@@ -1,0 +1,23 @@
+{
+  "name": "markdown-magpie",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Git-backed Markdown knowledge base maintenance with cited answers, gap detection, and pull request proposals.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev": "npm run dev --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "tsc -p tsconfig.check.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
