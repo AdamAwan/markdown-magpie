@@ -68,6 +68,20 @@ Start the API:
 npm run dev:api
 ```
 
+Index the sibling sample knowledge base:
+
+```bash
+curl -s -X POST http://localhost:4000/repositories/index \
+  -H 'content-type: application/json' \
+  -d '{"localPath":"../markdown-magpie-kb"}'
+```
+
+Search indexed Markdown sections:
+
+```bash
+curl -s 'http://localhost:4000/search?q=hotfix'
+```
+
 Start a mock watcher in another shell:
 
 ```bash
@@ -90,6 +104,12 @@ By default, AI jobs are stored in memory. To use Postgres:
 docker compose up -d postgres
 psql "$DATABASE_URL" -f packages/db/migrations/0001_initial.sql
 AI_JOB_QUEUE=postgres AI_EXECUTION_MODE=queue npm run dev:api
+```
+
+By default, indexed knowledge is held in memory and can optionally be persisted:
+
+```bash
+KNOWLEDGE_STORE=postgres npm run dev:api
 ```
 
 ## MVP Milestone

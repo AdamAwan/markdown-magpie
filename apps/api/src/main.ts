@@ -2,11 +2,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AiExecutionMode, AiJobType, AnswerQuestionJobInput } from "@magpie/core";
 import { MockChatProvider, answerQuestion } from "@magpie/retrieval";
 import { InMemoryAiJobQueue } from "./ai-job-queue.js";
+import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
 import { PostgresAiJobQueue } from "./postgres-ai-job-queue.js";
+import { PostgresKnowledgeStore } from "./postgres-knowledge-store.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
 const aiExecutionMode = normalizeAiExecutionMode(process.env.AI_EXECUTION_MODE);
 const aiJobs = createAiJobQueue();
+const knowledgeIndex = createKnowledgeIndex();
 
 const server = createServer(async (request, response) => {
   try {
@@ -33,6 +36,27 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 
   if (request.method === "POST" && path === "/ask") {
     await handleAsk(request, response);
+    return;
+  }
+
+  if (request.method === "POST" && path === "/repositories/index") {
+    await handleIndexRepository(request, response);
+    return;
+  }
+
+  if (request.method === "GET" && path === "/knowledge/stats") {
+    writeJson(response, 200, knowledgeIndex.getStats());
+    return;
+  }
+
+  if (request.method === "GET" && path === "/search") {
+    const query = url.searchParams.get("q")?.trim();
+    if (!query) {
+      writeJson(response, 400, { error: "query_required" });
+      return;
+    }
+
+    writeJson(response, 200, { sections: await knowledgeIndex.search(query, 5) });
     return;
   }
 
@@ -88,9 +112,15 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
   }
 
   if (aiExecutionMode === "queue") {
+    const sections = await knowledgeIndex.search(question, 5);
     const input: AnswerQuestionJobInput = {
       question,
-      context: [],
+      context: sections.map((section) => ({
+        sectionId: section.id,
+        path: section.path,
+        heading: section.heading,
+        content: section.content
+      })),
       expectedOutput: "answer_result"
     };
     const job = await aiJobs.enqueue("answer_question", input);
@@ -106,11 +136,7 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
 
   const result = await answerQuestion(
     question,
-    {
-      async search() {
-        return [];
-      }
-    },
+    knowledgeIndex,
     new MockChatProvider()
   );
 
@@ -118,6 +144,24 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
     mode: aiExecutionMode,
     result
   });
+}
+
+async function handleIndexRepository(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const payload = await readJsonBody<{ localPath?: string; repositoryId?: string; name?: string }>(request);
+  const localPath = payload.localPath?.trim() || process.env.KNOWLEDGE_REPO_PATH;
+
+  if (!localPath) {
+    writeJson(response, 400, { error: "local_path_required" });
+    return;
+  }
+
+  const summary = await knowledgeIndex.indexLocalRepository({
+    localPath,
+    repositoryId: payload.repositoryId,
+    name: payload.name
+  });
+
+  writeJson(response, 200, summary);
 }
 
 async function handleCreateJob(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -214,6 +258,19 @@ function createAiJobQueue(): InMemoryAiJobQueue | PostgresAiJobQueue {
   }
 
   return new InMemoryAiJobQueue();
+}
+
+function createKnowledgeIndex(): InMemoryKnowledgeIndex {
+  if (process.env.KNOWLEDGE_STORE === "postgres") {
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      throw new Error("DATABASE_URL is required when KNOWLEDGE_STORE=postgres");
+    }
+
+    return new InMemoryKnowledgeIndex(new PostgresKnowledgeStore(databaseUrl));
+  }
+
+  return new InMemoryKnowledgeIndex();
 }
 
 function isAiJobType(value: unknown): value is AiJobType {
