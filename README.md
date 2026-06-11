@@ -112,6 +112,16 @@ By default, indexed knowledge is held in memory and can optionally be persisted:
 KNOWLEDGE_STORE=postgres npm run dev:api
 ```
 
+Use a chat provider for answer synthesis:
+
+```bash
+CHAT_PROVIDER=mock npm run dev:api
+CHAT_PROVIDER=openai-compatible npm run dev:api
+CHAT_PROVIDER=azure-openai npm run dev:api
+```
+
+`mock` is the default and produces deterministic answers from retrieved Markdown context. OpenAI-compatible and Azure OpenAI providers use HTTP APIs configured through environment variables.
+
 ## MVP Milestone
 
 The first milestone is an end-to-end loop against one Markdown Git repository:

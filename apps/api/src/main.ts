@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AiExecutionMode, AiJobType, AnswerQuestionJobInput } from "@magpie/core";
-import { MockChatProvider, answerQuestion } from "@magpie/retrieval";
+import { answerQuestion, createChatProvider, type ChatProviderName } from "@magpie/retrieval";
 import { InMemoryAiJobQueue } from "./ai-job-queue.js";
 import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
 import { PostgresAiJobQueue } from "./postgres-ai-job-queue.js";
@@ -10,6 +10,7 @@ const port = Number.parseInt(process.env.PORT ?? "4000", 10);
 const aiExecutionMode = normalizeAiExecutionMode(process.env.AI_EXECUTION_MODE);
 const aiJobs = createAiJobQueue();
 const knowledgeIndex = createKnowledgeIndex();
+const chatProvider = createConfiguredChatProvider();
 
 const server = createServer(async (request, response) => {
   try {
@@ -23,6 +24,7 @@ const server = createServer(async (request, response) => {
 server.listen(port, () => {
   console.log(`Markdown Magpie API listening on http://localhost:${port}`);
   console.log(`AI execution mode: ${aiExecutionMode}`);
+  console.log(`Chat provider: ${normalizeChatProviderName(process.env.CHAT_PROVIDER)}`);
 });
 
 async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -137,7 +139,7 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
   const result = await answerQuestion(
     question,
     knowledgeIndex,
-    new MockChatProvider()
+    chatProvider
   );
 
   writeJson(response, 200, {
@@ -271,6 +273,26 @@ function createKnowledgeIndex(): InMemoryKnowledgeIndex {
   }
 
   return new InMemoryKnowledgeIndex();
+}
+
+function createConfiguredChatProvider() {
+  return createChatProvider({
+    provider: normalizeChatProviderName(process.env.CHAT_PROVIDER),
+    apiKey: process.env.OPENAI_COMPATIBLE_API_KEY || process.env.AZURE_OPENAI_API_KEY,
+    baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL,
+    model: process.env.OPENAI_COMPATIBLE_MODEL,
+    azureEndpoint: process.env.AZURE_OPENAI_ENDPOINT,
+    azureDeployment: process.env.AZURE_OPENAI_CHAT_DEPLOYMENT,
+    azureApiVersion: process.env.AZURE_OPENAI_API_VERSION
+  });
+}
+
+function normalizeChatProviderName(value: string | undefined): ChatProviderName {
+  if (value === "openai-compatible" || value === "azure-openai") {
+    return value;
+  }
+
+  return "mock";
 }
 
 function isAiJobType(value: unknown): value is AiJobType {
