@@ -9,6 +9,9 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
+    "dev:api": "npm run dev -w @magpie/api",
+    "dev:watcher": "npm run dev -w @magpie/watcher",
+    "dev:web": "npm run dev -w @magpie/web",
     "dev": "npm run dev --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",

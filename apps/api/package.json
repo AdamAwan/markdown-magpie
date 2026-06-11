@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@magpie/core": "file:../../packages/core",
     "@magpie/retrieval": "file:../../packages/retrieval",
     "tsx": "^4.19.4"
   },

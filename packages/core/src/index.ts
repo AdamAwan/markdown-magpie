@@ -146,6 +146,51 @@ export interface AgentRunner {
   run(job: AiJob): Promise<unknown>;
 }
 
+export interface AnswerQuestionJobInput {
+  question: string;
+  context: Array<{
+    sectionId: string;
+    path: string;
+    heading: string;
+    content: string;
+  }>;
+  expectedOutput: "answer_result";
+}
+
+export interface AnswerQuestionJobOutput {
+  answer: string;
+  confidence: Confidence;
+  citations: Citation[];
+  gap?: KnowledgeGapSignal;
+}
+
+export interface SummarizeGapJobInput {
+  questions: string[];
+  citedSections: Citation[];
+  expectedOutput: "gap_summary";
+}
+
+export interface SummarizeGapJobOutput {
+  summary: string;
+  priority: number;
+  rationale: string;
+}
+
+export interface DraftMarkdownProposalJobInput {
+  gapSummary: string;
+  triggeringQuestions: string[];
+  evidence: Citation[];
+  targetPath?: string;
+  expectedOutput: "markdown_proposal";
+}
+
+export interface DraftMarkdownProposalJobOutput {
+  title: string;
+  targetPath: string;
+  markdown: string;
+  rationale: string;
+}
+
 export interface PullRequestProvider {
   createPullRequest(request: CreatePullRequestRequest): Promise<CreatePullRequestResponse>;
 }

@@ -60,6 +60,30 @@ There are three intended execution modes:
 
 Watcher mode lowers the barrier to entry because early users can develop and test workflows with the agent tooling they already run locally, without provisioning cloud model credentials.
 
+## Local Development
+
+Start the API:
+
+```bash
+npm run dev:api
+```
+
+Start a mock watcher in another shell:
+
+```bash
+AI_EXECUTION_MODE=queue npm run dev:watcher
+```
+
+Create a queued answer job through the API:
+
+```bash
+curl -s http://localhost:4000/ask \
+  -H 'content-type: application/json' \
+  -d '{"question":"How do we deploy a hotfix?"}'
+```
+
+The watcher claims jobs from `/ai-jobs/claim` and completes them through `/ai-jobs/:id/complete`.
+
 ## MVP Milestone
 
 The first milestone is an end-to-end loop against one Markdown Git repository:
