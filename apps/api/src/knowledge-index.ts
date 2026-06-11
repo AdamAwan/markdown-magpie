@@ -152,7 +152,9 @@ function scoreSection(section: DocumentSection, terms: string[]): number {
 }
 
 function tokenize(value: string): string[] {
-  return [...new Set(value.toLowerCase().match(/[a-z0-9]{3,}/g) ?? [])];
+  return [
+    ...new Set((value.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []).filter((term) => !stopwords.has(term)))
+  ];
 }
 
 function slugify(value: string): string {
@@ -167,6 +169,22 @@ function slugify(value: string): string {
 function toPosixPath(value: string): string {
   return value.split(path.sep).join("/");
 }
+
+const stopwords = new Set([
+  "and",
+  "are",
+  "for",
+  "how",
+  "the",
+  "this",
+  "that",
+  "what",
+  "when",
+  "where",
+  "who",
+  "why",
+  "with"
+]);
 
 function resolveLocalPath(value: string): string {
   if (path.isAbsolute(value)) {

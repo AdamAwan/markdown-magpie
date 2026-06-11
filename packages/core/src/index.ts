@@ -68,8 +68,28 @@ export interface KnowledgeGapSignal {
 export interface QuestionLog {
   id: string;
   question: string;
+  executionMode: AiExecutionMode;
+  chatProvider: string;
+  confidence: Confidence;
+  retrievedSectionIds: string[];
   askedAt: string;
   answer?: AnswerResult;
+}
+
+export interface QuestionLogInput {
+  question: string;
+  executionMode: AiExecutionMode;
+  chatProvider: string;
+  answer?: AnswerResult;
+  retrievedSectionIds: string[];
+}
+
+export interface GapCandidate {
+  summary: string;
+  questionIds: string[];
+  count: number;
+  latestAskedAt: string;
+  confidence: Confidence;
 }
 
 export interface GapCluster {

@@ -112,6 +112,12 @@ By default, indexed knowledge is held in memory and can optionally be persisted:
 KNOWLEDGE_STORE=postgres npm run dev:api
 ```
 
+Question logs also default to memory. To persist them:
+
+```bash
+QUESTION_LOG_STORE=postgres npm run dev:api
+```
+
 Use a chat provider for answer synthesis:
 
 ```bash
@@ -121,6 +127,13 @@ CHAT_PROVIDER=azure-openai npm run dev:api
 ```
 
 `mock` is the default and produces deterministic answers from retrieved Markdown context. OpenAI-compatible and Azure OpenAI providers use HTTP APIs configured through environment variables.
+
+Inspect logged questions and gap candidates:
+
+```bash
+curl -s http://localhost:4000/questions
+curl -s http://localhost:4000/gaps/candidates
+```
 
 ## MVP Milestone
 

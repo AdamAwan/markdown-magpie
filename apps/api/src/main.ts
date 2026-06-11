@@ -5,12 +5,16 @@ import { InMemoryAiJobQueue } from "./ai-job-queue.js";
 import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
 import { PostgresAiJobQueue } from "./postgres-ai-job-queue.js";
 import { PostgresKnowledgeStore } from "./postgres-knowledge-store.js";
+import { PostgresQuestionLogStore } from "./postgres-question-log-store.js";
+import { InMemoryQuestionLogStore } from "./question-log-store.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
 const aiExecutionMode = normalizeAiExecutionMode(process.env.AI_EXECUTION_MODE);
 const aiJobs = createAiJobQueue();
 const knowledgeIndex = createKnowledgeIndex();
 const chatProvider = createConfiguredChatProvider();
+const questionLogs = createQuestionLogStore();
+const chatProviderName = normalizeChatProviderName(process.env.CHAT_PROVIDER);
 
 const server = createServer(async (request, response) => {
   try {
@@ -24,7 +28,7 @@ const server = createServer(async (request, response) => {
 server.listen(port, () => {
   console.log(`Markdown Magpie API listening on http://localhost:${port}`);
   console.log(`AI execution mode: ${aiExecutionMode}`);
-  console.log(`Chat provider: ${normalizeChatProviderName(process.env.CHAT_PROVIDER)}`);
+  console.log(`Chat provider: ${chatProviderName}`);
 });
 
 async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -59,6 +63,30 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     }
 
     writeJson(response, 200, { sections: await knowledgeIndex.search(query, 5) });
+    return;
+  }
+
+  if (request.method === "GET" && path === "/questions") {
+    const limit = parseLimit(url.searchParams.get("limit"), 50);
+    writeJson(response, 200, { questions: await questionLogs.list(limit) });
+    return;
+  }
+
+  const questionMatch = /^\/questions\/([^/]+)$/.exec(path);
+  if (request.method === "GET" && questionMatch) {
+    const log = await questionLogs.get(questionMatch[1]);
+    if (!log) {
+      writeJson(response, 404, { error: "question_not_found" });
+      return;
+    }
+
+    writeJson(response, 200, { question: log });
+    return;
+  }
+
+  if (request.method === "GET" && path === "/gaps/candidates") {
+    const limit = parseLimit(url.searchParams.get("limit"), 50);
+    writeJson(response, 200, { gaps: await questionLogs.listGapCandidates(limit) });
     return;
   }
 
@@ -126,10 +154,18 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
       expectedOutput: "answer_result"
     };
     const job = await aiJobs.enqueue("answer_question", input);
+    const log = await questionLogs.record({
+      question,
+      executionMode: aiExecutionMode,
+      chatProvider: "watcher",
+      retrievedSectionIds: sections.map((section) => section.id)
+    });
     writeJson(response, 202, {
       mode: "queue",
+      questionId: log.id,
       job,
       links: {
+        question: `/questions/${log.id}`,
         status: `/ai-jobs/${job.id}`
       }
     });
@@ -141,9 +177,17 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
     knowledgeIndex,
     chatProvider
   );
+  const log = await questionLogs.record({
+    question,
+    executionMode: aiExecutionMode,
+    chatProvider: chatProviderName,
+    answer: result,
+    retrievedSectionIds: result.citations.map((citation) => citation.sectionId)
+  });
 
   writeJson(response, 200, {
     mode: aiExecutionMode,
+    questionId: log.id,
     result
   });
 }
@@ -275,6 +319,19 @@ function createKnowledgeIndex(): InMemoryKnowledgeIndex {
   return new InMemoryKnowledgeIndex();
 }
 
+function createQuestionLogStore(): InMemoryQuestionLogStore | PostgresQuestionLogStore {
+  if (process.env.QUESTION_LOG_STORE === "postgres") {
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      throw new Error("DATABASE_URL is required when QUESTION_LOG_STORE=postgres");
+    }
+
+    return new PostgresQuestionLogStore(databaseUrl);
+  }
+
+  return new InMemoryQuestionLogStore();
+}
+
 function createConfiguredChatProvider() {
   return createChatProvider({
     provider: normalizeChatProviderName(process.env.CHAT_PROVIDER),
@@ -285,6 +342,15 @@ function createConfiguredChatProvider() {
     azureDeployment: process.env.AZURE_OPENAI_CHAT_DEPLOYMENT,
     azureApiVersion: process.env.AZURE_OPENAI_API_VERSION
   });
+}
+
+function parseLimit(value: string | null, defaultLimit: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (!Number.isFinite(parsed)) {
+    return defaultLimit;
+  }
+
+  return Math.max(1, Math.min(parsed, 200));
 }
 
 function normalizeChatProviderName(value: string | undefined): ChatProviderName {
