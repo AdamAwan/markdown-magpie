@@ -86,3 +86,12 @@ The watcher has no direct database access. It talks to the API only:
 4. Poll again.
 
 This keeps Codex, Claude Code, hosted APIs, and local mock providers behind the same contract.
+
+## Storage
+
+The API supports two queue backends:
+
+- `AI_JOB_QUEUE=memory`: process-local storage for fast development and tests.
+- `AI_JOB_QUEUE=postgres`: durable storage using the `ai_jobs` table.
+
+Postgres claiming uses `FOR UPDATE SKIP LOCKED`, so multiple watchers can safely poll the same queue once the API is running against a real database.

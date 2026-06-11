@@ -84,6 +84,14 @@ curl -s http://localhost:4000/ask \
 
 The watcher claims jobs from `/ai-jobs/claim` and completes them through `/ai-jobs/:id/complete`.
 
+By default, AI jobs are stored in memory. To use Postgres:
+
+```bash
+docker compose up -d postgres
+psql "$DATABASE_URL" -f packages/db/migrations/0001_initial.sql
+AI_JOB_QUEUE=postgres AI_EXECUTION_MODE=queue npm run dev:api
+```
+
 ## MVP Milestone
 
 The first milestone is an end-to-end loop against one Markdown Git repository:

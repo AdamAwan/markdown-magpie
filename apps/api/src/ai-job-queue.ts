@@ -61,11 +61,11 @@ export class InMemoryAiJobQueue implements AiJobQueue {
     });
   }
 
-  get(jobId: string): AiJob | undefined {
+  async get(jobId: string): Promise<AiJob | undefined> {
     return this.jobs.get(jobId);
   }
 
-  list(): AiJob[] {
+  async list(): Promise<AiJob[]> {
     return [...this.jobs.values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 

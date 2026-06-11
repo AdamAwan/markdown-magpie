@@ -138,6 +138,8 @@ export interface AiJobQueue {
   claimNext(workerName: string, acceptedTypes: AiJobType[]): Promise<AiJob | undefined>;
   complete<TOutput>(jobId: string, output: TOutput): Promise<void>;
   fail(jobId: string, error: string): Promise<void>;
+  get(jobId: string): Promise<AiJob | undefined>;
+  list(): Promise<AiJob[]>;
 }
 
 export interface AgentRunner {

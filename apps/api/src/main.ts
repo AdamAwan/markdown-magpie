@@ -2,10 +2,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AiExecutionMode, AiJobType, AnswerQuestionJobInput } from "@magpie/core";
 import { MockChatProvider, answerQuestion } from "@magpie/retrieval";
 import { InMemoryAiJobQueue } from "./ai-job-queue.js";
+import { PostgresAiJobQueue } from "./postgres-ai-job-queue.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
 const aiExecutionMode = normalizeAiExecutionMode(process.env.AI_EXECUTION_MODE);
-const aiJobs = new InMemoryAiJobQueue();
+const aiJobs = createAiJobQueue();
 
 const server = createServer(async (request, response) => {
   try {
@@ -41,7 +42,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   }
 
   if (request.method === "GET" && path === "/ai-jobs") {
-    writeJson(response, 200, { jobs: aiJobs.list() });
+    writeJson(response, 200, { jobs: await aiJobs.list() });
     return;
   }
 
@@ -64,7 +65,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 
   const getMatch = /^\/ai-jobs\/([^/]+)$/.exec(path);
   if (request.method === "GET" && getMatch) {
-    const job = aiJobs.get(getMatch[1]);
+    const job = await aiJobs.get(getMatch[1]);
     if (!job) {
       writeJson(response, 404, { error: "job_not_found" });
       return;
@@ -159,7 +160,7 @@ async function handleCompleteJob(
 
   try {
     await aiJobs.complete(jobId, payload.output ?? {});
-    writeJson(response, 200, { job: aiJobs.get(jobId) });
+    writeJson(response, 200, { job: await aiJobs.get(jobId) });
   } catch {
     writeJson(response, 404, { error: "job_not_found" });
   }
@@ -170,7 +171,7 @@ async function handleFailJob(jobId: string, request: IncomingMessage, response: 
 
   try {
     await aiJobs.fail(jobId, payload.error ?? "Unknown watcher failure");
-    writeJson(response, 200, { job: aiJobs.get(jobId) });
+    writeJson(response, 200, { job: await aiJobs.get(jobId) });
   } catch {
     writeJson(response, 404, { error: "job_not_found" });
   }
@@ -200,6 +201,19 @@ function normalizeAiExecutionMode(value: string | undefined): AiExecutionMode {
   }
 
   return "mock";
+}
+
+function createAiJobQueue(): InMemoryAiJobQueue | PostgresAiJobQueue {
+  if (process.env.AI_JOB_QUEUE === "postgres") {
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      throw new Error("DATABASE_URL is required when AI_JOB_QUEUE=postgres");
+    }
+
+    return new PostgresAiJobQueue(databaseUrl);
+  }
+
+  return new InMemoryAiJobQueue();
 }
 
 function isAiJobType(value: unknown): value is AiJobType {

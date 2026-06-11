@@ -11,6 +11,8 @@
   "dependencies": {
     "@magpie/core": "file:../../packages/core",
     "@magpie/retrieval": "file:../../packages/retrieval",
+    "@types/pg": "^8.20.0",
+    "pg": "^8.21.0",
     "tsx": "^4.19.4"
   },
   "devDependencies": {
