@@ -32,6 +32,8 @@ type Confidence = "high" | "medium" | "low" | "unknown";
 type Feedback = "helpful" | "unhelpful";
 type ConsoleSection = "ask" | "knowledge" | "gaps" | "jobs" | "proposals" | "config";
 type WorkspaceTab = "ask" | "search" | "recent";
+type AiExecutionMode = "direct" | "queue";
+type AiProviderName = "mock" | "openai-compatible" | "azure-openai" | "codex" | "claude";
 
 interface Health {
   ok: boolean;
@@ -49,6 +51,19 @@ interface RuntimeConfig {
   stores: Record<string, string | number | null>;
   knowledge: Record<string, string | number | null>;
   providers: Record<string, unknown>;
+  aiRuntime: {
+    executionMode: AiExecutionMode;
+    provider: AiProviderName;
+    executionModes: AiExecutionMode[];
+    directProviders: AiProviderName[];
+    queueProviders: AiProviderName[];
+    providers: Array<{
+      name: AiProviderName;
+      label: string;
+      supportsDirect: boolean;
+      supportsQueue: boolean;
+    }>;
+  };
   watcher: Record<string, string | number | null>;
 }
 
@@ -425,7 +440,7 @@ export default function HomePage() {
           </div>
           <div className="statusLine">
             <span>Provider</span>
-            <span>{answer?.mode ?? "mock"}</span>
+            <span>{config?.aiRuntime.provider ?? "mock"}</span>
           </div>
           <div className="statusLine">
             <span>Updated</span>
@@ -598,7 +613,12 @@ export default function HomePage() {
 
         {activeSection === "config" ? (
           <section className="fullWorkbench">
-            <ConfigPanel config={config} apiBaseUrl={resolveApiBaseUrl()} />
+            <ConfigPanel
+              apiBaseUrl={resolveApiBaseUrl()}
+              config={config}
+              onConfigChange={setConfig}
+              onMessage={setMessage}
+            />
           </section>
         ) : null}
       </main>
@@ -1191,7 +1211,30 @@ function ProposalPanel({
   );
 }
 
-function ConfigPanel({ apiBaseUrl, config }: { apiBaseUrl: string; config?: RuntimeConfig }) {
+function ConfigPanel({
+  apiBaseUrl,
+  config,
+  onConfigChange,
+  onMessage
+}: {
+  apiBaseUrl: string;
+  config?: RuntimeConfig;
+  onConfigChange: (config: RuntimeConfig) => void;
+  onMessage: (message: string) => void;
+}) {
+  const [executionMode, setExecutionMode] = useState<AiExecutionMode>("direct");
+  const [provider, setProvider] = useState<AiProviderName>("mock");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!config) {
+      return;
+    }
+
+    setExecutionMode(config.aiRuntime.executionMode);
+    setProvider(config.aiRuntime.provider);
+  }, [config]);
+
   if (!config) {
     return (
       <section className="surface">
@@ -1205,6 +1248,34 @@ function ConfigPanel({ apiBaseUrl, config }: { apiBaseUrl: string; config?: Runt
     );
   }
 
+  const providerOptions = config.aiRuntime.providers.filter((item) =>
+    executionMode === "direct" ? item.supportsDirect : item.supportsQueue
+  );
+  const selectedProvider = providerOptions.some((item) => item.name === provider) ? provider : providerOptions[0]?.name ?? "mock";
+
+  async function saveRuntimeConfig() {
+    if (!config) {
+      return;
+    }
+
+    setSaving(true);
+    onMessage("");
+    try {
+      const result = await apiPost<RuntimeConfig>("/config", {
+        ai: {
+          executionMode,
+          provider: selectedProvider
+        }
+      });
+      onConfigChange(result);
+      onMessage("Runtime AI config updated.");
+    } catch (error) {
+      onMessage(errorMessage(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <section className="surface">
       <div className="surfaceHeader">
@@ -1214,6 +1285,52 @@ function ConfigPanel({ apiBaseUrl, config }: { apiBaseUrl: string; config?: Runt
         </span>
       </div>
       <div className="surfaceBody">
+        <div className="runtimeEditor">
+          <div className="configControl">
+            <span>Execution</span>
+            <div className="segmented" role="group" aria-label="AI execution mode">
+              {config.aiRuntime.executionModes.map((mode) => (
+                <button
+                  className={executionMode === mode ? "segment active" : "segment"}
+                  key={mode}
+                  onClick={() => {
+                    setExecutionMode(mode);
+                    const nextProvider = config.aiRuntime.providers.find((item) =>
+                      mode === "direct" ? item.supportsDirect : item.supportsQueue
+                    )?.name;
+                    if (nextProvider && !config.aiRuntime.providers.find((item) => item.name === provider && (mode === "direct" ? item.supportsDirect : item.supportsQueue))) {
+                      setProvider(nextProvider);
+                    }
+                  }}
+                  type="button"
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="configControl">
+            <span>Provider</span>
+            <select onChange={(event) => setProvider(event.target.value as AiProviderName)} value={selectedProvider}>
+              {providerOptions.map((item) => (
+                <option key={item.name} value={item.name}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="button"
+            disabled={
+              saving ||
+              (executionMode === config.aiRuntime.executionMode && selectedProvider === config.aiRuntime.provider)
+            }
+            onClick={() => void saveRuntimeConfig()}
+            type="button"
+          >
+            {saving ? "Saving" : "Apply"}
+          </button>
+        </div>
         <div className="configGrid">
           <ConfigGroup title="API" value={{ ...config.api, browserApiBaseUrl: apiBaseUrl }} />
           <ConfigGroup title="Stores" value={config.stores} />

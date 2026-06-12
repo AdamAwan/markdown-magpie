@@ -21,13 +21,11 @@ import { InMemoryProposalStore } from "./proposal-store.js";
 import { InMemoryQuestionLogStore } from "./question-log-store.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
-const aiExecutionMode = normalizeAiExecutionMode(process.env.AI_EXECUTION_MODE);
 const aiJobs = createAiJobQueue();
 const knowledgeIndex = createKnowledgeIndex();
-const chatProvider = createConfiguredChatProvider();
 const questionLogs = createQuestionLogStore();
 const proposals = createProposalStore();
-const chatProviderName = normalizeChatProviderName(process.env.CHAT_PROVIDER);
+let runtimeConfig = createInitialRuntimeConfig();
 
 const server = createServer(async (request, response) => {
   try {
@@ -40,8 +38,8 @@ const server = createServer(async (request, response) => {
 
 server.listen(port, () => {
   console.log(`Markdown Magpie API listening on http://localhost:${port}`);
-  console.log(`AI execution mode: ${aiExecutionMode}`);
-  console.log(`Chat provider: ${chatProviderName}`);
+  console.log(`AI execution mode: ${runtimeConfig.aiExecutionMode}`);
+  console.log(`AI provider: ${runtimeConfig.aiProvider}`);
 });
 
 async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -60,6 +58,11 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 
   if (request.method === "GET" && path === "/config") {
     writeJson(response, 200, getRuntimeConfig());
+    return;
+  }
+
+  if (request.method === "POST" && path === "/config") {
+    await handleUpdateRuntimeConfig(request, response);
     return;
   }
 
@@ -221,6 +224,36 @@ async function handleUpdateProposalStatus(
   writeJson(response, 200, { proposal });
 }
 
+async function handleUpdateRuntimeConfig(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const payload = await readJsonBody<{
+    aiExecutionMode?: string;
+    aiProvider?: string;
+    ai?: {
+      executionMode?: string;
+      provider?: string;
+    };
+  }>(request);
+  const nextExecutionMode = normalizeAiExecutionMode(payload.ai?.executionMode ?? payload.aiExecutionMode);
+  const nextProvider = normalizeAiProvider(payload.ai?.provider ?? payload.aiProvider);
+
+  if (!nextExecutionMode || !nextProvider) {
+    writeJson(response, 400, { error: "valid_ai_runtime_config_required" });
+    return;
+  }
+
+  const validationError = validateRuntimeAiConfig(nextExecutionMode, nextProvider);
+  if (validationError) {
+    writeJson(response, 400, { error: "unsupported_ai_runtime_config", message: validationError });
+    return;
+  }
+
+  runtimeConfig = {
+    aiExecutionMode: nextExecutionMode,
+    aiProvider: nextProvider
+  };
+  writeJson(response, 200, getRuntimeConfig());
+}
+
 async function handleCreateProposalFromGap(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const payload = await readJsonBody<{ summary?: string; targetPath?: string }>(request);
   const summary = payload.summary?.trim();
@@ -246,8 +279,9 @@ async function handleCreateProposalFromGap(request: IncomingMessage, response: S
     triggeringQuestions: logs.map((log) => log.question),
     evidence,
     targetPath: payload.targetPath?.trim() || undefined,
+    provider: runtimeConfig.aiProvider,
     expectedOutput: "markdown_proposal"
-  };
+  } as DraftMarkdownProposalJobInput & { provider: AiProviderName };
   const job = await aiJobs.enqueue("draft_markdown_proposal", {
     ...input,
     triggeringQuestionIds: gap.questionIds
@@ -292,12 +326,12 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
     return;
   }
 
-  if (aiExecutionMode === "queue") {
+  if (runtimeConfig.aiExecutionMode === "queue") {
     const sections = await knowledgeIndex.search(question, 5);
     const log = await questionLogs.record({
       question,
-      executionMode: aiExecutionMode,
-      chatProvider: "watcher",
+      executionMode: runtimeConfig.aiExecutionMode,
+      chatProvider: runtimeConfig.aiProvider,
       retrievedSectionIds: sections.map((section) => section.id)
     });
     const input: AnswerQuestionJobInput = {
@@ -309,8 +343,9 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
         heading: section.heading,
         content: section.content
       })),
+      provider: runtimeConfig.aiProvider,
       expectedOutput: "answer_result"
-    };
+    } as AnswerQuestionJobInput & { provider: AiProviderName };
     const job = await aiJobs.enqueue("answer_question", input);
     writeJson(response, 202, {
       mode: "queue",
@@ -327,18 +362,18 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
   const result = await answerQuestion(
     question,
     knowledgeIndex,
-    chatProvider
+    createConfiguredChatProvider(runtimeConfig.aiProvider)
   );
   const log = await questionLogs.record({
     question,
-    executionMode: aiExecutionMode,
-    chatProvider: chatProviderName,
+    executionMode: runtimeConfig.aiExecutionMode,
+    chatProvider: runtimeConfig.aiProvider,
     answer: result,
     retrievedSectionIds: result.citations.map((citation) => citation.sectionId)
   });
 
   writeJson(response, 200, {
-    mode: aiExecutionMode,
+    mode: runtimeConfig.aiExecutionMode,
     questionId: log.id,
     result
   });
@@ -457,14 +492,14 @@ async function updateQuestionLogFromCompletedJob(job: AiJob | undefined, output:
     return;
   }
 
-  const input = job.input as Partial<AnswerQuestionJobInput>;
+  const input = job.input as Partial<AnswerQuestionJobInput> & { provider?: string };
   if (!input.questionLogId) {
     return;
   }
 
   await questionLogs.updateAnswer(input.questionLogId, {
     answer: output,
-    chatProvider: job.claimedBy ?? "watcher"
+    chatProvider: typeof input.provider === "string" ? input.provider : (job.claimedBy ?? "watcher")
   });
 }
 
@@ -503,18 +538,20 @@ function writeJson(response: ServerResponse, statusCode: number, body: unknown):
 }
 
 function getRuntimeConfig() {
+  const availableProviders = getConfiguredAiProviders();
   return {
     api: {
       port,
-      aiExecutionMode,
-      chatProvider: chatProviderName,
+      aiExecutionMode: runtimeConfig.aiExecutionMode,
+      aiProvider: runtimeConfig.aiProvider,
       nodeEnv: process.env.NODE_ENV ?? "development"
     },
     stores: {
-      knowledgeStore: process.env.KNOWLEDGE_STORE ?? "memory",
-      questionLogStore: process.env.QUESTION_LOG_STORE ?? "memory",
-      proposalStore: process.env.PROPOSAL_STORE ?? "memory",
-      aiJobQueue: process.env.AI_JOB_QUEUE ?? "memory",
+      storageBackend: storageBackend(),
+      knowledgeStore: storeBackend("KNOWLEDGE_STORE"),
+      questionLogStore: storeBackend("QUESTION_LOG_STORE"),
+      proposalStore: storeBackend("PROPOSAL_STORE"),
+      aiJobQueue: storeBackend("AI_JOB_QUEUE"),
       databaseUrl: maskConnectionString(process.env.DATABASE_URL)
     },
     knowledge: {
@@ -541,10 +578,18 @@ function getRuntimeConfig() {
         azureDevopsPat: secretState(process.env.AZURE_DEVOPS_PAT)
       }
     },
+    aiRuntime: {
+      executionMode: runtimeConfig.aiExecutionMode,
+      provider: runtimeConfig.aiProvider,
+      executionModes: ["direct", "queue"],
+      providers: availableProviders,
+      directProviders: availableProviders.filter((provider) => provider.supportsDirect).map((provider) => provider.name),
+      queueProviders: availableProviders.filter((provider) => provider.supportsQueue).map((provider) => provider.name)
+    },
     watcher: {
       name: process.env.WATCHER_NAME ?? null,
       pollIntervalMs: process.env.WATCHER_POLL_INTERVAL_MS ?? null,
-      aiJobProvider: process.env.AI_JOB_PROVIDER ?? "mock",
+      aiJobProvider: runtimeConfig.aiProvider,
       agentApiTimeoutMs: process.env.AGENT_API_TIMEOUT_MS ?? null
     }
   };
@@ -591,16 +636,127 @@ async function createProposalFromCompletedJob(job: AiJob | undefined, output: un
   });
 }
 
-function normalizeAiExecutionMode(value: string | undefined): AiExecutionMode {
+type AiProviderName = ChatProviderName | "codex" | "claude";
+
+interface RuntimeAiConfig {
+  aiExecutionMode: AiExecutionMode;
+  aiProvider: AiProviderName;
+}
+
+function normalizeAiExecutionMode(value: string | undefined): AiExecutionMode | undefined {
   if (value === "direct" || value === "queue") {
     return value;
   }
 
-  return "mock";
+  return undefined;
+}
+
+function normalizeAiProvider(value: string | undefined): AiProviderName | undefined {
+  if (value === "mock" || value === "openai-compatible" || value === "azure-openai" || value === "codex" || value === "claude") {
+    return value;
+  }
+
+  return undefined;
+}
+
+function createInitialRuntimeConfig(): RuntimeAiConfig {
+  const aiExecutionMode = normalizeAiExecutionMode(process.env.AI_EXECUTION_MODE) ?? "direct";
+  const providerFromEnv =
+    process.env.AI_PROVIDER ??
+    (aiExecutionMode === "queue" ? process.env.AI_JOB_PROVIDER : process.env.CHAT_PROVIDER) ??
+    process.env.CHAT_PROVIDER ??
+    process.env.AI_JOB_PROVIDER;
+  const aiProvider = normalizeAiProvider(providerFromEnv) ?? "mock";
+  const validationError = validateRuntimeAiConfig(aiExecutionMode, aiProvider);
+
+  if (validationError) {
+    throw new Error(validationError);
+  }
+
+  return {
+    aiExecutionMode,
+    aiProvider
+  };
+}
+
+function validateRuntimeAiConfig(aiExecutionMode: AiExecutionMode, aiProvider: AiProviderName): string | undefined {
+  const configuredProvider = getConfiguredAiProviders().find((provider) => provider.name === aiProvider);
+  if (!configuredProvider) {
+    return `${aiProvider} is not configured by environment variables`;
+  }
+
+  if (aiExecutionMode === "direct" && !configuredProvider.supportsDirect) {
+    return `${aiProvider} cannot be used in direct mode`;
+  }
+
+  if (aiExecutionMode === "queue" && !configuredProvider.supportsQueue) {
+    return `${aiProvider} cannot be used in queue mode`;
+  }
+
+  return undefined;
+}
+
+function getConfiguredAiProviders(): Array<{
+  name: AiProviderName;
+  label: string;
+  supportsDirect: boolean;
+  supportsQueue: boolean;
+}> {
+  const providers: Array<{
+    name: AiProviderName;
+    label: string;
+    supportsDirect: boolean;
+    supportsQueue: boolean;
+  }> = [
+    {
+      name: "mock",
+      label: "Mock",
+      supportsDirect: true,
+      supportsQueue: true
+    }
+  ];
+
+  if (process.env.OPENAI_COMPATIBLE_BASE_URL && process.env.OPENAI_COMPATIBLE_API_KEY && process.env.OPENAI_COMPATIBLE_MODEL) {
+    providers.push({
+      name: "openai-compatible",
+      label: "OpenAI-compatible",
+      supportsDirect: true,
+      supportsQueue: true
+    });
+  }
+
+  if (process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_CHAT_DEPLOYMENT) {
+    providers.push({
+      name: "azure-openai",
+      label: "Azure OpenAI",
+      supportsDirect: true,
+      supportsQueue: false
+    });
+  }
+
+  if (process.env.CODEX_CLI_PATH || process.env.AI_PROVIDER === "codex" || process.env.AI_JOB_PROVIDER === "codex") {
+    providers.push({
+      name: "codex",
+      label: "Codex CLI",
+      supportsDirect: false,
+      supportsQueue: true
+    });
+  }
+
+  if (process.env.CLAUDE_CLI_PATH || process.env.AI_PROVIDER === "claude" || process.env.AI_JOB_PROVIDER === "claude") {
+    providers.push({
+      name: "claude",
+      label: "Claude CLI",
+      supportsDirect: false,
+      supportsQueue: true
+    });
+  }
+
+  return providers;
 }
 
 function createAiJobQueue(): InMemoryAiJobQueue | PostgresAiJobQueue {
-  if (process.env.AI_JOB_QUEUE === "postgres") {
+  if (storeBackend("AI_JOB_QUEUE") === "postgres") {
     const databaseUrl = process.env.DATABASE_URL;
     if (!databaseUrl) {
       throw new Error("DATABASE_URL is required when AI_JOB_QUEUE=postgres");
@@ -613,7 +769,7 @@ function createAiJobQueue(): InMemoryAiJobQueue | PostgresAiJobQueue {
 }
 
 function createKnowledgeIndex(): InMemoryKnowledgeIndex {
-  if (process.env.KNOWLEDGE_STORE === "postgres") {
+  if (storeBackend("KNOWLEDGE_STORE") === "postgres") {
     const databaseUrl = process.env.DATABASE_URL;
     if (!databaseUrl) {
       throw new Error("DATABASE_URL is required when KNOWLEDGE_STORE=postgres");
@@ -626,7 +782,7 @@ function createKnowledgeIndex(): InMemoryKnowledgeIndex {
 }
 
 function createQuestionLogStore(): InMemoryQuestionLogStore | PostgresQuestionLogStore {
-  if (process.env.QUESTION_LOG_STORE === "postgres") {
+  if (storeBackend("QUESTION_LOG_STORE") === "postgres") {
     const databaseUrl = process.env.DATABASE_URL;
     if (!databaseUrl) {
       throw new Error("DATABASE_URL is required when QUESTION_LOG_STORE=postgres");
@@ -639,7 +795,7 @@ function createQuestionLogStore(): InMemoryQuestionLogStore | PostgresQuestionLo
 }
 
 function createProposalStore(): InMemoryProposalStore | PostgresProposalStore {
-  if (process.env.PROPOSAL_STORE === "postgres") {
+  if (storeBackend("PROPOSAL_STORE") === "postgres") {
     const databaseUrl = process.env.DATABASE_URL;
     if (!databaseUrl) {
       throw new Error("DATABASE_URL is required when PROPOSAL_STORE=postgres");
@@ -651,9 +807,21 @@ function createProposalStore(): InMemoryProposalStore | PostgresProposalStore {
   return new InMemoryProposalStore();
 }
 
-function createConfiguredChatProvider() {
+function storageBackend(): "memory" | "postgres" {
+  return process.env.STORAGE_BACKEND === "postgres" ? "postgres" : "memory";
+}
+
+function storeBackend(name: "KNOWLEDGE_STORE" | "QUESTION_LOG_STORE" | "PROPOSAL_STORE" | "AI_JOB_QUEUE"): "memory" | "postgres" {
+  return process.env[name] === "postgres" ? "postgres" : storageBackend();
+}
+
+function createConfiguredChatProvider(provider: AiProviderName) {
+  if (provider !== "mock" && provider !== "openai-compatible" && provider !== "azure-openai") {
+    throw new Error(`${provider} cannot be used as a direct chat provider`);
+  }
+
   return createChatProvider({
-    provider: normalizeChatProviderName(process.env.CHAT_PROVIDER),
+    provider,
     apiKey: process.env.OPENAI_COMPATIBLE_API_KEY || process.env.AZURE_OPENAI_API_KEY,
     baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL,
     model: process.env.OPENAI_COMPATIBLE_MODEL,
@@ -670,14 +838,6 @@ function parseLimit(value: string | null, defaultLimit: number): number {
   }
 
   return Math.max(1, Math.min(parsed, 200));
-}
-
-function normalizeChatProviderName(value: string | undefined): ChatProviderName {
-  if (value === "openai-compatible" || value === "azure-openai") {
-    return value;
-  }
-
-  return "mock";
 }
 
 function normalizeUploadPath(value: string | undefined): string {

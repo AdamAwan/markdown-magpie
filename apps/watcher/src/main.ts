@@ -14,7 +14,7 @@ import { buildPrompt, parseJobOutput } from "./job-prompts.js";
 
 const apiBaseUrl = process.env.API_BASE_URL ?? "http://localhost:4000";
 const watcherName = process.env.WATCHER_NAME ?? "local-dev-watcher";
-const provider = process.env.AI_JOB_PROVIDER ?? "mock";
+const defaultProvider = process.env.AI_PROVIDER ?? process.env.AI_JOB_PROVIDER ?? "mock";
 const pollIntervalMs = Number.parseInt(process.env.WATCHER_POLL_INTERVAL_MS ?? "2000", 10);
 const acceptedTypes: AiJobType[] = [
   "answer_question",
@@ -66,6 +66,7 @@ async function claimNextJob(): Promise<AiJob | undefined> {
 
 async function runAndComplete(job: AiJob): Promise<void> {
   try {
+    const runner = createRunner(providerForJob(job));
     if (!runner.supports(job.type)) {
       throw new Error(`${runner.name} does not support ${job.type}`);
     }
@@ -297,14 +298,17 @@ class CliAgentRunner implements AgentRunner {
   }
 }
 
-const runner = createRunner(provider);
-
 console.log(`Markdown Magpie watcher '${watcherName}' starting`);
 console.log(`API: ${apiBaseUrl}`);
-console.log(`Provider: ${runner.name}`);
+console.log(`Default provider: ${defaultProvider}`);
 console.log(`Accepted jobs: ${acceptedTypes.join(", ")}`);
 
 void poll();
+
+function providerForJob(job: AiJob): string {
+  const provider = (job.input as { provider?: unknown }).provider;
+  return typeof provider === "string" ? provider : defaultProvider;
+}
 
 async function postJson<TResponse>(path: string, body: unknown): Promise<TResponse> {
   const response = await fetch(`${apiBaseUrl}${path}`, {

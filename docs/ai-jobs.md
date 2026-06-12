@@ -113,14 +113,14 @@ The watcher can run a local CLI as the AI provider.
 Mock watcher:
 
 ```bash
-AI_EXECUTION_MODE=queue npm run dev:api
-AI_JOB_PROVIDER=mock npm run dev:watcher
+AI_EXECUTION_MODE=queue AI_PROVIDER=mock npm run dev:api
+AI_PROVIDER=mock npm run dev:watcher
 ```
 
 OpenAI-compatible API watcher:
 
 ```bash
-AI_JOB_PROVIDER=openai-compatible \
+AI_PROVIDER=openai-compatible \
 OPENAI_COMPATIBLE_BASE_URL=https://api.openai.com/v1 \
 OPENAI_COMPATIBLE_API_KEY=... \
 OPENAI_COMPATIBLE_MODEL=... \
@@ -130,7 +130,7 @@ npm run dev:watcher
 Codex-style command:
 
 ```bash
-AI_JOB_PROVIDER=codex \
+AI_PROVIDER=codex \
 CODEX_CLI_PATH=codex \
 CODEX_CLI_ARGS=exec \
 CODEX_CLI_PROMPT_MODE=arg \
@@ -140,7 +140,7 @@ npm run dev:watcher
 Claude-style command:
 
 ```bash
-AI_JOB_PROVIDER=claude \
+AI_PROVIDER=claude \
 CLAUDE_CLI_PATH=claude \
 CLAUDE_CLI_ARGS=-p \
 CLAUDE_CLI_PROMPT_MODE=arg \
@@ -169,9 +169,11 @@ Provider support should stay behind `AgentRunner` adapters:
 
 ## Storage
 
-The API supports two queue backends:
+The API supports two storage backends through one startup option:
 
-- `AI_JOB_QUEUE=memory`: process-local storage for fast development and tests.
-- `AI_JOB_QUEUE=postgres`: durable storage using the `ai_jobs` table.
+- `STORAGE_BACKEND=memory`: process-local storage for fast development and tests.
+- `STORAGE_BACKEND=postgres`: durable storage using Postgres tables, including `ai_jobs`.
+
+The older `AI_JOB_QUEUE` variable still works as a compatibility override for the job queue only.
 
 Postgres claiming uses `FOR UPDATE SKIP LOCKED`, so multiple watchers can safely poll the same queue once the API is running against a real database.

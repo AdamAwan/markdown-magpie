@@ -353,7 +353,8 @@ p {
 }
 
 textarea,
-input {
+input,
+select {
   width: 100%;
   border: 1px solid #b9c4bc;
   background: #fbfcfa;
@@ -368,7 +369,8 @@ textarea {
 }
 
 textarea:focus,
-input:focus {
+input:focus,
+select:focus {
   border-color: #285f74;
   box-shadow: 0 0 0 3px #d9e8f1;
 }
@@ -725,6 +727,56 @@ code {
   gap: 14px;
 }
 
+.runtimeEditor {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(220px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  border: 1px solid #d9ded6;
+  background: #fbfcfa;
+  padding: 12px;
+}
+
+.configControl {
+  display: grid;
+  gap: 6px;
+}
+
+.configControl span {
+  color: #65716b;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 1px solid #b9c4bc;
+  background: #ffffff;
+}
+
+.segment {
+  min-height: 38px;
+  border: 0;
+  border-right: 1px solid #b9c4bc;
+  background: transparent;
+  color: #65716b;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 850;
+  text-transform: capitalize;
+}
+
+.segment:last-child {
+  border-right: 0;
+}
+
+.segment.active {
+  background: #e5f1f4;
+  color: #285f74;
+}
+
 .configGroup {
   min-width: 0;
   border: 1px solid #e2e6df;
@@ -804,6 +856,7 @@ pre {
   .repositoryForm,
   .uploadForm,
   .proposalGrid,
+  .runtimeEditor,
   .configGrid {
     grid-template-columns: 1fr;
   }

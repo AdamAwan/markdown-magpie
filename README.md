@@ -122,12 +122,11 @@ If you later put the app behind a reverse proxy or a custom domain, set `NEXT_PU
 
 ### 2. Choose the AI Mode
 
-The easiest showcase mode is the default mock queue mode:
+The easiest showcase mode is queue execution with the deterministic mock provider:
 
 ```env
 AI_EXECUTION_MODE=queue
-AI_JOB_PROVIDER=mock
-CHAT_PROVIDER=mock
+AI_PROVIDER=mock
 ```
 
 This requires no external keys. The watcher will claim queued jobs and return deterministic demo answers/proposals.
@@ -136,7 +135,7 @@ To use an OpenAI-compatible API from the watcher, edit `.env.compose`:
 
 ```env
 AI_EXECUTION_MODE=queue
-AI_JOB_PROVIDER=openai-compatible
+AI_PROVIDER=openai-compatible
 OPENAI_COMPATIBLE_BASE_URL=https://api.openai.com/v1
 OPENAI_COMPATIBLE_API_KEY=your-key
 OPENAI_COMPATIBLE_MODEL=gpt-4.1-mini
@@ -148,7 +147,7 @@ To make the API answer directly instead of queueing work for the watcher:
 
 ```env
 AI_EXECUTION_MODE=direct
-CHAT_PROVIDER=openai-compatible
+AI_PROVIDER=openai-compatible
 OPENAI_COMPATIBLE_BASE_URL=https://api.openai.com/v1
 OPENAI_COMPATIBLE_API_KEY=your-key
 OPENAI_COMPATIBLE_MODEL=gpt-4.1-mini
@@ -158,12 +157,14 @@ For Azure OpenAI direct mode:
 
 ```env
 AI_EXECUTION_MODE=direct
-CHAT_PROVIDER=azure-openai
+AI_PROVIDER=azure-openai
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
 AZURE_OPENAI_API_KEY=your-key
 AZURE_OPENAI_CHAT_DEPLOYMENT=your-chat-deployment
 AZURE_OPENAI_API_VERSION=2024-10-21
 ```
+
+When multiple providers are configured in the environment, switch between valid direct and queue combinations from the web console's **Config** page without restarting the API. Storage remains a startup setting.
 
 ### 3. Build and Start Everything
 
@@ -329,10 +330,7 @@ postgres-data
 The default `.env.compose.example` uses Postgres-backed stores:
 
 ```env
-KNOWLEDGE_STORE=postgres
-QUESTION_LOG_STORE=postgres
-PROPOSAL_STORE=postgres
-AI_JOB_QUEUE=postgres
+STORAGE_BACKEND=postgres
 ```
 
 That means uploaded Markdown, questions, jobs, and proposals survive container restarts. They do not survive `docker compose down -v`.
@@ -402,7 +400,7 @@ docker compose logs -f watcher
 For OpenAI-compatible mode, verify:
 
 ```env
-AI_JOB_PROVIDER=openai-compatible
+AI_PROVIDER=openai-compatible
 OPENAI_COMPATIBLE_BASE_URL=...
 OPENAI_COMPATIBLE_API_KEY=...
 OPENAI_COMPATIBLE_MODEL=...
@@ -424,11 +422,12 @@ docker compose restart web
 
 Markdown Magpie treats AI work as provider-neutral jobs.
 
-There are three intended execution modes:
+There are two intended execution modes:
 
-- `mock`: deterministic local responses for development and tests.
 - `direct`: the API calls a configured model provider directly, such as Azure OpenAI, OpenAI-compatible APIs, Anthropic, or local model gateways.
 - `queue`: the API enqueues AI jobs and an external watcher claims them. This lets users run Codex, Claude Code, or another local agent as the model provider.
+
+`mock` is a provider, not an execution mode. It gives deterministic local responses for development and tests and can be selected in either direct or queue mode.
 
 Watcher mode lowers the barrier to entry because early users can develop and test workflows with the agent tooling they already run locally, without provisioning cloud model credentials.
 
@@ -457,7 +456,8 @@ curl -s 'http://localhost:4000/search?q=hotfix'
 Start a mock watcher in another shell:
 
 ```bash
-AI_EXECUTION_MODE=queue npm run dev:watcher
+AI_EXECUTION_MODE=queue AI_PROVIDER=mock npm run dev:api
+AI_PROVIDER=mock npm run dev:watcher
 ```
 
 Create a queued answer job through the API:
@@ -475,30 +475,20 @@ By default, AI jobs are stored in memory. To use Postgres:
 ```bash
 docker compose up -d postgres
 psql "$DATABASE_URL" -f packages/db/migrations/0001_initial.sql
-AI_JOB_QUEUE=postgres AI_EXECUTION_MODE=queue npm run dev:api
+STORAGE_BACKEND=postgres AI_EXECUTION_MODE=queue npm run dev:api
 ```
 
-By default, indexed knowledge is held in memory and can optionally be persisted:
+By default, indexed knowledge, question logs, proposals, and AI jobs use memory storage. Set `STORAGE_BACKEND=postgres` to persist them together. The older per-store variables still work as compatibility overrides when you need a mixed setup.
+
+Use a provider for answer synthesis:
 
 ```bash
-KNOWLEDGE_STORE=postgres npm run dev:api
+AI_PROVIDER=mock npm run dev:api
+AI_PROVIDER=openai-compatible npm run dev:api
+AI_PROVIDER=azure-openai npm run dev:api
 ```
 
-Question logs also default to memory. To persist them:
-
-```bash
-QUESTION_LOG_STORE=postgres npm run dev:api
-```
-
-Use a chat provider for answer synthesis:
-
-```bash
-CHAT_PROVIDER=mock npm run dev:api
-CHAT_PROVIDER=openai-compatible npm run dev:api
-CHAT_PROVIDER=azure-openai npm run dev:api
-```
-
-`mock` is the default and produces deterministic answers from retrieved Markdown context. OpenAI-compatible and Azure OpenAI providers use HTTP APIs configured through environment variables.
+`mock` is the default and produces deterministic answers from retrieved Markdown context. OpenAI-compatible and Azure OpenAI providers use HTTP APIs configured through environment variables. Configured providers can be switched at runtime in the web console's **Config** page.
 
 Inspect logged questions and gap candidates:
 

@@ -4,8 +4,10 @@ Markdown Magpie records question interactions so the knowledge base can learn fr
 
 ## Stores
 
-- `QUESTION_LOG_STORE=memory`: process-local logs for development.
-- `QUESTION_LOG_STORE=postgres`: durable logs in Postgres.
+- `STORAGE_BACKEND=memory`: process-local logs for development.
+- `STORAGE_BACKEND=postgres`: durable logs in Postgres.
+
+`QUESTION_LOG_STORE` still works as a compatibility override for question logs, but new local and deployment configs should prefer `STORAGE_BACKEND`.
 
 ## Logged Fields
 

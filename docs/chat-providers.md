@@ -9,7 +9,7 @@ Markdown Magpie keeps answer synthesis behind the `ChatProvider` interface.
 Default provider. It produces deterministic answers from retrieved Markdown context and requires no API key.
 
 ```bash
-CHAT_PROVIDER=mock npm run dev:api
+AI_PROVIDER=mock npm run dev:api
 ```
 
 ### `openai-compatible`
@@ -17,7 +17,7 @@ CHAT_PROVIDER=mock npm run dev:api
 Uses an OpenAI-compatible `/chat/completions` endpoint.
 
 ```bash
-CHAT_PROVIDER=openai-compatible \
+AI_PROVIDER=openai-compatible \
 OPENAI_COMPATIBLE_BASE_URL=https://example.com/v1 \
 OPENAI_COMPATIBLE_API_KEY=... \
 OPENAI_COMPATIBLE_MODEL=... \
@@ -29,7 +29,7 @@ npm run dev:api
 Uses Azure OpenAI chat completions.
 
 ```bash
-CHAT_PROVIDER=azure-openai \
+AI_PROVIDER=azure-openai \
 AZURE_OPENAI_ENDPOINT=https://example.openai.azure.com \
 AZURE_OPENAI_API_KEY=... \
 AZURE_OPENAI_CHAT_DEPLOYMENT=... \
@@ -39,6 +39,8 @@ npm run dev:api
 
 ## Execution Modes
 
-`CHAT_PROVIDER` controls direct answer synthesis.
+`AI_PROVIDER` controls direct answer synthesis when `AI_EXECUTION_MODE=direct`.
 
 `AI_EXECUTION_MODE=queue` bypasses direct synthesis and enqueues an `answer_question` job for the watcher instead.
+
+Configured provider choices can be switched at runtime from the web console's Config page. Environment variables still define which providers are available.

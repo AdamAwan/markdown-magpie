@@ -18,7 +18,7 @@ The API:
 4. Parses frontmatter.
 5. Splits documents into heading-based sections.
 6. Stores sections in the in-memory search index.
-7. Persists documents and sections to Postgres when `KNOWLEDGE_STORE=postgres`.
+7. Persists documents and sections to Postgres when `STORAGE_BACKEND=postgres`.
 
 ## Search
 

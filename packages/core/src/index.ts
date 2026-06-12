@@ -144,7 +144,7 @@ export interface EmbeddingProvider {
   embed(texts: string[]): Promise<number[][]>;
 }
 
-export type AiExecutionMode = "mock" | "direct" | "queue";
+export type AiExecutionMode = "direct" | "queue";
 
 export type AiJobType =
   | "answer_question"
