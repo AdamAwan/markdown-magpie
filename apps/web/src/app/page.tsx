@@ -105,6 +105,8 @@ export default function HomePage() {
   const [query, setQuery] = useState("");
   const [sections, setSections] = useState<SearchSection[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | undefined>();
   const [message, setMessage] = useState("");
 
   const latestJob = useMemo(
@@ -118,6 +120,7 @@ export default function HomePage() {
   }, []);
 
   async function refresh() {
+    setRefreshing(true);
     setMessage("");
     try {
       const [healthResult, statsResult, questionsResult, gapsResult, jobsResult, proposalsResult] = await Promise.all([
@@ -136,8 +139,30 @@ export default function HomePage() {
       setJobs(jobsResult.jobs);
       setProposals(proposalsResult.proposals);
       setSelectedProposalId((current) => current ?? proposalsResult.proposals[0]?.id);
+      setLastRefreshedAt(new Date().toISOString());
+
+      if (answer?.questionId) {
+        const result = await apiGet<{ question: QuestionLog }>(`/questions/${answer.questionId}`);
+        setAnswer((current) =>
+          current?.questionId === result.question.id
+            ? {
+                ...current,
+                mode: result.question.executionMode,
+                result: result.question.answer,
+                job: jobsResult.jobs.find((job) => job.id === current.job?.id) ?? current.job
+              }
+            : current
+        );
+      }
+
+      if (query.trim()) {
+        const result = await apiGet<{ sections: SearchSection[] }>(`/search?q=${encodeURIComponent(query.trim())}&limit=6`);
+        setSections(result.sections);
+      }
     } catch (error) {
       setMessage(errorMessage(error));
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -212,9 +237,12 @@ export default function HomePage() {
           <p className="eyebrow">Markdown Magpie</p>
           <h1>Knowledge Console</h1>
         </div>
-        <button className="button secondary" onClick={refresh} type="button">
-          Refresh
-        </button>
+        <div className="refreshControls">
+          <button className="button secondary" disabled={refreshing} onClick={() => void refresh()} type="button">
+            {refreshing ? "Refreshing" : "Refresh"}
+          </button>
+          <span aria-live="polite">{lastRefreshedAt ? `Updated ${new Date(lastRefreshedAt).toLocaleTimeString()}` : "Not refreshed yet"}</span>
+        </div>
       </header>
 
       {message ? <div className="alert">{message}</div> : null}

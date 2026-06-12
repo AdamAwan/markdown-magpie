@@ -90,6 +90,19 @@ p {
   opacity: 0.55;
 }
 
+.refreshControls {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+
+.refreshControls span {
+  color: #60706a;
+  font-size: 12px;
+  font-weight: 700;
+  min-height: 18px;
+}
+
 .alert {
   margin-bottom: 16px;
   border: 1px solid #c35f48;
@@ -444,6 +457,10 @@ pre {
   .inlineForm {
     grid-template-columns: 1fr;
     display: grid;
+  }
+
+  .refreshControls {
+    justify-items: stretch;
   }
 
   h1 {
