@@ -14,6 +14,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $logDir = Join-Path $repoRoot "tmp"
 $catKbPath = Join-Path $repoRoot "knowledge-bases\cats"
+$envPath = Join-Path $repoRoot ".env"
 
 function Write-Step {
   param([string] $Message)
@@ -23,6 +24,27 @@ function Write-Step {
 function Test-CommandExists {
   param([string] $Name)
   $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Import-DotEnv {
+  param([string] $Path)
+  if (-not (Test-Path $Path)) {
+    return
+  }
+
+  foreach ($line in Get-Content $Path) {
+    $trimmed = $line.Trim()
+    if (-not $trimmed -or $trimmed.StartsWith("#") -or -not $trimmed.Contains("=")) {
+      continue
+    }
+
+    $parts = $trimmed -split "=", 2
+    $name = $parts[0].Trim()
+    $value = $parts[1].Trim().Trim('"').Trim("'")
+    if ($name -and -not [Environment]::GetEnvironmentVariable($name, "Process")) {
+      [Environment]::SetEnvironmentVariable($name, $value, "Process")
+    }
+  }
 }
 
 function Get-PortProcessIds {
@@ -90,6 +112,8 @@ function Wait-ForHttp {
 if (-not (Test-CommandExists "npm")) {
   throw "npm was not found on PATH. Install Node.js 22+ and try again."
 }
+
+Import-DotEnv -Path $envPath
 
 if ($Provider -eq "codex" -and -not (Test-CommandExists $CodexCliPath)) {
   throw "Codex CLI '$CodexCliPath' was not found on PATH. Pass -CodexCliPath or enable the Codex CLI first."
