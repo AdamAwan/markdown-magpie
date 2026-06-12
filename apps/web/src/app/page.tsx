@@ -6,6 +6,8 @@ const apiBaseUrl = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:40
 
 type Confidence = "high" | "medium" | "low" | "unknown";
 type Feedback = "helpful" | "unhelpful";
+type ConsoleSection = "ask" | "knowledge" | "gaps" | "jobs" | "proposals";
+type WorkspaceTab = "ask" | "search" | "recent";
 
 interface Health {
   ok: boolean;
@@ -16,6 +18,20 @@ interface KnowledgeStats {
   repositoryCount: number;
   documentCount: number;
   sectionCount: number;
+}
+
+interface KnowledgeDocument {
+  id: string;
+  repositoryId: string;
+  path: string;
+  commitSha?: string;
+  metadata: {
+    title: string;
+    owner?: string;
+    status: string;
+    tags: string[];
+  };
+  content: string;
 }
 
 interface Citation {
@@ -82,6 +98,7 @@ interface SearchSection {
   id: string;
   path: string;
   heading: string;
+  anchor: string;
   content: string;
 }
 
@@ -96,15 +113,23 @@ export default function HomePage() {
   const [health, setHealth] = useState<Health | undefined>();
   const [stats, setStats] = useState<KnowledgeStats>({ repositoryCount: 0, documentCount: 0, sectionCount: 0 });
   const [questions, setQuestions] = useState<QuestionLog[]>([]);
+  const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [gaps, setGaps] = useState<GapCandidate[]>([]);
   const [jobs, setJobs] = useState<AiJob[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [selectedProposalId, setSelectedProposalId] = useState<string | undefined>();
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | undefined>();
+  const [activeSection, setActiveSection] = useState<ConsoleSection>("ask");
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("ask");
+  const [expandedQuestionIds, setExpandedQuestionIds] = useState<string[]>([]);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<AskResponse | undefined>();
   const [query, setQuery] = useState("");
   const [sections, setSections] = useState<SearchSection[]>([]);
+  const [uploadPath, setUploadPath] = useState("uploaded/cats-note.md");
+  const [uploadContent, setUploadContent] = useState("");
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | undefined>();
   const [message, setMessage] = useState("");
@@ -114,6 +139,7 @@ export default function HomePage() {
     [jobs]
   );
   const selectedProposal = proposals.find((proposal) => proposal.id === selectedProposalId) ?? proposals[0];
+  const selectedDocument = documents.find((document) => document.id === selectedDocumentId) ?? documents[0];
 
   useEffect(() => {
     void refresh();
@@ -123,9 +149,10 @@ export default function HomePage() {
     setRefreshing(true);
     setMessage("");
     try {
-      const [healthResult, statsResult, questionsResult, gapsResult, jobsResult, proposalsResult] = await Promise.all([
+      const [healthResult, statsResult, documentsResult, questionsResult, gapsResult, jobsResult, proposalsResult] = await Promise.all([
         apiGet<Health>("/health"),
         apiGet<KnowledgeStats>("/knowledge/stats"),
+        apiGet<{ documents: KnowledgeDocument[] }>("/documents"),
         apiGet<{ questions: QuestionLog[] }>("/questions?limit=8"),
         apiGet<{ gaps: GapCandidate[] }>("/gaps/candidates?limit=8"),
         apiGet<{ jobs: AiJob[] }>("/ai-jobs"),
@@ -134,11 +161,17 @@ export default function HomePage() {
 
       setHealth(healthResult);
       setStats(statsResult);
+      setDocuments(documentsResult.documents);
       setQuestions(questionsResult.questions);
       setGaps(gapsResult.gaps);
       setJobs(jobsResult.jobs);
       setProposals(proposalsResult.proposals);
       setSelectedProposalId((current) => current ?? proposalsResult.proposals[0]?.id);
+      setSelectedDocumentId((current) =>
+        current && documentsResult.documents.some((document) => document.id === current)
+          ? current
+          : documentsResult.documents[0]?.id
+      );
       setLastRefreshedAt(new Date().toISOString());
 
       if (answer?.questionId) {
@@ -197,6 +230,7 @@ export default function HomePage() {
     try {
       const result = await apiGet<{ sections: SearchSection[] }>(`/search?q=${encodeURIComponent(query.trim())}&limit=6`);
       setSections(result.sections);
+      setWorkspaceTab("search");
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -222,6 +256,7 @@ export default function HomePage() {
         summary: gap.summary,
         targetPath: "knowledge-bases/cats/proposed-gap.md"
       });
+      setActiveSection("jobs");
       await refresh();
     } catch (error) {
       setMessage(errorMessage(error));
@@ -230,224 +265,649 @@ export default function HomePage() {
     }
   }
 
+  async function uploadMarkdown(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!uploadPath.trim() || !uploadContent.trim()) {
+      return;
+    }
+
+    setUploading(true);
+    setMessage("");
+    try {
+      const summary = await apiPost<{ documentCount: number; sectionCount: number }>("/documents/upload", {
+        repositoryId: "console-upload",
+        name: "Console Upload",
+        documents: [
+          {
+            path: uploadPath.trim(),
+            content: uploadContent
+          }
+        ]
+      });
+      setMessage(`Indexed ${summary.documentCount} document with ${summary.sectionCount} sections.`);
+      setUploadContent("");
+      await refresh();
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function useDroppedFiles(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) {
+      return;
+    }
+
+    setUploadPath(file.name.toLowerCase().endsWith(".md") ? file.name : `${file.name}.md`);
+    setUploadContent(await file.text());
+  }
+
+  function openSection(section: ConsoleSection) {
+    setActiveSection(section);
+    if (section === "ask") {
+      setWorkspaceTab("ask");
+    }
+  }
+
   return (
-    <main className="shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Markdown Magpie</p>
-          <h1>Knowledge Console</h1>
+    <div className="appShell">
+      <aside className="sidebar">
+        <div className="brand">
+          <span>Markdown Magpie</span>
+          <strong>Knowledge Console</strong>
         </div>
-        <div className="refreshControls">
-          <button className="button secondary" disabled={refreshing} onClick={() => void refresh()} type="button">
-            {refreshing ? "Refreshing" : "Refresh"}
-          </button>
-          <span aria-live="polite">{lastRefreshedAt ? `Updated ${new Date(lastRefreshedAt).toLocaleTimeString()}` : "Not refreshed yet"}</span>
-        </div>
-      </header>
-
-      {message ? <div className="alert">{message}</div> : null}
-
-      <section className="metrics" aria-label="System status">
-        <Metric label="API" value={health?.ok ? "Online" : "Offline"} tone={health?.ok ? "good" : "bad"} />
-        <Metric label="Repositories" value={stats.repositoryCount.toString()} />
-        <Metric label="Documents" value={stats.documentCount.toString()} />
-        <Metric label="Sections" value={stats.sectionCount.toString()} />
-        <Metric label="Latest Job" value={latestJob ? latestJob.status : "None"} tone={latestJob?.status === "failed" ? "bad" : "neutral"} />
-      </section>
-
-      <section className="workspace">
-        <div className="toolPane">
-          <div className="paneHeader">
-            <h2>Ask</h2>
-            <span className="pill">{answer?.mode ?? "mock"}</span>
+        <nav className="sideNav" aria-label="Console sections">
+          <NavButton active={activeSection === "ask"} count={questions.length} glyph="Q" label="Ask" onClick={() => openSection("ask")} />
+          <NavButton active={activeSection === "knowledge"} count={stats.sectionCount} glyph="K" label="Knowledge" onClick={() => openSection("knowledge")} />
+          <NavButton active={activeSection === "gaps"} count={gaps.length} glyph="G" label="Gaps" onClick={() => openSection("gaps")} />
+          <NavButton active={activeSection === "jobs"} count={jobs.length} glyph="J" label="Jobs" onClick={() => openSection("jobs")} />
+          <NavButton active={activeSection === "proposals"} count={proposals.length} glyph="P" label="Proposals" onClick={() => openSection("proposals")} />
+        </nav>
+        <div className="sideStatus">
+          <div className="statusLine">
+            <span>API</span>
+            <span>
+              <span className={health?.ok ? "dot" : "dot offline"} />
+              {health?.ok ? "Online" : "Offline"}
+            </span>
           </div>
-          <form className="stack" onSubmit={ask}>
-            <label className="field">
-              <span>Question</span>
-              <textarea
-                onChange={(event) => setQuestion(event.target.value)}
-                placeholder="How do we roll back a hotfix?"
-                rows={4}
-                value={question}
-              />
-            </label>
-            <button className="button" disabled={loading || !question.trim()} type="submit">
-              Ask
-            </button>
-          </form>
+          <div className="statusLine">
+            <span>Provider</span>
+            <span>{answer?.mode ?? "mock"}</span>
+          </div>
+          <div className="statusLine">
+            <span>Updated</span>
+            <span>{lastRefreshedAt ? new Date(lastRefreshedAt).toLocaleTimeString() : "Never"}</span>
+          </div>
+        </div>
+      </aside>
 
-          {answer ? (
-            <div className="resultBlock">
-              <div className="resultHeader">
-                <span className={`status ${answer.result?.confidence ?? "unknown"}`}>{answer.result?.confidence ?? "queued"}</span>
-                <span>{answer.questionId}</span>
+      <main className="main">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">Markdown Magpie</p>
+            <h1>{sectionTitle(activeSection)}</h1>
+            <p>{sectionSubtitle(activeSection)}</p>
+          </div>
+          <div className="topActions">
+            <span className="refreshTime" aria-live="polite">
+              {lastRefreshedAt ? `Updated ${new Date(lastRefreshedAt).toLocaleTimeString()}` : "Not refreshed yet"}
+            </span>
+            <button className="button secondary" disabled={refreshing} onClick={() => void refresh()} type="button">
+              {refreshing ? "Refreshing" : "Refresh"}
+            </button>
+          </div>
+        </header>
+
+        {message ? <div className="alert">{message}</div> : null}
+
+        <section className="summary" aria-label="System summary">
+          <Metric label="API" value={health?.ok ? "Online" : "Offline"} tone={health?.ok ? "good" : "bad"} />
+          <Metric label="Documents" value={stats.documentCount.toString()} />
+          <Metric label="Sections" value={stats.sectionCount.toString()} />
+          <Metric label="Latest Job" value={latestJob ? latestJob.status : "None"} tone={latestJob?.status === "failed" ? "bad" : "neutral"} />
+        </section>
+
+        {activeSection === "ask" ? (
+          <section className="workbench singlePane">
+            <div className="surface">
+              <div className="surfaceHeader">
+                <h2>Workspace</h2>
+                <div className="tabs" role="tablist" aria-label="Workspace views">
+                  <TabButton active={workspaceTab === "ask"} label="Ask" onClick={() => setWorkspaceTab("ask")} />
+                  <TabButton active={workspaceTab === "search"} label="Search" onClick={() => setWorkspaceTab("search")} />
+                  <TabButton active={workspaceTab === "recent"} label="Recent" onClick={() => setWorkspaceTab("recent")} />
+                </div>
               </div>
-              <p>{answer.result?.answer ?? `Queued as ${answer.job?.type ?? "AI job"}`}</p>
-              {answer.result?.citations.map((citation) => (
+              <div className="surfaceBody">
+                {workspaceTab === "ask" ? (
+                  <AskPanel
+                    answer={answer}
+                    loading={loading}
+                    onAsk={ask}
+                    question={question}
+                    setQuestion={setQuestion}
+                  />
+                ) : null}
+                {workspaceTab === "search" ? (
+                  <SearchPanel
+                    loading={loading}
+                    query={query}
+                    sections={sections}
+                    search={search}
+                    setQuery={setQuery}
+                  />
+                ) : null}
+                {workspaceTab === "recent" ? (
+                  <RecentQuestions
+                    expandedQuestionIds={expandedQuestionIds}
+                    onFeedback={sendFeedback}
+                    questions={questions}
+                    toggleCitations={(questionId) =>
+                      setExpandedQuestionIds((current) =>
+                        current.includes(questionId)
+                          ? current.filter((id) => id !== questionId)
+                          : [...current, questionId]
+                      )
+                    }
+                  />
+                ) : null}
+              </div>
+            </div>
+          </section>
+        ) : null}
+
+        {activeSection === "knowledge" ? (
+          <section className="knowledgePage">
+            <div className="surface">
+              <div className="surfaceHeader">
+                <h2>Knowledge Base</h2>
+                <span className="pill">{documents.length} docs</span>
+              </div>
+              <div className="surfaceBody">
+                <KnowledgeBrowser
+                  documents={documents}
+                  selectedDocument={selectedDocument}
+                  setSelectedDocumentId={setSelectedDocumentId}
+                />
+              </div>
+            </div>
+            <div className="surface">
+              <div className="surfaceHeader">
+                <h2>Add Markdown</h2>
+                <span className="pill">Index</span>
+              </div>
+              <div className="surfaceBody">
+                <UploadPanel
+                  onDropFiles={useDroppedFiles}
+                  onUpload={uploadMarkdown}
+                  setUploadContent={setUploadContent}
+                  setUploadPath={setUploadPath}
+                  uploadContent={uploadContent}
+                  uploading={uploading}
+                  uploadPath={uploadPath}
+                />
+              </div>
+            </div>
+          </section>
+        ) : null}
+
+        {activeSection === "gaps" ? (
+          <section className="workbench">
+            <GapPanel draftProposal={draftProposal} gaps={gaps} loading={loading} />
+            <ProposalLinks proposals={proposals} openProposal={(proposalId) => {
+              setSelectedProposalId(proposalId);
+              setActiveSection("proposals");
+            }} />
+          </section>
+        ) : null}
+
+        {activeSection === "jobs" ? (
+          <section className="fullWorkbench">
+            <JobsPanel jobs={jobs} />
+          </section>
+        ) : null}
+
+        {activeSection === "proposals" ? (
+          <section className="fullWorkbench">
+            <ProposalPanel proposals={proposals} selectedProposal={selectedProposal} setSelectedProposalId={setSelectedProposalId} />
+          </section>
+        ) : null}
+      </main>
+    </div>
+  );
+}
+
+function AskPanel({
+  answer,
+  loading,
+  onAsk,
+  question,
+  setQuestion
+}: {
+  answer?: AskResponse;
+  loading: boolean;
+  onAsk: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  question: string;
+  setQuestion: (value: string) => void;
+}) {
+  return (
+    <>
+      <form className="questionForm" onSubmit={onAsk}>
+        <label className="field">
+          <span>Question</span>
+          <textarea
+            onChange={(event) => setQuestion(event.target.value)}
+            placeholder="What are urgent cat warning signs?"
+            rows={4}
+            value={question}
+          />
+        </label>
+        <button className="button" disabled={loading || !question.trim()} type="submit">
+          Ask
+        </button>
+      </form>
+      {answer ? (
+        <div className="answerBlock">
+          <div className="resultHeader">
+            <span className={`status ${answer.result?.confidence ?? "unknown"}`}>{answer.result?.confidence ?? "queued"}</span>
+            <code>{answer.questionId}</code>
+          </div>
+          <p>{answer.result?.answer ?? `Queued as ${answer.job?.type ?? "AI job"}`}</p>
+          {answer.result?.citations.length ? (
+            <div className="citationStack">
+              {answer.result.citations.map((citation) => (
                 <CitationRow citation={citation} key={citation.sectionId} />
               ))}
             </div>
           ) : null}
         </div>
+      ) : null}
+    </>
+  );
+}
 
-        <div className="toolPane">
-          <div className="paneHeader">
-            <h2>Search</h2>
-            <span className="pill">{sections.length} results</span>
-          </div>
-          <form className="inlineForm" onSubmit={search}>
-            <input
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="rollback"
-              type="search"
-              value={query}
-            />
-            <button className="button" disabled={loading || !query.trim()} type="submit">
-              Search
-            </button>
-          </form>
-          <div className="list">
-            {sections.map((section) => (
-              <article className="row" key={section.id}>
-                <div>
-                  <h3>{section.heading}</h3>
-                  <p className="path">{section.path}</p>
-                </div>
-                <p>{section.content.slice(0, 220)}</p>
-              </article>
-            ))}
-            {sections.length === 0 ? <p className="empty">No search results loaded.</p> : null}
-          </div>
-        </div>
-      </section>
-
-      <section className="lowerGrid">
-        <div className="toolPane">
-          <div className="paneHeader">
-            <h2>Recent Questions</h2>
-            <span className="pill">{questions.length}</span>
-          </div>
-          <div className="list compact">
-            {questions.map((item) => (
-              <article className="row" key={item.id}>
-                <div className="rowTop">
-                  <h3>{item.question}</h3>
-                  <span className={`status ${item.confidence}`}>{item.confidence}</span>
-                </div>
-                <p>{item.answer?.answer ?? "Waiting for an answer."}</p>
-                <div className="rowActions">
-                  <span>{new Date(item.askedAt).toLocaleString()}</span>
-                  <button
-                    className={item.feedback === "helpful" ? "chip selected" : "chip"}
-                    onClick={() => sendFeedback(item.id, "helpful")}
-                    type="button"
-                  >
-                    Helpful
-                  </button>
-                  <button
-                    className={item.feedback === "unhelpful" ? "chip selected" : "chip"}
-                    onClick={() => sendFeedback(item.id, "unhelpful")}
-                    type="button"
-                  >
-                    Unhelpful
-                  </button>
-                </div>
-              </article>
-            ))}
-            {questions.length === 0 ? <p className="empty">No questions logged yet.</p> : null}
-          </div>
-        </div>
-
-        <div className="toolPane">
-          <div className="paneHeader">
-            <h2>Gap Candidates</h2>
-            <span className="pill">{gaps.length}</span>
-          </div>
-          <div className="list compact">
-            {gaps.map((gap) => (
-              <article className="row" key={gap.summary}>
-                <div className="rowTop">
-                  <h3>{gap.summary}</h3>
-                  <span className="status low">{gap.count}</span>
-                </div>
-                <p>{gap.questionIds.join(", ")}</p>
-                <div className="rowActions">
-                  <span>{new Date(gap.latestAskedAt).toLocaleString()}</span>
-                  <button className="chip" disabled={loading} onClick={() => draftProposal(gap)} type="button">
-                    Draft Proposal
-                  </button>
-                </div>
-              </article>
-            ))}
-            {gaps.length === 0 ? <p className="empty">No gap candidates yet.</p> : null}
-          </div>
-        </div>
-
-        <div className="toolPane wide">
-          <div className="paneHeader">
-            <h2>AI Jobs</h2>
-            <span className="pill">{jobs.length}</span>
-          </div>
-          <div className="jobTable">
-            <div className="tableHead">
-              <span>Type</span>
-              <span>Status</span>
-              <span>Worker</span>
-              <span>Updated</span>
-            </div>
-            {[...jobs].slice(-8).reverse().map((job) => (
-              <div className="tableRow" key={job.id}>
-                <span>{job.type}</span>
-                <span className={`status ${job.status}`}>{job.status}</span>
-                <span>{job.claimedBy ?? "unclaimed"}</span>
-                <span>{new Date(job.updatedAt).toLocaleString()}</span>
+function SearchPanel({
+  loading,
+  query,
+  search,
+  sections,
+  setQuery
+}: {
+  loading: boolean;
+  query: string;
+  search: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  sections: SearchSection[];
+  setQuery: (value: string) => void;
+}) {
+  return (
+    <>
+      <form className="inlineForm" onSubmit={search}>
+        <input onChange={(event) => setQuery(event.target.value)} placeholder="warning signs" type="search" value={query} />
+        <button className="button" disabled={loading || !query.trim()} type="submit">
+          Search
+        </button>
+      </form>
+      <div className="list scrollList">
+        {sections.map((section) => (
+          <article className="row" key={section.id}>
+            <div className="rowTop">
+              <div>
+                <h3>{section.heading}</h3>
+                <p className="path">
+                  {section.path}
+                  {section.anchor ? `#${section.anchor}` : ""}
+                </p>
               </div>
-            ))}
-            {jobs.length === 0 ? <p className="empty">No AI jobs queued.</p> : null}
-          </div>
-        </div>
+              <span className="pill">{section.id}</span>
+            </div>
+            <p>{section.content.slice(0, 260)}</p>
+          </article>
+        ))}
+        {sections.length === 0 ? <p className="empty">No search results loaded.</p> : null}
+      </div>
+    </>
+  );
+}
 
-        <div className="toolPane wide">
-          <div className="paneHeader">
-            <h2>Proposals</h2>
-            <span className="pill">{proposals.length}</span>
-          </div>
-          <div className="proposalGrid">
-            <div className="list compact">
-              {proposals.map((proposal) => (
-                <button
-                  className={selectedProposal?.id === proposal.id ? "proposalItem selected" : "proposalItem"}
-                  key={proposal.id}
-                  onClick={() => setSelectedProposalId(proposal.id)}
-                  type="button"
-                >
-                  <span>{proposal.title}</span>
-                  <small>{proposal.targetPath}</small>
-                </button>
+function KnowledgeBrowser({
+  documents,
+  selectedDocument,
+  setSelectedDocumentId
+}: {
+  documents: KnowledgeDocument[];
+  selectedDocument?: KnowledgeDocument;
+  setSelectedDocumentId: (id: string) => void;
+}) {
+  return (
+    <div className="documentBrowser">
+      <div className="documentList">
+        {documents.map((document) => (
+          <button
+            className={selectedDocument?.id === document.id ? "documentItem selected" : "documentItem"}
+            key={document.id}
+            onClick={() => setSelectedDocumentId(document.id)}
+            type="button"
+          >
+            <span>{document.metadata.title}</span>
+            <small>{document.path}</small>
+            <span className={`status ${document.metadata.status}`}>{document.metadata.status}</span>
+          </button>
+        ))}
+        {documents.length === 0 ? <p className="empty">No Markdown documents indexed yet.</p> : null}
+      </div>
+      <article className="documentPreview">
+        {selectedDocument ? (
+          <>
+            <div className="rowTop">
+              <div>
+                <h2>{selectedDocument.metadata.title}</h2>
+                <p className="path">{selectedDocument.path}</p>
+              </div>
+              <span className={`status ${selectedDocument.metadata.status}`}>{selectedDocument.metadata.status}</span>
+            </div>
+            <div className="rowActions">
+              <span className="pill">{selectedDocument.repositoryId}</span>
+              {selectedDocument.metadata.owner ? <span className="pill">{selectedDocument.metadata.owner}</span> : null}
+              {selectedDocument.metadata.tags.map((tag) => (
+                <span className="pill" key={tag}>
+                  {tag}
+                </span>
               ))}
-              {proposals.length === 0 ? <p className="empty">No proposals generated yet.</p> : null}
             </div>
-            <div className="proposalPreview">
-              {selectedProposal ? (
-                <>
-                  <div className="rowTop">
-                    <div>
-                      <h3>{selectedProposal.title}</h3>
-                      <p className="path">{selectedProposal.targetPath}</p>
-                    </div>
-                    <span className="status pending">{selectedProposal.status}</span>
-                  </div>
-                  {selectedProposal.rationale ? <p>{selectedProposal.rationale}</p> : null}
-                  <pre>{selectedProposal.markdown}</pre>
-                </>
+            <pre className="markdownViewer">{selectedDocument.content}</pre>
+          </>
+        ) : (
+          <p className="empty">Select a document to view its Markdown.</p>
+        )}
+      </article>
+    </div>
+  );
+}
+
+function RecentQuestions({
+  expandedQuestionIds,
+  onFeedback,
+  questions,
+  toggleCitations
+}: {
+  expandedQuestionIds: string[];
+  onFeedback: (questionId: string, feedback: Feedback) => Promise<void>;
+  questions: QuestionLog[];
+  toggleCitations: (questionId: string) => void;
+}) {
+  return (
+    <div className="list scrollList">
+      {questions.map((item) => {
+        const citations = item.answer?.citations ?? [];
+        const isExpanded = expandedQuestionIds.includes(item.id);
+
+        return (
+          <article className="row" key={item.id}>
+            <div className="rowTop">
+              <h3>{item.question}</h3>
+              <span className={`status ${item.confidence}`}>{item.confidence}</span>
+            </div>
+            <p>{item.answer?.answer ?? "Waiting for an answer."}</p>
+            <div className="rowActions">
+              <span>{new Date(item.askedAt).toLocaleString()}</span>
+              {citations.length > 0 ? (
+                <button className="chip" onClick={() => toggleCitations(item.id)} type="button">
+                  {isExpanded ? "Hide" : "Show"} {citations.length} citations
+                </button>
               ) : (
-                <p className="empty">Select a generated proposal to review its Markdown.</p>
+                <span className="pill">0 citations</span>
               )}
+              <button
+                className={item.feedback === "helpful" ? "chip selected" : "chip"}
+                onClick={() => void onFeedback(item.id, "helpful")}
+                type="button"
+              >
+                Helpful
+              </button>
+              <button
+                className={item.feedback === "unhelpful" ? "chip selected" : "chip"}
+                onClick={() => void onFeedback(item.id, "unhelpful")}
+                type="button"
+              >
+                Unhelpful
+              </button>
             </div>
+            {isExpanded && citations.length > 0 ? (
+              <div className="citationStack">
+                {citations.map((citation) => (
+                  <CitationRow citation={citation} key={citation.sectionId} />
+                ))}
+              </div>
+            ) : null}
+          </article>
+        );
+      })}
+      {questions.length === 0 ? <p className="empty">No questions logged yet.</p> : null}
+    </div>
+  );
+}
+
+function UploadPanel({
+  onDropFiles,
+  onUpload,
+  setUploadContent,
+  setUploadPath,
+  uploadContent,
+  uploading,
+  uploadPath
+}: {
+  onDropFiles: (files: FileList | null) => Promise<void>;
+  onUpload: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  setUploadContent: (value: string) => void;
+  setUploadPath: (value: string) => void;
+  uploadContent: string;
+  uploading: boolean;
+  uploadPath: string;
+}) {
+  return (
+    <section className="uploadWorkspace">
+      <form
+        className="uploadForm"
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => {
+          event.preventDefault();
+          void onDropFiles(event.dataTransfer.files);
+        }}
+        onSubmit={onUpload}
+      >
+        <div className="uploadEditor">
+          <label className="field">
+            <span>Path</span>
+            <input onChange={(event) => setUploadPath(event.target.value)} placeholder="uploaded/cats-note.md" value={uploadPath} />
+          </label>
+          <label className="field editorField">
+            <span>Markdown</span>
+            <textarea
+              onChange={(event) => setUploadContent(event.target.value)}
+              placeholder={"# Cat introductions\n\nKeep first meetings calm and supervised."}
+              rows={14}
+              value={uploadContent}
+            />
+          </label>
+        </div>
+        <div className="dropHint">Drop a Markdown file here or choose one below.</div>
+        <div className="rowActions">
+          <label className="fileButton">
+            <input accept=".md,text/markdown,text/plain" onChange={(event) => void onDropFiles(event.target.files)} type="file" />
+            Choose File
+          </label>
+          <button className="button" disabled={uploading || !uploadPath.trim() || !uploadContent.trim()} type="submit">
+            {uploading ? "Indexing" : "Index Markdown"}
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
+function GapPanel({
+  draftProposal,
+  gaps,
+  loading
+}: {
+  draftProposal: (gap: GapCandidate) => Promise<void>;
+  gaps: GapCandidate[];
+  loading: boolean;
+}) {
+  return (
+    <section className="surface">
+      <div className="surfaceHeader">
+        <h2>Gap Candidates</h2>
+        <span className="pill">{gaps.length}</span>
+      </div>
+      <div className="surfaceBody">
+        <div className="list scrollList">
+          {gaps.map((gap) => (
+            <article className="row" key={gap.summary}>
+              <div className="rowTop">
+                <h3>{gap.summary}</h3>
+                <span className="status low">{gap.count}</span>
+              </div>
+              <p>{gap.questionIds.join(", ")}</p>
+              <div className="rowActions">
+                <span>{new Date(gap.latestAskedAt).toLocaleString()}</span>
+                <button className="chip" disabled={loading} onClick={() => void draftProposal(gap)} type="button">
+                  Draft Proposal
+                </button>
+              </div>
+            </article>
+          ))}
+          {gaps.length === 0 ? <p className="empty">No gap candidates yet.</p> : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function JobsPanel({ jobs }: { jobs: AiJob[] }) {
+  return (
+    <section className="surface">
+      <div className="surfaceHeader">
+        <h2>AI Jobs</h2>
+        <span className="pill">{jobs.length}</span>
+      </div>
+      <div className="surfaceBody">
+        <div className="jobTable">
+          <div className="tableHead">
+            <span>Type</span>
+            <span>Status</span>
+            <span>Worker</span>
+            <span>Updated</span>
+          </div>
+          {[...jobs].slice(-12).reverse().map((job) => (
+            <div className="tableRow" key={job.id}>
+              <span>{job.type}</span>
+              <span className={`status ${job.status}`}>{job.status}</span>
+              <span>{job.claimedBy ?? "unclaimed"}</span>
+              <span>{new Date(job.updatedAt).toLocaleString()}</span>
+            </div>
+          ))}
+          {jobs.length === 0 ? <p className="empty">No AI jobs queued.</p> : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ProposalLinks({
+  openProposal,
+  proposals
+}: {
+  openProposal: (proposalId: string) => void;
+  proposals: Proposal[];
+}) {
+  return (
+    <section className="surface">
+      <div className="surfaceHeader">
+        <h2>Proposals</h2>
+        <span className="pill">{proposals.length}</span>
+      </div>
+      <div className="surfaceBody">
+        <div className="list scrollList">
+          {proposals.map((proposal) => (
+            <article className="row" key={proposal.id}>
+              <div className="rowTop">
+                <div>
+                  <h3>{proposal.title}</h3>
+                  <p className="path">{proposal.targetPath}</p>
+                </div>
+                <span className={`status ${proposal.status}`}>{proposal.status}</span>
+              </div>
+              {proposal.gapSummary ? <p>{proposal.gapSummary}</p> : null}
+              <div className="rowActions">
+                <button className="chip" onClick={() => openProposal(proposal.id)} type="button">
+                  Open Proposal
+                </button>
+                {proposal.jobId ? <span className="pill">{proposal.jobId}</span> : null}
+              </div>
+            </article>
+          ))}
+          {proposals.length === 0 ? <p className="empty">No proposals generated yet.</p> : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ProposalPanel({
+  proposals,
+  selectedProposal,
+  setSelectedProposalId
+}: {
+  proposals: Proposal[];
+  selectedProposal?: Proposal;
+  setSelectedProposalId: (id: string) => void;
+}) {
+  return (
+    <section className="surface">
+      <div className="surfaceHeader">
+        <h2>Proposals</h2>
+        <span className="pill">{proposals.length}</span>
+      </div>
+      <div className="surfaceBody">
+        <div className="proposalGrid">
+          <div className="list scrollList">
+            {proposals.map((proposal) => (
+              <button
+                className={selectedProposal?.id === proposal.id ? "proposalItem selected" : "proposalItem"}
+                key={proposal.id}
+                onClick={() => setSelectedProposalId(proposal.id)}
+                type="button"
+              >
+                <span>{proposal.title}</span>
+                <small className="path">{proposal.targetPath}</small>
+              </button>
+            ))}
+            {proposals.length === 0 ? <p className="empty">No proposals generated yet.</p> : null}
+          </div>
+          <div className="proposalPreview">
+            {selectedProposal ? (
+              <>
+                <div className="rowTop">
+                  <div>
+                    <h3>{selectedProposal.title}</h3>
+                    <p className="path">{selectedProposal.targetPath}</p>
+                  </div>
+                  <span className="status pending">{selectedProposal.status}</span>
+                </div>
+                {selectedProposal.rationale ? <p>{selectedProposal.rationale}</p> : null}
+                <pre>{selectedProposal.markdown}</pre>
+              </>
+            ) : (
+              <p className="empty">Select a generated proposal to review its Markdown.</p>
+            )}
           </div>
         </div>
-      </section>
-    </main>
+      </div>
+    </section>
   );
 }
 
@@ -460,14 +920,84 @@ function Metric({ label, value, tone = "neutral" }: { label: string; value: stri
   );
 }
 
+function NavButton({
+  active,
+  count,
+  glyph,
+  label,
+  onClick
+}: {
+  active: boolean;
+  count: number;
+  glyph: string;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button className={active ? "navButton active" : "navButton"} onClick={onClick} type="button">
+      <span className="navGlyph">{glyph}</span>
+      <span>{label}</span>
+      <span className="pill">{count}</span>
+    </button>
+  );
+}
+
+function TabButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+  return (
+    <button className={active ? "tab active" : "tab"} onClick={onClick} type="button">
+      {label}
+    </button>
+  );
+}
+
 function CitationRow({ citation }: { citation: Citation }) {
   return (
     <div className="citation">
-      <strong>{citation.heading}</strong>
-      <span>{citation.path}</span>
+      <div className="citationTop">
+        <strong>{citation.heading}</strong>
+        <code>{citation.sectionId}</code>
+      </div>
+      <span>
+        {citation.path}
+        {citation.anchor ? `#${citation.anchor}` : ""}
+      </span>
       <p>{citation.excerpt}</p>
     </div>
   );
+}
+
+function sectionTitle(section: ConsoleSection): string {
+  if (section === "knowledge") {
+    return "Browse the Markdown knowledge base";
+  }
+  if (section === "gaps") {
+    return "Turn weak answers into proposals";
+  }
+  if (section === "jobs") {
+    return "Watch AI and MCP job flow";
+  }
+  if (section === "proposals") {
+    return "Review generated Markdown proposals";
+  }
+
+  return "Ask and inspect cited answers";
+}
+
+function sectionSubtitle(section: ConsoleSection): string {
+  if (section === "knowledge") {
+    return "Read indexed Markdown documents, search sections, and add new knowledge from one workspace.";
+  }
+  if (section === "gaps") {
+    return "Prioritize repeated gaps and draft Markdown updates from them.";
+  }
+  if (section === "jobs") {
+    return "See queued, claimed, completed, and failed AI work in one stable table.";
+  }
+  if (section === "proposals") {
+    return "Select a proposal and review its target path, rationale, and Markdown.";
+  }
+
+  return "Ask questions, review recent answers, and expand citations only when you need the source trail.";
 }
 
 async function apiGet<T>(path: string): Promise<T> {

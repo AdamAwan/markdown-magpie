@@ -20,6 +20,11 @@ export interface KnowledgePersistence {
   saveIndexedRepository(summary: IndexedRepositorySummary, documents: KnowledgeDocument[], sections: DocumentSection[]): Promise<void>;
 }
 
+export interface MarkdownUpload {
+  path: string;
+  content: string;
+}
+
 export class InMemoryKnowledgeIndex {
   private readonly documents = new Map<string, KnowledgeDocument>();
   private readonly sections = new Map<string, DocumentSection>();
@@ -81,6 +86,59 @@ export class InMemoryKnowledgeIndex {
     return summary;
   }
 
+  async indexMarkdownDocuments(input: {
+    documents: MarkdownUpload[];
+    repositoryId?: string;
+    name?: string;
+  }): Promise<IndexedRepositorySummary> {
+    const repositoryId = input.repositoryId ?? "uploaded";
+    const repository: RepositoryRef = {
+      id: repositoryId,
+      name: input.name ?? "Uploaded Markdown",
+      defaultBranch: "main",
+      localPath: "uploaded",
+      provider: "local"
+    };
+    const documents: KnowledgeDocument[] = [];
+    const sections: DocumentSection[] = [];
+
+    for (const upload of input.documents) {
+      const parsed = parseMarkdownDocument(upload.content);
+      const document: KnowledgeDocument = {
+        id: `${repository.id}:${upload.path}`,
+        repositoryId: repository.id,
+        path: upload.path,
+        metadata: parsed.metadata,
+        content: upload.content
+      };
+
+      documents.push(document);
+      sections.push(...splitIntoSections(document));
+    }
+
+    this.repositories.set(repository.id, repository);
+    for (const document of documents) {
+      this.documents.set(document.id, document);
+      for (const [sectionId, section] of this.sections) {
+        if (section.documentId === document.id) {
+          this.sections.delete(sectionId);
+        }
+      }
+    }
+    for (const section of sections) {
+      this.sections.set(section.id, section);
+    }
+
+    const summary: IndexedRepositorySummary = {
+      repository,
+      documentCount: documents.length,
+      sectionCount: sections.length
+    };
+
+    await this.persistence?.saveIndexedRepository(summary, documents, sections);
+    return summary;
+  }
+
   async search(question: string, limit: number): Promise<DocumentSection[]> {
     const terms = tokenize(question);
     if (terms.length === 0) {
@@ -96,6 +154,10 @@ export class InMemoryKnowledgeIndex {
       .sort((left, right) => right.score - left.score)
       .slice(0, limit)
       .map((result) => result.section);
+  }
+
+  listDocuments(): KnowledgeDocument[] {
+    return [...this.documents.values()].sort((left, right) => left.path.localeCompare(right.path));
   }
 
   getStats(): { repositoryCount: number; documentCount: number; sectionCount: number } {

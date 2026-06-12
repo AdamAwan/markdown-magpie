@@ -67,6 +67,16 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return;
   }
 
+  if (request.method === "POST" && path === "/documents/upload") {
+    await handleUploadDocuments(request, response);
+    return;
+  }
+
+  if (request.method === "GET" && path === "/documents") {
+    writeJson(response, 200, { documents: knowledgeIndex.listDocuments() });
+    return;
+  }
+
   if (request.method === "GET" && path === "/knowledge/stats") {
     writeJson(response, 200, knowledgeIndex.getStats());
     return;
@@ -319,6 +329,41 @@ async function handleIndexRepository(request: IncomingMessage, response: ServerR
   writeJson(response, 200, summary);
 }
 
+async function handleUploadDocuments(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const payload = await readJsonBody<{
+    repositoryId?: string;
+    name?: string;
+    documents?: Array<{ path?: string; content?: string }>;
+  }>(request);
+  const documents = (payload.documents ?? [])
+    .map((document) => ({
+      path: normalizeUploadPath(document.path),
+      content: document.content ?? ""
+    }))
+    .filter((document) => document.path && document.content.trim());
+
+  if (documents.length === 0) {
+    writeJson(response, 400, { error: "markdown_documents_required" });
+    return;
+  }
+
+  if (documents.some((document) => document.content.length > 250_000)) {
+    writeJson(response, 413, { error: "markdown_document_too_large" });
+    return;
+  }
+
+  const summary = await knowledgeIndex.indexMarkdownDocuments({
+    repositoryId: payload.repositoryId?.trim() || "uploaded",
+    name: payload.name?.trim() || "Uploaded Markdown",
+    documents: documents.map((document) => ({
+      path: document.path,
+      content: document.content
+    }))
+  });
+
+  writeJson(response, 201, summary);
+}
+
 async function handleCreateJob(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const payload = await readJsonBody<{ type?: AiJobType; input?: unknown }>(request);
 
@@ -529,6 +574,15 @@ function normalizeChatProviderName(value: string | undefined): ChatProviderName 
   }
 
   return "mock";
+}
+
+function normalizeUploadPath(value: string | undefined): string {
+  const path = value?.trim().replace(/\\/g, "/").replace(/^\/+/, "") ?? "";
+  if (!path || path.includes("..")) {
+    return "";
+  }
+
+  return path.toLowerCase().endsWith(".md") ? path : `${path}.md`;
 }
 
 function isAiJobType(value: unknown): value is AiJobType {

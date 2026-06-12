@@ -13,6 +13,7 @@
     "dev:watcher": "npm run dev -w @magpie/watcher",
     "dev:web": "npm run dev -w @magpie/web",
     "dev": "npm run dev --workspaces --if-present",
+    "eval:api": "node --import tsx scripts/eval-api.ts",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "tsc -p tsconfig.check.json --noEmit"
