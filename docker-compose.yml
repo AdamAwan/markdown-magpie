@@ -1,4 +1,69 @@
+name: markdown-magpie
+
+x-magpie-env: &magpie-env
+  - path: .env.compose.example
+  - path: .env.compose
+    required: false
+
 services:
+  api:
+    build:
+      context: .
+    image: markdown-magpie:latest
+    command: npm run start -w @magpie/api
+    env_file: *magpie-env
+    environment:
+      PORT: 4000
+    ports:
+      - "4000:4000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  web:
+    image: markdown-magpie:latest
+    command: npm run start -w @magpie/web
+    env_file: *magpie-env
+    environment:
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  watcher:
+    image: markdown-magpie:latest
+    command: npm run start -w @magpie/watcher
+    env_file: *magpie-env
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  mcp:
+    image: markdown-magpie:latest
+    command: npm run start -w @magpie/mcp
+    env_file: *magpie-env
+    profiles:
+      - mcp
+    stdin_open: true
+    depends_on:
+      api:
+        condition: service_started
+    restart: "no"
+
+  migrate:
+    image: markdown-magpie:latest
+    command: npm run db:migrate
+    env_file: *magpie-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   postgres:
     image: pgvector/pgvector:pg16
     environment:
@@ -9,6 +74,11 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d markdown_magpie"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   redis:
     image: redis:7-alpine

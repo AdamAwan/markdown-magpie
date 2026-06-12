@@ -51,6 +51,14 @@ export class PostgresProposalStore implements ProposalStore {
     const result = await this.pool.query<ProposalRow>("SELECT * FROM proposals WHERE id = $1", [id]);
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
+
+  async updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined> {
+    const result = await this.pool.query<ProposalRow>(
+      "UPDATE proposals SET status = $2 WHERE id = $1 RETURNING *",
+      [id, status]
+    );
+    return result.rows[0] ? mapRow(result.rows[0]) : undefined;
+  }
 }
 
 interface ProposalRow {

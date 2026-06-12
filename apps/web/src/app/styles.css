@@ -407,7 +407,10 @@ input:focus {
 .status.high,
 .status.medium,
 .status.completed,
-.status.good {
+.status.good,
+.status.ready,
+.status.pr-opened,
+.status.merged {
   border-color: #9dbb9f;
   background: #f0f8ee;
   color: #3d6b43;
@@ -415,7 +418,8 @@ input:focus {
 
 .status.low,
 .status.failed,
-.status.bad {
+.status.bad,
+.status.rejected {
   border-color: #d48d7a;
   background: #fff4ef;
   color: #9a3a2d;
@@ -468,6 +472,38 @@ input:focus {
 
 .documentItem:first-child {
   border-top: 0;
+}
+
+.folderGroup {
+  display: grid;
+  gap: 2px;
+  border-top: 1px solid #e2e6df;
+  padding: 10px 0;
+}
+
+.folderGroup:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.folderHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #65716b;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.folderHeader small {
+  color: #65716b;
+}
+
+.folderGroup .documentItem {
+  border-top: 0;
+  padding: 9px 0 9px 12px;
 }
 
 .documentItem.selected {
@@ -597,6 +633,13 @@ code {
   min-width: 0;
 }
 
+.repositoryForm {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.4fr) minmax(150px, 0.8fr) minmax(180px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
 .uploadForm {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 260px;
@@ -676,6 +719,54 @@ code {
   padding-top: 12px;
 }
 
+.configGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.configGroup {
+  min-width: 0;
+  border: 1px solid #e2e6df;
+  background: #fbfcfa;
+  padding: 12px;
+}
+
+.configGroup dl {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+.configRow {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.42fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  border-top: 1px solid #e2e6df;
+  padding-top: 8px;
+}
+
+.configRow:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.configRow dt {
+  color: #65716b;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.configRow dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #17211d;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
 pre {
   max-height: 460px;
   margin: 0;
@@ -703,15 +794,17 @@ pre {
   }
 
   .sideNav {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .sideStatus,
   .summary,
   .workbench,
   .documentBrowser,
+  .repositoryForm,
   .uploadForm,
-  .proposalGrid {
+  .proposalGrid,
+  .configGrid {
     grid-template-columns: 1fr;
   }
 
