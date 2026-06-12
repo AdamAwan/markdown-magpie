@@ -2,11 +2,35 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-const apiBaseUrl = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000").replace(/\/+$/, "");
+const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+
+declare global {
+  interface Window {
+    __MAGPIE_CONFIG__?: {
+      apiBaseUrl?: string;
+    };
+  }
+}
+
+function resolveApiBaseUrl(): string {
+  if (configuredApiBaseUrl) {
+    return configuredApiBaseUrl.replace(/\/+$/, "");
+  }
+
+  if (typeof window !== "undefined" && window.__MAGPIE_CONFIG__?.apiBaseUrl) {
+    return window.__MAGPIE_CONFIG__.apiBaseUrl.replace(/\/+$/, "");
+  }
+
+  if (typeof window !== "undefined") {
+    return `${window.location.protocol}//${window.location.hostname}:4000`;
+  }
+
+  return "http://localhost:4000";
+}
 
 type Confidence = "high" | "medium" | "low" | "unknown";
 type Feedback = "helpful" | "unhelpful";
-type ConsoleSection = "ask" | "knowledge" | "gaps" | "jobs" | "proposals";
+type ConsoleSection = "ask" | "knowledge" | "gaps" | "jobs" | "proposals" | "config";
 type WorkspaceTab = "ask" | "search" | "recent";
 
 interface Health {
@@ -18,6 +42,14 @@ interface KnowledgeStats {
   repositoryCount: number;
   documentCount: number;
   sectionCount: number;
+}
+
+interface RuntimeConfig {
+  api: Record<string, string | number | null>;
+  stores: Record<string, string | number | null>;
+  knowledge: Record<string, string | number | null>;
+  providers: Record<string, unknown>;
+  watcher: Record<string, string | number | null>;
 }
 
 interface KnowledgeDocument {
@@ -109,6 +141,16 @@ interface AskResponse {
   job?: AiJob;
 }
 
+interface IndexRepositoryResponse {
+  documentCount: number;
+  sectionCount: number;
+  repository: {
+    id: string;
+    name: string;
+    localPath: string;
+  };
+}
+
 export default function HomePage() {
   const [health, setHealth] = useState<Health | undefined>();
   const [stats, setStats] = useState<KnowledgeStats>({ repositoryCount: 0, documentCount: 0, sectionCount: 0 });
@@ -117,6 +159,7 @@ export default function HomePage() {
   const [gaps, setGaps] = useState<GapCandidate[]>([]);
   const [jobs, setJobs] = useState<AiJob[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [config, setConfig] = useState<RuntimeConfig | undefined>();
   const [selectedProposalId, setSelectedProposalId] = useState<string | undefined>();
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | undefined>();
   const [activeSection, setActiveSection] = useState<ConsoleSection>("ask");
@@ -126,9 +169,13 @@ export default function HomePage() {
   const [answer, setAnswer] = useState<AskResponse | undefined>();
   const [query, setQuery] = useState("");
   const [sections, setSections] = useState<SearchSection[]>([]);
+  const [repoPath, setRepoPath] = useState("knowledge-bases/cats");
+  const [repoId, setRepoId] = useState("cats");
+  const [repoName, setRepoName] = useState("Cats Knowledge Base");
   const [uploadPath, setUploadPath] = useState("uploaded/cats-note.md");
   const [uploadContent, setUploadContent] = useState("");
   const [loading, setLoading] = useState(false);
+  const [indexingRepo, setIndexingRepo] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | undefined>();
@@ -149,14 +196,15 @@ export default function HomePage() {
     setRefreshing(true);
     setMessage("");
     try {
-      const [healthResult, statsResult, documentsResult, questionsResult, gapsResult, jobsResult, proposalsResult] = await Promise.all([
+      const [healthResult, statsResult, documentsResult, questionsResult, gapsResult, jobsResult, proposalsResult, configResult] = await Promise.all([
         apiGet<Health>("/health"),
         apiGet<KnowledgeStats>("/knowledge/stats"),
         apiGet<{ documents: KnowledgeDocument[] }>("/documents"),
         apiGet<{ questions: QuestionLog[] }>("/questions?limit=8"),
         apiGet<{ gaps: GapCandidate[] }>("/gaps/candidates?limit=8"),
         apiGet<{ jobs: AiJob[] }>("/ai-jobs"),
-        apiGet<{ proposals: Proposal[] }>("/proposals?limit=8")
+        apiGet<{ proposals: Proposal[] }>("/proposals?limit=8"),
+        apiGet<RuntimeConfig>("/config")
       ]);
 
       setHealth(healthResult);
@@ -166,6 +214,7 @@ export default function HomePage() {
       setGaps(gapsResult.gaps);
       setJobs(jobsResult.jobs);
       setProposals(proposalsResult.proposals);
+      setConfig(configResult);
       setSelectedProposalId((current) => current ?? proposalsResult.proposals[0]?.id);
       setSelectedDocumentId((current) =>
         current && documentsResult.documents.some((document) => document.id === current)
@@ -265,6 +314,21 @@ export default function HomePage() {
     }
   }
 
+  async function updateProposalStatus(proposalId: string, status: Proposal["status"]) {
+    setLoading(true);
+    setMessage("");
+    try {
+      const result = await apiPost<{ proposal: Proposal }>(`/proposals/${proposalId}/status`, { status });
+      setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
+      setSelectedProposalId(result.proposal.id);
+      setMessage(status === "ready" ? "Proposal marked ready for PR workflow." : "Proposal rejected.");
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function uploadMarkdown(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!uploadPath.trim() || !uploadContent.trim()) {
@@ -291,6 +355,31 @@ export default function HomePage() {
       setMessage(errorMessage(error));
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function indexRepository(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!repoPath.trim()) {
+      return;
+    }
+
+    setIndexingRepo(true);
+    setMessage("");
+    try {
+      const summary = await apiPost<IndexRepositoryResponse>("/repositories/index", {
+        localPath: repoPath.trim(),
+        repositoryId: repoId.trim() || undefined,
+        name: repoName.trim() || undefined
+      });
+      setMessage(
+        `Indexed ${summary.repository.name} with ${summary.documentCount} documents and ${summary.sectionCount} sections.`
+      );
+      await refresh();
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setIndexingRepo(false);
     }
   }
 
@@ -324,6 +413,7 @@ export default function HomePage() {
           <NavButton active={activeSection === "gaps"} count={gaps.length} glyph="G" label="Gaps" onClick={() => openSection("gaps")} />
           <NavButton active={activeSection === "jobs"} count={jobs.length} glyph="J" label="Jobs" onClick={() => openSection("jobs")} />
           <NavButton active={activeSection === "proposals"} count={proposals.length} glyph="P" label="Proposals" onClick={() => openSection("proposals")} />
+          <NavButton active={activeSection === "config"} glyph="C" label="Config" onClick={() => openSection("config")} />
         </nav>
         <div className="sideStatus">
           <div className="statusLine">
@@ -424,7 +514,9 @@ export default function HomePage() {
             <div className="surface">
               <div className="surfaceHeader">
                 <h2>Knowledge Base</h2>
-                <span className="pill">{documents.length} docs</span>
+        <span className="pill" title="Indexed Markdown documents">
+          {documents.length} docs
+        </span>
               </div>
               <div className="surfaceBody">
                 <KnowledgeBrowser
@@ -436,8 +528,30 @@ export default function HomePage() {
             </div>
             <div className="surface">
               <div className="surfaceHeader">
+                <h2>Add Repository</h2>
+                <span className="pill" title="Index a local Markdown repository or folder">
+                  Repository
+                </span>
+              </div>
+              <div className="surfaceBody">
+                <RepositoryPanel
+                  indexing={indexingRepo}
+                  onIndex={indexRepository}
+                  repoId={repoId}
+                  repoName={repoName}
+                  repoPath={repoPath}
+                  setRepoId={setRepoId}
+                  setRepoName={setRepoName}
+                  setRepoPath={setRepoPath}
+                />
+              </div>
+            </div>
+            <div className="surface">
+              <div className="surfaceHeader">
                 <h2>Add Markdown</h2>
-                <span className="pill">Index</span>
+                <span className="pill" title="Add this Markdown to the searchable index">
+                  Index
+                </span>
               </div>
               <div className="surfaceBody">
                 <UploadPanel
@@ -472,7 +586,19 @@ export default function HomePage() {
 
         {activeSection === "proposals" ? (
           <section className="fullWorkbench">
-            <ProposalPanel proposals={proposals} selectedProposal={selectedProposal} setSelectedProposalId={setSelectedProposalId} />
+            <ProposalPanel
+              loading={loading}
+              proposals={proposals}
+              selectedProposal={selectedProposal}
+              setSelectedProposalId={setSelectedProposalId}
+              updateProposalStatus={updateProposalStatus}
+            />
+          </section>
+        ) : null}
+
+        {activeSection === "config" ? (
+          <section className="fullWorkbench">
+            <ConfigPanel config={config} apiBaseUrl={resolveApiBaseUrl()} />
           </section>
         ) : null}
       </main>
@@ -512,7 +638,12 @@ function AskPanel({
       {answer ? (
         <div className="answerBlock">
           <div className="resultHeader">
-            <span className={`status ${answer.result?.confidence ?? "unknown"}`}>{answer.result?.confidence ?? "queued"}</span>
+            <span
+              className={`status ${answer.result?.confidence ?? "unknown"}`}
+              title={answer.result ? `Answer confidence: ${answer.result.confidence}` : "Answer is queued"}
+            >
+              {answer.result?.confidence ?? "queued"}
+            </span>
             <code>{answer.questionId}</code>
           </div>
           <p>{answer.result?.answer ?? `Queued as ${answer.job?.type ?? "AI job"}`}</p>
@@ -561,7 +692,9 @@ function SearchPanel({
                   {section.anchor ? `#${section.anchor}` : ""}
                 </p>
               </div>
-              <span className="pill">{section.id}</span>
+              <span className="pill" title="Section ID">
+                {section.id}
+              </span>
             </div>
             <p>{section.content.slice(0, 260)}</p>
           </article>
@@ -581,20 +714,31 @@ function KnowledgeBrowser({
   selectedDocument?: KnowledgeDocument;
   setSelectedDocumentId: (id: string) => void;
 }) {
+  const folders = groupDocumentsByFolder(documents);
   return (
     <div className="documentBrowser">
       <div className="documentList">
-        {documents.map((document) => (
-          <button
-            className={selectedDocument?.id === document.id ? "documentItem selected" : "documentItem"}
-            key={document.id}
-            onClick={() => setSelectedDocumentId(document.id)}
-            type="button"
-          >
-            <span>{document.metadata.title}</span>
-            <small>{document.path}</small>
-            <span className={`status ${document.metadata.status}`}>{document.metadata.status}</span>
-          </button>
+        {folders.map((folder) => (
+          <section className="folderGroup" key={folder.name}>
+            <div className="folderHeader">
+              <span>{folder.name}</span>
+              <small>{folder.documents.length}</small>
+            </div>
+            {folder.documents.map((document) => (
+              <button
+                className={selectedDocument?.id === document.id ? "documentItem selected" : "documentItem"}
+                key={document.id}
+                onClick={() => setSelectedDocumentId(document.id)}
+                type="button"
+              >
+                <span>{document.metadata.title}</span>
+                <small>{document.path.split("/").at(-1) ?? document.path}</small>
+                <span className={`status ${document.metadata.status}`} title={`Document status: ${document.metadata.status}`}>
+                  {document.metadata.status}
+                </span>
+              </button>
+            ))}
+          </section>
         ))}
         {documents.length === 0 ? <p className="empty">No Markdown documents indexed yet.</p> : null}
       </div>
@@ -606,13 +750,21 @@ function KnowledgeBrowser({
                 <h2>{selectedDocument.metadata.title}</h2>
                 <p className="path">{selectedDocument.path}</p>
               </div>
-              <span className={`status ${selectedDocument.metadata.status}`}>{selectedDocument.metadata.status}</span>
+              <span className={`status ${selectedDocument.metadata.status}`} title={`Document status: ${selectedDocument.metadata.status}`}>
+                {selectedDocument.metadata.status}
+              </span>
             </div>
             <div className="rowActions">
-              <span className="pill">{selectedDocument.repositoryId}</span>
-              {selectedDocument.metadata.owner ? <span className="pill">{selectedDocument.metadata.owner}</span> : null}
+              <span className="pill" title="Repository ID">
+                {selectedDocument.repositoryId}
+              </span>
+              {selectedDocument.metadata.owner ? (
+                <span className="pill" title="Document owner">
+                  {selectedDocument.metadata.owner}
+                </span>
+              ) : null}
               {selectedDocument.metadata.tags.map((tag) => (
-                <span className="pill" key={tag}>
+                <span className="pill" key={tag} title="Document tag">
                   {tag}
                 </span>
               ))}
@@ -625,6 +777,22 @@ function KnowledgeBrowser({
       </article>
     </div>
   );
+}
+
+function groupDocumentsByFolder(documents: KnowledgeDocument[]): Array<{ name: string; documents: KnowledgeDocument[] }> {
+  const groups = new Map<string, KnowledgeDocument[]>();
+  for (const document of documents) {
+    const segments = document.path.split("/");
+    const folder = segments.length > 1 ? segments.slice(0, -1).join("/") : "/";
+    groups.set(folder, [...(groups.get(folder) ?? []), document]);
+  }
+
+  return [...groups.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, groupedDocuments]) => ({
+      name,
+      documents: groupedDocuments.sort((left, right) => left.path.localeCompare(right.path))
+    }));
 }
 
 function RecentQuestions({
@@ -648,17 +816,21 @@ function RecentQuestions({
           <article className="row" key={item.id}>
             <div className="rowTop">
               <h3>{item.question}</h3>
-              <span className={`status ${item.confidence}`}>{item.confidence}</span>
+              <span className={`status ${item.confidence}`} title={`Answer confidence: ${item.confidence}`}>
+                {item.confidence}
+              </span>
             </div>
             <p>{item.answer?.answer ?? "Waiting for an answer."}</p>
             <div className="rowActions">
               <span>{new Date(item.askedAt).toLocaleString()}</span>
               {citations.length > 0 ? (
-                <button className="chip" onClick={() => toggleCitations(item.id)} type="button">
+                <button className="chip" onClick={() => toggleCitations(item.id)} title="Show or hide the answer source sections" type="button">
                   {isExpanded ? "Hide" : "Show"} {citations.length} citations
                 </button>
               ) : (
-                <span className="pill">0 citations</span>
+                <span className="pill" title="No source sections were cited">
+                  0 citations
+                </span>
               )}
               <button
                 className={item.feedback === "helpful" ? "chip selected" : "chip"}
@@ -748,6 +920,61 @@ function UploadPanel({
   );
 }
 
+function RepositoryPanel({
+  indexing,
+  onIndex,
+  repoId,
+  repoName,
+  repoPath,
+  setRepoId,
+  setRepoName,
+  setRepoPath
+}: {
+  indexing: boolean;
+  onIndex: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  repoId: string;
+  repoName: string;
+  repoPath: string;
+  setRepoId: (value: string) => void;
+  setRepoName: (value: string) => void;
+  setRepoPath: (value: string) => void;
+}) {
+  return (
+    <form className="repositoryForm" onSubmit={onIndex}>
+      <label className="field">
+        <span>Local Path</span>
+        <input
+          onChange={(event) => setRepoPath(event.target.value)}
+          placeholder="knowledge-bases/cats"
+          title="Path to a local folder containing Markdown files. Relative paths resolve from the app workspace."
+          value={repoPath}
+        />
+      </label>
+      <label className="field">
+        <span>Repository ID</span>
+        <input
+          onChange={(event) => setRepoId(event.target.value)}
+          placeholder="cats"
+          title="Optional stable ID used internally for this knowledge repository."
+          value={repoId}
+        />
+      </label>
+      <label className="field">
+        <span>Name</span>
+        <input
+          onChange={(event) => setRepoName(event.target.value)}
+          placeholder="Cats Knowledge Base"
+          title="Optional display name for this knowledge repository."
+          value={repoName}
+        />
+      </label>
+      <button className="button" disabled={indexing || !repoPath.trim()} title="Index Markdown files from this repository" type="submit">
+        {indexing ? "Indexing" : "Index Repository"}
+      </button>
+    </form>
+  );
+}
+
 function GapPanel({
   draftProposal,
   gaps,
@@ -761,7 +988,9 @@ function GapPanel({
     <section className="surface">
       <div className="surfaceHeader">
         <h2>Gap Candidates</h2>
-        <span className="pill">{gaps.length}</span>
+        <span className="pill" title="Number of open gap candidates">
+          {gaps.length}
+        </span>
       </div>
       <div className="surfaceBody">
         <div className="list scrollList">
@@ -769,12 +998,20 @@ function GapPanel({
             <article className="row" key={gap.summary}>
               <div className="rowTop">
                 <h3>{gap.summary}</h3>
-                <span className="status low">{gap.count}</span>
+                <span className="pill countPill" title={`${gap.count} question${gap.count === 1 ? "" : "s"} grouped into this gap`}>
+                  {formatQuestionCount(gap.count)}
+                </span>
               </div>
-              <p>{gap.questionIds.join(", ")}</p>
+              <p title="Question IDs grouped into this gap">{gap.questionIds.join(", ")}</p>
               <div className="rowActions">
-                <span>{new Date(gap.latestAskedAt).toLocaleString()}</span>
-                <button className="chip" disabled={loading} onClick={() => void draftProposal(gap)} type="button">
+                <span title="Most recent matching question">{new Date(gap.latestAskedAt).toLocaleString()}</span>
+                <button
+                  className="chip"
+                  disabled={loading}
+                  onClick={() => void draftProposal(gap)}
+                  title="Queue a job to draft Markdown for this knowledge gap"
+                  type="button"
+                >
                   Draft Proposal
                 </button>
               </div>
@@ -792,7 +1029,9 @@ function JobsPanel({ jobs }: { jobs: AiJob[] }) {
     <section className="surface">
       <div className="surfaceHeader">
         <h2>AI Jobs</h2>
-        <span className="pill">{jobs.length}</span>
+        <span className="pill" title="Number of AI jobs loaded">
+          {jobs.length}
+        </span>
       </div>
       <div className="surfaceBody">
         <div className="jobTable">
@@ -805,7 +1044,9 @@ function JobsPanel({ jobs }: { jobs: AiJob[] }) {
           {[...jobs].slice(-12).reverse().map((job) => (
             <div className="tableRow" key={job.id}>
               <span>{job.type}</span>
-              <span className={`status ${job.status}`}>{job.status}</span>
+              <span className={`status ${job.status}`} title={`Job status: ${job.status}`}>
+                {job.status}
+              </span>
               <span>{job.claimedBy ?? "unclaimed"}</span>
               <span>{new Date(job.updatedAt).toLocaleString()}</span>
             </div>
@@ -828,7 +1069,9 @@ function ProposalLinks({
     <section className="surface">
       <div className="surfaceHeader">
         <h2>Proposals</h2>
-        <span className="pill">{proposals.length}</span>
+        <span className="pill" title="Number of generated proposals">
+          {proposals.length}
+        </span>
       </div>
       <div className="surfaceBody">
         <div className="list scrollList">
@@ -839,14 +1082,20 @@ function ProposalLinks({
                   <h3>{proposal.title}</h3>
                   <p className="path">{proposal.targetPath}</p>
                 </div>
-                <span className={`status ${proposal.status}`}>{proposal.status}</span>
+                <span className={`status ${proposal.status}`} title={`Proposal status: ${proposal.status}`}>
+                  {proposal.status}
+                </span>
               </div>
               {proposal.gapSummary ? <p>{proposal.gapSummary}</p> : null}
               <div className="rowActions">
-                <button className="chip" onClick={() => openProposal(proposal.id)} type="button">
+                <button className="chip" onClick={() => openProposal(proposal.id)} title="Open this proposal for review" type="button">
                   Open Proposal
                 </button>
-                {proposal.jobId ? <span className="pill">{proposal.jobId}</span> : null}
+                {proposal.jobId ? (
+                  <span className="pill" title="AI job that generated this proposal">
+                    {proposal.jobId}
+                  </span>
+                ) : null}
               </div>
             </article>
           ))}
@@ -858,19 +1107,25 @@ function ProposalLinks({
 }
 
 function ProposalPanel({
+  loading,
   proposals,
   selectedProposal,
-  setSelectedProposalId
+  setSelectedProposalId,
+  updateProposalStatus
 }: {
+  loading: boolean;
   proposals: Proposal[];
   selectedProposal?: Proposal;
   setSelectedProposalId: (id: string) => void;
+  updateProposalStatus: (proposalId: string, status: Proposal["status"]) => Promise<void>;
 }) {
   return (
     <section className="surface">
       <div className="surfaceHeader">
         <h2>Proposals</h2>
-        <span className="pill">{proposals.length}</span>
+        <span className="pill" title="Number of generated proposals">
+          {proposals.length}
+        </span>
       </div>
       <div className="surfaceBody">
         <div className="proposalGrid">
@@ -896,9 +1151,34 @@ function ProposalPanel({
                     <h3>{selectedProposal.title}</h3>
                     <p className="path">{selectedProposal.targetPath}</p>
                   </div>
-                  <span className="status pending">{selectedProposal.status}</span>
+                  <span className={`status ${selectedProposal.status}`} title={`Proposal status: ${selectedProposal.status}`}>
+                    {selectedProposal.status}
+                  </span>
                 </div>
                 {selectedProposal.rationale ? <p>{selectedProposal.rationale}</p> : null}
+                <div className="rowActions">
+                  <button
+                    className="chip selected"
+                    disabled={loading || selectedProposal.status === "ready"}
+                    onClick={() => void updateProposalStatus(selectedProposal.id, "ready")}
+                    title="Mark this draft as ready for the future PR workflow"
+                    type="button"
+                  >
+                    Mark Ready
+                  </button>
+                  <button
+                    className="chip"
+                    disabled={loading || selectedProposal.status === "rejected"}
+                    onClick={() => void updateProposalStatus(selectedProposal.id, "rejected")}
+                    title="Reject this generated proposal"
+                    type="button"
+                  >
+                    Reject
+                  </button>
+                  <span className="pill" title="This app can review proposals, but opening PRs is not implemented yet">
+                    PR submission not implemented
+                  </span>
+                </div>
                 <pre>{selectedProposal.markdown}</pre>
               </>
             ) : (
@@ -909,6 +1189,72 @@ function ProposalPanel({
       </div>
     </section>
   );
+}
+
+function ConfigPanel({ apiBaseUrl, config }: { apiBaseUrl: string; config?: RuntimeConfig }) {
+  if (!config) {
+    return (
+      <section className="surface">
+        <div className="surfaceHeader">
+          <h2>Runtime Config</h2>
+        </div>
+        <div className="surfaceBody">
+          <p className="empty">Config has not loaded yet.</p>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="surface">
+      <div className="surfaceHeader">
+        <h2>Runtime Config</h2>
+        <span className="pill" title="Browser-facing API base URL">
+          {apiBaseUrl}
+        </span>
+      </div>
+      <div className="surfaceBody">
+        <div className="configGrid">
+          <ConfigGroup title="API" value={{ ...config.api, browserApiBaseUrl: apiBaseUrl }} />
+          <ConfigGroup title="Stores" value={config.stores} />
+          <ConfigGroup title="Knowledge" value={config.knowledge} />
+          <ConfigGroup title="Providers" value={config.providers} />
+          <ConfigGroup title="Watcher" value={config.watcher} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ConfigGroup({ title, value }: { title: string; value: Record<string, unknown> }) {
+  return (
+    <section className="configGroup">
+      <h3>{title}</h3>
+      <dl>
+        {Object.entries(flattenConfig(value)).map(([key, itemValue]) => (
+          <div className="configRow" key={key}>
+            <dt>{key}</dt>
+            <dd>{String(itemValue ?? "not set")}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+function flattenConfig(value: Record<string, unknown>, prefix = ""): Record<string, string | number | null> {
+  return Object.entries(value).reduce<Record<string, string | number | null>>((result, [key, itemValue]) => {
+    const nextKey = prefix ? `${prefix}.${key}` : key;
+    if (itemValue && typeof itemValue === "object" && !Array.isArray(itemValue)) {
+      return {
+        ...result,
+        ...flattenConfig(itemValue as Record<string, unknown>, nextKey)
+      };
+    }
+
+    result[nextKey] = typeof itemValue === "string" || typeof itemValue === "number" || itemValue === null ? itemValue : JSON.stringify(itemValue);
+    return result;
+  }, {});
 }
 
 function Metric({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "good" | "bad" | "neutral" }) {
@@ -928,16 +1274,20 @@ function NavButton({
   onClick
 }: {
   active: boolean;
-  count: number;
+  count?: number;
   glyph: string;
   label: string;
   onClick: () => void;
 }) {
   return (
-    <button className={active ? "navButton active" : "navButton"} onClick={onClick} type="button">
+    <button className={active ? "navButton active" : "navButton"} onClick={onClick} title={`Open ${label}`} type="button">
       <span className="navGlyph">{glyph}</span>
       <span>{label}</span>
-      <span className="pill">{count}</span>
+      {count === undefined ? null : (
+        <span className="pill" title={`${count} ${label.toLowerCase()} item${count === 1 ? "" : "s"}`}>
+          {count}
+        </span>
+      )}
     </button>
   );
 }
@@ -979,8 +1329,15 @@ function sectionTitle(section: ConsoleSection): string {
   if (section === "proposals") {
     return "Review generated Markdown proposals";
   }
+  if (section === "config") {
+    return "Inspect runtime configuration";
+  }
 
   return "Ask and inspect cited answers";
+}
+
+function formatQuestionCount(count: number): string {
+  return `${count} question${count === 1 ? "" : "s"}`;
 }
 
 function sectionSubtitle(section: ConsoleSection): string {
@@ -996,17 +1353,20 @@ function sectionSubtitle(section: ConsoleSection): string {
   if (section === "proposals") {
     return "Select a proposal and review its target path, rationale, and Markdown.";
   }
+  if (section === "config") {
+    return "Check execution mode, stores, providers, repository paths, and whether secrets are set.";
+  }
 
   return "Ask questions, review recent answers, and expand citations only when you need the source trail.";
 }
 
 async function apiGet<T>(path: string): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`);
+  const response = await fetch(`${resolveApiBaseUrl()}${path}`);
   return readResponse<T>(response);
 }
 
 async function apiPost<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const response = await fetch(`${resolveApiBaseUrl()}${path}`, {
     method: "POST",
     headers: {
       "content-type": "application/json"

@@ -18,7 +18,7 @@ describe("answerQuestion", () => {
     assert.equal(result.gap?.summary, "No source material found for: How do I roll back a hotfix?");
   });
 
-  it("answers from retrieved sections with citations", async () => {
+  it("answers from relevant retrieved sections with citations", async () => {
     const sections: DocumentSection[] = [
       {
         id: "repo:runbook.md:0",
@@ -53,8 +53,76 @@ describe("answerQuestion", () => {
 
     assert.equal(result.confidence, "medium");
     assert.equal(result.gap, undefined);
-    assert.equal(result.citations.length, 2);
+    assert.equal(result.citations.length, 1);
     assert.equal(result.citations[0].sectionId, "repo:runbook.md:0");
     assert.match(result.answer, /rollback guidance is/i);
+  });
+
+  it("raises a gap when retrieved sections only have weak incidental overlap", async () => {
+    const sections: DocumentSection[] = [
+      {
+        id: "repo:care.md:0",
+        documentId: "repo:care.md",
+        path: "care.md",
+        heading: "Cat Care Basics",
+        headingPath: ["Cat Care Basics"],
+        anchor: "cat-care-basics",
+        content: "Cats need fresh water, routine feeding, and a clean litter box.",
+        ordinal: 0
+      },
+      {
+        id: "repo:adoption.md:0",
+        documentId: "repo:adoption.md",
+        path: "adoption.md",
+        heading: "Cat Adoption Checklist",
+        headingPath: ["Cat Adoption Checklist"],
+        anchor: "cat-adoption-checklist",
+        content: "Prepare a quiet room before bringing a cat home.",
+        ordinal: 0
+      }
+    ];
+    const searchProvider: SectionSearchProvider = {
+      async search() {
+        return sections;
+      }
+    };
+
+    const result = await answerQuestion("What should I do if a cat gets gum in their fur?", searchProvider, new MockChatProvider());
+
+    assert.equal(result.confidence, "low");
+    assert.equal(result.citations.length, 0);
+    assert.equal(result.gap?.summary, "No source material found for: What should I do if a cat gets gum in their fur?");
+  });
+
+  it("raises a gap when the chat provider says the context is insufficient", async () => {
+    const sections: DocumentSection[] = [
+      {
+        id: "repo:care.md:0",
+        documentId: "repo:care.md",
+        path: "care.md",
+        heading: "Gum in Fur",
+        headingPath: ["Gum in Fur"],
+        anchor: "gum-in-fur",
+        content: "Escalate sticky fur issues when the knowledge base has a reviewed procedure.",
+        ordinal: 0
+      }
+    ];
+    const searchProvider: SectionSearchProvider = {
+      async search() {
+        return sections;
+      }
+    };
+
+    const result = await answerQuestion("What about gum in fur?", searchProvider, {
+      async complete() {
+        return {
+          content: "The provided knowledge base does not contain any information about what to do if a cat gets gum in their fur."
+        };
+      }
+    });
+
+    assert.equal(result.confidence, "low");
+    assert.equal(result.citations.length, 0);
+    assert.match(result.gap?.summary ?? "", /No sufficient source material/);
   });
 });

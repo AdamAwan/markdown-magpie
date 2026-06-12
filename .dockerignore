@@ -1,0 +1,13 @@
+node_modules
+dist
+.next
+.next*
+.turbo
+.git
+.env
+.env.*
+coverage
+tmp
+data
+*.log
+*.tsbuildinfo

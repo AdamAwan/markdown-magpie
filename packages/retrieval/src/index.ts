@@ -131,9 +131,11 @@ export async function answerQuestion(
   chatProvider: ChatProvider
 ): Promise<AnswerResult> {
   const sections = await searchProvider.search(question, 5);
-  const citations = sections.map(toCitation);
+  const scoredSections = scoreSectionsForQuestion(question, sections);
+  const relevantSections = selectRelevantSections(scoredSections);
+  const citations = relevantSections.map((result) => toCitation(result.section));
 
-  if (sections.length === 0) {
+  if (sections.length === 0 || relevantSections.length === 0) {
     return {
       answer: "I could not find reliable source material for this question.",
       confidence: "low",
@@ -147,7 +149,7 @@ export async function answerQuestion(
     };
   }
 
-  const context = sections.map((section) => `# ${section.heading}\n${section.content}`).join("\n\n");
+  const context = relevantSections.map(({ section }) => `# ${section.heading}\n${section.content}`).join("\n\n");
   const response = await chatProvider.complete({
     system: "Answer using only the provided Markdown knowledge base context. Cite the source sections.",
     messages: [
@@ -158,11 +160,85 @@ export async function answerQuestion(
     ]
   });
 
+  if (isKnowledgeGapAnswer(response.content)) {
+    return {
+      answer: response.content,
+      confidence: "low",
+      citations: [],
+      gap: {
+        summary: `No sufficient source material found for: ${question}`,
+        question,
+        confidence: "low",
+        citedSectionIds: []
+      }
+    };
+  }
+
   return {
     answer: response.content,
-    confidence: sections.length >= 2 ? "medium" : "low",
+    confidence: confidenceForEvidence(relevantSections),
     citations
   };
+}
+
+interface ScoredSection {
+  section: DocumentSection;
+  score: number;
+}
+
+function scoreSectionsForQuestion(question: string, sections: DocumentSection[]): ScoredSection[] {
+  const terms = tokenize(question);
+  return sections
+    .map((section) => ({
+      section,
+      score: scoreSection(section, terms)
+    }))
+    .filter((result) => result.score > 0)
+    .sort((left, right) => right.score - left.score);
+}
+
+function selectRelevantSections(scoredSections: ScoredSection[]): ScoredSection[] {
+  const bestScore = scoredSections[0]?.score ?? 0;
+  if (bestScore < 2) {
+    return [];
+  }
+
+  return scoredSections
+    .filter((result) => result.score >= Math.max(2, Math.ceil(bestScore * 0.5)))
+    .slice(0, 3);
+}
+
+function confidenceForEvidence(scoredSections: ScoredSection[]): AnswerResult["confidence"] {
+  const bestScore = scoredSections[0]?.score ?? 0;
+  if (bestScore >= 5 && scoredSections.length >= 2) {
+    return "high";
+  }
+
+  return bestScore >= 2 ? "medium" : "low";
+}
+
+function scoreSection(section: DocumentSection, terms: string[]): number {
+  const heading = section.heading.toLowerCase();
+  const content = section.content.toLowerCase();
+  return terms.reduce((score, term) => {
+    if (heading.includes(term)) {
+      return score + 3;
+    }
+
+    return content.includes(term) ? score + 1 : score;
+  }, 0);
+}
+
+function tokenize(value: string): string[] {
+  return [
+    ...new Set((value.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []).filter((term) => !stopwords.has(term)))
+  ];
+}
+
+function isKnowledgeGapAnswer(value: string): boolean {
+  return /provided knowledge base does not contain|does not contain any information|could not find reliable source material|not enough (?:source|context|information)|none of the sections/i.test(
+    value
+  );
 }
 
 function toCitation(section: DocumentSection): Citation {
@@ -222,3 +298,24 @@ function assertConfig(value: string | undefined, name: string): asserts value is
     throw new Error(`${name} is required for the selected chat provider`);
   }
 }
+
+const stopwords = new Set([
+  "and",
+  "are",
+  "cat",
+  "cats",
+  "for",
+  "get",
+  "gets",
+  "got",
+  "how",
+  "the",
+  "this",
+  "that",
+  "what",
+  "when",
+  "where",
+  "who",
+  "why",
+  "with"
+]);

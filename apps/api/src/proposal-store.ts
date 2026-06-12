@@ -12,6 +12,7 @@ export interface ProposalStore {
   create(input: ProposalInput): Promise<Proposal>;
   list(limit: number): Promise<Proposal[]>;
   get(id: string): Promise<Proposal | undefined>;
+  updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined>;
 }
 
 export class InMemoryProposalStore implements ProposalStore {
@@ -44,5 +45,19 @@ export class InMemoryProposalStore implements ProposalStore {
 
   async get(id: string): Promise<Proposal | undefined> {
     return this.proposals.get(id);
+  }
+
+  async updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined> {
+    const existing = this.proposals.get(id);
+    if (!existing) {
+      return undefined;
+    }
+
+    const updated: Proposal = {
+      ...existing,
+      status
+    };
+    this.proposals.set(id, updated);
+    return updated;
   }
 }

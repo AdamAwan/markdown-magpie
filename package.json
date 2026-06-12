@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "build": "npm run build -w @magpie/core && npm run build -w @magpie/markdown && npm run build -w @magpie/retrieval && npm run build -w @magpie/git && npm run build -w @magpie/jobs && npm run build -w @magpie/api && npm run build -w @magpie/watcher && npm run build -w @magpie/mcp && npm run build -w @magpie/web",
+    "db:migrate": "node scripts/migrate.mjs",
     "dev:api": "npm run dev -w @magpie/api",
     "dev:watcher": "npm run dev -w @magpie/watcher",
     "dev:web": "npm run dev -w @magpie/web",

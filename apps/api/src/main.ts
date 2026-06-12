@@ -7,6 +7,7 @@ import type {
   AnswerQuestionJobOutput,
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
+  Proposal,
   QuestionFeedback
 } from "@magpie/core";
 import { answerQuestion, createChatProvider, type ChatProviderName } from "@magpie/retrieval";
@@ -54,6 +55,11 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 
   if (request.method === "GET" && path === "/health") {
     writeJson(response, 200, { ok: true, service: "markdown-magpie-api" });
+    return;
+  }
+
+  if (request.method === "GET" && path === "/config") {
+    writeJson(response, 200, getRuntimeConfig());
     return;
   }
 
@@ -146,6 +152,12 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return;
   }
 
+  const proposalStatusMatch = /^\/proposals\/([^/]+)\/status$/.exec(path);
+  if (request.method === "POST" && proposalStatusMatch) {
+    await handleUpdateProposalStatus(proposalStatusMatch[1], request, response);
+    return;
+  }
+
   if (request.method === "POST" && path === "/ai-jobs") {
     await handleCreateJob(request, response);
     return;
@@ -186,6 +198,27 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   }
 
   writeJson(response, 404, { error: "not_found" });
+}
+
+async function handleUpdateProposalStatus(
+  proposalId: string,
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
+  const payload = await readJsonBody<{ status?: Proposal["status"] }>(request);
+
+  if (!isProposalStatus(payload.status)) {
+    writeJson(response, 400, { error: "valid_proposal_status_required" });
+    return;
+  }
+
+  const proposal = await proposals.updateStatus(proposalId, payload.status);
+  if (!proposal) {
+    writeJson(response, 404, { error: "proposal_not_found" });
+    return;
+  }
+
+  writeJson(response, 200, { proposal });
 }
 
 async function handleCreateProposalFromGap(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -469,6 +502,77 @@ function writeJson(response: ServerResponse, statusCode: number, body: unknown):
   response.end(body === undefined ? undefined : JSON.stringify(body));
 }
 
+function getRuntimeConfig() {
+  return {
+    api: {
+      port,
+      aiExecutionMode,
+      chatProvider: chatProviderName,
+      nodeEnv: process.env.NODE_ENV ?? "development"
+    },
+    stores: {
+      knowledgeStore: process.env.KNOWLEDGE_STORE ?? "memory",
+      questionLogStore: process.env.QUESTION_LOG_STORE ?? "memory",
+      proposalStore: process.env.PROPOSAL_STORE ?? "memory",
+      aiJobQueue: process.env.AI_JOB_QUEUE ?? "memory",
+      databaseUrl: maskConnectionString(process.env.DATABASE_URL)
+    },
+    knowledge: {
+      repositoryPath: process.env.KNOWLEDGE_REPO_PATH ?? null
+    },
+    providers: {
+      llmProvider: process.env.LLM_PROVIDER ?? "mock",
+      embeddingProvider: process.env.EMBEDDING_PROVIDER ?? "mock",
+      gitProvider: process.env.GIT_PROVIDER ?? "local",
+      openAiCompatible: {
+        baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL || null,
+        model: process.env.OPENAI_COMPATIBLE_MODEL || null,
+        apiKey: secretState(process.env.OPENAI_COMPATIBLE_API_KEY)
+      },
+      azureOpenAi: {
+        endpoint: process.env.AZURE_OPENAI_ENDPOINT || null,
+        chatDeployment: process.env.AZURE_OPENAI_CHAT_DEPLOYMENT || null,
+        embeddingDeployment: process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT || null,
+        apiVersion: process.env.AZURE_OPENAI_API_VERSION || "2024-10-21",
+        apiKey: secretState(process.env.AZURE_OPENAI_API_KEY)
+      },
+      gitSecrets: {
+        githubToken: secretState(process.env.GITHUB_TOKEN),
+        azureDevopsPat: secretState(process.env.AZURE_DEVOPS_PAT)
+      }
+    },
+    watcher: {
+      name: process.env.WATCHER_NAME ?? null,
+      pollIntervalMs: process.env.WATCHER_POLL_INTERVAL_MS ?? null,
+      aiJobProvider: process.env.AI_JOB_PROVIDER ?? "mock",
+      agentApiTimeoutMs: process.env.AGENT_API_TIMEOUT_MS ?? null
+    }
+  };
+}
+
+function maskConnectionString(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const url = new URL(value);
+    if (url.password) {
+      url.password = "****";
+    }
+    if (url.username) {
+      url.username = `${url.username.slice(0, 1)}***`;
+    }
+    return url.toString();
+  } catch {
+    return secretState(value);
+  }
+}
+
+function secretState(value: string | undefined): "set" | "not set" {
+  return value ? "set" : "not set";
+}
+
 async function createProposalFromCompletedJob(job: AiJob | undefined, output: unknown): Promise<void> {
   if (!job || job.type !== "draft_markdown_proposal" || !isDraftMarkdownProposalJobOutput(output)) {
     return;
@@ -627,4 +731,8 @@ function isDraftMarkdownProposalJobOutput(value: unknown): value is DraftMarkdow
 
 function isQuestionFeedback(value: unknown): value is QuestionFeedback {
   return value === "helpful" || value === "unhelpful";
+}
+
+function isProposalStatus(value: unknown): value is Proposal["status"] {
+  return value === "draft" || value === "ready" || value === "pr-opened" || value === "merged" || value === "rejected";
 }
