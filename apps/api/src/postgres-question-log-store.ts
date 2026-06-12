@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import type { AnswerResult, Confidence, GapCandidate, QuestionLog, QuestionLogInput } from "@magpie/core";
+import type {
+  AnswerResult,
+  Confidence,
+  GapCandidate,
+  QuestionLog,
+  QuestionLogInput,
+  QuestionLogUpdateInput
+} from "@magpie/core";
 import type { QuestionLogStore } from "./question-log-store.js";
 
 const { Pool } = pg;
@@ -85,6 +92,71 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
   async get(id: string): Promise<QuestionLog | undefined> {
     const result = await this.pool.query<QuestionRow>("SELECT * FROM questions WHERE id = $1", [id]);
     return result.rows[0] ? mapQuestionRow(result.rows[0]) : undefined;
+  }
+
+  async updateAnswer(id: string, input: QuestionLogUpdateInput): Promise<QuestionLog | undefined> {
+    const existing = await this.get(id);
+    if (!existing) {
+      return undefined;
+    }
+
+    const metadata = {
+      answer: input.answer,
+      retrievedSectionIds: input.answer.citations.map((citation) => citation.sectionId)
+    };
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `
+          UPDATE questions
+          SET confidence = $2,
+              answer = $3,
+              chat_provider = $4,
+              gap_summary = $5,
+              metadata = $6
+          WHERE id = $1
+        `,
+        [
+          id,
+          input.answer.confidence,
+          input.answer.answer,
+          input.chatProvider ?? existing.chatProvider,
+          input.answer.gap?.summary ?? null,
+          JSON.stringify(metadata)
+        ]
+      );
+      await client.query("DELETE FROM answer_citations WHERE question_id = $1", [id]);
+
+      for (const citation of input.answer.citations) {
+        await client.query(
+          `
+            INSERT INTO answer_citations (
+              question_id, section_id, document_id, path, heading, anchor, excerpt
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+          `,
+          [
+            id,
+            citation.sectionId,
+            citation.documentId,
+            citation.path,
+            citation.heading,
+            citation.anchor,
+            citation.excerpt
+          ]
+        );
+      }
+
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return this.get(id);
   }
 
   async list(limit: number): Promise<QuestionLog[]> {

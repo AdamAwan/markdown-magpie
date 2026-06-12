@@ -33,4 +33,4 @@ Gap candidates are currently grouped from low-confidence questions with a gap su
 
 ## Queued Answers
 
-When `AI_EXECUTION_MODE=queue`, the API logs the queued question immediately with unknown confidence. A later slice should update the log when the watcher completes the answer job.
+When `AI_EXECUTION_MODE=queue`, the API logs the queued question immediately with unknown confidence. The `answer_question` job includes the question log ID, and the API updates the log when the watcher completes the job.

@@ -87,6 +87,44 @@ The watcher has no direct database access. It talks to the API only:
 
 This keeps Codex, Claude Code, hosted APIs, and local mock providers behind the same contract.
 
+## External Agent Providers
+
+The watcher can run a local CLI as the AI provider.
+
+Mock watcher:
+
+```bash
+AI_EXECUTION_MODE=queue npm run dev:api
+AI_JOB_PROVIDER=mock npm run dev:watcher
+```
+
+Codex-style command:
+
+```bash
+AI_JOB_PROVIDER=codex \
+CODEX_CLI_PATH=codex \
+CODEX_CLI_ARGS=exec \
+CODEX_CLI_PROMPT_MODE=arg \
+npm run dev:watcher
+```
+
+Claude-style command:
+
+```bash
+AI_JOB_PROVIDER=claude \
+CLAUDE_CLI_PATH=claude \
+CLAUDE_CLI_ARGS=-p \
+CLAUDE_CLI_PROMPT_MODE=arg \
+npm run dev:watcher
+```
+
+Prompt mode can be:
+
+- `arg`: append the prompt as the final process argument.
+- `stdin`: send the prompt through standard input.
+
+The agent must return JSON matching the job output schema. The watcher extracts and validates JSON before completing the job.
+
 ## Storage
 
 The API supports two queue backends:

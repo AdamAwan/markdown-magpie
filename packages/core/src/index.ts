@@ -84,6 +84,11 @@ export interface QuestionLogInput {
   retrievedSectionIds: string[];
 }
 
+export interface QuestionLogUpdateInput {
+  answer: AnswerResult;
+  chatProvider?: string;
+}
+
 export interface GapCandidate {
   summary: string;
   questionIds: string[];
@@ -169,6 +174,7 @@ export interface AgentRunner {
 }
 
 export interface AnswerQuestionJobInput {
+  questionLogId?: string;
   question: string;
   context: Array<{
     sectionId: string;

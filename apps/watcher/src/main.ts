@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import type {
   AgentRunner,
   AiJob,
@@ -9,6 +10,7 @@ import type {
   SummarizeGapJobInput,
   SummarizeGapJobOutput
 } from "@magpie/core";
+import { buildPrompt, parseJobOutput } from "./job-prompts.js";
 
 const apiBaseUrl = process.env.API_BASE_URL ?? "http://localhost:4000";
 const watcherName = process.env.WATCHER_NAME ?? "local-dev-watcher";
@@ -80,11 +82,21 @@ async function runAndComplete(job: AiJob): Promise<void> {
 
 function createRunner(name: string): AgentRunner {
   if (name === "codex") {
-    return new CliAgentRunner("codex", process.env.CODEX_CLI_PATH ?? "codex");
+    return new CliAgentRunner({
+      name: "codex",
+      command: process.env.CODEX_CLI_PATH ?? "codex",
+      args: splitArgs(process.env.CODEX_CLI_ARGS ?? "exec"),
+      promptMode: normalizePromptMode(process.env.CODEX_CLI_PROMPT_MODE)
+    });
   }
 
   if (name === "claude") {
-    return new CliAgentRunner("claude", process.env.CLAUDE_CLI_PATH ?? "claude");
+    return new CliAgentRunner({
+      name: "claude",
+      command: process.env.CLAUDE_CLI_PATH ?? "claude",
+      args: splitArgs(process.env.CLAUDE_CLI_ARGS ?? "-p"),
+      promptMode: normalizePromptMode(process.env.CLAUDE_CLI_PROMPT_MODE)
+    });
   }
 
   return new MockAgentRunner();
@@ -164,24 +176,44 @@ class MockAgentRunner implements AgentRunner {
   }
 }
 
+type PromptMode = "arg" | "stdin";
+
+interface CliAgentRunnerOptions {
+  name: string;
+  command: string;
+  args: string[];
+  promptMode: PromptMode;
+}
+
 class CliAgentRunner implements AgentRunner {
-  constructor(
-    public readonly name: string,
-    private readonly command: string
-  ) {}
+  readonly name: string;
+  private readonly command: string;
+  private readonly args: string[];
+  private readonly promptMode: PromptMode;
+  private readonly timeoutMs: number;
+
+  constructor(options: CliAgentRunnerOptions) {
+    this.name = options.name;
+    this.command = options.command;
+    this.args = options.args;
+    this.promptMode = options.promptMode;
+    this.timeoutMs = Number.parseInt(process.env.AGENT_CLI_TIMEOUT_MS ?? "120000", 10);
+  }
 
   supports() {
     return true;
   }
 
   async run(job: AiJob): Promise<unknown> {
-    return {
-      jobId: job.id,
-      provider: this.name,
+    const prompt = buildPrompt(job);
+    const stdout = await runCli({
       command: this.command,
-      status: "not_implemented",
-      note: "CLI execution needs a prompt/output contract and workspace permission policy before it is enabled."
-    };
+      args: this.promptMode === "arg" ? [...this.args, prompt] : this.args,
+      stdin: this.promptMode === "stdin" ? prompt : undefined,
+      timeoutMs: this.timeoutMs
+    });
+
+    return parseJobOutput(job, stdout);
   }
 }
 
@@ -213,5 +245,57 @@ async function postJson<TResponse>(path: string, body: unknown): Promise<TRespon
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
+  });
+}
+
+function splitArgs(value: string): string[] {
+  return value
+    .split(" ")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function normalizePromptMode(value: string | undefined): PromptMode {
+  return value === "stdin" ? "stdin" : "arg";
+}
+
+function runCli(options: {
+  command: string;
+  args: string[];
+  stdin?: string;
+  timeoutMs: number;
+}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(options.command, options.args, {
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error(`Agent CLI timed out after ${options.timeoutMs}ms`));
+    }, options.timeoutMs);
+
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timeout);
+      if (code !== 0) {
+        reject(new Error(`Agent CLI exited with ${code}: ${Buffer.concat(stderr).toString("utf8")}`));
+        return;
+      }
+
+      resolve(Buffer.concat(stdout).toString("utf8"));
+    });
+
+    if (options.stdin) {
+      child.stdin.end(options.stdin);
+    } else {
+      child.stdin.end();
+    }
   });
 }

@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AiExecutionMode, AiJobType, AnswerQuestionJobInput } from "@magpie/core";
+import type { AiExecutionMode, AiJob, AiJobType, AnswerQuestionJobInput, AnswerQuestionJobOutput } from "@magpie/core";
 import { answerQuestion, createChatProvider, type ChatProviderName } from "@magpie/retrieval";
 import { InMemoryAiJobQueue } from "./ai-job-queue.js";
 import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
@@ -143,7 +143,14 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
 
   if (aiExecutionMode === "queue") {
     const sections = await knowledgeIndex.search(question, 5);
+    const log = await questionLogs.record({
+      question,
+      executionMode: aiExecutionMode,
+      chatProvider: "watcher",
+      retrievedSectionIds: sections.map((section) => section.id)
+    });
     const input: AnswerQuestionJobInput = {
+      questionLogId: log.id,
       question,
       context: sections.map((section) => ({
         sectionId: section.id,
@@ -154,12 +161,6 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
       expectedOutput: "answer_result"
     };
     const job = await aiJobs.enqueue("answer_question", input);
-    const log = await questionLogs.record({
-      question,
-      executionMode: aiExecutionMode,
-      chatProvider: "watcher",
-      retrievedSectionIds: sections.map((section) => section.id)
-    });
     writeJson(response, 202, {
       mode: "queue",
       questionId: log.id,
@@ -249,11 +250,35 @@ async function handleCompleteJob(
   const payload = await readJsonBody<{ output?: unknown }>(request);
 
   try {
+    const existingJob = await aiJobs.get(jobId);
+    if (!existingJob) {
+      writeJson(response, 404, { error: "job_not_found" });
+      return;
+    }
+
     await aiJobs.complete(jobId, payload.output ?? {});
+    await updateQuestionLogFromCompletedJob(existingJob, payload.output);
     writeJson(response, 200, { job: await aiJobs.get(jobId) });
-  } catch {
-    writeJson(response, 404, { error: "job_not_found" });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unexpected completion failure";
+    writeJson(response, 500, { error: "job_completion_failed", message });
   }
+}
+
+async function updateQuestionLogFromCompletedJob(job: AiJob | undefined, output: unknown): Promise<void> {
+  if (!job || job.type !== "answer_question" || !isAnswerQuestionJobOutput(output)) {
+    return;
+  }
+
+  const input = job.input as Partial<AnswerQuestionJobInput>;
+  if (!input.questionLogId) {
+    return;
+  }
+
+  await questionLogs.updateAnswer(input.questionLogId, {
+    answer: output,
+    chatProvider: job.claimedBy ?? "watcher"
+  });
 }
 
 async function handleFailJob(jobId: string, request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -368,5 +393,21 @@ function isAiJobType(value: unknown): value is AiJobType {
     value === "draft_markdown_proposal" ||
     value === "detect_contradiction" ||
     value === "suggest_consolidation"
+  );
+}
+
+function isAnswerQuestionJobOutput(value: unknown): value is AnswerQuestionJobOutput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<AnswerQuestionJobOutput>;
+  return (
+    typeof candidate.answer === "string" &&
+    (candidate.confidence === "high" ||
+      candidate.confidence === "medium" ||
+      candidate.confidence === "low" ||
+      candidate.confidence === "unknown") &&
+    Array.isArray(candidate.citations)
   );
 }
