@@ -28,9 +28,9 @@ export class MockChatProvider implements ChatProvider {
     const question = extractBlock(prompt, "Question") || "the question";
     const context = extractBlock(prompt, "Context");
     const firstRelevantParagraph = context
-      .split(/\n{2,}/)
-      .map((paragraph) => paragraph.trim())
-      .find((paragraph) => paragraph && !paragraph.startsWith("#"));
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith("#"));
 
     if (!firstRelevantParagraph) {
       return {

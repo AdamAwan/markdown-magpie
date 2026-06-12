@@ -76,6 +76,25 @@ Marks a job as failed.
 }
 ```
 
+## Proposal Review
+
+Gap candidates can be turned into proposal jobs:
+
+```json
+POST /proposals/from-gap
+{
+  "summary": "No source material found for: How do I trim claws?",
+  "targetPath": "knowledge-bases/cats/proposed-gap.md"
+}
+```
+
+The API enqueues a `draft_markdown_proposal` job with the triggering questions and any available evidence citations.
+When the watcher completes that job, the API stores the generated Markdown proposal for review.
+
+```bash
+curl -s http://localhost:4000/proposals
+```
+
 ## Watcher Model
 
 The watcher has no direct database access. It talks to the API only:
@@ -96,6 +115,16 @@ Mock watcher:
 ```bash
 AI_EXECUTION_MODE=queue npm run dev:api
 AI_JOB_PROVIDER=mock npm run dev:watcher
+```
+
+OpenAI-compatible API watcher:
+
+```bash
+AI_JOB_PROVIDER=openai-compatible \
+OPENAI_COMPATIBLE_BASE_URL=https://api.openai.com/v1 \
+OPENAI_COMPATIBLE_API_KEY=... \
+OPENAI_COMPATIBLE_MODEL=... \
+npm run dev:watcher
 ```
 
 Codex-style command:
@@ -124,6 +153,19 @@ Prompt mode can be:
 - `stdin`: send the prompt through standard input.
 
 The agent must return JSON matching the job output schema. The watcher extracts and validates JSON before completing the job.
+
+## Provider Compatibility Practice
+
+Provider support should stay behind `AgentRunner` adapters:
+
+- Normalize every provider to the same internal job contract.
+- Keep prompts and output schemas provider-neutral.
+- Validate provider output before completing jobs.
+- Add a deterministic `mock` provider for local tests and demos.
+- Prefer OpenAI-compatible `/chat/completions` support for broad API coverage.
+- Keep provider credentials in environment variables, never in job payloads.
+- Use timeouts around external calls and mark jobs failed with readable errors.
+- Add one conformance smoke test per provider shape: answer job, gap summary job, and proposal job.
 
 ## Storage
 

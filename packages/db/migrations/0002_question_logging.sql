@@ -2,6 +2,8 @@ ALTER TABLE questions
   ADD COLUMN IF NOT EXISTS execution_mode text NOT NULL DEFAULT 'mock',
   ADD COLUMN IF NOT EXISTS chat_provider text NOT NULL DEFAULT 'mock',
   ADD COLUMN IF NOT EXISTS gap_summary text,
+  ADD COLUMN IF NOT EXISTS feedback text,
+  ADD COLUMN IF NOT EXISTS feedback_at timestamptz,
   ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}';
 
 ALTER TABLE answer_citations

@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { GapCandidate, QuestionLog, QuestionLogInput, QuestionLogUpdateInput } from "@magpie/core";
+import type { GapCandidate, QuestionFeedback, QuestionLog, QuestionLogInput, QuestionLogUpdateInput } from "@magpie/core";
 
 export interface QuestionLogStore {
   record(input: QuestionLogInput): Promise<QuestionLog>;
   updateAnswer(id: string, input: QuestionLogUpdateInput): Promise<QuestionLog | undefined>;
+  recordFeedback(id: string, feedback: QuestionFeedback): Promise<QuestionLog | undefined>;
   get(id: string): Promise<QuestionLog | undefined>;
   list(limit: number): Promise<QuestionLog[]>;
   listGapCandidates(limit: number): Promise<GapCandidate[]>;
@@ -44,6 +45,22 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       confidence: input.answer.confidence,
       retrievedSectionIds: input.answer.citations.map((citation) => citation.sectionId),
       answer: input.answer
+    };
+
+    this.logs.set(id, updated);
+    return updated;
+  }
+
+  async recordFeedback(id: string, feedback: QuestionFeedback): Promise<QuestionLog | undefined> {
+    const existing = this.logs.get(id);
+    if (!existing) {
+      return undefined;
+    }
+
+    const updated: QuestionLog = {
+      ...existing,
+      feedback,
+      feedbackAt: new Date().toISOString()
     };
 
     this.logs.set(id, updated);

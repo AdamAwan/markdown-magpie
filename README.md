@@ -135,6 +135,29 @@ curl -s http://localhost:4000/questions
 curl -s http://localhost:4000/gaps/candidates
 ```
 
+Run the local cats demo with the Codex watcher:
+
+```powershell
+.\scripts\run-cat-demo.ps1 -StopExisting
+```
+
+The script starts the API in queued mode, starts the watcher with `AI_JOB_PROVIDER=codex`, starts the web console, indexes `knowledge-bases/cats`, and opens logs under `tmp/`.
+
+Use the mock watcher instead of Codex:
+
+```powershell
+.\scripts\run-cat-demo.ps1 -Provider mock -StopExisting
+```
+
+Use an OpenAI-compatible API watcher:
+
+```powershell
+$env:OPENAI_COMPATIBLE_BASE_URL="https://api.openai.com/v1"
+$env:OPENAI_COMPATIBLE_API_KEY="..."
+$env:OPENAI_COMPATIBLE_MODEL="..."
+.\scripts\run-cat-demo.ps1 -Provider openai-compatible -StopExisting
+```
+
 ## MVP Milestone
 
 The first milestone is an end-to-end loop against one Markdown Git repository:

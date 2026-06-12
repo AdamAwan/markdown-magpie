@@ -4,6 +4,7 @@ import type {
   AnswerResult,
   Confidence,
   GapCandidate,
+  QuestionFeedback,
   QuestionLog,
   QuestionLogInput,
   QuestionLogUpdateInput
@@ -159,6 +160,24 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     return this.get(id);
   }
 
+  async recordFeedback(id: string, feedback: QuestionFeedback): Promise<QuestionLog | undefined> {
+    const result = await this.pool.query(
+      `
+        UPDATE questions
+        SET feedback = $2,
+            feedback_at = now()
+        WHERE id = $1
+      `,
+      [id, feedback]
+    );
+
+    if (result.rowCount !== 1) {
+      return undefined;
+    }
+
+    return this.get(id);
+  }
+
   async list(limit: number): Promise<QuestionLog[]> {
     const result = await this.pool.query<QuestionRow>(
       "SELECT * FROM questions ORDER BY asked_at DESC LIMIT $1",
@@ -206,6 +225,8 @@ interface QuestionRow {
     answer?: AnswerResult | null;
     retrievedSectionIds?: string[];
   };
+  feedback: QuestionFeedback | null;
+  feedback_at: Date | null;
   asked_at: Date;
 }
 
@@ -226,6 +247,8 @@ function mapQuestionRow(row: QuestionRow): QuestionLog {
     confidence: row.confidence,
     retrievedSectionIds: row.metadata.retrievedSectionIds ?? [],
     answer,
-    askedAt: row.asked_at.toISOString()
+    askedAt: row.asked_at.toISOString(),
+    feedback: row.feedback ?? undefined,
+    feedbackAt: row.feedback_at?.toISOString()
   };
 }

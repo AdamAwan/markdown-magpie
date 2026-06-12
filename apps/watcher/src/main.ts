@@ -81,6 +81,14 @@ async function runAndComplete(job: AiJob): Promise<void> {
 }
 
 function createRunner(name: string): AgentRunner {
+  if (name === "openai-compatible") {
+    return new OpenAICompatibleAgentRunner({
+      apiKey: requiredEnv("OPENAI_COMPATIBLE_API_KEY"),
+      baseUrl: requiredEnv("OPENAI_COMPATIBLE_BASE_URL"),
+      model: requiredEnv("OPENAI_COMPATIBLE_MODEL")
+    });
+  }
+
   if (name === "codex") {
     return new CliAgentRunner({
       name: "codex",
@@ -100,6 +108,78 @@ function createRunner(name: string): AgentRunner {
   }
 
   return new MockAgentRunner();
+}
+
+interface OpenAICompatibleAgentRunnerOptions {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+}
+
+class OpenAICompatibleAgentRunner implements AgentRunner {
+  readonly name = "openai-compatible";
+  private readonly timeoutMs: number;
+
+  constructor(private readonly options: OpenAICompatibleAgentRunnerOptions) {
+    this.timeoutMs = Number.parseInt(process.env.AGENT_API_TIMEOUT_MS ?? "120000", 10);
+  }
+
+  supports() {
+    return true;
+  }
+
+  async run(job: AiJob): Promise<unknown> {
+    const prompt = buildPrompt(job);
+    const content = await withTimeout(
+      this.complete(prompt),
+      this.timeoutMs,
+      `OpenAI-compatible provider timed out after ${this.timeoutMs}ms`
+    );
+
+    return parseJobOutput(job, content);
+  }
+
+  private async complete(prompt: string): Promise<string> {
+    const response = await fetch(`${trimTrailingSlash(this.options.baseUrl)}/chat/completions`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${this.options.apiKey}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model: this.options.model,
+        messages: [
+          {
+            role: "system",
+            content: "You complete Markdown Magpie AI jobs. Return only valid JSON matching the requested schema."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        temperature: 0.2
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI-compatible provider failed with ${response.status}: ${await response.text()}`);
+    }
+
+    const body = (await response.json()) as {
+      choices?: Array<{
+        message?: {
+          content?: string;
+        };
+      }>;
+    };
+    const content = body.choices?.[0]?.message?.content?.trim();
+    if (!content) {
+      throw new Error("OpenAI-compatible provider returned no message content");
+    }
+
+    return content;
+  }
 }
 
 class MockAgentRunner implements AgentRunner {
@@ -257,6 +337,38 @@ function splitArgs(value: string): string[] {
 
 function normalizePromptMode(value: string | undefined): PromptMode {
   return value === "stdin" ? "stdin" : "arg";
+}
+
+function requiredEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} is required`);
+  }
+
+  return value;
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    );
+  });
 }
 
 function runCli(options: {

@@ -1,11 +1,22 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AiExecutionMode, AiJob, AiJobType, AnswerQuestionJobInput, AnswerQuestionJobOutput } from "@magpie/core";
+import type {
+  AiExecutionMode,
+  AiJob,
+  AiJobType,
+  AnswerQuestionJobInput,
+  AnswerQuestionJobOutput,
+  DraftMarkdownProposalJobInput,
+  DraftMarkdownProposalJobOutput,
+  QuestionFeedback
+} from "@magpie/core";
 import { answerQuestion, createChatProvider, type ChatProviderName } from "@magpie/retrieval";
 import { InMemoryAiJobQueue } from "./ai-job-queue.js";
 import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
 import { PostgresAiJobQueue } from "./postgres-ai-job-queue.js";
 import { PostgresKnowledgeStore } from "./postgres-knowledge-store.js";
+import { PostgresProposalStore } from "./postgres-proposal-store.js";
 import { PostgresQuestionLogStore } from "./postgres-question-log-store.js";
+import { InMemoryProposalStore } from "./proposal-store.js";
 import { InMemoryQuestionLogStore } from "./question-log-store.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
@@ -14,6 +25,7 @@ const aiJobs = createAiJobQueue();
 const knowledgeIndex = createKnowledgeIndex();
 const chatProvider = createConfiguredChatProvider();
 const questionLogs = createQuestionLogStore();
+const proposals = createProposalStore();
 const chatProviderName = normalizeChatProviderName(process.env.CHAT_PROVIDER);
 
 const server = createServer(async (request, response) => {
@@ -34,6 +46,11 @@ server.listen(port, () => {
 async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
   const path = url.pathname;
+
+  if (request.method === "OPTIONS") {
+    writeJson(response, 204, undefined);
+    return;
+  }
 
   if (request.method === "GET" && path === "/health") {
     writeJson(response, 200, { ok: true, service: "markdown-magpie-api" });
@@ -62,7 +79,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       return;
     }
 
-    writeJson(response, 200, { sections: await knowledgeIndex.search(query, 5) });
+    writeJson(response, 200, { sections: await knowledgeIndex.search(query, parseLimit(url.searchParams.get("limit"), 5)) });
     return;
   }
 
@@ -84,9 +101,38 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return;
   }
 
+  const feedbackMatch = /^\/questions\/([^/]+)\/feedback$/.exec(path);
+  if (request.method === "POST" && feedbackMatch) {
+    await handleQuestionFeedback(feedbackMatch[1], request, response);
+    return;
+  }
+
   if (request.method === "GET" && path === "/gaps/candidates") {
     const limit = parseLimit(url.searchParams.get("limit"), 50);
     writeJson(response, 200, { gaps: await questionLogs.listGapCandidates(limit) });
+    return;
+  }
+
+  if (request.method === "GET" && path === "/proposals") {
+    const limit = parseLimit(url.searchParams.get("limit"), 50);
+    writeJson(response, 200, { proposals: await proposals.list(limit) });
+    return;
+  }
+
+  if (request.method === "POST" && path === "/proposals/from-gap") {
+    await handleCreateProposalFromGap(request, response);
+    return;
+  }
+
+  const proposalMatch = /^\/proposals\/([^/]+)$/.exec(path);
+  if (request.method === "GET" && proposalMatch) {
+    const proposal = await proposals.get(proposalMatch[1]);
+    if (!proposal) {
+      writeJson(response, 404, { error: "proposal_not_found" });
+      return;
+    }
+
+    writeJson(response, 200, { proposal });
     return;
   }
 
@@ -130,6 +176,68 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   }
 
   writeJson(response, 404, { error: "not_found" });
+}
+
+async function handleCreateProposalFromGap(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const payload = await readJsonBody<{ summary?: string; targetPath?: string }>(request);
+  const summary = payload.summary?.trim();
+
+  if (!summary) {
+    writeJson(response, 400, { error: "gap_summary_required" });
+    return;
+  }
+
+  const gaps = await questionLogs.listGapCandidates(200);
+  const gap = gaps.find((candidate) => candidate.summary === summary);
+  if (!gap) {
+    writeJson(response, 404, { error: "gap_candidate_not_found" });
+    return;
+  }
+
+  const logs = (await Promise.all(gap.questionIds.map((id) => questionLogs.get(id)))).filter(
+    (log): log is NonNullable<typeof log> => Boolean(log)
+  );
+  const evidence = logs.flatMap((log) => log.answer?.citations ?? []);
+  const input: DraftMarkdownProposalJobInput = {
+    gapSummary: gap.summary,
+    triggeringQuestions: logs.map((log) => log.question),
+    evidence,
+    targetPath: payload.targetPath?.trim() || undefined,
+    expectedOutput: "markdown_proposal"
+  };
+  const job = await aiJobs.enqueue("draft_markdown_proposal", {
+    ...input,
+    triggeringQuestionIds: gap.questionIds
+  });
+
+  writeJson(response, 202, {
+    job,
+    links: {
+      status: `/ai-jobs/${job.id}`,
+      proposals: "/proposals"
+    }
+  });
+}
+
+async function handleQuestionFeedback(
+  questionId: string,
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
+  const payload = await readJsonBody<{ feedback?: QuestionFeedback }>(request);
+
+  if (!isQuestionFeedback(payload.feedback)) {
+    writeJson(response, 400, { error: "valid_feedback_required" });
+    return;
+  }
+
+  const question = await questionLogs.recordFeedback(questionId, payload.feedback);
+  if (!question) {
+    writeJson(response, 404, { error: "question_not_found" });
+    return;
+  }
+
+  writeJson(response, 200, { question });
 }
 
 async function handleAsk(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -258,6 +366,7 @@ async function handleCompleteJob(
 
     await aiJobs.complete(jobId, payload.output ?? {});
     await updateQuestionLogFromCompletedJob(existingJob, payload.output);
+    await createProposalFromCompletedJob(existingJob, payload.output);
     writeJson(response, 200, { job: await aiJobs.get(jobId) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected completion failure";
@@ -306,8 +415,31 @@ async function readJsonBody<T>(request: NodeJS.ReadableStream): Promise<T> {
 }
 
 function writeJson(response: ServerResponse, statusCode: number, body: unknown): void {
-  response.writeHead(statusCode, { "content-type": "application/json" });
-  response.end(JSON.stringify(body));
+  response.writeHead(statusCode, {
+    "access-control-allow-headers": "content-type",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-origin": "*",
+    "content-type": "application/json"
+  });
+  response.end(body === undefined ? undefined : JSON.stringify(body));
+}
+
+async function createProposalFromCompletedJob(job: AiJob | undefined, output: unknown): Promise<void> {
+  if (!job || job.type !== "draft_markdown_proposal" || !isDraftMarkdownProposalJobOutput(output)) {
+    return;
+  }
+
+  const input = job.input as Partial<DraftMarkdownProposalJobInput> & {
+    triggeringQuestionIds?: string[];
+  };
+
+  await proposals.create({
+    ...output,
+    evidence: input.evidence ?? [],
+    gapSummary: input.gapSummary,
+    triggeringQuestionIds: input.triggeringQuestionIds,
+    jobId: job.id
+  });
 }
 
 function normalizeAiExecutionMode(value: string | undefined): AiExecutionMode {
@@ -355,6 +487,19 @@ function createQuestionLogStore(): InMemoryQuestionLogStore | PostgresQuestionLo
   }
 
   return new InMemoryQuestionLogStore();
+}
+
+function createProposalStore(): InMemoryProposalStore | PostgresProposalStore {
+  if (process.env.PROPOSAL_STORE === "postgres") {
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      throw new Error("DATABASE_URL is required when PROPOSAL_STORE=postgres");
+    }
+
+    return new PostgresProposalStore(databaseUrl);
+  }
+
+  return new InMemoryProposalStore();
 }
 
 function createConfiguredChatProvider() {
@@ -410,4 +555,22 @@ function isAnswerQuestionJobOutput(value: unknown): value is AnswerQuestionJobOu
       candidate.confidence === "unknown") &&
     Array.isArray(candidate.citations)
   );
+}
+
+function isDraftMarkdownProposalJobOutput(value: unknown): value is DraftMarkdownProposalJobOutput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<DraftMarkdownProposalJobOutput>;
+  return (
+    typeof candidate.title === "string" &&
+    typeof candidate.targetPath === "string" &&
+    typeof candidate.markdown === "string" &&
+    typeof candidate.rationale === "string"
+  );
+}
+
+function isQuestionFeedback(value: unknown): value is QuestionFeedback {
+  return value === "helpful" || value === "unhelpful";
 }

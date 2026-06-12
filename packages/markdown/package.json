@@ -6,13 +6,16 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "node --import tsx --test src/index.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@magpie/core": "file:../core"
   },
   "devDependencies": {
+    "@types/node": "^22.15.18",
+    "tsx": "^4.19.4",
     "typescript": "^5.8.3"
   }
 }

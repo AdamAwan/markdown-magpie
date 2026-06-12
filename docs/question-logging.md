@@ -19,6 +19,7 @@ Each question log records:
 - Answer result.
 - Citations.
 - Gap signal, when present.
+- Helpful or unhelpful feedback, when submitted.
 - Timestamp.
 
 ## Endpoints
@@ -26,6 +27,7 @@ Each question log records:
 ```bash
 GET /questions
 GET /questions/:id
+POST /questions/:id/feedback
 GET /gaps/candidates
 ```
 

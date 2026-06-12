@@ -74,6 +74,8 @@ export interface QuestionLog {
   retrievedSectionIds: string[];
   askedAt: string;
   answer?: AnswerResult;
+  feedback?: QuestionFeedback;
+  feedbackAt?: string;
 }
 
 export interface QuestionLogInput {
@@ -88,6 +90,8 @@ export interface QuestionLogUpdateInput {
   answer: AnswerResult;
   chatProvider?: string;
 }
+
+export type QuestionFeedback = "helpful" | "unhelpful";
 
 export interface GapCandidate {
   summary: string;
@@ -113,6 +117,11 @@ export interface Proposal {
   markdown: string;
   evidence: Citation[];
   gapClusterId?: string;
+  gapSummary?: string;
+  triggeringQuestionIds?: string[];
+  rationale?: string;
+  jobId?: string;
+  createdAt: string;
 }
 
 export interface ChatProvider {
