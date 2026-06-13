@@ -206,6 +206,31 @@ The MCP server is a stdio process intended to be launched by an MCP client, so i
 docker compose --profile mcp run --rm mcp
 ```
 
+#### Connecting an agent client (Claude Code, Codex, etc.)
+
+The MCP server speaks the standard MCP **stdio transport** (newline-delimited JSON-RPC) and proxies to the API at `API_BASE_URL` (default `http://localhost:4000`). It exposes two tools:
+
+- `kb.ask` — ask a question and get back a cited answer (`{ answer, confidence, citations }`). When the API runs in `queue` execution mode, the server waits for the background job to finish and returns the final answer; internal job, queue, and retrieval-context details are never exposed to the client.
+- `kb.search` — keyword search over indexed Markdown sections.
+
+To connect Claude Code, build once (`npm run build`) and add a project-scoped `.mcp.json` at the repo root (already included in this repository):
+
+```json
+{
+  "mcpServers": {
+    "markdown-magpie": {
+      "command": "node",
+      "args": ["apps/mcp/dist/main.js"],
+      "env": { "API_BASE_URL": "http://localhost:4000" }
+    }
+  }
+}
+```
+
+The API must be running and reachable at `API_BASE_URL`. In `queue` mode a watcher must also be running to process answer jobs. The wait behaviour is tunable via `ANSWER_POLL_INTERVAL_MS` (default `1000`) and `ANSWER_TIMEOUT_MS` (default `120000`).
+
+See [docs/mcp.md](docs/mcp.md) for details.
+
 ### 4. Open the Showcase
 
 Open the web console:

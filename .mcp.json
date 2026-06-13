@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "markdown-magpie": {
+      "command": "node",
+      "args": ["apps/mcp/dist/main.js"],
+      "env": {
+        "API_BASE_URL": "http://localhost:4000"
+      }
+    }
+  }
+}
