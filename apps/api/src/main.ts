@@ -145,6 +145,17 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return;
   }
 
+  const gapMatch = /^\/questions\/([^/]+)\/gap$/.exec(path);
+  if (request.method === "POST" && gapMatch) {
+    await handleRecordManualGap(gapMatch[1], request, response);
+    return;
+  }
+
+  if (request.method === "DELETE" && gapMatch) {
+    await handleClearManualGap(gapMatch[1], response);
+    return;
+  }
+
   if (request.method === "GET" && path === "/gaps/candidates") {
     const limit = parseLimit(url.searchParams.get("limit"), 50);
     writeJson(response, 200, { gaps: await questionLogs.listGapCandidates(limit) });
@@ -409,6 +420,33 @@ async function handleQuestionFeedback(
   writeJson(response, 200, { question });
 }
 
+async function handleRecordManualGap(
+  questionId: string,
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
+  const payload = await readJsonBody<{ summary?: string }>(request);
+  const summary = typeof payload.summary === "string" ? payload.summary : undefined;
+
+  const question = await questionLogs.recordManualGap(questionId, summary);
+  if (!question) {
+    writeJson(response, 404, { error: "question_not_found" });
+    return;
+  }
+
+  writeJson(response, 200, { question });
+}
+
+async function handleClearManualGap(questionId: string, response: ServerResponse): Promise<void> {
+  const question = await questionLogs.clearManualGap(questionId);
+  if (!question) {
+    writeJson(response, 404, { error: "question_not_found" });
+    return;
+  }
+
+  writeJson(response, 200, { question });
+}
+
 async function handleAsk(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const payload = await readJsonBody<{ question?: string }>(request);
   const question = payload.question?.trim();
@@ -622,7 +660,7 @@ async function readJsonBody<T>(request: NodeJS.ReadableStream): Promise<T> {
 function writeJson(response: ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, {
     "access-control-allow-headers": "content-type",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
     "access-control-allow-origin": "*",
     "content-type": "application/json"
   });
