@@ -710,8 +710,10 @@ function getRuntimeConfig() {
       openAiCompatible: {
         baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL || null,
         model: process.env.OPENAI_COMPATIBLE_MODEL || null,
+        apiKey: secretState(process.env.OPENAI_COMPATIBLE_API_KEY),
+        embeddingBaseUrl: process.env.OPENAI_COMPATIBLE_EMBEDDING_BASE_URL || null,
         embeddingModel: process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL || null,
-        apiKey: secretState(process.env.OPENAI_COMPATIBLE_API_KEY)
+        embeddingApiKey: secretState(process.env.OPENAI_COMPATIBLE_EMBEDDING_API_KEY)
       },
       azureOpenAi: {
         endpoint: process.env.AZURE_OPENAI_ENDPOINT || null,
@@ -1028,8 +1030,20 @@ function requireDatabaseUrl(): string {
   return databaseUrl;
 }
 
+// Embeddings can target a different endpoint/key than chat (e.g. DeepSeek for
+// Q&A, OpenAI for embeddings). The dedicated OPENAI_COMPATIBLE_EMBEDDING_* vars
+// take precedence, falling back to the shared chat credentials when unset so
+// single-endpoint setups keep working unchanged.
+function embeddingBaseUrl(): string | undefined {
+  return process.env.OPENAI_COMPATIBLE_EMBEDDING_BASE_URL || process.env.OPENAI_COMPATIBLE_BASE_URL || undefined;
+}
+
+function embeddingApiKey(): string | undefined {
+  return process.env.OPENAI_COMPATIBLE_EMBEDDING_API_KEY || process.env.OPENAI_COMPATIBLE_API_KEY || undefined;
+}
+
 function embeddingProviderName(): EmbeddingProviderName | undefined {
-  if (process.env.OPENAI_COMPATIBLE_BASE_URL && process.env.OPENAI_COMPATIBLE_API_KEY && process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL) {
+  if (embeddingBaseUrl() && embeddingApiKey() && process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL) {
     return "openai-compatible";
   }
   if (process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT) {
@@ -1045,8 +1059,8 @@ function createConfiguredEmbeddingProvider() {
   }
   return createEmbeddingProvider({
     provider,
-    apiKey: process.env.OPENAI_COMPATIBLE_API_KEY || process.env.AZURE_OPENAI_API_KEY,
-    baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL,
+    apiKey: embeddingApiKey() || process.env.AZURE_OPENAI_API_KEY,
+    baseUrl: embeddingBaseUrl(),
     model: process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL,
     azureEndpoint: process.env.AZURE_OPENAI_ENDPOINT,
     azureDeployment: process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,

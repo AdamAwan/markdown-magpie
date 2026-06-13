@@ -46,12 +46,14 @@ An embedding endpoint is detected by the **presence of its credential variables*
 | Variable | Purpose |
 |---|---|
 | `KNOWLEDGE_STORE=postgres` + `DATABASE_URL` | Required for vector search. |
-| `OPENAI_COMPATIBLE_BASE_URL` + `OPENAI_COMPATIBLE_API_KEY` + `OPENAI_COMPATIBLE_EMBEDDING_MODEL` | OpenAI-compatible embeddings. The model must output 1536-dimensional vectors. |
+| `OPENAI_COMPATIBLE_EMBEDDING_MODEL` (+ base URL & API key) | OpenAI-compatible embeddings. The model must output 1536-dimensional vectors. |
 | `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | Azure OpenAI embeddings. The deployment must output 1536-dimensional vectors. |
+
+Embeddings are configured **independently of chat**, so you can answer questions with one provider and embed with another (e.g. DeepSeek for `/ask`, OpenAI for embeddings). The embedding endpoint resolves its base URL and API key from `OPENAI_COMPATIBLE_EMBEDDING_BASE_URL` / `OPENAI_COMPATIBLE_EMBEDDING_API_KEY`, each falling back to the shared chat values (`OPENAI_COMPATIBLE_BASE_URL` / `OPENAI_COMPATIBLE_API_KEY`) when left blank. Setting `OPENAI_COMPATIBLE_EMBEDDING_MODEL` is what enables OpenAI-compatible embeddings.
 
 `EMBEDDING_PROVIDER` is informational only — it is surfaced in `/config` for display and does not enable embeddings.
 
-Both `text-embedding-3-small` and `ada-002` produce 1536-dimensional vectors and are compatible. Hybrid retrieval activates automatically when `KNOWLEDGE_STORE=postgres` **and** a complete set of embedding credentials (the OpenAI-compatible trio or the Azure trio above) are configured; otherwise the system stays on keyword-only search with no regression in behaviour. `/config` reports the resolved `retrieval.mode` (`hybrid` or `keyword`) and a plain-language `reason`.
+Both `text-embedding-3-small` and `ada-002` produce 1536-dimensional vectors and are compatible. Hybrid retrieval activates automatically when `KNOWLEDGE_STORE=postgres` **and** a complete set of embedding credentials (a resolved OpenAI-compatible base URL + API key + `OPENAI_COMPATIBLE_EMBEDDING_MODEL`, or the Azure trio above) are configured; otherwise the system stays on keyword-only search with no regression in behaviour. `/config` reports the resolved `retrieval.mode` (`hybrid` or `keyword`) and a plain-language `reason`.
 
 ## Ask
 
