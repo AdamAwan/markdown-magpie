@@ -180,8 +180,7 @@ export type AiJobType =
   | "summarize_gap"
   | "draft_markdown_proposal"
   | "detect_contradiction"
-  | "suggest_consolidation"
-  | "embed_sections";
+  | "suggest_consolidation";
 
 export type AiJobStatus = "pending" | "claimed" | "completed" | "failed" | "cancelled";
 
@@ -257,18 +256,6 @@ export interface DraftMarkdownProposalJobOutput {
   targetPath: string;
   markdown: string;
   rationale: string;
-}
-
-export interface EmbedSectionsJobInput {
-  /** Limit embedding to one repository; omit to embed every section missing an embedding. */
-  repositoryId?: string;
-  batchSize?: number;
-  expectedOutput: "embedded_sections";
-}
-
-export interface EmbedSectionsJobOutput {
-  embeddedCount: number;
-  remaining: number;
 }
 
 export interface PullRequestProvider {
