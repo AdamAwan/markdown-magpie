@@ -198,7 +198,10 @@ export class PostgresKnowledgeStore implements KnowledgePersistence, SectionVect
       `,
       [repositoryId ?? null, limit]
     );
-    return result.rows.map((row) => ({ id: row.id, text: `${row.heading}\n${row.content}` }));
+    return result.rows.map((row) => ({
+      id: row.id,
+      text: row.heading ? `${row.heading}\n${row.content}` : row.content
+    }));
   }
 
   async countSectionsNeedingEmbedding(repositoryId?: string): Promise<number> {
