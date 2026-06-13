@@ -13,6 +13,7 @@ export interface ProposalStore {
   list(limit: number): Promise<Proposal[]>;
   get(id: string): Promise<Proposal | undefined>;
   updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined>;
+  recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined>;
 }
 
 export class InMemoryProposalStore implements ProposalStore {
@@ -56,6 +57,21 @@ export class InMemoryProposalStore implements ProposalStore {
     const updated: Proposal = {
       ...existing,
       status
+    };
+    this.proposals.set(id, updated);
+    return updated;
+  }
+
+  async recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined> {
+    const existing = this.proposals.get(id);
+    if (!existing) {
+      return undefined;
+    }
+
+    const updated: Proposal = {
+      ...existing,
+      publication,
+      status: "branch-pushed"
     };
     this.proposals.set(id, updated);
     return updated;

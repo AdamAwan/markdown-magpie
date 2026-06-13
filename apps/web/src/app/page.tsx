@@ -153,14 +153,24 @@ interface AiJob {
 interface Proposal {
   id: string;
   title: string;
-  status: string;
+  status: "draft" | "ready" | "branch-pushed" | "pr-opened" | "merged" | "rejected";
   targetPath: string;
   markdown: string;
   gapSummary?: string;
   triggeringQuestionIds?: string[];
   rationale?: string;
   jobId?: string;
+  publication?: ProposalPublication;
   createdAt: string;
+}
+
+interface ProposalPublication {
+  provider: "local-git";
+  branchName: string;
+  commitSha: string;
+  remoteUrl?: string;
+  pullRequestUrl?: string;
+  publishedAt: string;
 }
 
 interface SearchSection {
@@ -362,6 +372,22 @@ export default function HomePage() {
       setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
       setSelectedProposalId(result.proposal.id);
       setMessage(status === "ready" ? "Proposal marked ready for PR workflow." : "Proposal rejected.");
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function publishProposal(proposalId: string) {
+    setLoading(true);
+    setMessage("");
+    try {
+      const result = await apiPost<{ proposal: Proposal }>(`/proposals/${proposalId}/publish`, {});
+      setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
+      setSelectedProposalId(result.proposal.id);
+      setMessage(`Published ${result.proposal.publication?.branchName ?? "proposal branch"}.`);
+      await refresh();
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -629,6 +655,7 @@ export default function HomePage() {
           <section className="fullWorkbench">
             <ProposalPanel
               loading={loading}
+              publishProposal={publishProposal}
               proposals={proposals}
               selectedProposal={selectedProposal}
               setSelectedProposalId={setSelectedProposalId}
@@ -1222,12 +1249,14 @@ function ProposalLinks({
 
 function ProposalPanel({
   loading,
+  publishProposal,
   proposals,
   selectedProposal,
   setSelectedProposalId,
   updateProposalStatus
 }: {
   loading: boolean;
+  publishProposal: (proposalId: string) => Promise<void>;
   proposals: Proposal[];
   selectedProposal?: Proposal;
   setSelectedProposalId: (id: string) => void;
@@ -1273,7 +1302,7 @@ function ProposalPanel({
                 <div className="rowActions">
                   <button
                     className="chip selected"
-                    disabled={loading || selectedProposal.status === "ready"}
+                    disabled={loading || selectedProposal.status !== "draft"}
                     onClick={() => void updateProposalStatus(selectedProposal.id, "ready")}
                     title="Mark this draft as ready for the future PR workflow"
                     type="button"
@@ -1281,18 +1310,41 @@ function ProposalPanel({
                     Mark Ready
                   </button>
                   <button
+                    className="chip selected"
+                    disabled={loading || selectedProposal.status !== "ready"}
+                    onClick={() => void publishProposal(selectedProposal.id)}
+                    title="Create and push a Git branch for this ready proposal"
+                    type="button"
+                  >
+                    Publish Branch
+                  </button>
+                  <button
                     className="chip"
-                    disabled={loading || selectedProposal.status === "rejected"}
+                    disabled={loading || selectedProposal.status !== "draft"}
                     onClick={() => void updateProposalStatus(selectedProposal.id, "rejected")}
                     title="Reject this generated proposal"
                     type="button"
                   >
                     Reject
                   </button>
-                  <span className="pill" title="This app can review proposals, but opening PRs is not implemented yet">
-                    PR submission not implemented
-                  </span>
+                  {selectedProposal.publication ? (
+                    <span className="pill" title={`Published commit ${selectedProposal.publication.commitSha}`}>
+                      {selectedProposal.publication.branchName}
+                    </span>
+                  ) : (
+                    <span className="pill" title="Ready proposals can be published as Git branches">
+                      Branch publish available
+                    </span>
+                  )}
                 </div>
+                {selectedProposal.publication ? (
+                  <div className="publicationSummary">
+                    <ContextValue label="Branch" value={selectedProposal.publication.branchName} />
+                    <ContextValue label="Commit" value={shortSha(selectedProposal.publication.commitSha)} />
+                    <ContextValue label="Remote" value={selectedProposal.publication.remoteUrl ?? "Not recorded"} />
+                    <ContextValue label="Published" value={new Date(selectedProposal.publication.publishedAt).toLocaleString()} />
+                  </div>
+                ) : null}
                 <pre>{selectedProposal.markdown}</pre>
               </>
             ) : (

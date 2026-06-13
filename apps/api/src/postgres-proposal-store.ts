@@ -59,6 +59,14 @@ export class PostgresProposalStore implements ProposalStore {
     );
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
+
+  async recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined> {
+    const result = await this.pool.query<ProposalRow>(
+      "UPDATE proposals SET status = 'branch-pushed', publication = $2 WHERE id = $1 RETURNING *",
+      [id, JSON.stringify(publication)]
+    );
+    return result.rows[0] ? mapRow(result.rows[0]) : undefined;
+  }
 }
 
 interface ProposalRow {
@@ -73,6 +81,7 @@ interface ProposalRow {
   triggering_question_ids: string[];
   rationale: string | null;
   job_id: string | null;
+  publication: Proposal["publication"] | null;
   created_at: Date;
 }
 
@@ -89,6 +98,7 @@ function mapRow(row: ProposalRow): Proposal {
     triggeringQuestionIds: row.triggering_question_ids,
     rationale: row.rationale ?? undefined,
     jobId: row.job_id ?? undefined,
+    publication: row.publication ?? undefined,
     createdAt: row.created_at.toISOString()
   };
 }

@@ -125,7 +125,7 @@ export interface GapCluster {
 export interface Proposal {
   id: string;
   title: string;
-  status: "draft" | "ready" | "pr-opened" | "merged" | "rejected";
+  status: "draft" | "ready" | "branch-pushed" | "pr-opened" | "merged" | "rejected";
   targetPath: string;
   markdown: string;
   evidence: Citation[];
@@ -134,7 +134,17 @@ export interface Proposal {
   triggeringQuestionIds?: string[];
   rationale?: string;
   jobId?: string;
+  publication?: ProposalPublication;
   createdAt: string;
+}
+
+export interface ProposalPublication {
+  provider: "local-git";
+  branchName: string;
+  commitSha: string;
+  remoteUrl?: string;
+  pullRequestUrl?: string;
+  publishedAt: string;
 }
 
 export interface ChatProvider {
@@ -260,4 +270,18 @@ export interface CreatePullRequestResponse {
   id: string;
   url: string;
   status: "open";
+}
+
+export interface PublishProposalBranchRequest {
+  repository: RepositoryRef;
+  branchName: string;
+  title: string;
+  markdown: string;
+  targetPath: string;
+}
+
+export interface PublishProposalBranchResponse {
+  branchName: string;
+  commitSha: string;
+  remoteUrl?: string;
 }

@@ -8,8 +8,10 @@ import type {
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
   Proposal,
+  RepositoryRef,
   QuestionFeedback
 } from "@magpie/core";
+import { LocalGitProposalPublisher } from "@magpie/git";
 import { answerQuestion, createChatProvider, type ChatProviderName } from "@magpie/retrieval";
 import { InMemoryAiJobQueue } from "./ai-job-queue.js";
 import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
@@ -166,6 +168,12 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return;
   }
 
+  const proposalPublishMatch = /^\/proposals\/([^/]+)\/publish$/.exec(path);
+  if (request.method === "POST" && proposalPublishMatch) {
+    await handlePublishProposal(proposalPublishMatch[1], response);
+    return;
+  }
+
   if (request.method === "POST" && path === "/ai-jobs") {
     await handleCreateJob(request, response);
     return;
@@ -227,6 +235,59 @@ async function handleUpdateProposalStatus(
   }
 
   writeJson(response, 200, { proposal });
+}
+
+async function handlePublishProposal(proposalId: string, response: ServerResponse): Promise<void> {
+  const proposal = await proposals.get(proposalId);
+  if (!proposal) {
+    writeJson(response, 404, { error: "proposal_not_found" });
+    return;
+  }
+
+  if (proposal.status !== "ready") {
+    writeJson(response, 409, { error: "proposal_not_ready", message: "Only ready proposals can be published." });
+    return;
+  }
+
+  const repository = findRepositoryForProposal(proposal);
+  if (!repository) {
+    writeJson(response, 409, {
+      error: "proposal_repository_not_found",
+      message: "No indexed Git repository matches this proposal target path."
+    });
+    return;
+  }
+
+  if (repository.git?.scope === "not-git" || !repository.git?.workTreeRoot) {
+    writeJson(response, 409, {
+      error: "proposal_repository_not_git",
+      message: "The matched repository is not a Git checkout."
+    });
+    return;
+  }
+
+  try {
+    const publisher = new LocalGitProposalPublisher();
+    const publication = await publisher.publish({
+      repository,
+      branchName: createProposalBranchName(proposal),
+      title: `docs: ${proposal.title}`,
+      markdown: proposal.markdown,
+      targetPath: proposal.targetPath
+    });
+    const updatedProposal = await proposals.recordPublication(proposal.id, {
+      provider: "local-git",
+      branchName: publication.branchName,
+      commitSha: publication.commitSha,
+      remoteUrl: publication.remoteUrl,
+      publishedAt: new Date().toISOString()
+    });
+
+    writeJson(response, 200, { proposal: updatedProposal, publication });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Proposal publish failed";
+    writeJson(response, 409, { error: "proposal_publish_failed", message });
+  }
 }
 
 async function handleUpdateRuntimeConfig(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -899,5 +960,46 @@ function isQuestionFeedback(value: unknown): value is QuestionFeedback {
 }
 
 function isProposalStatus(value: unknown): value is Proposal["status"] {
-  return value === "draft" || value === "ready" || value === "pr-opened" || value === "merged" || value === "rejected";
+  return (
+    value === "draft" ||
+    value === "ready" ||
+    value === "branch-pushed" ||
+    value === "pr-opened" ||
+    value === "merged" ||
+    value === "rejected"
+  );
+}
+
+function findRepositoryForProposal(proposal: Proposal): RepositoryRef | undefined {
+  const targetPath = normalizeRelativePath(proposal.targetPath);
+  const repositories = knowledgeIndex.listRepositories();
+  const explicitMatch = repositories
+    .map((repository) => ({
+      repository,
+      relativePathFromRoot: normalizeRelativePath(repository.git?.relativePathFromRoot)
+    }))
+    .filter(({ relativePathFromRoot }) => relativePathFromRoot && relativePathFromRoot !== ".")
+    .sort((left, right) => right.relativePathFromRoot.length - left.relativePathFromRoot.length)
+    .find(
+      ({ relativePathFromRoot }) => targetPath === relativePathFromRoot || targetPath.startsWith(`${relativePathFromRoot}/`)
+    );
+
+  return explicitMatch?.repository ?? (repositories.length === 1 ? repositories[0] : repositories.find((repository) => normalizeRelativePath(repository.git?.relativePathFromRoot) === "."));
+}
+
+function createProposalBranchName(proposal: Proposal): string {
+  return `magpie/proposal-${proposal.id.slice(0, 8)}-${slugify(proposal.title).slice(0, 40)}`;
+}
+
+function slugify(value: string): string {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "docs-update"
+  );
+}
+
+function normalizeRelativePath(value: string | undefined): string {
+  return value?.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "") ?? "";
 }
