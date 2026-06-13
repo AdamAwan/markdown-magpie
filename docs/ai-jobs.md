@@ -95,6 +95,25 @@ When the watcher completes that job, the API stores the generated Markdown propo
 curl -s http://localhost:4000/proposals
 ```
 
+A proposal moves through a status lifecycle: `draft`, `ready`, `branch-pushed`, `pr-opened`,
+`merged`, `rejected`. Update it directly:
+
+```bash
+POST /proposals/:id/status
+{ "status": "ready" }
+```
+
+Once a proposal is `ready` and its target path maps to an indexed Git checkout, it can be
+published to a local branch:
+
+```bash
+POST /proposals/:id/publish
+```
+
+This commits the Markdown to a new `magpie/proposal-*` branch via the `local-git` publisher
+and records the branch and commit SHA on the proposal. Opening a hosted pull request from that
+branch is planned but not yet implemented.
+
 ## Watcher Model
 
 The watcher has no direct database access. It talks to the API only:

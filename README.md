@@ -15,6 +15,16 @@ It answers questions with citations, records where the knowledge base is weak, p
 7. Generate proposed Markdown additions or edits.
 8. Open pull requests for maintainers to review.
 
+## Documentation
+
+- [docs/architecture.md](docs/architecture.md) — boundaries, provider strategy, and the primary flow.
+- [docs/api.md](docs/api.md) — full HTTP API reference.
+- [docs/ingestion.md](docs/ingestion.md) — how Markdown repositories are indexed.
+- [docs/chat-providers.md](docs/chat-providers.md) — answer-synthesis providers and configuration.
+- [docs/ai-jobs.md](docs/ai-jobs.md) — the queueable AI job contract and watcher model.
+- [docs/question-logging.md](docs/question-logging.md) — recorded question fields and the gap loop.
+- [docs/mvp.md](docs/mvp.md) — milestone roadmap.
+
 ## Repository Layout
 
 ```text
