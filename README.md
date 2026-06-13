@@ -480,15 +480,15 @@ curl -s http://localhost:4000/ask \
 
 The watcher claims jobs from `/ai-jobs/claim` and completes them through `/ai-jobs/:id/complete`.
 
-By default, AI jobs are stored in memory. To use Postgres:
+Use Postgres-backed storage for local development:
 
 ```bash
 docker compose up -d postgres
-psql "$DATABASE_URL" -f packages/db/migrations/0001_initial.sql
+npm run db:migrate
 STORAGE_BACKEND=postgres AI_EXECUTION_MODE=queue npm run dev:api
 ```
 
-By default, indexed knowledge, question logs, proposals, and AI jobs use memory storage. Set `STORAGE_BACKEND=postgres` to persist them together. The older per-store variables still work as compatibility overrides when you need a mixed setup.
+`npm run db:migrate` loads `DATABASE_URL` from `.env`. Indexed knowledge, question logs, proposals, and AI jobs use Postgres when `STORAGE_BACKEND=postgres` is set. The older per-store variables still work as compatibility overrides when you need a mixed setup.
 
 Use a provider for answer synthesis:
 

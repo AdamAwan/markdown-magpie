@@ -364,11 +364,16 @@ export default function HomePage() {
     setLoading(true);
     setMessage("");
     try {
-      await apiPost<{ job: AiJob }>("/proposals/from-gap", {
+      const result = await apiPost<{ job?: AiJob; proposal?: Proposal }>("/proposals/from-gap", {
         summary: gap.summary,
         targetPath: "knowledge-bases/cats/proposed-gap.md"
       });
-      setActiveSection("jobs");
+      if (result.proposal) {
+        setSelectedProposalId(result.proposal.id);
+        setActiveSection("proposals");
+      } else {
+        setActiveSection("jobs");
+      }
       await refresh();
     } catch (error) {
       setMessage(errorMessage(error));
@@ -505,6 +510,10 @@ export default function HomePage() {
           <div className="statusLine">
             <span>Provider</span>
             <span>{config?.aiRuntime.provider ?? "mock"}</span>
+          </div>
+          <div className="statusLine">
+            <span>Mode</span>
+            <span>{config?.aiRuntime.executionMode ?? "direct"}</span>
           </div>
           <div className="statusLine">
             <span>Updated</span>
@@ -1691,17 +1700,6 @@ function buildAttentionNotices({
       tone: "warning",
       actionLabel: "Open Knowledge",
       action: () => openSection("knowledge")
-    });
-  }
-
-  if (config?.stores.storageBackend === "memory") {
-    notices.push({
-      id: "memory-storage",
-      title: "Memory storage resets on API restart",
-      body: "Indexed documents, questions, jobs, and proposals are process-local right now. Re-index after restart or switch to Postgres storage for persistence.",
-      tone: "info",
-      actionLabel: "Open Config",
-      action: () => openSection("config")
     });
   }
 

@@ -360,6 +360,20 @@ async function handleCreateProposalFromGap(request: IncomingMessage, response: S
     provider: runtimeConfig.aiProvider,
     expectedOutput: "markdown_proposal"
   } as DraftMarkdownProposalJobInput & { provider: AiProviderName };
+
+  if (runtimeConfig.aiExecutionMode === "direct") {
+    const output = await draftMarkdownProposalDirect(input);
+    const proposal = await proposals.create({
+      ...output,
+      evidence,
+      gapSummary: gap.summary,
+      triggeringQuestionIds: gap.questionIds
+    });
+
+    writeJson(response, 201, { proposal });
+    return;
+  }
+
   const job = await aiJobs.enqueue("draft_markdown_proposal", {
     ...input,
     triggeringQuestionIds: gap.questionIds
@@ -695,6 +709,93 @@ function maskConnectionString(value: string | undefined): string | null {
 
 function secretState(value: string | undefined): "set" | "not set" {
   return value ? "set" : "not set";
+}
+
+async function draftMarkdownProposalDirect(input: DraftMarkdownProposalJobInput): Promise<DraftMarkdownProposalJobOutput> {
+  if (runtimeConfig.aiProvider === "mock") {
+    return createMockMarkdownProposal(input);
+  }
+
+  const response = await createConfiguredChatProvider(runtimeConfig.aiProvider).complete({
+    system:
+      "Draft a conservative Markdown knowledge base proposal for the provided gap. Return JSON only with this shape: " +
+      '{"title":"string","targetPath":"string","markdown":"string","rationale":"string"}. ' +
+      "Include frontmatter with title and status: draft in the markdown field.",
+    messages: [
+      {
+        role: "user",
+        content: JSON.stringify(input, null, 2)
+      }
+    ]
+  });
+  const output = parseJsonObject(response.content);
+
+  if (!isDraftMarkdownProposalJobOutput(output)) {
+    throw new Error("Direct proposal provider returned invalid markdown proposal output");
+  }
+
+  return output;
+}
+
+function createMockMarkdownProposal(input: DraftMarkdownProposalJobInput): DraftMarkdownProposalJobOutput {
+  const title = titleFromGapSummary(input.gapSummary);
+  const targetPath = input.targetPath ?? "proposed-gap.md";
+  const triggeringQuestions = input.triggeringQuestions.length
+    ? input.triggeringQuestions.map((question) => `- ${question}`).join("\n")
+    : "- No triggering questions recorded.";
+  const evidence = input.evidence.length
+    ? input.evidence.map((citation) => `- ${citation.path}#${citation.anchor}: ${citation.heading}`).join("\n")
+    : "- No supporting citations were available.";
+
+  return {
+    title,
+    targetPath,
+    markdown: `---\ntitle: ${JSON.stringify(title)}\nstatus: draft\n---\n\n# ${title}\n\n## Gap\n\n${input.gapSummary}\n\n## Triggering Questions\n\n${triggeringQuestions}\n\n## Proposed Guidance\n\nAdd reviewed guidance that directly answers this gap. Keep the final content specific, source-backed, and easy for maintainers to verify.\n\n## Evidence\n\n${evidence}\n`,
+    rationale: "Generated from the selected gap candidate using the deterministic mock provider."
+  };
+}
+
+function titleFromGapSummary(summary: string): string {
+  const normalized = summary
+    .replace(/^no (?:sufficient )?source material found for:\s*/i, "")
+    .replace(/[?.!]+$/g, "")
+    .trim();
+  if (!normalized) {
+    return "Knowledge Gap Proposal";
+  }
+
+  return normalized
+    .split(/\s+/)
+    .slice(0, 10)
+    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
+    .join(" ");
+}
+
+function parseJsonObject(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(value);
+    if (fenced) {
+      try {
+        return JSON.parse(fenced[1]);
+      } catch {
+        return undefined;
+      }
+    }
+
+    const start = value.indexOf("{");
+    const end = value.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(value.slice(start, end + 1));
+      } catch {
+        return undefined;
+      }
+    }
+  }
+
+  return undefined;
 }
 
 async function createProposalFromCompletedJob(job: AiJob | undefined, output: unknown): Promise<void> {

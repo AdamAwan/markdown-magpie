@@ -188,10 +188,7 @@ Provider support should stay behind `AgentRunner` adapters:
 
 ## Storage
 
-The API supports two storage backends through one startup option:
-
-- `STORAGE_BACKEND=memory`: process-local storage for fast development and tests.
-- `STORAGE_BACKEND=postgres`: durable storage using Postgres tables, including `ai_jobs`.
+Use `STORAGE_BACKEND=postgres` for durable storage using Postgres tables, including `ai_jobs`.
 
 The older `AI_JOB_QUEUE` variable still works as a compatibility override for the job queue only.
 
