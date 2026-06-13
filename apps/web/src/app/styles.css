@@ -213,12 +213,24 @@ p {
 
 .alert {
   margin-bottom: 14px;
-  border: 1px solid #c35f48;
-  background: #fff4ef;
-  color: #86351f;
+  border: 1px solid #9ab5d6;
+  background: #f1f7ff;
+  color: #214a78;
   padding: 12px 14px;
   font-size: 14px;
   font-weight: 750;
+}
+
+.alert.success {
+  border-color: #8ebc9b;
+  background: #f0fbf3;
+  color: #24623c;
+}
+
+.alert.danger {
+  border-color: #c35f48;
+  background: #fff4ef;
+  color: #86351f;
 }
 
 .attentionPanel {

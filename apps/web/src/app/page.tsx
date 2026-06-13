@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 
@@ -159,6 +159,14 @@ interface ConsoleNotice {
   action?: () => void;
 }
 
+interface UiMessage {
+  id: number;
+  text: string;
+  tone: "info" | "success" | "danger";
+}
+
+type JobTransitionMessage = Pick<UiMessage, "text" | "tone">;
+
 interface Proposal {
   id: string;
   title: string;
@@ -236,7 +244,9 @@ export default function HomePage() {
   const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | undefined>();
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState<UiMessage | undefined>();
+  const jobsRef = useRef<AiJob[]>([]);
+  const messageIdRef = useRef(0);
 
   const latestJob = useMemo(
     () => [...jobs].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0],
@@ -253,9 +263,52 @@ export default function HomePage() {
     void refresh();
   }, []);
 
-  async function refresh() {
+  useEffect(() => {
+    if (!message) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => setMessage(undefined), message.tone === "danger" ? 10_000 : 5_000);
+    return () => window.clearTimeout(timeout);
+  }, [message]);
+
+  useEffect(() => {
+    const hasActiveWork =
+      jobs.some(isActiveJob) ||
+      (answer?.job ? isActiveJob(answer.job) : false) ||
+      (answer?.mode === "queue" && !answer.result);
+
+    if (!hasActiveWork) {
+      return;
+    }
+
+    const interval = window.setInterval(() => void refresh({ silent: true }), 4_000);
+    return () => window.clearInterval(interval);
+  }, [answer?.job?.id, answer?.job?.status, answer?.mode, answer?.result, jobs]);
+
+  function showMessage(text: string, tone: UiMessage["tone"] = "info") {
+    setMessage({ id: messageIdRef.current++, text, tone });
+  }
+
+  function clearMessage() {
+    setMessage(undefined);
+  }
+
+  function applyJobs(nextJobs: AiJob[], notify: boolean) {
+    const notices = notify ? jobTransitionMessages(jobsRef.current, nextJobs) : [];
+    jobsRef.current = nextJobs;
+    setJobs(nextJobs);
+    if (notices.length > 0) {
+      const failed = notices.some((notice) => notice.tone === "danger");
+      showMessage(notices.map((notice) => notice.text).join(" "), failed ? "danger" : "success");
+    }
+  }
+
+  async function refresh(options: { preserveMessage?: boolean; silent?: boolean } = {}) {
     setRefreshing(true);
-    setMessage("");
+    if (!options.silent && !options.preserveMessage) {
+      clearMessage();
+    }
     try {
       const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, jobsResult, proposalsResult, configResult] = await Promise.all([
         apiGet<Health>("/health"),
@@ -275,7 +328,7 @@ export default function HomePage() {
       setDocuments(documentsResult.documents);
       setQuestions(questionsResult.questions);
       setGaps(gapsResult.gaps);
-      setJobs(jobsResult.jobs);
+      applyJobs(jobsResult.jobs, jobsRef.current.length > 0);
       setProposals(proposalsResult.proposals);
       setConfig(configResult);
       setSelectedProposalId((current) => current ?? proposalsResult.proposals[0]?.id);
@@ -305,7 +358,9 @@ export default function HomePage() {
         setSections(result.sections);
       }
     } catch (error) {
-      setMessage(errorMessage(error));
+      if (!options.silent) {
+        showMessage(errorMessage(error), "danger");
+      }
     } finally {
       setRefreshing(false);
     }
@@ -318,14 +373,17 @@ export default function HomePage() {
     }
 
     setLoading(true);
-    setMessage("");
+    clearMessage();
     try {
       const result = await apiPost<AskResponse>("/ask", { question: question.trim() });
       setAnswer(result);
       setQuestion("");
-      await refresh();
+      if (result.job) {
+        showMessage(`${formatJobType(result.job.type)} queued. We will update this page when it finishes.`, "info");
+      }
+      await refresh({ preserveMessage: true });
     } catch (error) {
-      setMessage(errorMessage(error));
+      showMessage(errorMessage(error), "danger");
     } finally {
       setLoading(false);
     }
@@ -338,31 +396,31 @@ export default function HomePage() {
     }
 
     setLoading(true);
-    setMessage("");
+    clearMessage();
     try {
       const result = await apiGet<{ sections: SearchSection[] }>(`/search?q=${encodeURIComponent(query.trim())}&limit=6`);
       setSections(result.sections);
       setWorkspaceTab("search");
     } catch (error) {
-      setMessage(errorMessage(error));
+      showMessage(errorMessage(error), "danger");
     } finally {
       setLoading(false);
     }
   }
 
   async function sendFeedback(questionId: string, feedback: Feedback) {
-    setMessage("");
+    clearMessage();
     try {
       const result = await apiPost<{ question: QuestionLog }>(`/questions/${questionId}/feedback`, { feedback });
       setQuestions((current) => current.map((item) => (item.id === questionId ? result.question : item)));
     } catch (error) {
-      setMessage(errorMessage(error));
+      showMessage(errorMessage(error), "danger");
     }
   }
 
   async function draftProposal(gap: GapCandidate) {
     setLoading(true);
-    setMessage("");
+    clearMessage();
     try {
       const result = await apiPost<{ job?: AiJob; proposal?: Proposal }>("/proposals/from-gap", {
         summary: gap.summary,
@@ -374,9 +432,12 @@ export default function HomePage() {
       } else {
         setActiveSection("jobs");
       }
-      await refresh();
+      if (result.job) {
+        showMessage(`${formatJobType(result.job.type)} queued. We will update this page when it finishes.`, "info");
+      }
+      await refresh({ preserveMessage: true });
     } catch (error) {
-      setMessage(errorMessage(error));
+      showMessage(errorMessage(error), "danger");
     } finally {
       setLoading(false);
     }
@@ -384,14 +445,14 @@ export default function HomePage() {
 
   async function updateProposalStatus(proposalId: string, status: Proposal["status"]) {
     setLoading(true);
-    setMessage("");
+    clearMessage();
     try {
       const result = await apiPost<{ proposal: Proposal }>(`/proposals/${proposalId}/status`, { status });
       setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
       setSelectedProposalId(result.proposal.id);
-      setMessage(status === "ready" ? "Proposal marked ready for PR workflow." : "Proposal rejected.");
+      showMessage(status === "ready" ? "Proposal marked ready for PR workflow." : "Proposal rejected.", "success");
     } catch (error) {
-      setMessage(errorMessage(error));
+      showMessage(errorMessage(error), "danger");
     } finally {
       setLoading(false);
     }
@@ -399,15 +460,15 @@ export default function HomePage() {
 
   async function publishProposal(proposalId: string) {
     setLoading(true);
-    setMessage("");
+    clearMessage();
     try {
       const result = await apiPost<{ proposal: Proposal }>(`/proposals/${proposalId}/publish`, {});
       setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
       setSelectedProposalId(result.proposal.id);
-      setMessage(`Published ${result.proposal.publication?.branchName ?? "proposal branch"}.`);
-      await refresh();
+      showMessage(`Published ${result.proposal.publication?.branchName ?? "proposal branch"}.`, "success");
+      await refresh({ preserveMessage: true });
     } catch (error) {
-      setMessage(errorMessage(error));
+      showMessage(errorMessage(error), "danger");
     } finally {
       setLoading(false);
     }
@@ -420,7 +481,7 @@ export default function HomePage() {
     }
 
     setUploading(true);
-    setMessage("");
+    clearMessage();
     try {
       const summary = await apiPost<{ documentCount: number; sectionCount: number }>("/documents/upload", {
         repositoryId: "console-upload",
@@ -432,11 +493,11 @@ export default function HomePage() {
           }
         ]
       });
-      setMessage(`Indexed ${summary.documentCount} document with ${summary.sectionCount} sections.`);
+      showMessage(`Indexed ${summary.documentCount} document with ${summary.sectionCount} sections.`, "success");
       setUploadContent("");
-      await refresh();
+      await refresh({ preserveMessage: true });
     } catch (error) {
-      setMessage(errorMessage(error));
+      showMessage(errorMessage(error), "danger");
     } finally {
       setUploading(false);
     }
@@ -449,19 +510,20 @@ export default function HomePage() {
     }
 
     setIndexingRepo(true);
-    setMessage("");
+    clearMessage();
     try {
       const summary = await apiPost<IndexRepositoryResponse>("/repositories/index", {
         localPath: repoPath.trim(),
         repositoryId: repoId.trim() || undefined,
         name: repoName.trim() || undefined
       });
-      setMessage(
-        `Indexed ${summary.repository.name} with ${summary.documentCount} documents and ${summary.sectionCount} sections.`
+      showMessage(
+        `Indexed ${summary.repository.name} with ${summary.documentCount} documents and ${summary.sectionCount} sections.`,
+        "success"
       );
-      await refresh();
+      await refresh({ preserveMessage: true });
     } catch (error) {
-      setMessage(errorMessage(error));
+      showMessage(errorMessage(error), "danger");
     } finally {
       setIndexingRepo(false);
     }
@@ -539,7 +601,11 @@ export default function HomePage() {
           </div>
         </header>
 
-        {message ? <div className="alert">{message}</div> : null}
+        {message ? (
+          <div className={`alert ${message.tone}`} role="status" aria-live="polite">
+            {message.text}
+          </div>
+        ) : null}
         {attentionNotices.length ? <AttentionPanel notices={attentionNotices} /> : null}
 
         <section className="summary" aria-label="System summary">
@@ -693,7 +759,7 @@ export default function HomePage() {
               apiBaseUrl={resolveApiBaseUrl()}
               config={config}
               onConfigChange={setConfig}
-              onMessage={setMessage}
+              onMessage={(text, tone) => (text ? showMessage(text, tone) : clearMessage())}
             />
           </section>
         ) : null}
@@ -1409,7 +1475,7 @@ function ConfigPanel({
   apiBaseUrl: string;
   config?: RuntimeConfig;
   onConfigChange: (config: RuntimeConfig) => void;
-  onMessage: (message: string) => void;
+  onMessage: (message: string, tone?: UiMessage["tone"]) => void;
 }) {
   const [executionMode, setExecutionMode] = useState<AiExecutionMode>("direct");
   const [provider, setProvider] = useState<AiProviderName>("mock");
@@ -1457,9 +1523,9 @@ function ConfigPanel({
         }
       });
       onConfigChange(result);
-      onMessage("Runtime AI config updated.");
+      onMessage("Runtime AI config updated.", "success");
     } catch (error) {
-      onMessage(errorMessage(error));
+      onMessage(errorMessage(error), "danger");
     } finally {
       setSaving(false);
     }
@@ -1726,6 +1792,39 @@ function buildAttentionNotices({
   }
 
   return notices;
+}
+
+function isActiveJob(job: AiJob): boolean {
+  return job.status === "pending" || job.status === "claimed";
+}
+
+function jobTransitionMessages(previousJobs: AiJob[], nextJobs: AiJob[]): JobTransitionMessage[] {
+  const previousById = new Map(previousJobs.map((job) => [job.id, job]));
+
+  return nextJobs.flatMap<JobTransitionMessage>((job) => {
+    const previous = previousById.get(job.id);
+    if (!previous || !isActiveJob(previous) || previous.status === job.status) {
+      return [];
+    }
+
+    if (job.status === "completed") {
+      return [{ text: `${formatJobType(job.type)} completed.`, tone: "success" as const }];
+    }
+
+    if (job.status === "failed") {
+      return [{ text: `${formatJobType(job.type)} failed. Open Jobs for details.`, tone: "danger" as const }];
+    }
+
+    return [];
+  });
+}
+
+function formatJobType(type: string): string {
+  return type
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 async function apiGet<T>(path: string): Promise<T> {
