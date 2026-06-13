@@ -41,14 +41,17 @@ Embeddings must come from an admin-configured endpoint. A CLI agent (Claude, Cod
 
 ## Embedding Configuration
 
+An embedding endpoint is detected by the **presence of its credential variables** — set all three for whichever provider you use:
+
 | Variable | Purpose |
 |---|---|
 | `KNOWLEDGE_STORE=postgres` + `DATABASE_URL` | Required for vector search. |
-| `EMBEDDING_PROVIDER` | `openai-compatible` or `azure-openai`. |
-| `OPENAI_COMPATIBLE_EMBEDDING_MODEL` | Embedding model for the OpenAI-compatible endpoint. Must output 1536-dimensional vectors. |
-| `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | Azure OpenAI embedding deployment name. Must output 1536-dimensional vectors. |
+| `OPENAI_COMPATIBLE_BASE_URL` + `OPENAI_COMPATIBLE_API_KEY` + `OPENAI_COMPATIBLE_EMBEDDING_MODEL` | OpenAI-compatible embeddings. The model must output 1536-dimensional vectors. |
+| `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | Azure OpenAI embeddings. The deployment must output 1536-dimensional vectors. |
 
-Both `text-embedding-3-small` and `ada-002` produce 1536-dimensional vectors and are compatible. Hybrid retrieval activates automatically when both `KNOWLEDGE_STORE=postgres` and an `EMBEDDING_PROVIDER` are configured; otherwise the system stays on keyword-only search with no regression in behaviour.
+`EMBEDDING_PROVIDER` is informational only — it is surfaced in `/config` for display and does not enable embeddings.
+
+Both `text-embedding-3-small` and `ada-002` produce 1536-dimensional vectors and are compatible. Hybrid retrieval activates automatically when `KNOWLEDGE_STORE=postgres` **and** a complete set of embedding credentials (the OpenAI-compatible trio or the Azure trio above) are configured; otherwise the system stays on keyword-only search with no regression in behaviour. `/config` reports the resolved `retrieval.mode` (`hybrid` or `keyword`) and a plain-language `reason`.
 
 ## Ask
 
