@@ -64,6 +64,11 @@ interface RuntimeConfig {
       supportsQueue: boolean;
     }>;
   };
+  retrieval: {
+    mode: "hybrid" | "keyword";
+    reason: string;
+    embeddingProvider: string | null;
+  };
   watcher: Record<string, string | number | null>;
 }
 
@@ -505,6 +510,12 @@ export default function HomePage() {
           <div className="statusLine">
             <span>Provider</span>
             <span>{config?.aiRuntime.provider ?? "mock"}</span>
+          </div>
+          <div className="statusLine">
+            <span>Retrieval</span>
+            <span title={config?.retrieval.reason}>
+              {config?.retrieval.mode === "hybrid" ? "Hybrid (semantic + keyword)" : "Keyword only"}
+            </span>
           </div>
           <div className="statusLine">
             <span>Updated</span>
