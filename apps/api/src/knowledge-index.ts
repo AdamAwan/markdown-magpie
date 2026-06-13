@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { DocumentSection, GitRepositoryContext, KnowledgeDocument, RepositoryRef } from "@magpie/core";
+import type { DocumentSection, GitRepositoryContext, KnowledgeDocument, RankedSection, RepositoryRef } from "@magpie/core";
 import { parseMarkdownDocument, splitIntoSections } from "@magpie/markdown";
 
 const execFileAsync = promisify(execFile);
@@ -178,21 +178,26 @@ export class InMemoryKnowledgeIndex {
     return summary;
   }
 
-  async search(question: string, limit: number): Promise<DocumentSection[]> {
+  async search(question: string, limit: number): Promise<RankedSection[]> {
     const terms = tokenize(question);
     if (terms.length === 0) {
       return [];
     }
 
-    return [...this.sections.values()]
+    const scored = [...this.sections.values()]
       .map((section) => ({
         section,
         score: scoreSection(section, terms)
       }))
       .filter((result) => result.score > 0)
       .sort((left, right) => right.score - left.score)
-      .slice(0, limit)
-      .map((result) => result.section);
+      .slice(0, limit);
+
+    const bestScore = scored[0]?.score ?? 1;
+    return scored.map((result) => ({
+      section: result.section,
+      relevance: result.score / bestScore
+    }));
   }
 
   listDocuments(): KnowledgeDocument[] {

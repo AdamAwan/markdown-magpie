@@ -1,7 +1,7 @@
-import type { AnswerResult, ChatProvider, Citation, ChatRequest, DocumentSection, EmbeddingProvider } from "@magpie/core";
+import type { AnswerResult, ChatProvider, Citation, ChatRequest, Confidence, DocumentSection, RankedSection } from "@magpie/core";
 
 export interface SectionSearchProvider {
-  search(question: string, limit: number): Promise<DocumentSection[]>;
+  search(question: string, limit: number): Promise<RankedSection[]>;
 }
 
 export type ChatProviderName = "mock" | "openai-compatible" | "azure-openai";
@@ -14,12 +14,6 @@ export interface ChatProviderConfig {
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
-}
-
-export class MockEmbeddingProvider implements EmbeddingProvider {
-  async embed(texts: string[]): Promise<number[][]> {
-    return texts.map((text) => [text.length]);
-  }
 }
 
 export class MockChatProvider implements ChatProvider {
@@ -125,17 +119,20 @@ export function createChatProvider(config: ChatProviderConfig): ChatProvider {
   return new MockChatProvider();
 }
 
+const RELEVANCE_FLOOR = 0.2;
+const HIGH_CONFIDENCE_RELEVANCE = 0.6;
+const MEDIUM_CONFIDENCE_RELEVANCE = 0.35;
+
 export async function answerQuestion(
   question: string,
   searchProvider: SectionSearchProvider,
   chatProvider: ChatProvider
 ): Promise<AnswerResult> {
-  const sections = await searchProvider.search(question, 5);
-  const scoredSections = scoreSectionsForQuestion(question, sections);
-  const relevantSections = selectRelevantSections(scoredSections);
+  const ranked = await searchProvider.search(question, 5);
+  const relevantSections = selectRelevantSections(ranked);
   const citations = relevantSections.map((result) => toCitation(result.section));
 
-  if (sections.length === 0 || relevantSections.length === 0) {
+  if (relevantSections.length === 0) {
     return {
       answer: "I could not find reliable source material for this question.",
       confidence: "low",
@@ -176,63 +173,28 @@ export async function answerQuestion(
 
   return {
     answer: response.content,
-    confidence: confidenceForEvidence(relevantSections),
+    confidence: confidenceFromRelevance(relevantSections),
     citations
   };
 }
 
-interface ScoredSection {
-  section: DocumentSection;
-  score: number;
-}
-
-function scoreSectionsForQuestion(question: string, sections: DocumentSection[]): ScoredSection[] {
-  const terms = tokenize(question);
-  return sections
-    .map((section) => ({
-      section,
-      score: scoreSection(section, terms)
-    }))
-    .filter((result) => result.score > 0)
-    .sort((left, right) => right.score - left.score);
-}
-
-function selectRelevantSections(scoredSections: ScoredSection[]): ScoredSection[] {
-  const bestScore = scoredSections[0]?.score ?? 0;
-  if (bestScore < 2) {
+function selectRelevantSections(ranked: RankedSection[]): RankedSection[] {
+  const best = ranked[0]?.relevance ?? 0;
+  if (best < RELEVANCE_FLOOR) {
     return [];
   }
 
-  return scoredSections
-    .filter((result) => result.score >= Math.max(2, Math.ceil(bestScore * 0.5)))
-    .slice(0, 3);
+  const threshold = Math.max(RELEVANCE_FLOOR, best * 0.5);
+  return ranked.filter((result) => result.relevance >= threshold).slice(0, 3);
 }
 
-function confidenceForEvidence(scoredSections: ScoredSection[]): AnswerResult["confidence"] {
-  const bestScore = scoredSections[0]?.score ?? 0;
-  if (bestScore >= 5 && scoredSections.length >= 2) {
+function confidenceFromRelevance(selected: RankedSection[]): Confidence {
+  const best = selected[0]?.relevance ?? 0;
+  if (best >= HIGH_CONFIDENCE_RELEVANCE && selected.length >= 2) {
     return "high";
   }
 
-  return bestScore >= 2 ? "medium" : "low";
-}
-
-function scoreSection(section: DocumentSection, terms: string[]): number {
-  const heading = section.heading.toLowerCase();
-  const content = section.content.toLowerCase();
-  return terms.reduce((score, term) => {
-    if (heading.includes(term)) {
-      return score + 3;
-    }
-
-    return content.includes(term) ? score + 1 : score;
-  }, 0);
-}
-
-function tokenize(value: string): string[] {
-  return [
-    ...new Set((value.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []).filter((term) => !stopwords.has(term)))
-  ];
+  return best >= MEDIUM_CONFIDENCE_RELEVANCE ? "medium" : "low";
 }
 
 function isKnowledgeGapAnswer(value: string): boolean {
@@ -299,23 +261,5 @@ function assertConfig(value: string | undefined, name: string): asserts value is
   }
 }
 
-const stopwords = new Set([
-  "and",
-  "are",
-  "cat",
-  "cats",
-  "for",
-  "get",
-  "gets",
-  "got",
-  "how",
-  "the",
-  "this",
-  "that",
-  "what",
-  "when",
-  "where",
-  "who",
-  "why",
-  "with"
-]);
+export * from "./rrf.js";
+export * from "./embeddings.js";

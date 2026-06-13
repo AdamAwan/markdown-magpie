@@ -410,12 +410,12 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
       question,
       executionMode: runtimeConfig.aiExecutionMode,
       chatProvider: runtimeConfig.aiProvider,
-      retrievedSectionIds: sections.map((section) => section.id)
+      retrievedSectionIds: sections.map((ranked) => ranked.section.id)
     });
     const input: AnswerQuestionJobInput = {
       questionLogId: log.id,
       question,
-      context: sections.map((section) => ({
+      context: sections.map(({ section }) => ({
         sectionId: section.id,
         path: section.path,
         heading: section.heading,
