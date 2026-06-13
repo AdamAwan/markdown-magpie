@@ -435,6 +435,24 @@ select:focus {
   color: #2d5775;
 }
 
+.status.repository-root {
+  border-color: #9dbb9f;
+  background: #f0f8ee;
+  color: #3d6b43;
+}
+
+.status.subdirectory {
+  border-color: #b8c8d9;
+  background: #f1f6fb;
+  color: #2d5775;
+}
+
+.status.not-git {
+  border-color: #d48d7a;
+  background: #fff4ef;
+  color: #9a3a2d;
+}
+
 .list {
   display: grid;
 }
@@ -640,6 +658,54 @@ code {
   grid-template-columns: minmax(240px, 1.4fr) minmax(150px, 0.8fr) minmax(180px, 1fr) auto;
   gap: 12px;
   align-items: end;
+}
+
+.repositoryContextList,
+.repositoryContext {
+  display: grid;
+  gap: 12px;
+}
+
+.repositoryContext {
+  border-top: 1px solid #e2e6df;
+  padding-top: 12px;
+}
+
+.repositoryContext:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.gitContextGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.contextValue {
+  min-width: 0;
+  border: 1px solid #e2e6df;
+  background: #fbfcfa;
+  padding: 10px;
+}
+
+.contextValue span {
+  display: block;
+  color: #65716b;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.contextValue strong {
+  display: block;
+  min-width: 0;
+  margin-top: 7px;
+  overflow-wrap: anywhere;
+  color: #17211d;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .uploadForm {
@@ -854,6 +920,7 @@ pre {
   .workbench,
   .documentBrowser,
   .repositoryForm,
+  .gitContextGrid,
   .uploadForm,
   .proposalGrid,
   .runtimeEditor,

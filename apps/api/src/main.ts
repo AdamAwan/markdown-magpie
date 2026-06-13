@@ -76,6 +76,11 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return;
   }
 
+  if (request.method === "GET" && path === "/repositories") {
+    writeJson(response, 200, { repositories: knowledgeIndex.listRepositories() });
+    return;
+  }
+
   if (request.method === "POST" && path === "/documents/upload") {
     await handleUploadDocuments(request, response);
     return;

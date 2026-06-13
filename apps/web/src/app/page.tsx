@@ -81,6 +81,28 @@ interface KnowledgeDocument {
   content: string;
 }
 
+interface RepositoryRef {
+  id: string;
+  name: string;
+  remoteUrl?: string;
+  defaultBranch: string;
+  localPath: string;
+  provider: "local" | "github" | "gitlab" | "azure-devops";
+  git?: GitRepositoryContext;
+}
+
+interface GitRepositoryContext {
+  scope: "repository-root" | "subdirectory" | "not-git";
+  indexedPath: string;
+  workTreeRoot?: string;
+  relativePathFromRoot?: string;
+  currentBranch?: string;
+  defaultBranch?: string;
+  headSha?: string;
+  remoteUrl?: string;
+  hasUncommittedChanges?: boolean;
+}
+
 interface Citation {
   sectionId: string;
   path: string;
@@ -171,6 +193,7 @@ export default function HomePage() {
   const [stats, setStats] = useState<KnowledgeStats>({ repositoryCount: 0, documentCount: 0, sectionCount: 0 });
   const [questions, setQuestions] = useState<QuestionLog[]>([]);
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [repositories, setRepositories] = useState<RepositoryRef[]>([]);
   const [gaps, setGaps] = useState<GapCandidate[]>([]);
   const [jobs, setJobs] = useState<AiJob[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
@@ -211,9 +234,10 @@ export default function HomePage() {
     setRefreshing(true);
     setMessage("");
     try {
-      const [healthResult, statsResult, documentsResult, questionsResult, gapsResult, jobsResult, proposalsResult, configResult] = await Promise.all([
+      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, jobsResult, proposalsResult, configResult] = await Promise.all([
         apiGet<Health>("/health"),
         apiGet<KnowledgeStats>("/knowledge/stats"),
+        apiGet<{ repositories: RepositoryRef[] }>("/repositories"),
         apiGet<{ documents: KnowledgeDocument[] }>("/documents"),
         apiGet<{ questions: QuestionLog[] }>("/questions?limit=8"),
         apiGet<{ gaps: GapCandidate[] }>("/gaps/candidates?limit=8"),
@@ -224,6 +248,7 @@ export default function HomePage() {
 
       setHealth(healthResult);
       setStats(statsResult);
+      setRepositories(repositoriesResult.repositories);
       setDocuments(documentsResult.documents);
       setQuestions(questionsResult.questions);
       setGaps(gapsResult.gaps);
@@ -526,6 +551,7 @@ export default function HomePage() {
 
         {activeSection === "knowledge" ? (
           <section className="knowledgePage">
+            <RepositoryContextPanel repositories={repositories} />
             <div className="surface">
               <div className="surfaceHeader">
                 <h2>Knowledge Base</h2>
@@ -725,6 +751,56 @@ function SearchPanel({
   );
 }
 
+function RepositoryContextPanel({ repositories }: { repositories: RepositoryRef[] }) {
+  return (
+    <section className="surface">
+      <div className="surfaceHeader">
+        <h2>Repository Context</h2>
+        <span className="pill" title="Indexed knowledge repositories">
+          {repositories.length} repos
+        </span>
+      </div>
+      <div className="surfaceBody">
+        <div className="repositoryContextList">
+          {repositories.map((repository) => (
+            <article className="repositoryContext" key={repository.id}>
+              <div className="rowTop">
+                <div>
+                  <h3>{repository.name}</h3>
+                  <p className="path">{repository.localPath}</p>
+                </div>
+                <span className={`status ${repository.git?.scope ?? "unknown"}`} title={gitScopeLabel(repository.git?.scope)}>
+                  {gitScopeLabel(repository.git?.scope)}
+                </span>
+              </div>
+              <div className="gitContextGrid">
+                <ContextValue label="Repository ID" value={repository.id} />
+                <ContextValue label="Provider" value={repository.provider} />
+                <ContextValue label="Branch" value={repository.git?.currentBranch ?? repository.defaultBranch} />
+                <ContextValue label="HEAD" value={shortSha(repository.git?.headSha)} />
+                <ContextValue label="Git Root" value={repository.git?.workTreeRoot ?? "Not detected"} />
+                <ContextValue label="Indexed Folder" value={repository.git?.relativePathFromRoot ?? repository.git?.indexedPath ?? repository.localPath} />
+                <ContextValue label="Remote" value={repository.git?.remoteUrl ?? repository.remoteUrl ?? "Not configured"} />
+                <ContextValue label="Working Tree" value={repository.git?.hasUncommittedChanges ? "Uncommitted changes" : repository.git?.scope === "not-git" ? "Not a git work tree" : "Clean"} />
+              </div>
+            </article>
+          ))}
+          {repositories.length === 0 ? <p className="empty">No repository context available yet. Index a repository to detect its Git scope.</p> : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ContextValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="contextValue">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
 function KnowledgeBrowser({
   documents,
   selectedDocument,
@@ -813,6 +889,24 @@ function groupDocumentsByFolder(documents: KnowledgeDocument[]): Array<{ name: s
       name,
       documents: groupedDocuments.sort((left, right) => left.path.localeCompare(right.path))
     }));
+}
+
+function gitScopeLabel(scope: GitRepositoryContext["scope"] | undefined): string {
+  if (scope === "repository-root") {
+    return "Git repo";
+  }
+  if (scope === "subdirectory") {
+    return "Git subfolder";
+  }
+  if (scope === "not-git") {
+    return "Not Git";
+  }
+
+  return "Unknown";
+}
+
+function shortSha(value: string | undefined): string {
+  return value ? value.slice(0, 12) : "Unknown";
 }
 
 function RecentQuestions({

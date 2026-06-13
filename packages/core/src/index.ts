@@ -9,6 +9,19 @@ export interface RepositoryRef {
   defaultBranch: string;
   localPath: string;
   provider: "local" | "github" | "gitlab" | "azure-devops";
+  git?: GitRepositoryContext;
+}
+
+export interface GitRepositoryContext {
+  scope: "repository-root" | "subdirectory" | "not-git";
+  indexedPath: string;
+  workTreeRoot?: string;
+  relativePathFromRoot?: string;
+  currentBranch?: string;
+  defaultBranch?: string;
+  headSha?: string;
+  remoteUrl?: string;
+  hasUncommittedChanges?: boolean;
 }
 
 export interface DocumentMetadata {

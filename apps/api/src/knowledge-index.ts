@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { DocumentSection, KnowledgeDocument, RepositoryRef } from "@magpie/core";
+import type { DocumentSection, GitRepositoryContext, KnowledgeDocument, RepositoryRef } from "@magpie/core";
 import { parseMarkdownDocument, splitIntoSections } from "@magpie/markdown";
 
 const execFileAsync = promisify(execFile);
@@ -38,14 +38,17 @@ export class InMemoryKnowledgeIndex {
     name?: string;
   }): Promise<IndexedRepositorySummary> {
     const localPath = resolveLocalPath(input.localPath);
+    const git = await detectGitContext(localPath);
     const repository: RepositoryRef = {
       id: input.repositoryId ?? slugify(path.basename(localPath)),
       name: input.name ?? path.basename(localPath),
-      defaultBranch: "main",
+      defaultBranch: git.defaultBranch ?? git.currentBranch ?? "main",
       localPath,
-      provider: "local"
+      provider: "local",
+      remoteUrl: git.remoteUrl,
+      git
     };
-    const commitSha = await readGitHead(localPath);
+    const commitSha = git.headSha;
     const markdownPaths = await findMarkdownFiles(localPath);
     const documents: KnowledgeDocument[] = [];
     const sections: DocumentSection[] = [];
@@ -160,6 +163,10 @@ export class InMemoryKnowledgeIndex {
     return [...this.documents.values()].sort((left, right) => left.path.localeCompare(right.path));
   }
 
+  listRepositories(): RepositoryRef[] {
+    return [...this.repositories.values()].sort((left, right) => left.name.localeCompare(right.name));
+  }
+
   getStats(): { repositoryCount: number; documentCount: number; sectionCount: number } {
     return {
       repositoryCount: this.repositories.size,
@@ -191,15 +198,6 @@ async function findMarkdownFiles(root: string): Promise<string[]> {
   }
 
   return files.sort();
-}
-
-async function readGitHead(localPath: string): Promise<string | undefined> {
-  try {
-    const result = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: localPath });
-    return result.stdout.trim() || undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function scoreSection(section: DocumentSection, terms: string[]): number {
@@ -264,4 +262,48 @@ function resolveLocalPath(value: string): string {
   }
 
   return path.resolve(process.env.INIT_CWD ?? process.cwd(), value);
+}
+
+async function detectGitContext(localPath: string): Promise<GitRepositoryContext> {
+  const indexedPath = path.resolve(localPath);
+  const workTreeRoot = await readGitValue(indexedPath, ["rev-parse", "--show-toplevel"]);
+  if (!workTreeRoot) {
+    return {
+      scope: "not-git",
+      indexedPath
+    };
+  }
+
+  const normalizedIndexedPath = normalizePathForComparison(indexedPath);
+  const normalizedWorkTreeRoot = normalizePathForComparison(workTreeRoot);
+  const relativePathFromRoot = toPosixPath(path.relative(workTreeRoot, indexedPath));
+  const remoteUrl = await readGitValue(indexedPath, ["config", "--get", "remote.origin.url"]);
+  const defaultBranchRef = await readGitValue(indexedPath, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
+  const defaultBranch = defaultBranchRef?.replace(/^origin\//, "");
+  const status = await readGitValue(indexedPath, ["status", "--porcelain"]);
+
+  return {
+    scope: normalizedIndexedPath === normalizedWorkTreeRoot ? "repository-root" : "subdirectory",
+    indexedPath,
+    workTreeRoot,
+    relativePathFromRoot: relativePathFromRoot || ".",
+    currentBranch: await readGitValue(indexedPath, ["branch", "--show-current"]),
+    defaultBranch,
+    headSha: await readGitValue(indexedPath, ["rev-parse", "HEAD"]),
+    remoteUrl,
+    hasUncommittedChanges: Boolean(status)
+  };
+}
+
+async function readGitValue(cwd: string, args: string[]): Promise<string | undefined> {
+  try {
+    const result = await execFileAsync("git", args, { cwd });
+    return result.stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizePathForComparison(value: string): string {
+  return path.resolve(value).replace(/[\\\/]+$/, "").toLowerCase();
 }
