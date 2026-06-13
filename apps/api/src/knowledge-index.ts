@@ -16,8 +16,15 @@ export interface IndexedRepositorySummary {
   commitSha?: string;
 }
 
+export interface LoadedKnowledge {
+  repositories: RepositoryRef[];
+  documents: KnowledgeDocument[];
+  sections: DocumentSection[];
+}
+
 export interface KnowledgePersistence {
   saveIndexedRepository(summary: IndexedRepositorySummary, documents: KnowledgeDocument[], sections: DocumentSection[]): Promise<void>;
+  loadAll(): Promise<LoadedKnowledge>;
 }
 
 export interface MarkdownUpload {
@@ -31,6 +38,35 @@ export class InMemoryKnowledgeIndex {
   private readonly repositories = new Map<string, RepositoryRef>();
 
   constructor(private readonly persistence?: KnowledgePersistence) {}
+
+  /**
+   * Loads previously persisted repositories, documents, and sections into the in-memory
+   * index. Without this, a Postgres-backed deployment would serve an empty index after a
+   * restart until something was re-indexed. Git context is re-derived from each repository's
+   * local path so publishing keeps working with fresh branch/SHA state.
+   */
+  async hydrate(): Promise<void> {
+    if (!this.persistence) {
+      return;
+    }
+
+    const { repositories, documents, sections } = await this.persistence.loadAll();
+
+    for (const repository of repositories) {
+      const git = await detectGitContext(repository.localPath);
+      this.repositories.set(repository.id, {
+        ...repository,
+        remoteUrl: repository.remoteUrl ?? git.remoteUrl,
+        git
+      });
+    }
+    for (const document of documents) {
+      this.documents.set(document.id, document);
+    }
+    for (const section of sections) {
+      this.sections.set(section.id, section);
+    }
+  }
 
   async indexLocalRepository(input: {
     localPath: string;

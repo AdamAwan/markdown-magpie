@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import type { AiJob, AiJobQueue, AiJobStatus, AiJobType } from "@magpie/core";
+import { DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS } from "./ai-job-queue.js";
 
 const { Pool } = pg;
 
 export class PostgresAiJobQueue implements AiJobQueue {
   private readonly pool: pg.Pool;
 
-  constructor(connectionString: string) {
+  constructor(connectionString: string, private readonly claimTimeoutMs = DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS) {
     this.pool = new Pool({ connectionString });
   }
 
@@ -26,11 +27,14 @@ export class PostgresAiJobQueue implements AiJobQueue {
   }
 
   async claimNext(workerName: string, acceptedTypes: AiJobType[]): Promise<AiJob | undefined> {
+    await this.requeueExpiredClaims();
+
     const result = await this.pool.query<AiJobRow>(
       `
         UPDATE ai_jobs
         SET status = 'claimed',
             claimed_by = $1,
+            claimed_at = now(),
             updated_at = now()
         WHERE id = (
           SELECT id
@@ -47,6 +51,22 @@ export class PostgresAiJobQueue implements AiJobQueue {
     );
 
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
+  }
+
+  private async requeueExpiredClaims(): Promise<void> {
+    await this.pool.query(
+      `
+        UPDATE ai_jobs
+        SET status = 'pending',
+            claimed_by = NULL,
+            claimed_at = NULL,
+            updated_at = now()
+        WHERE status = 'claimed'
+          AND claimed_at IS NOT NULL
+          AND claimed_at < now() - ($1::bigint * interval '1 millisecond')
+      `,
+      [this.claimTimeoutMs]
+    );
   }
 
   async complete<TOutput>(jobId: string, output: TOutput): Promise<void> {
@@ -103,6 +123,7 @@ interface AiJobRow {
   output: unknown | null;
   error: string | null;
   claimed_by: string | null;
+  claimed_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -116,6 +137,7 @@ function mapRow<TInput = unknown, TOutput = unknown>(row: AiJobRow): AiJob<TInpu
     output: row.output === null ? undefined : (row.output as TOutput),
     error: row.error ?? undefined,
     claimedBy: row.claimed_by ?? undefined,
+    claimedAt: row.claimed_at ? row.claimed_at.toISOString() : undefined,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
   };
