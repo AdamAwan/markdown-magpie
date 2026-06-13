@@ -12,8 +12,9 @@ import type {
   QuestionFeedback
 } from "@magpie/core";
 import { LocalGitProposalPublisher } from "@magpie/git";
-import { answerQuestion, createChatProvider, type ChatProviderName } from "@magpie/retrieval";
+import { answerQuestion, createChatProvider, createEmbeddingProvider, type ChatProviderName, type EmbeddingProviderName } from "@magpie/retrieval";
 import { DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS, InMemoryAiJobQueue } from "./ai-job-queue.js";
+import { embedPendingSections } from "./embed-sections.js";
 import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
 import { PostgresAiJobQueue } from "./postgres-ai-job-queue.js";
 import { PostgresKnowledgeStore } from "./postgres-knowledge-store.js";
@@ -25,7 +26,19 @@ import { InMemoryQuestionLogStore } from "./question-log-store.js";
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
 const aiJobClaimTimeoutMs = parseClaimTimeoutMs(process.env.AI_JOB_CLAIM_TIMEOUT_MS);
 const aiJobs = createAiJobQueue();
-const knowledgeIndex = createKnowledgeIndex();
+const knowledgeStore =
+  storeBackend("KNOWLEDGE_STORE") === "postgres"
+    ? new PostgresKnowledgeStore(requireDatabaseUrl())
+    : undefined;
+const embeddingProvider = knowledgeStore ? createConfiguredEmbeddingProvider() : undefined;
+const knowledgeIndex = knowledgeStore
+  ? new InMemoryKnowledgeIndex(
+      knowledgeStore,
+      embeddingProvider
+        ? { embeddingProvider, vectorSearch: knowledgeStore, onNotice: (message) => console.warn(message) }
+        : {}
+    )
+  : new InMemoryKnowledgeIndex();
 const questionLogs = createQuestionLogStore();
 const proposals = createProposalStore();
 let runtimeConfig = createInitialRuntimeConfig();
@@ -117,7 +130,8 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       return;
     }
 
-    writeJson(response, 200, { sections: await knowledgeIndex.search(query, parseLimit(url.searchParams.get("limit"), 5)) });
+    const ranked = await knowledgeIndex.search(query, parseLimit(url.searchParams.get("limit"), 5));
+    writeJson(response, 200, { sections: ranked.map((result) => result.section), ranked });
     return;
   }
 
@@ -473,6 +487,7 @@ async function handleIndexRepository(request: IncomingMessage, response: ServerR
   });
 
   writeJson(response, 200, summary);
+  void embedSectionsInBackground();
 }
 
 async function handleUploadDocuments(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -508,6 +523,7 @@ async function handleUploadDocuments(request: IncomingMessage, response: ServerR
   });
 
   writeJson(response, 201, summary);
+  void embedSectionsInBackground();
 }
 
 async function handleCreateJob(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -642,6 +658,7 @@ function getRuntimeConfig() {
       openAiCompatible: {
         baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL || null,
         model: process.env.OPENAI_COMPATIBLE_MODEL || null,
+        embeddingModel: process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL || null,
         apiKey: secretState(process.env.OPENAI_COMPATIBLE_API_KEY)
       },
       azureOpenAi: {
@@ -664,6 +681,14 @@ function getRuntimeConfig() {
       directProviders: availableProviders.filter((provider) => provider.supportsDirect).map((provider) => provider.name),
       queueProviders: availableProviders.filter((provider) => provider.supportsQueue).map((provider) => provider.name)
     },
+    retrieval: (() => {
+      const { mode, reason } = retrievalMode();
+      return {
+        mode,
+        reason,
+        embeddingProvider: embeddingProviderName() ?? null
+      };
+    })(),
     watcher: {
       name: process.env.WATCHER_NAME ?? null,
       pollIntervalMs: process.env.WATCHER_POLL_INTERVAL_MS ?? null,
@@ -856,17 +881,77 @@ function parseClaimTimeoutMs(value: string | undefined): number {
   return parsed;
 }
 
-function createKnowledgeIndex(): InMemoryKnowledgeIndex {
-  if (storeBackend("KNOWLEDGE_STORE") === "postgres") {
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error("DATABASE_URL is required when KNOWLEDGE_STORE=postgres");
-    }
-
-    return new InMemoryKnowledgeIndex(new PostgresKnowledgeStore(databaseUrl));
+function requireDatabaseUrl(): string {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error("DATABASE_URL is required when KNOWLEDGE_STORE=postgres");
   }
+  return databaseUrl;
+}
 
-  return new InMemoryKnowledgeIndex();
+function embeddingProviderName(): EmbeddingProviderName | undefined {
+  if (process.env.OPENAI_COMPATIBLE_BASE_URL && process.env.OPENAI_COMPATIBLE_API_KEY && process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL) {
+    return "openai-compatible";
+  }
+  if (process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT) {
+    return "azure-openai";
+  }
+  return undefined;
+}
+
+function createConfiguredEmbeddingProvider() {
+  const provider = embeddingProviderName();
+  if (!provider) {
+    return undefined;
+  }
+  return createEmbeddingProvider({
+    provider,
+    apiKey: process.env.OPENAI_COMPATIBLE_API_KEY || process.env.AZURE_OPENAI_API_KEY,
+    baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL,
+    model: process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL,
+    azureEndpoint: process.env.AZURE_OPENAI_ENDPOINT,
+    azureDeployment: process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
+    azureApiVersion: process.env.AZURE_OPENAI_API_VERSION
+  });
+}
+
+function retrievalMode(): { mode: "hybrid" | "keyword"; reason: string } {
+  const hasEmbeddings = embeddingProviderName() !== undefined;
+  const postgres = storeBackend("KNOWLEDGE_STORE") === "postgres";
+  if (hasEmbeddings && postgres) {
+    return { mode: "hybrid", reason: "Semantic + keyword search active." };
+  }
+  if (!hasEmbeddings) {
+    return { mode: "keyword", reason: "Add an embeddings endpoint to enable semantic search." };
+  }
+  return { mode: "keyword", reason: "Semantic search requires the Postgres knowledge store (KNOWLEDGE_STORE=postgres)." };
+}
+
+let embeddingInFlight = false;
+let embeddingRerunRequested = false;
+
+async function embedSectionsInBackground(): Promise<void> {
+  if (!knowledgeStore || !embeddingProvider) {
+    return;
+  }
+  if (embeddingInFlight) {
+    embeddingRerunRequested = true;
+    return;
+  }
+  embeddingInFlight = true;
+  try {
+    do {
+      embeddingRerunRequested = false;
+      const result = await embedPendingSections({ store: knowledgeStore, provider: embeddingProvider });
+      if (result.embeddedCount > 0) {
+        console.log(`Embedded ${result.embeddedCount} section(s); ${result.remaining} remaining`);
+      }
+    } while (embeddingRerunRequested);
+  } catch (error) {
+    console.warn(`Background embedding failed: ${error instanceof Error ? error.message : "unknown error"}`);
+  } finally {
+    embeddingInFlight = false;
+  }
 }
 
 function createQuestionLogStore(): InMemoryQuestionLogStore | PostgresQuestionLogStore {
