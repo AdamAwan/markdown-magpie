@@ -129,6 +129,10 @@ This keeps Codex, Claude Code, hosted APIs, and local mock providers behind the 
 
 The watcher can run a local CLI as the AI provider.
 
+Use `AI_PROVIDER` for both direct and queued AI providers. `AI_JOB_PROVIDER` is still
+accepted as an older compatibility name, but new local and deployment configuration should
+prefer `AI_PROVIDER`.
+
 Mock watcher:
 
 ```bash
@@ -188,7 +192,8 @@ Provider support should stay behind `AgentRunner` adapters:
 
 ## Storage
 
-Use `STORAGE_BACKEND=postgres` for durable storage using Postgres tables, including `ai_jobs`.
+Use `STORAGE_BACKEND=postgres` for local development and deployments. AI jobs are stored in
+Postgres tables, including `ai_jobs`.
 
 The older `AI_JOB_QUEUE` variable still works as a compatibility override for the job queue only.
 

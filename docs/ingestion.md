@@ -17,7 +17,7 @@ The API:
 3. Reads the current Git commit SHA when available.
 4. Parses frontmatter.
 5. Splits documents into heading-based sections.
-6. Stores sections in the in-memory search index.
+6. Updates the API's runtime search index.
 7. Persists documents and sections to Postgres when `STORAGE_BACKEND=postgres`.
 
 ## Search

@@ -12,5 +12,6 @@ Likely managed services:
 - Azure DevOps Repos or GitHub for pull request workflows.
 - Microsoft Entra ID for organization authentication.
 
-The application should continue to run locally through Docker Compose with provider-neutral or mock adapters.
-
+Local development should continue to use npm with provider-neutral or mock adapters.
+Docker Compose remains the single-host deployment shape; Azure is an optional managed
+deployment shape.

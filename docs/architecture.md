@@ -1,11 +1,14 @@
 # Architecture
 
-Markdown Magpie is designed around provider-neutral interfaces and Docker-first local deployment.
+Markdown Magpie is designed around provider-neutral interfaces and a Postgres-backed runtime.
+Use npm for local development. Docker Compose is the default shape for running the
+application outside the development loop, such as production-like demos, internal
+showcases, and single-host deployments.
 
 ## Boundaries
 
 - The Git repository is the source of truth for published knowledge.
-- The database stores indexes, logs, metadata, proposals, and audit history.
+- Postgres stores indexes, logs, metadata, proposals, and audit history.
 - The API owns permissions, retrieval orchestration, proposal creation, and review workflow.
 - The MCP server is a client surface over the API.
 - Background jobs perform sync, indexing, clustering, proposal generation, and maintenance checks.
@@ -21,7 +24,7 @@ The core packages define interfaces for:
 - Pull request creation
 - Job scheduling
 
-Concrete adapters can target local Docker services, Azure, GitHub, GitLab, Azure DevOps, OpenAI-compatible APIs, or other providers.
+Concrete adapters can target local services, Docker-deployed services, Azure, GitHub, GitLab, Azure DevOps, OpenAI-compatible APIs, or other providers.
 
 An object storage interface is planned but not yet defined in the core packages.
 

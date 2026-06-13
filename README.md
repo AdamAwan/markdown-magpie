@@ -41,15 +41,17 @@ packages/
   markdown/   Markdown parsing, frontmatter, and section chunking
   retrieval/  Search, ranking, embeddings, and cited answer orchestration
 infra/
-  docker-compose.yml-friendly local deployment docs
+  docker-compose.yml-friendly deployment docs
   azure/ optional managed deployment notes
 ```
 
-## Development
+## Local Development
 
-For day-to-day development, run the apps directly with npm. Docker Compose is not recommended while developing because it adds image rebuild and container restart time to the feedback loop.
+Use npm for day-to-day development. Docker Compose is for running the application outside the development loop, such as production-like demos, internal showcases, and single-host deployments.
 
-Install dependencies:
+Postgres is the primary storage backend. The in-memory stores still exist as a compatibility fallback, but local development should use `STORAGE_BACKEND=postgres`.
+
+### 1. Install Dependencies
 
 ```bash
 npm install
@@ -61,21 +63,47 @@ Use npm 10 if npm 11 fails with `Exit handler never called!` or leaves empty pac
 npx --yes npm@10 ci
 ```
 
-Copy the local environment defaults:
+### 2. Configure Environment
+
+Create the local environment file once:
 
 ```bash
 cp .env.example .env
 ```
 
-Start the API:
+The npm dev tooling loads `.env` for the API, watcher, and migration commands. Next.js also reads local environment files for the web app. In normal local development, edit `.env` and then use the npm scripts below.
+
+The default `.env.example` points at:
+
+```env
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/markdown_magpie
+STORAGE_BACKEND=postgres
+AI_EXECUTION_MODE=direct
+AI_PROVIDER=mock
+```
+
+### 3. Prepare Postgres
+
+Start or provision Postgres so it is reachable at `DATABASE_URL`, then run migrations:
+
+```bash
+npm run db:migrate
+```
+
+Run migrations before starting the API whenever the database is new or migrations have changed.
+
+### 4. Run Only the Components You Need
+
+For API work:
 
 ```bash
 npm run dev:api
 ```
 
-Start the web console in another shell:
+For web UI work, run the API and web app in separate shells:
 
 ```bash
+npm run dev:api
 npm run dev:web
 ```
 
@@ -85,16 +113,68 @@ Open:
 http://localhost:3000
 ```
 
-The default local config uses `STORAGE_BACKEND=postgres` and `AI_PROVIDER=mock`. Start local Postgres and run `npm run db:migrate` before starting the API.
+For queued AI job work, run the API in queue mode and start a watcher in another shell:
 
-Local development troubleshooting:
+```bash
+AI_EXECUTION_MODE=queue AI_PROVIDER=mock npm run dev:api
+AI_PROVIDER=mock npm run dev:watcher
+```
+
+For MCP work, build first and run the MCP server from an MCP client:
+
+```bash
+npm run build -w @magpie/mcp
+API_BASE_URL=http://localhost:4000 node apps/mcp/dist/main.js
+```
+
+The root `npm run dev` starts every workspace dev script that exists. Prefer the targeted scripts above unless you intentionally need every component.
+
+### 5. Seed and Exercise the App
+
+With the API running, index the bundled cats knowledge base:
+
+```bash
+curl -s -X POST http://localhost:4000/repositories/index \
+  -H 'content-type: application/json' \
+  -d '{"localPath":"knowledge-bases/cats","repositoryId":"cats","name":"Cats Knowledge Base"}'
+```
+
+Search indexed Markdown sections:
+
+```bash
+curl -s 'http://localhost:4000/search?q=claws'
+```
+
+Ask a question:
+
+```bash
+curl -s http://localhost:4000/ask \
+  -H 'content-type: application/json' \
+  -d '{"question":"How should I introduce a new cat food?"}'
+```
+
+Inspect logged questions and gap candidates:
+
+```bash
+curl -s http://localhost:4000/questions
+curl -s http://localhost:4000/gaps/candidates
+```
+
+The PowerShell cats demo starts the API in queued mode, starts the watcher, starts the web console, indexes `knowledge-bases/cats`, and writes logs under `tmp/`:
+
+```powershell
+.\scripts\run-cat-demo.ps1 -Provider mock -StopExisting
+```
+
+### Troubleshooting
 
 - If `npm install` fails with `Exit handler never called!`, use `npx --yes npm@10 ci`.
+- If `npm run db:migrate` cannot connect, verify `DATABASE_URL` in `.env` and confirm Postgres is running.
 - If a managed shell reports `listen EPERM` on ports `3000` or `4000`, run the dev command in a normal host shell or approve port binding for that command.
 
 ## Default Deployment
 
-The default deployment target is Docker Compose:
+The default non-development deployment target is Docker Compose:
 
 - API container
 - Web container
@@ -107,7 +187,7 @@ Managed cloud services are optional adapters. Azure is the preferred managed pat
 
 ## Production Showcase with Docker Compose
 
-This repository includes a production-oriented Docker setup that is intended for demos, internal showcases, and small single-host deployments.
+This repository includes a production-oriented Docker setup that is intended for demos, internal showcases, and small single-host deployments. Do not use this as the inner development loop; use the npm workflow above for code changes.
 
 The Compose deployment uses **one shared Markdown Magpie application image** and runs separate containers from that image:
 
@@ -145,15 +225,15 @@ cd markdown-magpie
 
 ### 1. Configure the Compose Environment
 
-The Compose file always loads `.env.compose.example`. For a quick local showcase, you can use it as-is.
+The Compose file always loads `.env.compose.example`. For a quick showcase, you can use it as-is.
 
-Create a private override file when you need to change settings or add secrets:
+Create `.env.compose` only when you need private overrides or secrets. Compose loads it on top of `.env.compose.example`:
 
 ```bash
 cp .env.compose.example .env.compose
 ```
 
-For a local showcase on your own machine, the defaults are enough.
+For a local or single-host showcase, the defaults are enough.
 
 For a remote host or VPS, keep the container-internal URLs as service names:
 
@@ -356,7 +436,7 @@ A useful showcase flow is:
 6. Open **Jobs** and wait for the watcher to complete the proposal job.
 7. Open **Proposals** and review the generated Markdown.
 
-With `AI_JOB_PROVIDER=mock`, the generated proposal is deterministic. With `AI_JOB_PROVIDER=openai-compatible`, the watcher asks the configured model to return structured JSON and stores the resulting Markdown proposal.
+With `AI_PROVIDER=mock`, the generated proposal is deterministic. With `AI_PROVIDER=openai-compatible`, the watcher asks the configured model to return structured JSON and stores the resulting Markdown proposal.
 
 ### Operations
 
@@ -426,7 +506,7 @@ For a remote showcase, open:
 - TCP `3000` for the web UI
 - TCP `4000` for the API
 
-Do not expose Postgres (`5432`) or Redis (`6379`) publicly. The current Compose file maps them to host ports for developer convenience. For a public server, restrict those ports with your host firewall, or remove the `ports` entries for `postgres` and `redis` and keep them available only on the Compose network.
+Do not expose Postgres (`5432`) or Redis (`6379`) publicly. The current Compose file maps them to host ports for operator convenience. For a public server, restrict those ports with your host firewall, or remove the `ports` entries for `postgres` and `redis` and keep them available only on the Compose network.
 
 ### Reverse Proxy Notes
 
@@ -512,96 +592,6 @@ There are two intended execution modes:
 `mock` is a provider, not an execution mode. It gives deterministic local responses for development and tests and can be selected in either direct or queue mode.
 
 Watcher mode lowers the barrier to entry because early users can develop and test workflows with the agent tooling they already run locally, without provisioning cloud model credentials.
-
-## Local Development
-
-Use the npm workflow from the [Development](#development) section for normal code changes. Docker Compose is intended for production-like demos and deployment checks, not the inner development loop.
-
-With the API running, index the sibling sample knowledge base:
-
-```bash
-curl -s -X POST http://localhost:4000/repositories/index \
-  -H 'content-type: application/json' \
-  -d '{"localPath":"../markdown-magpie-kb"}'
-```
-
-Search indexed Markdown sections:
-
-```bash
-curl -s 'http://localhost:4000/search?q=hotfix'
-```
-
-To test queued AI jobs, run the API in queue mode:
-
-```bash
-AI_EXECUTION_MODE=queue AI_PROVIDER=mock npm run dev:api
-```
-
-Then start a mock watcher in another shell:
-
-```bash
-AI_PROVIDER=mock npm run dev:watcher
-```
-
-Create a queued answer job through the API:
-
-```bash
-curl -s http://localhost:4000/ask \
-  -H 'content-type: application/json' \
-  -d '{"question":"How do we deploy a hotfix?"}'
-```
-
-The watcher claims jobs from `/ai-jobs/claim` and completes them through `/ai-jobs/:id/complete`.
-
-Use Postgres-backed storage for local development:
-
-```bash
-docker compose up -d postgres
-npm run db:migrate
-STORAGE_BACKEND=postgres AI_EXECUTION_MODE=queue npm run dev:api
-```
-
-`npm run db:migrate` loads `DATABASE_URL` from `.env`. Indexed knowledge, question logs, proposals, and AI jobs use Postgres when `STORAGE_BACKEND=postgres` is set. The older per-store variables still work as compatibility overrides when you need a mixed setup.
-
-Use a provider for answer synthesis:
-
-```bash
-AI_PROVIDER=mock npm run dev:api
-AI_PROVIDER=openai-compatible npm run dev:api
-AI_PROVIDER=azure-openai npm run dev:api
-```
-
-`mock` is the default and produces deterministic answers from retrieved Markdown context. OpenAI-compatible and Azure OpenAI providers use HTTP APIs configured through environment variables. Configured providers can be switched at runtime in the web console's **Config** page.
-
-Inspect logged questions and gap candidates:
-
-```bash
-curl -s http://localhost:4000/questions
-curl -s http://localhost:4000/gaps/candidates
-```
-
-Run the local cats demo with the Codex watcher:
-
-```powershell
-.\scripts\run-cat-demo.ps1 -StopExisting
-```
-
-The script starts the API in queued mode, starts the watcher with `AI_JOB_PROVIDER=codex`, starts the web console, indexes `knowledge-bases/cats`, and opens logs under `tmp/`.
-
-Use the mock watcher instead of Codex:
-
-```powershell
-.\scripts\run-cat-demo.ps1 -Provider mock -StopExisting
-```
-
-Use an OpenAI-compatible API watcher:
-
-```powershell
-$env:OPENAI_COMPATIBLE_BASE_URL="https://api.openai.com/v1"
-$env:OPENAI_COMPATIBLE_API_KEY="..."
-$env:OPENAI_COMPATIBLE_MODEL="..."
-.\scripts\run-cat-demo.ps1 -Provider openai-compatible -StopExisting
-```
 
 ## MVP Milestone
 
