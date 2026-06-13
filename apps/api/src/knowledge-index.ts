@@ -48,7 +48,10 @@ export interface MarkdownUpload {
   content: string;
 }
 
+// Heading term match scores 3, body match 1 (see scoreSection); ~6 is the score of a
+// strong two-term-in-heading hit, used to normalise keyword scores into [0,1].
 const KEYWORD_RELEVANCE_SCALE = 6;
+// Over-fetch vector candidates before fusion so good hits are not cut off by a small limit.
 const VECTOR_CANDIDATES = 20;
 
 export interface HybridSearchOptions {

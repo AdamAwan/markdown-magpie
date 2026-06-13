@@ -179,7 +179,7 @@ export async function answerQuestion(
 }
 
 function selectRelevantSections(ranked: RankedSection[]): RankedSection[] {
-  const best = ranked[0]?.relevance ?? 0;
+  const best = Math.max(0, ...ranked.map((result) => result.relevance));
   if (best < RELEVANCE_FLOOR) {
     return [];
   }
@@ -189,7 +189,7 @@ function selectRelevantSections(ranked: RankedSection[]): RankedSection[] {
 }
 
 function confidenceFromRelevance(selected: RankedSection[]): Confidence {
-  const best = selected[0]?.relevance ?? 0;
+  const best = Math.max(0, ...selected.map((result) => result.relevance));
   if (best >= HIGH_CONFIDENCE_RELEVANCE && selected.length >= 2) {
     return "high";
   }

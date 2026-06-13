@@ -79,6 +79,21 @@ describe("answerQuestion", () => {
     assert.equal(result.gap?.summary, "No source material found for: What should I do if a cat gets gum in their fur?");
   });
 
+  it("gates on the highest relevance, not the first element's (results may be ordered by fusion)", async () => {
+    // Simulates hybrid output: array ordered by fused score, so the strongest-relevance
+    // section is NOT first. The weak first item must not cause the strong one to be dropped.
+    const ranked: RankedSection[] = [
+      { section: section("repo:weak.md:0", "Weak Hit", "Tangentially related sentence."), relevance: 0.15 },
+      { section: section("repo:strong.md:0", "Strong Hit", "Directly answers the question in detail."), relevance: 0.5 }
+    ];
+
+    const result = await answerQuestion("the question", provider(ranked), new MockChatProvider());
+
+    assert.notEqual(result.confidence, "low");
+    assert.equal(result.citations.length, 1);
+    assert.equal(result.citations[0].sectionId, "repo:strong.md:0");
+  });
+
   it("raises a gap when the chat provider says the context is insufficient", async () => {
     const ranked: RankedSection[] = [
       { section: section("repo:care.md:0", "Gum in Fur", "Escalate sticky fur issues when a reviewed procedure exists."), relevance: 0.5 }
