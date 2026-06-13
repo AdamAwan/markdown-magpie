@@ -62,6 +62,33 @@ const tools = [
       required: ["query"],
       additionalProperties: false
     } satisfies JsonSchema
+  },
+  {
+    name: "kb.feedback",
+    description:
+      "Report feedback on a previously asked question using the questionId returned by kb.ask. " +
+      "kind is 'helpful', 'unhelpful', or 'knowledge_gap'. For 'knowledge_gap', optionally pass " +
+      "gapSummary describing the missing knowledge.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        questionId: {
+          type: "string",
+          description: "The questionId returned by kb.ask."
+        },
+        kind: {
+          type: "string",
+          enum: ["helpful", "unhelpful", "knowledge_gap"],
+          description: "The kind of feedback to record."
+        },
+        gapSummary: {
+          type: "string",
+          description: "Optional summary of the missing knowledge. Only used when kind is 'knowledge_gap'."
+        }
+      },
+      required: ["questionId", "kind"],
+      additionalProperties: false
+    } satisfies JsonSchema
   }
 ];
 
@@ -178,6 +205,11 @@ async function callTool(params: ToolCallParams): Promise<unknown> {
     return textResult(result);
   }
 
+  if (params.name === "kb.feedback") {
+    const result = await submitFeedback(params.arguments);
+    return textResult(result);
+  }
+
   throw new Error(`Unknown tool: ${params.name ?? "(missing)"}`);
 }
 
@@ -211,11 +243,52 @@ function numberArgument(args: Record<string, unknown> | undefined, name: string)
   return Math.max(1, Math.min(Math.trunc(value), 200));
 }
 
+type FeedbackKind = "helpful" | "unhelpful" | "knowledge_gap";
+
+function feedbackKindArgument(args: Record<string, unknown> | undefined): FeedbackKind {
+  const value = args?.kind;
+  if (value === "helpful" || value === "unhelpful" || value === "knowledge_gap") {
+    return value;
+  }
+
+  throw new Error("kind must be one of 'helpful', 'unhelpful', or 'knowledge_gap'");
+}
+
+function optionalStringArgument(args: Record<string, unknown> | undefined, name: string): string | undefined {
+  const value = args?.[name];
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "string") {
+    throw new Error(`${name} must be a string`);
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+async function submitFeedback(args: Record<string, unknown> | undefined): Promise<unknown> {
+  const questionId = stringArgument(args, "questionId");
+  const kind = feedbackKindArgument(args);
+
+  if (kind === "knowledge_gap") {
+    const gapSummary = optionalStringArgument(args, "gapSummary");
+    const body = gapSummary ? { summary: gapSummary } : {};
+    const response = asObject(await postJson(`/questions/${encodeURIComponent(questionId)}/gap`, body));
+    return { questionId, kind, question: response.question };
+  }
+
+  const response = asObject(await postJson(`/questions/${encodeURIComponent(questionId)}/feedback`, { feedback: kind }));
+  return { questionId, kind, question: response.question };
+}
+
 interface AskResult {
   answer: string;
   confidence: string;
   citations: unknown[];
   gap?: unknown;
+  questionId?: string;
 }
 
 interface JobView {
@@ -230,12 +303,10 @@ interface JobView {
 // job, queue, or retrieval-context details.
 async function askQuestion(question: string): Promise<AskResult> {
   const ask = asObject(await postJson("/ask", { question }));
+  const questionId = typeof ask.questionId === "string" ? ask.questionId : undefined;
+  const result = ask.result !== undefined ? extractAnswer(ask.result) : await waitForQueuedAnswer(readStatusPath(ask));
 
-  if (ask.result !== undefined) {
-    return extractAnswer(ask.result);
-  }
-
-  return waitForQueuedAnswer(readStatusPath(ask));
+  return { ...result, questionId };
 }
 
 async function waitForQueuedAnswer(statusPath: string): Promise<AskResult> {
