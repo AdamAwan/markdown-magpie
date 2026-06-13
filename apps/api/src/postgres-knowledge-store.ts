@@ -1,10 +1,17 @@
 import pg from "pg";
 import type { DocumentSection, KnowledgeDocument, KnowledgeStatus, RepositoryRef } from "@magpie/core";
-import type { IndexedRepositorySummary, KnowledgePersistence, LoadedKnowledge } from "./knowledge-index.js";
+import type {
+  EmbeddingPersistence,
+  IndexedRepositorySummary,
+  KnowledgePersistence,
+  LoadedKnowledge,
+  SectionToEmbed,
+  SectionVectorSearch
+} from "./knowledge-index.js";
 
 const { Pool } = pg;
 
-export class PostgresKnowledgeStore implements KnowledgePersistence {
+export class PostgresKnowledgeStore implements KnowledgePersistence, SectionVectorSearch, EmbeddingPersistence {
   private readonly pool: pg.Pool;
 
   constructor(connectionString: string) {
@@ -162,6 +169,58 @@ export class PostgresKnowledgeStore implements KnowledgePersistence {
 
     return { repositories, documents, sections };
   }
+
+  async searchByEmbedding(embedding: number[], limit: number): Promise<Array<{ id: string; similarity: number }>> {
+    const literal = toVectorLiteral(embedding);
+    const result = await this.pool.query<{ id: string; similarity: string }>(
+      `
+        SELECT id, 1 - (embedding <=> $1::vector) AS similarity
+        FROM document_sections
+        WHERE embedding IS NOT NULL
+        ORDER BY embedding <=> $1::vector
+        LIMIT $2
+      `,
+      [literal, limit]
+    );
+    return result.rows.map((row) => ({ id: row.id, similarity: Number(row.similarity) }));
+  }
+
+  async listSectionsNeedingEmbedding(limit: number, repositoryId?: string): Promise<SectionToEmbed[]> {
+    const result = await this.pool.query<{ id: string; heading: string; content: string }>(
+      `
+        SELECT s.id, s.heading, s.content
+        FROM document_sections s
+        JOIN documents d ON d.id = s.document_id
+        WHERE s.embedding IS NULL
+          AND ($1::text IS NULL OR d.repository_id = $1)
+        ORDER BY s.id
+        LIMIT $2
+      `,
+      [repositoryId ?? null, limit]
+    );
+    return result.rows.map((row) => ({ id: row.id, text: `${row.heading}\n${row.content}` }));
+  }
+
+  async countSectionsNeedingEmbedding(repositoryId?: string): Promise<number> {
+    const result = await this.pool.query<{ count: string }>(
+      `
+        SELECT count(*) AS count
+        FROM document_sections s
+        JOIN documents d ON d.id = s.document_id
+        WHERE s.embedding IS NULL
+          AND ($1::text IS NULL OR d.repository_id = $1)
+      `,
+      [repositoryId ?? null]
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
+  async saveSectionEmbedding(id: string, embedding: number[]): Promise<void> {
+    await this.pool.query("UPDATE document_sections SET embedding = $2::vector WHERE id = $1", [
+      id,
+      toVectorLiteral(embedding)
+    ]);
+  }
 }
 
 interface RepositoryRow {
@@ -195,4 +254,8 @@ interface SectionRow {
   anchor: string;
   ordinal: number;
   content: string;
+}
+
+function toVectorLiteral(embedding: number[]): string {
+  return `[${embedding.join(",")}]`;
 }

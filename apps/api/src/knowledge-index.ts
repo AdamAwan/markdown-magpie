@@ -27,6 +27,21 @@ export interface KnowledgePersistence {
   loadAll(): Promise<LoadedKnowledge>;
 }
 
+export interface SectionVectorSearch {
+  searchByEmbedding(embedding: number[], limit: number): Promise<Array<{ id: string; similarity: number }>>;
+}
+
+export interface SectionToEmbed {
+  id: string;
+  text: string;
+}
+
+export interface EmbeddingPersistence {
+  listSectionsNeedingEmbedding(limit: number, repositoryId?: string): Promise<SectionToEmbed[]>;
+  countSectionsNeedingEmbedding(repositoryId?: string): Promise<number>;
+  saveSectionEmbedding(id: string, embedding: number[]): Promise<void>;
+}
+
 export interface MarkdownUpload {
   path: string;
   content: string;
