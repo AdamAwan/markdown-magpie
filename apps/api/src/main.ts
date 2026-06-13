@@ -653,7 +653,7 @@ function getRuntimeConfig() {
     },
     providers: {
       llmProvider: process.env.LLM_PROVIDER ?? "mock",
-      embeddingProvider: process.env.EMBEDDING_PROVIDER ?? "mock",
+      embeddingProvider: embeddingProviderName() ?? "mock",
       gitProvider: process.env.GIT_PROVIDER ?? "local",
       openAiCompatible: {
         baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL || null,
