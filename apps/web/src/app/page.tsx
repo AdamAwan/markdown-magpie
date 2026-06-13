@@ -131,6 +131,7 @@ interface QuestionLog {
   askedAt: string;
   answer?: AnswerResult;
   feedback?: Feedback;
+  manualGap?: boolean;
 }
 
 interface GapCandidate {
@@ -418,6 +419,18 @@ export default function HomePage() {
     }
   }
 
+  async function toggleKnowledgeGap(questionId: string, flagged: boolean) {
+    clearMessage();
+    try {
+      const result = flagged
+        ? await apiPost<{ question: QuestionLog }>(`/questions/${questionId}/gap`, {})
+        : await apiDelete<{ question: QuestionLog }>(`/questions/${questionId}/gap`);
+      setQuestions((current) => current.map((item) => (item.id === questionId ? result.question : item)));
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    }
+  }
+
   async function draftProposal(gap: GapCandidate) {
     setLoading(true);
     clearMessage();
@@ -649,6 +662,7 @@ export default function HomePage() {
                   <RecentQuestions
                     expandedQuestionIds={expandedQuestionIds}
                     onFeedback={sendFeedback}
+                    onToggleGap={toggleKnowledgeGap}
                     questions={questions}
                     toggleCitations={(questionId) =>
                       setExpandedQuestionIds((current) =>
@@ -1048,11 +1062,13 @@ function shortSha(value: string | undefined): string {
 function RecentQuestions({
   expandedQuestionIds,
   onFeedback,
+  onToggleGap,
   questions,
   toggleCitations
 }: {
   expandedQuestionIds: string[];
   onFeedback: (questionId: string, feedback: Feedback) => Promise<void>;
+  onToggleGap: (questionId: string, flagged: boolean) => Promise<void>;
   questions: QuestionLog[];
   toggleCitations: (questionId: string) => void;
 }) {
@@ -1095,6 +1111,14 @@ function RecentQuestions({
                 type="button"
               >
                 Unhelpful
+              </button>
+              <button
+                className={item.manualGap ? "chip selected" : "chip"}
+                onClick={() => void onToggleGap(item.id, !item.manualGap)}
+                title="Flag this answer as a knowledge gap the system missed"
+                type="button"
+              >
+                Knowledge gap
               </button>
             </div>
             {isExpanded && citations.length > 0 ? (
@@ -1840,6 +1864,11 @@ async function apiPost<T>(path: string, body: unknown): Promise<T> {
     },
     body: JSON.stringify(body)
   });
+  return readResponse<T>(response);
+}
+
+async function apiDelete<T>(path: string): Promise<T> {
+  const response = await fetch(`${resolveApiBaseUrl()}${path}`, { method: "DELETE" });
   return readResponse<T>(response);
 }
 
