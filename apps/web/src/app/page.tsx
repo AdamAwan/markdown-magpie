@@ -30,8 +30,7 @@ function resolveApiBaseUrl(): string {
 
 type Confidence = "high" | "medium" | "low" | "unknown";
 type Feedback = "helpful" | "unhelpful";
-type ConsoleSection = "ask" | "knowledge" | "gaps" | "jobs" | "proposals" | "config";
-type WorkspaceTab = "ask" | "search" | "recent";
+type ConsoleSection = "ask" | "answered" | "knowledge" | "gaps" | "jobs" | "proposals" | "config";
 type AiExecutionMode = "direct" | "queue";
 type AiProviderName = "mock" | "openai-compatible" | "azure-openai" | "codex" | "claude";
 
@@ -234,7 +233,6 @@ export default function HomePage() {
   const [selectedProposalId, setSelectedProposalId] = useState<string | undefined>();
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | undefined>();
   const [activeSection, setActiveSection] = useState<ConsoleSection>("ask");
-  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("ask");
   const [expandedQuestionIds, setExpandedQuestionIds] = useState<string[]>([]);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<AskResponse | undefined>();
@@ -406,7 +404,6 @@ export default function HomePage() {
     try {
       const result = await apiGet<{ sections: SearchSection[] }>(`/search?q=${encodeURIComponent(query.trim())}&limit=6`);
       setSections(result.sections);
-      setWorkspaceTab("search");
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     } finally {
@@ -559,9 +556,6 @@ export default function HomePage() {
 
   function openSection(section: ConsoleSection) {
     setActiveSection(section);
-    if (section === "ask") {
-      setWorkspaceTab("ask");
-    }
   }
 
   return (
@@ -572,7 +566,8 @@ export default function HomePage() {
           <strong>Knowledge Console</strong>
         </div>
         <nav className="sideNav" aria-label="Console sections">
-          <NavButton active={activeSection === "ask"} count={questions.length} glyph="Q" label="Ask" onClick={() => openSection("ask")} />
+          <NavButton active={activeSection === "ask"} glyph="Q" label="Ask" onClick={() => openSection("ask")} />
+          <NavButton active={activeSection === "answered"} count={questions.length} glyph="A" label="Answered" onClick={() => openSection("answered")} />
           <NavButton active={activeSection === "knowledge"} count={stats.sectionCount} glyph="K" label="Knowledge" onClick={() => openSection("knowledge")} />
           <NavButton active={activeSection === "gaps"} count={gaps.length} glyph="G" label="Gaps" onClick={() => openSection("gaps")} />
           <NavButton active={activeSection === "jobs"} count={jobs.length} glyph="J" label="Jobs" onClick={() => openSection("jobs")} />
@@ -643,47 +638,41 @@ export default function HomePage() {
           <section className="workbench singlePane">
             <div className="surface">
               <div className="surfaceHeader">
-                <h2>Workspace</h2>
-                <div className="tabs" role="tablist" aria-label="Workspace views">
-                  <TabButton active={workspaceTab === "ask"} label="Ask" onClick={() => setWorkspaceTab("ask")} />
-                  <TabButton active={workspaceTab === "search"} label="Search" onClick={() => setWorkspaceTab("search")} />
-                  <TabButton active={workspaceTab === "recent"} label="Recent" onClick={() => setWorkspaceTab("recent")} />
-                </div>
+                <h2>Ask a Question</h2>
               </div>
               <div className="surfaceBody">
-                {workspaceTab === "ask" ? (
-                  <AskPanel
-                    answer={answer}
-                    loading={loading}
-                    onAsk={ask}
-                    question={question}
-                    setQuestion={setQuestion}
-                  />
-                ) : null}
-                {workspaceTab === "search" ? (
-                  <SearchPanel
-                    loading={loading}
-                    query={query}
-                    sections={sections}
-                    search={search}
-                    setQuery={setQuery}
-                  />
-                ) : null}
-                {workspaceTab === "recent" ? (
-                  <RecentQuestions
-                    expandedQuestionIds={expandedQuestionIds}
-                    onFeedback={sendFeedback}
-                    onToggleGap={toggleKnowledgeGap}
-                    questions={questions}
-                    toggleCitations={(questionId) =>
-                      setExpandedQuestionIds((current) =>
-                        current.includes(questionId)
-                          ? current.filter((id) => id !== questionId)
-                          : [...current, questionId]
-                      )
-                    }
-                  />
-                ) : null}
+                <AskPanel
+                  answer={answer}
+                  loading={loading}
+                  onAsk={ask}
+                  question={question}
+                  setQuestion={setQuestion}
+                />
+              </div>
+            </div>
+          </section>
+        ) : null}
+
+        {activeSection === "answered" ? (
+          <section className="workbench singlePane">
+            <div className="surface">
+              <div className="surfaceHeader">
+                <h2>Answered Questions</h2>
+              </div>
+              <div className="surfaceBody">
+                <AnsweredPanel
+                  expandedQuestionIds={expandedQuestionIds}
+                  onFeedback={sendFeedback}
+                  onToggleGap={toggleKnowledgeGap}
+                  questions={questions}
+                  toggleCitations={(questionId) =>
+                    setExpandedQuestionIds((current) =>
+                      current.includes(questionId)
+                        ? current.filter((id) => id !== questionId)
+                        : [...current, questionId]
+                    )
+                  }
+                />
               </div>
             </div>
           </section>
@@ -750,12 +739,8 @@ export default function HomePage() {
         ) : null}
 
         {activeSection === "gaps" ? (
-          <section className="workbench">
+          <section className="workbench singlePane">
             <GapPanel draftProposal={draftProposal} gaps={gaps} loading={loading} />
-            <ProposalLinks proposals={proposals} openProposal={(proposalId) => {
-              setSelectedProposalId(proposalId);
-              setActiveSection("proposals");
-            }} />
           </section>
         ) : null}
 
@@ -1070,7 +1055,7 @@ function shortSha(value: string | undefined): string {
   return value ? value.slice(0, 12) : "Unknown";
 }
 
-function RecentQuestions({
+function AnsweredPanel({
   expandedQuestionIds,
   onFeedback,
   onToggleGap,
@@ -1621,10 +1606,15 @@ function ConfigPanel({
             {saving ? "Saving" : "Apply"}
           </button>
         </div>
-        <div className="configGrid">
+        <div className="configStack">
           <ConfigGroup title="API" value={{ ...config.api, browserApiBaseUrl: apiBaseUrl }} />
           <ConfigGroup title="Stores" value={config.stores} />
           <ConfigGroup title="Knowledge" value={config.knowledge} />
+          <ConfigGroup title="Retrieval" value={{
+            mode: config.retrieval.mode,
+            embeddingProvider: config.retrieval.embeddingProvider,
+            reason: config.retrieval.reason
+          }} />
           <ConfigGroup title="Providers" value={config.providers} />
           <ConfigGroup title="Watcher" value={config.watcher} />
         </div>
@@ -1724,6 +1714,9 @@ function CitationRow({ citation }: { citation: Citation }) {
 }
 
 function sectionTitle(section: ConsoleSection): string {
+  if (section === "answered") {
+    return "Review answered questions";
+  }
   if (section === "knowledge") {
     return "Browse the Markdown knowledge base";
   }
@@ -1748,6 +1741,9 @@ function formatQuestionCount(count: number): string {
 }
 
 function sectionSubtitle(section: ConsoleSection): string {
+  if (section === "answered") {
+    return "Search your history of answers with citations. Expand any answer to view sources and leave feedback.";
+  }
   if (section === "knowledge") {
     return "Read indexed Markdown documents, search sections, and add new knowledge from one workspace.";
   }
@@ -1764,7 +1760,7 @@ function sectionSubtitle(section: ConsoleSection): string {
     return "Check execution mode, stores, providers, repository paths, and whether secrets are set.";
   }
 
-  return "Ask questions, review recent answers, and expand citations only when you need the source trail.";
+  return "Ask and inspect cited answers";
 }
 
 function buildAttentionNotices({

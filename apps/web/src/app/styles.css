@@ -847,6 +847,12 @@ code {
   gap: 14px;
 }
 
+.configStack {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
 .runtimeEditor {
   display: grid;
   grid-template-columns: minmax(180px, 0.8fr) minmax(220px, 1fr) auto;
@@ -912,8 +918,8 @@ code {
 
 .configRow {
   display: grid;
-  grid-template-columns: minmax(130px, 0.42fr) minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: 1fr;
+  gap: 6px;
   align-items: start;
   border-top: 1px solid #e2e6df;
   padding-top: 8px;
