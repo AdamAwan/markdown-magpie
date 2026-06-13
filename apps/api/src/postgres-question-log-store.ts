@@ -178,6 +178,44 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     return this.get(id);
   }
 
+  async recordManualGap(id: string, summary?: string): Promise<QuestionLog | undefined> {
+    const trimmed = summary?.trim();
+    const result = await this.pool.query(
+      `
+        UPDATE questions
+        SET manual_gap = true,
+            manual_gap_at = now(),
+            gap_summary = COALESCE($2, gap_summary, question)
+        WHERE id = $1
+      `,
+      [id, trimmed && trimmed.length > 0 ? trimmed : null]
+    );
+
+    if (result.rowCount !== 1) {
+      return undefined;
+    }
+
+    return this.get(id);
+  }
+
+  async clearManualGap(id: string): Promise<QuestionLog | undefined> {
+    const result = await this.pool.query(
+      `
+        UPDATE questions
+        SET manual_gap = false,
+            manual_gap_at = null
+        WHERE id = $1
+      `,
+      [id]
+    );
+
+    if (result.rowCount !== 1) {
+      return undefined;
+    }
+
+    return this.get(id);
+  }
+
   async list(limit: number): Promise<QuestionLog[]> {
     const result = await this.pool.query<QuestionRow>(
       "SELECT * FROM questions ORDER BY asked_at DESC LIMIT $1",
@@ -195,8 +233,8 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           count(*)::int AS count,
           max(asked_at) AS latest_asked_at
         FROM questions
-        WHERE confidence = 'low'
-          AND gap_summary IS NOT NULL
+        WHERE gap_summary IS NOT NULL
+          AND (confidence = 'low' OR manual_gap = true)
         GROUP BY gap_summary
         ORDER BY count DESC, latest_asked_at DESC
         LIMIT $1
@@ -227,6 +265,9 @@ interface QuestionRow {
   };
   feedback: QuestionFeedback | null;
   feedback_at: Date | null;
+  gap_summary: string | null;
+  manual_gap: boolean;
+  manual_gap_at: Date | null;
   asked_at: Date;
 }
 
@@ -249,6 +290,9 @@ function mapQuestionRow(row: QuestionRow): QuestionLog {
     answer,
     askedAt: row.asked_at.toISOString(),
     feedback: row.feedback ?? undefined,
-    feedbackAt: row.feedback_at?.toISOString()
+    feedbackAt: row.feedback_at?.toISOString(),
+    gapSummary: row.gap_summary ?? undefined,
+    manualGap: row.manual_gap,
+    manualGapAt: row.manual_gap_at?.toISOString()
   };
 }
