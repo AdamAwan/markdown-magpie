@@ -19,10 +19,11 @@ The core packages define interfaces for:
 - AI work execution
 - Git repository sync
 - Pull request creation
-- Object storage
 - Job scheduling
 
 Concrete adapters can target local Docker services, Azure, GitHub, GitLab, Azure DevOps, OpenAI-compatible APIs, or other providers.
+
+An object storage interface is planned but not yet defined in the core packages.
 
 Azure is the preferred managed deployment option when a hosted provider is required, but it should not leak into core domain logic.
 
@@ -71,5 +72,14 @@ Git Markdown repo
   -> record questions, answers, citations, confidence, feedback
   -> cluster weak answers into knowledge gaps
   -> generate Markdown proposals
+  -> publish proposals to a branch
   -> raise pull requests
 ```
+
+## Implementation Status
+
+The flow above describes the target design. Today the pipeline runs end to end up to
+publishing a proposal: the `PullRequestProvider` interface exists, but the only implemented
+adapter is `LocalGitProposalPublisher`, which commits the proposal to a local Git branch
+(`provider: "local-git"`). Opening pull requests on a hosted provider (GitHub, GitLab,
+Azure DevOps) and refreshing their status are planned but not yet implemented.

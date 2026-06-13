@@ -221,6 +221,41 @@ p {
   font-weight: 750;
 }
 
+.attentionPanel {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.attentionNotice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #d9ded6;
+  background: #ffffff;
+  padding: 12px 14px;
+}
+
+.attentionNotice h2 {
+  margin-bottom: 4px;
+}
+
+.attentionNotice.warning {
+  border-color: #d2b15e;
+  background: #fff9e8;
+}
+
+.attentionNotice.info {
+  border-color: #b8c8d9;
+  background: #f1f6fb;
+}
+
+.attentionNotice.danger {
+  border-color: #d48d7a;
+  background: #fff4ef;
+}
+
 .summary {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -950,6 +985,7 @@ pre {
   }
 
   .topbar,
+  .attentionNotice,
   .questionForm,
   .inlineForm,
   .rowTop,

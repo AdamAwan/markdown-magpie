@@ -7,7 +7,8 @@ import type {
   RepositoryRef
 } from "@magpie/core";
 import { execFile } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -46,34 +47,39 @@ export class LocalGitProposalPublisher {
   async publish(request: PublishProposalBranchRequest): Promise<PublishProposalBranchResponse> {
     const root = request.repository.git?.workTreeRoot ?? request.repository.localPath;
     const targetPath = resolveTargetPath(request.repository, request.targetPath);
-    const absoluteTargetPath = path.resolve(root, targetPath);
-
-    assertWithinRoot(root, absoluteTargetPath);
-    await assertCleanWorkTree(root);
     await ensureRemote(root);
+    await assertBranchDoesNotExist(root, request.branchName);
 
-    const baseBranch = request.repository.git?.currentBranch ?? request.repository.defaultBranch;
-    await git(root, ["checkout", baseBranch]);
-    await git(root, ["checkout", "-B", request.branchName]);
+    const baseRef = await resolveBaseRef(root, request.repository);
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "markdown-magpie-worktree-"));
+    const worktreePath = path.join(tempRoot, "checkout");
 
-    await mkdir(path.dirname(absoluteTargetPath), { recursive: true });
-    await writeFile(absoluteTargetPath, request.markdown, "utf8");
-    await git(root, ["add", "--", targetPath]);
+    try {
+      await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, baseRef]);
 
-    const status = await git(root, ["status", "--porcelain", "--", targetPath]);
-    if (!status.trim()) {
-      throw new Error(`Proposal does not change ${targetPath}`);
+      const absoluteTargetPath = path.resolve(worktreePath, targetPath);
+      assertWithinRoot(worktreePath, absoluteTargetPath);
+      await mkdir(path.dirname(absoluteTargetPath), { recursive: true });
+      await writeFile(absoluteTargetPath, request.markdown, "utf8");
+      await git(worktreePath, ["add", "--", targetPath]);
+
+      const status = await git(worktreePath, ["status", "--porcelain", "--", targetPath]);
+      if (!status.trim()) {
+        throw new Error(`Proposal does not change ${targetPath}`);
+      }
+
+      await git(worktreePath, ["commit", "-m", request.title]);
+      const commitSha = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
+      await git(worktreePath, ["push", "-u", "origin", request.branchName]);
+
+      return {
+        branchName: request.branchName,
+        commitSha,
+        remoteUrl: request.repository.remoteUrl ?? request.repository.git?.remoteUrl
+      };
+    } finally {
+      await cleanupWorktree(root, worktreePath, tempRoot);
     }
-
-    await git(root, ["commit", "-m", request.title]);
-    const commitSha = (await git(root, ["rev-parse", "HEAD"])).trim();
-    await git(root, ["push", "-u", "origin", request.branchName]);
-
-    return {
-      branchName: request.branchName,
-      commitSha,
-      remoteUrl: request.repository.remoteUrl ?? request.repository.git?.remoteUrl
-    };
   }
 }
 
@@ -92,18 +98,30 @@ function resolveTargetPath(repository: RepositoryRef, targetPath: string): strin
   return `${normalizedRelativePath}/${normalizedTargetPath}`;
 }
 
-async function assertCleanWorkTree(root: string): Promise<void> {
-  const status = await git(root, ["status", "--porcelain"]);
-  if (status.trim()) {
-    throw new Error("Cannot publish proposal because the repository checkout has uncommitted changes");
-  }
-}
-
 async function ensureRemote(root: string): Promise<void> {
   const remote = await git(root, ["remote", "get-url", "origin"]);
   if (!remote.trim()) {
     throw new Error("Cannot publish proposal because git remote 'origin' is not configured");
   }
+}
+
+async function assertBranchDoesNotExist(root: string, branchName: string): Promise<void> {
+  const localBranch = await tryGit(root, ["show-ref", "--verify", `refs/heads/${branchName}`]);
+  const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", branchName]);
+  if (localBranch.trim() || remoteBranch.trim()) {
+    throw new Error(`Cannot publish proposal because branch ${branchName} already exists`);
+  }
+}
+
+async function resolveBaseRef(root: string, repository: RepositoryRef): Promise<string> {
+  const defaultBranch = repository.defaultBranch || repository.git?.defaultBranch || repository.git?.currentBranch || "main";
+  const remoteRef = `refs/remotes/origin/${defaultBranch}`;
+  const hasRemoteRef = await tryGit(root, ["show-ref", "--verify", remoteRef]);
+  if (hasRemoteRef.trim()) {
+    return `origin/${defaultBranch}`;
+  }
+
+  return defaultBranch;
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
@@ -114,6 +132,19 @@ async function git(cwd: string, args: string[]): Promise<string> {
     const message = error instanceof Error ? error.message : "git command failed";
     throw new Error(message);
   }
+}
+
+async function tryGit(cwd: string, args: string[]): Promise<string> {
+  try {
+    return await git(cwd, args);
+  } catch {
+    return "";
+  }
+}
+
+async function cleanupWorktree(root: string, worktreePath: string, tempRoot: string): Promise<void> {
+  await tryGit(root, ["worktree", "remove", "--force", worktreePath]);
+  await rm(tempRoot, { force: true, recursive: true });
 }
 
 function assertWithinRoot(root: string, candidate: string): void {

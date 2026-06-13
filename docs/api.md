@@ -1,0 +1,298 @@
+# HTTP API Reference
+
+The API is a plain Node HTTP server. It listens on `PORT` (default `4000`), so the base URL
+in local development is `http://localhost:4000`.
+
+## Conventions
+
+- All requests and responses are JSON (`content-type: application/json`).
+- CORS is open: every response sends `access-control-allow-origin: *`, and `OPTIONS`
+  preflight requests return `204`.
+- Errors return a JSON body with an `error` code, e.g. `{ "error": "question_required" }`.
+  Some errors add a human-readable `message`. An uncaught failure returns `500` with
+  `{ "error": "internal_error", "message": "..." }`.
+- List endpoints accept a `limit` query parameter. It is clamped to between `1` and `200`.
+
+## Health & Config
+
+### `GET /health`
+
+Liveness check.
+
+```json
+{ "ok": true, "service": "markdown-magpie-api" }
+```
+
+### `GET /config`
+
+Returns the resolved runtime configuration: API settings, storage backends (with the
+database URL masked), configured knowledge repository path, provider settings and secret
+presence (`set` / `not set`), the AI runtime (current execution mode and provider, plus the
+available `direct` and `queue` providers), and watcher settings.
+
+### `POST /config`
+
+Switches the AI execution mode and provider at runtime. Accepts either a flat or nested shape:
+
+```json
+{ "aiExecutionMode": "direct", "aiProvider": "mock" }
+```
+
+```json
+{ "ai": { "executionMode": "queue", "provider": "openai-compatible" } }
+```
+
+- `200` — returns the updated config (same shape as `GET /config`).
+- `400 valid_ai_runtime_config_required` — mode or provider missing/unrecognised.
+- `400 unsupported_ai_runtime_config` — the provider is not configured by environment
+  variables, or cannot run in the requested mode (e.g. a queue-only provider in `direct`).
+
+See [chat-providers.md](chat-providers.md) for provider configuration.
+
+## Knowledge
+
+### `POST /ask`
+
+Answers a question from indexed Markdown context.
+
+```json
+{ "question": "How do I rollback a hotfix?" }
+```
+
+- `400 question_required` — empty or missing question.
+- In `direct` mode → `200` with `{ "mode": "direct", "questionId": "...", "result": { ... } }`,
+  where `result` is an `AnswerResult` (answer, confidence, citations, optional gap signal).
+- In `queue` mode → `202` with `{ "mode": "queue", "questionId": "...", "job": { ... }, "links": { ... } }`.
+  An `answer_question` job is enqueued for a watcher and the question log is written immediately
+  with unknown confidence. See [question-logging.md](question-logging.md).
+
+### `GET /search?q=<query>&limit=<n>`
+
+Keyword search over indexed sections. `limit` defaults to `5`.
+
+- `400 query_required` — missing `q`.
+- `200` — `{ "sections": [ DocumentSection, ... ] }`.
+
+### `POST /repositories/index`
+
+Indexes a local Git-backed Markdown repository. See [ingestion.md](ingestion.md).
+
+```json
+{ "localPath": "../markdown-magpie-kb", "repositoryId": "kb", "name": "Knowledge Base" }
+```
+
+`localPath` falls back to the `KNOWLEDGE_REPO_PATH` environment variable. `repositoryId` and
+`name` are optional and derived from the path when omitted.
+
+- `400 local_path_required` — no path supplied and no env fallback.
+- `200` — an indexed-repository summary: `{ repository, documentCount, sectionCount, commitSha }`.
+
+### `GET /repositories`
+
+Lists indexed repositories.
+
+```json
+{ "repositories": [ RepositoryRef, ... ] }
+```
+
+### `POST /documents/upload`
+
+Indexes Markdown documents supplied inline, without a Git checkout.
+
+```json
+{
+  "repositoryId": "uploaded",
+  "name": "Uploaded Markdown",
+  "documents": [{ "path": "guide.md", "content": "# Guide\n..." }]
+}
+```
+
+Paths are normalised (backslashes converted, leading slashes stripped, `.md` appended if
+missing); entries containing `..` or with empty content are dropped. `repositoryId` and
+`name` default to `uploaded` / `Uploaded Markdown`.
+
+- `400 markdown_documents_required` — no valid documents after filtering.
+- `413 markdown_document_too_large` — any document exceeds 250,000 characters.
+- `201` — an indexed-repository summary.
+
+### `GET /documents`
+
+Lists indexed documents, sorted by path.
+
+```json
+{ "documents": [ KnowledgeDocument, ... ] }
+```
+
+### `GET /knowledge/stats`
+
+Index counts.
+
+```json
+{ "repositoryCount": 1, "documentCount": 12, "sectionCount": 84 }
+```
+
+## Questions & Gaps
+
+See [question-logging.md](question-logging.md) for the recorded fields and lifecycle.
+
+### `GET /questions?limit=<n>`
+
+Lists question logs (newest first). `limit` defaults to `50`.
+
+```json
+{ "questions": [ QuestionLog, ... ] }
+```
+
+### `GET /questions/:id`
+
+- `404 question_not_found`.
+- `200` — `{ "question": QuestionLog }`.
+
+### `POST /questions/:id/feedback`
+
+Records helpful/unhelpful feedback on an answer.
+
+```json
+{ "feedback": "helpful" }
+```
+
+- `400 valid_feedback_required` — value is not `helpful` or `unhelpful`.
+- `404 question_not_found`.
+- `200` — `{ "question": QuestionLog }`.
+
+### `GET /gaps/candidates?limit=<n>`
+
+Lists knowledge-gap candidates grouped from low-confidence questions. `limit` defaults to `50`.
+
+```json
+{ "gaps": [ GapCandidate, ... ] }
+```
+
+## Proposals
+
+See the Proposal Review and Storage sections in [ai-jobs.md](ai-jobs.md).
+
+### `GET /proposals?limit=<n>`
+
+Lists proposals. `limit` defaults to `50`.
+
+```json
+{ "proposals": [ Proposal, ... ] }
+```
+
+### `POST /proposals/from-gap`
+
+Enqueues a `draft_markdown_proposal` job for a known gap candidate.
+
+```json
+{ "summary": "No source material found for: How do I trim claws?", "targetPath": "knowledge-bases/cats/proposed-gap.md" }
+```
+
+`targetPath` is optional. The summary must match an existing gap candidate.
+
+- `400 gap_summary_required` — empty or missing summary.
+- `404 gap_candidate_not_found` — no candidate matches the summary.
+- `202` — `{ "job": AiJob, "links": { "status": "/ai-jobs/:id", "proposals": "/proposals" } }`.
+
+### `GET /proposals/:id`
+
+- `404 proposal_not_found`.
+- `200` — `{ "proposal": Proposal }`.
+
+### `POST /proposals/:id/status`
+
+Sets the proposal status directly. Valid values: `draft`, `ready`, `branch-pushed`,
+`pr-opened`, `merged`, `rejected`.
+
+```json
+{ "status": "ready" }
+```
+
+- `400 valid_proposal_status_required`.
+- `404 proposal_not_found`.
+- `200` — `{ "proposal": Proposal }`.
+
+### `POST /proposals/:id/publish`
+
+Publishes a `ready` proposal to a local Git branch via the `local-git` publisher (commits the
+Markdown to a new `magpie/proposal-*` branch and records the branch and commit SHA). Opening a
+hosted pull request from that branch is planned but not yet implemented.
+
+- `404 proposal_not_found`.
+- `409 proposal_not_ready` — only `ready` proposals can be published.
+- `409 proposal_repository_not_found` — no indexed repository matches the target path.
+- `409 proposal_repository_not_git` — the matched repository is not a Git checkout.
+- `409 proposal_publish_failed` — the commit failed; `message` carries the reason.
+- `200` — `{ "proposal": Proposal, "publication": ProposalPublication }`.
+
+## AI Jobs
+
+The full job contract — payload shapes, the watcher model, and provider configuration — lives
+in [ai-jobs.md](ai-jobs.md). Job types: `answer_question`, `summarize_gap`,
+`draft_markdown_proposal`, `detect_contradiction`, `suggest_consolidation`.
+
+### `POST /ai-jobs`
+
+Creates a job.
+
+```json
+{ "type": "draft_markdown_proposal", "input": { ... } }
+```
+
+- `400 valid_job_type_required` — unknown or missing type.
+- `201` — `{ "job": AiJob }`.
+
+### `GET /ai-jobs`
+
+Lists all jobs.
+
+```json
+{ "jobs": [ AiJob, ... ] }
+```
+
+### `GET /ai-jobs/:id`
+
+- `404 job_not_found`.
+- `200` — `{ "job": AiJob }`.
+
+### `POST /ai-jobs/claim`
+
+Claims the oldest pending job matching the worker's accepted types.
+
+```json
+{ "workerName": "local-dev-watcher", "acceptedTypes": ["answer_question", "draft_markdown_proposal"] }
+```
+
+- `400 worker_name_required`.
+- `400 accepted_types_required` — none of the supplied types are recognised.
+- `200` — `{ "job": AiJob }` or `{ "job": null }` when nothing is pending.
+
+### `POST /ai-jobs/:id/complete`
+
+Completes a claimed job. On completion the API updates the originating question log
+(`answer_question`) or stores the generated proposal (`draft_markdown_proposal`).
+
+```json
+{ "output": { ... } }
+```
+
+- `404 job_not_found`.
+- `500 job_completion_failed` — `message` carries the reason.
+- `200` — `{ "job": AiJob }`.
+
+### `POST /ai-jobs/:id/fail`
+
+Marks a job as failed.
+
+```json
+{ "error": "Provider timed out" }
+```
+
+- `404 job_not_found`.
+- `200` — `{ "job": AiJob }`.
+
+## Type Reference
+
+The response shapes referenced above (`AnswerResult`, `Citation`, `DocumentSection`,
+`KnowledgeDocument`, `RepositoryRef`, `QuestionLog`, `GapCandidate`, `Proposal`,
+`ProposalPublication`, `AiJob`) are defined in `packages/core/src/index.ts`.
