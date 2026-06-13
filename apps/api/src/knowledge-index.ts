@@ -4,8 +4,9 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { DocumentSection, GitRepositoryContext, KnowledgeDocument, RankedSection, RepositoryRef } from "@magpie/core";
+import type { DocumentSection, EmbeddingProvider, GitRepositoryContext, KnowledgeDocument, RankedSection, RepositoryRef } from "@magpie/core";
 import { parseMarkdownDocument, splitIntoSections } from "@magpie/markdown";
+import { fuseRankings } from "@magpie/retrieval";
 
 const execFileAsync = promisify(execFile);
 
@@ -47,12 +48,24 @@ export interface MarkdownUpload {
   content: string;
 }
 
+const KEYWORD_RELEVANCE_SCALE = 6;
+const VECTOR_CANDIDATES = 20;
+
+export interface HybridSearchOptions {
+  embeddingProvider?: EmbeddingProvider;
+  vectorSearch?: SectionVectorSearch;
+  onNotice?: (message: string) => void;
+}
+
 export class InMemoryKnowledgeIndex {
   private readonly documents = new Map<string, KnowledgeDocument>();
   private readonly sections = new Map<string, DocumentSection>();
   private readonly repositories = new Map<string, RepositoryRef>();
 
-  constructor(private readonly persistence?: KnowledgePersistence) {}
+  constructor(
+    private readonly persistence?: KnowledgePersistence,
+    private readonly hybrid: HybridSearchOptions = {}
+  ) {}
 
   /**
    * Loads previously persisted repositories, documents, and sections into the in-memory
@@ -194,25 +207,59 @@ export class InMemoryKnowledgeIndex {
   }
 
   async search(question: string, limit: number): Promise<RankedSection[]> {
+    const keywordRanked = this.keywordRank(question);
+
+    const { embeddingProvider, vectorSearch, onNotice } = this.hybrid;
+    if (!embeddingProvider || !vectorSearch) {
+      return keywordRanked.slice(0, limit);
+    }
+
+    let vectorHits: Array<{ id: string; similarity: number }>;
+    try {
+      const [queryVector] = await embeddingProvider.embed([question]);
+      vectorHits = await vectorSearch.searchByEmbedding(queryVector, Math.max(limit, VECTOR_CANDIDATES));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      onNotice?.(`Vector search unavailable, falling back to keyword search: ${message}`);
+      return keywordRanked.slice(0, limit);
+    }
+
+    const keywordIds = keywordRanked.map((result) => result.section.id);
+    const vectorIds = vectorHits.map((hit) => hit.id);
+    const fused = fuseRankings([vectorIds, keywordIds]);
+
+    const similarityById = new Map(vectorHits.map((hit) => [hit.id, hit.similarity]));
+    const keywordRelevanceById = new Map(keywordRanked.map((result) => [result.section.id, result.relevance]));
+
+    return [...new Set([...vectorIds, ...keywordIds])]
+      .map((id) => ({
+        id,
+        fused: fused.get(id) ?? 0,
+        relevance: Math.max(similarityById.get(id) ?? 0, keywordRelevanceById.get(id) ?? 0)
+      }))
+      .sort((left, right) => right.fused - left.fused)
+      .slice(0, limit)
+      .map(({ id, relevance }) => {
+        const section = this.sections.get(id);
+        return section ? { section, relevance } : undefined;
+      })
+      .filter((result): result is RankedSection => result !== undefined);
+  }
+
+  private keywordRank(question: string): RankedSection[] {
     const terms = tokenize(question);
     if (terms.length === 0) {
       return [];
     }
 
-    const scored = [...this.sections.values()]
-      .map((section) => ({
-        section,
-        score: scoreSection(section, terms)
-      }))
+    return [...this.sections.values()]
+      .map((section) => ({ section, score: scoreSection(section, terms) }))
       .filter((result) => result.score > 0)
       .sort((left, right) => right.score - left.score)
-      .slice(0, limit);
-
-    const bestScore = scored[0]?.score ?? 1;
-    return scored.map((result) => ({
-      section: result.section,
-      relevance: result.score / bestScore
-    }));
+      .map((result) => ({
+        section: result.section,
+        relevance: Math.min(1, result.score / KEYWORD_RELEVANCE_SCALE)
+      }));
   }
 
   listDocuments(): KnowledgeDocument[] {
