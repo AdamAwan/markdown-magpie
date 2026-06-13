@@ -5,6 +5,8 @@ export interface QuestionLogStore {
   record(input: QuestionLogInput): Promise<QuestionLog>;
   updateAnswer(id: string, input: QuestionLogUpdateInput): Promise<QuestionLog | undefined>;
   recordFeedback(id: string, feedback: QuestionFeedback): Promise<QuestionLog | undefined>;
+  recordManualGap(id: string, summary?: string): Promise<QuestionLog | undefined>;
+  clearManualGap(id: string): Promise<QuestionLog | undefined>;
   get(id: string): Promise<QuestionLog | undefined>;
   list(limit: number): Promise<QuestionLog[]>;
   listGapCandidates(limit: number): Promise<GapCandidate[]>;
@@ -22,6 +24,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       confidence: input.answer?.confidence ?? "unknown",
       retrievedSectionIds: input.retrievedSectionIds,
       answer: input.answer,
+      gapSummary: input.answer?.gap?.summary,
       askedAt: new Date().toISOString()
     };
 
@@ -44,7 +47,8 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       chatProvider: input.chatProvider ?? existing.chatProvider,
       confidence: input.answer.confidence,
       retrievedSectionIds: input.answer.citations.map((citation) => citation.sectionId),
-      answer: input.answer
+      answer: input.answer,
+      gapSummary: input.answer.gap?.summary
     };
 
     this.logs.set(id, updated);
@@ -67,6 +71,40 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     return updated;
   }
 
+  async recordManualGap(id: string, summary?: string): Promise<QuestionLog | undefined> {
+    const existing = this.logs.get(id);
+    if (!existing) {
+      return undefined;
+    }
+
+    const trimmed = summary?.trim();
+    const updated: QuestionLog = {
+      ...existing,
+      manualGap: true,
+      manualGapAt: new Date().toISOString(),
+      gapSummary: trimmed || existing.gapSummary || existing.question
+    };
+
+    this.logs.set(id, updated);
+    return updated;
+  }
+
+  async clearManualGap(id: string): Promise<QuestionLog | undefined> {
+    const existing = this.logs.get(id);
+    if (!existing) {
+      return undefined;
+    }
+
+    const updated: QuestionLog = {
+      ...existing,
+      manualGap: false,
+      manualGapAt: undefined
+    };
+
+    this.logs.set(id, updated);
+    return updated;
+  }
+
   async list(limit: number): Promise<QuestionLog[]> {
     return [...this.logs.values()]
       .sort((left, right) => right.askedAt.localeCompare(left.askedAt))
@@ -76,8 +114,8 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
   async listGapCandidates(limit: number): Promise<GapCandidate[]> {
     const groups = new Map<string, QuestionLog[]>();
     for (const log of this.logs.values()) {
-      const summary = log.answer?.gap?.summary;
-      if (!summary || log.confidence !== "low") {
+      const summary = log.gapSummary;
+      if (!summary || (log.confidence !== "low" && !log.manualGap)) {
         continue;
       }
 
