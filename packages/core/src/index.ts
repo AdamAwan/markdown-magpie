@@ -89,6 +89,9 @@ export interface QuestionLog {
   answer?: AnswerResult;
   feedback?: QuestionFeedback;
   feedbackAt?: string;
+  gapSummary?: string;
+  manualGap?: boolean;
+  manualGapAt?: string;
 }
 
 export interface QuestionLogInput {
