@@ -150,6 +150,15 @@ interface AiJob {
   updatedAt: string;
 }
 
+interface ConsoleNotice {
+  id: string;
+  title: string;
+  body: string;
+  tone: "warning" | "info" | "danger";
+  actionLabel?: string;
+  action?: () => void;
+}
+
 interface Proposal {
   id: string;
   title: string;
@@ -232,6 +241,10 @@ export default function HomePage() {
   const latestJob = useMemo(
     () => [...jobs].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0],
     [jobs]
+  );
+  const attentionNotices = useMemo(
+    () => buildAttentionNotices({ config, health, jobs, openSection, stats }),
+    [config, health, jobs, stats]
   );
   const selectedProposal = proposals.find((proposal) => proposal.id === selectedProposalId) ?? proposals[0];
   const selectedDocument = documents.find((document) => document.id === selectedDocumentId) ?? documents[0];
@@ -518,6 +531,7 @@ export default function HomePage() {
         </header>
 
         {message ? <div className="alert">{message}</div> : null}
+        {attentionNotices.length ? <AttentionPanel notices={attentionNotices} /> : null}
 
         <section className="summary" aria-label="System summary">
           <Metric label="API" value={health?.ok ? "Online" : "Offline"} tone={health?.ok ? "good" : "bad"} />
@@ -676,6 +690,26 @@ export default function HomePage() {
         ) : null}
       </main>
     </div>
+  );
+}
+
+function AttentionPanel({ notices }: { notices: ConsoleNotice[] }) {
+  return (
+    <section className="attentionPanel" aria-label="System notices">
+      {notices.map((notice) => (
+        <article className={`attentionNotice ${notice.tone}`} key={notice.id}>
+          <div>
+            <h2>{notice.title}</h2>
+            <p>{notice.body}</p>
+          </div>
+          {notice.action && notice.actionLabel ? (
+            <button className="chip" onClick={notice.action} type="button">
+              {notice.actionLabel}
+            </button>
+          ) : null}
+        </article>
+      ))}
+    </section>
   );
 }
 
@@ -1621,6 +1655,79 @@ function sectionSubtitle(section: ConsoleSection): string {
   }
 
   return "Ask questions, review recent answers, and expand citations only when you need the source trail.";
+}
+
+function buildAttentionNotices({
+  config,
+  health,
+  jobs,
+  openSection,
+  stats
+}: {
+  config?: RuntimeConfig;
+  health?: Health;
+  jobs: AiJob[];
+  openSection: (section: ConsoleSection) => void;
+  stats: KnowledgeStats;
+}): ConsoleNotice[] {
+  const notices: ConsoleNotice[] = [];
+  const pendingJobs = jobs.filter((job) => job.status === "pending" || job.status === "claimed");
+  const failedJobs = jobs.filter((job) => job.status === "failed");
+
+  if (health && !health.ok) {
+    notices.push({
+      id: "api-offline",
+      title: "API is offline",
+      body: "The console cannot index documents, answer questions, or process jobs until the API is reachable.",
+      tone: "danger"
+    });
+  }
+
+  if (stats.sectionCount === 0) {
+    notices.push({
+      id: "empty-knowledge",
+      title: "No knowledge is indexed",
+      body: "Direct answers will have no source material, and queued answer jobs will be created without useful context.",
+      tone: "warning",
+      actionLabel: "Open Knowledge",
+      action: () => openSection("knowledge")
+    });
+  }
+
+  if (config?.stores.storageBackend === "memory") {
+    notices.push({
+      id: "memory-storage",
+      title: "Memory storage resets on API restart",
+      body: "Indexed documents, questions, jobs, and proposals are process-local right now. Re-index after restart or switch to Postgres storage for persistence.",
+      tone: "info",
+      actionLabel: "Open Config",
+      action: () => openSection("config")
+    });
+  }
+
+  if (config?.aiRuntime.executionMode === "queue" && pendingJobs.length > 0) {
+    notices.push({
+      id: "queue-waiting",
+      title: `${pendingJobs.length} queued job${pendingJobs.length === 1 ? "" : "s"} waiting`,
+      body: "Queue mode needs the watcher process. If these jobs stay pending after refresh, start the watcher or switch to direct mode.",
+      tone: "warning",
+      actionLabel: "Open Jobs",
+      action: () => openSection("jobs")
+    });
+  }
+
+  if (failedJobs.length > 0) {
+    notices.push({
+      id: "failed-jobs",
+      title: `${failedJobs.length} AI job${failedJobs.length === 1 ? "" : "s"} failed`,
+      body: "Open the job list to inspect provider or watcher errors before retrying the workflow.",
+      tone: "danger",
+      actionLabel: "Open Jobs",
+      action: () => openSection("jobs")
+    });
+  }
+
+  return notices;
 }
 
 async function apiGet<T>(path: string): Promise<T> {
