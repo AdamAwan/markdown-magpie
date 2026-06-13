@@ -21,6 +21,7 @@ Each question log records:
 - Citations.
 - Gap signal, when present.
 - Helpful or unhelpful feedback, when submitted.
+- Manual knowledge-gap flag, when set.
 - Timestamp.
 
 ## Endpoints
@@ -29,10 +30,14 @@ Each question log records:
 GET /questions
 GET /questions/:id
 POST /questions/:id/feedback
+POST /questions/:id/gap
+DELETE /questions/:id/gap
 GET /gaps/candidates
 ```
 
-Gap candidates are currently grouped from low-confidence questions with a gap summary. Answer synthesis asks the model to return structured JSON with `isKnowledgeGap` and `gapSummary`; when `isKnowledgeGap` is true, the answer is logged as low confidence and becomes eligible for gap grouping. This is intentionally simple; clustering can build on top of this data.
+Gap candidates are grouped by gap summary. Answer synthesis asks the model to return structured JSON with `isKnowledgeGap` and `gapSummary`; when `isKnowledgeGap` is true, the answer is logged as low confidence and becomes eligible for gap grouping.
+
+Gaps can also be flagged manually — via the **Knowledge gap** chip in the console, or the MCP `kb.feedback` tool — when the system fails to detect one automatically. A manual flag is separate from helpful/unhelpful feedback (an answer can be helpful and still expose a gap), and a manually-flagged question joins the same gap-candidate clustering and proposal workflow regardless of its answer confidence. Manual flagging reuses the question's gap summary, falling back to the question text. This is intentionally simple; clustering can build on top of this data.
 
 ## Queued Answers
 

@@ -160,9 +160,29 @@ Records helpful/unhelpful feedback on an answer.
 - `404 question_not_found`.
 - `200` — `{ "question": QuestionLog }`.
 
+Feedback is the answer-quality axis. Whether the answer exposed a knowledge gap is tracked separately (see below) and the two can both be set on the same question.
+
+### `POST /questions/:id/gap`
+
+Manually flags a question as a knowledge gap the automatic detection missed. The optional `summary` becomes the gap summary used for clustering; when omitted it falls back to the question's existing gap summary, then to the question text.
+
+```json
+{ "summary": "Adoption process is undocumented" }
+```
+
+- `404 question_not_found`.
+- `200` — `{ "question": QuestionLog }`.
+
+### `DELETE /questions/:id/gap`
+
+Clears the manual knowledge-gap flag. Any automatically-detected `gap_summary` is left intact, so un-flagging never removes a gap the system found on its own.
+
+- `404 question_not_found`.
+- `200` — `{ "question": QuestionLog }`.
+
 ### `GET /gaps/candidates?limit=<n>`
 
-Lists knowledge-gap candidates grouped from low-confidence questions. `limit` defaults to `50`.
+Lists knowledge-gap candidates grouped by gap summary. A question is included when it is a low-confidence automatic gap **or** has been manually flagged (regardless of answer confidence). `limit` defaults to `50`.
 
 ```json
 { "gaps": [ GapCandidate, ... ] }

@@ -19,7 +19,8 @@ Returns the final answer only:
   "answer": "string",
   "confidence": "high | medium | low",
   "citations": [ { "documentId": "...", "sectionId": "...", "path": "...", "heading": "...", "anchor": "...", "excerpt": "..." } ],
-  "gap": { ... }   // present only when the answer is a knowledge gap
+  "gap": { ... },        // present only when the answer is a knowledge gap
+  "questionId": "string" // identifier for reporting feedback via kb.feedback
 }
 ```
 
@@ -28,13 +29,29 @@ The API supports two execution modes:
 - **direct** — the API answers inline and the server returns the answer immediately.
 - **queue** — the API enqueues a background job (processed by a watcher). The server polls the job's status endpoint until it completes, then returns the finished answer.
 
-In both modes the client receives only the answer payload above. Internal details — execution mode, question/job identifiers, retrieval context, provider names, and status links — are never exposed to the client.
+In both modes the client receives the answer payload above plus the `questionId`. Other internal details — execution mode, job identifiers, retrieval context, provider names, and status links — are not exposed to the client.
 
 ### `kb.search`
 
 Input: `{ "query": string, "limit"?: number }`
 
 Returns indexed Markdown sections matching the keyword query.
+
+### `kb.feedback`
+
+Reports feedback on a previously asked question, using the `questionId` returned by `kb.ask`.
+
+Input:
+
+```json
+{
+  "questionId": "string",
+  "kind": "helpful | unhelpful | knowledge_gap",
+  "gapSummary": "string"   // optional; only used when kind is "knowledge_gap"
+}
+```
+
+`helpful` / `unhelpful` record answer-quality feedback. `knowledge_gap` flags the question as a knowledge gap the system missed (the optional `gapSummary` describes the missing knowledge); this is independent of helpful/unhelpful and feeds the same gap-candidate clustering as automatic detection.
 
 ## Configuration
 
