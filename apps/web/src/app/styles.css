@@ -931,12 +931,14 @@ code {
 }
 
 .configRow dt {
+  display: block;
   color: #65716b;
   font-size: 12px;
   font-weight: 850;
 }
 
 .configRow dd {
+  display: block;
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
