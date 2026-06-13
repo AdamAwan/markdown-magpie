@@ -238,6 +238,7 @@ export default function HomePage() {
   const [answer, setAnswer] = useState<AskResponse | undefined>();
   const [query, setQuery] = useState("");
   const [sections, setSections] = useState<SearchSection[]>([]);
+  const [answeredSearch, setAnsweredSearch] = useState("");
   const [repoPath, setRepoPath] = useState("knowledge-bases/cats");
   const [repoId, setRepoId] = useState("cats");
   const [repoName, setRepoName] = useState("Cats Knowledge Base");
@@ -660,11 +661,22 @@ export default function HomePage() {
                 <h2>Answered Questions</h2>
               </div>
               <div className="surfaceBody">
+                <form className="inlineForm" onSubmit={(e) => e.preventDefault()}>
+                  <input
+                    onChange={(event) => setAnsweredSearch(event.target.value)}
+                    placeholder="Search answered questions..."
+                    type="search"
+                    value={answeredSearch}
+                  />
+                </form>
                 <AnsweredPanel
                   expandedQuestionIds={expandedQuestionIds}
                   onFeedback={sendFeedback}
                   onToggleGap={toggleKnowledgeGap}
-                  questions={questions}
+                  questions={questions.filter(q =>
+                    answeredSearch.trim() === '' ||
+                    q.question.toLowerCase().includes(answeredSearch.toLowerCase())
+                  )}
                   toggleCitations={(questionId) =>
                     setExpandedQuestionIds((current) =>
                       current.includes(questionId)
