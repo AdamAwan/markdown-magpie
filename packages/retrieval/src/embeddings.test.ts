@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import {
+  AzureOpenAIEmbeddingProvider,
   createEmbeddingProvider,
   EMBEDDING_DIMENSIONS,
   OpenAICompatibleEmbeddingProvider
@@ -65,6 +66,36 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
 
     const provider = new OpenAICompatibleEmbeddingProvider({ apiKey: "k", baseUrl: "u", model: "m" });
     await assert.rejects(provider.embed(["x"]), /returned 0 vectors for 1 inputs/);
+  });
+});
+
+describe("AzureOpenAIEmbeddingProvider", () => {
+  it("posts to the deployment embeddings URL with the api-key header", async () => {
+    let captured: { url: string; headers: any; body: any } | undefined;
+    globalThis.fetch = (async (url: string, init: any) => {
+      captured = { url, headers: init.headers, body: JSON.parse(init.body) };
+      return new Response(
+        JSON.stringify({ data: [{ index: 0, embedding: vectorOf(EMBEDDING_DIMENSIONS) }] }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const provider = new AzureOpenAIEmbeddingProvider({
+      apiKey: "secret",
+      azureEndpoint: "https://my.openai.azure.com/",
+      azureDeployment: "embed-3",
+      azureApiVersion: "2024-10-21"
+    });
+    const vectors = await provider.embed(["only"]);
+
+    assert.equal(
+      captured?.url,
+      "https://my.openai.azure.com/openai/deployments/embed-3/embeddings?api-version=2024-10-21"
+    );
+    assert.equal(captured?.headers["api-key"], "secret");
+    assert.equal(captured?.headers.authorization, undefined);
+    assert.deepEqual(captured?.body.input, ["only"]);
+    assert.equal(vectors.length, 1);
   });
 });
 
