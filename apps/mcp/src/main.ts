@@ -2,6 +2,11 @@ import { stdin, stdout } from "node:process";
 
 const apiBaseUrl = trimTrailingSlash(process.env.API_BASE_URL ?? "http://localhost:4000");
 
+// When the API answers questions asynchronously (queue execution mode), kb.ask
+// polls the job until it produces an answer instead of returning queue metadata.
+const answerPollIntervalMs = parsePositiveInt(process.env.ANSWER_POLL_INTERVAL_MS, 1000);
+const answerTimeoutMs = parsePositiveInt(process.env.ANSWER_TIMEOUT_MS, 120000);
+
 type JsonRpcId = string | number | null;
 
 interface JsonRpcRequest {
@@ -87,28 +92,25 @@ async function drainMessages(): Promise<void> {
   }
 }
 
+// The MCP stdio transport frames each JSON-RPC message as a single line of
+// UTF-8 JSON terminated by a newline; messages must not contain embedded
+// newlines. See https://modelcontextprotocol.io/docs/concepts/transports.
 function readMessage(): JsonRpcRequest | undefined {
-  const headerEnd = inputBuffer.indexOf("\r\n\r\n");
-  if (headerEnd === -1) {
-    return undefined;
-  }
+  for (;;) {
+    const newlineIndex = inputBuffer.indexOf(0x0a);
+    if (newlineIndex === -1) {
+      return undefined;
+    }
 
-  const header = inputBuffer.subarray(0, headerEnd).toString("utf8");
-  const contentLength = /^Content-Length:\s*(\d+)$/im.exec(header)?.[1];
-  if (!contentLength) {
-    throw new Error("MCP message is missing Content-Length");
-  }
+    const line = inputBuffer.subarray(0, newlineIndex).toString("utf8").replace(/\r$/, "");
+    inputBuffer = inputBuffer.subarray(newlineIndex + 1);
 
-  const bodyLength = Number.parseInt(contentLength, 10);
-  const bodyStart = headerEnd + 4;
-  const bodyEnd = bodyStart + bodyLength;
-  if (inputBuffer.length < bodyEnd) {
-    return undefined;
-  }
+    if (line.trim().length === 0) {
+      continue;
+    }
 
-  const body = inputBuffer.subarray(bodyStart, bodyEnd).toString("utf8");
-  inputBuffer = inputBuffer.subarray(bodyEnd);
-  return JSON.parse(body) as JsonRpcRequest;
+    return JSON.parse(line) as JsonRpcRequest;
+  }
 }
 
 async function handleMessage(message: JsonRpcRequest): Promise<void> {
@@ -164,8 +166,8 @@ async function dispatch(message: JsonRpcRequest): Promise<unknown> {
 async function callTool(params: ToolCallParams): Promise<unknown> {
   if (params.name === "kb.ask") {
     const question = stringArgument(params.arguments, "question");
-    const result = await postJson("/ask", { question });
-    return textResult(result);
+    const answer = await askQuestion(question);
+    return textResult(answer);
   }
 
   if (params.name === "kb.search") {
@@ -209,6 +211,128 @@ function numberArgument(args: Record<string, unknown> | undefined, name: string)
   return Math.max(1, Math.min(Math.trunc(value), 200));
 }
 
+interface AskResult {
+  answer: string;
+  confidence: string;
+  citations: unknown[];
+  gap?: unknown;
+}
+
+interface JobView {
+  status: string;
+  output?: unknown;
+  error?: string;
+}
+
+// Asks the API a question and resolves to the final answer only. The API may
+// answer inline (direct mode) or asynchronously via a job (queue mode); in the
+// queue case we poll until the answer is ready so callers never see internal
+// job, queue, or retrieval-context details.
+async function askQuestion(question: string): Promise<AskResult> {
+  const ask = asObject(await postJson("/ask", { question }));
+
+  if (ask.result !== undefined) {
+    return extractAnswer(ask.result);
+  }
+
+  return waitForQueuedAnswer(readStatusPath(ask));
+}
+
+async function waitForQueuedAnswer(statusPath: string): Promise<AskResult> {
+  const deadline = Date.now() + answerTimeoutMs;
+
+  for (;;) {
+    const job = readJob(await getJson(statusPath));
+
+    if (job.status === "completed") {
+      if (job.output === undefined) {
+        throw new Error("Answer job completed without producing an answer");
+      }
+
+      return extractAnswer(job.output);
+    }
+
+    if (job.status === "failed" || job.status === "cancelled") {
+      throw new Error(job.error ?? `Answer job ${job.status}`);
+    }
+
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for the answer to be generated");
+    }
+
+    await delay(answerPollIntervalMs);
+  }
+}
+
+function readStatusPath(ask: Record<string, unknown>): string {
+  const links = ask.links;
+  if (links && typeof links === "object") {
+    const status = (links as Record<string, unknown>).status;
+    if (typeof status === "string" && status.length > 0) {
+      return status;
+    }
+  }
+
+  throw new Error("Queued answer response did not include a status link");
+}
+
+function readJob(value: unknown): JobView {
+  const job = asObject(asObject(value).job);
+  const status = job.status;
+  if (typeof status !== "string") {
+    throw new Error("Job status response did not include a status");
+  }
+
+  return {
+    status,
+    output: job.output,
+    error: typeof job.error === "string" ? job.error : undefined
+  };
+}
+
+function extractAnswer(value: unknown): AskResult {
+  const record = asObject(value);
+  const answer = record.answer;
+  if (typeof answer !== "string") {
+    throw new Error("Answer payload did not include answer text");
+  }
+
+  const result: AskResult = {
+    answer,
+    confidence: typeof record.confidence === "string" ? record.confidence : "low",
+    citations: Array.isArray(record.citations) ? record.citations : []
+  };
+
+  if (record.gap !== undefined) {
+    result.gap = record.gap;
+  }
+
+  return result;
+}
+
+function asObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error("Expected an object response from the API");
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 async function postJson(path: string, body: unknown): Promise<unknown> {
   const response = await fetch(`${apiBaseUrl}${path}`, {
     method: "POST",
@@ -249,8 +373,7 @@ function textResult(value: unknown): unknown {
 }
 
 function writeMessage(message: unknown): void {
-  const body = JSON.stringify(message);
-  stdout.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
+  stdout.write(`${JSON.stringify(message)}\n`);
 }
 
 function trimTrailingSlash(value: string): string {
