@@ -4,7 +4,7 @@
 
 **Goal:** Add semantic (vector) retrieval to the `/ask` flow, fused with the existing keyword scorer (hybrid search via Reciprocal Rank Fusion) and backed by pgvector, so the Q&A flow finds relevant sections even when the question shares no keywords with the source.
 
-**Architecture:** Vector ranking comes from a pgvector nearest-neighbour query; keyword ranking comes from the existing in-memory scorer (already loaded by `hydrate()`); the two ranked lists are fused with RRF in TypeScript. Embeddings are produced by an admin-configured OpenAI-compatible/Azure endpoint — index-time embedding is queued to the watcher, query-time embedding is synchronous in the API. Hybrid activates automatically only when `KNOWLEDGE_STORE=postgres` **and** an embeddings endpoint are configured; otherwise the system stays on today's keyword-only search with no behavioural change.
+**Architecture:** Vector ranking comes from a pgvector nearest-neighbour query; keyword ranking comes from the existing in-memory scorer (already loaded by `hydrate()`); the two ranked lists are fused with RRF in TypeScript. Embeddings are produced by an admin-configured OpenAI-compatible/Azure endpoint — index-time (section) embedding runs in the API as a background task kicked off after the index request returns; query-time (question) embedding is synchronous in the API. Hybrid activates automatically only when `KNOWLEDGE_STORE=postgres` **and** an embeddings endpoint are configured; otherwise the system stays on today's keyword-only search with no behavioural change.
 
 **Tech Stack:** Node.js + TypeScript (ESM, npm workspaces), `node:test` run from source via `tsx`, Postgres + pgvector (`pg`), Next.js admin UI.
 
@@ -20,18 +20,17 @@
 - `packages/retrieval/src/embeddings.ts` — embedding providers + `createEmbeddingProvider` factory + dimension guard.
 - `packages/retrieval/src/embeddings.test.ts` — embedding provider unit tests (mocked `fetch`).
 - `apps/api/src/knowledge-index.test.ts` — keyword-relevance + hybrid-fallback unit tests.
-- `apps/api/src/embed-sections.ts` — pure, injectable embed-batch logic shared by the watcher runner.
+- `apps/api/src/embed-sections.ts` — pure, injectable embed-batch logic, called by the API's background-embed trigger.
 - `apps/api/src/embed-sections.test.ts` — embed-batch unit tests (fake provider + fake store).
 - `packages/db/migrations/0006_hybrid_retrieval.sql` — HNSW index on `document_sections.embedding`.
 
 **Modified files**
-- `packages/core/src/index.ts` — `RankedSection` type; `"embed_sections"` job type + input/output.
+- `packages/core/src/index.ts` — `RankedSection` type. (Task 2 also added an `embed_sections` job type which Option A removes again in Task 8 — embedding runs in the API, not as a job.)
 - `packages/retrieval/src/index.ts` — `SectionSearchProvider` returns `RankedSection[]`; relevance-scale selection/confidence; remove the now-unused keyword scorer (moves to the search provider). Re-export embeddings + RRF.
 - `apps/api/src/knowledge-index.ts` — `search()` returns `RankedSection[]`; hybrid wiring + keyword fallback; embedding-provider/vector-search injection; `SectionVectorSearch` interface.
 - `apps/api/src/postgres-knowledge-store.ts` — pgvector nearest-neighbour query + list/save/count helpers for embeddings.
-- `apps/api/src/main.ts` — construct embedding provider; enqueue `embed_sections` after index; expose `retrievalMode` + embedding status in `/config`; adapt the admin `/knowledge/search` response to the new return type.
-- `apps/watcher/src/main.ts` — `embed_sections` accepted type + `EmbedSectionsRunner`.
-- `apps/watcher/package.json`, `apps/api/package.json`, `packages/retrieval/package.json` — switch `test` script to a glob so new test files run; add a `test` script to `apps/watcher`.
+- `apps/api/src/main.ts` — construct embedding provider + shared Postgres store; background-embed after index; expose `retrievalMode` + embedding status in `/config`; adapt the admin `/knowledge/search` response to the new return type.
+- `apps/api/package.json`, `packages/retrieval/package.json` — switch `test` script to a glob so new test files run. (No watcher changes — Option A keeps embedding in the API.)
 - `apps/web/src/app/page.tsx` — read-only retrieval-status indicator.
 - `docs/ingestion.md` — replace the "keyword scoring until the embedding adapter is wired in" note.
 
@@ -1108,13 +1107,14 @@ git commit -m "feat(api): hybrid search fusing pgvector and keyword ranking"
 
 ---
 
-## Task 8: Embed-batch logic + watcher runner
+## Task 8: Embed-batch logic (runs in the API, not the watcher)
+
+> **REVISED (Option A):** The watcher is a thin HTTP job-queue client with no DB or embedding capability, and section-embedding is triggered by the index event which already lives in the API. So embedding runs **in the API as a background task after indexing** — there is no `embed_sections` job and no watcher change. This task builds the pure, idempotent batch function the API calls (Steps 1–5) and removes the now-unused `embed_sections` core types (Step 6). The background trigger is wired in Task 9.
 
 **Files:**
 - Create: `apps/api/src/embed-sections.ts`
 - Create: `apps/api/src/embed-sections.test.ts`
-- Modify: `apps/watcher/src/main.ts`
-- Modify: `apps/watcher/package.json`
+- Modify: `packages/core/src/index.ts` (remove the unused `embed_sections` job type + I/O)
 
 - [ ] **Step 1: Write the failing test for the pure embed-batch function**
 
@@ -1247,130 +1247,26 @@ git add apps/api/src/embed-sections.ts apps/api/src/embed-sections.test.ts
 git commit -m "feat(api): add idempotent embed-pending-sections batch logic"
 ```
 
-- [ ] **Step 6: Add the `embed_sections` runner to the watcher**
+- [ ] **Step 6: Remove the now-unused `embed_sections` core types**
 
-The watcher processes jobs against the API today, but `embed_sections` needs direct DB + embedding access. Add a dedicated branch that runs the batch logic instead of an agent.
+Option A means no job is ever enqueued for embedding, so the job type added in Task 2 is dead code. In `packages/core/src/index.ts`:
+- Remove `"embed_sections"` from the `AiJobType` union (restore the original five members).
+- Delete the `EmbedSectionsJobInput` and `EmbedSectionsJobOutput` interfaces.
 
-In `apps/watcher/src/main.ts`:
+Keep `RankedSection` (Task 2's other addition — still used).
 
-(a) Extend the imports (`:2-12`) and add the new ones:
-
-```ts
-import type {
-  AgentRunner,
-  AiJob,
-  AiJobType,
-  AnswerQuestionJobInput,
-  AnswerQuestionJobOutput,
-  DraftMarkdownProposalJobInput,
-  DraftMarkdownProposalJobOutput,
-  EmbedSectionsJobInput,
-  SummarizeGapJobInput,
-  SummarizeGapJobOutput
-} from "@magpie/core";
-import { createEmbeddingProvider, type EmbeddingProviderName } from "@magpie/retrieval";
-import { PostgresKnowledgeStore } from "../../api/src/postgres-knowledge-store.js";
-import { embedPendingSections } from "../../api/src/embed-sections.js";
-```
-
-> If the cross-app import path is awkward under the workspace setup, move `embed-sections.ts`, `postgres-knowledge-store.ts`, and the `EmbeddingPersistence`/`SectionVectorSearch` interfaces into a shared `packages/` package and import from there. Confirm which during implementation by checking whether `apps/watcher/tsconfig.json` references `apps/api`. Prefer the shared-package route if the direct relative import does not type-check.
-
-(b) Add `"embed_sections"` to `acceptedTypes` (`:19-25`):
-
-```ts
-const acceptedTypes: AiJobType[] = [
-  "answer_question",
-  "summarize_gap",
-  "draft_markdown_proposal",
-  "detect_contradiction",
-  "suggest_consolidation",
-  "embed_sections"
-];
-```
-
-(c) In `runAndComplete` (`:67`), handle `embed_sections` before the agent path, because it does not use an `AgentRunner`:
-
-```ts
-async function runAndComplete(job: AiJob): Promise<void> {
-  try {
-    if (job.type === "embed_sections") {
-      const output = await runEmbedSections(job.input as EmbedSectionsJobInput);
-      await postJson(`/ai-jobs/${job.id}/complete`, { output });
-      console.log(`Completed ${job.type} job ${job.id}`);
-      return;
-    }
-
-    const runner = createRunner(providerForJob(job));
-    if (!runner.supports(job.type)) {
-      throw new Error(`${runner.name} does not support ${job.type}`);
-    }
-
-    const output = await runner.run(job);
-    await postJson(`/ai-jobs/${job.id}/complete`, { output });
-    console.log(`Completed ${job.type} job ${job.id}`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown job failure";
-    await postJson(`/ai-jobs/${job.id}/fail`, { error: message });
-    console.error(`Failed ${job.type} job ${job.id}: ${message}`);
-  }
-}
-```
-
-(d) Add the runner function near the bottom helpers:
-
-```ts
-async function runEmbedSections(input: EmbedSectionsJobInput) {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error("DATABASE_URL is required to run embed_sections jobs");
-  }
-
-  const embeddingProviderName = (process.env.EMBEDDING_PROVIDER ?? "mock") as EmbeddingProviderName;
-  const provider = createEmbeddingProvider({
-    provider: embeddingProviderName,
-    apiKey: process.env.OPENAI_COMPATIBLE_API_KEY || process.env.AZURE_OPENAI_API_KEY,
-    baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL,
-    model: process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL,
-    azureEndpoint: process.env.AZURE_OPENAI_ENDPOINT,
-    azureDeployment: process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
-    azureApiVersion: process.env.AZURE_OPENAI_API_VERSION
-  });
-
-  const store = new PostgresKnowledgeStore(databaseUrl);
-  return embedPendingSections({
-    store,
-    provider,
-    repositoryId: input.repositoryId,
-    batchSize: input.batchSize
-  });
-}
-```
-
-- [ ] **Step 7: Add a watcher test script**
-
-In `apps/watcher/package.json`, add to `scripts`:
-
-```json
-"test": "node --import tsx --test \"src/**/*.test.ts\"",
-```
-
-(There are no watcher unit tests yet; this makes the workspace's `npm test` a no-op-safe glob and ready for future tests. `node --test` with no matching files exits 0.)
-
-- [ ] **Step 8: Typecheck the watcher and api**
-
-Run: `npm run typecheck --workspace apps/watcher && npm run typecheck --workspace apps/api`
-Expected: PASS. If the cross-app import does not resolve, apply the shared-package note from Step 6 and re-run.
-
-- [ ] **Step 9: Commit**
+Then verify and commit:
 
 ```bash
-git add apps/watcher/src/main.ts apps/watcher/package.json
-git commit -m "feat(watcher): process embed_sections jobs via batch embedding"
+npm run typecheck      # root, exit 0
+npm test --workspace apps/api   # still green (+1 DB skip)
+git add packages/core/src/index.ts
+git commit -m "chore(core): drop unused embed_sections job type (embedding runs in the API)"
 ```
 
 ---
 
-## Task 9: API wiring — build providers, enqueue embedding, expose retrieval mode
+## Task 9: API wiring — build providers, background-embed after index, expose retrieval mode
 
 **Files:**
 - Modify: `apps/api/src/main.ts`
@@ -1427,27 +1323,66 @@ function retrievalMode(): { mode: "hybrid" | "keyword"; reason: string } {
 }
 ```
 
-(c) Update `createKnowledgeIndex` (`:859-870`) to pass hybrid options when running on Postgres with embeddings:
+(c) Build a single shared Postgres store + embedding provider at module scope, and use them both for hybrid search and for background embedding. Replace the existing `const knowledgeIndex = createKnowledgeIndex();` line and the `createKnowledgeIndex` function (`:859-870`) with:
 
 ```ts
-function createKnowledgeIndex(): InMemoryKnowledgeIndex {
-  if (storeBackend("KNOWLEDGE_STORE") === "postgres") {
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error("DATABASE_URL is required when KNOWLEDGE_STORE=postgres");
-    }
+const knowledgeStore =
+  storeBackend("KNOWLEDGE_STORE") === "postgres"
+    ? new PostgresKnowledgeStore(requireDatabaseUrl())
+    : undefined;
+const embeddingProvider = knowledgeStore ? createConfiguredEmbeddingProvider() : undefined;
+const knowledgeIndex = knowledgeStore
+  ? new InMemoryKnowledgeIndex(
+      knowledgeStore,
+      embeddingProvider
+        ? { embeddingProvider, vectorSearch: knowledgeStore, onNotice: (message) => console.warn(message) }
+        : {}
+    )
+  : new InMemoryKnowledgeIndex();
 
-    const store = new PostgresKnowledgeStore(databaseUrl);
-    const embeddingProvider = createConfiguredEmbeddingProvider();
-    return new InMemoryKnowledgeIndex(
-      store,
-      embeddingProvider ? { embeddingProvider, vectorSearch: store, onNotice: (message) => console.warn(message) } : {}
-    );
+function requireDatabaseUrl(): string {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error("DATABASE_URL is required when KNOWLEDGE_STORE=postgres");
   }
-
-  return new InMemoryKnowledgeIndex();
+  return databaseUrl;
 }
 ```
+
+Place this near the other top-level singletons (where `knowledgeIndex` is currently defined). If `createKnowledgeIndex` is referenced elsewhere, update those call sites to use the `knowledgeIndex` constant. Keep hydration (`await knowledgeIndex.hydrate()` or equivalent) exactly as it currently runs at startup.
+
+(d) Add the background-embedding function (module scope). It is idempotent and drains all pending sections; concurrent triggers coalesce via the in-flight guard:
+
+```ts
+let embeddingInFlight = false;
+let embeddingRerunRequested = false;
+
+async function embedSectionsInBackground(): Promise<void> {
+  if (!knowledgeStore || !embeddingProvider) {
+    return;
+  }
+  if (embeddingInFlight) {
+    embeddingRerunRequested = true;
+    return;
+  }
+  embeddingInFlight = true;
+  try {
+    do {
+      embeddingRerunRequested = false;
+      const result = await embedPendingSections({ store: knowledgeStore, provider: embeddingProvider });
+      if (result.embeddedCount > 0) {
+        console.log(`Embedded ${result.embeddedCount} section(s); ${result.remaining} remaining`);
+      }
+    } while (embeddingRerunRequested);
+  } catch (error) {
+    console.warn(`Background embedding failed: ${error instanceof Error ? error.message : "unknown error"}`);
+  } finally {
+    embeddingInFlight = false;
+  }
+}
+```
+
+Add the import near the other local imports: `import { embedPendingSections } from "./embed-sections.js";`
 
 - [ ] **Step 2: Adapt the admin search endpoint to the new return type**
 
@@ -1458,31 +1393,17 @@ The admin `/knowledge/search` handler (`:120`) returns `knowledgeIndex.search(..
     writeJson(response, 200, { sections: ranked.map((result) => result.section), ranked });
 ```
 
-- [ ] **Step 3: Enqueue an embed_sections job after indexing**
+- [ ] **Step 3: Trigger background embedding after indexing**
 
-In `handleIndexRepository` (`:460`) and `handleIndexMarkdown` (the upload handler — find it near the other index handlers), after the index summary is produced and before writing the response, enqueue an embedding job when hybrid is possible. Add a small helper and call it from both handlers:
+In each index handler — `handleIndexRepository` (`:460`) and the Markdown-upload handler (find it near the other index handlers; it calls `knowledgeIndex.indexMarkdownDocuments`) — kick off embedding **after the response is written** so the index request returns immediately. `embedSectionsInBackground` is a no-op unless Postgres + an embeddings endpoint are configured, so no mode guard is needed at the call site.
 
-```ts
-async function enqueueEmbeddingIfHybrid(repositoryId: string): Promise<void> {
-  if (retrievalMode().mode !== "hybrid") {
-    return;
-  }
-  const input: EmbedSectionsJobInput = { repositoryId, expectedOutput: "embedded_sections" };
-  await aiJobs.enqueue("embed_sections", input);
-}
-```
-
-Add the import for the type at the top of `main.ts` (alongside the other `@magpie/core` job-input imports):
+After the existing `writeJson(response, ..., { ... })` that returns the index summary, add:
 
 ```ts
-import type { /* …existing… */ EmbedSectionsJobInput } from "@magpie/core";
+  void embedSectionsInBackground();
 ```
 
-Then in each index handler, after `const summary = await knowledgeIndex.indexLocalRepository(...)` (or `indexMarkdownDocuments`), add:
-
-```ts
-  await enqueueEmbeddingIfHybrid(summary.repository.id);
-```
+Do this in both index handlers. Do not `await` it — it must not delay the response.
 
 - [ ] **Step 4: Expose retrieval mode and the new embedding model in `/config`**
 
@@ -1512,16 +1433,17 @@ In `getRuntimeConfig` (`:618-674`):
     })(),
 ```
 
-- [ ] **Step 5: Typecheck and run the api tests**
+- [ ] **Step 5: Build, typecheck and run the api tests**
 
-Run: `npm run typecheck --workspace apps/api && npm test --workspace apps/api`
-Expected: PASS.
+Run: `npm run build --workspace apps/api && npm run typecheck && npm test --workspace apps/api`
+(Use the ROOT `npm run typecheck` — the per-package `typecheck` script is broken repo-wide by a rootDir misconfig.)
+Expected: all exit 0; api tests pass (+1 DB skip).
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add apps/api/src/main.ts
-git commit -m "feat(api): wire embeddings, enqueue index embedding, expose retrieval mode"
+git commit -m "feat(api): wire embeddings, background-embed after index, expose retrieval mode"
 ```
 
 ---
@@ -1540,18 +1462,18 @@ for f in packages/db/migrations/*.sql; do psql "$DATABASE_URL" -f "$f"; done
 
 Expected: each runs without error, including `0006_hybrid_retrieval.sql`.
 
-- [ ] **Step 2: Configure hybrid mode and start the API + watcher**
+- [ ] **Step 2: Configure hybrid mode and start the API**
 
 Set, for an OpenAI-compatible embeddings endpoint:
 
 ```bash
-export STORAGE_BACKEND=postgres KNOWLEDGE_STORE=postgres AI_JOB_QUEUE=postgres
+export STORAGE_BACKEND=postgres KNOWLEDGE_STORE=postgres
 export DATABASE_URL=...   # pgvector-enabled
 export EMBEDDING_PROVIDER=openai-compatible
 export OPENAI_COMPATIBLE_BASE_URL=... OPENAI_COMPATIBLE_API_KEY=... OPENAI_COMPATIBLE_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
-Start the API and the watcher (per the repo's run scripts).
+Start the API (per the repo's run scripts). No watcher is needed for embedding under Option A.
 
 - [ ] **Step 3: Confirm retrieval mode is hybrid**
 
@@ -1563,15 +1485,15 @@ Expected: `{ "mode": "hybrid", "reason": "Semantic + keyword search active.", "e
 
 - [ ] **Step 4: Index a repo and confirm embeddings populate**
 
-Index a Markdown repo, then watch the embed job run:
+Index a Markdown repo; the API embeds in the background after the request returns:
 
 ```bash
 curl -s -XPOST localhost:4000/repositories/index -H 'content-type: application/json' -d '{"localPath":"<path>"}' | jq
-# after the watcher processes the embed_sections job:
+# give the background embed a moment, then:
 psql "$DATABASE_URL" -c "SELECT count(*) FILTER (WHERE embedding IS NOT NULL) AS embedded, count(*) AS total FROM document_sections;"
 ```
 
-Expected: `embedded` rises to `total` once the watcher finishes.
+Expected: `embedded` rises to `total` shortly after indexing (watch the API log for the `Embedded N section(s)` line).
 
 - [ ] **Step 5: Ask a question phrased with NO shared keywords**
 
@@ -1645,7 +1567,7 @@ git commit -m "feat(web): show derived retrieval mode in admin config"
 
 - [ ] **Step 1: Replace the keyword-only note**
 
-In `docs/ingestion.md`, find the note stating search is "lightweight keyword scoring … until the embedding/indexing adapter is wired in" and replace it with a description of hybrid retrieval: pgvector vector search fused with keyword scoring via RRF, embeddings from an admin-configured OpenAI-compatible/Azure endpoint, index-time embedding queued to the watcher, query-time embedding synchronous, and the automatic keyword-only fallback when embeddings/Postgres are not configured.
+In `docs/ingestion.md`, find the note stating search is "lightweight keyword scoring … until the embedding/indexing adapter is wired in" and replace it with a description of hybrid retrieval: pgvector vector search fused with keyword scoring via RRF, embeddings from an admin-configured OpenAI-compatible/Azure endpoint, index-time (section) embedding running in the API as a background task after indexing, query-time (question) embedding synchronous, and the automatic keyword-only fallback when embeddings/Postgres are not configured.
 
 - [ ] **Step 2: Document the new configuration**
 

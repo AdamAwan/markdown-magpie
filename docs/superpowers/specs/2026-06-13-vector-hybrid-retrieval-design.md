@@ -102,7 +102,19 @@ CREATE INDEX document_sections_embedding_hnsw
 No `tsvector` column is required: keyword ranking stays in memory under Approach B, so the
 migration is intentionally minimal.
 
-### Component 3 — Index-time embedding (queued to the watcher)
+### Component 3 — Index-time embedding
+
+> **REVISED during implementation (Option A):** The original design queued embedding to the
+> watcher. On inspection the watcher is a thin HTTP job-queue client with no DB or embedding
+> capability, and section-embedding is already triggered by the index event in the API. So
+> index-time embedding now runs **in the API as a background task** kicked off after the index
+> request returns (`embedSectionsInBackground`, idempotent, drains all `embedding IS NULL`
+> sections, concurrent triggers coalesce). There is no `embed_sections` job type and no watcher
+> change. The pure `embedPendingSections` batch function and the `EmbeddingPersistence` helpers
+> below remain exactly as described — only the caller changed (API background task, not a watcher
+> runner). The text struck through below is retained for history.
+
+~~Queued to the watcher as a background job:~~
 
 - New `AiJobType` `"embed_sections"` with input/output types in `packages/core`.
 - After a successful index, the API enqueues an `embed_sections` job **only when** running with
