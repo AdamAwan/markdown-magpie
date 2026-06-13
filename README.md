@@ -1,6 +1,6 @@
 # Markdown Magpie
 
-Markdown Magpie is a Docker-first, vendor-neutral knowledge maintenance system for Git-backed Markdown documentation.
+Markdown Magpie is a vendor-neutral knowledge maintenance system for Git-backed Markdown documentation.
 
 It answers questions with citations, records where the knowledge base is weak, proposes Markdown changes, and raises pull requests for human review.
 
@@ -45,9 +45,56 @@ infra/
   azure/ optional managed deployment notes
 ```
 
+## Development
+
+For day-to-day development, run the apps directly with npm. Docker Compose is not recommended while developing because it adds image rebuild and container restart time to the feedback loop.
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Use npm 10 if npm 11 fails with `Exit handler never called!` or leaves empty package directories in `node_modules`:
+
+```bash
+npx --yes npm@10 ci
+```
+
+Copy the local environment defaults:
+
+```bash
+cp .env.example .env
+```
+
+Start the API:
+
+```bash
+npm run dev:api
+```
+
+Start the web console in another shell:
+
+```bash
+npm run dev:web
+```
+
+Open:
+
+```text
+http://localhost:3000
+```
+
+The default local config uses `STORAGE_BACKEND=postgres` and `AI_PROVIDER=mock`. Start local Postgres and run `npm run db:migrate` before starting the API.
+
+Local development troubleshooting:
+
+- If `npm install` fails with `Exit handler never called!`, use `npx --yes npm@10 ci`.
+- If a managed shell reports `listen EPERM` on ports `3000` or `4000`, run the dev command in a normal host shell or approve port binding for that command.
+
 ## Default Deployment
 
-The default target is Docker Compose:
+The default deployment target is Docker Compose:
 
 - API container
 - Web container
@@ -468,13 +515,9 @@ Watcher mode lowers the barrier to entry because early users can develop and tes
 
 ## Local Development
 
-Start the API:
+Use the npm workflow from the [Development](#development) section for normal code changes. Docker Compose is intended for production-like demos and deployment checks, not the inner development loop.
 
-```bash
-npm run dev:api
-```
-
-Index the sibling sample knowledge base:
+With the API running, index the sibling sample knowledge base:
 
 ```bash
 curl -s -X POST http://localhost:4000/repositories/index \
@@ -488,10 +531,15 @@ Search indexed Markdown sections:
 curl -s 'http://localhost:4000/search?q=hotfix'
 ```
 
-Start a mock watcher in another shell:
+To test queued AI jobs, run the API in queue mode:
 
 ```bash
 AI_EXECUTION_MODE=queue AI_PROVIDER=mock npm run dev:api
+```
+
+Then start a mock watcher in another shell:
+
+```bash
 AI_PROVIDER=mock npm run dev:watcher
 ```
 

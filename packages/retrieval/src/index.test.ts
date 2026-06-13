@@ -125,4 +125,51 @@ describe("answerQuestion", () => {
     assert.equal(result.citations.length, 0);
     assert.match(result.gap?.summary ?? "", /No sufficient source material/);
   });
+
+  it("uses structured model gap decisions instead of retrieval confidence", async () => {
+    const sections: DocumentSection[] = [
+      {
+        id: "repo:care.md:0",
+        documentId: "repo:care.md",
+        path: "care.md",
+        heading: "Cat Care Basics",
+        headingPath: ["Cat Care Basics"],
+        anchor: "cat-care-basics",
+        content: "Cats need consistent food, fresh water, a clean litter box, and routine attention.",
+        ordinal: 0
+      },
+      {
+        id: "repo:health.md:1",
+        documentId: "repo:health.md",
+        path: "health.md",
+        heading: "Vet Care",
+        headingPath: ["Vet Care"],
+        anchor: "vet-care",
+        content: "Cats should have regular veterinary checkups and preventive care.",
+        ordinal: 1
+      }
+    ];
+    const searchProvider: SectionSearchProvider = {
+      async search() {
+        return sections;
+      }
+    };
+
+    const result = await answerQuestion("How do I know if a cat needs urgent care?", searchProvider, {
+      async complete() {
+        return {
+          content: JSON.stringify({
+            answer: "The provided context does not explain how to identify when a cat needs urgent care.",
+            confidence: "low",
+            isKnowledgeGap: true,
+            gapSummary: "No urgent cat care triage guidance is documented."
+          })
+        };
+      }
+    });
+
+    assert.equal(result.confidence, "low");
+    assert.equal(result.gap?.summary, "No urgent cat care triage guidance is documented.");
+    assert.deepEqual(result.gap?.citedSectionIds, ["repo:care.md:0", "repo:health.md:1"]);
+  });
 });

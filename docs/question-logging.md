@@ -32,7 +32,7 @@ POST /questions/:id/feedback
 GET /gaps/candidates
 ```
 
-Gap candidates are currently grouped from low-confidence questions with a gap summary. This is intentionally simple; clustering can build on top of this data.
+Gap candidates are currently grouped from low-confidence questions with a gap summary. Answer synthesis asks the model to return structured JSON with `isKnowledgeGap` and `gapSummary`; when `isKnowledgeGap` is true, the answer is logged as low confidence and becomes eligible for gap grouping. This is intentionally simple; clustering can build on top of this data.
 
 ## Queued Answers
 

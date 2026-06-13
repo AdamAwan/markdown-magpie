@@ -151,7 +151,10 @@ export async function answerQuestion(
 
   const context = relevantSections.map(({ section }) => `# ${section.heading}\n${section.content}`).join("\n\n");
   const response = await chatProvider.complete({
-    system: "Answer using only the provided Markdown knowledge base context. Cite the source sections.",
+    system:
+      "Answer using only the provided Markdown knowledge base context. Return only JSON with this shape: " +
+      '{"answer":"string","confidence":"high|medium|low","isKnowledgeGap":true|false,"gapSummary":"string|null"}. ' +
+      "Set isKnowledgeGap to true and confidence to low when the context does not specifically answer the question.",
     messages: [
       {
         role: "user",
@@ -159,6 +162,29 @@ export async function answerQuestion(
       }
     ]
   });
+  const structuredResponse = parseStructuredAnswerResponse(response.content);
+
+  if (structuredResponse?.isKnowledgeGap) {
+    return {
+      answer: structuredResponse.answer,
+      confidence: "low",
+      citations,
+      gap: {
+        summary: structuredResponse.gapSummary || `No sufficient source material found for: ${question}`,
+        question,
+        confidence: "low",
+        citedSectionIds: citations.map((citation) => citation.sectionId)
+      }
+    };
+  }
+
+  if (structuredResponse) {
+    return {
+      answer: structuredResponse.answer,
+      confidence: structuredResponse.confidence,
+      citations
+    };
+  }
 
   if (isKnowledgeGapAnswer(response.content)) {
     return {
@@ -215,6 +241,63 @@ function confidenceForEvidence(scoredSections: ScoredSection[]): AnswerResult["c
   }
 
   return bestScore >= 2 ? "medium" : "low";
+}
+
+interface StructuredAnswerResponse {
+  answer: string;
+  confidence: "high" | "medium" | "low";
+  isKnowledgeGap: boolean;
+  gapSummary: string;
+}
+
+function parseStructuredAnswerResponse(value: string): StructuredAnswerResponse | undefined {
+  const parsed = parseJsonObject(value);
+  if (!parsed || typeof parsed !== "object") {
+    return undefined;
+  }
+
+  const candidate = parsed as Partial<StructuredAnswerResponse>;
+  if (
+    typeof candidate.answer !== "string" ||
+    (candidate.confidence !== "high" && candidate.confidence !== "medium" && candidate.confidence !== "low") ||
+    typeof candidate.isKnowledgeGap !== "boolean"
+  ) {
+    return undefined;
+  }
+
+  return {
+    answer: candidate.answer,
+    confidence: candidate.isKnowledgeGap ? "low" : candidate.confidence,
+    isKnowledgeGap: candidate.isKnowledgeGap,
+    gapSummary: typeof candidate.gapSummary === "string" ? candidate.gapSummary : ""
+  };
+}
+
+function parseJsonObject(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(value);
+    if (fenced) {
+      try {
+        return JSON.parse(fenced[1]);
+      } catch {
+        return undefined;
+      }
+    }
+
+    const start = value.indexOf("{");
+    const end = value.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(value.slice(start, end + 1));
+      } catch {
+        return undefined;
+      }
+    }
+  }
+
+  return undefined;
 }
 
 function scoreSection(section: DocumentSection, terms: string[]): number {
