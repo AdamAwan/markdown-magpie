@@ -1,6 +1,6 @@
 import pg from "pg";
-import type { DocumentSection, KnowledgeDocument } from "@magpie/core";
-import type { IndexedRepositorySummary, KnowledgePersistence } from "./knowledge-index.js";
+import type { DocumentSection, KnowledgeDocument, KnowledgeStatus, RepositoryRef } from "@magpie/core";
+import type { IndexedRepositorySummary, KnowledgePersistence, LoadedKnowledge } from "./knowledge-index.js";
 
 const { Pool } = pg;
 
@@ -104,4 +104,95 @@ export class PostgresKnowledgeStore implements KnowledgePersistence {
       client.release();
     }
   }
+
+  async loadAll(): Promise<LoadedKnowledge> {
+    const [repositoryRows, documentRows, sectionRows] = await Promise.all([
+      this.pool.query<RepositoryRow>(
+        "SELECT id, name, remote_url, default_branch, local_path, provider FROM repositories"
+      ),
+      this.pool.query<DocumentRow>(
+        `
+          SELECT id, repository_id, path, commit_sha, title, owner, status,
+                 to_char(last_verified, 'YYYY-MM-DD') AS last_verified, review_cycle_days, content
+          FROM documents
+        `
+      ),
+      this.pool.query<SectionRow>(
+        "SELECT id, document_id, path, heading, heading_path, anchor, ordinal, content FROM document_sections"
+      )
+    ]);
+
+    const repositories: RepositoryRef[] = repositoryRows.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      remoteUrl: row.remote_url ?? undefined,
+      defaultBranch: row.default_branch,
+      localPath: row.local_path,
+      provider: row.provider as RepositoryRef["provider"]
+    }));
+
+    const documents: KnowledgeDocument[] = documentRows.rows.map((row) => ({
+      id: row.id,
+      repositoryId: row.repository_id,
+      path: row.path,
+      commitSha: row.commit_sha ?? undefined,
+      metadata: {
+        title: row.title,
+        owner: row.owner ?? undefined,
+        status: row.status as KnowledgeStatus,
+        lastVerified: row.last_verified ?? undefined,
+        reviewCycleDays: row.review_cycle_days ?? undefined,
+        // tags and relatedDocs are not persisted yet; rehydrate as empty.
+        tags: [],
+        relatedDocs: []
+      },
+      content: row.content
+    }));
+
+    const sections: DocumentSection[] = sectionRows.rows.map((row) => ({
+      id: row.id,
+      documentId: row.document_id,
+      path: row.path,
+      heading: row.heading,
+      headingPath: row.heading_path,
+      anchor: row.anchor,
+      content: row.content,
+      ordinal: row.ordinal
+    }));
+
+    return { repositories, documents, sections };
+  }
+}
+
+interface RepositoryRow {
+  id: string;
+  name: string;
+  remote_url: string | null;
+  default_branch: string;
+  local_path: string;
+  provider: string;
+}
+
+interface DocumentRow {
+  id: string;
+  repository_id: string;
+  path: string;
+  commit_sha: string | null;
+  title: string;
+  owner: string | null;
+  status: string;
+  last_verified: string | null;
+  review_cycle_days: number | null;
+  content: string;
+}
+
+interface SectionRow {
+  id: string;
+  document_id: string;
+  path: string;
+  heading: string;
+  heading_path: string[];
+  anchor: string;
+  ordinal: number;
+  content: string;
 }

@@ -13,7 +13,7 @@ import type {
 } from "@magpie/core";
 import { LocalGitProposalPublisher } from "@magpie/git";
 import { answerQuestion, createChatProvider, type ChatProviderName } from "@magpie/retrieval";
-import { InMemoryAiJobQueue } from "./ai-job-queue.js";
+import { DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS, InMemoryAiJobQueue } from "./ai-job-queue.js";
 import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
 import { PostgresAiJobQueue } from "./postgres-ai-job-queue.js";
 import { PostgresKnowledgeStore } from "./postgres-knowledge-store.js";
@@ -23,6 +23,7 @@ import { InMemoryProposalStore } from "./proposal-store.js";
 import { InMemoryQuestionLogStore } from "./question-log-store.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
+const aiJobClaimTimeoutMs = parseClaimTimeoutMs(process.env.AI_JOB_CLAIM_TIMEOUT_MS);
 const aiJobs = createAiJobQueue();
 const knowledgeIndex = createKnowledgeIndex();
 const questionLogs = createQuestionLogStore();
@@ -38,11 +39,22 @@ const server = createServer(async (request, response) => {
   }
 });
 
-server.listen(port, () => {
-  console.log(`Markdown Magpie API listening on http://localhost:${port}`);
-  console.log(`AI execution mode: ${runtimeConfig.aiExecutionMode}`);
-  console.log(`AI provider: ${runtimeConfig.aiProvider}`);
-});
+async function start(): Promise<void> {
+  try {
+    await knowledgeIndex.hydrate();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error(`Failed to hydrate knowledge index from storage: ${message}`);
+  }
+
+  server.listen(port, () => {
+    console.log(`Markdown Magpie API listening on http://localhost:${port}`);
+    console.log(`AI execution mode: ${runtimeConfig.aiExecutionMode}`);
+    console.log(`AI provider: ${runtimeConfig.aiProvider}`);
+  });
+}
+
+void start();
 
 async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
@@ -656,7 +668,8 @@ function getRuntimeConfig() {
       name: process.env.WATCHER_NAME ?? null,
       pollIntervalMs: process.env.WATCHER_POLL_INTERVAL_MS ?? null,
       aiJobProvider: runtimeConfig.aiProvider,
-      agentApiTimeoutMs: process.env.AGENT_API_TIMEOUT_MS ?? null
+      agentApiTimeoutMs: process.env.AGENT_API_TIMEOUT_MS ?? null,
+      claimTimeoutMs: aiJobClaimTimeoutMs
     }
   };
 }
@@ -828,10 +841,19 @@ function createAiJobQueue(): InMemoryAiJobQueue | PostgresAiJobQueue {
       throw new Error("DATABASE_URL is required when AI_JOB_QUEUE=postgres");
     }
 
-    return new PostgresAiJobQueue(databaseUrl);
+    return new PostgresAiJobQueue(databaseUrl, aiJobClaimTimeoutMs);
   }
 
-  return new InMemoryAiJobQueue();
+  return new InMemoryAiJobQueue(aiJobClaimTimeoutMs);
+}
+
+function parseClaimTimeoutMs(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS;
+  }
+
+  return parsed;
 }
 
 function createKnowledgeIndex(): InMemoryKnowledgeIndex {

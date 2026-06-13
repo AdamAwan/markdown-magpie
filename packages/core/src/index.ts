@@ -186,6 +186,7 @@ export interface AiJob<TInput = unknown, TOutput = unknown> {
   output?: TOutput;
   error?: string;
   claimedBy?: string;
+  claimedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { AiJob, AiJobQueue, AiJobType } from "@magpie/core";
 
+export const DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS = 300_000;
+
 export class InMemoryAiJobQueue implements AiJobQueue {
   private readonly jobs = new Map<string, AiJob>();
+
+  constructor(private readonly claimTimeoutMs = DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS) {}
 
   async enqueue<TInput>(type: AiJobType, input: TInput): Promise<AiJob<TInput>> {
     const now = new Date().toISOString();
@@ -20,6 +24,8 @@ export class InMemoryAiJobQueue implements AiJobQueue {
   }
 
   async claimNext(workerName: string, acceptedTypes: AiJobType[]): Promise<AiJob | undefined> {
+    this.requeueExpiredClaims();
+
     const now = new Date().toISOString();
     const job = [...this.jobs.values()]
       .filter((candidate) => candidate.status === "pending" && acceptedTypes.includes(candidate.type))
@@ -33,11 +39,31 @@ export class InMemoryAiJobQueue implements AiJobQueue {
       ...job,
       status: "claimed",
       claimedBy: workerName,
+      claimedAt: now,
       updatedAt: now
     };
 
     this.jobs.set(claimed.id, claimed);
     return claimed;
+  }
+
+  private requeueExpiredClaims(): void {
+    const threshold = Date.now() - this.claimTimeoutMs;
+    for (const [id, job] of this.jobs) {
+      if (job.status !== "claimed" || !job.claimedAt) {
+        continue;
+      }
+
+      if (Date.parse(job.claimedAt) < threshold) {
+        this.jobs.set(id, {
+          ...job,
+          status: "pending",
+          claimedBy: undefined,
+          claimedAt: undefined,
+          updatedAt: new Date().toISOString()
+        });
+      }
+    }
   }
 
   async complete<TOutput>(jobId: string, output: TOutput): Promise<void> {
