@@ -136,11 +136,25 @@ p {
 
 .statusLine {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  gap: 4px;
   color: #65716b;
   font-size: 12px;
+  font-weight: 750;
+}
+
+.statusLine span:first-child {
+  color: #65716b;
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.statusLine span:last-child {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #17211d;
   font-weight: 750;
 }
 
@@ -918,8 +932,8 @@ code {
 
 .configRow {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 6px;
+  grid-template-columns: minmax(130px, 0.42fr) minmax(0, 1fr);
+  gap: 10px;
   align-items: start;
   border-top: 1px solid #e2e6df;
   padding-top: 8px;
@@ -931,14 +945,12 @@ code {
 }
 
 .configRow dt {
-  display: block;
   color: #65716b;
   font-size: 12px;
   font-weight: 850;
 }
 
 .configRow dd {
-  display: block;
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
