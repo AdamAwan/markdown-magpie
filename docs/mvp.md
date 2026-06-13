@@ -7,7 +7,7 @@
 - Parse Markdown files and frontmatter.
 - Split documents into stable heading-based sections.
 - Store sections in Postgres.
-- Add keyword search and mock embeddings.
+- Add hybrid retrieval: pgvector nearest-neighbour fused with keyword scoring via RRF, with automatic keyword-only fallback.
 - Answer questions with citations from retrieved sections.
 - Expose `ask` and `search` over HTTP and MCP.
 - Support mock and queued AI execution modes.

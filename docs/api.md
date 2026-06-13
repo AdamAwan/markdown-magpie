@@ -28,7 +28,8 @@ Liveness check.
 Returns the resolved runtime configuration: API settings, storage backends (with the
 database URL masked), configured knowledge repository path, provider settings and secret
 presence (`set` / `not set`), the AI runtime (current execution mode and provider, plus the
-available `direct` and `queue` providers), and watcher settings.
+available `direct` and `queue` providers), watcher settings, and retrieval settings including
+`retrieval.mode` (`hybrid` or `keyword`) and a plain-language `reason`.
 
 ### `POST /config`
 
@@ -68,7 +69,7 @@ Answers a question from indexed Markdown context.
 
 ### `GET /search?q=<query>&limit=<n>`
 
-Keyword search over indexed sections. `limit` defaults to `5`.
+Searches indexed sections. `limit` defaults to `5`. When hybrid retrieval is active (Postgres + embeddings configured), results are ranked by Reciprocal Rank Fusion of pgvector nearest-neighbour and keyword scores; otherwise keyword scoring is used. Each result carries a `[0,1]` relevance score.
 
 - `400 query_required` — missing `q`.
 - `200` — `{ "sections": [ DocumentSection, ... ] }`.

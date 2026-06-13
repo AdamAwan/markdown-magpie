@@ -54,6 +54,12 @@ export interface DocumentSection {
   ordinal: number;
 }
 
+export interface RankedSection {
+  section: DocumentSection;
+  /** Absolute relevance in [0,1]; higher is better. */
+  relevance: number;
+}
+
 export interface Citation {
   documentId: string;
   sectionId: string;
