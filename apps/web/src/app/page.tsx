@@ -29,6 +29,66 @@ function resolveApiBaseUrl(): string {
   return "http://localhost:4000";
 }
 
+function extractModelInfo(config: RuntimeConfig | undefined): {
+  chatModel?: string;
+  chatHost?: string;
+  embeddingModel?: string;
+  embeddingHost?: string;
+} {
+  if (!config) return {};
+
+  const result: ReturnType<typeof extractModelInfo> = {};
+  const providers = config.providers as Record<string, unknown> | undefined;
+
+  if (providers?.openAiCompatible && typeof providers.openAiCompatible === "object") {
+    const compat = providers.openAiCompatible as Record<string, unknown>;
+    if (typeof compat.model === "string") {
+      result.chatModel = compat.model;
+    }
+    if (typeof compat.baseUrl === "string") {
+      result.chatHost = extractHostFromUrl(compat.baseUrl);
+    }
+    if (typeof compat.embeddingModel === "string") {
+      result.embeddingModel = compat.embeddingModel;
+    }
+    if (typeof compat.embeddingBaseUrl === "string") {
+      result.embeddingHost = extractHostFromUrl(compat.embeddingBaseUrl);
+    } else if (typeof compat.baseUrl === "string" && !compat.embeddingBaseUrl) {
+      result.embeddingHost = extractHostFromUrl(compat.baseUrl);
+    }
+  }
+
+  if (providers?.azureOpenAi && typeof providers.azureOpenAi === "object") {
+    const azure = providers.azureOpenAi as Record<string, unknown>;
+    if (typeof azure.chatDeployment === "string") {
+      result.chatModel = azure.chatDeployment;
+      result.chatHost = "Azure OpenAI";
+    }
+    if (typeof azure.embeddingDeployment === "string") {
+      result.embeddingModel = azure.embeddingDeployment;
+      result.embeddingHost = "Azure OpenAI";
+    }
+  }
+
+  return result;
+}
+
+function extractHostFromUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname;
+
+    if (hostname.includes("deepseek")) return "DeepSeek";
+    if (hostname.includes("openrouter")) return "OpenRouter";
+    if (hostname.includes("openai.com")) return "OpenAI";
+    if (hostname.includes("anthropic")) return "Anthropic";
+
+    return hostname;
+  } catch {
+    return url;
+  }
+}
+
 type Confidence = "high" | "medium" | "low" | "unknown";
 type Feedback = "helpful" | "unhelpful";
 type ConsoleSection = "ask" | "answered" | "knowledge" | "gaps" | "jobs" | "proposals" | "config" | "dataflow";
@@ -586,13 +646,34 @@ export default function HomePage() {
             </span>
           </div>
           <div className="statusLine">
-            <span>Provider</span>
-            <span>{config?.aiRuntime.provider ?? "mock"}</span>
-          </div>
-          <div className="statusLine">
             <span>Mode</span>
             <span>{config?.aiRuntime.executionMode ?? "direct"}</span>
           </div>
+          {(() => {
+            const modelInfo = extractModelInfo(config);
+            return (
+              <>
+                {modelInfo.chatModel && (
+                  <div className="statusLine">
+                    <span>Chat</span>
+                    <span title={modelInfo.chatHost || undefined}>
+                      {modelInfo.chatModel}
+                      {modelInfo.chatHost && ` (${modelInfo.chatHost})`}
+                    </span>
+                  </div>
+                )}
+                {modelInfo.embeddingModel && (
+                  <div className="statusLine">
+                    <span>Embedding</span>
+                    <span title={modelInfo.embeddingHost || undefined}>
+                      {modelInfo.embeddingModel}
+                      {modelInfo.embeddingHost && ` (${modelInfo.embeddingHost})`}
+                    </span>
+                  </div>
+                )}
+              </>
+            );
+          })()}
           <div className="statusLine">
             <span>Retrieval</span>
             <span title={config?.retrieval.reason}>
@@ -779,7 +860,7 @@ export default function HomePage() {
 
         {activeSection === "dataflow" ? (
           <section className="workbench singlePane">
-            <DataFlowPanel />
+            <DataFlowPanel config={config} />
           </section>
         ) : null}
 
@@ -1674,8 +1755,9 @@ function flattenConfig(value: Record<string, unknown>, prefix = ""): Record<stri
   }, {});
 }
 
-function DataFlowPanel() {
-  const [activeFlow, setActiveFlow] = useState<"overview" | "ask" | "learn" | "generate" | "queue">("overview");
+function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
+  const [activeFlow, setActiveFlow] = useState<"overview" | "ask" | "improvement" | "queue">("overview");
+  const modelInfo = extractModelInfo(config);
 
   useEffect(() => {
     mermaid.contentLoaded();
@@ -1701,16 +1783,10 @@ function DataFlowPanel() {
             Ask Flow
           </button>
           <button
-            className={activeFlow === "learn" ? "flowTab active" : "flowTab"}
-            onClick={() => setActiveFlow("learn")}
+            className={activeFlow === "improvement" ? "flowTab active" : "flowTab"}
+            onClick={() => setActiveFlow("improvement")}
           >
-            Learn Flow
-          </button>
-          <button
-            className={activeFlow === "generate" ? "flowTab active" : "flowTab"}
-            onClick={() => setActiveFlow("generate")}
-          >
-            Generate Flow
+            Continuous Improvement Cycle
           </button>
           <button
             className={activeFlow === "queue" ? "flowTab active" : "flowTab"}
@@ -1721,11 +1797,10 @@ function DataFlowPanel() {
         </div>
 
         <div className="flowDiagram">
-          {activeFlow === "overview" && <OverviewDiagram />}
-          {activeFlow === "ask" && <AskFlowDiagram />}
-          {activeFlow === "learn" && <LearnFlowDiagram />}
-          {activeFlow === "generate" && <GenerateFlowDiagram />}
-          {activeFlow === "queue" && <QueueArchitectureDiagram />}
+          {activeFlow === "overview" && <OverviewDiagram modelInfo={modelInfo} />}
+          {activeFlow === "ask" && <AskFlowDiagram modelInfo={modelInfo} />}
+          {activeFlow === "improvement" && <ContinuousImprovementDiagram modelInfo={modelInfo} />}
+          {activeFlow === "queue" && <QueueArchitectureDiagram modelInfo={modelInfo} />}
         </div>
 
         <div className="flowLegend">
@@ -1758,7 +1833,11 @@ function DataFlowPanel() {
   );
 }
 
-function OverviewDiagram() {
+function OverviewDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractModelInfo> }) {
+  const chatLabel = modelInfo.chatModel && modelInfo.chatHost
+    ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
+    : modelInfo.chatModel || "Chat Model";
+
   return (
     <div className="mermaid">
       {`graph TD
@@ -1767,7 +1846,7 @@ function OverviewDiagram() {
 
     D["❓ User Question<br/>Web/MCP"] -->|Retrieve| E["🔎 Search<br/>Keyword + Vector"]
     E -->|Context| C
-    C -->|Retrieved Sections| F["🤖 AI Synthesis<br/>Generate Answer"]
+    C -->|Retrieved Sections| F["🤖 ${chatLabel}<br/>Synthesizes Answer"]
     F -->|With Citations| G["✓ Answer<br/>+ Citations"]
 
     subgraph Learn["<b>LEARN</b><br/>(Feedback Analysis)"]
@@ -1778,7 +1857,7 @@ function OverviewDiagram() {
 
     subgraph Generate["<b>GENERATE</b><br/>(Solution Creation)"]
         J -->|Select Gap| K["🎯 Pick Gap<br/>Candidate"]
-        K -->|Synthesize| L["🤖 AI Generate<br/>Markdown Proposal"]
+        K -->|Synthesize| L["🤖 ${chatLabel}<br/>Generates Proposal"]
         L -->|Store| M["💾 Save<br/>Proposal"]
     end
 
@@ -1791,27 +1870,34 @@ function OverviewDiagram() {
   );
 }
 
-function AskFlowDiagram() {
+function AskFlowDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractModelInfo> }) {
+  const embedLabel = modelInfo.embeddingModel && modelInfo.embeddingHost
+    ? `${modelInfo.embeddingModel}<br/>(${modelInfo.embeddingHost})`
+    : modelInfo.embeddingModel || "Embedding Model";
+  const chatLabel = modelInfo.chatModel && modelInfo.chatHost
+    ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
+    : modelInfo.chatModel || "Chat Model";
+
   return (
     <div className="mermaid">
       {`graph TD
     Start["❓ Question<br/>Web UI or MCP"]
 
     Start --> Keyword["🔍 Keyword<br/>Search in Postgres"]
-    Keyword --> Vector["🔢 Vector<br/>Search"]
+    Keyword --> Vector["🔢 Vector Search<br/>${embedLabel}"]
     Vector --> Context["📚 Retrieved<br/>Context"]
 
     Context --> DecideMode{Execution<br/>Mode?}
 
     subgraph Direct["<b>DIRECT MODE</b>"]
-        DirAI["🤖 AI Synthesis<br/>(Synchronous)<br/>Using Configured Model"]
+        DirAI["🤖 ${chatLabel}<br/>(Synchronous)<br/>Generates Answer"]
     end
 
     subgraph Queue["<b>QUEUE MODE</b>"]
         JobCreate["📝 Create AI Job"]
         JobQueue["📦 Store in Queue"]
         WatcherClaim["👁️ Watcher<br/>Claims Job"]
-        QueueAI["🤖 AI Synthesis<br/>(When Claimed)"]
+        QueueAI["🤖 ${chatLabel}<br/>(When Claimed)<br/>Generates Answer"]
         JobStore["💾 Store Result"]
         JobCreate --> JobQueue
         JobQueue --> WatcherClaim
@@ -1835,62 +1921,54 @@ function AskFlowDiagram() {
   );
 }
 
-function LearnFlowDiagram() {
+function ContinuousImprovementDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractModelInfo> }) {
+  const chatLabel = modelInfo.chatModel && modelInfo.chatHost
+    ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
+    : modelInfo.chatModel || "Chat Model";
+
   return (
     <div className="mermaid">
-      {`graph LR
-    Auto["🔴 Low Confidence<br/>Answer"]
-    Manual["👤 User Marks<br/>Unhelpful"]
+      {`graph TD
+    Start["❓ Questions Answered"] --> Feedback["📊 Collect Feedback"]
 
-    Auto --> Record["💾 Record<br/>Feedback"]
-    Manual --> Record
+    subgraph Detection["<b>GAP DETECTION</b>"]
+        Feedback -->|Low Confidence| Auto["🔴 Auto-detect"]
+        Feedback -->|User Feedback| Manual["👤 Mark Unhelpful"]
+        Auto --> Analyze["🔍 Analyze Patterns"]
+        Manual --> Analyze
+        Analyze --> Cluster["📊 Cluster Similar<br/>by Semantics"]
+        Cluster --> Gaps["📋 Gap Candidates<br/>with Evidence"]
+    end
 
-    Record --> Identify["📋 Identify<br/>Gap"]
-    Identify --> Cluster["📊 Cluster by<br/>Similarity"]
-    Cluster --> Summary["📋 Group into<br/>Gap Candidate"]
-    Summary --> WebUI["🌐 Web UI<br/>Gaps Section"]
+    Gaps --> Decision{Approved<br/>by Human?}
 
-    Note["<i>User selects a gap<br/>to generate solution</i>"]
+    subgraph Generation["<b>PROPOSAL GENERATION</b>"]
+        Decision -->|Yes| Job["📝 Create AI Job"]
+        Job --> Synthesize["🤖 ${chatLabel}<br/>Generates Proposal"]
+        Synthesize --> ProposalStore["💾 Store Proposal"]
+    end
 
-    WebUI --> Note
+    subgraph Publishing["<b>INTEGRATION</b>"]
+        ProposalStore --> ProposalReview["👁️ Human Reviews<br/>Markdown"]
+        ProposalReview -->|Approved| Publish["🚀 Create Pull<br/>Request"]
+        ProposalReview -->|Changes| Job
+        Publish --> Merge["📬 Merge to<br/>Knowledge Base"]
+    end
 
-    style Auto fill:#e8f1f7,stroke:#285f74,stroke-width:2px
-    style Manual fill:#ffffff,stroke:#65716b,stroke-width:2px
-    style Summary fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px
-    style WebUI fill:#ffffff,stroke:#65716b,stroke-width:2px`}
+    Merge -->|Updated Docs| Start
+
+    style Detection fill:#e8f1f7,stroke:#285f74,stroke-width:2px
+    style Generation fill:#fef9f0,stroke:#8b5a00,stroke-width:2px
+    style Publishing fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px`}
     </div>
   );
 }
 
-function GenerateFlowDiagram() {
-  return (
-    <div className="mermaid">
-      {`graph LR
-    Start["📋 User Selects<br/>Gap Candidate<br/>from Gaps Section"]
-    Start -->|API /proposals/from-gap| Job["📝 Create AI Job<br/>Generate Proposal"]
+function QueueArchitectureDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractModelInfo> }) {
+  const chatLabel = modelInfo.chatModel && modelInfo.chatHost
+    ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
+    : modelInfo.chatModel || "Chat Model";
 
-    Job --> Direct["🤖 Direct Mode<br/>Synthesize<br/>Immediately"]
-    Job --> Queue["📝 Queue Mode<br/>Job Created"]
-
-    Direct --> Store["💾 Store<br/>Proposal"]
-    Queue -->|Watcher| QueueGen["🤖 Watcher<br/>Synthesizes"]
-    QueueGen --> Store
-
-    Store --> WebUI["🌐 Proposals<br/>Section"]
-    WebUI --> Review["👁️ Human<br/>Reviews<br/>Markdown"]
-    Review -->|Approved| Publish["🚀 Publish<br/>to Local Branch"]
-    Review -->|Rejected| Start
-    Publish --> Ready["📬 Ready for<br/>Pull Request"]
-
-    style Start fill:#ffffff,stroke:#65716b,stroke-width:2px
-    style Direct fill:#e8f1f7,stroke:#285f74,stroke-width:2px
-    style Queue fill:#fef9f0,stroke:#8b5a00,stroke-width:2px
-    style Ready fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px`}
-    </div>
-  );
-}
-
-function QueueArchitectureDiagram() {
   return (
     <div className="mermaid">
       {`graph TD
@@ -1898,7 +1976,7 @@ function QueueArchitectureDiagram() {
 
     subgraph Direct["<b>DIRECT MODE</b><br/>(Synchronous)"]
         DirReq["📨 Request"] --> DirAPI["🔌 API<br/>Process"]
-        DirAPI --> DirModel["🤖 Call Model<br/>Directly"]
+        DirAPI --> DirModel["🤖 ${chatLabel}<br/>Called Directly"]
         DirModel --> DirResp["✓ Response<br/>Immediate"]
     end
 
@@ -1906,7 +1984,7 @@ function QueueArchitectureDiagram() {
         QReq["📨 Request"] --> QJobCreate["📝 Create<br/>Job Record"]
         QJobCreate --> QQueue["📦 Job Queue<br/>Postgres"]
         QQueue --> QWatcher["👁️ Watcher<br/>Process"]
-        QWatcher --> QModel["🤖 Call Model<br/>Execute Job"]
+        QWatcher --> QModel["🤖 ${chatLabel}<br/>Called by Watcher"]
         QModel --> QResult["💾 Store<br/>Result"]
         QResult --> QResp["✓ Return<br/>Later"]
     end
