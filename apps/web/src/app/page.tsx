@@ -1770,11 +1770,23 @@ function OverviewDiagram() {
     C -->|Retrieved Sections| F["🤖 AI Synthesis<br/>Generate Answer"]
     F -->|With Citations| G["✓ Answer<br/>+ Citations"]
 
-    G -->|Store| H["💾 Log Answer<br/>& Feedback"]
-    H -->|Analyze| I["📊 Cluster<br/>Knowledge Gaps"]
-    I -->|Generate| J["📝 Markdown<br/>Proposal"]
-    J -->|Review| K["👤 Human<br/>Review"]
-    K -->|Approve| L["📬 Pull<br/>Request"]`}
+    subgraph Learn["<b>LEARN</b><br/>(Feedback Analysis)"]
+        G -->|Store| H["💾 Log Answer<br/>& Feedback"]
+        H -->|Auto-detect Low Conf| I["📋 Identify Gaps<br/>or Manual Flag"]
+        I -->|Group Similar| J["📊 Cluster into<br/>Gap Candidates"]
+    end
+
+    subgraph Generate["<b>GENERATE</b><br/>(Solution Creation)"]
+        J -->|Select Gap| K["🎯 Pick Gap<br/>Candidate"]
+        K -->|Synthesize| L["🤖 AI Generate<br/>Markdown Proposal"]
+        L -->|Store| M["💾 Save<br/>Proposal"]
+    end
+
+    M -->|Review| N["👤 Human<br/>Review"]
+    N -->|Approve| O["📬 Publish<br/>Pull Request"]
+
+    style Learn fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px
+    style Generate fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`}
     </div>
   );
 }
@@ -1827,14 +1839,25 @@ function LearnFlowDiagram() {
   return (
     <div className="mermaid">
       {`graph LR
-    Feedback["👤 User Feedback<br/>Mark Unhelpful"] --> Record["💾 Record<br/>in Database"]
-    Record --> Cluster["📊 Cluster<br/>Analyze Patterns"]
-    Cluster --> Gaps["📋 Knowledge<br/>Gaps"]
-    Gaps --> Generate["🤖 AI Generate<br/>Markdown Proposal<br/>to Fill Gap"]
-    Generate --> Store["💾 Store<br/>Proposal"]
-    Store --> Review["👁️ Human<br/>Review"]
-    Review --> Approve["✓ Approved"]
-    Approve --> PR["📬 Pull<br/>Request<br/>Ready"]`}
+    Auto["🔴 Low Confidence<br/>Answer"]
+    Manual["👤 User Marks<br/>Unhelpful"]
+
+    Auto --> Record["💾 Record<br/>Feedback"]
+    Manual --> Record
+
+    Record --> Identify["📋 Identify<br/>Gap"]
+    Identify --> Cluster["📊 Cluster by<br/>Similarity"]
+    Cluster --> Summary["📋 Group into<br/>Gap Candidate"]
+    Summary --> WebUI["🌐 Web UI<br/>Gaps Section"]
+
+    Note["<i>User selects a gap<br/>to generate solution</i>"]
+
+    WebUI --> Note
+
+    style Auto fill:#e8f1f7,stroke:#285f74,stroke-width:2px
+    style Manual fill:#ffffff,stroke:#65716b,stroke-width:2px
+    style Summary fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px
+    style WebUI fill:#ffffff,stroke:#65716b,stroke-width:2px`}
     </div>
   );
 }
@@ -1843,14 +1866,26 @@ function GenerateFlowDiagram() {
   return (
     <div className="mermaid">
       {`graph LR
-    Gap["📋 Knowledge<br/>Gap Summary"] --> Draft["🤖 AI Draft<br/>Generate Markdown<br/>Using Configured Model"]
-    Draft --> Create["📝 Create<br/>Proposal"]
-    Create --> Store["💾 Store in<br/>Database"]
-    Store --> Review["👁️ Human<br/>Review"]
-    Review -->|Approved| Publish["🚀 Publish<br/>to Branch"]
-    Review -->|Rejected| Gap
-    Publish --> Commit["✓ Commit<br/>Markdown"]
-    Commit --> PR["📬 Pull<br/>Request<br/>Ready"]`}
+    Start["📋 User Selects<br/>Gap Candidate<br/>from Gaps Section"]
+    Start -->|API /proposals/from-gap| Job["📝 Create AI Job<br/>Generate Proposal"]
+
+    Job --> Direct["🤖 Direct Mode<br/>Synthesize<br/>Immediately"]
+    Job --> Queue["📝 Queue Mode<br/>Job Created"]
+
+    Direct --> Store["💾 Store<br/>Proposal"]
+    Queue -->|Watcher| QueueGen["🤖 Watcher<br/>Synthesizes"]
+    QueueGen --> Store
+
+    Store --> WebUI["🌐 Proposals<br/>Section"]
+    WebUI --> Review["👁️ Human<br/>Reviews<br/>Markdown"]
+    Review -->|Approved| Publish["🚀 Publish<br/>to Local Branch"]
+    Review -->|Rejected| Start
+    Publish --> Ready["📬 Ready for<br/>Pull Request"]
+
+    style Start fill:#ffffff,stroke:#65716b,stroke-width:2px
+    style Direct fill:#e8f1f7,stroke:#285f74,stroke-width:2px
+    style Queue fill:#fef9f0,stroke:#8b5a00,stroke-width:2px
+    style Ready fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px`}
     </div>
   );
 }
