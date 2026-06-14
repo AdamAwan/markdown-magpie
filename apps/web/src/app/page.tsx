@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import mermaid from "mermaid";
 
 const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 
@@ -30,7 +31,7 @@ function resolveApiBaseUrl(): string {
 
 type Confidence = "high" | "medium" | "low" | "unknown";
 type Feedback = "helpful" | "unhelpful";
-type ConsoleSection = "ask" | "answered" | "knowledge" | "gaps" | "jobs" | "proposals" | "config";
+type ConsoleSection = "ask" | "answered" | "knowledge" | "gaps" | "jobs" | "proposals" | "config" | "dataflow";
 type AiExecutionMode = "direct" | "queue";
 type AiProviderName = "mock" | "openai-compatible" | "azure-openai" | "codex" | "claude";
 
@@ -573,6 +574,7 @@ export default function HomePage() {
           <NavButton active={activeSection === "gaps"} count={gaps.length} glyph="G" label="Gaps" onClick={() => openSection("gaps")} />
           <NavButton active={activeSection === "jobs"} count={jobs.length} glyph="J" label="Jobs" onClick={() => openSection("jobs")} />
           <NavButton active={activeSection === "proposals"} count={proposals.length} glyph="P" label="Proposals" onClick={() => openSection("proposals")} />
+          <NavButton active={activeSection === "dataflow"} glyph="D" label="Data Flow" onClick={() => openSection("dataflow")} />
           <NavButton active={activeSection === "config"} glyph="C" label="Config" onClick={() => openSection("config")} />
         </nav>
         <div className="sideStatus">
@@ -772,6 +774,12 @@ export default function HomePage() {
               setSelectedProposalId={setSelectedProposalId}
               updateProposalStatus={updateProposalStatus}
             />
+          </section>
+        ) : null}
+
+        {activeSection === "dataflow" ? (
+          <section className="workbench singlePane">
+            <DataFlowPanel />
           </section>
         ) : null}
 
@@ -1666,6 +1674,153 @@ function flattenConfig(value: Record<string, unknown>, prefix = ""): Record<stri
   }, {});
 }
 
+function DataFlowPanel() {
+  const [activeFlow, setActiveFlow] = useState<"overview" | "ask" | "learn" | "generate">("overview");
+
+  useEffect(() => {
+    mermaid.contentLoaded();
+  }, [activeFlow]);
+
+  return (
+    <div className="surface">
+      <div className="surfaceHeader">
+        <h2>Data Flow Architecture</h2>
+      </div>
+      <div className="surfaceBody dataFlowPanel">
+        <div className="flowTabs">
+          <button
+            className={activeFlow === "overview" ? "flowTab active" : "flowTab"}
+            onClick={() => setActiveFlow("overview")}
+          >
+            Overview
+          </button>
+          <button
+            className={activeFlow === "ask" ? "flowTab active" : "flowTab"}
+            onClick={() => setActiveFlow("ask")}
+          >
+            Ask Flow
+          </button>
+          <button
+            className={activeFlow === "learn" ? "flowTab active" : "flowTab"}
+            onClick={() => setActiveFlow("learn")}
+          >
+            Learn Flow
+          </button>
+          <button
+            className={activeFlow === "generate" ? "flowTab active" : "flowTab"}
+            onClick={() => setActiveFlow("generate")}
+          >
+            Generate Flow
+          </button>
+        </div>
+
+        <div className="flowDiagram">
+          {activeFlow === "overview" && <OverviewDiagram />}
+          {activeFlow === "ask" && <AskFlowDiagram />}
+          {activeFlow === "learn" && <LearnFlowDiagram />}
+          {activeFlow === "generate" && <GenerateFlowDiagram />}
+        </div>
+
+        <div className="flowLegend">
+          <h3>System Components</h3>
+          <div className="legendItems">
+            <div className="legendItem">
+              <div className="legendBox" style={{ background: "#fbfcfa", border: "2px solid #285f74" }}></div>
+              <span>Source (Git)</span>
+            </div>
+            <div className="legendItem">
+              <div className="legendBox" style={{ background: "#e8f1f7" }}></div>
+              <span>Processing</span>
+            </div>
+            <div className="legendItem">
+              <div className="legendBox" style={{ background: "#f0f4f0", border: "2px solid #3d6b43" }}></div>
+              <span>Storage (Postgres)</span>
+            </div>
+            <div className="legendItem">
+              <div className="legendBox" style={{ background: "#fef9f0", border: "2px solid #8b5a00" }}></div>
+              <span>AI Provider</span>
+            </div>
+            <div className="legendItem">
+              <div className="legendBox" style={{ background: "#f5f7f2" }}></div>
+              <span>User/API</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OverviewDiagram() {
+  return (
+    <div className="mermaid">
+      {`graph TD
+    A["📄 Git Markdown<br/>Repository"] -->|Sync| B["🔍 Parse &<br/>Index"]
+    B -->|Generate| C["📚 Postgres DB<br/>Indexed Sections"]
+
+    D["❓ User Question<br/>Web/MCP"] -->|Retrieve| E["🔎 Search<br/>Keyword + Vector"]
+    E -->|Context| C
+    C -->|Retrieved Sections| F["🤖 AI Synthesis<br/>Generate Answer"]
+    F -->|With Citations| G["✓ Answer<br/>+ Citations"]
+
+    G -->|Store| H["💾 Log Answer<br/>& Feedback"]
+    H -->|Analyze| I["📊 Cluster<br/>Knowledge Gaps"]
+    I -->|Generate| J["📝 Markdown<br/>Proposal"]
+    J -->|Review| K["👤 Human<br/>Review"]
+    K -->|Approve| L["📬 Pull<br/>Request"]`}
+    </div>
+  );
+}
+
+function AskFlowDiagram() {
+  return (
+    <div className="mermaid">
+      {`graph LR
+    Web["🌐 Web UI<br/>Question"] --> Keyword["🔍 Keyword<br/>Search"]
+    MCP["📡 MCP Client<br/>kb.ask tool"] --> Keyword
+    Keyword --> Vector["🔢 Vector<br/>Search"]
+    Vector --> Context["📚 Context<br/>Sections"]
+    Context --> AI["🤖 AI Synthesis<br/>Generate Answer<br/>Using Configured Model"]
+    AI --> Log["💾 Log &<br/>Store"]
+    Log --> Return["✓ Return<br/>to User"]
+    Return -->|Web UI| WebOut["🌐 Web<br/>Response"]
+    Return -->|MCP| MCPOut["📡 MCP<br/>Response"]`}
+    </div>
+  );
+}
+
+function LearnFlowDiagram() {
+  return (
+    <div className="mermaid">
+      {`graph LR
+    Feedback["👤 User Feedback<br/>Mark Unhelpful"] --> Record["💾 Record<br/>in Database"]
+    Record --> Cluster["📊 Cluster<br/>Analyze Patterns"]
+    Cluster --> Gaps["📋 Knowledge<br/>Gaps"]
+    Gaps --> Generate["🤖 AI Generate<br/>Markdown Proposal<br/>to Fill Gap"]
+    Generate --> Store["💾 Store<br/>Proposal"]
+    Store --> Review["👁️ Human<br/>Review"]
+    Review --> Approve["✓ Approved"]
+    Approve --> PR["📬 Pull<br/>Request<br/>Ready"]`}
+    </div>
+  );
+}
+
+function GenerateFlowDiagram() {
+  return (
+    <div className="mermaid">
+      {`graph LR
+    Gap["📋 Knowledge<br/>Gap Summary"] --> Draft["🤖 AI Draft<br/>Generate Markdown<br/>Using Configured Model"]
+    Draft --> Create["📝 Create<br/>Proposal"]
+    Create --> Store["💾 Store in<br/>Database"]
+    Store --> Review["👁️ Human<br/>Review"]
+    Review -->|Approved| Publish["🚀 Publish<br/>to Branch"]
+    Review -->|Rejected| Gap
+    Publish --> Commit["✓ Commit<br/>Markdown"]
+    Commit --> PR["📬 Pull<br/>Request<br/>Ready"]`}
+    </div>
+  );
+}
+
 function Metric({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "good" | "bad" | "neutral" }) {
   return (
     <div className={`metric ${tone}`}>
@@ -1741,6 +1896,9 @@ function sectionTitle(section: ConsoleSection): string {
   if (section === "proposals") {
     return "Review generated Markdown proposals";
   }
+  if (section === "dataflow") {
+    return "System data flow and architecture";
+  }
   if (section === "config") {
     return "Inspect runtime configuration";
   }
@@ -1767,6 +1925,9 @@ function sectionSubtitle(section: ConsoleSection): string {
   }
   if (section === "proposals") {
     return "Select a proposal and review its target path, rationale, and Markdown.";
+  }
+  if (section === "dataflow") {
+    return "Understand how Markdown, embeddings, questions, and proposals flow through the system.";
   }
   if (section === "config") {
     return "Check execution mode, stores, providers, repository paths, and whether secrets are set.";
