@@ -1675,7 +1675,7 @@ function flattenConfig(value: Record<string, unknown>, prefix = ""): Record<stri
 }
 
 function DataFlowPanel() {
-  const [activeFlow, setActiveFlow] = useState<"overview" | "ask" | "learn" | "generate">("overview");
+  const [activeFlow, setActiveFlow] = useState<"overview" | "ask" | "learn" | "generate" | "queue">("overview");
 
   useEffect(() => {
     mermaid.contentLoaded();
@@ -1712,6 +1712,12 @@ function DataFlowPanel() {
           >
             Generate Flow
           </button>
+          <button
+            className={activeFlow === "queue" ? "flowTab active" : "flowTab"}
+            onClick={() => setActiveFlow("queue")}
+          >
+            Queue Architecture
+          </button>
         </div>
 
         <div className="flowDiagram">
@@ -1719,6 +1725,7 @@ function DataFlowPanel() {
           {activeFlow === "ask" && <AskFlowDiagram />}
           {activeFlow === "learn" && <LearnFlowDiagram />}
           {activeFlow === "generate" && <GenerateFlowDiagram />}
+          {activeFlow === "queue" && <QueueArchitectureDiagram />}
         </div>
 
         <div className="flowLegend">
@@ -1775,16 +1782,43 @@ function OverviewDiagram() {
 function AskFlowDiagram() {
   return (
     <div className="mermaid">
-      {`graph LR
-    Web["🌐 Web UI<br/>Question"] --> Keyword["🔍 Keyword<br/>Search"]
-    MCP["📡 MCP Client<br/>kb.ask tool"] --> Keyword
+      {`graph TD
+    Start["❓ Question<br/>Web UI or MCP"]
+
+    Start --> Keyword["🔍 Keyword<br/>Search in Postgres"]
     Keyword --> Vector["🔢 Vector<br/>Search"]
-    Vector --> Context["📚 Context<br/>Sections"]
-    Context --> AI["🤖 AI Synthesis<br/>Generate Answer<br/>Using Configured Model"]
-    AI --> Log["💾 Log &<br/>Store"]
-    Log --> Return["✓ Return<br/>to User"]
+    Vector --> Context["📚 Retrieved<br/>Context"]
+
+    Context --> DecideMode{Execution<br/>Mode?}
+
+    subgraph Direct["<b>DIRECT MODE</b>"]
+        DirAI["🤖 AI Synthesis<br/>(Synchronous)<br/>Using Configured Model"]
+    end
+
+    subgraph Queue["<b>QUEUE MODE</b>"]
+        JobCreate["📝 Create AI Job"]
+        JobQueue["📦 Store in Queue"]
+        WatcherClaim["👁️ Watcher<br/>Claims Job"]
+        QueueAI["🤖 AI Synthesis<br/>(When Claimed)"]
+        JobStore["💾 Store Result"]
+        JobCreate --> JobQueue
+        JobQueue --> WatcherClaim
+        WatcherClaim --> QueueAI
+        QueueAI --> JobStore
+    end
+
+    DecideMode -->|Immediate| Direct
+    DecideMode -->|Deferred| Queue
+
+    DirAI --> Log["💾 Log &<br/>Store"]
+    JobStore --> Log
+
+    Log --> Return["✓ Answer<br/>with Citations"]
     Return -->|Web UI| WebOut["🌐 Web<br/>Response"]
-    Return -->|MCP| MCPOut["📡 MCP<br/>Response"]`}
+    Return -->|MCP| MCPOut["📡 MCP<br/>Response"]
+
+    style Direct fill:#e8f1f7,stroke:#285f74,stroke-width:2px
+    style Queue fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`}
     </div>
   );
 }
@@ -1817,6 +1851,39 @@ function GenerateFlowDiagram() {
     Review -->|Rejected| Gap
     Publish --> Commit["✓ Commit<br/>Markdown"]
     Commit --> PR["📬 Pull<br/>Request<br/>Ready"]`}
+    </div>
+  );
+}
+
+function QueueArchitectureDiagram() {
+  return (
+    <div className="mermaid">
+      {`graph TD
+    User["👤 User/Client<br/>Web UI or MCP"]
+
+    subgraph Direct["<b>DIRECT MODE</b><br/>(Synchronous)"]
+        DirReq["📨 Request"] --> DirAPI["🔌 API<br/>Process"]
+        DirAPI --> DirModel["🤖 Call Model<br/>Directly"]
+        DirModel --> DirResp["✓ Response<br/>Immediate"]
+    end
+
+    subgraph Queue["<b>QUEUE MODE</b><br/>(Asynchronous)"]
+        QReq["📨 Request"] --> QJobCreate["📝 Create<br/>Job Record"]
+        QJobCreate --> QQueue["📦 Job Queue<br/>Postgres"]
+        QQueue --> QWatcher["👁️ Watcher<br/>Process"]
+        QWatcher --> QModel["🤖 Call Model<br/>Execute Job"]
+        QModel --> QResult["💾 Store<br/>Result"]
+        QResult --> QResp["✓ Return<br/>Later"]
+    end
+
+    User -->|Option 1:<br/>Fast| Direct
+    User -->|Option 2:<br/>Flexible| Queue
+
+    DirResp --> Return["📤 Answer to User"]
+    QResp --> Return
+
+    style Direct fill:#e8f1f7,stroke:#285f74,stroke-width:2px
+    style Queue fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`}
     </div>
   );
 }
