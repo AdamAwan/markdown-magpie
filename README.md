@@ -136,7 +136,7 @@ With the API running, index the bundled cats knowledge base:
 ```bash
 curl -s -X POST http://localhost:4000/repositories/index \
   -H 'content-type: application/json' \
-  -d '{"localPath":"knowledge-bases/cats","repositoryId":"cats","name":"Cats Knowledge Base"}'
+  -d '{"repositoryId":"cats"}'
 ```
 
 Search indexed Markdown sections:

@@ -49,7 +49,10 @@ interface KnowledgeStats {
 interface RuntimeConfig {
   api: Record<string, string | number | null>;
   stores: Record<string, string | number | null>;
-  knowledge: Record<string, string | number | null>;
+  knowledge: {
+    repositoryPath: string | null;
+    repositories?: ConfiguredKnowledgeRepository[];
+  };
   providers: Record<string, unknown>;
   aiRuntime: {
     executionMode: AiExecutionMode;
@@ -70,6 +73,12 @@ interface RuntimeConfig {
     embeddingProvider: string | null;
   };
   watcher: Record<string, string | number | null>;
+}
+
+interface ConfiguredKnowledgeRepository {
+  id: string;
+  name: string;
+  path: string;
 }
 
 interface KnowledgeDocument {
@@ -240,9 +249,7 @@ export default function HomePage() {
   const [answer, setAnswer] = useState<AskResponse | undefined>();
   const [query, setQuery] = useState("");
   const [sections, setSections] = useState<SearchSection[]>([]);
-  const [repoPath, setRepoPath] = useState("knowledge-bases/cats");
   const [repoId, setRepoId] = useState("cats");
-  const [repoName, setRepoName] = useState("Cats Knowledge Base");
   const [uploadPath, setUploadPath] = useState("uploaded/cats-note.md");
   const [uploadContent, setUploadContent] = useState("");
   const [loading, setLoading] = useState(false);
@@ -268,6 +275,13 @@ export default function HomePage() {
   useEffect(() => {
     void refresh();
   }, []);
+
+  useEffect(() => {
+    const configuredRepositoryIds = config?.knowledge.repositories?.map((repository) => repository.id) ?? [];
+    if (configuredRepositoryIds.length > 0 && !configuredRepositoryIds.includes(repoId)) {
+      setRepoId(configuredRepositoryIds[0]);
+    }
+  }, [config, repoId]);
 
   useEffect(() => {
     if (!message) {
@@ -523,7 +537,7 @@ export default function HomePage() {
 
   async function indexRepository(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!repoPath.trim()) {
+    if (!repoId.trim()) {
       return;
     }
 
@@ -531,9 +545,7 @@ export default function HomePage() {
     clearMessage();
     try {
       const summary = await apiPost<IndexRepositoryResponse>("/repositories/index", {
-        localPath: repoPath.trim(),
-        repositoryId: repoId.trim() || undefined,
-        name: repoName.trim() || undefined
+        repositoryId: repoId.trim()
       });
       showMessage(
         `Indexed ${summary.repository.name} with ${summary.documentCount} documents and ${summary.sectionCount} sections.`,
@@ -709,21 +721,18 @@ export default function HomePage() {
             </div>
             <div className="surface">
               <div className="surfaceHeader">
-                <h2>Add Repository</h2>
+                <h2>Configured Knowledge Bases</h2>
                 <span className="pill" title="Index a local Markdown repository or folder">
-                  Repository
+                  Configured
                 </span>
               </div>
               <div className="surfaceBody">
                 <RepositoryPanel
+                  configuredRepositories={config?.knowledge.repositories ?? []}
                   indexing={indexingRepo}
                   onIndex={indexRepository}
                   repoId={repoId}
-                  repoName={repoName}
-                  repoPath={repoPath}
                   setRepoId={setRepoId}
-                  setRepoName={setRepoName}
-                  setRepoPath={setRepoPath}
                 />
               </div>
             </div>
@@ -1206,55 +1215,49 @@ function UploadPanel({
 }
 
 function RepositoryPanel({
+  configuredRepositories,
   indexing,
   onIndex,
   repoId,
-  repoName,
-  repoPath,
-  setRepoId,
-  setRepoName,
-  setRepoPath
+  setRepoId
 }: {
+  configuredRepositories: ConfiguredKnowledgeRepository[];
   indexing: boolean;
   onIndex: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   repoId: string;
-  repoName: string;
-  repoPath: string;
   setRepoId: (value: string) => void;
-  setRepoName: (value: string) => void;
-  setRepoPath: (value: string) => void;
 }) {
+  if (configuredRepositories.length === 0) {
+    return <p className="empty">No knowledge bases are configured. Add KNOWLEDGE_REPOSITORIES to the API environment.</p>;
+  }
+
   return (
     <form className="repositoryForm" onSubmit={onIndex}>
       <label className="field">
-        <span>Local Path</span>
-        <input
-          onChange={(event) => setRepoPath(event.target.value)}
-          placeholder="knowledge-bases/cats"
-          title="Path to a local folder containing Markdown files. Relative paths resolve from the app workspace."
-          value={repoPath}
-        />
-      </label>
-      <label className="field">
-        <span>Repository ID</span>
-        <input
+        <span>Knowledge Base</span>
+        <select
           onChange={(event) => setRepoId(event.target.value)}
-          placeholder="cats"
-          title="Optional stable ID used internally for this knowledge repository."
+          title="Configured knowledge bases come from the API environment."
           value={repoId}
-        />
+        >
+          {configuredRepositories.map((repository) => (
+            <option key={repository.id} value={repository.id}>
+              {repository.name}
+            </option>
+          ))}
+        </select>
       </label>
-      <label className="field">
-        <span>Name</span>
-        <input
-          onChange={(event) => setRepoName(event.target.value)}
-          placeholder="Cats Knowledge Base"
-          title="Optional display name for this knowledge repository."
-          value={repoName}
-        />
-      </label>
-      <button className="button" disabled={indexing || !repoPath.trim()} title="Index Markdown files from this repository" type="submit">
-        {indexing ? "Indexing" : "Index Repository"}
+      <div className="repositorySelectionMeta">
+        {configuredRepositories.map((repository) =>
+          repository.id === repoId ? (
+            <span key={repository.id} title={repository.path}>
+              {repository.path}
+            </span>
+          ) : null
+        )}
+      </div>
+      <button className="button" disabled={indexing || !repoId.trim()} title="Index Markdown files from this configured knowledge base" type="submit">
+        {indexing ? "Indexing" : "Index Knowledge Base"}
       </button>
     </form>
   );

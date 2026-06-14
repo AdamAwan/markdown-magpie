@@ -16,6 +16,10 @@ import { answerQuestion, createChatProvider, createEmbeddingProvider, type ChatP
 import { DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS, InMemoryAiJobQueue } from "./ai-job-queue.js";
 import { embedPendingSections } from "./embed-sections.js";
 import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
+import {
+  getConfiguredKnowledgeRepositories,
+  resolveKnowledgeRepositorySelection
+} from "./knowledge-repositories.js";
 import { PostgresAiJobQueue } from "./postgres-ai-job-queue.js";
 import { PostgresKnowledgeStore } from "./postgres-knowledge-store.js";
 import { PostgresProposalStore } from "./postgres-proposal-store.js";
@@ -42,6 +46,7 @@ const knowledgeIndex = knowledgeStore
 const questionLogs = createQuestionLogStore();
 const proposals = createProposalStore();
 let runtimeConfig = createInitialRuntimeConfig();
+const configuredKnowledgeRepositories = getConfiguredKnowledgeRepositories();
 
 const server = createServer(async (request, response) => {
   try {
@@ -525,17 +530,20 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
 
 async function handleIndexRepository(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const payload = await readJsonBody<{ localPath?: string; repositoryId?: string; name?: string }>(request);
-  const localPath = payload.localPath?.trim() || process.env.KNOWLEDGE_REPO_PATH;
+  let selection;
 
-  if (!localPath) {
-    writeJson(response, 400, { error: "local_path_required" });
+  try {
+    selection = resolveKnowledgeRepositorySelection(payload, configuredKnowledgeRepositories);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "configured_repository_required";
+    writeJson(response, 400, { error: knowledgeRepositoryErrorCode(message), message });
     return;
   }
 
   const summary = await knowledgeIndex.indexLocalRepository({
-    localPath,
-    repositoryId: payload.repositoryId,
-    name: payload.name
+    localPath: selection.localPath,
+    repositoryId: selection.repositoryId,
+    name: selection.name
   });
 
   writeJson(response, 200, summary);
@@ -701,7 +709,8 @@ function getRuntimeConfig() {
       databaseUrl: maskConnectionString(process.env.DATABASE_URL)
     },
     knowledge: {
-      repositoryPath: process.env.KNOWLEDGE_REPO_PATH ?? null
+      repositoryPath: process.env.KNOWLEDGE_REPO_PATH ?? null,
+      repositories: configuredKnowledgeRepositories
     },
     providers: {
       llmProvider: process.env.LLM_PROVIDER ?? "mock",
@@ -770,6 +779,18 @@ function maskConnectionString(value: string | undefined): string | null {
   } catch {
     return secretState(value);
   }
+}
+
+function knowledgeRepositoryErrorCode(message: string): string {
+  if (message === "local_path_required") {
+    return "local_path_required";
+  }
+
+  if (message.includes("localPath is not accepted")) {
+    return "local_path_not_allowed";
+  }
+
+  return "configured_repository_required";
 }
 
 function secretState(value: string | undefined): "set" | "not set" {

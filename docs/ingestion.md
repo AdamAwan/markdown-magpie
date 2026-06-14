@@ -4,11 +4,23 @@ Markdown Magpie indexes Git-backed Markdown repositories through the API.
 
 ## Local Repository Indexing
 
+Configure one or more server-side knowledge bases in the API environment:
+
+```env
+KNOWLEDGE_REPOSITORIES=[{"id":"cats","name":"Cats Knowledge Base","path":"knowledge-bases/cats"},{"id":"docs","name":"Product Docs","path":"../product-docs"}]
+```
+
+Then index a configured repository by ID:
+
 ```bash
 curl -s -X POST http://localhost:4000/repositories/index \
   -H 'content-type: application/json' \
-  -d '{"localPath":"../markdown-magpie-kb"}'
+  -d '{"repositoryId":"cats"}'
 ```
+
+The API rejects arbitrary client-supplied local paths when `KNOWLEDGE_REPOSITORIES` is set.
+`KNOWLEDGE_REPO_PATH` remains available as a legacy single-repository fallback when the
+multi-repository variable is unset.
 
 The API:
 
