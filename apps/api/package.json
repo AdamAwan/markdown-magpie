@@ -17,10 +17,10 @@
     "@magpie/retrieval": "file:../../packages/retrieval",
     "@types/pg": "^8.20.0",
     "pg": "^8.21.0",
-    "tsx": "^4.19.4"
+    "tsx": "^4.22.4"
   },
   "devDependencies": {
-    "@types/node": "^22.15.18",
-    "typescript": "^5.8.3"
+    "@types/node": "^25.9.3",
+    "typescript": "^6.0.3"
   }
 }

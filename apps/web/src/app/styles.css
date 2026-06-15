@@ -16,6 +16,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -717,9 +718,19 @@ code {
 
 .repositoryForm {
   display: grid;
-  grid-template-columns: minmax(240px, 1.4fr) minmax(150px, 0.8fr) minmax(180px, 1fr) auto;
+  grid-template-columns: minmax(240px, 1fr) minmax(180px, 1fr) auto;
   gap: 12px;
   align-items: end;
+}
+
+.repositorySelectionMeta {
+  min-width: 0;
+  color: #65716b;
+  font-size: 13px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .repositoryContextList,

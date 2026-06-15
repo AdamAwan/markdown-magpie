@@ -26,7 +26,7 @@ Liveness check.
 ### `GET /config`
 
 Returns the resolved runtime configuration: API settings, storage backends (with the
-database URL masked), configured knowledge repository path, provider settings and secret
+database URL masked), configured knowledge repositories, provider settings and secret
 presence (`set` / `not set`), the AI runtime (current execution mode and provider, plus the
 available `direct` and `queue` providers), watcher settings, and retrieval settings including
 `retrieval.mode` (`hybrid` or `keyword`) and a plain-language `reason`.
@@ -79,13 +79,20 @@ Searches indexed sections. `limit` defaults to `5`. When hybrid retrieval is act
 Indexes a local Git-backed Markdown repository. See [ingestion.md](ingestion.md).
 
 ```json
-{ "localPath": "../markdown-magpie-kb", "repositoryId": "kb", "name": "Knowledge Base" }
+{ "repositoryId": "cats" }
 ```
 
-`localPath` falls back to the `KNOWLEDGE_REPO_PATH` environment variable. `repositoryId` and
-`name` are optional and derived from the path when omitted.
+`repositoryId` must match an entry in the `KNOWLEDGE_REPOSITORIES` environment variable.
+When exactly one repository is configured, `repositoryId` may be omitted. The API indexes
+only configured paths; arbitrary `localPath` values are rejected while configured repositories
+exist.
 
-- `400 local_path_required` — no path supplied and no env fallback.
+For older single-repository deployments, `KNOWLEDGE_REPO_PATH` is still used as a fallback
+when `KNOWLEDGE_REPOSITORIES` is unset.
+
+- `400 configured_repository_required` — multiple repositories are configured and no valid ID was supplied.
+- `400 local_path_not_allowed` — a client attempted to submit an arbitrary server path.
+- `400 local_path_required` — no repository is configured and no legacy path was supplied.
 - `200` — an indexed-repository summary: `{ repository, documentCount, sectionCount, commitSha }`.
 
 ### `GET /repositories`
