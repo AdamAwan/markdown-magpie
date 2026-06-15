@@ -213,6 +213,12 @@ p {
   color: #17211d;
 }
 
+.button.danger {
+  border-color: #b3261e;
+  background: #b3261e;
+  color: #ffffff;
+}
+
 .button:disabled,
 .chip:disabled,
 .tab:disabled {
@@ -1283,4 +1289,18 @@ pre {
   height: 24px;
   border-radius: 4px;
   flex-shrink: 0;
+}
+
+.resetControl {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.resetConfirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }

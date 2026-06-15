@@ -10,6 +10,7 @@ export interface QuestionLogStore {
   get(id: string): Promise<QuestionLog | undefined>;
   list(limit: number): Promise<QuestionLog[]>;
   listGapCandidates(limit: number): Promise<GapCandidate[]>;
+  reset(): Promise<void>;
 }
 
 export class InMemoryQuestionLogStore implements QuestionLogStore {
@@ -109,6 +110,10 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     return [...this.logs.values()]
       .sort((left, right) => right.askedAt.localeCompare(left.askedAt))
       .slice(0, limit);
+  }
+
+  async reset(): Promise<void> {
+    this.logs.clear();
   }
 
   async listGapCandidates(limit: number): Promise<GapCandidate[]> {

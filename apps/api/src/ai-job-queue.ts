@@ -95,6 +95,10 @@ export class InMemoryAiJobQueue implements AiJobQueue {
     return [...this.jobs.values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 
+  async reset(): Promise<void> {
+    this.jobs.clear();
+  }
+
   private getExisting(jobId: string): AiJob {
     const job = this.jobs.get(jobId);
     if (!job) {
