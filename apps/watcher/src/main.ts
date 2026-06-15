@@ -12,7 +12,7 @@ import type {
 } from "@magpie/core";
 import { buildPrompt, parseJobOutput } from "./job-prompts.js";
 
-const apiBaseUrl = process.env.API_BASE_URL ?? "http://localhost:4000";
+const apiBaseUrl = trimTrailingSlash(process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/api$/, "");
 const watcherName = process.env.WATCHER_NAME ?? "local-dev-watcher";
 const defaultProvider = process.env.AI_PROVIDER ?? process.env.AI_JOB_PROVIDER ?? "mock";
 const pollIntervalMs = Number.parseInt(process.env.WATCHER_POLL_INTERVAL_MS ?? "2000", 10);
@@ -311,7 +311,7 @@ function providerForJob(job: AiJob): string {
 }
 
 async function postJson<TResponse>(path: string, body: unknown): Promise<TResponse> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const response = await fetch(apiUrl(path), {
     method: "POST",
     headers: {
       "content-type": "application/json"
@@ -354,6 +354,10 @@ function requiredEnv(name: string): string {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function apiUrl(path: string): string {
+  return path.startsWith("/api/") || path === "/api" ? `${apiBaseUrl}${path}` : `${apiBaseUrl}/api${path}`;
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

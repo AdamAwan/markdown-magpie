@@ -25,7 +25,7 @@ interface QuestionResponse {
   };
 }
 
-const apiBaseUrl = (process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/+$/, "");
+const apiBaseUrl = (process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/+$/, "").replace(/\/api$/, "");
 const timeoutMs = Number.parseInt(process.env.EVAL_TIMEOUT_MS ?? "30000", 10);
 const pollIntervalMs = 500;
 const cases: EvalCase[] = [
@@ -101,12 +101,12 @@ async function ask(question: string): Promise<{ answer: string; citations: unkno
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`);
+  const response = await fetch(apiUrl(path));
   return readResponse<T>(response, path);
 }
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const response = await fetch(apiUrl(path), {
     method: "POST",
     headers: {
       "content-type": "application/json"
@@ -127,6 +127,10 @@ async function readResponse<T>(response: Response, path: string): Promise<T> {
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function apiUrl(path: string): string {
+  return path.startsWith("/api/") || path === "/api" ? `${apiBaseUrl}${path}` : `${apiBaseUrl}/api${path}`;
 }
 
 void main();

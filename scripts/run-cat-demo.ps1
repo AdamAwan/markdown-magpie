@@ -183,7 +183,7 @@ npm run dev:web *>&1 | Tee-Object -FilePath '$webLog'
 
 Write-Step "Starting Markdown Magpie cat demo"
 Start-DemoWindow -Title "API" -Command $apiCommand
-Wait-ForHttp -Url "http://localhost:$ApiPort/health"
+Wait-ForHttp -Url "http://localhost:$ApiPort/api/health"
 
 if (-not $SkipIndex) {
   Write-Step "Indexing cats knowledge base"
@@ -192,7 +192,7 @@ if (-not $SkipIndex) {
     repositoryId = "cats"
     name = "Cats Knowledge Base"
   } | ConvertTo-Json
-  Invoke-RestMethod "http://localhost:$ApiPort/repositories/index" -Method Post -ContentType "application/json" -Body $body | Out-Null
+  Invoke-RestMethod "http://localhost:$ApiPort/api/repositories/index" -Method Post -ContentType "application/json" -Body $body | Out-Null
 }
 
 Start-DemoWindow -Title "Watcher" -Command $watcherCommand

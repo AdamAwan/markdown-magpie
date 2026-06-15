@@ -4,7 +4,7 @@ AI work is represented as queueable jobs so Markdown Magpie can use hosted model
 
 ## Endpoints
 
-### `POST /ai-jobs`
+### `POST /api/ai-jobs`
 
 Creates a job.
 
@@ -20,7 +20,7 @@ Creates a job.
 }
 ```
 
-### `POST /ai-jobs/claim`
+### `POST /api/ai-jobs/claim`
 
 Claims the oldest pending job matching the worker's accepted types.
 
@@ -52,7 +52,7 @@ or:
 }
 ```
 
-### `POST /ai-jobs/:id/complete`
+### `POST /api/ai-jobs/:id/complete`
 
 Completes a claimed job.
 
@@ -66,7 +66,7 @@ Completes a claimed job.
 }
 ```
 
-### `POST /ai-jobs/:id/fail`
+### `POST /api/ai-jobs/:id/fail`
 
 Marks a job as failed.
 
@@ -81,7 +81,7 @@ Marks a job as failed.
 Gap candidates can be turned into proposal jobs:
 
 ```json
-POST /proposals/from-gap
+POST /api/proposals/from-gap
 {
   "summary": "No source material found for: How do I trim claws?",
   "targetPath": "knowledge-bases/cats/proposed-gap.md"
@@ -92,14 +92,14 @@ The API enqueues a `draft_markdown_proposal` job with the triggering questions a
 When the watcher completes that job, the API stores the generated Markdown proposal for review.
 
 ```bash
-curl -s http://localhost:4000/proposals
+curl -s http://localhost:4000/api/proposals
 ```
 
 A proposal moves through a status lifecycle: `draft`, `ready`, `branch-pushed`, `pr-opened`,
 `merged`, `rejected`. Update it directly:
 
 ```bash
-POST /proposals/:id/status
+POST /api/proposals/:id/status
 { "status": "ready" }
 ```
 
@@ -107,7 +107,7 @@ Once a proposal is `ready` and its target path maps to an indexed Git checkout, 
 published to a local branch:
 
 ```bash
-POST /proposals/:id/publish
+POST /api/proposals/:id/publish
 ```
 
 This commits the Markdown to a new `magpie/proposal-*` branch via the `local-git` publisher

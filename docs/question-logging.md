@@ -27,12 +27,12 @@ Each question log records:
 ## Endpoints
 
 ```bash
-GET /questions
-GET /questions/:id
-POST /questions/:id/feedback
-POST /questions/:id/gap
-DELETE /questions/:id/gap
-GET /gaps/candidates
+GET /api/questions
+GET /api/questions/:id
+POST /api/questions/:id/feedback
+POST /api/questions/:id/gap
+DELETE /api/questions/:id/gap
+GET /api/gaps/candidates
 ```
 
 Gap candidates are grouped by gap summary. Answer synthesis asks the model to return structured JSON with `isKnowledgeGap` and `gapSummary`; when `isKnowledgeGap` is true, the answer is logged as low confidence and becomes eligible for gap grouping.

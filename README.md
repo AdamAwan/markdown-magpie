@@ -134,7 +134,7 @@ The root `npm run dev` starts every workspace dev script that exists. Prefer the
 With the API running, index the bundled cats knowledge base:
 
 ```bash
-curl -s -X POST http://localhost:4000/repositories/index \
+curl -s -X POST http://localhost:4000/api/repositories/index \
   -H 'content-type: application/json' \
   -d '{"repositoryId":"cats"}'
 ```
@@ -142,13 +142,13 @@ curl -s -X POST http://localhost:4000/repositories/index \
 Search indexed Markdown sections:
 
 ```bash
-curl -s 'http://localhost:4000/search?q=claws'
+curl -s 'http://localhost:4000/api/search?q=claws'
 ```
 
 Ask a question:
 
 ```bash
-curl -s http://localhost:4000/ask \
+curl -s http://localhost:4000/api/ask \
   -H 'content-type: application/json' \
   -d '{"question":"How should I introduce a new cat food?"}'
 ```
@@ -156,8 +156,8 @@ curl -s http://localhost:4000/ask \
 Inspect logged questions and gap candidates:
 
 ```bash
-curl -s http://localhost:4000/questions
-curl -s http://localhost:4000/gaps/candidates
+curl -s http://localhost:4000/api/questions
+curl -s http://localhost:4000/api/gaps/candidates
 ```
 
 The PowerShell cats demo starts the API in queued mode, starts the watcher, starts the web console, indexes `knowledge-bases/cats`, and writes logs under `tmp/`:
@@ -384,7 +384,7 @@ http://your-host:3000
 The API health endpoint is:
 
 ```text
-http://localhost:4000/health
+http://localhost:4000/api/health
 ```
 
 Expected response:
@@ -400,7 +400,7 @@ The web console has a **Knowledge** section where you can paste or upload Markdo
 You can also upload Markdown through the API:
 
 ```bash
-curl -s http://localhost:4000/documents/upload \
+curl -s http://localhost:4000/api/documents/upload \
   -H 'content-type: application/json' \
   -d '{
     "repositoryId": "showcase",
@@ -421,7 +421,7 @@ curl -s http://localhost:4000/documents/upload \
 Then ask:
 
 ```bash
-curl -s http://localhost:4000/ask \
+curl -s http://localhost:4000/api/ask \
   -H 'content-type: application/json' \
   -d '{"question":"What cat warning signs are urgent?"}'
 ```
@@ -429,8 +429,8 @@ curl -s http://localhost:4000/ask \
 In queue mode, the API returns a job first. The watcher should complete it shortly. Refresh the web UI or inspect jobs:
 
 ```bash
-curl -s http://localhost:4000/ai-jobs
-curl -s http://localhost:4000/questions
+curl -s http://localhost:4000/api/ai-jobs
+curl -s http://localhost:4000/api/questions
 ```
 
 ### 6. Create a Proposal Demo
@@ -546,7 +546,7 @@ If the API is offline in the UI, check:
 
 ```bash
 docker compose logs api
-curl -s http://localhost:4000/health
+curl -s http://localhost:4000/api/health
 ```
 
 If migrations fail, check:
@@ -580,7 +580,7 @@ OPENAI_COMPATIBLE_MODEL=...
 If the web UI loads but cannot call the API from a remote machine, check that port `4000` is reachable from your browser:
 
 ```text
-http://your-host:4000/health
+http://your-host:4000/api/health
 ```
 
 If that URL works but the UI still fails, set `NEXT_PUBLIC_API_BASE_URL` to the exact public API URL in `.env.compose` and restart the web container:
