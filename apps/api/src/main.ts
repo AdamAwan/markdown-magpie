@@ -571,39 +571,86 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
   });
 }
 
-async function handleIndexRepository(request: IncomingMessage, response: ServerResponse): Promise<void> {
-  const payload = await readJsonBody<{ flowId?: string; localPath?: string; repositoryId?: string; name?: string }>(request);
+async function indexRepositoryForPayload(payload: {
+  flowId?: string;
+  localPath?: string;
+  repositoryId?: string;
+  name?: string;
+}): Promise<Awaited<ReturnType<typeof knowledgeIndex.indexLocalRepository>>> {
   let selection: { localPath: string; repositoryId?: string; name?: string };
 
+  const indexableDestinations = configuredKnowledgeDestinations.filter(
+    (destination) => destination.kind === "local" || destination.kind === "git"
+  );
+  if (indexableDestinations.length > 0) {
+    const configured = selectDestinationForIndex(payload, indexableDestinations);
+    const localPath = await resolveConfiguredRepositoryLocalPath(configured);
+    selection = { localPath, repositoryId: configured.id, name: configured.name };
+  } else if (configuredKnowledgeDestinations.length > 0) {
+    throw new Error("configured_repository_not_indexable");
+  } else {
+    selection = resolveKnowledgeRepositorySelection(payload, configuredKnowledgeRepositories);
+  }
+
+  return knowledgeIndex.indexLocalRepository({
+    localPath: selection.localPath,
+    repositoryId: selection.repositoryId,
+    name: selection.name
+  });
+}
+
+async function handleIndexRepository(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const payload = await readJsonBody<{ flowId?: string; localPath?: string; repositoryId?: string; name?: string }>(request);
+
+  let summary: Awaited<ReturnType<typeof indexRepositoryForPayload>>;
   try {
-    const indexableDestinations = configuredKnowledgeDestinations.filter((destination) => destination.kind === "local" || destination.kind === "git");
-    if (indexableDestinations.length > 0) {
-      const configured = selectDestinationForIndex(payload, indexableDestinations);
-      const localPath = await resolveConfiguredRepositoryLocalPath(configured);
-      selection = {
-        localPath,
-        repositoryId: configured.id,
-        name: configured.name
-      };
-    } else if (configuredKnowledgeDestinations.length > 0) {
-      throw new Error("configured_repository_not_indexable");
-    } else {
-      selection = resolveKnowledgeRepositorySelection(payload, configuredKnowledgeRepositories);
-    }
+    summary = await indexRepositoryForPayload(payload);
   } catch (error) {
     const message = error instanceof Error ? error.message : "configured_repository_required";
     writeJson(response, 400, { error: knowledgeRepositoryErrorCode(message), message });
     return;
   }
 
-  const summary = await knowledgeIndex.indexLocalRepository({
-    localPath: selection.localPath,
-    repositoryId: selection.repositoryId,
-    name: selection.name
-  });
-
   writeJson(response, 200, summary);
   void embedSectionsInBackground();
+}
+
+function configuredIndexPayloads(): Array<{ flowId?: string; repositoryId?: string }> {
+  if (configuredKnowledgeFlows.length > 0) {
+    return configuredKnowledgeFlows.map((flow) => ({ flowId: flow.id }));
+  }
+
+  const indexableDestinations = configuredKnowledgeDestinations.filter(
+    (destination) => destination.kind === "local" || destination.kind === "git"
+  );
+  if (indexableDestinations.length > 0) {
+    return indexableDestinations.map((destination) => ({ repositoryId: destination.id }));
+  }
+
+  return configuredKnowledgeRepositories.map((repository) => ({ repositoryId: repository.id }));
+}
+
+async function seedConfiguredKnowledge(): Promise<{ indexed: number; failures: Array<{ target: string; message: string }> }> {
+  await syncConfiguredGitCheckouts();
+
+  const payloads = configuredIndexPayloads();
+  const failures: Array<{ target: string; message: string }> = [];
+  let indexed = 0;
+
+  for (const payload of payloads) {
+    const target = payload.flowId ?? payload.repositoryId ?? "default";
+    try {
+      await indexRepositoryForPayload(payload);
+      indexed += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "index_failed";
+      console.warn(`Failed to re-index ${target} during reset: ${message}`);
+      failures.push({ target, message });
+    }
+  }
+
+  void embedSectionsInBackground();
+  return { indexed, failures };
 }
 
 function selectDestinationForIndex(
