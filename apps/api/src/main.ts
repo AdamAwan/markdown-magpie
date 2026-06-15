@@ -571,27 +571,33 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
   });
 }
 
-async function indexRepositoryForPayload(payload: {
+async function resolveIndexSelection(payload: {
   flowId?: string;
   localPath?: string;
   repositoryId?: string;
   name?: string;
-}): Promise<Awaited<ReturnType<typeof knowledgeIndex.indexLocalRepository>>> {
-  let selection: { localPath: string; repositoryId?: string; name?: string };
-
+}): Promise<{ localPath: string; repositoryId?: string; name?: string }> {
   const indexableDestinations = configuredKnowledgeDestinations.filter(
     (destination) => destination.kind === "local" || destination.kind === "git"
   );
   if (indexableDestinations.length > 0) {
     const configured = selectDestinationForIndex(payload, indexableDestinations);
     const localPath = await resolveConfiguredRepositoryLocalPath(configured);
-    selection = { localPath, repositoryId: configured.id, name: configured.name };
-  } else if (configuredKnowledgeDestinations.length > 0) {
-    throw new Error("configured_repository_not_indexable");
-  } else {
-    selection = resolveKnowledgeRepositorySelection(payload, configuredKnowledgeRepositories);
+    return { localPath, repositoryId: configured.id, name: configured.name };
   }
+  if (configuredKnowledgeDestinations.length > 0) {
+    throw new Error("configured_repository_not_indexable");
+  }
+  return resolveKnowledgeRepositorySelection(payload, configuredKnowledgeRepositories);
+}
 
+async function indexRepositoryForPayload(payload: {
+  flowId?: string;
+  localPath?: string;
+  repositoryId?: string;
+  name?: string;
+}): Promise<Awaited<ReturnType<typeof knowledgeIndex.indexLocalRepository>>> {
+  const selection = await resolveIndexSelection(payload);
   return knowledgeIndex.indexLocalRepository({
     localPath: selection.localPath,
     repositoryId: selection.repositoryId,
@@ -602,14 +608,20 @@ async function indexRepositoryForPayload(payload: {
 async function handleIndexRepository(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const payload = await readJsonBody<{ flowId?: string; localPath?: string; repositoryId?: string; name?: string }>(request);
 
-  let summary: Awaited<ReturnType<typeof indexRepositoryForPayload>>;
+  let selection: { localPath: string; repositoryId?: string; name?: string };
   try {
-    summary = await indexRepositoryForPayload(payload);
+    selection = await resolveIndexSelection(payload);
   } catch (error) {
     const message = error instanceof Error ? error.message : "configured_repository_required";
     writeJson(response, 400, { error: knowledgeRepositoryErrorCode(message), message });
     return;
   }
+
+  const summary = await knowledgeIndex.indexLocalRepository({
+    localPath: selection.localPath,
+    repositoryId: selection.repositoryId,
+    name: selection.name
+  });
 
   writeJson(response, 200, summary);
   void embedSectionsInBackground();
