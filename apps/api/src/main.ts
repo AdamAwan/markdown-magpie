@@ -128,6 +128,11 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return;
   }
 
+  if (request.method === "POST" && path === "/admin/reset") {
+    await handleResetData(response);
+    return;
+  }
+
   if (request.method === "POST" && path === "/ask") {
     await handleAsk(request, response);
     return;
@@ -390,6 +395,31 @@ async function handleUpdateRuntimeConfig(request: IncomingMessage, response: Ser
     aiProvider: nextProvider
   };
   writeJson(response, 200, getRuntimeConfig());
+}
+
+async function handleResetData(response: ServerResponse): Promise<void> {
+  // Clear all user-generated state first, so even if re-seeding fails the app
+  // is left in a clean (empty) but recoverable state.
+  await questionLogs.reset();
+  await proposals.reset();
+  await aiJobs.reset();
+  if (knowledgeStore) {
+    await knowledgeStore.reset();
+  }
+  knowledgeIndex.reset();
+
+  // Reset runtime AI config back to the .env-derived defaults.
+  runtimeConfig = createInitialRuntimeConfig();
+
+  // Rebuild the knowledge bases from configuration.
+  const seed = await seedConfiguredKnowledge();
+
+  writeJson(response, 200, {
+    ok: true,
+    reindexed: seed.indexed,
+    failures: seed.failures,
+    stats: knowledgeIndex.getStats()
+  });
 }
 
 async function handleCreateProposalFromGap(request: IncomingMessage, response: ServerResponse): Promise<void> {
