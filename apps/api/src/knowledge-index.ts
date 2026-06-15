@@ -281,6 +281,12 @@ export class InMemoryKnowledgeIndex {
       sectionCount: this.sections.size
     };
   }
+
+  reset(): void {
+    this.documents.clear();
+    this.sections.clear();
+    this.repositories.clear();
+  }
 }
 
 async function findMarkdownFiles(root: string): Promise<string[]> {

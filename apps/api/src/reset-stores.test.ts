@@ -4,6 +4,7 @@ import { InMemoryAiJobQueue } from "./ai-job-queue.js";
 import { InMemoryQuestionLogStore } from "./question-log-store.js";
 import { InMemoryProposalStore } from "./proposal-store.js";
 import { PostgresKnowledgeStore } from "./postgres-knowledge-store.js";
+import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
 
 test("InMemoryAiJobQueue.reset removes all jobs", async () => {
   const queue = new InMemoryAiJobQueue();
@@ -42,6 +43,20 @@ test("InMemoryProposalStore.reset removes all proposals", async () => {
   await store.reset();
 
   assert.deepEqual(await store.list(50), []);
+});
+
+test("InMemoryKnowledgeIndex.reset empties the index stats", async () => {
+  const index = new InMemoryKnowledgeIndex();
+  await index.indexMarkdownDocuments({
+    repositoryId: "cats",
+    name: "Cats",
+    documents: [{ path: "care.md", content: "# Care\n\nFeed the cat." }]
+  });
+  assert.ok(index.getStats().sectionCount > 0);
+
+  index.reset();
+
+  assert.deepEqual(index.getStats(), { repositoryCount: 0, documentCount: 0, sectionCount: 0 });
 });
 
 const databaseUrl = process.env.DATABASE_URL;
