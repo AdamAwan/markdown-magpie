@@ -20,6 +20,7 @@ FROM deps AS build
 
 COPY tsconfig.base.json tsconfig.check.json ./
 COPY apps apps
+COPY knowledge-bases knowledge-bases
 COPY packages packages
 COPY scripts scripts
 
@@ -37,6 +38,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules node_modules
 COPY --from=build /app/apps apps
+COPY --from=build /app/knowledge-bases knowledge-bases
 COPY --from=build /app/packages packages
 COPY --from=build /app/scripts scripts
 COPY --from=build /app/tsconfig.base.json ./tsconfig.base.json
