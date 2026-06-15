@@ -1,7 +1,8 @@
 # HTTP API Reference
 
-The API is a plain Node HTTP server. It listens on `PORT` (default `4000`), so the base URL
-in local development is `http://localhost:4000`.
+The API is a plain Node HTTP server. It listens on `PORT` (default `4000`), and all API
+endpoints are served under `/api`. In local development the API base URL is
+`http://localhost:4000/api`.
 
 ## Conventions
 
@@ -15,7 +16,7 @@ in local development is `http://localhost:4000`.
 
 ## Health & Config
 
-### `GET /health`
+### `GET /api/health`
 
 Liveness check.
 
@@ -23,7 +24,7 @@ Liveness check.
 { "ok": true, "service": "markdown-magpie-api" }
 ```
 
-### `GET /config`
+### `GET /api/config`
 
 Returns the resolved runtime configuration: API settings, storage backends (with the
 database URL masked), configured knowledge repositories, provider settings and secret
@@ -31,7 +32,7 @@ presence (`set` / `not set`), the AI runtime (current execution mode and provide
 available `direct` and `queue` providers), watcher settings, and retrieval settings including
 `retrieval.mode` (`hybrid` or `keyword`) and a plain-language `reason`.
 
-### `POST /config`
+### `POST /api/config`
 
 Switches the AI execution mode and provider at runtime. Accepts either a flat or nested shape:
 
@@ -43,7 +44,7 @@ Switches the AI execution mode and provider at runtime. Accepts either a flat or
 { "ai": { "executionMode": "queue", "provider": "openai-compatible" } }
 ```
 
-- `200` — returns the updated config (same shape as `GET /config`).
+- `200` — returns the updated config (same shape as `GET /api/config`).
 - `400 valid_ai_runtime_config_required` — mode or provider missing/unrecognised.
 - `400 unsupported_ai_runtime_config` — the provider is not configured by environment
   variables, or cannot run in the requested mode (e.g. a queue-only provider in `direct`).
@@ -52,7 +53,7 @@ See [chat-providers.md](chat-providers.md) for provider configuration.
 
 ## Knowledge
 
-### `POST /ask`
+### `POST /api/ask`
 
 Answers a question from indexed Markdown context.
 
@@ -67,14 +68,14 @@ Answers a question from indexed Markdown context.
   An `answer_question` job is enqueued for a watcher and the question log is written immediately
   with unknown confidence. See [question-logging.md](question-logging.md).
 
-### `GET /search?q=<query>&limit=<n>`
+### `GET /api/search?q=<query>&limit=<n>`
 
 Searches indexed sections. `limit` defaults to `5`. When hybrid retrieval is active (Postgres + embeddings configured), results are ranked by Reciprocal Rank Fusion of pgvector nearest-neighbour and keyword scores; otherwise keyword scoring is used. Each result carries a `[0,1]` relevance score.
 
 - `400 query_required` — missing `q`.
 - `200` — `{ "sections": [ DocumentSection, ... ] }`.
 
-### `POST /repositories/index`
+### `POST /api/repositories/index`
 
 Indexes a local Git-backed Markdown repository. See [ingestion.md](ingestion.md).
 
@@ -95,7 +96,7 @@ when `KNOWLEDGE_REPOSITORIES` is unset.
 - `400 local_path_required` — no repository is configured and no legacy path was supplied.
 - `200` — an indexed-repository summary: `{ repository, documentCount, sectionCount, commitSha }`.
 
-### `GET /repositories`
+### `GET /api/repositories`
 
 Lists indexed repositories.
 
@@ -103,7 +104,7 @@ Lists indexed repositories.
 { "repositories": [ RepositoryRef, ... ] }
 ```
 
-### `POST /documents/upload`
+### `POST /api/documents/upload`
 
 Indexes Markdown documents supplied inline, without a Git checkout.
 
@@ -123,7 +124,7 @@ missing); entries containing `..` or with empty content are dropped. `repository
 - `413 markdown_document_too_large` — any document exceeds 250,000 characters.
 - `201` — an indexed-repository summary.
 
-### `GET /documents`
+### `GET /api/documents`
 
 Lists indexed documents, sorted by path.
 
@@ -131,7 +132,7 @@ Lists indexed documents, sorted by path.
 { "documents": [ KnowledgeDocument, ... ] }
 ```
 
-### `GET /knowledge/stats`
+### `GET /api/knowledge/stats`
 
 Index counts.
 
@@ -143,7 +144,7 @@ Index counts.
 
 See [question-logging.md](question-logging.md) for the recorded fields and lifecycle.
 
-### `GET /questions?limit=<n>`
+### `GET /api/questions?limit=<n>`
 
 Lists question logs (newest first). `limit` defaults to `50`.
 
@@ -151,12 +152,12 @@ Lists question logs (newest first). `limit` defaults to `50`.
 { "questions": [ QuestionLog, ... ] }
 ```
 
-### `GET /questions/:id`
+### `GET /api/questions/:id`
 
 - `404 question_not_found`.
 - `200` — `{ "question": QuestionLog }`.
 
-### `POST /questions/:id/feedback`
+### `POST /api/questions/:id/feedback`
 
 Records helpful/unhelpful feedback on an answer.
 
@@ -170,7 +171,7 @@ Records helpful/unhelpful feedback on an answer.
 
 Feedback is the answer-quality axis. Whether the answer exposed a knowledge gap is tracked separately (see below) and the two can both be set on the same question.
 
-### `POST /questions/:id/gap`
+### `POST /api/questions/:id/gap`
 
 Manually flags a question as a knowledge gap the automatic detection missed. The optional `summary` becomes the gap summary used for clustering; when omitted it falls back to the question's existing gap summary, then to the question text.
 
@@ -181,14 +182,14 @@ Manually flags a question as a knowledge gap the automatic detection missed. The
 - `404 question_not_found`.
 - `200` — `{ "question": QuestionLog }`.
 
-### `DELETE /questions/:id/gap`
+### `DELETE /api/questions/:id/gap`
 
 Clears the manual knowledge-gap flag. Any automatically-detected `gap_summary` is left intact, so un-flagging never removes a gap the system found on its own.
 
 - `404 question_not_found`.
 - `200` — `{ "question": QuestionLog }`.
 
-### `GET /gaps/candidates?limit=<n>`
+### `GET /api/gaps/candidates?limit=<n>`
 
 Lists knowledge-gap candidates grouped by gap summary. A question is included when it is a low-confidence automatic gap **or** has been manually flagged (regardless of answer confidence). `limit` defaults to `50`.
 
@@ -200,7 +201,7 @@ Lists knowledge-gap candidates grouped by gap summary. A question is included wh
 
 See the Proposal Review and Storage sections in [ai-jobs.md](ai-jobs.md).
 
-### `GET /proposals?limit=<n>`
+### `GET /api/proposals?limit=<n>`
 
 Lists proposals. `limit` defaults to `50`.
 
@@ -208,7 +209,7 @@ Lists proposals. `limit` defaults to `50`.
 { "proposals": [ Proposal, ... ] }
 ```
 
-### `POST /proposals/from-gap`
+### `POST /api/proposals/from-gap`
 
 Enqueues a `draft_markdown_proposal` job for a known gap candidate.
 
@@ -220,14 +221,14 @@ Enqueues a `draft_markdown_proposal` job for a known gap candidate.
 
 - `400 gap_summary_required` — empty or missing summary.
 - `404 gap_candidate_not_found` — no candidate matches the summary.
-- `202` — `{ "job": AiJob, "links": { "status": "/ai-jobs/:id", "proposals": "/proposals" } }`.
+- `202` — `{ "job": AiJob, "links": { "status": "/api/ai-jobs/:id", "proposals": "/api/proposals" } }`.
 
-### `GET /proposals/:id`
+### `GET /api/proposals/:id`
 
 - `404 proposal_not_found`.
 - `200` — `{ "proposal": Proposal }`.
 
-### `POST /proposals/:id/status`
+### `POST /api/proposals/:id/status`
 
 Sets the proposal status directly. Valid values: `draft`, `ready`, `branch-pushed`,
 `pr-opened`, `merged`, `rejected`.
@@ -240,7 +241,7 @@ Sets the proposal status directly. Valid values: `draft`, `ready`, `branch-pushe
 - `404 proposal_not_found`.
 - `200` — `{ "proposal": Proposal }`.
 
-### `POST /proposals/:id/publish`
+### `POST /api/proposals/:id/publish`
 
 Publishes a `ready` proposal to a local Git branch via the `local-git` publisher (commits the
 Markdown to a new `magpie/proposal-*` branch and records the branch and commit SHA). Opening a
@@ -259,7 +260,7 @@ The full job contract — payload shapes, the watcher model, and provider config
 in [ai-jobs.md](ai-jobs.md). Job types: `answer_question`, `summarize_gap`,
 `draft_markdown_proposal`, `detect_contradiction`, `suggest_consolidation`.
 
-### `POST /ai-jobs`
+### `POST /api/ai-jobs`
 
 Creates a job.
 
@@ -270,7 +271,7 @@ Creates a job.
 - `400 valid_job_type_required` — unknown or missing type.
 - `201` — `{ "job": AiJob }`.
 
-### `GET /ai-jobs`
+### `GET /api/ai-jobs`
 
 Lists all jobs.
 
@@ -278,12 +279,12 @@ Lists all jobs.
 { "jobs": [ AiJob, ... ] }
 ```
 
-### `GET /ai-jobs/:id`
+### `GET /api/ai-jobs/:id`
 
 - `404 job_not_found`.
 - `200` — `{ "job": AiJob }`.
 
-### `POST /ai-jobs/claim`
+### `POST /api/ai-jobs/claim`
 
 Claims the oldest pending job matching the worker's accepted types.
 
@@ -295,7 +296,7 @@ Claims the oldest pending job matching the worker's accepted types.
 - `400 accepted_types_required` — none of the supplied types are recognised.
 - `200` — `{ "job": AiJob }` or `{ "job": null }` when nothing is pending.
 
-### `POST /ai-jobs/:id/complete`
+### `POST /api/ai-jobs/:id/complete`
 
 Completes a claimed job. On completion the API updates the originating question log
 (`answer_question`) or stores the generated proposal (`draft_markdown_proposal`).
@@ -308,7 +309,7 @@ Completes a claimed job. On completion the API updates the originating question 
 - `500 job_completion_failed` — `message` carries the reason.
 - `200` — `{ "job": AiJob }`.
 
-### `POST /ai-jobs/:id/fail`
+### `POST /api/ai-jobs/:id/fail`
 
 Marks a job as failed.
 

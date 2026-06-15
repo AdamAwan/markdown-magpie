@@ -15,14 +15,18 @@ declare global {
 
 function resolveApiBaseUrl(): string {
   if (configuredApiBaseUrl) {
-    return configuredApiBaseUrl.replace(/\/+$/, "");
+    return configuredApiBaseUrl.replace(/\/+$/, "").replace(/\/api$/, "");
   }
 
   if (typeof window !== "undefined" && window.__MAGPIE_CONFIG__?.apiBaseUrl) {
-    return window.__MAGPIE_CONFIG__.apiBaseUrl.replace(/\/+$/, "");
+    return window.__MAGPIE_CONFIG__.apiBaseUrl.replace(/\/+$/, "").replace(/\/api$/, "");
   }
 
   return "";
+}
+
+function resolveApiUrl(path: string): string {
+  return path.startsWith("/api/") || path === "/api" ? `${resolveApiBaseUrl()}${path}` : `${resolveApiBaseUrl()}/api${path}`;
 }
 
 function extractModelInfo(config: RuntimeConfig | undefined): {
@@ -873,7 +877,7 @@ export default function HomePage() {
         {activeSection === "config" ? (
           <section className="fullWorkbench">
             <ConfigPanel
-              apiBaseUrl={resolveApiBaseUrl()}
+              apiBaseUrl={resolveApiUrl("")}
               config={config}
               onConfigChange={setConfig}
               onMessage={(text, tone) => (text ? showMessage(text, tone) : clearMessage())}
@@ -2212,12 +2216,12 @@ function formatJobType(type: string): string {
 }
 
 async function apiGet<T>(path: string): Promise<T> {
-  const response = await fetch(`${resolveApiBaseUrl()}${path}`);
+  const response = await fetch(resolveApiUrl(path));
   return readResponse<T>(response);
 }
 
 async function apiPost<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${resolveApiBaseUrl()}${path}`, {
+  const response = await fetch(resolveApiUrl(path), {
     method: "POST",
     headers: {
       "content-type": "application/json"
@@ -2228,7 +2232,7 @@ async function apiPost<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function apiDelete<T>(path: string): Promise<T> {
-  const response = await fetch(`${resolveApiBaseUrl()}${path}`, { method: "DELETE" });
+  const response = await fetch(resolveApiUrl(path), { method: "DELETE" });
   return readResponse<T>(response);
 }
 

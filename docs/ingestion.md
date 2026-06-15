@@ -13,7 +13,7 @@ KNOWLEDGE_REPOSITORIES=[{"id":"cats","name":"Cats Knowledge Base","path":"knowle
 Then index a configured repository by ID:
 
 ```bash
-curl -s -X POST http://localhost:4000/repositories/index \
+curl -s -X POST http://localhost:4000/api/repositories/index \
   -H 'content-type: application/json' \
   -d '{"repositoryId":"cats"}'
 ```
@@ -36,12 +36,12 @@ The API:
 ## Search
 
 ```bash
-curl -s 'http://localhost:4000/search?q=hotfix'
+curl -s 'http://localhost:4000/api/search?q=hotfix'
 ```
 
 When both `KNOWLEDGE_STORE=postgres` and an embeddings provider are configured, retrieval is **hybrid**: a pgvector nearest-neighbour search is fused with an in-memory keyword scorer (heading match +3, content match +1) using Reciprocal Rank Fusion (RRF). Results carry a `[0,1]` relevance score. When either condition is absent the system falls back to keyword-only scoring with no change in API shape.
 
-The active retrieval mode is reported by `GET /config` under `retrieval.mode` (`hybrid` or `keyword`) along with a plain-language `reason`.
+The active retrieval mode is reported by `GET /api/config` under `retrieval.mode` (`hybrid` or `keyword`) along with a plain-language `reason`.
 
 ## Section Embeddings
 
@@ -61,14 +61,14 @@ An embedding endpoint is detected by the **presence of its credential variables*
 | `OPENAI_COMPATIBLE_EMBEDDING_MODEL` (+ base URL & API key) | OpenAI-compatible embeddings. The model must output 1536-dimensional vectors. |
 | `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | Azure OpenAI embeddings. The deployment must output 1536-dimensional vectors. |
 
-Embeddings are configured **independently of chat**, so you can answer questions with one provider and embed with another (e.g. DeepSeek for `/ask`, OpenAI for embeddings). The embedding endpoint resolves its base URL and API key from `OPENAI_COMPATIBLE_EMBEDDING_BASE_URL` / `OPENAI_COMPATIBLE_EMBEDDING_API_KEY`, each falling back to the shared chat values (`OPENAI_COMPATIBLE_BASE_URL` / `OPENAI_COMPATIBLE_API_KEY`) when left blank. Setting `OPENAI_COMPATIBLE_EMBEDDING_MODEL` is what enables OpenAI-compatible embeddings.
+Embeddings are configured **independently of chat**, so you can answer questions with one provider and embed with another (e.g. DeepSeek for `/api/ask`, OpenAI for embeddings). The embedding endpoint resolves its base URL and API key from `OPENAI_COMPATIBLE_EMBEDDING_BASE_URL` / `OPENAI_COMPATIBLE_EMBEDDING_API_KEY`, each falling back to the shared chat values (`OPENAI_COMPATIBLE_BASE_URL` / `OPENAI_COMPATIBLE_API_KEY`) when left blank. Setting `OPENAI_COMPATIBLE_EMBEDDING_MODEL` is what enables OpenAI-compatible embeddings.
 
-`EMBEDDING_PROVIDER` is informational only — it is surfaced in `/config` for display and does not enable embeddings.
+`EMBEDDING_PROVIDER` is informational only — it is surfaced in `/api/config` for display and does not enable embeddings.
 
-Both `text-embedding-3-small` and `ada-002` produce 1536-dimensional vectors and are compatible. Hybrid retrieval activates automatically when `KNOWLEDGE_STORE=postgres` **and** a complete set of embedding credentials (a resolved OpenAI-compatible base URL + API key + `OPENAI_COMPATIBLE_EMBEDDING_MODEL`, or the Azure trio above) are configured; otherwise the system stays on keyword-only search with no regression in behaviour. `/config` reports the resolved `retrieval.mode` (`hybrid` or `keyword`) and a plain-language `reason`.
+Both `text-embedding-3-small` and `ada-002` produce 1536-dimensional vectors and are compatible. Hybrid retrieval activates automatically when `KNOWLEDGE_STORE=postgres` **and** a complete set of embedding credentials (a resolved OpenAI-compatible base URL + API key + `OPENAI_COMPATIBLE_EMBEDDING_MODEL`, or the Azure trio above) are configured; otherwise the system stays on keyword-only search with no regression in behaviour. `/api/config` reports the resolved `retrieval.mode` (`hybrid` or `keyword`) and a plain-language `reason`.
 
 ## Ask
 
-`POST /ask` retrieves up to five indexed sections using the active retrieval mode (hybrid or keyword) and passes them as context. Answer confidence is derived from the relevance scores of the retrieved sections.
+`POST /api/ask` retrieves up to five indexed sections using the active retrieval mode (hybrid or keyword) and passes them as context. Answer confidence is derived from the relevance scores of the retrieved sections.
 
 In `AI_EXECUTION_MODE=queue`, the retrieved sections are embedded in the `answer_question` job payload for the watcher.

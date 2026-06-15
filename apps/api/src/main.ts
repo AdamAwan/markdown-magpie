@@ -66,7 +66,7 @@ async function start(): Promise<void> {
   }
 
   server.listen(port, () => {
-    console.log(`Markdown Magpie API listening on http://localhost:${port}`);
+    console.log(`Markdown Magpie API listening on http://localhost:${port}/api`);
     console.log(`AI execution mode: ${runtimeConfig.aiExecutionMode}`);
     console.log(`AI provider: ${runtimeConfig.aiProvider}`);
   });
@@ -76,10 +76,15 @@ void start();
 
 async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
-  const path = url.pathname;
+  const path = apiRoutePath(url.pathname);
 
   if (request.method === "OPTIONS") {
     writeJson(response, 204, undefined);
+    return;
+  }
+
+  if (!path) {
+    writeJson(response, 404, { error: "not_found" });
     return;
   }
 
@@ -412,8 +417,8 @@ async function handleCreateProposalFromGap(request: IncomingMessage, response: S
   writeJson(response, 202, {
     job,
     links: {
-      status: `/ai-jobs/${job.id}`,
-      proposals: "/proposals"
+      status: apiLink(`/ai-jobs/${job.id}`),
+      proposals: apiLink("/proposals")
     }
   });
 }
@@ -501,8 +506,8 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
       questionId: log.id,
       job,
       links: {
-        question: `/questions/${log.id}`,
-        status: `/ai-jobs/${job.id}`
+        question: apiLink(`/questions/${log.id}`),
+        status: apiLink(`/ai-jobs/${job.id}`)
       }
     });
     return;
@@ -1283,4 +1288,20 @@ function slugify(value: string): string {
 
 function normalizeRelativePath(value: string | undefined): string {
   return value?.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "") ?? "";
+}
+
+function apiRoutePath(pathname: string): string | undefined {
+  if (pathname === "/api") {
+    return "/";
+  }
+
+  if (pathname.startsWith("/api/")) {
+    return pathname.slice("/api".length);
+  }
+
+  return undefined;
+}
+
+function apiLink(path: string): string {
+  return `/api${path}`;
 }

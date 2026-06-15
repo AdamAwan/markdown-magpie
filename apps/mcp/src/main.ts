@@ -1,6 +1,6 @@
 import { stdin, stdout } from "node:process";
 
-const apiBaseUrl = trimTrailingSlash(process.env.API_BASE_URL ?? "http://localhost:4000");
+const apiBaseUrl = trimTrailingSlash(process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/api$/, "");
 
 // When the API answers questions asynchronously (queue execution mode), kb.ask
 // polls the job until it produces an answer instead of returning queue metadata.
@@ -405,7 +405,7 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 }
 
 async function postJson(path: string, body: unknown): Promise<unknown> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const response = await fetch(apiUrl(path), {
     method: "POST",
     headers: {
       "content-type": "application/json"
@@ -417,7 +417,7 @@ async function postJson(path: string, body: unknown): Promise<unknown> {
 }
 
 async function getJson(path: string): Promise<unknown> {
-  const response = await fetch(`${apiBaseUrl}${path}`);
+  const response = await fetch(apiUrl(path));
   return readApiResponse(response, path);
 }
 
@@ -449,4 +449,8 @@ function writeMessage(message: unknown): void {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function apiUrl(path: string): string {
+  return path.startsWith("/api/") || path === "/api" ? `${apiBaseUrl}${path}` : `${apiBaseUrl}/api${path}`;
 }
