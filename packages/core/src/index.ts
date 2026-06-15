@@ -208,6 +208,7 @@ export interface AiJobQueue {
   fail(jobId: string, error: string): Promise<void>;
   get(jobId: string): Promise<AiJob | undefined>;
   list(): Promise<AiJob[]>;
+  reset(): Promise<void>;
 }
 
 export interface AgentRunner {

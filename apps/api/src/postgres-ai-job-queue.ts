@@ -110,6 +110,10 @@ export class PostgresAiJobQueue implements AiJobQueue {
     return result.rows.map((row) => mapRow(row));
   }
 
+  async reset(): Promise<void> {
+    await this.pool.query("DELETE FROM ai_jobs");
+  }
+
   async close(): Promise<void> {
     await this.pool.end();
   }
