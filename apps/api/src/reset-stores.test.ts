@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { InMemoryAiJobQueue } from "./ai-job-queue.js";
+import { InMemoryQuestionLogStore } from "./question-log-store.js";
 
 test("InMemoryAiJobQueue.reset removes all jobs", async () => {
   const queue = new InMemoryAiJobQueue();
@@ -10,4 +11,18 @@ test("InMemoryAiJobQueue.reset removes all jobs", async () => {
   await queue.reset();
 
   assert.deepEqual(await queue.list(), []);
+});
+
+test("InMemoryQuestionLogStore.reset removes all questions", async () => {
+  const store = new InMemoryQuestionLogStore();
+  await store.record({
+    question: "How do I adopt a cat?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    retrievedSectionIds: []
+  });
+
+  await store.reset();
+
+  assert.deepEqual(await store.list(50), []);
 });

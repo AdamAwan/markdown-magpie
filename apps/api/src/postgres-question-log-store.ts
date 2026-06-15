@@ -224,6 +224,21 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     return result.rows.map(mapQuestionRow);
   }
 
+  async reset(): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM answer_citations");
+      await client.query("DELETE FROM questions");
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async listGapCandidates(limit: number): Promise<GapCandidate[]> {
     const result = await this.pool.query<GapCandidateRow>(
       `
