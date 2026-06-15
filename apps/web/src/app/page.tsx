@@ -22,11 +22,7 @@ function resolveApiBaseUrl(): string {
     return window.__MAGPIE_CONFIG__.apiBaseUrl.replace(/\/+$/, "");
   }
 
-  if (typeof window !== "undefined") {
-    return `${window.location.protocol}//${window.location.hostname}:4000`;
-  }
-
-  return "http://localhost:4000";
+  return "";
 }
 
 function extractModelInfo(config: RuntimeConfig | undefined): {

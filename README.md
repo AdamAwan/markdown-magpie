@@ -243,19 +243,28 @@ API_BASE_URL=http://api:4000
 QUEUE_URL=redis://redis:6379
 ```
 
-The web UI automatically falls back to the current browser host with API port `4000`. For example, if you open:
+The web UI uses `NEXT_PUBLIC_API_BASE_URL` or `PUBLIC_API_BASE_URL` exactly as configured, trimming only trailing slashes. If neither is set, browser API calls stay on the same origin as the web app.
+
+For example, if you open:
 
 ```text
 http://203.0.113.10:3000
 ```
 
-the browser will call:
+and your API is exposed separately on port `4000`, set the browser-facing API URL in `.env.compose`:
+
+```env
+PUBLIC_API_BASE_URL=http://203.0.113.10:4000
+NEXT_PUBLIC_API_BASE_URL=http://203.0.113.10:4000
+```
+
+The browser will then call:
 
 ```text
 http://203.0.113.10:4000
 ```
 
-If you later put the app behind a reverse proxy or a custom domain, set `NEXT_PUBLIC_API_BASE_URL` or `PUBLIC_API_BASE_URL` in `.env.compose` to the public API URL.
+If you later put the app behind a reverse proxy or a custom domain, set `NEXT_PUBLIC_API_BASE_URL` or `PUBLIC_API_BASE_URL` in `.env.compose` to that exact public API URL.
 
 ### 2. Choose the AI Mode
 
