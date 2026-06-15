@@ -51,6 +51,29 @@ Switches the AI execution mode and provider at runtime. Accepts either a flat or
 
 See [chat-providers.md](chat-providers.md) for provider configuration.
 
+### `POST /api/admin/reset`
+
+Resets the application to its fresh-from-`.env` state. Intended for demos.
+
+**Warning:** This endpoint is unauthenticated and destructive. It is a demo aid and must not be exposed in a production deployment.
+
+Clears all questions (and their citations), proposals, gap clusters, AI jobs, and the indexed knowledge (sections, documents, repositories); resets the runtime AI config (execution mode / provider) to the `.env` defaults; then re-syncs the configured git checkouts and re-indexes the configured knowledge sources.
+
+Request body: none.
+
+Response `200`:
+
+```json
+{
+  "ok": true,
+  "reindexed": 1,
+  "failures": [],
+  "stats": { "repositoryCount": 1, "documentCount": 12, "sectionCount": 48 }
+}
+```
+
+`failures` lists any configured source that could not be re-indexed (`{ "target": "<flow or repository id>", "message": "<reason>" }`); the clear still completes fully even if re-indexing a source fails.
+
 ## Knowledge
 
 ### `POST /api/ask`
