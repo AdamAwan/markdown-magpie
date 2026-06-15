@@ -686,7 +686,7 @@ async function seedConfiguredKnowledge(): Promise<{ indexed: number; failures: A
       indexed += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : "index_failed";
-      console.warn(`Failed to re-index ${target} during reset: ${message}`);
+      console.warn(`Failed to re-index ${target}: ${message}`);
       failures.push({ target, message });
     }
   }

@@ -1789,6 +1789,7 @@ function ConfigPanel({
             className="button"
             disabled={
               saving ||
+              resetting ||
               (executionMode === config.aiRuntime.executionMode && selectedProvider === config.aiRuntime.provider)
             }
             onClick={() => void saveRuntimeConfig()}
