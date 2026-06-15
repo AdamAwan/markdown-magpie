@@ -1668,6 +1668,8 @@ function ConfigPanel({
   const [executionMode, setExecutionMode] = useState<AiExecutionMode>("direct");
   const [provider, setProvider] = useState<AiProviderName>("mock");
   const [saving, setSaving] = useState(false);
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     if (!config) {
@@ -1695,6 +1697,27 @@ function ConfigPanel({
     executionMode === "direct" ? item.supportsDirect : item.supportsQueue
   );
   const selectedProvider = providerOptions.some((item) => item.name === provider) ? provider : providerOptions[0]?.name ?? "mock";
+
+  async function resetData() {
+    setResetting(true);
+    setConfirmingReset(false);
+    onMessage("");
+    try {
+      const result = await apiPost<{ reindexed: number; failures: Array<{ target: string; message: string }> }>(
+        "/admin/reset",
+        {}
+      );
+      // Re-fetch config so the reset runtime AI config is reflected in the panel.
+      const refreshed = await apiGet<RuntimeConfig>("/config");
+      onConfigChange(refreshed);
+      const failureNote = result.failures.length > 0 ? ` (${result.failures.length} source(s) failed to re-index)` : "";
+      onMessage(`Data reset. Re-indexed ${result.reindexed} knowledge source(s)${failureNote}.`, result.failures.length > 0 ? "danger" : "success");
+    } catch (error) {
+      onMessage(errorMessage(error), "danger");
+    } finally {
+      setResetting(false);
+    }
+  }
 
   async function saveRuntimeConfig() {
     if (!config) {
@@ -1785,6 +1808,28 @@ function ConfigPanel({
           }} />
           <ConfigGroup title="Providers" value={config.providers} />
           <ConfigGroup title="Watcher" value={config.watcher} />
+        </div>
+        <div className="resetControl">
+          <h3>Demo controls</h3>
+          <p className="empty">
+            Deletes all questions, proposals, gaps and jobs, resets AI config, and re-indexes the
+            knowledge bases from configuration.
+          </p>
+          {confirmingReset ? (
+            <div className="resetConfirm">
+              <span>This permanently deletes all app data. Continue?</span>
+              <button className="button danger" disabled={resetting} onClick={() => void resetData()} type="button">
+                {resetting ? "Resetting" : "Confirm reset"}
+              </button>
+              <button className="button" disabled={resetting} onClick={() => setConfirmingReset(false)} type="button">
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button className="button danger" disabled={resetting} onClick={() => setConfirmingReset(true)} type="button">
+              Reset data
+            </button>
+          )}
         </div>
       </div>
     </section>
