@@ -26,6 +26,7 @@ export interface LoadedKnowledge {
 export interface KnowledgePersistence {
   saveIndexedRepository(summary: IndexedRepositorySummary, documents: KnowledgeDocument[], sections: DocumentSection[]): Promise<void>;
   loadAll(): Promise<LoadedKnowledge>;
+  reset(): Promise<void>;
 }
 
 export interface SectionVectorSearch {

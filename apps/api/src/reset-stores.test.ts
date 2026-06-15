@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { describe, it, test } from "node:test";
 import { InMemoryAiJobQueue } from "./ai-job-queue.js";
 import { InMemoryQuestionLogStore } from "./question-log-store.js";
 import { InMemoryProposalStore } from "./proposal-store.js";
+import { PostgresKnowledgeStore } from "./postgres-knowledge-store.js";
 
 test("InMemoryAiJobQueue.reset removes all jobs", async () => {
   const queue = new InMemoryAiJobQueue();
@@ -41,4 +42,17 @@ test("InMemoryProposalStore.reset removes all proposals", async () => {
   await store.reset();
 
   assert.deepEqual(await store.list(50), []);
+});
+
+const databaseUrl = process.env.DATABASE_URL;
+
+describe("PostgresKnowledgeStore.reset", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
+  it("clears knowledge tables without error", async () => {
+    const store = new PostgresKnowledgeStore(databaseUrl as string);
+    await store.reset();
+    const loaded = await store.loadAll();
+    assert.deepEqual(loaded.repositories, []);
+    assert.deepEqual(loaded.documents, []);
+    assert.deepEqual(loaded.sections, []);
+  });
 });

@@ -218,6 +218,22 @@ export class PostgresKnowledgeStore implements KnowledgePersistence, SectionVect
     return Number(result.rows[0]?.count ?? 0);
   }
 
+  async reset(): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM document_sections");
+      await client.query("DELETE FROM documents");
+      await client.query("DELETE FROM repositories");
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async saveSectionEmbedding(id: string, embedding: number[]): Promise<void> {
     await this.pool.query("UPDATE document_sections SET embedding = $2::vector WHERE id = $1", [
       id,
