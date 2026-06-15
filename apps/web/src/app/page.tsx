@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import mermaid from "mermaid";
 
 const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 
@@ -28,10 +29,69 @@ function resolveApiBaseUrl(): string {
   return "http://localhost:4000";
 }
 
+function extractModelInfo(config: RuntimeConfig | undefined): {
+  chatModel?: string;
+  chatHost?: string;
+  embeddingModel?: string;
+  embeddingHost?: string;
+} {
+  if (!config) return {};
+
+  const result: ReturnType<typeof extractModelInfo> = {};
+  const providers = config.providers as Record<string, unknown> | undefined;
+
+  if (providers?.openAiCompatible && typeof providers.openAiCompatible === "object") {
+    const compat = providers.openAiCompatible as Record<string, unknown>;
+    if (typeof compat.model === "string") {
+      result.chatModel = compat.model;
+    }
+    if (typeof compat.baseUrl === "string") {
+      result.chatHost = extractHostFromUrl(compat.baseUrl);
+    }
+    if (typeof compat.embeddingModel === "string") {
+      result.embeddingModel = compat.embeddingModel;
+    }
+    if (typeof compat.embeddingBaseUrl === "string") {
+      result.embeddingHost = extractHostFromUrl(compat.embeddingBaseUrl);
+    } else if (typeof compat.baseUrl === "string" && !compat.embeddingBaseUrl) {
+      result.embeddingHost = extractHostFromUrl(compat.baseUrl);
+    }
+  }
+
+  if (providers?.azureOpenAi && typeof providers.azureOpenAi === "object") {
+    const azure = providers.azureOpenAi as Record<string, unknown>;
+    if (typeof azure.chatDeployment === "string") {
+      result.chatModel = azure.chatDeployment;
+      result.chatHost = "Azure OpenAI";
+    }
+    if (typeof azure.embeddingDeployment === "string") {
+      result.embeddingModel = azure.embeddingDeployment;
+      result.embeddingHost = "Azure OpenAI";
+    }
+  }
+
+  return result;
+}
+
+function extractHostFromUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname;
+
+    if (hostname.includes("deepseek")) return "DeepSeek";
+    if (hostname.includes("openrouter")) return "OpenRouter";
+    if (hostname.includes("openai.com")) return "OpenAI";
+    if (hostname.includes("anthropic")) return "Anthropic";
+
+    return hostname;
+  } catch {
+    return url;
+  }
+}
+
 type Confidence = "high" | "medium" | "low" | "unknown";
 type Feedback = "helpful" | "unhelpful";
-type ConsoleSection = "ask" | "knowledge" | "gaps" | "jobs" | "proposals" | "config";
-type WorkspaceTab = "ask" | "search" | "recent";
+type ConsoleSection = "ask" | "answered" | "knowledge" | "gaps" | "jobs" | "proposals" | "config" | "dataflow";
 type AiExecutionMode = "direct" | "queue";
 type AiProviderName = "mock" | "openai-compatible" | "azure-openai" | "codex" | "claude";
 
@@ -243,12 +303,13 @@ export default function HomePage() {
   const [selectedProposalId, setSelectedProposalId] = useState<string | undefined>();
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | undefined>();
   const [activeSection, setActiveSection] = useState<ConsoleSection>("ask");
-  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("ask");
   const [expandedQuestionIds, setExpandedQuestionIds] = useState<string[]>([]);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<AskResponse | undefined>();
   const [query, setQuery] = useState("");
   const [sections, setSections] = useState<SearchSection[]>([]);
+  const [answeredSearch, setAnsweredSearch] = useState("");
+  const [repoPath, setRepoPath] = useState("knowledge-bases/cats");
   const [repoId, setRepoId] = useState("cats");
   const [uploadPath, setUploadPath] = useState("uploaded/cats-note.md");
   const [uploadContent, setUploadContent] = useState("");
@@ -420,7 +481,6 @@ export default function HomePage() {
     try {
       const result = await apiGet<{ sections: SearchSection[] }>(`/search?q=${encodeURIComponent(query.trim())}&limit=6`);
       setSections(result.sections);
-      setWorkspaceTab("search");
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     } finally {
@@ -571,9 +631,6 @@ export default function HomePage() {
 
   function openSection(section: ConsoleSection) {
     setActiveSection(section);
-    if (section === "ask") {
-      setWorkspaceTab("ask");
-    }
   }
 
   return (
@@ -584,11 +641,13 @@ export default function HomePage() {
           <strong>Knowledge Console</strong>
         </div>
         <nav className="sideNav" aria-label="Console sections">
-          <NavButton active={activeSection === "ask"} count={questions.length} glyph="Q" label="Ask" onClick={() => openSection("ask")} />
+          <NavButton active={activeSection === "ask"} glyph="Q" label="Ask" onClick={() => openSection("ask")} />
+          <NavButton active={activeSection === "answered"} count={questions.length} glyph="A" label="Answered" onClick={() => openSection("answered")} />
           <NavButton active={activeSection === "knowledge"} count={stats.sectionCount} glyph="K" label="Knowledge" onClick={() => openSection("knowledge")} />
           <NavButton active={activeSection === "gaps"} count={gaps.length} glyph="G" label="Gaps" onClick={() => openSection("gaps")} />
           <NavButton active={activeSection === "jobs"} count={jobs.length} glyph="J" label="Jobs" onClick={() => openSection("jobs")} />
           <NavButton active={activeSection === "proposals"} count={proposals.length} glyph="P" label="Proposals" onClick={() => openSection("proposals")} />
+          <NavButton active={activeSection === "dataflow"} glyph="D" label="Data Flow" onClick={() => openSection("dataflow")} />
           <NavButton active={activeSection === "config"} glyph="C" label="Config" onClick={() => openSection("config")} />
         </nav>
         <div className="sideStatus">
@@ -600,13 +659,34 @@ export default function HomePage() {
             </span>
           </div>
           <div className="statusLine">
-            <span>Provider</span>
-            <span>{config?.aiRuntime.provider ?? "mock"}</span>
-          </div>
-          <div className="statusLine">
             <span>Mode</span>
             <span>{config?.aiRuntime.executionMode ?? "direct"}</span>
           </div>
+          {(() => {
+            const modelInfo = extractModelInfo(config);
+            return (
+              <>
+                {modelInfo.chatModel && (
+                  <div className="statusLine">
+                    <span>Chat</span>
+                    <span title={modelInfo.chatHost || undefined}>
+                      {modelInfo.chatModel}
+                      {modelInfo.chatHost && ` (${modelInfo.chatHost})`}
+                    </span>
+                  </div>
+                )}
+                {modelInfo.embeddingModel && (
+                  <div className="statusLine">
+                    <span>Embedding</span>
+                    <span title={modelInfo.embeddingHost || undefined}>
+                      {modelInfo.embeddingModel}
+                      {modelInfo.embeddingHost && ` (${modelInfo.embeddingHost})`}
+                    </span>
+                  </div>
+                )}
+              </>
+            );
+          })()}
           <div className="statusLine">
             <span>Retrieval</span>
             <span title={config?.retrieval.reason}>
@@ -655,47 +735,52 @@ export default function HomePage() {
           <section className="workbench singlePane">
             <div className="surface">
               <div className="surfaceHeader">
-                <h2>Workspace</h2>
-                <div className="tabs" role="tablist" aria-label="Workspace views">
-                  <TabButton active={workspaceTab === "ask"} label="Ask" onClick={() => setWorkspaceTab("ask")} />
-                  <TabButton active={workspaceTab === "search"} label="Search" onClick={() => setWorkspaceTab("search")} />
-                  <TabButton active={workspaceTab === "recent"} label="Recent" onClick={() => setWorkspaceTab("recent")} />
-                </div>
+                <h2>Ask a Question</h2>
               </div>
               <div className="surfaceBody">
-                {workspaceTab === "ask" ? (
-                  <AskPanel
-                    answer={answer}
-                    loading={loading}
-                    onAsk={ask}
-                    question={question}
-                    setQuestion={setQuestion}
+                <AskPanel
+                  answer={answer}
+                  loading={loading}
+                  onAsk={ask}
+                  question={question}
+                  setQuestion={setQuestion}
+                />
+              </div>
+            </div>
+          </section>
+        ) : null}
+
+        {activeSection === "answered" ? (
+          <section className="workbench singlePane">
+            <div className="surface">
+              <div className="surfaceHeader">
+                <h2>Answered Questions</h2>
+              </div>
+              <div className="surfaceBody">
+                <form className="inlineForm" onSubmit={(e) => e.preventDefault()}>
+                  <input
+                    onChange={(event) => setAnsweredSearch(event.target.value)}
+                    placeholder="Search answered questions..."
+                    type="search"
+                    value={answeredSearch}
                   />
-                ) : null}
-                {workspaceTab === "search" ? (
-                  <SearchPanel
-                    loading={loading}
-                    query={query}
-                    sections={sections}
-                    search={search}
-                    setQuery={setQuery}
-                  />
-                ) : null}
-                {workspaceTab === "recent" ? (
-                  <RecentQuestions
-                    expandedQuestionIds={expandedQuestionIds}
-                    onFeedback={sendFeedback}
-                    onToggleGap={toggleKnowledgeGap}
-                    questions={questions}
-                    toggleCitations={(questionId) =>
-                      setExpandedQuestionIds((current) =>
-                        current.includes(questionId)
-                          ? current.filter((id) => id !== questionId)
-                          : [...current, questionId]
-                      )
-                    }
-                  />
-                ) : null}
+                </form>
+                <AnsweredPanel
+                  expandedQuestionIds={expandedQuestionIds}
+                  onFeedback={sendFeedback}
+                  onToggleGap={toggleKnowledgeGap}
+                  questions={questions.filter(q =>
+                    answeredSearch.trim() === '' ||
+                    q.question.toLowerCase().includes(answeredSearch.toLowerCase())
+                  )}
+                  toggleCitations={(questionId) =>
+                    setExpandedQuestionIds((current) =>
+                      current.includes(questionId)
+                        ? current.filter((id) => id !== questionId)
+                        : [...current, questionId]
+                    )
+                  }
+                />
               </div>
             </div>
           </section>
@@ -759,12 +844,8 @@ export default function HomePage() {
         ) : null}
 
         {activeSection === "gaps" ? (
-          <section className="workbench">
+          <section className="workbench singlePane">
             <GapPanel draftProposal={draftProposal} gaps={gaps} loading={loading} />
-            <ProposalLinks proposals={proposals} openProposal={(proposalId) => {
-              setSelectedProposalId(proposalId);
-              setActiveSection("proposals");
-            }} />
           </section>
         ) : null}
 
@@ -784,6 +865,12 @@ export default function HomePage() {
               setSelectedProposalId={setSelectedProposalId}
               updateProposalStatus={updateProposalStatus}
             />
+          </section>
+        ) : null}
+
+        {activeSection === "dataflow" ? (
+          <section className="workbench singlePane">
+            <DataFlowPanel config={config} />
           </section>
         ) : null}
 
@@ -1079,7 +1166,7 @@ function shortSha(value: string | undefined): string {
   return value ? value.slice(0, 12) : "Unknown";
 }
 
-function RecentQuestions({
+function AnsweredPanel({
   expandedQuestionIds,
   onFeedback,
   onToggleGap,
@@ -1624,10 +1711,15 @@ function ConfigPanel({
             {saving ? "Saving" : "Apply"}
           </button>
         </div>
-        <div className="configGrid">
+        <div className="configStack">
           <ConfigGroup title="API" value={{ ...config.api, browserApiBaseUrl: apiBaseUrl }} />
           <ConfigGroup title="Stores" value={config.stores} />
           <ConfigGroup title="Knowledge" value={config.knowledge} />
+          <ConfigGroup title="Retrieval" value={{
+            mode: config.retrieval.mode,
+            embeddingProvider: config.retrieval.embeddingProvider,
+            reason: config.retrieval.reason
+          }} />
           <ConfigGroup title="Providers" value={config.providers} />
           <ConfigGroup title="Watcher" value={config.watcher} />
         </div>
@@ -1665,6 +1757,252 @@ function flattenConfig(value: Record<string, unknown>, prefix = ""): Record<stri
     result[nextKey] = typeof itemValue === "string" || typeof itemValue === "number" || itemValue === null ? itemValue : JSON.stringify(itemValue);
     return result;
   }, {});
+}
+
+function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
+  const [activeFlow, setActiveFlow] = useState<"overview" | "ask" | "improvement" | "queue">("overview");
+  const modelInfo = extractModelInfo(config);
+
+  useEffect(() => {
+    mermaid.contentLoaded();
+  }, [activeFlow]);
+
+  return (
+    <div className="surface">
+      <div className="surfaceHeader">
+        <h2>Data Flow Architecture</h2>
+      </div>
+      <div className="surfaceBody dataFlowPanel">
+        <div className="flowTabs">
+          <button
+            className={activeFlow === "overview" ? "flowTab active" : "flowTab"}
+            onClick={() => setActiveFlow("overview")}
+          >
+            Overview
+          </button>
+          <button
+            className={activeFlow === "ask" ? "flowTab active" : "flowTab"}
+            onClick={() => setActiveFlow("ask")}
+          >
+            Ask Flow
+          </button>
+          <button
+            className={activeFlow === "improvement" ? "flowTab active" : "flowTab"}
+            onClick={() => setActiveFlow("improvement")}
+          >
+            Continuous Improvement Cycle
+          </button>
+          <button
+            className={activeFlow === "queue" ? "flowTab active" : "flowTab"}
+            onClick={() => setActiveFlow("queue")}
+          >
+            Queue Architecture
+          </button>
+        </div>
+
+        <div className="flowDiagram">
+          {activeFlow === "overview" && <OverviewDiagram modelInfo={modelInfo} />}
+          {activeFlow === "ask" && <AskFlowDiagram modelInfo={modelInfo} />}
+          {activeFlow === "improvement" && <ContinuousImprovementDiagram modelInfo={modelInfo} />}
+          {activeFlow === "queue" && <QueueArchitectureDiagram modelInfo={modelInfo} />}
+        </div>
+
+        <div className="flowLegend">
+          <h3>System Components</h3>
+          <div className="legendItems">
+            <div className="legendItem">
+              <div className="legendBox" style={{ background: "#fbfcfa", border: "2px solid #285f74" }}></div>
+              <span>Source (Git)</span>
+            </div>
+            <div className="legendItem">
+              <div className="legendBox" style={{ background: "#e8f1f7" }}></div>
+              <span>Processing</span>
+            </div>
+            <div className="legendItem">
+              <div className="legendBox" style={{ background: "#f0f4f0", border: "2px solid #3d6b43" }}></div>
+              <span>Storage (Postgres)</span>
+            </div>
+            <div className="legendItem">
+              <div className="legendBox" style={{ background: "#fef9f0", border: "2px solid #8b5a00" }}></div>
+              <span>AI Provider</span>
+            </div>
+            <div className="legendItem">
+              <div className="legendBox" style={{ background: "#f5f7f2" }}></div>
+              <span>User/API</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OverviewDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractModelInfo> }) {
+  const chatLabel = modelInfo.chatModel && modelInfo.chatHost
+    ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
+    : modelInfo.chatModel || "Chat Model";
+
+  return (
+    <div className="mermaid">
+      {`graph TD
+    A["📄 Git Markdown<br/>Repository"] -->|Sync| B["🔍 Parse &<br/>Index"]
+    B -->|Generate| C["📚 Postgres DB<br/>Indexed Sections"]
+
+    D["❓ User Question<br/>Web/MCP"] -->|Retrieve| E["🔎 Search<br/>Keyword + Vector"]
+    E -->|Context| C
+    C -->|Retrieved Sections| F["🤖 ${chatLabel}<br/>Synthesizes Answer"]
+    F -->|With Citations| G["✓ Answer<br/>+ Citations"]
+
+    subgraph Learn["<b>LEARN</b><br/>(Feedback Analysis)"]
+        G -->|Store| H["💾 Log Answer<br/>& Feedback"]
+        H -->|Auto-detect Low Conf| I["📋 Identify Gaps<br/>or Manual Flag"]
+        I -->|Group Similar| J["📊 Cluster into<br/>Gap Candidates"]
+    end
+
+    subgraph Generate["<b>GENERATE</b><br/>(Solution Creation)"]
+        J -->|Select Gap| K["🎯 Pick Gap<br/>Candidate"]
+        K -->|Synthesize| L["🤖 ${chatLabel}<br/>Generates Proposal"]
+        L -->|Store| M["💾 Save<br/>Proposal"]
+    end
+
+    M -->|Review| N["👤 Human<br/>Review"]
+    N -->|Approve| O["📬 Publish<br/>Pull Request"]
+
+    style Learn fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px
+    style Generate fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`}
+    </div>
+  );
+}
+
+function AskFlowDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractModelInfo> }) {
+  const embedLabel = modelInfo.embeddingModel && modelInfo.embeddingHost
+    ? `${modelInfo.embeddingModel}<br/>(${modelInfo.embeddingHost})`
+    : modelInfo.embeddingModel || "Embedding Model";
+  const chatLabel = modelInfo.chatModel && modelInfo.chatHost
+    ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
+    : modelInfo.chatModel || "Chat Model";
+
+  return (
+    <div className="mermaid">
+      {`graph TD
+    Start["❓ Question<br/>Web UI or MCP"]
+
+    Start --> Keyword["🔍 Keyword<br/>Search in Postgres"]
+    Keyword --> Vector["🔢 Vector Search<br/>${embedLabel}"]
+    Vector --> Context["📚 Retrieved<br/>Context"]
+
+    Context --> DecideMode{Execution<br/>Mode?}
+
+    subgraph Direct["<b>DIRECT MODE</b>"]
+        DirAI["🤖 ${chatLabel}<br/>(Synchronous)<br/>Generates Answer"]
+    end
+
+    subgraph Queue["<b>QUEUE MODE</b>"]
+        JobCreate["📝 Create AI Job"]
+        JobQueue["📦 Store in Queue"]
+        WatcherClaim["👁️ Watcher<br/>Claims Job"]
+        QueueAI["🤖 ${chatLabel}<br/>(When Claimed)<br/>Generates Answer"]
+        JobStore["💾 Store Result"]
+        JobCreate --> JobQueue
+        JobQueue --> WatcherClaim
+        WatcherClaim --> QueueAI
+        QueueAI --> JobStore
+    end
+
+    DecideMode -->|Immediate| Direct
+    DecideMode -->|Deferred| Queue
+
+    DirAI --> Log["💾 Log &<br/>Store"]
+    JobStore --> Log
+
+    Log --> Return["✓ Answer<br/>with Citations"]
+    Return -->|Web UI| WebOut["🌐 Web<br/>Response"]
+    Return -->|MCP| MCPOut["📡 MCP<br/>Response"]
+
+    style Direct fill:#e8f1f7,stroke:#285f74,stroke-width:2px
+    style Queue fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`}
+    </div>
+  );
+}
+
+function ContinuousImprovementDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractModelInfo> }) {
+  const chatLabel = modelInfo.chatModel && modelInfo.chatHost
+    ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
+    : modelInfo.chatModel || "Chat Model";
+
+  return (
+    <div className="mermaid">
+      {`graph TD
+    Start["❓ Questions Answered"] --> Feedback["📊 Collect Feedback"]
+
+    subgraph Detection["<b>GAP DETECTION</b>"]
+        Feedback -->|Low Confidence| Auto["🔴 Auto-detect"]
+        Feedback -->|User Feedback| Manual["👤 Mark Unhelpful"]
+        Auto --> Analyze["🔍 Analyze Patterns"]
+        Manual --> Analyze
+        Analyze --> Cluster["📊 Cluster Similar<br/>by Semantics"]
+        Cluster --> Gaps["📋 Gap Candidates<br/>with Evidence"]
+    end
+
+    Gaps --> Decision{Approved<br/>by Human?}
+
+    subgraph Generation["<b>PROPOSAL GENERATION</b>"]
+        Decision -->|Yes| Job["📝 Create AI Job"]
+        Job --> Synthesize["🤖 ${chatLabel}<br/>Generates Proposal"]
+        Synthesize --> ProposalStore["💾 Store Proposal"]
+    end
+
+    subgraph Publishing["<b>INTEGRATION</b>"]
+        ProposalStore --> ProposalReview["👁️ Human Reviews<br/>Markdown"]
+        ProposalReview -->|Approved| Publish["🚀 Create Pull<br/>Request"]
+        ProposalReview -->|Changes| Job
+        Publish --> Merge["📬 Merge to<br/>Knowledge Base"]
+    end
+
+    Merge -->|Updated Docs| Start
+
+    style Detection fill:#e8f1f7,stroke:#285f74,stroke-width:2px
+    style Generation fill:#fef9f0,stroke:#8b5a00,stroke-width:2px
+    style Publishing fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px`}
+    </div>
+  );
+}
+
+function QueueArchitectureDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractModelInfo> }) {
+  const chatLabel = modelInfo.chatModel && modelInfo.chatHost
+    ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
+    : modelInfo.chatModel || "Chat Model";
+
+  return (
+    <div className="mermaid">
+      {`graph TD
+    User["👤 User/Client<br/>Web UI or MCP"]
+
+    subgraph Direct["<b>DIRECT MODE</b><br/>(Synchronous)"]
+        DirReq["📨 Request"] --> DirAPI["🔌 API<br/>Process"]
+        DirAPI --> DirModel["🤖 ${chatLabel}<br/>Called Directly"]
+        DirModel --> DirResp["✓ Response<br/>Immediate"]
+    end
+
+    subgraph Queue["<b>QUEUE MODE</b><br/>(Asynchronous)"]
+        QReq["📨 Request"] --> QJobCreate["📝 Create<br/>Job Record"]
+        QJobCreate --> QQueue["📦 Job Queue<br/>Postgres"]
+        QQueue --> QWatcher["👁️ Watcher<br/>Process"]
+        QWatcher --> QModel["🤖 ${chatLabel}<br/>Called by Watcher"]
+        QModel --> QResult["💾 Store<br/>Result"]
+        QResult --> QResp["✓ Return<br/>Later"]
+    end
+
+    User -->|Option 1:<br/>Fast| Direct
+    User -->|Option 2:<br/>Flexible| Queue
+
+    DirResp --> Return["📤 Answer to User"]
+    QResp --> Return
+
+    style Direct fill:#e8f1f7,stroke:#285f74,stroke-width:2px
+    style Queue fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`}
+    </div>
+  );
 }
 
 function Metric({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "good" | "bad" | "neutral" }) {
@@ -1727,6 +2065,9 @@ function CitationRow({ citation }: { citation: Citation }) {
 }
 
 function sectionTitle(section: ConsoleSection): string {
+  if (section === "answered") {
+    return "Review answered questions";
+  }
   if (section === "knowledge") {
     return "Browse the Markdown knowledge base";
   }
@@ -1738,6 +2079,9 @@ function sectionTitle(section: ConsoleSection): string {
   }
   if (section === "proposals") {
     return "Review generated Markdown proposals";
+  }
+  if (section === "dataflow") {
+    return "System data flow and architecture";
   }
   if (section === "config") {
     return "Inspect runtime configuration";
@@ -1751,6 +2095,9 @@ function formatQuestionCount(count: number): string {
 }
 
 function sectionSubtitle(section: ConsoleSection): string {
+  if (section === "answered") {
+    return "Search your history of answers with citations. Expand any answer to view sources and leave feedback.";
+  }
   if (section === "knowledge") {
     return "Read indexed Markdown documents, search sections, and add new knowledge from one workspace.";
   }
@@ -1763,11 +2110,14 @@ function sectionSubtitle(section: ConsoleSection): string {
   if (section === "proposals") {
     return "Select a proposal and review its target path, rationale, and Markdown.";
   }
+  if (section === "dataflow") {
+    return "Understand how Markdown, embeddings, questions, and proposals flow through the system.";
+  }
   if (section === "config") {
     return "Check execution mode, stores, providers, repository paths, and whether secrets are set.";
   }
 
-  return "Ask questions, review recent answers, and expand citations only when you need the source trail.";
+  return "Ask and inspect cited answers";
 }
 
 function buildAttentionNotices({
