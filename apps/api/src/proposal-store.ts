@@ -15,6 +15,7 @@ export interface ProposalStore {
   get(id: string): Promise<Proposal | undefined>;
   updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined>;
   recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined>;
+  reset(): Promise<void>;
 }
 
 export class InMemoryProposalStore implements ProposalStore {
@@ -77,5 +78,9 @@ export class InMemoryProposalStore implements ProposalStore {
     };
     this.proposals.set(id, updated);
     return updated;
+  }
+
+  async reset(): Promise<void> {
+    this.proposals.clear();
   }
 }

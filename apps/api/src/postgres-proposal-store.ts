@@ -68,6 +68,21 @@ export class PostgresProposalStore implements ProposalStore {
     );
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
+
+  async reset(): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM proposals");
+      await client.query("DELETE FROM gap_clusters");
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 }
 
 interface ProposalRow {
