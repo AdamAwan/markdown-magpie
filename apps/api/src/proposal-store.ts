@@ -5,6 +5,7 @@ export interface ProposalInput extends DraftMarkdownProposalJobOutput {
   evidence: Proposal["evidence"];
   gapSummary?: string;
   triggeringQuestionIds?: string[];
+  destinationId?: string;
   jobId?: string;
 }
 
@@ -29,6 +30,7 @@ export class InMemoryProposalStore implements ProposalStore {
       evidence: input.evidence,
       gapSummary: input.gapSummary,
       triggeringQuestionIds: input.triggeringQuestionIds,
+      destinationId: input.destinationId,
       rationale: input.rationale,
       jobId: input.jobId,
       createdAt: new Date().toISOString()

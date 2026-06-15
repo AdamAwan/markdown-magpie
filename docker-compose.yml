@@ -14,6 +14,9 @@ services:
     env_file: *magpie-env
     environment:
       PORT: 4000
+      MAGPIE_CHECKOUT_ROOT: /data/checkouts
+    volumes:
+      - magpie-checkouts:/data/checkouts
     ports:
       - "4000:4000"
     depends_on:
@@ -38,6 +41,10 @@ services:
     image: markdown-magpie:latest
     command: npm run start -w @magpie/watcher
     env_file: *magpie-env
+    environment:
+      MAGPIE_CHECKOUT_ROOT: /data/checkouts
+    volumes:
+      - magpie-checkouts:/data/checkouts
     depends_on:
       api:
         condition: service_started
@@ -87,3 +94,4 @@ services:
 
 volumes:
   postgres-data:
+  magpie-checkouts:

@@ -18,9 +18,9 @@ export class PostgresProposalStore implements ProposalStore {
       `
         INSERT INTO proposals (
           id, title, status, target_path, markdown, evidence, gap_summary,
-          triggering_question_ids, rationale, job_id
+          triggering_question_ids, rationale, job_id, destination_id
         )
-        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING *
       `,
       [
@@ -32,7 +32,8 @@ export class PostgresProposalStore implements ProposalStore {
         input.gapSummary ?? null,
         input.triggeringQuestionIds ?? [],
         input.rationale,
-        input.jobId ?? null
+        input.jobId ?? null,
+        input.destinationId ?? null
       ]
     );
 
@@ -81,6 +82,7 @@ interface ProposalRow {
   triggering_question_ids: string[];
   rationale: string | null;
   job_id: string | null;
+  destination_id: string | null;
   publication: Proposal["publication"] | null;
   created_at: Date;
 }
@@ -96,6 +98,7 @@ function mapRow(row: ProposalRow): Proposal {
     gapClusterId: row.gap_cluster_id ?? undefined,
     gapSummary: row.gap_summary ?? undefined,
     triggeringQuestionIds: row.triggering_question_ids,
+    destinationId: row.destination_id ?? undefined,
     rationale: row.rationale ?? undefined,
     jobId: row.job_id ?? undefined,
     publication: row.publication ?? undefined,

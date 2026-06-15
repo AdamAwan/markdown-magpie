@@ -1,21 +1,32 @@
 import path from "node:path";
 
+type EnvLike = Record<string, string | undefined>;
+
 export interface ConfiguredKnowledgeRepository {
   id: string;
   name: string;
-  path: string;
+  path?: string;
+  url?: string;
+  branch?: string;
+  subpath?: string;
+  kind: "local" | "git" | "internet" | "agent";
+}
+
+export interface ConfiguredKnowledgeFlow {
+  id: string;
+  name: string;
+  sourceIds: string[];
+  destinationId: string;
 }
 
 export interface KnowledgeRepositorySelection {
-  localPath: string;
-  repositoryId?: string;
-  name?: string;
+  repository: ConfiguredKnowledgeRepository;
 }
 
 export function getConfiguredKnowledgeRepositories(
-  env: NodeJS.ProcessEnv = process.env
+  env: EnvLike = process.env
 ): ConfiguredKnowledgeRepository[] {
-  const configured = parseKnowledgeRepositoriesJson(env.KNOWLEDGE_REPOSITORIES);
+  const configured = parseRepositoryList(env.KNOWLEDGE_REPOSITORIES);
   if (configured.length > 0) {
     return configured;
   }
@@ -26,13 +37,49 @@ export function getConfiguredKnowledgeRepositories(
   }
 
   const id = slugFromPath(legacyPath);
-  return [{ id, name: id, path: legacyPath }];
+  return [{ id, name: id, path: legacyPath, kind: "local" }];
+}
+
+export function getConfiguredKnowledgeSources(env: EnvLike = process.env): ConfiguredKnowledgeRepository[] {
+  const sources = parseRepositoryList(env.KNOWLEDGE_SOURCES ?? env.KNOWLEDGE_SOURCE ?? env.SOURCE_DATA ?? env.SOURCE);
+  return sources.length > 0 ? sources : getConfiguredKnowledgeRepositories(env);
+}
+
+export function getConfiguredKnowledgeDestinations(env: EnvLike = process.env): ConfiguredKnowledgeRepository[] {
+  const destinations = parseRepositoryList(env.KNOWLEDGE_DESTINATIONS ?? env.KNOWLEDGE_DESTINATION ?? env.DESTINATION);
+  return destinations.length > 0 ? destinations : getConfiguredKnowledgeRepositories(env);
+}
+
+export function getConfiguredKnowledgeFlows(
+  env: EnvLike = process.env,
+  sources = getConfiguredKnowledgeSources(env),
+  destinations = getConfiguredKnowledgeDestinations(env)
+): ConfiguredKnowledgeFlow[] {
+  const configured = parseFlowList(env.KNOWLEDGE_FLOWS ?? env.KNOWLEDGE_FLOW);
+  if (configured.length > 0) {
+    return configured.filter((flow) =>
+      flow.sourceIds.every((sourceId) => sources.some((source) => source.id === sourceId)) &&
+      destinations.some((destination) => destination.id === flow.destinationId)
+    );
+  }
+
+  if (destinations.length === 0) {
+    return [];
+  }
+
+  const sourceIds = sources.map((source) => source.id);
+  return destinations.map((destination) => ({
+    id: destination.id,
+    name: destination.name,
+    sourceIds,
+    destinationId: destination.id
+  }));
 }
 
 export function resolveKnowledgeRepositorySelection(
   payload: { repositoryId?: string; localPath?: string; name?: string },
   repositories: ConfiguredKnowledgeRepository[]
-): KnowledgeRepositorySelection {
+): { localPath: string; repositoryId?: string; name?: string } {
   if (repositories.length === 0) {
     const localPath = payload.localPath?.trim();
     if (!localPath) {
@@ -46,6 +93,65 @@ export function resolveKnowledgeRepositorySelection(
     };
   }
 
+  const selection = resolveConfiguredRepositorySelection(payload, repositories).repository;
+  if (!selection.path || selection.kind !== "local") {
+    throw new Error("configured_repository_requires_checkout");
+  }
+
+  return {
+    localPath: selection.path,
+    repositoryId: selection.id,
+    name: selection.name
+  };
+}
+
+function parseFlowList(value: string | undefined): ConfiguredKnowledgeFlow[] {
+  if (!value?.trim()) {
+    return [];
+  }
+
+  const parsed = parseJsonOrString(value.trim());
+  const entries = Array.isArray(parsed) ? parsed : [parsed];
+  return entries
+    .map((entry) => normalizeFlowEntry(entry))
+    .filter((entry): entry is ConfiguredKnowledgeFlow => entry !== undefined);
+}
+
+function normalizeFlowEntry(value: unknown): ConfiguredKnowledgeFlow | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const destinationId = stringValue(candidate.destinationId) ?? stringValue(candidate.destination) ?? stringValue(candidate.kb);
+  const rawSourceIds = candidate.sourceIds ?? candidate.sources ?? candidate.source;
+  const sourceIds = normalizeIdList(rawSourceIds);
+  if (!destinationId || sourceIds.length === 0) {
+    return undefined;
+  }
+
+  const id = stringValue(candidate.id) ?? `${sourceIds.join("-")}-to-${destinationId}`;
+  return {
+    id,
+    name: stringValue(candidate.name) ?? id,
+    sourceIds,
+    destinationId
+  };
+}
+
+function normalizeIdList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(stringValue).filter((entry): entry is string => Boolean(entry));
+  }
+
+  const single = stringValue(value);
+  return single ? [single] : [];
+}
+
+export function resolveConfiguredRepositorySelection(
+  payload: { repositoryId?: string; localPath?: string },
+  repositories: ConfiguredKnowledgeRepository[]
+): KnowledgeRepositorySelection {
   if (payload.localPath?.trim()) {
     throw new Error("localPath is not accepted when knowledge repositories are configured");
   }
@@ -59,49 +165,158 @@ export function resolveKnowledgeRepositorySelection(
     throw new Error("configured_repository_required");
   }
 
-  return {
-    localPath: selected.path,
-    repositoryId: selected.id,
-    name: selected.name
-  };
+  return { repository: selected };
 }
 
-function parseKnowledgeRepositoriesJson(value: string | undefined): ConfiguredKnowledgeRepository[] {
+function parseRepositoryList(value: string | undefined): ConfiguredKnowledgeRepository[] {
   if (!value?.trim()) {
     return [];
   }
 
-  const parsed = JSON.parse(value) as unknown;
-  if (!Array.isArray(parsed)) {
-    throw new Error("KNOWLEDGE_REPOSITORIES must be a JSON array");
-  }
+  const trimmed = value.trim();
+  const parsed = parseJsonOrString(trimmed);
+  const entries = Array.isArray(parsed) ? parsed : [parsed];
 
-  return parsed
+  return entries
     .map((entry) => normalizeRepositoryEntry(entry))
     .filter((entry): entry is ConfiguredKnowledgeRepository => entry !== undefined);
 }
 
+function parseJsonOrString(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
 function normalizeRepositoryEntry(value: unknown): ConfiguredKnowledgeRepository | undefined {
+  if (typeof value === "string") {
+    return normalizeRepositoryObject({ value });
+  }
+
   if (!value || typeof value !== "object") {
     return undefined;
   }
 
-  const candidate = value as Partial<Record<"id" | "name" | "path", unknown>>;
-  const repositoryPath = typeof candidate.path === "string" ? candidate.path.trim() : "";
-  if (!repositoryPath) {
+  return normalizeRepositoryObject(value as Record<string, unknown>);
+}
+
+function normalizeRepositoryObject(candidate: Record<string, unknown>): ConfiguredKnowledgeRepository | undefined {
+  const rawValue = stringValue(candidate.value);
+  const url = stringValue(candidate.url) ?? stringValue(candidate.gitUrl) ?? stringValue(candidate.remoteUrl) ?? (isGitUrl(rawValue) ? rawValue : undefined);
+  const pathValue = stringValue(candidate.path) ?? stringValue(candidate.localPath) ?? (!isGitUrl(rawValue) ? rawValue : undefined);
+  const kind = normalizeKind(candidate.kind, candidate.type, url, pathValue, rawValue);
+
+  if (kind === "agent") {
+    const id = stringValue(candidate.id) ?? "agent";
+    return {
+      id,
+      name: stringValue(candidate.name) ?? "Agent Knowledge",
+      kind
+    };
+  }
+
+  if (kind === "internet") {
+    const internetUrl = rawValue === "internet" ? undefined : (url ?? rawValue);
+    const id = stringValue(candidate.id) ?? (internetUrl ? slugFromPath(internetUrl) : "internet");
+    return {
+      id,
+      name: stringValue(candidate.name) ?? id,
+      ...(internetUrl ? { url: internetUrl } : {}),
+      kind
+    };
+  }
+
+  if (kind === "git") {
+    if (!url) {
+      return undefined;
+    }
+    const id = stringValue(candidate.id) ?? slugFromGitUrl(url);
+    const repository: ConfiguredKnowledgeRepository = {
+      id,
+      name: stringValue(candidate.name) ?? id,
+      url,
+      kind
+    };
+    const branch = stringValue(candidate.branch);
+    const subpath = normalizeSubpath(stringValue(candidate.subpath) ?? stringValue(candidate.folder) ?? stringValue(candidate.docsPath));
+    return {
+      ...repository,
+      ...(branch ? { branch } : {}),
+      ...(subpath ? { subpath } : {})
+    };
+  }
+
+  if (!pathValue) {
     return undefined;
   }
 
-  const id = typeof candidate.id === "string" && candidate.id.trim() ? candidate.id.trim() : slugFromPath(repositoryPath);
-  const name = typeof candidate.name === "string" && candidate.name.trim() ? candidate.name.trim() : id;
+  const id = stringValue(candidate.id) ?? slugFromPath(pathValue);
+  const subpath = normalizeSubpath(stringValue(candidate.subpath) ?? stringValue(candidate.folder) ?? stringValue(candidate.docsPath));
+  return {
+    id,
+    name: stringValue(candidate.name) ?? id,
+    path: pathValue,
+    ...(subpath ? { subpath } : {}),
+    kind: "local"
+  };
+}
 
-  return { id, name, path: repositoryPath };
+function normalizeKind(
+  kind: unknown,
+  type: unknown,
+  url: string | undefined,
+  pathValue: string | undefined,
+  rawValue: string | undefined
+): ConfiguredKnowledgeRepository["kind"] {
+  const value = stringValue(kind) ?? stringValue(type);
+  if (value === "internet" || value === "web") {
+    return "internet";
+  }
+  if (value === "agent" || value === "model" || value === "general") {
+    return "agent";
+  }
+  if (rawValue === "agent" || rawValue === "general-agent-knowledge") {
+    return "agent";
+  }
+  if (rawValue === "internet" || rawValue === "web") {
+    return "internet";
+  }
+  if (value === "git" || value === "github" || value === "gitlab" || url) {
+    return "git";
+  }
+  if (pathValue) {
+    return "local";
+  }
+  return "local";
+}
+
+function isGitUrl(value: string | undefined): value is string {
+  return Boolean(value && (/^(?:https?:\/\/|git@|ssh:\/\/)/i.test(value) || /\.git(?:#.+)?$/i.test(value)));
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeSubpath(value: string | undefined): string | undefined {
+  const normalized = value?.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  return normalized && normalized !== "." ? normalized : undefined;
+}
+
+function slugFromGitUrl(value: string): string {
+  const withoutHash = value.split("#")[0] ?? value;
+  const basename = path.basename(withoutHash.replace(/[\\/]+$/, "").replace(/\.git$/i, ""));
+  return slugFromPath(basename);
 }
 
 function slugFromPath(value: string): string {
-  const basename = path.basename(value.replace(/[\\/]+$/, ""));
-  return basename
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "knowledge-base";
+  const basename = path.basename(value.replace(/[\\/]+$/, "").replace(/\.git$/i, ""));
+  return (
+    basename
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "knowledge-base"
+  );
 }

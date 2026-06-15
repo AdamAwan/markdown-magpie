@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  getConfiguredKnowledgeFlows,
+  getConfiguredKnowledgeDestinations,
   getConfiguredKnowledgeRepositories,
+  getConfiguredKnowledgeSources,
+  resolveConfiguredRepositorySelection,
   resolveKnowledgeRepositorySelection
 } from "./knowledge-repositories.js";
 
@@ -15,8 +19,130 @@ describe("knowledge repository configuration", () => {
     });
 
     assert.deepEqual(repositories, [
-      { id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats" },
-      { id: "docs", name: "Product Docs", path: "../product-docs" }
+      { id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats", kind: "local" },
+      { id: "docs", name: "Product Docs", path: "../product-docs", kind: "local" }
+    ]);
+  });
+
+  it("parses git source and destination URLs from dedicated config", () => {
+    const sources = getConfiguredKnowledgeSources({
+      KNOWLEDGE_SOURCES: "https://github.com/danielearwicker/flowerbi.git"
+    });
+    const destinations = getConfiguredKnowledgeDestinations({
+      KNOWLEDGE_DESTINATIONS: JSON.stringify([
+        { id: "flowerbi-docs", url: "https://github.com/AdamAwan/flowerbi-doc-test.git", subpath: "docs" }
+      ])
+    });
+
+    assert.deepEqual(sources, [
+      {
+        id: "flowerbi",
+        name: "flowerbi",
+        url: "https://github.com/danielearwicker/flowerbi.git",
+        kind: "git"
+      }
+    ]);
+    assert.deepEqual(destinations, [
+      {
+        id: "flowerbi-docs",
+        name: "flowerbi-docs",
+        url: "https://github.com/AdamAwan/flowerbi-doc-test.git",
+        subpath: "docs",
+        kind: "git"
+      }
+    ]);
+  });
+
+  it("allows multiple source kinds including agent knowledge and git subpaths", () => {
+    const sources = getConfiguredKnowledgeSources({
+      KNOWLEDGE_SOURCES: JSON.stringify([
+        { id: "agent", kind: "agent" },
+        { id: "code", url: "https://github.com/example/app.git", subpath: "src" },
+        "internet"
+      ])
+    });
+
+    assert.deepEqual(sources, [
+      { id: "agent", name: "Agent Knowledge", kind: "agent" },
+      {
+        id: "code",
+        name: "code",
+        url: "https://github.com/example/app.git",
+        subpath: "src",
+        kind: "git"
+      },
+      { id: "internet", name: "internet", kind: "internet" }
+    ]);
+  });
+
+  it("parses flows linking source ids to destination ids", () => {
+    const sources = getConfiguredKnowledgeSources({
+      KNOWLEDGE_SOURCES: JSON.stringify([{ id: "flowerbi", url: "https://github.com/example/source.git" }, { id: "agent", kind: "agent" }])
+    });
+    const destinations = getConfiguredKnowledgeDestinations({
+      KNOWLEDGE_DESTINATIONS: JSON.stringify([{ id: "flowerbi-docs", url: "https://github.com/example/docs.git" }])
+    });
+    const flows = getConfiguredKnowledgeFlows(
+      {
+        KNOWLEDGE_FLOWS: JSON.stringify([
+          { id: "flowerbi-flow", name: "FlowerBI Docs", sourceIds: ["flowerbi", "agent"], destinationId: "flowerbi-docs" }
+        ])
+      },
+      sources,
+      destinations
+    );
+
+    assert.deepEqual(flows, [
+      {
+        id: "flowerbi-flow",
+        name: "FlowerBI Docs",
+        sourceIds: ["flowerbi", "agent"],
+        destinationId: "flowerbi-docs"
+      }
+    ]);
+  });
+
+  it("infers one flow per destination when flows are not configured", () => {
+    const flows = getConfiguredKnowledgeFlows(
+      {},
+      [{ id: "agent", name: "Agent Knowledge", kind: "agent" }],
+      [{ id: "cats", name: "Cats KB", url: "https://github.com/example/cats.git", kind: "git" }]
+    );
+
+    assert.deepEqual(flows, [
+      {
+        id: "cats",
+        name: "Cats KB",
+        sourceIds: ["agent"],
+        destinationId: "cats"
+      }
+    ]);
+  });
+
+  it("accepts plain source and destination aliases", () => {
+    assert.deepEqual(getConfiguredKnowledgeSources({ SOURCE: "agent" }), [
+      { id: "agent", name: "Agent Knowledge", kind: "agent" }
+    ]);
+    assert.deepEqual(getConfiguredKnowledgeDestinations({ DESTINATION: "https://github.com/example/docs.git" }), [
+      {
+        id: "docs",
+        name: "docs",
+        url: "https://github.com/example/docs.git",
+        kind: "git"
+      }
+    ]);
+  });
+
+  it("falls back to legacy repositories for both sources and destinations", () => {
+    const env = {
+      KNOWLEDGE_REPOSITORIES: JSON.stringify([{ id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats" }])
+    };
+
+    assert.deepEqual(getConfiguredKnowledgeSources(env), [
+      { id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats", kind: "local" }
+    ]);
+    assert.deepEqual(getConfiguredKnowledgeDestinations(env), [
+      { id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats", kind: "local" }
     ]);
   });
 
@@ -26,7 +152,7 @@ describe("knowledge repository configuration", () => {
     });
 
     assert.deepEqual(repositories, [
-      { id: "cats", name: "cats", path: "knowledge-bases/cats" }
+      { id: "cats", name: "cats", path: "knowledge-bases/cats", kind: "local" }
     ]);
   });
 
@@ -34,8 +160,8 @@ describe("knowledge repository configuration", () => {
     const selection = resolveKnowledgeRepositorySelection(
       { repositoryId: "docs" },
       [
-        { id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats" },
-        { id: "docs", name: "Product Docs", path: "../product-docs" }
+        { id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats", kind: "local" },
+        { id: "docs", name: "Product Docs", path: "../product-docs", kind: "local" }
       ]
     );
 
@@ -51,10 +177,24 @@ describe("knowledge repository configuration", () => {
       () =>
         resolveKnowledgeRepositorySelection(
           { localPath: "/etc", repositoryId: "cats" },
-          [{ id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats" }]
+          [{ id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats", kind: "local" }]
         ),
       /localPath is not accepted/
     );
+  });
+
+  it("resolves configured git repositories by id without requiring a local path yet", () => {
+    const selection = resolveConfiguredRepositorySelection(
+      { repositoryId: "source" },
+      [{ id: "source", name: "Source Repo", url: "https://github.com/example/source.git", kind: "git" }]
+    );
+
+    assert.deepEqual(selection.repository, {
+      id: "source",
+      name: "Source Repo",
+      url: "https://github.com/example/source.git",
+      kind: "git"
+    });
   });
 
   it("keeps legacy local path indexing available when no repositories are configured", () => {

@@ -733,6 +733,95 @@ code {
   white-space: nowrap;
 }
 
+.knowledgeFlows {
+  display: grid;
+  gap: 10px;
+}
+
+.knowledgeFlow {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.28fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border-top: 1px solid #e2e6df;
+  padding: 12px 0;
+}
+
+.knowledgeFlow:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.knowledgeFlow.selected .flowSelect {
+  color: #123f52;
+}
+
+.flowSelect {
+  border: 0;
+  background: transparent;
+  color: #17211d;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 850;
+  padding: 0;
+  text-align: left;
+}
+
+.flowDiagram {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(160px, 0.7fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.flowNodeGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.flowNode {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  max-width: 100%;
+  border: 1px solid #cbd8ce;
+  border-radius: 6px;
+  background: #fbfcfa;
+  color: #17211d;
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+  padding: 6px 9px;
+}
+
+.flowNode.agent {
+  border-color: #d5c78f;
+  background: #fff8d8;
+}
+
+.flowNode.internet {
+  border-color: #b9d5df;
+  background: #edf8fb;
+}
+
+.flowNode.destination {
+  border-color: #285f74;
+  background: #e8f1f7;
+}
+
+.flowNode.missing {
+  color: #8c4b32;
+}
+
+.flowArrow {
+  color: #65716b;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-weight: 900;
+}
+
 .repositoryContextList,
 .repositoryContext {
   display: grid;
@@ -1004,6 +1093,8 @@ pre {
   .summary,
   .workbench,
   .documentBrowser,
+  .knowledgeFlow,
+  .flowDiagram,
   .repositoryForm,
   .gitContextGrid,
   .uploadForm,

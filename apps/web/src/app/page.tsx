@@ -112,6 +112,10 @@ interface RuntimeConfig {
   knowledge: {
     repositoryPath: string | null;
     repositories?: ConfiguredKnowledgeRepository[];
+    sources?: ConfiguredKnowledgeRepository[];
+    destinations?: ConfiguredKnowledgeRepository[];
+    flows?: ConfiguredKnowledgeFlow[];
+    checkoutRoot?: string;
   };
   providers: Record<string, unknown>;
   aiRuntime: {
@@ -138,7 +142,18 @@ interface RuntimeConfig {
 interface ConfiguredKnowledgeRepository {
   id: string;
   name: string;
-  path: string;
+  path?: string;
+  url?: string;
+  branch?: string;
+  subpath?: string;
+  kind?: "local" | "git" | "internet" | "agent";
+}
+
+interface ConfiguredKnowledgeFlow {
+  id: string;
+  name: string;
+  sourceIds: string[];
+  destinationId: string;
 }
 
 interface KnowledgeDocument {
@@ -310,7 +325,7 @@ export default function HomePage() {
   const [sections, setSections] = useState<SearchSection[]>([]);
   const [answeredSearch, setAnsweredSearch] = useState("");
   const [repoPath, setRepoPath] = useState("knowledge-bases/cats");
-  const [repoId, setRepoId] = useState("cats");
+  const [flowId, setFlowId] = useState("cats");
   const [uploadPath, setUploadPath] = useState("uploaded/cats-note.md");
   const [uploadContent, setUploadContent] = useState("");
   const [loading, setLoading] = useState(false);
@@ -338,11 +353,11 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    const configuredRepositoryIds = config?.knowledge.repositories?.map((repository) => repository.id) ?? [];
-    if (configuredRepositoryIds.length > 0 && !configuredRepositoryIds.includes(repoId)) {
-      setRepoId(configuredRepositoryIds[0]);
+    const configuredFlowIds = knowledgeFlows(config).map((flow) => flow.id);
+    if (configuredFlowIds.length > 0 && !configuredFlowIds.includes(flowId)) {
+      setFlowId(configuredFlowIds[0]);
     }
-  }, [config, repoId]);
+  }, [config, flowId]);
 
   useEffect(() => {
     if (!message) {
@@ -516,7 +531,7 @@ export default function HomePage() {
     try {
       const result = await apiPost<{ job?: AiJob; proposal?: Proposal }>("/proposals/from-gap", {
         summary: gap.summary,
-        targetPath: "knowledge-bases/cats/proposed-gap.md"
+        flowId
       });
       if (result.proposal) {
         setSelectedProposalId(result.proposal.id);
@@ -595,9 +610,8 @@ export default function HomePage() {
     }
   }
 
-  async function indexRepository(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!repoId.trim()) {
+  async function indexRepository(nextFlowId = flowId) {
+    if (!nextFlowId.trim()) {
       return;
     }
 
@@ -605,7 +619,7 @@ export default function HomePage() {
     clearMessage();
     try {
       const summary = await apiPost<IndexRepositoryResponse>("/repositories/index", {
-        repositoryId: repoId.trim()
+        flowId: nextFlowId.trim()
       });
       showMessage(
         `Indexed ${summary.repository.name} with ${summary.documentCount} documents and ${summary.sectionCount} sections.`,
@@ -813,11 +827,13 @@ export default function HomePage() {
               </div>
               <div className="surfaceBody">
                 <RepositoryPanel
-                  configuredRepositories={config?.knowledge.repositories ?? []}
+                  destinations={config?.knowledge.destinations ?? config?.knowledge.repositories ?? []}
+                  flows={knowledgeFlows(config)}
                   indexing={indexingRepo}
                   onIndex={indexRepository}
-                  repoId={repoId}
-                  setRepoId={setRepoId}
+                  selectedFlowId={flowId}
+                  setSelectedFlowId={setFlowId}
+                  sources={config?.knowledge.sources ?? []}
                 />
               </div>
             </div>
@@ -1302,52 +1318,99 @@ function UploadPanel({
 }
 
 function RepositoryPanel({
-  configuredRepositories,
+  destinations,
+  flows,
   indexing,
   onIndex,
-  repoId,
-  setRepoId
+  selectedFlowId,
+  setSelectedFlowId,
+  sources
 }: {
-  configuredRepositories: ConfiguredKnowledgeRepository[];
+  destinations: ConfiguredKnowledgeRepository[];
+  flows: ConfiguredKnowledgeFlow[];
   indexing: boolean;
-  onIndex: (event: FormEvent<HTMLFormElement>) => Promise<void>;
-  repoId: string;
-  setRepoId: (value: string) => void;
+  onIndex: (flowId: string) => Promise<void>;
+  selectedFlowId: string;
+  setSelectedFlowId: (value: string) => void;
+  sources: ConfiguredKnowledgeRepository[];
 }) {
-  if (configuredRepositories.length === 0) {
-    return <p className="empty">No knowledge bases are configured. Add KNOWLEDGE_REPOSITORIES to the API environment.</p>;
+  if (flows.length === 0) {
+    return <p className="empty">No knowledge flows are configured. Add KNOWLEDGE_FLOWS or KNOWLEDGE_DESTINATIONS to the API environment.</p>;
   }
 
   return (
-    <form className="repositoryForm" onSubmit={onIndex}>
-      <label className="field">
-        <span>Knowledge Base</span>
-        <select
-          onChange={(event) => setRepoId(event.target.value)}
-          title="Configured knowledge bases come from the API environment."
-          value={repoId}
-        >
-          {configuredRepositories.map((repository) => (
-            <option key={repository.id} value={repository.id}>
-              {repository.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div className="repositorySelectionMeta">
-        {configuredRepositories.map((repository) =>
-          repository.id === repoId ? (
-            <span key={repository.id} title={repository.path}>
-              {repository.path}
-            </span>
-          ) : null
-        )}
-      </div>
-      <button className="button" disabled={indexing || !repoId.trim()} title="Index Markdown files from this configured knowledge base" type="submit">
-        {indexing ? "Indexing" : "Index Knowledge Base"}
-      </button>
-    </form>
+    <div className="knowledgeFlows">
+      {flows.map((flow) => {
+        const destination = destinations.find((repository) => repository.id === flow.destinationId);
+        const flowSources = flow.sourceIds
+          .map((sourceId) => sources.find((source) => source.id === sourceId))
+          .filter((source): source is ConfiguredKnowledgeRepository => Boolean(source));
+        const active = selectedFlowId === flow.id;
+
+        return (
+          <article className={`knowledgeFlow ${active ? "selected" : ""}`} key={flow.id}>
+            <button
+              className="flowSelect"
+              onClick={() => setSelectedFlowId(flow.id)}
+              title={`Select ${flow.name}`}
+              type="button"
+            >
+              <span>{flow.name}</span>
+            </button>
+            <div className="flowDiagram" aria-label={`${flow.name} knowledge flow`}>
+              <div className="flowNodeGroup">
+                {flowSources.length > 0 ? (
+                  flowSources.map((source) => (
+                    <span className={`flowNode ${source.kind ?? "local"}`} key={source.id} title={repositoryLocation(source)}>
+                      {source.name}
+                    </span>
+                  ))
+                ) : (
+                  <span className="flowNode missing">No sources</span>
+                )}
+              </div>
+              <span className="flowArrow" aria-hidden="true">-&gt;</span>
+              <span className={`flowNode destination ${destination?.kind ?? "local"}`} title={destination ? repositoryLocation(destination) : flow.destinationId}>
+                {destination?.name ?? flow.destinationId}
+              </span>
+            </div>
+            <button
+              className="button"
+              disabled={indexing || !destination}
+              onClick={() => {
+                setSelectedFlowId(flow.id);
+                void onIndex(flow.id);
+              }}
+              title="Index the destination knowledge base used by /ask and MCP"
+              type="button"
+            >
+              {indexing && active ? "Indexing" : "Index KB"}
+            </button>
+          </article>
+        );
+      })}
+    </div>
   );
+}
+
+function repositoryLocation(repository: ConfiguredKnowledgeRepository): string {
+  const base = repository.url ?? repository.path ?? repository.kind ?? repository.id;
+  return repository.subpath ? `${base} / ${repository.subpath}` : base;
+}
+
+function knowledgeFlows(config: RuntimeConfig | undefined): ConfiguredKnowledgeFlow[] {
+  if (config?.knowledge.flows?.length) {
+    return config.knowledge.flows;
+  }
+
+  const destinations = config?.knowledge.destinations ?? config?.knowledge.repositories ?? [];
+  const sourceIds = (config?.knowledge.sources ?? []).map((source) => source.id);
+  return destinations.map((destination) => ({
+    id: destination.id,
+    name: destination.name,
+    sourceIds,
+    destinationId: destination.id
+  }));
 }
 
 function GapPanel({

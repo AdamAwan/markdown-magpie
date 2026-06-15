@@ -101,6 +101,8 @@ function draftMarkdownProposalPrompt(input: DraftMarkdownProposalJobInput): stri
 Rules:
 - Return JSON only.
 - Markdown must be reviewable and conservative.
+- Use sourceContext when present as raw material for improving the destination knowledge base.
+- Cite source file paths, URLs, or agent/internet source names in the rationale.
 - Include frontmatter with title and status: draft.
 
 Return JSON:

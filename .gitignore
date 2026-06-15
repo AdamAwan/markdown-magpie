@@ -10,5 +10,6 @@ dist/
 coverage/
 tmp/
 data/
+.magpie/
 *.log
 *.tsbuildinfo

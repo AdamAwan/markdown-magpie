@@ -7,6 +7,7 @@ import type {
   RepositoryRef
 } from "@magpie/core";
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -24,6 +25,18 @@ export interface RepositorySyncProvider {
   sync(repository: RepositoryRef): Promise<RepositorySyncResult>;
 }
 
+export interface GitCheckoutRequest {
+  id: string;
+  url: string;
+  checkoutRoot: string;
+  branch?: string;
+}
+
+export interface GitCheckoutResult {
+  localPath: string;
+  remoteUrl: string;
+}
+
 export class LocalRepositorySyncProvider implements RepositorySyncProvider {
   async sync(repository: RepositoryRef): Promise<RepositorySyncResult> {
     return {
@@ -31,6 +44,46 @@ export class LocalRepositorySyncProvider implements RepositorySyncProvider {
       changedPaths: []
     };
   }
+}
+
+export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<GitCheckoutResult> {
+  const localPath = path.join(request.checkoutRoot, safeCheckoutName(request.id));
+  await mkdir(request.checkoutRoot, { recursive: true });
+
+  if (!existsSync(path.join(localPath, ".git"))) {
+    const cloneArgs = ["clone"];
+    if (request.branch?.trim()) {
+      cloneArgs.push("--branch", request.branch.trim());
+    }
+    cloneArgs.push(request.url, localPath);
+    await git(request.checkoutRoot, cloneArgs);
+  } else {
+    const currentRemote = await tryGit(localPath, ["remote", "get-url", "origin"]);
+    if (currentRemote.trim() && currentRemote.trim() !== request.url) {
+      throw new Error(`Configured checkout ${localPath} already points at ${currentRemote.trim()}`);
+    }
+    if (!currentRemote.trim()) {
+      await git(localPath, ["remote", "add", "origin", request.url]);
+    }
+    await git(localPath, ["fetch", "--prune", "origin"]);
+    if (request.branch?.trim()) {
+      const branch = request.branch.trim();
+      await git(localPath, ["checkout", branch]);
+      if (await remoteBranchExists(localPath, branch)) {
+        await git(localPath, ["pull", "--ff-only", "origin", branch]);
+      }
+    } else {
+      const branch = await tryGit(localPath, ["branch", "--show-current"]);
+      if (branch.trim() && (await remoteBranchExists(localPath, branch.trim()))) {
+        await git(localPath, ["pull", "--ff-only"]);
+      }
+    }
+  }
+
+  return {
+    localPath,
+    remoteUrl: request.url
+  };
 }
 
 export class DryRunPullRequestProvider implements PullRequestProvider {
@@ -156,4 +209,18 @@ function assertWithinRoot(root: string, candidate: string): void {
 
 function toPosixPath(value: string): string {
   return value.replace(/\\/g, "/");
+}
+
+async function remoteBranchExists(root: string, branch: string): Promise<boolean> {
+  const result = await tryGit(root, ["ls-remote", "--heads", "origin", branch]);
+  return Boolean(result.trim());
+}
+
+function safeCheckoutName(value: string): string {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "repository"
+  );
 }

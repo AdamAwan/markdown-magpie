@@ -1,26 +1,48 @@
 # Markdown Ingestion
 
-Markdown Magpie indexes Git-backed Markdown repositories through the API.
+Markdown Magpie reads raw source data and writes reviewed Markdown proposals to configured destinations.
+Sources and destinations can be separate repositories, the same repository, or folders inside a repository.
 
-## Local Repository Indexing
+## Source And Destination Configuration
 
-Configure one or more server-side knowledge bases in the API environment:
+Configure read sources with `KNOWLEDGE_SOURCES`, curated KB destinations with `KNOWLEDGE_DESTINATIONS`,
+and links between them with `KNOWLEDGE_FLOWS`
+(`SOURCE` and `DESTINATION` are accepted as single-value aliases):
 
 ```env
-KNOWLEDGE_REPOSITORIES=[{"id":"cats","name":"Cats Knowledge Base","path":"knowledge-bases/cats"},{"id":"docs","name":"Product Docs","path":"../product-docs"}]
+MAGPIE_CHECKOUT_ROOT=.magpie/checkouts
+KNOWLEDGE_SOURCES=[{"id":"agent","name":"Agent Knowledge","kind":"agent"},{"id":"flowerbi","name":"FlowerBI Source","url":"https://github.com/danielearwicker/flowerbi.git","subpath":"src"}]
+KNOWLEDGE_DESTINATIONS=[{"id":"flowerbi-docs","name":"FlowerBI Docs","url":"https://github.com/AdamAwan/flowerbi-doc-test.git","subpath":"docs"}]
+KNOWLEDGE_FLOWS=[{"id":"flowerbi","name":"FlowerBI KB","sourceIds":["flowerbi"],"destinationId":"flowerbi-docs"}]
 ```
 
-Then index a configured repository by ID:
+Supported source kinds:
+
+- `local`: `{ "path": "knowledge-bases/cats" }`
+- `git`: `{ "url": "https://github.com/org/repo.git", "subpath": "docs" }`
+- `internet`: `{ "kind": "internet", "url": "https://example.com/docs" }` or `"internet"`
+- `agent`: `{ "kind": "agent" }` or `"agent"`
+
+Remote git sources and destinations are cloned or fast-forward pulled into `MAGPIE_CHECKOUT_ROOT`
+during API startup.
+Use `subpath` when the useful folder is inside the checkout, such as a `docs` directory.
+
+`KNOWLEDGE_REPOSITORIES` and `KNOWLEDGE_REPO_PATH` remain accepted as compatibility fallbacks when
+the explicit source/destination variables are unset.
+
+## Indexing
+
+Index a configured flow. This indexes the destination KB, not the raw source:
 
 ```bash
 curl -s -X POST http://localhost:4000/api/repositories/index \
   -H 'content-type: application/json' \
-  -d '{"repositoryId":"cats"}'
+  -d '{"flowId":"flowerbi"}'
 ```
 
-The API rejects arbitrary client-supplied local paths when `KNOWLEDGE_REPOSITORIES` is set.
-`KNOWLEDGE_REPO_PATH` remains available as a legacy single-repository fallback when the
-multi-repository variable is unset.
+The `/ask` endpoint and MCP tools retrieve from indexed destination KB documents. Raw sources
+(`agent`, `internet`, source repos, libraries, codebases) are used to draft and update the
+destination KB, but are not indexed as the answer corpus.
 
 The API:
 

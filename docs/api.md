@@ -77,19 +77,19 @@ Searches indexed sections. `limit` defaults to `5`. When hybrid retrieval is act
 
 ### `POST /api/repositories/index`
 
-Indexes a local Git-backed Markdown repository. See [ingestion.md](ingestion.md).
+Indexes the destination KB for a configured flow. See [ingestion.md](ingestion.md).
 
 ```json
-{ "repositoryId": "cats" }
+{ "flowId": "cats" }
 ```
 
-`repositoryId` must match an entry in the `KNOWLEDGE_REPOSITORIES` environment variable.
-When exactly one repository is configured, `repositoryId` may be omitted. The API indexes
-only configured paths; arbitrary `localPath` values are rejected while configured repositories
-exist.
+`flowId` must match an entry in `KNOWLEDGE_FLOWS`. The API indexes that flow's destination
+repository/folder, which is the curated KB used by `/ask` and MCP. `repositoryId` remains accepted
+as a direct destination ID for compatibility. Arbitrary `localPath` values are rejected while
+configured destinations exist.
 
-For older single-repository deployments, `KNOWLEDGE_REPO_PATH` is still used as a fallback
-when `KNOWLEDGE_REPOSITORIES` is unset.
+For older single-repository deployments, `KNOWLEDGE_REPOSITORIES` and `KNOWLEDGE_REPO_PATH` are
+still used as fallbacks when `KNOWLEDGE_SOURCES` / `KNOWLEDGE_DESTINATIONS` are unset.
 
 - `400 configured_repository_required` — multiple repositories are configured and no valid ID was supplied.
 - `400 local_path_not_allowed` — a client attempted to submit an arbitrary server path.
@@ -214,10 +214,16 @@ Lists proposals. `limit` defaults to `50`.
 Enqueues a `draft_markdown_proposal` job for a known gap candidate.
 
 ```json
-{ "summary": "No source material found for: How do I trim claws?", "targetPath": "knowledge-bases/cats/proposed-gap.md" }
+{
+  "summary": "No source material found for: How do I trim claws?",
+  "targetPath": "proposed-gap.md",
+  "sourceIds": ["agent", "flowerbi"],
+  "destinationId": "flowerbi-docs"
+}
 ```
 
-`targetPath` is optional. The summary must match an existing gap candidate.
+`targetPath`, `sourceIds`, and `destinationId` are optional. The summary must match an existing gap candidate.
+When omitted, proposal jobs use the configured sources by default and the only configured destination when one exists.
 
 - `400 gap_summary_required` — empty or missing summary.
 - `404 gap_candidate_not_found` — no candidate matches the summary.
@@ -243,8 +249,9 @@ Sets the proposal status directly. Valid values: `draft`, `ready`, `branch-pushe
 
 ### `POST /api/proposals/:id/publish`
 
-Publishes a `ready` proposal to a local Git branch via the `local-git` publisher (commits the
-Markdown to a new `magpie/proposal-*` branch and records the branch and commit SHA). Opening a
+Publishes a `ready` proposal to the configured destination via the `local-git` publisher. Git
+destinations are cloned or fast-forward pulled into `MAGPIE_CHECKOUT_ROOT`, then the Markdown is
+committed to a new `magpie/proposal-*` branch and the branch and commit SHA are recorded. Opening a
 hosted pull request from that branch is planned but not yet implemented.
 
 - `404 proposal_not_found`.

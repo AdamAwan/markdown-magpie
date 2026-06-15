@@ -141,6 +141,7 @@ export interface Proposal {
   gapClusterId?: string;
   gapSummary?: string;
   triggeringQuestionIds?: string[];
+  destinationId?: string;
   rationale?: string;
   jobId?: string;
   publication?: ProposalPublication;
@@ -250,8 +251,19 @@ export interface DraftMarkdownProposalJobInput {
   gapSummary: string;
   triggeringQuestions: string[];
   evidence: Citation[];
+  sourceContext?: SourceDataContext[];
+  destinationId?: string;
   targetPath?: string;
   expectedOutput: "markdown_proposal";
+}
+
+export interface SourceDataContext {
+  sourceId: string;
+  sourceName: string;
+  kind: "local" | "git" | "internet" | "agent";
+  path?: string;
+  url?: string;
+  content?: string;
 }
 
 export interface DraftMarkdownProposalJobOutput {
