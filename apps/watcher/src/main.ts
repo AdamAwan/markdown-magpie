@@ -301,9 +301,36 @@ class CliAgentRunner implements AgentRunner {
 console.log(`Markdown Magpie watcher '${watcherName}' starting`);
 console.log(`API: ${apiBaseUrl}`);
 console.log(`Default provider: ${defaultProvider}`);
+console.log(`Poll interval: ${pollIntervalMs}ms`);
 console.log(`Accepted jobs: ${acceptedTypes.join(", ")}`);
+logProviderReadiness(defaultProvider);
 
 void poll();
+
+// Surface whether the default provider's credentials/CLIs are present at
+// startup, so a misconfigured provider is visible here rather than only when
+// the first job fails. Secrets are reported as set/MISSING, never printed.
+function logProviderReadiness(provider: string): void {
+  const state = (name: string) => (process.env[name] ? "set" : "MISSING");
+  if (provider === "openai-compatible") {
+    console.log(
+      `Provider readiness (openai-compatible) — base url: ${state("OPENAI_COMPATIBLE_BASE_URL")}, ` +
+        `model: ${state("OPENAI_COMPATIBLE_MODEL")}, api key: ${state("OPENAI_COMPATIBLE_API_KEY")}`
+    );
+  } else if (provider === "codex") {
+    console.log(
+      `Provider readiness (codex) — command: ${process.env.CODEX_CLI_PATH ?? "codex"}, args: ${process.env.CODEX_CLI_ARGS ?? "exec"}`
+    );
+  } else if (provider === "claude") {
+    console.log(
+      `Provider readiness (claude) — command: ${process.env.CLAUDE_CLI_PATH ?? "claude"}, args: ${process.env.CLAUDE_CLI_ARGS ?? "-p"}`
+    );
+  } else if (provider === "mock") {
+    console.log("Provider readiness (mock) — no external credentials required");
+  } else {
+    console.log(`Provider readiness — no check available for provider '${provider}'`);
+  }
+}
 
 function providerForJob(job: AiJob): string {
   const provider = (job.input as { provider?: unknown }).provider;

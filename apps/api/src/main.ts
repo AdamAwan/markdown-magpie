@@ -93,8 +93,7 @@ async function start(): Promise<void> {
 
   server.listen(port, () => {
     console.log(`Markdown Magpie API listening on http://localhost:${port}/api`);
-    console.log(`AI execution mode: ${runtimeConfig.aiExecutionMode}`);
-    console.log(`AI provider: ${runtimeConfig.aiProvider}`);
+    logStartupConfig();
   });
 }
 
@@ -842,6 +841,74 @@ function getRuntimeConfig() {
       claimTimeoutMs: aiJobClaimTimeoutMs
     }
   };
+}
+
+// Startup summary so operators can trace which options resolved and which
+// providers/credentials are (not) wired up. Built from getRuntimeConfig() so it
+// reuses the same secret masking — values are reported as "set"/"not set", never
+// printed. Set LOG_STARTUP_CONFIG=false to suppress.
+function logStartupConfig(): void {
+  if (process.env.LOG_STARTUP_CONFIG === "false") {
+    return;
+  }
+
+  const cfg = getRuntimeConfig();
+  const lines: string[] = [];
+  const section = (title: string) => lines.push(`  ${title}`);
+  const add = (label: string, value: unknown) => lines.push(`    ${`${label}`.padEnd(26)}: ${value}`);
+
+  section("Stores (memory | postgres)");
+  add("storage backend (default)", cfg.stores.storageBackend);
+  add("knowledge store", cfg.stores.knowledgeStore);
+  add("question log store", cfg.stores.questionLogStore);
+  add("proposal store", cfg.stores.proposalStore);
+  add("ai job queue", cfg.stores.aiJobQueue);
+  add("database url", cfg.stores.databaseUrl ?? "not set");
+
+  section("AI execution");
+  add("execution mode", cfg.aiRuntime.executionMode);
+  add("active provider", cfg.aiRuntime.provider);
+  add("configured providers", cfg.aiRuntime.providers.map((provider) => provider.name).join(", "));
+  add("usable in direct mode", cfg.aiRuntime.directProviders.join(", ") || "none");
+  add("usable in queue mode", cfg.aiRuntime.queueProviders.join(", ") || "none");
+
+  section("Chat provider (openai-compatible)");
+  add("base url", cfg.providers.openAiCompatible.baseUrl ?? "not set");
+  add("model", cfg.providers.openAiCompatible.model ?? "not set");
+  add("api key", cfg.providers.openAiCompatible.apiKey);
+
+  section("Embeddings / retrieval");
+  add("retrieval mode", `${cfg.retrieval.mode} (${cfg.retrieval.reason})`);
+  add("embedding provider", cfg.retrieval.embeddingProvider ?? "none");
+  add("embedding base url", cfg.providers.openAiCompatible.embeddingBaseUrl ?? "falls back to chat");
+  add("embedding model", cfg.providers.openAiCompatible.embeddingModel ?? "not set");
+  add("embedding api key", cfg.providers.openAiCompatible.embeddingApiKey);
+
+  section("Azure OpenAI");
+  add("endpoint", cfg.providers.azureOpenAi.endpoint ?? "not set");
+  add("chat deployment", cfg.providers.azureOpenAi.chatDeployment ?? "not set");
+  add("embedding deployment", cfg.providers.azureOpenAi.embeddingDeployment ?? "not set");
+  add("api key", cfg.providers.azureOpenAi.apiKey);
+
+  section("Git");
+  add("provider (display only)", cfg.providers.gitProvider);
+  add("github token", cfg.providers.gitSecrets.githubToken);
+  add("azure devops pat", cfg.providers.gitSecrets.azureDevopsPat);
+
+  section("Knowledge");
+  add("sources", cfg.knowledge.sources.map((repo) => `${repo.id}[${repo.kind}]`).join(", ") || "none");
+  add("destinations", cfg.knowledge.destinations.map((repo) => `${repo.id}[${repo.kind}]`).join(", ") || "none");
+  add(
+    "flows",
+    cfg.knowledge.flows.map((flow) => `${flow.id}(${flow.sourceIds.join("+")}->${flow.destinationId})`).join(", ") || "none"
+  );
+  add("checkout root", cfg.knowledge.checkoutRoot);
+
+  section("Watcher");
+  add("name", cfg.watcher.name ?? "not set");
+  add("poll interval ms", cfg.watcher.pollIntervalMs ?? "default (2000)");
+
+  console.log(`Resolved configuration (env=${cfg.api.nodeEnv}):\n${lines.join("\n")}`);
 }
 
 function maskConnectionString(value: string | undefined): string | null {
