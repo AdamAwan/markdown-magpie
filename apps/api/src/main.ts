@@ -28,7 +28,7 @@ import { ensureGitCheckout, fetchPullRequestStatus, LocalGitProposalPublisher, r
 import { answerQuestion, createChatProvider, createEmbeddingProvider, type ChatProviderName, type EmbeddingProviderName } from "@magpie/retrieval";
 import { DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS, InMemoryAiJobQueue } from "./ai-job-queue.js";
 import { embedPendingSections } from "./embed-sections.js";
-import { assembleClusters, singletonCluster } from "./gap-clustering.js";
+import { assembleClusters, selectClustersToDraft, singletonCluster } from "./gap-clustering.js";
 import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
 import {
   type ConfiguredKnowledgeFlow,
@@ -474,33 +474,26 @@ async function reindexDestinationForProposal(proposal: Proposal): Promise<boolea
   }
 }
 
-async function handlePublishProposal(proposalId: string, response: ServerResponse): Promise<void> {
-  const proposal = await proposals.get(proposalId);
-  if (!proposal) {
-    writeJson(response, 404, { error: "proposal_not_found" });
-    return;
-  }
-
-  if (proposal.status !== "ready") {
-    writeJson(response, 409, { error: "proposal_not_ready", message: "Only ready proposals can be published." });
-    return;
-  }
-
+// Pushes a "ready" proposal's branch and raises a PR for it, degrading to a
+// branch-only publish if the PR can't be opened. Shared by the HTTP publish
+// route and the scheduled gap-to-PR task, so the result is a discriminated
+// outcome rather than an HTTP response — callers map it to their own surface.
+async function publishReadyProposal(proposal: Proposal) {
   const repository = await findRepositoryForProposal(proposal);
   if (!repository) {
-    writeJson(response, 409, {
-      error: "proposal_repository_not_found",
+    return {
+      ok: false as const,
+      code: "proposal_repository_not_found",
       message: "No indexed Git repository matches this proposal target path."
-    });
-    return;
+    };
   }
 
   if (repository.git?.scope === "not-git" || !repository.git?.workTreeRoot) {
-    writeJson(response, 409, {
-      error: "proposal_repository_not_git",
+    return {
+      ok: false as const,
+      code: "proposal_repository_not_git",
       message: "The matched repository is not a Git checkout."
-    });
-    return;
+    };
   }
 
   try {
@@ -546,11 +539,37 @@ async function handlePublishProposal(proposalId: string, response: ServerRespons
       publishedAt: new Date().toISOString()
     });
 
-    writeJson(response, 200, { proposal: updatedProposal, publication, pullRequestUrl, pullRequestWarning });
+    return { ok: true as const, proposal: updatedProposal, publication, pullRequestUrl, pullRequestWarning };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Proposal publish failed";
-    writeJson(response, 409, { error: "proposal_publish_failed", message });
+    return { ok: false as const, code: "proposal_publish_failed", message };
   }
+}
+
+async function handlePublishProposal(proposalId: string, response: ServerResponse): Promise<void> {
+  const proposal = await proposals.get(proposalId);
+  if (!proposal) {
+    writeJson(response, 404, { error: "proposal_not_found" });
+    return;
+  }
+
+  if (proposal.status !== "ready") {
+    writeJson(response, 409, { error: "proposal_not_ready", message: "Only ready proposals can be published." });
+    return;
+  }
+
+  const outcome = await publishReadyProposal(proposal);
+  if (!outcome.ok) {
+    writeJson(response, 409, { error: outcome.code, message: outcome.message });
+    return;
+  }
+
+  writeJson(response, 200, {
+    proposal: outcome.proposal,
+    publication: outcome.publication,
+    pullRequestUrl: outcome.pullRequestUrl,
+    pullRequestWarning: outcome.pullRequestWarning
+  });
 }
 
 // Human-facing PR description linking the merge back to the gaps it closes.
@@ -629,24 +648,19 @@ async function handleResetData(response: ServerResponse): Promise<void> {
 // single `summary` (legacy /from-gap) or a `summaries` array (a confirmed
 // cluster from /from-gaps). Evidence and triggering questions are unioned across
 // every gap in the cluster so the drafter sees the full picture once.
-async function handleCreateProposalFromGaps(request: IncomingMessage, response: ServerResponse): Promise<void> {
-  const payload = await readJsonBody<{
-    summary?: string;
-    summaries?: string[];
-    targetPath?: string;
-    flowId?: string;
-    sourceIds?: string[];
-    destinationId?: string;
-  }>(request);
-
-  const requested = [...(payload.summaries ?? []), ...(payload.summary ? [payload.summary] : [])]
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-  const uniqueRequested = [...new Set(requested)];
+// Core of "draft one proposal from a confirmed cluster of gap summaries",
+// independent of HTTP so the scheduled gap-to-PR task can reuse it. Returns a
+// discriminated outcome: in direct mode the proposal is already created; in
+// queue mode an AI job is enqueued and the proposal lands later via the job
+// completion machinery.
+async function draftProposalFromGapSummaries(
+  rawSummaries: string[],
+  overrides: { targetPath?: string; flowId?: string; sourceIds?: string[]; destinationId?: string } = {}
+) {
+  const uniqueRequested = [...new Set(rawSummaries.map((value) => value.trim()).filter((value) => value.length > 0))];
 
   if (uniqueRequested.length === 0) {
-    writeJson(response, 400, { error: "gap_summary_required" });
-    return;
+    return { ok: false as const, code: "gap_summary_required" };
   }
 
   const candidates = await questionLogs.listGapCandidates(200);
@@ -655,8 +669,7 @@ async function handleCreateProposalFromGaps(request: IncomingMessage, response: 
     .filter((candidate): candidate is GapCandidate => Boolean(candidate));
 
   if (matched.length === 0) {
-    writeJson(response, 404, { error: "gap_candidate_not_found" });
-    return;
+    return { ok: false as const, code: "gap_candidate_not_found" };
   }
 
   const gapSummaries = matched.map((candidate) => candidate.summary);
@@ -667,9 +680,9 @@ async function handleCreateProposalFromGaps(request: IncomingMessage, response: 
     (log): log is NonNullable<typeof log> => Boolean(log)
   );
   const evidence = dedupeCitations(logs.flatMap((log) => log.answer?.citations ?? []));
-  const flow = selectFlow(payload.flowId);
-  const sourceIds = payload.sourceIds ?? flow?.sourceIds;
-  const destinationId = payload.destinationId?.trim() || flow?.destinationId || defaultDestinationId();
+  const flow = selectFlow(overrides.flowId);
+  const sourceIds = overrides.sourceIds ?? flow?.sourceIds;
+  const destinationId = overrides.destinationId?.trim() || flow?.destinationId || defaultDestinationId();
   console.log(
     `Drafting proposal for ${label} (flow=${flow?.id ?? "none"}, destination=${destinationId ?? "none"}, ` +
       `provider=${runtimeConfig.aiProvider}, mode=${runtimeConfig.aiExecutionMode})`
@@ -690,7 +703,7 @@ async function handleCreateProposalFromGaps(request: IncomingMessage, response: 
     evidence,
     sourceContext,
     destinationId,
-    targetPath: payload.targetPath?.trim() || undefined,
+    targetPath: overrides.targetPath?.trim() || undefined,
     provider: runtimeConfig.aiProvider,
     expectedOutput: "markdown_proposal"
   } as DraftMarkdownProposalJobInput & { provider: AiProviderName };
@@ -707,8 +720,7 @@ async function handleCreateProposalFromGaps(request: IncomingMessage, response: 
     });
 
     console.log(`Created proposal ${proposal.id} directly for ${label} (target ${proposal.targetPath})`);
-    writeJson(response, 201, { proposal });
-    return;
+    return { ok: true as const, mode: "direct" as const, proposal };
   }
 
   const job = await aiJobs.enqueue("draft_markdown_proposal", {
@@ -717,10 +729,41 @@ async function handleCreateProposalFromGaps(request: IncomingMessage, response: 
   });
 
   console.log(`Enqueued draft_markdown_proposal job ${job.id} for ${label}`);
+  return { ok: true as const, mode: "queue" as const, job };
+}
+
+async function handleCreateProposalFromGaps(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const payload = await readJsonBody<{
+    summary?: string;
+    summaries?: string[];
+    targetPath?: string;
+    flowId?: string;
+    sourceIds?: string[];
+    destinationId?: string;
+  }>(request);
+
+  const requested = [...(payload.summaries ?? []), ...(payload.summary ? [payload.summary] : [])];
+  const outcome = await draftProposalFromGapSummaries(requested, {
+    targetPath: payload.targetPath,
+    flowId: payload.flowId,
+    sourceIds: payload.sourceIds,
+    destinationId: payload.destinationId
+  });
+
+  if (!outcome.ok) {
+    writeJson(response, outcome.code === "gap_summary_required" ? 400 : 404, { error: outcome.code });
+    return;
+  }
+
+  if (outcome.mode === "direct") {
+    writeJson(response, 201, { proposal: outcome.proposal });
+    return;
+  }
+
   writeJson(response, 202, {
-    job,
+    job: outcome.job,
     links: {
-      status: apiLink(`/ai-jobs/${job.id}`),
+      status: apiLink(`/ai-jobs/${outcome.job.id}`),
       proposals: apiLink("/proposals")
     }
   });
@@ -1831,6 +1874,16 @@ const scheduledTaskDefinitions: ScheduledTaskDefinition[] = [
       "or closed (mark rejected) on the host. Requires GITHUB_TOKEN.",
     defaultCron: "*/10 * * * *",
     run: refreshPullRequests
+  },
+  {
+    key: "gaps-to-pull-requests",
+    label: "Clustered gaps → pull requests",
+    description:
+      "Clusters the open knowledge gaps, drafts a proposal for any cluster not already covered, then " +
+      "publishes every draft and ready proposal as a pull request (auto-promoting drafts to ready). " +
+      "A fully automated pipeline with no manual review step.",
+    defaultCron: "0 * * * *",
+    run: processGapsIntoPullRequests
   }
 ];
 
@@ -1929,6 +1982,87 @@ async function refreshPullRequests(): Promise<void> {
       // proposal; mark it so the task stops chasing a dead PR.
       await proposals.updateStatus(proposal.id, "rejected");
       console.log(`Pull request for proposal ${proposal.id} was closed without merging; marked rejected.`);
+    }
+  }
+}
+
+// The set of gap summaries that already have a proposal, so the gap-to-PR task
+// never drafts the same gap twice. This deliberately includes rejected proposals
+// (a closed PR): without it, an autonomous run would re-draft and re-raise every
+// hour the very content a human just declined. Merged proposals resolve their
+// gaps at the source, so those summaries stop appearing as candidates and need
+// no entry here; proposals.list already omits merged rows.
+async function coveredGapSummaries(): Promise<Set<string>> {
+  const summaries = new Set<string>();
+  for (const proposal of await proposals.list(500)) {
+    for (const summary of splitGapSummaries(proposal.gapSummary)) {
+      summaries.add(summary);
+    }
+  }
+  return summaries;
+}
+
+// End-to-end gap-to-PR pipeline. First drafts proposals for any gap cluster not
+// already covered, then auto-promotes every draft to ready and publishes all
+// draft/ready proposals as pull requests. Each step is best-effort and logged so
+// one failure can't abort the whole run.
+async function processGapsIntoPullRequests(): Promise<void> {
+  // 1) Cluster the open gaps and draft a proposal for each uncovered cluster.
+  const candidates = await questionLogs.listGapCandidates(200);
+  if (candidates.length > 0) {
+    const clusters = await clusterGapCandidates(candidates);
+    const toDraft = selectClustersToDraft(
+      clusters,
+      candidates.map((candidate) => candidate.summary),
+      await coveredGapSummaries()
+    );
+    for (const summaries of toDraft) {
+      try {
+        const outcome = await draftProposalFromGapSummaries(summaries);
+        if (!outcome.ok) {
+          console.warn(`Gap-to-PR task skipped a cluster: ${outcome.code}`);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "draft failed";
+        console.warn(`Gap-to-PR task failed to draft a cluster: ${message}`);
+      }
+    }
+  }
+
+  // 2) Get every unpublished proposal to a PR. Drafts are auto-promoted to ready
+  // first; "branch-pushed" proposals are ones whose branch landed but whose PR
+  // never opened (transient host error, or no token at the time), so we retry the
+  // PR for them too. Raising a PR for a branch that already has one is rejected
+  // by the host, so this can't create duplicates.
+  const pending = [
+    ...(await proposals.list(200, { status: "draft" })),
+    ...(await proposals.list(200, { status: "ready" })),
+    ...(await proposals.list(200, { status: "branch-pushed" }))
+  ];
+  for (const proposal of pending) {
+    let candidate = proposal;
+    if (candidate.status === "draft") {
+      const promoted = await proposals.updateStatus(candidate.id, "ready");
+      if (!promoted) {
+        continue;
+      }
+      candidate = promoted;
+    }
+
+    try {
+      const outcome = await publishReadyProposal(candidate);
+      if (outcome.ok) {
+        console.log(
+          outcome.pullRequestUrl
+            ? `Gap-to-PR task raised ${outcome.pullRequestUrl} for proposal ${candidate.id}.`
+            : `Gap-to-PR task pushed a branch for proposal ${candidate.id} (no PR raised).`
+        );
+      } else {
+        console.warn(`Gap-to-PR task could not publish proposal ${candidate.id}: ${outcome.code} (${outcome.message}).`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "publish failed";
+      console.warn(`Gap-to-PR task failed to publish proposal ${candidate.id}: ${message}`);
     }
   }
 }

@@ -103,3 +103,32 @@ export function assembleClusters(candidates: GapCandidate[], parsed: unknown): S
 
   return clusters;
 }
+
+// Decides which clusters the autonomous gap-to-PR pipeline should draft a
+// proposal for, returning one summary list per proposal to create. A cluster is
+// drafted only when it still contains at least one live gap candidate that no
+// existing proposal already covers. Summaries chosen in this pass are folded
+// into `covered` as we go, so two overlapping clusters can't both draft the same
+// gap in a single run.
+export function selectClustersToDraft(
+  clusters: SuggestedGapCluster[],
+  liveSummaries: Iterable<string>,
+  coveredSummaries: Iterable<string>
+): string[][] {
+  const live = new Set(liveSummaries);
+  const covered = new Set(coveredSummaries);
+  const selected: string[][] = [];
+
+  for (const cluster of clusters) {
+    const summaries = cluster.summaries.filter((summary) => live.has(summary));
+    if (summaries.length === 0 || summaries.every((summary) => covered.has(summary))) {
+      continue;
+    }
+    selected.push(summaries);
+    for (const summary of summaries) {
+      covered.add(summary);
+    }
+  }
+
+  return selected;
+}

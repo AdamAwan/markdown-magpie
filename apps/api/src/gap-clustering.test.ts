@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { GapCandidate } from "@magpie/core";
-import { assembleClusters, clusterId, singletonCluster } from "./gap-clustering.js";
+import { assembleClusters, buildCluster, clusterId, selectClustersToDraft, singletonCluster } from "./gap-clustering.js";
 
 function candidate(summary: string, questionIds: string[]): GapCandidate {
   return { summary, questionIds, count: questionIds.length, latestAskedAt: "2026-06-16T00:00:00.000Z", confidence: "low" };
@@ -98,4 +98,34 @@ test("singletonCluster derives a title from the gap summary", () => {
   assert.equal(cluster.summaries.length, 1);
   assert.equal(cluster.title, "How Do I Trim Claws");
   assert.deepEqual(cluster.questionIds, ["q9"]);
+});
+
+const clusterOf = (summaries: string[]) => buildCluster(summaries.map((s) => candidate(s, ["q"])), undefined, undefined);
+
+test("selectClustersToDraft returns the live summaries of an uncovered cluster", () => {
+  const selected = selectClustersToDraft([clusterOf(["a", "b"])], ["a", "b"], []);
+  assert.deepEqual(selected, [["a", "b"]]);
+});
+
+test("selectClustersToDraft skips a cluster already fully covered by a proposal", () => {
+  const selected = selectClustersToDraft([clusterOf(["a", "b"])], ["a", "b"], ["a", "b"]);
+  assert.deepEqual(selected, []);
+});
+
+test("selectClustersToDraft drafts a cluster that has at least one uncovered gap", () => {
+  // "a" is already covered but "b" is not, so the cluster is still worth drafting.
+  const selected = selectClustersToDraft([clusterOf(["a", "b"])], ["a", "b"], ["a"]);
+  assert.deepEqual(selected, [["a", "b"]]);
+});
+
+test("selectClustersToDraft drops summaries that are no longer live candidates", () => {
+  // "gone" was resolved/removed since clustering, so it must not be drafted.
+  const selected = selectClustersToDraft([clusterOf(["a", "gone"])], ["a"], []);
+  assert.deepEqual(selected, [["a"]]);
+});
+
+test("selectClustersToDraft never drafts the same gap twice across overlapping clusters", () => {
+  const selected = selectClustersToDraft([clusterOf(["a"]), clusterOf(["a"])], ["a"], []);
+  // Second cluster is suppressed once the first claims "a".
+  assert.deepEqual(selected, [["a"]]);
 });
