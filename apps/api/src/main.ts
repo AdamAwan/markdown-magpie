@@ -19,6 +19,7 @@ import type {
   Proposal,
   RepositoryRef,
   QuestionFeedback,
+  ScheduledTaskSettings,
   SourceDataContext,
   SuggestedGapCluster
 } from "@magpie/core";
@@ -45,8 +46,10 @@ import { PostgresCrunchStore } from "./postgres-crunch-store.js";
 import { PostgresKnowledgeStore } from "./postgres-knowledge-store.js";
 import { PostgresProposalStore } from "./postgres-proposal-store.js";
 import { PostgresQuestionLogStore } from "./postgres-question-log-store.js";
+import { PostgresScheduledTaskStore } from "./postgres-scheduled-task-store.js";
 import { InMemoryProposalStore } from "./proposal-store.js";
 import { InMemoryQuestionLogStore } from "./question-log-store.js";
+import { InMemoryScheduledTaskStore } from "./scheduled-task-store.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
 const aiJobClaimTimeoutMs = parseClaimTimeoutMs(process.env.AI_JOB_CLAIM_TIMEOUT_MS);
@@ -67,6 +70,7 @@ const knowledgeIndex = knowledgeStore
 const questionLogs = createQuestionLogStore();
 const proposals = createProposalStore();
 const crunchRuns = createCrunchStore();
+const scheduledTasks = createScheduledTaskStore();
 let runtimeConfig = createInitialRuntimeConfig();
 const configuredKnowledgeRepositories = getConfiguredKnowledgeRepositories();
 const configuredKnowledgeSources = getConfiguredKnowledgeSources();
@@ -107,7 +111,7 @@ async function start(): Promise<void> {
     console.log(`Markdown Magpie API listening on http://localhost:${port}/api`);
     logStartupConfig();
     startCrunchScheduler();
-    startPullRequestPoller();
+    startScheduledTaskScheduler();
   });
 }
 
@@ -299,6 +303,23 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   const crunchRunPublishMatch = /^\/crunch\/runs\/([^/]+)\/publish$/.exec(path);
   if (request.method === "POST" && crunchRunPublishMatch) {
     await handlePublishCrunchRun(crunchRunPublishMatch[1], response);
+    return;
+  }
+
+  if (request.method === "GET" && path === "/scheduled-tasks") {
+    writeJson(response, 200, { tasks: await scheduledTasksForResponse() });
+    return;
+  }
+
+  const scheduledTaskSettingsMatch = /^\/scheduled-tasks\/([^/]+)\/settings$/.exec(path);
+  if (request.method === "POST" && scheduledTaskSettingsMatch) {
+    await handleUpdateScheduledTaskSettings(scheduledTaskSettingsMatch[1], request, response);
+    return;
+  }
+
+  const scheduledTaskRunMatch = /^\/scheduled-tasks\/([^/]+)\/run$/.exec(path);
+  if (request.method === "POST" && scheduledTaskRunMatch) {
+    await handleRunScheduledTask(scheduledTaskRunMatch[1], response);
     return;
   }
 
@@ -582,6 +603,7 @@ async function handleResetData(response: ServerResponse): Promise<void> {
   await questionLogs.reset();
   await proposals.reset();
   await crunchRuns.reset();
+  await scheduledTasks.reset();
   await aiJobs.reset();
   if (knowledgeStore) {
     await knowledgeStore.reset();
@@ -1789,74 +1811,181 @@ async function crunchSchedulerTick(): Promise<void> {
   }
 }
 
-let pullRequestPollInFlight = false;
-
-// Polls open pull requests so a human merging (or closing) on the host
-// auto-advances the proposal here — closing the loop without a manual click.
-// Disabled when no GITHUB_TOKEN is configured (nothing to query) or when the
-// tick interval is set to 0.
-function startPullRequestPoller(): void {
-  const tickMs = Number.parseInt(process.env.PULL_REQUEST_POLL_TICK_MS ?? "60000", 10);
-  if (!Number.isFinite(tickMs) || tickMs <= 0) {
-    console.log("Pull request poller disabled (PULL_REQUEST_POLL_TICK_MS <= 0).");
-    return;
-  }
-  if (!process.env.GITHUB_TOKEN?.trim()) {
-    console.log("Pull request poller disabled (no GITHUB_TOKEN configured).");
-    return;
-  }
-
-  const timer = setInterval(() => void pullRequestPollTick(), tickMs);
-  timer.unref?.();
-  console.log(`Pull request poller started (tick ${tickMs}ms)`);
+// A background side-process the operator can schedule from the Crunch page. The
+// registry is the single place to add new scheduled work: give it a key, copy,
+// a default cron, and a handler, and it appears in the UI and the scheduler.
+interface ScheduledTaskDefinition {
+  key: string;
+  label: string;
+  description: string;
+  defaultCron: string;
+  run(): Promise<void>;
 }
 
-// One tick: for every proposal still awaiting its PR, ask the host whether it
-// merged or closed and advance the proposal accordingly. Re-entrancy guarded so
-// a slow re-index can't overlap the next tick.
-async function pullRequestPollTick(): Promise<void> {
-  if (pullRequestPollInFlight) {
+const scheduledTaskDefinitions: ScheduledTaskDefinition[] = [
+  {
+    key: "pull-request-refresh",
+    label: "Pull request status refresh",
+    description:
+      "Checks open pull requests and advances proposals when they are merged (resolve gaps + re-index) " +
+      "or closed (mark rejected) on the host. Requires GITHUB_TOKEN.",
+    defaultCron: "*/10 * * * *",
+    run: refreshPullRequests
+  }
+];
+
+function findScheduledTask(key: string): ScheduledTaskDefinition | undefined {
+  return scheduledTaskDefinitions.find((task) => task.key === key);
+}
+
+// The default (unsaved) schedule for a registered task, so the UI can render a
+// control before the schedule has ever been saved.
+function defaultScheduledTaskSettings(task: ScheduledTaskDefinition): ScheduledTaskSettings {
+  return { key: task.key, enabled: false, cron: task.defaultCron };
+}
+
+let scheduledTaskTickInFlight = false;
+
+// Drives every registered side-process on its own cron, mirroring the Crunch
+// scheduler: one timer, a re-entrancy guard, and "reschedule before run" so a
+// failure or restart can't cause a tight retry loop.
+function startScheduledTaskScheduler(): void {
+  const tickMs = Number.parseInt(process.env.SCHEDULED_TASK_TICK_MS ?? "60000", 10);
+  const interval = Number.isFinite(tickMs) && tickMs > 0 ? tickMs : 60_000;
+  const timer = setInterval(() => void scheduledTaskTick(), interval);
+  timer.unref?.();
+  console.log(`Scheduled task scheduler started (tick ${interval}ms)`);
+}
+
+async function scheduledTaskTick(): Promise<void> {
+  if (scheduledTaskTickInFlight) {
     return;
   }
-  pullRequestPollInFlight = true;
+  scheduledTaskTickInFlight = true;
   try {
-    const open = await proposals.list(200, { status: "pr-opened" });
-    for (const proposal of open) {
-      const pullRequestUrl = proposal.publication?.pullRequestUrl;
-      if (!pullRequestUrl) {
+    const now = Date.now();
+    for (const task of scheduledTaskDefinitions) {
+      const setting = await scheduledTasks.getSettings(task.key);
+      if (!setting?.enabled || !setting.nextRunAt) {
+        continue;
+      }
+      if (new Date(setting.nextRunAt).getTime() > now) {
         continue;
       }
 
-      let status: Awaited<ReturnType<typeof fetchPullRequestStatus>>;
+      const nextRunAt = nextCronTime(setting.cron, new Date(now));
+      if (!nextRunAt) {
+        console.warn(`Scheduled task ${task.key} has an invalid cron "${setting.cron}"; skipping.`);
+        continue;
+      }
+      await scheduledTasks.touchSchedule(task.key, new Date(now).toISOString(), nextRunAt.toISOString());
+      console.log(`Scheduled task ${task.key} due; running.`);
       try {
-        status = await fetchPullRequestStatus(pullRequestUrl);
+        await task.run();
       } catch (error) {
-        const message = error instanceof Error ? error.message : "pull request lookup failed";
-        console.warn(`Pull request status check failed for proposal ${proposal.id}: ${message}`);
-        continue;
-      }
-      if (!status) {
-        continue;
-      }
-
-      if (status.merged) {
-        const merged = await proposals.updateStatus(proposal.id, "merged");
-        if (merged) {
-          console.log(`Detected merged pull request for proposal ${proposal.id}; running merge cascade.`);
-          await runMergeCascade(merged);
-        }
-      } else if (status.state === "closed") {
-        // Closed without merging is effectively a rejection of the published
-        // proposal; mark it so the poller stops chasing a dead PR.
-        await proposals.updateStatus(proposal.id, "rejected");
-        console.log(`Pull request for proposal ${proposal.id} was closed without merging; marked rejected.`);
+        const message = error instanceof Error ? error.message : "scheduled task run failed";
+        console.error(`Scheduled task ${task.key} failed: ${message}`);
       }
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : "pull request poll tick failed";
-    console.error(`Pull request poll tick error: ${message}`);
+    const message = error instanceof Error ? error.message : "scheduled task tick failed";
+    console.error(`Scheduled task tick error: ${message}`);
   } finally {
-    pullRequestPollInFlight = false;
+    scheduledTaskTickInFlight = false;
+  }
+}
+
+// For every proposal still awaiting its PR, ask the host whether it merged or
+// closed and advance the proposal accordingly. No-ops gracefully when no
+// GITHUB_TOKEN is configured (fetchPullRequestStatus returns undefined).
+async function refreshPullRequests(): Promise<void> {
+  const open = await proposals.list(200, { status: "pr-opened" });
+  for (const proposal of open) {
+    const pullRequestUrl = proposal.publication?.pullRequestUrl;
+    if (!pullRequestUrl) {
+      continue;
+    }
+
+    let status: Awaited<ReturnType<typeof fetchPullRequestStatus>>;
+    try {
+      status = await fetchPullRequestStatus(pullRequestUrl);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "pull request lookup failed";
+      console.warn(`Pull request status check failed for proposal ${proposal.id}: ${message}`);
+      continue;
+    }
+    if (!status) {
+      continue;
+    }
+
+    if (status.merged) {
+      const merged = await proposals.updateStatus(proposal.id, "merged");
+      if (merged) {
+        console.log(`Detected merged pull request for proposal ${proposal.id}; running merge cascade.`);
+        await runMergeCascade(merged);
+      }
+    } else if (status.state === "closed") {
+      // Closed without merging is effectively a rejection of the published
+      // proposal; mark it so the task stops chasing a dead PR.
+      await proposals.updateStatus(proposal.id, "rejected");
+      console.log(`Pull request for proposal ${proposal.id} was closed without merging; marked rejected.`);
+    }
+  }
+}
+
+// Always returns one row per registered task, merging in any saved schedule so
+// the UI can render a control even before the schedule has been saved once.
+async function scheduledTasksForResponse(): Promise<
+  Array<{ key: string; label: string; description: string; settings: ScheduledTaskSettings }>
+> {
+  const stored = await scheduledTasks.listSettings();
+  const byKey = new Map(stored.map((setting) => [setting.key, setting]));
+  return scheduledTaskDefinitions.map((task) => ({
+    key: task.key,
+    label: task.label,
+    description: task.description,
+    settings: byKey.get(task.key) ?? defaultScheduledTaskSettings(task)
+  }));
+}
+
+async function handleUpdateScheduledTaskSettings(
+  key: string,
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
+  const task = findScheduledTask(key);
+  if (!task) {
+    writeJson(response, 404, { error: "scheduled_task_not_found" });
+    return;
+  }
+
+  const payload = await readJsonBody<{ enabled?: boolean; cron?: string }>(request);
+  const cron = typeof payload.cron === "string" ? payload.cron.trim() : "";
+  if (!isValidCron(cron)) {
+    writeJson(response, 400, {
+      error: "valid_cron_required",
+      message: "cron must be a standard 5-field expression, e.g. \"*/10 * * * *\"."
+    });
+    return;
+  }
+
+  await scheduledTasks.updateSettings(key, { enabled: Boolean(payload.enabled), cron });
+  writeJson(response, 200, { tasks: await scheduledTasksForResponse() });
+}
+
+async function handleRunScheduledTask(key: string, response: ServerResponse): Promise<void> {
+  const task = findScheduledTask(key);
+  if (!task) {
+    writeJson(response, 404, { error: "scheduled_task_not_found" });
+    return;
+  }
+
+  try {
+    await task.run();
+    writeJson(response, 200, { ok: true, tasks: await scheduledTasksForResponse() });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "scheduled task run failed";
+    writeJson(response, 500, { error: "scheduled_task_run_failed", message });
   }
 }
 
@@ -2117,7 +2246,13 @@ function storageBackend(): "memory" | "postgres" {
 }
 
 function storeBackend(
-  name: "KNOWLEDGE_STORE" | "QUESTION_LOG_STORE" | "PROPOSAL_STORE" | "AI_JOB_QUEUE" | "CRUNCH_STORE"
+  name:
+    | "KNOWLEDGE_STORE"
+    | "QUESTION_LOG_STORE"
+    | "PROPOSAL_STORE"
+    | "AI_JOB_QUEUE"
+    | "CRUNCH_STORE"
+    | "SCHEDULED_TASK_STORE"
 ): "memory" | "postgres" {
   return process.env[name] === "postgres" ? "postgres" : storageBackend();
 }
@@ -2133,6 +2268,19 @@ function createCrunchStore(): InMemoryCrunchStore | PostgresCrunchStore {
   }
 
   return new InMemoryCrunchStore();
+}
+
+function createScheduledTaskStore(): InMemoryScheduledTaskStore | PostgresScheduledTaskStore {
+  if (storeBackend("SCHEDULED_TASK_STORE") === "postgres") {
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      throw new Error("DATABASE_URL is required when SCHEDULED_TASK_STORE=postgres");
+    }
+
+    return new PostgresScheduledTaskStore(databaseUrl);
+  }
+
+  return new InMemoryScheduledTaskStore();
 }
 
 function createConfiguredChatProvider(provider: AiProviderName) {

@@ -439,6 +439,17 @@ export interface CrunchSettings {
   nextRunAt?: string;
 }
 
+// Schedule for a generic background side-process (e.g. refreshing pull request
+// status). Keyed by a stable task key from the server's task registry, so the
+// Crunch page can drive any number of scheduled side-processes uniformly.
+export interface ScheduledTaskSettings {
+  key: string;
+  enabled: boolean;
+  cron: string;
+  lastRunAt?: string;
+  nextRunAt?: string;
+}
+
 // --- Cron scheduling -------------------------------------------------------
 // A small, dependency-free evaluator for standard 5-field cron expressions:
 //   minute(0-59) hour(0-23) day-of-month(1-31) month(1-12) day-of-week(0-6)

@@ -332,6 +332,21 @@ interface CrunchSettings {
   nextRunAt?: string;
 }
 
+interface ScheduledTaskSettings {
+  key: string;
+  enabled: boolean;
+  cron: string;
+  lastRunAt?: string;
+  nextRunAt?: string;
+}
+
+interface ScheduledTask {
+  key: string;
+  label: string;
+  description: string;
+  settings: ScheduledTaskSettings;
+}
+
 interface SearchSection {
   id: string;
   path: string;
@@ -369,6 +384,7 @@ export default function HomePage() {
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [crunchRuns, setCrunchRuns] = useState<CrunchRun[]>([]);
   const [crunchSettings, setCrunchSettings] = useState<CrunchSettings[]>([]);
+  const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
   const [config, setConfig] = useState<RuntimeConfig | undefined>();
   const [selectedProposalId, setSelectedProposalId] = useState<string | undefined>();
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | undefined>();
@@ -462,7 +478,7 @@ export default function HomePage() {
       clearMessage();
     }
     try {
-      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, proposalsResult, crunchRunsResult, crunchSettingsResult, configResult] = await Promise.all([
+      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, proposalsResult, crunchRunsResult, crunchSettingsResult, scheduledTasksResult, configResult] = await Promise.all([
         apiGet<Health>("/health"),
         apiGet<KnowledgeStats>("/knowledge/stats"),
         apiGet<{ repositories: RepositoryRef[] }>("/repositories"),
@@ -474,6 +490,7 @@ export default function HomePage() {
         apiGet<{ proposals: Proposal[] }>("/proposals?limit=8"),
         apiGet<{ runs: CrunchRun[] }>("/crunch/runs?limit=12"),
         apiGet<{ settings: CrunchSettings[] }>("/crunch/settings"),
+        apiGet<{ tasks: ScheduledTask[] }>("/scheduled-tasks"),
         apiGet<RuntimeConfig>("/config")
       ]);
 
@@ -488,6 +505,7 @@ export default function HomePage() {
       setProposals(proposalsResult.proposals);
       setCrunchRuns(crunchRunsResult.runs);
       setCrunchSettings(crunchSettingsResult.settings);
+      setScheduledTasks(scheduledTasksResult.tasks);
       setConfig(configResult);
       setSelectedProposalId((current) => current ?? proposalsResult.proposals[0]?.id);
       setSelectedDocumentId((current) =>
@@ -727,6 +745,32 @@ export default function HomePage() {
       showMessage(enabled ? "Crunch schedule enabled." : "Crunch schedule disabled.", "success");
     } catch (error) {
       showMessage(errorMessage(error), "danger");
+    }
+  }
+
+  async function saveScheduledTask(key: string, enabled: boolean, cron: string) {
+    clearMessage();
+    try {
+      const result = await apiPost<{ tasks: ScheduledTask[] }>(`/scheduled-tasks/${key}/settings`, { enabled, cron });
+      setScheduledTasks(result.tasks);
+      showMessage(enabled ? "Side-process schedule enabled." : "Side-process schedule disabled.", "success");
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    }
+  }
+
+  async function runScheduledTask(key: string) {
+    setLoading(true);
+    clearMessage();
+    try {
+      const result = await apiPost<{ tasks: ScheduledTask[] }>(`/scheduled-tasks/${key}/run`, {});
+      setScheduledTasks(result.tasks);
+      showMessage("Side-process run complete.", "success");
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -1062,8 +1106,11 @@ export default function HomePage() {
               loading={loading}
               onPublish={publishCrunchRun}
               onRun={runCrunch}
+              onRunTask={runScheduledTask}
               onSaveSchedule={saveCrunchSchedule}
+              onSaveTask={saveScheduledTask}
               runs={crunchRuns}
+              scheduledTasks={scheduledTasks}
               settings={crunchSettings}
             />
           </section>
@@ -2048,16 +2095,22 @@ function CrunchPanel({
   loading,
   onPublish,
   onRun,
+  onRunTask,
   onSaveSchedule,
+  onSaveTask,
   runs,
+  scheduledTasks,
   settings
 }: {
   flows: ConfiguredKnowledgeFlow[];
   loading: boolean;
   onPublish: (runId: string) => Promise<void>;
   onRun: (flowId?: string) => Promise<void>;
+  onRunTask: (key: string) => Promise<void>;
   onSaveSchedule: (flowId: string | undefined, enabled: boolean, cron: string) => Promise<void>;
+  onSaveTask: (key: string, enabled: boolean, cron: string) => Promise<void>;
   runs: CrunchRun[];
+  scheduledTasks: ScheduledTask[];
   settings: CrunchSettings[];
 }) {
   const flowName = (flowId?: string) => flows.find((flow) => flow.id === flowId)?.name ?? flowId ?? "Default knowledge base";
@@ -2090,6 +2143,14 @@ function CrunchPanel({
           {settings.length === 0 ? <p className="empty">No knowledge flows are configured to crunch.</p> : null}
         </div>
 
+        <div className="crunchSchedules">
+          <h3 className="crunchSubhead">Side processes</h3>
+          {scheduledTasks.map((task) => (
+            <ScheduledTaskCard key={task.key} loading={loading} onRun={onRunTask} onSave={onSaveTask} task={task} />
+          ))}
+          {scheduledTasks.length === 0 ? <p className="empty">No scheduled side-processes are registered.</p> : null}
+        </div>
+
         <div className="crunchRuns">
           <h3 className="crunchSubhead">Recent runs</h3>
           <div className="list scrollList">
@@ -2111,10 +2172,11 @@ function CrunchPanel({
 }
 
 const CRON_PRESETS: Array<{ label: string; cron: string }> = [
-  { label: "Daily 02:00", cron: "0 2 * * *" },
+  { label: "Every 10 minutes", cron: "*/10 * * * *" },
+  { label: "Hourly", cron: "0 * * * *" },
   { label: "Every 6 hours", cron: "0 */6 * * *" },
-  { label: "Weekly (Mon 02:00)", cron: "0 2 * * 1" },
-  { label: "Hourly", cron: "0 * * * *" }
+  { label: "Daily 02:00", cron: "0 2 * * *" },
+  { label: "Weekly (Mon 02:00)", cron: "0 2 * * 1" }
 ];
 
 function CrunchScheduleCard({
@@ -2203,6 +2265,94 @@ function CrunchScheduleCard({
       {setting.lastRunAt ? (
         <p className="hint">Last scheduled run {new Date(setting.lastRunAt).toLocaleString()}</p>
       ) : null}
+    </article>
+  );
+}
+
+function ScheduledTaskCard({
+  loading,
+  onRun,
+  onSave,
+  task
+}: {
+  loading: boolean;
+  onRun: (key: string) => Promise<void>;
+  onSave: (key: string, enabled: boolean, cron: string) => Promise<void>;
+  task: ScheduledTask;
+}) {
+  const setting = task.settings;
+  const [enabled, setEnabled] = useState(setting.enabled);
+  const [cron, setCron] = useState(setting.cron);
+
+  useEffect(() => {
+    setEnabled(setting.enabled);
+    setCron(setting.cron);
+  }, [setting.enabled, setting.cron]);
+
+  const cronValid = isValidCronExpression(cron);
+
+  return (
+    <article className="crunchScheduleCard">
+      <div className="rowTop">
+        <div>
+          <h3>{task.label}</h3>
+          <p className="path">
+            {setting.enabled
+              ? `Scheduled (${setting.cron})${
+                  setting.nextRunAt ? ` · next ${new Date(setting.nextRunAt).toLocaleString()}` : ""
+                }`
+              : "Schedule disabled"}
+          </p>
+        </div>
+        <span className={`status ${setting.enabled ? "completed" : "pending"}`} title="Schedule status">
+          {setting.enabled ? "On" : "Off"}
+        </span>
+      </div>
+      <p className="hint">{task.description}</p>
+      <div className="crunchScheduleControls">
+        <label className="crunchToggle">
+          <input checked={enabled} onChange={(event) => setEnabled(event.target.checked)} type="checkbox" />
+          <span>Run on a schedule</span>
+        </label>
+        <label className="field crunchCronField">
+          <span>Cron (min hour day month weekday)</span>
+          <input
+            aria-invalid={!cronValid}
+            onChange={(event) => setCron(event.target.value)}
+            placeholder="*/10 * * * *"
+            spellCheck={false}
+            value={cron}
+          />
+        </label>
+        <div className="rowActions">
+          <button
+            className="button secondary"
+            disabled={loading || !cronValid}
+            onClick={() => void onSave(task.key, enabled, cron.trim())}
+            title={cronValid ? "Save this schedule" : "Enter a valid 5-field cron expression"}
+            type="button"
+          >
+            Save schedule
+          </button>
+          <button className="button" disabled={loading} onClick={() => void onRun(task.key)} type="button">
+            Run now
+          </button>
+        </div>
+      </div>
+      <div className="crunchPresets">
+        {CRON_PRESETS.map((preset) => (
+          <button
+            className={cron.trim() === preset.cron ? "chip selected" : "chip"}
+            key={preset.cron}
+            onClick={() => setCron(preset.cron)}
+            type="button"
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
+      {!cronValid ? <p className="crunchError">Not a valid 5-field cron expression.</p> : null}
+      {setting.lastRunAt ? <p className="hint">Last run {new Date(setting.lastRunAt).toLocaleString()}</p> : null}
     </article>
   );
 }
