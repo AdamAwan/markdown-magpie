@@ -290,7 +290,17 @@ export class InMemoryKnowledgeIndex {
 }
 
 async function findMarkdownFiles(root: string): Promise<string[]> {
-  const entries = await readdir(root);
+  let entries: string[];
+  try {
+    entries = await readdir(root);
+  } catch (error) {
+    // A not-yet-populated destination subpath has no directory on disk; treat
+    // it as an empty index rather than crashing the caller (e.g. publish).
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
   const files: string[] = [];
 
   for (const entry of entries) {

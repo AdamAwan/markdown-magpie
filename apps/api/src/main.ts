@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync } from "node:fs";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type {
   AiExecutionMode,
@@ -1603,12 +1603,21 @@ async function syncConfiguredGitCheckouts(): Promise<void> {
           "Drafts from this source will have no real material until the configuration is corrected."
       );
     } else {
-      // A destination's subpath legitimately may not exist yet — it is created
-      // when the first proposal is published — so this is informational only.
-      console.log(
-        `Configured git destination ${repository.id} has no content at ${localPath} yet.${subpathHint} ` +
-          "This is expected for a fresh destination; the folder is created when the first proposal is published."
-      );
+      // A destination's subpath legitimately may not exist yet, but publishing
+      // indexes it first (git-context detection + markdown scan), which fails
+      // on a missing directory. Create the empty folder inside the checkout so
+      // the first publish has somewhere to write. (Empty dirs aren't tracked by
+      // git; the file itself is committed on publish.)
+      try {
+        await mkdir(localPath, { recursive: true });
+        console.log(
+          `Created empty destination folder for ${repository.id} at ${localPath}.${subpathHint} ` +
+            "This is expected for a fresh destination; it will be populated when proposals are published."
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "unknown error";
+        console.warn(`Could not create destination folder for ${repository.id} at ${localPath}: ${message}`);
+      }
     }
   }
 }
