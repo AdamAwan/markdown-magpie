@@ -11,13 +11,17 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@hono/node-server": "^2.0.5",
+    "@hono/zod-validator": "^0.8.0",
     "@magpie/core": "file:../../packages/core",
     "@magpie/git": "file:../../packages/git",
     "@magpie/markdown": "file:../../packages/markdown",
     "@magpie/retrieval": "file:../../packages/retrieval",
     "@types/pg": "^8.20.0",
+    "hono": "^4.12.25",
     "pg": "^8.21.0",
-    "tsx": "^4.22.4"
+    "tsx": "^4.22.4",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",

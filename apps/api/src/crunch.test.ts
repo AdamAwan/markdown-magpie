@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildMockCrunchPlan, isValidCron, nextCronTime } from "@magpie/core";
-import { InMemoryCrunchStore, nextRunFor } from "./crunch-store.js";
+import { InMemoryCrunchStore, nextRunFor } from "./stores/crunch-store.js";
 
 function largeMultiTopicDoc(): string {
   const section = (heading: string) =>

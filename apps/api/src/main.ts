@@ -26,10 +26,10 @@ import type {
 import { buildMockCrunchPlan, isValidCron, nextCronTime, resolveProposalTargetPath } from "@magpie/core";
 import { ensureGitCheckout, fetchPullRequestStatus, LocalGitProposalPublisher, raisePullRequest } from "@magpie/git";
 import { answerQuestion, createChatProvider, createEmbeddingProvider, type ChatProviderName, type EmbeddingProviderName } from "@magpie/retrieval";
-import { DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS, InMemoryAiJobQueue } from "./ai-job-queue.js";
-import { embedPendingSections } from "./embed-sections.js";
-import { assembleClusters, selectClustersToDraft, singletonCluster } from "./gap-clustering.js";
-import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
+import { DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS, InMemoryAiJobQueue } from "./stores/ai-job-queue.js";
+import { embedPendingSections } from "./stores/embed-sections.js";
+import { assembleClusters, selectClustersToDraft, singletonCluster } from "./stores/gap-clustering.js";
+import { InMemoryKnowledgeIndex } from "./stores/knowledge-index.js";
 import {
   type ConfiguredKnowledgeFlow,
   type ConfiguredKnowledgeRepository,
@@ -39,17 +39,17 @@ import {
   getConfiguredKnowledgeSources,
   resolveConfiguredRepositorySelection,
   resolveKnowledgeRepositorySelection
-} from "./knowledge-repositories.js";
-import { DEFAULT_CRUNCH_CRON, InMemoryCrunchStore } from "./crunch-store.js";
-import { PostgresAiJobQueue } from "./postgres-ai-job-queue.js";
-import { PostgresCrunchStore } from "./postgres-crunch-store.js";
-import { PostgresKnowledgeStore } from "./postgres-knowledge-store.js";
-import { PostgresProposalStore } from "./postgres-proposal-store.js";
-import { PostgresQuestionLogStore } from "./postgres-question-log-store.js";
-import { PostgresScheduledTaskStore } from "./postgres-scheduled-task-store.js";
-import { InMemoryProposalStore } from "./proposal-store.js";
-import { InMemoryQuestionLogStore } from "./question-log-store.js";
-import { InMemoryScheduledTaskStore } from "./scheduled-task-store.js";
+} from "./stores/knowledge-repositories.js";
+import { DEFAULT_CRUNCH_CRON, InMemoryCrunchStore } from "./stores/crunch-store.js";
+import { PostgresAiJobQueue } from "./stores/postgres-ai-job-queue.js";
+import { PostgresCrunchStore } from "./stores/postgres-crunch-store.js";
+import { PostgresKnowledgeStore } from "./stores/postgres-knowledge-store.js";
+import { PostgresProposalStore } from "./stores/postgres-proposal-store.js";
+import { PostgresQuestionLogStore } from "./stores/postgres-question-log-store.js";
+import { PostgresScheduledTaskStore } from "./stores/postgres-scheduled-task-store.js";
+import { InMemoryProposalStore } from "./stores/proposal-store.js";
+import { InMemoryQuestionLogStore } from "./stores/question-log-store.js";
+import { InMemoryScheduledTaskStore } from "./stores/scheduled-task-store.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
 const aiJobClaimTimeoutMs = parseClaimTimeoutMs(process.env.AI_JOB_CLAIM_TIMEOUT_MS);
