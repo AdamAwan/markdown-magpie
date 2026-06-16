@@ -2710,7 +2710,7 @@ function flattenConfig(value: Record<string, unknown>, prefix = ""): Record<stri
 }
 
 function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
-  const [activeFlow, setActiveFlow] = useState<"overview" | "ask" | "improvement" | "queue">("overview");
+  const [activeFlow, setActiveFlow] = useState<"overview" | "ask" | "improvement" | "queue" | "automation">("overview");
   const modelInfo = extractModelInfo(config);
 
   useEffect(() => {
@@ -2748,6 +2748,12 @@ function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
           >
             Queue Architecture
           </button>
+          <button
+            className={activeFlow === "automation" ? "flowTab active" : "flowTab"}
+            onClick={() => setActiveFlow("automation")}
+          >
+            Automation &amp; Crunch
+          </button>
         </div>
 
         <div className="flowDiagram">
@@ -2755,6 +2761,7 @@ function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
           {activeFlow === "ask" && <AskFlowDiagram modelInfo={modelInfo} />}
           {activeFlow === "improvement" && <ContinuousImprovementDiagram modelInfo={modelInfo} />}
           {activeFlow === "queue" && <QueueArchitectureDiagram modelInfo={modelInfo} />}
+          {activeFlow === "automation" && <AutomationDiagram modelInfo={modelInfo} />}
         </div>
 
         <div className="flowLegend">
@@ -2815,8 +2822,10 @@ function OverviewDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractMo
         L -->|Store| M["💾 Save<br/>Proposal"]
     end
 
-    M -->|Review| N["👤 Human<br/>Review"]
-    N -->|Approve| O["📬 Publish<br/>Pull Request"]
+    M -->|Review| N["👤 Human Review<br/>or ⏱️ Scheduled<br/>Automation"]
+    N -->|Approve / Auto-promote| O["📬 Publish<br/>Pull Request"]
+    O -->|Merged on host| P["🔄 Resolve Gaps<br/>+ Re-index"]
+    P -.->|Updated Docs| C
 
     style Learn fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px
     style Generate fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`}
@@ -2837,19 +2846,20 @@ function AskFlowDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractMod
       {`graph TD
     Start["❓ Question<br/>Web UI or MCP"]
 
-    Start --> Keyword["🔍 Keyword<br/>Search in Postgres"]
-    Keyword --> Vector["🔢 Vector Search<br/>${embedLabel}"]
-    Vector --> Context["📚 Retrieved<br/>Context"]
-
-    Context --> DecideMode{Execution<br/>Mode?}
+    Start --> Keyword["🔍 Keyword Search<br/>in Postgres"]
+    Keyword --> DecideMode{Execution<br/>Mode?}
 
     subgraph Direct["<b>DIRECT MODE</b>"]
+        DirVector["🔢 Vector Search + RRF Fusion<br/>${embedLabel}<br/>(hybrid; keyword-only if no embeddings)"]
+        DirContext["📚 Retrieved<br/>Context"]
         DirAI["🤖 ${chatLabel}<br/>(Synchronous)<br/>Generates Answer"]
+        DirVector --> DirContext
+        DirContext --> DirAI
     end
 
     subgraph Queue["<b>QUEUE MODE</b>"]
-        JobCreate["📝 Create AI Job"]
-        JobQueue["📦 Store in Queue"]
+        JobCreate["📝 Create AI Job<br/>(keyword context)"]
+        JobQueue["📦 Store in Queue<br/>(Postgres)"]
         WatcherClaim["👁️ Watcher<br/>Claims Job"]
         QueueAI["🤖 ${chatLabel}<br/>(When Claimed)<br/>Generates Answer"]
         JobStore["💾 Store Result"]
@@ -2859,8 +2869,8 @@ function AskFlowDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractMod
         QueueAI --> JobStore
     end
 
-    DecideMode -->|Immediate| Direct
-    DecideMode -->|Deferred| Queue
+    DecideMode -->|Immediate| DirVector
+    DecideMode -->|Deferred| JobCreate
 
     DirAI --> Log["💾 Log &<br/>Store"]
     JobStore --> Log
@@ -2894,26 +2904,39 @@ function ContinuousImprovementDiagram({ modelInfo }: { modelInfo: ReturnType<typ
         Cluster --> Gaps["📋 Gap Candidates<br/>with Evidence"]
     end
 
-    Gaps --> Decision{Approved<br/>by Human?}
+    Gaps --> Path{Review<br/>Path?}
 
-    subgraph Generation["<b>PROPOSAL GENERATION</b>"]
-        Decision -->|Yes| Job["📝 Create AI Job"]
-        Job --> Synthesize["🤖 ${chatLabel}<br/>Generates Proposal"]
-        Synthesize --> ProposalStore["💾 Store Proposal"]
+    subgraph ManualPath["<b>MANUAL (Human-in-the-loop)</b>"]
+        ManualPick["👤 Human Picks<br/>Cluster to Draft"]
+        ManualJob["📝 Create AI Job"]
+        ManualSynth["🤖 ${chatLabel}<br/>Generates Proposal"]
+        ManualReview["👁️ Human Reviews<br/>Markdown"]
+        ManualPick --> ManualJob
+        ManualJob --> ManualSynth
+        ManualSynth --> ManualReview
+        ManualReview -->|Changes| ManualJob
     end
 
-    subgraph Publishing["<b>INTEGRATION</b>"]
-        ProposalStore --> ProposalReview["👁️ Human Reviews<br/>Markdown"]
-        ProposalReview -->|Approved| Publish["🚀 Create Pull<br/>Request"]
-        ProposalReview -->|Changes| Job
-        Publish --> Merge["📬 Merge to<br/>Knowledge Base"]
+    subgraph AutoPath["<b>AUTOMATED (cron: gaps → PRs)</b>"]
+        AutoDraft["🤖 ${chatLabel}<br/>Auto-draft<br/>uncovered clusters"]
+        AutoPromote["⏩ Auto-promote<br/>draft → ready<br/>(no manual review)"]
+        AutoDraft --> AutoPromote
     end
 
-    Merge -->|Updated Docs| Start
+    Path -->|Manual| ManualPick
+    Path -->|Scheduled| AutoDraft
+
+    ManualReview -->|Approved| Publish["🚀 Create Pull<br/>Request"]
+    AutoPromote --> Publish
+
+    Publish --> Merged{PR Outcome?}
+    Merged -->|Merged on host| Resolve["✅ Resolve Gaps<br/>+ Re-index KB"]
+    Merged -->|Closed| Rejected["🚫 Mark Rejected"]
+    Resolve -->|Updated Docs| Start
 
     style Detection fill:#e8f1f7,stroke:#285f74,stroke-width:2px
-    style Generation fill:#fef9f0,stroke:#8b5a00,stroke-width:2px
-    style Publishing fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px`}
+    style ManualPath fill:#fef9f0,stroke:#8b5a00,stroke-width:2px
+    style AutoPath fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px`}
     </div>
   );
 }
@@ -2951,6 +2974,59 @@ function QueueArchitectureDiagram({ modelInfo }: { modelInfo: ReturnType<typeof 
 
     style Direct fill:#e8f1f7,stroke:#285f74,stroke-width:2px
     style Queue fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`}
+    </div>
+  );
+}
+
+function AutomationDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractModelInfo> }) {
+  const chatLabel = modelInfo.chatModel && modelInfo.chatHost
+    ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
+    : modelInfo.chatModel || "Chat Model";
+
+  return (
+    <div className="mermaid">
+      {`graph TD
+    Scheduler["⏱️ Scheduler<br/>(cron settings per task)"]
+
+    subgraph GapsTask["<b>gaps → pull requests</b><br/>(default: hourly)"]
+        GCluster["📊 Cluster<br/>Open Gaps"]
+        GDraft["🤖 ${chatLabel}<br/>Draft Uncovered<br/>Clusters"]
+        GPromote["⏩ Auto-promote<br/>draft → ready"]
+        GPublish["🚀 Publish PRs<br/>(no manual review)"]
+        GCluster --> GDraft
+        GDraft --> GPromote
+        GPromote --> GPublish
+    end
+
+    subgraph CrunchTask["<b>Crunch</b><br/>(scheduled or on-demand)"]
+        CrPlan["🧹 ${chatLabel}<br/>Build Crunch Plan<br/>(tidy / consolidate)"]
+        CrReview["👁️ Human Reviews<br/>Plan + Operations"]
+        CrPublish["🚀 Publish Branch"]
+        CrPlan --> CrReview
+        CrReview -->|Publish| CrPublish
+    end
+
+    subgraph PrTask["<b>PR status refresh</b><br/>(default: every 10 min)"]
+        PrCheck["🔍 Check Open PRs<br/>on Host"]
+        PrOutcome{Merged?}
+        PrResolve["✅ Resolve Gaps<br/>+ Re-index KB"]
+        PrReject["🚫 Mark Rejected"]
+        PrCheck --> PrOutcome
+        PrOutcome -->|Merged| PrResolve
+        PrOutcome -->|Closed| PrReject
+    end
+
+    Scheduler --> GCluster
+    Scheduler --> CrPlan
+    Scheduler --> PrCheck
+
+    GPublish --> Host["🌐 Git Host<br/>Pull Requests"]
+    CrPublish --> Host
+    Host --> PrCheck
+
+    style GapsTask fill:#fef9f0,stroke:#8b5a00,stroke-width:2px
+    style CrunchTask fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px
+    style PrTask fill:#e8f1f7,stroke:#285f74,stroke-width:2px`}
     </div>
   );
 }

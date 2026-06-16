@@ -71,18 +71,38 @@ Git Markdown repo
   -> split into sections by heading
   -> store document metadata and section text
   -> generate embeddings
-  -> answer questions with citations
+  -> answer questions with citations (hybrid keyword + vector retrieval)
   -> record questions, answers, citations, confidence, feedback
   -> cluster weak answers into knowledge gaps
   -> generate Markdown proposals
-  -> publish proposals to a branch
-  -> raise pull requests
+  -> publish proposals to a branch and raise a pull request
+  -> on merge: resolve the closed gaps and re-index the knowledge base
 ```
+
+Proposal generation runs along two paths:
+
+- **Manual (human-in-the-loop):** an operator picks a gap cluster to draft, reviews the
+  generated Markdown, then publishes it as a pull request.
+- **Automated (scheduled):** the `gaps-to-pull-requests` task clusters open gaps, drafts
+  proposals for any cluster not already covered, auto-promotes drafts to ready, and
+  publishes them as pull requests with no manual review step.
+
+Two background tasks are registered in the scheduler (configured from the Crunch page):
+
+- `gaps-to-pull-requests` — the automated proposal pipeline above (default: hourly).
+- `pull-request-refresh` — checks open pull requests and, when one is merged, resolves the
+  gaps it closed and re-indexes the knowledge base; when one is closed, marks the proposal
+  rejected (default: every 10 minutes; requires `GITHUB_TOKEN`).
+
+**Crunch** is a separate knowledge-base tidying flow (scheduled or on-demand) that builds a
+plan of consolidation/clean-up operations over a destination's documents; an operator then
+reviews the plan and publishes it as a branch.
 
 ## Implementation Status
 
-The flow above describes the target design. Today the pipeline runs end to end up to
-publishing a proposal: the `PullRequestProvider` interface exists, but the only implemented
-adapter is `LocalGitProposalPublisher`, which commits the proposal to a local Git branch
-(`provider: "local-git"`). Opening pull requests on a hosted provider (GitHub, GitLab,
-Azure DevOps) and refreshing their status are planned but not yet implemented.
+The pipeline runs end to end, including raising pull requests on a hosted provider and
+refreshing their status. `LocalGitProposalPublisher` (`provider: "local-git"`) commits a
+proposal to a Git branch and pushes it; when a host token is configured the branch is also
+raised as a pull request, and the `pull-request-refresh` task advances proposals as their
+PRs are merged or closed. If no token is available, publishing degrades gracefully to a
+pushed branch.
