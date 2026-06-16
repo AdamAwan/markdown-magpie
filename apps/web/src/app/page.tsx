@@ -91,7 +91,7 @@ function extractHostFromUrl(url: string): string {
 
 type Confidence = "high" | "medium" | "low" | "unknown";
 type Feedback = "helpful" | "unhelpful";
-type ConsoleSection = "ask" | "answered" | "knowledge" | "gaps" | "jobs" | "proposals" | "config" | "dataflow";
+type ConsoleSection = "ask" | "answered" | "knowledge" | "gaps" | "jobs" | "proposals" | "crunch" | "config" | "dataflow";
 type AiExecutionMode = "direct" | "queue";
 type AiProviderName = "mock" | "openai-compatible" | "azure-openai" | "codex" | "claude";
 
@@ -289,6 +289,49 @@ interface ProposalPublication {
   publishedAt: string;
 }
 
+interface CrunchFileWrite {
+  path: string;
+  content: string;
+}
+
+interface CrunchOperation {
+  kind: "consolidate" | "split" | "rewrite";
+  title: string;
+  reason: string;
+  sources: string[];
+  writes: CrunchFileWrite[];
+  deletes: string[];
+}
+
+interface CrunchPlan {
+  summary: string;
+  operations: CrunchOperation[];
+  rationale: string;
+}
+
+interface CrunchRun {
+  id: string;
+  flowId?: string;
+  destinationId?: string;
+  trigger: "scheduled" | "manual";
+  status: "pending" | "running" | "completed" | "failed" | "published";
+  jobId?: string;
+  plan?: CrunchPlan;
+  error?: string;
+  documentCount: number;
+  publication?: ProposalPublication;
+  createdAt: string;
+  completedAt?: string;
+}
+
+interface CrunchSettings {
+  flowId?: string;
+  enabled: boolean;
+  cron: string;
+  lastRunAt?: string;
+  nextRunAt?: string;
+}
+
 interface SearchSection {
   id: string;
   path: string;
@@ -324,6 +367,8 @@ export default function HomePage() {
   const [gapClusters, setGapClusters] = useState<SuggestedGapCluster[]>([]);
   const [jobs, setJobs] = useState<AiJob[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [crunchRuns, setCrunchRuns] = useState<CrunchRun[]>([]);
+  const [crunchSettings, setCrunchSettings] = useState<CrunchSettings[]>([]);
   const [config, setConfig] = useState<RuntimeConfig | undefined>();
   const [selectedProposalId, setSelectedProposalId] = useState<string | undefined>();
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | undefined>();
@@ -381,6 +426,7 @@ export default function HomePage() {
   useEffect(() => {
     const hasActiveWork =
       jobs.some(isActiveJob) ||
+      crunchRuns.some((run) => run.status === "running" || run.status === "pending") ||
       (answer?.job ? isActiveJob(answer.job) : false) ||
       (answer?.mode === "queue" && !answer.result);
 
@@ -390,7 +436,7 @@ export default function HomePage() {
 
     const interval = window.setInterval(() => void refresh({ silent: true }), 4_000);
     return () => window.clearInterval(interval);
-  }, [answer?.job?.id, answer?.job?.status, answer?.mode, answer?.result, jobs]);
+  }, [answer?.job?.id, answer?.job?.status, answer?.mode, answer?.result, jobs, crunchRuns]);
 
   function showMessage(text: string, tone: UiMessage["tone"] = "info") {
     setMessage({ id: messageIdRef.current++, text, tone });
@@ -416,7 +462,7 @@ export default function HomePage() {
       clearMessage();
     }
     try {
-      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, proposalsResult, configResult] = await Promise.all([
+      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, proposalsResult, crunchRunsResult, crunchSettingsResult, configResult] = await Promise.all([
         apiGet<Health>("/health"),
         apiGet<KnowledgeStats>("/knowledge/stats"),
         apiGet<{ repositories: RepositoryRef[] }>("/repositories"),
@@ -426,6 +472,8 @@ export default function HomePage() {
         apiGet<{ clusters: SuggestedGapCluster[] }>("/gaps/clusters?limit=8"),
         apiGet<{ jobs: AiJob[] }>("/ai-jobs"),
         apiGet<{ proposals: Proposal[] }>("/proposals?limit=8"),
+        apiGet<{ runs: CrunchRun[] }>("/crunch/runs?limit=12"),
+        apiGet<{ settings: CrunchSettings[] }>("/crunch/settings"),
         apiGet<RuntimeConfig>("/config")
       ]);
 
@@ -438,6 +486,8 @@ export default function HomePage() {
       setGapClusters(clustersResult.clusters);
       applyJobs(jobsResult.jobs, jobsRef.current.length > 0);
       setProposals(proposalsResult.proposals);
+      setCrunchRuns(crunchRunsResult.runs);
+      setCrunchSettings(crunchSettingsResult.settings);
       setConfig(configResult);
       setSelectedProposalId((current) => current ?? proposalsResult.proposals[0]?.id);
       setSelectedDocumentId((current) =>
@@ -621,6 +671,56 @@ export default function HomePage() {
     }
   }
 
+  async function runCrunch(targetFlowId?: string) {
+    setLoading(true);
+    clearMessage();
+    try {
+      const result = await apiPost<{ run: CrunchRun }>("/crunch/run", { flowId: targetFlowId });
+      if (result.run.status === "completed") {
+        showMessage(`Crunch finished: ${result.run.plan?.summary ?? "plan ready"}`, "success");
+      } else if (result.run.status === "failed") {
+        showMessage(`Crunch failed: ${result.run.error ?? "unknown error"}`, "danger");
+      } else {
+        showMessage("Crunch queued. We will update this page when it finishes.", "info");
+      }
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveCrunchSchedule(targetFlowId: string | undefined, enabled: boolean, cron: string) {
+    clearMessage();
+    try {
+      const result = await apiPost<{ settings: CrunchSettings[] }>("/crunch/settings", {
+        flowId: targetFlowId,
+        enabled,
+        cron
+      });
+      setCrunchSettings(result.settings);
+      showMessage(enabled ? "Crunch schedule enabled." : "Crunch schedule disabled.", "success");
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    }
+  }
+
+  async function publishCrunchRun(runId: string) {
+    setLoading(true);
+    clearMessage();
+    try {
+      const result = await apiPost<{ run: CrunchRun }>(`/crunch/runs/${runId}/publish`, {});
+      setCrunchRuns((current) => current.map((run) => (run.id === runId ? result.run : run)));
+      showMessage(`Published ${result.run.publication?.branchName ?? "crunch branch"}.`, "success");
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function uploadMarkdown(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!uploadPath.trim() || !uploadContent.trim()) {
@@ -701,6 +801,7 @@ export default function HomePage() {
           <NavButton active={activeSection === "gaps"} count={gaps.length} glyph="G" label="Gaps" onClick={() => openSection("gaps")} />
           <NavButton active={activeSection === "jobs"} count={jobs.length} glyph="J" label="Jobs" onClick={() => openSection("jobs")} />
           <NavButton active={activeSection === "proposals"} count={proposals.length} glyph="P" label="Proposals" onClick={() => openSection("proposals")} />
+          <NavButton active={activeSection === "crunch"} count={crunchRuns.length} glyph="Cr" label="Crunch" onClick={() => openSection("crunch")} />
           <NavButton active={activeSection === "dataflow"} glyph="D" label="Data Flow" onClick={() => openSection("dataflow")} />
           <NavButton active={activeSection === "config"} glyph="C" label="Config" onClick={() => openSection("config")} />
         </nav>
@@ -926,6 +1027,20 @@ export default function HomePage() {
               selectedProposal={selectedProposal}
               setSelectedProposalId={setSelectedProposalId}
               updateProposalStatus={updateProposalStatus}
+            />
+          </section>
+        ) : null}
+
+        {activeSection === "crunch" ? (
+          <section className="fullWorkbench">
+            <CrunchPanel
+              flows={knowledgeFlows(config)}
+              loading={loading}
+              onPublish={publishCrunchRun}
+              onRun={runCrunch}
+              onSaveSchedule={saveCrunchSchedule}
+              runs={crunchRuns}
+              settings={crunchSettings}
             />
           </section>
         ) : null}
@@ -1894,6 +2009,308 @@ function ProposalPanel({
   );
 }
 
+function CrunchPanel({
+  flows,
+  loading,
+  onPublish,
+  onRun,
+  onSaveSchedule,
+  runs,
+  settings
+}: {
+  flows: ConfiguredKnowledgeFlow[];
+  loading: boolean;
+  onPublish: (runId: string) => Promise<void>;
+  onRun: (flowId?: string) => Promise<void>;
+  onSaveSchedule: (flowId: string | undefined, enabled: boolean, cron: string) => Promise<void>;
+  runs: CrunchRun[];
+  settings: CrunchSettings[];
+}) {
+  const flowName = (flowId?: string) => flows.find((flow) => flow.id === flowId)?.name ?? flowId ?? "Default knowledge base";
+
+  return (
+    <section className="surface">
+      <div className="surfaceHeader">
+        <h2>Crunch</h2>
+        <span className="pill" title="Scheduled knowledge-base tidying runs">
+          {runs.length} run{runs.length === 1 ? "" : "s"}
+        </span>
+      </div>
+      <div className="surfaceBody">
+        <p className="hint">
+          Crunch runs an AI maintenance pass over the knowledge base: it consolidates overlapping documents and splits
+          bloated ones, then lands the result on a review branch. Schedule it, or run it on demand.
+        </p>
+
+        <div className="crunchSchedules">
+          {settings.map((setting) => (
+            <CrunchScheduleCard
+              flowName={flowName(setting.flowId)}
+              key={setting.flowId ?? "__default__"}
+              loading={loading}
+              onRun={onRun}
+              onSave={onSaveSchedule}
+              setting={setting}
+            />
+          ))}
+          {settings.length === 0 ? <p className="empty">No knowledge flows are configured to crunch.</p> : null}
+        </div>
+
+        <div className="crunchRuns">
+          <h3 className="crunchSubhead">Recent runs</h3>
+          <div className="list scrollList">
+            {runs.map((run) => (
+              <CrunchRunCard
+                flowName={flowName(run.flowId)}
+                key={run.id}
+                loading={loading}
+                onPublish={onPublish}
+                run={run}
+              />
+            ))}
+            {runs.length === 0 ? <p className="empty">No crunch runs yet. Use “Run now” to create one.</p> : null}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+const CRON_PRESETS: Array<{ label: string; cron: string }> = [
+  { label: "Daily 02:00", cron: "0 2 * * *" },
+  { label: "Every 6 hours", cron: "0 */6 * * *" },
+  { label: "Weekly (Mon 02:00)", cron: "0 2 * * 1" },
+  { label: "Hourly", cron: "0 * * * *" }
+];
+
+function CrunchScheduleCard({
+  flowName,
+  loading,
+  onRun,
+  onSave,
+  setting
+}: {
+  flowName: string;
+  loading: boolean;
+  onRun: (flowId?: string) => Promise<void>;
+  onSave: (flowId: string | undefined, enabled: boolean, cron: string) => Promise<void>;
+  setting: CrunchSettings;
+}) {
+  const [enabled, setEnabled] = useState(setting.enabled);
+  const [cron, setCron] = useState(setting.cron);
+
+  useEffect(() => {
+    setEnabled(setting.enabled);
+    setCron(setting.cron);
+  }, [setting.enabled, setting.cron]);
+
+  const cronValid = isValidCronExpression(cron);
+
+  return (
+    <article className="crunchScheduleCard">
+      <div className="rowTop">
+        <div>
+          <h3>{flowName}</h3>
+          <p className="path">
+            {setting.enabled
+              ? `Scheduled (${setting.cron})${
+                  setting.nextRunAt ? ` · next ${new Date(setting.nextRunAt).toLocaleString()}` : ""
+                }`
+              : "Schedule disabled"}
+          </p>
+        </div>
+        <span className={`status ${setting.enabled ? "completed" : "pending"}`} title="Schedule status">
+          {setting.enabled ? "On" : "Off"}
+        </span>
+      </div>
+      <div className="crunchScheduleControls">
+        <label className="crunchToggle">
+          <input checked={enabled} onChange={(event) => setEnabled(event.target.checked)} type="checkbox" />
+          <span>Run on a schedule</span>
+        </label>
+        <label className="field crunchCronField">
+          <span>Cron (min hour day month weekday)</span>
+          <input
+            aria-invalid={!cronValid}
+            onChange={(event) => setCron(event.target.value)}
+            placeholder="0 2 * * *"
+            spellCheck={false}
+            value={cron}
+          />
+        </label>
+        <div className="rowActions">
+          <button
+            className="button secondary"
+            disabled={loading || !cronValid}
+            onClick={() => void onSave(setting.flowId, enabled, cron.trim())}
+            title={cronValid ? "Save this schedule" : "Enter a valid 5-field cron expression"}
+            type="button"
+          >
+            Save schedule
+          </button>
+          <button className="button" disabled={loading} onClick={() => void onRun(setting.flowId)} type="button">
+            Run now
+          </button>
+        </div>
+      </div>
+      <div className="crunchPresets">
+        {CRON_PRESETS.map((preset) => (
+          <button
+            className={cron.trim() === preset.cron ? "chip selected" : "chip"}
+            key={preset.cron}
+            onClick={() => setCron(preset.cron)}
+            type="button"
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
+      {!cronValid ? <p className="crunchError">Not a valid 5-field cron expression.</p> : null}
+      {setting.lastRunAt ? (
+        <p className="hint">Last scheduled run {new Date(setting.lastRunAt).toLocaleString()}</p>
+      ) : null}
+    </article>
+  );
+}
+
+// Lightweight client-side mirror of the server's cron validation, so the Save
+// button can disable on obviously invalid input. The server re-validates.
+function isValidCronExpression(expr: string): boolean {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    return false;
+  }
+  const bounds: Array<[number, number]> = [
+    [0, 59],
+    [0, 23],
+    [1, 31],
+    [1, 12],
+    [0, 7]
+  ];
+  return parts.every((part, index) => {
+    const [min, max] = bounds[index];
+    return part.split(",").every((entry) => {
+      const stepMatch = /^(.+)\/(\d+)$/.exec(entry);
+      const rangePart = stepMatch ? stepMatch[1] : entry;
+      if (stepMatch && Number(stepMatch[2]) <= 0) {
+        return false;
+      }
+      if (rangePart === "*") {
+        return true;
+      }
+      const range = /^(\d+)-(\d+)$/.exec(rangePart);
+      if (range) {
+        const lo = Number(range[1]);
+        const hi = Number(range[2]);
+        return lo >= min && hi <= max && lo <= hi;
+      }
+      if (/^\d+$/.test(rangePart)) {
+        const value = Number(rangePart);
+        return value >= min && value <= max;
+      }
+      return false;
+    });
+  });
+}
+
+function CrunchRunCard({
+  flowName,
+  loading,
+  onPublish,
+  run
+}: {
+  flowName: string;
+  loading: boolean;
+  onPublish: (runId: string) => Promise<void>;
+  run: CrunchRun;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const operations = run.plan?.operations ?? [];
+
+  return (
+    <article className="row crunchRun">
+      <div className="rowTop">
+        <div>
+          <h3>{run.plan?.summary ?? `Crunch run (${run.status})`}</h3>
+          <p className="path">
+            {flowName} · {run.trigger} · {run.documentCount} document{run.documentCount === 1 ? "" : "s"} ·{" "}
+            {new Date(run.createdAt).toLocaleString()}
+          </p>
+        </div>
+        <span className={`status ${run.status}`} title={`Run status: ${run.status}`}>
+          {run.status}
+        </span>
+      </div>
+      {run.error ? <p className="crunchError">{run.error}</p> : null}
+      {run.plan?.rationale ? <p>{run.plan.rationale}</p> : null}
+      <div className="rowActions">
+        {operations.length > 0 ? (
+          <button className="chip" onClick={() => setExpanded((value) => !value)} type="button">
+            {expanded ? "Hide" : "Show"} {operations.length} operation{operations.length === 1 ? "" : "s"}
+          </button>
+        ) : run.status === "completed" ? (
+          <span className="pill">No changes needed</span>
+        ) : null}
+        {run.status === "completed" && operations.length > 0 ? (
+          <button
+            className="button"
+            disabled={loading}
+            onClick={() => void onPublish(run.id)}
+            title="Commit this tidy plan to a new review branch"
+            type="button"
+          >
+            Publish branch
+          </button>
+        ) : null}
+        {run.publication ? (
+          <span className="pill" title={`Published commit ${run.publication.commitSha}`}>
+            {run.publication.branchName}
+          </span>
+        ) : null}
+      </div>
+      {expanded && operations.length > 0 ? (
+        <div className="crunchOperations">
+          {operations.map((operation, index) => (
+            <div className="crunchOperation" key={`${run.id}-op-${index}`}>
+              <div className="rowTop">
+                <strong>{operation.title}</strong>
+                <span className={`status ${operation.kind === "split" ? "ready" : "completed"}`}>{operation.kind}</span>
+              </div>
+              <p>{operation.reason}</p>
+              <div className="crunchFileLists">
+                {operation.writes.length > 0 ? (
+                  <div>
+                    <span className="crunchFileLabel">Writes</span>
+                    <ul className="crunchFileList">
+                      {operation.writes.map((write) => (
+                        <li className="crunchWrite" key={`w-${write.path}`}>
+                          + {write.path}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {operation.deletes.length > 0 ? (
+                  <div>
+                    <span className="crunchFileLabel">Deletes</span>
+                    <ul className="crunchFileList">
+                      {operation.deletes.map((deletion) => (
+                        <li className="crunchDelete" key={`d-${deletion}`}>
+                          − {deletion}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 function ConfigPanel({
   apiBaseUrl,
   config,
@@ -2429,6 +2846,9 @@ function sectionTitle(section: ConsoleSection): string {
   if (section === "proposals") {
     return "Review generated Markdown proposals";
   }
+  if (section === "crunch") {
+    return "Keep the knowledge base tidy";
+  }
   if (section === "dataflow") {
     return "System data flow and architecture";
   }
@@ -2458,6 +2878,9 @@ function sectionSubtitle(section: ConsoleSection): string {
   }
   if (section === "proposals") {
     return "Select a proposal and review its target path, rationale, and Markdown.";
+  }
+  if (section === "crunch") {
+    return "Schedule an AI pass that consolidates overlapping docs and splits bloated ones, then review and publish the tidy as a branch.";
   }
   if (section === "dataflow") {
     return "Understand how Markdown, embeddings, questions, and proposals flow through the system.";

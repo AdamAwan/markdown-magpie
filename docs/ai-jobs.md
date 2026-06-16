@@ -116,6 +116,53 @@ This commits the Markdown to a new `magpie/proposal-*` branch via the `local-git
 and records the branch and commit SHA on the proposal. Opening a hosted pull request from that
 branch is planned but not yet implemented.
 
+## Crunch — scheduled knowledge-base tidying
+
+Crunch is a scheduled maintenance pass that fights knowledge-base fragmentation:
+it consolidates overlapping documents and splits bloated, multi-topic documents,
+then lands the result on a review branch.
+
+It uses the `crunch_knowledge_base` job type. The input is every document
+(path + content) for a flow's destination; the output is a `CrunchPlan` — a list
+of operations, each with the source paths it reorganizes, the files to write, and
+the files to delete:
+
+```json
+{
+  "summary": "2 tidy operation(s): 1 split, 1 consolidate.",
+  "operations": [
+    {
+      "kind": "split",
+      "title": "Split docs/big.md into 3 focused documents",
+      "reason": "...",
+      "sources": ["docs/big.md"],
+      "writes": [{ "path": "docs/big/setup.md", "content": "..." }],
+      "deletes": ["docs/big.md"]
+    }
+  ],
+  "rationale": "..."
+}
+```
+
+In `direct` mode the API plans synchronously (the `mock` provider uses a
+deterministic size/fragmentation heuristic). In `queue` mode a job is enqueued
+and the watcher completes it, matching the rest of the job contract.
+
+A run is triggered manually (`POST /api/crunch/run`) or by the in-process
+scheduler. The scheduler is configured per flow via `POST /api/crunch/settings`
+(`{ flowId, enabled, intervalMinutes }`) and fires on an interval. Endpoints:
+
+- `GET /api/crunch/runs` — list recent runs and their plans.
+- `POST /api/crunch/run` — trigger a run now (`{ flowId }`).
+- `GET /api/crunch/settings` / `POST /api/crunch/settings` — read/update the schedule.
+- `POST /api/crunch/runs/:id/publish` — commit a completed run's plan (multi-file
+  writes and deletes) to a new `magpie/crunch-*` branch via the `local-git` publisher.
+
+Crunch state is stored in the `crunch_runs` and `crunch_settings` tables
+(`STORAGE_BACKEND=postgres`), with in-memory fallbacks for local development.
+The scheduler tick interval defaults to 60s and can be tuned with
+`CRUNCH_SCHEDULER_TICK_MS`.
+
 ## Watcher Model
 
 The watcher has no direct database access. It talks to the API only:

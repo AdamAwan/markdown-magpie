@@ -1,6 +1,7 @@
 import type {
   CreatePullRequestRequest,
   CreatePullRequestResponse,
+  PublishChangesetRequest,
   PublishProposalBranchRequest,
   PublishProposalBranchResponse,
   PullRequestProvider,
@@ -8,7 +9,7 @@ import type {
 } from "@magpie/core";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -121,6 +122,67 @@ export class LocalGitProposalPublisher {
       const status = await git(worktreePath, ["status", "--porcelain", "--", targetPath]);
       if (!status.trim()) {
         throw new Error(`Proposal does not change ${targetPath}`);
+      }
+
+      const { name: authorName, email: authorEmail } = resolveCommitterIdentity();
+      await git(worktreePath, [
+        "-c",
+        `user.name=${authorName}`,
+        "-c",
+        `user.email=${authorEmail}`,
+        "commit",
+        "-m",
+        request.title
+      ]);
+      const commitSha = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
+      await git(worktreePath, ["push", "-u", "origin", request.branchName], authEnv);
+
+      return {
+        branchName: request.branchName,
+        commitSha,
+        remoteUrl: request.repository.remoteUrl ?? request.repository.git?.remoteUrl
+      };
+    } finally {
+      await cleanupWorktree(root, worktreePath, tempRoot);
+    }
+  }
+
+  // Publishes a multi-file changeset (writes and deletes) to a single new
+  // branch in one commit. Used by Crunch, where consolidating or splitting
+  // documents necessarily creates and removes several files at once.
+  async publishChangeset(request: PublishChangesetRequest): Promise<PublishProposalBranchResponse> {
+    const root = request.repository.git?.workTreeRoot ?? request.repository.localPath;
+    const remoteUrl = await ensureRemote(root);
+    const authEnv = buildGitAuthEnv(remoteUrl);
+    await assertBranchDoesNotExist(root, request.branchName, authEnv);
+
+    const baseRef = await resolveBaseRef(root, request.repository);
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "markdown-magpie-worktree-"));
+    const worktreePath = path.join(tempRoot, "checkout");
+
+    try {
+      await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, baseRef]);
+
+      for (const change of request.changes) {
+        const repoRelativePath = resolveTargetPath(request.repository, change.path);
+        const absolutePath = path.resolve(worktreePath, repoRelativePath);
+        assertWithinRoot(worktreePath, absolutePath);
+
+        if (change.delete) {
+          await tryGit(worktreePath, ["rm", "--ignore-unmatch", "--", repoRelativePath]);
+          // git rm already removes the file; unlink covers untracked paths.
+          await unlink(absolutePath).catch(() => undefined);
+          continue;
+        }
+
+        await mkdir(path.dirname(absolutePath), { recursive: true });
+        await writeFile(absolutePath, change.content ?? "", "utf8");
+        await git(worktreePath, ["add", "--", repoRelativePath]);
+      }
+
+      const status = await git(worktreePath, ["status", "--porcelain"]);
+      if (!status.trim()) {
+        throw new Error("Crunch plan does not change any files");
       }
 
       const { name: authorName, email: authorEmail } = resolveCommitterIdentity();

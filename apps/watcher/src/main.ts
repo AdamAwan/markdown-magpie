@@ -5,12 +5,14 @@ import type {
   AiJobType,
   AnswerQuestionJobInput,
   AnswerQuestionJobOutput,
+  CrunchKnowledgeBaseJobInput,
+  CrunchKnowledgeBaseJobOutput,
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
   SummarizeGapJobInput,
   SummarizeGapJobOutput
 } from "@magpie/core";
-import { resolveProposalTargetPath } from "@magpie/core";
+import { buildMockCrunchPlan, resolveProposalTargetPath } from "@magpie/core";
 import { buildPrompt, parseJobOutput } from "./job-prompts.js";
 
 const apiBaseUrl = trimTrailingSlash(process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/api$/, "");
@@ -22,7 +24,8 @@ const acceptedTypes: AiJobType[] = [
   "summarize_gap",
   "draft_markdown_proposal",
   "detect_contradiction",
-  "suggest_consolidation"
+  "suggest_consolidation",
+  "crunch_knowledge_base"
 ];
 
 let shuttingDown = false;
@@ -204,11 +207,19 @@ class MockAgentRunner implements AgentRunner {
       return this.draftMarkdownProposal(job.input as DraftMarkdownProposalJobInput);
     }
 
+    if (job.type === "crunch_knowledge_base") {
+      return this.crunchKnowledgeBase(job.input as CrunchKnowledgeBaseJobInput);
+    }
+
     return {
       provider: this.name,
       status: "not_enough_signal",
       summary: `Mock runner received ${job.type}, but no specialist handler exists yet.`
     };
+  }
+
+  private crunchKnowledgeBase(input: CrunchKnowledgeBaseJobInput): CrunchKnowledgeBaseJobOutput {
+    return buildMockCrunchPlan(input.documents ?? []);
   }
 
   private answerQuestion(input: AnswerQuestionJobInput): AnswerQuestionJobOutput {

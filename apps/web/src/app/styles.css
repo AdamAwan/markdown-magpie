@@ -1397,3 +1397,113 @@ pre {
   gap: 8px;
   flex-wrap: wrap;
 }
+
+/* Crunch — scheduled knowledge-base tidying */
+.crunchSchedules {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.crunchScheduleCard {
+  border: 1px solid #d9ded6;
+  background: #ffffff;
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.crunchScheduleControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px;
+}
+
+.crunchToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.crunchCronField {
+  max-width: 280px;
+}
+
+.crunchCronField input {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.crunchCronField input[aria-invalid="true"] {
+  border-color: #c0584f;
+}
+
+.crunchPresets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.crunchSubhead {
+  margin: 8px 0 10px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #65716b;
+}
+
+.crunchError {
+  color: #9a2c2c;
+  font-weight: 600;
+}
+
+.crunchOperations {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.crunchOperation {
+  border: 1px solid #e4e8e0;
+  background: #fbfcfa;
+  padding: 12px 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.crunchFileLists {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+}
+
+.crunchFileLabel {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #65716b;
+  margin-bottom: 4px;
+}
+
+.crunchFileList {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+}
+
+.crunchWrite {
+  color: #1f7a4d;
+}
+
+.crunchDelete {
+  color: #9a2c2c;
+}
