@@ -452,7 +452,20 @@ async function handleCreateProposalFromGap(request: IncomingMessage, response: S
   const flow = selectFlow(payload.flowId);
   const sourceIds = payload.sourceIds ?? flow?.sourceIds;
   const destinationId = payload.destinationId?.trim() || flow?.destinationId || defaultDestinationId();
+  console.log(
+    `Drafting proposal for gap "${gap.summary}" (flow=${flow?.id ?? "none"}, destination=${destinationId ?? "none"}, ` +
+      `provider=${runtimeConfig.aiProvider}, mode=${runtimeConfig.aiExecutionMode})`
+  );
   const sourceContext = await collectSourceContext(sourceIds);
+  const materialFiles = sourceContext.filter((context) => context.path && context.content !== "Source path does not exist.");
+  if (materialFiles.length === 0) {
+    console.warn(
+      `Drafting proposal for gap "${gap.summary}" with no real source files attached — ` +
+        "the model will likely produce a placeholder. Check the source configuration and subpaths."
+    );
+  } else {
+    console.log(`Proposal draft will use ${materialFiles.length} source file(s) as raw material.`);
+  }
   const input: DraftMarkdownProposalJobInput = {
     gapSummary: gap.summary,
     triggeringQuestions: logs.map((log) => log.question),
@@ -475,6 +488,7 @@ async function handleCreateProposalFromGap(request: IncomingMessage, response: S
       destinationId: input.destinationId
     });
 
+    console.log(`Created proposal ${proposal.id} directly for gap "${gap.summary}" (target ${proposal.targetPath})`);
     writeJson(response, 201, { proposal });
     return;
   }
@@ -484,6 +498,7 @@ async function handleCreateProposalFromGap(request: IncomingMessage, response: S
     triggeringQuestionIds: gap.questionIds
   });
 
+  console.log(`Enqueued draft_markdown_proposal job ${job.id} for gap "${gap.summary}"`);
   writeJson(response, 202, {
     job,
     links: {
@@ -1566,9 +1581,20 @@ async function syncConfiguredGitCheckouts(): Promise<void> {
     ...configuredKnowledgeDestinations
   ]);
 
+  console.log(`Syncing ${gitRepositories.length} configured git checkout(s)`);
   for (const repository of gitRepositories) {
     const localPath = await resolveConfiguredRepositoryLocalPath(repository);
-    console.log(`Synced configured git ${repository.id} at ${localPath}`);
+    if (existsSync(localPath)) {
+      console.log(`Synced configured git ${repository.id} at ${localPath}`);
+    } else {
+      const subpathHint = repository.subpath
+        ? ` Configured subpath "${repository.subpath}" was not found in the cloned repository.`
+        : "";
+      console.warn(
+        `Synced configured git ${repository.id}, but resolved path ${localPath} does not exist.${subpathHint} ` +
+          "Content for this repository will be empty until the configuration is corrected."
+      );
+    }
   }
 }
 
@@ -1639,6 +1665,15 @@ function selectFlow(flowId: string | undefined): ConfiguredKnowledgeFlow | undef
 
 async function collectSourceContext(sourceIds: string[] | undefined): Promise<SourceDataContext[]> {
   const selectedSources = selectSources(sourceIds);
+  console.log(
+    `Collecting source context from ${selectedSources.length} source(s): ` +
+      (selectedSources.map((source) => `${source.id}(${source.kind})`).join(", ") || "none")
+  );
+  if (sourceIds?.length && selectedSources.length === 0) {
+    console.warn(
+      `Requested source ids [${sourceIds.join(", ")}] matched no configured sources. Check KNOWLEDGE_SOURCES.`
+    );
+  }
   const contexts: SourceDataContext[] = [];
 
   for (const source of selectedSources) {
@@ -1652,6 +1687,7 @@ async function collectSourceContext(sourceIds: string[] | undefined): Promise<So
           ? "Use this internet source as supporting raw material."
           : "Use relevant internet research as supporting raw material."
       });
+      console.log(`Source ${source.id}: internet reference${source.url ? ` (${source.url})` : ""}; content is not fetched.`);
       continue;
     }
 
@@ -1662,14 +1698,28 @@ async function collectSourceContext(sourceIds: string[] | undefined): Promise<So
         kind: source.kind,
         content: "Use general agent knowledge as supporting raw material where no configured repository or URL is available."
       });
+      console.log(`Source ${source.id}: agent knowledge reference; no repository content attached.`);
       continue;
     }
 
     try {
       const localPath = await resolveConfiguredRepositoryLocalPath(source);
-      contexts.push(...(await collectLocalSourceContext(source, localPath)));
+      const localContexts = await collectLocalSourceContext(source, localPath);
+      contexts.push(...localContexts);
+      const fileContexts = localContexts.filter((context) => context.path);
+      const totalBytes = fileContexts.reduce((sum, context) => sum + (context.content?.length ?? 0), 0);
+      if (fileContexts.length === 0) {
+        console.warn(
+          `Source ${source.id}: no usable files collected from ${localPath}` +
+            (source.subpath ? ` (subpath "${source.subpath}")` : "") +
+            ". Drafts from this source will have no real material."
+        );
+      } else {
+        console.log(`Source ${source.id}: collected ${fileContexts.length} file(s), ${totalBytes} bytes from ${localPath}`);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "unavailable source";
+      console.error(`Source ${source.id}: failed to collect context — ${message}`);
       contexts.push({
         sourceId: source.id,
         sourceName: source.name,
@@ -1702,6 +1752,10 @@ async function collectLocalSourceContext(
   root: string
 ): Promise<SourceDataContext[]> {
   if (!existsSync(root)) {
+    console.warn(
+      `Source ${source.id}: path ${root} does not exist` +
+        (source.subpath ? ` — configured subpath "${source.subpath}" is missing from the repository.` : ".")
+    );
     return [
       {
         sourceId: source.id,
@@ -1715,6 +1769,7 @@ async function collectLocalSourceContext(
   }
 
   const files = await findSourceContextFiles(root);
+  console.log(`Source ${source.id}: found ${files.length} candidate text file(s) under ${root}`);
   const contexts: SourceDataContext[] = [];
   let remainingBytes = 80_000;
 
