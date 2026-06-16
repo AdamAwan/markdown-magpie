@@ -15,12 +15,11 @@ import type {
   Proposal,
   RepositoryRef,
   QuestionFeedback,
-  ScheduledTaskSettings,
-  SuggestedGapCluster
+  ScheduledTaskSettings
 } from "@magpie/core";
 import { buildMockCrunchPlan, isValidCron, nextCronTime, resolveProposalTargetPath } from "@magpie/core";
 import { fetchPullRequestStatus, LocalGitProposalPublisher, raisePullRequest } from "@magpie/git";
-import { assembleClusters, selectClustersToDraft, singletonCluster } from "./stores/gap-clustering.js";
+import { selectClustersToDraft } from "./stores/gap-clustering.js";
 import { DEFAULT_CRUNCH_CRON } from "./stores/crunch-store.js";
 import { apiLink, normalizeRelativePath, parseLimit, slugify } from "./platform/paths.js";
 import {
@@ -43,6 +42,8 @@ import {
 } from "./platform/providers.js";
 import { normalizeAiExecutionMode, normalizeAiProvider } from "./config-holder.js";
 import { type AppContext, createAppContext } from "./context.js";
+import * as questionsService from "./features/questions/service.js";
+import * as gapsService from "./features/gaps/service.js";
 import * as askService from "./features/ask/service.js";
 import * as knowledgeService from "./features/knowledge/service.js";
 import { knowledgeRepositoryErrorCode } from "./features/knowledge/service.js";
@@ -158,13 +159,13 @@ async function route(ctx: AppContext, request: IncomingMessage, response: Server
 
   if (request.method === "GET" && path === "/questions") {
     const limit = parseLimit(url.searchParams.get("limit"), 50);
-    writeJson(response, 200, { questions: await ctx.stores.questionLogs.list(limit) });
+    writeJson(response, 200, { questions: await questionsService.listQuestions(ctx, limit) });
     return;
   }
 
   const questionMatch = /^\/questions\/([^/]+)$/.exec(path);
   if (request.method === "GET" && questionMatch) {
-    const log = await ctx.stores.questionLogs.get(questionMatch[1]);
+    const log = await questionsService.getQuestion(ctx, questionMatch[1]);
     if (!log) {
       writeJson(response, 404, { error: "question_not_found" });
       return;
@@ -193,14 +194,13 @@ async function route(ctx: AppContext, request: IncomingMessage, response: Server
 
   if (request.method === "GET" && path === "/gaps/candidates") {
     const limit = parseLimit(url.searchParams.get("limit"), 50);
-    writeJson(response, 200, { gaps: await ctx.stores.questionLogs.listGapCandidates(limit) });
+    writeJson(response, 200, { gaps: await gapsService.listCandidates(ctx, limit) });
     return;
   }
 
   if (request.method === "GET" && path === "/gaps/clusters") {
     const limit = parseLimit(url.searchParams.get("limit"), 50);
-    const candidates = await ctx.stores.questionLogs.listGapCandidates(limit);
-    const clusters = await clusterGapCandidates(ctx, candidates);
+    const clusters = await gapsService.listClusters(ctx, limit);
     writeJson(response, 200, { clusters });
     return;
   }
@@ -782,12 +782,12 @@ async function handleQuestionFeedback(
 ): Promise<void> {
   const payload = await readJsonBody<{ feedback?: QuestionFeedback }>(request);
 
-  if (!isQuestionFeedback(payload.feedback)) {
+  if (!questionsService.isQuestionFeedback(payload.feedback)) {
     writeJson(response, 400, { error: "valid_feedback_required" });
     return;
   }
 
-  const question = await ctx.stores.questionLogs.recordFeedback(questionId, payload.feedback);
+  const question = await questionsService.recordFeedback(ctx, questionId, payload.feedback);
   if (!question) {
     writeJson(response, 404, { error: "question_not_found" });
     return;
@@ -805,7 +805,7 @@ async function handleRecordManualGap(
   const payload = await readJsonBody<{ summary?: string }>(request);
   const summary = typeof payload.summary === "string" ? payload.summary : undefined;
 
-  const question = await ctx.stores.questionLogs.recordManualGap(questionId, summary);
+  const question = await questionsService.recordManualGap(ctx, questionId, summary);
   if (!question) {
     writeJson(response, 404, { error: "question_not_found" });
     return;
@@ -819,7 +819,7 @@ async function handleClearManualGap(
   questionId: string,
   response: ServerResponse
 ): Promise<void> {
-  const question = await ctx.stores.questionLogs.clearManualGap(questionId);
+  const question = await questionsService.clearManualGap(ctx, questionId);
   if (!question) {
     writeJson(response, 404, { error: "question_not_found" });
     return;
@@ -1233,41 +1233,6 @@ async function draftMarkdownProposalDirect(
 // mock provider cannot cluster semantically (its embeddings/answers are
 // deterministic stubs), so it — and any non-chat provider — falls back to one
 // cluster per gap, which the reviewer can still merge by hand.
-async function clusterGapCandidates(ctx: AppContext, candidates: GapCandidate[]): Promise<SuggestedGapCluster[]> {
-  const canCluster =
-    ctx.config.get().aiProvider === "openai-compatible" || ctx.config.get().aiProvider === "azure-openai";
-  if (!canCluster || candidates.length <= 1) {
-    return candidates.map((candidate) => singletonCluster(candidate));
-  }
-
-  try {
-    return await requestGapClusters(ctx, candidates);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "clustering failed";
-    console.warn(`Gap clustering failed (${message}); falling back to one cluster per gap.`);
-    return candidates.map((candidate) => singletonCluster(candidate));
-  }
-}
-
-async function requestGapClusters(ctx: AppContext, candidates: GapCandidate[]): Promise<SuggestedGapCluster[]> {
-  const response = await ctx.providers.chat(ctx.config.get().aiProvider).complete({
-    system:
-      "Group related knowledge-base gaps that a single Markdown article could resolve. " +
-      "Two gaps belong together only when one proposal would naturally answer both. " +
-      'Return JSON only with this shape: {"clusters":[{"title":"string","summaries":["string"],"rationale":"string"}]}. ' +
-      "Use the gap summary strings exactly as provided. Every input summary must appear in exactly one cluster. " +
-      "Prefer several small, focused clusters over one broad cluster.",
-    messages: [
-      {
-        role: "user",
-        content: JSON.stringify({ gaps: candidates.map((candidate) => candidate.summary) }, null, 2)
-      }
-    ]
-  });
-
-  return assembleClusters(candidates, parseJsonObject(response.content));
-}
-
 function createMockMarkdownProposal(
   ctx: AppContext,
   input: DraftMarkdownProposalJobInput
@@ -1854,7 +1819,7 @@ async function processGapsIntoPullRequests(ctx: AppContext): Promise<void> {
   // 1) Cluster the open gaps and draft a proposal for each uncovered cluster.
   const candidates = await ctx.stores.questionLogs.listGapCandidates(200);
   if (candidates.length > 0) {
-    const clusters = await clusterGapCandidates(ctx, candidates);
+    const clusters = await gapsService.clusterGapCandidates(ctx, candidates);
     const toDraft = selectClustersToDraft(
       clusters,
       candidates.map((candidate) => candidate.summary),
@@ -2007,10 +1972,6 @@ function isDraftMarkdownProposalJobOutput(value: unknown): value is DraftMarkdow
     typeof candidate.markdown === "string" &&
     typeof candidate.rationale === "string"
   );
-}
-
-function isQuestionFeedback(value: unknown): value is QuestionFeedback {
-  return value === "helpful" || value === "unhelpful";
 }
 
 function isProposalStatus(value: unknown): value is Proposal["status"] {
