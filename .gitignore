@@ -13,3 +13,4 @@ data/
 .magpie/
 *.log
 *.tsbuildinfo
+.claude/worktrees/
