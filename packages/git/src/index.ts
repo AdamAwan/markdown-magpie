@@ -121,7 +121,16 @@ export class LocalGitProposalPublisher {
         throw new Error(`Proposal does not change ${targetPath}`);
       }
 
-      await git(worktreePath, ["commit", "-m", request.title]);
+      const { name: authorName, email: authorEmail } = resolveCommitterIdentity();
+      await git(worktreePath, [
+        "-c",
+        `user.name=${authorName}`,
+        "-c",
+        `user.email=${authorEmail}`,
+        "commit",
+        "-m",
+        request.title
+      ]);
       const commitSha = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
       await git(worktreePath, ["push", "-u", "origin", request.branchName]);
 
@@ -149,6 +158,18 @@ function resolveTargetPath(repository: RepositoryRef, targetPath: string): strin
   }
 
   return `${normalizedRelativePath}/${normalizedTargetPath}`;
+}
+
+function resolveCommitterIdentity(): { name: string; email: string } {
+  const name = process.env.MAGPIE_GIT_AUTHOR_NAME?.trim();
+  const email = process.env.MAGPIE_GIT_AUTHOR_EMAIL?.trim();
+  if (!name || !email) {
+    throw new Error(
+      "Cannot publish proposal because the commit identity is not configured. " +
+        "Set MAGPIE_GIT_AUTHOR_NAME and MAGPIE_GIT_AUTHOR_EMAIL."
+    );
+  }
+  return { name, email };
 }
 
 async function ensureRemote(root: string): Promise<void> {
