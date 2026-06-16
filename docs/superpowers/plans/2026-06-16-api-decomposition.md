@@ -16,7 +16,7 @@
 
 ## Conventions for this plan
 
-- **Verification per step:** after each extraction commit, run `npm run -w @magpie/api typecheck && npm run build && npm run test`. "Green" below means all three pass. Manual flow checks are listed where a user-facing path changed.
+- **Verification per step:** after each extraction commit, run the monorepo gate `npm run typecheck` (root, uses `tsconfig.check.json`), `npm run build`, and `npm run -w @magpie/api test`. "Green" means: typecheck shows **no new errors** (there is ONE known pre-existing error — `apps/web/src/app/layout.tsx` "Cannot find module … './styles.css'"; that is unrelated to this work and acceptable, but no API/`apps/api` error may appear); build succeeds for `@magpie/api` (the `@magpie/web` build also fails on that same pre-existing CSS issue — acceptable); all API tests pass. **Do NOT use `npm run -w @magpie/api typecheck`** — that per-workspace config has a pre-existing `rootDir`/`paths` (TS6059) conflict and always fails; it is not the real gate. Manual flow checks are listed where a user-facing path changed.
 - **Moves vs new code:** when a step says *move* a function, relocate the existing body **verbatim** from `apps/api/src/main.ts`, changing only its signature to accept `ctx: AppContext` (or a narrower slice) instead of reading module globals, and updating the call sites. New files/classes are shown in full.
 - **Always green:** the app must build and serve at the end of every task. Phases 0–3 keep `node:http` running until Task 12 swaps it.
 - **Commits:** every task ends with a commit on `refactor/api-decomposition`.
