@@ -1581,18 +1581,33 @@ async function syncConfiguredGitCheckouts(): Promise<void> {
     ...configuredKnowledgeDestinations
   ]);
 
+  const checkoutKey = (repository: ConfiguredKnowledgeRepository) => `${repository.id}\0${repository.url ?? ""}`;
+  const sourceKeys = new Set(configuredKnowledgeSources.filter((source) => source.kind === "git").map(checkoutKey));
+
   console.log(`Syncing ${gitRepositories.length} configured git checkout(s)`);
   for (const repository of gitRepositories) {
     const localPath = await resolveConfiguredRepositoryLocalPath(repository);
     if (existsSync(localPath)) {
       console.log(`Synced configured git ${repository.id} at ${localPath}`);
-    } else {
-      const subpathHint = repository.subpath
-        ? ` Configured subpath "${repository.subpath}" was not found in the cloned repository.`
-        : "";
+      continue;
+    }
+
+    const subpathHint = repository.subpath
+      ? ` Configured subpath "${repository.subpath}" was not found in the cloned repository.`
+      : "";
+    if (sourceKeys.has(checkoutKey(repository))) {
+      // A read source with a missing path is a real misconfiguration: drafts
+      // built from it will have no real material to work with.
       console.warn(
-        `Synced configured git ${repository.id}, but resolved path ${localPath} does not exist.${subpathHint} ` +
-          "Content for this repository will be empty until the configuration is corrected."
+        `Synced configured git source ${repository.id}, but resolved path ${localPath} does not exist.${subpathHint} ` +
+          "Drafts from this source will have no real material until the configuration is corrected."
+      );
+    } else {
+      // A destination's subpath legitimately may not exist yet — it is created
+      // when the first proposal is published — so this is informational only.
+      console.log(
+        `Configured git destination ${repository.id} has no content at ${localPath} yet.${subpathHint} ` +
+          "This is expected for a fresh destination; the folder is created when the first proposal is published."
       );
     }
   }
