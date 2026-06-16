@@ -25,8 +25,7 @@ import type {
 } from "@magpie/core";
 import { buildMockCrunchPlan, isValidCron, nextCronTime, resolveProposalTargetPath } from "@magpie/core";
 import { ensureGitCheckout, fetchPullRequestStatus, LocalGitProposalPublisher, raisePullRequest } from "@magpie/git";
-import { answerQuestion, createChatProvider, createEmbeddingProvider, type ChatProviderName, type EmbeddingProviderName } from "@magpie/retrieval";
-import { DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS, InMemoryAiJobQueue } from "./stores/ai-job-queue.js";
+import { answerQuestion } from "@magpie/retrieval";
 import { embedPendingSections } from "./stores/embed-sections.js";
 import { assembleClusters, selectClustersToDraft, singletonCluster } from "./stores/gap-clustering.js";
 import { InMemoryKnowledgeIndex } from "./stores/knowledge-index.js";
@@ -40,21 +39,32 @@ import {
   resolveConfiguredRepositorySelection,
   resolveKnowledgeRepositorySelection
 } from "./stores/knowledge-repositories.js";
-import { DEFAULT_CRUNCH_CRON, InMemoryCrunchStore } from "./stores/crunch-store.js";
-import { PostgresAiJobQueue } from "./stores/postgres-ai-job-queue.js";
-import { PostgresCrunchStore } from "./stores/postgres-crunch-store.js";
+import { DEFAULT_CRUNCH_CRON } from "./stores/crunch-store.js";
 import { PostgresKnowledgeStore } from "./stores/postgres-knowledge-store.js";
-import { PostgresProposalStore } from "./stores/postgres-proposal-store.js";
-import { PostgresQuestionLogStore } from "./stores/postgres-question-log-store.js";
-import { PostgresScheduledTaskStore } from "./stores/postgres-scheduled-task-store.js";
-import { InMemoryProposalStore } from "./stores/proposal-store.js";
-import { InMemoryQuestionLogStore } from "./stores/question-log-store.js";
-import { InMemoryScheduledTaskStore } from "./stores/scheduled-task-store.js";
 import { apiLink, normalizeRelativePath, normalizeUploadPath, parseLimit, slugify, toPosixPath } from "./platform/paths.js";
+import {
+  createAiJobQueue,
+  createCrunchStore,
+  createProposalStore,
+  createQuestionLogStore,
+  createScheduledTaskStore,
+  parseClaimTimeoutMs,
+  requireDatabaseUrl,
+  storageBackend,
+  storeBackend
+} from "./platform/stores.js";
+import {
+  type AiProviderName,
+  createConfiguredChatProvider,
+  createConfiguredEmbeddingProvider,
+  embeddingProviderName,
+  getConfiguredAiProviders,
+  retrievalMode
+} from "./platform/providers.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
 const aiJobClaimTimeoutMs = parseClaimTimeoutMs(process.env.AI_JOB_CLAIM_TIMEOUT_MS);
-const aiJobs = createAiJobQueue();
+const aiJobs = createAiJobQueue(aiJobClaimTimeoutMs);
 const knowledgeStore =
   storeBackend("KNOWLEDGE_STORE") === "postgres"
     ? new PostgresKnowledgeStore(requireDatabaseUrl())
@@ -2124,8 +2134,6 @@ async function handleRunScheduledTask(key: string, response: ServerResponse): Pr
   }
 }
 
-type AiProviderName = ChatProviderName | "codex" | "claude";
-
 interface RuntimeAiConfig {
   aiExecutionMode: AiExecutionMode;
   aiProvider: AiProviderName;
@@ -2184,145 +2192,6 @@ function validateRuntimeAiConfig(aiExecutionMode: AiExecutionMode, aiProvider: A
   return undefined;
 }
 
-function getConfiguredAiProviders(): Array<{
-  name: AiProviderName;
-  label: string;
-  supportsDirect: boolean;
-  supportsQueue: boolean;
-}> {
-  const providers: Array<{
-    name: AiProviderName;
-    label: string;
-    supportsDirect: boolean;
-    supportsQueue: boolean;
-  }> = [
-    {
-      name: "mock",
-      label: "Mock",
-      supportsDirect: true,
-      supportsQueue: true
-    }
-  ];
-
-  if (process.env.OPENAI_COMPATIBLE_BASE_URL && process.env.OPENAI_COMPATIBLE_API_KEY && process.env.OPENAI_COMPATIBLE_MODEL) {
-    providers.push({
-      name: "openai-compatible",
-      label: "OpenAI-compatible",
-      supportsDirect: true,
-      supportsQueue: true
-    });
-  }
-
-  if (process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_CHAT_DEPLOYMENT) {
-    providers.push({
-      name: "azure-openai",
-      label: "Azure OpenAI",
-      supportsDirect: true,
-      supportsQueue: false
-    });
-  }
-
-  if (process.env.CODEX_CLI_PATH || process.env.AI_PROVIDER === "codex" || process.env.AI_JOB_PROVIDER === "codex") {
-    providers.push({
-      name: "codex",
-      label: "Codex CLI",
-      supportsDirect: false,
-      supportsQueue: true
-    });
-  }
-
-  if (process.env.CLAUDE_CLI_PATH || process.env.AI_PROVIDER === "claude" || process.env.AI_JOB_PROVIDER === "claude") {
-    providers.push({
-      name: "claude",
-      label: "Claude CLI",
-      supportsDirect: false,
-      supportsQueue: true
-    });
-  }
-
-  return providers;
-}
-
-function createAiJobQueue(): InMemoryAiJobQueue | PostgresAiJobQueue {
-  if (storeBackend("AI_JOB_QUEUE") === "postgres") {
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error("DATABASE_URL is required when AI_JOB_QUEUE=postgres");
-    }
-
-    return new PostgresAiJobQueue(databaseUrl, aiJobClaimTimeoutMs);
-  }
-
-  return new InMemoryAiJobQueue(aiJobClaimTimeoutMs);
-}
-
-function parseClaimTimeoutMs(value: string | undefined): number {
-  const parsed = Number.parseInt(value ?? "", 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS;
-  }
-
-  return parsed;
-}
-
-function requireDatabaseUrl(): string {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error("DATABASE_URL is required when KNOWLEDGE_STORE=postgres");
-  }
-  return databaseUrl;
-}
-
-// Embeddings can target a different endpoint/key than chat (e.g. DeepSeek for
-// Q&A, OpenAI for embeddings). The dedicated OPENAI_COMPATIBLE_EMBEDDING_* vars
-// take precedence, falling back to the shared chat credentials when unset so
-// single-endpoint setups keep working unchanged.
-function embeddingBaseUrl(): string | undefined {
-  return process.env.OPENAI_COMPATIBLE_EMBEDDING_BASE_URL || process.env.OPENAI_COMPATIBLE_BASE_URL || undefined;
-}
-
-function embeddingApiKey(): string | undefined {
-  return process.env.OPENAI_COMPATIBLE_EMBEDDING_API_KEY || process.env.OPENAI_COMPATIBLE_API_KEY || undefined;
-}
-
-function embeddingProviderName(): EmbeddingProviderName | undefined {
-  if (embeddingBaseUrl() && embeddingApiKey() && process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL) {
-    return "openai-compatible";
-  }
-  if (process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT) {
-    return "azure-openai";
-  }
-  return undefined;
-}
-
-function createConfiguredEmbeddingProvider() {
-  const provider = embeddingProviderName();
-  if (!provider) {
-    return undefined;
-  }
-  return createEmbeddingProvider({
-    provider,
-    apiKey: embeddingApiKey() || process.env.AZURE_OPENAI_API_KEY,
-    baseUrl: embeddingBaseUrl(),
-    model: process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL,
-    azureEndpoint: process.env.AZURE_OPENAI_ENDPOINT,
-    azureDeployment: process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
-    azureApiVersion: process.env.AZURE_OPENAI_API_VERSION
-  });
-}
-
-function retrievalMode(): { mode: "hybrid" | "keyword"; reason: string } {
-  const hasEmbeddings = embeddingProviderName() !== undefined;
-  const postgres = storeBackend("KNOWLEDGE_STORE") === "postgres";
-  if (hasEmbeddings && postgres) {
-    return { mode: "hybrid", reason: "Semantic + keyword search active." };
-  }
-  if (!hasEmbeddings) {
-    return { mode: "keyword", reason: "Add an embeddings endpoint to enable semantic search." };
-  }
-  return { mode: "keyword", reason: "Semantic search requires the Postgres knowledge store (KNOWLEDGE_STORE=postgres)." };
-}
-
 let embeddingInFlight = false;
 let embeddingRerunRequested = false;
 
@@ -2348,90 +2217,6 @@ async function embedSectionsInBackground(): Promise<void> {
   } finally {
     embeddingInFlight = false;
   }
-}
-
-function createQuestionLogStore(): InMemoryQuestionLogStore | PostgresQuestionLogStore {
-  if (storeBackend("QUESTION_LOG_STORE") === "postgres") {
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error("DATABASE_URL is required when QUESTION_LOG_STORE=postgres");
-    }
-
-    return new PostgresQuestionLogStore(databaseUrl);
-  }
-
-  return new InMemoryQuestionLogStore();
-}
-
-function createProposalStore(): InMemoryProposalStore | PostgresProposalStore {
-  if (storeBackend("PROPOSAL_STORE") === "postgres") {
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error("DATABASE_URL is required when PROPOSAL_STORE=postgres");
-    }
-
-    return new PostgresProposalStore(databaseUrl);
-  }
-
-  return new InMemoryProposalStore();
-}
-
-function storageBackend(): "memory" | "postgres" {
-  return process.env.STORAGE_BACKEND === "postgres" ? "postgres" : "memory";
-}
-
-function storeBackend(
-  name:
-    | "KNOWLEDGE_STORE"
-    | "QUESTION_LOG_STORE"
-    | "PROPOSAL_STORE"
-    | "AI_JOB_QUEUE"
-    | "CRUNCH_STORE"
-    | "SCHEDULED_TASK_STORE"
-): "memory" | "postgres" {
-  return process.env[name] === "postgres" ? "postgres" : storageBackend();
-}
-
-function createCrunchStore(): InMemoryCrunchStore | PostgresCrunchStore {
-  if (storeBackend("CRUNCH_STORE") === "postgres") {
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error("DATABASE_URL is required when CRUNCH_STORE=postgres");
-    }
-
-    return new PostgresCrunchStore(databaseUrl);
-  }
-
-  return new InMemoryCrunchStore();
-}
-
-function createScheduledTaskStore(): InMemoryScheduledTaskStore | PostgresScheduledTaskStore {
-  if (storeBackend("SCHEDULED_TASK_STORE") === "postgres") {
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error("DATABASE_URL is required when SCHEDULED_TASK_STORE=postgres");
-    }
-
-    return new PostgresScheduledTaskStore(databaseUrl);
-  }
-
-  return new InMemoryScheduledTaskStore();
-}
-
-function createConfiguredChatProvider(provider: AiProviderName) {
-  if (provider !== "mock" && provider !== "openai-compatible" && provider !== "azure-openai") {
-    throw new Error(`${provider} cannot be used as a direct chat provider`);
-  }
-
-  return createChatProvider({
-    provider,
-    apiKey: process.env.OPENAI_COMPATIBLE_API_KEY || process.env.AZURE_OPENAI_API_KEY,
-    baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL,
-    model: process.env.OPENAI_COMPATIBLE_MODEL,
-    azureEndpoint: process.env.AZURE_OPENAI_ENDPOINT,
-    azureDeployment: process.env.AZURE_OPENAI_CHAT_DEPLOYMENT,
-    azureApiVersion: process.env.AZURE_OPENAI_API_VERSION
-  });
 }
 
 function isAiJobType(value: unknown): value is AiJobType {
