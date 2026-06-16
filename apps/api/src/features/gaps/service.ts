@@ -1,6 +1,7 @@
 import type { GapCandidate, SuggestedGapCluster } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import { assembleClusters, singletonCluster } from "../../stores/gap-clustering.js";
+import { parseJsonObject } from "../../platform/json.js";
 
 export async function listCandidates(ctx: AppContext, limit: number): Promise<GapCandidate[]> {
   return ctx.stores.questionLogs.listGapCandidates(limit);
@@ -50,32 +51,4 @@ export async function requestGapClusters(
   });
 
   return assembleClusters(candidates, parseJsonObject(response.content));
-}
-
-// NOTE: duplicated from main.ts for this task; Task 9/10 will consolidate.
-function parseJsonObject(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(value);
-    if (fenced) {
-      try {
-        return JSON.parse(fenced[1]);
-      } catch {
-        return undefined;
-      }
-    }
-
-    const start = value.indexOf("{");
-    const end = value.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(value.slice(start, end + 1));
-      } catch {
-        return undefined;
-      }
-    }
-  }
-
-  return undefined;
 }

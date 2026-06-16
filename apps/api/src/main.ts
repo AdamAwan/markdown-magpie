@@ -9,37 +9,22 @@ import type {
   CrunchPlan,
   CrunchRun,
   CrunchRunTrigger,
-  DraftMarkdownProposalJobInput,
-  DraftMarkdownProposalJobOutput,
-  GapCandidate,
   Proposal,
-  RepositoryRef,
   QuestionFeedback,
   ScheduledTaskSettings
 } from "@magpie/core";
-import { buildMockCrunchPlan, isValidCron, nextCronTime, resolveProposalTargetPath } from "@magpie/core";
-import { fetchPullRequestStatus, LocalGitProposalPublisher, raisePullRequest } from "@magpie/git";
+import { buildMockCrunchPlan, isValidCron, nextCronTime } from "@magpie/core";
+import { fetchPullRequestStatus, LocalGitProposalPublisher } from "@magpie/git";
 import { selectClustersToDraft } from "./stores/gap-clustering.js";
 import { DEFAULT_CRUNCH_CRON } from "./stores/crunch-store.js";
-import { apiLink, normalizeRelativePath, parseLimit, slugify } from "./platform/paths.js";
+import { apiLink, normalizeRelativePath, parseLimit } from "./platform/paths.js";
 import {
   defaultDestinationId,
-  destinationSubpath,
   findRepositoryForDestination,
-  findRepositoryForProposal,
-  resolveConfiguredRepositoryLocalPath,
-  seedConfiguredKnowledge,
-  selectDestinationForProposal,
   selectFlow
 } from "./platform/repositories.js";
-import { collectSourceContext } from "./platform/source-context.js";
-import { storageBackend, storeBackend } from "./platform/stores.js";
-import {
-  type AiProviderName,
-  embeddingProviderName,
-  getConfiguredAiProviders,
-  retrievalMode
-} from "./platform/providers.js";
+import { type AiProviderName } from "./platform/providers.js";
+import { parseJsonObject } from "./platform/json.js";
 import { normalizeAiExecutionMode, normalizeAiProvider } from "./config-holder.js";
 import { type AppContext, createAppContext } from "./context.js";
 import * as questionsService from "./features/questions/service.js";
@@ -47,6 +32,8 @@ import * as gapsService from "./features/gaps/service.js";
 import * as askService from "./features/ask/service.js";
 import * as knowledgeService from "./features/knowledge/service.js";
 import { knowledgeRepositoryErrorCode } from "./features/knowledge/service.js";
+import * as proposalsService from "./features/proposals/service.js";
+import * as configService from "./features/config/service.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
 
@@ -73,7 +60,7 @@ async function start(): Promise<void> {
 
   server.listen(port, () => {
     console.log(`Markdown Magpie API listening on http://localhost:${port}/api`);
-    logStartupConfig(ctx);
+    configService.logStartupConfig(ctx);
     startCrunchScheduler(ctx);
     startScheduledTaskScheduler(ctx);
   });
@@ -101,7 +88,7 @@ async function route(ctx: AppContext, request: IncomingMessage, response: Server
   }
 
   if (request.method === "GET" && path === "/config") {
-    writeJson(response, 200, getRuntimeConfig(ctx));
+    writeJson(response, 200, configService.getRuntimeConfig(ctx));
     return;
   }
 
@@ -208,8 +195,8 @@ async function route(ctx: AppContext, request: IncomingMessage, response: Server
   if (request.method === "GET" && path === "/proposals") {
     const limit = parseLimit(url.searchParams.get("limit"), 50);
     const statusFilter = url.searchParams.get("status");
-    const options = isProposalStatus(statusFilter) ? { status: statusFilter } : undefined;
-    writeJson(response, 200, { proposals: await ctx.stores.proposals.list(limit, options) });
+    const options = proposalsService.isProposalStatus(statusFilter) ? { status: statusFilter } : undefined;
+    writeJson(response, 200, { proposals: await proposalsService.list(ctx, limit, options) });
     return;
   }
 
@@ -220,7 +207,7 @@ async function route(ctx: AppContext, request: IncomingMessage, response: Server
 
   const proposalMatch = /^\/proposals\/([^/]+)$/.exec(path);
   if (request.method === "GET" && proposalMatch) {
-    const proposal = await ctx.stores.proposals.get(proposalMatch[1]);
+    const proposal = await proposalsService.get(ctx, proposalMatch[1]);
     if (!proposal) {
       writeJson(response, 404, { error: "proposal_not_found" });
       return;
@@ -347,12 +334,12 @@ async function handleUpdateProposalStatus(
 ): Promise<void> {
   const payload = await readJsonBody<{ status?: Proposal["status"] }>(request);
 
-  if (!isProposalStatus(payload.status)) {
+  if (!proposalsService.isProposalStatus(payload.status)) {
     writeJson(response, 400, { error: "valid_proposal_status_required" });
     return;
   }
 
-  const proposal = await ctx.stores.proposals.updateStatus(proposalId, payload.status);
+  const proposal = await proposalsService.updateStatus(ctx, proposalId, payload.status);
   if (!proposal) {
     writeJson(response, 404, { error: "proposal_not_found" });
     return;
@@ -362,7 +349,7 @@ async function handleUpdateProposalStatus(
   // base: resolve the gaps it closed so they stop surfacing, then re-index the
   // destination so the new doc becomes searchable.
   if (proposal.status === "merged") {
-    const { resolvedGapCount, reindexed } = await runMergeCascade(ctx, proposal);
+    const { resolvedGapCount, reindexed } = await proposalsService.runMergeCascade(ctx, proposal);
     writeJson(response, 200, { proposal, resolvedGapCount, reindexed });
     return;
   }
@@ -370,155 +357,12 @@ async function handleUpdateProposalStatus(
   writeJson(response, 200, { proposal });
 }
 
-// The work that must happen once a proposal is merged, shared by the manual
-// "Mark merged" endpoint and the pull-request poller: resolve its gaps and
-// re-index the destination knowledge base.
-async function runMergeCascade(
-  ctx: AppContext,
-  proposal: Proposal
-): Promise<{ resolvedGapCount: number; reindexed: boolean }> {
-  const resolvedGapCount = await resolveGapsForMergedProposal(ctx, proposal);
-  const reindexed = await reindexDestinationForProposal(ctx, proposal);
-  return { resolvedGapCount, reindexed };
-}
-
-// Resolves the gaps a merged proposal closed: precisely the rows whose question
-// and summary the proposal recorded, so unrelated gaps on a multi-topic question
-// are left untouched. Returns the number of gaps newly resolved.
-async function resolveGapsForMergedProposal(ctx: AppContext, proposal: Proposal): Promise<number> {
-  const questionIds = proposal.triggeringQuestionIds ?? [];
-  const summaries = splitGapSummaries(proposal.gapSummary);
-  if (questionIds.length === 0 || summaries.length === 0) {
-    return 0;
-  }
-
-  const resolved = await ctx.stores.questionLogs.resolveGaps(questionIds, summaries, proposal.id);
-  console.log(`Resolved ${resolved} gap(s) closed by merged proposal ${proposal.id}`);
-  return resolved;
-}
-
-// Pulls the destination's default branch (where the PR merged) and re-indexes it
-// so the merged document is immediately searchable. Best-effort: a failure here
-// must not undo the merge, so it is logged and reported rather than thrown.
-async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal): Promise<boolean> {
-  try {
-    if (ctx.knowledgeConfig.destinations.length > 0) {
-      const destination = selectDestinationForProposal(ctx.repositoryDeps(), proposal);
-      if (!destination) {
-        console.warn(`No destination matched merged proposal ${proposal.id}; skipping re-index.`);
-        return false;
-      }
-
-      // For a git destination this also fetches and fast-forwards the checkout,
-      // bringing in the just-merged commit before we re-index.
-      const localPath = await resolveConfiguredRepositoryLocalPath(destination);
-      await ctx.stores.knowledgeIndex.indexLocalRepository({
-        localPath,
-        repositoryId: destination.id,
-        name: destination.name
-      });
-    } else {
-      const repository = await findRepositoryForProposal(ctx.repositoryDeps(), proposal);
-      if (!repository) {
-        console.warn(`No repository matched merged proposal ${proposal.id}; skipping re-index.`);
-        return false;
-      }
-
-      await ctx.stores.knowledgeIndex.indexLocalRepository({
-        localPath: repository.localPath,
-        repositoryId: repository.id,
-        name: repository.name
-      });
-    }
-
-    console.log(`Re-indexed destination after merging proposal ${proposal.id}`);
-    void ctx.embedder.trigger();
-    return true;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown error";
-    console.warn(`Re-index after merging proposal ${proposal.id} failed: ${message}`);
-    return false;
-  }
-}
-
-// Pushes a "ready" proposal's branch and raises a PR for it, degrading to a
-// branch-only publish if the PR can't be opened. Shared by the HTTP publish
-// route and the scheduled gap-to-PR task, so the result is a discriminated
-// outcome rather than an HTTP response — callers map it to their own surface.
-async function publishReadyProposal(ctx: AppContext, proposal: Proposal) {
-  const repository = await findRepositoryForProposal(ctx.repositoryDeps(), proposal);
-  if (!repository) {
-    return {
-      ok: false as const,
-      code: "proposal_repository_not_found",
-      message: "No indexed Git repository matches this proposal target path."
-    };
-  }
-
-  if (repository.git?.scope === "not-git" || !repository.git?.workTreeRoot) {
-    return {
-      ok: false as const,
-      code: "proposal_repository_not_git",
-      message: "The matched repository is not a Git checkout."
-    };
-  }
-
-  try {
-    const publisher = new LocalGitProposalPublisher();
-    const publication = await publisher.publish({
-      repository,
-      branchName: createProposalBranchName(proposal),
-      title: `docs: ${proposal.title}`,
-      markdown: proposal.markdown,
-      targetPath: proposal.targetPath
-    });
-    // The branch is now on the remote; try to open a PR for it. A PR failure
-    // (unsupported host, bad token, API error) must not lose the pushed branch,
-    // so we degrade to a branch-only publish and surface the reason.
-    let pullRequestUrl: string | undefined;
-    let pullRequestWarning: string | undefined;
-    try {
-      const baseBranch = repository.defaultBranch || repository.git?.defaultBranch || "main";
-      const raised = await raisePullRequest({
-        remoteUrl: publication.remoteUrl,
-        headBranch: publication.branchName,
-        baseBranch,
-        title: `docs: ${proposal.title}`,
-        body: buildPullRequestBody(proposal)
-      });
-      pullRequestUrl = raised?.url;
-      console.log(
-        raised
-          ? `Raised pull request ${raised.url} for proposal ${proposal.id}`
-          : `Pushed branch ${publication.branchName}; no PR raised (unsupported host or missing token).`
-      );
-    } catch (error) {
-      pullRequestWarning = error instanceof Error ? error.message : "Pull request creation failed";
-      console.warn(`Branch ${publication.branchName} pushed, but PR creation failed: ${pullRequestWarning}`);
-    }
-
-    const updatedProposal = await ctx.stores.proposals.recordPublication(proposal.id, {
-      provider: "local-git",
-      branchName: publication.branchName,
-      commitSha: publication.commitSha,
-      remoteUrl: publication.remoteUrl,
-      pullRequestUrl,
-      publishedAt: new Date().toISOString()
-    });
-
-    return { ok: true as const, proposal: updatedProposal, publication, pullRequestUrl, pullRequestWarning };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Proposal publish failed";
-    return { ok: false as const, code: "proposal_publish_failed", message };
-  }
-}
-
 async function handlePublishProposal(
   ctx: AppContext,
   proposalId: string,
   response: ServerResponse
 ): Promise<void> {
-  const proposal = await ctx.stores.proposals.get(proposalId);
+  const proposal = await proposalsService.get(ctx, proposalId);
   if (!proposal) {
     writeJson(response, 404, { error: "proposal_not_found" });
     return;
@@ -529,7 +373,7 @@ async function handlePublishProposal(
     return;
   }
 
-  const outcome = await publishReadyProposal(ctx, proposal);
+  const outcome = await proposalsService.publishReadyProposal(ctx, proposal);
   if (!outcome.ok) {
     writeJson(response, 409, { error: outcome.code, message: outcome.message });
     return;
@@ -541,20 +385,6 @@ async function handlePublishProposal(
     pullRequestUrl: outcome.pullRequestUrl,
     pullRequestWarning: outcome.pullRequestWarning
   });
-}
-
-// Human-facing PR description linking the merge back to the gaps it closes.
-function buildPullRequestBody(proposal: Proposal): string {
-  const lines = ["Proposed by Markdown Magpie to close knowledge gaps.", ""];
-  if (proposal.rationale) {
-    lines.push(proposal.rationale, "");
-  }
-  const summaries = splitGapSummaries(proposal.gapSummary);
-  if (summaries.length > 0) {
-    lines.push("Gaps addressed:");
-    lines.push(...summaries.map((summary) => `- ${summary}`));
-  }
-  return lines.join("\n").trim();
 }
 
 async function handleUpdateRuntimeConfig(
@@ -584,125 +414,18 @@ async function handleUpdateRuntimeConfig(
     return;
   }
 
-  writeJson(response, 200, getRuntimeConfig(ctx));
+  writeJson(response, 200, configService.getRuntimeConfig(ctx));
 }
 
 async function handleResetData(ctx: AppContext, response: ServerResponse): Promise<void> {
-  // Clear all user-generated state first, so even if re-seeding fails the app
-  // is left in a clean (empty) but recoverable state.
-  await ctx.stores.questionLogs.reset();
-  await ctx.stores.proposals.reset();
-  await ctx.stores.crunchRuns.reset();
-  await ctx.stores.scheduledTasks.reset();
-  await ctx.stores.aiJobs.reset();
-  if (ctx.stores.knowledge) {
-    await ctx.stores.knowledge.reset();
-  }
-  ctx.stores.knowledgeIndex.reset();
-
-  // Reset runtime AI config back to the .env-derived defaults.
-  ctx.config.reset();
-
-  // Rebuild the knowledge bases from configuration.
-  const seed = await seedConfiguredKnowledge(ctx.repositoryDeps());
+  const { reindexed, failures, stats } = await configService.resetData(ctx);
 
   writeJson(response, 200, {
     ok: true,
-    reindexed: seed.indexed,
-    failures: seed.failures,
-    stats: ctx.stores.knowledgeIndex.getStats()
+    reindexed,
+    failures,
+    stats
   });
-}
-
-// Drafts ONE proposal from one or more gap candidates. The reviewer (via the
-// clustering UI) decides which gaps belong together, so this accepts either a
-// single `summary` (legacy /from-gap) or a `summaries` array (a confirmed
-// cluster from /from-gaps). Evidence and triggering questions are unioned across
-// every gap in the cluster so the drafter sees the full picture once.
-// Core of "draft one proposal from a confirmed cluster of gap summaries",
-// independent of HTTP so the scheduled gap-to-PR task can reuse it. Returns a
-// discriminated outcome: in direct mode the proposal is already created; in
-// queue mode an AI job is enqueued and the proposal lands later via the job
-// completion machinery.
-async function draftProposalFromGapSummaries(
-  ctx: AppContext,
-  rawSummaries: string[],
-  overrides: { targetPath?: string; flowId?: string; sourceIds?: string[]; destinationId?: string } = {}
-) {
-  const uniqueRequested = [...new Set(rawSummaries.map((value) => value.trim()).filter((value) => value.length > 0))];
-
-  if (uniqueRequested.length === 0) {
-    return { ok: false as const, code: "gap_summary_required" };
-  }
-
-  const candidates = await ctx.stores.questionLogs.listGapCandidates(200);
-  const matched = uniqueRequested
-    .map((summary) => candidates.find((candidate) => candidate.summary === summary))
-    .filter((candidate): candidate is GapCandidate => Boolean(candidate));
-
-  if (matched.length === 0) {
-    return { ok: false as const, code: "gap_candidate_not_found" };
-  }
-
-  const gapSummaries = matched.map((candidate) => candidate.summary);
-  const questionIds = [...new Set(matched.flatMap((candidate) => candidate.questionIds))];
-  const label = gapSummaries.length === 1 ? `gap "${gapSummaries[0]}"` : `${gapSummaries.length} clustered gaps`;
-
-  const logs = (await Promise.all(questionIds.map((id) => ctx.stores.questionLogs.get(id)))).filter(
-    (log): log is NonNullable<typeof log> => Boolean(log)
-  );
-  const evidence = dedupeCitations(logs.flatMap((log) => log.answer?.citations ?? []));
-  const deps = ctx.repositoryDeps();
-  const flow = selectFlow(deps, overrides.flowId);
-  const sourceIds = overrides.sourceIds ?? flow?.sourceIds;
-  const destinationId = overrides.destinationId?.trim() || flow?.destinationId || defaultDestinationId(deps);
-  console.log(
-    `Drafting proposal for ${label} (flow=${flow?.id ?? "none"}, destination=${destinationId ?? "none"}, ` +
-      `provider=${ctx.config.get().aiProvider}, mode=${ctx.config.get().aiExecutionMode})`
-  );
-  const sourceContext = await collectSourceContext(deps, sourceIds);
-  const materialFiles = sourceContext.filter((context) => context.path && context.content !== "Source path does not exist.");
-  if (materialFiles.length === 0) {
-    console.warn(
-      `Drafting proposal for ${label} with no real source files attached — ` +
-        "the model will likely produce a placeholder. Check the source configuration and subpaths."
-    );
-  } else {
-    console.log(`Proposal draft will use ${materialFiles.length} source file(s) as raw material.`);
-  }
-  const input: DraftMarkdownProposalJobInput = {
-    gapSummaries,
-    triggeringQuestions: logs.map((log) => log.question),
-    evidence,
-    sourceContext,
-    destinationId,
-    targetPath: overrides.targetPath?.trim() || undefined,
-    provider: ctx.config.get().aiProvider,
-    expectedOutput: "markdown_proposal"
-  } as DraftMarkdownProposalJobInput & { provider: AiProviderName };
-
-  if (ctx.config.get().aiExecutionMode === "direct") {
-    const output = await draftMarkdownProposalDirect(ctx, input);
-    const proposal = await ctx.stores.proposals.create({
-      ...output,
-      targetPath: resolveProposalTargetPath(destinationSubpath(deps, input.destinationId), output.title),
-      evidence,
-      gapSummary: joinGapSummaries(gapSummaries),
-      triggeringQuestionIds: questionIds,
-      destinationId: input.destinationId
-    });
-
-    console.log(`Created proposal ${proposal.id} directly for ${label} (target ${proposal.targetPath})`);
-    return { ok: true as const, mode: "direct" as const, proposal };
-  }
-
-  const job = await ctx.stores.aiJobs.enqueue("draft_markdown_proposal", {
-    ...input,
-    triggeringQuestionIds: questionIds
-  });
-
-  console.log(`Enqueued draft_markdown_proposal job ${job.id} for ${label}`);
-  return { ok: true as const, mode: "queue" as const, job };
 }
 
 async function handleCreateProposalFromGaps(
@@ -720,7 +443,7 @@ async function handleCreateProposalFromGaps(
   }>(request);
 
   const requested = [...(payload.summaries ?? []), ...(payload.summary ? [payload.summary] : [])];
-  const outcome = await draftProposalFromGapSummaries(ctx, requested, {
+  const outcome = await proposalsService.draftFromGaps(ctx, requested, {
     targetPath: payload.targetPath,
     flowId: payload.flowId,
     sourceIds: payload.sourceIds,
@@ -744,34 +467,6 @@ async function handleCreateProposalFromGaps(
       proposals: apiLink("/proposals")
     }
   });
-}
-
-// Stored on the proposal as a human-readable record of which gaps it closes.
-function joinGapSummaries(summaries: string[]): string {
-  return summaries.join("\n");
-}
-
-// Inverse of joinGapSummaries: recovers the individual gap summaries a proposal
-// closes from its stored newline-joined record.
-function splitGapSummaries(gapSummary: string | undefined): string[] {
-  return (gapSummary ?? "")
-    .split("\n")
-    .map((summary) => summary.trim())
-    .filter((summary) => summary.length > 0);
-}
-
-function dedupeCitations(citations: Proposal["evidence"]): Proposal["evidence"] {
-  const seen = new Set<string>();
-  const result: Proposal["evidence"] = [];
-  for (const citation of citations) {
-    const key = citation.sectionId || `${citation.path}#${citation.anchor}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    result.push(citation);
-  }
-  return result;
 }
 
 async function handleQuestionFeedback(
@@ -957,7 +652,7 @@ async function handleCompleteJob(
 
     await ctx.stores.aiJobs.complete(jobId, payload.output ?? {});
     await updateQuestionLogFromCompletedJob(ctx, existingJob, payload.output);
-    await createProposalFromCompletedJob(ctx, existingJob, payload.output);
+    await proposalsService.createProposalFromCompletedJob(ctx, existingJob, payload.output);
     await attachCrunchPlanFromCompletedJob(ctx, existingJob, payload.output);
     writeJson(response, 200, { job: await ctx.stores.aiJobs.get(jobId) });
   } catch (error) {
@@ -1030,305 +725,6 @@ function writeJson(response: ServerResponse, statusCode: number, body: unknown):
     "content-type": "application/json"
   });
   response.end(body === undefined ? undefined : JSON.stringify(body));
-}
-
-function getRuntimeConfig(ctx: AppContext) {
-  const availableProviders = getConfiguredAiProviders();
-  return {
-    api: {
-      port,
-      aiExecutionMode: ctx.config.get().aiExecutionMode,
-      aiProvider: ctx.config.get().aiProvider,
-      nodeEnv: process.env.NODE_ENV ?? "development"
-    },
-    stores: {
-      storageBackend: storageBackend(),
-      knowledgeStore: storeBackend("KNOWLEDGE_STORE"),
-      questionLogStore: storeBackend("QUESTION_LOG_STORE"),
-      proposalStore: storeBackend("PROPOSAL_STORE"),
-      aiJobQueue: storeBackend("AI_JOB_QUEUE"),
-      databaseUrl: maskConnectionString(process.env.DATABASE_URL)
-    },
-    knowledge: {
-      repositoryPath: process.env.KNOWLEDGE_REPO_PATH ?? null,
-      repositories: ctx.knowledgeConfig.repositories,
-      sources: ctx.knowledgeConfig.sources,
-      destinations: ctx.knowledgeConfig.destinations,
-      flows: ctx.knowledgeConfig.flows,
-      checkoutRoot: ctx.knowledgeConfig.checkoutRoot
-    },
-    providers: {
-      llmProvider: process.env.LLM_PROVIDER ?? "mock",
-      embeddingProvider: embeddingProviderName() ?? "mock",
-      gitProvider: process.env.GIT_PROVIDER ?? "local",
-      openAiCompatible: {
-        baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL || null,
-        model: process.env.OPENAI_COMPATIBLE_MODEL || null,
-        apiKey: secretState(process.env.OPENAI_COMPATIBLE_API_KEY),
-        embeddingBaseUrl: process.env.OPENAI_COMPATIBLE_EMBEDDING_BASE_URL || null,
-        embeddingModel: process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL || null,
-        embeddingApiKey: secretState(process.env.OPENAI_COMPATIBLE_EMBEDDING_API_KEY)
-      },
-      azureOpenAi: {
-        endpoint: process.env.AZURE_OPENAI_ENDPOINT || null,
-        chatDeployment: process.env.AZURE_OPENAI_CHAT_DEPLOYMENT || null,
-        embeddingDeployment: process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT || null,
-        apiVersion: process.env.AZURE_OPENAI_API_VERSION || "2024-10-21",
-        apiKey: secretState(process.env.AZURE_OPENAI_API_KEY)
-      },
-      gitSecrets: {
-        githubToken: secretState(process.env.GITHUB_TOKEN),
-        azureDevopsPat: secretState(process.env.AZURE_DEVOPS_PAT)
-      }
-    },
-    aiRuntime: {
-      executionMode: ctx.config.get().aiExecutionMode,
-      provider: ctx.config.get().aiProvider,
-      executionModes: ["direct", "queue"],
-      providers: availableProviders,
-      directProviders: availableProviders.filter((provider) => provider.supportsDirect).map((provider) => provider.name),
-      queueProviders: availableProviders.filter((provider) => provider.supportsQueue).map((provider) => provider.name)
-    },
-    retrieval: (() => {
-      const { mode, reason } = retrievalMode();
-      return {
-        mode,
-        reason,
-        embeddingProvider: embeddingProviderName() ?? null
-      };
-    })(),
-    watcher: {
-      name: process.env.WATCHER_NAME ?? null,
-      pollIntervalMs: process.env.WATCHER_POLL_INTERVAL_MS ?? null,
-      aiJobProvider: ctx.config.get().aiProvider,
-      agentApiTimeoutMs: process.env.AGENT_API_TIMEOUT_MS ?? null,
-      claimTimeoutMs: ctx.claimTimeoutMs
-    }
-  };
-}
-
-// Startup summary so operators can trace which options resolved and which
-// providers/credentials are (not) wired up. Built from getRuntimeConfig() so it
-// reuses the same secret masking — values are reported as "set"/"not set", never
-// printed. Set LOG_STARTUP_CONFIG=false to suppress.
-function logStartupConfig(ctx: AppContext): void {
-  if (process.env.LOG_STARTUP_CONFIG === "false") {
-    return;
-  }
-
-  const cfg = getRuntimeConfig(ctx);
-  const lines: string[] = [];
-  const section = (title: string) => lines.push(`  ${title}`);
-  const add = (label: string, value: unknown) => lines.push(`    ${`${label}`.padEnd(26)}: ${value}`);
-
-  section("Stores (memory | postgres)");
-  add("storage backend (default)", cfg.stores.storageBackend);
-  add("knowledge store", cfg.stores.knowledgeStore);
-  add("question log store", cfg.stores.questionLogStore);
-  add("proposal store", cfg.stores.proposalStore);
-  add("ai job queue", cfg.stores.aiJobQueue);
-  add("database url", cfg.stores.databaseUrl ?? "not set");
-
-  section("AI execution");
-  add("execution mode", cfg.aiRuntime.executionMode);
-  add("active provider", cfg.aiRuntime.provider);
-  add("configured providers", cfg.aiRuntime.providers.map((provider) => provider.name).join(", "));
-  add("usable in direct mode", cfg.aiRuntime.directProviders.join(", ") || "none");
-  add("usable in queue mode", cfg.aiRuntime.queueProviders.join(", ") || "none");
-
-  section("Chat provider (openai-compatible)");
-  add("base url", cfg.providers.openAiCompatible.baseUrl ?? "not set");
-  add("model", cfg.providers.openAiCompatible.model ?? "not set");
-  add("api key", cfg.providers.openAiCompatible.apiKey);
-
-  section("Embeddings / retrieval");
-  add("retrieval mode", `${cfg.retrieval.mode} (${cfg.retrieval.reason})`);
-  add("embedding provider", cfg.retrieval.embeddingProvider ?? "none");
-  add("embedding base url", cfg.providers.openAiCompatible.embeddingBaseUrl ?? "falls back to chat");
-  add("embedding model", cfg.providers.openAiCompatible.embeddingModel ?? "not set");
-  add("embedding api key", cfg.providers.openAiCompatible.embeddingApiKey);
-
-  section("Azure OpenAI");
-  add("endpoint", cfg.providers.azureOpenAi.endpoint ?? "not set");
-  add("chat deployment", cfg.providers.azureOpenAi.chatDeployment ?? "not set");
-  add("embedding deployment", cfg.providers.azureOpenAi.embeddingDeployment ?? "not set");
-  add("api key", cfg.providers.azureOpenAi.apiKey);
-
-  section("Git");
-  add("provider (display only)", cfg.providers.gitProvider);
-  add("github token", cfg.providers.gitSecrets.githubToken);
-  add("azure devops pat", cfg.providers.gitSecrets.azureDevopsPat);
-
-  section("Knowledge");
-  add("sources", cfg.knowledge.sources.map((repo) => `${repo.id}[${repo.kind}]`).join(", ") || "none");
-  add("destinations", cfg.knowledge.destinations.map((repo) => `${repo.id}[${repo.kind}]`).join(", ") || "none");
-  add(
-    "flows",
-    cfg.knowledge.flows.map((flow) => `${flow.id}(${flow.sourceIds.join("+")}->${flow.destinationId})`).join(", ") || "none"
-  );
-  add("checkout root", cfg.knowledge.checkoutRoot);
-
-  section("Watcher");
-  add("name", cfg.watcher.name ?? "not set");
-  add("poll interval ms", cfg.watcher.pollIntervalMs ?? "default (2000)");
-
-  console.log(`Resolved configuration (env=${cfg.api.nodeEnv}):\n${lines.join("\n")}`);
-}
-
-function maskConnectionString(value: string | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-
-  try {
-    const url = new URL(value);
-    if (url.password) {
-      url.password = "****";
-    }
-    if (url.username) {
-      url.username = `${url.username.slice(0, 1)}***`;
-    }
-    return url.toString();
-  } catch {
-    return secretState(value);
-  }
-}
-
-function secretState(value: string | undefined): "set" | "not set" {
-  return value ? "set" : "not set";
-}
-
-async function draftMarkdownProposalDirect(
-  ctx: AppContext,
-  input: DraftMarkdownProposalJobInput
-): Promise<DraftMarkdownProposalJobOutput> {
-  if (ctx.config.get().aiProvider === "mock") {
-    return createMockMarkdownProposal(ctx, input);
-  }
-
-  const response = await ctx.providers.chat(ctx.config.get().aiProvider).complete({
-    system:
-      "Draft a conservative Markdown knowledge base proposal for the provided gap. Return JSON only with this shape: " +
-      '{"title":"string","targetPath":"string","markdown":"string","rationale":"string"}. ' +
-      "Include frontmatter with title and status: draft in the markdown field.",
-    messages: [
-      {
-        role: "user",
-        content: JSON.stringify(input, null, 2)
-      }
-    ]
-  });
-  const output = parseJsonObject(response.content);
-
-  if (!isDraftMarkdownProposalJobOutput(output)) {
-    throw new Error("Direct proposal provider returned invalid markdown proposal output");
-  }
-
-  return output;
-}
-
-// Suggests semantic groupings of gap candidates for the review UI. This is a
-// read-only suggestion step, so it always runs synchronously against the chat
-// provider regardless of the direct/queue execution mode used for drafting. The
-// mock provider cannot cluster semantically (its embeddings/answers are
-// deterministic stubs), so it — and any non-chat provider — falls back to one
-// cluster per gap, which the reviewer can still merge by hand.
-function createMockMarkdownProposal(
-  ctx: AppContext,
-  input: DraftMarkdownProposalJobInput
-): DraftMarkdownProposalJobOutput {
-  const title = titleFromGapSummary(input.gapSummaries[0] ?? "");
-  const targetPath = resolveProposalTargetPath(destinationSubpath(ctx.repositoryDeps(), input.destinationId), title);
-  const gapList = input.gapSummaries.length
-    ? input.gapSummaries.map((summary) => `- ${summary}`).join("\n")
-    : "- No gap summaries recorded.";
-  const gapHeading = input.gapSummaries.length === 1 ? "Gap" : "Gaps";
-  const triggeringQuestions = input.triggeringQuestions.length
-    ? input.triggeringQuestions.map((question) => `- ${question}`).join("\n")
-    : "- No triggering questions recorded.";
-  const evidence = input.evidence.length
-    ? input.evidence.map((citation) => `- ${citation.path}#${citation.anchor}: ${citation.heading}`).join("\n")
-    : "- No supporting citations were available.";
-  const sourceMaterial = input.sourceContext?.length
-    ? input.sourceContext
-        .slice(0, 8)
-        .map((source) => `- ${source.sourceName}${source.path ? ` (${source.path})` : source.url ? ` (${source.url})` : ""}`)
-        .join("\n")
-    : "- No raw source context was attached.";
-
-  return {
-    title,
-    targetPath,
-    markdown: `---\ntitle: ${JSON.stringify(title)}\nstatus: draft\n---\n\n# ${title}\n\n## ${gapHeading}\n\n${gapList}\n\n## Triggering Questions\n\n${triggeringQuestions}\n\n## Proposed Guidance\n\nAdd reviewed guidance that directly answers ${input.gapSummaries.length === 1 ? "this gap" : "these related gaps"}. Keep the final content specific, source-backed, and easy for maintainers to verify.\n\n## Raw Source Material\n\n${sourceMaterial}\n\n## Evidence\n\n${evidence}\n`,
-    rationale: "Generated from the selected gap candidate(s) using the deterministic mock provider."
-  };
-}
-
-function titleFromGapSummary(summary: string): string {
-  const normalized = summary
-    .replace(/^no (?:sufficient )?source material found for:\s*/i, "")
-    .replace(/[?.!]+$/g, "")
-    .trim();
-  if (!normalized) {
-    return "Knowledge Gap Proposal";
-  }
-
-  return normalized
-    .split(/\s+/)
-    .slice(0, 10)
-    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
-    .join(" ");
-}
-
-function parseJsonObject(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(value);
-    if (fenced) {
-      try {
-        return JSON.parse(fenced[1]);
-      } catch {
-        return undefined;
-      }
-    }
-
-    const start = value.indexOf("{");
-    const end = value.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(value.slice(start, end + 1));
-      } catch {
-        return undefined;
-      }
-    }
-  }
-
-  return undefined;
-}
-
-async function createProposalFromCompletedJob(
-  ctx: AppContext,
-  job: AiJob | undefined,
-  output: unknown
-): Promise<void> {
-  if (!job || job.type !== "draft_markdown_proposal" || !isDraftMarkdownProposalJobOutput(output)) {
-    return;
-  }
-
-  const input = job.input as Partial<DraftMarkdownProposalJobInput> & {
-    triggeringQuestionIds?: string[];
-  };
-
-  await ctx.stores.proposals.create({
-    ...output,
-    targetPath: resolveProposalTargetPath(destinationSubpath(ctx.repositoryDeps(), input.destinationId), output.title),
-    evidence: input.evidence ?? [],
-    gapSummary: input.gapSummaries ? joinGapSummaries(input.gapSummaries) : undefined,
-    triggeringQuestionIds: input.triggeringQuestionIds,
-    destinationId: input.destinationId,
-    jobId: job.id
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1784,7 +1180,7 @@ async function refreshPullRequests(ctx: AppContext): Promise<void> {
       const merged = await ctx.stores.proposals.updateStatus(proposal.id, "merged");
       if (merged) {
         console.log(`Detected merged pull request for proposal ${proposal.id}; running merge cascade.`);
-        await runMergeCascade(ctx, merged);
+        await proposalsService.runMergeCascade(ctx, merged);
       }
     } else if (status.state === "closed") {
       // Closed without merging is effectively a rejection of the published
@@ -1804,7 +1200,7 @@ async function refreshPullRequests(ctx: AppContext): Promise<void> {
 async function coveredGapSummaries(ctx: AppContext): Promise<Set<string>> {
   const summaries = new Set<string>();
   for (const proposal of await ctx.stores.proposals.list(500)) {
-    for (const summary of splitGapSummaries(proposal.gapSummary)) {
+    for (const summary of proposalsService.splitGapSummaries(proposal.gapSummary)) {
       summaries.add(summary);
     }
   }
@@ -1827,7 +1223,7 @@ async function processGapsIntoPullRequests(ctx: AppContext): Promise<void> {
     );
     for (const summaries of toDraft) {
       try {
-        const outcome = await draftProposalFromGapSummaries(ctx, summaries);
+        const outcome = await proposalsService.draftFromGaps(ctx, summaries);
         if (!outcome.ok) {
           console.warn(`Gap-to-PR task skipped a cluster: ${outcome.code}`);
         }
@@ -1859,7 +1255,7 @@ async function processGapsIntoPullRequests(ctx: AppContext): Promise<void> {
     }
 
     try {
-      const outcome = await publishReadyProposal(ctx, candidate);
+      const outcome = await proposalsService.publishReadyProposal(ctx, candidate);
       if (outcome.ok) {
         console.log(
           outcome.pullRequestUrl
@@ -1958,35 +1354,6 @@ function isAnswerQuestionJobOutput(value: unknown): value is AnswerQuestionJobOu
       candidate.confidence === "unknown") &&
     Array.isArray(candidate.citations)
   );
-}
-
-function isDraftMarkdownProposalJobOutput(value: unknown): value is DraftMarkdownProposalJobOutput {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const candidate = value as Partial<DraftMarkdownProposalJobOutput>;
-  return (
-    typeof candidate.title === "string" &&
-    typeof candidate.targetPath === "string" &&
-    typeof candidate.markdown === "string" &&
-    typeof candidate.rationale === "string"
-  );
-}
-
-function isProposalStatus(value: unknown): value is Proposal["status"] {
-  return (
-    value === "draft" ||
-    value === "ready" ||
-    value === "branch-pushed" ||
-    value === "pr-opened" ||
-    value === "merged" ||
-    value === "rejected"
-  );
-}
-
-function createProposalBranchName(proposal: Proposal): string {
-  return `magpie/proposal-${proposal.id.slice(0, 8)}-${slugify(proposal.title).slice(0, 40)}`;
 }
 
 function apiRoutePath(pathname: string): string | undefined {
