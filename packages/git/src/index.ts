@@ -185,7 +185,7 @@ async function ensureRemote(root: string): Promise<string> {
 async function assertBranchDoesNotExist(
   root: string,
   branchName: string,
-  authEnv?: NodeJS.ProcessEnv
+  authEnv?: Partial<NodeJS.ProcessEnv>
 ): Promise<void> {
   const localBranch = await tryGit(root, ["show-ref", "--verify", `refs/heads/${branchName}`]);
   const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", branchName], authEnv);
@@ -205,7 +205,7 @@ async function resolveBaseRef(root: string, repository: RepositoryRef): Promise<
   return defaultBranch;
 }
 
-async function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
+async function git(cwd: string, args: string[], env?: Partial<NodeJS.ProcessEnv>): Promise<string> {
   try {
     const result = await execFileAsync("git", args, {
       cwd,
@@ -218,7 +218,7 @@ async function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promis
   }
 }
 
-async function tryGit(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
+async function tryGit(cwd: string, args: string[], env?: Partial<NodeJS.ProcessEnv>): Promise<string> {
   try {
     return await git(cwd, args, env);
   } catch {
@@ -232,7 +232,7 @@ async function tryGit(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Pro
 // URL — so it can't leak into the command line that git() echoes back in error
 // messages (which are surfaced to the UI). Returns {} when no token applies, so
 // public repos, SSH remotes, and credential-embedded URLs keep working unchanged.
-function buildGitAuthEnv(remoteUrl: string | undefined): NodeJS.ProcessEnv {
+function buildGitAuthEnv(remoteUrl: string | undefined): Partial<NodeJS.ProcessEnv> {
   const header = buildAuthHeader(remoteUrl);
   if (!header) {
     return {};
@@ -302,7 +302,7 @@ function toPosixPath(value: string): string {
 async function remoteBranchExists(
   root: string,
   branch: string,
-  authEnv?: NodeJS.ProcessEnv
+  authEnv?: Partial<NodeJS.ProcessEnv>
 ): Promise<boolean> {
   const result = await tryGit(root, ["ls-remote", "--heads", "origin", branch], authEnv);
   return Boolean(result.trim());
