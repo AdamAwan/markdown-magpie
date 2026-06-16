@@ -239,14 +239,20 @@ Enqueues a `draft_markdown_proposal` job for a known gap candidate.
 ```json
 {
   "summary": "No source material found for: How do I trim claws?",
-  "targetPath": "proposed-gap.md",
   "sourceIds": ["agent", "flowerbi"],
   "destinationId": "flowerbi-docs"
 }
 ```
 
-`targetPath`, `sourceIds`, and `destinationId` are optional. The summary must match an existing gap candidate.
+`sourceIds` and `destinationId` are optional. The summary must match an existing gap candidate.
 When omitted, proposal jobs use the configured sources by default and the only configured destination when one exists.
+
+The proposal's location is owned by the system, not the caller: the file lands at
+`<destination docs subpath>/<title-slug>.md` (repository root when the destination has no
+configured subpath). This keeps every proposal's folder structure consistent on its branch
+regardless of whether it was drafted by the mock provider, a direct AI call, or the job queue.
+A `targetPath` field in the request body is accepted for backward compatibility but no longer
+determines where the file is written.
 
 - `400 gap_summary_required` — empty or missing summary.
 - `404 gap_candidate_not_found` — no candidate matches the summary.

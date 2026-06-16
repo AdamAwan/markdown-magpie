@@ -15,6 +15,7 @@ import type {
   QuestionFeedback,
   SourceDataContext
 } from "@magpie/core";
+import { resolveProposalTargetPath } from "@magpie/core";
 import { ensureGitCheckout, LocalGitProposalPublisher } from "@magpie/git";
 import { answerQuestion, createChatProvider, createEmbeddingProvider, type ChatProviderName, type EmbeddingProviderName } from "@magpie/retrieval";
 import { DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS, InMemoryAiJobQueue } from "./ai-job-queue.js";
@@ -467,6 +468,7 @@ async function handleCreateProposalFromGap(request: IncomingMessage, response: S
     const output = await draftMarkdownProposalDirect(input);
     const proposal = await proposals.create({
       ...output,
+      targetPath: resolveProposalTargetPath(destinationSubpath(input.destinationId), output.title),
       evidence,
       gapSummary: gap.summary,
       triggeringQuestionIds: gap.questionIds,
@@ -1067,7 +1069,7 @@ async function draftMarkdownProposalDirect(input: DraftMarkdownProposalJobInput)
 
 function createMockMarkdownProposal(input: DraftMarkdownProposalJobInput): DraftMarkdownProposalJobOutput {
   const title = titleFromGapSummary(input.gapSummary);
-  const targetPath = input.targetPath ?? `proposed/${slugify(title).slice(0, 60) || "knowledge-gap"}.md`;
+  const targetPath = resolveProposalTargetPath(destinationSubpath(input.destinationId), title);
   const triggeringQuestions = input.triggeringQuestions.length
     ? input.triggeringQuestions.map((question) => `- ${question}`).join("\n")
     : "- No triggering questions recorded.";
@@ -1143,6 +1145,7 @@ async function createProposalFromCompletedJob(job: AiJob | undefined, output: un
 
   await proposals.create({
     ...output,
+    targetPath: resolveProposalTargetPath(destinationSubpath(input.destinationId), output.title),
     evidence: input.evidence ?? [],
     gapSummary: input.gapSummary,
     triggeringQuestionIds: input.triggeringQuestionIds,
@@ -1531,6 +1534,13 @@ async function findRepositoryForProposal(proposal: Proposal): Promise<Repository
     );
 
   return explicitMatch?.repository ?? (repositories.length === 1 ? repositories[0] : repositories.find((repository) => normalizeRelativePath(repository.git?.relativePathFromRoot) === "."));
+}
+
+function destinationSubpath(destinationId: string | undefined): string | undefined {
+  if (!destinationId) {
+    return undefined;
+  }
+  return configuredKnowledgeDestinations.find((destination) => destination.id === destinationId)?.subpath;
 }
 
 function selectDestinationForProposal(proposal: Proposal): ConfiguredKnowledgeRepository | undefined {

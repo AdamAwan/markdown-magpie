@@ -84,12 +84,14 @@ Gap candidates can be turned into proposal jobs:
 POST /api/proposals/from-gap
 {
   "summary": "No source material found for: How do I trim claws?",
-  "targetPath": "knowledge-bases/cats/proposed-gap.md"
+  "destinationId": "cats-docs"
 }
 ```
 
 The API enqueues a `draft_markdown_proposal` job with the triggering questions and any available evidence citations.
-When the watcher completes that job, the API stores the generated Markdown proposal for review.
+When the watcher completes that job, the API stores the generated Markdown proposal for review. The proposal's
+file location is derived from the destination — `<destination docs subpath>/<title-slug>.md` — so it is consistent
+across providers; any `targetPath` returned by the provider is not used to place the file.
 
 ```bash
 curl -s http://localhost:4000/api/proposals

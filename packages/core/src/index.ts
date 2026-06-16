@@ -148,6 +148,27 @@ export interface Proposal {
   createdAt: string;
 }
 
+// Canonical location for a drafted proposal within its destination repository.
+// The folder is always owned by us (the destination's configured docs subpath),
+// never chosen by the AI or hard-coded per call site, so every proposal lands in
+// a consistent place on its branch. The "proposed" state is represented by the
+// branch/PR, so the doc is written to its final home — no staging prefix.
+export function proposalFileName(title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60)
+    .replace(/-+$/g, "");
+  return `${slug || "knowledge-gap"}.md`;
+}
+
+export function resolveProposalTargetPath(subpath: string | undefined, title: string): string {
+  const folder = (subpath ?? "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const fileName = proposalFileName(title);
+  return folder ? `${folder}/${fileName}` : fileName;
+}
+
 export interface ProposalPublication {
   provider: "local-git";
   branchName: string;

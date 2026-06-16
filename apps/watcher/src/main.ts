@@ -10,6 +10,7 @@ import type {
   SummarizeGapJobInput,
   SummarizeGapJobOutput
 } from "@magpie/core";
+import { resolveProposalTargetPath } from "@magpie/core";
 import { buildPrompt, parseJobOutput } from "./job-prompts.js";
 
 const apiBaseUrl = trimTrailingSlash(process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/api$/, "");
@@ -249,8 +250,10 @@ class MockAgentRunner implements AgentRunner {
 
   private draftMarkdownProposal(input: DraftMarkdownProposalJobInput): DraftMarkdownProposalJobOutput {
     return {
+      // The destination's docs folder is owned by the API at persist time; the
+      // watcher only supplies the canonical filename.
       title: input.gapSummary,
-      targetPath: input.targetPath ?? "docs/proposed/knowledge-gap.md",
+      targetPath: resolveProposalTargetPath(undefined, input.gapSummary),
       markdown: `---\ntitle: ${input.gapSummary}\nstatus: draft\n---\n\n# ${input.gapSummary}\n\nTODO: Review and expand this proposed article.\n`,
       rationale: `Mock proposal generated from ${input.triggeringQuestions.length} triggering question(s).`
     };
