@@ -1,30 +1,14 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type {
-  AiJob,
   AiJobType,
-  AnswerQuestionJobInput,
-  AnswerQuestionJobOutput,
-  ChangesetChange,
-  CrunchKnowledgeBaseJobInput,
-  CrunchPlan,
-  CrunchRun,
-  CrunchRunTrigger,
   Proposal,
   QuestionFeedback,
   ScheduledTaskSettings
 } from "@magpie/core";
-import { buildMockCrunchPlan, isValidCron, nextCronTime } from "@magpie/core";
-import { fetchPullRequestStatus, LocalGitProposalPublisher } from "@magpie/git";
+import { isValidCron, nextCronTime } from "@magpie/core";
+import { fetchPullRequestStatus } from "@magpie/git";
 import { selectClustersToDraft } from "./stores/gap-clustering.js";
-import { DEFAULT_CRUNCH_CRON } from "./stores/crunch-store.js";
-import { apiLink, normalizeRelativePath, parseLimit } from "./platform/paths.js";
-import {
-  defaultDestinationId,
-  findRepositoryForDestination,
-  selectFlow
-} from "./platform/repositories.js";
-import { type AiProviderName } from "./platform/providers.js";
-import { parseJsonObject } from "./platform/json.js";
+import { apiLink, parseLimit } from "./platform/paths.js";
 import { normalizeAiExecutionMode, normalizeAiProvider } from "./config-holder.js";
 import { type AppContext, createAppContext } from "./context.js";
 import * as questionsService from "./features/questions/service.js";
@@ -33,6 +17,8 @@ import * as askService from "./features/ask/service.js";
 import * as knowledgeService from "./features/knowledge/service.js";
 import { knowledgeRepositoryErrorCode } from "./features/knowledge/service.js";
 import * as proposalsService from "./features/proposals/service.js";
+import * as crunchService from "./features/crunch/service.js";
+import * as jobsService from "./features/jobs/service.js";
 import * as configService from "./features/config/service.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
@@ -231,7 +217,7 @@ async function route(ctx: AppContext, request: IncomingMessage, response: Server
 
   if (request.method === "GET" && path === "/crunch/runs") {
     const limit = parseLimit(url.searchParams.get("limit"), 20);
-    writeJson(response, 200, { runs: await ctx.stores.crunchRuns.listRuns(limit) });
+    writeJson(response, 200, { runs: await crunchService.listRuns(ctx, limit) });
     return;
   }
 
@@ -241,7 +227,7 @@ async function route(ctx: AppContext, request: IncomingMessage, response: Server
   }
 
   if (request.method === "GET" && path === "/crunch/settings") {
-    writeJson(response, 200, { settings: await crunchSettingsForResponse(ctx) });
+    writeJson(response, 200, { settings: await crunchService.settingsForResponse(ctx) });
     return;
   }
 
@@ -275,7 +261,7 @@ async function route(ctx: AppContext, request: IncomingMessage, response: Server
 
   const crunchRunMatch = /^\/crunch\/runs\/([^/]+)$/.exec(path);
   if (request.method === "GET" && crunchRunMatch) {
-    const run = await ctx.stores.crunchRuns.getRun(crunchRunMatch[1]);
+    const run = await crunchService.getRun(ctx, crunchRunMatch[1]);
     if (!run) {
       writeJson(response, 404, { error: "crunch_run_not_found" });
       return;
@@ -290,7 +276,7 @@ async function route(ctx: AppContext, request: IncomingMessage, response: Server
   }
 
   if (request.method === "GET" && path === "/ai-jobs") {
-    writeJson(response, 200, { jobs: await ctx.stores.aiJobs.list() });
+    writeJson(response, 200, { jobs: await jobsService.listJobs(ctx) });
     return;
   }
 
@@ -313,7 +299,7 @@ async function route(ctx: AppContext, request: IncomingMessage, response: Server
 
   const getMatch = /^\/ai-jobs\/([^/]+)$/.exec(path);
   if (request.method === "GET" && getMatch) {
-    const job = await ctx.stores.aiJobs.get(getMatch[1]);
+    const job = await jobsService.getJob(ctx, getMatch[1]);
     if (!job) {
       writeJson(response, 404, { error: "job_not_found" });
       return;
@@ -607,12 +593,12 @@ async function handleUploadDocuments(
 async function handleCreateJob(ctx: AppContext, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const payload = await readJsonBody<{ type?: AiJobType; input?: unknown }>(request);
 
-  if (!payload.type || !isAiJobType(payload.type)) {
+  if (!payload.type || !jobsService.isAiJobType(payload.type)) {
     writeJson(response, 400, { error: "valid_job_type_required" });
     return;
   }
 
-  const job = await ctx.stores.aiJobs.enqueue(payload.type, payload.input ?? {});
+  const job = await jobsService.createJob(ctx, payload.type, payload.input);
   writeJson(response, 201, { job });
 }
 
@@ -625,13 +611,13 @@ async function handleClaimJob(ctx: AppContext, request: IncomingMessage, respons
     return;
   }
 
-  const acceptedTypes = (payload.acceptedTypes ?? []).filter(isAiJobType);
+  const acceptedTypes = (payload.acceptedTypes ?? []).filter(jobsService.isAiJobType);
   if (acceptedTypes.length === 0) {
     writeJson(response, 400, { error: "accepted_types_required" });
     return;
   }
 
-  const job = await ctx.stores.aiJobs.claimNext(workerName, acceptedTypes);
+  const job = await jobsService.claimJob(ctx, workerName, acceptedTypes);
   writeJson(response, 200, { job: job ?? null });
 }
 
@@ -644,41 +630,17 @@ async function handleCompleteJob(
   const payload = await readJsonBody<{ output?: unknown }>(request);
 
   try {
-    const existingJob = await ctx.stores.aiJobs.get(jobId);
-    if (!existingJob) {
-      writeJson(response, 404, { error: "job_not_found" });
+    const outcome = await jobsService.completeJob(ctx, jobId, payload.output);
+    if (!outcome.ok) {
+      writeJson(response, 404, { error: outcome.code });
       return;
     }
 
-    await ctx.stores.aiJobs.complete(jobId, payload.output ?? {});
-    await updateQuestionLogFromCompletedJob(ctx, existingJob, payload.output);
-    await proposalsService.createProposalFromCompletedJob(ctx, existingJob, payload.output);
-    await attachCrunchPlanFromCompletedJob(ctx, existingJob, payload.output);
-    writeJson(response, 200, { job: await ctx.stores.aiJobs.get(jobId) });
+    writeJson(response, 200, { job: outcome.job });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected completion failure";
     writeJson(response, 500, { error: "job_completion_failed", message });
   }
-}
-
-async function updateQuestionLogFromCompletedJob(
-  ctx: AppContext,
-  job: AiJob | undefined,
-  output: unknown
-): Promise<void> {
-  if (!job || job.type !== "answer_question" || !isAnswerQuestionJobOutput(output)) {
-    return;
-  }
-
-  const input = job.input as Partial<AnswerQuestionJobInput> & { provider?: string };
-  if (!input.questionLogId) {
-    return;
-  }
-
-  await ctx.stores.questionLogs.updateAnswer(input.questionLogId, {
-    answer: output,
-    chatProvider: typeof input.provider === "string" ? input.provider : (job.claimedBy ?? "watcher")
-  });
 }
 
 async function handleFailJob(
@@ -690,15 +652,8 @@ async function handleFailJob(
   const payload = await readJsonBody<{ error?: string }>(request);
 
   try {
-    const failingJob = await ctx.stores.aiJobs.get(jobId);
-    await ctx.stores.aiJobs.fail(jobId, payload.error ?? "Unknown watcher failure");
-    if (failingJob?.type === "crunch_knowledge_base") {
-      const run = await ctx.stores.crunchRuns.getRunByJobId(jobId);
-      if (run) {
-        await ctx.stores.crunchRuns.failRun(run.id, payload.error ?? "Crunch job failed");
-      }
-    }
-    writeJson(response, 200, { job: await ctx.stores.aiJobs.get(jobId) });
+    const job = await jobsService.failJob(ctx, jobId, payload.error);
+    writeJson(response, 200, { job });
   } catch {
     writeJson(response, 404, { error: "job_not_found" });
   }
@@ -738,7 +693,10 @@ async function handleTriggerCrunch(
 ): Promise<void> {
   const payload = await readJsonBody<{ flowId?: string }>(request);
   try {
-    const run = await triggerCrunchRun(ctx, { flowId: payload.flowId?.trim() || undefined, trigger: "manual" });
+    const run = await crunchService.triggerCrunchRun(ctx, {
+      flowId: payload.flowId?.trim() || undefined,
+      trigger: "manual"
+    });
     writeJson(response, run.status === "failed" ? 502 : 200, { run });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Crunch run failed to start";
@@ -761,252 +719,21 @@ async function handleUpdateCrunchSettings(
     return;
   }
 
-  await ctx.stores.crunchRuns.updateSettings(payload.flowId?.trim() || undefined, {
+  await crunchService.updateSettings(ctx, payload.flowId?.trim() || undefined, {
     enabled: Boolean(payload.enabled),
     cron
   });
-  writeJson(response, 200, { settings: await crunchSettingsForResponse(ctx) });
-}
-
-// Always returns one settings row per configured flow (or a single default-flow
-// row when no flows are configured), merging in any stored schedule so the UI
-// can render a control even before the schedule has been saved once.
-async function crunchSettingsForResponse(ctx: AppContext) {
-  const stored = await ctx.stores.crunchRuns.listSettings();
-  const byFlow = new Map(stored.map((setting) => [setting.flowId ?? "", setting]));
-  const fallback = (flowId: string | undefined) =>
-    byFlow.get(flowId ?? "") ?? { flowId, enabled: false, cron: DEFAULT_CRUNCH_CRON };
-
-  if (ctx.knowledgeConfig.flows.length > 0) {
-    return ctx.knowledgeConfig.flows.map((flow) => fallback(flow.id));
-  }
-
-  return [fallback(undefined)];
+  writeJson(response, 200, { settings: await crunchService.settingsForResponse(ctx) });
 }
 
 async function handlePublishCrunchRun(ctx: AppContext, runId: string, response: ServerResponse): Promise<void> {
-  const run = await ctx.stores.crunchRuns.getRun(runId);
-  if (!run) {
-    writeJson(response, 404, { error: "crunch_run_not_found" });
+  const outcome = await crunchService.publishRun(ctx, runId);
+  if (!outcome.ok) {
+    writeJson(response, outcome.status, { error: outcome.code, message: outcome.message });
     return;
   }
 
-  if (run.status !== "completed" || !run.plan) {
-    writeJson(response, 409, {
-      error: "crunch_run_not_publishable",
-      message: "Only completed crunch runs with a plan can be published."
-    });
-    return;
-  }
-
-  const changes = changesetFromPlan(run.plan);
-  if (changes.length === 0) {
-    writeJson(response, 409, {
-      error: "crunch_run_empty_plan",
-      message: "This crunch plan does not change any files."
-    });
-    return;
-  }
-
-  const repository = await findRepositoryForDestination(ctx.repositoryDeps(), run.destinationId);
-  if (!repository) {
-    writeJson(response, 409, {
-      error: "crunch_repository_not_found",
-      message: "No indexed Git repository matches this crunch run's destination."
-    });
-    return;
-  }
-
-  if (repository.git?.scope === "not-git" || !repository.git?.workTreeRoot) {
-    writeJson(response, 409, {
-      error: "crunch_repository_not_git",
-      message: "The matched repository is not a Git checkout."
-    });
-    return;
-  }
-
-  try {
-    const publisher = new LocalGitProposalPublisher();
-    const publication = await publisher.publishChangeset({
-      repository,
-      branchName: crunchBranchName(run),
-      title: `docs: crunch tidy (${run.plan.operations.length} operation${run.plan.operations.length === 1 ? "" : "s"})`,
-      changes
-    });
-    const updatedRun = await ctx.stores.crunchRuns.recordRunPublication(run.id, {
-      provider: "local-git",
-      branchName: publication.branchName,
-      commitSha: publication.commitSha,
-      remoteUrl: publication.remoteUrl,
-      publishedAt: new Date().toISOString()
-    });
-
-    writeJson(response, 200, { run: updatedRun, publication });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Crunch publish failed";
-    writeJson(response, 409, { error: "crunch_publish_failed", message });
-  }
-}
-
-// Shared by the manual trigger endpoint and the scheduler. In direct mode the
-// plan is produced synchronously; in queue mode a job is enqueued and the run is
-// completed later by the watcher via attachCrunchPlanFromCompletedJob().
-async function triggerCrunchRun(
-  ctx: AppContext,
-  options: { flowId?: string; trigger: CrunchRunTrigger }
-): Promise<CrunchRun> {
-  const deps = ctx.repositoryDeps();
-  const flow = selectFlow(deps, options.flowId);
-  const flowId = flow?.id ?? options.flowId;
-  const destinationId = flow?.destinationId ?? defaultDestinationId(deps);
-  const documents = gatherCrunchDocuments(ctx, destinationId);
-  const input = {
-    flowId,
-    destinationId,
-    documents,
-    expectedOutput: "crunch_plan",
-    provider: ctx.config.get().aiProvider
-  } satisfies CrunchKnowledgeBaseJobInput & { provider: AiProviderName };
-
-  console.log(
-    `Crunch run requested (trigger=${options.trigger}, flow=${flowId ?? "default"}, ` +
-      `destination=${destinationId ?? "none"}, documents=${documents.length}, ` +
-      `provider=${ctx.config.get().aiProvider}, mode=${ctx.config.get().aiExecutionMode})`
-  );
-
-  if (ctx.config.get().aiExecutionMode === "direct") {
-    try {
-      const plan = await crunchKnowledgeBaseDirect(ctx, input);
-      return ctx.stores.crunchRuns.createRun({
-        flowId,
-        destinationId,
-        trigger: options.trigger,
-        documentCount: documents.length,
-        status: "completed",
-        plan
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Crunch planning failed";
-      return ctx.stores.crunchRuns.createRun({
-        flowId,
-        destinationId,
-        trigger: options.trigger,
-        documentCount: documents.length,
-        status: "failed",
-        error: message
-      });
-    }
-  }
-
-  const job = await ctx.stores.aiJobs.enqueue("crunch_knowledge_base", input);
-  return ctx.stores.crunchRuns.createRun({
-    flowId,
-    destinationId,
-    trigger: options.trigger,
-    documentCount: documents.length,
-    status: "running",
-    jobId: job.id
-  });
-}
-
-function gatherCrunchDocuments(ctx: AppContext, destinationId: string | undefined) {
-  const documents = ctx.stores.knowledgeIndex.listDocuments();
-  const scoped = destinationId ? documents.filter((document) => document.repositoryId === destinationId) : documents;
-  return scoped.map((document) => ({ path: document.path, content: document.content }));
-}
-
-async function crunchKnowledgeBaseDirect(ctx: AppContext, input: CrunchKnowledgeBaseJobInput): Promise<CrunchPlan> {
-  if (ctx.config.get().aiProvider === "mock") {
-    return buildMockCrunchPlan(input.documents);
-  }
-
-  const response = await ctx.providers.chat(ctx.config.get().aiProvider).complete({
-    system:
-      "You tidy a fragmented Markdown knowledge base by proposing structural maintenance only. " +
-      "Consolidate overlapping or tiny documents and split large multi-topic documents. Preserve all information. " +
-      'Return JSON only with this shape: {"summary":"string","operations":[{"kind":"consolidate|split|rewrite",' +
-      '"title":"string","reason":"string","sources":["path"],"writes":[{"path":"string","content":"string"}],' +
-      '"deletes":["path"]}],"rationale":"string"}. Use existing document paths exactly. ' +
-      "If the knowledge base is already tidy, return an empty operations array.",
-    messages: [
-      {
-        role: "user",
-        content: JSON.stringify(input, null, 2)
-      }
-    ]
-  });
-  const output = parseJsonObject(response.content);
-
-  if (!isCrunchPlan(output)) {
-    throw new Error("Direct crunch provider returned invalid plan output");
-  }
-
-  return output;
-}
-
-async function attachCrunchPlanFromCompletedJob(
-  ctx: AppContext,
-  job: AiJob | undefined,
-  output: unknown
-): Promise<void> {
-  if (!job || job.type !== "crunch_knowledge_base") {
-    return;
-  }
-
-  const run = await ctx.stores.crunchRuns.getRunByJobId(job.id);
-  if (!run) {
-    return;
-  }
-
-  if (isCrunchPlan(output)) {
-    await ctx.stores.crunchRuns.completeRun(run.id, output);
-  } else {
-    await ctx.stores.crunchRuns.failRun(run.id, "Crunch job returned an invalid plan");
-  }
-}
-
-function isCrunchPlan(value: unknown): value is CrunchPlan {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const candidate = value as Partial<CrunchPlan>;
-  if (typeof candidate.summary !== "string" || !Array.isArray(candidate.operations)) {
-    return false;
-  }
-
-  return candidate.operations.every(
-    (operation) =>
-      operation &&
-      typeof operation.title === "string" &&
-      Array.isArray(operation.writes) &&
-      Array.isArray(operation.deletes) &&
-      operation.writes.every((write) => write && typeof write.path === "string" && typeof write.content === "string") &&
-      operation.deletes.every((deletion) => typeof deletion === "string")
-  );
-}
-
-// Flattens a plan's operations into a single de-duplicated changeset. Deletes are
-// applied first, then writes, so a path that is both deleted and (re)written ends
-// up as a write — a split that reuses the original path stays a write, not a
-// delete.
-function changesetFromPlan(plan: CrunchPlan): ChangesetChange[] {
-  const changes = new Map<string, ChangesetChange>();
-  for (const operation of plan.operations) {
-    for (const deletion of operation.deletes) {
-      changes.set(normalizeRelativePath(deletion), { path: deletion, delete: true });
-    }
-  }
-  for (const operation of plan.operations) {
-    for (const write of operation.writes) {
-      changes.set(normalizeRelativePath(write.path), { path: write.path, content: write.content });
-    }
-  }
-  return [...changes.values()];
-}
-
-function crunchBranchName(run: CrunchRun): string {
-  return `magpie/crunch-${run.id.slice(0, 8)}`;
+  writeJson(response, 200, { run: outcome.run, publication: outcome.publication });
 }
 
 let crunchTickInFlight = false;
@@ -1045,7 +772,7 @@ async function crunchSchedulerTick(ctx: AppContext): Promise<void> {
       await ctx.stores.crunchRuns.touchSchedule(setting.flowId, new Date(now).toISOString(), nextRunAt.toISOString());
       console.log(`Crunch schedule due for flow ${setting.flowId ?? "default"}; starting scheduled run.`);
       try {
-        await triggerCrunchRun(ctx, { flowId: setting.flowId, trigger: "scheduled" });
+        await crunchService.triggerCrunchRun(ctx, { flowId: setting.flowId, trigger: "scheduled" });
       } catch (error) {
         const message = error instanceof Error ? error.message : "scheduled crunch run failed";
         console.error(`Scheduled crunch run failed for flow ${setting.flowId ?? "default"}: ${message}`);
@@ -1327,33 +1054,6 @@ async function handleRunScheduledTask(ctx: AppContext, key: string, response: Se
     const message = error instanceof Error ? error.message : "scheduled task run failed";
     writeJson(response, 500, { error: "scheduled_task_run_failed", message });
   }
-}
-
-function isAiJobType(value: unknown): value is AiJobType {
-  return (
-    value === "answer_question" ||
-    value === "summarize_gap" ||
-    value === "draft_markdown_proposal" ||
-    value === "detect_contradiction" ||
-    value === "suggest_consolidation" ||
-    value === "crunch_knowledge_base"
-  );
-}
-
-function isAnswerQuestionJobOutput(value: unknown): value is AnswerQuestionJobOutput {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const candidate = value as Partial<AnswerQuestionJobOutput>;
-  return (
-    typeof candidate.answer === "string" &&
-    (candidate.confidence === "high" ||
-      candidate.confidence === "medium" ||
-      candidate.confidence === "low" ||
-      candidate.confidence === "unknown") &&
-    Array.isArray(candidate.citations)
-  );
 }
 
 function apiRoutePath(pathname: string): string | undefined {
