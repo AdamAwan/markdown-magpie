@@ -20,17 +20,15 @@ import type {
 } from "@magpie/core";
 import { buildMockCrunchPlan, isValidCron, nextCronTime, resolveProposalTargetPath } from "@magpie/core";
 import { fetchPullRequestStatus, LocalGitProposalPublisher, raisePullRequest } from "@magpie/git";
-import { answerQuestion } from "@magpie/retrieval";
 import { assembleClusters, selectClustersToDraft, singletonCluster } from "./stores/gap-clustering.js";
 import { DEFAULT_CRUNCH_CRON } from "./stores/crunch-store.js";
-import { apiLink, normalizeRelativePath, normalizeUploadPath, parseLimit, slugify } from "./platform/paths.js";
+import { apiLink, normalizeRelativePath, parseLimit, slugify } from "./platform/paths.js";
 import {
   defaultDestinationId,
   destinationSubpath,
   findRepositoryForDestination,
   findRepositoryForProposal,
   resolveConfiguredRepositoryLocalPath,
-  resolveIndexSelection,
   seedConfiguredKnowledge,
   selectDestinationForProposal,
   selectFlow
@@ -45,6 +43,9 @@ import {
 } from "./platform/providers.js";
 import { normalizeAiExecutionMode, normalizeAiProvider } from "./config-holder.js";
 import { type AppContext, createAppContext } from "./context.js";
+import * as askService from "./features/ask/service.js";
+import * as knowledgeService from "./features/knowledge/service.js";
+import { knowledgeRepositoryErrorCode } from "./features/knowledge/service.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
 
@@ -124,7 +125,7 @@ async function route(ctx: AppContext, request: IncomingMessage, response: Server
   }
 
   if (request.method === "GET" && path === "/repositories") {
-    writeJson(response, 200, { repositories: ctx.stores.knowledgeIndex.listRepositories() });
+    writeJson(response, 200, { repositories: knowledgeService.listRepositories(ctx) });
     return;
   }
 
@@ -134,12 +135,12 @@ async function route(ctx: AppContext, request: IncomingMessage, response: Server
   }
 
   if (request.method === "GET" && path === "/documents") {
-    writeJson(response, 200, { documents: ctx.stores.knowledgeIndex.listDocuments() });
+    writeJson(response, 200, { documents: knowledgeService.listDocuments(ctx) });
     return;
   }
 
   if (request.method === "GET" && path === "/knowledge/stats") {
-    writeJson(response, 200, ctx.stores.knowledgeIndex.getStats());
+    writeJson(response, 200, knowledgeService.stats(ctx));
     return;
   }
 
@@ -150,7 +151,7 @@ async function route(ctx: AppContext, request: IncomingMessage, response: Server
       return;
     }
 
-    const ranked = await ctx.stores.knowledgeIndex.search(query, parseLimit(url.searchParams.get("limit"), 5));
+    const ranked = await knowledgeService.search(ctx, query, parseLimit(url.searchParams.get("limit"), 5));
     writeJson(response, 200, { sections: ranked.map((result) => result.section), ranked });
     return;
   }
@@ -836,56 +837,24 @@ async function handleAsk(ctx: AppContext, request: IncomingMessage, response: Se
     return;
   }
 
-  if (ctx.config.get().aiExecutionMode === "queue") {
-    const sections = await ctx.stores.knowledgeIndex.search(question, 5);
-    const log = await ctx.stores.questionLogs.record({
-      question,
-      executionMode: ctx.config.get().aiExecutionMode,
-      chatProvider: ctx.config.get().aiProvider,
-      retrievedSectionIds: sections.map((ranked) => ranked.section.id)
-    });
-    const input: AnswerQuestionJobInput = {
-      questionLogId: log.id,
-      question,
-      context: sections.map(({ section }) => ({
-        sectionId: section.id,
-        path: section.path,
-        heading: section.heading,
-        content: section.content
-      })),
-      provider: ctx.config.get().aiProvider,
-      expectedOutput: "answer_result"
-    } as AnswerQuestionJobInput & { provider: AiProviderName };
-    const job = await ctx.stores.aiJobs.enqueue("answer_question", input);
+  const outcome = await askService.ask(ctx, question);
+  if (outcome.kind === "queue") {
     writeJson(response, 202, {
       mode: "queue",
-      questionId: log.id,
-      job,
+      questionId: outcome.questionId,
+      job: outcome.job,
       links: {
-        question: apiLink(`/questions/${log.id}`),
-        status: apiLink(`/ai-jobs/${job.id}`)
+        question: apiLink(`/questions/${outcome.questionId}`),
+        status: apiLink(`/ai-jobs/${outcome.job.id}`)
       }
     });
     return;
   }
 
-  const result = await answerQuestion(
-    question,
-    ctx.stores.knowledgeIndex,
-    ctx.providers.chat(ctx.config.get().aiProvider)
-  );
-  const log = await ctx.stores.questionLogs.record({
-    question,
-    executionMode: ctx.config.get().aiExecutionMode,
-    chatProvider: ctx.config.get().aiProvider,
-    answer: result,
-    retrievedSectionIds: result.citations.map((citation) => citation.sectionId)
-  });
-
   writeJson(response, 200, {
-    mode: ctx.config.get().aiExecutionMode,
-    questionId: log.id,
-    result
+    mode: outcome.mode,
+    questionId: outcome.questionId,
+    result: outcome.result
   });
 }
 
@@ -898,21 +867,15 @@ async function handleIndexRepository(
 
   let selection: { localPath: string; repositoryId?: string; name?: string };
   try {
-    selection = await resolveIndexSelection(ctx.repositoryDeps(), payload);
+    selection = await knowledgeService.resolveSelection(ctx, payload);
   } catch (error) {
     const message = error instanceof Error ? error.message : "configured_repository_required";
     writeJson(response, 400, { error: knowledgeRepositoryErrorCode(message), message });
     return;
   }
 
-  const summary = await ctx.stores.knowledgeIndex.indexLocalRepository({
-    localPath: selection.localPath,
-    repositoryId: selection.repositoryId,
-    name: selection.name
-  });
-
+  const summary = await knowledgeService.indexSelection(ctx, selection);
   writeJson(response, 200, summary);
-  void ctx.embedder.trigger();
 }
 
 async function handleUploadDocuments(
@@ -925,12 +888,7 @@ async function handleUploadDocuments(
     name?: string;
     documents?: Array<{ path?: string; content?: string }>;
   }>(request);
-  const documents = (payload.documents ?? [])
-    .map((document) => ({
-      path: normalizeUploadPath(document.path),
-      content: document.content ?? ""
-    }))
-    .filter((document) => document.path && document.content.trim());
+  const documents = knowledgeService.normalizeUploadDocuments(payload.documents);
 
   if (documents.length === 0) {
     writeJson(response, 400, { error: "markdown_documents_required" });
@@ -942,17 +900,13 @@ async function handleUploadDocuments(
     return;
   }
 
-  const summary = await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
-    repositoryId: payload.repositoryId?.trim() || "uploaded",
-    name: payload.name?.trim() || "Uploaded Markdown",
-    documents: documents.map((document) => ({
-      path: document.path,
-      content: document.content
-    }))
+  const summary = await knowledgeService.uploadDocuments(ctx, {
+    repositoryId: payload.repositoryId,
+    name: payload.name,
+    documents
   });
 
   writeJson(response, 201, summary);
-  void ctx.embedder.trigger();
 }
 
 async function handleCreateJob(ctx: AppContext, request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -1238,22 +1192,6 @@ function maskConnectionString(value: string | undefined): string | null {
   } catch {
     return secretState(value);
   }
-}
-
-function knowledgeRepositoryErrorCode(message: string): string {
-  if (message === "local_path_required") {
-    return "local_path_required";
-  }
-
-  if (message.includes("localPath is not accepted")) {
-    return "local_path_not_allowed";
-  }
-
-  if (message.includes("cannot_be_checked_out") || message.includes("repository_url_required") || message === "configured_repository_not_indexable") {
-    return "configured_repository_not_indexable";
-  }
-
-  return "configured_repository_required";
 }
 
 function secretState(value: string | undefined): "set" | "not set" {
