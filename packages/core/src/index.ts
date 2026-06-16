@@ -92,6 +92,10 @@ export type QuestionGapSource = "auto" | "manual";
 export interface QuestionGap {
   summary: string;
   source: QuestionGapSource;
+  // Set when a merged proposal closes this gap. A resolved gap is retained for
+  // audit but no longer surfaces as a candidate.
+  resolvedAt?: string;
+  resolvedByProposalId?: string;
 }
 
 export interface QuestionLog {
@@ -171,6 +175,9 @@ export interface Proposal {
   jobId?: string;
   publication?: ProposalPublication;
   createdAt: string;
+  // Stamped when the proposal is marked merged. Marking merged also resolves the
+  // gaps it closed so they stop surfacing as candidates.
+  mergedAt?: string;
 }
 
 // Canonical location for a drafted proposal within its destination repository.

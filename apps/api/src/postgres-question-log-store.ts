@@ -271,9 +271,15 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       return grouped;
     }
 
-    const result = await this.pool.query<{ question_id: string; summary: string; source: QuestionGapSource }>(
+    const result = await this.pool.query<{
+      question_id: string;
+      summary: string;
+      source: QuestionGapSource;
+      resolved_at: Date | null;
+      resolved_by_proposal_id: string | null;
+    }>(
       `
-        SELECT question_id, summary, source
+        SELECT question_id, summary, source, resolved_at, resolved_by_proposal_id
         FROM question_gaps
         WHERE question_id = ANY($1)
         ORDER BY created_at ASC, id ASC
@@ -283,11 +289,36 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
 
     for (const row of result.rows) {
       const existing = grouped.get(row.question_id) ?? [];
-      existing.push({ summary: row.summary, source: row.source });
+      existing.push({
+        summary: row.summary,
+        source: row.source,
+        resolvedAt: row.resolved_at?.toISOString(),
+        resolvedByProposalId: row.resolved_by_proposal_id ?? undefined
+      });
       grouped.set(row.question_id, existing);
     }
 
     return grouped;
+  }
+
+  async resolveGaps(questionIds: string[], summaries: string[], proposalId: string): Promise<number> {
+    const trimmedSummaries = [...new Set(summaries.map((summary) => summary.trim()).filter((summary) => summary.length > 0))];
+    if (questionIds.length === 0 || trimmedSummaries.length === 0) {
+      return 0;
+    }
+
+    const result = await this.pool.query(
+      `
+        UPDATE question_gaps
+        SET resolved_at = now(), resolved_by_proposal_id = $3
+        WHERE question_id = ANY($1)
+          AND summary = ANY($2)
+          AND resolved_at IS NULL
+      `,
+      [questionIds, trimmedSummaries, proposalId]
+    );
+
+    return result.rowCount ?? 0;
   }
 
   async reset(): Promise<void> {
@@ -321,7 +352,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           SELECT DISTINCT qg.summary, q.id AS question_id, q.asked_at
           FROM question_gaps qg
           JOIN questions q ON q.id = qg.question_id
-          WHERE q.confidence = 'low' OR q.manual_gap = true
+          WHERE qg.resolved_at IS NULL AND (q.confidence = 'low' OR q.manual_gap = true)
         ) AS distinct_gaps
         GROUP BY summary
         ORDER BY count DESC, latest_asked_at DESC

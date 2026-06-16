@@ -23,7 +23,7 @@ import type {
   SuggestedGapCluster
 } from "@magpie/core";
 import { buildMockCrunchPlan, isValidCron, nextCronTime, resolveProposalTargetPath } from "@magpie/core";
-import { ensureGitCheckout, LocalGitProposalPublisher } from "@magpie/git";
+import { ensureGitCheckout, fetchPullRequestStatus, LocalGitProposalPublisher, raisePullRequest } from "@magpie/git";
 import { answerQuestion, createChatProvider, createEmbeddingProvider, type ChatProviderName, type EmbeddingProviderName } from "@magpie/retrieval";
 import { DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS, InMemoryAiJobQueue } from "./ai-job-queue.js";
 import { embedPendingSections } from "./embed-sections.js";
@@ -107,6 +107,7 @@ async function start(): Promise<void> {
     console.log(`Markdown Magpie API listening on http://localhost:${port}/api`);
     logStartupConfig();
     startCrunchScheduler();
+    startPullRequestPoller();
   });
 }
 
@@ -239,7 +240,9 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 
   if (request.method === "GET" && path === "/proposals") {
     const limit = parseLimit(url.searchParams.get("limit"), 50);
-    writeJson(response, 200, { proposals: await proposals.list(limit) });
+    const statusFilter = url.searchParams.get("status");
+    const options = isProposalStatus(statusFilter) ? { status: statusFilter } : undefined;
+    writeJson(response, 200, { proposals: await proposals.list(limit, options) });
     return;
   }
 
@@ -370,7 +373,84 @@ async function handleUpdateProposalStatus(
     return;
   }
 
+  // Merging is the point at which the proposal's content lands in the knowledge
+  // base: resolve the gaps it closed so they stop surfacing, then re-index the
+  // destination so the new doc becomes searchable.
+  if (proposal.status === "merged") {
+    const { resolvedGapCount, reindexed } = await runMergeCascade(proposal);
+    writeJson(response, 200, { proposal, resolvedGapCount, reindexed });
+    return;
+  }
+
   writeJson(response, 200, { proposal });
+}
+
+// The work that must happen once a proposal is merged, shared by the manual
+// "Mark merged" endpoint and the pull-request poller: resolve its gaps and
+// re-index the destination knowledge base.
+async function runMergeCascade(proposal: Proposal): Promise<{ resolvedGapCount: number; reindexed: boolean }> {
+  const resolvedGapCount = await resolveGapsForMergedProposal(proposal);
+  const reindexed = await reindexDestinationForProposal(proposal);
+  return { resolvedGapCount, reindexed };
+}
+
+// Resolves the gaps a merged proposal closed: precisely the rows whose question
+// and summary the proposal recorded, so unrelated gaps on a multi-topic question
+// are left untouched. Returns the number of gaps newly resolved.
+async function resolveGapsForMergedProposal(proposal: Proposal): Promise<number> {
+  const questionIds = proposal.triggeringQuestionIds ?? [];
+  const summaries = splitGapSummaries(proposal.gapSummary);
+  if (questionIds.length === 0 || summaries.length === 0) {
+    return 0;
+  }
+
+  const resolved = await questionLogs.resolveGaps(questionIds, summaries, proposal.id);
+  console.log(`Resolved ${resolved} gap(s) closed by merged proposal ${proposal.id}`);
+  return resolved;
+}
+
+// Pulls the destination's default branch (where the PR merged) and re-indexes it
+// so the merged document is immediately searchable. Best-effort: a failure here
+// must not undo the merge, so it is logged and reported rather than thrown.
+async function reindexDestinationForProposal(proposal: Proposal): Promise<boolean> {
+  try {
+    if (configuredKnowledgeDestinations.length > 0) {
+      const destination = selectDestinationForProposal(proposal);
+      if (!destination) {
+        console.warn(`No destination matched merged proposal ${proposal.id}; skipping re-index.`);
+        return false;
+      }
+
+      // For a git destination this also fetches and fast-forwards the checkout,
+      // bringing in the just-merged commit before we re-index.
+      const localPath = await resolveConfiguredRepositoryLocalPath(destination);
+      await knowledgeIndex.indexLocalRepository({
+        localPath,
+        repositoryId: destination.id,
+        name: destination.name
+      });
+    } else {
+      const repository = await findRepositoryForProposal(proposal);
+      if (!repository) {
+        console.warn(`No repository matched merged proposal ${proposal.id}; skipping re-index.`);
+        return false;
+      }
+
+      await knowledgeIndex.indexLocalRepository({
+        localPath: repository.localPath,
+        repositoryId: repository.id,
+        name: repository.name
+      });
+    }
+
+    console.log(`Re-indexed destination after merging proposal ${proposal.id}`);
+    void embedSectionsInBackground();
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown error";
+    console.warn(`Re-index after merging proposal ${proposal.id} failed: ${message}`);
+    return false;
+  }
 }
 
 async function handlePublishProposal(proposalId: string, response: ServerResponse): Promise<void> {
@@ -411,19 +491,59 @@ async function handlePublishProposal(proposalId: string, response: ServerRespons
       markdown: proposal.markdown,
       targetPath: proposal.targetPath
     });
+    // The branch is now on the remote; try to open a PR for it. A PR failure
+    // (unsupported host, bad token, API error) must not lose the pushed branch,
+    // so we degrade to a branch-only publish and surface the reason.
+    let pullRequestUrl: string | undefined;
+    let pullRequestWarning: string | undefined;
+    try {
+      const baseBranch = repository.defaultBranch || repository.git?.defaultBranch || "main";
+      const raised = await raisePullRequest({
+        remoteUrl: publication.remoteUrl,
+        headBranch: publication.branchName,
+        baseBranch,
+        title: `docs: ${proposal.title}`,
+        body: buildPullRequestBody(proposal)
+      });
+      pullRequestUrl = raised?.url;
+      console.log(
+        raised
+          ? `Raised pull request ${raised.url} for proposal ${proposal.id}`
+          : `Pushed branch ${publication.branchName}; no PR raised (unsupported host or missing token).`
+      );
+    } catch (error) {
+      pullRequestWarning = error instanceof Error ? error.message : "Pull request creation failed";
+      console.warn(`Branch ${publication.branchName} pushed, but PR creation failed: ${pullRequestWarning}`);
+    }
+
     const updatedProposal = await proposals.recordPublication(proposal.id, {
       provider: "local-git",
       branchName: publication.branchName,
       commitSha: publication.commitSha,
       remoteUrl: publication.remoteUrl,
+      pullRequestUrl,
       publishedAt: new Date().toISOString()
     });
 
-    writeJson(response, 200, { proposal: updatedProposal, publication });
+    writeJson(response, 200, { proposal: updatedProposal, publication, pullRequestUrl, pullRequestWarning });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Proposal publish failed";
     writeJson(response, 409, { error: "proposal_publish_failed", message });
   }
+}
+
+// Human-facing PR description linking the merge back to the gaps it closes.
+function buildPullRequestBody(proposal: Proposal): string {
+  const lines = ["Proposed by Markdown Magpie to close knowledge gaps.", ""];
+  if (proposal.rationale) {
+    lines.push(proposal.rationale, "");
+  }
+  const summaries = splitGapSummaries(proposal.gapSummary);
+  if (summaries.length > 0) {
+    lines.push("Gaps addressed:");
+    lines.push(...summaries.map((summary) => `- ${summary}`));
+  }
+  return lines.join("\n").trim();
 }
 
 async function handleUpdateRuntimeConfig(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -587,6 +707,15 @@ async function handleCreateProposalFromGaps(request: IncomingMessage, response: 
 // Stored on the proposal as a human-readable record of which gaps it closes.
 function joinGapSummaries(summaries: string[]): string {
   return summaries.join("\n");
+}
+
+// Inverse of joinGapSummaries: recovers the individual gap summaries a proposal
+// closes from its stored newline-joined record.
+function splitGapSummaries(gapSummary: string | undefined): string[] {
+  return (gapSummary ?? "")
+    .split("\n")
+    .map((summary) => summary.trim())
+    .filter((summary) => summary.length > 0);
 }
 
 function dedupeCitations(citations: Proposal["evidence"]): Proposal["evidence"] {
@@ -1657,6 +1786,77 @@ async function crunchSchedulerTick(): Promise<void> {
     console.error(`Crunch scheduler tick error: ${message}`);
   } finally {
     crunchTickInFlight = false;
+  }
+}
+
+let pullRequestPollInFlight = false;
+
+// Polls open pull requests so a human merging (or closing) on the host
+// auto-advances the proposal here — closing the loop without a manual click.
+// Disabled when no GITHUB_TOKEN is configured (nothing to query) or when the
+// tick interval is set to 0.
+function startPullRequestPoller(): void {
+  const tickMs = Number.parseInt(process.env.PULL_REQUEST_POLL_TICK_MS ?? "60000", 10);
+  if (!Number.isFinite(tickMs) || tickMs <= 0) {
+    console.log("Pull request poller disabled (PULL_REQUEST_POLL_TICK_MS <= 0).");
+    return;
+  }
+  if (!process.env.GITHUB_TOKEN?.trim()) {
+    console.log("Pull request poller disabled (no GITHUB_TOKEN configured).");
+    return;
+  }
+
+  const timer = setInterval(() => void pullRequestPollTick(), tickMs);
+  timer.unref?.();
+  console.log(`Pull request poller started (tick ${tickMs}ms)`);
+}
+
+// One tick: for every proposal still awaiting its PR, ask the host whether it
+// merged or closed and advance the proposal accordingly. Re-entrancy guarded so
+// a slow re-index can't overlap the next tick.
+async function pullRequestPollTick(): Promise<void> {
+  if (pullRequestPollInFlight) {
+    return;
+  }
+  pullRequestPollInFlight = true;
+  try {
+    const open = await proposals.list(200, { status: "pr-opened" });
+    for (const proposal of open) {
+      const pullRequestUrl = proposal.publication?.pullRequestUrl;
+      if (!pullRequestUrl) {
+        continue;
+      }
+
+      let status: Awaited<ReturnType<typeof fetchPullRequestStatus>>;
+      try {
+        status = await fetchPullRequestStatus(pullRequestUrl);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "pull request lookup failed";
+        console.warn(`Pull request status check failed for proposal ${proposal.id}: ${message}`);
+        continue;
+      }
+      if (!status) {
+        continue;
+      }
+
+      if (status.merged) {
+        const merged = await proposals.updateStatus(proposal.id, "merged");
+        if (merged) {
+          console.log(`Detected merged pull request for proposal ${proposal.id}; running merge cascade.`);
+          await runMergeCascade(merged);
+        }
+      } else if (status.state === "closed") {
+        // Closed without merging is effectively a rejection of the published
+        // proposal; mark it so the poller stops chasing a dead PR.
+        await proposals.updateStatus(proposal.id, "rejected");
+        console.log(`Pull request for proposal ${proposal.id} was closed without merging; marked rejected.`);
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "pull request poll tick failed";
+    console.error(`Pull request poll tick error: ${message}`);
+  } finally {
+    pullRequestPollInFlight = false;
   }
 }
 

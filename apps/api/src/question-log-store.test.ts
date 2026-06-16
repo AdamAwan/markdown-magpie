@@ -166,3 +166,45 @@ test("listGapCandidates excludes a question whose manual gap was cleared", async
 
   assert.equal((await store.listGapCandidates(50)).length, 0);
 });
+
+test("resolveGaps resolves only the matching gap and drops it from candidates", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({
+    question: "react + export?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    answer: multiGapAnswer,
+    retrievedSectionIds: []
+  });
+
+  const resolved = await store.resolveGaps([log.id], ["No React integration guidance"], "proposal-1");
+  assert.equal(resolved, 1);
+
+  const candidates = await store.listGapCandidates(50);
+  // The resolved gap is gone; the untouched gap on the same question survives.
+  assert.deepEqual(
+    candidates.map((candidate) => candidate.summary),
+    ["Dashboard export is undocumented"]
+  );
+
+  const stored = await store.get(log.id);
+  const resolvedGap = stored?.gaps?.find((gap) => gap.summary === "No React integration guidance");
+  assert.equal(resolvedGap?.resolvedByProposalId, "proposal-1");
+  assert.ok(resolvedGap?.resolvedAt);
+});
+
+test("resolveGaps is idempotent and only counts newly resolved gaps", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({
+    question: "vaccines?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    answer: lowGapAnswer,
+    retrievedSectionIds: []
+  });
+
+  assert.equal(await store.resolveGaps([log.id], ["No source material for: vaccines"], "proposal-1"), 1);
+  // Re-resolving the same gap changes nothing and reports zero new resolutions.
+  assert.equal(await store.resolveGaps([log.id], ["No source material for: vaccines"], "proposal-2"), 0);
+  assert.equal((await store.listGapCandidates(50)).length, 0);
+});

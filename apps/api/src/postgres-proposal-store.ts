@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import type { Citation, Proposal } from "@magpie/core";
-import type { ProposalInput, ProposalStore } from "./proposal-store.js";
+import type { ProposalInput, ProposalListOptions, ProposalStore } from "./proposal-store.js";
 
 const { Pool } = pg;
 
@@ -40,11 +40,16 @@ export class PostgresProposalStore implements ProposalStore {
     return mapRow(result.rows[0]);
   }
 
-  async list(limit: number): Promise<Proposal[]> {
-    const result = await this.pool.query<ProposalRow>(
-      "SELECT * FROM proposals ORDER BY created_at DESC LIMIT $1",
-      [limit]
-    );
+  async list(limit: number, options?: ProposalListOptions): Promise<Proposal[]> {
+    const result = options?.status
+      ? await this.pool.query<ProposalRow>(
+          "SELECT * FROM proposals WHERE status = $2 ORDER BY created_at DESC LIMIT $1",
+          [limit, options.status]
+        )
+      : await this.pool.query<ProposalRow>(
+          "SELECT * FROM proposals WHERE status <> 'merged' ORDER BY created_at DESC LIMIT $1",
+          [limit]
+        );
     return result.rows.map(mapRow);
   }
 
@@ -55,16 +60,23 @@ export class PostgresProposalStore implements ProposalStore {
 
   async updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined> {
     const result = await this.pool.query<ProposalRow>(
-      "UPDATE proposals SET status = $2 WHERE id = $1 RETURNING *",
+      `
+        UPDATE proposals
+        SET status = $2,
+            merged_at = CASE WHEN $2 = 'merged' THEN COALESCE(merged_at, now()) ELSE merged_at END
+        WHERE id = $1
+        RETURNING *
+      `,
       [id, status]
     );
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
   async recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined> {
+    const status = publication.pullRequestUrl ? "pr-opened" : "branch-pushed";
     const result = await this.pool.query<ProposalRow>(
-      "UPDATE proposals SET status = 'branch-pushed', publication = $2 WHERE id = $1 RETURNING *",
-      [id, JSON.stringify(publication)]
+      "UPDATE proposals SET status = $3, publication = $2 WHERE id = $1 RETURNING *",
+      [id, JSON.stringify(publication), status]
     );
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
@@ -100,6 +112,7 @@ interface ProposalRow {
   destination_id: string | null;
   publication: Proposal["publication"] | null;
   created_at: Date;
+  merged_at: Date | null;
 }
 
 function mapRow(row: ProposalRow): Proposal {
@@ -117,6 +130,7 @@ function mapRow(row: ProposalRow): Proposal {
     rationale: row.rationale ?? undefined,
     jobId: row.job_id ?? undefined,
     publication: row.publication ?? undefined,
-    createdAt: row.created_at.toISOString()
+    createdAt: row.created_at.toISOString(),
+    mergedAt: row.merged_at?.toISOString()
   };
 }

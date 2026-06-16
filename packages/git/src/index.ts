@@ -98,6 +98,180 @@ export class DryRunPullRequestProvider implements PullRequestProvider {
   }
 }
 
+export interface RaisePullRequestRequest {
+  // Remote the published branch lives on. Used to derive the host and repo slug.
+  remoteUrl: string | undefined;
+  headBranch: string;
+  baseBranch: string;
+  title: string;
+  body: string;
+}
+
+export interface RaisedPullRequest {
+  url: string;
+  number: number;
+}
+
+// Opens a pull request for an already-pushed branch. Returns undefined when the
+// remote host is unsupported or no token is configured, so callers can degrade
+// to a branch-only publish. Throws only when a supported host's API rejects the
+// request, so genuine failures surface rather than being silently swallowed.
+export async function raisePullRequest(request: RaisePullRequestRequest): Promise<RaisedPullRequest | undefined> {
+  const slug = parseGitHubSlug(request.remoteUrl);
+  if (!slug) {
+    return undefined;
+  }
+
+  const token = process.env.GITHUB_TOKEN?.trim();
+  if (!token) {
+    return undefined;
+  }
+
+  const response = await fetch(`https://api.github.com/repos/${slug.owner}/${slug.repo}/pulls`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "Content-Type": "application/json",
+      "User-Agent": "markdown-magpie"
+    },
+    body: JSON.stringify({
+      title: request.title,
+      head: request.headBranch,
+      base: request.baseBranch,
+      body: request.body
+    })
+  });
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`GitHub pull request creation failed (${response.status}): ${detail.slice(0, 500)}`);
+  }
+
+  const data = (await response.json()) as { html_url?: string; number?: number };
+  if (!data.html_url || typeof data.number !== "number") {
+    throw new Error("GitHub pull request creation returned an unexpected response");
+  }
+
+  return { url: data.html_url, number: data.number };
+}
+
+export interface PullRequestStatus {
+  merged: boolean;
+  // GitHub reports a merged PR as state "closed"; `merged` disambiguates a merge
+  // from a close-without-merge.
+  state: "open" | "closed";
+}
+
+// Reads the current state of a previously-raised GitHub pull request. Returns
+// undefined when the URL is not a GitHub PR, no token is configured, or the PR
+// can no longer be found — all cases where the poller should simply skip it.
+// Throws only on an unexpected API error so transient failures surface in logs.
+export async function fetchPullRequestStatus(pullRequestUrl: string | undefined): Promise<PullRequestStatus | undefined> {
+  const ref = parseGitHubPullRequestUrl(pullRequestUrl);
+  if (!ref) {
+    return undefined;
+  }
+
+  const token = process.env.GITHUB_TOKEN?.trim();
+  if (!token) {
+    return undefined;
+  }
+
+  const response = await fetch(
+    `https://api.github.com/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "markdown-magpie"
+      }
+    }
+  );
+
+  if (response.status === 404) {
+    return undefined;
+  }
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`GitHub pull request lookup failed (${response.status}): ${detail.slice(0, 500)}`);
+  }
+
+  const data = (await response.json()) as { merged?: boolean; state?: string };
+  return { merged: Boolean(data.merged), state: data.state === "closed" ? "closed" : "open" };
+}
+
+// Parses owner/repo/number from a github.com pull request html_url such as
+// https://github.com/owner/repo/pull/7.
+function parseGitHubPullRequestUrl(
+  pullRequestUrl: string | undefined
+): { owner: string; repo: string; number: number } | undefined {
+  if (!pullRequestUrl?.trim()) {
+    return undefined;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(pullRequestUrl.trim());
+  } catch {
+    return undefined;
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (host !== "github.com" && !host.endsWith(".github.com")) {
+    return undefined;
+  }
+
+  const segments = parsed.pathname.replace(/^\/+|\/+$/g, "").split("/");
+  // owner / repo / "pull" / number
+  if (segments.length < 4 || segments[2] !== "pull") {
+    return undefined;
+  }
+
+  const number = Number.parseInt(segments[3], 10);
+  if (!Number.isInteger(number)) {
+    return undefined;
+  }
+
+  return { owner: segments[0], repo: segments[1].replace(/\.git$/, ""), number };
+}
+
+// Extracts the owner/repo slug from an https or ssh github.com remote. Returns
+// undefined for any other host so non-GitHub remotes degrade to branch-only.
+function parseGitHubSlug(remoteUrl: string | undefined): { owner: string; repo: string } | undefined {
+  if (!remoteUrl?.trim()) {
+    return undefined;
+  }
+
+  const trimmed = remoteUrl.trim();
+  // git@github.com:owner/repo(.git)
+  const sshMatch = /^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/.exec(trimmed);
+  if (sshMatch) {
+    return { owner: sshMatch[1], repo: sshMatch[2] };
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return undefined;
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (host !== "github.com" && !host.endsWith(".github.com")) {
+    return undefined;
+  }
+
+  const segments = parsed.pathname.replace(/^\/+|\/+$/g, "").split("/");
+  if (segments.length < 2) {
+    return undefined;
+  }
+
+  return { owner: segments[0], repo: segments[1].replace(/\.git$/, "") };
+}
+
 export class LocalGitProposalPublisher {
   async publish(request: PublishProposalBranchRequest): Promise<PublishProposalBranchResponse> {
     const root = request.repository.git?.workTreeRoot ?? request.repository.localPath;

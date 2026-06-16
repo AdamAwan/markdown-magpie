@@ -9,9 +9,16 @@ export interface ProposalInput extends DraftMarkdownProposalJobOutput {
   jobId?: string;
 }
 
+export interface ProposalListOptions {
+  // Returns only proposals in this status. When omitted, merged proposals are
+  // excluded so the active list reflects work still in flight; merged proposals
+  // remain fetchable as history via { status: "merged" }.
+  status?: Proposal["status"];
+}
+
 export interface ProposalStore {
   create(input: ProposalInput): Promise<Proposal>;
-  list(limit: number): Promise<Proposal[]>;
+  list(limit: number, options?: ProposalListOptions): Promise<Proposal[]>;
   get(id: string): Promise<Proposal | undefined>;
   updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined>;
   recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined>;
@@ -41,8 +48,9 @@ export class InMemoryProposalStore implements ProposalStore {
     return proposal;
   }
 
-  async list(limit: number): Promise<Proposal[]> {
+  async list(limit: number, options?: ProposalListOptions): Promise<Proposal[]> {
     return [...this.proposals.values()]
+      .filter((proposal) => (options?.status ? proposal.status === options.status : proposal.status !== "merged"))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, limit);
   }
@@ -59,7 +67,8 @@ export class InMemoryProposalStore implements ProposalStore {
 
     const updated: Proposal = {
       ...existing,
-      status
+      status,
+      mergedAt: status === "merged" ? existing.mergedAt ?? new Date().toISOString() : existing.mergedAt
     };
     this.proposals.set(id, updated);
     return updated;
@@ -74,7 +83,7 @@ export class InMemoryProposalStore implements ProposalStore {
     const updated: Proposal = {
       ...existing,
       publication,
-      status: "branch-pushed"
+      status: publication.pullRequestUrl ? "pr-opened" : "branch-pushed"
     };
     this.proposals.set(id, updated);
     return updated;

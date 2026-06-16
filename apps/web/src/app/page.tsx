@@ -644,10 +644,24 @@ export default function HomePage() {
     setLoading(true);
     clearMessage();
     try {
-      const result = await apiPost<{ proposal: Proposal }>(`/proposals/${proposalId}/status`, { status });
+      const result = await apiPost<{ proposal: Proposal; resolvedGapCount?: number; reindexed?: boolean }>(
+        `/proposals/${proposalId}/status`,
+        { status }
+      );
       setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
       setSelectedProposalId(result.proposal.id);
-      showMessage(status === "ready" ? "Proposal marked ready for PR workflow." : "Proposal rejected.", "success");
+      if (status === "merged") {
+        const gapPart = result.resolvedGapCount
+          ? `${result.resolvedGapCount} gap${result.resolvedGapCount === 1 ? "" : "s"} resolved`
+          : "no open gaps to resolve";
+        const indexPart = result.reindexed ? "knowledge base re-indexed" : "re-index skipped";
+        showMessage(`Proposal merged — ${gapPart}; ${indexPart}.`, "success");
+        // Merged proposals drop out of the active list and their gaps stop
+        // surfacing, so pull fresh proposal and gap state.
+        await refresh({ preserveMessage: true });
+      } else {
+        showMessage(status === "ready" ? "Proposal marked ready for PR workflow." : "Proposal rejected.", "success");
+      }
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     } finally {
@@ -659,10 +673,20 @@ export default function HomePage() {
     setLoading(true);
     clearMessage();
     try {
-      const result = await apiPost<{ proposal: Proposal }>(`/proposals/${proposalId}/publish`, {});
+      const result = await apiPost<{ proposal: Proposal; pullRequestUrl?: string; pullRequestWarning?: string }>(
+        `/proposals/${proposalId}/publish`,
+        {}
+      );
       setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
       setSelectedProposalId(result.proposal.id);
-      showMessage(`Published ${result.proposal.publication?.branchName ?? "proposal branch"}.`, "success");
+      const branchLabel = result.proposal.publication?.branchName ?? "proposal branch";
+      if (result.pullRequestUrl) {
+        showMessage(`Published ${branchLabel} and opened a pull request.`, "success");
+      } else if (result.pullRequestWarning) {
+        showMessage(`Published ${branchLabel}, but PR creation failed: ${result.pullRequestWarning}`, "info");
+      } else {
+        showMessage(`Published ${branchLabel} (no PR raised — configure a host token to enable).`, "success");
+      }
       await refresh({ preserveMessage: true });
     } catch (error) {
       showMessage(errorMessage(error), "danger");
@@ -1971,6 +1995,15 @@ function ProposalPanel({
                     Publish Branch
                   </button>
                   <button
+                    className="chip selected"
+                    disabled={loading || (selectedProposal.status !== "branch-pushed" && selectedProposal.status !== "pr-opened")}
+                    onClick={() => void updateProposalStatus(selectedProposal.id, "merged")}
+                    title="Mark the published PR as merged: resolves its gaps and re-indexes the knowledge base"
+                    type="button"
+                  >
+                    Mark Merged
+                  </button>
+                  <button
                     className="chip"
                     disabled={loading || selectedProposal.status !== "draft"}
                     onClick={() => void updateProposalStatus(selectedProposal.id, "rejected")}
@@ -1994,6 +2027,7 @@ function ProposalPanel({
                     <ContextValue label="Branch" value={selectedProposal.publication.branchName} />
                     <ContextValue label="Commit" value={shortSha(selectedProposal.publication.commitSha)} />
                     <ContextValue label="Remote" value={selectedProposal.publication.remoteUrl ?? "Not recorded"} />
+                    <ContextValue label="Pull request" value={selectedProposal.publication.pullRequestUrl ?? "Not raised"} />
                     <ContextValue label="Published" value={new Date(selectedProposal.publication.publishedAt).toLocaleString()} />
                   </div>
                 ) : null}

@@ -19,6 +19,10 @@ export interface QuestionLogStore {
   recordFeedback(id: string, feedback: QuestionFeedback): Promise<QuestionLog | undefined>;
   recordManualGap(id: string, summary?: string): Promise<QuestionLog | undefined>;
   clearManualGap(id: string): Promise<QuestionLog | undefined>;
+  // Soft-resolves the gaps closed by a merged proposal: the matching rows are
+  // retained for audit but stop surfacing as candidates. Returns how many gaps
+  // were newly resolved.
+  resolveGaps(questionIds: string[], summaries: string[], proposalId: string): Promise<number>;
   get(id: string): Promise<QuestionLog | undefined>;
   list(limit: number): Promise<QuestionLog[]>;
   listGapCandidates(limit: number): Promise<GapCandidate[]>;
@@ -126,6 +130,33 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     return updated;
   }
 
+  async resolveGaps(questionIds: string[], summaries: string[], proposalId: string): Promise<number> {
+    const questionSet = new Set(questionIds);
+    const summarySet = new Set(summaries.map((summary) => summary.trim()).filter((summary) => summary.length > 0));
+    if (questionSet.size === 0 || summarySet.size === 0) {
+      return 0;
+    }
+
+    const resolvedAt = new Date().toISOString();
+    let resolved = 0;
+    for (const log of this.logs.values()) {
+      if (!questionSet.has(log.id) || !log.gaps?.length) {
+        continue;
+      }
+
+      const gaps = log.gaps.map((gap) => {
+        if (gap.resolvedAt || !summarySet.has(gap.summary)) {
+          return gap;
+        }
+        resolved += 1;
+        return { ...gap, resolvedAt, resolvedByProposalId: proposalId };
+      });
+      this.logs.set(log.id, { ...log, gaps });
+    }
+
+    return resolved;
+  }
+
   async list(limit: number): Promise<QuestionLog[]> {
     return [...this.logs.values()]
       .sort((left, right) => right.askedAt.localeCompare(left.askedAt))
@@ -143,7 +174,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
         continue;
       }
 
-      const summaries = new Set((log.gaps ?? []).map((gap) => gap.summary));
+      const summaries = new Set((log.gaps ?? []).filter((gap) => !gap.resolvedAt).map((gap) => gap.summary));
       for (const summary of summaries) {
         groups.set(summary, [...(groups.get(summary) ?? []), log]);
       }
