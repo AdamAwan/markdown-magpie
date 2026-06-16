@@ -18,7 +18,6 @@ export interface RepositoryDeps {
     destinations: ConfiguredKnowledgeRepository[];
     flows: ConfiguredKnowledgeFlow[];
     repositories: ConfiguredKnowledgeRepository[];
-    checkoutRoot: string;
   };
   knowledgeIndex: InMemoryKnowledgeIndex;
   triggerEmbedding: () => void;
@@ -319,7 +318,7 @@ export async function seedConfiguredKnowledge(
   return { indexed, failures };
 }
 
-function selectDestinationForProposal(
+export function selectDestinationForProposal(
   deps: RepositoryDeps,
   proposal: { targetPath?: string; destinationId?: string }
 ): ConfiguredKnowledgeRepository | undefined {

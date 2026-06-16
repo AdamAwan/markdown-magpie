@@ -48,6 +48,7 @@ import {
   resolveIndexSelection,
   seedConfiguredKnowledge,
   selectDestinationForIndex,
+  selectDestinationForProposal,
   selectFlow,
   syncConfiguredGitCheckouts
 } from "./platform/repositories.js";
@@ -110,8 +111,7 @@ const repositoryDeps = (): RepositoryDeps => ({
     sources: configuredKnowledgeSources,
     destinations: configuredKnowledgeDestinations,
     flows: configuredKnowledgeFlows,
-    repositories: configuredKnowledgeRepositories,
-    checkoutRoot: checkoutRoot()
+    repositories: configuredKnowledgeRepositories
   },
   knowledgeIndex,
   triggerEmbedding: () => void embedder.trigger()
@@ -472,14 +472,7 @@ async function resolveGapsForMergedProposal(proposal: Proposal): Promise<number>
 async function reindexDestinationForProposal(proposal: Proposal): Promise<boolean> {
   try {
     if (configuredKnowledgeDestinations.length > 0) {
-      const destination = configuredKnowledgeDestinations.find((d) => d.id === proposal.destinationId) ??
-        configuredKnowledgeDestinations.find((d) => {
-          if (!d.subpath) return false;
-          const targetPath = normalizeRelativePath(proposal.targetPath);
-          const subpath = normalizeRelativePath(d.subpath);
-          return targetPath === subpath || targetPath.startsWith(`${subpath}/`);
-        }) ??
-        (configuredKnowledgeDestinations.length === 1 ? configuredKnowledgeDestinations[0] : undefined);
+      const destination = selectDestinationForProposal(repositoryDeps(), proposal);
       if (!destination) {
         console.warn(`No destination matched merged proposal ${proposal.id}; skipping re-index.`);
         return false;
