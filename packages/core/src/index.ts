@@ -74,7 +74,10 @@ export interface AnswerResult {
   answer: string;
   confidence: Confidence;
   citations: Citation[];
-  gap?: KnowledgeGapSignal;
+  // A single question can expose several distinct knowledge gaps (e.g. asking
+  // "how do I set this up with React so I can export dashboards?" is two gaps).
+  // Each is tracked separately so it can cluster and become its own proposal.
+  gaps?: KnowledgeGapSignal[];
 }
 
 export interface KnowledgeGapSignal {
@@ -82,6 +85,13 @@ export interface KnowledgeGapSignal {
   question: string;
   confidence: Confidence;
   citedSectionIds: string[];
+}
+
+export type QuestionGapSource = "auto" | "manual";
+
+export interface QuestionGap {
+  summary: string;
+  source: QuestionGapSource;
 }
 
 export interface QuestionLog {
@@ -95,7 +105,7 @@ export interface QuestionLog {
   answer?: AnswerResult;
   feedback?: QuestionFeedback;
   feedbackAt?: string;
-  gapSummary?: string;
+  gaps?: QuestionGap[];
   manualGap?: boolean;
   manualGapAt?: string;
 }
@@ -254,7 +264,7 @@ export interface AnswerQuestionJobOutput {
   answer: string;
   confidence: Confidence;
   citations: Citation[];
-  gap?: KnowledgeGapSignal;
+  gaps?: KnowledgeGapSignal[];
 }
 
 export interface SummarizeGapJobInput {

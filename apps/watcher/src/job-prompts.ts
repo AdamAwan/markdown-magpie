@@ -64,15 +64,19 @@ Return this JSON shape:
       "excerpt": "string"
     }
   ],
-  "gap": {
-    "summary": "string",
-    "question": "string",
-    "confidence": "low",
-    "citedSectionIds": []
-  }
+  "gaps": [
+    {
+      "summary": "string",
+      "question": "string",
+      "confidence": "low",
+      "citedSectionIds": []
+    }
+  ]
 }
 
-Omit "gap" when the answer is supported by context.
+List one entry in "gaps" for each distinct piece of missing knowledge — a question that asks
+about several unrelated topics should produce one gap per unanswered topic. Use an empty array
+or omit "gaps" when the answer is fully supported by context.
 
 Question:
 ${input.question}

@@ -1,4 +1,4 @@
-import type { AnswerResult, ChatProvider, Citation, ChatRequest, Confidence, DocumentSection, RankedSection } from "@magpie/core";
+import type { AnswerResult, ChatProvider, Citation, ChatRequest, Confidence, DocumentSection, KnowledgeGapSignal, RankedSection } from "@magpie/core";
 
 export interface SectionSearchProvider {
   search(question: string, limit: number): Promise<RankedSection[]>;
@@ -137,12 +137,7 @@ export async function answerQuestion(
       answer: "I could not find reliable source material for this question.",
       confidence: "low",
       citations: [],
-      gap: {
-        summary: `No source material found for: ${question}`,
-        question,
-        confidence: "low",
-        citedSectionIds: []
-      }
+      gaps: [toGapSignal(`No source material found for: ${question}`, question, [])]
     };
   }
 
@@ -150,8 +145,10 @@ export async function answerQuestion(
   const response = await chatProvider.complete({
     system:
       "Answer using only the provided Markdown knowledge base context. Return only JSON with this shape: " +
-      '{"answer":"string","confidence":"high|medium|low","isKnowledgeGap":true|false,"gapSummary":"string|null"}. ' +
-      "Set isKnowledgeGap to true and confidence to low when the context does not specifically answer the question.",
+      '{"answer":"string","confidence":"high|medium|low","isKnowledgeGap":true|false,"gaps":["string"]}. ' +
+      "Set isKnowledgeGap to true and confidence to low when the context does not specifically answer the question. " +
+      'List each distinct piece of missing knowledge as its own entry in "gaps" — a question that asks about several ' +
+      "unrelated topics should produce one gap per unanswered topic. Use an empty array when the answer is fully supported.",
     messages: [
       {
         role: "user",
@@ -162,16 +159,15 @@ export async function answerQuestion(
   const structuredResponse = parseStructuredAnswerResponse(response.content);
 
   if (structuredResponse?.isKnowledgeGap) {
+    const citedSectionIds = citations.map((citation) => citation.sectionId);
+    const summaries = structuredResponse.gaps.length
+      ? structuredResponse.gaps
+      : [`No sufficient source material found for: ${question}`];
     return {
       answer: structuredResponse.answer,
       confidence: "low",
       citations,
-      gap: {
-        summary: structuredResponse.gapSummary || `No sufficient source material found for: ${question}`,
-        question,
-        confidence: "low",
-        citedSectionIds: citations.map((citation) => citation.sectionId)
-      }
+      gaps: summaries.map((summary) => toGapSignal(summary, question, citedSectionIds))
     };
   }
 
@@ -188,12 +184,7 @@ export async function answerQuestion(
       answer: response.content,
       confidence: "low",
       citations: [],
-      gap: {
-        summary: `No sufficient source material found for: ${question}`,
-        question,
-        confidence: "low",
-        citedSectionIds: []
-      }
+      gaps: [toGapSignal(`No sufficient source material found for: ${question}`, question, [])]
     };
   }
 
@@ -227,7 +218,7 @@ interface StructuredAnswerResponse {
   answer: string;
   confidence: "high" | "medium" | "low";
   isKnowledgeGap: boolean;
-  gapSummary: string;
+  gaps: string[];
 }
 
 function parseStructuredAnswerResponse(value: string): StructuredAnswerResponse | undefined {
@@ -236,7 +227,7 @@ function parseStructuredAnswerResponse(value: string): StructuredAnswerResponse 
     return undefined;
   }
 
-  const candidate = parsed as Partial<StructuredAnswerResponse>;
+  const candidate = parsed as Partial<StructuredAnswerResponse> & { gapSummary?: unknown };
   if (
     typeof candidate.answer !== "string" ||
     (candidate.confidence !== "high" && candidate.confidence !== "medium" && candidate.confidence !== "low") ||
@@ -249,8 +240,32 @@ function parseStructuredAnswerResponse(value: string): StructuredAnswerResponse 
     answer: candidate.answer,
     confidence: candidate.isKnowledgeGap ? "low" : candidate.confidence,
     isKnowledgeGap: candidate.isKnowledgeGap,
-    gapSummary: typeof candidate.gapSummary === "string" ? candidate.gapSummary : ""
+    gaps: parseGapSummaries(candidate.gaps, candidate.gapSummary)
   };
+}
+
+// The model is asked for a "gaps" array, but tolerate the older singular
+// "gapSummary" string so a stale provider prompt still yields one gap. Blank
+// entries are dropped; callers fall back to a generated summary when empty.
+function parseGapSummaries(gaps: unknown, legacyGapSummary: unknown): string[] {
+  const collected: string[] = [];
+  if (Array.isArray(gaps)) {
+    for (const entry of gaps) {
+      if (typeof entry === "string" && entry.trim().length > 0) {
+        collected.push(entry.trim());
+      }
+    }
+  }
+
+  if (collected.length === 0 && typeof legacyGapSummary === "string" && legacyGapSummary.trim().length > 0) {
+    collected.push(legacyGapSummary.trim());
+  }
+
+  return collected;
+}
+
+function toGapSignal(summary: string, question: string, citedSectionIds: string[]): KnowledgeGapSignal {
+  return { summary, question, confidence: "low", citedSectionIds };
 }
 
 function parseJsonObject(value: string): unknown {

@@ -217,12 +217,14 @@ class MockAgentRunner implements AgentRunner {
         answer: "I could not find reliable source material for this question.",
         confidence: "low",
         citations: [],
-        gap: {
-          summary: `No source material found for: ${input.question}`,
-          question: input.question,
-          confidence: "low",
-          citedSectionIds: []
-        }
+        gaps: [
+          {
+            summary: `No source material found for: ${input.question}`,
+            question: input.question,
+            confidence: "low",
+            citedSectionIds: []
+          }
+        ]
       };
     }
 

@@ -204,10 +204,10 @@ interface AnswerResult {
   answer: string;
   confidence: Confidence;
   citations: Citation[];
-  gap?: {
+  gaps?: {
     summary: string;
     question: string;
-  };
+  }[];
 }
 
 interface QuestionLog {
@@ -1210,6 +1210,13 @@ function AnsweredPanel({
               </span>
             </div>
             <p>{item.answer?.answer ?? "Waiting for an answer."}</p>
+            {item.answer?.gaps && item.answer.gaps.length > 0 ? (
+              <ul className="gapList" title="Distinct knowledge gaps detected for this question">
+                {item.answer.gaps.map((gap, index) => (
+                  <li key={`${item.id}-gap-${index}`}>{gap.summary}</li>
+                ))}
+              </ul>
+            ) : null}
             <div className="rowActions">
               <span>{new Date(item.askedAt).toLocaleString()}</span>
               {citations.length > 0 ? (

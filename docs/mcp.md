@@ -19,7 +19,7 @@ Returns the final answer only:
   "answer": "string",
   "confidence": "high | medium | low",
   "citations": [ { "documentId": "...", "sectionId": "...", "path": "...", "heading": "...", "anchor": "...", "excerpt": "..." } ],
-  "gap": { ... },        // present only when the answer is a knowledge gap
+  "gaps": [ { ... } ],   // present only when the answer exposes knowledge gaps; one entry per missing topic
   "questionId": "string" // identifier for reporting feedback via kb.feedback
 }
 ```

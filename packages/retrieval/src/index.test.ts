@@ -33,7 +33,8 @@ describe("answerQuestion", () => {
     const result = await answerQuestion("How do I roll back a hotfix?", provider([]), new MockChatProvider());
     assert.equal(result.confidence, "low");
     assert.equal(result.citations.length, 0);
-    assert.equal(result.gap?.summary, "No source material found for: How do I roll back a hotfix?");
+    assert.equal(result.gaps?.length, 1);
+    assert.equal(result.gaps?.[0].summary, "No source material found for: How do I roll back a hotfix?");
   });
 
   it("answers from relevant retrieved sections with citations", async () => {
@@ -49,7 +50,7 @@ describe("answerQuestion", () => {
     );
 
     assert.equal(result.confidence, "medium");
-    assert.equal(result.gap, undefined);
+    assert.equal(result.gaps, undefined);
     assert.equal(result.citations.length, 1); // 0.1 is below the relative band, dropped
     assert.equal(result.citations[0].sectionId, "repo:runbook.md:0");
     assert.match(result.answer, /rollback guidance is/i);
@@ -76,7 +77,7 @@ describe("answerQuestion", () => {
 
     assert.equal(result.confidence, "low");
     assert.equal(result.citations.length, 0);
-    assert.equal(result.gap?.summary, "No source material found for: What should I do if a cat gets gum in their fur?");
+    assert.equal(result.gaps?.[0].summary, "No source material found for: What should I do if a cat gets gum in their fur?");
   });
 
   it("gates on the highest relevance, not the first element's (results may be ordered by fusion)", async () => {
@@ -109,7 +110,7 @@ describe("answerQuestion", () => {
 
     assert.equal(result.confidence, "low");
     assert.equal(result.citations.length, 0);
-    assert.match(result.gap?.summary ?? "", /No sufficient source material/);
+    assert.match(result.gaps?.[0].summary ?? "", /No sufficient source material/);
   });
 
   it("uses structured model gap decisions instead of retrieval confidence", async () => {
@@ -135,6 +136,7 @@ describe("answerQuestion", () => {
             answer: "The provided context does not explain how to identify when a cat needs urgent care.",
             confidence: "low",
             isKnowledgeGap: true,
+            // Legacy singular field is still tolerated and wrapped into one gap.
             gapSummary: "No urgent cat care triage guidance is documented."
           })
         };
@@ -142,7 +144,39 @@ describe("answerQuestion", () => {
     });
 
     assert.equal(result.confidence, "low");
-    assert.equal(result.gap?.summary, "No urgent cat care triage guidance is documented.");
-    assert.deepEqual(result.gap?.citedSectionIds, ["repo:care.md:0", "repo:health.md:1"]);
+    assert.equal(result.gaps?.length, 1);
+    assert.equal(result.gaps?.[0].summary, "No urgent cat care triage guidance is documented.");
+    assert.deepEqual(result.gaps?.[0].citedSectionIds, ["repo:care.md:0", "repo:health.md:1"]);
+  });
+
+  it("splits a multi-topic question into one gap per missing topic", async () => {
+    const ranked: RankedSection[] = [
+      {
+        section: section("repo:setup.md:0", "Getting Started", "Install the package and add the provider to your app root."),
+        relevance: 0.5
+      }
+    ];
+
+    const result = await answerQuestion("How do I set this up with React so I can export dashboards?", provider(ranked), {
+      async complete() {
+        return {
+          content: JSON.stringify({
+            answer: "The context covers installation but not React integration or dashboard export.",
+            confidence: "low",
+            isKnowledgeGap: true,
+            gaps: ["No React integration guidance is documented.", "Dashboard export is not documented."]
+          })
+        };
+      }
+    });
+
+    assert.equal(result.confidence, "low");
+    assert.equal(result.gaps?.length, 2);
+    assert.deepEqual(
+      result.gaps?.map((gap) => gap.summary),
+      ["No React integration guidance is documented.", "Dashboard export is not documented."]
+    );
+    // Every gap from one answer shares that answer's citations.
+    assert.deepEqual(result.gaps?.[1].citedSectionIds, ["repo:setup.md:0"]);
   });
 });

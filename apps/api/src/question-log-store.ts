@@ -1,5 +1,17 @@
 import { randomUUID } from "node:crypto";
-import type { GapCandidate, QuestionFeedback, QuestionLog, QuestionLogInput, QuestionLogUpdateInput } from "@magpie/core";
+import type {
+  AnswerResult,
+  GapCandidate,
+  QuestionFeedback,
+  QuestionGap,
+  QuestionLog,
+  QuestionLogInput,
+  QuestionLogUpdateInput
+} from "@magpie/core";
+
+function autoGapsFromAnswer(answer: AnswerResult | undefined): QuestionGap[] {
+  return (answer?.gaps ?? []).map((gap) => ({ summary: gap.summary, source: "auto" as const }));
+}
 
 export interface QuestionLogStore {
   record(input: QuestionLogInput): Promise<QuestionLog>;
@@ -25,7 +37,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       confidence: input.answer?.confidence ?? "unknown",
       retrievedSectionIds: input.retrievedSectionIds,
       answer: input.answer,
-      gapSummary: input.answer?.gap?.summary,
+      gaps: autoGapsFromAnswer(input.answer),
       askedAt: new Date().toISOString()
     };
 
@@ -49,7 +61,11 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       confidence: input.answer.confidence,
       retrievedSectionIds: input.answer.citations.map((citation) => citation.sectionId),
       answer: input.answer,
-      gapSummary: input.answer.gap?.summary
+      // Re-answering replaces auto-detected gaps but preserves any manual flag.
+      gaps: [
+        ...(existing.gaps ?? []).filter((gap) => gap.source === "manual"),
+        ...autoGapsFromAnswer(input.answer)
+      ]
     };
 
     this.logs.set(id, updated);
@@ -79,11 +95,13 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     }
 
     const trimmed = summary?.trim();
+    const manualGap: QuestionGap = { summary: trimmed || existing.question, source: "manual" };
     const updated: QuestionLog = {
       ...existing,
       manualGap: true,
       manualGapAt: new Date().toISOString(),
-      gapSummary: trimmed || existing.gapSummary || existing.question
+      // Replace any prior manual gap; auto-detected gaps are left untouched.
+      gaps: [...(existing.gaps ?? []).filter((gap) => gap.source !== "manual"), manualGap]
     };
 
     this.logs.set(id, updated);
@@ -99,7 +117,9 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     const updated: QuestionLog = {
       ...existing,
       manualGap: false,
-      manualGapAt: undefined
+      manualGapAt: undefined,
+      // Drop the manual flag's gap; any auto-detected gaps remain candidates.
+      gaps: (existing.gaps ?? []).filter((gap) => gap.source !== "manual")
     };
 
     this.logs.set(id, updated);
@@ -119,12 +139,14 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
   async listGapCandidates(limit: number): Promise<GapCandidate[]> {
     const groups = new Map<string, QuestionLog[]>();
     for (const log of this.logs.values()) {
-      const summary = log.gapSummary;
-      if (!summary || (log.confidence !== "low" && !log.manualGap)) {
+      if (log.confidence !== "low" && !log.manualGap) {
         continue;
       }
 
-      groups.set(summary, [...(groups.get(summary) ?? []), log]);
+      const summaries = new Set((log.gaps ?? []).map((gap) => gap.summary));
+      for (const summary of summaries) {
+        groups.set(summary, [...(groups.get(summary) ?? []), log]);
+      }
     }
 
     return [...groups.entries()]

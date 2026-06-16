@@ -7,10 +7,20 @@ const lowGapAnswer: AnswerResult = {
   answer: "I could not find reliable source material.",
   confidence: "low",
   citations: [],
-  gap: { summary: "No source material for: vaccines", question: "vaccines?", confidence: "low", citedSectionIds: [] }
+  gaps: [{ summary: "No source material for: vaccines", question: "vaccines?", confidence: "low", citedSectionIds: [] }]
 };
 
-test("recordManualGap flags the question and stores the provided summary", async () => {
+const multiGapAnswer: AnswerResult = {
+  answer: "The context covers setup but not React integration or dashboard export.",
+  confidence: "low",
+  citations: [],
+  gaps: [
+    { summary: "No React integration guidance", question: "react + export?", confidence: "low", citedSectionIds: [] },
+    { summary: "Dashboard export is undocumented", question: "react + export?", confidence: "low", citedSectionIds: [] }
+  ]
+};
+
+test("recordManualGap flags the question and stores the provided summary as a manual gap", async () => {
   const store = new InMemoryQuestionLogStore();
   const log = await store.record({ question: "How do I adopt?", executionMode: "direct", chatProvider: "mock", retrievedSectionIds: [] });
 
@@ -18,7 +28,7 @@ test("recordManualGap flags the question and stores the provided summary", async
 
   assert.equal(updated?.manualGap, true);
   assert.ok(updated?.manualGapAt);
-  assert.equal(updated?.gapSummary, "Adoption process is undocumented");
+  assert.deepEqual(updated?.gaps, [{ summary: "Adoption process is undocumented", source: "manual" }]);
 });
 
 test("recordManualGap defaults the summary to the question text", async () => {
@@ -27,7 +37,7 @@ test("recordManualGap defaults the summary to the question text", async () => {
 
   const updated = await store.recordManualGap(log.id);
 
-  assert.equal(updated?.gapSummary, "How do I adopt?");
+  assert.deepEqual(updated?.gaps, [{ summary: "How do I adopt?", source: "manual" }]);
 });
 
 test("recordManualGap returns undefined for an unknown question", async () => {
@@ -35,16 +45,60 @@ test("recordManualGap returns undefined for an unknown question", async () => {
   assert.equal(await store.recordManualGap("missing"), undefined);
 });
 
-test("clearManualGap unsets the flag but keeps the gap summary", async () => {
+test("record stores one gap per detected gap for a multi-topic question", async () => {
   const store = new InMemoryQuestionLogStore();
-  const log = await store.record({ question: "How do I adopt?", executionMode: "direct", chatProvider: "mock", retrievedSectionIds: [] });
-  await store.recordManualGap(log.id, "Adoption undocumented");
+  const log = await store.record({
+    question: "react + export?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    answer: multiGapAnswer,
+    retrievedSectionIds: []
+  });
+
+  assert.deepEqual(log.gaps, [
+    { summary: "No React integration guidance", source: "auto" },
+    { summary: "Dashboard export is undocumented", source: "auto" }
+  ]);
+});
+
+test("recordManualGap preserves auto-detected gaps and adds a manual one", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({
+    question: "react + export?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    answer: multiGapAnswer,
+    retrievedSectionIds: []
+  });
+
+  const updated = await store.recordManualGap(log.id, "Also missing auth setup");
+
+  assert.deepEqual(updated?.gaps, [
+    { summary: "No React integration guidance", source: "auto" },
+    { summary: "Dashboard export is undocumented", source: "auto" },
+    { summary: "Also missing auth setup", source: "manual" }
+  ]);
+});
+
+test("clearManualGap removes the manual gap but keeps auto-detected gaps", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({
+    question: "react + export?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    answer: multiGapAnswer,
+    retrievedSectionIds: []
+  });
+  await store.recordManualGap(log.id, "Also missing auth setup");
 
   const cleared = await store.clearManualGap(log.id);
 
   assert.equal(cleared?.manualGap, false);
   assert.equal(cleared?.manualGapAt, undefined);
-  assert.equal(cleared?.gapSummary, "Adoption undocumented");
+  assert.deepEqual(cleared?.gaps, [
+    { summary: "No React integration guidance", source: "auto" },
+    { summary: "Dashboard export is undocumented", source: "auto" }
+  ]);
 });
 
 test("listGapCandidates includes a manually flagged high-confidence question", async () => {
@@ -68,6 +122,39 @@ test("listGapCandidates still includes auto-detected low-confidence gaps", async
 
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].summary, "No source material for: vaccines");
+});
+
+test("listGapCandidates lists each gap of a multi-topic question separately and clusters shared gaps", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const first = await store.record({
+    question: "react + export?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    answer: multiGapAnswer,
+    retrievedSectionIds: []
+  });
+  // A second question that only shares the dashboard-export gap.
+  const second = await store.record({
+    question: "how do I export a dashboard?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    answer: {
+      answer: "Not documented.",
+      confidence: "low",
+      citations: [],
+      gaps: [{ summary: "Dashboard export is undocumented", question: "export?", confidence: "low", citedSectionIds: [] }]
+    },
+    retrievedSectionIds: []
+  });
+
+  const candidates = await store.listGapCandidates(50);
+  const bySummary = new Map(candidates.map((candidate) => [candidate.summary, candidate]));
+
+  assert.equal(candidates.length, 2);
+  assert.equal(bySummary.get("No React integration guidance")?.count, 1);
+  const shared = bySummary.get("Dashboard export is undocumented");
+  assert.equal(shared?.count, 2);
+  assert.deepEqual([...(shared?.questionIds ?? [])].sort(), [first.id, second.id].sort());
 });
 
 test("listGapCandidates excludes a question whose manual gap was cleared", async () => {

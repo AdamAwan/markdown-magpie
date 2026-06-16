@@ -5,6 +5,8 @@ import type {
   Confidence,
   GapCandidate,
   QuestionFeedback,
+  QuestionGap,
+  QuestionGapSource,
   QuestionLog,
   QuestionLogInput,
   QuestionLogUpdateInput
@@ -28,10 +30,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       await client.query(
         `
           INSERT INTO questions (
-            id, question, confidence, answer, execution_mode, chat_provider,
-            gap_summary, metadata
+            id, question, confidence, answer, execution_mode, chat_provider, metadata
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
         `,
         [
           id,
@@ -40,13 +41,14 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           input.answer?.answer ?? null,
           input.executionMode,
           input.chatProvider,
-          input.answer?.gap?.summary ?? null,
           JSON.stringify({
             answer: input.answer ?? null,
             retrievedSectionIds: input.retrievedSectionIds
           })
         ]
       );
+
+      await insertGapRows(client, id, autoGapSummaries(input.answer));
 
       for (const citation of input.answer?.citations ?? []) {
         await client.query(
@@ -92,7 +94,12 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
 
   async get(id: string): Promise<QuestionLog | undefined> {
     const result = await this.pool.query<QuestionRow>("SELECT * FROM questions WHERE id = $1", [id]);
-    return result.rows[0] ? mapQuestionRow(result.rows[0]) : undefined;
+    if (!result.rows[0]) {
+      return undefined;
+    }
+
+    const gapsByQuestion = await this.loadGaps([id]);
+    return mapQuestionRow(result.rows[0], gapsByQuestion.get(id) ?? []);
   }
 
   async updateAnswer(id: string, input: QuestionLogUpdateInput): Promise<QuestionLog | undefined> {
@@ -114,8 +121,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           SET confidence = $2,
               answer = $3,
               chat_provider = $4,
-              gap_summary = $5,
-              metadata = $6
+              metadata = $5
           WHERE id = $1
         `,
         [
@@ -123,10 +129,12 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           input.answer.confidence,
           input.answer.answer,
           input.chatProvider ?? existing.chatProvider,
-          input.answer.gap?.summary ?? null,
           JSON.stringify(metadata)
         ]
       );
+      // Re-answering replaces auto-detected gaps but preserves any manual flag.
+      await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'auto'", [id]);
+      await insertGapRows(client, id, autoGapSummaries(input.answer));
       await client.query("DELETE FROM answer_citations WHERE question_id = $1", [id]);
 
       for (const citation of input.answer.citations) {
@@ -180,37 +188,68 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
 
   async recordManualGap(id: string, summary?: string): Promise<QuestionLog | undefined> {
     const trimmed = summary?.trim();
-    const result = await this.pool.query(
-      `
-        UPDATE questions
-        SET manual_gap = true,
-            manual_gap_at = now(),
-            gap_summary = COALESCE($2, gap_summary, question)
-        WHERE id = $1
-      `,
-      [id, trimmed && trimmed.length > 0 ? trimmed : null]
-    );
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `
+          UPDATE questions
+          SET manual_gap = true,
+              manual_gap_at = now()
+          WHERE id = $1
+          RETURNING question
+        `,
+        [id]
+      );
 
-    if (result.rowCount !== 1) {
-      return undefined;
+      if (result.rowCount !== 1) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+
+      // Replace any prior manual gap; auto-detected gaps are left untouched. The
+      // summary falls back to the question text when none is supplied.
+      const manualSummary = trimmed && trimmed.length > 0 ? trimmed : (result.rows[0] as { question: string }).question;
+      await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'manual'", [id]);
+      await insertGapRows(client, id, [manualSummary], "manual");
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
     }
 
     return this.get(id);
   }
 
   async clearManualGap(id: string): Promise<QuestionLog | undefined> {
-    const result = await this.pool.query(
-      `
-        UPDATE questions
-        SET manual_gap = false,
-            manual_gap_at = null
-        WHERE id = $1
-      `,
-      [id]
-    );
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `
+          UPDATE questions
+          SET manual_gap = false,
+              manual_gap_at = null
+          WHERE id = $1
+        `,
+        [id]
+      );
 
-    if (result.rowCount !== 1) {
-      return undefined;
+      if (result.rowCount !== 1) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+
+      // Drop the manual flag's gap; any auto-detected gaps remain candidates.
+      await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'manual'", [id]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
     }
 
     return this.get(id);
@@ -221,7 +260,34 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       "SELECT * FROM questions ORDER BY asked_at DESC LIMIT $1",
       [limit]
     );
-    return result.rows.map(mapQuestionRow);
+    const gapsByQuestion = await this.loadGaps(result.rows.map((row) => row.id));
+    return result.rows.map((row) => mapQuestionRow(row, gapsByQuestion.get(row.id) ?? []));
+  }
+
+  // Loads gap rows for the given questions in one query, grouped by question id.
+  private async loadGaps(questionIds: string[]): Promise<Map<string, QuestionGap[]>> {
+    const grouped = new Map<string, QuestionGap[]>();
+    if (questionIds.length === 0) {
+      return grouped;
+    }
+
+    const result = await this.pool.query<{ question_id: string; summary: string; source: QuestionGapSource }>(
+      `
+        SELECT question_id, summary, source
+        FROM question_gaps
+        WHERE question_id = ANY($1)
+        ORDER BY created_at ASC, id ASC
+      `,
+      [questionIds]
+    );
+
+    for (const row of result.rows) {
+      const existing = grouped.get(row.question_id) ?? [];
+      existing.push({ summary: row.summary, source: row.source });
+      grouped.set(row.question_id, existing);
+    }
+
+    return grouped;
   }
 
   async reset(): Promise<void> {
@@ -229,6 +295,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     try {
       await client.query("BEGIN");
       await client.query("DELETE FROM answer_citations");
+      await client.query("DELETE FROM question_gaps");
       await client.query("DELETE FROM questions");
       await client.query("COMMIT");
     } catch (error) {
@@ -240,17 +307,23 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
   }
 
   async listGapCandidates(limit: number): Promise<GapCandidate[]> {
+    // Cluster across individual gap rows so each distinct gap of a multi-topic
+    // question can group with the same gap from other questions. A question with
+    // both a 'manual' and an 'auto' row for the same summary is counted once.
     const result = await this.pool.query<GapCandidateRow>(
       `
         SELECT
-          gap_summary,
-          array_agg(id ORDER BY asked_at DESC) AS question_ids,
+          summary,
+          array_agg(question_id ORDER BY asked_at DESC) AS question_ids,
           count(*)::int AS count,
           max(asked_at) AS latest_asked_at
-        FROM questions
-        WHERE gap_summary IS NOT NULL
-          AND (confidence = 'low' OR manual_gap = true)
-        GROUP BY gap_summary
+        FROM (
+          SELECT DISTINCT qg.summary, q.id AS question_id, q.asked_at
+          FROM question_gaps qg
+          JOIN questions q ON q.id = qg.question_id
+          WHERE q.confidence = 'low' OR q.manual_gap = true
+        ) AS distinct_gaps
+        GROUP BY summary
         ORDER BY count DESC, latest_asked_at DESC
         LIMIT $1
       `,
@@ -258,13 +331,33 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     );
 
     return result.rows.map((row) => ({
-      summary: row.gap_summary,
+      summary: row.summary,
       questionIds: row.question_ids,
       count: row.count,
       latestAskedAt: row.latest_asked_at.toISOString(),
       confidence: "low"
     }));
   }
+}
+
+// Inserts one gap row per summary. Used for both auto-detected gaps (on answer)
+// and manual gaps (on flag); the caller picks the source.
+async function insertGapRows(
+  client: pg.PoolClient,
+  questionId: string,
+  summaries: string[],
+  source: QuestionGapSource = "auto"
+): Promise<void> {
+  for (const summary of summaries) {
+    await client.query(
+      "INSERT INTO question_gaps (question_id, summary, source) VALUES ($1, $2, $3)",
+      [questionId, summary, source]
+    );
+  }
+}
+
+function autoGapSummaries(answer: AnswerResult | undefined): string[] {
+  return (answer?.gaps ?? []).map((gap) => gap.summary).filter((summary) => summary.trim().length > 0);
 }
 
 interface QuestionRow {
@@ -280,20 +373,19 @@ interface QuestionRow {
   };
   feedback: QuestionFeedback | null;
   feedback_at: Date | null;
-  gap_summary: string | null;
   manual_gap: boolean;
   manual_gap_at: Date | null;
   asked_at: Date;
 }
 
 interface GapCandidateRow {
-  gap_summary: string;
+  summary: string;
   question_ids: string[];
   count: number;
   latest_asked_at: Date;
 }
 
-function mapQuestionRow(row: QuestionRow): QuestionLog {
+function mapQuestionRow(row: QuestionRow, gaps: QuestionGap[]): QuestionLog {
   const answer = row.metadata.answer ?? undefined;
   return {
     id: row.id,
@@ -306,7 +398,7 @@ function mapQuestionRow(row: QuestionRow): QuestionLog {
     askedAt: row.asked_at.toISOString(),
     feedback: row.feedback ?? undefined,
     feedbackAt: row.feedback_at?.toISOString(),
-    gapSummary: row.gap_summary ?? undefined,
+    gaps,
     manualGap: row.manual_gap,
     manualGapAt: row.manual_gap_at?.toISOString()
   };

@@ -287,7 +287,7 @@ interface AskResult {
   answer: string;
   confidence: string;
   citations: unknown[];
-  gap?: unknown;
+  gaps?: unknown[];
   questionId?: string;
 }
 
@@ -374,8 +374,8 @@ function extractAnswer(value: unknown): AskResult {
     citations: Array.isArray(record.citations) ? record.citations : []
   };
 
-  if (record.gap !== undefined) {
-    result.gap = record.gap;
+  if (Array.isArray(record.gaps) && record.gaps.length > 0) {
+    result.gaps = record.gaps;
   }
 
   return result;
