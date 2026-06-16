@@ -50,6 +50,7 @@ import { PostgresScheduledTaskStore } from "./stores/postgres-scheduled-task-sto
 import { InMemoryProposalStore } from "./stores/proposal-store.js";
 import { InMemoryQuestionLogStore } from "./stores/question-log-store.js";
 import { InMemoryScheduledTaskStore } from "./stores/scheduled-task-store.js";
+import { apiLink, normalizeRelativePath, normalizeUploadPath, parseLimit, slugify, toPosixPath } from "./platform/paths.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
 const aiJobClaimTimeoutMs = parseClaimTimeoutMs(process.env.AI_JOB_CLAIM_TIMEOUT_MS);
@@ -2433,24 +2434,6 @@ function createConfiguredChatProvider(provider: AiProviderName) {
   });
 }
 
-function parseLimit(value: string | null, defaultLimit: number): number {
-  const parsed = Number.parseInt(value ?? "", 10);
-  if (!Number.isFinite(parsed)) {
-    return defaultLimit;
-  }
-
-  return Math.max(1, Math.min(parsed, 200));
-}
-
-function normalizeUploadPath(value: string | undefined): string {
-  const path = value?.trim().replace(/\\/g, "/").replace(/^\/+/, "") ?? "";
-  if (!path || path.includes("..")) {
-    return "";
-  }
-
-  return path.toLowerCase().endsWith(".md") ? path : `${path}.md`;
-}
-
 function isAiJobType(value: unknown): value is AiJobType {
   return (
     value === "answer_question" ||
@@ -2858,23 +2841,6 @@ function createProposalBranchName(proposal: Proposal): string {
   return `magpie/proposal-${proposal.id.slice(0, 8)}-${slugify(proposal.title).slice(0, 40)}`;
 }
 
-function slugify(value: string): string {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "docs-update"
-  );
-}
-
-function normalizeRelativePath(value: string | undefined): string {
-  return value?.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "") ?? "";
-}
-
-function toPosixPath(value: string): string {
-  return value.replace(/\\/g, "/");
-}
-
 function apiRoutePath(pathname: string): string | undefined {
   if (pathname === "/api") {
     return "/";
@@ -2887,6 +2853,3 @@ function apiRoutePath(pathname: string): string | undefined {
   return undefined;
 }
 
-function apiLink(path: string): string {
-  return `/api${path}`;
-}
