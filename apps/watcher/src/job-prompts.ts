@@ -100,10 +100,11 @@ ${JSON.stringify(input, null, 2)}`;
 }
 
 function draftMarkdownProposalPrompt(input: DraftMarkdownProposalJobInput): string {
-  return `Draft a Markdown knowledge base proposal for this gap.
+  return `Draft a single Markdown knowledge base proposal that addresses every gap listed in gapSummaries.
 
 Rules:
 - Return JSON only.
+- gapSummaries may contain several related gaps; write ONE cohesive article that covers all of them rather than separate sections that repeat each other.
 - Markdown must be reviewable and conservative.
 - Use sourceContext when present as raw material for improving the destination knowledge base.
 - Cite source file paths, URLs, or agent/internet source names in the rationale.

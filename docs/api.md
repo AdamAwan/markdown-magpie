@@ -220,6 +220,21 @@ Lists knowledge-gap candidates grouped by gap summary. A question is included wh
 { "gaps": [ GapCandidate, ... ] }
 ```
 
+### `GET /api/gaps/clusters?limit=<n>`
+
+Returns gap candidates grouped into **suggested clusters** — sets of related gaps that a single
+proposal could resolve (e.g. "do cats like cheese?", "is cheese bad for cats?" and "what if a cat
+eats lots of cheese?" form one cluster). Grouping is performed by the configured chat provider;
+the `mock` provider and any non-chat provider fall back to one cluster per gap. Clusters are
+suggestions only — they are recomputed on demand, never persisted, and the reviewer is expected to
+regroup them before drafting. `limit` defaults to `50`.
+
+```json
+{ "clusters": [ SuggestedGapCluster, ... ] }
+```
+
+Each `SuggestedGapCluster` has `{ id, title, summaries, questionIds, count, rationale? }`.
+
 ## Proposals
 
 See the Proposal Review and Storage sections in [ai-jobs.md](ai-jobs.md).
@@ -232,20 +247,30 @@ Lists proposals. `limit` defaults to `50`.
 { "proposals": [ Proposal, ... ] }
 ```
 
-### `POST /api/proposals/from-gap`
+### `POST /api/proposals/from-gap` &nbsp;·&nbsp; `POST /api/proposals/from-gaps`
 
-Enqueues a `draft_markdown_proposal` job for a known gap candidate.
+Drafts **one** `draft_markdown_proposal` from one or more known gap candidates. Use `from-gaps`
+with a `summaries` array to draft a single proposal that covers a confirmed cluster of related
+gaps; `from-gap` with a single `summary` remains for the one-gap case. Both routes accept either
+field — `summary` and `summaries` are merged and de-duplicated — so a cluster of three cheese gaps
+produces a single proposal instead of three near-identical ones. Evidence and triggering questions
+are unioned across every gap in the request.
 
 ```json
 {
-  "summary": "No source material found for: How do I trim claws?",
+  "summaries": [
+    "whether cats like cheese",
+    "health impact of cheese on cats",
+    "consequences of cats eating large amounts of cheese"
+  ],
   "sourceIds": ["agent", "flowerbi"],
   "destinationId": "flowerbi-docs"
 }
 ```
 
-`sourceIds` and `destinationId` are optional. The summary must match an existing gap candidate.
-When omitted, proposal jobs use the configured sources by default and the only configured destination when one exists.
+`sourceIds` and `destinationId` are optional. At least one summary must match an existing gap
+candidate. When omitted, proposal jobs use the configured sources by default and the only
+configured destination when one exists.
 
 The proposal's location is owned by the system, not the caller: the file lands at
 `<destination docs subpath>/<title-slug>.md` (repository root when the destination has no

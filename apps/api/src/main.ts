@@ -10,16 +10,19 @@ import type {
   AnswerQuestionJobOutput,
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
+  GapCandidate,
   Proposal,
   RepositoryRef,
   QuestionFeedback,
-  SourceDataContext
+  SourceDataContext,
+  SuggestedGapCluster
 } from "@magpie/core";
 import { resolveProposalTargetPath } from "@magpie/core";
 import { ensureGitCheckout, LocalGitProposalPublisher } from "@magpie/git";
 import { answerQuestion, createChatProvider, createEmbeddingProvider, type ChatProviderName, type EmbeddingProviderName } from "@magpie/retrieval";
 import { DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS, InMemoryAiJobQueue } from "./ai-job-queue.js";
 import { embedPendingSections } from "./embed-sections.js";
+import { assembleClusters, singletonCluster } from "./gap-clustering.js";
 import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
 import {
   type ConfiguredKnowledgeFlow,
@@ -217,14 +220,22 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return;
   }
 
+  if (request.method === "GET" && path === "/gaps/clusters") {
+    const limit = parseLimit(url.searchParams.get("limit"), 50);
+    const candidates = await questionLogs.listGapCandidates(limit);
+    const clusters = await clusterGapCandidates(candidates);
+    writeJson(response, 200, { clusters });
+    return;
+  }
+
   if (request.method === "GET" && path === "/proposals") {
     const limit = parseLimit(url.searchParams.get("limit"), 50);
     writeJson(response, 200, { proposals: await proposals.list(limit) });
     return;
   }
 
-  if (request.method === "POST" && path === "/proposals/from-gap") {
-    await handleCreateProposalFromGap(request, response);
+  if (request.method === "POST" && (path === "/proposals/from-gap" || path === "/proposals/from-gaps")) {
+    await handleCreateProposalFromGaps(request, response);
     return;
   }
 
@@ -423,51 +434,68 @@ async function handleResetData(response: ServerResponse): Promise<void> {
   });
 }
 
-async function handleCreateProposalFromGap(request: IncomingMessage, response: ServerResponse): Promise<void> {
+// Drafts ONE proposal from one or more gap candidates. The reviewer (via the
+// clustering UI) decides which gaps belong together, so this accepts either a
+// single `summary` (legacy /from-gap) or a `summaries` array (a confirmed
+// cluster from /from-gaps). Evidence and triggering questions are unioned across
+// every gap in the cluster so the drafter sees the full picture once.
+async function handleCreateProposalFromGaps(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const payload = await readJsonBody<{
     summary?: string;
+    summaries?: string[];
     targetPath?: string;
     flowId?: string;
     sourceIds?: string[];
     destinationId?: string;
   }>(request);
-  const summary = payload.summary?.trim();
 
-  if (!summary) {
+  const requested = [...(payload.summaries ?? []), ...(payload.summary ? [payload.summary] : [])]
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  const uniqueRequested = [...new Set(requested)];
+
+  if (uniqueRequested.length === 0) {
     writeJson(response, 400, { error: "gap_summary_required" });
     return;
   }
 
-  const gaps = await questionLogs.listGapCandidates(200);
-  const gap = gaps.find((candidate) => candidate.summary === summary);
-  if (!gap) {
+  const candidates = await questionLogs.listGapCandidates(200);
+  const matched = uniqueRequested
+    .map((summary) => candidates.find((candidate) => candidate.summary === summary))
+    .filter((candidate): candidate is GapCandidate => Boolean(candidate));
+
+  if (matched.length === 0) {
     writeJson(response, 404, { error: "gap_candidate_not_found" });
     return;
   }
 
-  const logs = (await Promise.all(gap.questionIds.map((id) => questionLogs.get(id)))).filter(
+  const gapSummaries = matched.map((candidate) => candidate.summary);
+  const questionIds = [...new Set(matched.flatMap((candidate) => candidate.questionIds))];
+  const label = gapSummaries.length === 1 ? `gap "${gapSummaries[0]}"` : `${gapSummaries.length} clustered gaps`;
+
+  const logs = (await Promise.all(questionIds.map((id) => questionLogs.get(id)))).filter(
     (log): log is NonNullable<typeof log> => Boolean(log)
   );
-  const evidence = logs.flatMap((log) => log.answer?.citations ?? []);
+  const evidence = dedupeCitations(logs.flatMap((log) => log.answer?.citations ?? []));
   const flow = selectFlow(payload.flowId);
   const sourceIds = payload.sourceIds ?? flow?.sourceIds;
   const destinationId = payload.destinationId?.trim() || flow?.destinationId || defaultDestinationId();
   console.log(
-    `Drafting proposal for gap "${gap.summary}" (flow=${flow?.id ?? "none"}, destination=${destinationId ?? "none"}, ` +
+    `Drafting proposal for ${label} (flow=${flow?.id ?? "none"}, destination=${destinationId ?? "none"}, ` +
       `provider=${runtimeConfig.aiProvider}, mode=${runtimeConfig.aiExecutionMode})`
   );
   const sourceContext = await collectSourceContext(sourceIds);
   const materialFiles = sourceContext.filter((context) => context.path && context.content !== "Source path does not exist.");
   if (materialFiles.length === 0) {
     console.warn(
-      `Drafting proposal for gap "${gap.summary}" with no real source files attached — ` +
+      `Drafting proposal for ${label} with no real source files attached — ` +
         "the model will likely produce a placeholder. Check the source configuration and subpaths."
     );
   } else {
     console.log(`Proposal draft will use ${materialFiles.length} source file(s) as raw material.`);
   }
   const input: DraftMarkdownProposalJobInput = {
-    gapSummary: gap.summary,
+    gapSummaries,
     triggeringQuestions: logs.map((log) => log.question),
     evidence,
     sourceContext,
@@ -483,22 +511,22 @@ async function handleCreateProposalFromGap(request: IncomingMessage, response: S
       ...output,
       targetPath: resolveProposalTargetPath(destinationSubpath(input.destinationId), output.title),
       evidence,
-      gapSummary: gap.summary,
-      triggeringQuestionIds: gap.questionIds,
+      gapSummary: joinGapSummaries(gapSummaries),
+      triggeringQuestionIds: questionIds,
       destinationId: input.destinationId
     });
 
-    console.log(`Created proposal ${proposal.id} directly for gap "${gap.summary}" (target ${proposal.targetPath})`);
+    console.log(`Created proposal ${proposal.id} directly for ${label} (target ${proposal.targetPath})`);
     writeJson(response, 201, { proposal });
     return;
   }
 
   const job = await aiJobs.enqueue("draft_markdown_proposal", {
     ...input,
-    triggeringQuestionIds: gap.questionIds
+    triggeringQuestionIds: questionIds
   });
 
-  console.log(`Enqueued draft_markdown_proposal job ${job.id} for gap "${gap.summary}"`);
+  console.log(`Enqueued draft_markdown_proposal job ${job.id} for ${label}`);
   writeJson(response, 202, {
     job,
     links: {
@@ -506,6 +534,25 @@ async function handleCreateProposalFromGap(request: IncomingMessage, response: S
       proposals: apiLink("/proposals")
     }
   });
+}
+
+// Stored on the proposal as a human-readable record of which gaps it closes.
+function joinGapSummaries(summaries: string[]): string {
+  return summaries.join("\n");
+}
+
+function dedupeCitations(citations: Proposal["evidence"]): Proposal["evidence"] {
+  const seen = new Set<string>();
+  const result: Proposal["evidence"] = [];
+  for (const citation of citations) {
+    const key = citation.sectionId || `${citation.path}#${citation.anchor}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(citation);
+  }
+  return result;
 }
 
 async function handleQuestionFeedback(
@@ -1082,9 +1129,54 @@ async function draftMarkdownProposalDirect(input: DraftMarkdownProposalJobInput)
   return output;
 }
 
+// Suggests semantic groupings of gap candidates for the review UI. This is a
+// read-only suggestion step, so it always runs synchronously against the chat
+// provider regardless of the direct/queue execution mode used for drafting. The
+// mock provider cannot cluster semantically (its embeddings/answers are
+// deterministic stubs), so it — and any non-chat provider — falls back to one
+// cluster per gap, which the reviewer can still merge by hand.
+async function clusterGapCandidates(candidates: GapCandidate[]): Promise<SuggestedGapCluster[]> {
+  const canCluster =
+    runtimeConfig.aiProvider === "openai-compatible" || runtimeConfig.aiProvider === "azure-openai";
+  if (!canCluster || candidates.length <= 1) {
+    return candidates.map((candidate) => singletonCluster(candidate));
+  }
+
+  try {
+    return await requestGapClusters(candidates);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "clustering failed";
+    console.warn(`Gap clustering failed (${message}); falling back to one cluster per gap.`);
+    return candidates.map((candidate) => singletonCluster(candidate));
+  }
+}
+
+async function requestGapClusters(candidates: GapCandidate[]): Promise<SuggestedGapCluster[]> {
+  const response = await createConfiguredChatProvider(runtimeConfig.aiProvider).complete({
+    system:
+      "Group related knowledge-base gaps that a single Markdown article could resolve. " +
+      "Two gaps belong together only when one proposal would naturally answer both. " +
+      'Return JSON only with this shape: {"clusters":[{"title":"string","summaries":["string"],"rationale":"string"}]}. ' +
+      "Use the gap summary strings exactly as provided. Every input summary must appear in exactly one cluster. " +
+      "Prefer several small, focused clusters over one broad cluster.",
+    messages: [
+      {
+        role: "user",
+        content: JSON.stringify({ gaps: candidates.map((candidate) => candidate.summary) }, null, 2)
+      }
+    ]
+  });
+
+  return assembleClusters(candidates, parseJsonObject(response.content));
+}
+
 function createMockMarkdownProposal(input: DraftMarkdownProposalJobInput): DraftMarkdownProposalJobOutput {
-  const title = titleFromGapSummary(input.gapSummary);
+  const title = titleFromGapSummary(input.gapSummaries[0] ?? "");
   const targetPath = resolveProposalTargetPath(destinationSubpath(input.destinationId), title);
+  const gapList = input.gapSummaries.length
+    ? input.gapSummaries.map((summary) => `- ${summary}`).join("\n")
+    : "- No gap summaries recorded.";
+  const gapHeading = input.gapSummaries.length === 1 ? "Gap" : "Gaps";
   const triggeringQuestions = input.triggeringQuestions.length
     ? input.triggeringQuestions.map((question) => `- ${question}`).join("\n")
     : "- No triggering questions recorded.";
@@ -1101,8 +1193,8 @@ function createMockMarkdownProposal(input: DraftMarkdownProposalJobInput): Draft
   return {
     title,
     targetPath,
-    markdown: `---\ntitle: ${JSON.stringify(title)}\nstatus: draft\n---\n\n# ${title}\n\n## Gap\n\n${input.gapSummary}\n\n## Triggering Questions\n\n${triggeringQuestions}\n\n## Proposed Guidance\n\nAdd reviewed guidance that directly answers this gap. Keep the final content specific, source-backed, and easy for maintainers to verify.\n\n## Raw Source Material\n\n${sourceMaterial}\n\n## Evidence\n\n${evidence}\n`,
-    rationale: "Generated from the selected gap candidate using the deterministic mock provider."
+    markdown: `---\ntitle: ${JSON.stringify(title)}\nstatus: draft\n---\n\n# ${title}\n\n## ${gapHeading}\n\n${gapList}\n\n## Triggering Questions\n\n${triggeringQuestions}\n\n## Proposed Guidance\n\nAdd reviewed guidance that directly answers ${input.gapSummaries.length === 1 ? "this gap" : "these related gaps"}. Keep the final content specific, source-backed, and easy for maintainers to verify.\n\n## Raw Source Material\n\n${sourceMaterial}\n\n## Evidence\n\n${evidence}\n`,
+    rationale: "Generated from the selected gap candidate(s) using the deterministic mock provider."
   };
 }
 
@@ -1162,7 +1254,7 @@ async function createProposalFromCompletedJob(job: AiJob | undefined, output: un
     ...output,
     targetPath: resolveProposalTargetPath(destinationSubpath(input.destinationId), output.title),
     evidence: input.evidence ?? [],
-    gapSummary: input.gapSummary,
+    gapSummary: input.gapSummaries ? joinGapSummaries(input.gapSummaries) : undefined,
     triggeringQuestionIds: input.triggeringQuestionIds,
     destinationId: input.destinationId,
     jobId: job.id

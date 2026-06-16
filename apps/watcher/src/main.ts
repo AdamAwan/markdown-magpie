@@ -251,13 +251,15 @@ class MockAgentRunner implements AgentRunner {
   }
 
   private draftMarkdownProposal(input: DraftMarkdownProposalJobInput): DraftMarkdownProposalJobOutput {
+    const title = input.gapSummaries[0] ?? "Knowledge gap proposal";
+    const gapList = input.gapSummaries.map((summary) => `- ${summary}`).join("\n");
     return {
       // The destination's docs folder is owned by the API at persist time; the
       // watcher only supplies the canonical filename.
-      title: input.gapSummary,
-      targetPath: resolveProposalTargetPath(undefined, input.gapSummary),
-      markdown: `---\ntitle: ${input.gapSummary}\nstatus: draft\n---\n\n# ${input.gapSummary}\n\nTODO: Review and expand this proposed article.\n`,
-      rationale: `Mock proposal generated from ${input.triggeringQuestions.length} triggering question(s).`
+      title,
+      targetPath: resolveProposalTargetPath(undefined, title),
+      markdown: `---\ntitle: ${title}\nstatus: draft\n---\n\n# ${title}\n\nThis proposal addresses the following gaps:\n\n${gapList}\n\nTODO: Review and expand this proposed article.\n`,
+      rationale: `Mock proposal generated from ${input.gapSummaries.length} gap(s) and ${input.triggeringQuestions.length} triggering question(s).`
     };
   }
 }

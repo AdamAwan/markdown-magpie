@@ -141,6 +141,21 @@ export interface GapCluster {
   status: "open" | "proposed" | "dismissed" | "resolved";
 }
 
+// A semantic grouping of gap candidates that could be addressed by a single
+// knowledge-base article (e.g. "do cats like cheese?", "is cheese bad for
+// cats?", "what if a cat eats a lot of cheese?" are one cluster). Clusters are
+// only ever *suggestions* — they are recomputed on demand and never persisted,
+// because the human reviewer can regroup them before drafting. One drafted
+// proposal is produced per cluster the reviewer confirms.
+export interface SuggestedGapCluster {
+  id: string;
+  title: string;
+  summaries: string[];
+  questionIds: string[];
+  count: number;
+  rationale?: string;
+}
+
 export interface Proposal {
   id: string;
   title: string;
@@ -280,7 +295,10 @@ export interface SummarizeGapJobOutput {
 }
 
 export interface DraftMarkdownProposalJobInput {
-  gapSummary: string;
+  // One proposal can address several related gaps at once (a confirmed cluster),
+  // so the drafter receives every gap summary in the cluster and writes a single
+  // cohesive article covering all of them.
+  gapSummaries: string[];
   triggeringQuestions: string[];
   evidence: Citation[];
   sourceContext?: SourceDataContext[];

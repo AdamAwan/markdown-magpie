@@ -231,6 +231,15 @@ interface GapCandidate {
   confidence: Confidence;
 }
 
+interface SuggestedGapCluster {
+  id: string;
+  title: string;
+  summaries: string[];
+  questionIds: string[];
+  count: number;
+  rationale?: string;
+}
+
 interface AiJob {
   id: string;
   type: string;
@@ -312,6 +321,7 @@ export default function HomePage() {
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [repositories, setRepositories] = useState<RepositoryRef[]>([]);
   const [gaps, setGaps] = useState<GapCandidate[]>([]);
+  const [gapClusters, setGapClusters] = useState<SuggestedGapCluster[]>([]);
   const [jobs, setJobs] = useState<AiJob[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [config, setConfig] = useState<RuntimeConfig | undefined>();
@@ -406,13 +416,14 @@ export default function HomePage() {
       clearMessage();
     }
     try {
-      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, jobsResult, proposalsResult, configResult] = await Promise.all([
+      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, proposalsResult, configResult] = await Promise.all([
         apiGet<Health>("/health"),
         apiGet<KnowledgeStats>("/knowledge/stats"),
         apiGet<{ repositories: RepositoryRef[] }>("/repositories"),
         apiGet<{ documents: KnowledgeDocument[] }>("/documents"),
         apiGet<{ questions: QuestionLog[] }>("/questions?limit=8"),
         apiGet<{ gaps: GapCandidate[] }>("/gaps/candidates?limit=8"),
+        apiGet<{ clusters: SuggestedGapCluster[] }>("/gaps/clusters?limit=8"),
         apiGet<{ jobs: AiJob[] }>("/ai-jobs"),
         apiGet<{ proposals: Proposal[] }>("/proposals?limit=8"),
         apiGet<RuntimeConfig>("/config")
@@ -424,6 +435,7 @@ export default function HomePage() {
       setDocuments(documentsResult.documents);
       setQuestions(questionsResult.questions);
       setGaps(gapsResult.gaps);
+      setGapClusters(clustersResult.clusters);
       applyJobs(jobsResult.jobs, jobsRef.current.length > 0);
       setProposals(proposalsResult.proposals);
       setConfig(configResult);
@@ -531,6 +543,34 @@ export default function HomePage() {
     try {
       const result = await apiPost<{ job?: AiJob; proposal?: Proposal }>("/proposals/from-gap", {
         summary: gap.summary,
+        flowId
+      });
+      if (result.proposal) {
+        setSelectedProposalId(result.proposal.id);
+        setActiveSection("proposals");
+      } else {
+        setActiveSection("jobs");
+      }
+      if (result.job) {
+        showMessage(`${formatJobType(result.job.type)} queued. We will update this page when it finishes.`, "info");
+      }
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function draftCluster(summaries: string[]) {
+    if (summaries.length === 0) {
+      return;
+    }
+    setLoading(true);
+    clearMessage();
+    try {
+      const result = await apiPost<{ job?: AiJob; proposal?: Proposal }>("/proposals/from-gaps", {
+        summaries,
         flowId
       });
       if (result.proposal) {
@@ -861,6 +901,12 @@ export default function HomePage() {
 
         {activeSection === "gaps" ? (
           <section className="workbench singlePane">
+            <GapClusterPanel
+              clusters={gapClusters}
+              gaps={gaps}
+              draftCluster={draftCluster}
+              loading={loading}
+            />
             <GapPanel draftProposal={draftProposal} gaps={gaps} loading={loading} />
           </section>
         ) : null}
@@ -1418,6 +1464,193 @@ function knowledgeFlows(config: RuntimeConfig | undefined): ConfiguredKnowledgeF
     sourceIds,
     destinationId: destination.id
   }));
+}
+
+const NEW_CLUSTER = "__new__";
+
+interface EditableCluster {
+  id: string;
+  title: string;
+  summaries: string[];
+  rationale?: string;
+}
+
+function toEditableClusters(clusters: SuggestedGapCluster[]): EditableCluster[] {
+  return clusters.map((cluster) => ({
+    id: cluster.id,
+    title: cluster.title,
+    summaries: [...cluster.summaries],
+    rationale: cluster.rationale
+  }));
+}
+
+function clusterTitleFor(summary: string): string {
+  const words = summary
+    .replace(/[?.!]+$/g, "")
+    .trim()
+    .split(/\s+/)
+    .slice(0, 8)
+    .join(" ");
+  return words || "Knowledge gap";
+}
+
+// Shows the semantic gap groupings as an editable starting point: the reviewer
+// can move a gap into another cluster or split it into a new one, then draft a
+// single proposal per cluster. Edits are local — the server suggestion is only a
+// suggestion — and reset whenever a fresh suggestion arrives from the API.
+function GapClusterPanel({
+  clusters,
+  gaps,
+  draftCluster,
+  loading
+}: {
+  clusters: SuggestedGapCluster[];
+  gaps: GapCandidate[];
+  draftCluster: (summaries: string[]) => Promise<void>;
+  loading: boolean;
+}) {
+  const signature = useMemo(
+    () => clusters.map((cluster) => `${cluster.id}:${cluster.summaries.join("|")}`).join("~"),
+    [clusters]
+  );
+  const [groups, setGroups] = useState<EditableCluster[]>(() => toEditableClusters(clusters));
+  const [edited, setEdited] = useState(false);
+
+  useEffect(() => {
+    setGroups(toEditableClusters(clusters));
+    setEdited(false);
+    // Re-sync only when the server's suggestion actually changes, so a background
+    // refresh does not wipe out an in-progress regrouping.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature]);
+
+  const questionIdsBySummary = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const gap of gaps) {
+      map.set(gap.summary, gap.questionIds);
+    }
+    return map;
+  }, [gaps]);
+
+  function questionCount(summaries: string[]): number {
+    const ids = new Set<string>();
+    for (const summary of summaries) {
+      for (const id of questionIdsBySummary.get(summary) ?? []) {
+        ids.add(id);
+      }
+    }
+    return ids.size;
+  }
+
+  function moveSummary(summary: string, targetId: string) {
+    setEdited(true);
+    setGroups((previous) => {
+      // Dropping a gap from / adding it to a group invalidates that group's
+      // suggested rationale, so clear it rather than show a stale explanation.
+      let next = previous.map((group) =>
+        group.summaries.includes(summary)
+          ? { ...group, summaries: group.summaries.filter((item) => item !== summary), rationale: undefined }
+          : group
+      );
+      if (targetId === NEW_CLUSTER) {
+        next = [...next, { id: `local-${summary}`, title: clusterTitleFor(summary), summaries: [summary] }];
+      } else {
+        next = next.map((group) =>
+          group.id === targetId
+            ? { ...group, summaries: [...group.summaries, summary], rationale: undefined }
+            : group
+        );
+      }
+      return next.filter((group) => group.summaries.length > 0);
+    });
+  }
+
+  function renameGroup(id: string, title: string) {
+    setEdited(true);
+    setGroups((previous) => previous.map((group) => (group.id === id ? { ...group, title } : group)));
+  }
+
+  return (
+    <section className="surface">
+      <div className="surfaceHeader">
+        <h2>Suggested Clusters</h2>
+        <span className="pill" title="Gap clusters — one proposal each">
+          {groups.length}
+        </span>
+      </div>
+      <div className="surfaceBody">
+        {edited ? (
+          <p className="hint" title="Your groupings override the original suggestion">
+            Edited — drafting uses your groupings.
+          </p>
+        ) : null}
+        <div className="list scrollList">
+          {groups.map((group) => (
+            <article className="clusterCard" key={group.id}>
+              <div className="rowTop">
+                <input
+                  className="clusterTitle"
+                  value={group.title}
+                  onChange={(event) => renameGroup(group.id, event.target.value)}
+                  aria-label="Cluster title"
+                />
+                <span
+                  className="pill countPill"
+                  title={`${questionCount(group.summaries)} question(s) across ${group.summaries.length} gap(s)`}
+                >
+                  {group.summaries.length} gap{group.summaries.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              {group.rationale ? (
+                <p className="clusterRationale" title="Why these gaps were grouped">
+                  {group.rationale}
+                </p>
+              ) : null}
+              <ul className="clusterGaps">
+                {group.summaries.map((summary) => (
+                  <li key={summary}>
+                    <span>{summary}</span>
+                    <select
+                      value=""
+                      disabled={loading}
+                      aria-label="Move gap to another cluster"
+                      onChange={(event) => {
+                        if (event.target.value) {
+                          moveSummary(summary, event.target.value);
+                        }
+                      }}
+                    >
+                      <option value="">Move to…</option>
+                      {groups
+                        .filter((other) => other.id !== group.id)
+                        .map((other) => (
+                          <option key={other.id} value={other.id}>
+                            {other.title}
+                          </option>
+                        ))}
+                      <option value={NEW_CLUSTER}>New cluster</option>
+                    </select>
+                  </li>
+                ))}
+              </ul>
+              <div className="rowActions">
+                <button
+                  className="chip"
+                  disabled={loading}
+                  onClick={() => void draftCluster(group.summaries)}
+                  title="Draft one proposal covering every gap in this cluster"
+                  type="button"
+                >
+                  Draft Proposal
+                </button>
+              </div>
+            </article>
+          ))}
+          {groups.length === 0 ? <p className="empty">No gap clusters yet.</p> : null}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function GapPanel({
