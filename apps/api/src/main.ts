@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type {
-  AiExecutionMode,
   AiJob,
   AiJobType,
   AnswerQuestionJobInput,
@@ -61,6 +60,7 @@ import {
   getConfiguredAiProviders,
   retrievalMode
 } from "./platform/providers.js";
+import { normalizeAiExecutionMode, normalizeAiProvider, RuntimeConfigHolder } from "./config-holder.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
 const aiJobClaimTimeoutMs = parseClaimTimeoutMs(process.env.AI_JOB_CLAIM_TIMEOUT_MS);
@@ -82,7 +82,7 @@ const questionLogs = createQuestionLogStore();
 const proposals = createProposalStore();
 const crunchRuns = createCrunchStore();
 const scheduledTasks = createScheduledTaskStore();
-let runtimeConfig = createInitialRuntimeConfig();
+const runtimeConfig = RuntimeConfigHolder.fromEnv();
 const configuredKnowledgeRepositories = getConfiguredKnowledgeRepositories();
 const configuredKnowledgeSources = getConfiguredKnowledgeSources();
 const configuredKnowledgeDestinations = getConfiguredKnowledgeDestinations();
@@ -614,16 +614,12 @@ async function handleUpdateRuntimeConfig(request: IncomingMessage, response: Ser
     return;
   }
 
-  const validationError = validateRuntimeAiConfig(nextExecutionMode, nextProvider);
-  if (validationError) {
-    writeJson(response, 400, { error: "unsupported_ai_runtime_config", message: validationError });
+  const error = runtimeConfig.update({ aiExecutionMode: nextExecutionMode, aiProvider: nextProvider });
+  if (error) {
+    writeJson(response, 400, { error: "unsupported_ai_runtime_config", message: error });
     return;
   }
 
-  runtimeConfig = {
-    aiExecutionMode: nextExecutionMode,
-    aiProvider: nextProvider
-  };
   writeJson(response, 200, getRuntimeConfig());
 }
 
@@ -641,7 +637,7 @@ async function handleResetData(response: ServerResponse): Promise<void> {
   knowledgeIndex.reset();
 
   // Reset runtime AI config back to the .env-derived defaults.
-  runtimeConfig = createInitialRuntimeConfig();
+  runtimeConfig.reset();
 
   // Rebuild the knowledge bases from configuration.
   const seed = await seedConfiguredKnowledge();
@@ -696,7 +692,7 @@ async function draftProposalFromGapSummaries(
   const destinationId = overrides.destinationId?.trim() || flow?.destinationId || defaultDestinationId();
   console.log(
     `Drafting proposal for ${label} (flow=${flow?.id ?? "none"}, destination=${destinationId ?? "none"}, ` +
-      `provider=${runtimeConfig.aiProvider}, mode=${runtimeConfig.aiExecutionMode})`
+      `provider=${runtimeConfig.get().aiProvider}, mode=${runtimeConfig.get().aiExecutionMode})`
   );
   const sourceContext = await collectSourceContext(sourceIds);
   const materialFiles = sourceContext.filter((context) => context.path && context.content !== "Source path does not exist.");
@@ -715,11 +711,11 @@ async function draftProposalFromGapSummaries(
     sourceContext,
     destinationId,
     targetPath: overrides.targetPath?.trim() || undefined,
-    provider: runtimeConfig.aiProvider,
+    provider: runtimeConfig.get().aiProvider,
     expectedOutput: "markdown_proposal"
   } as DraftMarkdownProposalJobInput & { provider: AiProviderName };
 
-  if (runtimeConfig.aiExecutionMode === "direct") {
+  if (runtimeConfig.get().aiExecutionMode === "direct") {
     const output = await draftMarkdownProposalDirect(input);
     const proposal = await proposals.create({
       ...output,
@@ -865,12 +861,12 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
     return;
   }
 
-  if (runtimeConfig.aiExecutionMode === "queue") {
+  if (runtimeConfig.get().aiExecutionMode === "queue") {
     const sections = await knowledgeIndex.search(question, 5);
     const log = await questionLogs.record({
       question,
-      executionMode: runtimeConfig.aiExecutionMode,
-      chatProvider: runtimeConfig.aiProvider,
+      executionMode: runtimeConfig.get().aiExecutionMode,
+      chatProvider: runtimeConfig.get().aiProvider,
       retrievedSectionIds: sections.map((ranked) => ranked.section.id)
     });
     const input: AnswerQuestionJobInput = {
@@ -882,7 +878,7 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
         heading: section.heading,
         content: section.content
       })),
-      provider: runtimeConfig.aiProvider,
+      provider: runtimeConfig.get().aiProvider,
       expectedOutput: "answer_result"
     } as AnswerQuestionJobInput & { provider: AiProviderName };
     const job = await aiJobs.enqueue("answer_question", input);
@@ -901,18 +897,18 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
   const result = await answerQuestion(
     question,
     knowledgeIndex,
-    createConfiguredChatProvider(runtimeConfig.aiProvider)
+    createConfiguredChatProvider(runtimeConfig.get().aiProvider)
   );
   const log = await questionLogs.record({
     question,
-    executionMode: runtimeConfig.aiExecutionMode,
-    chatProvider: runtimeConfig.aiProvider,
+    executionMode: runtimeConfig.get().aiExecutionMode,
+    chatProvider: runtimeConfig.get().aiProvider,
     answer: result,
     retrievedSectionIds: result.citations.map((citation) => citation.sectionId)
   });
 
   writeJson(response, 200, {
-    mode: runtimeConfig.aiExecutionMode,
+    mode: runtimeConfig.get().aiExecutionMode,
     questionId: log.id,
     result
   });
@@ -1187,8 +1183,8 @@ function getRuntimeConfig() {
   return {
     api: {
       port,
-      aiExecutionMode: runtimeConfig.aiExecutionMode,
-      aiProvider: runtimeConfig.aiProvider,
+      aiExecutionMode: runtimeConfig.get().aiExecutionMode,
+      aiProvider: runtimeConfig.get().aiProvider,
       nodeEnv: process.env.NODE_ENV ?? "development"
     },
     stores: {
@@ -1232,8 +1228,8 @@ function getRuntimeConfig() {
       }
     },
     aiRuntime: {
-      executionMode: runtimeConfig.aiExecutionMode,
-      provider: runtimeConfig.aiProvider,
+      executionMode: runtimeConfig.get().aiExecutionMode,
+      provider: runtimeConfig.get().aiProvider,
       executionModes: ["direct", "queue"],
       providers: availableProviders,
       directProviders: availableProviders.filter((provider) => provider.supportsDirect).map((provider) => provider.name),
@@ -1250,7 +1246,7 @@ function getRuntimeConfig() {
     watcher: {
       name: process.env.WATCHER_NAME ?? null,
       pollIntervalMs: process.env.WATCHER_POLL_INTERVAL_MS ?? null,
-      aiJobProvider: runtimeConfig.aiProvider,
+      aiJobProvider: runtimeConfig.get().aiProvider,
       agentApiTimeoutMs: process.env.AGENT_API_TIMEOUT_MS ?? null,
       claimTimeoutMs: aiJobClaimTimeoutMs
     }
@@ -1365,11 +1361,11 @@ function secretState(value: string | undefined): "set" | "not set" {
 }
 
 async function draftMarkdownProposalDirect(input: DraftMarkdownProposalJobInput): Promise<DraftMarkdownProposalJobOutput> {
-  if (runtimeConfig.aiProvider === "mock") {
+  if (runtimeConfig.get().aiProvider === "mock") {
     return createMockMarkdownProposal(input);
   }
 
-  const response = await createConfiguredChatProvider(runtimeConfig.aiProvider).complete({
+  const response = await createConfiguredChatProvider(runtimeConfig.get().aiProvider).complete({
     system:
       "Draft a conservative Markdown knowledge base proposal for the provided gap. Return JSON only with this shape: " +
       '{"title":"string","targetPath":"string","markdown":"string","rationale":"string"}. ' +
@@ -1398,7 +1394,7 @@ async function draftMarkdownProposalDirect(input: DraftMarkdownProposalJobInput)
 // cluster per gap, which the reviewer can still merge by hand.
 async function clusterGapCandidates(candidates: GapCandidate[]): Promise<SuggestedGapCluster[]> {
   const canCluster =
-    runtimeConfig.aiProvider === "openai-compatible" || runtimeConfig.aiProvider === "azure-openai";
+    runtimeConfig.get().aiProvider === "openai-compatible" || runtimeConfig.get().aiProvider === "azure-openai";
   if (!canCluster || candidates.length <= 1) {
     return candidates.map((candidate) => singletonCluster(candidate));
   }
@@ -1413,7 +1409,7 @@ async function clusterGapCandidates(candidates: GapCandidate[]): Promise<Suggest
 }
 
 async function requestGapClusters(candidates: GapCandidate[]): Promise<SuggestedGapCluster[]> {
-  const response = await createConfiguredChatProvider(runtimeConfig.aiProvider).complete({
+  const response = await createConfiguredChatProvider(runtimeConfig.get().aiProvider).complete({
     system:
       "Group related knowledge-base gaps that a single Markdown article could resolve. " +
       "Two gaps belong together only when one proposal would naturally answer both. " +
@@ -1648,16 +1644,16 @@ async function triggerCrunchRun(options: { flowId?: string; trigger: CrunchRunTr
     destinationId,
     documents,
     expectedOutput: "crunch_plan",
-    provider: runtimeConfig.aiProvider
+    provider: runtimeConfig.get().aiProvider
   } satisfies CrunchKnowledgeBaseJobInput & { provider: AiProviderName };
 
   console.log(
     `Crunch run requested (trigger=${options.trigger}, flow=${flowId ?? "default"}, ` +
       `destination=${destinationId ?? "none"}, documents=${documents.length}, ` +
-      `provider=${runtimeConfig.aiProvider}, mode=${runtimeConfig.aiExecutionMode})`
+      `provider=${runtimeConfig.get().aiProvider}, mode=${runtimeConfig.get().aiExecutionMode})`
   );
 
-  if (runtimeConfig.aiExecutionMode === "direct") {
+  if (runtimeConfig.get().aiExecutionMode === "direct") {
     try {
       const plan = await crunchKnowledgeBaseDirect(input);
       return crunchRuns.createRun({
@@ -1699,11 +1695,11 @@ function gatherCrunchDocuments(destinationId: string | undefined) {
 }
 
 async function crunchKnowledgeBaseDirect(input: CrunchKnowledgeBaseJobInput): Promise<CrunchPlan> {
-  if (runtimeConfig.aiProvider === "mock") {
+  if (runtimeConfig.get().aiProvider === "mock") {
     return buildMockCrunchPlan(input.documents);
   }
 
-  const response = await createConfiguredChatProvider(runtimeConfig.aiProvider).complete({
+  const response = await createConfiguredChatProvider(runtimeConfig.get().aiProvider).complete({
     system:
       "You tidy a fragmented Markdown knowledge base by proposing structural maintenance only. " +
       "Consolidate overlapping or tiny documents and split large multi-topic documents. Preserve all information. " +
@@ -2132,64 +2128,6 @@ async function handleRunScheduledTask(key: string, response: ServerResponse): Pr
     const message = error instanceof Error ? error.message : "scheduled task run failed";
     writeJson(response, 500, { error: "scheduled_task_run_failed", message });
   }
-}
-
-interface RuntimeAiConfig {
-  aiExecutionMode: AiExecutionMode;
-  aiProvider: AiProviderName;
-}
-
-function normalizeAiExecutionMode(value: string | undefined): AiExecutionMode | undefined {
-  if (value === "direct" || value === "queue") {
-    return value;
-  }
-
-  return undefined;
-}
-
-function normalizeAiProvider(value: string | undefined): AiProviderName | undefined {
-  if (value === "mock" || value === "openai-compatible" || value === "azure-openai" || value === "codex" || value === "claude") {
-    return value;
-  }
-
-  return undefined;
-}
-
-function createInitialRuntimeConfig(): RuntimeAiConfig {
-  const aiExecutionMode = normalizeAiExecutionMode(process.env.AI_EXECUTION_MODE) ?? "direct";
-  const providerFromEnv =
-    process.env.AI_PROVIDER ??
-    (aiExecutionMode === "queue" ? process.env.AI_JOB_PROVIDER : process.env.CHAT_PROVIDER) ??
-    process.env.CHAT_PROVIDER ??
-    process.env.AI_JOB_PROVIDER;
-  const aiProvider = normalizeAiProvider(providerFromEnv) ?? "mock";
-  const validationError = validateRuntimeAiConfig(aiExecutionMode, aiProvider);
-
-  if (validationError) {
-    throw new Error(validationError);
-  }
-
-  return {
-    aiExecutionMode,
-    aiProvider
-  };
-}
-
-function validateRuntimeAiConfig(aiExecutionMode: AiExecutionMode, aiProvider: AiProviderName): string | undefined {
-  const configuredProvider = getConfiguredAiProviders().find((provider) => provider.name === aiProvider);
-  if (!configuredProvider) {
-    return `${aiProvider} is not configured by environment variables`;
-  }
-
-  if (aiExecutionMode === "direct" && !configuredProvider.supportsDirect) {
-    return `${aiProvider} cannot be used in direct mode`;
-  }
-
-  if (aiExecutionMode === "queue" && !configuredProvider.supportsQueue) {
-    return `${aiProvider} cannot be used in queue mode`;
-  }
-
-  return undefined;
 }
 
 let embeddingInFlight = false;
