@@ -1,10 +1,12 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { apiLink, parseLimit } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import * as proposalsService from "./service.js";
+import { proposalStatusBodySchema } from "./schema.js";
 
 export function proposalRoutes(ctx: AppContext): Hono {
   const app = new Hono();
@@ -65,25 +67,29 @@ export function proposalRoutes(ctx: AppContext): Hono {
     return c.json({ proposal });
   });
 
-  app.post("/:id/status", async (c) => {
-    const payload = await readJsonBody<{ status?: unknown }>(c);
+  app.post(
+    "/:id/status",
+    zValidator("json", proposalStatusBodySchema, (result, c) => {
+      if (!result.success) {
+        return c.json({ error: "valid_proposal_status_required" }, 400);
+      }
+    }),
+    async (c) => {
+      const { status } = c.req.valid("json");
 
-    if (!proposalsService.isProposalStatus(payload.status)) {
-      throw new HttpError(400, "valid_proposal_status_required");
+      const proposal = await proposalsService.updateStatus(ctx, c.req.param("id"), status);
+      if (!proposal) {
+        throw new HttpError(404, "proposal_not_found");
+      }
+
+      if (proposal.status === "merged") {
+        const { resolvedGapCount, reindexed } = await proposalsService.runMergeCascade(ctx, proposal);
+        return c.json({ proposal, resolvedGapCount, reindexed });
+      }
+
+      return c.json({ proposal });
     }
-
-    const proposal = await proposalsService.updateStatus(ctx, c.req.param("id"), payload.status);
-    if (!proposal) {
-      throw new HttpError(404, "proposal_not_found");
-    }
-
-    if (proposal.status === "merged") {
-      const { resolvedGapCount, reindexed } = await proposalsService.runMergeCascade(ctx, proposal);
-      return c.json({ proposal, resolvedGapCount, reindexed });
-    }
-
-    return c.json({ proposal });
-  });
+  );
 
   app.post("/:id/publish", async (c) => {
     const proposal = await proposalsService.get(ctx, c.req.param("id"));

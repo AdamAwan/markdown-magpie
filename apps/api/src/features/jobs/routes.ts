@@ -1,22 +1,28 @@
 import { Hono } from "hono";
+import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import * as jobsService from "./service.js";
+import { createJobBodySchema } from "./schema.js";
 
 export function jobRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
-  app.post("/", async (c) => {
-    const payload = await readJsonBody<{ type?: unknown; input?: unknown }>(c);
+  app.post(
+    "/",
+    zValidator("json", createJobBodySchema, (result, c) => {
+      if (!result.success) {
+        return c.json({ error: "valid_job_type_required" }, 400);
+      }
+    }),
+    async (c) => {
+      const { type, input } = c.req.valid("json");
 
-    if (!jobsService.isAiJobType(payload.type)) {
-      throw new HttpError(400, "valid_job_type_required");
+      const job = await jobsService.createJob(ctx, type, input);
+      return c.json({ job }, 201);
     }
-
-    const job = await jobsService.createJob(ctx, payload.type, payload.input);
-    return c.json({ job }, 201);
-  });
+  );
 
   app.get("/", async (c) => c.json({ jobs: await jobsService.listJobs(ctx) }));
 

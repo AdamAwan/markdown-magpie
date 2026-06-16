@@ -1,10 +1,11 @@
 import { Hono } from "hono";
-import { isValidCron } from "@magpie/core";
+import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { parseLimit } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import * as crunchService from "./service.js";
+import { crunchSettingsBodySchema } from "./schema.js";
 
 export function crunchRoutes(ctx: AppContext): Hono {
   const app = new Hono();
@@ -30,19 +31,26 @@ export function crunchRoutes(ctx: AppContext): Hono {
 
   app.get("/settings", async (c) => c.json({ settings: await crunchService.settingsForResponse(ctx) }));
 
-  app.post("/settings", async (c) => {
-    const payload = await readJsonBody<{ flowId?: string; enabled?: boolean; cron?: string }>(c);
-    const cron = typeof payload.cron === "string" ? payload.cron.trim() : "";
-    if (!isValidCron(cron)) {
-      throw new HttpError(400, "valid_cron_required", 'cron must be a standard 5-field expression, e.g. "0 2 * * *".');
-    }
+  app.post(
+    "/settings",
+    zValidator("json", crunchSettingsBodySchema, (result, c) => {
+      if (!result.success) {
+        return c.json(
+          { error: "valid_cron_required", message: 'cron must be a standard 5-field expression, e.g. "0 2 * * *".' },
+          400
+        );
+      }
+    }),
+    async (c) => {
+      const { flowId, enabled, cron } = c.req.valid("json");
 
-    await crunchService.updateSettings(ctx, payload.flowId?.trim() || undefined, {
-      enabled: Boolean(payload.enabled),
-      cron
-    });
-    return c.json({ settings: await crunchService.settingsForResponse(ctx) });
-  });
+      await crunchService.updateSettings(ctx, flowId?.trim() || undefined, {
+        enabled: Boolean(enabled),
+        cron
+      });
+      return c.json({ settings: await crunchService.settingsForResponse(ctx) });
+    }
+  );
 
   app.post("/runs/:id/publish", async (c) => {
     const outcome = await crunchService.publishRun(ctx, c.req.param("id"));

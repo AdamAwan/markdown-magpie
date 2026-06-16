@@ -1,9 +1,11 @@
 import { Hono } from "hono";
+import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { parseLimit } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import * as questionsService from "./service.js";
+import { feedbackBodySchema } from "./schema.js";
 
 export function questionRoutes(ctx: AppContext): Hono {
   const app = new Hono();
@@ -21,19 +23,23 @@ export function questionRoutes(ctx: AppContext): Hono {
     return c.json({ question: log });
   });
 
-  app.post("/:id/feedback", async (c) => {
-    const payload = await readJsonBody<{ feedback?: unknown }>(c);
+  app.post(
+    "/:id/feedback",
+    zValidator("json", feedbackBodySchema, (result, c) => {
+      if (!result.success) {
+        return c.json({ error: "valid_feedback_required" }, 400);
+      }
+    }),
+    async (c) => {
+      const { feedback } = c.req.valid("json");
 
-    if (!questionsService.isQuestionFeedback(payload.feedback)) {
-      throw new HttpError(400, "valid_feedback_required");
+      const question = await questionsService.recordFeedback(ctx, c.req.param("id"), feedback);
+      if (!question) {
+        throw new HttpError(404, "question_not_found");
+      }
+      return c.json({ question });
     }
-
-    const question = await questionsService.recordFeedback(ctx, c.req.param("id"), payload.feedback);
-    if (!question) {
-      throw new HttpError(404, "question_not_found");
-    }
-    return c.json({ question });
-  });
+  );
 
   app.post("/:id/gap", async (c) => {
     const payload = await readJsonBody<{ summary?: string }>(c);
