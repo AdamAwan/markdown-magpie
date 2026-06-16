@@ -19,6 +19,8 @@ services:
       - magpie-checkouts:/data/checkouts
     ports:
       - "4000:4000"
+    profiles:
+      - app
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -32,6 +34,8 @@ services:
       PORT: 3000
     ports:
       - "3000:3000"
+    profiles:
+      - app
     depends_on:
       api:
         condition: service_started
@@ -45,6 +49,8 @@ services:
       MAGPIE_CHECKOUT_ROOT: /data/checkouts
     volumes:
       - magpie-checkouts:/data/checkouts
+    profiles:
+      - app
     depends_on:
       api:
         condition: service_started
@@ -66,6 +72,8 @@ services:
     image: markdown-magpie:latest
     command: npm run db:migrate
     env_file: *magpie-env
+    profiles:
+      - app
     depends_on:
       postgres:
         condition: service_healthy

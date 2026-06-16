@@ -82,15 +82,35 @@ AI_EXECUTION_MODE=direct
 AI_PROVIDER=mock
 ```
 
-### 3. Prepare Postgres
+### 3. Prepare Postgres and Redis
 
-Start or provision Postgres so it is reachable at `DATABASE_URL`, then run migrations:
+The inner dev loop runs the app processes **on your host** with `npm`, while the
+external dependencies run in containers. The Compose file gates every app service
+behind the `app` profile, so a bare `up` starts only the dependencies:
+
+```bash
+docker compose up -d        # postgres + redis only, published on localhost
+```
+
+This is the recommended way to satisfy `DATABASE_URL` for local development
+(Postgres also backs the AI job queue, so it covers `AI_EXECUTION_MODE=queue`
+too; Redis comes up alongside it for future Redis-backed adapters). Ports `5432`
+and `6379` are published, which is why `.env.example` points at `localhost`. (If
+you prefer, provision Postgres any other way you like — Compose is just the
+convenient option.)
+
+With Postgres reachable at `DATABASE_URL`, run migrations from the host:
 
 ```bash
 npm run db:migrate
 ```
 
 Run migrations before starting the API whenever the database is new or migrations have changed.
+
+> **Two modes, one Compose file.** `docker compose up` brings up just the
+> dependencies for this host-based dev loop. Adding `--profile app` runs the
+> entire stack in containers instead — see
+> [Production Showcase with Docker Compose](#production-showcase-with-docker-compose).
 
 ### 4. Run Only the Components You Need
 
@@ -198,6 +218,13 @@ The Compose deployment uses **one shared Markdown Magpie application image** and
 - `migrate`: one-shot database migration job
 - `postgres`: Postgres 16 with `pgvector`
 - `redis`: Redis 7, available for future Redis-backed adapters
+
+The app services (`api`, `web`, `watcher`, `migrate`) are gated behind the `app`
+Compose profile; `postgres` and `redis` have no profile and so are always
+started. This is what lets the same file serve two modes: a bare
+`docker compose up` brings up only the dependencies (for the host-based dev loop
+in [Local Development](#local-development)), while `docker compose --profile app up`
+runs the full stack described here.
 
 Postgres and Redis use their own upstream images. The Markdown Magpie code is built once into `markdown-magpie:latest`, then Compose starts each app process with a different command. This keeps deployment simple while preserving the right runtime shape: one container per long-running process.
 
@@ -314,11 +341,15 @@ When multiple providers are configured in the environment, switch between valid 
 
 ### 3. Build and Start Everything
 
-Run:
+Run the full stack with the `app` profile:
 
 ```bash
-docker compose up --build -d
+docker compose --profile app up --build -d
 ```
+
+The `--profile app` flag is what starts the application containers; without it,
+`docker compose up` brings up only Postgres and Redis (the dependencies-only mode
+used for [local development](#local-development)).
 
 The first boot will:
 
@@ -336,10 +367,10 @@ docker compose ps
 
 You should see `api`, `web`, `watcher`, `postgres`, and `redis` running. The `migrate` service should show as exited successfully.
 
-The MCP server is a stdio process intended to be launched by an MCP client, so it is not started by default. To include it for testing:
+The MCP server is a stdio process intended to be launched by an MCP client, so it is not started by default. It depends on the `api` service, so activate the `app` profile alongside `mcp` (or have the stack already running from the step above):
 
 ```bash
-docker compose --profile mcp run --rm mcp
+docker compose --profile app --profile mcp run --rm mcp
 ```
 
 #### Connecting an agent client (Claude Code, Codex, etc.)
@@ -467,7 +498,7 @@ docker compose restart api
 Rebuild after code changes:
 
 ```bash
-docker compose up --build -d
+docker compose --profile app up --build -d
 ```
 
 Run migrations manually:
@@ -537,7 +568,7 @@ NEXT_PUBLIC_API_BASE_URL=https://magpie-api.example.com
 Then start Compose again:
 
 ```bash
-docker compose up -d
+docker compose --profile app up -d
 ```
 
 ### Troubleshooting
@@ -559,7 +590,7 @@ Common causes are an invalid `DATABASE_URL`, Postgres not being ready, or an old
 
 ```bash
 docker compose down -v
-docker compose up --build -d
+docker compose --profile app up --build -d
 ```
 
 If queued questions never complete, check the watcher:
