@@ -22,113 +22,46 @@ import { buildMockCrunchPlan, isValidCron, nextCronTime, resolveProposalTargetPa
 import { fetchPullRequestStatus, LocalGitProposalPublisher, raisePullRequest } from "@magpie/git";
 import { answerQuestion } from "@magpie/retrieval";
 import { assembleClusters, selectClustersToDraft, singletonCluster } from "./stores/gap-clustering.js";
-import { InMemoryKnowledgeIndex } from "./stores/knowledge-index.js";
-import {
-  type ConfiguredKnowledgeFlow,
-  type ConfiguredKnowledgeRepository,
-  getConfiguredKnowledgeDestinations,
-  getConfiguredKnowledgeFlows,
-  getConfiguredKnowledgeRepositories,
-  getConfiguredKnowledgeSources
-} from "./stores/knowledge-repositories.js";
 import { DEFAULT_CRUNCH_CRON } from "./stores/crunch-store.js";
-import { PostgresKnowledgeStore } from "./stores/postgres-knowledge-store.js";
 import { apiLink, normalizeRelativePath, normalizeUploadPath, parseLimit, slugify } from "./platform/paths.js";
-import { BackgroundEmbedder } from "./platform/background-embedder.js";
 import {
-  type RepositoryDeps,
-  checkoutRoot,
-  configuredIndexPayloads,
   defaultDestinationId,
   destinationSubpath,
   findRepositoryForDestination,
   findRepositoryForProposal,
-  indexRepositoryForPayload,
   resolveConfiguredRepositoryLocalPath,
   resolveIndexSelection,
   seedConfiguredKnowledge,
-  selectDestinationForIndex,
   selectDestinationForProposal,
-  selectFlow,
-  syncConfiguredGitCheckouts
+  selectFlow
 } from "./platform/repositories.js";
 import { collectSourceContext } from "./platform/source-context.js";
-import {
-  createAiJobQueue,
-  createCrunchStore,
-  createProposalStore,
-  createQuestionLogStore,
-  createScheduledTaskStore,
-  parseClaimTimeoutMs,
-  requireDatabaseUrl,
-  storageBackend,
-  storeBackend
-} from "./platform/stores.js";
+import { storageBackend, storeBackend } from "./platform/stores.js";
 import {
   type AiProviderName,
-  createConfiguredChatProvider,
-  createConfiguredEmbeddingProvider,
   embeddingProviderName,
   getConfiguredAiProviders,
   retrievalMode
 } from "./platform/providers.js";
-import { normalizeAiExecutionMode, normalizeAiProvider, RuntimeConfigHolder } from "./config-holder.js";
+import { normalizeAiExecutionMode, normalizeAiProvider } from "./config-holder.js";
+import { type AppContext, createAppContext } from "./context.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
-const aiJobClaimTimeoutMs = parseClaimTimeoutMs(process.env.AI_JOB_CLAIM_TIMEOUT_MS);
-const aiJobs = createAiJobQueue(aiJobClaimTimeoutMs);
-const knowledgeStore =
-  storeBackend("KNOWLEDGE_STORE") === "postgres"
-    ? new PostgresKnowledgeStore(requireDatabaseUrl())
-    : undefined;
-const embeddingProvider = knowledgeStore ? createConfiguredEmbeddingProvider() : undefined;
-const knowledgeIndex = knowledgeStore
-  ? new InMemoryKnowledgeIndex(
-      knowledgeStore,
-      embeddingProvider
-        ? { embeddingProvider, vectorSearch: knowledgeStore, onNotice: (message) => console.warn(message) }
-        : {}
-    )
-  : new InMemoryKnowledgeIndex();
-const questionLogs = createQuestionLogStore();
-const proposals = createProposalStore();
-const crunchRuns = createCrunchStore();
-const scheduledTasks = createScheduledTaskStore();
-const runtimeConfig = RuntimeConfigHolder.fromEnv();
-const configuredKnowledgeRepositories = getConfiguredKnowledgeRepositories();
-const configuredKnowledgeSources = getConfiguredKnowledgeSources();
-const configuredKnowledgeDestinations = getConfiguredKnowledgeDestinations();
-const configuredKnowledgeFlows = getConfiguredKnowledgeFlows(
-  process.env,
-  configuredKnowledgeSources,
-  configuredKnowledgeDestinations
-);
-
-const embedder = new BackgroundEmbedder(knowledgeStore, embeddingProvider);
-
-const repositoryDeps = (): RepositoryDeps => ({
-  knowledgeConfig: {
-    sources: configuredKnowledgeSources,
-    destinations: configuredKnowledgeDestinations,
-    flows: configuredKnowledgeFlows,
-    repositories: configuredKnowledgeRepositories
-  },
-  knowledgeIndex,
-  triggerEmbedding: () => void embedder.trigger()
-});
-
-const server = createServer(async (request, response) => {
-  try {
-    await route(request, response);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unexpected error";
-    writeJson(response, 500, { error: "internal_error", message });
-  }
-});
 
 async function start(): Promise<void> {
+  const ctx = await createAppContext();
+
+  const server = createServer(async (request, response) => {
+    try {
+      await route(ctx, request, response);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unexpected error";
+      writeJson(response, 500, { error: "internal_error", message });
+    }
+  });
+
   try {
-    await syncConfiguredGitCheckouts(repositoryDeps());
+    await ctx.bootstrap();
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error(`Failed to sync configured git repositories: ${message}`);
@@ -136,24 +69,17 @@ async function start(): Promise<void> {
     return;
   }
 
-  try {
-    await knowledgeIndex.hydrate();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    console.error(`Failed to hydrate knowledge index from storage: ${message}`);
-  }
-
   server.listen(port, () => {
     console.log(`Markdown Magpie API listening on http://localhost:${port}/api`);
-    logStartupConfig();
-    startCrunchScheduler();
-    startScheduledTaskScheduler();
+    logStartupConfig(ctx);
+    startCrunchScheduler(ctx);
+    startScheduledTaskScheduler(ctx);
   });
 }
 
 void start();
 
-async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function route(ctx: AppContext, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
   const path = apiRoutePath(url.pathname);
 
@@ -173,47 +99,47 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   }
 
   if (request.method === "GET" && path === "/config") {
-    writeJson(response, 200, getRuntimeConfig());
+    writeJson(response, 200, getRuntimeConfig(ctx));
     return;
   }
 
   if (request.method === "POST" && path === "/config") {
-    await handleUpdateRuntimeConfig(request, response);
+    await handleUpdateRuntimeConfig(ctx, request, response);
     return;
   }
 
   if (request.method === "POST" && path === "/admin/reset") {
-    await handleResetData(response);
+    await handleResetData(ctx, response);
     return;
   }
 
   if (request.method === "POST" && path === "/ask") {
-    await handleAsk(request, response);
+    await handleAsk(ctx, request, response);
     return;
   }
 
   if (request.method === "POST" && path === "/repositories/index") {
-    await handleIndexRepository(request, response);
+    await handleIndexRepository(ctx, request, response);
     return;
   }
 
   if (request.method === "GET" && path === "/repositories") {
-    writeJson(response, 200, { repositories: knowledgeIndex.listRepositories() });
+    writeJson(response, 200, { repositories: ctx.stores.knowledgeIndex.listRepositories() });
     return;
   }
 
   if (request.method === "POST" && path === "/documents/upload") {
-    await handleUploadDocuments(request, response);
+    await handleUploadDocuments(ctx, request, response);
     return;
   }
 
   if (request.method === "GET" && path === "/documents") {
-    writeJson(response, 200, { documents: knowledgeIndex.listDocuments() });
+    writeJson(response, 200, { documents: ctx.stores.knowledgeIndex.listDocuments() });
     return;
   }
 
   if (request.method === "GET" && path === "/knowledge/stats") {
-    writeJson(response, 200, knowledgeIndex.getStats());
+    writeJson(response, 200, ctx.stores.knowledgeIndex.getStats());
     return;
   }
 
@@ -224,20 +150,20 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       return;
     }
 
-    const ranked = await knowledgeIndex.search(query, parseLimit(url.searchParams.get("limit"), 5));
+    const ranked = await ctx.stores.knowledgeIndex.search(query, parseLimit(url.searchParams.get("limit"), 5));
     writeJson(response, 200, { sections: ranked.map((result) => result.section), ranked });
     return;
   }
 
   if (request.method === "GET" && path === "/questions") {
     const limit = parseLimit(url.searchParams.get("limit"), 50);
-    writeJson(response, 200, { questions: await questionLogs.list(limit) });
+    writeJson(response, 200, { questions: await ctx.stores.questionLogs.list(limit) });
     return;
   }
 
   const questionMatch = /^\/questions\/([^/]+)$/.exec(path);
   if (request.method === "GET" && questionMatch) {
-    const log = await questionLogs.get(questionMatch[1]);
+    const log = await ctx.stores.questionLogs.get(questionMatch[1]);
     if (!log) {
       writeJson(response, 404, { error: "question_not_found" });
       return;
@@ -249,31 +175,31 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 
   const feedbackMatch = /^\/questions\/([^/]+)\/feedback$/.exec(path);
   if (request.method === "POST" && feedbackMatch) {
-    await handleQuestionFeedback(feedbackMatch[1], request, response);
+    await handleQuestionFeedback(ctx, feedbackMatch[1], request, response);
     return;
   }
 
   const gapMatch = /^\/questions\/([^/]+)\/gap$/.exec(path);
   if (request.method === "POST" && gapMatch) {
-    await handleRecordManualGap(gapMatch[1], request, response);
+    await handleRecordManualGap(ctx, gapMatch[1], request, response);
     return;
   }
 
   if (request.method === "DELETE" && gapMatch) {
-    await handleClearManualGap(gapMatch[1], response);
+    await handleClearManualGap(ctx, gapMatch[1], response);
     return;
   }
 
   if (request.method === "GET" && path === "/gaps/candidates") {
     const limit = parseLimit(url.searchParams.get("limit"), 50);
-    writeJson(response, 200, { gaps: await questionLogs.listGapCandidates(limit) });
+    writeJson(response, 200, { gaps: await ctx.stores.questionLogs.listGapCandidates(limit) });
     return;
   }
 
   if (request.method === "GET" && path === "/gaps/clusters") {
     const limit = parseLimit(url.searchParams.get("limit"), 50);
-    const candidates = await questionLogs.listGapCandidates(limit);
-    const clusters = await clusterGapCandidates(candidates);
+    const candidates = await ctx.stores.questionLogs.listGapCandidates(limit);
+    const clusters = await clusterGapCandidates(ctx, candidates);
     writeJson(response, 200, { clusters });
     return;
   }
@@ -282,18 +208,18 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     const limit = parseLimit(url.searchParams.get("limit"), 50);
     const statusFilter = url.searchParams.get("status");
     const options = isProposalStatus(statusFilter) ? { status: statusFilter } : undefined;
-    writeJson(response, 200, { proposals: await proposals.list(limit, options) });
+    writeJson(response, 200, { proposals: await ctx.stores.proposals.list(limit, options) });
     return;
   }
 
   if (request.method === "POST" && (path === "/proposals/from-gap" || path === "/proposals/from-gaps")) {
-    await handleCreateProposalFromGaps(request, response);
+    await handleCreateProposalFromGaps(ctx, request, response);
     return;
   }
 
   const proposalMatch = /^\/proposals\/([^/]+)$/.exec(path);
   if (request.method === "GET" && proposalMatch) {
-    const proposal = await proposals.get(proposalMatch[1]);
+    const proposal = await ctx.stores.proposals.get(proposalMatch[1]);
     if (!proposal) {
       writeJson(response, 404, { error: "proposal_not_found" });
       return;
@@ -305,63 +231,63 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 
   const proposalStatusMatch = /^\/proposals\/([^/]+)\/status$/.exec(path);
   if (request.method === "POST" && proposalStatusMatch) {
-    await handleUpdateProposalStatus(proposalStatusMatch[1], request, response);
+    await handleUpdateProposalStatus(ctx, proposalStatusMatch[1], request, response);
     return;
   }
 
   const proposalPublishMatch = /^\/proposals\/([^/]+)\/publish$/.exec(path);
   if (request.method === "POST" && proposalPublishMatch) {
-    await handlePublishProposal(proposalPublishMatch[1], response);
+    await handlePublishProposal(ctx, proposalPublishMatch[1], response);
     return;
   }
 
   if (request.method === "GET" && path === "/crunch/runs") {
     const limit = parseLimit(url.searchParams.get("limit"), 20);
-    writeJson(response, 200, { runs: await crunchRuns.listRuns(limit) });
+    writeJson(response, 200, { runs: await ctx.stores.crunchRuns.listRuns(limit) });
     return;
   }
 
   if (request.method === "POST" && path === "/crunch/run") {
-    await handleTriggerCrunch(request, response);
+    await handleTriggerCrunch(ctx, request, response);
     return;
   }
 
   if (request.method === "GET" && path === "/crunch/settings") {
-    writeJson(response, 200, { settings: await crunchSettingsForResponse() });
+    writeJson(response, 200, { settings: await crunchSettingsForResponse(ctx) });
     return;
   }
 
   if (request.method === "POST" && path === "/crunch/settings") {
-    await handleUpdateCrunchSettings(request, response);
+    await handleUpdateCrunchSettings(ctx, request, response);
     return;
   }
 
   const crunchRunPublishMatch = /^\/crunch\/runs\/([^/]+)\/publish$/.exec(path);
   if (request.method === "POST" && crunchRunPublishMatch) {
-    await handlePublishCrunchRun(crunchRunPublishMatch[1], response);
+    await handlePublishCrunchRun(ctx, crunchRunPublishMatch[1], response);
     return;
   }
 
   if (request.method === "GET" && path === "/scheduled-tasks") {
-    writeJson(response, 200, { tasks: await scheduledTasksForResponse() });
+    writeJson(response, 200, { tasks: await scheduledTasksForResponse(ctx) });
     return;
   }
 
   const scheduledTaskSettingsMatch = /^\/scheduled-tasks\/([^/]+)\/settings$/.exec(path);
   if (request.method === "POST" && scheduledTaskSettingsMatch) {
-    await handleUpdateScheduledTaskSettings(scheduledTaskSettingsMatch[1], request, response);
+    await handleUpdateScheduledTaskSettings(ctx, scheduledTaskSettingsMatch[1], request, response);
     return;
   }
 
   const scheduledTaskRunMatch = /^\/scheduled-tasks\/([^/]+)\/run$/.exec(path);
   if (request.method === "POST" && scheduledTaskRunMatch) {
-    await handleRunScheduledTask(scheduledTaskRunMatch[1], response);
+    await handleRunScheduledTask(ctx, scheduledTaskRunMatch[1], response);
     return;
   }
 
   const crunchRunMatch = /^\/crunch\/runs\/([^/]+)$/.exec(path);
   if (request.method === "GET" && crunchRunMatch) {
-    const run = await crunchRuns.getRun(crunchRunMatch[1]);
+    const run = await ctx.stores.crunchRuns.getRun(crunchRunMatch[1]);
     if (!run) {
       writeJson(response, 404, { error: "crunch_run_not_found" });
       return;
@@ -371,35 +297,35 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   }
 
   if (request.method === "POST" && path === "/ai-jobs") {
-    await handleCreateJob(request, response);
+    await handleCreateJob(ctx, request, response);
     return;
   }
 
   if (request.method === "GET" && path === "/ai-jobs") {
-    writeJson(response, 200, { jobs: await aiJobs.list() });
+    writeJson(response, 200, { jobs: await ctx.stores.aiJobs.list() });
     return;
   }
 
   if (request.method === "POST" && path === "/ai-jobs/claim") {
-    await handleClaimJob(request, response);
+    await handleClaimJob(ctx, request, response);
     return;
   }
 
   const completeMatch = /^\/ai-jobs\/([^/]+)\/complete$/.exec(path);
   if (request.method === "POST" && completeMatch) {
-    await handleCompleteJob(completeMatch[1], request, response);
+    await handleCompleteJob(ctx, completeMatch[1], request, response);
     return;
   }
 
   const failMatch = /^\/ai-jobs\/([^/]+)\/fail$/.exec(path);
   if (request.method === "POST" && failMatch) {
-    await handleFailJob(failMatch[1], request, response);
+    await handleFailJob(ctx, failMatch[1], request, response);
     return;
   }
 
   const getMatch = /^\/ai-jobs\/([^/]+)$/.exec(path);
   if (request.method === "GET" && getMatch) {
-    const job = await aiJobs.get(getMatch[1]);
+    const job = await ctx.stores.aiJobs.get(getMatch[1]);
     if (!job) {
       writeJson(response, 404, { error: "job_not_found" });
       return;
@@ -413,6 +339,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 }
 
 async function handleUpdateProposalStatus(
+  ctx: AppContext,
   proposalId: string,
   request: IncomingMessage,
   response: ServerResponse
@@ -424,7 +351,7 @@ async function handleUpdateProposalStatus(
     return;
   }
 
-  const proposal = await proposals.updateStatus(proposalId, payload.status);
+  const proposal = await ctx.stores.proposals.updateStatus(proposalId, payload.status);
   if (!proposal) {
     writeJson(response, 404, { error: "proposal_not_found" });
     return;
@@ -434,7 +361,7 @@ async function handleUpdateProposalStatus(
   // base: resolve the gaps it closed so they stop surfacing, then re-index the
   // destination so the new doc becomes searchable.
   if (proposal.status === "merged") {
-    const { resolvedGapCount, reindexed } = await runMergeCascade(proposal);
+    const { resolvedGapCount, reindexed } = await runMergeCascade(ctx, proposal);
     writeJson(response, 200, { proposal, resolvedGapCount, reindexed });
     return;
   }
@@ -445,23 +372,26 @@ async function handleUpdateProposalStatus(
 // The work that must happen once a proposal is merged, shared by the manual
 // "Mark merged" endpoint and the pull-request poller: resolve its gaps and
 // re-index the destination knowledge base.
-async function runMergeCascade(proposal: Proposal): Promise<{ resolvedGapCount: number; reindexed: boolean }> {
-  const resolvedGapCount = await resolveGapsForMergedProposal(proposal);
-  const reindexed = await reindexDestinationForProposal(proposal);
+async function runMergeCascade(
+  ctx: AppContext,
+  proposal: Proposal
+): Promise<{ resolvedGapCount: number; reindexed: boolean }> {
+  const resolvedGapCount = await resolveGapsForMergedProposal(ctx, proposal);
+  const reindexed = await reindexDestinationForProposal(ctx, proposal);
   return { resolvedGapCount, reindexed };
 }
 
 // Resolves the gaps a merged proposal closed: precisely the rows whose question
 // and summary the proposal recorded, so unrelated gaps on a multi-topic question
 // are left untouched. Returns the number of gaps newly resolved.
-async function resolveGapsForMergedProposal(proposal: Proposal): Promise<number> {
+async function resolveGapsForMergedProposal(ctx: AppContext, proposal: Proposal): Promise<number> {
   const questionIds = proposal.triggeringQuestionIds ?? [];
   const summaries = splitGapSummaries(proposal.gapSummary);
   if (questionIds.length === 0 || summaries.length === 0) {
     return 0;
   }
 
-  const resolved = await questionLogs.resolveGaps(questionIds, summaries, proposal.id);
+  const resolved = await ctx.stores.questionLogs.resolveGaps(questionIds, summaries, proposal.id);
   console.log(`Resolved ${resolved} gap(s) closed by merged proposal ${proposal.id}`);
   return resolved;
 }
@@ -469,10 +399,10 @@ async function resolveGapsForMergedProposal(proposal: Proposal): Promise<number>
 // Pulls the destination's default branch (where the PR merged) and re-indexes it
 // so the merged document is immediately searchable. Best-effort: a failure here
 // must not undo the merge, so it is logged and reported rather than thrown.
-async function reindexDestinationForProposal(proposal: Proposal): Promise<boolean> {
+async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal): Promise<boolean> {
   try {
-    if (configuredKnowledgeDestinations.length > 0) {
-      const destination = selectDestinationForProposal(repositoryDeps(), proposal);
+    if (ctx.knowledgeConfig.destinations.length > 0) {
+      const destination = selectDestinationForProposal(ctx.repositoryDeps(), proposal);
       if (!destination) {
         console.warn(`No destination matched merged proposal ${proposal.id}; skipping re-index.`);
         return false;
@@ -481,19 +411,19 @@ async function reindexDestinationForProposal(proposal: Proposal): Promise<boolea
       // For a git destination this also fetches and fast-forwards the checkout,
       // bringing in the just-merged commit before we re-index.
       const localPath = await resolveConfiguredRepositoryLocalPath(destination);
-      await knowledgeIndex.indexLocalRepository({
+      await ctx.stores.knowledgeIndex.indexLocalRepository({
         localPath,
         repositoryId: destination.id,
         name: destination.name
       });
     } else {
-      const repository = await findRepositoryForProposal(repositoryDeps(), proposal);
+      const repository = await findRepositoryForProposal(ctx.repositoryDeps(), proposal);
       if (!repository) {
         console.warn(`No repository matched merged proposal ${proposal.id}; skipping re-index.`);
         return false;
       }
 
-      await knowledgeIndex.indexLocalRepository({
+      await ctx.stores.knowledgeIndex.indexLocalRepository({
         localPath: repository.localPath,
         repositoryId: repository.id,
         name: repository.name
@@ -501,7 +431,7 @@ async function reindexDestinationForProposal(proposal: Proposal): Promise<boolea
     }
 
     console.log(`Re-indexed destination after merging proposal ${proposal.id}`);
-    void embedder.trigger();
+    void ctx.embedder.trigger();
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
@@ -514,8 +444,8 @@ async function reindexDestinationForProposal(proposal: Proposal): Promise<boolea
 // branch-only publish if the PR can't be opened. Shared by the HTTP publish
 // route and the scheduled gap-to-PR task, so the result is a discriminated
 // outcome rather than an HTTP response — callers map it to their own surface.
-async function publishReadyProposal(proposal: Proposal) {
-  const repository = await findRepositoryForProposal(repositoryDeps(), proposal);
+async function publishReadyProposal(ctx: AppContext, proposal: Proposal) {
+  const repository = await findRepositoryForProposal(ctx.repositoryDeps(), proposal);
   if (!repository) {
     return {
       ok: false as const,
@@ -566,7 +496,7 @@ async function publishReadyProposal(proposal: Proposal) {
       console.warn(`Branch ${publication.branchName} pushed, but PR creation failed: ${pullRequestWarning}`);
     }
 
-    const updatedProposal = await proposals.recordPublication(proposal.id, {
+    const updatedProposal = await ctx.stores.proposals.recordPublication(proposal.id, {
       provider: "local-git",
       branchName: publication.branchName,
       commitSha: publication.commitSha,
@@ -582,8 +512,12 @@ async function publishReadyProposal(proposal: Proposal) {
   }
 }
 
-async function handlePublishProposal(proposalId: string, response: ServerResponse): Promise<void> {
-  const proposal = await proposals.get(proposalId);
+async function handlePublishProposal(
+  ctx: AppContext,
+  proposalId: string,
+  response: ServerResponse
+): Promise<void> {
+  const proposal = await ctx.stores.proposals.get(proposalId);
   if (!proposal) {
     writeJson(response, 404, { error: "proposal_not_found" });
     return;
@@ -594,7 +528,7 @@ async function handlePublishProposal(proposalId: string, response: ServerRespons
     return;
   }
 
-  const outcome = await publishReadyProposal(proposal);
+  const outcome = await publishReadyProposal(ctx, proposal);
   if (!outcome.ok) {
     writeJson(response, 409, { error: outcome.code, message: outcome.message });
     return;
@@ -622,7 +556,11 @@ function buildPullRequestBody(proposal: Proposal): string {
   return lines.join("\n").trim();
 }
 
-async function handleUpdateRuntimeConfig(request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function handleUpdateRuntimeConfig(
+  ctx: AppContext,
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
   const payload = await readJsonBody<{
     aiExecutionMode?: string;
     aiProvider?: string;
@@ -639,39 +577,39 @@ async function handleUpdateRuntimeConfig(request: IncomingMessage, response: Ser
     return;
   }
 
-  const error = runtimeConfig.update({ aiExecutionMode: nextExecutionMode, aiProvider: nextProvider });
+  const error = ctx.config.update({ aiExecutionMode: nextExecutionMode, aiProvider: nextProvider });
   if (error) {
     writeJson(response, 400, { error: "unsupported_ai_runtime_config", message: error });
     return;
   }
 
-  writeJson(response, 200, getRuntimeConfig());
+  writeJson(response, 200, getRuntimeConfig(ctx));
 }
 
-async function handleResetData(response: ServerResponse): Promise<void> {
+async function handleResetData(ctx: AppContext, response: ServerResponse): Promise<void> {
   // Clear all user-generated state first, so even if re-seeding fails the app
   // is left in a clean (empty) but recoverable state.
-  await questionLogs.reset();
-  await proposals.reset();
-  await crunchRuns.reset();
-  await scheduledTasks.reset();
-  await aiJobs.reset();
-  if (knowledgeStore) {
-    await knowledgeStore.reset();
+  await ctx.stores.questionLogs.reset();
+  await ctx.stores.proposals.reset();
+  await ctx.stores.crunchRuns.reset();
+  await ctx.stores.scheduledTasks.reset();
+  await ctx.stores.aiJobs.reset();
+  if (ctx.stores.knowledge) {
+    await ctx.stores.knowledge.reset();
   }
-  knowledgeIndex.reset();
+  ctx.stores.knowledgeIndex.reset();
 
   // Reset runtime AI config back to the .env-derived defaults.
-  runtimeConfig.reset();
+  ctx.config.reset();
 
   // Rebuild the knowledge bases from configuration.
-  const seed = await seedConfiguredKnowledge(repositoryDeps());
+  const seed = await seedConfiguredKnowledge(ctx.repositoryDeps());
 
   writeJson(response, 200, {
     ok: true,
     reindexed: seed.indexed,
     failures: seed.failures,
-    stats: knowledgeIndex.getStats()
+    stats: ctx.stores.knowledgeIndex.getStats()
   });
 }
 
@@ -686,6 +624,7 @@ async function handleResetData(response: ServerResponse): Promise<void> {
 // queue mode an AI job is enqueued and the proposal lands later via the job
 // completion machinery.
 async function draftProposalFromGapSummaries(
+  ctx: AppContext,
   rawSummaries: string[],
   overrides: { targetPath?: string; flowId?: string; sourceIds?: string[]; destinationId?: string } = {}
 ) {
@@ -695,7 +634,7 @@ async function draftProposalFromGapSummaries(
     return { ok: false as const, code: "gap_summary_required" };
   }
 
-  const candidates = await questionLogs.listGapCandidates(200);
+  const candidates = await ctx.stores.questionLogs.listGapCandidates(200);
   const matched = uniqueRequested
     .map((summary) => candidates.find((candidate) => candidate.summary === summary))
     .filter((candidate): candidate is GapCandidate => Boolean(candidate));
@@ -708,17 +647,17 @@ async function draftProposalFromGapSummaries(
   const questionIds = [...new Set(matched.flatMap((candidate) => candidate.questionIds))];
   const label = gapSummaries.length === 1 ? `gap "${gapSummaries[0]}"` : `${gapSummaries.length} clustered gaps`;
 
-  const logs = (await Promise.all(questionIds.map((id) => questionLogs.get(id)))).filter(
+  const logs = (await Promise.all(questionIds.map((id) => ctx.stores.questionLogs.get(id)))).filter(
     (log): log is NonNullable<typeof log> => Boolean(log)
   );
   const evidence = dedupeCitations(logs.flatMap((log) => log.answer?.citations ?? []));
-  const deps = repositoryDeps();
+  const deps = ctx.repositoryDeps();
   const flow = selectFlow(deps, overrides.flowId);
   const sourceIds = overrides.sourceIds ?? flow?.sourceIds;
   const destinationId = overrides.destinationId?.trim() || flow?.destinationId || defaultDestinationId(deps);
   console.log(
     `Drafting proposal for ${label} (flow=${flow?.id ?? "none"}, destination=${destinationId ?? "none"}, ` +
-      `provider=${runtimeConfig.get().aiProvider}, mode=${runtimeConfig.get().aiExecutionMode})`
+      `provider=${ctx.config.get().aiProvider}, mode=${ctx.config.get().aiExecutionMode})`
   );
   const sourceContext = await collectSourceContext(deps, sourceIds);
   const materialFiles = sourceContext.filter((context) => context.path && context.content !== "Source path does not exist.");
@@ -737,13 +676,13 @@ async function draftProposalFromGapSummaries(
     sourceContext,
     destinationId,
     targetPath: overrides.targetPath?.trim() || undefined,
-    provider: runtimeConfig.get().aiProvider,
+    provider: ctx.config.get().aiProvider,
     expectedOutput: "markdown_proposal"
   } as DraftMarkdownProposalJobInput & { provider: AiProviderName };
 
-  if (runtimeConfig.get().aiExecutionMode === "direct") {
-    const output = await draftMarkdownProposalDirect(input);
-    const proposal = await proposals.create({
+  if (ctx.config.get().aiExecutionMode === "direct") {
+    const output = await draftMarkdownProposalDirect(ctx, input);
+    const proposal = await ctx.stores.proposals.create({
       ...output,
       targetPath: resolveProposalTargetPath(destinationSubpath(deps, input.destinationId), output.title),
       evidence,
@@ -756,7 +695,7 @@ async function draftProposalFromGapSummaries(
     return { ok: true as const, mode: "direct" as const, proposal };
   }
 
-  const job = await aiJobs.enqueue("draft_markdown_proposal", {
+  const job = await ctx.stores.aiJobs.enqueue("draft_markdown_proposal", {
     ...input,
     triggeringQuestionIds: questionIds
   });
@@ -765,7 +704,11 @@ async function draftProposalFromGapSummaries(
   return { ok: true as const, mode: "queue" as const, job };
 }
 
-async function handleCreateProposalFromGaps(request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function handleCreateProposalFromGaps(
+  ctx: AppContext,
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
   const payload = await readJsonBody<{
     summary?: string;
     summaries?: string[];
@@ -776,7 +719,7 @@ async function handleCreateProposalFromGaps(request: IncomingMessage, response: 
   }>(request);
 
   const requested = [...(payload.summaries ?? []), ...(payload.summary ? [payload.summary] : [])];
-  const outcome = await draftProposalFromGapSummaries(requested, {
+  const outcome = await draftProposalFromGapSummaries(ctx, requested, {
     targetPath: payload.targetPath,
     flowId: payload.flowId,
     sourceIds: payload.sourceIds,
@@ -831,6 +774,7 @@ function dedupeCitations(citations: Proposal["evidence"]): Proposal["evidence"] 
 }
 
 async function handleQuestionFeedback(
+  ctx: AppContext,
   questionId: string,
   request: IncomingMessage,
   response: ServerResponse
@@ -842,7 +786,7 @@ async function handleQuestionFeedback(
     return;
   }
 
-  const question = await questionLogs.recordFeedback(questionId, payload.feedback);
+  const question = await ctx.stores.questionLogs.recordFeedback(questionId, payload.feedback);
   if (!question) {
     writeJson(response, 404, { error: "question_not_found" });
     return;
@@ -852,6 +796,7 @@ async function handleQuestionFeedback(
 }
 
 async function handleRecordManualGap(
+  ctx: AppContext,
   questionId: string,
   request: IncomingMessage,
   response: ServerResponse
@@ -859,7 +804,7 @@ async function handleRecordManualGap(
   const payload = await readJsonBody<{ summary?: string }>(request);
   const summary = typeof payload.summary === "string" ? payload.summary : undefined;
 
-  const question = await questionLogs.recordManualGap(questionId, summary);
+  const question = await ctx.stores.questionLogs.recordManualGap(questionId, summary);
   if (!question) {
     writeJson(response, 404, { error: "question_not_found" });
     return;
@@ -868,8 +813,12 @@ async function handleRecordManualGap(
   writeJson(response, 200, { question });
 }
 
-async function handleClearManualGap(questionId: string, response: ServerResponse): Promise<void> {
-  const question = await questionLogs.clearManualGap(questionId);
+async function handleClearManualGap(
+  ctx: AppContext,
+  questionId: string,
+  response: ServerResponse
+): Promise<void> {
+  const question = await ctx.stores.questionLogs.clearManualGap(questionId);
   if (!question) {
     writeJson(response, 404, { error: "question_not_found" });
     return;
@@ -878,7 +827,7 @@ async function handleClearManualGap(questionId: string, response: ServerResponse
   writeJson(response, 200, { question });
 }
 
-async function handleAsk(request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function handleAsk(ctx: AppContext, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const payload = await readJsonBody<{ question?: string }>(request);
   const question = payload.question?.trim();
 
@@ -887,12 +836,12 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
     return;
   }
 
-  if (runtimeConfig.get().aiExecutionMode === "queue") {
-    const sections = await knowledgeIndex.search(question, 5);
-    const log = await questionLogs.record({
+  if (ctx.config.get().aiExecutionMode === "queue") {
+    const sections = await ctx.stores.knowledgeIndex.search(question, 5);
+    const log = await ctx.stores.questionLogs.record({
       question,
-      executionMode: runtimeConfig.get().aiExecutionMode,
-      chatProvider: runtimeConfig.get().aiProvider,
+      executionMode: ctx.config.get().aiExecutionMode,
+      chatProvider: ctx.config.get().aiProvider,
       retrievedSectionIds: sections.map((ranked) => ranked.section.id)
     });
     const input: AnswerQuestionJobInput = {
@@ -904,10 +853,10 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
         heading: section.heading,
         content: section.content
       })),
-      provider: runtimeConfig.get().aiProvider,
+      provider: ctx.config.get().aiProvider,
       expectedOutput: "answer_result"
     } as AnswerQuestionJobInput & { provider: AiProviderName };
-    const job = await aiJobs.enqueue("answer_question", input);
+    const job = await ctx.stores.aiJobs.enqueue("answer_question", input);
     writeJson(response, 202, {
       mode: "queue",
       questionId: log.id,
@@ -922,47 +871,55 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
 
   const result = await answerQuestion(
     question,
-    knowledgeIndex,
-    createConfiguredChatProvider(runtimeConfig.get().aiProvider)
+    ctx.stores.knowledgeIndex,
+    ctx.providers.chat(ctx.config.get().aiProvider)
   );
-  const log = await questionLogs.record({
+  const log = await ctx.stores.questionLogs.record({
     question,
-    executionMode: runtimeConfig.get().aiExecutionMode,
-    chatProvider: runtimeConfig.get().aiProvider,
+    executionMode: ctx.config.get().aiExecutionMode,
+    chatProvider: ctx.config.get().aiProvider,
     answer: result,
     retrievedSectionIds: result.citations.map((citation) => citation.sectionId)
   });
 
   writeJson(response, 200, {
-    mode: runtimeConfig.get().aiExecutionMode,
+    mode: ctx.config.get().aiExecutionMode,
     questionId: log.id,
     result
   });
 }
 
-async function handleIndexRepository(request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function handleIndexRepository(
+  ctx: AppContext,
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
   const payload = await readJsonBody<{ flowId?: string; localPath?: string; repositoryId?: string; name?: string }>(request);
 
   let selection: { localPath: string; repositoryId?: string; name?: string };
   try {
-    selection = await resolveIndexSelection(repositoryDeps(), payload);
+    selection = await resolveIndexSelection(ctx.repositoryDeps(), payload);
   } catch (error) {
     const message = error instanceof Error ? error.message : "configured_repository_required";
     writeJson(response, 400, { error: knowledgeRepositoryErrorCode(message), message });
     return;
   }
 
-  const summary = await knowledgeIndex.indexLocalRepository({
+  const summary = await ctx.stores.knowledgeIndex.indexLocalRepository({
     localPath: selection.localPath,
     repositoryId: selection.repositoryId,
     name: selection.name
   });
 
   writeJson(response, 200, summary);
-  void embedder.trigger();
+  void ctx.embedder.trigger();
 }
 
-async function handleUploadDocuments(request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function handleUploadDocuments(
+  ctx: AppContext,
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
   const payload = await readJsonBody<{
     repositoryId?: string;
     name?: string;
@@ -985,7 +942,7 @@ async function handleUploadDocuments(request: IncomingMessage, response: ServerR
     return;
   }
 
-  const summary = await knowledgeIndex.indexMarkdownDocuments({
+  const summary = await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
     repositoryId: payload.repositoryId?.trim() || "uploaded",
     name: payload.name?.trim() || "Uploaded Markdown",
     documents: documents.map((document) => ({
@@ -995,10 +952,10 @@ async function handleUploadDocuments(request: IncomingMessage, response: ServerR
   });
 
   writeJson(response, 201, summary);
-  void embedder.trigger();
+  void ctx.embedder.trigger();
 }
 
-async function handleCreateJob(request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function handleCreateJob(ctx: AppContext, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const payload = await readJsonBody<{ type?: AiJobType; input?: unknown }>(request);
 
   if (!payload.type || !isAiJobType(payload.type)) {
@@ -1006,11 +963,11 @@ async function handleCreateJob(request: IncomingMessage, response: ServerRespons
     return;
   }
 
-  const job = await aiJobs.enqueue(payload.type, payload.input ?? {});
+  const job = await ctx.stores.aiJobs.enqueue(payload.type, payload.input ?? {});
   writeJson(response, 201, { job });
 }
 
-async function handleClaimJob(request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function handleClaimJob(ctx: AppContext, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const payload = await readJsonBody<{ workerName?: string; acceptedTypes?: AiJobType[] }>(request);
   const workerName = payload.workerName?.trim();
 
@@ -1025,11 +982,12 @@ async function handleClaimJob(request: IncomingMessage, response: ServerResponse
     return;
   }
 
-  const job = await aiJobs.claimNext(workerName, acceptedTypes);
+  const job = await ctx.stores.aiJobs.claimNext(workerName, acceptedTypes);
   writeJson(response, 200, { job: job ?? null });
 }
 
 async function handleCompleteJob(
+  ctx: AppContext,
   jobId: string,
   request: IncomingMessage,
   response: ServerResponse
@@ -1037,24 +995,28 @@ async function handleCompleteJob(
   const payload = await readJsonBody<{ output?: unknown }>(request);
 
   try {
-    const existingJob = await aiJobs.get(jobId);
+    const existingJob = await ctx.stores.aiJobs.get(jobId);
     if (!existingJob) {
       writeJson(response, 404, { error: "job_not_found" });
       return;
     }
 
-    await aiJobs.complete(jobId, payload.output ?? {});
-    await updateQuestionLogFromCompletedJob(existingJob, payload.output);
-    await createProposalFromCompletedJob(existingJob, payload.output);
-    await attachCrunchPlanFromCompletedJob(existingJob, payload.output);
-    writeJson(response, 200, { job: await aiJobs.get(jobId) });
+    await ctx.stores.aiJobs.complete(jobId, payload.output ?? {});
+    await updateQuestionLogFromCompletedJob(ctx, existingJob, payload.output);
+    await createProposalFromCompletedJob(ctx, existingJob, payload.output);
+    await attachCrunchPlanFromCompletedJob(ctx, existingJob, payload.output);
+    writeJson(response, 200, { job: await ctx.stores.aiJobs.get(jobId) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected completion failure";
     writeJson(response, 500, { error: "job_completion_failed", message });
   }
 }
 
-async function updateQuestionLogFromCompletedJob(job: AiJob | undefined, output: unknown): Promise<void> {
+async function updateQuestionLogFromCompletedJob(
+  ctx: AppContext,
+  job: AiJob | undefined,
+  output: unknown
+): Promise<void> {
   if (!job || job.type !== "answer_question" || !isAnswerQuestionJobOutput(output)) {
     return;
   }
@@ -1064,25 +1026,30 @@ async function updateQuestionLogFromCompletedJob(job: AiJob | undefined, output:
     return;
   }
 
-  await questionLogs.updateAnswer(input.questionLogId, {
+  await ctx.stores.questionLogs.updateAnswer(input.questionLogId, {
     answer: output,
     chatProvider: typeof input.provider === "string" ? input.provider : (job.claimedBy ?? "watcher")
   });
 }
 
-async function handleFailJob(jobId: string, request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function handleFailJob(
+  ctx: AppContext,
+  jobId: string,
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
   const payload = await readJsonBody<{ error?: string }>(request);
 
   try {
-    const failingJob = await aiJobs.get(jobId);
-    await aiJobs.fail(jobId, payload.error ?? "Unknown watcher failure");
+    const failingJob = await ctx.stores.aiJobs.get(jobId);
+    await ctx.stores.aiJobs.fail(jobId, payload.error ?? "Unknown watcher failure");
     if (failingJob?.type === "crunch_knowledge_base") {
-      const run = await crunchRuns.getRunByJobId(jobId);
+      const run = await ctx.stores.crunchRuns.getRunByJobId(jobId);
       if (run) {
-        await crunchRuns.failRun(run.id, payload.error ?? "Crunch job failed");
+        await ctx.stores.crunchRuns.failRun(run.id, payload.error ?? "Crunch job failed");
       }
     }
-    writeJson(response, 200, { job: await aiJobs.get(jobId) });
+    writeJson(response, 200, { job: await ctx.stores.aiJobs.get(jobId) });
   } catch {
     writeJson(response, 404, { error: "job_not_found" });
   }
@@ -1111,13 +1078,13 @@ function writeJson(response: ServerResponse, statusCode: number, body: unknown):
   response.end(body === undefined ? undefined : JSON.stringify(body));
 }
 
-function getRuntimeConfig() {
+function getRuntimeConfig(ctx: AppContext) {
   const availableProviders = getConfiguredAiProviders();
   return {
     api: {
       port,
-      aiExecutionMode: runtimeConfig.get().aiExecutionMode,
-      aiProvider: runtimeConfig.get().aiProvider,
+      aiExecutionMode: ctx.config.get().aiExecutionMode,
+      aiProvider: ctx.config.get().aiProvider,
       nodeEnv: process.env.NODE_ENV ?? "development"
     },
     stores: {
@@ -1130,11 +1097,11 @@ function getRuntimeConfig() {
     },
     knowledge: {
       repositoryPath: process.env.KNOWLEDGE_REPO_PATH ?? null,
-      repositories: configuredKnowledgeRepositories,
-      sources: configuredKnowledgeSources,
-      destinations: configuredKnowledgeDestinations,
-      flows: configuredKnowledgeFlows,
-      checkoutRoot: checkoutRoot()
+      repositories: ctx.knowledgeConfig.repositories,
+      sources: ctx.knowledgeConfig.sources,
+      destinations: ctx.knowledgeConfig.destinations,
+      flows: ctx.knowledgeConfig.flows,
+      checkoutRoot: ctx.knowledgeConfig.checkoutRoot
     },
     providers: {
       llmProvider: process.env.LLM_PROVIDER ?? "mock",
@@ -1161,8 +1128,8 @@ function getRuntimeConfig() {
       }
     },
     aiRuntime: {
-      executionMode: runtimeConfig.get().aiExecutionMode,
-      provider: runtimeConfig.get().aiProvider,
+      executionMode: ctx.config.get().aiExecutionMode,
+      provider: ctx.config.get().aiProvider,
       executionModes: ["direct", "queue"],
       providers: availableProviders,
       directProviders: availableProviders.filter((provider) => provider.supportsDirect).map((provider) => provider.name),
@@ -1179,9 +1146,9 @@ function getRuntimeConfig() {
     watcher: {
       name: process.env.WATCHER_NAME ?? null,
       pollIntervalMs: process.env.WATCHER_POLL_INTERVAL_MS ?? null,
-      aiJobProvider: runtimeConfig.get().aiProvider,
+      aiJobProvider: ctx.config.get().aiProvider,
       agentApiTimeoutMs: process.env.AGENT_API_TIMEOUT_MS ?? null,
-      claimTimeoutMs: aiJobClaimTimeoutMs
+      claimTimeoutMs: ctx.claimTimeoutMs
     }
   };
 }
@@ -1190,12 +1157,12 @@ function getRuntimeConfig() {
 // providers/credentials are (not) wired up. Built from getRuntimeConfig() so it
 // reuses the same secret masking — values are reported as "set"/"not set", never
 // printed. Set LOG_STARTUP_CONFIG=false to suppress.
-function logStartupConfig(): void {
+function logStartupConfig(ctx: AppContext): void {
   if (process.env.LOG_STARTUP_CONFIG === "false") {
     return;
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = getRuntimeConfig(ctx);
   const lines: string[] = [];
   const section = (title: string) => lines.push(`  ${title}`);
   const add = (label: string, value: unknown) => lines.push(`    ${`${label}`.padEnd(26)}: ${value}`);
@@ -1293,12 +1260,15 @@ function secretState(value: string | undefined): "set" | "not set" {
   return value ? "set" : "not set";
 }
 
-async function draftMarkdownProposalDirect(input: DraftMarkdownProposalJobInput): Promise<DraftMarkdownProposalJobOutput> {
-  if (runtimeConfig.get().aiProvider === "mock") {
-    return createMockMarkdownProposal(input);
+async function draftMarkdownProposalDirect(
+  ctx: AppContext,
+  input: DraftMarkdownProposalJobInput
+): Promise<DraftMarkdownProposalJobOutput> {
+  if (ctx.config.get().aiProvider === "mock") {
+    return createMockMarkdownProposal(ctx, input);
   }
 
-  const response = await createConfiguredChatProvider(runtimeConfig.get().aiProvider).complete({
+  const response = await ctx.providers.chat(ctx.config.get().aiProvider).complete({
     system:
       "Draft a conservative Markdown knowledge base proposal for the provided gap. Return JSON only with this shape: " +
       '{"title":"string","targetPath":"string","markdown":"string","rationale":"string"}. ' +
@@ -1325,15 +1295,15 @@ async function draftMarkdownProposalDirect(input: DraftMarkdownProposalJobInput)
 // mock provider cannot cluster semantically (its embeddings/answers are
 // deterministic stubs), so it — and any non-chat provider — falls back to one
 // cluster per gap, which the reviewer can still merge by hand.
-async function clusterGapCandidates(candidates: GapCandidate[]): Promise<SuggestedGapCluster[]> {
+async function clusterGapCandidates(ctx: AppContext, candidates: GapCandidate[]): Promise<SuggestedGapCluster[]> {
   const canCluster =
-    runtimeConfig.get().aiProvider === "openai-compatible" || runtimeConfig.get().aiProvider === "azure-openai";
+    ctx.config.get().aiProvider === "openai-compatible" || ctx.config.get().aiProvider === "azure-openai";
   if (!canCluster || candidates.length <= 1) {
     return candidates.map((candidate) => singletonCluster(candidate));
   }
 
   try {
-    return await requestGapClusters(candidates);
+    return await requestGapClusters(ctx, candidates);
   } catch (error) {
     const message = error instanceof Error ? error.message : "clustering failed";
     console.warn(`Gap clustering failed (${message}); falling back to one cluster per gap.`);
@@ -1341,8 +1311,8 @@ async function clusterGapCandidates(candidates: GapCandidate[]): Promise<Suggest
   }
 }
 
-async function requestGapClusters(candidates: GapCandidate[]): Promise<SuggestedGapCluster[]> {
-  const response = await createConfiguredChatProvider(runtimeConfig.get().aiProvider).complete({
+async function requestGapClusters(ctx: AppContext, candidates: GapCandidate[]): Promise<SuggestedGapCluster[]> {
+  const response = await ctx.providers.chat(ctx.config.get().aiProvider).complete({
     system:
       "Group related knowledge-base gaps that a single Markdown article could resolve. " +
       "Two gaps belong together only when one proposal would naturally answer both. " +
@@ -1360,9 +1330,12 @@ async function requestGapClusters(candidates: GapCandidate[]): Promise<Suggested
   return assembleClusters(candidates, parseJsonObject(response.content));
 }
 
-function createMockMarkdownProposal(input: DraftMarkdownProposalJobInput): DraftMarkdownProposalJobOutput {
+function createMockMarkdownProposal(
+  ctx: AppContext,
+  input: DraftMarkdownProposalJobInput
+): DraftMarkdownProposalJobOutput {
   const title = titleFromGapSummary(input.gapSummaries[0] ?? "");
-  const targetPath = resolveProposalTargetPath(destinationSubpath(repositoryDeps(), input.destinationId), title);
+  const targetPath = resolveProposalTargetPath(destinationSubpath(ctx.repositoryDeps(), input.destinationId), title);
   const gapList = input.gapSummaries.length
     ? input.gapSummaries.map((summary) => `- ${summary}`).join("\n")
     : "- No gap summaries recorded.";
@@ -1431,7 +1404,11 @@ function parseJsonObject(value: string): unknown {
   return undefined;
 }
 
-async function createProposalFromCompletedJob(job: AiJob | undefined, output: unknown): Promise<void> {
+async function createProposalFromCompletedJob(
+  ctx: AppContext,
+  job: AiJob | undefined,
+  output: unknown
+): Promise<void> {
   if (!job || job.type !== "draft_markdown_proposal" || !isDraftMarkdownProposalJobOutput(output)) {
     return;
   }
@@ -1440,9 +1417,9 @@ async function createProposalFromCompletedJob(job: AiJob | undefined, output: un
     triggeringQuestionIds?: string[];
   };
 
-  await proposals.create({
+  await ctx.stores.proposals.create({
     ...output,
-    targetPath: resolveProposalTargetPath(destinationSubpath(repositoryDeps(), input.destinationId), output.title),
+    targetPath: resolveProposalTargetPath(destinationSubpath(ctx.repositoryDeps(), input.destinationId), output.title),
     evidence: input.evidence ?? [],
     gapSummary: input.gapSummaries ? joinGapSummaries(input.gapSummaries) : undefined,
     triggeringQuestionIds: input.triggeringQuestionIds,
@@ -1455,10 +1432,14 @@ async function createProposalFromCompletedJob(job: AiJob | undefined, output: un
 // Crunch — scheduled knowledge-base tidying
 // ---------------------------------------------------------------------------
 
-async function handleTriggerCrunch(request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function handleTriggerCrunch(
+  ctx: AppContext,
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
   const payload = await readJsonBody<{ flowId?: string }>(request);
   try {
-    const run = await triggerCrunchRun({ flowId: payload.flowId?.trim() || undefined, trigger: "manual" });
+    const run = await triggerCrunchRun(ctx, { flowId: payload.flowId?.trim() || undefined, trigger: "manual" });
     writeJson(response, run.status === "failed" ? 502 : 200, { run });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Crunch run failed to start";
@@ -1466,7 +1447,11 @@ async function handleTriggerCrunch(request: IncomingMessage, response: ServerRes
   }
 }
 
-async function handleUpdateCrunchSettings(request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function handleUpdateCrunchSettings(
+  ctx: AppContext,
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
   const payload = await readJsonBody<{ flowId?: string; enabled?: boolean; cron?: string }>(request);
   const cron = typeof payload.cron === "string" ? payload.cron.trim() : "";
   if (!isValidCron(cron)) {
@@ -1477,31 +1462,31 @@ async function handleUpdateCrunchSettings(request: IncomingMessage, response: Se
     return;
   }
 
-  await crunchRuns.updateSettings(payload.flowId?.trim() || undefined, {
+  await ctx.stores.crunchRuns.updateSettings(payload.flowId?.trim() || undefined, {
     enabled: Boolean(payload.enabled),
     cron
   });
-  writeJson(response, 200, { settings: await crunchSettingsForResponse() });
+  writeJson(response, 200, { settings: await crunchSettingsForResponse(ctx) });
 }
 
 // Always returns one settings row per configured flow (or a single default-flow
 // row when no flows are configured), merging in any stored schedule so the UI
 // can render a control even before the schedule has been saved once.
-async function crunchSettingsForResponse() {
-  const stored = await crunchRuns.listSettings();
+async function crunchSettingsForResponse(ctx: AppContext) {
+  const stored = await ctx.stores.crunchRuns.listSettings();
   const byFlow = new Map(stored.map((setting) => [setting.flowId ?? "", setting]));
   const fallback = (flowId: string | undefined) =>
     byFlow.get(flowId ?? "") ?? { flowId, enabled: false, cron: DEFAULT_CRUNCH_CRON };
 
-  if (configuredKnowledgeFlows.length > 0) {
-    return configuredKnowledgeFlows.map((flow) => fallback(flow.id));
+  if (ctx.knowledgeConfig.flows.length > 0) {
+    return ctx.knowledgeConfig.flows.map((flow) => fallback(flow.id));
   }
 
   return [fallback(undefined)];
 }
 
-async function handlePublishCrunchRun(runId: string, response: ServerResponse): Promise<void> {
-  const run = await crunchRuns.getRun(runId);
+async function handlePublishCrunchRun(ctx: AppContext, runId: string, response: ServerResponse): Promise<void> {
+  const run = await ctx.stores.crunchRuns.getRun(runId);
   if (!run) {
     writeJson(response, 404, { error: "crunch_run_not_found" });
     return;
@@ -1524,7 +1509,7 @@ async function handlePublishCrunchRun(runId: string, response: ServerResponse): 
     return;
   }
 
-  const repository = await findRepositoryForDestination(repositoryDeps(), run.destinationId);
+  const repository = await findRepositoryForDestination(ctx.repositoryDeps(), run.destinationId);
   if (!repository) {
     writeJson(response, 409, {
       error: "crunch_repository_not_found",
@@ -1549,7 +1534,7 @@ async function handlePublishCrunchRun(runId: string, response: ServerResponse): 
       title: `docs: crunch tidy (${run.plan.operations.length} operation${run.plan.operations.length === 1 ? "" : "s"})`,
       changes
     });
-    const updatedRun = await crunchRuns.recordRunPublication(run.id, {
+    const updatedRun = await ctx.stores.crunchRuns.recordRunPublication(run.id, {
       provider: "local-git",
       branchName: publication.branchName,
       commitSha: publication.commitSha,
@@ -1567,30 +1552,33 @@ async function handlePublishCrunchRun(runId: string, response: ServerResponse): 
 // Shared by the manual trigger endpoint and the scheduler. In direct mode the
 // plan is produced synchronously; in queue mode a job is enqueued and the run is
 // completed later by the watcher via attachCrunchPlanFromCompletedJob().
-async function triggerCrunchRun(options: { flowId?: string; trigger: CrunchRunTrigger }): Promise<CrunchRun> {
-  const deps = repositoryDeps();
+async function triggerCrunchRun(
+  ctx: AppContext,
+  options: { flowId?: string; trigger: CrunchRunTrigger }
+): Promise<CrunchRun> {
+  const deps = ctx.repositoryDeps();
   const flow = selectFlow(deps, options.flowId);
   const flowId = flow?.id ?? options.flowId;
   const destinationId = flow?.destinationId ?? defaultDestinationId(deps);
-  const documents = gatherCrunchDocuments(destinationId);
+  const documents = gatherCrunchDocuments(ctx, destinationId);
   const input = {
     flowId,
     destinationId,
     documents,
     expectedOutput: "crunch_plan",
-    provider: runtimeConfig.get().aiProvider
+    provider: ctx.config.get().aiProvider
   } satisfies CrunchKnowledgeBaseJobInput & { provider: AiProviderName };
 
   console.log(
     `Crunch run requested (trigger=${options.trigger}, flow=${flowId ?? "default"}, ` +
       `destination=${destinationId ?? "none"}, documents=${documents.length}, ` +
-      `provider=${runtimeConfig.get().aiProvider}, mode=${runtimeConfig.get().aiExecutionMode})`
+      `provider=${ctx.config.get().aiProvider}, mode=${ctx.config.get().aiExecutionMode})`
   );
 
-  if (runtimeConfig.get().aiExecutionMode === "direct") {
+  if (ctx.config.get().aiExecutionMode === "direct") {
     try {
-      const plan = await crunchKnowledgeBaseDirect(input);
-      return crunchRuns.createRun({
+      const plan = await crunchKnowledgeBaseDirect(ctx, input);
+      return ctx.stores.crunchRuns.createRun({
         flowId,
         destinationId,
         trigger: options.trigger,
@@ -1600,7 +1588,7 @@ async function triggerCrunchRun(options: { flowId?: string; trigger: CrunchRunTr
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Crunch planning failed";
-      return crunchRuns.createRun({
+      return ctx.stores.crunchRuns.createRun({
         flowId,
         destinationId,
         trigger: options.trigger,
@@ -1611,8 +1599,8 @@ async function triggerCrunchRun(options: { flowId?: string; trigger: CrunchRunTr
     }
   }
 
-  const job = await aiJobs.enqueue("crunch_knowledge_base", input);
-  return crunchRuns.createRun({
+  const job = await ctx.stores.aiJobs.enqueue("crunch_knowledge_base", input);
+  return ctx.stores.crunchRuns.createRun({
     flowId,
     destinationId,
     trigger: options.trigger,
@@ -1622,18 +1610,18 @@ async function triggerCrunchRun(options: { flowId?: string; trigger: CrunchRunTr
   });
 }
 
-function gatherCrunchDocuments(destinationId: string | undefined) {
-  const documents = knowledgeIndex.listDocuments();
+function gatherCrunchDocuments(ctx: AppContext, destinationId: string | undefined) {
+  const documents = ctx.stores.knowledgeIndex.listDocuments();
   const scoped = destinationId ? documents.filter((document) => document.repositoryId === destinationId) : documents;
   return scoped.map((document) => ({ path: document.path, content: document.content }));
 }
 
-async function crunchKnowledgeBaseDirect(input: CrunchKnowledgeBaseJobInput): Promise<CrunchPlan> {
-  if (runtimeConfig.get().aiProvider === "mock") {
+async function crunchKnowledgeBaseDirect(ctx: AppContext, input: CrunchKnowledgeBaseJobInput): Promise<CrunchPlan> {
+  if (ctx.config.get().aiProvider === "mock") {
     return buildMockCrunchPlan(input.documents);
   }
 
-  const response = await createConfiguredChatProvider(runtimeConfig.get().aiProvider).complete({
+  const response = await ctx.providers.chat(ctx.config.get().aiProvider).complete({
     system:
       "You tidy a fragmented Markdown knowledge base by proposing structural maintenance only. " +
       "Consolidate overlapping or tiny documents and split large multi-topic documents. Preserve all information. " +
@@ -1657,20 +1645,24 @@ async function crunchKnowledgeBaseDirect(input: CrunchKnowledgeBaseJobInput): Pr
   return output;
 }
 
-async function attachCrunchPlanFromCompletedJob(job: AiJob | undefined, output: unknown): Promise<void> {
+async function attachCrunchPlanFromCompletedJob(
+  ctx: AppContext,
+  job: AiJob | undefined,
+  output: unknown
+): Promise<void> {
   if (!job || job.type !== "crunch_knowledge_base") {
     return;
   }
 
-  const run = await crunchRuns.getRunByJobId(job.id);
+  const run = await ctx.stores.crunchRuns.getRunByJobId(job.id);
   if (!run) {
     return;
   }
 
   if (isCrunchPlan(output)) {
-    await crunchRuns.completeRun(run.id, output);
+    await ctx.stores.crunchRuns.completeRun(run.id, output);
   } else {
-    await crunchRuns.failRun(run.id, "Crunch job returned an invalid plan");
+    await ctx.stores.crunchRuns.failRun(run.id, "Crunch job returned an invalid plan");
   }
 }
 
@@ -1720,9 +1712,9 @@ function crunchBranchName(run: CrunchRun): string {
 
 let crunchTickInFlight = false;
 
-function startCrunchScheduler(): void {
+function startCrunchScheduler(ctx: AppContext): void {
   const tickMs = Number.parseInt(process.env.CRUNCH_SCHEDULER_TICK_MS ?? "60000", 10);
-  const timer = setInterval(() => void crunchSchedulerTick(), Number.isFinite(tickMs) && tickMs > 0 ? tickMs : 60_000);
+  const timer = setInterval(() => void crunchSchedulerTick(ctx), Number.isFinite(tickMs) && tickMs > 0 ? tickMs : 60_000);
   // Don't keep the process alive solely for the scheduler.
   timer.unref?.();
   console.log(`Crunch scheduler started (tick ${Number.isFinite(tickMs) && tickMs > 0 ? tickMs : 60_000}ms)`);
@@ -1730,14 +1722,14 @@ function startCrunchScheduler(): void {
 
 // One tick: fire any enabled schedule whose nextRunAt is due, then reschedule it.
 // Re-entrancy guarded so a slow direct run can't overlap the next tick.
-async function crunchSchedulerTick(): Promise<void> {
+async function crunchSchedulerTick(ctx: AppContext): Promise<void> {
   if (crunchTickInFlight) {
     return;
   }
   crunchTickInFlight = true;
   try {
     const now = Date.now();
-    for (const setting of await crunchRuns.listSettings()) {
+    for (const setting of await ctx.stores.crunchRuns.listSettings()) {
       if (!setting.enabled || !setting.nextRunAt) {
         continue;
       }
@@ -1751,10 +1743,10 @@ async function crunchSchedulerTick(): Promise<void> {
         continue;
       }
       // Reschedule before running so a failure or restart can't cause a tight retry loop.
-      await crunchRuns.touchSchedule(setting.flowId, new Date(now).toISOString(), nextRunAt.toISOString());
+      await ctx.stores.crunchRuns.touchSchedule(setting.flowId, new Date(now).toISOString(), nextRunAt.toISOString());
       console.log(`Crunch schedule due for flow ${setting.flowId ?? "default"}; starting scheduled run.`);
       try {
-        await triggerCrunchRun({ flowId: setting.flowId, trigger: "scheduled" });
+        await triggerCrunchRun(ctx, { flowId: setting.flowId, trigger: "scheduled" });
       } catch (error) {
         const message = error instanceof Error ? error.message : "scheduled crunch run failed";
         console.error(`Scheduled crunch run failed for flow ${setting.flowId ?? "default"}: ${message}`);
@@ -1776,7 +1768,7 @@ interface ScheduledTaskDefinition {
   label: string;
   description: string;
   defaultCron: string;
-  run(): Promise<void>;
+  run(ctx: AppContext): Promise<void>;
 }
 
 const scheduledTaskDefinitions: ScheduledTaskDefinition[] = [
@@ -1816,15 +1808,15 @@ let scheduledTaskTickInFlight = false;
 // Drives every registered side-process on its own cron, mirroring the Crunch
 // scheduler: one timer, a re-entrancy guard, and "reschedule before run" so a
 // failure or restart can't cause a tight retry loop.
-function startScheduledTaskScheduler(): void {
+function startScheduledTaskScheduler(ctx: AppContext): void {
   const tickMs = Number.parseInt(process.env.SCHEDULED_TASK_TICK_MS ?? "60000", 10);
   const interval = Number.isFinite(tickMs) && tickMs > 0 ? tickMs : 60_000;
-  const timer = setInterval(() => void scheduledTaskTick(), interval);
+  const timer = setInterval(() => void scheduledTaskTick(ctx), interval);
   timer.unref?.();
   console.log(`Scheduled task scheduler started (tick ${interval}ms)`);
 }
 
-async function scheduledTaskTick(): Promise<void> {
+async function scheduledTaskTick(ctx: AppContext): Promise<void> {
   if (scheduledTaskTickInFlight) {
     return;
   }
@@ -1832,7 +1824,7 @@ async function scheduledTaskTick(): Promise<void> {
   try {
     const now = Date.now();
     for (const task of scheduledTaskDefinitions) {
-      const setting = await scheduledTasks.getSettings(task.key);
+      const setting = await ctx.stores.scheduledTasks.getSettings(task.key);
       if (!setting?.enabled || !setting.nextRunAt) {
         continue;
       }
@@ -1845,10 +1837,10 @@ async function scheduledTaskTick(): Promise<void> {
         console.warn(`Scheduled task ${task.key} has an invalid cron "${setting.cron}"; skipping.`);
         continue;
       }
-      await scheduledTasks.touchSchedule(task.key, new Date(now).toISOString(), nextRunAt.toISOString());
+      await ctx.stores.scheduledTasks.touchSchedule(task.key, new Date(now).toISOString(), nextRunAt.toISOString());
       console.log(`Scheduled task ${task.key} due; running.`);
       try {
-        await task.run();
+        await task.run(ctx);
       } catch (error) {
         const message = error instanceof Error ? error.message : "scheduled task run failed";
         console.error(`Scheduled task ${task.key} failed: ${message}`);
@@ -1865,8 +1857,8 @@ async function scheduledTaskTick(): Promise<void> {
 // For every proposal still awaiting its PR, ask the host whether it merged or
 // closed and advance the proposal accordingly. No-ops gracefully when no
 // GITHUB_TOKEN is configured (fetchPullRequestStatus returns undefined).
-async function refreshPullRequests(): Promise<void> {
-  const open = await proposals.list(200, { status: "pr-opened" });
+async function refreshPullRequests(ctx: AppContext): Promise<void> {
+  const open = await ctx.stores.proposals.list(200, { status: "pr-opened" });
   for (const proposal of open) {
     const pullRequestUrl = proposal.publication?.pullRequestUrl;
     if (!pullRequestUrl) {
@@ -1886,15 +1878,15 @@ async function refreshPullRequests(): Promise<void> {
     }
 
     if (status.merged) {
-      const merged = await proposals.updateStatus(proposal.id, "merged");
+      const merged = await ctx.stores.proposals.updateStatus(proposal.id, "merged");
       if (merged) {
         console.log(`Detected merged pull request for proposal ${proposal.id}; running merge cascade.`);
-        await runMergeCascade(merged);
+        await runMergeCascade(ctx, merged);
       }
     } else if (status.state === "closed") {
       // Closed without merging is effectively a rejection of the published
       // proposal; mark it so the task stops chasing a dead PR.
-      await proposals.updateStatus(proposal.id, "rejected");
+      await ctx.stores.proposals.updateStatus(proposal.id, "rejected");
       console.log(`Pull request for proposal ${proposal.id} was closed without merging; marked rejected.`);
     }
   }
@@ -1906,9 +1898,9 @@ async function refreshPullRequests(): Promise<void> {
 // hour the very content a human just declined. Merged proposals resolve their
 // gaps at the source, so those summaries stop appearing as candidates and need
 // no entry here; proposals.list already omits merged rows.
-async function coveredGapSummaries(): Promise<Set<string>> {
+async function coveredGapSummaries(ctx: AppContext): Promise<Set<string>> {
   const summaries = new Set<string>();
-  for (const proposal of await proposals.list(500)) {
+  for (const proposal of await ctx.stores.proposals.list(500)) {
     for (const summary of splitGapSummaries(proposal.gapSummary)) {
       summaries.add(summary);
     }
@@ -1920,19 +1912,19 @@ async function coveredGapSummaries(): Promise<Set<string>> {
 // already covered, then auto-promotes every draft to ready and publishes all
 // draft/ready proposals as pull requests. Each step is best-effort and logged so
 // one failure can't abort the whole run.
-async function processGapsIntoPullRequests(): Promise<void> {
+async function processGapsIntoPullRequests(ctx: AppContext): Promise<void> {
   // 1) Cluster the open gaps and draft a proposal for each uncovered cluster.
-  const candidates = await questionLogs.listGapCandidates(200);
+  const candidates = await ctx.stores.questionLogs.listGapCandidates(200);
   if (candidates.length > 0) {
-    const clusters = await clusterGapCandidates(candidates);
+    const clusters = await clusterGapCandidates(ctx, candidates);
     const toDraft = selectClustersToDraft(
       clusters,
       candidates.map((candidate) => candidate.summary),
-      await coveredGapSummaries()
+      await coveredGapSummaries(ctx)
     );
     for (const summaries of toDraft) {
       try {
-        const outcome = await draftProposalFromGapSummaries(summaries);
+        const outcome = await draftProposalFromGapSummaries(ctx, summaries);
         if (!outcome.ok) {
           console.warn(`Gap-to-PR task skipped a cluster: ${outcome.code}`);
         }
@@ -1949,14 +1941,14 @@ async function processGapsIntoPullRequests(): Promise<void> {
   // PR for them too. Raising a PR for a branch that already has one is rejected
   // by the host, so this can't create duplicates.
   const pending = [
-    ...(await proposals.list(200, { status: "draft" })),
-    ...(await proposals.list(200, { status: "ready" })),
-    ...(await proposals.list(200, { status: "branch-pushed" }))
+    ...(await ctx.stores.proposals.list(200, { status: "draft" })),
+    ...(await ctx.stores.proposals.list(200, { status: "ready" })),
+    ...(await ctx.stores.proposals.list(200, { status: "branch-pushed" }))
   ];
   for (const proposal of pending) {
     let candidate = proposal;
     if (candidate.status === "draft") {
-      const promoted = await proposals.updateStatus(candidate.id, "ready");
+      const promoted = await ctx.stores.proposals.updateStatus(candidate.id, "ready");
       if (!promoted) {
         continue;
       }
@@ -1964,7 +1956,7 @@ async function processGapsIntoPullRequests(): Promise<void> {
     }
 
     try {
-      const outcome = await publishReadyProposal(candidate);
+      const outcome = await publishReadyProposal(ctx, candidate);
       if (outcome.ok) {
         console.log(
           outcome.pullRequestUrl
@@ -1983,10 +1975,10 @@ async function processGapsIntoPullRequests(): Promise<void> {
 
 // Always returns one row per registered task, merging in any saved schedule so
 // the UI can render a control even before the schedule has been saved once.
-async function scheduledTasksForResponse(): Promise<
+async function scheduledTasksForResponse(ctx: AppContext): Promise<
   Array<{ key: string; label: string; description: string; settings: ScheduledTaskSettings }>
 > {
-  const stored = await scheduledTasks.listSettings();
+  const stored = await ctx.stores.scheduledTasks.listSettings();
   const byKey = new Map(stored.map((setting) => [setting.key, setting]));
   return scheduledTaskDefinitions.map((task) => ({
     key: task.key,
@@ -1997,6 +1989,7 @@ async function scheduledTasksForResponse(): Promise<
 }
 
 async function handleUpdateScheduledTaskSettings(
+  ctx: AppContext,
   key: string,
   request: IncomingMessage,
   response: ServerResponse
@@ -2017,11 +2010,11 @@ async function handleUpdateScheduledTaskSettings(
     return;
   }
 
-  await scheduledTasks.updateSettings(key, { enabled: Boolean(payload.enabled), cron });
-  writeJson(response, 200, { tasks: await scheduledTasksForResponse() });
+  await ctx.stores.scheduledTasks.updateSettings(key, { enabled: Boolean(payload.enabled), cron });
+  writeJson(response, 200, { tasks: await scheduledTasksForResponse(ctx) });
 }
 
-async function handleRunScheduledTask(key: string, response: ServerResponse): Promise<void> {
+async function handleRunScheduledTask(ctx: AppContext, key: string, response: ServerResponse): Promise<void> {
   const task = findScheduledTask(key);
   if (!task) {
     writeJson(response, 404, { error: "scheduled_task_not_found" });
@@ -2029,8 +2022,8 @@ async function handleRunScheduledTask(key: string, response: ServerResponse): Pr
   }
 
   try {
-    await task.run();
-    writeJson(response, 200, { ok: true, tasks: await scheduledTasksForResponse() });
+    await task.run(ctx);
+    writeJson(response, 200, { ok: true, tasks: await scheduledTasksForResponse(ctx) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "scheduled task run failed";
     writeJson(response, 500, { error: "scheduled_task_run_failed", message });
