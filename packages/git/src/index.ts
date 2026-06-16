@@ -49,6 +49,7 @@ export class LocalRepositorySyncProvider implements RepositorySyncProvider {
 export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<GitCheckoutResult> {
   const localPath = path.join(request.checkoutRoot, safeCheckoutName(request.id));
   await mkdir(request.checkoutRoot, { recursive: true });
+  const authEnv = buildGitAuthEnv(request.url);
 
   if (!existsSync(path.join(localPath, ".git"))) {
     const cloneArgs = ["clone"];
@@ -56,7 +57,7 @@ export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<Gi
       cloneArgs.push("--branch", request.branch.trim());
     }
     cloneArgs.push(request.url, localPath);
-    await git(request.checkoutRoot, cloneArgs);
+    await git(request.checkoutRoot, cloneArgs, authEnv);
   } else {
     const currentRemote = await tryGit(localPath, ["remote", "get-url", "origin"]);
     if (currentRemote.trim() && currentRemote.trim() !== request.url) {
@@ -65,17 +66,17 @@ export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<Gi
     if (!currentRemote.trim()) {
       await git(localPath, ["remote", "add", "origin", request.url]);
     }
-    await git(localPath, ["fetch", "--prune", "origin"]);
+    await git(localPath, ["fetch", "--prune", "origin"], authEnv);
     if (request.branch?.trim()) {
       const branch = request.branch.trim();
       await git(localPath, ["checkout", branch]);
-      if (await remoteBranchExists(localPath, branch)) {
-        await git(localPath, ["pull", "--ff-only", "origin", branch]);
+      if (await remoteBranchExists(localPath, branch, authEnv)) {
+        await git(localPath, ["pull", "--ff-only", "origin", branch], authEnv);
       }
     } else {
       const branch = await tryGit(localPath, ["branch", "--show-current"]);
-      if (branch.trim() && (await remoteBranchExists(localPath, branch.trim()))) {
-        await git(localPath, ["pull", "--ff-only"]);
+      if (branch.trim() && (await remoteBranchExists(localPath, branch.trim(), authEnv))) {
+        await git(localPath, ["pull", "--ff-only"], authEnv);
       }
     }
   }
@@ -100,8 +101,9 @@ export class LocalGitProposalPublisher {
   async publish(request: PublishProposalBranchRequest): Promise<PublishProposalBranchResponse> {
     const root = request.repository.git?.workTreeRoot ?? request.repository.localPath;
     const targetPath = resolveTargetPath(request.repository, request.targetPath);
-    await ensureRemote(root);
-    await assertBranchDoesNotExist(root, request.branchName);
+    const remoteUrl = await ensureRemote(root);
+    const authEnv = buildGitAuthEnv(remoteUrl);
+    await assertBranchDoesNotExist(root, request.branchName, authEnv);
 
     const baseRef = await resolveBaseRef(root, request.repository);
     const tempRoot = await mkdtemp(path.join(tmpdir(), "markdown-magpie-worktree-"));
@@ -132,7 +134,7 @@ export class LocalGitProposalPublisher {
         request.title
       ]);
       const commitSha = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
-      await git(worktreePath, ["push", "-u", "origin", request.branchName]);
+      await git(worktreePath, ["push", "-u", "origin", request.branchName], authEnv);
 
       return {
         branchName: request.branchName,
@@ -172,16 +174,21 @@ function resolveCommitterIdentity(): { name: string; email: string } {
   return { name, email };
 }
 
-async function ensureRemote(root: string): Promise<void> {
+async function ensureRemote(root: string): Promise<string> {
   const remote = await git(root, ["remote", "get-url", "origin"]);
   if (!remote.trim()) {
     throw new Error("Cannot publish proposal because git remote 'origin' is not configured");
   }
+  return remote.trim();
 }
 
-async function assertBranchDoesNotExist(root: string, branchName: string): Promise<void> {
+async function assertBranchDoesNotExist(
+  root: string,
+  branchName: string,
+  authEnv?: NodeJS.ProcessEnv
+): Promise<void> {
   const localBranch = await tryGit(root, ["show-ref", "--verify", `refs/heads/${branchName}`]);
-  const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", branchName]);
+  const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", branchName], authEnv);
   if (localBranch.trim() || remoteBranch.trim()) {
     throw new Error(`Cannot publish proposal because branch ${branchName} already exists`);
   }
@@ -198,9 +205,12 @@ async function resolveBaseRef(root: string, repository: RepositoryRef): Promise<
   return defaultBranch;
 }
 
-async function git(cwd: string, args: string[]): Promise<string> {
+async function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
   try {
-    const result = await execFileAsync("git", args, { cwd });
+    const result = await execFileAsync("git", args, {
+      cwd,
+      env: env ? { ...process.env, ...env } : process.env
+    });
     return result.stdout;
   } catch (error) {
     const message = error instanceof Error ? error.message : "git command failed";
@@ -208,12 +218,69 @@ async function git(cwd: string, args: string[]): Promise<string> {
   }
 }
 
-async function tryGit(cwd: string, args: string[]): Promise<string> {
+async function tryGit(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
   try {
-    return await git(cwd, args);
+    return await git(cwd, args, env);
   } catch {
     return "";
   }
+}
+
+// Authenticate HTTPS git operations using a host-matched token, injected as an
+// http.extraheader via GIT_CONFIG_* environment variables (git >= 2.31). The
+// secret travels in the child's environment only — never in argv or the remote
+// URL — so it can't leak into the command line that git() echoes back in error
+// messages (which are surfaced to the UI). Returns {} when no token applies, so
+// public repos, SSH remotes, and credential-embedded URLs keep working unchanged.
+function buildGitAuthEnv(remoteUrl: string | undefined): NodeJS.ProcessEnv {
+  const header = buildAuthHeader(remoteUrl);
+  if (!header) {
+    return {};
+  }
+  return {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.extraheader",
+    GIT_CONFIG_VALUE_0: header
+  };
+}
+
+function buildAuthHeader(remoteUrl: string | undefined): string | undefined {
+  if (!remoteUrl?.trim()) {
+    return undefined;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(remoteUrl.trim());
+  } catch {
+    return undefined;
+  }
+
+  // SSH (git@/ssh://) authenticates with keys; credential-embedded URLs already
+  // carry their own auth — don't override either.
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return undefined;
+  }
+  if (parsed.username || parsed.password) {
+    return undefined;
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (host === "github.com" || host.endsWith(".github.com")) {
+    const token = process.env.GITHUB_TOKEN?.trim();
+    return token ? basicAuthHeader("x-access-token", token) : undefined;
+  }
+  if (host === "dev.azure.com" || host.endsWith(".visualstudio.com")) {
+    const pat = process.env.AZURE_DEVOPS_PAT?.trim();
+    return pat ? basicAuthHeader("pat", pat) : undefined;
+  }
+
+  return undefined;
+}
+
+function basicAuthHeader(username: string, secret: string): string {
+  const encoded = Buffer.from(`${username}:${secret}`).toString("base64");
+  return `Authorization: Basic ${encoded}`;
 }
 
 async function cleanupWorktree(root: string, worktreePath: string, tempRoot: string): Promise<void> {
@@ -232,8 +299,12 @@ function toPosixPath(value: string): string {
   return value.replace(/\\/g, "/");
 }
 
-async function remoteBranchExists(root: string, branch: string): Promise<boolean> {
-  const result = await tryGit(root, ["ls-remote", "--heads", "origin", branch]);
+async function remoteBranchExists(
+  root: string,
+  branch: string,
+  authEnv?: NodeJS.ProcessEnv
+): Promise<boolean> {
+  const result = await tryGit(root, ["ls-remote", "--heads", "origin", branch], authEnv);
   return Boolean(result.trim());
 }
 
