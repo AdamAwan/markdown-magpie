@@ -195,13 +195,13 @@ export function crunchBranchName(run: CrunchRun): string {
 export async function publishRun(ctx: AppContext, runId: string) {
   const run = await ctx.stores.crunchRuns.getRun(runId);
   if (!run) {
-    return { ok: false as const, status: 404, code: "crunch_run_not_found" };
+    return { ok: false as const, status: 404 as const, code: "crunch_run_not_found" };
   }
 
   if (run.status !== "completed" || !run.plan) {
     return {
       ok: false as const,
-      status: 409,
+      status: 409 as const,
       code: "crunch_run_not_publishable",
       message: "Only completed crunch runs with a plan can be published."
     };
@@ -211,7 +211,7 @@ export async function publishRun(ctx: AppContext, runId: string) {
   if (changes.length === 0) {
     return {
       ok: false as const,
-      status: 409,
+      status: 409 as const,
       code: "crunch_run_empty_plan",
       message: "This crunch plan does not change any files."
     };
@@ -221,7 +221,7 @@ export async function publishRun(ctx: AppContext, runId: string) {
   if (!repository) {
     return {
       ok: false as const,
-      status: 409,
+      status: 409 as const,
       code: "crunch_repository_not_found",
       message: "No indexed Git repository matches this crunch run's destination."
     };
@@ -230,7 +230,7 @@ export async function publishRun(ctx: AppContext, runId: string) {
   if (repository.git?.scope === "not-git" || !repository.git?.workTreeRoot) {
     return {
       ok: false as const,
-      status: 409,
+      status: 409 as const,
       code: "crunch_repository_not_git",
       message: "The matched repository is not a Git checkout."
     };
@@ -255,7 +255,7 @@ export async function publishRun(ctx: AppContext, runId: string) {
     return { ok: true as const, run: updatedRun, publication };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Crunch publish failed";
-    return { ok: false as const, status: 409, code: "crunch_publish_failed", message };
+    return { ok: false as const, status: 409 as const, code: "crunch_publish_failed", message };
   }
 }
 
