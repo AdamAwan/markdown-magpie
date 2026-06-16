@@ -1,7 +1,4 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, stat } from "node:fs/promises";
-import path from "node:path";
 import type {
   AiJob,
   AiJobType,
@@ -19,13 +16,11 @@ import type {
   RepositoryRef,
   QuestionFeedback,
   ScheduledTaskSettings,
-  SourceDataContext,
   SuggestedGapCluster
 } from "@magpie/core";
 import { buildMockCrunchPlan, isValidCron, nextCronTime, resolveProposalTargetPath } from "@magpie/core";
-import { ensureGitCheckout, fetchPullRequestStatus, LocalGitProposalPublisher, raisePullRequest } from "@magpie/git";
+import { fetchPullRequestStatus, LocalGitProposalPublisher, raisePullRequest } from "@magpie/git";
 import { answerQuestion } from "@magpie/retrieval";
-import { embedPendingSections } from "./stores/embed-sections.js";
 import { assembleClusters, selectClustersToDraft, singletonCluster } from "./stores/gap-clustering.js";
 import { InMemoryKnowledgeIndex } from "./stores/knowledge-index.js";
 import {
@@ -34,13 +29,29 @@ import {
   getConfiguredKnowledgeDestinations,
   getConfiguredKnowledgeFlows,
   getConfiguredKnowledgeRepositories,
-  getConfiguredKnowledgeSources,
-  resolveConfiguredRepositorySelection,
-  resolveKnowledgeRepositorySelection
+  getConfiguredKnowledgeSources
 } from "./stores/knowledge-repositories.js";
 import { DEFAULT_CRUNCH_CRON } from "./stores/crunch-store.js";
 import { PostgresKnowledgeStore } from "./stores/postgres-knowledge-store.js";
-import { apiLink, normalizeRelativePath, normalizeUploadPath, parseLimit, slugify, toPosixPath } from "./platform/paths.js";
+import { apiLink, normalizeRelativePath, normalizeUploadPath, parseLimit, slugify } from "./platform/paths.js";
+import { BackgroundEmbedder } from "./platform/background-embedder.js";
+import {
+  type RepositoryDeps,
+  checkoutRoot,
+  configuredIndexPayloads,
+  defaultDestinationId,
+  destinationSubpath,
+  findRepositoryForDestination,
+  findRepositoryForProposal,
+  indexRepositoryForPayload,
+  resolveConfiguredRepositoryLocalPath,
+  resolveIndexSelection,
+  seedConfiguredKnowledge,
+  selectDestinationForIndex,
+  selectFlow,
+  syncConfiguredGitCheckouts
+} from "./platform/repositories.js";
+import { collectSourceContext } from "./platform/source-context.js";
 import {
   createAiJobQueue,
   createCrunchStore,
@@ -92,6 +103,20 @@ const configuredKnowledgeFlows = getConfiguredKnowledgeFlows(
   configuredKnowledgeDestinations
 );
 
+const embedder = new BackgroundEmbedder(knowledgeStore, embeddingProvider);
+
+const repositoryDeps = (): RepositoryDeps => ({
+  knowledgeConfig: {
+    sources: configuredKnowledgeSources,
+    destinations: configuredKnowledgeDestinations,
+    flows: configuredKnowledgeFlows,
+    repositories: configuredKnowledgeRepositories,
+    checkoutRoot: checkoutRoot()
+  },
+  knowledgeIndex,
+  triggerEmbedding: () => void embedder.trigger()
+});
+
 const server = createServer(async (request, response) => {
   try {
     await route(request, response);
@@ -103,7 +128,7 @@ const server = createServer(async (request, response) => {
 
 async function start(): Promise<void> {
   try {
-    await syncConfiguredGitCheckouts();
+    await syncConfiguredGitCheckouts(repositoryDeps());
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error(`Failed to sync configured git repositories: ${message}`);
@@ -447,7 +472,14 @@ async function resolveGapsForMergedProposal(proposal: Proposal): Promise<number>
 async function reindexDestinationForProposal(proposal: Proposal): Promise<boolean> {
   try {
     if (configuredKnowledgeDestinations.length > 0) {
-      const destination = selectDestinationForProposal(proposal);
+      const destination = configuredKnowledgeDestinations.find((d) => d.id === proposal.destinationId) ??
+        configuredKnowledgeDestinations.find((d) => {
+          if (!d.subpath) return false;
+          const targetPath = normalizeRelativePath(proposal.targetPath);
+          const subpath = normalizeRelativePath(d.subpath);
+          return targetPath === subpath || targetPath.startsWith(`${subpath}/`);
+        }) ??
+        (configuredKnowledgeDestinations.length === 1 ? configuredKnowledgeDestinations[0] : undefined);
       if (!destination) {
         console.warn(`No destination matched merged proposal ${proposal.id}; skipping re-index.`);
         return false;
@@ -462,7 +494,7 @@ async function reindexDestinationForProposal(proposal: Proposal): Promise<boolea
         name: destination.name
       });
     } else {
-      const repository = await findRepositoryForProposal(proposal);
+      const repository = await findRepositoryForProposal(repositoryDeps(), proposal);
       if (!repository) {
         console.warn(`No repository matched merged proposal ${proposal.id}; skipping re-index.`);
         return false;
@@ -476,7 +508,7 @@ async function reindexDestinationForProposal(proposal: Proposal): Promise<boolea
     }
 
     console.log(`Re-indexed destination after merging proposal ${proposal.id}`);
-    void embedSectionsInBackground();
+    void embedder.trigger();
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
@@ -490,7 +522,7 @@ async function reindexDestinationForProposal(proposal: Proposal): Promise<boolea
 // route and the scheduled gap-to-PR task, so the result is a discriminated
 // outcome rather than an HTTP response — callers map it to their own surface.
 async function publishReadyProposal(proposal: Proposal) {
-  const repository = await findRepositoryForProposal(proposal);
+  const repository = await findRepositoryForProposal(repositoryDeps(), proposal);
   if (!repository) {
     return {
       ok: false as const,
@@ -640,7 +672,7 @@ async function handleResetData(response: ServerResponse): Promise<void> {
   runtimeConfig.reset();
 
   // Rebuild the knowledge bases from configuration.
-  const seed = await seedConfiguredKnowledge();
+  const seed = await seedConfiguredKnowledge(repositoryDeps());
 
   writeJson(response, 200, {
     ok: true,
@@ -687,14 +719,15 @@ async function draftProposalFromGapSummaries(
     (log): log is NonNullable<typeof log> => Boolean(log)
   );
   const evidence = dedupeCitations(logs.flatMap((log) => log.answer?.citations ?? []));
-  const flow = selectFlow(overrides.flowId);
+  const deps = repositoryDeps();
+  const flow = selectFlow(deps, overrides.flowId);
   const sourceIds = overrides.sourceIds ?? flow?.sourceIds;
-  const destinationId = overrides.destinationId?.trim() || flow?.destinationId || defaultDestinationId();
+  const destinationId = overrides.destinationId?.trim() || flow?.destinationId || defaultDestinationId(deps);
   console.log(
     `Drafting proposal for ${label} (flow=${flow?.id ?? "none"}, destination=${destinationId ?? "none"}, ` +
       `provider=${runtimeConfig.get().aiProvider}, mode=${runtimeConfig.get().aiExecutionMode})`
   );
-  const sourceContext = await collectSourceContext(sourceIds);
+  const sourceContext = await collectSourceContext(deps, sourceIds);
   const materialFiles = sourceContext.filter((context) => context.path && context.content !== "Source path does not exist.");
   if (materialFiles.length === 0) {
     console.warn(
@@ -719,7 +752,7 @@ async function draftProposalFromGapSummaries(
     const output = await draftMarkdownProposalDirect(input);
     const proposal = await proposals.create({
       ...output,
-      targetPath: resolveProposalTargetPath(destinationSubpath(input.destinationId), output.title),
+      targetPath: resolveProposalTargetPath(destinationSubpath(deps, input.destinationId), output.title),
       evidence,
       gapSummary: joinGapSummaries(gapSummaries),
       triggeringQuestionIds: questionIds,
@@ -914,46 +947,12 @@ async function handleAsk(request: IncomingMessage, response: ServerResponse): Pr
   });
 }
 
-async function resolveIndexSelection(payload: {
-  flowId?: string;
-  localPath?: string;
-  repositoryId?: string;
-  name?: string;
-}): Promise<{ localPath: string; repositoryId?: string; name?: string }> {
-  const indexableDestinations = configuredKnowledgeDestinations.filter(
-    (destination) => destination.kind === "local" || destination.kind === "git"
-  );
-  if (indexableDestinations.length > 0) {
-    const configured = selectDestinationForIndex(payload, indexableDestinations);
-    const localPath = await resolveConfiguredRepositoryLocalPath(configured);
-    return { localPath, repositoryId: configured.id, name: configured.name };
-  }
-  if (configuredKnowledgeDestinations.length > 0) {
-    throw new Error("configured_repository_not_indexable");
-  }
-  return resolveKnowledgeRepositorySelection(payload, configuredKnowledgeRepositories);
-}
-
-async function indexRepositoryForPayload(payload: {
-  flowId?: string;
-  localPath?: string;
-  repositoryId?: string;
-  name?: string;
-}): Promise<Awaited<ReturnType<typeof knowledgeIndex.indexLocalRepository>>> {
-  const selection = await resolveIndexSelection(payload);
-  return knowledgeIndex.indexLocalRepository({
-    localPath: selection.localPath,
-    repositoryId: selection.repositoryId,
-    name: selection.name
-  });
-}
-
 async function handleIndexRepository(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const payload = await readJsonBody<{ flowId?: string; localPath?: string; repositoryId?: string; name?: string }>(request);
 
   let selection: { localPath: string; repositoryId?: string; name?: string };
   try {
-    selection = await resolveIndexSelection(payload);
+    selection = await resolveIndexSelection(repositoryDeps(), payload);
   } catch (error) {
     const message = error instanceof Error ? error.message : "configured_repository_required";
     writeJson(response, 400, { error: knowledgeRepositoryErrorCode(message), message });
@@ -967,66 +966,7 @@ async function handleIndexRepository(request: IncomingMessage, response: ServerR
   });
 
   writeJson(response, 200, summary);
-  void embedSectionsInBackground();
-}
-
-function configuredIndexPayloads(): Array<{ flowId?: string; repositoryId?: string }> {
-  if (configuredKnowledgeFlows.length > 0) {
-    return configuredKnowledgeFlows.map((flow) => ({ flowId: flow.id }));
-  }
-
-  const indexableDestinations = configuredKnowledgeDestinations.filter(
-    (destination) => destination.kind === "local" || destination.kind === "git"
-  );
-  if (indexableDestinations.length > 0) {
-    return indexableDestinations.map((destination) => ({ repositoryId: destination.id }));
-  }
-
-  return configuredKnowledgeRepositories.map((repository) => ({ repositoryId: repository.id }));
-}
-
-async function seedConfiguredKnowledge(): Promise<{ indexed: number; failures: Array<{ target: string; message: string }> }> {
-  await syncConfiguredGitCheckouts();
-
-  const payloads = configuredIndexPayloads();
-  const failures: Array<{ target: string; message: string }> = [];
-  let indexed = 0;
-
-  for (const payload of payloads) {
-    const target = payload.flowId ?? payload.repositoryId ?? "default";
-    try {
-      await indexRepositoryForPayload(payload);
-      indexed += 1;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "index_failed";
-      console.warn(`Failed to re-index ${target}: ${message}`);
-      failures.push({ target, message });
-    }
-  }
-
-  void embedSectionsInBackground();
-  return { indexed, failures };
-}
-
-function selectDestinationForIndex(
-  payload: { flowId?: string; repositoryId?: string; localPath?: string },
-  destinations: ConfiguredKnowledgeRepository[]
-): ConfiguredKnowledgeRepository {
-  if (payload.localPath?.trim()) {
-    throw new Error("localPath is not accepted when knowledge repositories are configured");
-  }
-
-  const flowId = payload.flowId?.trim();
-  if (flowId) {
-    const flow = configuredKnowledgeFlows.find((candidate) => candidate.id === flowId);
-    const destination = flow ? destinations.find((candidate) => candidate.id === flow.destinationId) : undefined;
-    if (!destination) {
-      throw new Error("configured_repository_required");
-    }
-    return destination;
-  }
-
-  return resolveConfiguredRepositorySelection(payload, destinations).repository;
+  void embedder.trigger();
 }
 
 async function handleUploadDocuments(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -1062,7 +1002,7 @@ async function handleUploadDocuments(request: IncomingMessage, response: ServerR
   });
 
   writeJson(response, 201, summary);
-  void embedSectionsInBackground();
+  void embedder.trigger();
 }
 
 async function handleCreateJob(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -1429,7 +1369,7 @@ async function requestGapClusters(candidates: GapCandidate[]): Promise<Suggested
 
 function createMockMarkdownProposal(input: DraftMarkdownProposalJobInput): DraftMarkdownProposalJobOutput {
   const title = titleFromGapSummary(input.gapSummaries[0] ?? "");
-  const targetPath = resolveProposalTargetPath(destinationSubpath(input.destinationId), title);
+  const targetPath = resolveProposalTargetPath(destinationSubpath(repositoryDeps(), input.destinationId), title);
   const gapList = input.gapSummaries.length
     ? input.gapSummaries.map((summary) => `- ${summary}`).join("\n")
     : "- No gap summaries recorded.";
@@ -1509,7 +1449,7 @@ async function createProposalFromCompletedJob(job: AiJob | undefined, output: un
 
   await proposals.create({
     ...output,
-    targetPath: resolveProposalTargetPath(destinationSubpath(input.destinationId), output.title),
+    targetPath: resolveProposalTargetPath(destinationSubpath(repositoryDeps(), input.destinationId), output.title),
     evidence: input.evidence ?? [],
     gapSummary: input.gapSummaries ? joinGapSummaries(input.gapSummaries) : undefined,
     triggeringQuestionIds: input.triggeringQuestionIds,
@@ -1591,7 +1531,7 @@ async function handlePublishCrunchRun(runId: string, response: ServerResponse): 
     return;
   }
 
-  const repository = await findRepositoryForDestination(run.destinationId);
+  const repository = await findRepositoryForDestination(repositoryDeps(), run.destinationId);
   if (!repository) {
     writeJson(response, 409, {
       error: "crunch_repository_not_found",
@@ -1635,9 +1575,10 @@ async function handlePublishCrunchRun(runId: string, response: ServerResponse): 
 // plan is produced synchronously; in queue mode a job is enqueued and the run is
 // completed later by the watcher via attachCrunchPlanFromCompletedJob().
 async function triggerCrunchRun(options: { flowId?: string; trigger: CrunchRunTrigger }): Promise<CrunchRun> {
-  const flow = selectFlow(options.flowId);
+  const deps = repositoryDeps();
+  const flow = selectFlow(deps, options.flowId);
   const flowId = flow?.id ?? options.flowId;
-  const destinationId = flow?.destinationId ?? defaultDestinationId();
+  const destinationId = flow?.destinationId ?? defaultDestinationId(deps);
   const documents = gatherCrunchDocuments(destinationId);
   const input = {
     flowId,
@@ -1778,33 +1719,6 @@ function changesetFromPlan(plan: CrunchPlan): ChangesetChange[] {
     }
   }
   return [...changes.values()];
-}
-
-async function findRepositoryForDestination(destinationId: string | undefined): Promise<RepositoryRef | undefined> {
-  if (configuredKnowledgeDestinations.length > 0) {
-    const destination = destinationId
-      ? configuredKnowledgeDestinations.find((candidate) => candidate.id === destinationId)
-      : configuredKnowledgeDestinations.length === 1
-        ? configuredKnowledgeDestinations[0]
-        : undefined;
-    if (!destination) {
-      return undefined;
-    }
-
-    const localPath = await resolveConfiguredRepositoryLocalPath(destination);
-    const summary = await knowledgeIndex.indexLocalRepository({
-      localPath,
-      repositoryId: destination.id,
-      name: destination.name
-    });
-    void embedSectionsInBackground();
-    return summary.repository;
-  }
-
-  const repositories = knowledgeIndex.listRepositories();
-  return repositories.length === 1
-    ? repositories[0]
-    : repositories.find((repository) => normalizeRelativePath(repository.git?.relativePathFromRoot) === ".");
 }
 
 function crunchBranchName(run: CrunchRun): string {
@@ -2130,33 +2044,6 @@ async function handleRunScheduledTask(key: string, response: ServerResponse): Pr
   }
 }
 
-let embeddingInFlight = false;
-let embeddingRerunRequested = false;
-
-async function embedSectionsInBackground(): Promise<void> {
-  if (!knowledgeStore || !embeddingProvider) {
-    return;
-  }
-  if (embeddingInFlight) {
-    embeddingRerunRequested = true;
-    return;
-  }
-  embeddingInFlight = true;
-  try {
-    do {
-      embeddingRerunRequested = false;
-      const result = await embedPendingSections({ store: knowledgeStore, provider: embeddingProvider });
-      if (result.embeddedCount > 0) {
-        console.log(`Embedded ${result.embeddedCount} section(s); ${result.remaining} remaining`);
-      }
-    } while (embeddingRerunRequested);
-  } catch (error) {
-    console.warn(`Background embedding failed: ${error instanceof Error ? error.message : "unknown error"}`);
-  } finally {
-    embeddingInFlight = false;
-  }
-}
-
 function isAiJobType(value: unknown): value is AiJobType {
   return (
     value === "answer_question" ||
@@ -2211,353 +2098,6 @@ function isProposalStatus(value: unknown): value is Proposal["status"] {
     value === "merged" ||
     value === "rejected"
   );
-}
-
-async function findRepositoryForProposal(proposal: Proposal): Promise<RepositoryRef | undefined> {
-  if (configuredKnowledgeDestinations.length > 0) {
-    const destination = selectDestinationForProposal(proposal);
-    if (!destination) {
-      return undefined;
-    }
-
-    const localPath = await resolveConfiguredRepositoryLocalPath(destination);
-    const summary = await knowledgeIndex.indexLocalRepository({
-      localPath,
-      repositoryId: destination.id,
-      name: destination.name
-    });
-    void embedSectionsInBackground();
-    return summary.repository;
-  }
-
-  const targetPath = normalizeRelativePath(proposal.targetPath);
-  const repositories = knowledgeIndex.listRepositories();
-  const explicitMatch = repositories
-    .map((repository) => ({
-      repository,
-      relativePathFromRoot: normalizeRelativePath(repository.git?.relativePathFromRoot)
-    }))
-    .filter(({ relativePathFromRoot }) => relativePathFromRoot && relativePathFromRoot !== ".")
-    .sort((left, right) => right.relativePathFromRoot.length - left.relativePathFromRoot.length)
-    .find(
-      ({ relativePathFromRoot }) => targetPath === relativePathFromRoot || targetPath.startsWith(`${relativePathFromRoot}/`)
-    );
-
-  return explicitMatch?.repository ?? (repositories.length === 1 ? repositories[0] : repositories.find((repository) => normalizeRelativePath(repository.git?.relativePathFromRoot) === "."));
-}
-
-function destinationSubpath(destinationId: string | undefined): string | undefined {
-  if (!destinationId) {
-    return undefined;
-  }
-  return configuredKnowledgeDestinations.find((destination) => destination.id === destinationId)?.subpath;
-}
-
-function selectDestinationForProposal(proposal: Proposal): ConfiguredKnowledgeRepository | undefined {
-  if (proposal.destinationId) {
-    return configuredKnowledgeDestinations.find((destination) => destination.id === proposal.destinationId);
-  }
-
-  const targetPath = normalizeRelativePath(proposal.targetPath);
-  const explicitMatch = configuredKnowledgeDestinations
-    .filter((destination) => destination.subpath)
-    .sort((left, right) => (right.subpath ?? "").length - (left.subpath ?? "").length)
-    .find((destination) => {
-      const subpath = normalizeRelativePath(destination.subpath);
-      return targetPath === subpath || targetPath.startsWith(`${subpath}/`);
-    });
-
-  return explicitMatch ?? (configuredKnowledgeDestinations.length === 1 ? configuredKnowledgeDestinations[0] : undefined);
-}
-
-async function syncConfiguredGitCheckouts(): Promise<void> {
-  const gitRepositories = uniqueConfiguredGitRepositories([
-    ...configuredKnowledgeSources,
-    ...configuredKnowledgeDestinations
-  ]);
-
-  const checkoutKey = (repository: ConfiguredKnowledgeRepository) => `${repository.id}\0${repository.url ?? ""}`;
-  const sourceKeys = new Set(configuredKnowledgeSources.filter((source) => source.kind === "git").map(checkoutKey));
-
-  console.log(`Syncing ${gitRepositories.length} configured git checkout(s)`);
-  for (const repository of gitRepositories) {
-    const localPath = await resolveConfiguredRepositoryLocalPath(repository);
-    if (existsSync(localPath)) {
-      console.log(`Synced configured git ${repository.id} at ${localPath}`);
-      continue;
-    }
-
-    const subpathHint = repository.subpath
-      ? ` Configured subpath "${repository.subpath}" was not found in the cloned repository.`
-      : "";
-    if (sourceKeys.has(checkoutKey(repository))) {
-      // A read source with a missing path is a real misconfiguration: drafts
-      // built from it will have no real material to work with.
-      console.warn(
-        `Synced configured git source ${repository.id}, but resolved path ${localPath} does not exist.${subpathHint} ` +
-          "Drafts from this source will have no real material until the configuration is corrected."
-      );
-    } else {
-      // A destination's subpath legitimately may not exist yet, but publishing
-      // indexes it first (git-context detection + markdown scan), which fails
-      // on a missing directory. Create the empty folder inside the checkout so
-      // the first publish has somewhere to write. (Empty dirs aren't tracked by
-      // git; the file itself is committed on publish.)
-      try {
-        await mkdir(localPath, { recursive: true });
-        console.log(
-          `Created empty destination folder for ${repository.id} at ${localPath}.${subpathHint} ` +
-            "This is expected for a fresh destination; it will be populated when proposals are published."
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "unknown error";
-        console.warn(`Could not create destination folder for ${repository.id} at ${localPath}: ${message}`);
-      }
-    }
-  }
-}
-
-function uniqueConfiguredGitRepositories(repositories: ConfiguredKnowledgeRepository[]): ConfiguredKnowledgeRepository[] {
-  const byCheckout = new Map<string, ConfiguredKnowledgeRepository>();
-
-  for (const repository of repositories) {
-    if (repository.kind !== "git") {
-      continue;
-    }
-
-    byCheckout.set(`${repository.id}\0${repository.url ?? ""}`, repository);
-  }
-
-  return [...byCheckout.values()];
-}
-
-async function resolveConfiguredRepositoryLocalPath(repository: ConfiguredKnowledgeRepository): Promise<string> {
-  if (repository.kind === "internet" || repository.kind === "agent") {
-    throw new Error(`${repository.kind}_sources_cannot_be_checked_out`);
-  }
-
-  let localPath: string;
-  if (repository.kind === "git") {
-    if (!repository.url) {
-      throw new Error("configured_git_repository_url_required");
-    }
-    const checkout = await ensureGitCheckout({
-      id: repository.id,
-      url: repository.url,
-      branch: repository.branch,
-      checkoutRoot: checkoutRoot()
-    });
-    localPath = checkout.localPath;
-  } else if (repository.path) {
-    localPath = resolveLocalConfiguredPath(repository.path);
-  } else {
-    throw new Error("configured_local_repository_path_required");
-  }
-
-  return repository.subpath ? path.join(localPath, repository.subpath) : localPath;
-}
-
-function checkoutRoot(): string {
-  return resolveLocalConfiguredPath(process.env.MAGPIE_CHECKOUT_ROOT ?? ".magpie/checkouts");
-}
-
-function resolveLocalConfiguredPath(value: string): string {
-  if (path.isAbsolute(value)) {
-    return value;
-  }
-
-  return path.resolve(process.env.INIT_CWD ?? process.cwd(), value);
-}
-
-function defaultDestinationId(): string | undefined {
-  return configuredKnowledgeDestinations.length === 1 ? configuredKnowledgeDestinations[0].id : undefined;
-}
-
-function selectFlow(flowId: string | undefined): ConfiguredKnowledgeFlow | undefined {
-  const trimmed = flowId?.trim();
-  if (trimmed) {
-    return configuredKnowledgeFlows.find((flow) => flow.id === trimmed);
-  }
-
-  return configuredKnowledgeFlows.length === 1 ? configuredKnowledgeFlows[0] : undefined;
-}
-
-async function collectSourceContext(sourceIds: string[] | undefined): Promise<SourceDataContext[]> {
-  const selectedSources = selectSources(sourceIds);
-  console.log(
-    `Collecting source context from ${selectedSources.length} source(s): ` +
-      (selectedSources.map((source) => `${source.id}(${source.kind})`).join(", ") || "none")
-  );
-  if (sourceIds?.length && selectedSources.length === 0) {
-    console.warn(
-      `Requested source ids [${sourceIds.join(", ")}] matched no configured sources. Check KNOWLEDGE_SOURCES.`
-    );
-  }
-  const contexts: SourceDataContext[] = [];
-
-  for (const source of selectedSources) {
-    if (source.kind === "internet") {
-      contexts.push({
-        sourceId: source.id,
-        sourceName: source.name,
-        kind: source.kind,
-        url: source.url,
-        content: source.url
-          ? "Use this internet source as supporting raw material."
-          : "Use relevant internet research as supporting raw material."
-      });
-      console.log(`Source ${source.id}: internet reference${source.url ? ` (${source.url})` : ""}; content is not fetched.`);
-      continue;
-    }
-
-    if (source.kind === "agent") {
-      contexts.push({
-        sourceId: source.id,
-        sourceName: source.name,
-        kind: source.kind,
-        content: "Use general agent knowledge as supporting raw material where no configured repository or URL is available."
-      });
-      console.log(`Source ${source.id}: agent knowledge reference; no repository content attached.`);
-      continue;
-    }
-
-    try {
-      const localPath = await resolveConfiguredRepositoryLocalPath(source);
-      const localContexts = await collectLocalSourceContext(source, localPath);
-      contexts.push(...localContexts);
-      const fileContexts = localContexts.filter((context) => context.path);
-      const totalBytes = fileContexts.reduce((sum, context) => sum + (context.content?.length ?? 0), 0);
-      if (fileContexts.length === 0) {
-        console.warn(
-          `Source ${source.id}: no usable files collected from ${localPath}` +
-            (source.subpath ? ` (subpath "${source.subpath}")` : "") +
-            ". Drafts from this source will have no real material."
-        );
-      } else {
-        console.log(`Source ${source.id}: collected ${fileContexts.length} file(s), ${totalBytes} bytes from ${localPath}`);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "unavailable source";
-      console.error(`Source ${source.id}: failed to collect context — ${message}`);
-      contexts.push({
-        sourceId: source.id,
-        sourceName: source.name,
-        kind: source.kind,
-        path: source.path,
-        url: source.url,
-        content: `Source unavailable: ${message}`
-      });
-    }
-  }
-
-  return contexts;
-}
-
-function selectSources(sourceIds: string[] | undefined): ConfiguredKnowledgeRepository[] {
-  if (configuredKnowledgeSources.length === 0) {
-    return [];
-  }
-
-  const requested = new Set((sourceIds ?? []).map((id) => id.trim()).filter(Boolean));
-  if (requested.size === 0) {
-    return configuredKnowledgeSources.slice(0, 3);
-  }
-
-  return configuredKnowledgeSources.filter((source) => requested.has(source.id));
-}
-
-async function collectLocalSourceContext(
-  source: ConfiguredKnowledgeRepository,
-  root: string
-): Promise<SourceDataContext[]> {
-  if (!existsSync(root)) {
-    console.warn(
-      `Source ${source.id}: path ${root} does not exist` +
-        (source.subpath ? ` — configured subpath "${source.subpath}" is missing from the repository.` : ".")
-    );
-    return [
-      {
-        sourceId: source.id,
-        sourceName: source.name,
-        kind: source.kind,
-        path: root,
-        url: source.url,
-        content: "Source path does not exist."
-      }
-    ];
-  }
-
-  const files = await findSourceContextFiles(root);
-  console.log(`Source ${source.id}: found ${files.length} candidate text file(s) under ${root}`);
-  const contexts: SourceDataContext[] = [];
-  let remainingBytes = 80_000;
-
-  for (const file of files.slice(0, 24)) {
-    if (remainingBytes <= 0) {
-      break;
-    }
-    const content = await readFile(file, "utf8");
-    const excerpt = content.slice(0, Math.min(content.length, remainingBytes, 8_000));
-    remainingBytes -= excerpt.length;
-    contexts.push({
-      sourceId: source.id,
-      sourceName: source.name,
-      kind: source.kind,
-      path: toPosixPath(path.relative(root, file)),
-      url: source.url,
-      content: excerpt
-    });
-  }
-
-  return contexts;
-}
-
-async function findSourceContextFiles(root: string): Promise<string[]> {
-  const files: string[] = [];
-  await walkSourceFiles(root, files);
-  return files.sort((left, right) => sourceFilePriority(left) - sourceFilePriority(right) || left.localeCompare(right));
-}
-
-async function walkSourceFiles(root: string, files: string[]): Promise<void> {
-  const entries = await readdir(root);
-  for (const entry of entries) {
-    if (ignoredSourceEntry(entry)) {
-      continue;
-    }
-
-    const fullPath = path.join(root, entry);
-    const entryStat = await stat(fullPath);
-    if (entryStat.isDirectory()) {
-      await walkSourceFiles(fullPath, files);
-      continue;
-    }
-
-    if (entryStat.isFile() && entryStat.size <= 250_000 && isTextSourceFile(entry)) {
-      files.push(fullPath);
-    }
-  }
-}
-
-function ignoredSourceEntry(entry: string): boolean {
-  return new Set([".git", "node_modules", "dist", "build", ".next", "coverage", "vendor", ".turbo"]).has(entry);
-}
-
-function isTextSourceFile(entry: string): boolean {
-  return /\.(?:md|mdx|txt|ts|tsx|js|jsx|mjs|cjs|json|yml|yaml|toml|py|go|rs|cs|java|kt|swift|php|rb|css|scss|html)$/i.test(entry);
-}
-
-function sourceFilePriority(file: string): number {
-  const basename = path.basename(file).toLowerCase();
-  if (/^readme(?:\..+)?$/.test(basename)) {
-    return 0;
-  }
-  if (["package.json", "pyproject.toml", "cargo.toml", "go.mod"].includes(basename)) {
-    return 1;
-  }
-  if (/\.(?:md|mdx)$/i.test(basename)) {
-    return 2;
-  }
-  return 3;
 }
 
 function createProposalBranchName(proposal: Proposal): string {
