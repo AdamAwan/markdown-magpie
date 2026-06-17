@@ -1,33 +1,14 @@
 import type {
   AiJob,
-  AnswerQuestionJobInput,
   AnswerQuestionJobOutput,
-  CrunchKnowledgeBaseJobInput,
   CrunchKnowledgeBaseJobOutput,
-  DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
-  SummarizeGapJobInput,
   SummarizeGapJobOutput
 } from "@magpie/core";
+import { buildJobPrompt } from "@magpie/prompts";
 
 export function buildPrompt(job: AiJob): string {
-  if (job.type === "answer_question") {
-    return answerQuestionPrompt(job.input as AnswerQuestionJobInput);
-  }
-
-  if (job.type === "summarize_gap") {
-    return summarizeGapPrompt(job.input as SummarizeGapJobInput);
-  }
-
-  if (job.type === "draft_markdown_proposal") {
-    return draftMarkdownProposalPrompt(job.input as DraftMarkdownProposalJobInput);
-  }
-
-  if (job.type === "crunch_knowledge_base") {
-    return crunchKnowledgeBasePrompt(job.input as CrunchKnowledgeBaseJobInput);
-  }
-
-  return genericPrompt(job);
+  return buildJobPrompt(job);
 }
 
 export function parseJobOutput(job: AiJob, stdout: string): unknown {
@@ -49,128 +30,6 @@ export function parseJobOutput(job: AiJob, stdout: string): unknown {
   }
 
   return parsed;
-}
-
-function answerQuestionPrompt(input: AnswerQuestionJobInput): string {
-  return `You are answering a question using a Markdown knowledge base.
-
-Rules:
-- Use only the provided context.
-- If the context is insufficient, say that reliable source material was not found.
-- Return JSON only. Do not wrap it in Markdown.
-- Every citation must refer to a provided context section.
-
-Return this JSON shape:
-{
-  "answer": "string",
-  "confidence": "high | medium | low",
-  "citations": [
-    {
-      "documentId": "string",
-      "sectionId": "string",
-      "path": "string",
-      "heading": "string",
-      "anchor": "string",
-      "excerpt": "string"
-    }
-  ],
-  "gaps": [
-    {
-      "summary": "string",
-      "question": "string",
-      "confidence": "low",
-      "citedSectionIds": []
-    }
-  ]
-}
-
-List one entry in "gaps" for each distinct piece of missing knowledge — a question that asks
-about several unrelated topics should produce one gap per unanswered topic. Use an empty array
-or omit "gaps" when the answer is fully supported by context.
-
-Question:
-${input.question}
-
-Context:
-${JSON.stringify(input.context, null, 2)}`;
-}
-
-function summarizeGapPrompt(input: SummarizeGapJobInput): string {
-  return `Summarize these unanswered or weakly answered knowledge base questions.
-
-Return JSON only:
-{
-  "summary": "string",
-  "priority": 1,
-  "rationale": "string"
-}
-
-Input:
-${JSON.stringify(input, null, 2)}`;
-}
-
-function draftMarkdownProposalPrompt(input: DraftMarkdownProposalJobInput): string {
-  return `Draft a single Markdown knowledge base proposal that addresses every gap listed in gapSummaries.
-
-Rules:
-- Return JSON only.
-- gapSummaries may contain several related gaps; write ONE cohesive article that covers all of them rather than separate sections that repeat each other.
-- Markdown must be reviewable and conservative.
-- Use sourceContext when present as raw material for improving the destination knowledge base.
-- Cite source file paths, URLs, or agent/internet source names in the rationale.
-- Include frontmatter with title and status: draft.
-
-Return JSON:
-{
-  "title": "string",
-  "targetPath": "string",
-  "markdown": "string",
-  "rationale": "string"
-}
-
-Input:
-${JSON.stringify(input, null, 2)}`;
-}
-
-function crunchKnowledgeBasePrompt(input: CrunchKnowledgeBaseJobInput): string {
-  return `You are tidying a fragmented Markdown knowledge base. Propose structural maintenance only — do not invent new facts.
-
-Goal:
-- CONSOLIDATE documents that overlap or are too small and scattered into a single cohesive document.
-- SPLIT documents that have grown large and cover several unrelated topics into focused documents.
-- Preserve all existing information. Only reorganize, merge, and lightly rewrite headings.
-
-Rules:
-- Return JSON only.
-- Every operation must list the source paths it reorganizes, the files to write (full new content), and the files to delete.
-- Use existing document paths exactly as provided in the input.
-- If the knowledge base is already tidy, return an empty operations array.
-
-Return JSON:
-{
-  "summary": "string",
-  "operations": [
-    {
-      "kind": "consolidate | split | rewrite",
-      "title": "string",
-      "reason": "string",
-      "sources": ["existing/path.md"],
-      "writes": [{ "path": "new/path.md", "content": "string" }],
-      "deletes": ["existing/path.md"]
-    }
-  ],
-  "rationale": "string"
-}
-
-Input:
-${JSON.stringify(input, null, 2)}`;
-}
-
-function genericPrompt(job: AiJob): string {
-  return `Complete this Markdown Magpie AI job. Return JSON only.
-
-Job:
-${JSON.stringify(job, null, 2)}`;
 }
 
 function extractJson(stdout: string): unknown {
