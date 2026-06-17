@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   ConfiguredKnowledgeFlow,
   ConfiguredKnowledgeRepository,
@@ -103,6 +104,7 @@ export function FlowsPanel({
   const activeDocument = active.documents.find((document) => document.id === selectedDocumentId) ?? active.documents[0];
 
   return (
+    <Tooltip.Provider delayDuration={150}>
     <div className="flowWorkspace">
       <nav className="flowSidebar" aria-label="Knowledge flows">
         {entries.map((entry) => (
@@ -182,6 +184,7 @@ export function FlowsPanel({
 
       {fullScreenDocument ? <DocumentModal document={fullScreenDocument} onClose={() => setFullScreenDocument(null)} /> : null}
     </div>
+    </Tooltip.Provider>
   );
 }
 
@@ -199,19 +202,72 @@ function FlowPipeline({
       <div className="flowNodeGroup">
         {sources.length > 0 ? (
           sources.map((source) => (
-            <span className={`flowNode ${source.kind ?? "local"}`} key={source.id} title={repositoryLocation(source)}>
-              {source.name}
-            </span>
+            <RepositoryNode className={`flowNode ${source.kind ?? "local"}`} key={source.id} repository={source} />
           ))
         ) : (
           <span className="flowNode missing">No sources</span>
         )}
       </div>
       <span className="flowArrow" aria-hidden="true">-&gt;</span>
-      <span className={`flowNode destination ${destination?.kind ?? "local"}`} title={destination ? repositoryLocation(destination) : fallbackDestinationId}>
-        {destination?.name ?? fallbackDestinationId ?? "Unknown"}
-      </span>
+      <RepositoryNode
+        className={`flowNode destination ${destination?.kind ?? "local"}`}
+        fallbackLabel={fallbackDestinationId}
+        repository={destination}
+      />
     </div>
+  );
+}
+
+/**
+ * A pipeline node (source or destination) that reveals the repository's
+ * details in a tooltip on hover/focus. Falls back to a plain label when the
+ * repository could not be resolved.
+ */
+function RepositoryNode({
+  className,
+  fallbackLabel,
+  repository
+}: {
+  className: string;
+  fallbackLabel?: string;
+  repository?: ConfiguredKnowledgeRepository;
+}) {
+  if (!repository) {
+    return <span className={className}>{fallbackLabel ?? "Unknown"}</span>;
+  }
+
+  const rows: Array<{ label: string; value: string }> = [
+    { label: "Kind", value: repository.kind ?? "local" },
+    { label: "Location", value: repository.url ?? repository.path ?? "Not configured" }
+  ];
+  if (repository.subpath) {
+    rows.push({ label: "Subpath", value: repository.subpath });
+  }
+  if (repository.branch) {
+    rows.push({ label: "Branch", value: repository.branch });
+  }
+  rows.push({ label: "ID", value: repository.id });
+
+  return (
+    <Tooltip.Root>
+      <Tooltip.Trigger asChild>
+        <span className={className}>{repository.name}</span>
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content className="repositoryTooltip" sideOffset={6} collisionPadding={12}>
+          <strong className="repositoryTooltipName">{repository.name}</strong>
+          <dl className="repositoryTooltipRows">
+            {rows.map((row) => (
+              <div className="repositoryTooltipRow" key={row.label}>
+                <dt>{row.label}</dt>
+                <dd>{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+          <Tooltip.Arrow className="repositoryTooltipArrow" />
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
   );
 }
 

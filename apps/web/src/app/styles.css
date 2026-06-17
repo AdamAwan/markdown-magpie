@@ -864,6 +864,59 @@ code {
   min-width: 0;
 }
 
+.flowPipe .flowNode {
+  cursor: default;
+}
+
+.repositoryTooltip {
+  z-index: 60;
+  display: grid;
+  gap: 8px;
+  max-width: 320px;
+  border: 1px solid #20322b;
+  background: #17211d;
+  color: #f3f6f1;
+  padding: 10px 12px;
+  font-size: 12px;
+  box-shadow: 0 8px 24px rgba(23, 33, 29, 0.28);
+  animation: fadeIn 0.12s ease;
+}
+
+.repositoryTooltipName {
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.repositoryTooltipRows {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+}
+
+.repositoryTooltipRow {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.repositoryTooltipRow dt {
+  color: #9fb1a7;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.repositoryTooltipRow dd {
+  margin: 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  overflow-wrap: anywhere;
+}
+
+.repositoryTooltipArrow {
+  fill: #17211d;
+}
+
 .flowStatStrip {
   display: flex;
   flex-wrap: wrap;
