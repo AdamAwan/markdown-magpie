@@ -521,66 +521,77 @@ export default function HomePage() {
           <NavButton active={activeSection === "config"} glyph="C" label="Config" onClick={() => openSection("config")} />
         </nav>
         <div className="sideStatus">
-          <div className="statusLine">
-            <span>API</span>
-            <span>
-              <span className={health?.ok ? "dot" : "dot offline"} />
-              {health?.ok ? "Online" : "Offline"}
-            </span>
+          <div className="statusGroup">
+            <p className="statusGroupTitle">System</p>
+            <div className="statusLine">
+              <span>API</span>
+              <span>
+                <span className={health?.ok ? "dot" : "dot offline"} />
+                {health?.ok ? "Online" : "Offline"}
+              </span>
+            </div>
+            <div className="statusLine">
+              <span>Documents</span>
+              <span>{stats.documentCount}</span>
+            </div>
+            <div className="statusLine">
+              <span>Sections</span>
+              <span>{stats.sectionCount}</span>
+            </div>
+            <div className="statusLine">
+              <span>Latest Job</span>
+              <span>
+                {latestJob ? <span className={latestJob.status === "failed" ? "dot offline" : "dot"} /> : null}
+                {latestJob ? latestJob.status : "None"}
+              </span>
+            </div>
           </div>
-          <div className="statusLine">
-            <span>Documents</span>
-            <span>{stats.documentCount}</span>
+
+          <div className="statusGroup">
+            <p className="statusGroupTitle">Model</p>
+            <div className="statusLine">
+              <span>Mode</span>
+              <span>{config?.aiRuntime.executionMode ?? "direct"}</span>
+            </div>
+            {(() => {
+              const modelInfo = extractModelInfo(config);
+              return (
+                <>
+                  {modelInfo.chatModel && (
+                    <div className="statusLine">
+                      <span>Chat</span>
+                      <span title={modelInfo.chatHost || undefined}>
+                        {modelInfo.chatModel}
+                        {modelInfo.chatHost && ` (${modelInfo.chatHost})`}
+                      </span>
+                    </div>
+                  )}
+                  {modelInfo.embeddingModel && (
+                    <div className="statusLine">
+                      <span>Embedding</span>
+                      <span title={modelInfo.embeddingHost || undefined}>
+                        {modelInfo.embeddingModel}
+                        {modelInfo.embeddingHost && ` (${modelInfo.embeddingHost})`}
+                      </span>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+            <div className="statusLine">
+              <span>Retrieval</span>
+              <span title={config?.retrieval.reason}>
+                {config?.retrieval.mode === "hybrid" ? "Hybrid (semantic + keyword)" : "Keyword only"}
+              </span>
+            </div>
           </div>
-          <div className="statusLine">
-            <span>Sections</span>
-            <span>{stats.sectionCount}</span>
-          </div>
-          <div className="statusLine">
-            <span>Latest Job</span>
-            <span>
-              {latestJob ? <span className={latestJob.status === "failed" ? "dot offline" : "dot"} /> : null}
-              {latestJob ? latestJob.status : "None"}
-            </span>
-          </div>
-          <div className="statusLine">
-            <span>Mode</span>
-            <span>{config?.aiRuntime.executionMode ?? "direct"}</span>
-          </div>
-          {(() => {
-            const modelInfo = extractModelInfo(config);
-            return (
-              <>
-                {modelInfo.chatModel && (
-                  <div className="statusLine">
-                    <span>Chat</span>
-                    <span title={modelInfo.chatHost || undefined}>
-                      {modelInfo.chatModel}
-                      {modelInfo.chatHost && ` (${modelInfo.chatHost})`}
-                    </span>
-                  </div>
-                )}
-                {modelInfo.embeddingModel && (
-                  <div className="statusLine">
-                    <span>Embedding</span>
-                    <span title={modelInfo.embeddingHost || undefined}>
-                      {modelInfo.embeddingModel}
-                      {modelInfo.embeddingHost && ` (${modelInfo.embeddingHost})`}
-                    </span>
-                  </div>
-                )}
-              </>
-            );
-          })()}
-          <div className="statusLine">
-            <span>Retrieval</span>
-            <span title={config?.retrieval.reason}>
-              {config?.retrieval.mode === "hybrid" ? "Hybrid (semantic + keyword)" : "Keyword only"}
-            </span>
-          </div>
-          <div className="statusLine">
-            <span>Updated</span>
-            <span>{lastRefreshedAt ? new Date(lastRefreshedAt).toLocaleTimeString() : "Never"}</span>
+
+          <div className="statusGroup">
+            <p className="statusGroupTitle">Session</p>
+            <div className="statusLine">
+              <span>Updated</span>
+              <span>{lastRefreshedAt ? new Date(lastRefreshedAt).toLocaleTimeString() : "Never"}</span>
+            </div>
           </div>
         </div>
       </aside>

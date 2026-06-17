@@ -146,10 +146,24 @@ p {
 
 .sideStatus {
   display: grid;
-  gap: 8px;
+  gap: 16px;
   margin-top: 22px;
   border-top: 1px solid #d9ded6;
   padding: 16px 8px 0;
+}
+
+.statusGroup {
+  display: grid;
+  gap: 8px;
+}
+
+.statusGroupTitle {
+  margin: 0;
+  color: #8a958d;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .statusLine {
