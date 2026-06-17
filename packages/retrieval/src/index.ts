@@ -1,4 +1,5 @@
 import type { AnswerResult, ChatProvider, Citation, ChatRequest, Confidence, DocumentSection, KnowledgeGapSignal, RankedSection } from "@magpie/core";
+import { ANSWER_QUESTION_DIRECT } from "@magpie/prompts";
 
 export interface SectionSearchProvider {
   search(question: string, limit: number): Promise<RankedSection[]>;
@@ -143,12 +144,7 @@ export async function answerQuestion(
 
   const context = relevantSections.map(({ section }) => `# ${section.heading}\n${section.content}`).join("\n\n");
   const response = await chatProvider.complete({
-    system:
-      "Answer using only the provided Markdown knowledge base context. Return only JSON with this shape: " +
-      '{"answer":"string","confidence":"high|medium|low","isKnowledgeGap":true|false,"gaps":["string"]}. ' +
-      "Set isKnowledgeGap to true and confidence to low when the context does not specifically answer the question. " +
-      'List each distinct piece of missing knowledge as its own entry in "gaps" — a question that asks about several ' +
-      "unrelated topics should produce one gap per unanswered topic. Use an empty array when the answer is fully supported.",
+    system: ANSWER_QUESTION_DIRECT.instructions,
     messages: [
       {
         role: "user",
