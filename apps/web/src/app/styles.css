@@ -831,46 +831,274 @@ code {
   white-space: nowrap;
 }
 
-.knowledgeFlows {
+.flowWorkspace {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.28fr) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 560px;
+}
+
+.flowSidebar {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  max-height: 640px;
+  overflow: auto;
+  border-right: 1px solid #e2e6df;
+  padding-right: 14px;
+}
+
+.flowSidebarItem {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  border: 1px solid #d9ded6;
+  background: #ffffff;
+  color: #17211d;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.flowSidebarItem.selected {
+  border-color: #285f74;
+  background: #e8f1f7;
+}
+
+.flowSidebarName {
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.flowSidebarMeta {
+  color: #65716b;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+}
+
+.flowDetail {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+}
+
+.flowDetailHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.flowDetailHead h3 {
+  margin: 0 0 8px;
+}
+
+.flowPipe {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.flowStatStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  border: 1px solid #e2e6df;
+  background: #fbfcfa;
+  padding: 12px 16px;
+}
+
+.flowStat {
+  display: grid;
+  gap: 4px;
+}
+
+.flowStat span {
+  color: #65716b;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.flowStat strong {
+  font-size: 15px;
+}
+
+.flowSection {
   display: grid;
   gap: 10px;
+  min-width: 0;
 }
 
-.knowledgeFlow {
+.flowSectionTitle {
+  margin: 0;
+  color: #65716b;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.flowSourceGrid {
   display: grid;
-  grid-template-columns: minmax(150px, 0.28fr) minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: center;
-  border-top: 1px solid #e2e6df;
-  padding: 12px 0;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
 }
 
-.knowledgeFlow:first-child {
+.flowSource {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid #e2e6df;
+  background: #fbfcfa;
+  padding: 10px 12px;
+}
+
+.flowSourceKind {
+  color: #65716b;
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.flowSourceLocation,
+.flowSourceBranch {
+  color: #65716b;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.flowDocs {
+  display: grid;
+  grid-template-columns: minmax(200px, 0.42fr) minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+}
+
+.flowDocList {
+  display: grid;
+  align-content: start;
+  max-height: 560px;
+  overflow: auto;
+  border-right: 1px solid #e2e6df;
+  padding-right: 14px;
+}
+
+.flowDocGroup {
+  display: grid;
+  gap: 2px;
+  border-top: 1px solid #e2e6df;
+  padding: 10px 0;
+}
+
+.flowDocGroup:first-child {
   border-top: 0;
   padding-top: 0;
 }
 
-.knowledgeFlow.selected .flowSelect {
-  color: #123f52;
+.flowDocRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0 6px 12px;
 }
 
-.flowSelect {
+.flowDocRow.selected {
+  background: #e8f1f7;
+}
+
+.flowDocSelect {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
   border: 0;
   background: transparent;
   color: #17211d;
-  cursor: pointer;
-  font: inherit;
-  font-weight: 850;
-  padding: 0;
+  padding: 4px 0;
   text-align: left;
 }
 
-.flowDiagram {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(160px, 0.7fr);
-  gap: 10px;
+.flowDocRow.selected .flowDocSelect {
+  color: #285f74;
+}
+
+.flowDocSelect span {
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.flowDocSelect small {
+  color: #65716b;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.flowDocRowSide {
+  display: flex;
   align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.flowDocOpen {
+  min-height: 24px;
+  border: 1px solid #b9c4bc;
+  background: #ffffff;
+  color: #285f74;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.flowDocReader {
+  display: grid;
+  align-content: start;
+  gap: 12px;
   min-width: 0;
+}
+
+.docModalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(23, 33, 29, 0.55);
+  padding: 24px;
+}
+
+.docModal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(900px, 100%);
+  max-height: 85vh;
+  border: 1px solid #d9ded6;
+  background: #ffffff;
+}
+
+.docModalHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid #d9ded6;
+  padding: 16px;
+}
+
+.docModalHead h3 {
+  margin: 0 0 6px;
+}
+
+.docModalBody {
+  max-height: none;
+  margin: 16px;
+  overflow: auto;
 }
 
 .flowNodeGroup {
@@ -1190,8 +1418,8 @@ pre {
   .sideStatus,
   .workbench,
   .documentBrowser,
-  .knowledgeFlow,
-  .flowDiagram,
+  .flowWorkspace,
+  .flowDocs,
   .repositoryForm,
   .gitContextGrid,
   .uploadForm,
@@ -1202,7 +1430,9 @@ pre {
     grid-template-columns: 1fr;
   }
 
-  .documentList {
+  .documentList,
+  .flowSidebar,
+  .flowDocList {
     border-right: 0;
     border-bottom: 1px solid #e2e6df;
     padding-right: 0;

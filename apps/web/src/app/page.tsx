@@ -33,7 +33,7 @@ import {
 } from "../lib/console.js";
 import { AttentionPanel, NavButton } from "../components/common.js";
 import { AskPanel } from "../components/AskPanel.js";
-import { KnowledgeBrowser, RepositoryContextPanel, RepositoryPanel, UploadPanel } from "../components/KnowledgePanel.js";
+import { FlowsPanel, OTHER_DOCUMENTS_ID, RepositoryContextPanel, UploadPanel } from "../components/KnowledgePanel.js";
 import { GapClusterPanel, GapPanel } from "../components/GapsPanel.js";
 import { JobsPanel } from "../components/JobsPanel.js";
 import { ProposalPanel } from "../components/ProposalsPanel.js";
@@ -83,7 +83,6 @@ export default function HomePage() {
     [config, health, jobs, stats]
   );
   const selectedProposal = proposals.find((proposal) => proposal.id === selectedProposalId) ?? proposals[0];
-  const selectedDocument = documents.find((document) => document.id === selectedDocumentId) ?? documents[0];
 
   useEffect(() => {
     void refresh();
@@ -91,7 +90,7 @@ export default function HomePage() {
 
   useEffect(() => {
     const configuredFlowIds = knowledgeFlows(config).map((flow) => flow.id);
-    if (configuredFlowIds.length > 0 && !configuredFlowIds.includes(flowId)) {
+    if (configuredFlowIds.length > 0 && flowId !== OTHER_DOCUMENTS_ID && !configuredFlowIds.includes(flowId)) {
       setFlowId(configuredFlowIds[0]);
     }
   }, [config, flowId]);
@@ -652,36 +651,23 @@ export default function HomePage() {
 
         {activeSection === "knowledge" ? (
           <section className="knowledgePage">
-            <RepositoryContextPanel repositories={repositories} />
             <div className="surface">
               <div className="surfaceHeader">
-                <h2>Knowledge Base</h2>
-        <span className="pill" title="Indexed Markdown documents">
-          {documents.length} docs
-        </span>
-              </div>
-              <div className="surfaceBody">
-                <KnowledgeBrowser
-                  documents={documents}
-                  selectedDocument={selectedDocument}
-                  setSelectedDocumentId={setSelectedDocumentId}
-                />
-              </div>
-            </div>
-            <div className="surface">
-              <div className="surfaceHeader">
-                <h2>Configured Knowledge Bases</h2>
-                <span className="pill" title="Index a local Markdown repository or folder">
-                  Configured
+                <h2>Knowledge Flows</h2>
+                <span className="pill" title="Configured knowledge flows">
+                  {knowledgeFlows(config).length} flows
                 </span>
               </div>
               <div className="surfaceBody">
-                <RepositoryPanel
+                <FlowsPanel
                   destinations={config?.knowledge.destinations ?? config?.knowledge.repositories ?? []}
+                  documents={documents}
                   flows={knowledgeFlows(config)}
                   indexing={indexingRepo}
                   onIndex={indexRepository}
+                  selectedDocumentId={selectedDocumentId}
                   selectedFlowId={flowId}
+                  setSelectedDocumentId={setSelectedDocumentId}
                   setSelectedFlowId={setFlowId}
                   sources={config?.knowledge.sources ?? []}
                 />
@@ -706,6 +692,7 @@ export default function HomePage() {
                 />
               </div>
             </div>
+            <RepositoryContextPanel repositories={repositories} />
           </section>
         ) : null}
 
