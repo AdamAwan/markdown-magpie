@@ -47,6 +47,6 @@ COPY --from=build /app/packages packages
 COPY --from=build /app/scripts scripts
 COPY --from=build /app/tsconfig.base.json ./tsconfig.base.json
 
-EXPOSE 3000 4000
+EXPOSE 3000 4000 4001
 
 CMD ["npm", "run", "start", "-w", "@magpie/api"]

@@ -2,9 +2,17 @@
 
 `@magpie/mcp` (`apps/mcp`) is a thin [Model Context Protocol](https://modelcontextprotocol.io) server that lets AI agents and MCP-aware clients ask questions against the indexed Markdown knowledge base. It is a client surface over the HTTP API — it holds no state of its own and proxies every request to the API at `API_BASE_URL`.
 
-## Transport
+## Transports
 
-The server uses the MCP **stdio transport**: each JSON-RPC message is a single line of UTF-8 JSON terminated by a newline, with no embedded newlines (per the [MCP transports spec](https://modelcontextprotocol.io/docs/concepts/transports)). The client launches the server as a subprocess and exchanges messages over stdin/stdout. Logging goes to stderr.
+The server supports two standard MCP transports:
+
+### stdio (local subprocess)
+
+Uses the MCP **stdio transport**: each JSON-RPC message is a single line of UTF-8 JSON terminated by a newline, with no embedded newlines (per the [MCP transports spec](https://modelcontextprotocol.io/docs/concepts/transports)). The client launches the server as a subprocess and exchanges messages over stdin/stdout. Logging goes to stderr.
+
+### Streamable HTTP (network)
+
+Uses the MCP **Streamable HTTP transport** (spec version 2025-03-26+). Runs as a long-lived HTTP server on a configurable port. Clients send JSON-RPC requests via HTTP POST and receive responses via JSON or Server-Sent Events (SSE). This transport is built on the official `@modelcontextprotocol/server` SDK and supports both stateful and stateless modes.
 
 ## Tools
 
@@ -55,11 +63,20 @@ Input:
 
 ## Configuration
 
+### Common (all transports)
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `API_BASE_URL` | `http://localhost:4000` | Base URL of the Markdown Magpie API. |
 | `ANSWER_POLL_INTERVAL_MS` | `1000` | How often `kb.ask` polls a queued answer job. |
 | `ANSWER_TIMEOUT_MS` | `120000` | How long `kb.ask` waits for a queued answer before failing. |
+
+### Streamable HTTP only
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MCP_HTTP_PORT` | `4001` | Port the HTTP server listens on. |
+| `MCP_HTTP_HOST` | `0.0.0.0` | Host interface to bind to. |
 
 ## Requirements
 
@@ -67,6 +84,8 @@ Input:
 - In `queue` execution mode, a watcher must be running to process `answer_question` jobs; otherwise `kb.ask` will time out.
 
 ## Running
+
+### stdio (local)
 
 ```bash
 npm run build            # produces apps/mcp/dist/main.js
@@ -79,7 +98,24 @@ Under Docker Compose, the server is available via the `mcp` profile:
 docker compose --profile mcp run --rm mcp
 ```
 
-## Connecting Claude Code
+### Streamable HTTP (network)
+
+```bash
+npm run build            # produces apps/mcp/dist/http.js
+API_BASE_URL=http://localhost:4000 npm run start:http -w @magpie/mcp
+```
+
+Under Docker Compose, the HTTP server is available via the `mcp-http` profile:
+
+```bash
+docker compose --profile mcp-http up -d mcp-http
+```
+
+The server listens on port 4001 by default. The MCP endpoint is at `http://localhost:4001/mcp` and a health check is at `http://localhost:4001/health`.
+
+## Connecting Clients
+
+### Claude Code (stdio)
 
 A project-scoped `.mcp.json` at the repository root registers the server with Claude Code:
 
@@ -96,3 +132,20 @@ A project-scoped `.mcp.json` at the repository root registers the server with Cl
 ```
 
 Build first (`npm run build`) so `apps/mcp/dist/main.js` exists, ensure the API (and a watcher, in queue mode) are running, then start Claude Code from the repository root and approve the server when prompted.
+
+### Hermes Agent (Streamable HTTP)
+
+Add to `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  markdown-magpie:
+    url: "http://localhost:4001/mcp"
+    timeout: 180
+```
+
+Restart Hermes Agent. Tools will appear as `mcp_markdown-magpie_kb_ask`, `mcp_markdown-magpie_kb_search`, and `mcp_markdown-magpie_kb_feedback`.
+
+### Any MCP Client (Streamable HTTP)
+
+Point the client at `http://<host>:4001/mcp`. The server implements the MCP Streamable HTTP transport and is compatible with any spec-compliant client (Claude Desktop, VS Code, Continue, etc.).
