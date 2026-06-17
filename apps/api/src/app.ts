@@ -11,6 +11,7 @@ import { proposalRoutes } from "./features/proposals/routes.js";
 import { crunchRoutes } from "./features/crunch/routes.js";
 import { scheduledTaskRoutes } from "./features/scheduled-tasks/routes.js";
 import { jobRoutes } from "./features/jobs/routes.js";
+import { promptRoutes } from "./features/prompts/routes.js";
 
 export function buildApp(ctx: AppContext): Hono {
   const app = new Hono();
@@ -40,6 +41,7 @@ export function buildApp(ctx: AppContext): Hono {
   api.route("/crunch", crunchRoutes(ctx));
   api.route("/scheduled-tasks", scheduledTaskRoutes(ctx));
   api.route("/ai-jobs", jobRoutes(ctx));
+  api.route("/", promptRoutes(ctx));
 
   app.route("/api", api);
 
