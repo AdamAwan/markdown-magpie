@@ -917,31 +917,6 @@ code {
   fill: #17211d;
 }
 
-.flowStatStrip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 22px;
-  border: 1px solid #e2e6df;
-  background: #fbfcfa;
-  padding: 12px 16px;
-}
-
-.flowStat {
-  display: grid;
-  gap: 4px;
-}
-
-.flowStat span {
-  color: #65716b;
-  font-size: 11px;
-  font-weight: 850;
-  text-transform: uppercase;
-}
-
-.flowStat strong {
-  font-size: 15px;
-}
-
 .flowSection {
   display: grid;
   gap: 10px;

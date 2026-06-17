@@ -146,15 +146,6 @@ export function FlowsPanel({
           )}
         </div>
 
-        {active.isOther ? null : (
-          <div className="flowStatStrip">
-            <FlowStat label="Documents" value={String(active.documents.length)} />
-            <FlowStat label="Sources" value={String(active.sources.length)} />
-            <FlowStat label="Destination" value={active.destination?.name ?? active.flow?.destinationId ?? "Unknown"} />
-            <FlowStat label="Kind" value={active.destination?.kind ?? "local"} />
-          </div>
-        )}
-
         <div className="flowSection">
           <h4 className="flowSectionTitle">Indexed documents</h4>
           <FlowDocuments
@@ -252,15 +243,6 @@ function RepositoryNode({
         </Tooltip.Content>
       </Tooltip.Portal>
     </Tooltip.Root>
-  );
-}
-
-function FlowStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flowStat">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
   );
 }
 
