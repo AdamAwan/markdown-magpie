@@ -6,6 +6,7 @@ import type {
   Proposal
 } from "@magpie/core";
 import { resolveProposalTargetPath } from "@magpie/core";
+import { DRAFT_MARKDOWN_PROPOSAL } from "@magpie/prompts";
 import { LocalGitProposalPublisher, raisePullRequest } from "@magpie/git";
 import type { AppContext } from "../../context.js";
 import type { ProposalListOptions } from "../../stores/proposal-store.js";
@@ -295,10 +296,7 @@ export async function draftMarkdownProposalDirect(
   }
 
   const response = await ctx.providers.chat(ctx.config.get().aiProvider).complete({
-    system:
-      "Draft a conservative Markdown knowledge base proposal for the provided gap. Return JSON only with this shape: " +
-      '{"title":"string","targetPath":"string","markdown":"string","rationale":"string"}. ' +
-      "Include frontmatter with title and status: draft in the markdown field.",
+    system: DRAFT_MARKDOWN_PROPOSAL.instructions,
     messages: [
       {
         role: "user",

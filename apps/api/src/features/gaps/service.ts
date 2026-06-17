@@ -1,4 +1,5 @@
 import type { GapCandidate, SuggestedGapCluster } from "@magpie/core";
+import { GAP_CLUSTERING } from "@magpie/prompts";
 import type { AppContext } from "../../context.js";
 import { assembleClusters, singletonCluster } from "../../stores/gap-clustering.js";
 import { parseJsonObject } from "../../platform/json.js";
@@ -36,12 +37,7 @@ export async function requestGapClusters(
   candidates: GapCandidate[]
 ): Promise<SuggestedGapCluster[]> {
   const response = await ctx.providers.chat(ctx.config.get().aiProvider).complete({
-    system:
-      "Group related knowledge-base gaps that a single Markdown article could resolve. " +
-      "Two gaps belong together only when one proposal would naturally answer both. " +
-      'Return JSON only with this shape: {"clusters":[{"title":"string","summaries":["string"],"rationale":"string"}]}. ' +
-      "Use the gap summary strings exactly as provided. Every input summary must appear in exactly one cluster. " +
-      "Prefer several small, focused clusters over one broad cluster.",
+    system: GAP_CLUSTERING.instructions,
     messages: [
       {
         role: "user",
