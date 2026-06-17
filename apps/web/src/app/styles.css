@@ -777,43 +777,6 @@ code {
   font-size: 12px;
 }
 
-.fileButton {
-  display: inline-flex;
-  min-height: 38px;
-  align-items: center;
-  border: 1px solid #b9c4bc;
-  background: #ffffff;
-  color: #41504b;
-  padding: 8px 12px;
-  font-size: 13px;
-  font-weight: 850;
-}
-
-.fileButton input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.dropHint {
-  display: grid;
-  min-height: 110px;
-  place-items: center;
-  border: 1px dashed #b9c4bc;
-  background: #fbfcfa;
-  color: #65716b;
-  padding: 12px;
-  text-align: center;
-  font-size: 13px;
-  font-weight: 750;
-}
-
-.uploadWorkspace {
-  min-width: 0;
-}
-
 .repositoryForm {
   display: grid;
   grid-template-columns: minmax(240px, 1fr) minmax(180px, 1fr) auto;
@@ -1196,23 +1159,6 @@ code {
   line-height: 1.35;
 }
 
-.uploadForm {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
-  gap: 14px;
-  align-items: start;
-}
-
-.uploadEditor {
-  display: grid;
-  gap: 12px;
-  min-width: 0;
-}
-
-.editorField textarea {
-  min-height: 360px;
-}
-
 .empty {
   border-top: 1px solid #e2e6df;
   padding-top: 12px;
@@ -1422,7 +1368,6 @@ pre {
   .flowDocs,
   .repositoryForm,
   .gitContextGrid,
-  .uploadForm,
   .proposalGrid,
   .publicationSummary,
   .runtimeEditor,

@@ -33,7 +33,7 @@ import {
 } from "../lib/console.js";
 import { AttentionPanel, NavButton } from "../components/common.js";
 import { AskPanel } from "../components/AskPanel.js";
-import { FlowsPanel, OTHER_DOCUMENTS_ID, RepositoryContextPanel, UploadPanel } from "../components/KnowledgePanel.js";
+import { FlowsPanel, OTHER_DOCUMENTS_ID, RepositoryContextPanel } from "../components/KnowledgePanel.js";
 import { GapClusterPanel, GapPanel } from "../components/GapsPanel.js";
 import { JobsPanel } from "../components/JobsPanel.js";
 import { ProposalPanel } from "../components/ProposalsPanel.js";
@@ -63,11 +63,8 @@ export default function HomePage() {
   const [answer, setAnswer] = useState<AskResponse | undefined>();
   const [answeredSearch, setAnsweredSearch] = useState("");
   const [flowId, setFlowId] = useState("cats");
-  const [uploadPath, setUploadPath] = useState("uploaded/cats-note.md");
-  const [uploadContent, setUploadContent] = useState("");
   const [loading, setLoading] = useState(false);
   const [indexingRepo, setIndexingRepo] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | undefined>();
   const [message, setMessage] = useState<UiMessage | undefined>();
@@ -431,35 +428,6 @@ export default function HomePage() {
     }
   }
 
-  async function uploadMarkdown(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!uploadPath.trim() || !uploadContent.trim()) {
-      return;
-    }
-
-    setUploading(true);
-    clearMessage();
-    try {
-      const summary = await apiPost<{ documentCount: number; sectionCount: number }>("/documents/upload", {
-        repositoryId: "console-upload",
-        name: "Console Upload",
-        documents: [
-          {
-            path: uploadPath.trim(),
-            content: uploadContent
-          }
-        ]
-      });
-      showMessage(`Indexed ${summary.documentCount} document with ${summary.sectionCount} sections.`, "success");
-      setUploadContent("");
-      await refresh({ preserveMessage: true });
-    } catch (error) {
-      showMessage(errorMessage(error), "danger");
-    } finally {
-      setUploading(false);
-    }
-  }
-
   async function indexRepository(nextFlowId = flowId) {
     if (!nextFlowId.trim()) {
       return;
@@ -481,16 +449,6 @@ export default function HomePage() {
     } finally {
       setIndexingRepo(false);
     }
-  }
-
-  async function useDroppedFiles(files: FileList | null) {
-    const file = files?.[0];
-    if (!file) {
-      return;
-    }
-
-    setUploadPath(file.name.toLowerCase().endsWith(".md") ? file.name : `${file.name}.md`);
-    setUploadContent(await file.text());
   }
 
   function openSection(section: ConsoleSection) {
@@ -670,25 +628,6 @@ export default function HomePage() {
                   setSelectedDocumentId={setSelectedDocumentId}
                   setSelectedFlowId={setFlowId}
                   sources={config?.knowledge.sources ?? []}
-                />
-              </div>
-            </div>
-            <div className="surface">
-              <div className="surfaceHeader">
-                <h2>Add Markdown</h2>
-                <span className="pill" title="Add this Markdown to the searchable index">
-                  Index
-                </span>
-              </div>
-              <div className="surfaceBody">
-                <UploadPanel
-                  onDropFiles={useDroppedFiles}
-                  onUpload={uploadMarkdown}
-                  setUploadContent={setUploadContent}
-                  setUploadPath={setUploadPath}
-                  uploadContent={uploadContent}
-                  uploading={uploading}
-                  uploadPath={uploadPath}
                 />
               </div>
             </div>

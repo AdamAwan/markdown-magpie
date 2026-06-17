@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ConfiguredKnowledgeFlow,
   ConfiguredKnowledgeRepository,
@@ -405,64 +405,6 @@ function gitScopeLabel(scope: GitRepositoryContext["scope"] | undefined): string
   }
 
   return "Unknown";
-}
-
-export function UploadPanel({
-  onDropFiles,
-  onUpload,
-  setUploadContent,
-  setUploadPath,
-  uploadContent,
-  uploading,
-  uploadPath
-}: {
-  onDropFiles: (files: FileList | null) => Promise<void>;
-  onUpload: (event: FormEvent<HTMLFormElement>) => Promise<void>;
-  setUploadContent: (value: string) => void;
-  setUploadPath: (value: string) => void;
-  uploadContent: string;
-  uploading: boolean;
-  uploadPath: string;
-}) {
-  return (
-    <section className="uploadWorkspace">
-      <form
-        className="uploadForm"
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => {
-          event.preventDefault();
-          void onDropFiles(event.dataTransfer.files);
-        }}
-        onSubmit={onUpload}
-      >
-        <div className="uploadEditor">
-          <label className="field">
-            <span>Path</span>
-            <input onChange={(event) => setUploadPath(event.target.value)} placeholder="uploaded/cats-note.md" value={uploadPath} />
-          </label>
-          <label className="field editorField">
-            <span>Markdown</span>
-            <textarea
-              onChange={(event) => setUploadContent(event.target.value)}
-              placeholder={"# Cat introductions\n\nKeep first meetings calm and supervised."}
-              rows={14}
-              value={uploadContent}
-            />
-          </label>
-        </div>
-        <div className="dropHint">Drop a Markdown file here or choose one below.</div>
-        <div className="rowActions">
-          <label className="fileButton">
-            <input accept=".md,text/markdown,text/plain" onChange={(event) => void onDropFiles(event.target.files)} type="file" />
-            Choose File
-          </label>
-          <button className="button" disabled={uploading || !uploadPath.trim() || !uploadContent.trim()} type="submit">
-            {uploading ? "Indexing" : "Index Markdown"}
-          </button>
-        </div>
-      </form>
-    </section>
-  );
 }
 
 function repositoryLocation(repository: ConfiguredKnowledgeRepository): string {

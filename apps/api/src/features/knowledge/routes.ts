@@ -31,31 +31,6 @@ export function knowledgeRoutes(ctx: AppContext): Hono {
 
   app.get("/repositories", (c) => c.json({ repositories: knowledgeService.listRepositories(ctx) }));
 
-  app.post("/documents/upload", async (c) => {
-    const payload = await readJsonBody<{
-      repositoryId?: string;
-      name?: string;
-      documents?: Array<{ path?: string; content?: string }>;
-    }>(c);
-    const documents = knowledgeService.normalizeUploadDocuments(payload.documents);
-
-    if (documents.length === 0) {
-      throw new HttpError(400, "markdown_documents_required");
-    }
-
-    if (documents.some((document) => document.content.length > 250_000)) {
-      throw new HttpError(413, "markdown_document_too_large");
-    }
-
-    const summary = await knowledgeService.uploadDocuments(ctx, {
-      repositoryId: payload.repositoryId,
-      name: payload.name,
-      documents
-    });
-
-    return c.json(summary, 201);
-  });
-
   app.get("/documents", (c) => c.json({ documents: knowledgeService.listDocuments(ctx) }));
 
   app.get("/knowledge/stats", (c) => c.json(knowledgeService.stats(ctx)));
