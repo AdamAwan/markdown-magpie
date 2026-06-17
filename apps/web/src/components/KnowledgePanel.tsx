@@ -155,22 +155,6 @@ export function FlowsPanel({
           </div>
         )}
 
-        {active.isOther || active.sources.length === 0 ? null : (
-          <div className="flowSection">
-            <h4 className="flowSectionTitle">Sources</h4>
-            <div className="flowSourceGrid">
-              {active.sources.map((source) => (
-                <article className="flowSource" key={source.id}>
-                  <span className="flowSourceKind">{source.kind ?? "local"}</span>
-                  <strong>{source.name}</strong>
-                  <span className="flowSourceLocation">{repositoryLocation(source)}</span>
-                  {source.branch ? <span className="flowSourceBranch">{source.branch}</span> : null}
-                </article>
-              ))}
-            </div>
-          </div>
-        )}
-
         <div className="flowSection">
           <h4 className="flowSectionTitle">Indexed documents</h4>
           <FlowDocuments
@@ -461,9 +445,4 @@ function gitScopeLabel(scope: GitRepositoryContext["scope"] | undefined): string
   }
 
   return "Unknown";
-}
-
-function repositoryLocation(repository: ConfiguredKnowledgeRepository): string {
-  const base = repository.url ?? repository.path ?? repository.kind ?? repository.id;
-  return repository.subpath ? `${base} / ${repository.subpath}` : base;
 }

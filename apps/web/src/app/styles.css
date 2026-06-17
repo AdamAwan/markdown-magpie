@@ -957,36 +957,6 @@ code {
   text-transform: uppercase;
 }
 
-.flowSourceGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 8px;
-}
-
-.flowSource {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  border: 1px solid #e2e6df;
-  background: #fbfcfa;
-  padding: 10px 12px;
-}
-
-.flowSourceKind {
-  color: #65716b;
-  font-size: 10px;
-  font-weight: 850;
-  text-transform: uppercase;
-}
-
-.flowSourceLocation,
-.flowSourceBranch {
-  color: #65716b;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-
 .flowDocs {
   display: grid;
   grid-template-columns: minmax(200px, 0.42fr) minmax(0, 1fr);
