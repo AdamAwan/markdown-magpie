@@ -1,6 +1,6 @@
 export type Confidence = "high" | "medium" | "low" | "unknown";
 export type Feedback = "helpful" | "unhelpful";
-export type ConsoleSection = "ask" | "answered" | "knowledge" | "gaps" | "jobs" | "proposals" | "crunch" | "config" | "dataflow";
+export type ConsoleSection = "ask" | "knowledge" | "gaps" | "jobs" | "proposals" | "crunch" | "config" | "dataflow";
 export type AiExecutionMode = "direct" | "queue";
 export type AiProviderName = "mock" | "openai-compatible" | "azure-openai" | "codex" | "claude";
 

@@ -33,7 +33,6 @@ import {
 } from "../lib/console.js";
 import { AttentionPanel, NavButton } from "../components/common.js";
 import { AskPanel } from "../components/AskPanel.js";
-import { AnsweredPanel } from "../components/AnsweredPanel.js";
 import { KnowledgeBrowser, RepositoryContextPanel, RepositoryPanel, UploadPanel } from "../components/KnowledgePanel.js";
 import { GapClusterPanel, GapPanel } from "../components/GapsPanel.js";
 import { JobsPanel } from "../components/JobsPanel.js";
@@ -510,8 +509,7 @@ export default function HomePage() {
           </div>
         </div>
         <nav className="sideNav" aria-label="Console sections">
-          <NavButton active={activeSection === "ask"} glyph="Q" label="Ask" onClick={() => openSection("ask")} />
-          <NavButton active={activeSection === "answered"} count={questions.length} glyph="A" label="Answered" onClick={() => openSection("answered")} />
+          <NavButton active={activeSection === "ask"} count={questions.length} glyph="Q" label="Ask" onClick={() => openSection("ask")} />
           <NavButton active={activeSection === "knowledge"} count={stats.sectionCount} glyph="K" label="Knowledge" onClick={() => openSection("knowledge")} />
           <NavButton active={activeSection === "gaps"} count={gaps.length} glyph="G" label="Gaps" onClick={() => openSection("gaps")} />
           <NavButton active={activeSection === "jobs"} count={jobs.length} glyph="J" label="Jobs" onClick={() => openSection("jobs")} />
@@ -629,39 +627,16 @@ export default function HomePage() {
               <div className="surfaceBody">
                 <AskPanel
                   answer={answer}
+                  answeredSearch={answeredSearch}
+                  expandedQuestionIds={expandedQuestionIds}
                   loading={loading}
                   onAsk={ask}
-                  question={question}
-                  setQuestion={setQuestion}
-                />
-              </div>
-            </div>
-          </section>
-        ) : null}
-
-        {activeSection === "answered" ? (
-          <section className="workbench singlePane">
-            <div className="surface">
-              <div className="surfaceHeader">
-                <h2>Answered Questions</h2>
-              </div>
-              <div className="surfaceBody">
-                <form className="inlineForm" onSubmit={(e) => e.preventDefault()}>
-                  <input
-                    onChange={(event) => setAnsweredSearch(event.target.value)}
-                    placeholder="Search answered questions..."
-                    type="search"
-                    value={answeredSearch}
-                  />
-                </form>
-                <AnsweredPanel
-                  expandedQuestionIds={expandedQuestionIds}
                   onFeedback={sendFeedback}
                   onToggleGap={toggleKnowledgeGap}
-                  questions={questions.filter(q =>
-                    answeredSearch.trim() === '' ||
-                    q.question.toLowerCase().includes(answeredSearch.toLowerCase())
-                  )}
+                  question={question}
+                  questions={questions}
+                  setAnsweredSearch={setAnsweredSearch}
+                  setQuestion={setQuestion}
                   toggleCitations={(questionId) =>
                     setExpandedQuestionIds((current) =>
                       current.includes(questionId)

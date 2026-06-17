@@ -435,11 +435,18 @@ select:focus {
   box-shadow: 0 0 0 3px #d9e8f1;
 }
 
-.answerBlock {
+.answerBlock,
+.answeredBlock {
   display: grid;
   gap: 12px;
   border-top: 1px solid #e2e6df;
   padding-top: 14px;
+}
+
+.answeredBlock .inlineForm {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: min(280px, 50vw);
+  margin: 0;
 }
 
 .rowTop,
