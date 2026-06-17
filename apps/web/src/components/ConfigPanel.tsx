@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { AiExecutionMode, AiProviderName, RuntimeConfig, UiMessage } from "../lib/types.js";
-import { apiGet, apiPost, errorMessage } from "../lib/api.js";
+import { AiExecutionMode, AiProviderName, RuntimeConfig, UiMessage } from "../lib/types";
+import { apiGet, apiPost, errorMessage } from "../lib/api";
 
 export function ConfigPanel({
   apiBaseUrl,

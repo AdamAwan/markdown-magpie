@@ -1,4 +1,5 @@
-import { Citation, ConsoleNotice } from "../lib/types.js";
+import Link from "next/link";
+import { Citation, ConsoleNotice } from "../lib/types";
 
 export function AttentionPanel({ notices }: { notices: ConsoleNotice[] }) {
   return (
@@ -25,16 +26,21 @@ export function NavButton({
   count,
   glyph,
   label,
-  onClick
+  href
 }: {
   active: boolean;
   count?: number;
   glyph: string;
   label: string;
-  onClick: () => void;
+  href: string;
 }) {
   return (
-    <button className={active ? "navButton active" : "navButton"} onClick={onClick} title={`Open ${label}`} type="button">
+    <Link
+      className={active ? "navButton active" : "navButton"}
+      href={href}
+      title={`Open ${label}`}
+      aria-current={active ? "page" : undefined}
+    >
       <span className="navGlyph">{glyph}</span>
       <span>{label}</span>
       {count === undefined ? null : (
@@ -42,7 +48,7 @@ export function NavButton({
           {count}
         </span>
       )}
-    </button>
+    </Link>
   );
 }
 

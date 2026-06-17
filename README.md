@@ -412,6 +412,11 @@ On a remote host, use the host IP or domain:
 http://your-host:3000
 ```
 
+Each console section is a real route — `/ask`, `/knowledge`, `/gaps`, `/jobs`,
+`/proposals`, `/crunch`, `/dataflow`, and `/config` — so links are shareable and a
+page refresh keeps you on the section you were viewing. The root `/` redirects to
+`/ask`.
+
 The API health endpoint is:
 
 ```text

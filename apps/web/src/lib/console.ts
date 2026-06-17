@@ -1,4 +1,4 @@
-import { AiJob, ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, KnowledgeStats, RuntimeConfig } from "./types.js";
+import { AiJob, ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, KnowledgeStats, RuntimeConfig } from "./types";
 
 export function sectionTitle(section: ConsoleSection): string {
   if (section === "knowledge") {

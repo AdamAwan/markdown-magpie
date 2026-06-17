@@ -1,4 +1,4 @@
-import { AiJob } from "../lib/types.js";
+import { AiJob } from "../lib/types";
 
 export function JobsPanel({ jobs }: { jobs: AiJob[] }) {
   return (

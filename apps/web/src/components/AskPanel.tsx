@@ -1,6 +1,6 @@
 import { FormEvent } from "react";
-import { AskResponse, Feedback, QuestionLog } from "../lib/types.js";
-import { CitationRow } from "./common.js";
+import { AskResponse, Feedback, QuestionLog } from "../lib/types";
+import { CitationRow } from "./common";
 
 export function AskPanel({
   answer,

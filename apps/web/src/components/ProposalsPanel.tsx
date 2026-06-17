@@ -1,6 +1,6 @@
-import { Proposal } from "../lib/types.js";
-import { shortSha } from "../lib/format.js";
-import { ContextValue } from "./common.js";
+import { Proposal } from "../lib/types";
+import { shortSha } from "../lib/format";
+import { ContextValue } from "./common";
 
 export function ProposalPanel({
   loading,

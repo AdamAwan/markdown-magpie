@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ConfiguredKnowledgeFlow, CrunchRun, CrunchSettings, ScheduledTask } from "../lib/types.js";
+import { ConfiguredKnowledgeFlow, CrunchRun, CrunchSettings, ScheduledTask } from "../lib/types";
 
 export function CrunchPanel({
   flows,

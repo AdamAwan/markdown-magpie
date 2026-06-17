@@ -6,9 +6,9 @@ import {
   GitRepositoryContext,
   KnowledgeDocument,
   RepositoryRef
-} from "../lib/types.js";
-import { shortSha } from "../lib/format.js";
-import { ContextValue } from "./common.js";
+} from "../lib/types";
+import { shortSha } from "../lib/format";
+import { ContextValue } from "./common";
 
 /** Sidebar id for documents that no configured flow produced (e.g. console uploads). */
 export const OTHER_DOCUMENTS_ID = "__other_documents__";

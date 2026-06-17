@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { GapCandidate, SuggestedGapCluster } from "../lib/types.js";
-import { formatQuestionCount } from "../lib/format.js";
+import { GapCandidate, SuggestedGapCluster } from "../lib/types";
+import { formatQuestionCount } from "../lib/format";
 
 const NEW_CLUSTER = "__new__";
 

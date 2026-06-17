@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import mermaid from "mermaid";
-import { RuntimeConfig } from "../lib/types.js";
-import { extractModelInfo } from "../lib/config.js";
+import { RuntimeConfig } from "../lib/types";
+import { extractModelInfo } from "../lib/config";
 
 export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
   const [activeFlow, setActiveFlow] = useState<"overview" | "ask" | "improvement" | "queue" | "automation">("overview");

@@ -1,4 +1,4 @@
-import { ConfiguredKnowledgeFlow, RuntimeConfig } from "./types.js";
+import { ConfiguredKnowledgeFlow, RuntimeConfig } from "./types";
 
 export function extractModelInfo(config: RuntimeConfig | undefined): {
   chatModel?: string;

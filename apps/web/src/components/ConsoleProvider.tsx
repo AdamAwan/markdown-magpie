@@ -1,0 +1,533 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { FormEvent, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  AiJob,
+  AskResponse,
+  ConsoleSection,
+  CrunchRun,
+  CrunchSettings,
+  Feedback,
+  GapCandidate,
+  Health,
+  IndexRepositoryResponse,
+  KnowledgeDocument,
+  KnowledgeStats,
+  Proposal,
+  QuestionLog,
+  RepositoryRef,
+  RuntimeConfig,
+  ScheduledTask,
+  SuggestedGapCluster,
+  UiMessage
+} from "../lib/types";
+import { apiDelete, apiGet, apiPost, errorMessage } from "../lib/api";
+import { knowledgeFlows } from "../lib/config";
+import { buildAttentionNotices, formatJobType, isActiveJob, jobTransitionMessages } from "../lib/console";
+import { sectionPath } from "../lib/sections";
+import { OTHER_DOCUMENTS_ID } from "./KnowledgePanel";
+
+// Holds every piece of console state, the data-loading effects and the action
+// handlers that previously lived inline in the single page component. Lifting
+// them into a provider mounted by the root layout means the state and the 4s
+// polling survive client-side navigation between section routes, so moving
+// between sections never re-fetches and a refresh restores the same data.
+function useConsoleController() {
+  const router = useRouter();
+
+  const [health, setHealth] = useState<Health | undefined>();
+  const [stats, setStats] = useState<KnowledgeStats>({ repositoryCount: 0, documentCount: 0, sectionCount: 0 });
+  const [questions, setQuestions] = useState<QuestionLog[]>([]);
+  const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [repositories, setRepositories] = useState<RepositoryRef[]>([]);
+  const [gaps, setGaps] = useState<GapCandidate[]>([]);
+  const [gapClusters, setGapClusters] = useState<SuggestedGapCluster[]>([]);
+  const [jobs, setJobs] = useState<AiJob[]>([]);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [crunchRuns, setCrunchRuns] = useState<CrunchRun[]>([]);
+  const [crunchSettings, setCrunchSettings] = useState<CrunchSettings[]>([]);
+  const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
+  const [config, setConfig] = useState<RuntimeConfig | undefined>();
+  const [selectedProposalId, setSelectedProposalId] = useState<string | undefined>();
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | undefined>();
+  const [expandedQuestionIds, setExpandedQuestionIds] = useState<string[]>([]);
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState<AskResponse | undefined>();
+  const [answeredSearch, setAnsweredSearch] = useState("");
+  const [flowId, setFlowId] = useState("cats");
+  const [loading, setLoading] = useState(false);
+  const [indexingRepo, setIndexingRepo] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | undefined>();
+  const [message, setMessage] = useState<UiMessage | undefined>();
+  const jobsRef = useRef<AiJob[]>([]);
+  const messageIdRef = useRef(0);
+
+  const openSection = useCallback(
+    (section: ConsoleSection) => {
+      router.push(sectionPath(section));
+    },
+    [router]
+  );
+
+  const latestJob = useMemo(
+    () => [...jobs].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0],
+    [jobs]
+  );
+  const attentionNotices = useMemo(
+    () => buildAttentionNotices({ config, health, jobs, openSection, stats }),
+    [config, health, jobs, openSection, stats]
+  );
+  const selectedProposal = proposals.find((proposal) => proposal.id === selectedProposalId) ?? proposals[0];
+
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const configuredFlowIds = knowledgeFlows(config).map((flow) => flow.id);
+    if (configuredFlowIds.length > 0 && flowId !== OTHER_DOCUMENTS_ID && !configuredFlowIds.includes(flowId)) {
+      setFlowId(configuredFlowIds[0]);
+    }
+  }, [config, flowId]);
+
+  useEffect(() => {
+    if (!message) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => setMessage(undefined), message.tone === "danger" ? 10_000 : 5_000);
+    return () => window.clearTimeout(timeout);
+  }, [message]);
+
+  useEffect(() => {
+    const hasActiveWork =
+      jobs.some(isActiveJob) ||
+      crunchRuns.some((run) => run.status === "running" || run.status === "pending") ||
+      (answer?.job ? isActiveJob(answer.job) : false) ||
+      (answer?.mode === "queue" && !answer.result);
+
+    if (!hasActiveWork) {
+      return;
+    }
+
+    const interval = window.setInterval(() => void refresh({ silent: true }), 4_000);
+    return () => window.clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [answer?.job?.id, answer?.job?.status, answer?.mode, answer?.result, jobs, crunchRuns]);
+
+  function showMessage(text: string, tone: UiMessage["tone"] = "info") {
+    setMessage({ id: messageIdRef.current++, text, tone });
+  }
+
+  function clearMessage() {
+    setMessage(undefined);
+  }
+
+  function toggleCitations(questionId: string) {
+    setExpandedQuestionIds((current) =>
+      current.includes(questionId) ? current.filter((id) => id !== questionId) : [...current, questionId]
+    );
+  }
+
+  function applyJobs(nextJobs: AiJob[], notify: boolean) {
+    const notices = notify ? jobTransitionMessages(jobsRef.current, nextJobs) : [];
+    jobsRef.current = nextJobs;
+    setJobs(nextJobs);
+    if (notices.length > 0) {
+      const failed = notices.some((notice) => notice.tone === "danger");
+      showMessage(notices.map((notice) => notice.text).join(" "), failed ? "danger" : "success");
+    }
+  }
+
+  async function refresh(options: { preserveMessage?: boolean; silent?: boolean } = {}) {
+    setRefreshing(true);
+    if (!options.silent && !options.preserveMessage) {
+      clearMessage();
+    }
+    try {
+      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, proposalsResult, crunchRunsResult, crunchSettingsResult, scheduledTasksResult, configResult] = await Promise.all([
+        apiGet<Health>("/health"),
+        apiGet<KnowledgeStats>("/knowledge/stats"),
+        apiGet<{ repositories: RepositoryRef[] }>("/repositories"),
+        apiGet<{ documents: KnowledgeDocument[] }>("/documents"),
+        apiGet<{ questions: QuestionLog[] }>("/questions?limit=8"),
+        apiGet<{ gaps: GapCandidate[] }>("/gaps/candidates?limit=8"),
+        apiGet<{ clusters: SuggestedGapCluster[] }>("/gaps/clusters?limit=8"),
+        apiGet<{ jobs: AiJob[] }>("/ai-jobs"),
+        apiGet<{ proposals: Proposal[] }>("/proposals?limit=8"),
+        apiGet<{ runs: CrunchRun[] }>("/crunch/runs?limit=12"),
+        apiGet<{ settings: CrunchSettings[] }>("/crunch/settings"),
+        apiGet<{ tasks: ScheduledTask[] }>("/scheduled-tasks"),
+        apiGet<RuntimeConfig>("/config")
+      ]);
+
+      setHealth(healthResult);
+      setStats(statsResult);
+      setRepositories(repositoriesResult.repositories);
+      setDocuments(documentsResult.documents);
+      setQuestions(questionsResult.questions);
+      setGaps(gapsResult.gaps);
+      setGapClusters(clustersResult.clusters);
+      applyJobs(jobsResult.jobs, jobsRef.current.length > 0);
+      setProposals(proposalsResult.proposals);
+      setCrunchRuns(crunchRunsResult.runs);
+      setCrunchSettings(crunchSettingsResult.settings);
+      setScheduledTasks(scheduledTasksResult.tasks);
+      setConfig(configResult);
+      setSelectedProposalId((current) => current ?? proposalsResult.proposals[0]?.id);
+      setSelectedDocumentId((current) =>
+        current && documentsResult.documents.some((document) => document.id === current)
+          ? current
+          : documentsResult.documents[0]?.id
+      );
+      setLastRefreshedAt(new Date().toISOString());
+
+      if (answer?.questionId) {
+        const result = await apiGet<{ question: QuestionLog }>(`/questions/${answer.questionId}`);
+        setAnswer((current) =>
+          current?.questionId === result.question.id
+            ? {
+                ...current,
+                mode: result.question.executionMode,
+                result: result.question.answer,
+                job: jobsResult.jobs.find((job) => job.id === current.job?.id) ?? current.job
+              }
+            : current
+        );
+      }
+    } catch (error) {
+      if (!options.silent) {
+        showMessage(errorMessage(error), "danger");
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function ask(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!question.trim()) {
+      return;
+    }
+
+    setLoading(true);
+    clearMessage();
+    try {
+      const result = await apiPost<AskResponse>("/ask", { question: question.trim() });
+      setAnswer(result);
+      setQuestion("");
+      if (result.job) {
+        showMessage(`${formatJobType(result.job.type)} queued. We will update this page when it finishes.`, "info");
+      }
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function sendFeedback(questionId: string, feedback: Feedback) {
+    clearMessage();
+    try {
+      const result = await apiPost<{ question: QuestionLog }>(`/questions/${questionId}/feedback`, { feedback });
+      setQuestions((current) => current.map((item) => (item.id === questionId ? result.question : item)));
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    }
+  }
+
+  async function toggleKnowledgeGap(questionId: string, flagged: boolean) {
+    clearMessage();
+    try {
+      const result = flagged
+        ? await apiPost<{ question: QuestionLog }>(`/questions/${questionId}/gap`, {})
+        : await apiDelete<{ question: QuestionLog }>(`/questions/${questionId}/gap`);
+      setQuestions((current) => current.map((item) => (item.id === questionId ? result.question : item)));
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    }
+  }
+
+  async function draftProposal(gap: GapCandidate) {
+    setLoading(true);
+    clearMessage();
+    try {
+      const result = await apiPost<{ job?: AiJob; proposal?: Proposal }>("/proposals/from-gap", {
+        summary: gap.summary,
+        flowId
+      });
+      if (result.proposal) {
+        setSelectedProposalId(result.proposal.id);
+        openSection("proposals");
+      } else {
+        openSection("jobs");
+      }
+      if (result.job) {
+        showMessage(`${formatJobType(result.job.type)} queued. We will update this page when it finishes.`, "info");
+      }
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function draftCluster(summaries: string[]) {
+    if (summaries.length === 0) {
+      return;
+    }
+    setLoading(true);
+    clearMessage();
+    try {
+      const result = await apiPost<{ job?: AiJob; proposal?: Proposal }>("/proposals/from-gaps", {
+        summaries,
+        flowId
+      });
+      if (result.proposal) {
+        setSelectedProposalId(result.proposal.id);
+        openSection("proposals");
+      } else {
+        openSection("jobs");
+      }
+      if (result.job) {
+        showMessage(`${formatJobType(result.job.type)} queued. We will update this page when it finishes.`, "info");
+      }
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function updateProposalStatus(proposalId: string, status: Proposal["status"]) {
+    setLoading(true);
+    clearMessage();
+    try {
+      const result = await apiPost<{ proposal: Proposal; resolvedGapCount?: number; reindexed?: boolean }>(
+        `/proposals/${proposalId}/status`,
+        { status }
+      );
+      setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
+      setSelectedProposalId(result.proposal.id);
+      if (status === "merged") {
+        const gapPart = result.resolvedGapCount
+          ? `${result.resolvedGapCount} gap${result.resolvedGapCount === 1 ? "" : "s"} resolved`
+          : "no open gaps to resolve";
+        const indexPart = result.reindexed ? "knowledge base re-indexed" : "re-index skipped";
+        showMessage(`Proposal merged — ${gapPart}; ${indexPart}.`, "success");
+        // Merged proposals drop out of the active list and their gaps stop
+        // surfacing, so pull fresh proposal and gap state.
+        await refresh({ preserveMessage: true });
+      } else {
+        showMessage(status === "ready" ? "Proposal marked ready for PR workflow." : "Proposal rejected.", "success");
+      }
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function publishProposal(proposalId: string) {
+    setLoading(true);
+    clearMessage();
+    try {
+      const result = await apiPost<{ proposal: Proposal; pullRequestUrl?: string; pullRequestWarning?: string }>(
+        `/proposals/${proposalId}/publish`,
+        {}
+      );
+      setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
+      setSelectedProposalId(result.proposal.id);
+      const branchLabel = result.proposal.publication?.branchName ?? "proposal branch";
+      if (result.pullRequestUrl) {
+        showMessage(`Published ${branchLabel} and opened a pull request.`, "success");
+      } else if (result.pullRequestWarning) {
+        showMessage(`Published ${branchLabel}, but PR creation failed: ${result.pullRequestWarning}`, "info");
+      } else {
+        showMessage(`Published ${branchLabel} (no PR raised — configure a host token to enable).`, "success");
+      }
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function runCrunch(targetFlowId?: string) {
+    setLoading(true);
+    clearMessage();
+    try {
+      const result = await apiPost<{ run: CrunchRun }>("/crunch/run", { flowId: targetFlowId });
+      if (result.run.status === "completed") {
+        showMessage(`Crunch finished: ${result.run.plan?.summary ?? "plan ready"}`, "success");
+      } else if (result.run.status === "failed") {
+        showMessage(`Crunch failed: ${result.run.error ?? "unknown error"}`, "danger");
+      } else {
+        showMessage("Crunch queued. We will update this page when it finishes.", "info");
+      }
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveCrunchSchedule(targetFlowId: string | undefined, enabled: boolean, cron: string) {
+    clearMessage();
+    try {
+      const result = await apiPost<{ settings: CrunchSettings[] }>("/crunch/settings", {
+        flowId: targetFlowId,
+        enabled,
+        cron
+      });
+      setCrunchSettings(result.settings);
+      showMessage(enabled ? "Crunch schedule enabled." : "Crunch schedule disabled.", "success");
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    }
+  }
+
+  async function saveScheduledTask(key: string, enabled: boolean, cron: string) {
+    clearMessage();
+    try {
+      const result = await apiPost<{ tasks: ScheduledTask[] }>(`/scheduled-tasks/${key}/settings`, { enabled, cron });
+      setScheduledTasks(result.tasks);
+      showMessage(enabled ? "Side-process schedule enabled." : "Side-process schedule disabled.", "success");
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    }
+  }
+
+  async function runScheduledTask(key: string) {
+    setLoading(true);
+    clearMessage();
+    try {
+      const result = await apiPost<{ tasks: ScheduledTask[] }>(`/scheduled-tasks/${key}/run`, {});
+      setScheduledTasks(result.tasks);
+      showMessage("Side-process run complete.", "success");
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function publishCrunchRun(runId: string) {
+    setLoading(true);
+    clearMessage();
+    try {
+      const result = await apiPost<{ run: CrunchRun }>(`/crunch/runs/${runId}/publish`, {});
+      setCrunchRuns((current) => current.map((run) => (run.id === runId ? result.run : run)));
+      showMessage(`Published ${result.run.publication?.branchName ?? "crunch branch"}.`, "success");
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function indexRepository(nextFlowId = flowId) {
+    if (!nextFlowId.trim()) {
+      return;
+    }
+
+    setIndexingRepo(true);
+    clearMessage();
+    try {
+      const summary = await apiPost<IndexRepositoryResponse>("/repositories/index", {
+        flowId: nextFlowId.trim()
+      });
+      showMessage(
+        `Indexed ${summary.repository.name} with ${summary.documentCount} documents and ${summary.sectionCount} sections.`,
+        "success"
+      );
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setIndexingRepo(false);
+    }
+  }
+
+  return {
+    health,
+    stats,
+    questions,
+    documents,
+    repositories,
+    gaps,
+    gapClusters,
+    jobs,
+    proposals,
+    crunchRuns,
+    crunchSettings,
+    scheduledTasks,
+    config,
+    selectedProposalId,
+    selectedDocumentId,
+    selectedProposal,
+    expandedQuestionIds,
+    question,
+    answer,
+    answeredSearch,
+    flowId,
+    loading,
+    indexingRepo,
+    refreshing,
+    lastRefreshedAt,
+    message,
+    latestJob,
+    attentionNotices,
+    setConfig,
+    setSelectedProposalId,
+    setSelectedDocumentId,
+    setFlowId,
+    setAnsweredSearch,
+    setQuestion,
+    showMessage,
+    clearMessage,
+    toggleCitations,
+    openSection,
+    refresh,
+    ask,
+    sendFeedback,
+    toggleKnowledgeGap,
+    draftProposal,
+    draftCluster,
+    updateProposalStatus,
+    publishProposal,
+    runCrunch,
+    saveCrunchSchedule,
+    saveScheduledTask,
+    runScheduledTask,
+    publishCrunchRun,
+    indexRepository
+  };
+}
+
+type ConsoleContextValue = ReturnType<typeof useConsoleController>;
+
+const ConsoleContext = createContext<ConsoleContextValue | null>(null);
+
+export function ConsoleProvider({ children }: { children: ReactNode }) {
+  const value = useConsoleController();
+  return <ConsoleContext.Provider value={value}>{children}</ConsoleContext.Provider>;
+}
+
+export function useConsole(): ConsoleContextValue {
+  const context = useContext(ConsoleContext);
+  if (!context) {
+    throw new Error("useConsole must be used within a ConsoleProvider");
+  }
+  return context;
+}
