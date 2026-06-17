@@ -17,6 +17,7 @@
 - `PromptDefinition` objects contain NO functions (must be JSON-serialisable for the API).
 - Instruction strings in the catalog must NOT include a trailing newline; `buildJobPrompt` appends `\n\n…` so the queue output is byte-identical to today's prompts.
 - Catalog order and ids are fixed (see Task 1). Exactly 8 entries.
+- **Type-check gate:** per-package `npm run typecheck -w <pkg>` scripts fail with `TS6059` for ANY package that imports another `@magpie/*` package — this is pre-existing monorepo behaviour (the per-package `rootDir: src` cannot contain a sibling package's `src` reached via the path alias). It also affects `@magpie/retrieval`, `@magpie/api`, `@magpie/watcher`, etc. The real type-check gate is the **root `npm run typecheck`** (`tsconfig.check.json`, no `rootDir`). Use the root command to verify types; per-package `build` is still a valid check. (`@magpie/web` is the exception — it imports no `@magpie/*` package, so its own `typecheck` is fine.)
 
 ---
 
@@ -515,8 +516,8 @@ Expected: PASS (all build + catalog tests).
 
 - [ ] **Step 5: Build the package so downstream consumers resolve it via node_modules**
 
-Run: `npm run build -w @magpie/prompts && npm run typecheck -w @magpie/prompts`
-Expected: no errors; `packages/prompts/dist/index.js` exists.
+Run: `npm run build -w @magpie/prompts && npm run typecheck`
+Expected: build succeeds (`packages/prompts/dist/index.js` exists) and root type-check passes. (Do NOT use `npm run typecheck -w @magpie/prompts` once `build.ts` imports `@magpie/core` — pre-existing TS6059; see Global Constraints.)
 
 - [ ] **Step 6: Commit**
 
@@ -600,8 +601,8 @@ with:
 
 - [ ] **Step 5: Typecheck and build the watcher (it has no unit tests)**
 
-Run: `npm run typecheck -w @magpie/watcher && npm run build -w @magpie/watcher`
-Expected: no type errors; build succeeds.
+Run: `npm run build -w @magpie/watcher && npm run typecheck`
+Expected: build succeeds; root type-check passes. (Do NOT use `npm run typecheck -w @magpie/watcher` — it fails with the pre-existing TS6059; see Global Constraints.)
 
 - [ ] **Step 6: Commit**
 
@@ -665,8 +666,8 @@ with:
 
 - [ ] **Step 4: Run the retrieval tests (must stay green)**
 
-Run: `npm test -w @magpie/retrieval && npm run typecheck -w @magpie/retrieval`
-Expected: PASS — existing tests unaffected (the mock provider does not read the system text; the real providers receive the same string as before).
+Run: `npm test -w @magpie/retrieval && npm run typecheck`
+Expected: tests PASS and root type-check passes — existing tests unaffected (the mock provider does not read the system text; the real providers receive the same string as before). (Do NOT use `npm run typecheck -w @magpie/retrieval` — pre-existing TS6059; see Global Constraints.)
 
 - [ ] **Step 5: Commit**
 
@@ -777,7 +778,7 @@ with:
 
 - [ ] **Step 5: Run the API tests (must stay green)**
 
-Run: `npm test -w @magpie/api && npm run typecheck -w @magpie/api`
+Run: `npm test -w @magpie/api && npm run typecheck`  (root type-check, NOT `-w @magpie/api` — pre-existing TS6059; see Global Constraints)
 Expected: PASS — `service.test.ts` files use the mock provider, which short-circuits before the prompt is read, so the wording change does not affect assertions.
 
 - [ ] **Step 6: Commit**
@@ -858,7 +859,7 @@ Add the mount after the `jobRoutes` line (line 42):
 
 - [ ] **Step 5: Run the test to verify it passes**
 
-Run: `npm test -w @magpie/api && npm run typecheck -w @magpie/api`
+Run: `npm test -w @magpie/api && npm run typecheck`  (root type-check, NOT `-w @magpie/api` — pre-existing TS6059; see Global Constraints)
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
