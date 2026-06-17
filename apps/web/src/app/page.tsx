@@ -31,7 +31,7 @@ import {
   sectionSubtitle,
   sectionTitle
 } from "../lib/console.js";
-import { AttentionPanel, Metric, NavButton } from "../components/common.js";
+import { AttentionPanel, NavButton } from "../components/common.js";
 import { AskPanel } from "../components/AskPanel.js";
 import { AnsweredPanel } from "../components/AnsweredPanel.js";
 import { KnowledgeBrowser, RepositoryContextPanel, RepositoryPanel, UploadPanel } from "../components/KnowledgePanel.js";
@@ -503,8 +503,11 @@ export default function HomePage() {
     <div className="appShell">
       <aside className="sidebar">
         <div className="brand">
-          <span>Markdown Magpie</span>
-          <strong>Knowledge Console</strong>
+          <img className="brandLogo" src="/magpie.jpeg" alt="" aria-hidden="true" width={40} height={40} />
+          <div className="brandText">
+            <span>Markdown Magpie</span>
+            <strong>Knowledge Console</strong>
+          </div>
         </div>
         <nav className="sideNav" aria-label="Console sections">
           <NavButton active={activeSection === "ask"} glyph="Q" label="Ask" onClick={() => openSection("ask")} />
@@ -523,6 +526,21 @@ export default function HomePage() {
             <span>
               <span className={health?.ok ? "dot" : "dot offline"} />
               {health?.ok ? "Online" : "Offline"}
+            </span>
+          </div>
+          <div className="statusLine">
+            <span>Documents</span>
+            <span>{stats.documentCount}</span>
+          </div>
+          <div className="statusLine">
+            <span>Sections</span>
+            <span>{stats.sectionCount}</span>
+          </div>
+          <div className="statusLine">
+            <span>Latest Job</span>
+            <span>
+              {latestJob ? <span className={latestJob.status === "failed" ? "dot offline" : "dot"} /> : null}
+              {latestJob ? latestJob.status : "None"}
             </span>
           </div>
           <div className="statusLine">
@@ -590,13 +608,6 @@ export default function HomePage() {
           </div>
         ) : null}
         {attentionNotices.length ? <AttentionPanel notices={attentionNotices} /> : null}
-
-        <section className="summary" aria-label="System summary">
-          <Metric label="API" value={health?.ok ? "Online" : "Offline"} tone={health?.ok ? "good" : "bad"} />
-          <Metric label="Documents" value={stats.documentCount.toString()} />
-          <Metric label="Sections" value={stats.sectionCount.toString()} />
-          <Metric label="Latest Job" value={latestJob ? latestJob.status : "None"} tone={latestJob?.status === "failed" ? "bad" : "neutral"} />
-        </section>
 
         {activeSection === "ask" ? (
           <section className="workbench singlePane">

@@ -20,15 +20,6 @@ export function AttentionPanel({ notices }: { notices: ConsoleNotice[] }) {
   );
 }
 
-export function Metric({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "good" | "bad" | "neutral" }) {
-  return (
-    <div className={`metric ${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
 export function NavButton({
   active,
   count,

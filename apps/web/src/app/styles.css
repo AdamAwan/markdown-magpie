@@ -69,7 +69,24 @@ p {
 }
 
 .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 8px 8px 20px;
+}
+
+.brandLogo {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 9px;
+  object-fit: cover;
+  background: #ffffff;
+  border: 1px solid #e2e7dd;
+}
+
+.brandText {
+  min-width: 0;
 }
 
 .eyebrow,
@@ -285,45 +302,6 @@ p {
 }
 
 .attentionNotice.danger {
-  border-color: #d48d7a;
-  background: #fff4ef;
-}
-
-.summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 14px;
-}
-
-.metric {
-  display: grid;
-  min-height: 74px;
-  align-content: center;
-  border: 1px solid #d9ded6;
-  background: #ffffff;
-  padding: 12px;
-}
-
-.metric span {
-  color: #65716b;
-  font-size: 11px;
-  font-weight: 850;
-  text-transform: uppercase;
-}
-
-.metric strong {
-  margin-top: 8px;
-  font-size: 22px;
-  line-height: 1;
-}
-
-.metric.good {
-  border-color: #9dbb9f;
-  background: #f0f8ee;
-}
-
-.metric.bad {
   border-color: #d48d7a;
   background: #fff4ef;
 }
@@ -1189,7 +1167,6 @@ pre {
   }
 
   .sideStatus,
-  .summary,
   .workbench,
   .documentBrowser,
   .knowledgeFlow,
