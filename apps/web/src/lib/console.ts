@@ -1,9 +1,6 @@
 import { AiJob, ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, KnowledgeStats, RuntimeConfig } from "./types.js";
 
 export function sectionTitle(section: ConsoleSection): string {
-  if (section === "answered") {
-    return "Review answered questions";
-  }
   if (section === "knowledge") {
     return "Browse the Markdown knowledge base";
   }
@@ -30,9 +27,6 @@ export function sectionTitle(section: ConsoleSection): string {
 }
 
 export function sectionSubtitle(section: ConsoleSection): string {
-  if (section === "answered") {
-    return "Search your history of answers with citations. Expand any answer to view sources and leave feedback.";
-  }
   if (section === "knowledge") {
     return "Read indexed Markdown documents, search sections, and add new knowledge from one workspace.";
   }

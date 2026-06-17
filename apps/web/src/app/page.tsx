@@ -31,10 +31,9 @@ import {
   sectionSubtitle,
   sectionTitle
 } from "../lib/console.js";
-import { AttentionPanel, Metric, NavButton } from "../components/common.js";
+import { AttentionPanel, NavButton } from "../components/common.js";
 import { AskPanel } from "../components/AskPanel.js";
-import { AnsweredPanel } from "../components/AnsweredPanel.js";
-import { KnowledgeBrowser, RepositoryContextPanel, RepositoryPanel, UploadPanel } from "../components/KnowledgePanel.js";
+import { FlowsPanel, OTHER_DOCUMENTS_ID, RepositoryContextPanel } from "../components/KnowledgePanel.js";
 import { GapClusterPanel, GapPanel } from "../components/GapsPanel.js";
 import { JobsPanel } from "../components/JobsPanel.js";
 import { ProposalPanel } from "../components/ProposalsPanel.js";
@@ -64,11 +63,8 @@ export default function HomePage() {
   const [answer, setAnswer] = useState<AskResponse | undefined>();
   const [answeredSearch, setAnsweredSearch] = useState("");
   const [flowId, setFlowId] = useState("cats");
-  const [uploadPath, setUploadPath] = useState("uploaded/cats-note.md");
-  const [uploadContent, setUploadContent] = useState("");
   const [loading, setLoading] = useState(false);
   const [indexingRepo, setIndexingRepo] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | undefined>();
   const [message, setMessage] = useState<UiMessage | undefined>();
@@ -84,7 +80,6 @@ export default function HomePage() {
     [config, health, jobs, stats]
   );
   const selectedProposal = proposals.find((proposal) => proposal.id === selectedProposalId) ?? proposals[0];
-  const selectedDocument = documents.find((document) => document.id === selectedDocumentId) ?? documents[0];
 
   useEffect(() => {
     void refresh();
@@ -92,7 +87,7 @@ export default function HomePage() {
 
   useEffect(() => {
     const configuredFlowIds = knowledgeFlows(config).map((flow) => flow.id);
-    if (configuredFlowIds.length > 0 && !configuredFlowIds.includes(flowId)) {
+    if (configuredFlowIds.length > 0 && flowId !== OTHER_DOCUMENTS_ID && !configuredFlowIds.includes(flowId)) {
       setFlowId(configuredFlowIds[0]);
     }
   }, [config, flowId]);
@@ -433,35 +428,6 @@ export default function HomePage() {
     }
   }
 
-  async function uploadMarkdown(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!uploadPath.trim() || !uploadContent.trim()) {
-      return;
-    }
-
-    setUploading(true);
-    clearMessage();
-    try {
-      const summary = await apiPost<{ documentCount: number; sectionCount: number }>("/documents/upload", {
-        repositoryId: "console-upload",
-        name: "Console Upload",
-        documents: [
-          {
-            path: uploadPath.trim(),
-            content: uploadContent
-          }
-        ]
-      });
-      showMessage(`Indexed ${summary.documentCount} document with ${summary.sectionCount} sections.`, "success");
-      setUploadContent("");
-      await refresh({ preserveMessage: true });
-    } catch (error) {
-      showMessage(errorMessage(error), "danger");
-    } finally {
-      setUploading(false);
-    }
-  }
-
   async function indexRepository(nextFlowId = flowId) {
     if (!nextFlowId.trim()) {
       return;
@@ -485,16 +451,6 @@ export default function HomePage() {
     }
   }
 
-  async function useDroppedFiles(files: FileList | null) {
-    const file = files?.[0];
-    if (!file) {
-      return;
-    }
-
-    setUploadPath(file.name.toLowerCase().endsWith(".md") ? file.name : `${file.name}.md`);
-    setUploadContent(await file.text());
-  }
-
   function openSection(section: ConsoleSection) {
     setActiveSection(section);
   }
@@ -503,12 +459,14 @@ export default function HomePage() {
     <div className="appShell">
       <aside className="sidebar">
         <div className="brand">
-          <span>Markdown Magpie</span>
-          <strong>Knowledge Console</strong>
+          <img className="brandLogo" src="/magpie.jpeg" alt="" aria-hidden="true" width={40} height={40} />
+          <div className="brandText">
+            <span>Markdown Magpie</span>
+            <strong>Knowledge Console</strong>
+          </div>
         </div>
         <nav className="sideNav" aria-label="Console sections">
-          <NavButton active={activeSection === "ask"} glyph="Q" label="Ask" onClick={() => openSection("ask")} />
-          <NavButton active={activeSection === "answered"} count={questions.length} glyph="A" label="Answered" onClick={() => openSection("answered")} />
+          <NavButton active={activeSection === "ask"} count={questions.length} glyph="Q" label="Ask" onClick={() => openSection("ask")} />
           <NavButton active={activeSection === "knowledge"} count={stats.sectionCount} glyph="K" label="Knowledge" onClick={() => openSection("knowledge")} />
           <NavButton active={activeSection === "gaps"} count={gaps.length} glyph="G" label="Gaps" onClick={() => openSection("gaps")} />
           <NavButton active={activeSection === "jobs"} count={jobs.length} glyph="J" label="Jobs" onClick={() => openSection("jobs")} />
@@ -518,51 +476,77 @@ export default function HomePage() {
           <NavButton active={activeSection === "config"} glyph="C" label="Config" onClick={() => openSection("config")} />
         </nav>
         <div className="sideStatus">
-          <div className="statusLine">
-            <span>API</span>
-            <span>
-              <span className={health?.ok ? "dot" : "dot offline"} />
-              {health?.ok ? "Online" : "Offline"}
-            </span>
+          <div className="statusGroup">
+            <p className="statusGroupTitle">System</p>
+            <div className="statusLine">
+              <span>API</span>
+              <span>
+                <span className={health?.ok ? "dot" : "dot offline"} />
+                {health?.ok ? "Online" : "Offline"}
+              </span>
+            </div>
+            <div className="statusLine">
+              <span>Documents</span>
+              <span>{stats.documentCount}</span>
+            </div>
+            <div className="statusLine">
+              <span>Sections</span>
+              <span>{stats.sectionCount}</span>
+            </div>
+            <div className="statusLine">
+              <span>Latest Job</span>
+              <span>
+                {latestJob ? <span className={latestJob.status === "failed" ? "dot offline" : "dot"} /> : null}
+                {latestJob ? latestJob.status : "None"}
+              </span>
+            </div>
           </div>
-          <div className="statusLine">
-            <span>Mode</span>
-            <span>{config?.aiRuntime.executionMode ?? "direct"}</span>
+
+          <div className="statusGroup">
+            <p className="statusGroupTitle">Model</p>
+            <div className="statusLine">
+              <span>Mode</span>
+              <span>{config?.aiRuntime.executionMode ?? "direct"}</span>
+            </div>
+            {(() => {
+              const modelInfo = extractModelInfo(config);
+              return (
+                <>
+                  {modelInfo.chatModel && (
+                    <div className="statusLine">
+                      <span>Chat</span>
+                      <span title={modelInfo.chatHost || undefined}>
+                        {modelInfo.chatModel}
+                        {modelInfo.chatHost && ` (${modelInfo.chatHost})`}
+                      </span>
+                    </div>
+                  )}
+                  {modelInfo.embeddingModel && (
+                    <div className="statusLine">
+                      <span>Embedding</span>
+                      <span title={modelInfo.embeddingHost || undefined}>
+                        {modelInfo.embeddingModel}
+                        {modelInfo.embeddingHost && ` (${modelInfo.embeddingHost})`}
+                      </span>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+            <div className="statusLine">
+              <span>Retrieval</span>
+              <span title={config?.retrieval.reason}>
+                {config?.retrieval.mode === "hybrid" ? "Hybrid (semantic + keyword)" : "Keyword only"}
+              </span>
+            </div>
           </div>
-          {(() => {
-            const modelInfo = extractModelInfo(config);
-            return (
-              <>
-                {modelInfo.chatModel && (
-                  <div className="statusLine">
-                    <span>Chat</span>
-                    <span title={modelInfo.chatHost || undefined}>
-                      {modelInfo.chatModel}
-                      {modelInfo.chatHost && ` (${modelInfo.chatHost})`}
-                    </span>
-                  </div>
-                )}
-                {modelInfo.embeddingModel && (
-                  <div className="statusLine">
-                    <span>Embedding</span>
-                    <span title={modelInfo.embeddingHost || undefined}>
-                      {modelInfo.embeddingModel}
-                      {modelInfo.embeddingHost && ` (${modelInfo.embeddingHost})`}
-                    </span>
-                  </div>
-                )}
-              </>
-            );
-          })()}
-          <div className="statusLine">
-            <span>Retrieval</span>
-            <span title={config?.retrieval.reason}>
-              {config?.retrieval.mode === "hybrid" ? "Hybrid (semantic + keyword)" : "Keyword only"}
-            </span>
-          </div>
-          <div className="statusLine">
-            <span>Updated</span>
-            <span>{lastRefreshedAt ? new Date(lastRefreshedAt).toLocaleTimeString() : "Never"}</span>
+
+          <div className="statusGroup">
+            <p className="statusGroupTitle">Session</p>
+            <div className="statusLine">
+              <span>Updated</span>
+              <span>{lastRefreshedAt ? new Date(lastRefreshedAt).toLocaleTimeString() : "Never"}</span>
+            </div>
           </div>
         </div>
       </aside>
@@ -591,13 +575,6 @@ export default function HomePage() {
         ) : null}
         {attentionNotices.length ? <AttentionPanel notices={attentionNotices} /> : null}
 
-        <section className="summary" aria-label="System summary">
-          <Metric label="API" value={health?.ok ? "Online" : "Offline"} tone={health?.ok ? "good" : "bad"} />
-          <Metric label="Documents" value={stats.documentCount.toString()} />
-          <Metric label="Sections" value={stats.sectionCount.toString()} />
-          <Metric label="Latest Job" value={latestJob ? latestJob.status : "None"} tone={latestJob?.status === "failed" ? "bad" : "neutral"} />
-        </section>
-
         {activeSection === "ask" ? (
           <section className="workbench singlePane">
             <div className="surface">
@@ -607,39 +584,16 @@ export default function HomePage() {
               <div className="surfaceBody">
                 <AskPanel
                   answer={answer}
+                  answeredSearch={answeredSearch}
+                  expandedQuestionIds={expandedQuestionIds}
                   loading={loading}
                   onAsk={ask}
-                  question={question}
-                  setQuestion={setQuestion}
-                />
-              </div>
-            </div>
-          </section>
-        ) : null}
-
-        {activeSection === "answered" ? (
-          <section className="workbench singlePane">
-            <div className="surface">
-              <div className="surfaceHeader">
-                <h2>Answered Questions</h2>
-              </div>
-              <div className="surfaceBody">
-                <form className="inlineForm" onSubmit={(e) => e.preventDefault()}>
-                  <input
-                    onChange={(event) => setAnsweredSearch(event.target.value)}
-                    placeholder="Search answered questions..."
-                    type="search"
-                    value={answeredSearch}
-                  />
-                </form>
-                <AnsweredPanel
-                  expandedQuestionIds={expandedQuestionIds}
                   onFeedback={sendFeedback}
                   onToggleGap={toggleKnowledgeGap}
-                  questions={questions.filter(q =>
-                    answeredSearch.trim() === '' ||
-                    q.question.toLowerCase().includes(answeredSearch.toLowerCase())
-                  )}
+                  question={question}
+                  questions={questions}
+                  setAnsweredSearch={setAnsweredSearch}
+                  setQuestion={setQuestion}
                   toggleCitations={(questionId) =>
                     setExpandedQuestionIds((current) =>
                       current.includes(questionId)
@@ -655,60 +609,29 @@ export default function HomePage() {
 
         {activeSection === "knowledge" ? (
           <section className="knowledgePage">
-            <RepositoryContextPanel repositories={repositories} />
             <div className="surface">
               <div className="surfaceHeader">
-                <h2>Knowledge Base</h2>
-        <span className="pill" title="Indexed Markdown documents">
-          {documents.length} docs
-        </span>
-              </div>
-              <div className="surfaceBody">
-                <KnowledgeBrowser
-                  documents={documents}
-                  selectedDocument={selectedDocument}
-                  setSelectedDocumentId={setSelectedDocumentId}
-                />
-              </div>
-            </div>
-            <div className="surface">
-              <div className="surfaceHeader">
-                <h2>Configured Knowledge Bases</h2>
-                <span className="pill" title="Index a local Markdown repository or folder">
-                  Configured
+                <h2>Knowledge Flows</h2>
+                <span className="pill" title="Configured knowledge flows">
+                  {knowledgeFlows(config).length} flows
                 </span>
               </div>
               <div className="surfaceBody">
-                <RepositoryPanel
+                <FlowsPanel
                   destinations={config?.knowledge.destinations ?? config?.knowledge.repositories ?? []}
+                  documents={documents}
                   flows={knowledgeFlows(config)}
                   indexing={indexingRepo}
                   onIndex={indexRepository}
+                  selectedDocumentId={selectedDocumentId}
                   selectedFlowId={flowId}
+                  setSelectedDocumentId={setSelectedDocumentId}
                   setSelectedFlowId={setFlowId}
                   sources={config?.knowledge.sources ?? []}
                 />
               </div>
             </div>
-            <div className="surface">
-              <div className="surfaceHeader">
-                <h2>Add Markdown</h2>
-                <span className="pill" title="Add this Markdown to the searchable index">
-                  Index
-                </span>
-              </div>
-              <div className="surfaceBody">
-                <UploadPanel
-                  onDropFiles={useDroppedFiles}
-                  onUpload={uploadMarkdown}
-                  setUploadContent={setUploadContent}
-                  setUploadPath={setUploadPath}
-                  uploadContent={uploadContent}
-                  uploading={uploading}
-                  uploadPath={uploadPath}
-                />
-              </div>
-            </div>
+            <RepositoryContextPanel repositories={repositories} />
           </section>
         ) : null}
 

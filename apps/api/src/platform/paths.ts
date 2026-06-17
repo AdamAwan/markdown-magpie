@@ -7,15 +7,6 @@ export function parseLimit(value: string | null, defaultLimit: number): number {
   return Math.max(1, Math.min(parsed, 200));
 }
 
-export function normalizeUploadPath(value: string | undefined): string {
-  const path = value?.trim().replace(/\\/g, "/").replace(/^\/+/, "") ?? "";
-  if (!path || path.includes("..")) {
-    return "";
-  }
-
-  return path.toLowerCase().endsWith(".md") ? path : `${path}.md`;
-}
-
 export function normalizeRelativePath(value: string | undefined): string {
   return value?.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "") ?? "";
 }

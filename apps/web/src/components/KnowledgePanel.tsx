@@ -1,4 +1,5 @@
-import { FormEvent } from "react";
+import { useEffect, useState } from "react";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   ConfiguredKnowledgeFlow,
   ConfiguredKnowledgeRepository,
@@ -8,6 +9,9 @@ import {
 } from "../lib/types.js";
 import { shortSha } from "../lib/format.js";
 import { ContextValue } from "./common.js";
+
+/** Sidebar id for documents that no configured flow produced (e.g. console uploads). */
+export const OTHER_DOCUMENTS_ID = "__other_documents__";
 
 export function RepositoryContextPanel({ repositories }: { repositories: RepositoryRef[] }) {
   return (
@@ -50,54 +54,254 @@ export function RepositoryContextPanel({ repositories }: { repositories: Reposit
   );
 }
 
-export function KnowledgeBrowser({
+interface FlowEntry {
+  id: string;
+  name: string;
+  flow?: ConfiguredKnowledgeFlow;
+  destination?: ConfiguredKnowledgeRepository;
+  sources: ConfiguredKnowledgeRepository[];
+  documents: KnowledgeDocument[];
+  isOther: boolean;
+}
+
+/**
+ * Flow-centric master/detail view. The left rail lists every configured flow
+ * (plus an "Other documents" bucket for docs no flow produced); the right pane
+ * shows the selected flow's pipeline, sources, status and indexed documents.
+ */
+export function FlowsPanel({
+  destinations,
   documents,
-  selectedDocument,
-  setSelectedDocumentId
+  flows,
+  indexing,
+  onIndex,
+  selectedDocumentId,
+  selectedFlowId,
+  setSelectedDocumentId,
+  setSelectedFlowId,
+  sources
+}: {
+  destinations: ConfiguredKnowledgeRepository[];
+  documents: KnowledgeDocument[];
+  flows: ConfiguredKnowledgeFlow[];
+  indexing: boolean;
+  onIndex: (flowId: string) => Promise<void>;
+  selectedDocumentId?: string;
+  selectedFlowId: string;
+  setSelectedDocumentId: (id: string) => void;
+  setSelectedFlowId: (value: string) => void;
+  sources: ConfiguredKnowledgeRepository[];
+}) {
+  const [fullScreenDocument, setFullScreenDocument] = useState<KnowledgeDocument | null>(null);
+
+  const entries = buildFlowEntries(flows, destinations, sources, documents);
+
+  if (entries.length === 0) {
+    return <p className="empty">No knowledge flows are configured. Add KNOWLEDGE_FLOWS or KNOWLEDGE_DESTINATIONS to the API environment.</p>;
+  }
+
+  const active = entries.find((entry) => entry.id === selectedFlowId) ?? entries[0];
+  const activeDocument = active.documents.find((document) => document.id === selectedDocumentId) ?? active.documents[0];
+
+  return (
+    <Tooltip.Provider delayDuration={150}>
+    <div className="flowWorkspace">
+      <nav className="flowSidebar" aria-label="Knowledge flows">
+        {entries.map((entry) => (
+          <button
+            className={entry.id === active.id ? "flowSidebarItem selected" : "flowSidebarItem"}
+            key={entry.id}
+            onClick={() => setSelectedFlowId(entry.id)}
+            type="button"
+          >
+            <span className="flowSidebarName">{entry.name}</span>
+            <span className="flowSidebarMeta">{flowSummary(entry)}</span>
+          </button>
+        ))}
+      </nav>
+
+      <section className="flowDetail">
+        <div className="flowDetailHead">
+          <div>
+            <h3>{active.name}</h3>
+            {active.isOther ? (
+              <p className="path">Indexed documents not produced by a configured flow (for example, console uploads).</p>
+            ) : (
+              <FlowPipeline destination={active.destination} fallbackDestinationId={active.flow?.destinationId} sources={active.sources} />
+            )}
+          </div>
+          {active.isOther ? null : (
+            <button
+              className="button"
+              disabled={indexing || !active.destination}
+              onClick={() => {
+                setSelectedFlowId(active.id);
+                void onIndex(active.id);
+              }}
+              title="Index the destination knowledge base used by /ask and MCP"
+              type="button"
+            >
+              {indexing ? "Indexing" : "Index KB"}
+            </button>
+          )}
+        </div>
+
+        <div className="flowSection">
+          <h4 className="flowSectionTitle">Indexed documents</h4>
+          <FlowDocuments
+            documents={active.documents}
+            onOpenFull={setFullScreenDocument}
+            onSelect={setSelectedDocumentId}
+            selectedDocument={activeDocument}
+          />
+        </div>
+      </section>
+
+      {fullScreenDocument ? <DocumentModal document={fullScreenDocument} onClose={() => setFullScreenDocument(null)} /> : null}
+    </div>
+    </Tooltip.Provider>
+  );
+}
+
+function FlowPipeline({
+  destination,
+  fallbackDestinationId,
+  sources
+}: {
+  destination?: ConfiguredKnowledgeRepository;
+  fallbackDestinationId?: string;
+  sources: ConfiguredKnowledgeRepository[];
+}) {
+  return (
+    <div className="flowPipe" aria-label="Knowledge flow pipeline">
+      <div className="flowNodeGroup">
+        {sources.length > 0 ? (
+          sources.map((source) => (
+            <RepositoryNode className={`flowNode ${source.kind ?? "local"}`} key={source.id} repository={source} />
+          ))
+        ) : (
+          <span className="flowNode missing">No sources</span>
+        )}
+      </div>
+      <span className="flowArrow" aria-hidden="true">-&gt;</span>
+      <RepositoryNode
+        className={`flowNode destination ${destination?.kind ?? "local"}`}
+        fallbackLabel={fallbackDestinationId}
+        repository={destination}
+      />
+    </div>
+  );
+}
+
+/**
+ * A pipeline node (source or destination) that reveals the repository's
+ * details in a tooltip on hover/focus. Falls back to a plain label when the
+ * repository could not be resolved.
+ */
+function RepositoryNode({
+  className,
+  fallbackLabel,
+  repository
+}: {
+  className: string;
+  fallbackLabel?: string;
+  repository?: ConfiguredKnowledgeRepository;
+}) {
+  if (!repository) {
+    return <span className={className}>{fallbackLabel ?? "Unknown"}</span>;
+  }
+
+  const rows: Array<{ label: string; value: string }> = [
+    { label: "Kind", value: repository.kind ?? "local" },
+    { label: "Location", value: repository.url ?? repository.path ?? "Not configured" }
+  ];
+  if (repository.subpath) {
+    rows.push({ label: "Subpath", value: repository.subpath });
+  }
+  if (repository.branch) {
+    rows.push({ label: "Branch", value: repository.branch });
+  }
+  rows.push({ label: "ID", value: repository.id });
+
+  return (
+    <Tooltip.Root>
+      <Tooltip.Trigger asChild>
+        <span className={className}>{repository.name}</span>
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content className="repositoryTooltip" sideOffset={6} collisionPadding={12}>
+          <strong className="repositoryTooltipName">{repository.name}</strong>
+          <dl className="repositoryTooltipRows">
+            {rows.map((row) => (
+              <div className="repositoryTooltipRow" key={row.label}>
+                <dt>{row.label}</dt>
+                <dd>{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+          <Tooltip.Arrow className="repositoryTooltipArrow" />
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  );
+}
+
+function FlowDocuments({
+  documents,
+  onOpenFull,
+  onSelect,
+  selectedDocument
 }: {
   documents: KnowledgeDocument[];
+  onOpenFull: (document: KnowledgeDocument) => void;
+  onSelect: (id: string) => void;
   selectedDocument?: KnowledgeDocument;
-  setSelectedDocumentId: (id: string) => void;
 }) {
+  if (documents.length === 0) {
+    return <p className="empty">No Markdown documents indexed yet.</p>;
+  }
+
   const folders = groupDocumentsByFolder(documents);
+
   return (
-    <div className="documentBrowser">
-      <div className="documentList">
+    <div className="flowDocs">
+      <div className="flowDocList">
         {folders.map((folder) => (
-          <section className="folderGroup" key={folder.name}>
+          <div className="flowDocGroup" key={folder.name}>
             <div className="folderHeader">
               <span>{folder.name}</span>
               <small>{folder.documents.length}</small>
             </div>
             {folder.documents.map((document) => (
-              <button
-                className={selectedDocument?.id === document.id ? "documentItem selected" : "documentItem"}
-                key={document.id}
-                onClick={() => setSelectedDocumentId(document.id)}
-                type="button"
-              >
-                <span>{document.metadata.title}</span>
-                <small>{document.path.split("/").at(-1) ?? document.path}</small>
-                <span className={`status ${document.metadata.status}`} title={`Document status: ${document.metadata.status}`}>
-                  {document.metadata.status}
-                </span>
-              </button>
+              <div className={selectedDocument?.id === document.id ? "flowDocRow selected" : "flowDocRow"} key={document.id}>
+                <button className="flowDocSelect" onClick={() => onSelect(document.id)} type="button">
+                  <span>{document.metadata.title}</span>
+                  <small>{document.path.split("/").at(-1) ?? document.path}</small>
+                </button>
+                <div className="flowDocRowSide">
+                  <span className={`status ${document.metadata.status}`} title={`Document status: ${document.metadata.status}`}>
+                    {document.metadata.status}
+                  </span>
+                  <button className="flowDocOpen" onClick={() => onOpenFull(document)} title="Open full Markdown" type="button">
+                    Open
+                  </button>
+                </div>
+              </div>
             ))}
-          </section>
+          </div>
         ))}
-        {documents.length === 0 ? <p className="empty">No Markdown documents indexed yet.</p> : null}
       </div>
-      <article className="documentPreview">
+      <article className="flowDocReader">
         {selectedDocument ? (
           <>
             <div className="rowTop">
               <div>
-                <h2>{selectedDocument.metadata.title}</h2>
+                <h3>{selectedDocument.metadata.title}</h3>
                 <p className="path">{selectedDocument.path}</p>
               </div>
-              <span className={`status ${selectedDocument.metadata.status}`} title={`Document status: ${selectedDocument.metadata.status}`}>
-                {selectedDocument.metadata.status}
-              </span>
+              <button className="button secondary" onClick={() => onOpenFull(selectedDocument)} type="button">
+                Open full
+              </button>
             </div>
             <div className="rowActions">
               <span className="pill" title="Repository ID">
@@ -117,11 +321,82 @@ export function KnowledgeBrowser({
             <pre className="markdownViewer">{selectedDocument.content}</pre>
           </>
         ) : (
-          <p className="empty">Select a document to view its Markdown.</p>
+          <p className="empty">Select a document to preview its Markdown.</p>
         )}
       </article>
     </div>
   );
+}
+
+function DocumentModal({ document: knowledgeDocument, onClose }: { document: KnowledgeDocument; onClose: () => void }) {
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="docModalBackdrop" onClick={onClose} role="presentation">
+      <div className="docModal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={knowledgeDocument.metadata.title}>
+        <div className="docModalHead">
+          <div>
+            <h3>{knowledgeDocument.metadata.title}</h3>
+            <p className="path">{knowledgeDocument.path}</p>
+          </div>
+          <button className="button secondary" onClick={onClose} type="button">
+            Close
+          </button>
+        </div>
+        <pre className="docModalBody">{knowledgeDocument.content}</pre>
+      </div>
+    </div>
+  );
+}
+
+function buildFlowEntries(
+  flows: ConfiguredKnowledgeFlow[],
+  destinations: ConfiguredKnowledgeRepository[],
+  sources: ConfiguredKnowledgeRepository[],
+  documents: KnowledgeDocument[]
+): FlowEntry[] {
+  const entries: FlowEntry[] = flows.map((flow) => ({
+    id: flow.id,
+    name: flow.name,
+    flow,
+    destination: destinations.find((repository) => repository.id === flow.destinationId),
+    sources: flow.sourceIds
+      .map((sourceId) => sources.find((source) => source.id === sourceId))
+      .filter((source): source is ConfiguredKnowledgeRepository => Boolean(source)),
+    documents: documents.filter((document) => document.repositoryId === flow.destinationId),
+    isOther: false
+  }));
+
+  const claimedDestinations = new Set(flows.map((flow) => flow.destinationId));
+  const otherDocuments = documents.filter((document) => !claimedDestinations.has(document.repositoryId));
+  if (otherDocuments.length > 0) {
+    entries.push({
+      id: OTHER_DOCUMENTS_ID,
+      name: "Other documents",
+      sources: [],
+      documents: otherDocuments,
+      isOther: true
+    });
+  }
+
+  return entries;
+}
+
+function flowSummary(entry: FlowEntry): string {
+  if (entry.isOther) {
+    return `${entry.documents.length} unassigned ${entry.documents.length === 1 ? "doc" : "docs"}`;
+  }
+  const sourceLabel = `${entry.sources.length} ${entry.sources.length === 1 ? "source" : "sources"}`;
+  const destinationLabel = entry.destination?.name ?? entry.flow?.destinationId ?? "?";
+  return `${sourceLabel} → ${destinationLabel} · ${entry.documents.length} docs`;
 }
 
 function groupDocumentsByFolder(documents: KnowledgeDocument[]): Array<{ name: string; documents: KnowledgeDocument[] }> {
@@ -152,143 +427,4 @@ function gitScopeLabel(scope: GitRepositoryContext["scope"] | undefined): string
   }
 
   return "Unknown";
-}
-
-export function UploadPanel({
-  onDropFiles,
-  onUpload,
-  setUploadContent,
-  setUploadPath,
-  uploadContent,
-  uploading,
-  uploadPath
-}: {
-  onDropFiles: (files: FileList | null) => Promise<void>;
-  onUpload: (event: FormEvent<HTMLFormElement>) => Promise<void>;
-  setUploadContent: (value: string) => void;
-  setUploadPath: (value: string) => void;
-  uploadContent: string;
-  uploading: boolean;
-  uploadPath: string;
-}) {
-  return (
-    <section className="uploadWorkspace">
-      <form
-        className="uploadForm"
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => {
-          event.preventDefault();
-          void onDropFiles(event.dataTransfer.files);
-        }}
-        onSubmit={onUpload}
-      >
-        <div className="uploadEditor">
-          <label className="field">
-            <span>Path</span>
-            <input onChange={(event) => setUploadPath(event.target.value)} placeholder="uploaded/cats-note.md" value={uploadPath} />
-          </label>
-          <label className="field editorField">
-            <span>Markdown</span>
-            <textarea
-              onChange={(event) => setUploadContent(event.target.value)}
-              placeholder={"# Cat introductions\n\nKeep first meetings calm and supervised."}
-              rows={14}
-              value={uploadContent}
-            />
-          </label>
-        </div>
-        <div className="dropHint">Drop a Markdown file here or choose one below.</div>
-        <div className="rowActions">
-          <label className="fileButton">
-            <input accept=".md,text/markdown,text/plain" onChange={(event) => void onDropFiles(event.target.files)} type="file" />
-            Choose File
-          </label>
-          <button className="button" disabled={uploading || !uploadPath.trim() || !uploadContent.trim()} type="submit">
-            {uploading ? "Indexing" : "Index Markdown"}
-          </button>
-        </div>
-      </form>
-    </section>
-  );
-}
-
-export function RepositoryPanel({
-  destinations,
-  flows,
-  indexing,
-  onIndex,
-  selectedFlowId,
-  setSelectedFlowId,
-  sources
-}: {
-  destinations: ConfiguredKnowledgeRepository[];
-  flows: ConfiguredKnowledgeFlow[];
-  indexing: boolean;
-  onIndex: (flowId: string) => Promise<void>;
-  selectedFlowId: string;
-  setSelectedFlowId: (value: string) => void;
-  sources: ConfiguredKnowledgeRepository[];
-}) {
-  if (flows.length === 0) {
-    return <p className="empty">No knowledge flows are configured. Add KNOWLEDGE_FLOWS or KNOWLEDGE_DESTINATIONS to the API environment.</p>;
-  }
-
-  return (
-    <div className="knowledgeFlows">
-      {flows.map((flow) => {
-        const destination = destinations.find((repository) => repository.id === flow.destinationId);
-        const flowSources = flow.sourceIds
-          .map((sourceId) => sources.find((source) => source.id === sourceId))
-          .filter((source): source is ConfiguredKnowledgeRepository => Boolean(source));
-        const active = selectedFlowId === flow.id;
-
-        return (
-          <article className={`knowledgeFlow ${active ? "selected" : ""}`} key={flow.id}>
-            <button
-              className="flowSelect"
-              onClick={() => setSelectedFlowId(flow.id)}
-              title={`Select ${flow.name}`}
-              type="button"
-            >
-              <span>{flow.name}</span>
-            </button>
-            <div className="flowDiagram" aria-label={`${flow.name} knowledge flow`}>
-              <div className="flowNodeGroup">
-                {flowSources.length > 0 ? (
-                  flowSources.map((source) => (
-                    <span className={`flowNode ${source.kind ?? "local"}`} key={source.id} title={repositoryLocation(source)}>
-                      {source.name}
-                    </span>
-                  ))
-                ) : (
-                  <span className="flowNode missing">No sources</span>
-                )}
-              </div>
-              <span className="flowArrow" aria-hidden="true">-&gt;</span>
-              <span className={`flowNode destination ${destination?.kind ?? "local"}`} title={destination ? repositoryLocation(destination) : flow.destinationId}>
-                {destination?.name ?? flow.destinationId}
-              </span>
-            </div>
-            <button
-              className="button"
-              disabled={indexing || !destination}
-              onClick={() => {
-                setSelectedFlowId(flow.id);
-                void onIndex(flow.id);
-              }}
-              title="Index the destination knowledge base used by /ask and MCP"
-              type="button"
-            >
-              {indexing && active ? "Indexing" : "Index KB"}
-            </button>
-          </article>
-        );
-      })}
-    </div>
-  );
-}
-
-function repositoryLocation(repository: ConfiguredKnowledgeRepository): string {
-  const base = repository.url ?? repository.path ?? repository.kind ?? repository.id;
-  return repository.subpath ? `${base} / ${repository.subpath}` : base;
 }
