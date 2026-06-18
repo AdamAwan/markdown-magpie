@@ -149,6 +149,8 @@ export function formatJobType(type: string): string {
   return type
     .split("_")
     .filter(Boolean)
-    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    // filter(Boolean) guarantees a non-empty segment, but guard the first char
+    // anyway so an unexpected empty part can never render the literal "undefined".
+    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : ""))
     .join(" ");
 }
