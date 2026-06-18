@@ -127,26 +127,6 @@ Lists indexed repositories.
 { "repositories": [ RepositoryRef, ... ] }
 ```
 
-### `POST /api/knowledge/documents/upload`
-
-Indexes Markdown documents supplied inline, without a Git checkout.
-
-```json
-{
-  "repositoryId": "uploaded",
-  "name": "Uploaded Markdown",
-  "documents": [{ "path": "guide.md", "content": "# Guide\n..." }]
-}
-```
-
-Paths are normalised (backslashes converted, leading slashes stripped, `.md` appended if
-missing); entries containing `..` or with empty content are dropped. `repositoryId` and
-`name` default to `uploaded` / `Uploaded Markdown`.
-
-- `400 markdown_documents_required` — no valid documents after filtering.
-- `413 markdown_document_too_large` — any document exceeds 250,000 characters.
-- `201` — an indexed-repository summary.
-
 ### `GET /api/knowledge/documents`
 
 Lists indexed documents, sorted by path.

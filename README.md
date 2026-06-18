@@ -431,27 +431,14 @@ Expected response:
 
 ### 5. Add Demo Knowledge
 
-The web console has a **Knowledge** section where you can paste or upload Markdown. This is the easiest way to seed a showcase.
+The web console's **Knowledge** section lists every configured flow. Select one and click **Index KB** to index its destination knowledge base — the corpus that `/ask` and the MCP tools answer from.
 
-You can also upload Markdown through the API:
+You can also index a flow through the API:
 
 ```bash
-curl -s http://localhost:4000/api/knowledge/documents/upload \
+curl -s -X POST http://localhost:4000/api/knowledge/repositories/index \
   -H 'content-type: application/json' \
-  -d '{
-    "repositoryId": "showcase",
-    "name": "Showcase Knowledge",
-    "documents": [
-      {
-        "path": "cats/health.md",
-        "content": "# Cat Health\n\nUrgent warning signs include breathing trouble, collapse, seizures, repeated vomiting, and inability to urinate."
-      },
-      {
-        "path": "cats/care.md",
-        "content": "# Cat Care\n\nIntroduce food changes gradually over seven to ten days. Keep water available and monitor appetite."
-      }
-    ]
-  }'
+  -d '{"repositoryId":"cats"}'
 ```
 
 Then ask:
