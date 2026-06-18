@@ -1,15 +1,28 @@
-import { useEffect, useState } from "react";
+"use client";
+
+import { useEffect, useRef, useState } from "react";
 import mermaid from "mermaid";
 import { RuntimeConfig } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
 
-export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
-  const [activeFlow, setActiveFlow] = useState<"overview" | "ask" | "improvement" | "queue" | "automation">("overview");
-  const modelInfo = extractModelInfo(config);
+type ModelInfo = ReturnType<typeof extractModelInfo>;
+type FlowKey = "overview" | "ask" | "improvement" | "queue" | "automation";
 
-  useEffect(() => {
-    mermaid.contentLoaded();
-  }, [activeFlow]);
+// Initialize mermaid exactly once on the client. startOnLoad is false because we
+// render each diagram on demand via mermaid.run rather than letting it scan the
+// DOM at load time.
+let mermaidInitialized = false;
+function ensureMermaidInitialized() {
+  if (!mermaidInitialized) {
+    mermaid.initialize({ startOnLoad: false });
+    mermaidInitialized = true;
+  }
+}
+
+export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
+  const [activeFlow, setActiveFlow] = useState<FlowKey>("overview");
+  const modelInfo = extractModelInfo(config);
+  const graph = buildDiagram(activeFlow, modelInfo);
 
   return (
     <div className="surface">
@@ -51,11 +64,7 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
         </div>
 
         <div className="flowDiagram">
-          {activeFlow === "overview" && <OverviewDiagram modelInfo={modelInfo} />}
-          {activeFlow === "ask" && <AskFlowDiagram modelInfo={modelInfo} />}
-          {activeFlow === "improvement" && <ContinuousImprovementDiagram modelInfo={modelInfo} />}
-          {activeFlow === "queue" && <QueueArchitectureDiagram modelInfo={modelInfo} />}
-          {activeFlow === "automation" && <AutomationDiagram modelInfo={modelInfo} />}
+          <MermaidDiagram graph={graph} flowKey={activeFlow} />
         </div>
 
         <div className="flowLegend">
@@ -88,14 +97,69 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
   );
 }
 
-function OverviewDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractModelInfo> }) {
+// Renders a single mermaid graph into a ref'd element. mermaid mutates the DOM
+// node it processes and marks it with data-processed; to re-render when the graph
+// changes we clear that flag, restore the source, and run mermaid against just
+// this node. Wrapped in try/catch so a malformed graph leaves a readable error
+// instead of crashing the panel.
+function MermaidDiagram({ graph, flowKey }: { graph: string; flowKey: FlowKey }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) {
+      return;
+    }
+
+    let cancelled = false;
+    ensureMermaidInitialized();
+    element.removeAttribute("data-processed");
+    element.textContent = graph;
+
+    void (async () => {
+      try {
+        await mermaid.run({ nodes: [element] });
+      } catch (error) {
+        if (!cancelled) {
+          element.removeAttribute("data-processed");
+          element.textContent = `Unable to render this diagram: ${
+            error instanceof Error ? error.message : "unknown error"
+          }`;
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [graph]);
+
+  // key forces a fresh node per flow so mermaid never re-reads a half-processed one.
+  return <div className="mermaid" key={flowKey} ref={ref} />;
+}
+
+function buildDiagram(flow: FlowKey, modelInfo: ModelInfo): string {
+  if (flow === "ask") {
+    return askFlowDiagram(modelInfo);
+  }
+  if (flow === "improvement") {
+    return continuousImprovementDiagram(modelInfo);
+  }
+  if (flow === "queue") {
+    return queueArchitectureDiagram(modelInfo);
+  }
+  if (flow === "automation") {
+    return automationDiagram(modelInfo);
+  }
+  return overviewDiagram(modelInfo);
+}
+
+function overviewDiagram(modelInfo: ModelInfo): string {
   const chatLabel = modelInfo.chatModel && modelInfo.chatHost
     ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
     : modelInfo.chatModel || "Chat Model";
 
-  return (
-    <div className="mermaid">
-      {`graph TD
+  return `graph TD
     A["📄 Git Markdown<br/>Repository"] -->|Sync| B["🔍 Parse &<br/>Index"]
     B -->|Generate| C["📚 Postgres DB<br/>Indexed Sections"]
 
@@ -122,12 +186,10 @@ function OverviewDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractMo
     P -.->|Updated Docs| C
 
     style Learn fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px
-    style Generate fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`}
-    </div>
-  );
+    style Generate fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`;
 }
 
-function AskFlowDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractModelInfo> }) {
+function askFlowDiagram(modelInfo: ModelInfo): string {
   const embedLabel = modelInfo.embeddingModel && modelInfo.embeddingHost
     ? `${modelInfo.embeddingModel}<br/>(${modelInfo.embeddingHost})`
     : modelInfo.embeddingModel || "Embedding Model";
@@ -135,9 +197,7 @@ function AskFlowDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractMod
     ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
     : modelInfo.chatModel || "Chat Model";
 
-  return (
-    <div className="mermaid">
-      {`graph TD
+  return `graph TD
     Start["❓ Question<br/>Web UI or MCP"]
 
     Start --> Keyword["🔍 Keyword Search<br/>in Postgres"]
@@ -174,19 +234,15 @@ function AskFlowDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractMod
     Return -->|MCP| MCPOut["📡 MCP<br/>Response"]
 
     style Direct fill:#e8f1f7,stroke:#285f74,stroke-width:2px
-    style Queue fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`}
-    </div>
-  );
+    style Queue fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`;
 }
 
-function ContinuousImprovementDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractModelInfo> }) {
+function continuousImprovementDiagram(modelInfo: ModelInfo): string {
   const chatLabel = modelInfo.chatModel && modelInfo.chatHost
     ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
     : modelInfo.chatModel || "Chat Model";
 
-  return (
-    <div className="mermaid">
-      {`graph TD
+  return `graph TD
     Start["❓ Questions Answered"] --> Feedback["📊 Collect Feedback"]
 
     subgraph Detection["<b>GAP DETECTION</b>"]
@@ -230,19 +286,15 @@ function ContinuousImprovementDiagram({ modelInfo }: { modelInfo: ReturnType<typ
 
     style Detection fill:#e8f1f7,stroke:#285f74,stroke-width:2px
     style ManualPath fill:#fef9f0,stroke:#8b5a00,stroke-width:2px
-    style AutoPath fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px`}
-    </div>
-  );
+    style AutoPath fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px`;
 }
 
-function QueueArchitectureDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractModelInfo> }) {
+function queueArchitectureDiagram(modelInfo: ModelInfo): string {
   const chatLabel = modelInfo.chatModel && modelInfo.chatHost
     ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
     : modelInfo.chatModel || "Chat Model";
 
-  return (
-    <div className="mermaid">
-      {`graph TD
+  return `graph TD
     User["👤 User/Client<br/>Web UI or MCP"]
 
     subgraph Direct["<b>DIRECT MODE</b><br/>(Synchronous)"]
@@ -267,19 +319,15 @@ function QueueArchitectureDiagram({ modelInfo }: { modelInfo: ReturnType<typeof 
     QResp --> Return
 
     style Direct fill:#e8f1f7,stroke:#285f74,stroke-width:2px
-    style Queue fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`}
-    </div>
-  );
+    style Queue fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`;
 }
 
-function AutomationDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extractModelInfo> }) {
+function automationDiagram(modelInfo: ModelInfo): string {
   const chatLabel = modelInfo.chatModel && modelInfo.chatHost
     ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
     : modelInfo.chatModel || "Chat Model";
 
-  return (
-    <div className="mermaid">
-      {`graph TD
+  return `graph TD
     Scheduler["⏱️ Scheduler<br/>(cron settings per task)"]
 
     subgraph GapsTask["<b>gaps → pull requests</b><br/>(default: hourly)"]
@@ -320,7 +368,5 @@ function AutomationDiagram({ modelInfo }: { modelInfo: ReturnType<typeof extract
 
     style GapsTask fill:#fef9f0,stroke:#8b5a00,stroke-width:2px
     style CrunchTask fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px
-    style PrTask fill:#e8f1f7,stroke:#285f74,stroke-width:2px`}
-    </div>
-  );
+    style PrTask fill:#e8f1f7,stroke:#285f74,stroke-width:2px`;
 }
