@@ -65,6 +65,11 @@ function useConsoleController() {
   const [message, setMessage] = useState<UiMessage | undefined>();
   const jobsRef = useRef<AiJob[]>([]);
   const messageIdRef = useRef(0);
+  // Holds the AbortController for the in-flight refresh. The 4s poll and a manual
+  // Refresh can overlap; aborting the previous request before starting a new one
+  // (and ignoring a superseded controller's results) stops a slow stale response
+  // from clobbering fresher state.
+  const refreshControllerRef = useRef<AbortController | undefined>(undefined);
 
   const openSection = useCallback(
     (section: ConsoleSection) => {
@@ -145,27 +150,40 @@ function useConsoleController() {
   }
 
   async function refresh(options: { preserveMessage?: boolean; silent?: boolean } = {}) {
+    // Abort any refresh still in flight so its (now stale) response is discarded
+    // and never overwrites the state this newer refresh is about to set.
+    refreshControllerRef.current?.abort();
+    const controller = new AbortController();
+    refreshControllerRef.current = controller;
+    const { signal } = controller;
+
     setRefreshing(true);
     if (!options.silent && !options.preserveMessage) {
       clearMessage();
     }
     try {
       const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, proposalsResult, crunchRunsResult, crunchSettingsResult, scheduledTasksResult, configResult, promptsResult] = await Promise.all([
-        apiGet<Health>("/health"),
-        apiGet<KnowledgeStats>("/knowledge/stats"),
-        apiGet<{ repositories: RepositoryRef[] }>("/repositories"),
-        apiGet<{ documents: KnowledgeDocument[] }>("/documents"),
-        apiGet<{ questions: QuestionLog[] }>("/questions?limit=8"),
-        apiGet<{ gaps: GapCandidate[] }>("/gaps/candidates?limit=8"),
-        apiGet<{ clusters: SuggestedGapCluster[] }>("/gaps/clusters?limit=8"),
-        apiGet<{ jobs: AiJob[] }>("/ai-jobs"),
-        apiGet<{ proposals: Proposal[] }>("/proposals?limit=8"),
-        apiGet<{ runs: CrunchRun[] }>("/crunch/runs?limit=12"),
-        apiGet<{ settings: CrunchSettings[] }>("/crunch/settings"),
-        apiGet<{ tasks: ScheduledTask[] }>("/scheduled-tasks"),
-        apiGet<RuntimeConfig>("/config"),
-        apiGet<{ prompts: PromptSummary[] }>("/prompts")
+        apiGet<Health>("/health", { signal }),
+        apiGet<KnowledgeStats>("/knowledge/stats", { signal }),
+        apiGet<{ repositories: RepositoryRef[] }>("/repositories", { signal }),
+        apiGet<{ documents: KnowledgeDocument[] }>("/documents", { signal }),
+        apiGet<{ questions: QuestionLog[] }>("/questions?limit=8", { signal }),
+        apiGet<{ gaps: GapCandidate[] }>("/gaps/candidates?limit=8", { signal }),
+        apiGet<{ clusters: SuggestedGapCluster[] }>("/gaps/clusters?limit=8", { signal }),
+        apiGet<{ jobs: AiJob[] }>("/ai-jobs", { signal }),
+        apiGet<{ proposals: Proposal[] }>("/proposals?limit=8", { signal }),
+        apiGet<{ runs: CrunchRun[] }>("/crunch/runs?limit=12", { signal }),
+        apiGet<{ settings: CrunchSettings[] }>("/crunch/settings", { signal }),
+        apiGet<{ tasks: ScheduledTask[] }>("/scheduled-tasks", { signal }),
+        apiGet<RuntimeConfig>("/config", { signal }),
+        apiGet<{ prompts: PromptSummary[] }>("/prompts", { signal })
       ]);
+
+      // A newer refresh superseded this one while its requests were in flight;
+      // drop the results so we don't clobber the fresher state.
+      if (signal.aborted || refreshControllerRef.current !== controller) {
+        return;
+      }
 
       setHealth(healthResult);
       setStats(statsResult);
@@ -190,7 +208,10 @@ function useConsoleController() {
       setLastRefreshedAt(new Date().toISOString());
 
       if (answer?.questionId) {
-        const result = await apiGet<{ question: QuestionLog }>(`/questions/${answer.questionId}`);
+        const result = await apiGet<{ question: QuestionLog }>(`/questions/${answer.questionId}`, { signal });
+        if (signal.aborted || refreshControllerRef.current !== controller) {
+          return;
+        }
         setAnswer((current) =>
           current?.questionId === result.question.id
             ? {
@@ -203,11 +224,19 @@ function useConsoleController() {
         );
       }
     } catch (error) {
+      // A superseded/aborted refresh raising AbortError is expected — stay quiet.
+      if (signal.aborted) {
+        return;
+      }
       if (!options.silent) {
         showMessage(errorMessage(error), "danger");
       }
     } finally {
-      setRefreshing(false);
+      // Only the latest refresh owns the spinner; a superseded one must not clear
+      // it out from under the refresh that replaced it.
+      if (refreshControllerRef.current === controller) {
+        setRefreshing(false);
+      }
     }
   }
 
