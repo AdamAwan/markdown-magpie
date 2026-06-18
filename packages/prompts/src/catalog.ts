@@ -94,6 +94,48 @@ Return JSON:
 }`
 };
 
+export const SOURCE_CHANGE_SYNC: PromptDefinition = {
+  id: "source-change-sync",
+  title: "Sync knowledge base to source changes",
+  description:
+    "Given a set of source-code/data changes (diffs) and the knowledge-base documents that may describe the changed behaviour, rewrites only the documents whose stated facts are now contradicted by the change. Used by both queued sync_source_change jobs and the API direct path.",
+  usedBy: ["watcher · queue mode", "api · direct mode"],
+  outputShape: '{ summary, operations[], rationale }',
+  instructions: `You maintain a Markdown knowledge base that DESCRIBES an external source (code or data). The source has changed, and some knowledge-base documents may now state facts that the change has made wrong. Update those documents so they match the new reality.
+
+Input:
+- "changes": the source files that changed, each with a unified diff.
+- "candidateDocuments": the knowledge-base documents retrieved as possibly affected. These are the ONLY documents you may edit.
+
+Goal:
+- For each candidate document, decide whether the source change contradicts or outdates anything it states (e.g. a threshold, date, default, behaviour, or rule that moved).
+- Rewrite ONLY the documents that are now wrong, changing only the affected statements. Preserve all other content, structure, and tone.
+- Do not edit a document the change does not affect.
+
+Rules:
+- Return JSON only.
+- Only assert facts supported by the diffs. Do NOT invent new information or document behaviour the diff does not show.
+- Use the candidate document paths exactly as provided. Every write must contain the full new file content. Do not delete documents.
+- Use kind "rewrite" for every operation.
+- If no candidate document is actually affected by the change, return an empty operations array.
+
+Return JSON:
+{
+  "summary": "string",
+  "operations": [
+    {
+      "kind": "rewrite",
+      "title": "string",
+      "reason": "string",
+      "sources": ["existing/doc.md"],
+      "writes": [{ "path": "existing/doc.md", "content": "string" }],
+      "deletes": []
+    }
+  ],
+  "rationale": "string"
+}`
+};
+
 export const GAP_CLUSTERING: PromptDefinition = {
   id: "gap-clustering",
   title: "Cluster related gaps",
@@ -149,6 +191,7 @@ export const promptCatalog: PromptDefinition[] = [
   SUMMARIZE_GAP,
   DRAFT_MARKDOWN_PROPOSAL,
   CRUNCH_KNOWLEDGE_BASE,
+  SOURCE_CHANGE_SYNC,
   GAP_CLUSTERING,
   GENERIC_JOB,
   JOB_RUNNER_SYSTEM,

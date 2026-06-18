@@ -238,7 +238,8 @@ export type AiJobType =
   | "draft_markdown_proposal"
   | "detect_contradiction"
   | "suggest_consolidation"
-  | "crunch_knowledge_base";
+  | "crunch_knowledge_base"
+  | "sync_source_change";
 
 export type AiJobStatus = "pending" | "claimed" | "completed" | "failed" | "cancelled";
 
@@ -449,6 +450,81 @@ export interface CrunchSettings {
   cron: string;
   lastRunAt?: string;
   nextRunAt?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Source-change sync — keep the knowledge base honest against its sources
+//
+// Crunch reorganizes the knowledge base against *itself*. Source-change sync
+// corrects it against its *sources*: when an upstream source commit changes the
+// underlying behaviour the KB describes (e.g. a cutoff moves from 2024 to 2025),
+// any KB document that still asserts the old fact is now wrong. This pass detects
+// changed source commits, retrieves the KB documents that already speak to the
+// change, and asks the model to rewrite only those documents to match the new
+// reality — landing the result on a review branch. The plan reuses CrunchPlan:
+// the output is the same multi-file write/delete changeset.
+// ---------------------------------------------------------------------------
+
+export type SourceSyncRunTrigger = "scheduled" | "manual";
+
+// "skipped" records a detected source change that needed no KB edit (nothing in
+// the KB matched it, or the model returned an empty plan) — kept for the operator
+// to see that the change was considered.
+export type SourceSyncRunStatus = "running" | "completed" | "failed" | "published" | "skipped";
+
+// The last source commit a flow has reacted to. The next run diffs the source's
+// new HEAD against this, so only genuinely new commits are processed.
+export interface SourceSyncState {
+  flowId?: string;
+  sourceId: string;
+  lastSha: string;
+  lastCheckedAt: string;
+}
+
+export interface SourceChangeFile {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "other";
+  diff: string;
+}
+
+// A knowledge-base document the change *might* affect — retrieved from the KB and
+// handed to the model as the only documents it is allowed to edit.
+export interface SourceSyncCandidateDocument {
+  path: string;
+  content: string;
+}
+
+export interface SourceChangeSyncJobInput {
+  flowId?: string;
+  destinationId?: string;
+  sourceId: string;
+  sourceName: string;
+  fromSha: string;
+  toSha: string;
+  changes: SourceChangeFile[];
+  candidateDocuments: SourceSyncCandidateDocument[];
+  expectedOutput: "crunch_plan";
+}
+
+export type SourceChangeSyncJobOutput = CrunchPlan;
+
+export interface SourceSyncRun {
+  id: string;
+  flowId?: string;
+  destinationId?: string;
+  sourceId: string;
+  trigger: SourceSyncRunTrigger;
+  status: SourceSyncRunStatus;
+  jobId?: string;
+  plan?: CrunchPlan;
+  error?: string;
+  fromSha?: string;
+  toSha: string;
+  changedFileCount: number;
+  candidateCount: number;
+  publication?: ProposalPublication;
+  createdAt: string;
+  completedAt?: string;
 }
 
 // Schedule for a generic background side-process (e.g. refreshing pull request

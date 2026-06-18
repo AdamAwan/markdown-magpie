@@ -5,9 +5,11 @@ import { PostgresCrunchStore } from "../stores/postgres-crunch-store.js";
 import { PostgresProposalStore } from "../stores/postgres-proposal-store.js";
 import { PostgresQuestionLogStore } from "../stores/postgres-question-log-store.js";
 import { PostgresScheduledTaskStore } from "../stores/postgres-scheduled-task-store.js";
+import { PostgresSourceSyncStore } from "../stores/postgres-source-sync-store.js";
 import { InMemoryProposalStore } from "../stores/proposal-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
+import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
 
 export function storageBackend(): "memory" | "postgres" {
   return process.env.STORAGE_BACKEND === "postgres" ? "postgres" : "memory";
@@ -21,6 +23,7 @@ export function storeBackend(
     | "AI_JOB_QUEUE"
     | "CRUNCH_STORE"
     | "SCHEDULED_TASK_STORE"
+    | "SOURCE_SYNC_STORE"
 ): "memory" | "postgres" {
   return process.env[name] === "postgres" ? "postgres" : storageBackend();
 }
@@ -105,4 +108,17 @@ export function createScheduledTaskStore(): InMemoryScheduledTaskStore | Postgre
   }
 
   return new InMemoryScheduledTaskStore();
+}
+
+export function createSourceSyncStore(): InMemorySourceSyncStore | PostgresSourceSyncStore {
+  if (storeBackend("SOURCE_SYNC_STORE") === "postgres") {
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      throw new Error("DATABASE_URL is required when SOURCE_SYNC_STORE=postgres");
+    }
+
+    return new PostgresSourceSyncStore(databaseUrl);
+  }
+
+  return new InMemorySourceSyncStore();
 }

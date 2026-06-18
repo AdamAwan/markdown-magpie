@@ -156,6 +156,7 @@ export async function resetData(ctx: AppContext) {
   await ctx.stores.proposals.reset();
   await ctx.stores.crunchRuns.reset();
   await ctx.stores.scheduledTasks.reset();
+  await ctx.stores.sourceSync.reset();
   await ctx.stores.aiJobs.reset();
   if (ctx.stores.knowledge) {
     await ctx.stores.knowledge.reset();

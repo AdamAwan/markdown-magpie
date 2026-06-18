@@ -4,6 +4,7 @@ import { selectClustersToDraft } from "../stores/gap-clustering.js";
 import type { AppContext } from "../context.js";
 import * as gapsService from "../features/gaps/service.js";
 import * as proposalsService from "../features/proposals/service.js";
+import * as sourceSyncService from "../features/source-sync/service.js";
 
 // A background side-process the operator can schedule from the Crunch page. The
 // registry is the single place to add new scheduled work: give it a key, copy,
@@ -35,6 +36,17 @@ export const scheduledTaskDefinitions: ScheduledTaskDefinition[] = [
       "A fully automated pipeline with no manual review step.",
     defaultCron: "0 * * * *",
     run: processGapsIntoPullRequests
+  },
+  {
+    key: "source-change-sync",
+    label: "Source change → knowledge base sync",
+    description:
+      "Watches each flow's git sources for new commits. When a change outdates a knowledge-base document " +
+      "that already describes the affected behaviour (e.g. a threshold or date that moved), the document is " +
+      "rewritten to match and the result lands on a review branch. Only documents the knowledge base already " +
+      "covers are touched.",
+    defaultCron: "*/10 * * * *",
+    run: syncSourceChanges
   }
 ];
 
@@ -97,6 +109,28 @@ async function refreshPullRequests(ctx: AppContext): Promise<void> {
       // proposal; mark it so the task stops chasing a dead PR.
       await ctx.stores.proposals.updateStatus(proposal.id, "rejected");
       console.log(`Pull request for proposal ${proposal.id} was closed without merging; marked rejected.`);
+    }
+  }
+}
+
+// Runs the source-change sync for every configured flow (or the default flow
+// when none are configured). Each flow is best-effort and logged so one failure
+// can't abort the others.
+async function syncSourceChanges(ctx: AppContext): Promise<void> {
+  const flows = ctx.repositoryDeps().knowledgeConfig.flows;
+  const targets = flows.length > 0 ? flows.map((flow) => flow.id) : [undefined];
+
+  for (const flowId of targets) {
+    try {
+      const runs = await sourceSyncService.triggerSourceSyncRun(ctx, { flowId, trigger: "scheduled" });
+      for (const run of runs) {
+        console.log(
+          `Source-change sync run ${run.id} (${run.status}) for source ${run.sourceId} in flow ${flowId ?? "default"}.`
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "source-change sync failed";
+      console.warn(`Source-change sync failed for flow ${flowId ?? "default"}: ${message}`);
     }
   }
 }

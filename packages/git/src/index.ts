@@ -88,6 +88,60 @@ export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<Gi
   };
 }
 
+// A single file touched by a range of source commits. `diff` is the unified
+// patch for that file, truncated to keep model input bounded.
+export interface SourceFileChange {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "other";
+  diff: string;
+}
+
+// The current commit on the checkout's HEAD, or undefined when the path is not a
+// git work tree (so callers can degrade rather than throw).
+export async function getHeadSha(localPath: string): Promise<string | undefined> {
+  const sha = (await tryGit(localPath, ["rev-parse", "HEAD"])).trim();
+  return sha || undefined;
+}
+
+// The files changed between two commits, with a (capped) per-file patch. Scope to
+// a subdirectory with `subpath` so a source's configured subpath is the only
+// thing diffed. Returns [] when either ref is missing or nothing changed.
+export async function diffChangedFiles(
+  localPath: string,
+  fromSha: string,
+  toSha: string,
+  options: { subpath?: string; maxDiffChars?: number } = {}
+): Promise<SourceFileChange[]> {
+  const maxDiffChars = options.maxDiffChars ?? 8_000;
+  const pathspec = options.subpath?.trim() ? ["--", options.subpath.trim()] : [];
+
+  const nameStatus = await tryGit(localPath, ["diff", "--name-status", "-M", `${fromSha}..${toSha}`, ...pathspec]);
+  const changes: SourceFileChange[] = [];
+
+  for (const line of nameStatus.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    // Columns are tab-separated: "<status>\t<path>" (renames add an old/new pair).
+    const parts = trimmed.split(/\t/);
+    const code = parts[0]?.[0] ?? "";
+    const filePath = parts.length > 2 ? parts[parts.length - 1] : parts[1];
+    if (!filePath) {
+      continue;
+    }
+
+    const status: SourceFileChange["status"] =
+      code === "A" ? "added" : code === "M" ? "modified" : code === "D" ? "deleted" : code === "R" ? "renamed" : "other";
+
+    const rawDiff = await tryGit(localPath, ["diff", "-M", `${fromSha}..${toSha}`, "--", filePath]);
+    const diff = rawDiff.length > maxDiffChars ? `${rawDiff.slice(0, maxDiffChars)}\n… (diff truncated)` : rawDiff;
+    changes.push({ path: filePath, status, diff });
+  }
+
+  return changes;
+}
+
 export class DryRunPullRequestProvider implements PullRequestProvider {
   async createPullRequest(request: CreatePullRequestRequest): Promise<CreatePullRequestResponse> {
     return {

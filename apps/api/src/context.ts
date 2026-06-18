@@ -7,6 +7,7 @@ import {
   createProposalStore,
   createQuestionLogStore,
   createScheduledTaskStore,
+  createSourceSyncStore,
   parseClaimTimeoutMs,
   requireDatabaseUrl,
   storeBackend
@@ -36,6 +37,7 @@ export interface AppContext {
     proposals: ReturnType<typeof createProposalStore>;
     crunchRuns: ReturnType<typeof createCrunchStore>;
     scheduledTasks: ReturnType<typeof createScheduledTaskStore>;
+    sourceSync: ReturnType<typeof createSourceSyncStore>;
     aiJobs: ReturnType<typeof createAiJobQueue>;
   };
   providers: {
@@ -90,6 +92,7 @@ export async function createAppContext(): Promise<AppContext> {
       proposals: createProposalStore(),
       crunchRuns: createCrunchStore(),
       scheduledTasks: createScheduledTaskStore(),
+      sourceSync: createSourceSyncStore(),
       aiJobs: createAiJobQueue(claimTimeoutMs)
     },
     providers: {

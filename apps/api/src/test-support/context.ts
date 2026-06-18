@@ -8,6 +8,7 @@ import { InMemoryKnowledgeIndex } from "../stores/knowledge-index.js";
 import { InMemoryProposalStore } from "../stores/proposal-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
+import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
 
 // A fully-typed ChatProvider stub — no casts. It returns a valid markdown
 // proposal JSON payload so any direct provider path that does reach the chat
@@ -46,6 +47,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
       proposals: new InMemoryProposalStore(),
       crunchRuns: new InMemoryCrunchStore(),
       scheduledTasks: new InMemoryScheduledTaskStore(),
+      sourceSync: new InMemorySourceSyncStore(),
       aiJobs: new InMemoryAiJobQueue()
     },
     providers: {
