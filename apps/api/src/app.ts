@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
 import type { AppContext } from "./context.js";
 import { onError } from "./http/errors.js";
 import { configRoutes } from "./features/config/routes.js";
@@ -22,6 +23,15 @@ export function buildApp(ctx: AppContext): Hono {
       origin: "*",
       allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
       allowHeaders: ["content-type"]
+    })
+  );
+
+  // Cap request bodies so a single oversized upload can't exhaust memory.
+  app.use(
+    "*",
+    bodyLimit({
+      maxSize: 4 * 1024 * 1024,
+      onError: (c) => c.json({ error: "payload_too_large" }, 413)
     })
   );
 
