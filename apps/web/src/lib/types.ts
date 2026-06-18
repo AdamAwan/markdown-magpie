@@ -1,7 +1,44 @@
-export type Confidence = "high" | "medium" | "low" | "unknown";
-export type Feedback = "helpful" | "unhelpful";
+// Canonical domain types live in @magpie/core. The web app re-exports them here
+// (rather than re-declaring them) so the console can never drift from the backend
+// shapes. Only genuinely web-only types are declared locally below.
+export type {
+  AiExecutionMode,
+  AiJob,
+  AiJobStatus,
+  AiJobType,
+  AnswerResult,
+  Citation,
+  Confidence,
+  CrunchFileWrite,
+  CrunchOperation,
+  CrunchPlan,
+  CrunchRun,
+  CrunchSettings,
+  DocumentMetadata,
+  GapCandidate,
+  GitRepositoryContext,
+  KnowledgeDocument,
+  KnowledgeGapSignal,
+  KnowledgeStatus,
+  Proposal,
+  ProposalPublication,
+  QuestionFeedback,
+  QuestionGap,
+  QuestionLog,
+  RepositoryRef,
+  ScheduledTaskSettings,
+  SuggestedGapCluster
+} from "@magpie/core";
+
+import type { AiExecutionMode, AiJob, AnswerResult, QuestionFeedback, ScheduledTaskSettings } from "@magpie/core";
+
+// Feedback was the local name for the core QuestionFeedback union; keep the alias
+// so existing call sites continue to read naturally.
+export type Feedback = QuestionFeedback;
+
+// --- Web-only types (not part of the backend domain) -----------------------
+
 export type ConsoleSection = "ask" | "knowledge" | "gaps" | "jobs" | "proposals" | "crunch" | "prompts" | "config" | "dataflow";
-export type AiExecutionMode = "direct" | "queue";
 export type AiProviderName = "mock" | "openai-compatible" | "azure-openai" | "codex" | "claude";
 
 export interface Health {
@@ -75,102 +112,6 @@ export interface ConfiguredKnowledgeFlow {
   persona?: string;
 }
 
-export interface KnowledgeDocument {
-  id: string;
-  repositoryId: string;
-  path: string;
-  commitSha?: string;
-  metadata: {
-    title: string;
-    owner?: string;
-    status: string;
-    tags: string[];
-  };
-  content: string;
-}
-
-export interface RepositoryRef {
-  id: string;
-  name: string;
-  remoteUrl?: string;
-  defaultBranch: string;
-  localPath: string;
-  provider: "local" | "github" | "gitlab" | "azure-devops";
-  git?: GitRepositoryContext;
-}
-
-export interface GitRepositoryContext {
-  scope: "repository-root" | "subdirectory" | "not-git";
-  indexedPath: string;
-  workTreeRoot?: string;
-  relativePathFromRoot?: string;
-  currentBranch?: string;
-  defaultBranch?: string;
-  headSha?: string;
-  remoteUrl?: string;
-  hasUncommittedChanges?: boolean;
-}
-
-export interface Citation {
-  sectionId: string;
-  path: string;
-  heading: string;
-  anchor: string;
-  excerpt: string;
-}
-
-export interface AnswerResult {
-  answer: string;
-  confidence: Confidence;
-  citations: Citation[];
-  gaps?: {
-    summary: string;
-    question: string;
-  }[];
-}
-
-export interface QuestionLog {
-  id: string;
-  question: string;
-  executionMode: string;
-  chatProvider: string;
-  confidence: Confidence;
-  retrievedSectionIds: string[];
-  askedAt: string;
-  answer?: AnswerResult;
-  feedback?: Feedback;
-  manualGap?: boolean;
-  flowId?: string;
-}
-
-export interface GapCandidate {
-  summary: string;
-  questionIds: string[];
-  count: number;
-  latestAskedAt: string;
-  confidence: Confidence;
-  flowId?: string;
-}
-
-export interface SuggestedGapCluster {
-  id: string;
-  title: string;
-  summaries: string[];
-  questionIds: string[];
-  count: number;
-  rationale?: string;
-  flowId?: string;
-}
-
-export interface AiJob {
-  id: string;
-  type: string;
-  status: string;
-  claimedBy?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface ConsoleNotice {
   id: string;
   title: string;
@@ -187,80 +128,6 @@ export interface UiMessage {
 }
 
 export type JobTransitionMessage = Pick<UiMessage, "text" | "tone">;
-
-export interface Proposal {
-  id: string;
-  title: string;
-  status: "draft" | "ready" | "branch-pushed" | "pr-opened" | "merged" | "rejected";
-  targetPath: string;
-  markdown: string;
-  gapSummary?: string;
-  triggeringQuestionIds?: string[];
-  rationale?: string;
-  jobId?: string;
-  publication?: ProposalPublication;
-  createdAt: string;
-}
-
-export interface ProposalPublication {
-  provider: "local-git";
-  branchName: string;
-  commitSha: string;
-  remoteUrl?: string;
-  pullRequestUrl?: string;
-  publishedAt: string;
-}
-
-export interface CrunchFileWrite {
-  path: string;
-  content: string;
-}
-
-export interface CrunchOperation {
-  kind: "consolidate" | "split" | "rewrite";
-  title: string;
-  reason: string;
-  sources: string[];
-  writes: CrunchFileWrite[];
-  deletes: string[];
-}
-
-export interface CrunchPlan {
-  summary: string;
-  operations: CrunchOperation[];
-  rationale: string;
-}
-
-export interface CrunchRun {
-  id: string;
-  flowId?: string;
-  destinationId?: string;
-  trigger: "scheduled" | "manual";
-  status: "pending" | "running" | "completed" | "failed" | "published";
-  jobId?: string;
-  plan?: CrunchPlan;
-  error?: string;
-  documentCount: number;
-  publication?: ProposalPublication;
-  createdAt: string;
-  completedAt?: string;
-}
-
-export interface CrunchSettings {
-  flowId?: string;
-  enabled: boolean;
-  cron: string;
-  lastRunAt?: string;
-  nextRunAt?: string;
-}
-
-export interface ScheduledTaskSettings {
-  key: string;
-  enabled: boolean;
-  cron: string;
-  lastRunAt?: string;
-  nextRunAt?: string;
-}
 
 export interface ScheduledTask {
   key: string;
