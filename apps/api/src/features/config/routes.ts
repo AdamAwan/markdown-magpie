@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { AppContext } from "../../context.js";
+import { requireScopes } from "../../auth/middleware.js";
 import { normalizeAiExecutionMode, normalizeAiProvider } from "../../config-holder.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
@@ -8,9 +9,9 @@ import * as configService from "./service.js";
 export function configRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
-  app.get("/", (c) => c.json(configService.getRuntimeConfig(ctx)));
+  app.get("/", requireScopes("manage:admin"), (c) => c.json(configService.getRuntimeConfig(ctx)));
 
-  app.post("/", async (c) => {
+  app.post("/", requireScopes("manage:admin"), async (c) => {
     const payload = await readJsonBody<{
       aiExecutionMode?: string;
       aiProvider?: string;
@@ -37,7 +38,7 @@ export function configRoutes(ctx: AppContext): Hono {
 export function adminRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
-  app.post("/reset", async (c) => {
+  app.post("/reset", requireScopes("manage:admin"), async (c) => {
     const { reindexed, failures, stats } = await configService.resetData(ctx);
     return c.json({ ok: true, reindexed, failures, stats });
   });

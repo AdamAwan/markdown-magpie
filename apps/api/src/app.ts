@@ -13,8 +13,9 @@ import { crunchRoutes } from "./features/crunch/routes.js";
 import { scheduledTaskRoutes } from "./features/scheduled-tasks/routes.js";
 import { jobRoutes } from "./features/jobs/routes.js";
 import { promptRoutes } from "./features/prompts/routes.js";
+import { requireAuth, type ApiAuthOptions } from "./auth/middleware.js";
 
-export function buildApp(ctx: AppContext): Hono {
+export function buildApp(ctx: AppContext, options: ApiAuthOptions = {}): Hono {
   const app = new Hono();
 
   app.use(
@@ -22,7 +23,7 @@ export function buildApp(ctx: AppContext): Hono {
     cors({
       origin: "*",
       allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
-      allowHeaders: ["content-type"]
+      allowHeaders: ["content-type", "authorization"]
     })
   );
 
@@ -41,6 +42,7 @@ export function buildApp(ctx: AppContext): Hono {
   const api = new Hono();
 
   api.get("/health", (c) => c.json({ ok: true, service: "markdown-magpie-api" }));
+  api.use("*", requireAuth(options));
 
   // Every feature module owns one prefix and declares relative paths internally.
   api.route("/config", configRoutes(ctx));

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
+import { requireScopes } from "../../auth/middleware.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import * as jobsService from "./service.js";
@@ -11,6 +12,7 @@ export function jobRoutes(ctx: AppContext): Hono {
 
   app.post(
     "/",
+    requireScopes("manage:jobs"),
     zValidator("json", createJobBodySchema, (result, c) => {
       if (!result.success) {
         return c.json({ error: "valid_job_type_required" }, 400);
@@ -24,9 +26,9 @@ export function jobRoutes(ctx: AppContext): Hono {
     }
   );
 
-  app.get("/", async (c) => c.json({ jobs: await jobsService.listJobs(ctx) }));
+  app.get("/", requireScopes("read:knowledge"), async (c) => c.json({ jobs: await jobsService.listJobs(ctx) }));
 
-  app.post("/claim", async (c) => {
+  app.post("/claim", requireScopes("manage:jobs"), async (c) => {
     const payload = await readJsonBody<{ workerName?: string; acceptedTypes?: unknown[] }>(c);
     const workerName = payload.workerName?.trim();
 
@@ -44,7 +46,7 @@ export function jobRoutes(ctx: AppContext): Hono {
     return c.json({ job: job ?? null });
   });
 
-  app.post("/:id/complete", async (c) => {
+  app.post("/:id/complete", requireScopes("manage:jobs"), async (c) => {
     const payload = await readJsonBody<{ output?: unknown }>(c);
 
     try {
@@ -62,7 +64,7 @@ export function jobRoutes(ctx: AppContext): Hono {
     }
   });
 
-  app.post("/:id/fail", async (c) => {
+  app.post("/:id/fail", requireScopes("manage:jobs"), async (c) => {
     const payload = await readJsonBody<{ error?: string }>(c);
     const errorMessage = typeof payload.error === "string" ? payload.error : undefined;
 
@@ -74,7 +76,7 @@ export function jobRoutes(ctx: AppContext): Hono {
     }
   });
 
-  app.get("/:id", async (c) => {
+  app.get("/:id", requireScopes("read:knowledge"), async (c) => {
     const job = await jobsService.getJob(ctx, c.req.param("id"));
     if (!job) {
       throw new HttpError(404, "job_not_found");
