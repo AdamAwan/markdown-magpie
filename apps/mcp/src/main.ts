@@ -1,11 +1,5 @@
 import { stdin, stdout } from "node:process";
-
-const apiBaseUrl = trimTrailingSlash(process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/api$/, "");
-
-// When the API answers questions asynchronously (queue execution mode), kb.ask
-// polls the job until it produces an answer instead of returning queue metadata.
-const answerPollIntervalMs = parsePositiveInt(process.env.ANSWER_POLL_INTERVAL_MS, 1000);
-const answerTimeoutMs = parsePositiveInt(process.env.ANSWER_TIMEOUT_MS, 120000);
+import { askQuestion, getJson, stringArgument, submitFeedback } from "./kb-client.js";
 
 type JsonRpcId = string | number | null;
 
@@ -221,15 +215,6 @@ function asToolCallParams(value: unknown): ToolCallParams {
   return value as ToolCallParams;
 }
 
-function stringArgument(args: Record<string, unknown> | undefined, name: string): string {
-  const value = args?.[name];
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`${name} must be a non-empty string`);
-  }
-
-  return value.trim();
-}
-
 function numberArgument(args: Record<string, unknown> | undefined, name: string): number | undefined {
   const value = args?.[name];
   if (value === undefined) {
@@ -241,195 +226,6 @@ function numberArgument(args: Record<string, unknown> | undefined, name: string)
   }
 
   return Math.max(1, Math.min(Math.trunc(value), 200));
-}
-
-type FeedbackKind = "helpful" | "unhelpful" | "knowledge_gap";
-
-function feedbackKindArgument(args: Record<string, unknown> | undefined): FeedbackKind {
-  const value = args?.kind;
-  if (value === "helpful" || value === "unhelpful" || value === "knowledge_gap") {
-    return value;
-  }
-
-  throw new Error("kind must be one of 'helpful', 'unhelpful', or 'knowledge_gap'");
-}
-
-function optionalStringArgument(args: Record<string, unknown> | undefined, name: string): string | undefined {
-  const value = args?.[name];
-  if (value === undefined) {
-    return undefined;
-  }
-
-  if (typeof value !== "string") {
-    throw new Error(`${name} must be a string`);
-  }
-
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-async function submitFeedback(args: Record<string, unknown> | undefined): Promise<unknown> {
-  const questionId = stringArgument(args, "questionId");
-  const kind = feedbackKindArgument(args);
-
-  if (kind === "knowledge_gap") {
-    const gapSummary = optionalStringArgument(args, "gapSummary");
-    const body = gapSummary ? { summary: gapSummary } : {};
-    const response = asObject(await postJson(`/questions/${encodeURIComponent(questionId)}/gap`, body));
-    return { questionId, kind, question: response.question };
-  }
-
-  const response = asObject(await postJson(`/questions/${encodeURIComponent(questionId)}/feedback`, { feedback: kind }));
-  return { questionId, kind, question: response.question };
-}
-
-interface AskResult {
-  answer: string;
-  confidence: string;
-  citations: unknown[];
-  gaps?: unknown[];
-  questionId?: string;
-}
-
-interface JobView {
-  status: string;
-  output?: unknown;
-  error?: string;
-}
-
-// Asks the API a question and resolves to the final answer only. The API may
-// answer inline (direct mode) or asynchronously via a job (queue mode); in the
-// queue case we poll until the answer is ready so callers never see internal
-// job, queue, or retrieval-context details.
-async function askQuestion(question: string): Promise<AskResult> {
-  const ask = asObject(await postJson("/ask", { question }));
-  const questionId = typeof ask.questionId === "string" ? ask.questionId : undefined;
-  const result = ask.result !== undefined ? extractAnswer(ask.result) : await waitForQueuedAnswer(readStatusPath(ask));
-
-  return { ...result, questionId };
-}
-
-async function waitForQueuedAnswer(statusPath: string): Promise<AskResult> {
-  const deadline = Date.now() + answerTimeoutMs;
-
-  for (;;) {
-    const job = readJob(await getJson(statusPath));
-
-    if (job.status === "completed") {
-      if (job.output === undefined) {
-        throw new Error("Answer job completed without producing an answer");
-      }
-
-      return extractAnswer(job.output);
-    }
-
-    if (job.status === "failed" || job.status === "cancelled") {
-      throw new Error(job.error ?? `Answer job ${job.status}`);
-    }
-
-    if (Date.now() >= deadline) {
-      throw new Error("Timed out waiting for the answer to be generated");
-    }
-
-    await delay(answerPollIntervalMs);
-  }
-}
-
-function readStatusPath(ask: Record<string, unknown>): string {
-  const links = ask.links;
-  if (links && typeof links === "object") {
-    const status = (links as Record<string, unknown>).status;
-    if (typeof status === "string" && status.length > 0) {
-      return status;
-    }
-  }
-
-  throw new Error("Queued answer response did not include a status link");
-}
-
-function readJob(value: unknown): JobView {
-  const job = asObject(asObject(value).job);
-  const status = job.status;
-  if (typeof status !== "string") {
-    throw new Error("Job status response did not include a status");
-  }
-
-  return {
-    status,
-    output: job.output,
-    error: typeof job.error === "string" ? job.error : undefined
-  };
-}
-
-function extractAnswer(value: unknown): AskResult {
-  const record = asObject(value);
-  const answer = record.answer;
-  if (typeof answer !== "string") {
-    throw new Error("Answer payload did not include answer text");
-  }
-
-  const result: AskResult = {
-    answer,
-    confidence: typeof record.confidence === "string" ? record.confidence : "low",
-    citations: Array.isArray(record.citations) ? record.citations : []
-  };
-
-  if (Array.isArray(record.gaps) && record.gaps.length > 0) {
-    result.gaps = record.gaps;
-  }
-
-  return result;
-}
-
-function asObject(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error("Expected an object response from the API");
-  }
-
-  return value as Record<string, unknown>;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function parsePositiveInt(value: string | undefined, fallback: number): number {
-  if (value === undefined) {
-    return fallback;
-  }
-
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-async function postJson(path: string, body: unknown): Promise<unknown> {
-  const response = await fetch(apiUrl(path), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json"
-    },
-    body: JSON.stringify(body)
-  });
-
-  return readApiResponse(response, path);
-}
-
-async function getJson(path: string): Promise<unknown> {
-  const response = await fetch(apiUrl(path));
-  return readApiResponse(response, path);
-}
-
-async function readApiResponse(response: Response, path: string): Promise<unknown> {
-  const text = await response.text();
-  const body = text ? JSON.parse(text) : {};
-
-  if (!response.ok) {
-    throw new Error(`API ${path} failed with ${response.status}: ${text}`);
-  }
-
-  return body;
 }
 
 function textResult(value: unknown): unknown {
@@ -445,12 +241,4 @@ function textResult(value: unknown): unknown {
 
 function writeMessage(message: unknown): void {
   stdout.write(`${JSON.stringify(message)}\n`);
-}
-
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, "");
-}
-
-function apiUrl(path: string): string {
-  return path.startsWith("/api/") || path === "/api" ? `${apiBaseUrl}${path}` : `${apiBaseUrl}/api${path}`;
 }
