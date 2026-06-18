@@ -157,6 +157,40 @@ test("listGapCandidates lists each gap of a multi-topic question separately and 
   assert.deepEqual([...(shared?.questionIds ?? [])].sort(), [first.id, second.id].sort());
 });
 
+test("listGapCandidates groups the same gap separately per flow and tags each candidate", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const sharedGap: AnswerResult = {
+    answer: "Not documented.",
+    confidence: "low",
+    citations: [],
+    gaps: [{ summary: "Pricing is undocumented", question: "price?", confidence: "low", citedSectionIds: [] }]
+  };
+  const sales = await store.record({
+    question: "price?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    answer: sharedGap,
+    retrievedSectionIds: [],
+    flowId: "magpie-sales"
+  });
+  const support = await store.record({
+    question: "price?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    answer: sharedGap,
+    retrievedSectionIds: [],
+    flowId: "magpie-support"
+  });
+
+  const candidates = await store.listGapCandidates(50);
+  const byFlow = new Map(candidates.map((candidate) => [candidate.flowId, candidate]));
+
+  // Same summary, two flows -> two candidates, each tagged and scoped to its flow.
+  assert.equal(candidates.length, 2);
+  assert.deepEqual(byFlow.get("magpie-sales")?.questionIds, [sales.id]);
+  assert.deepEqual(byFlow.get("magpie-support")?.questionIds, [support.id]);
+});
+
 test("listGapCandidates excludes a question whose manual gap was cleared", async () => {
   const store = new InMemoryQuestionLogStore();
   const helpful: AnswerResult = { answer: "Yes.", confidence: "high", citations: [] };

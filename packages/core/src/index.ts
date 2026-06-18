@@ -105,6 +105,10 @@ export interface QuestionLog {
   chatProvider: string;
   confidence: Confidence;
   retrievedSectionIds: string[];
+  // The flow this question was routed to (scopes retrieval + persona). Recorded
+  // so a gap can later be attributed to the flow that produced it. Absent for
+  // un-routed/legacy questions.
+  flowId?: string;
   askedAt: string;
   answer?: AnswerResult;
   feedback?: QuestionFeedback;
@@ -120,6 +124,7 @@ export interface QuestionLogInput {
   chatProvider: string;
   answer?: AnswerResult;
   retrievedSectionIds: string[];
+  flowId?: string;
 }
 
 export interface QuestionLogUpdateInput {
@@ -135,6 +140,10 @@ export interface GapCandidate {
   count: number;
   latestAskedAt: string;
   confidence: Confidence;
+  // The flow whose questions surfaced this gap. Candidates are grouped per flow,
+  // so the same summary asked under two flows yields two candidates. Absent when
+  // the underlying questions were not routed to a flow.
+  flowId?: string;
 }
 
 export interface GapCluster {
@@ -158,6 +167,9 @@ export interface SuggestedGapCluster {
   questionIds: string[];
   count: number;
   rationale?: string;
+  // Every member of a cluster belongs to the same flow (clustering runs per
+  // flow), so a drafted proposal can default to this flow's destination/persona.
+  flowId?: string;
 }
 
 export interface Proposal {

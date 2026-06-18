@@ -1,11 +1,12 @@
 import { FormEvent } from "react";
 import { AskResponse, Feedback, QuestionLog } from "../lib/types";
-import { CitationRow } from "./common";
+import { CitationRow, FlowTag } from "./common";
 
 export function AskPanel({
   answer,
   answeredSearch,
   expandedQuestionIds,
+  flowLabels,
   loading,
   onAsk,
   onFeedback,
@@ -19,6 +20,7 @@ export function AskPanel({
   answer?: AskResponse;
   answeredSearch: string;
   expandedQuestionIds: string[];
+  flowLabels: Record<string, string>;
   loading: boolean;
   onAsk: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onFeedback: (questionId: string, feedback: Feedback) => Promise<void>;
@@ -33,6 +35,9 @@ export function AskPanel({
   const filteredQuestions = query
     ? questions.filter((item) => item.question.toLowerCase().includes(query))
     : questions;
+  // The /ask response carries no flow itself; recover it from the logged question
+  // once the post-ask refresh has loaded it, so the live answer is tagged too.
+  const answerFlowId = answer ? questions.find((item) => item.id === answer.questionId)?.flowId : undefined;
 
   return (
     <>
@@ -59,6 +64,7 @@ export function AskPanel({
             >
               {answer.result?.confidence ?? "queued"}
             </span>
+            <FlowTag flowId={answerFlowId} flowLabels={flowLabels} />
             <code>{answer.questionId}</code>
           </div>
           <p>{answer.result?.answer ?? `Queued as ${answer.job?.type ?? "AI job"}`}</p>
@@ -93,6 +99,7 @@ export function AskPanel({
               <article className="row" key={item.id}>
                 <div className="rowTop">
                   <h3>{item.question}</h3>
+                  <FlowTag flowId={item.flowId} flowLabels={flowLabels} />
                   <span className={`status ${item.confidence}`} title={`Answer confidence: ${item.confidence}`}>
                     {item.confidence}
                   </span>

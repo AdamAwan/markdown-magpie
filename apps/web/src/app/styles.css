@@ -473,6 +473,16 @@ select:focus {
   white-space: nowrap;
 }
 
+/* Names the knowledge flow a gap/cluster belongs to. Title-cased (flow names are
+   prose) and tinted to read as a routing tag distinct from count/status pills. */
+.flowPill {
+  border-color: #b8c8d9;
+  background: #f1f6fb;
+  color: #2d5775;
+  text-transform: none;
+  font-weight: 700;
+}
+
 .status.high,
 .status.medium,
 .status.completed,

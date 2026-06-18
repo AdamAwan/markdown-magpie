@@ -30,9 +30,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       await client.query(
         `
           INSERT INTO questions (
-            id, question, confidence, answer, execution_mode, chat_provider, metadata
+            id, question, confidence, answer, execution_mode, chat_provider, flow_id, metadata
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         `,
         [
           id,
@@ -41,6 +41,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           input.answer?.answer ?? null,
           input.executionMode,
           input.chatProvider,
+          input.flowId ?? null,
           JSON.stringify({
             answer: input.answer ?? null,
             retrievedSectionIds: input.retrievedSectionIds
@@ -341,20 +342,24 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     // Cluster across individual gap rows so each distinct gap of a multi-topic
     // question can group with the same gap from other questions. A question with
     // both a 'manual' and an 'auto' row for the same summary is counted once.
+    // Group by (summary, flow_id) so the same gap raised under two flows yields
+    // two candidates, each clustering and drafting within its own flow. flow_id
+    // is coalesced to '' so NULL (un-routed) gaps still group with each other.
     const result = await this.pool.query<GapCandidateRow>(
       `
         SELECT
           summary,
+          flow_id,
           array_agg(question_id ORDER BY asked_at DESC) AS question_ids,
           count(*)::int AS count,
           max(asked_at) AS latest_asked_at
         FROM (
-          SELECT DISTINCT qg.summary, q.id AS question_id, q.asked_at
+          SELECT DISTINCT qg.summary, coalesce(q.flow_id, '') AS flow_id, q.id AS question_id, q.asked_at
           FROM question_gaps qg
           JOIN questions q ON q.id = qg.question_id
           WHERE qg.resolved_at IS NULL AND (q.confidence = 'low' OR q.manual_gap = true)
         ) AS distinct_gaps
-        GROUP BY summary
+        GROUP BY summary, flow_id
         ORDER BY count DESC, latest_asked_at DESC
         LIMIT $1
       `,
@@ -366,7 +371,8 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       questionIds: row.question_ids,
       count: row.count,
       latestAskedAt: row.latest_asked_at.toISOString(),
-      confidence: "low"
+      confidence: "low",
+      ...(row.flow_id ? { flowId: row.flow_id } : {})
     }));
   }
 }
@@ -398,6 +404,7 @@ interface QuestionRow {
   answer: string | null;
   execution_mode: QuestionLog["executionMode"];
   chat_provider: string;
+  flow_id: string | null;
   metadata: {
     answer?: AnswerResult | null;
     retrievedSectionIds?: string[];
@@ -411,6 +418,7 @@ interface QuestionRow {
 
 interface GapCandidateRow {
   summary: string;
+  flow_id: string;
   question_ids: string[];
   count: number;
   latest_asked_at: Date;
@@ -427,6 +435,7 @@ function mapQuestionRow(row: QuestionRow, gaps: QuestionGap[]): QuestionLog {
     retrievedSectionIds: row.metadata.retrievedSectionIds ?? [],
     answer,
     askedAt: row.asked_at.toISOString(),
+    ...(row.flow_id ? { flowId: row.flow_id } : {}),
     feedback: row.feedback ?? undefined,
     feedbackAt: row.feedback_at?.toISOString(),
     gaps,

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { GapCandidate, SuggestedGapCluster } from "../lib/types";
 import { formatQuestionCount } from "../lib/format";
+import { FlowTag } from "./common";
 
 const NEW_CLUSTER = "__new__";
 
@@ -9,6 +10,7 @@ interface EditableCluster {
   title: string;
   summaries: string[];
   rationale?: string;
+  flowId?: string;
 }
 
 function toEditableClusters(clusters: SuggestedGapCluster[]): EditableCluster[] {
@@ -16,7 +18,8 @@ function toEditableClusters(clusters: SuggestedGapCluster[]): EditableCluster[] 
     id: cluster.id,
     title: cluster.title,
     summaries: [...cluster.summaries],
-    rationale: cluster.rationale
+    rationale: cluster.rationale,
+    flowId: cluster.flowId
   }));
 }
 
@@ -38,12 +41,14 @@ export function GapClusterPanel({
   clusters,
   gaps,
   draftCluster,
-  loading
+  loading,
+  flowLabels
 }: {
   clusters: SuggestedGapCluster[];
   gaps: GapCandidate[];
-  draftCluster: (summaries: string[]) => Promise<void>;
+  draftCluster: (summaries: string[], flowId?: string) => Promise<void>;
   loading: boolean;
+  flowLabels: Record<string, string>;
 }) {
   const signature = useMemo(
     () => clusters.map((cluster) => `${cluster.id}:${cluster.summaries.join("|")}`).join("~"),
@@ -60,18 +65,20 @@ export function GapClusterPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature]);
 
-  const questionIdsBySummary = useMemo(() => {
+  // Keyed by (flowId, summary): the same summary can exist in two flows with
+  // different questions, so keying on summary alone would conflate their counts.
+  const questionIdsByFlowSummary = useMemo(() => {
     const map = new Map<string, string[]>();
     for (const gap of gaps) {
-      map.set(gap.summary, gap.questionIds);
+      map.set(`${gap.flowId ?? ""} ${gap.summary}`, gap.questionIds);
     }
     return map;
   }, [gaps]);
 
-  function questionCount(summaries: string[]): number {
+  function questionCount(summaries: string[], flowId?: string): number {
     const ids = new Set<string>();
     for (const summary of summaries) {
-      for (const id of questionIdsBySummary.get(summary) ?? []) {
+      for (const id of questionIdsByFlowSummary.get(`${flowId ?? ""} ${summary}`) ?? []) {
         ids.add(id);
       }
     }
@@ -89,7 +96,10 @@ export function GapClusterPanel({
           : group
       );
       if (targetId === NEW_CLUSTER) {
-        next = [...next, { id: `local-${summary}`, title: clusterTitleFor(summary), summaries: [summary] }];
+        // A split inherits the flow of the cluster the gap came from, so the new
+        // group still drafts to the right destination.
+        const sourceFlowId = previous.find((group) => group.summaries.includes(summary))?.flowId;
+        next = [...next, { id: `local-${summary}`, title: clusterTitleFor(summary), summaries: [summary], flowId: sourceFlowId }];
       } else {
         next = next.map((group) =>
           group.id === targetId
@@ -130,9 +140,10 @@ export function GapClusterPanel({
                   onChange={(event) => renameGroup(group.id, event.target.value)}
                   aria-label="Cluster title"
                 />
+                <FlowTag flowId={group.flowId} flowLabels={flowLabels} />
                 <span
                   className="pill countPill"
-                  title={`${questionCount(group.summaries)} question(s) across ${group.summaries.length} gap(s)`}
+                  title={`${questionCount(group.summaries, group.flowId)} question(s) across ${group.summaries.length} gap(s)`}
                 >
                   {group.summaries.length} gap{group.summaries.length === 1 ? "" : "s"}
                 </span>
@@ -173,7 +184,7 @@ export function GapClusterPanel({
                 <button
                   className="chip"
                   disabled={loading}
-                  onClick={() => void draftCluster(group.summaries)}
+                  onClick={() => void draftCluster(group.summaries, group.flowId)}
                   title="Draft one proposal covering every gap in this cluster"
                   type="button"
                 >
@@ -192,11 +203,13 @@ export function GapClusterPanel({
 export function GapPanel({
   draftProposal,
   gaps,
-  loading
+  loading,
+  flowLabels
 }: {
   draftProposal: (gap: GapCandidate) => Promise<void>;
   gaps: GapCandidate[];
   loading: boolean;
+  flowLabels: Record<string, string>;
 }) {
   return (
     <section className="surface">
@@ -209,9 +222,12 @@ export function GapPanel({
       <div className="surfaceBody">
         <div className="list scrollList">
           {gaps.map((gap) => (
-            <article className="row" key={gap.summary}>
+            // The same summary can surface under two flows, so the flow is part
+            // of the key to keep candidates distinct.
+            <article className="row" key={`${gap.flowId ?? ""} ${gap.summary}`}>
               <div className="rowTop">
                 <h3>{gap.summary}</h3>
+                <FlowTag flowId={gap.flowId} flowLabels={flowLabels} />
                 <span className="pill countPill" title={`${gap.count} question${gap.count === 1 ? "" : "s"} grouped into this gap`}>
                   {formatQuestionCount(gap.count)}
                 </span>

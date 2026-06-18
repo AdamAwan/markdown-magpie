@@ -140,6 +140,7 @@ export interface QuestionLog {
   answer?: AnswerResult;
   feedback?: Feedback;
   manualGap?: boolean;
+  flowId?: string;
 }
 
 export interface GapCandidate {
@@ -148,6 +149,7 @@ export interface GapCandidate {
   count: number;
   latestAskedAt: string;
   confidence: Confidence;
+  flowId?: string;
 }
 
 export interface SuggestedGapCluster {
@@ -157,6 +159,7 @@ export interface SuggestedGapCluster {
   questionIds: string[];
   count: number;
   rationale?: string;
+  flowId?: string;
 }
 
 export interface AiJob {

@@ -34,7 +34,8 @@ export async function ask(ctx: AppContext, question: string): Promise<AskResult>
       question,
       executionMode: ctx.config.get().aiExecutionMode,
       chatProvider: ctx.config.get().aiProvider,
-      retrievedSectionIds: sections.map((ranked) => ranked.section.id)
+      retrievedSectionIds: sections.map((ranked) => ranked.section.id),
+      ...(flowId ? { flowId } : {})
     });
     const input: AnswerQuestionJobInput = {
       questionLogId: log.id,
@@ -67,7 +68,8 @@ export async function ask(ctx: AppContext, question: string): Promise<AskResult>
     executionMode: ctx.config.get().aiExecutionMode,
     chatProvider: ctx.config.get().aiProvider,
     answer: result,
-    retrievedSectionIds: result.citations.map((citation) => citation.sectionId)
+    retrievedSectionIds: result.citations.map((citation) => citation.sectionId),
+    ...(flowId ? { flowId } : {})
   });
 
   return { kind: "direct", mode: ctx.config.get().aiExecutionMode, questionId: log.id, result };

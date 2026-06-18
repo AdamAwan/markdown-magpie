@@ -235,7 +235,11 @@ export async function draftFromGaps(
   );
   const evidence = dedupeCitations(logs.flatMap((log) => log.answer?.citations ?? []));
   const deps = ctx.repositoryDeps();
-  const flow = selectFlow(deps, overrides.flowId);
+  // Prefer an explicit override; otherwise inherit the flow the matched gaps came
+  // from. Candidates within a cluster share a flow (clustering is per-flow), so
+  // this routes the draft to that flow's destination + sources even on the
+  // autonomous gap-to-PR path, which passes no override.
+  const flow = selectFlow(deps, overrides.flowId ?? derivedFlowId(matched));
   const sourceIds = overrides.sourceIds ?? flow?.sourceIds;
   const destinationId = overrides.destinationId?.trim() || flow?.destinationId || defaultDestinationId(deps);
   console.log(
@@ -358,6 +362,14 @@ export function titleFromGapSummary(summary: string): string {
     .slice(0, 10)
     .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
     .join(" ");
+}
+
+// The flow a set of matched gap candidates agree on, or undefined when they span
+// several flows or none carry one. Used to default a draft's destination/sources
+// to the flow that surfaced the gaps when the caller gives no explicit override.
+function derivedFlowId(candidates: GapCandidate[]): string | undefined {
+  const flowIds = new Set(candidates.map((candidate) => candidate.flowId).filter(Boolean));
+  return flowIds.size === 1 ? [...flowIds][0] : undefined;
 }
 
 // Stored on the proposal as a human-readable record of which gaps it closes.

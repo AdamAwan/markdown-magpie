@@ -1,12 +1,15 @@
 "use client";
 
+import { useMemo } from "react";
 import { AskPanel } from "../../components/AskPanel";
 import { useConsole } from "../../components/ConsoleProvider";
+import { knowledgeFlows } from "../../lib/config";
 
 export default function AskPage() {
   const {
     answer,
     answeredSearch,
+    config,
     expandedQuestionIds,
     loading,
     ask,
@@ -19,6 +22,12 @@ export default function AskPage() {
     toggleCitations
   } = useConsole();
 
+  // Map flow id -> display name so questions can be tagged with a readable flow.
+  const flowLabels = useMemo(
+    () => Object.fromEntries(knowledgeFlows(config).map((flow) => [flow.id, flow.name])),
+    [config]
+  );
+
   return (
     <section className="workbench singlePane">
       <div className="surface">
@@ -30,6 +39,7 @@ export default function AskPage() {
             answer={answer}
             answeredSearch={answeredSearch}
             expandedQuestionIds={expandedQuestionIds}
+            flowLabels={flowLabels}
             loading={loading}
             onAsk={ask}
             onFeedback={sendFeedback}

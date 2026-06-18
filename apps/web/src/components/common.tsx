@@ -68,6 +68,21 @@ export function CitationRow({ citation }: { citation: Citation }) {
   );
 }
 
+// A small pill naming the knowledge flow a question, gap, or cluster belongs to,
+// so reviewers can see at a glance which audience/destination it routes to.
+// Renders nothing for un-routed (legacy) items; falls back to the raw id when the
+// flow is no longer configured.
+export function FlowTag({ flowId, flowLabels }: { flowId?: string; flowLabels: Record<string, string> }) {
+  if (!flowId) {
+    return null;
+  }
+  return (
+    <span className="pill flowPill" title={`Knowledge flow: ${flowLabels[flowId] ?? flowId}`}>
+      {flowLabels[flowId] ?? flowId}
+    </span>
+  );
+}
+
 export function ContextValue({ label, value }: { label: string; value: string }) {
   return (
     <div className="contextValue">

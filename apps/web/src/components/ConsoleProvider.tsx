@@ -262,7 +262,9 @@ function useConsoleController() {
     try {
       const result = await apiPost<{ job?: AiJob; proposal?: Proposal }>("/proposals/from-gap", {
         summary: gap.summary,
-        flowId
+        // Draft into the flow the gap actually came from; fall back to the
+        // console's selected flow for un-routed/legacy gaps.
+        flowId: gap.flowId ?? flowId
       });
       if (result.proposal) {
         setSelectedProposalId(result.proposal.id);
@@ -281,7 +283,7 @@ function useConsoleController() {
     }
   }
 
-  async function draftCluster(summaries: string[]) {
+  async function draftCluster(summaries: string[], clusterFlowId?: string) {
     if (summaries.length === 0) {
       return;
     }
@@ -290,7 +292,9 @@ function useConsoleController() {
     try {
       const result = await apiPost<{ job?: AiJob; proposal?: Proposal }>("/proposals/from-gaps", {
         summaries,
-        flowId
+        // Use the cluster's own flow (clusters are per-flow); fall back to the
+        // console's selected flow when the cluster carries none.
+        flowId: clusterFlowId ?? flowId
       });
       if (result.proposal) {
         setSelectedProposalId(result.proposal.id);
