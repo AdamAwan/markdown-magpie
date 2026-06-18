@@ -1,6 +1,7 @@
 "use client";
 
 import { ReactNode, useMemo } from "react";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { ConsoleSection } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
@@ -52,7 +53,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="appShell">
       <aside className="sidebar">
         <div className="brand">
-          <img className="brandLogo" src="/magpie.jpeg" alt="" aria-hidden="true" width={40} height={40} />
+          <Image className="brandLogo" src="/magpie.jpeg" alt="" aria-hidden="true" width={40} height={40} />
           <div className="brandText">
             <span>Markdown Magpie</span>
             <strong>Knowledge Console</strong>

@@ -7,6 +7,7 @@ import {
   CRUNCH_KNOWLEDGE_BASE,
   DRAFT_MARKDOWN_PROPOSAL,
   GENERIC_JOB,
+  SOURCE_CHANGE_SYNC,
   SUMMARIZE_GAP
 } from "./catalog.js";
 
@@ -57,6 +58,12 @@ test("crunch_knowledge_base appends Input block", () => {
   const input = { documents: [{ path: "a.md", content: "c" }] };
   const prompt = buildJobPrompt(job("crunch_knowledge_base", input));
   assert.equal(prompt, `${CRUNCH_KNOWLEDGE_BASE.instructions}\n\nInput:\n${JSON.stringify(input, null, 2)}`);
+});
+
+test("sync_source_change uses the source-change-sync prompt, not the generic fallback", () => {
+  const input = { changes: [{ path: "src/a.ts", diff: "..." }], documents: [] };
+  const prompt = buildJobPrompt(job("sync_source_change", input));
+  assert.equal(prompt, `${SOURCE_CHANGE_SYNC.instructions}\n\nInput:\n${JSON.stringify(input, null, 2)}`);
 });
 
 test("unmapped job types fall back to the generic job prompt with the whole job", () => {

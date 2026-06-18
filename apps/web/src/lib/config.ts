@@ -24,7 +24,9 @@ export function extractModelInfo(config: RuntimeConfig | undefined): {
     }
     if (typeof compat.embeddingBaseUrl === "string") {
       result.embeddingHost = extractHostFromUrl(compat.embeddingBaseUrl);
-    } else if (typeof compat.baseUrl === "string" && !compat.embeddingBaseUrl) {
+    } else if (typeof compat.baseUrl === "string") {
+      // No dedicated embedding endpoint configured: embeddings share the chat
+      // host. (We're already in the `embeddingBaseUrl is not a string` branch.)
       result.embeddingHost = extractHostFromUrl(compat.baseUrl);
     }
   }

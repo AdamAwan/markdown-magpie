@@ -108,7 +108,10 @@ async function routeToFlow(ctx: AppContext, question: string): Promise<RoutedFlo
 function routingChatProvider(ctx: AppContext): ChatProvider | undefined {
   try {
     return ctx.providers.chat(ctx.config.get().aiProvider);
-  } catch {
+  } catch (error) {
+    // Expected for queue-only providers; log so a genuine misconfiguration is
+    // observable rather than silently degrading routing.
+    console.debug("routingChatProvider: no synchronous provider for routing:", error);
     return undefined;
   }
 }

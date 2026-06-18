@@ -129,8 +129,17 @@ async function parseEmbeddingResponse(response: Response, expectedCount: number)
     throw new Error(`Embedding provider returned ${data.length} vectors for ${expectedCount} inputs`);
   }
 
-  return [...data]
-    .sort((left, right) => (left.index ?? 0) - (right.index ?? 0))
+  // Reorder by the provider's `index` only when every entry carries one.
+  // Defaulting a missing index to 0 (the previous behaviour) would collapse all
+  // un-indexed entries to the front and silently misalign vectors with their
+  // input text; if indices are absent/partial we trust the returned array order
+  // (OpenAI-compatible APIs return embeddings in input order).
+  const ordered = [...data];
+  if (ordered.every((entry) => typeof entry.index === "number")) {
+    ordered.sort((left, right) => (left.index as number) - (right.index as number));
+  }
+
+  return ordered
     .map((entry) => {
       const vector = entry.embedding;
       if (!vector || vector.length !== EMBEDDING_DIMENSIONS) {

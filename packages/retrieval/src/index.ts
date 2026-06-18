@@ -261,7 +261,10 @@ export async function routeQuestionToFlow(
       ]
     });
     content = response.content;
-  } catch {
+  } catch (error) {
+    // Routing must never fail the ask, but a totally silent swallow hides a
+    // misconfigured provider. Log and degrade to the default flow.
+    console.debug("routeQuestionToFlow: provider call failed, falling back to default flow:", error);
     return undefined;
   }
 

@@ -1,6 +1,8 @@
 export function parseLimit(value: string | null, defaultLimit: number): number {
-  const parsed = Number.parseInt(value ?? "", 10);
-  if (!Number.isFinite(parsed)) {
+  // Number() (unlike parseInt) rejects trailing garbage like "12abc" rather than
+  // silently parsing it to 12; fall back to the default for anything non-integer.
+  const parsed = Number(value);
+  if (value === null || value.trim() === "" || !Number.isInteger(parsed)) {
     return defaultLimit;
   }
 

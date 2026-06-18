@@ -142,8 +142,10 @@ function numberOrUndefined(value: string | undefined): number | undefined {
     return undefined;
   }
 
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  // Number() rejects trailing garbage (e.g. "5x") that parseInt would accept as
+  // 5, so a malformed review_cycle_days isn't silently coerced.
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : undefined;
 }
 
 function slugify(value: string): string {

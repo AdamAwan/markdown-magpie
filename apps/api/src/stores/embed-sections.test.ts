@@ -76,6 +76,27 @@ describe("embedPendingSections", () => {
     assert.equal(store.saved.size, 0);
   });
 
+  it("stops instead of spinning when the store never clears a section", async () => {
+    // A store whose saveSectionEmbedding is a no-op keeps returning the same
+    // section on every pass; the stall guard must terminate the loop.
+    const stuckStore: EmbeddingPersistence = {
+      async listSectionsNeedingEmbedding() {
+        return [{ id: "a", text: "alpha" }];
+      },
+      async countSectionsNeedingEmbedding() {
+        return 1;
+      },
+      async saveSectionEmbedding() {
+        // no-op: never clears the pending section
+      }
+    };
+
+    const result = await embedPendingSections({ store: stuckStore, provider, batchSize: 10 });
+    // First pass embeds "a"; the second pass returns only the already-attempted
+    // "a", so the loop stops rather than running forever.
+    assert.equal(result.embeddedCount, 1);
+  });
+
   it("throws when the provider returns an empty vector array", async () => {
     const store = fakeStore([{ id: "a", text: "alpha" }]);
     const emptyProvider: EmbeddingProvider = {

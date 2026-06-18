@@ -3,6 +3,7 @@ import type {
   AnswerQuestionJobInput,
   CrunchKnowledgeBaseJobInput,
   DraftMarkdownProposalJobInput,
+  SourceChangeSyncJobInput,
   SummarizeGapJobInput
 } from "@magpie/core";
 import {
@@ -10,6 +11,7 @@ import {
   CRUNCH_KNOWLEDGE_BASE,
   DRAFT_MARKDOWN_PROPOSAL,
   GENERIC_JOB,
+  SOURCE_CHANGE_SYNC,
   SUMMARIZE_GAP,
   withPersona
 } from "./catalog.js";
@@ -31,6 +33,10 @@ export function buildJobPrompt(job: AiJob): string {
 
   if (job.type === "crunch_knowledge_base") {
     return `${CRUNCH_KNOWLEDGE_BASE.instructions}\n\nInput:\n${JSON.stringify(job.input as CrunchKnowledgeBaseJobInput, null, 2)}`;
+  }
+
+  if (job.type === "sync_source_change") {
+    return `${SOURCE_CHANGE_SYNC.instructions}\n\nInput:\n${JSON.stringify(job.input as SourceChangeSyncJobInput, null, 2)}`;
   }
 
   return `${GENERIC_JOB.instructions}\n\nJob:\n${JSON.stringify(job, null, 2)}`;
