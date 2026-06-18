@@ -16,12 +16,13 @@ jobs:
 
     # Postgres (with pgvector) backs the integration tests for the Postgres*
     # stores. Without DATABASE_URL set, those test blocks self-skip and the SQL
-    # paths go uncovered — so the suite runs against a real database here.
+    # paths go uncovered — so the suite runs against a real database here. The
+    # test:db wrapper creates a throwaway database on this server per run,
+    # migrates it, and drops it after, so we only need the default `postgres` db.
     services:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_DB: markdown_magpie
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
         ports:
@@ -33,7 +34,7 @@ jobs:
           --health-retries 20
 
     env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/markdown_magpie
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
 
     steps:
       - name: Checkout
@@ -51,11 +52,10 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Run database migrations
-        run: npm run db:migrate
-
+      # Provisions a throwaway database, migrates it, runs the suite against it,
+      # and drops it — see scripts/test-db.mjs.
       - name: Test
-        run: npm run test
+        run: npm run test:db
 
       - name: Lint
         run: npm run lint

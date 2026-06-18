@@ -21,7 +21,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "npm run test --workspaces --if-present",
+    "test:db": "node scripts/test-db.mjs npm run test",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
+    "test:db:coverage": "node scripts/test-db.mjs npm run test:coverage",
     "typecheck": "tsc -p tsconfig.check.json --noEmit"
   },
   "devDependencies": {
