@@ -4,9 +4,9 @@ import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { apiLink, parseLimit } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
-import { readJsonBody } from "../../http/body.js";
+import { parseJsonBody } from "../../http/body.js";
 import * as proposalsService from "./service.js";
-import { proposalStatusBodySchema } from "./schema.js";
+import { draftFromGapsBodySchema, proposalStatusBodySchema } from "./schema.js";
 
 export function proposalRoutes(ctx: AppContext): Hono {
   const app = new Hono();
@@ -19,14 +19,7 @@ export function proposalRoutes(ctx: AppContext): Hono {
   });
 
   const createFromGaps = async (c: Context): Promise<Response> => {
-    const payload = await readJsonBody<{
-      summary?: string;
-      summaries?: string[];
-      targetPath?: string;
-      flowId?: string;
-      sourceIds?: string[];
-      destinationId?: string;
-    }>(c);
+    const payload = await parseJsonBody(c, draftFromGapsBodySchema, "gap_summary_required");
 
     const requested = [...(payload.summaries ?? []), ...(payload.summary ? [payload.summary] : [])];
     const outcome = await proposalsService.draftFromGaps(ctx, requested, {

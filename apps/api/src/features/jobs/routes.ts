@@ -34,7 +34,8 @@ export function jobRoutes(ctx: AppContext): Hono {
       throw new HttpError(400, "worker_name_required");
     }
 
-    const acceptedTypes = (payload.acceptedTypes ?? []).filter(jobsService.isAiJobType);
+    const rawTypes = Array.isArray(payload.acceptedTypes) ? payload.acceptedTypes : [];
+    const acceptedTypes = rawTypes.filter(jobsService.isAiJobType);
     if (acceptedTypes.length === 0) {
       throw new HttpError(400, "accepted_types_required");
     }
@@ -63,9 +64,10 @@ export function jobRoutes(ctx: AppContext): Hono {
 
   app.post("/:id/fail", async (c) => {
     const payload = await readJsonBody<{ error?: string }>(c);
+    const errorMessage = typeof payload.error === "string" ? payload.error : undefined;
 
     try {
-      const job = await jobsService.failJob(ctx, c.req.param("id"), payload.error);
+      const job = await jobsService.failJob(ctx, c.req.param("id"), errorMessage);
       return c.json({ job });
     } catch {
       throw new HttpError(404, "job_not_found");
