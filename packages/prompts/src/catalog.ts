@@ -172,6 +172,22 @@ export const JOB_RUNNER_SYSTEM: PromptDefinition = {
   instructions: `You complete Markdown Magpie AI jobs. Return only valid JSON matching the requested schema.`
 };
 
+export const ROUTE_QUESTION_TO_FLOW: PromptDefinition = {
+  id: "route-question-to-flow",
+  title: "Route question to flow",
+  description:
+    "Picks the single best-matching knowledge flow for a question from the configured flows (id, name, and persona). Used before retrieval so the answer is scoped and shaped to one audience.",
+  usedBy: ["api · ask routing (direct + queue)"],
+  outputShape: '{ flowId, confidence, rationale }',
+  instructions:
+    'You route a user question to exactly one knowledge flow. You are given the question and a ' +
+    'list of flows, each with an "id", a "name", and an optional "persona" describing its audience ' +
+    'and answering style. Choose the single flow whose name and persona best match the question. ' +
+    'Return only JSON with this shape: {"flowId":"string","confidence":"high|medium|low","rationale":"string"}. ' +
+    'The flowId MUST be exactly one of the provided ids. If no flow clearly matches, pick the closest ' +
+    'one and set confidence to low.'
+};
+
 export const promptCatalog: PromptDefinition[] = [
   ANSWER_QUESTION_QUEUE,
   ANSWER_QUESTION_DIRECT,
@@ -180,9 +196,18 @@ export const promptCatalog: PromptDefinition[] = [
   CRUNCH_KNOWLEDGE_BASE,
   GAP_CLUSTERING,
   GENERIC_JOB,
-  JOB_RUNNER_SYSTEM
+  JOB_RUNNER_SYSTEM,
+  ROUTE_QUESTION_TO_FLOW
 ];
 
 export function getPrompt(id: string): PromptDefinition | undefined {
   return promptCatalog.find((prompt) => prompt.id === id);
+}
+
+// Appends a flow's persona snippet to a base answer prompt so the model knows the
+// audience and answering style. Returns the base unchanged when no persona is set,
+// keeping the single source of truth for the base instructions in this catalog.
+export function withPersona(baseInstructions: string, persona?: string): string {
+  const trimmed = persona?.trim();
+  return trimmed ? `${baseInstructions}\n\nPersona (how to look and respond):\n${trimmed}` : baseInstructions;
 }

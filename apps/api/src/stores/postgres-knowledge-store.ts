@@ -170,17 +170,26 @@ export class PostgresKnowledgeStore implements KnowledgePersistence, SectionVect
     return { repositories, documents, sections };
   }
 
-  async searchByEmbedding(embedding: number[], limit: number): Promise<Array<{ id: string; similarity: number }>> {
+  async searchByEmbedding(
+    embedding: number[],
+    limit: number,
+    repositoryIds?: string[]
+  ): Promise<Array<{ id: string; similarity: number }>> {
     const literal = toVectorLiteral(embedding);
+    // A null filter ($3) matches every repository; otherwise restrict to the flow's
+    // destination via the section -> document -> repository join.
+    const repositoryFilter = repositoryIds && repositoryIds.length > 0 ? repositoryIds : null;
     const result = await this.pool.query<{ id: string; similarity: string }>(
       `
-        SELECT id, 1 - (embedding <=> $1::vector) AS similarity
-        FROM document_sections
-        WHERE embedding IS NOT NULL
-        ORDER BY embedding <=> $1::vector
+        SELECT s.id, 1 - (s.embedding <=> $1::vector) AS similarity
+        FROM document_sections s
+        JOIN documents d ON d.id = s.document_id
+        WHERE s.embedding IS NOT NULL
+          AND ($3::text[] IS NULL OR d.repository_id = ANY($3))
+        ORDER BY s.embedding <=> $1::vector
         LIMIT $2
       `,
-      [literal, limit]
+      [literal, limit, repositoryFilter]
     );
     return result.rows.map((row) => ({ id: row.id, similarity: Number(row.similarity) }));
   }

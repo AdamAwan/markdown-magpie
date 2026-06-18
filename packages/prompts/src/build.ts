@@ -10,13 +10,15 @@ import {
   CRUNCH_KNOWLEDGE_BASE,
   DRAFT_MARKDOWN_PROPOSAL,
   GENERIC_JOB,
-  SUMMARIZE_GAP
+  SUMMARIZE_GAP,
+  withPersona
 } from "./catalog.js";
 
 export function buildJobPrompt(job: AiJob): string {
   if (job.type === "answer_question") {
     const input = job.input as AnswerQuestionJobInput;
-    return `${ANSWER_QUESTION_QUEUE.instructions}\n\nQuestion:\n${input.question}\n\nContext:\n${JSON.stringify(input.context, null, 2)}`;
+    const system = withPersona(ANSWER_QUESTION_QUEUE.instructions, input.persona);
+    return `${system}\n\nQuestion:\n${input.question}\n\nContext:\n${JSON.stringify(input.context, null, 2)}`;
   }
 
   if (job.type === "summarize_gap") {

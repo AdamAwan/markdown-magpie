@@ -1062,6 +1062,31 @@ code {
   overflow: auto;
 }
 
+.flowDetailActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid #d8e0d0;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #45513f;
+  cursor: pointer;
+}
+
+.iconButton:hover {
+  background: #f1f5ec;
+  color: #1f2a22;
+}
+
 .flowNodeGroup {
   display: flex;
   flex-wrap: wrap;
@@ -1737,4 +1762,39 @@ pre {
 
 .promptEmpty {
   color: #45513f;
+}
+
+.personaAssembly {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed #c7d2bc;
+  border-radius: 8px;
+  background: #fbfdf8;
+}
+
+.personaAssemblyLabel {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #5a6650;
+}
+
+.flowPersonaList {
+  display: grid;
+  gap: 12px;
+}
+
+.flowPersona {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e2e8da;
+  border-radius: 8px;
+  background: #f7faf3;
+}
+
+.flowPersona h3 {
+  margin: 0;
+  font-size: 0.95rem;
 }

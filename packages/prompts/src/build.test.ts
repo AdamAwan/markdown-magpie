@@ -30,6 +30,17 @@ test("answer_question embeds question and context after the instructions", () =>
   );
 });
 
+test("answer_question appends the flow persona to the base instructions", () => {
+  const input = { question: "What now?", context: [{ heading: "H", content: "C" }], persona: "Be concise and formal." };
+  const prompt = buildJobPrompt(job("answer_question", input));
+  assert.ok(
+    prompt.startsWith(
+      `${ANSWER_QUESTION_QUEUE.instructions}\n\nPersona (how to look and respond):\nBe concise and formal.`
+    )
+  );
+  assert.match(prompt, /\n\nQuestion:\nWhat now\?/);
+});
+
 test("summarize_gap appends Input block", () => {
   const input = { questions: ["a", "b"] };
   const prompt = buildJobPrompt(job("summarize_gap", input));

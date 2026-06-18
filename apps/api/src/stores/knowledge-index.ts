@@ -30,7 +30,11 @@ export interface KnowledgePersistence {
 }
 
 export interface SectionVectorSearch {
-  searchByEmbedding(embedding: number[], limit: number): Promise<Array<{ id: string; similarity: number }>>;
+  searchByEmbedding(
+    embedding: number[],
+    limit: number,
+    repositoryIds?: string[]
+  ): Promise<Array<{ id: string; similarity: number }>>;
 }
 
 export interface SectionToEmbed {
@@ -210,8 +214,8 @@ export class InMemoryKnowledgeIndex {
     return summary;
   }
 
-  async search(question: string, limit: number): Promise<RankedSection[]> {
-    const keywordRanked = this.keywordRank(question);
+  async search(question: string, limit: number, repositoryIds?: string[]): Promise<RankedSection[]> {
+    const keywordRanked = this.keywordRank(question, repositoryIds);
 
     const { embeddingProvider, vectorSearch, onNotice } = this.hybrid;
     if (!embeddingProvider || !vectorSearch) {
@@ -221,7 +225,7 @@ export class InMemoryKnowledgeIndex {
     let vectorHits: Array<{ id: string; similarity: number }>;
     try {
       const [queryVector] = await embeddingProvider.embed([question]);
-      vectorHits = await vectorSearch.searchByEmbedding(queryVector, Math.max(limit, VECTOR_CANDIDATES));
+      vectorHits = await vectorSearch.searchByEmbedding(queryVector, Math.max(limit, VECTOR_CANDIDATES), repositoryIds);
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
       onNotice?.(`Vector search unavailable, falling back to keyword search: ${message}`);
@@ -242,21 +246,25 @@ export class InMemoryKnowledgeIndex {
         relevance: Math.max(similarityById.get(id) ?? 0, keywordRelevanceById.get(id) ?? 0)
       }))
       .sort((left, right) => right.fused - left.fused)
-      .slice(0, limit)
       .map(({ id, relevance }) => {
         const section = this.sections.get(id);
         return section ? { section, relevance } : undefined;
       })
-      .filter((result): result is RankedSection => result !== undefined);
+      .filter((result): result is RankedSection => result !== undefined)
+      // Re-apply the repository filter post-fusion so a vector backend that ignores
+      // the scope (e.g. a test stub) still cannot leak sections from other flows.
+      .filter((result) => this.sectionInRepositories(result.section, repositoryIds))
+      .slice(0, limit);
   }
 
-  private keywordRank(question: string): RankedSection[] {
+  private keywordRank(question: string, repositoryIds?: string[]): RankedSection[] {
     const terms = tokenize(question);
     if (terms.length === 0) {
       return [];
     }
 
     return [...this.sections.values()]
+      .filter((section) => this.sectionInRepositories(section, repositoryIds))
       .map((section) => ({ section, score: scoreSection(section, terms) }))
       .filter((result) => result.score > 0)
       .sort((left, right) => right.score - left.score)
@@ -264,6 +272,18 @@ export class InMemoryKnowledgeIndex {
         section: result.section,
         relevance: Math.min(1, result.score / KEYWORD_RELEVANCE_SCALE)
       }));
+  }
+
+  // Resolves a section to its owning repository via the document map and tests it
+  // against an optional repository filter. An undefined/empty filter matches every
+  // section (unscoped search); a section whose document is missing is excluded.
+  private sectionInRepositories(section: DocumentSection, repositoryIds?: string[]): boolean {
+    if (!repositoryIds || repositoryIds.length === 0) {
+      return true;
+    }
+
+    const repositoryId = this.documents.get(section.documentId)?.repositoryId;
+    return repositoryId !== undefined && repositoryIds.includes(repositoryId);
   }
 
   listDocuments(): KnowledgeDocument[] {

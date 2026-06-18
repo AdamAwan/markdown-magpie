@@ -280,7 +280,19 @@ export interface AnswerQuestionJobInput {
     heading: string;
     content: string;
   }>;
+  // The flow the question was routed to, and that flow's persona snippet. Both are
+  // carried in the job so the watcher (which has no flow config) can apply the
+  // persona via buildJobPrompt. Absent when no flow matched / none configured.
+  flowId?: string;
+  persona?: string;
   expectedOutput: "answer_result";
+}
+
+// Result of routing a question to the single best-matching knowledge flow.
+export interface FlowRouteDecision {
+  flowId: string;
+  confidence: Confidence;
+  rationale?: string;
 }
 
 export interface AnswerQuestionJobOutput {

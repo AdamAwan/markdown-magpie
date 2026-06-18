@@ -93,6 +93,7 @@ export function FlowsPanel({
   sources: ConfiguredKnowledgeRepository[];
 }) {
   const [fullScreenDocument, setFullScreenDocument] = useState<KnowledgeDocument | null>(null);
+  const [personaFlow, setPersonaFlow] = useState<ConfiguredKnowledgeFlow | null>(null);
 
   const entries = buildFlowEntries(flows, destinations, sources, documents);
 
@@ -130,20 +131,33 @@ export function FlowsPanel({
               <FlowPipeline destination={active.destination} fallbackDestinationId={active.flow?.destinationId} sources={active.sources} />
             )}
           </div>
-          {active.isOther ? null : (
-            <button
-              className="button"
-              disabled={indexing || !active.destination}
-              onClick={() => {
-                setSelectedFlowId(active.id);
-                void onIndex(active.id);
-              }}
-              title="Index the destination knowledge base used by /ask and MCP"
-              type="button"
-            >
-              {indexing ? "Indexing" : "Index KB"}
-            </button>
-          )}
+          <div className="flowDetailActions">
+            {active.flow?.persona ? (
+              <button
+                className="iconButton"
+                onClick={() => setPersonaFlow(active.flow ?? null)}
+                title="View flow persona"
+                aria-label={`View persona for ${active.name}`}
+                type="button"
+              >
+                <PersonIcon />
+              </button>
+            ) : null}
+            {active.isOther ? null : (
+              <button
+                className="button"
+                disabled={indexing || !active.destination}
+                onClick={() => {
+                  setSelectedFlowId(active.id);
+                  void onIndex(active.id);
+                }}
+                title="Index the destination knowledge base used by /ask and MCP"
+                type="button"
+              >
+                {indexing ? "Indexing" : "Index KB"}
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="flowSection">
@@ -158,8 +172,56 @@ export function FlowsPanel({
       </section>
 
       {fullScreenDocument ? <DocumentModal document={fullScreenDocument} onClose={() => setFullScreenDocument(null)} /> : null}
+      {personaFlow ? <PersonaModal flow={personaFlow} onClose={() => setPersonaFlow(null)} /> : null}
     </div>
     </Tooltip.Provider>
+  );
+}
+
+function PersonIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0 2c-4.42 0-8 2.69-8 6v2h16v-2c0-3.31-3.58-6-8-6Z"
+      />
+    </svg>
+  );
+}
+
+/** Shows a flow's persona — the snippet appended to the base answer prompt — in a modal. */
+function PersonaModal({ flow, onClose }: { flow: ConfiguredKnowledgeFlow; onClose: () => void }) {
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="docModalBackdrop" onClick={onClose} role="presentation">
+      <div
+        className="docModal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${flow.name} persona`}
+      >
+        <div className="docModalHead">
+          <div>
+            <h3>{flow.name} · persona</h3>
+            <p className="path">Appended to the base answer prompt when this flow answers a question.</p>
+          </div>
+          <button className="button secondary" onClick={onClose} type="button">
+            Close
+          </button>
+        </div>
+        <pre className="docModalBody promptInstructions">{flow.persona}</pre>
+      </div>
+    </div>
   );
 }
 

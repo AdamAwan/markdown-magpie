@@ -45,6 +45,53 @@ describe("InMemoryKnowledgeIndex.search", () => {
     assert.ok((top?.relevance ?? 0) >= 0.8);
   });
 
+  it("scopes keyword results to the given repositoryIds", async () => {
+    const index = new InMemoryKnowledgeIndex();
+    await index.indexMarkdownDocuments({
+      documents: [{ path: "rollback.md", content: "# Hotfix Rollback\nRun the rollback workflow.\n" }],
+      repositoryId: "repoA"
+    });
+    await index.indexMarkdownDocuments({
+      documents: [{ path: "rollback.md", content: "# Hotfix Rollback\nRun the rollback workflow.\n" }],
+      repositoryId: "repoB"
+    });
+
+    const unscoped = await index.search("how do I rollback the hotfix", 5);
+    assert.ok(unscoped.some((r) => r.section.id.startsWith("repoA:")));
+    assert.ok(unscoped.some((r) => r.section.id.startsWith("repoB:")));
+
+    const scoped = await index.search("how do I rollback the hotfix", 5, ["repoA"]);
+    assert.ok(scoped.length >= 1);
+    assert.ok(scoped.every((r) => r.section.id.startsWith("repoA:")));
+  });
+
+  it("scopes hybrid results, ignoring vector hits outside the repositoryIds", async () => {
+    const embeddingProvider: EmbeddingProvider = {
+      async embed(texts) {
+        return texts.map(() => [1, 0, 0]);
+      }
+    };
+    // Stub returns a hit from repoB even though the search is scoped to repoA; the
+    // post-fusion filter must drop it.
+    const vectorSearch: SectionVectorSearch = {
+      async searchByEmbedding() {
+        return [{ id: "repoB:rollback.md:0", similarity: 0.95 }];
+      }
+    };
+    const index = new InMemoryKnowledgeIndex(undefined, { embeddingProvider, vectorSearch });
+    await index.indexMarkdownDocuments({
+      documents: [{ path: "rollback.md", content: "# Hotfix Rollback\nRun the rollback workflow.\n" }],
+      repositoryId: "repoA"
+    });
+    await index.indexMarkdownDocuments({
+      documents: [{ path: "rollback.md", content: "# Hotfix Rollback\nRun the rollback workflow.\n" }],
+      repositoryId: "repoB"
+    });
+
+    const scoped = await index.search("how do I rollback the hotfix", 5, ["repoA"]);
+    assert.ok(scoped.every((r) => r.section.id.startsWith("repoA:")));
+  });
+
   it("falls back to keyword search when the embedding call fails", async () => {
     const embeddingProvider: EmbeddingProvider = {
       async embed() {

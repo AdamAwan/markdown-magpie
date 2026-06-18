@@ -72,6 +72,7 @@ export interface ConfiguredKnowledgeFlow {
   name: string;
   sourceIds: string[];
   destinationId: string;
+  persona?: string;
 }
 
 export interface KnowledgeDocument {

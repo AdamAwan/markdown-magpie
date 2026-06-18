@@ -1,8 +1,15 @@
-import type { AnswerResult, ChatProvider, Citation, ChatRequest, Confidence, DocumentSection, KnowledgeGapSignal, RankedSection } from "@magpie/core";
-import { ANSWER_QUESTION_DIRECT } from "@magpie/prompts";
+import type { AnswerResult, ChatProvider, Citation, ChatRequest, Confidence, DocumentSection, FlowRouteDecision, KnowledgeGapSignal, RankedSection } from "@magpie/core";
+import { ANSWER_QUESTION_DIRECT, ROUTE_QUESTION_TO_FLOW, withPersona } from "@magpie/prompts";
 
 export interface SectionSearchProvider {
-  search(question: string, limit: number): Promise<RankedSection[]>;
+  search(question: string, limit: number, repositoryIds?: string[]): Promise<RankedSection[]>;
+}
+
+// Minimal shape the router needs from a configured flow.
+export interface RoutableFlow {
+  id: string;
+  name: string;
+  persona?: string;
 }
 
 export type ChatProviderName = "mock" | "openai-compatible" | "azure-openai";
@@ -124,12 +131,20 @@ const RELEVANCE_FLOOR = 0.2;
 const HIGH_CONFIDENCE_RELEVANCE = 0.6;
 const MEDIUM_CONFIDENCE_RELEVANCE = 0.35;
 
+export interface AnswerQuestionOptions {
+  // Restrict retrieval to these repositories (a flow's destination). Undefined searches everything.
+  repositoryIds?: string[];
+  // Persona snippet appended to the base answer prompt to shape the response.
+  persona?: string;
+}
+
 export async function answerQuestion(
   question: string,
   searchProvider: SectionSearchProvider,
-  chatProvider: ChatProvider
+  chatProvider: ChatProvider,
+  options: AnswerQuestionOptions = {}
 ): Promise<AnswerResult> {
-  const ranked = await searchProvider.search(question, 5);
+  const ranked = await searchProvider.search(question, 5, options.repositoryIds);
   const relevantSections = selectRelevantSections(ranked);
   const citations = relevantSections.map((result) => toCitation(result.section));
 
@@ -144,7 +159,7 @@ export async function answerQuestion(
 
   const context = relevantSections.map(({ section }) => `# ${section.heading}\n${section.content}`).join("\n\n");
   const response = await chatProvider.complete({
-    system: ANSWER_QUESTION_DIRECT.instructions,
+    system: withPersona(ANSWER_QUESTION_DIRECT.instructions, options.persona),
     messages: [
       {
         role: "user",
@@ -189,6 +204,65 @@ export async function answerQuestion(
     confidence: confidenceFromRelevance(relevantSections),
     citations
   };
+}
+
+/**
+ * Picks the single best-matching flow for a question via the chat provider.
+ *
+ * Short-circuits (no AI call) when zero or one flow is configured. Returns
+ * `undefined` — letting the caller fall back to a default flow — when the model
+ * errors, returns unparseable output, or names a flow id that is not configured.
+ * Routing must never fail the ask, so the provider call is wrapped.
+ */
+export async function routeQuestionToFlow(
+  question: string,
+  flows: RoutableFlow[],
+  chatProvider: ChatProvider
+): Promise<FlowRouteDecision | undefined> {
+  if (flows.length <= 1) {
+    return flows[0] ? { flowId: flows[0].id, confidence: "high" } : undefined;
+  }
+
+  let content: string;
+  try {
+    const response = await chatProvider.complete({
+      system: ROUTE_QUESTION_TO_FLOW.instructions,
+      messages: [
+        {
+          role: "user",
+          content: `Question:\n${question}\n\nFlows:\n${JSON.stringify(
+            flows.map((flow) => ({ id: flow.id, name: flow.name, persona: flow.persona })),
+            null,
+            2
+          )}`
+        }
+      ]
+    });
+    content = response.content;
+  } catch {
+    return undefined;
+  }
+
+  const parsed = parseJsonObject(content);
+  if (!parsed || typeof parsed !== "object") {
+    return undefined;
+  }
+
+  const candidate = parsed as { flowId?: unknown; confidence?: unknown; rationale?: unknown };
+  const flowId = typeof candidate.flowId === "string" ? candidate.flowId.trim() : undefined;
+  if (!flowId || !flows.some((flow) => flow.id === flowId)) {
+    return undefined;
+  }
+
+  return {
+    flowId,
+    confidence: normalizeConfidence(candidate.confidence),
+    rationale: typeof candidate.rationale === "string" ? candidate.rationale : undefined
+  };
+}
+
+function normalizeConfidence(value: unknown): Confidence {
+  return value === "high" || value === "medium" || value === "low" ? value : "low";
 }
 
 function selectRelevantSections(ranked: RankedSection[]): RankedSection[] {
