@@ -10,6 +10,48 @@
 
 ---
 
+## Progress Snapshot
+
+**Updated:** 2026-06-18
+
+**Workspace:** implementation is happening in the isolated worktree
+`/home/adam/markdown-magpie/.worktrees/auth0-mcp-gating` on branch
+`auth0-mcp-gating`.
+
+**Completed and reviewed:**
+
+- Task 1 Shared Auth Package — complete, passed both review gates.
+  - `9733574 feat(auth): add shared auth0 verifier`
+  - `1e79ce7 fix(auth): tighten verifier review findings`
+- Task 2 API Auth Middleware and Route Scopes — complete, passed both review gates.
+  - `17b9152 feat(api): gate routes with auth0 scopes`
+  - `c067f7e fix(api): read auth settings from environment`
+  - `6cfb7d2 fix(api): drop context casts and dead auth branch`
+  - Spec review: ✅ all routes carry explicit scopes, error contract correct,
+    runtime honors `AUTH_REQUIRED` from `process.env`.
+  - Code quality review: two Important findings fixed in `6cfb7d2` (removed
+    `as unknown` double-casts via Hono `ContextVariableMap`; rethrow non-`AuthError`
+    instead of a dead catch branch). Re-review: ✅ approved.
+  - Verified: `npm run test -w @magpie/api -- src/app.test.ts` → 124 pass / 0 fail.
+
+**In progress:**
+
+- Task 3 Web Auth0 Login and API Token Injection.
+
+**Not started:**
+
+- Task 4 HTTP MCP Authorization.
+- Task 5 stdio MCP Token Handling.
+- Task 6 Env and Docs.
+- Task 7 Full Verification.
+
+**Known note:** `npm run typecheck -w @magpie/api` reports pre-existing package-local
+`rootDir` (TS6059) errors for sibling workspace imports, present on clean HEAD and
+unrelated to the auth work. Tests run via `tsx` (the canonical test path) and pass;
+root `npm run typecheck` is the relevant repo-level check.
+
+---
+
 ## File Structure
 
 - Create `packages/auth`: shared Auth0 config, JWKS-backed JWT validation, bearer parsing, scope helpers, and tests.
@@ -35,7 +77,7 @@
 - Create: `packages/auth/src/index.test.ts`
 - Modify: `package.json`
 
-- [ ] **Step 1: Create package manifest and add dependencies**
+- [x] **Step 1: Create package manifest and add dependencies**
 
 Create `packages/auth/package.json`:
 
@@ -70,7 +112,7 @@ npm install @auth0/auth0-react -w @magpie/web
 
 Expected: `package-lock.json`, `packages/auth/package.json`, and `apps/web/package.json` update.
 
-- [ ] **Step 2: Create a failing auth package test**
+- [x] **Step 2: Create a failing auth package test**
 
 Create `packages/auth/src/index.test.ts`:
 
@@ -133,7 +175,7 @@ test("createRemoteAuthVerifier rejects the wrong audience", async () => {
 });
 ```
 
-- [ ] **Step 3: Verify the test fails**
+- [x] **Step 3: Verify the test fails**
 
 Run:
 
@@ -143,7 +185,7 @@ npm run test -w @magpie/auth
 
 Expected: FAIL because `@magpie/auth` and its exports do not exist yet.
 
-- [ ] **Step 4: Implement the shared package**
+- [x] **Step 4: Implement the shared package**
 
 Create `packages/auth/tsconfig.json` and `packages/auth/tsconfig.build.json` using the same pattern as `packages/core`.
 
@@ -229,7 +271,7 @@ function trimTrailingSlash(value: string): string {
 }
 ```
 
-- [ ] **Step 5: Run package tests**
+- [x] **Step 5: Run package tests**
 
 Run:
 
@@ -239,11 +281,11 @@ npm run test -w @magpie/auth
 
 Expected: PASS.
 
-- [ ] **Step 6: Add auth package to root build**
+- [x] **Step 6: Add auth package to root build**
 
 Modify root `package.json` build script so `npm run build -w @magpie/auth` runs before `@magpie/api` and `@magpie/mcp`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add package.json package-lock.json packages/auth apps/web/package.json
@@ -258,7 +300,7 @@ git commit -m "feat(auth): add shared auth0 verifier"
 - Modify: `apps/api/src/features/*/routes.ts`
 - Test: `apps/api/src/app.test.ts`
 
-- [ ] **Step 1: Write failing API tests**
+- [x] **Step 1: Write failing API tests**
 
 Append to `apps/api/src/app.test.ts`:
 
@@ -294,7 +336,7 @@ test("auth required allows valid tokens with the route scope", async () => {
 
 Add local helpers in the test file using `jose` test keys, matching Task 1.
 
-- [ ] **Step 2: Verify the API tests fail**
+- [x] **Step 2: Verify the API tests fail**
 
 Run:
 
@@ -304,7 +346,7 @@ npm run test -w @magpie/api -- src/app.test.ts
 
 Expected: FAIL because `buildApp` does not accept test auth options and routes are not protected.
 
-- [ ] **Step 3: Implement Hono middleware**
+- [x] **Step 3: Implement Hono middleware**
 
 Create `apps/api/src/auth/middleware.ts`:
 
@@ -352,11 +394,11 @@ export function requireScopes(...scopes: string[]): MiddlewareHandler<{ Variable
 }
 ```
 
-- [ ] **Step 4: Wire app-level auth**
+- [x] **Step 4: Wire app-level auth**
 
 Change `buildApp(ctx: AppContext)` to `buildApp(ctx: AppContext, options: ApiAuthOptions = {})`. In `apps/api/src/app.ts`, call `api.get("/health", ...)` first, then `api.use("*", requireAuth(options))`, then mount feature routes.
 
-- [ ] **Step 5: Add route scopes**
+- [x] **Step 5: Add route scopes**
 
 Import `requireScopes` into feature route files and add middleware:
 
@@ -368,7 +410,7 @@ Import `requireScopes` into feature route files and add middleware:
 - `promptRoutes`: use `read:knowledge`.
 - `configRoutes` and `adminRoutes`: use `manage:admin`.
 
-- [ ] **Step 6: Run API tests**
+- [x] **Step 6: Run API tests**
 
 Run:
 
@@ -378,7 +420,7 @@ npm run test -w @magpie/api -- src/app.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/api packages/auth package.json package-lock.json
