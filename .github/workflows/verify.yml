@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   verify:
-    name: Typecheck, test, lint
+    name: Typecheck, test, lint, build
     runs-on: ubuntu-latest
 
     steps:
@@ -35,3 +35,9 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      # Builds every workspace in dependency order, including the web app's
+      # `next build`. typecheck excludes apps/web (bundler resolution), so this
+      # is what catches web/build-only breaks like an unresolvable import.
+      - name: Build
+        run: npm run build
