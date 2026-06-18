@@ -1,6 +1,7 @@
 import type { ChatProvider, EmbeddingProvider } from "@magpie/core";
 import { RuntimeConfigHolder } from "./config-holder.js";
 import { BackgroundEmbedder } from "./platform/background-embedder.js";
+import { BackgroundRunner } from "./platform/background-runner.js";
 import {
   createAiJobQueue,
   createCrunchStore,
@@ -53,6 +54,7 @@ export interface AppContext {
     checkoutRoot: string;
   };
   embedder: BackgroundEmbedder;
+  background: BackgroundRunner;
   claimTimeoutMs: number;
   repositoryDeps(): RepositoryDeps;
   bootstrap(): Promise<void>;
@@ -83,6 +85,7 @@ export async function createAppContext(): Promise<AppContext> {
   };
 
   const embedder = new BackgroundEmbedder(knowledgeStore, embedding);
+  const background = new BackgroundRunner();
 
   const ctx: AppContext = {
     stores: {
@@ -102,6 +105,7 @@ export async function createAppContext(): Promise<AppContext> {
     config: RuntimeConfigHolder.fromEnv(),
     knowledgeConfig,
     embedder,
+    background,
     claimTimeoutMs,
     repositoryDeps() {
       return { knowledgeConfig, knowledgeIndex, triggerEmbedding: () => void embedder.trigger() };

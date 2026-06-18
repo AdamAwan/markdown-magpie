@@ -83,8 +83,14 @@ export function proposalRoutes(ctx: AppContext): Hono {
       }
 
       if (proposal.status === "merged") {
-        const { resolvedGapCount, reindexed } = await proposalsService.runMergeCascade(ctx, proposal);
-        return c.json({ proposal, resolvedGapCount, reindexed });
+        // The merge is recorded synchronously above. The cascade (resolving gaps
+        // and re-indexing the destination, which fetches/fast-forwards a git
+        // checkout) can be slow, so run it off the request thread and report that
+        // it was scheduled rather than blocking the response on a network fetch.
+        ctx.background.run(`merge-cascade ${proposal.id}`, async () => {
+          await proposalsService.runMergeCascade(ctx, proposal);
+        });
+        return c.json({ proposal, cascadeScheduled: true });
       }
 
       return c.json({ proposal });

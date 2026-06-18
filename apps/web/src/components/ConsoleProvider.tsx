@@ -346,18 +346,17 @@ function useConsoleController() {
     setLoading(true);
     clearMessage();
     try {
-      const result = await apiPost<{ proposal: Proposal; resolvedGapCount?: number; reindexed?: boolean }>(
+      const result = await apiPost<{ proposal: Proposal; cascadeScheduled?: boolean }>(
         `/proposals/${proposalId}/status`,
         { status }
       );
       setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
       setSelectedProposalId(result.proposal.id);
       if (status === "merged") {
-        const gapPart = result.resolvedGapCount
-          ? `${result.resolvedGapCount} gap${result.resolvedGapCount === 1 ? "" : "s"} resolved`
-          : "no open gaps to resolve";
-        const indexPart = result.reindexed ? "knowledge base re-indexed" : "re-index skipped";
-        showMessage(`Proposal merged — ${gapPart}; ${indexPart}.`, "success");
+        // The merge is recorded immediately; resolving gaps and re-indexing the
+        // destination now run in the background, so the result is eventually
+        // consistent. Refresh shortly after to pick up the cascade's effects.
+        showMessage("Proposal merged — resolving gaps and re-indexing in the background.", "success");
         // Merged proposals drop out of the active list and their gaps stop
         // surfacing, so pull fresh proposal and gap state.
         await refresh({ preserveMessage: true });

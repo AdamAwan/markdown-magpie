@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
-import { parseLimit } from "../../platform/paths.js";
+import { apiLink, parseLimit } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import * as crunchService from "./service.js";
@@ -22,6 +22,12 @@ export function crunchRoutes(ctx: AppContext): Hono {
         flowId: payload.flowId?.trim() || undefined,
         trigger: "manual"
       });
+      // Planning happens off the request thread; the run starts "running" and is
+      // completed in the background (direct) or by the watcher (queue). Return
+      // 202 with a status link so the client can poll for the plan.
+      if (run.status === "running") {
+        return c.json({ run, links: { status: apiLink(`/crunch/runs/${run.id}`) } }, 202);
+      }
       return c.json({ run }, run.status === "failed" ? 502 : 200);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Crunch run failed to start";

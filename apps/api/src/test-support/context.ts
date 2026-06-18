@@ -2,6 +2,7 @@ import type { ChatProvider, ChatRequest, ChatResponse } from "@magpie/core";
 import type { AppContext } from "../context.js";
 import { RuntimeConfigHolder } from "../config-holder.js";
 import { BackgroundEmbedder } from "../platform/background-embedder.js";
+import { BackgroundRunner } from "../platform/background-runner.js";
 import { DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS, InMemoryAiJobQueue } from "../stores/ai-job-queue.js";
 import { InMemoryCrunchStore } from "../stores/crunch-store.js";
 import { InMemoryKnowledgeIndex } from "../stores/knowledge-index.js";
@@ -57,6 +58,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
     config: new RuntimeConfigHolder({ aiExecutionMode: "direct", aiProvider: "mock" }),
     knowledgeConfig,
     embedder,
+    background: new BackgroundRunner(),
     claimTimeoutMs: DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS,
     repositoryDeps() {
       return { knowledgeConfig, knowledgeIndex, triggerEmbedding: () => {} };

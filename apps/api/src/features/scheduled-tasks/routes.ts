@@ -34,13 +34,12 @@ export function scheduledTaskRoutes(ctx: AppContext): Hono {
       throw new HttpError(404, "scheduled_task_not_found");
     }
 
-    try {
-      await task.run(ctx);
-      return c.json({ ok: true, tasks: await scheduledTasksForResponse(ctx) });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "scheduled task run failed";
-      throw new HttpError(500, "scheduled_task_run_failed", message);
-    }
+    // A manual run drives the same (potentially long, AI + git) pipeline the
+    // scheduler runs. Kick it off the request thread and return 202; the task's
+    // effects are observable via the proposals/crunch/source-sync endpoints, and
+    // failures are logged by the background runner.
+    ctx.background.run(`scheduled-task ${key}`, () => task.run(ctx));
+    return c.json({ ok: true, started: true, tasks: await scheduledTasksForResponse(ctx) }, 202);
   });
 
   return app;

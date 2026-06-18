@@ -24,9 +24,11 @@ export async function getRun(ctx: AppContext, id: string): Promise<CrunchRun | u
   return ctx.stores.crunchRuns.getRun(id);
 }
 
-// Shared by the manual trigger endpoint and the scheduler. In direct mode the
-// plan is produced synchronously; in queue mode a job is enqueued and the run is
-// completed later by the watcher via attachCrunchPlanFromCompletedJob().
+// Shared by the manual trigger endpoint and the scheduler. Both modes return a
+// "running" run immediately so neither the HTTP response nor the scheduler tick
+// blocks on the (potentially slow) planning step. In direct mode the model call
+// runs in the background and completes the run; in queue mode a job is enqueued
+// and the watcher completes the run via attachCrunchPlanFromCompletedJob().
 export async function triggerCrunchRun(
   ctx: AppContext,
   options: { flowId?: string; trigger: CrunchRunTrigger }
@@ -51,27 +53,28 @@ export async function triggerCrunchRun(
   );
 
   if (ctx.config.get().aiExecutionMode === "direct") {
-    try {
-      const plan = await crunchKnowledgeBaseDirect(ctx, input);
-      return ctx.stores.crunchRuns.createRun({
-        flowId,
-        destinationId,
-        trigger: options.trigger,
-        documentCount: documents.length,
-        status: "completed",
-        plan
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Crunch planning failed";
-      return ctx.stores.crunchRuns.createRun({
-        flowId,
-        destinationId,
-        trigger: options.trigger,
-        documentCount: documents.length,
-        status: "failed",
-        error: message
-      });
-    }
+    // The model call can be slow, so create the run as "running" and plan it off
+    // the request thread, mirroring the queue-mode lifecycle. Callers poll
+    // GET /crunch/runs/:id (or the runs list) for completion.
+    const run = await ctx.stores.crunchRuns.createRun({
+      flowId,
+      destinationId,
+      trigger: options.trigger,
+      documentCount: documents.length,
+      status: "running"
+    });
+
+    ctx.background.run(`crunch ${run.id}`, async () => {
+      try {
+        const plan = await crunchKnowledgeBaseDirect(ctx, input);
+        await ctx.stores.crunchRuns.completeRun(run.id, plan);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Crunch planning failed";
+        await ctx.stores.crunchRuns.failRun(run.id, message);
+      }
+    });
+
+    return run;
   }
 
   const job = await ctx.stores.aiJobs.enqueue("crunch_knowledge_base", input);
