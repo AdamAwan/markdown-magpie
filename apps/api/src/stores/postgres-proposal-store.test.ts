@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
+import { PostgresGapClusterStore } from "./postgres-gap-cluster-store.js";
 import { PostgresProposalStore } from "./postgres-proposal-store.js";
 import type { ProposalInput } from "./proposal-store.js";
 
@@ -82,5 +84,24 @@ describe("PostgresProposalStore", { skip: databaseUrl ? false : "DATABASE_URL no
   it("returns undefined when updating or fetching an unknown id", async () => {
     assert.equal(await store.get("00000000-0000-0000-0000-000000000000"), undefined);
     assert.equal(await store.updateStatus("00000000-0000-0000-0000-000000000000", "merged"), undefined);
+  });
+
+  it("links a proposal to a gap cluster and reads it back", async () => {
+    const clusterStore = new PostgresGapClusterStore(databaseUrl as string);
+    const cluster = await clusterStore.createCluster({ title: `c-${randomUUID()}`, revision: 1 });
+
+    const proposal = await store.create({
+      title: "T",
+      targetPath: "t.md",
+      markdown: "#",
+      rationale: "r",
+      evidence: [],
+      gapClusterId: cluster.id
+    });
+    const fetched = await store.get(proposal.id);
+    assert.equal(fetched?.gapClusterId, cluster.id);
+
+    const relinked = await store.linkCluster(proposal.id, cluster.id);
+    assert.equal(relinked?.gapClusterId, cluster.id);
   });
 });
