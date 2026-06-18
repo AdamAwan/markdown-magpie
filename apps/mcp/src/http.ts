@@ -124,6 +124,9 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     sessionIdGenerator: undefined
   });
 
+  // Start connecting eagerly but await it lazily inside `handle` (see below), so
+  // that importing this module (e.g. from tests) never boots a live connection.
+  // Any connect rejection is surfaced through the per-request try/catch as a 500.
   const connected = server.connect(transport);
 
   // Bind to loopback by default; require an explicit opt-in (e.g.
