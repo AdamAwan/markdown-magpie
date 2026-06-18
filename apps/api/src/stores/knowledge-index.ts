@@ -470,5 +470,5 @@ async function readGitValue(cwd: string, args: string[]): Promise<string | undef
 }
 
 function normalizePathForComparison(value: string): string {
-  return path.resolve(value).replace(/[\\\/]+$/, "").toLowerCase();
+  return path.resolve(value).replace(/[\\/]+$/, "").toLowerCase();
 }

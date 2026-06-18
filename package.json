@@ -15,12 +15,21 @@
     "dev:web": "npm run dev -w @magpie/web",
     "dev": "npm run dev --workspaces --if-present",
     "eval:api": "node --import tsx scripts/eval-api.ts",
-    "lint": "npm run lint --workspaces --if-present",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "tsc -p tsconfig.check.json --noEmit"
   },
   "devDependencies": {
-    "typescript": "^6.0.3"
+    "@eslint/js": "^9.39.4",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.4",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.1"
   },
   "overrides": {
     "postcss": "^8.5.10"
