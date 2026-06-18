@@ -34,6 +34,9 @@ export interface QuestionLogStore {
   // reconciler keys cluster memberships off these. Postgres returns the bigint
   // question_gaps.id; the in-memory store returns a stable synthetic id.
   gapIdsForSummary(summary: string, flowId?: string): Promise<string[]>;
+  // Resolves a set of gap ids (as produced by gapIdsForSummary) back to their
+  // distinct summaries and question ids, for the cluster read path.
+  gapDetailsForIds(gapIds: string[]): Promise<{ summaries: string[]; questionIds: string[] }>;
   reset(): Promise<void>;
 }
 
@@ -61,6 +64,20 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       }
     }
     return ids;
+  }
+
+  async gapDetailsForIds(gapIds: string[]): Promise<{ summaries: string[]; questionIds: string[] }> {
+    const summaries = new Set<string>();
+    const questionIds = new Set<string>();
+    for (const id of gapIds) {
+      const sep = id.indexOf("::");
+      if (sep === -1) {
+        continue;
+      }
+      questionIds.add(id.slice(0, sep));
+      summaries.add(id.slice(sep + 2));
+    }
+    return { summaries: [...summaries], questionIds: [...questionIds] };
   }
 
   async record(input: QuestionLogInput): Promise<QuestionLog> {

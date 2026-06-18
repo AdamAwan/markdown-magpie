@@ -43,6 +43,23 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     return result.rows.map((row) => row.id);
   }
 
+  async gapDetailsForIds(gapIds: string[]): Promise<{ summaries: string[]; questionIds: string[] }> {
+    if (gapIds.length === 0) {
+      return { summaries: [], questionIds: [] };
+    }
+    const result = await this.pool.query<{ summary: string; question_id: string }>(
+      "SELECT summary, question_id FROM question_gaps WHERE id = ANY($1::bigint[])",
+      [gapIds]
+    );
+    const summaries = new Set<string>();
+    const questionIds = new Set<string>();
+    for (const row of result.rows) {
+      summaries.add(row.summary);
+      questionIds.add(row.question_id);
+    }
+    return { summaries: [...summaries], questionIds: [...questionIds] };
+  }
+
   async record(input: QuestionLogInput): Promise<QuestionLog> {
     const id = randomUUID();
     const client = await this.pool.connect();

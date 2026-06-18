@@ -1,4 +1,4 @@
-import type { GapCandidate, SuggestedGapCluster } from "@magpie/core";
+import type { GapCandidate, PersistedGapCluster, SuggestedGapCluster } from "@magpie/core";
 import { GAP_CLUSTERING } from "@magpie/prompts";
 import type { AppContext } from "../../context.js";
 import { assembleClusters, singletonCluster } from "../../stores/gap-clustering.js";
@@ -8,9 +8,38 @@ export async function listCandidates(ctx: AppContext, limit: number): Promise<Ga
   return ctx.stores.questionLogs.listGapCandidates(limit);
 }
 
-export async function listClusters(ctx: AppContext, limit: number): Promise<SuggestedGapCluster[]> {
-  const candidates = await ctx.stores.questionLogs.listGapCandidates(limit);
-  return clusterGapCandidates(ctx, candidates);
+// Fast read over the persisted clusters the reconciler maintains — no model call.
+// Each active cluster is enriched with its gap summaries/question ids and the
+// proposal (if any) linked to it, matching the SuggestedGapCluster fields the UI
+// already renders plus the persisted lineage fields.
+export async function listClusters(ctx: AppContext, limit: number): Promise<PersistedGapCluster[]> {
+  const clusters = await ctx.stores.gapClusters.listActiveClusters();
+  const proposals = await ctx.stores.proposals.list(500);
+  const proposalByCluster = new Map(
+    proposals.filter((p) => p.gapClusterId).map((p) => [p.gapClusterId as string, p])
+  );
+
+  const result: PersistedGapCluster[] = [];
+  for (const cluster of clusters.slice(0, limit)) {
+    const memberships = await ctx.stores.gapClusters.listMembershipsForCluster(cluster.id);
+    const gapIds = memberships.map((m) => m.gapId);
+    const { summaries, questionIds } = await ctx.stores.questionLogs.gapDetailsForIds(gapIds);
+    const proposal = proposalByCluster.get(cluster.id);
+    result.push({
+      id: cluster.id,
+      title: cluster.title,
+      summaries,
+      questionIds,
+      count: questionIds.length,
+      rationale: cluster.rationale,
+      flowId: cluster.flowId,
+      status: "active",
+      proposalId: proposal?.id,
+      proposalStatus: proposal?.status,
+      lastReconciledAt: cluster.updatedAt
+    });
+  }
+  return result;
 }
 
 export async function clusterGapCandidates(
