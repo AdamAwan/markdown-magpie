@@ -37,7 +37,8 @@ export class InMemoryProposalStore implements ProposalStore {
       markdown: input.markdown,
       evidence: input.evidence,
       gapSummary: input.gapSummary,
-      triggeringQuestionIds: input.triggeringQuestionIds,
+      // Postgres coalesces a missing value to an empty array; mirror that here.
+      triggeringQuestionIds: input.triggeringQuestionIds ?? [],
       destinationId: input.destinationId,
       rationale: input.rationale,
       jobId: input.jobId,

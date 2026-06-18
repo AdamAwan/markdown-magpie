@@ -59,6 +59,8 @@ test("record stores one gap per detected gap for a multi-topic question", async 
     { summary: "No React integration guidance", source: "auto" },
     { summary: "Dashboard export is undocumented", source: "auto" }
   ]);
+  // Matches the Postgres column default (manual_gap NOT NULL DEFAULT false).
+  assert.equal(log.manualGap, false);
 });
 
 test("recordManualGap preserves auto-detected gaps and adds a manual one", async () => {

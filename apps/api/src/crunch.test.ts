@@ -49,6 +49,18 @@ test("InMemoryCrunchStore completes a queued run by job id", async () => {
   assert.equal(completed?.plan?.summary, "done");
 });
 
+test("InMemoryCrunchStore.getRunByJobId returns the newest run sharing a job id (matches Postgres)", async () => {
+  const store = new InMemoryCrunchStore();
+  const older = await store.createRun({ trigger: "manual", documentCount: 1, status: "running", jobId: "job-x" });
+  // Force a strictly-later createdAt so the newest-wins ordering is deterministic.
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const newer = await store.createRun({ trigger: "manual", documentCount: 1, status: "running", jobId: "job-x" });
+
+  assert.notEqual(older.id, newer.id);
+  const byJob = await store.getRunByJobId("job-x");
+  assert.equal(byJob?.id, newer.id);
+});
+
 test("InMemoryCrunchStore schedules a next run when enabled and clears it when disabled", async () => {
   const store = new InMemoryCrunchStore();
 
