@@ -1,6 +1,7 @@
 import type { MiddlewareHandler } from "hono";
 import {
   AuthError,
+  authSettingsFromEnv,
   createRemoteAuthVerifier,
   hasScopes,
   parseBearerToken,
@@ -11,6 +12,8 @@ import type { JSONWebKeySet } from "jose";
 
 export interface ApiAuthOptions {
   auth?: AuthSettings & { jwks?: () => Promise<JSONWebKeySet> };
+  env?: NodeJS.ProcessEnv;
+  jwks?: () => Promise<JSONWebKeySet>;
 }
 
 type PrincipalContext = {
@@ -19,7 +22,7 @@ type PrincipalContext = {
 };
 
 export function requireAuth(options: ApiAuthOptions): MiddlewareHandler {
-  const settings = options.auth;
+  const settings = options.auth ?? { ...authSettingsFromEnv(options.env), jwks: options.jwks };
   if (!settings?.required) {
     return async (_c, next) => {
       await next();

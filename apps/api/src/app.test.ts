@@ -16,8 +16,14 @@ interface TestAuthOptions {
   };
 }
 
+interface TestEnvAuthOptions {
+  env: NodeJS.ProcessEnv;
+  jwks: () => Promise<JSONWebKeySet>;
+}
+
 async function makeTestAuth(): Promise<{
   options: TestAuthOptions;
+  envOptions: TestEnvAuthOptions;
   authorization: (scopes?: string[]) => Promise<string>;
 }> {
   const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
@@ -42,6 +48,14 @@ async function makeTestAuth(): Promise<{
         audience: authAudience,
         jwks: async () => jwks
       }
+    },
+    envOptions: {
+      env: {
+        AUTH_REQUIRED: "true",
+        AUTH0_ISSUER_BASE_URL: authIssuer,
+        AUTH0_AUDIENCE: authAudience
+      },
+      jwks: async () => jwks
     },
     authorization: async (scopes = []) => {
       const token = await new SignJWT({ scope: scopes.join(" ") })
@@ -87,6 +101,16 @@ test("auth required rejects valid tokens missing route scopes", async () => {
 
   assert.equal(res.status, 403);
   assert.deepEqual(await res.json(), { error: "forbidden" });
+});
+
+test("auth required from environment rejects missing token without explicit auth options", async () => {
+  const auth = await makeTestAuth();
+  const app = buildApp(makeTestContext(), auth.envOptions);
+
+  const res = await app.request("/api/knowledge/stats");
+
+  assert.equal(res.status, 401);
+  assert.deepEqual(await res.json(), { error: "unauthorized" });
 });
 
 test("auth required allows valid tokens with route scopes to reach handlers", async () => {
