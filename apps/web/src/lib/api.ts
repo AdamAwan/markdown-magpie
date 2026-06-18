@@ -24,32 +24,63 @@ export function resolveApiUrl(path: string): string {
   return path.startsWith("/api/") || path === "/api" ? `${resolveApiBaseUrl()}${path}` : `${resolveApiBaseUrl()}/api${path}`;
 }
 
-export async function apiGet<T>(path: string): Promise<T> {
-  const response = await fetch(resolveApiUrl(path));
+// Default per-request timeout. Each call also accepts a caller AbortSignal, which
+// is combined with the timeout so either can abort the request.
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+export interface ApiRequestOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+export async function apiGet<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+  const response = await fetch(resolveApiUrl(path), {
+    signal: requestSignal(options)
+  });
   return readResponse<T>(response);
 }
 
-export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+export async function apiPost<T>(path: string, body: unknown, options: ApiRequestOptions = {}): Promise<T> {
   const response = await fetch(resolveApiUrl(path), {
     method: "POST",
     headers: {
       "content-type": "application/json"
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal: requestSignal(options)
   });
   return readResponse<T>(response);
 }
 
-export async function apiDelete<T>(path: string): Promise<T> {
-  const response = await fetch(resolveApiUrl(path), { method: "DELETE" });
+export async function apiDelete<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+  const response = await fetch(resolveApiUrl(path), { method: "DELETE", signal: requestSignal(options) });
   return readResponse<T>(response);
+}
+
+// Combine the caller's signal (if any) with a request timeout so either source
+// can abort the fetch. AbortSignal.any short-circuits if the caller already
+// aborted, so a superseded request never fires.
+function requestSignal({ signal, timeoutMs = DEFAULT_TIMEOUT_MS }: ApiRequestOptions): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
 async function readResponse<T>(response: Response): Promise<T> {
   const text = await response.text();
-  const body = text ? JSON.parse(text) : {};
+  // The error body is not guaranteed to be JSON (proxies and crashes can return
+  // HTML or plain text), so parse defensively and fall back to the raw text.
+  let body: unknown = {};
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = {};
+    }
+  }
+
   if (!response.ok) {
-    throw new Error(typeof body.message === "string" ? body.message : text || response.statusText);
+    const message = (body as { message?: unknown }).message;
+    throw new Error(typeof message === "string" ? message : text || response.statusText);
   }
 
   return body as T;
