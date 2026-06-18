@@ -15,17 +15,31 @@ export function storageBackend(): "memory" | "postgres" {
   return process.env.STORAGE_BACKEND === "postgres" ? "postgres" : "memory";
 }
 
-export function storeBackend(
-  name:
-    | "KNOWLEDGE_STORE"
-    | "QUESTION_LOG_STORE"
-    | "PROPOSAL_STORE"
-    | "AI_JOB_QUEUE"
-    | "CRUNCH_STORE"
-    | "SCHEDULED_TASK_STORE"
-    | "SOURCE_SYNC_STORE"
-): "memory" | "postgres" {
+export type StoreEnvName =
+  | "KNOWLEDGE_STORE"
+  | "QUESTION_LOG_STORE"
+  | "PROPOSAL_STORE"
+  | "AI_JOB_QUEUE"
+  | "CRUNCH_STORE"
+  | "SCHEDULED_TASK_STORE"
+  | "SOURCE_SYNC_STORE";
+
+export function storeBackend(name: StoreEnvName): "memory" | "postgres" {
   return process.env[name] === "postgres" ? "postgres" : storageBackend();
+}
+
+// Pick the Postgres or in-memory implementation for a store, with the same
+// "DATABASE_URL is required when <NAME>=postgres" error every factory used to
+// inline. Keeps the seven create* functions to a single line each.
+function createStore<T>(name: StoreEnvName, postgres: (databaseUrl: string) => T, memory: () => T): T {
+  if (storeBackend(name) === "postgres") {
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      throw new Error(`DATABASE_URL is required when ${name}=postgres`);
+    }
+    return postgres(databaseUrl);
+  }
+  return memory();
 }
 
 export function requireDatabaseUrl(): string {
@@ -46,79 +60,49 @@ export function parseClaimTimeoutMs(value: string | undefined): number {
 }
 
 export function createAiJobQueue(claimTimeoutMs: number): InMemoryAiJobQueue | PostgresAiJobQueue {
-  if (storeBackend("AI_JOB_QUEUE") === "postgres") {
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error("DATABASE_URL is required when AI_JOB_QUEUE=postgres");
-    }
-
-    return new PostgresAiJobQueue(databaseUrl, claimTimeoutMs);
-  }
-
-  return new InMemoryAiJobQueue(claimTimeoutMs);
+  return createStore<InMemoryAiJobQueue | PostgresAiJobQueue>(
+    "AI_JOB_QUEUE",
+    (databaseUrl) => new PostgresAiJobQueue(databaseUrl, claimTimeoutMs),
+    () => new InMemoryAiJobQueue(claimTimeoutMs)
+  );
 }
 
 export function createQuestionLogStore(): InMemoryQuestionLogStore | PostgresQuestionLogStore {
-  if (storeBackend("QUESTION_LOG_STORE") === "postgres") {
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error("DATABASE_URL is required when QUESTION_LOG_STORE=postgres");
-    }
-
-    return new PostgresQuestionLogStore(databaseUrl);
-  }
-
-  return new InMemoryQuestionLogStore();
+  return createStore<InMemoryQuestionLogStore | PostgresQuestionLogStore>(
+    "QUESTION_LOG_STORE",
+    (databaseUrl) => new PostgresQuestionLogStore(databaseUrl),
+    () => new InMemoryQuestionLogStore()
+  );
 }
 
 export function createProposalStore(): InMemoryProposalStore | PostgresProposalStore {
-  if (storeBackend("PROPOSAL_STORE") === "postgres") {
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error("DATABASE_URL is required when PROPOSAL_STORE=postgres");
-    }
-
-    return new PostgresProposalStore(databaseUrl);
-  }
-
-  return new InMemoryProposalStore();
+  return createStore<InMemoryProposalStore | PostgresProposalStore>(
+    "PROPOSAL_STORE",
+    (databaseUrl) => new PostgresProposalStore(databaseUrl),
+    () => new InMemoryProposalStore()
+  );
 }
 
 export function createCrunchStore(): InMemoryCrunchStore | PostgresCrunchStore {
-  if (storeBackend("CRUNCH_STORE") === "postgres") {
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error("DATABASE_URL is required when CRUNCH_STORE=postgres");
-    }
-
-    return new PostgresCrunchStore(databaseUrl);
-  }
-
-  return new InMemoryCrunchStore();
+  return createStore<InMemoryCrunchStore | PostgresCrunchStore>(
+    "CRUNCH_STORE",
+    (databaseUrl) => new PostgresCrunchStore(databaseUrl),
+    () => new InMemoryCrunchStore()
+  );
 }
 
 export function createScheduledTaskStore(): InMemoryScheduledTaskStore | PostgresScheduledTaskStore {
-  if (storeBackend("SCHEDULED_TASK_STORE") === "postgres") {
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error("DATABASE_URL is required when SCHEDULED_TASK_STORE=postgres");
-    }
-
-    return new PostgresScheduledTaskStore(databaseUrl);
-  }
-
-  return new InMemoryScheduledTaskStore();
+  return createStore<InMemoryScheduledTaskStore | PostgresScheduledTaskStore>(
+    "SCHEDULED_TASK_STORE",
+    (databaseUrl) => new PostgresScheduledTaskStore(databaseUrl),
+    () => new InMemoryScheduledTaskStore()
+  );
 }
 
 export function createSourceSyncStore(): InMemorySourceSyncStore | PostgresSourceSyncStore {
-  if (storeBackend("SOURCE_SYNC_STORE") === "postgres") {
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error("DATABASE_URL is required when SOURCE_SYNC_STORE=postgres");
-    }
-
-    return new PostgresSourceSyncStore(databaseUrl);
-  }
-
-  return new InMemorySourceSyncStore();
+  return createStore<InMemorySourceSyncStore | PostgresSourceSyncStore>(
+    "SOURCE_SYNC_STORE",
+    (databaseUrl) => new PostgresSourceSyncStore(databaseUrl),
+    () => new InMemorySourceSyncStore()
+  );
 }

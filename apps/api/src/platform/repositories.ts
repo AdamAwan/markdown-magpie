@@ -83,13 +83,19 @@ export async function resolveConfiguredRepositoryLocalPath(
   return repository.subpath ? path.join(localPath, repository.subpath) : localPath;
 }
 
+// A stable identity for a configured git checkout (id + url), so the same repo
+// configured as both a source and a destination dedupes to one checkout. The NUL
+// separator can't appear in either field.
+function checkoutKey(repository: ConfiguredKnowledgeRepository): string {
+  return `${repository.id}\0${repository.url ?? ""}`;
+}
+
 export async function syncConfiguredGitCheckouts(deps: RepositoryDeps): Promise<void> {
   const gitRepositories = uniqueConfiguredGitRepositories([
     ...deps.knowledgeConfig.sources,
     ...deps.knowledgeConfig.destinations
   ]);
 
-  const checkoutKey = (repository: ConfiguredKnowledgeRepository) => `${repository.id}\0${repository.url ?? ""}`;
   const sourceKeys = new Set(deps.knowledgeConfig.sources.filter((source) => source.kind === "git").map(checkoutKey));
 
   console.log(`Syncing ${gitRepositories.length} configured git checkout(s)`);
@@ -133,7 +139,7 @@ export function uniqueConfiguredGitRepositories(
       continue;
     }
 
-    byCheckout.set(`${repository.id}\0${repository.url ?? ""}`, repository);
+    byCheckout.set(checkoutKey(repository), repository);
   }
 
   return [...byCheckout.values()];
