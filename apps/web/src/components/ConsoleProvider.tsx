@@ -167,8 +167,8 @@ function useConsoleController() {
       const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, proposalsResult, crunchRunsResult, crunchSettingsResult, scheduledTasksResult, configResult, promptsResult] = await Promise.all([
         apiGet<Health>("/health", { signal }),
         apiGet<KnowledgeStats>("/knowledge/stats", { signal }),
-        apiGet<{ repositories: RepositoryRef[] }>("/repositories", { signal }),
-        apiGet<{ documents: KnowledgeDocument[] }>("/documents", { signal }),
+        apiGet<{ repositories: RepositoryRef[] }>("/knowledge/repositories", { signal }),
+        apiGet<{ documents: KnowledgeDocument[] }>("/knowledge/documents", { signal }),
         apiGet<{ questions: QuestionLog[] }>("/questions?limit=8", { signal }),
         apiGet<{ gaps: GapCandidate[] }>("/gaps/candidates?limit=8", { signal }),
         apiGet<{ clusters: SuggestedGapCluster[] }>("/gaps/clusters?limit=8", { signal }),
@@ -482,7 +482,7 @@ function useConsoleController() {
     setIndexingRepo(true);
     clearMessage();
     try {
-      const summary = await apiPost<IndexRepositoryResponse>("/repositories/index", {
+      const summary = await apiPost<IndexRepositoryResponse>("/knowledge/repositories/index", {
         flowId: nextFlowId.trim()
       });
       showMessage(

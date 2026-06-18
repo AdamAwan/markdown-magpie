@@ -3,7 +3,7 @@ import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
 import type { AppContext } from "./context.js";
 import { onError } from "./http/errors.js";
-import { configRoutes } from "./features/config/routes.js";
+import { configRoutes, adminRoutes } from "./features/config/routes.js";
 import { askRoutes } from "./features/ask/routes.js";
 import { knowledgeRoutes } from "./features/knowledge/routes.js";
 import { questionRoutes } from "./features/questions/routes.js";
@@ -42,16 +42,18 @@ export function buildApp(ctx: AppContext): Hono {
 
   api.get("/health", (c) => c.json({ ok: true, service: "markdown-magpie-api" }));
 
-  api.route("/", configRoutes(ctx));
-  api.route("/", askRoutes(ctx));
-  api.route("/", knowledgeRoutes(ctx));
+  // Every feature module owns one prefix and declares relative paths internally.
+  api.route("/config", configRoutes(ctx));
+  api.route("/admin", adminRoutes(ctx));
+  api.route("/ask", askRoutes(ctx));
+  api.route("/knowledge", knowledgeRoutes(ctx));
   api.route("/questions", questionRoutes(ctx));
   api.route("/gaps", gapRoutes(ctx));
   api.route("/proposals", proposalRoutes(ctx));
   api.route("/crunch", crunchRoutes(ctx));
   api.route("/scheduled-tasks", scheduledTaskRoutes(ctx));
   api.route("/ai-jobs", jobRoutes(ctx));
-  api.route("/", promptRoutes(ctx));
+  api.route("/prompts", promptRoutes(ctx));
 
   app.route("/api", api);
 

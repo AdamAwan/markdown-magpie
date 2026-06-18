@@ -59,9 +59,9 @@ test("GET /api/questions/bogus returns 404 question_not_found", async () => {
   assert.deepEqual(await res.json(), { error: "question_not_found" });
 });
 
-test("POST /api/repositories/index rejects a localPath that escapes the allow-root", async () => {
+test("POST /api/knowledge/repositories/index rejects a localPath that escapes the allow-root", async () => {
   const app = buildApp(makeTestContext());
-  const res = await app.request("/api/repositories/index", {
+  const res = await app.request("/api/knowledge/repositories/index", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ localPath: "../../../../../../etc" })

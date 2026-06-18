@@ -91,14 +91,14 @@ Answers a question from indexed Markdown context.
   An `answer_question` job is enqueued for a watcher and the question log is written immediately
   with unknown confidence. See [question-logging.md](question-logging.md).
 
-### `GET /api/search?q=<query>&limit=<n>`
+### `GET /api/knowledge/search?q=<query>&limit=<n>`
 
 Searches indexed sections. `limit` defaults to `5`. When hybrid retrieval is active (Postgres + embeddings configured), results are ranked by Reciprocal Rank Fusion of pgvector nearest-neighbour and keyword scores; otherwise keyword scoring is used. Each result carries a `[0,1]` relevance score.
 
 - `400 query_required` — missing `q`.
 - `200` — `{ "sections": [ DocumentSection, ... ] }`.
 
-### `POST /api/repositories/index`
+### `POST /api/knowledge/repositories/index`
 
 Indexes the destination KB for a configured flow. See [ingestion.md](ingestion.md).
 
@@ -119,7 +119,7 @@ still used as fallbacks when `KNOWLEDGE_SOURCES` / `KNOWLEDGE_DESTINATIONS` are 
 - `400 local_path_required` — no repository is configured and no legacy path was supplied.
 - `200` — an indexed-repository summary: `{ repository, documentCount, sectionCount, commitSha }`.
 
-### `GET /api/repositories`
+### `GET /api/knowledge/repositories`
 
 Lists indexed repositories.
 
@@ -127,7 +127,7 @@ Lists indexed repositories.
 { "repositories": [ RepositoryRef, ... ] }
 ```
 
-### `POST /api/documents/upload`
+### `POST /api/knowledge/documents/upload`
 
 Indexes Markdown documents supplied inline, without a Git checkout.
 
@@ -147,7 +147,7 @@ missing); entries containing `..` or with empty content are dropped. `repository
 - `413 markdown_document_too_large` — any document exceeds 250,000 characters.
 - `201` — an indexed-repository summary.
 
-### `GET /api/documents`
+### `GET /api/knowledge/documents`
 
 Lists indexed documents, sorted by path.
 

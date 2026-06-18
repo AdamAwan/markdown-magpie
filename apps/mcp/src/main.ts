@@ -194,7 +194,7 @@ async function callTool(params: ToolCallParams): Promise<unknown> {
   if (params.name === "kb.search") {
     const query = stringArgument(params.arguments, "query");
     const limit = numberArgument(params.arguments, "limit");
-    const path = limit === undefined ? `/search?q=${encodeURIComponent(query)}` : `/search?q=${encodeURIComponent(query)}&limit=${limit}`;
+    const path = limit === undefined ? `/knowledge/search?q=${encodeURIComponent(query)}` : `/knowledge/search?q=${encodeURIComponent(query)}&limit=${limit}`;
     const result = await getJson(path);
     return textResult(result);
   }

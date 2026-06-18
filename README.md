@@ -154,7 +154,7 @@ The root `npm run dev` starts every workspace dev script that exists. Prefer the
 With the API running, index the bundled cats knowledge base:
 
 ```bash
-curl -s -X POST http://localhost:4000/api/repositories/index \
+curl -s -X POST http://localhost:4000/api/knowledge/repositories/index \
   -H 'content-type: application/json' \
   -d '{"repositoryId":"cats"}'
 ```
@@ -162,7 +162,7 @@ curl -s -X POST http://localhost:4000/api/repositories/index \
 Search indexed Markdown sections:
 
 ```bash
-curl -s 'http://localhost:4000/api/search?q=claws'
+curl -s 'http://localhost:4000/api/knowledge/search?q=claws'
 ```
 
 Ask a question:
@@ -436,7 +436,7 @@ The web console has a **Knowledge** section where you can paste or upload Markdo
 You can also upload Markdown through the API:
 
 ```bash
-curl -s http://localhost:4000/api/documents/upload \
+curl -s http://localhost:4000/api/knowledge/documents/upload \
   -H 'content-type: application/json' \
   -d '{
     "repositoryId": "showcase",

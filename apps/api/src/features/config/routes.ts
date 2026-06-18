@@ -8,9 +8,9 @@ import * as configService from "./service.js";
 export function configRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
-  app.get("/config", (c) => c.json(configService.getRuntimeConfig(ctx)));
+  app.get("/", (c) => c.json(configService.getRuntimeConfig(ctx)));
 
-  app.post("/config", async (c) => {
+  app.post("/", async (c) => {
     const payload = await readJsonBody<{
       aiExecutionMode?: string;
       aiProvider?: string;
@@ -31,7 +31,13 @@ export function configRoutes(ctx: AppContext): Hono {
     return c.json(configService.getRuntimeConfig(ctx));
   });
 
-  app.post("/admin/reset", async (c) => {
+  return app;
+}
+
+export function adminRoutes(ctx: AppContext): Hono {
+  const app = new Hono();
+
+  app.post("/reset", async (c) => {
     const { reindexed, failures, stats } = await configService.resetData(ctx);
     return c.json({ ok: true, reindexed, failures, stats });
   });

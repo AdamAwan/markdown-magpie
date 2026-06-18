@@ -51,8 +51,8 @@ async function main(): Promise<void> {
     async ({ query, limit }) => {
       const path =
         limit !== undefined
-          ? `/search?q=${encodeURIComponent(query)}&limit=${limit}`
-          : `/search?q=${encodeURIComponent(query)}`;
+          ? `/knowledge/search?q=${encodeURIComponent(query)}&limit=${limit}`
+          : `/knowledge/search?q=${encodeURIComponent(query)}`;
       const result = await getJson(path);
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
     }

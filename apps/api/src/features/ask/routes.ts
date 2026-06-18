@@ -9,7 +9,7 @@ export function askRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
   app.post(
-    "/ask",
+    "/",
     zValidator("json", askBodySchema, (result, c) => {
       if (!result.success) {
         return c.json({ error: "question_required" }, 400);

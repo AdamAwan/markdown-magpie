@@ -33,7 +33,7 @@ export function knowledgeRoutes(ctx: AppContext): Hono {
 
   app.get("/documents", (c) => c.json({ documents: knowledgeService.listDocuments(ctx) }));
 
-  app.get("/knowledge/stats", (c) => c.json(knowledgeService.stats(ctx)));
+  app.get("/stats", (c) => c.json(knowledgeService.stats(ctx)));
 
   app.get("/search", async (c) => {
     const query = c.req.query("q")?.trim();
