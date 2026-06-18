@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 import "./styles.css";
+import { ConsoleProvider } from "../components/ConsoleProvider";
+import { AppShell } from "../components/AppShell";
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   const runtimeConfig = {
@@ -14,7 +16,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             __html: `window.__MAGPIE_CONFIG__=${JSON.stringify(runtimeConfig)};`
           }}
         />
-        {children}
+        <ConsoleProvider>
+          <AppShell>{children}</AppShell>
+        </ConsoleProvider>
       </body>
     </html>
   );

@@ -10,6 +10,13 @@
       "env": {
         "MAGPIE_DEV_API_PROXY": "http://localhost:4000"
       }
+    },
+    {
+      "name": "deck",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8771", "--directory", "presentation"],
+      "port": 8771,
+      "autoPort": false
     }
   ]
 }

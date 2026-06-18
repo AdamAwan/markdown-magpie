@@ -5,12 +5,19 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/main.ts",
+    "dev:http": "tsx src/http.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
+    "start:http": "node dist/http.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "tsx": "^4.22.4"
+    "@cfworker/json-schema": "^4.1.1",
+    "@modelcontextprotocol/express": "^2.0.0-alpha.2",
+    "@modelcontextprotocol/node": "^2.0.0-alpha.2",
+    "@modelcontextprotocol/server": "^2.0.0-alpha.2",
+    "tsx": "^4.22.4",
+    "zod": "^4.1.12"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",

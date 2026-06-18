@@ -1,0 +1,78 @@
+import Link from "next/link";
+import { Citation, ConsoleNotice } from "../lib/types";
+
+export function AttentionPanel({ notices }: { notices: ConsoleNotice[] }) {
+  return (
+    <section className="attentionPanel" aria-label="System notices">
+      {notices.map((notice) => (
+        <article className={`attentionNotice ${notice.tone}`} key={notice.id}>
+          <div>
+            <h2>{notice.title}</h2>
+            <p>{notice.body}</p>
+          </div>
+          {notice.action && notice.actionLabel ? (
+            <button className="chip" onClick={notice.action} type="button">
+              {notice.actionLabel}
+            </button>
+          ) : null}
+        </article>
+      ))}
+    </section>
+  );
+}
+
+export function NavButton({
+  active,
+  count,
+  glyph,
+  label,
+  href
+}: {
+  active: boolean;
+  count?: number;
+  glyph: string;
+  label: string;
+  href: string;
+}) {
+  return (
+    <Link
+      className={active ? "navButton active" : "navButton"}
+      href={href}
+      title={`Open ${label}`}
+      aria-current={active ? "page" : undefined}
+    >
+      <span className="navGlyph">{glyph}</span>
+      <span>{label}</span>
+      {count === undefined ? null : (
+        <span className="pill" title={`${count} ${label.toLowerCase()} item${count === 1 ? "" : "s"}`}>
+          {count}
+        </span>
+      )}
+    </Link>
+  );
+}
+
+export function CitationRow({ citation }: { citation: Citation }) {
+  return (
+    <div className="citation">
+      <div className="citationTop">
+        <strong>{citation.heading}</strong>
+        <code>{citation.sectionId}</code>
+      </div>
+      <span>
+        {citation.path}
+        {citation.anchor ? `#${citation.anchor}` : ""}
+      </span>
+      <p>{citation.excerpt}</p>
+    </div>
+  );
+}
+
+export function ContextValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="contextValue">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}

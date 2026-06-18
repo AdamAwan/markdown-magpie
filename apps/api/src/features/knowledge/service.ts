@@ -1,6 +1,5 @@
 import type { AppContext } from "../../context.js";
 import { resolveIndexSelection } from "../../platform/repositories.js";
-import { normalizeUploadPath } from "../../platform/paths.js";
 
 export function knowledgeRepositoryErrorCode(message: string): string {
   if (message === "local_path_required") {
@@ -47,49 +46,6 @@ export async function indexSelection(
     localPath: selection.localPath,
     repositoryId: selection.repositoryId,
     name: selection.name
-  });
-  void ctx.embedder.trigger();
-  return summary;
-}
-
-export interface UploadDocumentInput {
-  path?: string;
-  content?: string;
-}
-
-export interface UploadDocumentsPayload {
-  repositoryId?: string;
-  name?: string;
-  documents: Array<{ path: string; content: string }>;
-}
-
-/**
- * Normalises the incoming documents (path + non-empty content). The handler is
- * responsible for the empty-list (400) and too-large (413) validation so that
- * response shapes and status codes are preserved exactly.
- */
-export function normalizeUploadDocuments(
-  documents: UploadDocumentInput[] | undefined
-): Array<{ path: string; content: string }> {
-  return (documents ?? [])
-    .map((document) => ({
-      path: normalizeUploadPath(document.path),
-      content: document.content ?? ""
-    }))
-    .filter((document) => document.path && document.content.trim());
-}
-
-export async function uploadDocuments(
-  ctx: AppContext,
-  payload: UploadDocumentsPayload
-): Promise<Awaited<ReturnType<AppContext["stores"]["knowledgeIndex"]["indexMarkdownDocuments"]>>> {
-  const summary = await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
-    repositoryId: payload.repositoryId?.trim() || "uploaded",
-    name: payload.name?.trim() || "Uploaded Markdown",
-    documents: payload.documents.map((document) => ({
-      path: document.path,
-      content: document.content
-    }))
   });
   void ctx.embedder.trigger();
   return summary;
