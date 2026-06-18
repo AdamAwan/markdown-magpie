@@ -48,12 +48,26 @@ call rather than degrading to a re-auth prompt. Acceptable for now (API will 401
 anyway once MCP/API rejection lands), but Task 4 should settle the agreed UX so both
 halves match.
 
+- Task 4 HTTP MCP Authorization — complete, passed both review gates.
+  - `9e8f685 feat(mcp): protect http transport with auth0`
+  - `fee9330 test(mcp): cover authorized tool dispatch and downstream service token`
+  - `3572eae docs(mcp): explain lazy transport connect`
+  - Spec review: all 9 functional requirements met (metadata on both well-known
+    paths, 401+`WWW-Authenticate` with origin-derived URL, GET/POST/DELETE gated,
+    per-tool scopes, `MCP_API_AUTH_TOKEN` downstream with no user-token forwarding,
+    `MCP_API_AUTH_TOKEN` startup fail-fast). Two design-mandated tests were missing
+    (authorized tool dispatch + downstream service-token) and were added in
+    `fee9330`; re-review: ✅ gap closed.
+  - Code quality review: ✅ ready to merge; no banned casts/`any`, verifier built
+    once, 401/403 clean, auth-disabled path byte-identical. Lazy-connect comment
+    added in `3572eae`.
+  - Verified: `npm run test -w @magpie/mcp` → 11 pass / 0 fail; `typecheck` clean.
+
 **In progress:**
 
-- Task 4 HTTP MCP Authorization.
+- Task 5 stdio MCP Token Handling.
 
 **Not started:**
-- Task 5 stdio MCP Token Handling.
 - Task 6 Env and Docs.
 - Task 7 Full Verification.
 
@@ -592,7 +606,7 @@ git commit -m "feat(web): add auth0 login and api tokens"
 - Modify: `apps/mcp/src/kb-client.ts`
 - Create: `apps/mcp/src/http.test.ts`
 
-- [ ] **Step 1: Write failing HTTP MCP tests**
+- [x] **Step 1: Write failing HTTP MCP tests**
 
 Create `apps/mcp/src/http.test.ts` with tests for:
 
@@ -614,7 +628,7 @@ test("/mcp without a bearer token returns a discovery challenge", async () => {
 
 Use the existing Express app directly; if `supertest` is not present, use `node:http` and `app.listen(0)` in the test helper.
 
-- [ ] **Step 2: Verify HTTP MCP tests fail**
+- [x] **Step 2: Verify HTTP MCP tests fail**
 
 Run:
 
@@ -624,11 +638,11 @@ npm run test -w @magpie/mcp
 
 Expected: FAIL because the app is not exported and auth is not implemented.
 
-- [ ] **Step 3: Extract app factory**
+- [x] **Step 3: Extract app factory**
 
 Refactor `apps/mcp/src/http.ts` so `main()` calls an exported `createHttpMcpApp(options)` and then listens. Preserve current runtime behaviour when auth is disabled.
 
-- [ ] **Step 4: Add metadata and challenge**
+- [x] **Step 4: Add metadata and challenge**
 
 Implement:
 
@@ -643,7 +657,7 @@ const metadata = {
 
 Serve it from both well-known paths. Return `WWW-Authenticate: Bearer resource_metadata="https://mcp-magpie.wastedcake.com/.well-known/oauth-protected-resource"` for missing/invalid tokens.
 
-- [ ] **Step 5: Enforce MCP scopes**
+- [x] **Step 5: Enforce MCP scopes**
 
 Before dispatching `/mcp`, verify the inbound token. For `tools/call`, check:
 
@@ -653,7 +667,7 @@ Before dispatching `/mcp`, verify the inbound token. For `tools/call`, check:
 
 Use `MCP_API_AUTH_TOKEN` for calls to `askQuestion`, `getJson`, and `submitFeedback`.
 
-- [ ] **Step 6: Run MCP tests**
+- [x] **Step 6: Run MCP tests**
 
 Run:
 
@@ -663,7 +677,7 @@ npm run test -w @magpie/mcp
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/mcp packages/auth package-lock.json apps/mcp/package.json
