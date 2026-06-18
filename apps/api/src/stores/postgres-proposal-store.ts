@@ -86,7 +86,6 @@ export class PostgresProposalStore implements ProposalStore {
     try {
       await client.query("BEGIN");
       await client.query("DELETE FROM proposals");
-      await client.query("DELETE FROM gap_clusters");
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -104,7 +103,6 @@ interface ProposalRow {
   target_path: string;
   markdown: string;
   evidence: Citation[];
-  gap_cluster_id: string | null;
   gap_summary: string | null;
   triggering_question_ids: string[];
   rationale: string | null;
@@ -123,7 +121,6 @@ function mapRow(row: ProposalRow): Proposal {
     targetPath: row.target_path,
     markdown: row.markdown,
     evidence: row.evidence ?? [],
-    gapClusterId: row.gap_cluster_id ?? undefined,
     gapSummary: row.gap_summary ?? undefined,
     triggeringQuestionIds: row.triggering_question_ids,
     destinationId: row.destination_id ?? undefined,
