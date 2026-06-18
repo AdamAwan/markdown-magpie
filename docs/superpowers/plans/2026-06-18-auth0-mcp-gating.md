@@ -62,10 +62,20 @@ halves match.
     once, 401/403 clean, auth-disabled path byte-identical. Lazy-connect comment
     added in `3572eae`.
   - Verified: `npm run test -w @magpie/mcp` → 11 pass / 0 fail; `typecheck` clean.
-
-**In progress:**
-
-- Task 5 stdio MCP Token Handling.
+- Task 5 stdio MCP Token Handling — complete, passed both review gates.
+  - `e15f935 feat(mcp): pass auth tokens from stdio`
+  - `b7f315e test(mcp): make stdio entrypoint importable and test auth guard`
+  - Spec review: stdio passes `MCP_AUTH_TOKEN` (not `MCP_API_AUTH_TOKEN`) to all API
+    calls; startup fails fast (stderr + exit 1) when `AUTH_REQUIRED=true` and token
+    missing; disabled path byte-identical. kb-client `{ token }` plumbing reused from
+    Task 4 (unchanged). The design-mandated startup-rejection test was initially
+    missing because `main.ts` ran side effects at import; closed in `b7f315e` by
+    adding the `http.ts`-style `fileURLToPath(import.meta.url) === argv[1]` entrypoint
+    guard so the pure `resolveStdioAuthToken` helper is unit-testable. Re-review: ✅.
+  - Code quality review: ✅ ready to merge; clean import/runtime split mirroring
+    `http.ts`, pure tested guard helper, no banned casts/`any`.
+  - Verified: `npm run test -w @magpie/mcp` → 16 pass / 0 fail (no hang); `typecheck`
+    clean.
 
 **Not started:**
 - Task 6 Env and Docs.
@@ -691,7 +701,7 @@ git commit -m "feat(mcp): protect http transport with auth0"
 - Modify: `apps/mcp/src/kb-client.ts`
 - Test: `apps/mcp/src/kb-client.test.ts`
 
-- [ ] **Step 1: Write failing client token test**
+- [x] **Step 1: Write failing client token test**
 
 Create `apps/mcp/src/kb-client.test.ts`:
 
@@ -713,7 +723,7 @@ test("getJson sends the configured bearer token", async () => {
 });
 ```
 
-- [ ] **Step 2: Verify MCP client test fails**
+- [x] **Step 2: Verify MCP client test fails**
 
 Run:
 
@@ -723,11 +733,11 @@ npm run test -w @magpie/mcp -- src/kb-client.test.ts
 
 Expected: FAIL because `getJson` does not accept token options.
 
-- [ ] **Step 3: Implement token options**
+- [x] **Step 3: Implement token options**
 
 Update `getJson`, `postJson`, `askQuestion`, and `submitFeedback` to accept `{ token?: string }`, set `authorization` when present, and pass options through queued answer polling.
 
-- [ ] **Step 4: Add stdio startup guard**
+- [x] **Step 4: Add stdio startup guard**
 
 In `apps/mcp/src/main.ts`, read:
 
@@ -742,7 +752,7 @@ if (authRequired && !stdioAuthToken) {
 
 Pass `stdioAuthToken` into every `askQuestion`, `getJson`, and `submitFeedback` call.
 
-- [ ] **Step 5: Run MCP tests**
+- [x] **Step 5: Run MCP tests**
 
 Run:
 
@@ -752,7 +762,7 @@ npm run test -w @magpie/mcp
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/mcp
