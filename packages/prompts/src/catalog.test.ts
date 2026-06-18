@@ -6,6 +6,22 @@ test("catalog has exactly 8 prompts", () => {
   assert.equal(promptCatalog.length, 8);
 });
 
+test("catalog ids are in the fixed, documented order", () => {
+  assert.deepEqual(
+    promptCatalog.map((prompt) => prompt.id),
+    [
+      "answer-question-queue",
+      "answer-question-direct",
+      "summarize-gap",
+      "draft-markdown-proposal",
+      "crunch-knowledge-base",
+      "gap-clustering",
+      "generic-job",
+      "job-runner-system"
+    ]
+  );
+});
+
 test("all prompt ids are unique", () => {
   const ids = promptCatalog.map((prompt) => prompt.id);
   assert.equal(new Set(ids).size, ids.length);
