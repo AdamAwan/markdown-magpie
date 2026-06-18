@@ -6,7 +6,7 @@ import type {
   SummarizeGapJobInput
 } from "@magpie/core";
 import {
-  ANSWER_QUESTION_QUEUE,
+  ANSWER_QUESTION,
   CRUNCH_KNOWLEDGE_BASE,
   DRAFT_MARKDOWN_PROPOSAL,
   GENERIC_JOB,
@@ -17,7 +17,7 @@ import {
 export function buildJobPrompt(job: AiJob): string {
   if (job.type === "answer_question") {
     const input = job.input as AnswerQuestionJobInput;
-    const system = withPersona(ANSWER_QUESTION_QUEUE.instructions, input.persona);
+    const system = withPersona(ANSWER_QUESTION.instructions, input.persona);
     return `${system}\n\nQuestion:\n${input.question}\n\nContext:\n${JSON.stringify(input.context, null, 2)}`;
   }
 

@@ -1,5 +1,5 @@
 import type { AnswerResult, ChatProvider, Citation, ChatRequest, Confidence, DocumentSection, FlowRouteDecision, KnowledgeGapSignal, RankedSection } from "@magpie/core";
-import { ANSWER_QUESTION_DIRECT, ROUTE_QUESTION_TO_FLOW, withPersona } from "@magpie/prompts";
+import { ANSWER_QUESTION, ROUTE_QUESTION_TO_FLOW, withPersona } from "@magpie/prompts";
 
 export interface SectionSearchProvider {
   search(question: string, limit: number, repositoryIds?: string[]): Promise<RankedSection[]>;
@@ -159,7 +159,7 @@ export async function answerQuestion(
 
   const context = relevantSections.map(({ section }) => `# ${section.heading}\n${section.content}`).join("\n\n");
   const response = await chatProvider.complete({
-    system: withPersona(ANSWER_QUESTION_DIRECT.instructions, options.persona),
+    system: withPersona(ANSWER_QUESTION.instructions, options.persona),
     messages: [
       {
         role: "user",

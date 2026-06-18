@@ -1704,6 +1704,67 @@ pre {
   color: #9a2c2c;
 }
 
+.promptFlow {
+  display: grid;
+  gap: 32px;
+}
+
+/* Each stage is a step in the question's journey. A connector line runs down the
+   left edge from one step badge to the next so the pipeline reads top-to-bottom. */
+.promptStage {
+  position: relative;
+  display: grid;
+  gap: 14px;
+}
+
+.promptStage:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 15px;
+  top: 34px;
+  bottom: -32px;
+  width: 2px;
+  background: linear-gradient(#bcd0bf, #e2e8da);
+}
+
+.promptStageHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.promptStageStep {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #3d6b43;
+  color: #f5f7f2;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.promptStageTitle {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.promptStageBlurb {
+  margin: 4px 0 0;
+  max-width: 60ch;
+  color: #45513f;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.promptStage .promptList {
+  margin-left: 46px;
+}
+
 .promptList {
   display: grid;
   gap: 16px;
@@ -1725,7 +1786,8 @@ pre {
   gap: 12px;
 }
 
-.promptCardHead h2 {
+.promptCardHead h2,
+.promptCardHead h3 {
   margin: 0;
   font-size: 1.05rem;
 }

@@ -2,16 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { promptCatalog, getPrompt } from "./catalog.js";
 
-test("catalog has exactly 9 prompts", () => {
-  assert.equal(promptCatalog.length, 9);
+test("catalog has exactly 8 prompts", () => {
+  assert.equal(promptCatalog.length, 8);
 });
 
 test("catalog ids are in the fixed, documented order", () => {
   assert.deepEqual(
     promptCatalog.map((prompt) => prompt.id),
     [
-      "answer-question-queue",
-      "answer-question-direct",
+      "answer-question",
       "summarize-gap",
       "draft-markdown-proposal",
       "crunch-knowledge-base",

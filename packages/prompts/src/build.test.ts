@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { AiJob } from "@magpie/core";
 import { buildJobPrompt } from "./build.js";
 import {
-  ANSWER_QUESTION_QUEUE,
+  ANSWER_QUESTION,
   CRUNCH_KNOWLEDGE_BASE,
   DRAFT_MARKDOWN_PROPOSAL,
   GENERIC_JOB,
@@ -26,7 +26,7 @@ test("answer_question embeds question and context after the instructions", () =>
   const prompt = buildJobPrompt(job("answer_question", input));
   assert.equal(
     prompt,
-    `${ANSWER_QUESTION_QUEUE.instructions}\n\nQuestion:\n${input.question}\n\nContext:\n${JSON.stringify(input.context, null, 2)}`
+    `${ANSWER_QUESTION.instructions}\n\nQuestion:\n${input.question}\n\nContext:\n${JSON.stringify(input.context, null, 2)}`
   );
 });
 
@@ -35,7 +35,7 @@ test("answer_question appends the flow persona to the base instructions", () => 
   const prompt = buildJobPrompt(job("answer_question", input));
   assert.ok(
     prompt.startsWith(
-      `${ANSWER_QUESTION_QUEUE.instructions}\n\nPersona (how to look and respond):\nBe concise and formal.`
+      `${ANSWER_QUESTION.instructions}\n\nPersona (how to look and respond):\nBe concise and formal.`
     )
   );
   assert.match(prompt, /\n\nQuestion:\nWhat now\?/);

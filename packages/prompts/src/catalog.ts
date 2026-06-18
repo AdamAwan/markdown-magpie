@@ -1,55 +1,11 @@
 import type { PromptDefinition } from "./types.js";
 
-export const ANSWER_QUESTION_QUEUE: PromptDefinition = {
-  id: "answer-question-queue",
-  title: "Answer question (queue mode)",
+export const ANSWER_QUESTION: PromptDefinition = {
+  id: "answer-question",
+  title: "Answer question",
   description:
-    "Answers a question from Markdown context and asks the model to produce its own citations. Used by queued answer_question jobs.",
-  usedBy: ["watcher · queue mode"],
-  outputShape: '{ answer, confidence, citations[], gaps[] }',
-  instructions: `You are answering a question using a Markdown knowledge base.
-
-Rules:
-- Use only the provided context.
-- If the context is insufficient, say that reliable source material was not found.
-- Return JSON only. Do not wrap it in Markdown.
-- Every citation must refer to a provided context section.
-
-Return this JSON shape:
-{
-  "answer": "string",
-  "confidence": "high | medium | low",
-  "citations": [
-    {
-      "documentId": "string",
-      "sectionId": "string",
-      "path": "string",
-      "heading": "string",
-      "anchor": "string",
-      "excerpt": "string"
-    }
-  ],
-  "gaps": [
-    {
-      "summary": "string",
-      "question": "string",
-      "confidence": "low",
-      "citedSectionIds": []
-    }
-  ]
-}
-
-List one entry in "gaps" for each distinct piece of missing knowledge — a question that asks
-about several unrelated topics should produce one gap per unanswered topic. Use an empty array
-or omit "gaps" when the answer is fully supported by context.`
-};
-
-export const ANSWER_QUESTION_DIRECT: PromptDefinition = {
-  id: "answer-question-direct",
-  title: "Answer question (direct mode)",
-  description:
-    "Answers a question from Markdown context; citations are computed in code from search ranking, so the model only returns answer/confidence/gap detection. Used by the retrieval answerQuestion path.",
-  usedBy: ["api · direct mode (retrieval)"],
+    "Answers a question from Markdown knowledge base context. Citations are computed in code from the retrieved sections (search ranking in direct mode, the job's context sections in queue mode), so the model only returns answer/confidence/gap detection. Shared by the direct retrieval path and queued answer_question jobs.",
+  usedBy: ["api · direct mode (retrieval)", "watcher · queue mode"],
   outputShape: '{ answer, confidence, isKnowledgeGap, gaps[] }',
   instructions:
     'Answer using only the provided Markdown knowledge base context. Return only JSON with this shape: ' +
@@ -189,8 +145,7 @@ export const ROUTE_QUESTION_TO_FLOW: PromptDefinition = {
 };
 
 export const promptCatalog: PromptDefinition[] = [
-  ANSWER_QUESTION_QUEUE,
-  ANSWER_QUESTION_DIRECT,
+  ANSWER_QUESTION,
   SUMMARIZE_GAP,
   DRAFT_MARKDOWN_PROPOSAL,
   CRUNCH_KNOWLEDGE_BASE,
