@@ -24,9 +24,15 @@ environment values, but Markdown Magpie still validates tokens itself.
 Create these Auth0 resources:
 
 - **Single Page Application:** `Markdown Magpie Web`
-  - Allowed callback URL: `http://localhost:3000`
-  - Allowed logout URL: `http://localhost:3000`
-  - Allowed web origin: `http://localhost:3000`
+  - Allowed callback URLs:
+    - `https://magpie.wastedcake.com`
+    - `http://localhost:3000`
+  - Allowed logout URLs:
+    - `https://magpie.wastedcake.com`
+    - `http://localhost:3000`
+  - Allowed web origins:
+    - `https://magpie.wastedcake.com`
+    - `http://localhost:3000`
 - **API/resource server:** `Markdown Magpie`
   - Audience: `https://markdown-magpie.local/api` by default.
   - Signing algorithm: `RS256`.
@@ -58,8 +64,10 @@ Add Auth0 configuration to `.env.example` and `.env.compose.example`:
 - `NEXT_PUBLIC_AUTH0_DOMAIN`.
 - `NEXT_PUBLIC_AUTH0_CLIENT_ID`.
 - `NEXT_PUBLIC_AUTH0_AUDIENCE`.
-- `NEXT_PUBLIC_AUTH0_REDIRECT_URI`, defaulting to `http://localhost:3000`.
-- `MCP_RESOURCE_URL`, defaulting to `http://localhost:4001/mcp`.
+- `NEXT_PUBLIC_AUTH0_REDIRECT_URI`, production value
+  `https://magpie.wastedcake.com` and local default `http://localhost:3000`.
+- `MCP_RESOURCE_URL`, production value `https://mcp-magpie.wastedcake.com/mcp`
+  and local default `http://localhost:4001/mcp`.
 - `MCP_AUTH_TOKEN`, used only by the stdio MCP transport.
 - `MCP_API_AUTH_TOKEN`, used by the HTTP MCP server when it calls the API after
   validating the user's MCP access token.
