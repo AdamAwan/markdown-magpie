@@ -633,6 +633,10 @@ There are two intended execution modes:
 
 Watcher mode lowers the barrier to entry because early users can develop and test workflows with the agent tooling they already run locally, without provisioning cloud model credentials.
 
+### AI prompts
+
+All AI/agent prompts live in the `@magpie/prompts` package (`packages/prompts`) as a single catalog of `PromptDefinition` entries. The watcher (queue mode) wraps an instruction with the serialised job input via `buildJobPrompt`; the API and retrieval (direct mode) pass the same instruction text as the chat `system` message. The catalog is served read-only at `GET /api/prompts` and rendered in the console's **Prompts** section, so the exact instruction text sent to the model is always inspectable without reading the source.
+
 ## MVP Milestone
 
 The first milestone is an end-to-end loop against one Markdown Git repository:
