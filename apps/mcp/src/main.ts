@@ -1,4 +1,5 @@
-import { stdin, stdout } from "node:process";
+import { argv, stdin, stdout } from "node:process";
+import { fileURLToPath } from "node:url";
 import { askQuestion, getJson, stringArgument, submitFeedback } from "./kb-client.js";
 
 type JsonRpcId = string | number | null;
@@ -6,7 +7,8 @@ type JsonRpcId = string | number | null;
 // Bearer token the stdio transport presents to the API on every call. Distinct
 // from the HTTP transport's MCP_API_AUTH_TOKEN service token. Undefined when
 // AUTH_REQUIRED is unset/false, which keeps local-dev calls unauthenticated.
-const stdioAuthToken = process.env.MCP_AUTH_TOKEN;
+// Resolved inside main() once the auth guard has run.
+let stdioAuthToken: string | undefined;
 
 // Validates that a stdio token is present when auth is required. Pure (operates
 // on a supplied env object) so the guard is unit-testable without spawning the
@@ -20,13 +22,6 @@ export function resolveStdioAuthToken(env: NodeJS.ProcessEnv): string | undefine
   }
 
   return token;
-}
-
-try {
-  resolveStdioAuthToken(process.env);
-} catch (error) {
-  console.error(error instanceof Error ? error.message : "Invalid stdio MCP auth configuration.");
-  process.exit(1);
 }
 
 interface JsonRpcRequest {
@@ -114,14 +109,27 @@ const tools = [
 
 let inputBuffer = Buffer.alloc(0);
 
-stdin.on("data", (chunk: Buffer) => {
-  inputBuffer = Buffer.concat([inputBuffer, chunk]);
-  void drainMessages();
-});
+// Bootstraps the stdio MCP server: enforces the auth guard, resolves the bearer
+// token, and wires up the stdin reader. Runs only when this module is launched
+// as the entrypoint (see the guard at the bottom), so importing it (e.g. from
+// tests) has no side effects.
+function main(): void {
+  try {
+    stdioAuthToken = resolveStdioAuthToken(process.env);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "Invalid stdio MCP auth configuration.");
+    process.exit(1);
+  }
 
-stdin.on("error", (error) => {
-  console.error(`MCP stdin error: ${error.message}`);
-});
+  stdin.on("data", (chunk: Buffer) => {
+    inputBuffer = Buffer.concat([inputBuffer, chunk]);
+    void drainMessages();
+  });
+
+  stdin.on("error", (error) => {
+    console.error(`MCP stdin error: ${error.message}`);
+  });
+}
 
 async function drainMessages(): Promise<void> {
   for (;;) {
@@ -267,4 +275,11 @@ function textResult(value: unknown): unknown {
 
 function writeMessage(message: unknown): void {
   stdout.write(`${JSON.stringify(message)}\n`);
+}
+
+// Only start the stdio server when run directly (e.g. `node dist/main.js`).
+// Importing this module (tests) must not run the auth guard, exit the process,
+// or register the stdin reader that would keep the event loop alive.
+if (argv[1] && fileURLToPath(import.meta.url) === argv[1]) {
+  main();
 }
