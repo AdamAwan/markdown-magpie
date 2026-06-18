@@ -30,7 +30,10 @@ export class AuthError extends Error {
 }
 
 export function authSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): AuthSettings {
-  const issuer = trimTrailingSlash(env.AUTH0_ISSUER_BASE_URL ?? `https://${env.AUTH0_DOMAIN ?? ""}`) + "/";
+  const issuerBase =
+    env.AUTH0_ISSUER_BASE_URL ??
+    (env.AUTH0_DOMAIN ? `https://${env.AUTH0_DOMAIN}` : "https://markdown-magpie.local");
+  const issuer = trimTrailingSlash(issuerBase) + "/";
 
   return {
     required: env.AUTH_REQUIRED === "true",
@@ -50,7 +53,12 @@ export function hasScopes(principal: Principal, requiredScopes: readonly string[
 }
 
 export function createRemoteAuthVerifier(options: AuthSettings & { jwks?: () => Promise<JSONWebKeySet> }) {
-  const remoteJwks = createRemoteJWKSet(new URL(options.jwksUri ?? `${options.issuer}.well-known/jwks.json`));
+  let remoteJwks: ReturnType<typeof createRemoteJWKSet> | undefined;
+
+  function getRemoteJwks(): ReturnType<typeof createRemoteJWKSet> {
+    remoteJwks ??= createRemoteJWKSet(new URL(options.jwksUri ?? `${options.issuer}.well-known/jwks.json`));
+    return remoteJwks;
+  }
 
   return {
     async verify(token: string | undefined): Promise<Principal> {
@@ -59,11 +67,12 @@ export function createRemoteAuthVerifier(options: AuthSettings & { jwks?: () => 
       }
 
       try {
-        const keySet = options.jwks ? createLocalJWKSet(await options.jwks()) : remoteJwks;
+        const keySet = options.jwks ? createLocalJWKSet(await options.jwks()) : getRemoteJwks();
         const { payload } = await jwtVerify(token, keySet, {
           issuer: options.issuer,
           audience: options.audience,
-          algorithms: ["RS256"]
+          algorithms: ["RS256"],
+          requiredClaims: ["exp"]
         });
 
         return {
