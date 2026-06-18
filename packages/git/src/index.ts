@@ -349,14 +349,24 @@ export class LocalGitProposalPublisher {
     const targetPath = resolveTargetPath(request.repository, request.targetPath);
     const remoteUrl = await ensureRemote(root);
     const authEnv = buildGitAuthEnv(remoteUrl);
-    await assertBranchDoesNotExist(root, request.branchName, authEnv);
 
-    const baseRef = await resolveBaseRef(root, request.repository);
+    const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", request.branchName], authEnv);
+    const branchExists = Boolean(remoteBranch.trim());
+
     const tempRoot = await mkdtemp(path.join(tmpdir(), "markdown-magpie-worktree-"));
     const worktreePath = path.join(tempRoot, "checkout");
 
     try {
-      await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, baseRef]);
+      if (branchExists) {
+        // Update path: base the worktree on the existing remote branch tip so our
+        // new commit is a fast-forward — these branches are bot-owned, so the tip
+        // is always our last push and no force is ever needed.
+        await git(root, ["fetch", "origin", request.branchName], authEnv);
+        await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, `origin/${request.branchName}`]);
+      } else {
+        const baseRef = await resolveBaseRef(root, request.repository);
+        await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, baseRef]);
+      }
 
       const absoluteTargetPath = path.resolve(worktreePath, targetPath);
       assertWithinRoot(worktreePath, absoluteTargetPath);
@@ -366,7 +376,17 @@ export class LocalGitProposalPublisher {
 
       const status = await git(worktreePath, ["status", "--porcelain", "--", targetPath]);
       if (!status.trim()) {
-        throw new Error(`Proposal does not change ${targetPath}`);
+        // No content change. On the create path this is an error; on the update
+        // path it just means the regenerated doc is identical — return the current tip.
+        if (!branchExists) {
+          throw new Error(`Proposal does not change ${targetPath}`);
+        }
+        const head = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
+        return {
+          branchName: request.branchName,
+          commitSha: head,
+          remoteUrl: request.repository.remoteUrl ?? request.repository.git?.remoteUrl
+        };
       }
 
       const { name: authorName, email: authorEmail } = resolveCommitterIdentity();
