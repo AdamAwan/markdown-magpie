@@ -21,7 +21,7 @@ interface HttpResponse {
 // runtime dependency. Boots the Express app on an ephemeral port per request
 // chain and tears it down afterwards.
 function request(app: Express) {
-  function send(method: string, path: string, payload?: unknown, authorization?: string): Promise<HttpResponse> {
+  function send(method: string, path: string, payload?: unknown, extraHeaders?: Record<string, string>): Promise<HttpResponse> {
     return new Promise((resolve, reject) => {
       const server: Server = app.listen(0, "127.0.0.1", () => {
         const { port } = server.address() as AddressInfo;
@@ -30,8 +30,8 @@ function request(app: Express) {
         if (body !== undefined) {
           headers["content-type"] = "application/json";
         }
-        if (authorization !== undefined) {
-          headers.authorization = authorization;
+        if (extraHeaders) {
+          Object.assign(headers, extraHeaders);
         }
 
         const req = createRequest(port, method, path, headers, (res) => {
@@ -51,16 +51,19 @@ function request(app: Express) {
   }
 
   return {
-    get: (path: string, authorization?: string) => send("GET", path, undefined, authorization),
+    get: (path: string, authorization?: string) =>
+      send("GET", path, undefined, authorization === undefined ? undefined : { authorization }),
     post: (path: string) => {
-      let authorization: string | undefined;
+      const extraHeaders: Record<string, string> = {};
       const chain = {
-        set(_name: string, value: string) {
-          authorization = value;
+        set(name: string, value: string) {
+          // Existing tests call .set("authorization", ...); generalising to any
+          // header lets newer tests add the Accept header the transport needs.
+          extraHeaders[name] = value;
           return chain;
         },
         send(payload: unknown) {
-          return send("POST", path, payload, authorization);
+          return send("POST", path, payload, extraHeaders);
         }
       };
       return chain;
@@ -223,6 +226,68 @@ test("a valid token with the right scope passes the MCP boundary (reaches transp
     .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
   assert.notEqual(res.status, 401);
   assert.notEqual(res.status, 403);
+});
+
+test("a valid scoped tools/call dispatches and calls the API with the service token (not the user token)", async () => {
+  const auth = await makeTestAuth();
+  // A user token that is unmistakably distinct from the configured service
+  // token, so a downstream leak of the inbound bearer would be obvious.
+  const userScopedToken = await auth.token(["read:knowledge"]);
+  const serviceToken = "service-token-distinct-from-user";
+
+  // Capture the outbound API request and return a minimal valid search payload
+  // so the kb.search tool dispatches end-to-end through the transport. kb.search
+  // is the simplest tool: a single GET via getJson, no answer-polling loop.
+  const originalFetch = globalThis.fetch;
+  let captured: { url: string; authorization: string | null } | undefined;
+  const fetchStub: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    captured = { url, authorization: headers.get("authorization") };
+    return new Response(JSON.stringify({ results: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+  globalThis.fetch = fetchStub;
+
+  try {
+    const app = createHttpMcpApp(
+      testOptions({
+        auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks },
+        apiToken: serviceToken
+      })
+    );
+    const res = await request(app)
+      .post("/mcp")
+      .set("authorization", userScopedToken)
+      // The Streamable HTTP transport requires the client to accept both content
+      // types on POST; without this it rejects with 406 before dispatching.
+      .set("accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb.search", arguments: { query: "hi" } } });
+
+    // The tool passed auth/scope and was dispatched (not gated).
+    assert.notEqual(res.status, 401);
+    assert.notEqual(res.status, 403);
+    assert.equal(res.status, 200);
+
+    // The tool actually ran: the stubbed downstream fetch was invoked.
+    assert.ok(captured, "expected the kb.search tool to call the downstream API");
+    assert.match(captured.url, /\/api\/knowledge\/search\?q=hi/);
+
+    // The downstream call carries the configured service token, never the
+    // inbound user token.
+    assert.equal(captured.authorization, `Bearer ${serviceToken}`);
+    // The inbound user token must not leak downstream. userScopedToken is the
+    // full "Bearer <jwt>" the client sent; assert no substring of it appears.
+    const userJwt = userScopedToken.replace(/^Bearer /, "");
+    assert.ok(
+      captured.authorization !== null && !captured.authorization.includes(userJwt),
+      "inbound user token must not be forwarded downstream"
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("auth disabled lets /mcp through without a token", async () => {
