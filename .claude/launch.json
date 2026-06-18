@@ -7,6 +7,13 @@
       "runtimeArgs": ["run", "dev:web"],
       "port": 3000,
       "autoPort": false
+    },
+    {
+      "name": "deck",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8771", "--directory", "presentation"],
+      "port": 8771,
+      "autoPort": false
     }
   ]
 }

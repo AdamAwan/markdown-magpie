@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 const ROOT = process.cwd();
 const OPT = join(ROOT, "presentation/assets/opt");
+const EXAMPLE = join(ROOT, "presentation/assets/example");
 
 const img = {};
 for (const f of readdirSync(OPT)) {
@@ -12,11 +13,19 @@ for (const f of readdirSync(OPT)) {
   const b64 = readFileSync(join(OPT, f)).toString("base64");
   img[key] = `data:image/jpeg;base64,${b64}`;
 }
+// Demo screenshots (slides 8–10). Kept at native format/resolution rather than
+// downscaled into opt/, because they are text-heavy captures that must stay legible.
+const mimeOf = (f) => (/\.png$/i.test(f) ? "image/png" : "image/jpeg");
+for (const f of readdirSync(EXAMPLE)) {
+  const key = f.replace(/\.(jpg|jpeg|png)$/i, "");
+  const b64 = readFileSync(join(EXAMPLE, f)).toString("base64");
+  img[key] = `data:${mimeOf(f)};base64,${b64}`;
+}
 const A = (k) => img[k] ?? "";
 
 // ---- helpers -------------------------------------------------------------
-const frame = (src, { tall = false, label = "localhost:3000 — Knowledge Console", pos = "top" } = {}) => `
-  <div class="bf ${tall ? "bf--tall" : ""}">
+const frame = (src, { tall = false, auto = false, label = "localhost:3000 — Knowledge Console", pos = "top" } = {}) => `
+  <div class="bf ${tall ? "bf--tall" : ""} ${auto ? "bf--auto" : ""}">
     <div class="bf__bar"><span class="d"></span><span class="d"></span><span class="d"></span><span class="bf__url">${label}</span></div>
     <div class="bf__view"><img src="${src}" alt="" style="object-position:center ${pos}"/></div>
   </div>`;
@@ -90,6 +99,7 @@ const HTML = `<!doctype html>
   ul.feat li .b{flex:0 0 auto;width:24px;height:24px;border-radius:7px;background:var(--accent-soft);
     color:var(--accent);display:grid;place-items:center;font-size:13px;font-weight:700;margin-top:2px;}
   ul.feat li b{color:var(--ink);} ul.feat li span{color:var(--muted);}
+  .ink ul.feat li b{color:#eef2ec;} .ink ul.feat li span{color:#aebcb4;}
 
   /* browser frame for screenshots */
   .bf{border:1px solid var(--line-2);border-radius:12px;overflow:hidden;background:#fff;
@@ -99,6 +109,7 @@ const HTML = `<!doctype html>
   .bf__url{margin-left:12px;font-size:12px;color:var(--muted);}
   .bf__view{height:clamp(300px,46vh,520px);overflow:hidden;}
   .bf--tall .bf__view{height:clamp(340px,62vh,640px);}
+  .bf--auto .bf__view{height:auto;max-height:clamp(360px,58vh,560px);}
   .bf__view img{width:100%;display:block;}
 
   /* generic two-tone diagram blocks */
@@ -144,9 +155,21 @@ const HTML = `<!doctype html>
   .chat .cite .pth{font-family:ui-monospace,monospace;color:#9fd3e2;}
   .badge{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;border-radius:99px;}
   .badge.hi{background:rgba(61,107,67,.25);color:#9fd9a6;}
+  .badge.lo{background:rgba(154,58,45,.3);color:#e8917f;}
   .live{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:#e8917f;}
   .live .dot{width:9px;height:9px;border-radius:50%;background:#e8917f;animation:pulse 1.4s infinite;}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+  /* demo: MCP screenshot pair (slide 8) + payoff shot (slide 10) */
+  .mcpshots{display:grid;grid-template-columns:1fr 1fr;gap:clamp(16px,2vw,26px);margin-top:22px;align-items:start;}
+  .mcpshot{margin:0;}
+  .mcpshot img{width:100%;display:block;border-radius:10px;border:1px solid rgba(255,255,255,.14);
+    box-shadow:0 18px 36px -28px rgba(0,0,0,.6);}
+  .mcpshot figcaption{margin-top:11px;font-size:14px;line-height:1.45;color:#aebcb4;}
+  .mcpshot figcaption .badge{margin-right:7px;vertical-align:1px;}
+  .payoff{margin:0;}
+  .payoff img{width:100%;display:block;border-radius:12px;border:1px solid rgba(255,255,255,.14);
+    box-shadow:0 22px 44px -30px rgba(0,0,0,.7);}
 
   /* filmstrip */
   .strip{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;}
@@ -158,6 +181,13 @@ const HTML = `<!doctype html>
   .strip figcaption b{color:var(--ink);display:block;font-size:14px;}
   .strip .seq{display:grid;grid-template-columns:auto 1fr;gap:7px;align-items:center;}
   .strip .seq .n{width:20px;height:20px;border-radius:6px;background:var(--accent);color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center;}
+
+  /* demo: two readable screenshots side by side (slides 9–10) */
+  .demoduo{display:grid;grid-template-columns:1fr 1fr;gap:clamp(20px,2.8vw,42px);margin-top:24px;align-items:start;}
+  .demoduo figure{margin:0;}
+  .demoduo figcaption{display:flex;align-items:center;gap:9px;margin-bottom:13px;font-size:clamp(14px,1.5vw,16px);color:var(--muted);line-height:1.4;}
+  .demoduo figcaption .n{flex:0 0 auto;width:24px;height:24px;border-radius:7px;background:var(--accent);color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center;}
+  .demoduo figcaption b{color:var(--ink);}
 
   .pillars{display:grid;grid-template-columns:repeat(2,1fr);gap:18px;}
   .pillar{display:flex;gap:14px;background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:22px;}
@@ -288,42 +318,80 @@ const HTML = `<!doctype html>
   <!-- 8 DEMO: FROM INSIDE CLAUDE -->
   <section class="slide ink" data-title="Demo · in Claude">
     <div class="wrap">
-      <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px">
-        <div><div class="kicker">Live demo · part 1</div><h2 style="margin:.1em 0 0">It meets people where they already work.</h2></div>
-        <span class="live"><span class="dot"></span>LIVE — asking from inside Claude via MCP</span>
+      <div class="kicker">Demo · part 1 — in Claude</div>
+      <h2 style="margin:.1em 0 0">It meets people where they already work.</h2>
+      <div class="mcpshots">
+        <figure class="mcpshot">
+          <img src="${A("mcp-high-confidence")}" alt="kb_ask answering FlowerBI's key features with high confidence"/>
+          <figcaption><span class="badge hi">HIGH</span>Ask what's covered — a cited answer, straight inside the chat.</figcaption>
+        </figure>
+        <figure class="mcpshot">
+          <img src="${A("mcp-low-confidence-2")}" alt="kb_ask abstaining and flagging a knowledge gap"/>
+          <figcaption><span class="badge lo">LOW</span>Ask what's missing — it abstains honestly and flags a knowledge gap.</figcaption>
+        </figure>
       </div>
-      <div class="chat" style="margin-top:22px">
-        <div class="turn"><div class="role">You · in Claude</div><div class="you">What external dependencies does the core flowerbi package have?</div></div>
-        <div class="turn"><div class="role">Tool call</div><span class="tool">🔧 kb_ask(question: "…core flowerbi package…")</span></div>
-        <div class="turn"><div class="role">Markdown Magpie &nbsp;<span class="badge hi">HIGH confidence</span></div>
-          <div class="ans">The core <code>flowerbi</code> package has two runtime dependencies — <code>@types/json-stable-stringify</code> and <code>json-stable-stringify</code> — and no peer dependencies.</div>
-          <div class="cites">
-            <div class="cite">▸ <span class="pth">flowerbi-external-dependencies.md</span> — “Core package: flowerbi”</div>
-            <div class="cite">▸ <span class="pth">flowerbi-external-dependencies.md</span> — “FlowerBI External Dependencies”</div>
-            <div class="cite">▸ <span class="pth">flowerbi-external-dependencies.md</span> — “Notes”</div>
-          </div>
-        </div>
-      </div>
-      <p class="footnote">Same engine, exposed as MCP tools (<span class="mono">kb_ask</span>, <span class="mono">kb_search</span>, <span class="mono">kb_feedback</span>) — so the knowledge shows up in Claude, Codex, or any agent, and feedback flows straight back.</p>
+      <p class="footnote">Same engine, exposed as MCP tools (<span class="mono">kb_ask</span>, <span class="mono">kb_search</span>, <span class="mono">kb_feedback</span>) — so the knowledge shows up in Claude, Codex, or any agent, and every weak answer feeds back as a gap.</p>
     </div>
   </section>
 
-  <!-- 9 DEMO: BACKSTAGE -->
-  <section class="slide light" data-title="Demo · backstage">
+  <!-- 9 DEMO: BACKSTAGE · DETECT & DRAFT -->
+  <section class="slide light" data-title="Demo · detect & draft">
     <div class="wrap">
-      <div class="kicker">Live demo · part 2</div>
-      <h2>Backstage: a weak answer becomes a reviewed improvement.</h2>
-      <div class="strip" style="margin-top:24px">
-        <figure><div class="shot"><img src="${A("02-ask-cited")}"/></div><figcaption><div class="seq"><span class="n">1</span><b>Ask &amp; cite</b></div>A question is answered with sources — or flagged low-confidence.</figcaption></figure>
-        <figure><div class="shot"><img src="${A("03-gaps")}"/></div><figcaption><div class="seq"><span class="n">2</span><b>Cluster the gap</b></div>Weak answers group into themed knowledge gaps.</figcaption></figure>
-        <figure><div class="shot"><img src="${A("04-proposal")}"/></div><figcaption><div class="seq"><span class="n">3</span><b>Draft a fix</b></div>It proposes grounded Markdown with evidence &amp; rationale.</figcaption></figure>
-        <figure><div class="shot"><img src="${A("06-dataflow")}"/></div><figcaption><div class="seq"><span class="n">4</span><b>Review → PR → re-index</b></div>An admin approves; it merges, resolves the gap, re-indexes.</figcaption></figure>
+      <div class="kicker">Demo · part 2 — backstage</div>
+      <h2>That gap becomes a reviewed improvement.</h2>
+      <div class="demoduo">
+        <figure>
+          <figcaption><span class="n">1</span><span><b>Cluster the gaps</b> — weak answers group into themes.</span></figcaption>
+          ${frame(A("web-gap-cluster"), { auto: true, label: "localhost:3000 — Gaps · suggested clusters" })}
+        </figure>
+        <figure>
+          <figcaption><span class="n">2</span><span><b>Draft a fix</b> — grounded Markdown with a rationale.</span></figcaption>
+          ${frame(A("web-proposal"), { auto: true, label: "localhost:3000 — Proposals · drafted fix" })}
+        </figure>
       </div>
-      <p class="footnote">All real: this ran against a live FlowerBI knowledge base while building these slides.</p>
+      <p class="footnote">It detects its own weak spots and drafts the fix — you never start from a blank page.</p>
     </div>
   </section>
 
-  <!-- 10 CHEAP & YOURS -->
+  <!-- 10 DEMO: BACKSTAGE · REVIEW & SHIP -->
+  <section class="slide light" data-title="Demo · review & ship">
+    <div class="wrap">
+      <div class="kicker">Demo · part 2 — backstage</div>
+      <h2>Reviewed like code, then merged in.</h2>
+      <div class="demoduo">
+        <figure>
+          <figcaption><span class="n">3</span><span><b>Raise PRs</b> — each fix is a reviewable pull request.</span></figcaption>
+          ${frame(A("web-raised-prs"), { auto: true, label: "github.com — Pull requests" })}
+        </figure>
+        <figure>
+          <figcaption><span class="n">4</span><span><b>Merge &amp; re-index</b> — approved, merged, re-indexed.</span></figcaption>
+          ${frame(A("web-merged-in"), { auto: true, label: "localhost:3000 — Knowledge Console · re-indexed" })}
+        </figure>
+      </div>
+      <p class="footnote">Every change is a Git PR an admin approves — diffable, reversible, attributable. The raw source never leaves the wall.</p>
+    </div>
+  </section>
+
+  <!-- 11 DEMO: THE PAYOFF -->
+  <section class="slide ink" data-title="Demo · the payoff">
+    <div class="wrap split">
+      <div>
+        <div class="kicker">Demo · part 3 — the payoff</div>
+        <h2>Ask again — now it knows.</h2>
+        <ul class="feat">
+          <li><span class="b">✓</span><div><b>The same question that drew a blank</b> <span>now returns a complete, grounded answer.</span></div></li>
+          <li><span class="b">✓</span><div><b>No engineer wrote that page</b> <span>— the loop drafted it from real usage.</span></div></li>
+          <li><span class="b">✓</span><div><b>It still went through review</b> <span>before it ever shipped to a user.</span></div></li>
+        </ul>
+        <p class="footnote">All real: captured against a live FlowerBI knowledge base while building these slides.</p>
+      </div>
+      <figure class="payoff">
+        <img src="${A("mcp-result-of-learning")}" alt="kb_ask now returning a full example FlowerBI star schema after the gap was filled"/>
+      </figure>
+    </div>
+  </section>
+
+  <!-- 12 CHEAP & YOURS -->
   <section class="slide light" data-title="Cheap & yours">
     <div class="wrap">
       <div class="kicker">…and it's cheap, and it's yours</div>
@@ -337,7 +405,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 11 WIDE APPLICATIONS -->
+  <!-- 13 WIDE APPLICATIONS -->
   <section class="slide light" data-title="Applications">
     <div class="wrap">
       <div class="kicker">Wide applications</div>
@@ -358,7 +426,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 12 EASY SETUP -->
+  <!-- 14 EASY SETUP -->
   <section class="slide light" data-title="Easy setup">
     <div class="wrap">
       <div class="kicker">Easy to set up</div>
@@ -372,7 +440,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 13 CTA -->
+  <!-- 15 CTA -->
   <section class="slide ink" data-title="Call to action">
     <div class="wrap">
       <div class="brand"><img src="${A("icon")}" alt=""/><span class="nm">Markdown Magpie</span></div>
