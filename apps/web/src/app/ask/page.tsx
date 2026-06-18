@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { AskPanel } from "../../components/AskPanel";
 import { useConsole } from "../../components/ConsoleProvider";
-import { knowledgeFlows } from "../../lib/config";
+import { knowledgeFlowLabels } from "../../lib/config";
 
 export default function AskPage() {
   const {
@@ -22,11 +22,7 @@ export default function AskPage() {
     toggleCitations
   } = useConsole();
 
-  // Map flow id -> display name so questions can be tagged with a readable flow.
-  const flowLabels = useMemo(
-    () => Object.fromEntries(knowledgeFlows(config).map((flow) => [flow.id, flow.name])),
-    [config]
-  );
+  const flowLabels = useMemo(() => knowledgeFlowLabels(config), [config]);
 
   return (
     <section className="workbench singlePane">

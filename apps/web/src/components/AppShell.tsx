@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode } from "react";
+import { ReactNode, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { ConsoleSection } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
@@ -33,6 +33,10 @@ export function AppShell({ children }: { children: ReactNode }) {
     message,
     refresh
   } = useConsole();
+
+  // URL parsing/host detection; memoised so it doesn't re-run on every render
+  // (the provider re-renders on each 4s poll).
+  const modelInfo = useMemo(() => extractModelInfo(config), [config]);
 
   const counts: Partial<Record<ConsoleSection, number>> = {
     ask: questions.length,
@@ -99,31 +103,24 @@ export function AppShell({ children }: { children: ReactNode }) {
               <span>Mode</span>
               <span>{config?.aiRuntime.executionMode ?? "direct"}</span>
             </div>
-            {(() => {
-              const modelInfo = extractModelInfo(config);
-              return (
-                <>
-                  {modelInfo.chatModel && (
-                    <div className="statusLine">
-                      <span>Chat</span>
-                      <span title={modelInfo.chatHost || undefined}>
-                        {modelInfo.chatModel}
-                        {modelInfo.chatHost && ` (${modelInfo.chatHost})`}
-                      </span>
-                    </div>
-                  )}
-                  {modelInfo.embeddingModel && (
-                    <div className="statusLine">
-                      <span>Embedding</span>
-                      <span title={modelInfo.embeddingHost || undefined}>
-                        {modelInfo.embeddingModel}
-                        {modelInfo.embeddingHost && ` (${modelInfo.embeddingHost})`}
-                      </span>
-                    </div>
-                  )}
-                </>
-              );
-            })()}
+            {modelInfo.chatModel && (
+              <div className="statusLine">
+                <span>Chat</span>
+                <span title={modelInfo.chatHost || undefined}>
+                  {modelInfo.chatModel}
+                  {modelInfo.chatHost && ` (${modelInfo.chatHost})`}
+                </span>
+              </div>
+            )}
+            {modelInfo.embeddingModel && (
+              <div className="statusLine">
+                <span>Embedding</span>
+                <span title={modelInfo.embeddingHost || undefined}>
+                  {modelInfo.embeddingModel}
+                  {modelInfo.embeddingHost && ` (${modelInfo.embeddingHost})`}
+                </span>
+              </div>
+            )}
             <div className="statusLine">
               <span>Retrieval</span>
               <span title={config?.retrieval.reason}>

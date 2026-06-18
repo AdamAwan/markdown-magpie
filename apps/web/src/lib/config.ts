@@ -60,6 +60,12 @@ export function extractHostFromUrl(url: string): string {
   }
 }
 
+// Flow id -> display name, so gaps/questions/clusters can be tagged with a
+// readable flow rather than the raw id. Shared by the Ask and Gaps pages.
+export function knowledgeFlowLabels(config: RuntimeConfig | undefined): Record<string, string> {
+  return Object.fromEntries(knowledgeFlows(config).map((flow) => [flow.id, flow.name]));
+}
+
 export function knowledgeFlows(config: RuntimeConfig | undefined): ConfiguredKnowledgeFlow[] {
   if (config?.knowledge.flows?.length) {
     return config.knowledge.flows;

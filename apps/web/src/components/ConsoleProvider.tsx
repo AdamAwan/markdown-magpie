@@ -57,7 +57,9 @@ function useConsoleController() {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<AskResponse | undefined>();
   const [answeredSearch, setAnsweredSearch] = useState("");
-  const [flowId, setFlowId] = useState("cats");
+  // Starts empty; a reconciliation effect selects the first configured flow once
+  // config loads, so no demo-specific id is baked into the default state.
+  const [flowId, setFlowId] = useState("");
   const [loading, setLoading] = useState(false);
   const [indexingRepo, setIndexingRepo] = useState(false);
   const [refreshing, setRefreshing] = useState(false);

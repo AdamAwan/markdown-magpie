@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import mermaid from "mermaid";
 import { RuntimeConfig } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
@@ -21,8 +21,8 @@ function ensureMermaidInitialized() {
 
 export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
   const [activeFlow, setActiveFlow] = useState<FlowKey>("overview");
-  const modelInfo = extractModelInfo(config);
-  const graph = buildDiagram(activeFlow, modelInfo);
+  const modelInfo = useMemo(() => extractModelInfo(config), [config]);
+  const graph = useMemo(() => buildDiagram(activeFlow, modelInfo), [activeFlow, modelInfo]);
 
   return (
     <div className="surface">
