@@ -76,9 +76,19 @@ halves match.
     `http.ts`, pure tested guard helper, no banned casts/`any`.
   - Verified: `npm run test -w @magpie/mcp` → 16 pass / 0 fail (no hang); `typecheck`
     clean.
+- Task 6 Env and Docs — complete, passed both review gates.
+  - `a7d27da docs: document auth0 configuration`
+  - `4b3892a docs: fix mcp design link and clarify auth docs`
+  - Updated `.env.example`, `.env.compose.example`, `README.md`, `docs/mcp.md`.
+  - Spec review: ✅ all required Auth0 env vars/sections present; every documented
+    var verified against an actual code reference; per-tool scope table matches
+    `TOOL_SCOPES`. Incidental fix: corrected an existing `MCP_HTTP_HOST` doc default
+    (`0.0.0.0`→`127.0.0.1`) to match code.
+  - Docs quality review found a broken design-doc link (404) + minor polish; fixed
+    in `4b3892a` (corrected relative link, disambiguated the two auth sections,
+    clarified the JWKS default URL). Re-review: ✅ fixes confirmed.
 
-**Not started:**
-- Task 6 Env and Docs.
+**In progress:**
 - Task 7 Full Verification.
 
 **Known note:** `npm run typecheck -w @magpie/api` reports pre-existing package-local
@@ -777,7 +787,7 @@ git commit -m "feat(mcp): pass auth tokens from stdio"
 - Modify: `README.md`
 - Modify: `docs/mcp.md`
 
-- [ ] **Step 1: Update env templates**
+- [x] **Step 1: Update env templates**
 
 Add an `Auth0` section with:
 
@@ -802,7 +812,7 @@ NEXT_PUBLIC_AUTH0_REDIRECT_URI=https://magpie.wastedcake.com
 MCP_RESOURCE_URL=https://mcp-magpie.wastedcake.com/mcp
 ```
 
-- [ ] **Step 2: Update README**
+- [x] **Step 2: Update README**
 
 Add a concise Auth0 checklist:
 
@@ -815,7 +825,7 @@ Create a machine-to-machine application for the HTTP MCP server and put its acce
 The official Auth0 MCP server can bootstrap these tenant resources, but Markdown Magpie validates tokens at runtime.
 ```
 
-- [ ] **Step 3: Update MCP docs**
+- [x] **Step 3: Update MCP docs**
 
 Document:
 
@@ -824,7 +834,7 @@ Document:
 - stdio uses `MCP_AUTH_TOKEN`.
 - HTTP MCP calls the API using `MCP_API_AUTH_TOKEN`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add .env.example .env.compose.example README.md docs/mcp.md
