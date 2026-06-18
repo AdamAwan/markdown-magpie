@@ -22,6 +22,11 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     this.pool = new Pool({ connectionString });
   }
 
+  async getGapCatalogRevision(): Promise<number> {
+    const result = await this.pool.query<{ revision: string }>("SELECT revision FROM gap_catalog WHERE id = true");
+    return result.rows[0] ? Number(result.rows[0].revision) : 0;
+  }
+
   async record(input: QuestionLogInput): Promise<QuestionLog> {
     const id = randomUUID();
     const client = await this.pool.connect();
@@ -49,7 +54,11 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         ]
       );
 
-      await insertGapRows(client, id, autoGapSummaries(input.answer));
+      const autoSummaries = autoGapSummaries(input.answer);
+      await insertGapRows(client, id, autoSummaries);
+      if (autoSummaries.length > 0) {
+        await bumpGapCatalog(client);
+      }
 
       for (const citation of input.answer?.citations ?? []) {
         await client.query(
@@ -136,6 +145,8 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       // Re-answering replaces auto-detected gaps but preserves any manual flag.
       await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'auto'", [id]);
       await insertGapRows(client, id, autoGapSummaries(input.answer));
+      // Re-answering replaces the auto-detected gaps, changing the candidate set.
+      await bumpGapCatalog(client);
       await client.query("DELETE FROM answer_citations WHERE question_id = $1", [id]);
 
       for (const citation of input.answer.citations) {
@@ -213,6 +224,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       const manualSummary = trimmed && trimmed.length > 0 ? trimmed : (result.rows[0] as { question: string }).question;
       await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'manual'", [id]);
       await insertGapRows(client, id, [manualSummary], "manual");
+      await bumpGapCatalog(client);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -244,7 +256,10 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       }
 
       // Drop the manual flag's gap; any auto-detected gaps remain candidates.
-      await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'manual'", [id]);
+      const deleted = await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'manual'", [id]);
+      if ((deleted.rowCount ?? 0) > 0) {
+        await bumpGapCatalog(client);
+      }
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -308,18 +323,33 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       return 0;
     }
 
-    const result = await this.pool.query(
-      `
-        UPDATE question_gaps
-        SET resolved_at = now(), resolved_by_proposal_id = $3
-        WHERE question_id = ANY($1)
-          AND summary = ANY($2)
-          AND resolved_at IS NULL
-      `,
-      [questionIds, trimmedSummaries, proposalId]
-    );
-
-    return result.rowCount ?? 0;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `
+          UPDATE question_gaps
+          SET resolved_at = now(), resolved_by_proposal_id = $3
+          WHERE question_id = ANY($1)
+            AND summary = ANY($2)
+            AND resolved_at IS NULL
+        `,
+        [questionIds, trimmedSummaries, proposalId]
+      );
+      const resolved = result.rowCount ?? 0;
+      // Resolving gaps removes them from the candidate set, so the catalog
+      // advances in the same transaction.
+      if (resolved > 0) {
+        await bumpGapCatalog(client);
+      }
+      await client.query("COMMIT");
+      return resolved;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async reset(): Promise<void> {
@@ -391,6 +421,13 @@ async function insertGapRows(
       [questionId, summary, source]
     );
   }
+}
+
+// Advances the monotonic gap-catalog revision. Called inside the same
+// transaction as any change to the unresolved candidate gaps so the reconciler
+// can gate model work on it.
+async function bumpGapCatalog(client: pg.PoolClient): Promise<void> {
+  await client.query("UPDATE gap_catalog SET revision = revision + 1 WHERE id = true");
 }
 
 function autoGapSummaries(answer: AnswerResult | undefined): string[] {

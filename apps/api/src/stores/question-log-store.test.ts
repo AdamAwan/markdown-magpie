@@ -229,6 +229,26 @@ test("resolveGaps resolves only the matching gap and drops it from candidates", 
   assert.ok(resolvedGap?.resolvedAt);
 });
 
+test("gap catalog revision advances when a manual gap is recorded and when gaps resolve", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const start = await store.getGapCatalogRevision();
+
+  const log = await store.record({
+    question: "How do I configure X?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    retrievedSectionIds: []
+  });
+  await store.recordManualGap(log.id, "How to configure X");
+
+  const afterAdd = await store.getGapCatalogRevision();
+  assert.ok(afterAdd > start, "recording a gap advances the revision");
+
+  await store.resolveGaps([log.id], ["How to configure X"], "prop-1");
+  const afterResolve = await store.getGapCatalogRevision();
+  assert.ok(afterResolve > afterAdd, "resolving a gap advances the revision");
+});
+
 test("resolveGaps is idempotent and only counts newly resolved gaps", async () => {
   const store = new InMemoryQuestionLogStore();
   const log = await store.record({
