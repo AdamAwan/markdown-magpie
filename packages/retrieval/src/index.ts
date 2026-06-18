@@ -1,4 +1,4 @@
-import type { AnswerResult, ChatProvider, Citation, ChatRequest, Confidence, DocumentSection, FlowRouteDecision, KnowledgeGapSignal, RankedSection } from "@magpie/core";
+import type { AnswerResult, ChatProvider, ChatResponse, Citation, ChatRequest, Confidence, DocumentSection, FlowRouteDecision, KnowledgeGapSignal, RankedSection } from "@magpie/core";
 import { ANSWER_QUESTION, ROUTE_QUESTION_TO_FLOW, withPersona } from "@magpie/prompts";
 
 export interface SectionSearchProvider {
@@ -25,7 +25,7 @@ export interface ChatProviderConfig {
 }
 
 export class MockChatProvider implements ChatProvider {
-  async complete(request: ChatRequest): Promise<{ content: string }> {
+  async complete(request: ChatRequest): Promise<ChatResponse> {
     const prompt = request.messages.at(-1)?.content ?? "";
     const question = extractBlock(prompt, "Question") || "the question";
     const context = extractBlock(prompt, "Context");
@@ -49,7 +49,7 @@ export class MockChatProvider implements ChatProvider {
 export class OpenAICompatibleChatProvider implements ChatProvider {
   constructor(private readonly config: Required<Pick<ChatProviderConfig, "apiKey" | "baseUrl" | "model">>) {}
 
-  async complete(request: ChatRequest): Promise<{ content: string }> {
+  async complete(request: ChatRequest): Promise<ChatResponse> {
     const response = await fetch(`${trimTrailingSlash(this.config.baseUrl)}/chat/completions`, {
       method: "POST",
       headers: {
@@ -77,7 +77,7 @@ export class AzureOpenAIChatProvider implements ChatProvider {
     >
   ) {}
 
-  async complete(request: ChatRequest): Promise<{ content: string }> {
+  async complete(request: ChatRequest): Promise<ChatResponse> {
     const endpoint = trimTrailingSlash(this.config.azureEndpoint);
     const deployment = encodeURIComponent(this.config.azureDeployment);
     const apiVersion = encodeURIComponent(this.config.azureApiVersion);
@@ -382,7 +382,7 @@ function toCitation(section: DocumentSection): Citation {
   };
 }
 
-async function parseChatCompletionResponse(response: Response): Promise<{ content: string }> {
+async function parseChatCompletionResponse(response: Response): Promise<ChatResponse> {
   if (!response.ok) {
     throw new Error(`Chat provider failed with ${response.status}: ${await response.text()}`);
   }
