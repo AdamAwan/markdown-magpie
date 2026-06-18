@@ -1507,3 +1507,63 @@ pre {
 .crunchDelete {
   color: #9a2c2c;
 }
+
+.promptList {
+  display: grid;
+  gap: 16px;
+}
+
+.promptCard {
+  border: 1px solid #d8e0d0;
+  border-radius: 10px;
+  padding: 16px;
+  background: #ffffff;
+  display: grid;
+  gap: 10px;
+}
+
+.promptCardHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.promptCardHead h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.promptDescription {
+  margin: 0;
+  color: #45513f;
+}
+
+.promptChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.promptOutput {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #45513f;
+}
+
+.promptInstructions {
+  margin: 0;
+  padding: 12px;
+  background: #17211d;
+  color: #f5f7f2;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  overflow-x: auto;
+}
+
+.promptEmpty {
+  color: #45513f;
+}

@@ -91,7 +91,16 @@ function extractHostFromUrl(url: string): string {
 
 type Confidence = "high" | "medium" | "low" | "unknown";
 type Feedback = "helpful" | "unhelpful";
-type ConsoleSection = "ask" | "answered" | "knowledge" | "gaps" | "jobs" | "proposals" | "crunch" | "config" | "dataflow";
+interface PromptSummary {
+  id: string;
+  title: string;
+  description: string;
+  usedBy: string[];
+  outputShape: string;
+  instructions: string;
+}
+
+type ConsoleSection = "ask" | "answered" | "knowledge" | "gaps" | "jobs" | "proposals" | "crunch" | "prompts" | "config" | "dataflow";
 type AiExecutionMode = "direct" | "queue";
 type AiProviderName = "mock" | "openai-compatible" | "azure-openai" | "codex" | "claude";
 
@@ -385,6 +394,7 @@ export default function HomePage() {
   const [crunchRuns, setCrunchRuns] = useState<CrunchRun[]>([]);
   const [crunchSettings, setCrunchSettings] = useState<CrunchSettings[]>([]);
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
+  const [prompts, setPrompts] = useState<PromptSummary[]>([]);
   const [config, setConfig] = useState<RuntimeConfig | undefined>();
   const [selectedProposalId, setSelectedProposalId] = useState<string | undefined>();
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | undefined>();
@@ -478,7 +488,7 @@ export default function HomePage() {
       clearMessage();
     }
     try {
-      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, proposalsResult, crunchRunsResult, crunchSettingsResult, scheduledTasksResult, configResult] = await Promise.all([
+      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, proposalsResult, crunchRunsResult, crunchSettingsResult, scheduledTasksResult, configResult, promptsResult] = await Promise.all([
         apiGet<Health>("/health"),
         apiGet<KnowledgeStats>("/knowledge/stats"),
         apiGet<{ repositories: RepositoryRef[] }>("/repositories"),
@@ -491,7 +501,8 @@ export default function HomePage() {
         apiGet<{ runs: CrunchRun[] }>("/crunch/runs?limit=12"),
         apiGet<{ settings: CrunchSettings[] }>("/crunch/settings"),
         apiGet<{ tasks: ScheduledTask[] }>("/scheduled-tasks"),
-        apiGet<RuntimeConfig>("/config")
+        apiGet<RuntimeConfig>("/config"),
+        apiGet<{ prompts: PromptSummary[] }>("/prompts")
       ]);
 
       setHealth(healthResult);
@@ -507,6 +518,7 @@ export default function HomePage() {
       setCrunchSettings(crunchSettingsResult.settings);
       setScheduledTasks(scheduledTasksResult.tasks);
       setConfig(configResult);
+      setPrompts(promptsResult.prompts);
       setSelectedProposalId((current) => current ?? proposalsResult.proposals[0]?.id);
       setSelectedDocumentId((current) =>
         current && documentsResult.documents.some((document) => document.id === current)
@@ -870,6 +882,7 @@ export default function HomePage() {
           <NavButton active={activeSection === "jobs"} count={jobs.length} glyph="J" label="Jobs" onClick={() => openSection("jobs")} />
           <NavButton active={activeSection === "proposals"} count={proposals.length} glyph="P" label="Proposals" onClick={() => openSection("proposals")} />
           <NavButton active={activeSection === "crunch"} count={crunchRuns.length} glyph="Cr" label="Crunch" onClick={() => openSection("crunch")} />
+          <NavButton active={activeSection === "prompts"} count={prompts.length} glyph="Pr" label="Prompts" onClick={() => openSection("prompts")} />
           <NavButton active={activeSection === "dataflow"} glyph="D" label="Data Flow" onClick={() => openSection("dataflow")} />
           <NavButton active={activeSection === "config"} glyph="C" label="Config" onClick={() => openSection("config")} />
         </nav>
@@ -1116,6 +1129,12 @@ export default function HomePage() {
           </section>
         ) : null}
 
+        {activeSection === "prompts" ? (
+          <section className="workbench singlePane">
+            <PromptsPanel prompts={prompts} />
+          </section>
+        ) : null}
+
         {activeSection === "dataflow" ? (
           <section className="workbench singlePane">
             <DataFlowPanel config={config} />
@@ -1154,6 +1173,37 @@ function AttentionPanel({ notices }: { notices: ConsoleNotice[] }) {
         </article>
       ))}
     </section>
+  );
+}
+
+function PromptsPanel({ prompts }: { prompts: PromptSummary[] }) {
+  if (prompts.length === 0) {
+    return <p className="promptEmpty">No prompts are registered.</p>;
+  }
+
+  return (
+    <div className="promptList">
+      {prompts.map((prompt) => (
+        <article className="promptCard" key={prompt.id}>
+          <div className="promptCardHead">
+            <h2>{prompt.title}</h2>
+            <code>{prompt.id}</code>
+          </div>
+          <p className="promptDescription">{prompt.description}</p>
+          <div className="promptChips">
+            {prompt.usedBy.map((usage) => (
+              <span className="chip" key={usage}>
+                {usage}
+              </span>
+            ))}
+          </div>
+          <p className="promptOutput">
+            <strong>Output:</strong> {prompt.outputShape}
+          </p>
+          <pre className="promptInstructions">{prompt.instructions}</pre>
+        </article>
+      ))}
+    </div>
   );
 }
 
@@ -3115,6 +3165,9 @@ function sectionTitle(section: ConsoleSection): string {
   if (section === "config") {
     return "Inspect runtime configuration";
   }
+  if (section === "prompts") {
+    return "Browse AI prompts";
+  }
 
   return "Ask and inspect cited answers";
 }
@@ -3147,6 +3200,9 @@ function sectionSubtitle(section: ConsoleSection): string {
   }
   if (section === "config") {
     return "Check execution mode, stores, providers, repository paths, and whether secrets are set.";
+  }
+  if (section === "prompts") {
+    return "Read the exact instruction text sent to the AI for each job type, and where each prompt is used.";
   }
 
   return "Ask and inspect cited answers";
