@@ -172,10 +172,28 @@ export interface SuggestedGapCluster {
   flowId?: string;
 }
 
+// What GET /api/gaps/clusters now returns: an active persisted cluster. Keeps
+// every field SuggestedGapCluster exposed (so the UI is unchanged) and adds the
+// persisted lineage fields. `id` is a stable surrogate that survives membership
+// changes — unlike the content-hash id the on-demand clusterer produced.
+export interface PersistedGapCluster {
+  id: string;
+  title: string;
+  summaries: string[];
+  questionIds: string[];
+  count: number;
+  rationale?: string;
+  flowId?: string;
+  status: "active";
+  proposalId?: string;
+  proposalStatus?: Proposal["status"];
+  lastReconciledAt?: string;
+}
+
 export interface Proposal {
   id: string;
   title: string;
-  status: "draft" | "ready" | "branch-pushed" | "pr-opened" | "merged" | "rejected";
+  status: "draft" | "ready" | "branch-pushed" | "pr-opened" | "merged" | "rejected" | "superseded";
   targetPath: string;
   markdown: string;
   evidence: Citation[];
