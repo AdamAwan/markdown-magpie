@@ -19,11 +19,11 @@ function timeoutOverride(name: string): number | undefined {
 // Q&A, OpenAI for embeddings). The dedicated OPENAI_COMPATIBLE_EMBEDDING_* vars
 // take precedence, falling back to the shared chat credentials when unset so
 // single-endpoint setups keep working unchanged.
-export function embeddingBaseUrl(): string | undefined {
+function embeddingBaseUrl(): string | undefined {
   return process.env.OPENAI_COMPATIBLE_EMBEDDING_BASE_URL || process.env.OPENAI_COMPATIBLE_BASE_URL || undefined;
 }
 
-export function embeddingApiKey(): string | undefined {
+function embeddingApiKey(): string | undefined {
   return process.env.OPENAI_COMPATIBLE_EMBEDDING_API_KEY || process.env.OPENAI_COMPATIBLE_API_KEY || undefined;
 }
 

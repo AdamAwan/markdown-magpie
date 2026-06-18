@@ -88,13 +88,13 @@ export async function triggerCrunchRun(
   });
 }
 
-export function gatherCrunchDocuments(ctx: AppContext, destinationId: string | undefined) {
+function gatherCrunchDocuments(ctx: AppContext, destinationId: string | undefined) {
   const documents = ctx.stores.knowledgeIndex.listDocuments();
   const scoped = destinationId ? documents.filter((document) => document.repositoryId === destinationId) : documents;
   return scoped.map((document) => ({ path: document.path, content: document.content }));
 }
 
-export async function crunchKnowledgeBaseDirect(
+async function crunchKnowledgeBaseDirect(
   ctx: AppContext,
   input: CrunchKnowledgeBaseJobInput
 ): Promise<CrunchPlan> {
@@ -181,7 +181,7 @@ export function changesetFromPlan(plan: CrunchPlan): ChangesetChange[] {
   return [...changes.values()];
 }
 
-export function crunchBranchName(run: CrunchRun): string {
+function crunchBranchName(run: CrunchRun): string {
   return `magpie/crunch-${run.id.slice(0, 8)}`;
 }
 

@@ -38,14 +38,6 @@ const CANDIDATE_DOCUMENT_LIMIT = 6;
 // blow up the embedding/keyword query.
 const RETRIEVAL_QUERY_MAX_CHARS = 6_000;
 
-export async function listRuns(ctx: AppContext, limit: number): Promise<SourceSyncRun[]> {
-  return ctx.stores.sourceSync.listRuns(limit);
-}
-
-export async function getRun(ctx: AppContext, id: string): Promise<SourceSyncRun | undefined> {
-  return ctx.stores.sourceSync.getRun(id);
-}
-
 // Watches every git source of a flow (or, with no flow, every configured git
 // source) for new commits and reacts to each. Returns one run per source that
 // actually had a new commit to consider; sources with no change since last time
@@ -287,7 +279,7 @@ async function publishRun(
   }
 }
 
-export function sourceSyncBranchName(run: SourceSyncRun): string {
+function sourceSyncBranchName(run: SourceSyncRun): string {
   return `magpie/source-sync-${run.id.slice(0, 8)}`;
 }
 

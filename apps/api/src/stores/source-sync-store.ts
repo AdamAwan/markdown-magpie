@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { CrunchPlan, ProposalPublication, SourceSyncRun, SourceSyncState } from "@magpie/core";
 
-// How often the source-change watcher polls by default: every 10 minutes, like
-// the pull-request refresh task.
-export const DEFAULT_SOURCE_SYNC_CRON = "*/10 * * * *";
-
 export interface SourceSyncRunInput {
   flowId?: string;
   destinationId?: string;

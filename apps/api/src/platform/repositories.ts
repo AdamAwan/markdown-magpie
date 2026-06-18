@@ -27,7 +27,7 @@ export function checkoutRoot(): string {
   return resolveLocalConfiguredPath(process.env.MAGPIE_CHECKOUT_ROOT ?? ".magpie/checkouts");
 }
 
-export function resolveLocalConfiguredPath(value: string): string {
+function resolveLocalConfiguredPath(value: string): string {
   if (path.isAbsolute(value)) {
     return value;
   }
@@ -38,13 +38,13 @@ export function resolveLocalConfiguredPath(value: string): string {
 // The directory a client-supplied localPath must stay within. Anchored to the
 // configured checkout root's parent (the working directory), so a request can
 // only ever index something under the deployment's own tree.
-export function localPathAllowRoot(): string {
+function localPathAllowRoot(): string {
   return path.resolve(process.env.MAGPIE_LOCAL_INDEX_ROOT ?? process.env.INIT_CWD ?? process.cwd());
 }
 
 // Resolves a client-supplied localPath and rejects any path that escapes the
 // allow-root (path traversal). Returns the resolved absolute path on success.
-export function resolveLocalPathWithinRoot(value: string): string {
+function resolveLocalPathWithinRoot(value: string): string {
   const root = localPathAllowRoot();
   const resolved = resolveLocalConfiguredPath(value);
   const relative = path.relative(root, resolved);
@@ -129,7 +129,7 @@ export async function syncConfiguredGitCheckouts(deps: RepositoryDeps): Promise<
   }
 }
 
-export function uniqueConfiguredGitRepositories(
+function uniqueConfiguredGitRepositories(
   repositories: ConfiguredKnowledgeRepository[]
 ): ConfiguredKnowledgeRepository[] {
   const byCheckout = new Map<string, ConfiguredKnowledgeRepository>();
@@ -268,7 +268,7 @@ export async function resolveIndexSelection(
   return { ...selection, localPath: resolveLocalPathWithinRoot(selection.localPath) };
 }
 
-export async function indexRepositoryForPayload(
+async function indexRepositoryForPayload(
   deps: RepositoryDeps,
   payload: {
     flowId?: string;
@@ -285,7 +285,7 @@ export async function indexRepositoryForPayload(
   });
 }
 
-export function selectDestinationForIndex(
+function selectDestinationForIndex(
   deps: RepositoryDeps,
   payload: { flowId?: string; repositoryId?: string; localPath?: string },
   destinations: ConfiguredKnowledgeRepository[]
@@ -307,7 +307,7 @@ export function selectDestinationForIndex(
   return resolveConfiguredRepositorySelection(payload, destinations).repository;
 }
 
-export function configuredIndexPayloads(deps: RepositoryDeps): Array<{ flowId?: string; repositoryId?: string }> {
+function configuredIndexPayloads(deps: RepositoryDeps): Array<{ flowId?: string; repositoryId?: string }> {
   if (deps.knowledgeConfig.flows.length > 0) {
     return deps.knowledgeConfig.flows.map((flow) => ({ flowId: flow.id }));
   }

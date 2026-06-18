@@ -56,7 +56,7 @@ export function findScheduledTask(key: string): ScheduledTaskDefinition | undefi
 
 // The default (unsaved) schedule for a registered task, so the UI can render a
 // control before the schedule has ever been saved.
-export function defaultScheduledTaskSettings(task: ScheduledTaskDefinition): ScheduledTaskSettings {
+function defaultScheduledTaskSettings(task: ScheduledTaskDefinition): ScheduledTaskSettings {
   return { key: task.key, enabled: false, cron: task.defaultCron };
 }
 
@@ -141,7 +141,7 @@ async function syncSourceChanges(ctx: AppContext): Promise<void> {
 // hour the very content a human just declined. Merged proposals resolve their
 // gaps at the source, so those summaries stop appearing as candidates and need
 // no entry here; proposals.list already omits merged rows.
-export async function coveredGapSummaries(ctx: AppContext): Promise<Set<string>> {
+async function coveredGapSummaries(ctx: AppContext): Promise<Set<string>> {
   const summaries = new Set<string>();
   for (const proposal of await ctx.stores.proposals.list(500)) {
     for (const summary of proposalsService.splitGapSummaries(proposal.gapSummary)) {

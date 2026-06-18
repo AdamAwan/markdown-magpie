@@ -22,7 +22,7 @@ export const SECTION_NAV: SectionNav[] = [
   { section: "config", path: "/config", glyph: "C", label: "Config" }
 ];
 
-export const DEFAULT_SECTION: ConsoleSection = "ask";
+const DEFAULT_SECTION: ConsoleSection = "ask";
 export const DEFAULT_SECTION_PATH = "/ask";
 
 export function sectionPath(section: ConsoleSection): string {

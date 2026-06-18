@@ -46,7 +46,7 @@ export function extractModelInfo(config: RuntimeConfig | undefined): {
   return result;
 }
 
-export function extractHostFromUrl(url: string): string {
+function extractHostFromUrl(url: string): string {
   try {
     const parsed = new URL(url);
     const hostname = parsed.hostname;

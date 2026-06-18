@@ -8,7 +8,7 @@ declare global {
   }
 }
 
-export function resolveApiBaseUrl(): string {
+function resolveApiBaseUrl(): string {
   if (configuredApiBaseUrl) {
     return configuredApiBaseUrl.replace(/\/+$/, "").replace(/\/api$/, "");
   }

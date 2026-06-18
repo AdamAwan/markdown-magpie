@@ -81,7 +81,7 @@ export async function collectSourceContext(
   return contexts;
 }
 
-export function selectSources(
+function selectSources(
   deps: RepositoryDeps,
   sourceIds: string[] | undefined
 ): ConfiguredKnowledgeRepository[] {
@@ -97,7 +97,7 @@ export function selectSources(
   return deps.knowledgeConfig.sources.filter((source) => requested.has(source.id));
 }
 
-export async function collectLocalSourceContext(
+async function collectLocalSourceContext(
   source: ConfiguredKnowledgeRepository,
   root: string
 ): Promise<SourceDataContext[]> {
@@ -143,13 +143,13 @@ export async function collectLocalSourceContext(
   return contexts;
 }
 
-export async function findSourceContextFiles(root: string): Promise<string[]> {
+async function findSourceContextFiles(root: string): Promise<string[]> {
   const files: string[] = [];
   await walkSourceFiles(root, files);
   return files.sort((left, right) => sourceFilePriority(left) - sourceFilePriority(right) || left.localeCompare(right));
 }
 
-export async function walkSourceFiles(root: string, files: string[]): Promise<void> {
+async function walkSourceFiles(root: string, files: string[]): Promise<void> {
   const entries = await readdir(root);
   for (const entry of entries) {
     if (ignoredSourceEntry(entry)) {
@@ -169,15 +169,15 @@ export async function walkSourceFiles(root: string, files: string[]): Promise<vo
   }
 }
 
-export function ignoredSourceEntry(entry: string): boolean {
+function ignoredSourceEntry(entry: string): boolean {
   return new Set([".git", "node_modules", "dist", "build", ".next", "coverage", "vendor", ".turbo"]).has(entry);
 }
 
-export function isTextSourceFile(entry: string): boolean {
+function isTextSourceFile(entry: string): boolean {
   return /\.(?:md|mdx|txt|ts|tsx|js|jsx|mjs|cjs|json|yml|yaml|toml|py|go|rs|cs|java|kt|swift|php|rb|css|scss|html)$/i.test(entry);
 }
 
-export function sourceFilePriority(file: string): number {
+function sourceFilePriority(file: string): number {
   const basename = path.basename(file).toLowerCase();
   if (/^readme(?:\..+)?$/.test(basename)) {
     return 0;

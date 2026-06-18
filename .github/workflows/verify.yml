@@ -36,6 +36,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Dead code (knip)
+        run: npm run deadcode
+
       # Builds every workspace in dependency order, including the web app's
       # `next build`. typecheck excludes apps/web (bundler resolution), so this
       # is what catches web/build-only breaks like an unresolvable import.

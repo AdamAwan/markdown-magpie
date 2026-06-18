@@ -176,7 +176,7 @@ export async function resetData(ctx: AppContext) {
   };
 }
 
-export function maskConnectionString(value: string | undefined): string | null {
+function maskConnectionString(value: string | undefined): string | null {
   if (!value) {
     return null;
   }
@@ -195,6 +195,6 @@ export function maskConnectionString(value: string | undefined): string | null {
   }
 }
 
-export function secretState(value: string | undefined): "set" | "not set" {
+function secretState(value: string | undefined): "set" | "not set" {
   return value ? "set" : "not set";
 }

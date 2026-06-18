@@ -28,8 +28,12 @@ export default tseslint.config(
       // The mock/test fakes and a few provider shims legitimately need `any`; keep
       // it visible as a warning rather than failing the build.
       "@typescript-eslint/no-explicit-any": "warn",
-      // Allow intentionally-unused args prefixed with _ (e.g. discarded callback params).
-      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }]
+      // Flag dead locals, imports, and params. Anything intentionally unused opts
+      // out with a leading underscore (args, vars, and caught errors alike).
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" }
+      ]
     }
   },
   {

@@ -54,7 +54,7 @@ export async function runMergeCascade(
 // Resolves the gaps a merged proposal closed: precisely the rows whose question
 // and summary the proposal recorded, so unrelated gaps on a multi-topic question
 // are left untouched. Returns the number of gaps newly resolved.
-export async function resolveGapsForMergedProposal(ctx: AppContext, proposal: Proposal): Promise<number> {
+async function resolveGapsForMergedProposal(ctx: AppContext, proposal: Proposal): Promise<number> {
   const questionIds = proposal.triggeringQuestionIds ?? [];
   const summaries = splitGapSummaries(proposal.gapSummary);
   if (questionIds.length === 0 || summaries.length === 0) {
@@ -69,7 +69,7 @@ export async function resolveGapsForMergedProposal(ctx: AppContext, proposal: Pr
 // Pulls the destination's default branch (where the PR merged) and re-indexes it
 // so the merged document is immediately searchable. Best-effort: a failure here
 // must not undo the merge, so it is logged and reported rather than thrown.
-export async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal): Promise<boolean> {
+async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal): Promise<boolean> {
   try {
     if (ctx.knowledgeConfig.destinations.length > 0) {
       const destination = selectDestinationForProposal(ctx.repositoryDeps(), proposal);
@@ -183,7 +183,7 @@ export async function publishReadyProposal(ctx: AppContext, proposal: Proposal) 
 }
 
 // Human-facing PR description linking the merge back to the gaps it closes.
-export function buildPullRequestBody(proposal: Proposal): string {
+function buildPullRequestBody(proposal: Proposal): string {
   const lines = ["Proposed by Markdown Magpie to close knowledge gaps.", ""];
   if (proposal.rationale) {
     lines.push(proposal.rationale, "");
@@ -291,7 +291,7 @@ export async function draftFromGaps(
   return { ok: true as const, mode: "queue" as const, job };
 }
 
-export async function draftMarkdownProposalDirect(
+async function draftMarkdownProposalDirect(
   ctx: AppContext,
   input: DraftMarkdownProposalJobInput
 ): Promise<DraftMarkdownProposalJobOutput> {
@@ -317,7 +317,7 @@ export async function draftMarkdownProposalDirect(
   return output;
 }
 
-export function createMockMarkdownProposal(
+function createMockMarkdownProposal(
   ctx: AppContext,
   input: DraftMarkdownProposalJobInput
 ): DraftMarkdownProposalJobOutput {
@@ -348,7 +348,7 @@ export function createMockMarkdownProposal(
   };
 }
 
-export function titleFromGapSummary(summary: string): string {
+function titleFromGapSummary(summary: string): string {
   const normalized = summary
     .replace(/^no (?:sufficient )?source material found for:\s*/i, "")
     .replace(/[?.!]+$/g, "")
@@ -373,7 +373,7 @@ function derivedFlowId(candidates: GapCandidate[]): string | undefined {
 }
 
 // Stored on the proposal as a human-readable record of which gaps it closes.
-export function joinGapSummaries(summaries: string[]): string {
+function joinGapSummaries(summaries: string[]): string {
   return summaries.join("\n");
 }
 
@@ -386,7 +386,7 @@ export function splitGapSummaries(gapSummary: string | undefined): string[] {
     .filter((summary) => summary.length > 0);
 }
 
-export function dedupeCitations(citations: Proposal["evidence"]): Proposal["evidence"] {
+function dedupeCitations(citations: Proposal["evidence"]): Proposal["evidence"] {
   const seen = new Set<string>();
   const result: Proposal["evidence"] = [];
   for (const citation of citations) {
@@ -400,7 +400,7 @@ export function dedupeCitations(citations: Proposal["evidence"]): Proposal["evid
   return result;
 }
 
-export function createProposalBranchName(proposal: Proposal): string {
+function createProposalBranchName(proposal: Proposal): string {
   return `magpie/proposal-${proposal.id.slice(0, 8)}-${slugify(proposal.title).slice(0, 40)}`;
 }
 

@@ -63,7 +63,7 @@ export async function completeJob(
   return { ok: true, job: await ctx.stores.aiJobs.get(jobId) };
 }
 
-export async function updateQuestionLogFromCompletedJob(
+async function updateQuestionLogFromCompletedJob(
   ctx: AppContext,
   job: AiJob | undefined,
   output: unknown

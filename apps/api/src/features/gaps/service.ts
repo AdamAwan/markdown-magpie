@@ -57,7 +57,7 @@ function groupByFlow(candidates: GapCandidate[]): Map<string, GapCandidate[]> {
   return groups;
 }
 
-export async function requestGapClusters(
+async function requestGapClusters(
   ctx: AppContext,
   candidates: GapCandidate[],
   flowId?: string

@@ -26,19 +26,19 @@ interface JobView {
   error?: string;
 }
 
-export type FeedbackKind = "helpful" | "unhelpful" | "knowledge_gap";
+type FeedbackKind = "helpful" | "unhelpful" | "knowledge_gap";
 
-export function trimTrailingSlash(value: string): string {
+function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
-export function apiUrl(path: string): string {
+function apiUrl(path: string): string {
   return path.startsWith("/api/") || path === "/api"
     ? `${apiBaseUrl}${path}`
     : `${apiBaseUrl}/api${path}`;
 }
 
-export function parsePositiveInt(value: string | undefined, fallback: number): number {
+function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (value === undefined) {
     return fallback;
   }
@@ -47,7 +47,7 @@ export function parsePositiveInt(value: string | undefined, fallback: number): n
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-export async function postJson(path: string, body: unknown): Promise<unknown> {
+async function postJson(path: string, body: unknown): Promise<unknown> {
   const response = await fetch(apiUrl(path), {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -158,7 +158,7 @@ function extractAnswer(value: unknown): AskResult {
   return result;
 }
 
-export function asObject(value: unknown): Record<string, unknown> {
+function asObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error("Expected an object response from the API");
   }

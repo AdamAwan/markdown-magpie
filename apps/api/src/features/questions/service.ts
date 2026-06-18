@@ -1,10 +1,6 @@
 import type { QuestionFeedback, QuestionLog } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 
-export function isQuestionFeedback(value: unknown): value is QuestionFeedback {
-  return value === "helpful" || value === "unhelpful";
-}
-
 export async function recordFeedback(
   ctx: AppContext,
   questionId: string,
