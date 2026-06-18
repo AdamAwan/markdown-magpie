@@ -9,5 +9,8 @@ export const createJobBodySchema = z.object({
     "suggest_consolidation",
     "crunch_knowledge_base"
   ]),
-  input: z.unknown().optional()
+  // Job inputs are always object payloads (consumers read them as
+  // Partial<...JobInput>); reject arrays/primitives at the boundary rather than
+  // letting a malformed `as Partial` cast slip through downstream.
+  input: z.record(z.string(), z.unknown()).optional()
 });

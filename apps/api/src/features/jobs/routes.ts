@@ -49,7 +49,7 @@ export function jobRoutes(ctx: AppContext): Hono {
     try {
       const outcome = await jobsService.completeJob(ctx, c.req.param("id"), payload.output);
       if (!outcome.ok) {
-        throw new HttpError(404, outcome.code);
+        throw new HttpError(outcome.code === "job_not_found" ? 404 : 400, outcome.code);
       }
       return c.json({ job: outcome.job });
     } catch (error) {

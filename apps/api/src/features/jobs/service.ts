@@ -38,13 +38,25 @@ export async function completeJob(
   ctx: AppContext,
   jobId: string,
   output: unknown
-): Promise<{ ok: false; code: "job_not_found" } | { ok: true; job: AiJob | undefined }> {
+): Promise<
+  | { ok: false; code: "job_not_found" }
+  | { ok: false; code: "invalid_output" }
+  | { ok: true; job: AiJob | undefined }
+> {
   const existingJob = await ctx.stores.aiJobs.get(jobId);
   if (!existingJob) {
     return { ok: false, code: "job_not_found" };
   }
 
-  await ctx.stores.aiJobs.complete(jobId, output ?? {});
+  // Worker output is untrusted: it must be an object, and for job types that
+  // feed a downstream store (answers, proposals, crunch plans) it must match
+  // the expected shape. Otherwise we'd silently mark the job complete with
+  // garbage that the side-effect handlers quietly skip.
+  if (!isPlainObject(output) || !outputMatchesJobType(existingJob.type, output)) {
+    return { ok: false, code: "invalid_output" };
+  }
+
+  await ctx.stores.aiJobs.complete(jobId, output);
   await updateQuestionLogFromCompletedJob(ctx, existingJob, output);
   await proposalsService.createProposalFromCompletedJob(ctx, existingJob, output);
   await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, output);
@@ -88,6 +100,26 @@ export async function failJob(
     }
   }
   return ctx.stores.aiJobs.get(jobId);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Validate completion output against the job type, reusing the same guards the
+// side-effect handlers rely on. Job types with no downstream consumer accept any
+// object payload.
+function outputMatchesJobType(type: AiJobType, output: Record<string, unknown>): boolean {
+  switch (type) {
+    case "answer_question":
+      return isAnswerQuestionJobOutput(output);
+    case "draft_markdown_proposal":
+      return proposalsService.isDraftMarkdownProposalJobOutput(output);
+    case "crunch_knowledge_base":
+      return crunchService.isCrunchPlan(output);
+    default:
+      return true;
+  }
 }
 
 export function isAiJobType(value: unknown): value is AiJobType {
