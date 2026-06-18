@@ -14,28 +14,10 @@ jobs:
     name: Typecheck, test, lint, build
     runs-on: ubuntu-latest
 
-    # Postgres (with pgvector) backs the integration tests for the Postgres*
-    # stores. Without DATABASE_URL set, those test blocks self-skip and the SQL
-    # paths go uncovered — so the suite runs against a real database here. The
-    # test:db wrapper creates a throwaway database on this server per run,
-    # migrates it, and drops it after, so we only need the default `postgres` db.
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-
-    env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-
+    # The integration tests for the Postgres* stores run against a single-use
+    # pgvector container that the test:db wrapper boots, migrates, and tears down
+    # per run (see scripts/test-db.mjs, via Testcontainers). Docker is preinstalled
+    # on ubuntu-latest, so no service container or DATABASE_URL is needed here.
     steps:
       - name: Checkout
         uses: actions/checkout@v5
