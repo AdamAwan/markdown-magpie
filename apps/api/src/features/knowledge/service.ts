@@ -6,6 +6,10 @@ export function knowledgeRepositoryErrorCode(message: string): string {
     return "local_path_required";
   }
 
+  if (message === "local_path_outside_root") {
+    return "local_path_outside_root";
+  }
+
   if (message.includes("localPath is not accepted")) {
     return "local_path_not_allowed";
   }

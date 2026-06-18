@@ -35,6 +35,26 @@ export function resolveLocalConfiguredPath(value: string): string {
   return path.resolve(process.env.INIT_CWD ?? process.cwd(), value);
 }
 
+// The directory a client-supplied localPath must stay within. Anchored to the
+// configured checkout root's parent (the working directory), so a request can
+// only ever index something under the deployment's own tree.
+export function localPathAllowRoot(): string {
+  return path.resolve(process.env.MAGPIE_LOCAL_INDEX_ROOT ?? process.env.INIT_CWD ?? process.cwd());
+}
+
+// Resolves a client-supplied localPath and rejects any path that escapes the
+// allow-root (path traversal). Returns the resolved absolute path on success.
+export function resolveLocalPathWithinRoot(value: string): string {
+  const root = localPathAllowRoot();
+  const resolved = resolveLocalConfiguredPath(value);
+  const relative = path.relative(root, resolved);
+  const escapes = relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  if (escapes) {
+    throw new Error("local_path_outside_root");
+  }
+  return resolved;
+}
+
 export async function resolveConfiguredRepositoryLocalPath(
   repository: ConfiguredKnowledgeRepository
 ): Promise<string> {
@@ -236,7 +256,10 @@ export async function resolveIndexSelection(
   if (deps.knowledgeConfig.destinations.length > 0) {
     throw new Error("configured_repository_not_indexable");
   }
-  return resolveKnowledgeRepositorySelection(payload, deps.knowledgeConfig.repositories);
+  const selection = resolveKnowledgeRepositorySelection(payload, deps.knowledgeConfig.repositories);
+  // Constrain a client-supplied localPath to the allow-root so a crafted
+  // "../../etc"-style path can't index files outside the deployment tree.
+  return { ...selection, localPath: resolveLocalPathWithinRoot(selection.localPath) };
 }
 
 export async function indexRepositoryForPayload(
