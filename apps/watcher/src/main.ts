@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import type {
   AgentRunner,
   AiJob,
@@ -19,7 +19,7 @@ import { JOB_RUNNER_SYSTEM } from "@magpie/prompts";
 const apiBaseUrl = trimTrailingSlash(process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/api$/, "");
 const watcherName = process.env.WATCHER_NAME ?? "local-dev-watcher";
 const defaultProvider = process.env.AI_PROVIDER ?? process.env.AI_JOB_PROVIDER ?? "mock";
-const pollIntervalMs = Number.parseInt(process.env.WATCHER_POLL_INTERVAL_MS ?? "2000", 10);
+const pollIntervalMs = parsePositiveInt(process.env.WATCHER_POLL_INTERVAL_MS, 2000);
 const acceptedTypes: AiJobType[] = [
   "answer_question",
   "summarize_gap",
@@ -31,13 +31,51 @@ const acceptedTypes: AiJobType[] = [
 
 let shuttingDown = false;
 
+// The job currently claimed by this watcher, and the CLI child (if any) running
+// it. On a shutdown signal we kill the child and best-effort release the job so
+// it isn't left dangling in the "claimed/running" state.
+let activeJob: AiJob | undefined;
+let activeChild: ChildProcess | undefined;
+let shutdownStarted = false;
+
 process.on("SIGINT", () => {
-  shuttingDown = true;
+  void shutdown("SIGINT");
 });
 
 process.on("SIGTERM", () => {
-  shuttingDown = true;
+  void shutdown("SIGTERM");
 });
+
+async function shutdown(signal: string): Promise<void> {
+  // Guard against a second signal re-entering while the first is still tearing
+  // down (and against the loop racing the handler).
+  if (shutdownStarted) {
+    return;
+  }
+  shutdownStarted = true;
+  shuttingDown = true;
+  console.log(`Received ${signal}, shutting down...`);
+
+  if (activeChild && activeChild.exitCode === null && !activeChild.killed) {
+    activeChild.kill("SIGTERM");
+  }
+
+  const job = activeJob;
+  if (job) {
+    try {
+      await postJson(`/ai-jobs/${job.id}/fail`, {
+        error: `Watcher '${watcherName}' shut down (${signal}) before completing the job`
+      });
+      console.log(`Released claimed job ${job.id} on shutdown`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      console.error(`Failed to release job ${job.id} on shutdown: ${message}`);
+    }
+  }
+
+  console.log(`Markdown Magpie watcher '${watcherName}' stopped`);
+  process.exit(0);
+}
 
 async function poll(): Promise<void> {
   while (!shuttingDown) {
@@ -49,7 +87,14 @@ async function poll(): Promise<void> {
       }
 
       console.log(`Claimed ${job.type} job ${job.id}`);
-      await runAndComplete(job);
+      activeJob = job;
+      try {
+        await runAndComplete(job);
+      } finally {
+        // The job has now reached a terminal state (completed or failed) via
+        // runAndComplete, so it no longer needs releasing on shutdown.
+        activeJob = undefined;
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown watcher error";
       console.error(`Watcher loop error: ${message}`);
@@ -127,7 +172,7 @@ class OpenAICompatibleAgentRunner implements AgentRunner {
   private readonly timeoutMs: number;
 
   constructor(private readonly options: OpenAICompatibleAgentRunnerOptions) {
-    this.timeoutMs = Number.parseInt(process.env.AGENT_API_TIMEOUT_MS ?? "120000", 10);
+    this.timeoutMs = parsePositiveInt(process.env.AGENT_API_TIMEOUT_MS, 120000);
   }
 
   supports() {
@@ -297,7 +342,7 @@ class CliAgentRunner implements AgentRunner {
     this.command = options.command;
     this.args = options.args;
     this.promptMode = options.promptMode;
-    this.timeoutMs = Number.parseInt(process.env.AGENT_CLI_TIMEOUT_MS ?? "120000", 10);
+    this.timeoutMs = parsePositiveInt(process.env.AGENT_CLI_TIMEOUT_MS, 120000);
   }
 
   supports() {
@@ -378,6 +423,20 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+// Parse a positive integer from an env var, falling back to the default when
+// the value is absent, malformed (NaN), or non-positive. Without this guard a
+// bad value would yield NaN and make setTimeout/withTimeout busy-loop or reject
+// instantly. (Mirrors @magpie/mcp's parsePositiveInt; not imported to avoid a
+// cross-app dependency.)
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function splitArgs(value: string): string[] {
   return value
     .split(" ")
@@ -435,6 +494,8 @@ function runCli(options: {
     const child = spawn(options.command, options.args, {
       stdio: ["pipe", "pipe", "pipe"]
     });
+    // Track the child so a shutdown signal can terminate it promptly.
+    activeChild = child;
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     const timeout = setTimeout(() => {
@@ -446,10 +507,12 @@ function runCli(options: {
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.on("error", (error) => {
       clearTimeout(timeout);
+      activeChild = undefined;
       reject(error);
     });
     child.on("close", (code) => {
       clearTimeout(timeout);
+      activeChild = undefined;
       if (code !== 0) {
         reject(new Error(`Agent CLI exited with ${code}: ${Buffer.concat(stderr).toString("utf8")}`));
         return;
