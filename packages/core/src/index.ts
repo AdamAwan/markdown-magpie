@@ -551,9 +551,137 @@ export interface ScheduledTaskSettings {
 }
 
 // --- Cron scheduling -------------------------------------------------------
-// The 5-field cron evaluator lives in ./cron.ts; re-exported here so the
-// public surface of @magpie/core is unchanged.
-export { isValidCron, nextCronTime } from "./cron.js";
+// A small, dependency-free evaluator for standard 5-field cron expressions:
+//   minute(0-59) hour(0-23) day-of-month(1-31) month(1-12) day-of-week(0-6)
+// Supports "*", lists (a,b), ranges (a-b), and steps (*/n, a-b/n). Sunday is 0
+// (7 is also accepted as Sunday). Times are evaluated in local time.
+//
+// Caveat: evaluation is in local wall-clock time and nextCronTime scans
+// minute-by-minute, so around DST transitions a "skipped" local hour can be
+// missed and a "repeated" local hour can match twice. Acceptable for the
+// coarse maintenance schedules this drives; revisit if minute-precision
+// correctness across DST is ever required.
+
+interface CronFields {
+  minute: Set<number>;
+  hour: Set<number>;
+  dayOfMonth: Set<number>;
+  month: Set<number>;
+  dayOfWeek: Set<number>;
+  domRestricted: boolean;
+  dowRestricted: boolean;
+}
+
+function parseCronField(field: string, min: number, max: number): Set<number> | undefined {
+  const values = new Set<number>();
+  for (const part of field.split(",")) {
+    const stepMatch = /^(.+)\/(\d+)$/.exec(part);
+    const rangePart = stepMatch ? stepMatch[1] : part;
+    const step = stepMatch ? Number.parseInt(stepMatch[2], 10) : 1;
+    if (step <= 0) {
+      return undefined;
+    }
+
+    let lo: number;
+    let hi: number;
+    if (rangePart === "*") {
+      lo = min;
+      hi = max;
+    } else {
+      const range = /^(\d+)-(\d+)$/.exec(rangePart);
+      if (range) {
+        lo = Number.parseInt(range[1], 10);
+        hi = Number.parseInt(range[2], 10);
+      } else if (/^\d+$/.test(rangePart)) {
+        lo = Number.parseInt(rangePart, 10);
+        hi = lo;
+      } else {
+        return undefined;
+      }
+    }
+
+    if (Number.isNaN(lo) || Number.isNaN(hi) || lo < min || hi > max || lo > hi) {
+      return undefined;
+    }
+    for (let value = lo; value <= hi; value += step) {
+      values.add(value);
+    }
+  }
+  return values.size > 0 ? values : undefined;
+}
+
+function parseCronExpression(expr: string): CronFields | undefined {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    return undefined;
+  }
+
+  const minute = parseCronField(parts[0], 0, 59);
+  const hour = parseCronField(parts[1], 0, 23);
+  const dayOfMonth = parseCronField(parts[2], 1, 31);
+  const month = parseCronField(parts[3], 1, 12);
+  const dayOfWeek = parseCronField(parts[4].replace(/7/g, "0"), 0, 6);
+  if (!minute || !hour || !dayOfMonth || !month || !dayOfWeek) {
+    return undefined;
+  }
+
+  return {
+    minute,
+    hour,
+    dayOfMonth,
+    month,
+    dayOfWeek,
+    domRestricted: parts[2] !== "*",
+    dowRestricted: parts[4] !== "*"
+  };
+}
+
+export function isValidCron(expr: string): boolean {
+  return parseCronExpression(expr) !== undefined;
+}
+
+function cronMatches(fields: CronFields, date: Date): boolean {
+  if (!fields.minute.has(date.getMinutes())) {
+    return false;
+  }
+  if (!fields.hour.has(date.getHours())) {
+    return false;
+  }
+  if (!fields.month.has(date.getMonth() + 1)) {
+    return false;
+  }
+
+  const domMatch = fields.dayOfMonth.has(date.getDate());
+  const dowMatch = fields.dayOfWeek.has(date.getDay());
+  // Vixie-cron rule: when both day-of-month and day-of-week are restricted, a
+  // match on either one counts; otherwise both must match.
+  if (fields.domRestricted && fields.dowRestricted) {
+    return domMatch || dowMatch;
+  }
+  return domMatch && dowMatch;
+}
+
+// The next minute that matches `expr`, strictly after `from`, or undefined if the
+// expression is invalid (or — practically never — has no match within a year).
+export function nextCronTime(expr: string, from: Date): Date | undefined {
+  const fields = parseCronExpression(expr);
+  if (!fields) {
+    return undefined;
+  }
+
+  const candidate = new Date(from.getTime());
+  candidate.setSeconds(0, 0);
+  candidate.setMinutes(candidate.getMinutes() + 1);
+
+  const maxIterations = 366 * 24 * 60;
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    if (cronMatches(fields, candidate)) {
+      return new Date(candidate.getTime());
+    }
+    candidate.setMinutes(candidate.getMinutes() + 1);
+  }
+  return undefined;
+}
 
 // Multi-file branch publish, used by Crunch (and any future change that touches
 // more than one document at once). A change with `delete: true` removes the
@@ -571,6 +699,141 @@ export interface PublishChangesetRequest {
   changes: ChangesetChange[];
 }
 
-// The deterministic mock crunch planner lives in ./crunch-mock.ts; re-exported
-// here so the public surface of @magpie/core is unchanged.
-export { buildMockCrunchPlan } from "./crunch-mock.js";
+function crunchSlug(value: string): string {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60)
+      .replace(/-+$/g, "") || "section"
+  );
+}
+
+function documentFolder(filePath: string): string {
+  const segments = filePath.replace(/\\/g, "/").split("/");
+  return segments.length > 1 ? segments.slice(0, -1).join("/") : "";
+}
+
+function countHeadings(content: string, level: number): string[] {
+  const prefix = `${"#".repeat(level)} `;
+  return content
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith(prefix))
+    .map((line) => line.slice(prefix.length).trim())
+    .filter(Boolean);
+}
+
+// Deterministic, dependency-free tidy heuristics shared by the API's direct
+// mock executor and the watcher's mock runner so demos and tests agree:
+//   - SPLIT a document that has grown large (> 1,800 chars) and covers several
+//     topics (>= 3 level-2 headings) into one file per "##" section.
+//   - CONSOLIDATE a folder that has fragmented into several small documents
+//     (>= 2 docs, each < 1,200 chars, none being split) into one overview file.
+// Real providers replace this with a model call; the shape of the output is the
+// same CrunchPlan either way.
+export function buildMockCrunchPlan(documents: CrunchFileWrite[]): CrunchPlan {
+  const operations: CrunchOperation[] = [];
+  const splitPaths = new Set<string>();
+
+  for (const document of [...documents].sort((left, right) => left.path.localeCompare(right.path))) {
+    const sections = countHeadings(document.content, 2);
+    if (document.content.length <= 1800 || sections.length < 3) {
+      continue;
+    }
+
+    splitPaths.add(document.path);
+    const folder = documentFolder(document.path);
+    const baseName = (document.path.replace(/\\/g, "/").split("/").at(-1) ?? document.path).replace(/\.md$/i, "");
+    const baseDir = folder ? `${folder}/${crunchSlug(baseName)}` : crunchSlug(baseName);
+    const blocks = splitByHeading(document.content, 2);
+    const writes: CrunchFileWrite[] = blocks.map((block) => ({
+      path: `${baseDir}/${crunchSlug(block.heading)}.md`,
+      content: `# ${block.heading}\n\n${block.body.trim()}\n`
+    }));
+
+    operations.push({
+      kind: "split",
+      title: `Split ${document.path} into ${writes.length} focused documents`,
+      reason: `This document is ${document.content.length} characters across ${sections.length} top-level sections, mixing several topics. Splitting one section per file keeps each document focused and easier to retrieve.`,
+      sources: [document.path],
+      writes,
+      deletes: [document.path]
+    });
+  }
+
+  const byFolder = new Map<string, CrunchFileWrite[]>();
+  for (const document of documents) {
+    if (splitPaths.has(document.path)) {
+      continue;
+    }
+    if (document.content.length >= 1200) {
+      continue;
+    }
+    const folder = documentFolder(document.path);
+    byFolder.set(folder, [...(byFolder.get(folder) ?? []), document]);
+  }
+
+  for (const [folder, folderDocuments] of [...byFolder.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    if (folderDocuments.length < 2) {
+      continue;
+    }
+
+    const sorted = [...folderDocuments].sort((left, right) => left.path.localeCompare(right.path));
+    const overviewPath = folder ? `${folder}/overview.md` : "overview.md";
+    const heading = folder ? `${folder} overview` : "Overview";
+    const body = sorted
+      .map((document) => {
+        const title = (document.path.replace(/\\/g, "/").split("/").at(-1) ?? document.path).replace(/\.md$/i, "");
+        return `## ${title}\n\n${stripFrontmatter(document.content).trim()}`;
+      })
+      .join("\n\n");
+
+    operations.push({
+      kind: "consolidate",
+      title: `Consolidate ${sorted.length} small documents in ${folder || "the root"} into one overview`,
+      reason: `${sorted.length} short documents (each under 1,200 characters) cover closely related material in the same folder. Merging them into a single overview reduces fragmentation and duplicate context.`,
+      sources: sorted.map((document) => document.path),
+      writes: [{ path: overviewPath, content: `# ${heading}\n\n${body}\n` }],
+      deletes: sorted.map((document) => document.path)
+    });
+  }
+
+  return {
+    summary:
+      operations.length === 0
+        ? "The knowledge base already looks tidy — no consolidations or splits are needed."
+        : `${operations.length} tidy operation(s): ${operations.filter((operation) => operation.kind === "split").length} split, ${operations.filter((operation) => operation.kind === "consolidate").length} consolidate.`,
+    operations,
+    rationale: "Generated by the deterministic mock crunch planner from document size and folder fragmentation heuristics."
+  };
+}
+
+function stripFrontmatter(content: string): string {
+  const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(content);
+  return match ? content.slice(match[0].length) : content;
+}
+
+function splitByHeading(content: string, level: number): Array<{ heading: string; body: string }> {
+  const prefix = `${"#".repeat(level)} `;
+  const lines = stripFrontmatter(content).split(/\r?\n/);
+  const blocks: Array<{ heading: string; body: string }> = [];
+  let current: { heading: string; body: string[] } | undefined;
+
+  for (const line of lines) {
+    if (line.startsWith(prefix)) {
+      if (current) {
+        blocks.push({ heading: current.heading, body: current.body.join("\n") });
+      }
+      current = { heading: line.slice(prefix.length).trim() || "Section", body: [] };
+    } else if (current) {
+      current.body.push(line);
+    }
+  }
+
+  if (current) {
+    blocks.push({ heading: current.heading, body: current.body.join("\n") });
+  }
+
+  return blocks;
+}
