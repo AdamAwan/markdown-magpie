@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { isValidCron } from "@magpie/core";
 import { ConfiguredKnowledgeFlow, CrunchRun, CrunchSettings, ScheduledTask } from "../lib/types";
 
 export function CrunchPanel({
@@ -103,80 +104,16 @@ function CrunchScheduleCard({
   onSave: (flowId: string | undefined, enabled: boolean, cron: string) => Promise<void>;
   setting: CrunchSettings;
 }) {
-  const [enabled, setEnabled] = useState(setting.enabled);
-  const [cron, setCron] = useState(setting.cron);
-
-  useEffect(() => {
-    setEnabled(setting.enabled);
-    setCron(setting.cron);
-  }, [setting.enabled, setting.cron]);
-
-  const cronValid = isValidCronExpression(cron);
-
   return (
-    <article className="crunchScheduleCard">
-      <div className="rowTop">
-        <div>
-          <h3>{flowName}</h3>
-          <p className="path">
-            {setting.enabled
-              ? `Scheduled (${setting.cron})${
-                  setting.nextRunAt ? ` · next ${new Date(setting.nextRunAt).toLocaleString()}` : ""
-                }`
-              : "Schedule disabled"}
-          </p>
-        </div>
-        <span className={`status ${setting.enabled ? "completed" : "pending"}`} title="Schedule status">
-          {setting.enabled ? "On" : "Off"}
-        </span>
-      </div>
-      <div className="crunchScheduleControls">
-        <label className="crunchToggle">
-          <input checked={enabled} onChange={(event) => setEnabled(event.target.checked)} type="checkbox" />
-          <span>Run on a schedule</span>
-        </label>
-        <label className="field crunchCronField">
-          <span>Cron (min hour day month weekday)</span>
-          <input
-            aria-invalid={!cronValid}
-            onChange={(event) => setCron(event.target.value)}
-            placeholder="0 2 * * *"
-            spellCheck={false}
-            value={cron}
-          />
-        </label>
-        <div className="rowActions">
-          <button
-            className="button secondary"
-            disabled={loading || !cronValid}
-            onClick={() => void onSave(setting.flowId, enabled, cron.trim())}
-            title={cronValid ? "Save this schedule" : "Enter a valid 5-field cron expression"}
-            type="button"
-          >
-            Save schedule
-          </button>
-          <button className="button" disabled={loading} onClick={() => void onRun(setting.flowId)} type="button">
-            Run now
-          </button>
-        </div>
-      </div>
-      <div className="crunchPresets">
-        {CRON_PRESETS.map((preset) => (
-          <button
-            className={cron.trim() === preset.cron ? "chip selected" : "chip"}
-            key={preset.cron}
-            onClick={() => setCron(preset.cron)}
-            type="button"
-          >
-            {preset.label}
-          </button>
-        ))}
-      </div>
-      {!cronValid ? <p className="crunchError">Not a valid 5-field cron expression.</p> : null}
-      {setting.lastRunAt ? (
-        <p className="hint">Last scheduled run {new Date(setting.lastRunAt).toLocaleString()}</p>
-      ) : null}
-    </article>
+    <ScheduleEditor
+      loading={loading}
+      onRun={() => onRun(setting.flowId)}
+      onSave={(enabled, cron) => onSave(setting.flowId, enabled, cron)}
+      placeholder="0 2 * * *"
+      setting={setting}
+      title={flowName}
+      lastRunLabel="Last scheduled run"
+    />
   );
 }
 
@@ -191,22 +128,68 @@ function ScheduledTaskCard({
   onSave: (key: string, enabled: boolean, cron: string) => Promise<void>;
   task: ScheduledTask;
 }) {
-  const setting = task.settings;
+  return (
+    <ScheduleEditor
+      description={task.description}
+      loading={loading}
+      onRun={() => onRun(task.key)}
+      onSave={(enabled, cron) => onSave(task.key, enabled, cron)}
+      placeholder="*/10 * * * *"
+      setting={task.settings}
+      title={task.label}
+      lastRunLabel="Last run"
+    />
+  );
+}
+
+// The "enabled + cron" editor shared by crunch flow schedules and side-process
+// schedules. It owns the live form state and a dirty flag so a background refresh
+// (which replaces `setting`) never overwrites edits the user is mid-typing; the
+// flag clears on save so the freshly persisted values mirror back in.
+function ScheduleEditor({
+  description,
+  lastRunLabel,
+  loading,
+  onRun,
+  onSave,
+  placeholder,
+  setting,
+  title
+}: {
+  description?: string;
+  lastRunLabel: string;
+  loading: boolean;
+  onRun: () => Promise<void>;
+  onSave: (enabled: boolean, cron: string) => Promise<void>;
+  placeholder: string;
+  setting: { enabled: boolean; cron: string; nextRunAt?: string; lastRunAt?: string };
+  title: string;
+}) {
   const [enabled, setEnabled] = useState(setting.enabled);
   const [cron, setCron] = useState(setting.cron);
+  const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
+    if (dirty) {
+      return;
+    }
     setEnabled(setting.enabled);
     setCron(setting.cron);
-  }, [setting.enabled, setting.cron]);
+  }, [dirty, setting.enabled, setting.cron]);
 
-  const cronValid = isValidCronExpression(cron);
+  const cronValid = isValidCron(cron);
+
+  async function save() {
+    await onSave(enabled, cron.trim());
+    // Persisted: re-mirror server state on the next refresh.
+    setDirty(false);
+  }
 
   return (
     <article className="crunchScheduleCard">
       <div className="rowTop">
         <div>
-          <h3>{task.label}</h3>
+          <h3>{title}</h3>
           <p className="path">
             {setting.enabled
               ? `Scheduled (${setting.cron})${
@@ -219,18 +202,28 @@ function ScheduledTaskCard({
           {setting.enabled ? "On" : "Off"}
         </span>
       </div>
-      <p className="hint">{task.description}</p>
+      {description ? <p className="hint">{description}</p> : null}
       <div className="crunchScheduleControls">
         <label className="crunchToggle">
-          <input checked={enabled} onChange={(event) => setEnabled(event.target.checked)} type="checkbox" />
+          <input
+            checked={enabled}
+            onChange={(event) => {
+              setDirty(true);
+              setEnabled(event.target.checked);
+            }}
+            type="checkbox"
+          />
           <span>Run on a schedule</span>
         </label>
         <label className="field crunchCronField">
           <span>Cron (min hour day month weekday)</span>
           <input
             aria-invalid={!cronValid}
-            onChange={(event) => setCron(event.target.value)}
-            placeholder="*/10 * * * *"
+            onChange={(event) => {
+              setDirty(true);
+              setCron(event.target.value);
+            }}
+            placeholder={placeholder}
             spellCheck={false}
             value={cron}
           />
@@ -239,13 +232,13 @@ function ScheduledTaskCard({
           <button
             className="button secondary"
             disabled={loading || !cronValid}
-            onClick={() => void onSave(task.key, enabled, cron.trim())}
+            onClick={() => void save()}
             title={cronValid ? "Save this schedule" : "Enter a valid 5-field cron expression"}
             type="button"
           >
             Save schedule
           </button>
-          <button className="button" disabled={loading} onClick={() => void onRun(task.key)} type="button">
+          <button className="button" disabled={loading} onClick={() => void onRun()} type="button">
             Run now
           </button>
         </div>
@@ -255,7 +248,10 @@ function ScheduledTaskCard({
           <button
             className={cron.trim() === preset.cron ? "chip selected" : "chip"}
             key={preset.cron}
-            onClick={() => setCron(preset.cron)}
+            onClick={() => {
+              setDirty(true);
+              setCron(preset.cron);
+            }}
             type="button"
           >
             {preset.label}
@@ -263,49 +259,13 @@ function ScheduledTaskCard({
         ))}
       </div>
       {!cronValid ? <p className="crunchError">Not a valid 5-field cron expression.</p> : null}
-      {setting.lastRunAt ? <p className="hint">Last run {new Date(setting.lastRunAt).toLocaleString()}</p> : null}
+      {setting.lastRunAt ? (
+        <p className="hint">
+          {lastRunLabel} {new Date(setting.lastRunAt).toLocaleString()}
+        </p>
+      ) : null}
     </article>
   );
-}
-
-// Lightweight client-side mirror of the server's cron validation, so the Save
-// button can disable on obviously invalid input. The server re-validates.
-function isValidCronExpression(expr: string): boolean {
-  const parts = expr.trim().split(/\s+/);
-  if (parts.length !== 5) {
-    return false;
-  }
-  const bounds: Array<[number, number]> = [
-    [0, 59],
-    [0, 23],
-    [1, 31],
-    [1, 12],
-    [0, 7]
-  ];
-  return parts.every((part, index) => {
-    const [min, max] = bounds[index];
-    return part.split(",").every((entry) => {
-      const stepMatch = /^(.+)\/(\d+)$/.exec(entry);
-      const rangePart = stepMatch ? stepMatch[1] : entry;
-      if (stepMatch && Number(stepMatch[2]) <= 0) {
-        return false;
-      }
-      if (rangePart === "*") {
-        return true;
-      }
-      const range = /^(\d+)-(\d+)$/.exec(rangePart);
-      if (range) {
-        const lo = Number(range[1]);
-        const hi = Number(range[2]);
-        return lo >= min && hi <= max && lo <= hi;
-      }
-      if (/^\d+$/.test(rangePart)) {
-        const value = Number(rangePart);
-        return value >= min && value <= max;
-      }
-      return false;
-    });
-  });
 }
 
 function CrunchRunCard({

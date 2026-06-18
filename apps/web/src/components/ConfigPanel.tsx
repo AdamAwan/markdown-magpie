@@ -18,15 +18,19 @@ export function ConfigPanel({
   const [saving, setSaving] = useState(false);
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [resetting, setResetting] = useState(false);
+  // Once the user touches the controls we stop mirroring server config into local
+  // state, so a background refresh can't reset their pending selection mid-edit.
+  // Saving clears the flag, re-syncing to the freshly persisted values.
+  const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
-    if (!config) {
+    if (!config || dirty) {
       return;
     }
 
     setExecutionMode(config.aiRuntime.executionMode);
     setProvider(config.aiRuntime.provider);
-  }, [config]);
+  }, [config, dirty]);
 
   if (!config) {
     return (
@@ -82,6 +86,8 @@ export function ConfigPanel({
         }
       });
       onConfigChange(result);
+      // Persisted: drop the dirty guard so the panel re-mirrors server values.
+      setDirty(false);
       onMessage("Runtime AI config updated.", "success");
     } catch (error) {
       onMessage(errorMessage(error), "danger");
@@ -108,6 +114,7 @@ export function ConfigPanel({
                   className={executionMode === mode ? "segment active" : "segment"}
                   key={mode}
                   onClick={() => {
+                    setDirty(true);
                     setExecutionMode(mode);
                     const nextProvider = config.aiRuntime.providers.find((item) =>
                       mode === "direct" ? item.supportsDirect : item.supportsQueue
@@ -125,7 +132,13 @@ export function ConfigPanel({
           </div>
           <label className="configControl">
             <span>Provider</span>
-            <select onChange={(event) => setProvider(event.target.value as AiProviderName)} value={selectedProvider}>
+            <select
+              onChange={(event) => {
+                setDirty(true);
+                setProvider(event.target.value as AiProviderName);
+              }}
+              value={selectedProvider}
+            >
               {providerOptions.map((item) => (
                 <option key={item.name} value={item.name}>
                   {item.label}
