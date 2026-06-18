@@ -5,6 +5,7 @@ import { BackgroundEmbedder } from "../platform/background-embedder.js";
 import { BackgroundRunner } from "../platform/background-runner.js";
 import { DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS, InMemoryAiJobQueue } from "../stores/ai-job-queue.js";
 import { InMemoryCrunchStore } from "../stores/crunch-store.js";
+import { InMemoryGapClusterStore } from "../stores/gap-cluster-store.js";
 import { InMemoryKnowledgeIndex } from "../stores/knowledge-index.js";
 import { InMemoryProposalStore } from "../stores/proposal-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
@@ -49,7 +50,8 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
       crunchRuns: new InMemoryCrunchStore(),
       scheduledTasks: new InMemoryScheduledTaskStore(),
       sourceSync: new InMemorySourceSyncStore(),
-      aiJobs: new InMemoryAiJobQueue()
+      aiJobs: new InMemoryAiJobQueue(),
+      gapClusters: new InMemoryGapClusterStore()
     },
     providers: {
       chat: () => stubChat(),

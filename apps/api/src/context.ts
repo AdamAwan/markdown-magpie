@@ -5,6 +5,7 @@ import { BackgroundRunner } from "./platform/background-runner.js";
 import {
   createAiJobQueue,
   createCrunchStore,
+  createGapClusterStore,
   createProposalStore,
   createQuestionLogStore,
   createScheduledTaskStore,
@@ -40,6 +41,7 @@ export interface AppContext {
     scheduledTasks: ReturnType<typeof createScheduledTaskStore>;
     sourceSync: ReturnType<typeof createSourceSyncStore>;
     aiJobs: ReturnType<typeof createAiJobQueue>;
+    gapClusters: ReturnType<typeof createGapClusterStore>;
   };
   providers: {
     chat: (provider: AiProviderName) => ChatProvider;
@@ -96,7 +98,8 @@ export async function createAppContext(): Promise<AppContext> {
       crunchRuns: createCrunchStore(),
       scheduledTasks: createScheduledTaskStore(),
       sourceSync: createSourceSyncStore(),
-      aiJobs: createAiJobQueue(claimTimeoutMs)
+      aiJobs: createAiJobQueue(claimTimeoutMs),
+      gapClusters: createGapClusterStore()
     },
     providers: {
       chat: (provider) => createConfiguredChatProvider(provider),
