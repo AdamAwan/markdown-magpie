@@ -80,9 +80,9 @@ Input:
 | `MCP_RESOURCE_URL` | `http://localhost:<port>/mcp` | Public URL of the `/mcp` endpoint, advertised in the OAuth protected-resource metadata. |
 | `MCP_API_AUTH_TOKEN` | — | Service token used for downstream API calls. Required when `AUTH_REQUIRED=true` (the server fails fast at startup otherwise). |
 
-### Authentication (both transports)
+### Auth variables (both transports)
 
-Auth is off by default and shared with the API via the `@magpie/auth` package. These variables apply only when `AUTH_REQUIRED=true`.
+Auth is off by default and shared with the API via the `@magpie/auth` package. These variables apply only when `AUTH_REQUIRED=true`; the [Authentication](#authentication) section below explains how they are used.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -90,12 +90,12 @@ Auth is off by default and shared with the API via the `@magpie/auth` package. T
 | `AUTH0_ISSUER_BASE_URL` | — | Full Auth0 issuer (e.g. `https://your-tenant.eu.auth0.com`). |
 | `AUTH0_DOMAIN` | — | Alternative to the issuer base; the issuer becomes `https://<domain>/`. |
 | `AUTH0_AUDIENCE` | `https://markdown-magpie.local/api` | API identifier the token must carry. |
-| `AUTH0_JWKS_URI` | `<issuer>.well-known/jwks.json` | Optional JWKS endpoint override. |
+| `AUTH0_JWKS_URI` | `https://<domain>/.well-known/jwks.json` | Optional JWKS endpoint override (derived from the trailing-slash-normalised issuer when unset). |
 | `MCP_AUTH_TOKEN` | — | stdio only: bearer token presented to the API. Required when `AUTH_REQUIRED=true`. |
 
 ## Authentication
 
-Authentication is optional and disabled unless `AUTH_REQUIRED=true`. When disabled, both transports run unauthenticated for local development. When enabled, tokens are validated locally against the Auth0 JWKS — see the [Auth0 design](../docs/superpowers/specs/2026-06-18-auth0-mcp-gating-design.md) for the full model.
+Authentication is optional and disabled unless `AUTH_REQUIRED=true`. When disabled, both transports run unauthenticated for local development. When enabled, tokens are validated locally against the Auth0 JWKS — see the [Auth0 design](superpowers/specs/2026-06-18-auth0-mcp-gating-design.md) for the full model.
 
 ### Streamable HTTP
 
