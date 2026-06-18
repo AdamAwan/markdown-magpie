@@ -55,4 +55,35 @@ describe("embedPendingSections", () => {
     assert.equal(result.embeddedCount, 0);
     assert.equal(result.remaining, 0);
   });
+
+  it("throws (does not infinite-loop) when the provider returns fewer vectors than sections", async () => {
+    const store = fakeStore([
+      { id: "a", text: "alpha" },
+      { id: "b", text: "beta" }
+    ]);
+    // Provider returns a short array (one vector for two sections).
+    const shortProvider: EmbeddingProvider = {
+      async embed() {
+        return [new Array(1536).fill(0)];
+      }
+    };
+
+    await assert.rejects(
+      () => embedPendingSections({ store, provider: shortProvider, batchSize: 10 }),
+      /returned 1 vector\(s\) for 2 section\(s\)/
+    );
+    // Nothing was persisted because the batch was rejected up front.
+    assert.equal(store.saved.size, 0);
+  });
+
+  it("throws when the provider returns an empty vector array", async () => {
+    const store = fakeStore([{ id: "a", text: "alpha" }]);
+    const emptyProvider: EmbeddingProvider = {
+      async embed() {
+        return [];
+      }
+    };
+
+    await assert.rejects(() => embedPendingSections({ store, provider: emptyProvider, batchSize: 10 }));
+  });
 });

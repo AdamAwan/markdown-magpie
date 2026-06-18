@@ -31,9 +31,23 @@ export async function embedPendingSections(options: EmbedPendingOptions): Promis
     }
 
     const vectors = await options.provider.embed(pending.map((section) => section.text));
+    if (vectors.length !== pending.length) {
+      throw new Error(
+        `Embedding provider returned ${vectors.length} vector(s) for ${pending.length} section(s); refusing to embed a mismatched batch`
+      );
+    }
+
+    let embeddedThisPass = 0;
     for (let i = 0; i < pending.length; i += 1) {
       await options.store.saveSectionEmbedding(pending[i].id, vectors[i]);
       embeddedCount += 1;
+      embeddedThisPass += 1;
+    }
+
+    // Guard against an infinite loop: if a full pass made no progress (e.g. the
+    // store keeps returning the same sections), stop rather than spin forever.
+    if (embeddedThisPass === 0) {
+      break;
     }
   }
 
