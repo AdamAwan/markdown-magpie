@@ -6,7 +6,7 @@ export interface ParsedMarkdown {
 }
 
 export function parseMarkdownDocument(content: string): ParsedMarkdown {
-  const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n?/);
+  const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
   const rawFrontmatter = frontmatterMatch?.[1] ?? "";
   const body = frontmatterMatch ? content.slice(frontmatterMatch[0].length) : content;
 
@@ -20,26 +20,46 @@ export function splitIntoSections(document: KnowledgeDocument): DocumentSection[
   const parsed = parseMarkdownDocument(document.content);
   const lines = parsed.body.split(/\r?\n/);
   const sections: DocumentSection[] = [];
-  const headingStack: string[] = [];
+  const headingStack: Array<string | undefined> = [];
+  const usedAnchors = new Set<string>();
   let currentHeading = parsed.metadata.title;
-  let currentLevel = 1;
   let currentLines: string[] = [];
   let ordinal = 0;
+  let inFence = false;
+
+  const uniqueAnchor = (base: string, ordinalForFallback: number): string => {
+    let anchor = base || `section-${ordinalForFallback}`;
+    if (usedAnchors.has(anchor)) {
+      let suffix = 2;
+      while (usedAnchors.has(`${anchor}-${suffix}`)) {
+        suffix += 1;
+      }
+      anchor = `${anchor}-${suffix}`;
+    }
+    usedAnchors.add(anchor);
+    return anchor;
+  };
 
   const flush = () => {
     const content = currentLines.join("\n").trim();
-    if (!content) {
+    // A heading with no body still emits a section so it stays visible to
+    // retrieval; only truly empty (heading-less, body-less) buffers are skipped.
+    const hasHeadingLine = currentLines.some((line) => /^(#{1,6})\s+(.+)$/.test(line));
+    if (!content && !hasHeadingLine) {
       return;
     }
 
-    const headingPath = headingStack.length > 0 ? [...headingStack] : [currentHeading];
+    // Compact the stack so a doc starting at `##` (a hole at index 0) does not
+    // produce a leading "-" in the joined heading path / anchor.
+    const compactedStack = headingStack.filter((entry): entry is string => entry !== undefined);
+    const headingPath = compactedStack.length > 0 ? compactedStack : [currentHeading];
     sections.push({
       id: `${document.id}:${ordinal}`,
       documentId: document.id,
       path: document.path,
       heading: currentHeading,
       headingPath,
-      anchor: slugify(headingPath.join("-")),
+      anchor: uniqueAnchor(slugify(headingPath.join("-")), ordinal),
       content,
       ordinal
     });
@@ -47,11 +67,17 @@ export function splitIntoSections(document: KnowledgeDocument): DocumentSection[
   };
 
   for (const line of lines) {
-    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      currentLines.push(line);
+      continue;
+    }
+
+    const heading = inFence ? null : /^(#{1,6})\s+(.+)$/.exec(line);
     if (heading) {
       flush();
       currentLines = [line];
-      currentLevel = heading[1].length;
+      const currentLevel = heading[1].length;
       currentHeading = heading[2].trim();
       headingStack.splice(currentLevel - 1);
       headingStack[currentLevel - 1] = currentHeading;
