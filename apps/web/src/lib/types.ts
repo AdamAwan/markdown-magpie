@@ -1,12 +1,21 @@
 export type Confidence = "high" | "medium" | "low" | "unknown";
 export type Feedback = "helpful" | "unhelpful";
-export type ConsoleSection = "ask" | "knowledge" | "gaps" | "jobs" | "proposals" | "crunch" | "config" | "dataflow";
+export type ConsoleSection = "ask" | "knowledge" | "gaps" | "jobs" | "proposals" | "crunch" | "prompts" | "config" | "dataflow";
 export type AiExecutionMode = "direct" | "queue";
 export type AiProviderName = "mock" | "openai-compatible" | "azure-openai" | "codex" | "claude";
 
 export interface Health {
   ok: boolean;
   service: string;
+}
+
+export interface PromptSummary {
+  id: string;
+  title: string;
+  description: string;
+  usedBy: string[];
+  outputShape: string;
+  instructions: string;
 }
 
 export interface KnowledgeStats {

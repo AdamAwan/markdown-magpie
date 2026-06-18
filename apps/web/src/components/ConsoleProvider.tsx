@@ -14,6 +14,7 @@ import {
   IndexRepositoryResponse,
   KnowledgeDocument,
   KnowledgeStats,
+  PromptSummary,
   Proposal,
   QuestionLog,
   RepositoryRef,
@@ -48,6 +49,7 @@ function useConsoleController() {
   const [crunchRuns, setCrunchRuns] = useState<CrunchRun[]>([]);
   const [crunchSettings, setCrunchSettings] = useState<CrunchSettings[]>([]);
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
+  const [prompts, setPrompts] = useState<PromptSummary[]>([]);
   const [config, setConfig] = useState<RuntimeConfig | undefined>();
   const [selectedProposalId, setSelectedProposalId] = useState<string | undefined>();
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | undefined>();
@@ -148,7 +150,7 @@ function useConsoleController() {
       clearMessage();
     }
     try {
-      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, proposalsResult, crunchRunsResult, crunchSettingsResult, scheduledTasksResult, configResult] = await Promise.all([
+      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, proposalsResult, crunchRunsResult, crunchSettingsResult, scheduledTasksResult, configResult, promptsResult] = await Promise.all([
         apiGet<Health>("/health"),
         apiGet<KnowledgeStats>("/knowledge/stats"),
         apiGet<{ repositories: RepositoryRef[] }>("/repositories"),
@@ -161,7 +163,8 @@ function useConsoleController() {
         apiGet<{ runs: CrunchRun[] }>("/crunch/runs?limit=12"),
         apiGet<{ settings: CrunchSettings[] }>("/crunch/settings"),
         apiGet<{ tasks: ScheduledTask[] }>("/scheduled-tasks"),
-        apiGet<RuntimeConfig>("/config")
+        apiGet<RuntimeConfig>("/config"),
+        apiGet<{ prompts: PromptSummary[] }>("/prompts")
       ]);
 
       setHealth(healthResult);
@@ -176,6 +179,7 @@ function useConsoleController() {
       setCrunchRuns(crunchRunsResult.runs);
       setCrunchSettings(crunchSettingsResult.settings);
       setScheduledTasks(scheduledTasksResult.tasks);
+      setPrompts(promptsResult.prompts);
       setConfig(configResult);
       setSelectedProposalId((current) => current ?? proposalsResult.proposals[0]?.id);
       setSelectedDocumentId((current) =>
@@ -472,6 +476,7 @@ function useConsoleController() {
     crunchRuns,
     crunchSettings,
     scheduledTasks,
+    prompts,
     config,
     selectedProposalId,
     selectedDocumentId,

@@ -17,6 +17,7 @@ export const SECTION_NAV: SectionNav[] = [
   { section: "jobs", path: "/jobs", glyph: "J", label: "Jobs" },
   { section: "proposals", path: "/proposals", glyph: "P", label: "Proposals" },
   { section: "crunch", path: "/crunch", glyph: "Cr", label: "Crunch" },
+  { section: "prompts", path: "/prompts", glyph: "Pr", label: "Prompts" },
   { section: "dataflow", path: "/dataflow", glyph: "D", label: "Data Flow" },
   { section: "config", path: "/config", glyph: "C", label: "Config" }
 ];
