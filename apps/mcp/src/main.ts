@@ -3,6 +3,32 @@ import { askQuestion, getJson, stringArgument, submitFeedback } from "./kb-clien
 
 type JsonRpcId = string | number | null;
 
+// Bearer token the stdio transport presents to the API on every call. Distinct
+// from the HTTP transport's MCP_API_AUTH_TOKEN service token. Undefined when
+// AUTH_REQUIRED is unset/false, which keeps local-dev calls unauthenticated.
+const stdioAuthToken = process.env.MCP_AUTH_TOKEN;
+
+// Validates that a stdio token is present when auth is required. Pure (operates
+// on a supplied env object) so the guard is unit-testable without spawning the
+// process; returns the token to use, or throws a clear message that the startup
+// path turns into a non-zero exit.
+export function resolveStdioAuthToken(env: NodeJS.ProcessEnv): string | undefined {
+  const authRequired = env.AUTH_REQUIRED === "true";
+  const token = env.MCP_AUTH_TOKEN;
+  if (authRequired && !token) {
+    throw new Error("MCP_AUTH_TOKEN is required when AUTH_REQUIRED=true for stdio MCP.");
+  }
+
+  return token;
+}
+
+try {
+  resolveStdioAuthToken(process.env);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : "Invalid stdio MCP auth configuration.");
+  process.exit(1);
+}
+
 interface JsonRpcRequest {
   jsonrpc: "2.0";
   id?: JsonRpcId;
@@ -187,7 +213,7 @@ async function dispatch(message: JsonRpcRequest): Promise<unknown> {
 async function callTool(params: ToolCallParams): Promise<unknown> {
   if (params.name === "kb.ask") {
     const question = stringArgument(params.arguments, "question");
-    const answer = await askQuestion(question);
+    const answer = await askQuestion(question, { token: stdioAuthToken });
     return textResult(answer);
   }
 
@@ -195,12 +221,12 @@ async function callTool(params: ToolCallParams): Promise<unknown> {
     const query = stringArgument(params.arguments, "query");
     const limit = numberArgument(params.arguments, "limit");
     const path = limit === undefined ? `/knowledge/search?q=${encodeURIComponent(query)}` : `/knowledge/search?q=${encodeURIComponent(query)}&limit=${limit}`;
-    const result = await getJson(path);
+    const result = await getJson(path, { token: stdioAuthToken });
     return textResult(result);
   }
 
   if (params.name === "kb.feedback") {
-    const result = await submitFeedback(params.arguments);
+    const result = await submitFeedback(params.arguments, { token: stdioAuthToken });
     return textResult(result);
   }
 
