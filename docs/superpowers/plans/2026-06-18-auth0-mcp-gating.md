@@ -87,9 +87,17 @@ halves match.
   - Docs quality review found a broken design-doc link (404) + minor polish; fixed
     in `4b3892a` (corrected relative link, disambiguated the two auth sections,
     clarified the JWKS default URL). Re-review: ✅ fixes confirmed.
-
-**In progress:**
-- Task 7 Full Verification.
+- Task 7 Full Verification — complete. All repo checks green; no fixes were needed
+  (no verification commit).
+  - Focused: `@magpie/auth` 6/0, `@magpie/api` (`src/app.test.ts`) 124/0,
+    `@magpie/mcp` 16/0.
+  - `npm run typecheck` → exit 0.
+  - `npm run lint` → 0 errors (5 pre-existing `any` warnings in
+    `packages/retrieval/src/embeddings.test.ts`, unrelated to this work).
+  - `npm run test` (all workspaces) → 195 pass / 0 fail (api 124, mcp 16, auth 6,
+    markdown 11, prompts 13, retrieval 25).
+  - `npm run build` → exit 0 (all workspaces incl. the Next.js web app; `@magpie/auth`
+    builds before `@magpie/api`/`@magpie/mcp`).
 
 **Known note:** `npm run typecheck -w @magpie/api` reports pre-existing package-local
 `rootDir` (TS6059) errors for sibling workspace imports, present on clean HEAD and
@@ -846,7 +854,7 @@ git commit -m "docs: document auth0 configuration"
 **Files:**
 - All changed files.
 
-- [ ] **Step 1: Run focused tests**
+- [x] **Step 1: Run focused tests**
 
 ```bash
 npm run test -w @magpie/auth
@@ -856,7 +864,7 @@ npm run test -w @magpie/mcp
 
 Expected: all PASS.
 
-- [ ] **Step 2: Run repo checks**
+- [x] **Step 2: Run repo checks**
 
 ```bash
 npm run typecheck
@@ -866,7 +874,7 @@ npm run test
 
 Expected: all PASS.
 
-- [ ] **Step 3: Build**
+- [x] **Step 3: Build**
 
 ```bash
 npm run build
@@ -874,7 +882,7 @@ npm run build
 
 Expected: all workspaces build successfully.
 
-- [ ] **Step 4: Commit any verification fixes**
+- [x] **Step 4: Commit any verification fixes**
 
 If verification required code changes:
 
