@@ -33,14 +33,26 @@
     `as unknown` double-casts via Hono `ContextVariableMap`; rethrow non-`AuthError`
     instead of a dead catch branch). Re-review: ✅ approved.
   - Verified: `npm run test -w @magpie/api -- src/app.test.ts` → 124 pass / 0 fail.
+- Task 3 Web Auth0 Login and API Token Injection — complete, passed both review gates.
+  - `7a7d7c5 feat(web): add auth0 login and api tokens`
+  - Spec review: ✅ disabled-auth path is byte-identical to today; `AuthActions`
+    only mounts when auth is configured (guarded via `authConfiguredFromWindow()`,
+    same `domain && clientId && audience` predicate as `AuthProvider`).
+  - Code quality review: ✅ ready to merge. No banned casts/`any`; `Window`
+    augmentation is a proper `declare global` merge; token fetch is lazy per-request.
+  - Verified: `npm run typecheck -w @magpie/web` passes.
+
+**Follow-up to decide alongside Task 4:** if `getAccessTokenSilently()` rejects
+(expired session / refresh hiccup), `authHeaders` currently rejects the whole API
+call rather than degrading to a re-auth prompt. Acceptable for now (API will 401
+anyway once MCP/API rejection lands), but Task 4 should settle the agreed UX so both
+halves match.
 
 **In progress:**
 
-- Task 3 Web Auth0 Login and API Token Injection.
+- Task 4 HTTP MCP Authorization.
 
 **Not started:**
-
-- Task 4 HTTP MCP Authorization.
 - Task 5 stdio MCP Token Handling.
 - Task 6 Env and Docs.
 - Task 7 Full Verification.
@@ -435,7 +447,7 @@ git commit -m "feat(api): gate routes with auth0 scopes"
 - Modify: `apps/web/src/components/AppShell.tsx`
 - Modify: `apps/web/src/lib/api.ts`
 
-- [ ] **Step 1: Write the failing typecheck target**
+- [x] **Step 1: Write the failing typecheck target**
 
 Run:
 
@@ -445,7 +457,7 @@ npm run typecheck -w @magpie/web
 
 Expected before edits: PASS. After adding the imports in Step 2 before the provider exists, it should fail.
 
-- [ ] **Step 2: Add the intended provider usage**
+- [x] **Step 2: Add the intended provider usage**
 
 Modify `apps/web/src/app/layout.tsx` to wrap `ConsoleProvider` with `<AuthProvider config={runtimeConfig.auth}>`. Extend the injected runtime config with:
 
@@ -458,7 +470,7 @@ auth: {
 }
 ```
 
-- [ ] **Step 3: Verify typecheck fails**
+- [x] **Step 3: Verify typecheck fails**
 
 Run:
 
@@ -468,7 +480,7 @@ npm run typecheck -w @magpie/web
 
 Expected: FAIL because `AuthProvider` is not implemented.
 
-- [ ] **Step 4: Implement `AuthProvider`**
+- [x] **Step 4: Implement `AuthProvider`**
 
 Create `apps/web/src/components/AuthProvider.tsx`:
 
@@ -514,7 +526,7 @@ function AuthTokenBridge({ children }: { children: ReactNode }) {
 }
 ```
 
-- [ ] **Step 5: Update API token injection**
+- [x] **Step 5: Update API token injection**
 
 In `apps/web/src/lib/api.ts`, add:
 
@@ -536,7 +548,7 @@ async function authHeaders(headers: Record<string, string> = {}): Promise<Record
 
 Use `await authHeaders()` in `apiGet`, `apiPost`, and `apiDelete`.
 
-- [ ] **Step 6: Add identity controls**
+- [x] **Step 6: Add identity controls**
 
 In `apps/web/src/components/AppShell.tsx`, use `useAuth0` only inside a small child component so the app still renders when auth is disabled:
 
@@ -556,7 +568,7 @@ function AuthActions() {
 
 Render it in `.topActions`.
 
-- [ ] **Step 7: Run web typecheck**
+- [x] **Step 7: Run web typecheck**
 
 Run:
 
@@ -566,7 +578,7 @@ npm run typecheck -w @magpie/web
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add apps/web package-lock.json apps/web/package.json
