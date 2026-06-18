@@ -27,6 +27,22 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     return result.rows[0] ? Number(result.rows[0].revision) : 0;
   }
 
+  async gapIdsForSummary(summary: string, flowId?: string): Promise<string[]> {
+    const result = await this.pool.query<{ id: string }>(
+      `
+        SELECT qg.id::text AS id
+        FROM question_gaps qg
+        JOIN questions q ON q.id = qg.question_id
+        WHERE qg.resolved_at IS NULL
+          AND qg.summary = $1
+          AND coalesce(q.flow_id, '') = coalesce($2, '')
+        ORDER BY qg.id ASC
+      `,
+      [summary, flowId ?? null]
+    );
+    return result.rows.map((row) => row.id);
+  }
+
   async record(input: QuestionLogInput): Promise<QuestionLog> {
     const id = randomUUID();
     const client = await this.pool.connect();
