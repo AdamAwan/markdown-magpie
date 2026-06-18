@@ -1,5 +1,6 @@
 import type { AnswerResult, ChatProvider, ChatResponse, Citation, ChatRequest, Confidence, DocumentSection, FlowRouteDecision, KnowledgeGapSignal, RankedSection } from "@magpie/core";
 import { ANSWER_QUESTION, ROUTE_QUESTION_TO_FLOW, withPersona } from "@magpie/prompts";
+import { DEFAULT_CHAT_TIMEOUT_MS, fetchWithTimeout } from "./http.js";
 
 export interface SectionSearchProvider {
   search(question: string, limit: number, repositoryIds?: string[]): Promise<RankedSection[]>;
@@ -22,6 +23,7 @@ export interface ChatProviderConfig {
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
+  timeoutMs?: number;
 }
 
 export class MockChatProvider implements ChatProvider {
@@ -47,24 +49,32 @@ export class MockChatProvider implements ChatProvider {
 }
 
 export class OpenAICompatibleChatProvider implements ChatProvider {
-  constructor(private readonly config: Required<Pick<ChatProviderConfig, "apiKey" | "baseUrl" | "model">>) {}
+  constructor(
+    private readonly config: Required<Pick<ChatProviderConfig, "apiKey" | "baseUrl" | "model">>,
+    private readonly timeoutMs: number = DEFAULT_CHAT_TIMEOUT_MS
+  ) {}
 
   async complete(request: ChatRequest): Promise<ChatResponse> {
-    const response = await fetch(`${trimTrailingSlash(this.config.baseUrl)}/chat/completions`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.config.apiKey}`,
-        "content-type": "application/json"
+    const response = await fetchWithTimeout(
+      `${trimTrailingSlash(this.config.baseUrl)}/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.config.apiKey}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          model: this.config.model,
+          messages: [
+            { role: "system", content: request.system },
+            ...request.messages
+          ],
+          temperature: 0.2
+        })
       },
-      body: JSON.stringify({
-        model: this.config.model,
-        messages: [
-          { role: "system", content: request.system },
-          ...request.messages
-        ],
-        temperature: 0.2
-      })
-    });
+      this.timeoutMs,
+      "Chat provider"
+    );
 
     return parseChatCompletionResponse(response);
   }
@@ -74,27 +84,33 @@ export class AzureOpenAIChatProvider implements ChatProvider {
   constructor(
     private readonly config: Required<
       Pick<ChatProviderConfig, "apiKey" | "azureEndpoint" | "azureDeployment" | "azureApiVersion">
-    >
+    >,
+    private readonly timeoutMs: number = DEFAULT_CHAT_TIMEOUT_MS
   ) {}
 
   async complete(request: ChatRequest): Promise<ChatResponse> {
     const endpoint = trimTrailingSlash(this.config.azureEndpoint);
     const deployment = encodeURIComponent(this.config.azureDeployment);
     const apiVersion = encodeURIComponent(this.config.azureApiVersion);
-    const response = await fetch(`${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`, {
-      method: "POST",
-      headers: {
-        "api-key": this.config.apiKey,
-        "content-type": "application/json"
+    const response = await fetchWithTimeout(
+      `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`,
+      {
+        method: "POST",
+        headers: {
+          "api-key": this.config.apiKey,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          messages: [
+            { role: "system", content: request.system },
+            ...request.messages
+          ],
+          temperature: 0.2
+        })
       },
-      body: JSON.stringify({
-        messages: [
-          { role: "system", content: request.system },
-          ...request.messages
-        ],
-        temperature: 0.2
-      })
-    });
+      this.timeoutMs,
+      "Chat provider"
+    );
 
     return parseChatCompletionResponse(response);
   }
@@ -105,23 +121,29 @@ export function createChatProvider(config: ChatProviderConfig): ChatProvider {
     assertConfig(config.apiKey, "OPENAI_COMPATIBLE_API_KEY");
     assertConfig(config.baseUrl, "OPENAI_COMPATIBLE_BASE_URL");
     assertConfig(config.model, "OPENAI_COMPATIBLE_MODEL");
-    return new OpenAICompatibleChatProvider({
-      apiKey: config.apiKey,
-      baseUrl: config.baseUrl,
-      model: config.model
-    });
+    return new OpenAICompatibleChatProvider(
+      {
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: config.model
+      },
+      config.timeoutMs ?? DEFAULT_CHAT_TIMEOUT_MS
+    );
   }
 
   if (config.provider === "azure-openai") {
     assertConfig(config.apiKey, "AZURE_OPENAI_API_KEY");
     assertConfig(config.azureEndpoint, "AZURE_OPENAI_ENDPOINT");
     assertConfig(config.azureDeployment, "AZURE_OPENAI_CHAT_DEPLOYMENT");
-    return new AzureOpenAIChatProvider({
-      apiKey: config.apiKey,
-      azureEndpoint: config.azureEndpoint,
-      azureDeployment: config.azureDeployment,
-      azureApiVersion: config.azureApiVersion ?? "2024-10-21"
-    });
+    return new AzureOpenAIChatProvider(
+      {
+        apiKey: config.apiKey,
+        azureEndpoint: config.azureEndpoint,
+        azureDeployment: config.azureDeployment,
+        azureApiVersion: config.azureApiVersion ?? "2024-10-21"
+      },
+      config.timeoutMs ?? DEFAULT_CHAT_TIMEOUT_MS
+    );
   }
 
   return new MockChatProvider();

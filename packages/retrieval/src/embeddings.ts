@@ -1,4 +1,5 @@
 import type { EmbeddingProvider } from "@magpie/core";
+import { DEFAULT_EMBEDDING_TIMEOUT_MS, fetchWithTimeout } from "./http.js";
 
 export const EMBEDDING_DIMENSIONS = 1536;
 
@@ -12,6 +13,7 @@ export interface EmbeddingProviderConfig {
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
+  timeoutMs?: number;
 }
 
 export class MockEmbeddingProvider implements EmbeddingProvider {
@@ -27,17 +29,25 @@ export class MockEmbeddingProvider implements EmbeddingProvider {
 }
 
 export class OpenAICompatibleEmbeddingProvider implements EmbeddingProvider {
-  constructor(private readonly config: Required<Pick<EmbeddingProviderConfig, "apiKey" | "baseUrl" | "model">>) {}
+  constructor(
+    private readonly config: Required<Pick<EmbeddingProviderConfig, "apiKey" | "baseUrl" | "model">>,
+    private readonly timeoutMs: number = DEFAULT_EMBEDDING_TIMEOUT_MS
+  ) {}
 
   async embed(texts: string[]): Promise<number[][]> {
-    const response = await fetch(`${trimTrailingSlash(this.config.baseUrl)}/embeddings`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.config.apiKey}`,
-        "content-type": "application/json"
+    const response = await fetchWithTimeout(
+      `${trimTrailingSlash(this.config.baseUrl)}/embeddings`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.config.apiKey}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ model: this.config.model, input: texts })
       },
-      body: JSON.stringify({ model: this.config.model, input: texts })
-    });
+      this.timeoutMs,
+      "Embedding provider"
+    );
 
     return parseEmbeddingResponse(response, texts.length);
   }
@@ -47,14 +57,15 @@ export class AzureOpenAIEmbeddingProvider implements EmbeddingProvider {
   constructor(
     private readonly config: Required<
       Pick<EmbeddingProviderConfig, "apiKey" | "azureEndpoint" | "azureDeployment" | "azureApiVersion">
-    >
+    >,
+    private readonly timeoutMs: number = DEFAULT_EMBEDDING_TIMEOUT_MS
   ) {}
 
   async embed(texts: string[]): Promise<number[][]> {
     const endpoint = trimTrailingSlash(this.config.azureEndpoint);
     const deployment = encodeURIComponent(this.config.azureDeployment);
     const apiVersion = encodeURIComponent(this.config.azureApiVersion);
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `${endpoint}/openai/deployments/${deployment}/embeddings?api-version=${apiVersion}`,
       {
         method: "POST",
@@ -63,7 +74,9 @@ export class AzureOpenAIEmbeddingProvider implements EmbeddingProvider {
           "content-type": "application/json"
         },
         body: JSON.stringify({ input: texts })
-      }
+      },
+      this.timeoutMs,
+      "Embedding provider"
     );
 
     return parseEmbeddingResponse(response, texts.length);
@@ -75,23 +88,29 @@ export function createEmbeddingProvider(config: EmbeddingProviderConfig): Embedd
     assertConfig(config.apiKey, "OPENAI_COMPATIBLE_API_KEY");
     assertConfig(config.baseUrl, "OPENAI_COMPATIBLE_BASE_URL");
     assertConfig(config.model, "OPENAI_COMPATIBLE_EMBEDDING_MODEL");
-    return new OpenAICompatibleEmbeddingProvider({
-      apiKey: config.apiKey,
-      baseUrl: config.baseUrl,
-      model: config.model
-    });
+    return new OpenAICompatibleEmbeddingProvider(
+      {
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: config.model
+      },
+      config.timeoutMs ?? DEFAULT_EMBEDDING_TIMEOUT_MS
+    );
   }
 
   if (config.provider === "azure-openai") {
     assertConfig(config.apiKey, "AZURE_OPENAI_API_KEY");
     assertConfig(config.azureEndpoint, "AZURE_OPENAI_ENDPOINT");
     assertConfig(config.azureDeployment, "AZURE_OPENAI_EMBEDDING_DEPLOYMENT");
-    return new AzureOpenAIEmbeddingProvider({
-      apiKey: config.apiKey,
-      azureEndpoint: config.azureEndpoint,
-      azureDeployment: config.azureDeployment,
-      azureApiVersion: config.azureApiVersion ?? "2024-10-21"
-    });
+    return new AzureOpenAIEmbeddingProvider(
+      {
+        apiKey: config.apiKey,
+        azureEndpoint: config.azureEndpoint,
+        azureDeployment: config.azureDeployment,
+        azureApiVersion: config.azureApiVersion ?? "2024-10-21"
+      },
+      config.timeoutMs ?? DEFAULT_EMBEDDING_TIMEOUT_MS
+    );
   }
 
   return new MockEmbeddingProvider();

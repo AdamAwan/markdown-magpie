@@ -16,6 +16,23 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+// A hung git subprocess (e.g. a credential prompt on a misconfigured remote) or
+// a stalled GitHub connection would otherwise block indexing and the PR poller
+// indefinitely; large diffs/clones could also blow past execFile's 1 MB default
+// stdout buffer. These bounds are configurable for unusually large repos.
+const GIT_SUBPROCESS_TIMEOUT_MS = positiveIntFromEnv("GIT_TIMEOUT_MS", 120_000);
+const GIT_SUBPROCESS_MAX_BUFFER = positiveIntFromEnv("GIT_MAX_BUFFER_BYTES", 64 * 1024 * 1024);
+const GITHUB_API_TIMEOUT_MS = positiveIntFromEnv("GITHUB_API_TIMEOUT_MS", 30_000);
+
+function positiveIntFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export interface RepositorySyncResult {
   repository: RepositoryRef;
   headSha?: string;
@@ -181,7 +198,7 @@ export async function raisePullRequest(request: RaisePullRequestRequest): Promis
     return undefined;
   }
 
-  const response = await fetch(`https://api.github.com/repos/${slug.owner}/${slug.repo}/pulls`, {
+  const response = await githubFetch(`https://api.github.com/repos/${slug.owner}/${slug.repo}/pulls`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -233,7 +250,7 @@ export async function fetchPullRequestStatus(pullRequestUrl: string | undefined)
     return undefined;
   }
 
-  const response = await fetch(
+  const response = await githubFetch(
     `https://api.github.com/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`,
     {
       headers: {
@@ -495,11 +512,26 @@ async function resolveBaseRef(root: string, repository: RepositoryRef): Promise<
   return defaultBranch;
 }
 
+// GitHub REST call with an abort-based timeout so the PR poller can't hang on a
+// stalled connection. The TimeoutError is rethrown as a readable message.
+async function githubFetch(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new Error(`GitHub request timed out after ${GITHUB_API_TIMEOUT_MS}ms`);
+    }
+    throw error;
+  }
+}
+
 async function git(cwd: string, args: string[], env?: Partial<NodeJS.ProcessEnv>): Promise<string> {
   try {
     const result = await execFileAsync("git", args, {
       cwd,
-      env: env ? { ...process.env, ...env } : process.env
+      env: env ? { ...process.env, ...env } : process.env,
+      timeout: GIT_SUBPROCESS_TIMEOUT_MS,
+      maxBuffer: GIT_SUBPROCESS_MAX_BUFFER
     });
     return result.stdout;
   } catch (error) {
