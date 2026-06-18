@@ -7,6 +7,7 @@ import type {
   CrunchRunTrigger
 } from "@magpie/core";
 import { buildMockCrunchPlan } from "@magpie/core";
+import { CRUNCH_KNOWLEDGE_BASE } from "@magpie/prompts";
 import { LocalGitProposalPublisher } from "@magpie/git";
 import type { AppContext } from "../../context.js";
 import { DEFAULT_CRUNCH_CRON } from "../../stores/crunch-store.js";
@@ -99,13 +100,7 @@ export async function crunchKnowledgeBaseDirect(
   }
 
   const response = await ctx.providers.chat(ctx.config.get().aiProvider).complete({
-    system:
-      "You tidy a fragmented Markdown knowledge base by proposing structural maintenance only. " +
-      "Consolidate overlapping or tiny documents and split large multi-topic documents. Preserve all information. " +
-      'Return JSON only with this shape: {"summary":"string","operations":[{"kind":"consolidate|split|rewrite",' +
-      '"title":"string","reason":"string","sources":["path"],"writes":[{"path":"string","content":"string"}],' +
-      '"deletes":["path"]}],"rationale":"string"}. Use existing document paths exactly. ' +
-      "If the knowledge base is already tidy, return an empty operations array.",
+    system: CRUNCH_KNOWLEDGE_BASE.instructions,
     messages: [
       {
         role: "user",

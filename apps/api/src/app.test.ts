@@ -58,3 +58,19 @@ test("GET /api/questions/bogus returns 404 question_not_found", async () => {
   assert.equal(res.status, 404);
   assert.deepEqual(await res.json(), { error: "question_not_found" });
 });
+
+test("GET /api/prompts returns the catalog", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/prompts");
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { prompts: Array<Record<string, unknown>> };
+  assert.equal(body.prompts.length, 8);
+  for (const prompt of body.prompts) {
+    assert.equal(typeof prompt.id, "string");
+    assert.equal(typeof prompt.title, "string");
+    assert.equal(typeof prompt.description, "string");
+    assert.equal(typeof prompt.outputShape, "string");
+    assert.equal(typeof prompt.instructions, "string");
+    assert.ok(Array.isArray(prompt.usedBy));
+  }
+});

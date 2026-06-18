@@ -16,6 +16,9 @@ export function sectionTitle(section: ConsoleSection): string {
   if (section === "crunch") {
     return "Keep the knowledge base tidy";
   }
+  if (section === "prompts") {
+    return "Browse AI prompts";
+  }
   if (section === "dataflow") {
     return "System data flow and architecture";
   }
@@ -41,6 +44,9 @@ export function sectionSubtitle(section: ConsoleSection): string {
   }
   if (section === "crunch") {
     return "Schedule an AI pass that consolidates overlapping docs and splits bloated ones, then review and publish the tidy as a branch.";
+  }
+  if (section === "prompts") {
+    return "Read the exact instruction text sent to the AI for each job type, and where each prompt is used.";
   }
   if (section === "dataflow") {
     return "Understand how Markdown, embeddings, questions, and proposals flow through the system.";

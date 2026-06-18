@@ -1,21 +1,21 @@
 {
-  "name": "@magpie/watcher",
+  "name": "@magpie/prompts",
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
-    "dev": "node --env-file=../../.env --import tsx src/main.ts",
     "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/main.js",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@magpie/core": "file:../../packages/core",
-    "@magpie/prompts": "file:../../packages/prompts",
-    "tsx": "^4.22.4"
+    "@magpie/core": "file:../core"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
+    "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }
 }

@@ -14,6 +14,7 @@ import type {
 } from "@magpie/core";
 import { buildMockCrunchPlan, resolveProposalTargetPath } from "@magpie/core";
 import { buildPrompt, parseJobOutput } from "./job-prompts.js";
+import { JOB_RUNNER_SYSTEM } from "@magpie/prompts";
 
 const apiBaseUrl = trimTrailingSlash(process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/api$/, "");
 const watcherName = process.env.WATCHER_NAME ?? "local-dev-watcher";
@@ -156,7 +157,7 @@ class OpenAICompatibleAgentRunner implements AgentRunner {
         messages: [
           {
             role: "system",
-            content: "You complete Markdown Magpie AI jobs. Return only valid JSON matching the requested schema."
+            content: JOB_RUNNER_SYSTEM.instructions
           },
           {
             role: "user",
