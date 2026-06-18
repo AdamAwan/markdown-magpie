@@ -143,6 +143,7 @@ export class InMemoryKnowledgeIndex {
     }
 
     this.repositories.set(repository.id, repository);
+    this.pruneRepository(repository.id, new Set(documents.map((document) => document.id)));
     for (const document of documents) {
       this.documents.set(document.id, document);
     }
@@ -192,6 +193,9 @@ export class InMemoryKnowledgeIndex {
     }
 
     this.repositories.set(repository.id, repository);
+    // Prune docs/sections for files no longer in the set, then drop stale
+    // sections for the surviving documents before re-inserting the fresh ones.
+    this.pruneRepository(repository.id, new Set(documents.map((document) => document.id)));
     for (const document of documents) {
       this.documents.set(document.id, document);
       for (const [sectionId, section] of this.sections) {
@@ -300,6 +304,24 @@ export class InMemoryKnowledgeIndex {
       documentCount: this.documents.size,
       sectionCount: this.sections.size
     };
+  }
+
+  // Drops previously-indexed documents (and their sections) for a repository
+  // that are absent from the freshly-indexed set, so re-indexing a source whose
+  // files were deleted doesn't leave stale docs/sections behind.
+  private pruneRepository(repositoryId: string, keepDocumentIds: Set<string>): void {
+    for (const [documentId, document] of this.documents) {
+      if (document.repositoryId !== repositoryId || keepDocumentIds.has(documentId)) {
+        continue;
+      }
+
+      this.documents.delete(documentId);
+      for (const [sectionId, section] of this.sections) {
+        if (section.documentId === documentId) {
+          this.sections.delete(sectionId);
+        }
+      }
+    }
   }
 
   reset(): void {

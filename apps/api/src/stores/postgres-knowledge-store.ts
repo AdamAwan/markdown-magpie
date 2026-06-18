@@ -82,6 +82,14 @@ export class PostgresKnowledgeStore implements KnowledgePersistence, SectionVect
         await client.query("DELETE FROM document_sections WHERE document_id = $1", [document.id]);
       }
 
+      // Prune documents (cascading to their sections) for source files that no
+      // longer exist in the repository, so a re-index doesn't leave stale docs
+      // behind. The incoming set is authoritative for this repository.
+      await client.query(
+        "DELETE FROM documents WHERE repository_id = $1 AND path <> ALL($2::text[])",
+        [summary.repository.id, documents.map((document) => document.path)]
+      );
+
       for (const section of sections) {
         await client.query(
           `

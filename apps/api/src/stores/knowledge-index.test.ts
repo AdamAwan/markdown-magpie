@@ -92,6 +92,29 @@ describe("InMemoryKnowledgeIndex.search", () => {
     assert.ok(scoped.every((r) => r.section.id.startsWith("repoA:")));
   });
 
+  it("prunes documents removed from the source set on re-index", async () => {
+    const index = new InMemoryKnowledgeIndex();
+    await index.indexMarkdownDocuments({
+      documents: [
+        { path: "keep.md", content: "# Keep\nThis rollback doc survives the re-index.\n" },
+        { path: "gone.md", content: "# Gone\nThis rollback doc is removed at the source.\n" }
+      ],
+      repositoryId: "repo"
+    });
+
+    // Re-index with "gone.md" absent from the set.
+    await index.indexMarkdownDocuments({
+      documents: [{ path: "keep.md", content: "# Keep\nThis rollback doc survives the re-index.\n" }],
+      repositoryId: "repo"
+    });
+
+    const paths = index.listDocuments().map((document) => document.path);
+    assert.deepEqual(paths, ["keep.md"]);
+
+    const ranked = await index.search("rollback", 5);
+    assert.ok(ranked.every((result) => !result.section.id.startsWith("repo:gone.md")));
+  });
+
   it("falls back to keyword search when the embedding call fails", async () => {
     const embeddingProvider: EmbeddingProvider = {
       async embed() {
