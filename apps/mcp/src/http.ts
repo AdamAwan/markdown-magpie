@@ -16,6 +16,7 @@ import {
 import type { JSONWebKeySet } from "jose";
 import { z } from "zod/v4";
 import { askQuestion, getJson, submitFeedback, type KbClientOptions } from "./kb-client.js";
+import { createApiTokenProvider, type ApiTokenProvider } from "./api-token.js";
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -50,15 +51,33 @@ export interface HttpMcpOptions {
   // The public URL of this protected resource (the /mcp endpoint). Used for the
   // protected-resource metadata document and the discovery challenge.
   resourceUrl: string;
-  // Service token used for downstream API calls. The inbound user token is
-  // NEVER forwarded; this is a separate credential (MCP_API_AUTH_TOKEN).
-  apiToken: string | undefined;
+  // Service credential used for downstream API calls. The inbound user token is
+  // NEVER forwarded; this is a separate M2M credential. Provide EITHER a static
+  // token (`apiToken`, legacy MCP_API_AUTH_TOKEN) OR client-credentials so the
+  // server fetches and refreshes its own token at runtime (preferred — static
+  // Auth0 tokens expire ~24h after deploy). When both are given, the
+  // client-credentials config wins.
+  apiToken?: string;
+  apiClientId?: string;
+  apiClientSecret?: string;
+  apiTokenUrl?: string;
+  apiAudience?: string;
 }
 
 // ── App factory ──────────────────────────────────────────────────────────────
 
 export function createHttpMcpApp(options: HttpMcpOptions): Express {
-  const kbOptions: KbClientOptions = { token: options.apiToken };
+  // Resolve the downstream service token lazily so an expired M2M token is
+  // refreshed transparently between tool calls. The inbound user token is never
+  // forwarded — this credential is entirely separate.
+  const apiTokenProvider: ApiTokenProvider = createApiTokenProvider({
+    staticToken: options.apiToken,
+    clientId: options.apiClientId,
+    clientSecret: options.apiClientSecret,
+    tokenUrl: options.apiTokenUrl,
+    audience: options.apiAudience
+  });
+  const kbOptions: KbClientOptions = { token: apiTokenProvider };
 
   const server = new McpServer({
     name: "markdown-magpie",
@@ -271,21 +290,42 @@ function requiredToolScope(req: Request): string | undefined {
 async function main(): Promise<void> {
   const resourceUrl = process.env.MCP_RESOURCE_URL ?? `http://localhost:${port}/mcp`;
   const auth = mcpAuthSettingsFromEnv(process.env, resourceUrl);
+
   const apiToken = process.env.MCP_API_AUTH_TOKEN;
+  const apiClientId = process.env.MCP_API_CLIENT_ID;
+  const apiClientSecret = process.env.MCP_API_CLIENT_SECRET;
+  // Downstream API calls target the WEB API audience (AUTH0_AUDIENCE), which is
+  // distinct from this server's own MCP audience. The token endpoint lives on
+  // the Auth0 issuer (which already carries a trailing slash).
+  const apiAudience = authSettingsFromEnv().audience;
+  const apiTokenUrl = `${auth.issuer}oauth/token`;
+  const hasClientCredentials = Boolean(apiClientId && apiClientSecret);
 
   // When auth is required this server acts as an OAuth protected resource and
-  // must authenticate to the API with its own service token. Fail fast so a
-  // misconfigured deploy can't silently call the API unauthenticated.
-  if (auth.required && !apiToken) {
+  // must authenticate to the API with its own service credential. Accept either
+  // a runtime client-credentials pair (preferred — it auto-refreshes, so it
+  // survives the ~24h Auth0 token lifetime) or a static MCP_API_AUTH_TOKEN. Fail
+  // fast otherwise so a misconfigured deploy can't silently call the API
+  // unauthenticated.
+  if (auth.required && !apiToken && !hasClientCredentials) {
     console.error(
-      "MCP_API_AUTH_TOKEN is required when AUTH_REQUIRED=true (the HTTP MCP server needs a service token to call the API)."
+      "A downstream API service credential is required when AUTH_REQUIRED=true: set " +
+        "MCP_API_CLIENT_ID + MCP_API_CLIENT_SECRET (preferred, auto-refreshing) or a static MCP_API_AUTH_TOKEN."
     );
     process.exit(1);
   }
 
   const host = process.env.MCP_HTTP_HOST ?? "127.0.0.1";
 
-  const app = createHttpMcpApp({ auth, resourceUrl, apiToken });
+  const app = createHttpMcpApp({
+    auth,
+    resourceUrl,
+    apiToken,
+    apiClientId,
+    apiClientSecret,
+    apiTokenUrl,
+    apiAudience
+  });
 
   app.listen(port, host, () => {
     console.error(

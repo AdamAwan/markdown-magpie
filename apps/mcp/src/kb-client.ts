@@ -32,12 +32,17 @@ type FeedbackKind = "helpful" | "unhelpful" | "knowledge_gap";
 // protected resource it authenticates to the API with its own service token
 // (never the inbound user token). Omitting `token` preserves the unauthenticated
 // local-dev behaviour. Shared by both transports (stdio reuses this in Task 5).
+//
+// `token` may be a literal string (stdio's MCP_AUTH_TOKEN) or a provider
+// function (the HTTP transport's runtime-refreshed M2M token). A provider is
+// resolved on every call so an expired token is transparently refreshed.
 export interface KbClientOptions {
-  token?: string;
+  token?: string | (() => Promise<string | undefined>);
 }
 
-function authHeaders(options: KbClientOptions | undefined): Record<string, string> {
-  return options?.token ? { authorization: `Bearer ${options.token}` } : {};
+async function authHeaders(options: KbClientOptions | undefined): Promise<Record<string, string>> {
+  const token = typeof options?.token === "function" ? await options.token() : options?.token;
+  return token ? { authorization: `Bearer ${token}` } : {};
 }
 
 function trimTrailingSlash(value: string): string {
@@ -62,7 +67,7 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 async function postJson(path: string, body: unknown, options?: KbClientOptions): Promise<unknown> {
   const response = await fetch(apiUrl(path), {
     method: "POST",
-    headers: { "content-type": "application/json", ...authHeaders(options) },
+    headers: { "content-type": "application/json", ...(await authHeaders(options)) },
     body: JSON.stringify(body)
   });
 
@@ -70,7 +75,7 @@ async function postJson(path: string, body: unknown, options?: KbClientOptions):
 }
 
 export async function getJson(path: string, options?: KbClientOptions): Promise<unknown> {
-  const response = await fetch(apiUrl(path), { headers: authHeaders(options) });
+  const response = await fetch(apiUrl(path), { headers: await authHeaders(options) });
   return readApiResponse(response, path);
 }
 
