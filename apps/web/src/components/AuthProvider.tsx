@@ -3,6 +3,7 @@
 import { Auth0Provider, useAuth0 } from "@auth0/auth0-react";
 import { ReactNode, useEffect, useState } from "react";
 import { setAccessTokenProvider } from "../lib/api";
+import { Landing } from "./Landing";
 
 export interface BrowserAuthConfig {
   domain: string;
@@ -64,30 +65,56 @@ export function AuthProvider({ children, config }: { children: ReactNode; config
       cacheLocation="localstorage"
       useRefreshTokens
     >
-      <AuthTokenBridge>{children}</AuthTokenBridge>
+      <AuthGate>{children}</AuthGate>
     </Auth0Provider>
   );
 }
 
-function AuthTokenBridge({ children }: { children: ReactNode }) {
-  const { getAccessTokenSilently, isAuthenticated, isLoading } = useAuth0();
+function Splash() {
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#f5f7f2",
+        color: "#65716b",
+        fontWeight: 750
+      }}
+    >
+      Loading…
+    </div>
+  );
+}
+
+// Gates the data-fetching console behind authentication. The app subtree (which
+// fetches on mount and polls) only renders once the user is signed in AND the
+// access-token provider is armed, so there is never a token-less request race on
+// first load. Unauthenticated visitors get the Landing page instead.
+function AuthGate({ children }: { children: ReactNode }) {
+  const { getAccessTokenSilently, isAuthenticated, isLoading, loginWithRedirect } = useAuth0();
   const [tokenProviderReady, setTokenProviderReady] = useState(false);
 
   useEffect(() => {
-    setAccessTokenProvider(isAuthenticated ? () => getAccessTokenSilently() : undefined);
-    setTokenProviderReady(true);
+    if (isAuthenticated) {
+      setAccessTokenProvider(() => getAccessTokenSilently());
+      setTokenProviderReady(true);
+    } else {
+      setAccessTokenProvider(undefined);
+      setTokenProviderReady(false);
+    }
     return () => setAccessTokenProvider(undefined);
   }, [getAccessTokenSilently, isAuthenticated]);
 
-  // Hold the data-fetching app until the Auth0 session has resolved AND the
-  // access-token provider is armed. Otherwise children mount and fire their
-  // initial API calls before the provider effect runs, so those requests go out
-  // without an Authorization header and 401 on first load (the request that
-  // worked manually only differed by carrying the token). Once auth is resolved
-  // we render regardless of authentication state, so anonymous/auth-disabled
-  // behaviour is unchanged.
-  if (isLoading || !tokenProviderReady) {
-    return <div className="refreshTime" style={{ padding: "2rem" }}>Loading…</div>;
+  // Session still resolving, or signed in but the provider effect hasn't armed
+  // the token yet (effects run after render) — hold so children never mount with
+  // an unarmed provider.
+  if (isLoading || (isAuthenticated && !tokenProviderReady)) {
+    return <Splash />;
+  }
+  if (!isAuthenticated) {
+    return <Landing onLogin={() => void loginWithRedirect()} />;
   }
   return <>{children}</>;
 }
