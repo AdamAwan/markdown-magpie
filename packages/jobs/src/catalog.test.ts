@@ -10,6 +10,21 @@ import {
 } from "./index.js";
 
 const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
+const FOURTEEN_DAYS_SECONDS = 14 * 24 * 60 * 60;
+const EXPIRATION_SECONDS = {
+  answer_question: 5 * 60,
+  summarize_gap: 10 * 60,
+  draft_markdown_proposal: 15 * 60,
+  detect_contradiction: 10 * 60,
+  suggest_consolidation: 10 * 60,
+  crunch_knowledge_base: 60 * 60,
+  cluster_gap_candidates: 5 * 60,
+  refresh_pull_requests: 5 * 60,
+  process_gaps_to_pull_requests: 60 * 60,
+  trigger_scheduled_crunch: 60 * 60,
+  publish_proposal: 15 * 60,
+  publish_crunch: 15 * 60
+} as const;
 
 test("every job type is unique and has schemas and a valid policy", () => {
   assert.equal(new Set(JOB_TYPES).size, JOB_TYPES.length);
@@ -19,10 +34,27 @@ test("every job type is unique and has schemas and a valid policy", () => {
     assert.equal(definition.type, type);
     assert.equal(typeof definition.inputSchema.safeParse, "function");
     assert.equal(typeof definition.outputSchema.safeParse, "function");
-    assert.ok(definition.policy.retryLimit >= 0);
-    assert.ok(definition.policy.heartbeatSeconds >= 10);
+    assert.equal(definition.policy.heartbeatSeconds, 60);
+    assert.equal(definition.policy.retentionSeconds, FOURTEEN_DAYS_SECONDS);
+    assert.equal(definition.policy.expireInSeconds, EXPIRATION_SECONDS[type]);
     assert.ok(definition.policy.expireInSeconds > definition.policy.heartbeatSeconds);
     assert.equal(definition.policy.deleteAfterSeconds, THIRTY_DAYS_SECONDS);
+    assert.equal(definition.policy.retryBackoff, true);
+  }
+});
+
+test("provider work retries three times and non-provider work retries twice", () => {
+  for (const type of ["answer_question", "cluster_gap_candidates"] as const) {
+    const policy = jobDefinition(type).policy;
+    assert.equal(policy.retryLimit, 3);
+    assert.equal(policy.retryDelay, 15);
+    assert.equal(policy.retryDelayMax, 300);
+  }
+  for (const type of ["process_gaps_to_pull_requests", "refresh_pull_requests"] as const) {
+    const policy = jobDefinition(type).policy;
+    assert.equal(policy.retryLimit, 2);
+    assert.equal(policy.retryDelay, 30);
+    assert.equal(policy.retryDelayMax, 600);
   }
 });
 
@@ -47,15 +79,16 @@ test("github capability yields only GitHub work queues", () => {
 });
 
 test("all queue definitions provision every AI provider partition and a dead-letter queue", () => {
+  const queueDefinitions = allQueueDefinitions();
   for (const provider of AI_PROVIDERS) {
     const queueName = queueNameForJob("answer_question", { provider });
-    const definition = allQueueDefinitions.find((candidate) => candidate.name === queueName);
+    const definition = queueDefinitions.find((candidate) => candidate.name === queueName);
     assert.ok(definition);
     assert.equal(definition.capability, provider);
     assert.equal(definition.deadLetter, false);
     assert.ok(definition.policy?.deadLetter);
     assert.ok(
-      allQueueDefinitions.some(
+      queueDefinitions.some(
         (candidate) => candidate.name === definition.policy?.deadLetter && candidate.deadLetter
       )
     );
@@ -63,6 +96,11 @@ test("all queue definitions provision every AI provider partition and a dead-let
 
   const claimable = queueNamesForCapabilities([...AI_PROVIDERS, "github", "maintenance"]);
   assert.ok(claimable.every((name) => !name.endsWith("__dead_letter")));
+});
+
+test("every concrete work and dead-letter queue name is unique", () => {
+  const names = allQueueDefinitions().map((definition) => definition.name);
+  assert.equal(new Set(names).size, names.length);
 });
 
 test("queue naming rejects a missing or invalid AI provider", () => {

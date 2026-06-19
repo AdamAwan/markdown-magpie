@@ -34,8 +34,8 @@ export interface JobError {
   code: string;
   message: string;
   category: "provider" | "validation" | "configuration" | "timeout" | "external" | "internal";
-  provider?: AiProviderName;
-  details?: unknown;
+  provider?: string;
+  details?: Record<string, string | number | boolean | null>;
   executor?: string;
 }
 
@@ -58,15 +58,15 @@ export interface JobView<TInput = unknown, TOutput = unknown> {
   failedAt?: string;
   retryAt?: string;
   heartbeatAt?: string;
-  heartbeatSeconds: number;
+  heartbeatSeconds?: number;
   expireInSeconds: number;
 }
 
 export interface JobPolicy {
   retryLimit: number;
-  retryBackoff: "exponential";
-  retryDelaySeconds: number;
-  retryMaxDelaySeconds: number;
+  retryDelay: number;
+  retryBackoff: true;
+  retryDelayMax: number;
   heartbeatSeconds: number;
   expireInSeconds: number;
   retentionSeconds: number;

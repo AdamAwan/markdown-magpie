@@ -1,5 +1,17 @@
 import { z } from "zod";
-import { AI_PROVIDERS } from "./types.js";
+import type {
+  AnswerQuestionJobInput as CoreAnswerQuestionJobInput,
+  AnswerQuestionJobOutput,
+  CrunchKnowledgeBaseJobInput as CoreCrunchKnowledgeBaseJobInput,
+  CrunchKnowledgeBaseJobOutput,
+  DraftMarkdownProposalJobInput as CoreDraftMarkdownProposalJobInput,
+  DraftMarkdownProposalJobOutput,
+  SummarizeGapJobInput as CoreSummarizeGapJobInput,
+  SummarizeGapJobOutput
+} from "@magpie/core";
+import { AI_PROVIDERS, type AiProviderName, type JobError } from "./types.js";
+
+type ProviderInput<T> = T & { provider: AiProviderName };
 
 const providerSchema = z.enum(AI_PROVIDERS);
 const confidenceSchema = z.enum(["high", "medium", "low", "unknown"]);
@@ -24,10 +36,13 @@ export const jobErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
   category: z.enum(["provider", "validation", "configuration", "timeout", "external", "internal"]),
-  provider: providerSchema.optional(),
-  details: z.unknown().optional(),
+  provider: z.string().optional(),
+  details: z.record(
+    z.string(),
+    z.union([z.string(), z.number(), z.boolean(), z.null()])
+  ).optional(),
   executor: z.string().optional()
-});
+}) satisfies z.ZodType<JobError>;
 
 export const answerQuestionInputSchema = z.object({
   provider: providerSchema,
@@ -40,25 +55,25 @@ export const answerQuestionInputSchema = z.object({
     content: z.string()
   })),
   expectedOutput: z.literal("answer_result")
-});
+}) satisfies z.ZodType<ProviderInput<CoreAnswerQuestionJobInput>>;
 export const answerQuestionOutputSchema = z.object({
   answer: z.string(),
   confidence: confidenceSchema,
   citations: z.array(citationSchema),
   gaps: z.array(gapSchema).optional()
-});
+}) satisfies z.ZodType<AnswerQuestionJobOutput>;
 
 export const summarizeGapInputSchema = z.object({
   provider: providerSchema,
   questions: z.array(z.string()),
   citedSections: z.array(citationSchema),
   expectedOutput: z.literal("gap_summary")
-});
+}) satisfies z.ZodType<ProviderInput<CoreSummarizeGapJobInput>>;
 export const summarizeGapOutputSchema = z.object({
   summary: z.string(),
   priority: z.number(),
   rationale: z.string()
-});
+}) satisfies z.ZodType<SummarizeGapJobOutput>;
 
 const sourceDataContextSchema = z.object({
   sourceId: z.string(),
@@ -77,13 +92,13 @@ export const draftMarkdownProposalInputSchema = z.object({
   destinationId: z.string().optional(),
   targetPath: z.string().optional(),
   expectedOutput: z.literal("markdown_proposal")
-});
+}) satisfies z.ZodType<ProviderInput<CoreDraftMarkdownProposalJobInput>>;
 export const draftMarkdownProposalOutputSchema = z.object({
   title: z.string(),
   targetPath: z.string(),
   markdown: z.string(),
   rationale: z.string()
-});
+}) satisfies z.ZodType<DraftMarkdownProposalJobOutput>;
 
 export const detectContradictionInputSchema = z.object({
   provider: providerSchema,
@@ -115,12 +130,12 @@ export const crunchKnowledgeBaseInputSchema = z.object({
   destinationId: z.string().optional(),
   documents: z.array(documentSchema),
   expectedOutput: z.literal("crunch_plan")
-});
+}) satisfies z.ZodType<ProviderInput<CoreCrunchKnowledgeBaseJobInput>>;
 export const crunchKnowledgeBaseOutputSchema = z.object({
   summary: z.string(),
   operations: z.array(crunchOperationSchema),
   rationale: z.string()
-});
+}) satisfies z.ZodType<CrunchKnowledgeBaseJobOutput>;
 
 export const clusterGapCandidatesInputSchema = z.object({
   candidates: z.array(z.object({ summary: z.string(), questionIds: z.array(z.string()) })),

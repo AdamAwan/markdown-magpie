@@ -14,7 +14,7 @@ import {
 
 const DAY = 24 * 60 * 60;
 const BASE_POLICY = {
-  retryBackoff: "exponential",
+  retryBackoff: true,
   heartbeatSeconds: 60,
   retentionSeconds: 14 * DAY,
   deleteAfterSeconds: 30 * DAY
@@ -24,8 +24,8 @@ function policy(providerWork: boolean, expireInSeconds: number): Readonly<JobPol
   return Object.freeze({
     ...BASE_POLICY,
     retryLimit: providerWork ? 3 : 2,
-    retryDelaySeconds: providerWork ? 15 : 30,
-    retryMaxDelaySeconds: providerWork ? 300 : 600,
+    retryDelay: providerWork ? 15 : 30,
+    retryDelayMax: providerWork ? 300 : 600,
     expireInSeconds
   });
 }
@@ -120,7 +120,7 @@ function concreteQueue(definition: JobDefinition, capability: JobCapability): Qu
 
 const workQueues = concreteWorkQueues();
 
-export const allQueueDefinitions: readonly QueueDefinition[] = Object.freeze([
+const queueDefinitions: readonly QueueDefinition[] = Object.freeze([
   ...workQueues,
   ...workQueues.map((queue) => Object.freeze({
     name: queue.policy!.deadLetter!,
@@ -128,6 +128,10 @@ export const allQueueDefinitions: readonly QueueDefinition[] = Object.freeze([
     deadLetter: true
   }))
 ]);
+
+export function allQueueDefinitions(): QueueDefinition[] {
+  return [...queueDefinitions];
+}
 
 export function queueNamesForCapabilities(capabilities: readonly JobCapability[]): string[] {
   const accepted = new Set(capabilities);
