@@ -339,12 +339,20 @@ function automationDiagram(modelInfo: ModelInfo): string {
   return `graph TD
     Scheduler["⏱️ Scheduler<br/>(per-flow cron + run-lock)"]
 
-    subgraph GapsTask["<b>gaps → pull requests</b><br/>(per flow · every 10 min)"]
-        GPoll["🔍 Poll this flow's<br/>own open PRs"]
-        GCluster["📊 Cluster this flow's<br/>open gaps"]
-        GDraft["🤖 ${chatLabel}<br/>Draft Uncovered<br/>Clusters"]
+    subgraph FetchTask["<b>snapshot refresh</b> · fetch<br/>(per flow · every 5 min)"]
+        FGather["📥 Gather this flow's<br/>gaps + proposals"]
+        FPoll["🔍 Poll open PRs (conditional)<br/>ETag 304s cost no rate limit"]
+        FWrite["💾 Write snapshot<br/>(per-flow dir on disk)"]
+        FGather --> FPoll
+        FPoll --> FWrite
+    end
+
+    subgraph GapsTask["<b>gaps → pull requests</b> · process<br/>(per flow · every 10 min)"]
+        GRead["📖 Read PR state<br/>from snapshot"]
+        GCluster["📊 Cluster this flow's gaps"]
+        GDraft["🤖 ${chatLabel}<br/>Draft uncovered clusters"]
         GPublish["🚀 Publish PRs<br/>(no manual review)"]
-        GPoll --> GCluster
+        GRead --> GCluster
         GCluster --> GDraft
         GDraft --> GPublish
     end
@@ -365,24 +373,28 @@ function automationDiagram(modelInfo: ModelInfo): string {
         CrReview -->|Publish| CrPublish
     end
 
-    Scheduler -->|one job per flow| GPoll
+    Scheduler -->|one job per flow| FGather
+    Scheduler -->|one job per flow| GRead
     Scheduler -->|one job per flow| SWatch
     Scheduler -->|per flow| CrPlan
 
+    FWrite -.->|snapshot| GRead
     GPublish --> Host["🌐 Git Host<br/>Pull Requests"]
     SBranch --> Host
     CrPublish --> Host
     Host -->|merged| Resolve["✅ Resolve Gaps<br/>+ Re-index KB"]
-    Host -.->|next run| GPoll
+    Host -.->|next fetch| FPoll
 
+    style FetchTask fill:#fbfcfa,stroke:#285f74,stroke-width:2px
     style GapsTask fill:#fef9f0,stroke:#8b5a00,stroke-width:2px
     style SyncTask fill:#e8f1f7,stroke:#285f74,stroke-width:2px
     style CrunchTask fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px`;
 }
 
-// Zooms into the per-flow reconciler: the scheduler fans out one job per flow,
-// each with its own cron and run-lock, and every step inside a job is scoped to
-// that flow alone — its own PRs, its own revision gate, its own outbox.
+// Zooms into one flow's two jobs and the fetch/process split between them: a fetch
+// job polls the host and writes a snapshot; the reconciler reads that snapshot and
+// never touches the host in the steady state. Everything is scoped to the flow —
+// its own PRs, its own revision gate, its own outbox, its own crons and run-locks.
 function perFlowJobsDiagram(modelInfo: ModelInfo): string {
   const chatLabel = modelInfo.chatModel && modelInfo.chatHost
     ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
@@ -390,31 +402,40 @@ function perFlowJobsDiagram(modelInfo: ModelInfo): string {
 
   return `graph TD
     Sched["⏱️ Scheduler tick"]
-    Sched -->|fan out: one job per flow| FA["🧵 Flow A job<br/>own cron + run-lock"]
-    Sched -->|fan out: one job per flow| FB["🧵 Flow B job<br/>own cron + run-lock"]
+    Sched -->|fan out: jobs per flow| FA["🧵 Flow A jobs<br/>own crons + run-locks"]
+    Sched -->|fan out: jobs per flow| FB["🧵 Flow B jobs<br/>own crons + run-locks"]
     FA -.->|independent — a slow or stuck<br/>flow can't block the other| FB
 
-    FA --> Poll
+    FA --> Gather
+    FA --> ReadPR
 
-    subgraph Recon["<b>RECONCILER — scoped to Flow A</b>"]
-        Poll["🔍 Poll only Flow A's<br/>own open PRs"]
+    subgraph Fetch["<b>FETCH</b> · snapshot refresh (Flow A · ~5 min)"]
+        Gather["📥 Gather Flow A's<br/>gaps + proposals"]
+        Poll["🔍 Poll only Flow A's open PRs<br/>(conditional · ETag)"]
+        Write["💾 Write snapshot<br/>to disk"]
+        Gather --> Poll
+        Poll --> Write
+    end
+
+    subgraph Recon["<b>PROCESS</b> · reconciler (Flow A · ~10 min)"]
+        ReadPR["📖 Read PR state from snapshot<br/>(live poll only if missing)"]
         Gate{"Flow A's gap-catalog<br/>revision advanced?"}
         Cluster["📊 Cluster Flow A's gaps<br/>(reshape within flow only)"]
         Draft["🤖 ${chatLabel}<br/>Draft uncovered clusters"]
-        Enqueue["📥 Enqueue publish<br/>(outbox)"]
         Outbox["📬 Drain Flow A's<br/>publish outbox"]
-        Poll --> Gate
+        ReadPR --> Gate
         Gate -->|unchanged| Outbox
         Gate -->|advanced| Cluster
         Cluster --> Draft
-        Draft --> Enqueue
-        Enqueue --> Outbox
+        Draft --> Outbox
     end
 
-    Poll -->|merged| Resolve["✅ Resolve gaps<br/>+ Re-index KB"]
-    Poll -->|closed| Reject["🚫 Mark rejected<br/>+ freeze cluster"]
+    Write -.->|snapshot| ReadPR
+    ReadPR -->|merged| Resolve["✅ Resolve gaps<br/>+ Re-index KB"]
+    ReadPR -->|closed| Reject["🚫 Mark rejected<br/>+ freeze cluster"]
     Outbox --> Host["🌐 Git Host<br/>Flow A's Pull Requests"]
-    Host -.->|next run| Poll
+    Host -.->|next fetch| Poll
 
+    style Fetch fill:#fbfcfa,stroke:#285f74,stroke-width:2px
     style Recon fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`;
 }
