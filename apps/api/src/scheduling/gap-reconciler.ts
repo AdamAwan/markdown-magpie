@@ -94,10 +94,19 @@ async function refreshOpenPullRequests(
   deps: ReconcilerDeps,
   cache: ClusterFlowCache
 ): Promise<void> {
+  // Prefer the PR state the fetch job already downloaded for this flow; only poll
+  // the host live for a PR the snapshot hasn't covered yet (e.g. one opened since
+  // the last fetch, or before the fetch job has ever run). This keeps the
+  // reconciler off the network in the steady state. defaultPublish still re-checks
+  // live state immediately before mutating, so acting on a snapshot reading can't
+  // publish against a PR that changed since the fetch.
+  const snapshot = await ctx.stores.snapshots.read(flowId);
+  const snapshotByProposal = new Map((snapshot?.pullRequests ?? []).map((pr) => [pr.proposalId, pr]));
+
   const open = await ctx.stores.proposals.list(200, { status: "pr-opened" });
   for (const proposal of open) {
-    // Only poll PRs that came from this flow's proposals — never any other flow's,
-    // and never an arbitrary PR on the repo.
+    // Only consider PRs that came from this flow's proposals — never any other
+    // flow's, and never an arbitrary PR on the repo.
     if (!sameFlow(await proposalFlowId(ctx, proposal, cache), flowId)) {
       continue;
     }
@@ -105,13 +114,18 @@ async function refreshOpenPullRequests(
     if (!pullRequestUrl) {
       continue;
     }
-    let status;
-    try {
-      status = await deps.fetchPullRequestStatus(pullRequestUrl);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "pull request lookup failed";
-      console.warn(`PR status check failed for proposal ${proposal.id}: ${message}`);
-      continue;
+    let status: { merged: boolean; state: "open" | "closed" } | undefined;
+    const cached = snapshotByProposal.get(proposal.id);
+    if (cached && cached.state !== "unknown") {
+      status = { merged: cached.merged, state: cached.state };
+    } else {
+      try {
+        status = await deps.fetchPullRequestStatus(pullRequestUrl);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "pull request lookup failed";
+        console.warn(`PR status check failed for proposal ${proposal.id}: ${message}`);
+        continue;
+      }
     }
     if (!status) {
       continue;

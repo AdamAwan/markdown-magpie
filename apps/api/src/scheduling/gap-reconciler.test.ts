@@ -237,6 +237,49 @@ describe("reconcileGaps outbox", () => {
   });
 });
 
+describe("reconcileGaps PR state from snapshot", () => {
+  it("applies a merge recorded in the snapshot without polling the host live", async () => {
+    const ctx = makeTestContext();
+    const proposal = await ctx.stores.proposals.create({
+      title: "T",
+      targetPath: "t.md",
+      markdown: "#",
+      rationale: "r",
+      evidence: [],
+      triggeringQuestionIds: []
+    });
+    await ctx.stores.proposals.recordPublication(proposal.id, {
+      provider: "local-git",
+      branchName: "b",
+      commitSha: "sha",
+      pullRequestUrl: "https://github.com/o/r/pull/1",
+      publishedAt: new Date().toISOString()
+    });
+    // The fetch job already saw this PR merge.
+    await ctx.stores.snapshots.write({
+      flowId: undefined,
+      takenAt: new Date().toISOString(),
+      catalogRevision: 0,
+      gaps: [],
+      proposals: [{ id: proposal.id, status: "pr-opened", pullRequestUrl: "https://github.com/o/r/pull/1" }],
+      pullRequests: [
+        { proposalId: proposal.id, url: "https://github.com/o/r/pull/1", merged: true, state: "closed", checkedAt: new Date().toISOString() }
+      ]
+    });
+
+    let liveLookups = 0;
+    await reconcileGaps(ctx, undefined, {
+      fetchPullRequestStatus: async () => {
+        liveLookups += 1;
+        return undefined;
+      }
+    });
+
+    assert.equal(liveLookups, 0, "the reconciler used the snapshot, not a live poll");
+    assert.equal((await ctx.stores.proposals.get(proposal.id))?.status, "merged", "the snapshot's merge was applied");
+  });
+});
+
 // Records two questions, flags a manual gap on each, then creates two clusters and
 // assigns each gap to one. Recording the gaps advances the catalog past the
 // processed revision so the gate opens.
