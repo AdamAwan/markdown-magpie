@@ -8,7 +8,16 @@ export interface ScheduledTaskStore {
   listSettings(): Promise<ScheduledTaskSettings[]>;
   getSettings(key: string): Promise<ScheduledTaskSettings | undefined>;
   updateSettings(key: string, patch: { enabled: boolean; cron: string }): Promise<ScheduledTaskSettings>;
-  touchSchedule(key: string, lastRunAt: string, nextRunAt: string): Promise<ScheduledTaskSettings | undefined>;
+  // Advances a task's schedule. When `expectedNextRunAt` is supplied this is an
+  // atomic claim: the update only applies if the row's next_run_at still equals
+  // that value, so exactly one instance wins when several tick at once. Returns
+  // undefined when the row is missing OR the claim was lost to another instance.
+  touchSchedule(
+    key: string,
+    lastRunAt: string,
+    nextRunAt: string,
+    expectedNextRunAt?: string
+  ): Promise<ScheduledTaskSettings | undefined>;
   reset(): Promise<void>;
 }
 
@@ -35,9 +44,18 @@ export class InMemoryScheduledTaskStore implements ScheduledTaskStore {
     return next;
   }
 
-  async touchSchedule(key: string, lastRunAt: string, nextRunAt: string): Promise<ScheduledTaskSettings | undefined> {
+  async touchSchedule(
+    key: string,
+    lastRunAt: string,
+    nextRunAt: string,
+    expectedNextRunAt?: string
+  ): Promise<ScheduledTaskSettings | undefined> {
     const current = this.settings.get(key);
     if (!current) {
+      return undefined;
+    }
+    // Atomic-claim semantics: bail if another claimant already advanced the row.
+    if (expectedNextRunAt !== undefined && current.nextRunAt !== expectedNextRunAt) {
       return undefined;
     }
     const next: ScheduledTaskSettings = { ...current, lastRunAt, nextRunAt };

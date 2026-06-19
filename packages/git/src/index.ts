@@ -94,7 +94,12 @@ export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<Gi
     } else {
       const branch = await tryGit(localPath, ["branch", "--show-current"]);
       if (branch.trim() && (await remoteBranchExists(localPath, branch.trim(), authEnv))) {
-        await git(localPath, ["pull", "--ff-only"], authEnv);
+        // Pull the current branch explicitly. A bare `git pull --ff-only` resolves
+        // its merge target from FETCH_HEAD, which the preceding `fetch --prune
+        // origin` populates with every remote branch — so once the bot has pushed
+        // many proposal branches, git aborts with "Cannot fast-forward to multiple
+        // branches." Naming the branch keeps the merge target unambiguous.
+        await git(localPath, ["pull", "--ff-only", "origin", branch.trim()], authEnv);
       }
     }
   }
@@ -217,6 +222,16 @@ export async function raisePullRequest(request: RaisePullRequestRequest): Promis
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
+    // A branch that already has an open PR returns 422. That's not a failure for
+    // us — the desired end state (an open PR for this branch) already holds — so
+    // adopt the existing one and return it instead of throwing and forcing the
+    // publication outbox to retry a request that can never succeed.
+    if (response.status === 422 && /already exists/i.test(detail)) {
+      const existing = await findOpenPullRequest(slug, token, request.headBranch);
+      if (existing) {
+        return existing;
+      }
+    }
     throw new Error(`GitHub pull request creation failed (${response.status}): ${detail.slice(0, 500)}`);
   }
 
@@ -226,6 +241,37 @@ export async function raisePullRequest(request: RaisePullRequestRequest): Promis
   }
 
   return { url: data.html_url, number: data.number };
+}
+
+// Looks up the open pull request already raised for a branch, so a duplicate
+// create attempt (422) can resolve to the live PR. Returns undefined when none
+// is found or the lookup fails — the caller then surfaces the original error.
+async function findOpenPullRequest(
+  slug: { owner: string; repo: string },
+  token: string,
+  headBranch: string
+): Promise<RaisedPullRequest | undefined> {
+  const head = `${slug.owner}:${headBranch}`;
+  const url = `https://api.github.com/repos/${slug.owner}/${slug.repo}/pulls?state=open&head=${encodeURIComponent(head)}`;
+  let response: Response;
+  try {
+    response = await githubFetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "markdown-magpie"
+      }
+    });
+  } catch {
+    return undefined;
+  }
+  if (!response.ok) {
+    return undefined;
+  }
+  const list = (await response.json().catch(() => [])) as Array<{ html_url?: string; number?: number }>;
+  const match = list.find((pr) => pr.html_url && typeof pr.number === "number");
+  return match ? { url: match.html_url as string, number: match.number as number } : undefined;
 }
 
 export interface PullRequestStatus {

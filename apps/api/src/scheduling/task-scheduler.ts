@@ -29,7 +29,18 @@ export class TaskScheduler extends IntervalScheduler {
         console.warn(`Scheduled task ${task.key} has an invalid cron "${setting.cron}"; skipping.`);
         continue;
       }
-      await this.ctx.stores.scheduledTasks.touchSchedule(task.key, new Date(now).toISOString(), nextRunAt.toISOString());
+      // Atomically claim this run against the still-due next_run_at. If another
+      // API instance already advanced the schedule, the claim returns nothing and
+      // we skip — so the task runs once per slot, never once per running instance.
+      const claimed = await this.ctx.stores.scheduledTasks.touchSchedule(
+        task.key,
+        new Date(now).toISOString(),
+        nextRunAt.toISOString(),
+        setting.nextRunAt
+      );
+      if (!claimed) {
+        continue;
+      }
       console.log(`Scheduled task ${task.key} due; running.`);
       try {
         await task.run(this.ctx);

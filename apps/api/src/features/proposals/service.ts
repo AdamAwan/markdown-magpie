@@ -3,7 +3,8 @@ import type {
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
   GapCandidate,
-  Proposal
+  Proposal,
+  SourceDataContext
 } from "@magpie/core";
 import { resolveProposalTargetPath } from "@magpie/core";
 import { DRAFT_MARKDOWN_PROPOSAL } from "@magpie/prompts";
@@ -206,10 +207,23 @@ function buildPullRequestBody(proposal: Proposal): string {
 // discriminated outcome: in direct mode the proposal is already created; in
 // queue mode an AI job is enqueued and the proposal lands later via the job
 // completion machinery.
+// A per-run memo of collected source context, keyed by the resolved source-id
+// set. Collecting a source walks its checkout and reads up to 24 files, and that
+// material is identical for every proposal drawn from the same sources — so a
+// reconcile run drafting dozens of proposals would otherwise re-collect the same
+// bytes dozens of times. Callers that draft in a loop pass one cache through.
+export type SourceContextCache = Map<string, SourceDataContext[]>;
+
 export async function draftFromGaps(
   ctx: AppContext,
   rawSummaries: string[],
-  overrides: { targetPath?: string; flowId?: string; sourceIds?: string[]; destinationId?: string } = {}
+  overrides: {
+    targetPath?: string;
+    flowId?: string;
+    sourceIds?: string[];
+    destinationId?: string;
+    sourceContextCache?: SourceContextCache;
+  } = {}
 ) {
   const uniqueRequested = [...new Set(rawSummaries.map((value) => value.trim()).filter((value) => value.length > 0))];
 
@@ -246,7 +260,7 @@ export async function draftFromGaps(
     `Drafting proposal for ${label} (flow=${flow?.id ?? "none"}, destination=${destinationId ?? "none"}, ` +
       `provider=${ctx.config.get().aiProvider}, mode=${ctx.config.get().aiExecutionMode})`
   );
-  const sourceContext = await collectSourceContext(deps, sourceIds);
+  const sourceContext = await collectSourceContextCached(deps, sourceIds, overrides.sourceContextCache);
   const materialFiles = sourceContext.filter((context) => context.path && context.content !== "Source path does not exist.");
   if (materialFiles.length === 0) {
     console.warn(
@@ -289,6 +303,29 @@ export async function draftFromGaps(
 
   console.log(`Enqueued draft_markdown_proposal job ${job.id} for ${label}`);
   return { ok: true as const, mode: "queue" as const, job };
+}
+
+// Wraps collectSourceContext with the optional per-run memo. The key is the
+// resolved source-id set (sorted, so order can't fragment it); an undefined set
+// means "the configured default sources", which collectSourceContext resolves
+// deterministically, so it caches safely under a stable sentinel key.
+async function collectSourceContextCached(
+  deps: ReturnType<AppContext["repositoryDeps"]>,
+  sourceIds: string[] | undefined,
+  cache: SourceContextCache | undefined
+): Promise<SourceDataContext[]> {
+  if (!cache) {
+    return collectSourceContext(deps, sourceIds);
+  }
+  const key = sourceIds ? [...sourceIds].sort().join("\0") : "\0default";
+  const cached = cache.get(key);
+  if (cached) {
+    console.log(`Reusing cached source context for [${sourceIds?.join(", ") ?? "default"}] (${cached.length} entr${cached.length === 1 ? "y" : "ies"}).`);
+    return cached;
+  }
+  const collected = await collectSourceContext(deps, sourceIds);
+  cache.set(key, collected);
+  return collected;
 }
 
 async function draftMarkdownProposalDirect(

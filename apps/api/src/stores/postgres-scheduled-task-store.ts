@@ -42,9 +42,29 @@ export class PostgresScheduledTaskStore implements ScheduledTaskStore {
     return mapRow(result.rows[0]);
   }
 
-  async touchSchedule(key: string, lastRunAt: string, nextRunAt: string): Promise<ScheduledTaskSettings | undefined> {
+  async touchSchedule(
+    key: string,
+    lastRunAt: string,
+    nextRunAt: string,
+    expectedNextRunAt?: string
+  ): Promise<ScheduledTaskSettings | undefined> {
     // Only an enabled task ticks, and enabling always inserts the row first, so a
     // plain update is sufficient — no upsert (and so no per-task default cron) needed.
+    // When `expectedNextRunAt` is supplied the WHERE clause makes this an atomic
+    // compare-and-set: across multiple API instances ticking at the same moment,
+    // only the one whose UPDATE matches the still-current next_run_at claims the
+    // run. The losers get zero rows back and skip, so the task runs exactly once.
+    if (expectedNextRunAt !== undefined) {
+      const claimed = await this.pool.query<ScheduledTaskRow>(
+        `UPDATE scheduled_task_settings
+            SET last_run_at = $2, next_run_at = $3
+          WHERE task_key = $1 AND next_run_at = $4::timestamptz
+        RETURNING *`,
+        [key, lastRunAt, nextRunAt, expectedNextRunAt]
+      );
+      return claimed.rows[0] ? mapRow(claimed.rows[0]) : undefined;
+    }
+
     const result = await this.pool.query<ScheduledTaskRow>(
       "UPDATE scheduled_task_settings SET last_run_at = $2, next_run_at = $3 WHERE task_key = $1 RETURNING *",
       [key, lastRunAt, nextRunAt]

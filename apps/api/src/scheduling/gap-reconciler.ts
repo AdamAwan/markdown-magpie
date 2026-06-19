@@ -187,13 +187,18 @@ async function draftProposalsForUncoveredClusters(ctx: AppContext): Promise<void
     proposals.map((p) => p.gapClusterId).filter((id): id is string => Boolean(id))
   );
 
+  // Collect each source set's context once for the whole run; clusters sharing a
+  // flow (and so the same sources) reuse the bytes instead of re-walking the
+  // checkout per draft.
+  const sourceContextCache: proposalsService.SourceContextCache = new Map();
+
   let drafted = 0;
   for (const cluster of active) {
     if (coveredClusterIds.has(cluster.id)) {
       continue;
     }
     try {
-      const outcome = await gapsService.draftFromCluster(ctx, cluster.id, {});
+      const outcome = await gapsService.draftFromCluster(ctx, cluster.id, { sourceContextCache });
       if (outcome.ok) {
         drafted += 1;
         console.log(
