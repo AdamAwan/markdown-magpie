@@ -83,16 +83,19 @@ Proposal generation runs along two paths:
 
 - **Manual (human-in-the-loop):** an operator picks a gap cluster to draft, reviews the
   generated Markdown, then publishes it as a pull request.
-- **Automated (scheduled):** the `gaps-to-pull-requests` task clusters open gaps, drafts
-  proposals for any cluster not already covered, auto-promotes drafts to ready, and
-  publishes them as pull requests with no manual review step.
+- **Automated (scheduled):** the `gaps-to-pull-requests` reconciler clusters open gaps, drafts
+  proposals for any cluster not already covered, publishes them as pull requests, and advances
+  proposals as their PRs merge or close — all in one task with no manual review step.
 
-Two background tasks are registered in the scheduler (configured from the Crunch page):
+Background tasks registered in the scheduler (configured from the Crunch page):
 
-- `gaps-to-pull-requests` — the automated proposal pipeline above (default: hourly).
-- `pull-request-refresh` — checks open pull requests and, when one is merged, resolves the
-  gaps it closed and re-indexes the knowledge base; when one is closed, marks the proposal
-  rejected (default: every 10 minutes; requires `GITHUB_TOKEN`).
+- `gaps-to-pull-requests` — the single gap reconciler: it gates model work on the gap-catalog
+  revision, applies critic-confirmed cluster merges/splits, publishes open proposals through an
+  idempotent outbox, and (folding in the former `pull-request-refresh` task) checks open pull
+  requests — resolving the gaps a merged PR closed and re-indexing, or marking a closed PR's
+  proposal rejected (default: every 10 minutes; requires `GITHUB_TOKEN` for PR operations).
+- `source-change-sync` — watches each flow's git sources and rewrites knowledge-base documents
+  a source change has outdated (default: every 10 minutes).
 
 **Crunch** is a separate knowledge-base tidying flow (scheduled or on-demand) that builds a
 plan of consolidation/clean-up operations over a destination's documents; an operator then
@@ -103,6 +106,6 @@ reviews the plan and publishes it as a branch.
 The pipeline runs end to end, including raising pull requests on a hosted provider and
 refreshing their status. `LocalGitProposalPublisher` (`provider: "local-git"`) commits a
 proposal to a Git branch and pushes it; when a host token is configured the branch is also
-raised as a pull request, and the `pull-request-refresh` task advances proposals as their
-PRs are merged or closed. If no token is available, publishing degrades gracefully to a
+raised as a pull request, and the `gaps-to-pull-requests` reconciler advances proposals as
+their PRs are merged or closed. If no token is available, publishing degrades gracefully to a
 pushed branch.
