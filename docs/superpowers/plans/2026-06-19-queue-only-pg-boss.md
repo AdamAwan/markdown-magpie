@@ -75,7 +75,7 @@ Existing feature services remain in their current vertical slices. Do not move u
 - Modify: `packages/jobs/src/index.ts`
 - Modify: `package-lock.json`
 
-- [ ] **Step 1: Add the catalog tests first**
+- [x] **Step 1: Add the catalog tests first**
 
 ```ts
 // packages/jobs/src/catalog.test.ts
@@ -106,13 +106,13 @@ test("capabilities select only compatible provider queues", () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify the missing exports fail**
+- [x] **Step 2: Run the test to verify the missing exports fail**
 
 Run: `npm test -w @magpie/jobs`
 
 Expected: FAIL because `JOB_TYPES`, `jobDefinition`, `queueNameForJob`, and `queueNamesForCapabilities` do not exist.
 
-- [ ] **Step 3: Add dependencies and test script**
+- [x] **Step 3: Add dependencies and test script**
 
 Add `@magpie/core`, `zod`, `tsx`, and `@types/node` using the same workspace/file conventions as `@magpie/prompts`, and add:
 
@@ -124,7 +124,7 @@ Run: `npm install`
 
 Use `"pg-boss": "^12.18.2"` later in the API, not in this provider-neutral package.
 
-- [ ] **Step 4: Define the stable contracts**
+- [x] **Step 4: Define the stable contracts**
 
 ```ts
 // packages/jobs/src/types.ts
@@ -184,7 +184,7 @@ export interface JobPolicy {
 }
 ```
 
-- [ ] **Step 5: Define schemas and catalog entries**
+- [x] **Step 5: Define schemas and catalog entries**
 
 In `schemas.ts`, define `jobErrorSchema` and one input/output Zod schema per `JOB_TYPES` entry. Reuse `@magpie/core` domain shapes through `satisfies z.ZodType<...>` where practical. Include these new shapes explicitly:
 
@@ -221,7 +221,7 @@ export const publishCrunchOutputSchema = z.object({
 
 In `catalog.ts`, create one immutable `JobDefinition` for every type. AI definitions resolve their capability from `input.provider` and `queueNameForJob()` produces a provider-partitioned queue name; maintenance definitions use their type as queue name. `allQueueDefinitions()` expands every AI type across all four providers for startup provisioning. Use a 30-day `deleteAfterSeconds`, 14-day queued retention, heartbeat 60 seconds, and explicit expirations: 5 minutes for answer/cluster/PR refresh, 15 minutes for drafting, 60 minutes for crunch and orchestration. Set three retries with exponential backoff for provider work and two for maintenance. Provision one non-consumed dead-letter queue per concrete work queue and set `deadLetter` to that queue name; include dead-letter queues in operations listing but never in watcher claim expansion.
 
-- [ ] **Step 6: Export and verify**
+- [x] **Step 6: Export and verify**
 
 Export contracts, schemas, catalog, `isJobType`, `isAiProviderName`, `jobDefinition`, `queueNameForJob`, `allQueueDefinitions`, and `queueNamesForCapabilities` from `index.ts`.
 
@@ -229,7 +229,7 @@ Run: `npm test -w @magpie/jobs && npm run build -w @magpie/jobs && npm run typec
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add package-lock.json packages/jobs
