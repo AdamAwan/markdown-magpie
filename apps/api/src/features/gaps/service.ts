@@ -3,6 +3,7 @@ import { GAP_CLUSTERING } from "@magpie/prompts";
 import type { AppContext } from "../../context.js";
 import { assembleClusters, singletonCluster } from "../../stores/gap-clustering.js";
 import { parseJsonObject } from "../../platform/json.js";
+import { draftFromGaps } from "../proposals/service.js";
 
 export async function listCandidates(ctx: AppContext, limit: number): Promise<GapCandidate[]> {
   return ctx.stores.questionLogs.listGapCandidates(limit);
@@ -40,6 +41,37 @@ export async function listClusters(ctx: AppContext, limit: number): Promise<Pers
     });
   }
   return result;
+}
+
+// Drafts one proposal from a persisted cluster, linking the proposal back to the
+// cluster and queueing it for publication. The cluster's own flow routes the
+// draft, so the caller only supplies optional target/destination overrides. Only
+// the synchronous (direct-mode) proposal is linked here; in queue mode the
+// proposal is created later by the AI-job completion path and links there.
+export async function draftFromCluster(
+  ctx: AppContext,
+  clusterId: string,
+  overrides: { targetPath?: string; destinationId?: string }
+) {
+  const cluster = await ctx.stores.gapClusters.getCluster(clusterId);
+  if (!cluster || cluster.status !== "active") {
+    return { ok: false as const, code: "cluster_not_found" };
+  }
+  const memberships = await ctx.stores.gapClusters.listMembershipsForCluster(clusterId);
+  const { summaries } = await ctx.stores.questionLogs.gapDetailsForIds(memberships.map((m) => m.gapId));
+  const outcome = await draftFromGaps(ctx, summaries, {
+    flowId: cluster.flowId,
+    targetPath: overrides.targetPath,
+    destinationId: overrides.destinationId
+  });
+  if (!outcome.ok) {
+    return outcome;
+  }
+  if (outcome.mode === "direct") {
+    await ctx.stores.proposals.linkCluster(outcome.proposal.id, clusterId);
+    await ctx.stores.gapClusters.enqueuePublicationAction(outcome.proposal.id, "publish");
+  }
+  return outcome;
 }
 
 export async function clusterGapCandidates(

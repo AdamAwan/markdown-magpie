@@ -59,3 +59,34 @@ test("listClusters surfaces gap summaries, question ids, and the linked proposal
   assert.equal(result.proposalId, proposal.id);
   assert.equal(result.proposalStatus, "draft");
 });
+
+test("draftFromCluster creates a proposal, links the cluster, and enqueues a publish action", async () => {
+  const ctx = makeTestContext();
+  const log = await ctx.stores.questionLogs.record({
+    question: "How do I configure X?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    retrievedSectionIds: []
+  });
+  await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
+  const gapIds = await ctx.stores.questionLogs.gapIdsForSummary("How to configure X");
+  const cluster = await ctx.stores.gapClusters.createCluster({ title: "Configure X", revision: 1 });
+  await ctx.stores.gapClusters.assignGapToCluster(cluster.id, gapIds[0]);
+
+  const outcome = await gaps.draftFromCluster(ctx, cluster.id, {});
+  assert.equal(outcome.ok, true);
+
+  const proposals = await ctx.stores.proposals.list(50);
+  const linked = proposals.find((p) => p.gapClusterId === cluster.id);
+  assert.ok(linked, "a proposal is linked to the cluster");
+
+  const pending = await ctx.stores.gapClusters.listPendingPublicationActions();
+  assert.equal(pending.some((a) => a.proposalId === linked!.id && a.kind === "publish"), true);
+});
+
+test("draftFromCluster returns cluster_not_found for an unknown or inactive cluster", async () => {
+  const ctx = makeTestContext();
+  const outcome = await gaps.draftFromCluster(ctx, "does-not-exist", {});
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.ok === false ? outcome.code : undefined, "cluster_not_found");
+});
