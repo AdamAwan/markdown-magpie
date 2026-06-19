@@ -1,6 +1,6 @@
 import { nextCronTime } from "@magpie/core";
 import type { AppContext } from "../context.js";
-import { scheduledTaskDefinitions } from "./task-registry.js";
+import { listScheduledTasks } from "./task-registry.js";
 import { IntervalScheduler } from "./interval-scheduler.js";
 
 // Drives every registered side-process on its own cron, mirroring the Crunch
@@ -15,7 +15,7 @@ export class TaskScheduler extends IntervalScheduler {
   }
 
   protected async runTick(now: number): Promise<void> {
-    for (const task of scheduledTaskDefinitions) {
+    for (const task of listScheduledTasks(this.ctx)) {
       const setting = await this.ctx.stores.scheduledTasks.getSettings(task.key);
       if (!setting?.enabled || !setting.nextRunAt) {
         continue;

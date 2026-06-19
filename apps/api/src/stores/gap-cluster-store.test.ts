@@ -38,11 +38,17 @@ describe("InMemoryGapClusterStore", () => {
     assert.equal(fetched?.status, "frozen");
   });
 
-  it("tracks the processed revision", async () => {
+  it("tracks the processed revision per flow", async () => {
     const store = new InMemoryGapClusterStore();
     assert.equal(await store.getProcessedRevision(), 0);
-    await store.setProcessedRevision(7, "2026-06-18T00:00:00.000Z");
-    assert.equal(await store.getProcessedRevision(), 7);
+    await store.setProcessedRevision(undefined, 7, "2026-06-18T00:00:00.000Z");
+    assert.equal(await store.getProcessedRevision(), 7, "the default flow's revision advanced");
+
+    // A different flow keeps its own counter — advancing one never touches another.
+    assert.equal(await store.getProcessedRevision("alpha"), 0, "another flow is unaffected");
+    await store.setProcessedRevision("alpha", 3, "2026-06-18T00:00:00.000Z");
+    assert.equal(await store.getProcessedRevision("alpha"), 3);
+    assert.equal(await store.getProcessedRevision(), 7, "the default flow's revision is independent");
   });
 
   it("enqueues and drains publication actions", async () => {

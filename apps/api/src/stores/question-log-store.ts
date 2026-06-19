@@ -27,9 +27,11 @@ export interface QuestionLogStore {
   list(limit: number): Promise<QuestionLog[]>;
   listGapCandidates(limit: number): Promise<GapCandidate[]>;
   // Monotonic counter advanced whenever the unresolved candidate gaps change
-  // (added, removed, or resolved). The reconciler compares it to its processed
-  // revision to decide whether any model work is needed.
-  getGapCatalogRevision(): Promise<number>;
+  // (added, removed, or resolved). Tracked per flow so a gap change in one flow
+  // doesn't force every flow to re-cluster; the reconciler compares its flow's
+  // counter to its processed revision to decide whether model work is needed.
+  // flowId omitted reads the un-routed/default flow.
+  getGapCatalogRevision(flowId?: string): Promise<number>;
   // Stable ids of the unresolved gap rows matching a summary within a flow. The
   // reconciler keys cluster memberships off these. Postgres returns the bigint
   // question_gaps.id; the in-memory store returns a stable synthetic id.
@@ -42,10 +44,17 @@ export interface QuestionLogStore {
 
 export class InMemoryQuestionLogStore implements QuestionLogStore {
   private readonly logs = new Map<string, QuestionLog>();
-  private gapCatalogRevision = 0;
+  // Catalog revision per flow ('' is the un-routed/default flow), mirroring the
+  // per-flow gap_catalog table in Postgres.
+  private readonly gapCatalogRevision = new Map<string, number>();
 
-  async getGapCatalogRevision(): Promise<number> {
-    return this.gapCatalogRevision;
+  private bumpCatalog(flowId?: string): void {
+    const key = flowId ?? "";
+    this.gapCatalogRevision.set(key, (this.gapCatalogRevision.get(key) ?? 0) + 1);
+  }
+
+  async getGapCatalogRevision(flowId?: string): Promise<number> {
+    return this.gapCatalogRevision.get(flowId ?? "") ?? 0;
   }
 
   async gapIdsForSummary(summary: string, flowId?: string): Promise<string[]> {
@@ -98,7 +107,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
 
     this.logs.set(log.id, log);
     if (log.gaps && log.gaps.length > 0) {
-      this.gapCatalogRevision += 1;
+      this.bumpCatalog(log.flowId);
     }
     return log;
   }
@@ -128,7 +137,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
 
     this.logs.set(id, updated);
     // Re-answering replaces the auto-detected gaps, changing the candidate set.
-    this.gapCatalogRevision += 1;
+    this.bumpCatalog(existing.flowId);
     return updated;
   }
 
@@ -165,7 +174,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     };
 
     this.logs.set(id, updated);
-    this.gapCatalogRevision += 1;
+    this.bumpCatalog(existing.flowId);
     return updated;
   }
 
@@ -185,7 +194,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
 
     this.logs.set(id, updated);
     if (existing.manualGap) {
-      this.gapCatalogRevision += 1;
+      this.bumpCatalog(existing.flowId);
     }
     return updated;
   }
@@ -199,23 +208,31 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
 
     const resolvedAt = new Date().toISOString();
     let resolved = 0;
+    // Bump every flow that actually had a gap resolved (a proposal's questions
+    // share a flow in practice, but resolving spans whatever the caller passes).
+    const resolvedFlows = new Set<string>();
     for (const log of this.logs.values()) {
       if (!questionSet.has(log.id) || !log.gaps?.length) {
         continue;
       }
 
+      let resolvedHere = 0;
       const gaps = log.gaps.map((gap) => {
         if (gap.resolvedAt || !summarySet.has(gap.summary)) {
           return gap;
         }
         resolved += 1;
+        resolvedHere += 1;
         return { ...gap, resolvedAt, resolvedByProposalId: proposalId };
       });
       this.logs.set(log.id, { ...log, gaps });
+      if (resolvedHere > 0) {
+        resolvedFlows.add(log.flowId ?? "");
+      }
     }
 
-    if (resolved > 0) {
-      this.gapCatalogRevision += 1;
+    for (const flow of resolvedFlows) {
+      this.bumpCatalog(flow);
     }
     return resolved;
   }
@@ -228,7 +245,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
 
   async reset(): Promise<void> {
     this.logs.clear();
-    this.gapCatalogRevision = 0;
+    this.gapCatalogRevision.clear();
   }
 
   async listGapCandidates(limit: number): Promise<GapCandidate[]> {

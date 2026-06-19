@@ -6,7 +6,7 @@ import { RuntimeConfig } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
 
 type ModelInfo = ReturnType<typeof extractModelInfo>;
-type FlowKey = "overview" | "ask" | "improvement" | "queue" | "automation";
+type FlowKey = "overview" | "ask" | "improvement" | "queue" | "automation" | "perflow";
 
 // Initialize mermaid exactly once on the client. startOnLoad is false because we
 // render each diagram on demand via mermaid.run rather than letting it scan the
@@ -60,6 +60,12 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
             onClick={() => setActiveFlow("automation")}
           >
             Automation &amp; Crunch
+          </button>
+          <button
+            className={activeFlow === "perflow" ? "flowTab active" : "flowTab"}
+            onClick={() => setActiveFlow("perflow")}
+          >
+            Per-Flow Jobs
           </button>
         </div>
 
@@ -150,6 +156,9 @@ function buildDiagram(flow: FlowKey, modelInfo: ModelInfo): string {
   }
   if (flow === "automation") {
     return automationDiagram(modelInfo);
+  }
+  if (flow === "perflow") {
+    return perFlowJobsDiagram(modelInfo);
   }
   return overviewDiagram(modelInfo);
 }
@@ -328,19 +337,27 @@ function automationDiagram(modelInfo: ModelInfo): string {
     : modelInfo.chatModel || "Chat Model";
 
   return `graph TD
-    Scheduler["⏱️ Scheduler<br/>(cron settings per task)"]
+    Scheduler["⏱️ Scheduler<br/>(per-flow cron + run-lock)"]
 
-    subgraph GapsTask["<b>gaps → pull requests</b><br/>(default: hourly)"]
-        GCluster["📊 Cluster<br/>Open Gaps"]
+    subgraph GapsTask["<b>gaps → pull requests</b><br/>(per flow · every 10 min)"]
+        GPoll["🔍 Poll this flow's<br/>own open PRs"]
+        GCluster["📊 Cluster this flow's<br/>open gaps"]
         GDraft["🤖 ${chatLabel}<br/>Draft Uncovered<br/>Clusters"]
-        GPromote["⏩ Auto-promote<br/>draft → ready"]
         GPublish["🚀 Publish PRs<br/>(no manual review)"]
+        GPoll --> GCluster
         GCluster --> GDraft
-        GDraft --> GPromote
-        GPromote --> GPublish
+        GDraft --> GPublish
     end
 
-    subgraph CrunchTask["<b>Crunch</b><br/>(scheduled or on-demand)"]
+    subgraph SyncTask["<b>source change → KB sync</b><br/>(per flow · every 10 min)"]
+        SWatch["🔍 Watch this flow's<br/>git sources"]
+        SRewrite["🤖 ${chatLabel}<br/>Rewrite outdated<br/>docs it already covers"]
+        SBranch["🚀 Publish review branch"]
+        SWatch --> SRewrite
+        SRewrite --> SBranch
+    end
+
+    subgraph CrunchTask["<b>Crunch</b><br/>(per flow · scheduled or on-demand)"]
         CrPlan["🧹 ${chatLabel}<br/>Build Crunch Plan<br/>(tidy / consolidate)"]
         CrReview["👁️ Human Reviews<br/>Plan + Operations"]
         CrPublish["🚀 Publish Branch"]
@@ -348,25 +365,56 @@ function automationDiagram(modelInfo: ModelInfo): string {
         CrReview -->|Publish| CrPublish
     end
 
-    subgraph PrTask["<b>PR status refresh</b><br/>(default: every 10 min)"]
-        PrCheck["🔍 Check Open PRs<br/>on Host"]
-        PrOutcome{Merged?}
-        PrResolve["✅ Resolve Gaps<br/>+ Re-index KB"]
-        PrReject["🚫 Mark Rejected"]
-        PrCheck --> PrOutcome
-        PrOutcome -->|Merged| PrResolve
-        PrOutcome -->|Closed| PrReject
-    end
-
-    Scheduler --> GCluster
-    Scheduler --> CrPlan
-    Scheduler --> PrCheck
+    Scheduler -->|one job per flow| GPoll
+    Scheduler -->|one job per flow| SWatch
+    Scheduler -->|per flow| CrPlan
 
     GPublish --> Host["🌐 Git Host<br/>Pull Requests"]
+    SBranch --> Host
     CrPublish --> Host
-    Host --> PrCheck
+    Host -->|merged| Resolve["✅ Resolve Gaps<br/>+ Re-index KB"]
+    Host -.->|next run| GPoll
 
     style GapsTask fill:#fef9f0,stroke:#8b5a00,stroke-width:2px
-    style CrunchTask fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px
-    style PrTask fill:#e8f1f7,stroke:#285f74,stroke-width:2px`;
+    style SyncTask fill:#e8f1f7,stroke:#285f74,stroke-width:2px
+    style CrunchTask fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px`;
+}
+
+// Zooms into the per-flow reconciler: the scheduler fans out one job per flow,
+// each with its own cron and run-lock, and every step inside a job is scoped to
+// that flow alone — its own PRs, its own revision gate, its own outbox.
+function perFlowJobsDiagram(modelInfo: ModelInfo): string {
+  const chatLabel = modelInfo.chatModel && modelInfo.chatHost
+    ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
+    : modelInfo.chatModel || "Chat Model";
+
+  return `graph TD
+    Sched["⏱️ Scheduler tick"]
+    Sched -->|fan out: one job per flow| FA["🧵 Flow A job<br/>own cron + run-lock"]
+    Sched -->|fan out: one job per flow| FB["🧵 Flow B job<br/>own cron + run-lock"]
+    FA -.->|independent — a slow or stuck<br/>flow can't block the other| FB
+
+    FA --> Poll
+
+    subgraph Recon["<b>RECONCILER — scoped to Flow A</b>"]
+        Poll["🔍 Poll only Flow A's<br/>own open PRs"]
+        Gate{"Flow A's gap-catalog<br/>revision advanced?"}
+        Cluster["📊 Cluster Flow A's gaps<br/>(reshape within flow only)"]
+        Draft["🤖 ${chatLabel}<br/>Draft uncovered clusters"]
+        Enqueue["📥 Enqueue publish<br/>(outbox)"]
+        Outbox["📬 Drain Flow A's<br/>publish outbox"]
+        Poll --> Gate
+        Gate -->|unchanged| Outbox
+        Gate -->|advanced| Cluster
+        Cluster --> Draft
+        Draft --> Enqueue
+        Enqueue --> Outbox
+    end
+
+    Poll -->|merged| Resolve["✅ Resolve gaps<br/>+ Re-index KB"]
+    Poll -->|closed| Reject["🚫 Mark rejected<br/>+ freeze cluster"]
+    Outbox --> Host["🌐 Git Host<br/>Flow A's Pull Requests"]
+    Host -.->|next run| Poll
+
+    style Recon fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`;
 }

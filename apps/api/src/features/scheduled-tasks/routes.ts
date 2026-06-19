@@ -13,7 +13,7 @@ export function scheduledTaskRoutes(ctx: AppContext): Hono {
 
   app.post("/:key/settings", requireScopes("manage:jobs"), async (c) => {
     const key = c.req.param("key");
-    const task = findScheduledTask(key);
+    const task = findScheduledTask(ctx, key);
     if (!task) {
       throw new HttpError(404, "scheduled_task_not_found");
     }
@@ -34,7 +34,7 @@ export function scheduledTaskRoutes(ctx: AppContext): Hono {
 
   app.post("/:key/run", requireScopes("manage:jobs"), async (c) => {
     const key = c.req.param("key");
-    const task = findScheduledTask(key);
+    const task = findScheduledTask(ctx, key);
     if (!task) {
       throw new HttpError(404, "scheduled_task_not_found");
     }

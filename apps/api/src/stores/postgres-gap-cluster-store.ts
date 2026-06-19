@@ -132,17 +132,24 @@ export class PostgresGapClusterStore implements GapClusterStore {
     ]);
   }
 
-  async getProcessedRevision(): Promise<number> {
+  async getProcessedRevision(flowId?: string): Promise<number> {
     const result = await this.pool.query<{ processed_revision: string }>(
-      "SELECT processed_revision FROM gap_reconciler_state WHERE id = true"
+      "SELECT processed_revision FROM gap_reconciler_state WHERE flow_id = $1",
+      [flowId ?? ""]
     );
     return result.rows[0] ? Number(result.rows[0].processed_revision) : 0;
   }
 
-  async setProcessedRevision(revision: number, lastRunAt: string): Promise<void> {
+  async setProcessedRevision(flowId: string | undefined, revision: number, lastRunAt: string): Promise<void> {
     await this.pool.query(
-      "UPDATE gap_reconciler_state SET processed_revision = $1, last_run_at = $2 WHERE id = true",
-      [revision, lastRunAt]
+      `
+        INSERT INTO gap_reconciler_state (flow_id, processed_revision, last_run_at)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (flow_id) DO UPDATE
+          SET processed_revision = EXCLUDED.processed_revision,
+              last_run_at = EXCLUDED.last_run_at
+      `,
+      [flowId ?? "", revision, lastRunAt]
     );
   }
 
@@ -189,7 +196,7 @@ export class PostgresGapClusterStore implements GapClusterStore {
       await client.query("DELETE FROM gap_cluster_memberships");
       await client.query("UPDATE proposals SET gap_cluster_id = NULL WHERE gap_cluster_id IS NOT NULL");
       await client.query("DELETE FROM gap_clusters");
-      await client.query("UPDATE gap_reconciler_state SET processed_revision = 0, last_run_at = NULL WHERE id = true");
+      await client.query("DELETE FROM gap_reconciler_state");
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");

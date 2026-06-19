@@ -46,11 +46,16 @@ describe("PostgresGapClusterStore", { skip: databaseUrl ? false : "DATABASE_URL 
     assert.ok(!(await store.listActiveClusters()).some((x) => x.id === c.id));
   });
 
-  it("persists the processed revision", async () => {
-    await store.setProcessedRevision(11, new Date(0).toISOString());
+  it("persists the processed revision per flow", async () => {
+    await store.setProcessedRevision(undefined, 11, new Date(0).toISOString());
     assert.equal(await store.getProcessedRevision(), 11);
-    await store.setProcessedRevision(12, new Date(1000).toISOString());
+    await store.setProcessedRevision(undefined, 12, new Date(1000).toISOString());
     assert.equal(await store.getProcessedRevision(), 12);
+
+    // A named flow tracks independently of the default flow.
+    await store.setProcessedRevision("alpha", 5, new Date(2000).toISOString());
+    assert.equal(await store.getProcessedRevision("alpha"), 5);
+    assert.equal(await store.getProcessedRevision(), 12, "the default flow is unaffected");
   });
 
   it("queues and retries publication actions", async () => {

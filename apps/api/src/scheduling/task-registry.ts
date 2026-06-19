@@ -3,9 +3,9 @@ import type { AppContext } from "../context.js";
 import * as sourceSyncService from "../features/source-sync/service.js";
 import { reconcileGaps } from "./gap-reconciler.js";
 
-// A background side-process the operator can schedule from the Crunch page. The
-// registry is the single place to add new scheduled work: give it a key, copy,
-// a default cron, and a handler, and it appears in the UI and the scheduler.
+// A concrete, schedulable side-process. Each one is a single flow's instance of a
+// template below: it has its own key, schedule, and run-lock, so the UI and the
+// scheduler treat per-flow jobs as independent units.
 export interface ScheduledTaskDefinition {
   key: string;
   label: string;
@@ -14,47 +14,94 @@ export interface ScheduledTaskDefinition {
   run(ctx: AppContext): Promise<void>;
 }
 
-export const scheduledTaskDefinitions: ScheduledTaskDefinition[] = [
+// A side-process defined once and expanded to one concrete task per configured
+// flow. Running per flow means a busy flow can be scheduled tighter than a quiet
+// one, a slow or stuck flow can't block the others (separate run-locks), and a
+// gap/PR change in one flow only ever drives that flow's job. The registry is the
+// single place to add new scheduled work: give it a base key, copy, a default
+// cron, and a flow-scoped handler, and it appears per flow in the UI and scheduler.
+interface FlowTaskTemplate {
+  baseKey: string;
+  label(flowName: string): string;
+  description: string;
+  defaultCron: string;
+  run(ctx: AppContext, flowId: string | undefined): Promise<void>;
+}
+
+const flowTaskTemplates: FlowTaskTemplate[] = [
   {
-    key: "gaps-to-pull-requests",
-    label: "Clustered gaps → pull requests",
+    baseKey: "gaps-to-pull-requests",
+    label: (flow) => `Clustered gaps → pull requests · ${flow}`,
     description:
-      "Reconciles knowledge gaps into clusters and proposals, detects merged/closed pull requests, and " +
-      "publishes open proposals. Requires GITHUB_TOKEN for PR operations.",
+      "Reconciles this flow's knowledge gaps into clusters and proposals, detects merged/closed pull requests " +
+      "raised from its proposals, and publishes its open proposals. Requires GITHUB_TOKEN for PR operations.",
     defaultCron: "*/10 * * * *",
-    run: runGapReconciler
+    run: (ctx, flowId) => reconcileGaps(ctx, flowId)
   },
   {
-    key: "source-change-sync",
-    label: "Source change → knowledge base sync",
+    baseKey: "source-change-sync",
+    label: (flow) => `Source change → knowledge base sync · ${flow}`,
     description:
-      "Watches each flow's git sources for new commits. When a change outdates a knowledge-base document " +
-      "that already describes the affected behaviour (e.g. a threshold or date that moved), the document is " +
-      "rewritten to match and the result lands on a review branch. Only documents the knowledge base already " +
-      "covers are touched.",
+      "Watches this flow's git sources for new commits. When a change outdates a knowledge-base document that " +
+      "already describes the affected behaviour (e.g. a threshold or date that moved), the document is rewritten " +
+      "to match and the result lands on a review branch. Only documents the knowledge base already covers are touched.",
     defaultCron: "*/10 * * * *",
-    run: syncSourceChanges
+    run: (ctx, flowId) => syncSourceChangesForFlow(ctx, flowId)
   }
 ];
 
-export function findScheduledTask(key: string): ScheduledTaskDefinition | undefined {
-  return scheduledTaskDefinitions.find((task) => task.key === key);
+// Composite key encoding the base task and its flow. The un-routed/default flow
+// (when no flows are configured) uses the DEFAULT_FLOW_TOKEN. Flow ids are slugs,
+// so "::" can't collide with one.
+const FLOW_KEY_SEPARATOR = "::";
+const DEFAULT_FLOW_TOKEN = "default";
+
+function taskKey(baseKey: string, flowId: string | undefined): string {
+  return `${baseKey}${FLOW_KEY_SEPARATOR}${flowId ?? DEFAULT_FLOW_TOKEN}`;
 }
 
-// The default (unsaved) schedule for a registered task, so the UI can render a
-// control before the schedule has ever been saved.
+// The flows to expand tasks over: every configured flow, or a single un-routed
+// "default" flow when none are configured (mirroring the source-sync fallback).
+function expansionFlows(ctx: AppContext): Array<{ id: string | undefined; name: string }> {
+  const flows = ctx.knowledgeConfig.flows;
+  return flows.length > 0
+    ? flows.map((flow) => ({ id: flow.id, name: flow.name }))
+    : [{ id: undefined, name: "default" }];
+}
+
+// Every concrete scheduled task: the cartesian product of templates and flows.
+// Computed from config on each call so adding/removing a flow is picked up
+// without a restart.
+export function listScheduledTasks(ctx: AppContext): ScheduledTaskDefinition[] {
+  return flowTaskTemplates.flatMap((template) =>
+    expansionFlows(ctx).map((flow) => ({
+      key: taskKey(template.baseKey, flow.id),
+      label: template.label(flow.name),
+      description: template.description,
+      defaultCron: template.defaultCron,
+      run: (ctx: AppContext) => template.run(ctx, flow.id)
+    }))
+  );
+}
+
+export function findScheduledTask(ctx: AppContext, key: string): ScheduledTaskDefinition | undefined {
+  return listScheduledTasks(ctx).find((task) => task.key === key);
+}
+
+// The default (unsaved) schedule for a task, so the UI can render a control before
+// the schedule has ever been saved.
 function defaultScheduledTaskSettings(task: ScheduledTaskDefinition): ScheduledTaskSettings {
   return { key: task.key, enabled: false, cron: task.defaultCron };
 }
 
-// Always returns one row per registered task, merging in any saved schedule so
-// the UI can render a control even before the schedule has been saved once.
+// One row per concrete (per-flow) task, merging in any saved schedule so the UI
+// can render a control even before the schedule has been saved once.
 export async function scheduledTasksForResponse(ctx: AppContext): Promise<
   Array<{ key: string; label: string; description: string; settings: ScheduledTaskSettings }>
 > {
   const stored = await ctx.stores.scheduledTasks.listSettings();
   const byKey = new Map(stored.map((setting) => [setting.key, setting]));
-  return scheduledTaskDefinitions.map((task) => ({
+  return listScheduledTasks(ctx).map((task) => ({
     key: task.key,
     label: task.label,
     description: task.description,
@@ -62,33 +109,14 @@ export async function scheduledTasksForResponse(ctx: AppContext): Promise<
   }));
 }
 
-// The single gap-reconciliation job. It runs inline in the scheduler handler:
-// the deployment is single-instance today, so one process owns the cron. If
-// multi-instance deployment is introduced, this should enqueue a claimed AI job
-// (via the existing claim-lease) instead of running inline — see the reconciler
-// design seam noted in the plan.
-async function runGapReconciler(ctx: AppContext): Promise<void> {
-  await reconcileGaps(ctx);
-}
-
-// Runs the source-change sync for every configured flow (or the default flow
-// when none are configured). Each flow is best-effort and logged so one failure
-// can't abort the others.
-async function syncSourceChanges(ctx: AppContext): Promise<void> {
-  const flows = ctx.repositoryDeps().knowledgeConfig.flows;
-  const targets = flows.length > 0 ? flows.map((flow) => flow.id) : [undefined];
-
-  for (const flowId of targets) {
-    try {
-      const runs = await sourceSyncService.triggerSourceSyncRun(ctx, { flowId, trigger: "scheduled" });
-      for (const run of runs) {
-        console.log(
-          `Source-change sync run ${run.id} (${run.status}) for source ${run.sourceId} in flow ${flowId ?? "default"}.`
-        );
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "source-change sync failed";
-      console.warn(`Source-change sync failed for flow ${flowId ?? "default"}: ${message}`);
-    }
+// Runs the source-change sync for a single flow. Per-flow error isolation is now
+// the scheduler's job (each flow is its own task with its own try/catch), so this
+// no longer loops or swallows failures itself.
+async function syncSourceChangesForFlow(ctx: AppContext, flowId: string | undefined): Promise<void> {
+  const runs = await sourceSyncService.triggerSourceSyncRun(ctx, { flowId, trigger: "scheduled" });
+  for (const run of runs) {
+    console.log(
+      `Source-change sync run ${run.id} (${run.status}) for source ${run.sourceId} in flow ${flowId ?? "default"}.`
+    );
   }
 }

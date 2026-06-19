@@ -17,7 +17,7 @@ describe("reconcileGaps revision gate", () => {
       }) as never;
 
     // processed revision already equals the catalog revision (both 0), no actions.
-    await reconcileGaps(ctx, { fetchPullRequestStatus: async () => undefined });
+    await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
     assert.equal(chatCalls, 0, "no model calls when nothing changed");
   });
 
@@ -41,7 +41,7 @@ describe("reconcileGaps revision gate", () => {
     });
 
     let lookups = 0;
-    await reconcileGaps(ctx, {
+    await reconcileGaps(ctx, undefined, {
       fetchPullRequestStatus: async () => {
         lookups += 1;
         return { merged: true, state: "closed" };
@@ -67,7 +67,7 @@ describe("reconcileGaps clustering", () => {
     // No merges/splits proposed.
     ctx.providers.chat = () => ({ complete: async () => ({ content: '{"merges":[],"splits":[]}' }) }) as never;
 
-    await reconcileGaps(ctx, { fetchPullRequestStatus: async () => undefined });
+    await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
 
     const clusters = await ctx.stores.gapClusters.listActiveClusters();
     assert.equal(clusters.length, 1, "the new gap created one cluster");
@@ -97,7 +97,7 @@ describe("reconcileGaps clustering", () => {
       }) as never;
 
     const before = await ctx.stores.gapClusters.listActiveClusters();
-    await reconcileGaps(ctx, { fetchPullRequestStatus: async () => undefined });
+    await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
     const after = await ctx.stores.gapClusters.listActiveClusters();
 
     assert.ok(proposeCalls >= 1 && criticCalls >= 1, "propose then critic were called");
@@ -120,7 +120,7 @@ describe("reconcileGaps clustering", () => {
       }) as never;
 
     const membershipsBefore = await ctx.stores.gapClusters.listActiveMemberships();
-    await reconcileGaps(ctx, { fetchPullRequestStatus: async () => undefined });
+    await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
 
     const after = await ctx.stores.gapClusters.listActiveClusters();
     assert.equal(after.length, 1, "the two clusters merged into one survivor");
@@ -145,7 +145,7 @@ describe("reconcileGaps autonomous drafting", () => {
     ctx.providers.chat = () => ({ complete: async () => ({ content: '{"merges":[],"splits":[]}' }) }) as never;
 
     let published = 0;
-    await reconcileGaps(ctx, {
+    await reconcileGaps(ctx, undefined, {
       fetchPullRequestStatus: async () => undefined,
       publishProposal: async () => {
         published += 1;
@@ -182,7 +182,7 @@ describe("reconcileGaps autonomous drafting", () => {
       retrievedSectionIds: []
     });
     await ctx.stores.questionLogs.recordManualGap(log1.id, "Topic one");
-    await reconcileGaps(ctx, deps);
+    await reconcileGaps(ctx, undefined, deps);
     assert.equal((await ctx.stores.proposals.list(500)).length, 1, "first run drafts one proposal");
 
     // A new, distinct gap advances the catalog and reopens the gate.
@@ -193,7 +193,7 @@ describe("reconcileGaps autonomous drafting", () => {
       retrievedSectionIds: []
     });
     await ctx.stores.questionLogs.recordManualGap(log2.id, "Topic two");
-    await reconcileGaps(ctx, deps);
+    await reconcileGaps(ctx, undefined, deps);
 
     const proposals = await ctx.stores.proposals.list(500);
     assert.equal(proposals.length, 2, "only the newly uncovered cluster was drafted; the existing proposal was untouched");
@@ -223,7 +223,7 @@ describe("reconcileGaps outbox", () => {
       }) as never;
 
     let publishCalls = 0;
-    await reconcileGaps(ctx, {
+    await reconcileGaps(ctx, undefined, {
       fetchPullRequestStatus: async () => undefined,
       publishProposal: async () => {
         publishCalls += 1;

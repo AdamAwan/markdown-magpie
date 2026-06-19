@@ -22,8 +22,11 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     this.pool = new Pool({ connectionString });
   }
 
-  async getGapCatalogRevision(): Promise<number> {
-    const result = await this.pool.query<{ revision: string }>("SELECT revision FROM gap_catalog WHERE id = true");
+  async getGapCatalogRevision(flowId?: string): Promise<number> {
+    const result = await this.pool.query<{ revision: string }>(
+      "SELECT revision FROM gap_catalog WHERE flow_id = $1",
+      [flowId ?? ""]
+    );
     return result.rows[0] ? Number(result.rows[0].revision) : 0;
   }
 
@@ -90,7 +93,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       const autoSummaries = autoGapSummaries(input.answer);
       await insertGapRows(client, id, autoSummaries);
       if (autoSummaries.length > 0) {
-        await bumpGapCatalog(client);
+        await bumpGapCatalog(client, input.flowId ?? null);
       }
 
       for (const citation of input.answer?.citations ?? []) {
@@ -179,7 +182,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'auto'", [id]);
       await insertGapRows(client, id, autoGapSummaries(input.answer));
       // Re-answering replaces the auto-detected gaps, changing the candidate set.
-      await bumpGapCatalog(client);
+      await bumpGapCatalog(client, existing.flowId ?? null);
       await client.query("DELETE FROM answer_citations WHERE question_id = $1", [id]);
 
       for (const citation of input.answer.citations) {
@@ -242,7 +245,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           SET manual_gap = true,
               manual_gap_at = now()
           WHERE id = $1
-          RETURNING question
+          RETURNING question, flow_id
         `,
         [id]
       );
@@ -254,10 +257,11 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
 
       // Replace any prior manual gap; auto-detected gaps are left untouched. The
       // summary falls back to the question text when none is supplied.
-      const manualSummary = trimmed && trimmed.length > 0 ? trimmed : (result.rows[0] as { question: string }).question;
+      const row = result.rows[0] as { question: string; flow_id: string | null };
+      const manualSummary = trimmed && trimmed.length > 0 ? trimmed : row.question;
       await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'manual'", [id]);
       await insertGapRows(client, id, [manualSummary], "manual");
-      await bumpGapCatalog(client);
+      await bumpGapCatalog(client, row.flow_id);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -273,12 +277,13 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      const result = await client.query(
+      const result = await client.query<{ flow_id: string | null }>(
         `
           UPDATE questions
           SET manual_gap = false,
               manual_gap_at = null
           WHERE id = $1
+          RETURNING flow_id
         `,
         [id]
       );
@@ -291,7 +296,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       // Drop the manual flag's gap; any auto-detected gaps remain candidates.
       const deleted = await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'manual'", [id]);
       if ((deleted.rowCount ?? 0) > 0) {
-        await bumpGapCatalog(client);
+        await bumpGapCatalog(client, result.rows[0].flow_id);
       }
       await client.query("COMMIT");
     } catch (error) {
@@ -359,21 +364,29 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      const result = await client.query(
+      const result = await client.query<{ question_id: string }>(
         `
           UPDATE question_gaps
           SET resolved_at = now(), resolved_by_proposal_id = $3
           WHERE question_id = ANY($1)
             AND summary = ANY($2)
             AND resolved_at IS NULL
+          RETURNING question_id
         `,
         [questionIds, trimmedSummaries, proposalId]
       );
       const resolved = result.rowCount ?? 0;
-      // Resolving gaps removes them from the candidate set, so the catalog
-      // advances in the same transaction.
+      // Resolving gaps removes them from the candidate set, so each affected
+      // flow's catalog advances in the same transaction.
       if (resolved > 0) {
-        await bumpGapCatalog(client);
+        const affectedQuestionIds = [...new Set(result.rows.map((r) => r.question_id))];
+        const flows = await client.query<{ flow_id: string }>(
+          "SELECT DISTINCT coalesce(flow_id, '') AS flow_id FROM questions WHERE id = ANY($1)",
+          [affectedQuestionIds]
+        );
+        for (const { flow_id } of flows.rows) {
+          await bumpGapCatalog(client, flow_id);
+        }
       }
       await client.query("COMMIT");
       return resolved;
@@ -456,11 +469,18 @@ async function insertGapRows(
   }
 }
 
-// Advances the monotonic gap-catalog revision. Called inside the same
-// transaction as any change to the unresolved candidate gaps so the reconciler
-// can gate model work on it.
-async function bumpGapCatalog(client: pg.PoolClient): Promise<void> {
-  await client.query("UPDATE gap_catalog SET revision = revision + 1 WHERE id = true");
+// Advances the monotonic gap-catalog revision for one flow ('' is the
+// un-routed/default flow). Called inside the same transaction as any change to
+// that flow's unresolved candidate gaps so the reconciler can gate model work on
+// it. Upserts so a flow that has never had a gap still gets its first revision.
+async function bumpGapCatalog(client: pg.PoolClient, flowId: string | null): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO gap_catalog (flow_id, revision) VALUES ($1, 1)
+      ON CONFLICT (flow_id) DO UPDATE SET revision = gap_catalog.revision + 1
+    `,
+    [flowId ?? ""]
+  );
 }
 
 function autoGapSummaries(answer: AnswerResult | undefined): string[] {

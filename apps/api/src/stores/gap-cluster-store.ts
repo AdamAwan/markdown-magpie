@@ -57,8 +57,11 @@ export interface GapClusterStore {
   assignGapToCluster(clusterId: string, gapId: string, rationale?: string): Promise<void>;
   deactivateClusterMemberships(clusterId: string): Promise<void>;
 
-  getProcessedRevision(): Promise<number>;
-  setProcessedRevision(revision: number, lastRunAt: string): Promise<void>;
+  // Last catalog revision whose clustering is committed, per flow ('' is the
+  // un-routed/default flow). Scoped per flow so each flow's reconciler gates on
+  // its own progress. flowId omitted reads/writes the default flow.
+  getProcessedRevision(flowId?: string): Promise<number>;
+  setProcessedRevision(flowId: string | undefined, revision: number, lastRunAt: string): Promise<void>;
 
   enqueuePublicationAction(proposalId: string, kind: "publish" | "supersede"): Promise<PublicationActionRecord>;
   listPendingPublicationActions(): Promise<PublicationActionRecord[]>;
@@ -72,8 +75,9 @@ export class InMemoryGapClusterStore implements GapClusterStore {
   private clusters = new Map<string, GapClusterRecord>();
   private memberships = new Map<string, GapClusterMembershipRecord>();
   private actions = new Map<string, PublicationActionRecord>();
-  private processedRevision = 0;
-  private processedRunAt: string | undefined;
+  // Processed revision per flow ('' is the un-routed/default flow).
+  private processedRevision = new Map<string, number>();
+  private processedRunAt = new Map<string, string>();
   private seq = 0;
 
   private nextId(prefix: string): string {
@@ -163,13 +167,13 @@ export class InMemoryGapClusterStore implements GapClusterStore {
     }
   }
 
-  async getProcessedRevision(): Promise<number> {
-    return this.processedRevision;
+  async getProcessedRevision(flowId?: string): Promise<number> {
+    return this.processedRevision.get(flowId ?? "") ?? 0;
   }
 
-  async setProcessedRevision(revision: number, lastRunAt: string): Promise<void> {
-    this.processedRevision = revision;
-    this.processedRunAt = lastRunAt;
+  async setProcessedRevision(flowId: string | undefined, revision: number, lastRunAt: string): Promise<void> {
+    this.processedRevision.set(flowId ?? "", revision);
+    this.processedRunAt.set(flowId ?? "", lastRunAt);
   }
 
   async enqueuePublicationAction(proposalId: string, kind: "publish" | "supersede"): Promise<PublicationActionRecord> {
@@ -218,8 +222,8 @@ export class InMemoryGapClusterStore implements GapClusterStore {
     this.clusters.clear();
     this.memberships.clear();
     this.actions.clear();
-    this.processedRevision = 0;
-    this.processedRunAt = undefined;
+    this.processedRevision.clear();
+    this.processedRunAt.clear();
     this.seq = 0;
   }
 }
