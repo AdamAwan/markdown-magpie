@@ -1,0 +1,135 @@
+import type { ZodType } from "zod";
+import * as schemas from "./schemas.js";
+import {
+  AI_PROVIDERS,
+  JOB_TYPES,
+  isAiProviderName,
+  type AiProviderName,
+  type JobCapability,
+  type JobDefinition,
+  type JobPolicy,
+  type JobType,
+  type QueueDefinition
+} from "./types.js";
+
+const DAY = 24 * 60 * 60;
+const BASE_POLICY = {
+  retryBackoff: "exponential",
+  heartbeatSeconds: 60,
+  retentionSeconds: 14 * DAY,
+  deleteAfterSeconds: 30 * DAY
+} as const;
+
+function policy(providerWork: boolean, expireInSeconds: number): Readonly<JobPolicy> {
+  return Object.freeze({
+    ...BASE_POLICY,
+    retryLimit: providerWork ? 3 : 2,
+    retryDelaySeconds: providerWork ? 15 : 30,
+    retryMaxDelaySeconds: providerWork ? 300 : 600,
+    expireInSeconds
+  });
+}
+
+function define(
+  type: JobType,
+  capability: JobCapability | "provider",
+  inputSchema: ZodType,
+  outputSchema: ZodType,
+  expireInSeconds: number
+): JobDefinition {
+  const providerWork = capability === "provider";
+  const requiredCapability = (input: unknown): JobCapability => {
+    if (!providerWork) {
+      return capability;
+    }
+    const provider = (input as { provider?: unknown } | null)?.provider;
+    if (!isAiProviderName(provider)) {
+      throw new TypeError(`AI job ${type} requires a valid provider`);
+    }
+    return provider;
+  };
+  const queueName = (input: unknown): string => {
+    const required = requiredCapability(input);
+    return providerWork ? `${type}__${required.replaceAll("-", "_")}` : type;
+  };
+  return Object.freeze({
+    type,
+    inputSchema,
+    outputSchema,
+    policy: policy(providerWork, expireInSeconds),
+    requiredCapability,
+    queueName
+  });
+}
+
+const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
+  answer_question: define("answer_question", "provider", schemas.answerQuestionInputSchema, schemas.answerQuestionOutputSchema, 5 * 60),
+  summarize_gap: define("summarize_gap", "provider", schemas.summarizeGapInputSchema, schemas.summarizeGapOutputSchema, 10 * 60),
+  draft_markdown_proposal: define("draft_markdown_proposal", "provider", schemas.draftMarkdownProposalInputSchema, schemas.draftMarkdownProposalOutputSchema, 15 * 60),
+  detect_contradiction: define("detect_contradiction", "provider", schemas.detectContradictionInputSchema, schemas.detectContradictionOutputSchema, 10 * 60),
+  suggest_consolidation: define("suggest_consolidation", "provider", schemas.suggestConsolidationInputSchema, schemas.suggestConsolidationOutputSchema, 10 * 60),
+  crunch_knowledge_base: define("crunch_knowledge_base", "provider", schemas.crunchKnowledgeBaseInputSchema, schemas.crunchKnowledgeBaseOutputSchema, 60 * 60),
+  cluster_gap_candidates: define("cluster_gap_candidates", "provider", schemas.clusterGapCandidatesInputSchema, schemas.clusterGapCandidatesOutputSchema, 5 * 60),
+  refresh_pull_requests: define("refresh_pull_requests", "github", schemas.refreshPullRequestsInputSchema, schemas.refreshPullRequestsOutputSchema, 5 * 60),
+  process_gaps_to_pull_requests: define("process_gaps_to_pull_requests", "maintenance", schemas.processGapsToPullRequestsInputSchema, schemas.processGapsToPullRequestsOutputSchema, 60 * 60),
+  trigger_scheduled_crunch: define("trigger_scheduled_crunch", "maintenance", schemas.triggerScheduledCrunchInputSchema, schemas.triggerScheduledCrunchOutputSchema, 60 * 60),
+  publish_proposal: define("publish_proposal", "github", schemas.publishProposalInputSchema, schemas.publishProposalOutputSchema, 15 * 60),
+  publish_crunch: define("publish_crunch", "github", schemas.publishCrunchInputSchema, schemas.publishCrunchOutputSchema, 15 * 60)
+});
+
+export function jobDefinition(type: JobType): JobDefinition {
+  return definitions[type];
+}
+
+export function queueNameForJob(type: JobType, input: unknown): string {
+  return jobDefinition(type).queueName(input);
+}
+
+const aiJobTypes = new Set<JobType>([
+  "answer_question",
+  "summarize_gap",
+  "draft_markdown_proposal",
+  "detect_contradiction",
+  "suggest_consolidation",
+  "crunch_knowledge_base",
+  "cluster_gap_candidates"
+]);
+
+function concreteWorkQueues(): QueueDefinition[] {
+  return JOB_TYPES.flatMap((type) => {
+    const definition = jobDefinition(type);
+    if (aiJobTypes.has(type)) {
+      return AI_PROVIDERS.map((provider) => concreteQueue(definition, provider));
+    }
+    return [concreteQueue(definition, definition.requiredCapability({}))];
+  });
+}
+
+function concreteQueue(definition: JobDefinition, capability: JobCapability): QueueDefinition {
+  const input = aiJobTypes.has(definition.type) ? { provider: capability as AiProviderName } : {};
+  const name = definition.queueName(input);
+  const deadLetter = `${name}__dead_letter`;
+  return Object.freeze({
+    name,
+    type: definition.type,
+    capability,
+    deadLetter: false,
+    policy: Object.freeze({ ...definition.policy, deadLetter })
+  });
+}
+
+const workQueues = concreteWorkQueues();
+
+export const allQueueDefinitions: readonly QueueDefinition[] = Object.freeze([
+  ...workQueues,
+  ...workQueues.map((queue) => Object.freeze({
+    name: queue.policy!.deadLetter!,
+    type: queue.type,
+    deadLetter: true
+  }))
+]);
+
+export function queueNamesForCapabilities(capabilities: readonly JobCapability[]): string[] {
+  const accepted = new Set(capabilities);
+  return workQueues.filter((queue) => accepted.has(queue.capability!)).map((queue) => queue.name);
+}
