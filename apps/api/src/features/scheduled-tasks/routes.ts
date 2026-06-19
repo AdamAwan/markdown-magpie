@@ -39,11 +39,35 @@ export function scheduledTaskRoutes(ctx: AppContext): Hono {
       throw new HttpError(404, "scheduled_task_not_found");
     }
 
+    // Take the run-lock up front so a manual run can't start alongside a
+    // scheduled run, another tab's run, or a run on another instance. A held
+    // lock means a run is already in flight, so report 409 rather than piling on.
+    const lock = await ctx.stores.scheduledTasks.tryAcquireRun(key, task.defaultCron);
+    if (!lock) {
+      return c.json(
+        {
+          ok: false,
+          started: false,
+          reason: "already_running",
+          message: "A run for this side-process is already in progress.",
+          tasks: await scheduledTasksForResponse(ctx)
+        },
+        409
+      );
+    }
+
     // A manual run drives the same (potentially long, AI + git) pipeline the
     // scheduler runs. Kick it off the request thread and return 202; the task's
     // effects are observable via the proposals/crunch/source-sync endpoints, and
-    // failures are logged by the background runner.
-    ctx.background.run(`scheduled-task ${key}`, () => task.run(ctx));
+    // failures are logged by the background runner. The lock is released when the
+    // background run settles, win or lose.
+    ctx.background.run(`scheduled-task ${key}`, async () => {
+      try {
+        await task.run(ctx);
+      } finally {
+        await ctx.stores.scheduledTasks.releaseRun(key);
+      }
+    });
     return c.json({ ok: true, started: true, tasks: await scheduledTasksForResponse(ctx) }, 202);
   });
 

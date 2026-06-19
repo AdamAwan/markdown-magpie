@@ -1,7 +1,7 @@
 import pg from "pg";
 import type { ScheduledTaskSettings } from "@magpie/core";
 import { nextRunFor } from "./crunch-store.js";
-import type { ScheduledTaskStore } from "./scheduled-task-store.js";
+import { runLockStaleMs, type ScheduledTaskStore } from "./scheduled-task-store.js";
 
 const { Pool } = pg;
 
@@ -72,6 +72,34 @@ export class PostgresScheduledTaskStore implements ScheduledTaskStore {
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
+  async tryAcquireRun(key: string, defaultCron: string): Promise<ScheduledTaskSettings | undefined> {
+    // Atomic compare-and-set on the run-lock. INSERT creates the row for a task
+    // that was never saved (so "Run now" still locks); on conflict the lock is
+    // taken only when it is free or stale. A losing caller gets zero rows back
+    // and skips, so at most one run is ever in flight across all instances.
+    const staleCutoffSeconds = Math.floor(runLockStaleMs() / 1000);
+    const result = await this.pool.query<ScheduledTaskRow>(
+      `
+        INSERT INTO scheduled_task_settings (task_key, enabled, cron, running_since)
+        VALUES ($1, false, $2, now())
+        ON CONFLICT (task_key) DO UPDATE
+          SET running_since = now()
+          WHERE scheduled_task_settings.running_since IS NULL
+             OR scheduled_task_settings.running_since < now() - make_interval(secs => $3)
+        RETURNING *
+      `,
+      [key, defaultCron, staleCutoffSeconds]
+    );
+    return result.rows[0] ? mapRow(result.rows[0]) : undefined;
+  }
+
+  async releaseRun(key: string): Promise<void> {
+    await this.pool.query(
+      "UPDATE scheduled_task_settings SET running_since = NULL WHERE task_key = $1",
+      [key]
+    );
+  }
+
   async reset(): Promise<void> {
     await this.pool.query("DELETE FROM scheduled_task_settings");
   }
@@ -83,6 +111,7 @@ interface ScheduledTaskRow {
   cron: string;
   last_run_at: Date | null;
   next_run_at: Date | null;
+  running_since: Date | null;
 }
 
 function mapRow(row: ScheduledTaskRow): ScheduledTaskSettings {
@@ -91,6 +120,7 @@ function mapRow(row: ScheduledTaskRow): ScheduledTaskSettings {
     enabled: row.enabled,
     cron: row.cron,
     lastRunAt: row.last_run_at ? row.last_run_at.toISOString() : undefined,
-    nextRunAt: row.next_run_at ? row.next_run_at.toISOString() : undefined
+    nextRunAt: row.next_run_at ? row.next_run_at.toISOString() : undefined,
+    runningSince: row.running_since ? row.running_since.toISOString() : undefined
   };
 }

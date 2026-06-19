@@ -566,6 +566,10 @@ export interface ScheduledTaskSettings {
   cron: string;
   lastRunAt?: string;
   nextRunAt?: string;
+  // Set while a run (scheduled or manual) is in flight, and cleared when it
+  // finishes. The UI disables "Run now" while this is set, and both trigger
+  // paths refuse to start an overlapping run.
+  runningSince?: string;
 }
 
 // --- Cron scheduling -------------------------------------------------------

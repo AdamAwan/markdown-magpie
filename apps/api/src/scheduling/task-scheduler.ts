@@ -41,12 +41,21 @@ export class TaskScheduler extends IntervalScheduler {
       if (!claimed) {
         continue;
       }
+      // Take the run-lock so this slot can't overlap a still-running previous run
+      // or a manual "Run now". If a run is already in flight we drop this slot.
+      const lock = await this.ctx.stores.scheduledTasks.tryAcquireRun(task.key, task.defaultCron);
+      if (!lock) {
+        console.log(`Scheduled task ${task.key} is due, but a run is already in flight; skipping this slot.`);
+        continue;
+      }
       console.log(`Scheduled task ${task.key} due; running.`);
       try {
         await task.run(this.ctx);
       } catch (error) {
         const message = error instanceof Error ? error.message : "scheduled task run failed";
         console.error(`Scheduled task ${task.key} failed: ${message}`);
+      } finally {
+        await this.ctx.stores.scheduledTasks.releaseRun(task.key);
       }
     }
   }

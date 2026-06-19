@@ -450,7 +450,7 @@ function useConsoleController() {
     try {
       const result = await apiPost<{ tasks: ScheduledTask[] }>(`/scheduled-tasks/${key}/run`, {});
       setScheduledTasks(result.tasks);
-      showMessage("Side-process run complete.", "success");
+      showMessage("Side-process started; it runs in the background.", "success");
       await refresh({ preserveMessage: true });
     } catch (error) {
       showMessage(errorMessage(error), "danger");

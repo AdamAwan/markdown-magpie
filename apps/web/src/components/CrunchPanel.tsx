@@ -162,7 +162,7 @@ function ScheduleEditor({
   onRun: () => Promise<void>;
   onSave: (enabled: boolean, cron: string) => Promise<void>;
   placeholder: string;
-  setting: { enabled: boolean; cron: string; nextRunAt?: string; lastRunAt?: string };
+  setting: { enabled: boolean; cron: string; nextRunAt?: string; lastRunAt?: string; runningSince?: string };
   title: string;
 }) {
   const [enabled, setEnabled] = useState(setting.enabled);
@@ -198,8 +198,11 @@ function ScheduleEditor({
               : "Schedule disabled"}
           </p>
         </div>
-        <span className={`status ${setting.enabled ? "completed" : "pending"}`} title="Schedule status">
-          {setting.enabled ? "On" : "Off"}
+        <span
+          className={`status ${setting.runningSince ? "running" : setting.enabled ? "completed" : "pending"}`}
+          title={setting.runningSince ? "A run is in progress" : "Schedule status"}
+        >
+          {setting.runningSince ? "Running" : setting.enabled ? "On" : "Off"}
         </span>
       </div>
       {description ? <p className="hint">{description}</p> : null}
@@ -238,8 +241,14 @@ function ScheduleEditor({
           >
             Save schedule
           </button>
-          <button className="button" disabled={loading} onClick={() => void onRun()} type="button">
-            Run now
+          <button
+            className="button"
+            disabled={loading || Boolean(setting.runningSince)}
+            onClick={() => void onRun()}
+            title={setting.runningSince ? "A run is already in progress" : "Run this side-process now"}
+            type="button"
+          >
+            {setting.runningSince ? "Running…" : "Run now"}
           </button>
         </div>
       </div>
