@@ -30,6 +30,7 @@ import {
   getConfiguredKnowledgeSources
 } from "./stores/knowledge-repositories.js";
 import { checkoutRoot, syncConfiguredGitCheckouts, type RepositoryDeps } from "./platform/repositories.js";
+import { backfillGapClusters } from "./scheduling/gap-backfill.js";
 
 export interface AppContext {
   stores: {
@@ -123,6 +124,14 @@ export async function createAppContext(): Promise<AppContext> {
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         console.error(`Failed to hydrate knowledge index from storage: ${message}`);
+      }
+      // Best-effort one-shot migration: give pre-existing proposals a gap cluster
+      // so the reconciler has lineage to work from. No-ops once clusters exist.
+      try {
+        await backfillGapClusters(this);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        console.error(`Failed to backfill gap clusters: ${message}`);
       }
     }
   };
