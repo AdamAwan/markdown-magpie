@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import type { Citation, Proposal } from "@magpie/core";
+import type { Citation, DraftContext, Proposal } from "@magpie/core";
 import type { ProposalInput, ProposalListOptions, ProposalStore } from "./proposal-store.js";
 
 const { Pool } = pg;
@@ -18,9 +18,10 @@ export class PostgresProposalStore implements ProposalStore {
       `
         INSERT INTO proposals (
           id, title, status, target_path, markdown, evidence, gap_summary,
-          triggering_question_ids, rationale, job_id, destination_id, gap_cluster_id
+          triggering_question_ids, rationale, job_id, destination_id, gap_cluster_id,
+          draft_context
         )
-        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11::bigint)
+        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11::bigint, $12)
         RETURNING *
       `,
       [
@@ -34,7 +35,8 @@ export class PostgresProposalStore implements ProposalStore {
         input.rationale,
         input.jobId ?? null,
         input.destinationId ?? null,
-        input.gapClusterId ?? null
+        input.gapClusterId ?? null,
+        input.draftContext ? JSON.stringify(input.draftContext) : null
       ]
     );
 
@@ -119,6 +121,7 @@ interface ProposalRow {
   destination_id: string | null;
   gap_cluster_id: string | null;
   publication: Proposal["publication"] | null;
+  draft_context: DraftContext | null;
   created_at: Date;
   merged_at: Date | null;
 }
@@ -138,6 +141,7 @@ function mapRow(row: ProposalRow): Proposal {
     rationale: row.rationale ?? undefined,
     jobId: row.job_id ?? undefined,
     publication: row.publication ?? undefined,
+    draftContext: row.draft_context ?? undefined,
     createdAt: row.created_at.toISOString(),
     mergedAt: row.merged_at?.toISOString()
   };

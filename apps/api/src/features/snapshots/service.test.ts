@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { makeTestContext } from "../../test-support/context.js";
-import { refreshSnapshot } from "./service.js";
+import { listFlowSnapshots, readFlowSnapshot, refreshSnapshot } from "./service.js";
 
 const noPulls = { pollPullRequest: async () => ({ notModified: false }) };
 
@@ -124,5 +124,39 @@ describe("refreshSnapshot", () => {
 
     const alphaSnapshot = await refreshSnapshot(ctx, "alpha", noPulls);
     assert.ok(alphaSnapshot.proposals.some((p) => p.id === proposal.id), "alpha's proposal is in the alpha snapshot");
+  });
+});
+
+describe("reading snapshots for the UI", () => {
+  it("lists only flows whose snapshot has been written, labelled by flow name", async () => {
+    const ctx = makeTestContext({
+      knowledgeConfig: {
+        sources: [],
+        destinations: [],
+        flows: [{ id: "alpha", name: "Alpha flow", sourceIds: [], destinationId: "d" }],
+        repositories: [],
+        checkoutRoot: ".magpie/checkouts"
+      }
+    });
+
+    // Nothing written yet.
+    assert.deepEqual(await listFlowSnapshots(ctx), []);
+
+    await refreshSnapshot(ctx, undefined, noPulls);
+    await refreshSnapshot(ctx, "alpha", noPulls);
+
+    const views = await listFlowSnapshots(ctx);
+    assert.equal(views.length, 2);
+    assert.equal(views.find((v) => v.flowId === undefined)?.flowName, "Default flow");
+    assert.equal(views.find((v) => v.flowId === "alpha")?.flowName, "Alpha flow");
+  });
+
+  it("reads one flow's snapshot and returns undefined when absent", async () => {
+    const ctx = makeTestContext();
+    assert.equal(await readFlowSnapshot(ctx, undefined), undefined);
+
+    await refreshSnapshot(ctx, undefined, noPulls);
+    const view = await readFlowSnapshot(ctx, undefined);
+    assert.equal(view?.flowName, "Default flow");
   });
 });

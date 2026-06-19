@@ -204,10 +204,30 @@ export interface Proposal {
   rationale?: string;
   jobId?: string;
   publication?: ProposalPublication;
+  // A compact record of the context the model was given when it drafted this
+  // proposal — the gaps, the source files, how much evidence, and the flow's
+  // in-flight work it was told about. Lets a reviewer see what the draft was
+  // based on, not just its output. Absent on proposals drafted before this was
+  // captured.
+  draftContext?: DraftContext;
   createdAt: string;
   // Stamped when the proposal is marked merged. Marking merged also resolves the
   // gaps it closed so they stop surfacing as candidates.
   mergedAt?: string;
+}
+
+// The inputs handed to the drafter, kept alongside the proposal so the context
+// is inspectable after the fact regardless of execution mode (direct or queued).
+// Deliberately compact: source file identities, not their bodies.
+export interface DraftContext {
+  // The gap summaries the draft set out to close.
+  gapSummaries: string[];
+  // The source files the model received as raw material (identity only).
+  sourceFiles: Array<{ sourceName: string; path?: string; url?: string }>;
+  // How many evidence citations were attached.
+  evidenceCount: number;
+  // The flow's in-flight proposals / open pull requests the model was shown.
+  openPullRequests: OpenPullRequestContext[];
 }
 
 // Canonical location for a drafted proposal within its destination repository.

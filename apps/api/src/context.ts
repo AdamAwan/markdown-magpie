@@ -8,6 +8,7 @@ import {
   createGapClusterStore,
   createProposalStore,
   createQuestionLogStore,
+  createReconciliationDecisionStore,
   createScheduledTaskStore,
   createSnapshotStore,
   createSourceSyncStore,
@@ -44,6 +45,7 @@ export interface AppContext {
     sourceSync: ReturnType<typeof createSourceSyncStore>;
     aiJobs: ReturnType<typeof createAiJobQueue>;
     gapClusters: ReturnType<typeof createGapClusterStore>;
+    reconciliations: ReturnType<typeof createReconciliationDecisionStore>;
     snapshots: ReturnType<typeof createSnapshotStore>;
   };
   providers: {
@@ -103,6 +105,7 @@ export async function createAppContext(): Promise<AppContext> {
       sourceSync: createSourceSyncStore(),
       aiJobs: createAiJobQueue(claimTimeoutMs),
       gapClusters: createGapClusterStore(),
+      reconciliations: createReconciliationDecisionStore(),
       snapshots: createSnapshotStore()
     },
     providers: {

@@ -9,6 +9,7 @@ import { InMemoryGapClusterStore } from "../stores/gap-cluster-store.js";
 import { InMemoryKnowledgeIndex } from "../stores/knowledge-index.js";
 import { InMemoryProposalStore } from "../stores/proposal-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
+import { InMemoryReconciliationDecisionStore } from "../stores/reconciliation-decision-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
 import { InMemorySnapshotStore } from "../stores/snapshot-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
@@ -53,6 +54,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
       sourceSync: new InMemorySourceSyncStore(),
       aiJobs: new InMemoryAiJobQueue(),
       gapClusters: new InMemoryGapClusterStore(),
+      reconciliations: new InMemoryReconciliationDecisionStore(),
       snapshots: new InMemorySnapshotStore()
     },
     providers: {

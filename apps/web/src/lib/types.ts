@@ -30,7 +30,15 @@ export type {
   SuggestedGapCluster
 } from "@magpie/core";
 
-import type { AiExecutionMode, AiJob, AnswerResult, QuestionFeedback, ScheduledTaskSettings } from "@magpie/core";
+import type {
+  AiExecutionMode,
+  AiJob,
+  AnswerResult,
+  GapCandidate,
+  Proposal,
+  QuestionFeedback,
+  ScheduledTaskSettings
+} from "@magpie/core";
 
 // Feedback was the local name for the core QuestionFeedback union; keep the alias
 // so existing call sites continue to read naturally.
@@ -38,7 +46,19 @@ export type Feedback = QuestionFeedback;
 
 // --- Web-only types (not part of the backend domain) -----------------------
 
-export type ConsoleSection = "ask" | "knowledge" | "gaps" | "jobs" | "proposals" | "crunch" | "prompts" | "config" | "dataflow" | "mcp";
+export type ConsoleSection =
+  | "ask"
+  | "knowledge"
+  | "gaps"
+  | "jobs"
+  | "proposals"
+  | "snapshots"
+  | "reconciliations"
+  | "crunch"
+  | "prompts"
+  | "config"
+  | "dataflow"
+  | "mcp";
 export type AiProviderName = "mock" | "openai-compatible" | "azure-openai" | "codex" | "claude";
 
 export interface Health {
@@ -151,4 +171,45 @@ export interface IndexRepositoryResponse {
     name: string;
     localPath: string;
   };
+}
+
+// Mirrors the API's snapshot shapes (apps/api/src/stores/snapshot-store.ts). The
+// web can't import server modules, so these are kept in sync by hand.
+export interface SnapshotProposal {
+  id: string;
+  title?: string;
+  status: Proposal["status"];
+  gapClusterId?: string;
+  pullRequestUrl?: string;
+}
+
+export interface SnapshotPullRequest {
+  proposalId: string;
+  url: string;
+  merged: boolean;
+  state: "open" | "closed" | "unknown";
+  checkedAt: string;
+}
+
+export interface FlowSnapshot {
+  flowId?: string;
+  flowName: string;
+  takenAt: string;
+  catalogRevision: number;
+  gaps: GapCandidate[];
+  proposals: SnapshotProposal[];
+  pullRequests: SnapshotPullRequest[];
+}
+
+// Mirrors the API's ReconciliationDecisionRecord
+// (apps/api/src/stores/reconciliation-decision-store.ts).
+export interface ReconciliationDecision {
+  id: string;
+  flowId?: string;
+  kind: "merge" | "split";
+  rationale: string;
+  confirmed: boolean;
+  applied: boolean;
+  clusterIds: string[];
+  createdAt: string;
 }

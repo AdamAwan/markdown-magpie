@@ -102,6 +102,13 @@ describe("reconcileGaps clustering", () => {
 
     assert.ok(proposeCalls >= 1 && criticCalls >= 1, "propose then critic were called");
     assert.equal(after.length, before.length, "rejected merge left clusters unchanged");
+
+    const decisions = await ctx.stores.reconciliations.list(50);
+    const merge = decisions.find((d) => d.kind === "merge");
+    assert.ok(merge, "the rejected merge was recorded as a decision");
+    assert.equal(merge.confirmed, false, "the decision records the critic's rejection");
+    assert.equal(merge.applied, false, "a rejected merge is not applied");
+    assert.equal(merge.rationale, "x");
   });
 
   it("applies a critic-confirmed merge, keeping every gap exactly once", async () => {
@@ -127,6 +134,13 @@ describe("reconcileGaps clustering", () => {
     const membershipsAfter = await ctx.stores.gapClusters.listActiveMemberships();
     assert.equal(membershipsAfter.length, membershipsBefore.length, "every gap kept exactly one active membership");
     assert.ok(membershipsAfter.every((m) => m.clusterId === after[0].id), "all gaps now belong to the survivor");
+
+    const decisions = await ctx.stores.reconciliations.list(50);
+    const merge = decisions.find((d) => d.kind === "merge");
+    assert.ok(merge, "the confirmed merge was recorded");
+    assert.equal(merge.confirmed, true);
+    assert.equal(merge.applied, true, "a confirmed merge is applied");
+    assert.equal(merge.rationale, "x");
   });
 });
 

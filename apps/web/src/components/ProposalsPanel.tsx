@@ -54,6 +54,43 @@ export function ProposalPanel({
                   </span>
                 </div>
                 {selectedProposal.rationale ? <p>{selectedProposal.rationale}</p> : null}
+                {selectedProposal.draftContext ? (
+                  <details className="draftContext">
+                    <summary>Draft context — what the model was given</summary>
+                    <div className="publicationSummary">
+                      <ContextValue label="Gaps addressed" value={String(selectedProposal.draftContext.gapSummaries.length)} />
+                      <ContextValue label="Source files" value={String(selectedProposal.draftContext.sourceFiles.length)} />
+                      <ContextValue label="Evidence citations" value={String(selectedProposal.draftContext.evidenceCount)} />
+                      <ContextValue label="Open PRs shown" value={String(selectedProposal.draftContext.openPullRequests.length)} />
+                    </div>
+                    {selectedProposal.draftContext.gapSummaries.length > 0 ? (
+                      <ul className="clusterGaps">
+                        {selectedProposal.draftContext.gapSummaries.map((summary) => (
+                          <li key={summary}>{summary}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {selectedProposal.draftContext.openPullRequests.length > 0 ? (
+                      <>
+                        <p className="path">In-flight pull requests the draft was aware of:</p>
+                        <ul className="clusterGaps">
+                          {selectedProposal.draftContext.openPullRequests.map((pr, index) => (
+                            <li key={pr.url ?? `${pr.title}-${index}`}>
+                              {pr.url ? (
+                                <a href={pr.url} target="_blank" rel="noreferrer">
+                                  {pr.title}
+                                </a>
+                              ) : (
+                                pr.title
+                              )}
+                              {pr.targetPath ? <small className="path"> — {pr.targetPath}</small> : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+                  </details>
+                ) : null}
                 <div className="rowActions">
                   <button
                     className="chip selected"

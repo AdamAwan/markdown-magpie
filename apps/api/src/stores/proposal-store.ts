@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DraftMarkdownProposalJobOutput, Proposal } from "@magpie/core";
+import type { DraftContext, DraftMarkdownProposalJobOutput, Proposal } from "@magpie/core";
 
 export interface ProposalInput extends DraftMarkdownProposalJobOutput {
   evidence: Proposal["evidence"];
@@ -8,6 +8,7 @@ export interface ProposalInput extends DraftMarkdownProposalJobOutput {
   destinationId?: string;
   jobId?: string;
   gapClusterId?: string;
+  draftContext?: DraftContext;
 }
 
 export interface ProposalListOptions {
@@ -45,6 +46,7 @@ export class InMemoryProposalStore implements ProposalStore {
       rationale: input.rationale,
       jobId: input.jobId,
       gapClusterId: input.gapClusterId,
+      draftContext: input.draftContext,
       createdAt: new Date().toISOString()
     };
 

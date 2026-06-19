@@ -6,10 +6,12 @@ import { PostgresCrunchStore } from "../stores/postgres-crunch-store.js";
 import { PostgresGapClusterStore } from "../stores/postgres-gap-cluster-store.js";
 import { PostgresProposalStore } from "../stores/postgres-proposal-store.js";
 import { PostgresQuestionLogStore } from "../stores/postgres-question-log-store.js";
+import { PostgresReconciliationDecisionStore } from "../stores/postgres-reconciliation-decision-store.js";
 import { PostgresScheduledTaskStore } from "../stores/postgres-scheduled-task-store.js";
 import { PostgresSourceSyncStore } from "../stores/postgres-source-sync-store.js";
 import { InMemoryProposalStore } from "../stores/proposal-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
+import { InMemoryReconciliationDecisionStore } from "../stores/reconciliation-decision-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
 import { FileSnapshotStore, type SnapshotStore } from "../stores/snapshot-store.js";
@@ -27,7 +29,8 @@ export type StoreEnvName =
   | "CRUNCH_STORE"
   | "SCHEDULED_TASK_STORE"
   | "SOURCE_SYNC_STORE"
-  | "GAP_CLUSTER_STORE";
+  | "GAP_CLUSTER_STORE"
+  | "RECONCILIATION_DECISION_STORE";
 
 export function storeBackend(name: StoreEnvName): "memory" | "postgres" {
   return process.env[name] === "postgres" ? "postgres" : storageBackend();
@@ -117,6 +120,16 @@ export function createGapClusterStore(): InMemoryGapClusterStore | PostgresGapCl
     "GAP_CLUSTER_STORE",
     (databaseUrl) => new PostgresGapClusterStore(databaseUrl),
     () => new InMemoryGapClusterStore()
+  );
+}
+
+export function createReconciliationDecisionStore():
+  | InMemoryReconciliationDecisionStore
+  | PostgresReconciliationDecisionStore {
+  return createStore<InMemoryReconciliationDecisionStore | PostgresReconciliationDecisionStore>(
+    "RECONCILIATION_DECISION_STORE",
+    (databaseUrl) => new PostgresReconciliationDecisionStore(databaseUrl),
+    () => new InMemoryReconciliationDecisionStore()
   );
 }
 

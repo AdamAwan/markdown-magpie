@@ -199,6 +199,16 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
         continue;
       }
       const confirmed = await criticConfirm(ctx, "merge", merge.rationale);
+      // Record the decision (rationale + critic verdict) so it's inspectable in
+      // the UI, not just in the logs. Only confirmed changes are applied.
+      await ctx.stores.reconciliations.record({
+        flowId,
+        kind: "merge",
+        rationale: merge.rationale,
+        confirmed,
+        applied: confirmed,
+        clusterIds: merge.clusterIds
+      });
       if (!confirmed) {
         console.log(`Gap reconciler [${flowLabel}]: critic rejected a proposed merge of ${merge.clusterIds.length} clusters.`);
         continue;
@@ -211,6 +221,14 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
         continue;
       }
       const confirmed = await criticConfirm(ctx, "split", split.rationale);
+      await ctx.stores.reconciliations.record({
+        flowId,
+        kind: "split",
+        rationale: split.rationale,
+        confirmed,
+        applied: confirmed,
+        clusterIds: [split.clusterId]
+      });
       if (!confirmed) {
         console.log(`Gap reconciler [${flowLabel}]: critic rejected a proposed split of cluster ${split.clusterId}.`);
         continue;

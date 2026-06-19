@@ -9,6 +9,7 @@ import {
   CrunchRun,
   CrunchSettings,
   Feedback,
+  FlowSnapshot,
   GapCandidate,
   Health,
   IndexRepositoryResponse,
@@ -17,6 +18,7 @@ import {
   PromptSummary,
   Proposal,
   QuestionLog,
+  ReconciliationDecision,
   RepositoryRef,
   RuntimeConfig,
   ScheduledTask,
@@ -50,6 +52,8 @@ function useConsoleController() {
   const [crunchSettings, setCrunchSettings] = useState<CrunchSettings[]>([]);
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
   const [prompts, setPrompts] = useState<PromptSummary[]>([]);
+  const [flowSnapshots, setFlowSnapshots] = useState<FlowSnapshot[]>([]);
+  const [reconciliationDecisions, setReconciliationDecisions] = useState<ReconciliationDecision[]>([]);
   const [config, setConfig] = useState<RuntimeConfig | undefined>();
   const [selectedProposalId, setSelectedProposalId] = useState<string | undefined>();
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | undefined>();
@@ -164,7 +168,7 @@ function useConsoleController() {
       clearMessage();
     }
     try {
-      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, proposalsResult, crunchRunsResult, crunchSettingsResult, scheduledTasksResult, configResult, promptsResult] = await Promise.all([
+      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, proposalsResult, crunchRunsResult, crunchSettingsResult, scheduledTasksResult, configResult, promptsResult, snapshotsResult, reconciliationsResult] = await Promise.all([
         apiGet<Health>("/health", { signal }),
         apiGet<KnowledgeStats>("/knowledge/stats", { signal }),
         apiGet<{ repositories: RepositoryRef[] }>("/knowledge/repositories", { signal }),
@@ -178,7 +182,9 @@ function useConsoleController() {
         apiGet<{ settings: CrunchSettings[] }>("/crunch/settings", { signal }),
         apiGet<{ tasks: ScheduledTask[] }>("/scheduled-tasks", { signal }),
         apiGet<RuntimeConfig>("/config", { signal }),
-        apiGet<{ prompts: PromptSummary[] }>("/prompts", { signal })
+        apiGet<{ prompts: PromptSummary[] }>("/prompts", { signal }),
+        apiGet<{ snapshots: FlowSnapshot[] }>("/snapshots", { signal }),
+        apiGet<{ decisions: ReconciliationDecision[] }>("/reconciliations?limit=20", { signal })
       ]);
 
       // A newer refresh superseded this one while its requests were in flight;
@@ -200,6 +206,8 @@ function useConsoleController() {
       setCrunchSettings(crunchSettingsResult.settings);
       setScheduledTasks(scheduledTasksResult.tasks);
       setPrompts(promptsResult.prompts);
+      setFlowSnapshots(snapshotsResult.snapshots);
+      setReconciliationDecisions(reconciliationsResult.decisions);
       setConfig(configResult);
       setSelectedProposalId((current) => current ?? proposalsResult.proposals[0]?.id);
       setSelectedDocumentId((current) =>
@@ -511,6 +519,8 @@ function useConsoleController() {
     crunchSettings,
     scheduledTasks,
     prompts,
+    flowSnapshots,
+    reconciliationDecisions,
     config,
     selectedProposalId,
     selectedDocumentId,

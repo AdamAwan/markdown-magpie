@@ -18,6 +18,45 @@ function sameFlow(a: string | undefined, b: string | undefined): boolean {
   return (a ?? "") === (b ?? "");
 }
 
+// A snapshot enriched with its flow's human label for the UI. The default flow
+// has no flowId, so a stable label is supplied here.
+export interface FlowSnapshotView extends FlowSnapshot {
+  flowName: string;
+}
+
+const DEFAULT_FLOW_LABEL = "Default flow";
+
+function flowName(ctx: AppContext, flowId: string | undefined): string {
+  if (!flowId) {
+    return DEFAULT_FLOW_LABEL;
+  }
+  return ctx.knowledgeConfig.flows.find((flow) => flow.id === flowId)?.name ?? flowId;
+}
+
+// Reads the on-disk snapshot for every known flow — the configured flows plus the
+// un-routed/default flow — returning only those a fetch job has actually written.
+// A pure read of the downloaded-data location; it never polls the host.
+export async function listFlowSnapshots(ctx: AppContext): Promise<FlowSnapshotView[]> {
+  const flowIds: Array<string | undefined> = [undefined, ...ctx.knowledgeConfig.flows.map((flow) => flow.id)];
+  const views: FlowSnapshotView[] = [];
+  for (const flowId of flowIds) {
+    const snapshot = await ctx.stores.snapshots.read(flowId);
+    if (snapshot) {
+      views.push({ ...snapshot, flowName: flowName(ctx, flowId) });
+    }
+  }
+  return views;
+}
+
+// Reads one flow's snapshot, or undefined when no fetch job has written it yet.
+export async function readFlowSnapshot(
+  ctx: AppContext,
+  flowId: string | undefined
+): Promise<FlowSnapshotView | undefined> {
+  const snapshot = await ctx.stores.snapshots.read(flowId);
+  return snapshot ? { ...snapshot, flowName: flowName(ctx, flowId) } : undefined;
+}
+
 // A proposal's flow is its cluster's flow; a cluster-less proposal belongs to the
 // un-routed/default flow. Cached per run to avoid repeat cluster reads.
 type ClusterFlowCache = Map<string, string | undefined>;

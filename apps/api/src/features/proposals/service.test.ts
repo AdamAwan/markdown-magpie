@@ -49,6 +49,32 @@ test("runMergeCascade resolves the gaps the merged proposal recorded", async () 
   );
 });
 
+test("draftFromGaps records a draftContext capturing the gaps and open PRs the model saw", async () => {
+  const ctx = makeTestContext();
+  const log = await ctx.stores.questionLogs.record({
+    question: "How do I configure X?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    retrievedSectionIds: []
+  });
+  await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
+
+  const outcome = await proposals.draftFromGaps(ctx, ["How to configure X"], {
+    openPullRequests: [
+      { title: "Existing doc", url: "https://github.com/o/r/pull/1", targetPath: "x.md", status: "pr-opened" }
+    ]
+  });
+  if (!outcome.ok || outcome.mode !== "direct") {
+    throw new Error("expected a direct-mode proposal");
+  }
+  const context = outcome.proposal.draftContext;
+  assert.ok(context, "the proposal carries a draft context");
+  assert.deepEqual(context.gapSummaries, ["How to configure X"]);
+  assert.equal(context.evidenceCount, 0);
+  assert.equal(context.openPullRequests.length, 1);
+  assert.equal(context.openPullRequests[0].url, "https://github.com/o/r/pull/1");
+});
+
 test("collectOpenPullRequestContext returns [] when the flow has no snapshot yet", async () => {
   const ctx = makeTestContext();
   assert.deepEqual(await proposals.collectOpenPullRequestContext(ctx, undefined), []);

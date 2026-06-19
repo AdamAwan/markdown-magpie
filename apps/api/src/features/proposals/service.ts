@@ -1,5 +1,6 @@
 import type {
   AiJob,
+  DraftContext,
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
   GapCandidate,
@@ -273,6 +274,25 @@ export async function collectOpenPullRequestContext(
   return result;
 }
 
+// Distils the inputs handed to the drafter into the compact, inspectable record
+// kept on the proposal. Records source-file identities (name/path/url) but not
+// their bodies, which can be large and are already captured elsewhere.
+function buildDraftContext(parts: {
+  gapSummaries: string[];
+  sourceContext?: SourceDataContext[];
+  evidence: Proposal["evidence"];
+  openPullRequests?: OpenPullRequestContext[];
+}): DraftContext {
+  return {
+    gapSummaries: parts.gapSummaries,
+    sourceFiles: (parts.sourceContext ?? [])
+      .filter((source) => source.path || source.url)
+      .map((source) => ({ sourceName: source.sourceName, path: source.path, url: source.url })),
+    evidenceCount: parts.evidence.length,
+    openPullRequests: parts.openPullRequests ?? []
+  };
+}
+
 export async function draftFromGaps(
   ctx: AppContext,
   rawSummaries: string[],
@@ -354,7 +374,8 @@ export async function draftFromGaps(
       evidence,
       gapSummary: joinGapSummaries(gapSummaries),
       triggeringQuestionIds: questionIds,
-      destinationId: input.destinationId
+      destinationId: input.destinationId,
+      draftContext: buildDraftContext({ gapSummaries, sourceContext, evidence, openPullRequests: overrides.openPullRequests })
     });
 
     console.log(`Created proposal ${proposal.id} directly for ${label} (target ${proposal.targetPath})`);
@@ -526,7 +547,13 @@ export async function createProposalFromCompletedJob(
     gapSummary: input.gapSummaries ? joinGapSummaries(input.gapSummaries) : undefined,
     triggeringQuestionIds: input.triggeringQuestionIds,
     destinationId: input.destinationId,
-    jobId: job.id
+    jobId: job.id,
+    draftContext: buildDraftContext({
+      gapSummaries: input.gapSummaries ?? [],
+      sourceContext: input.sourceContext,
+      evidence: input.evidence ?? [],
+      openPullRequests: input.openPullRequests
+    })
   });
 }
 
