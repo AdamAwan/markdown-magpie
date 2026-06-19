@@ -66,6 +66,21 @@ export function Landing({ onLogin }: { onLogin: () => void }) {
           Log in
         </button>
 
+        <a
+          className="button secondary"
+          href="/presentation/"
+          style={{
+            display: "inline-flex",
+            width: "100%",
+            justifyContent: "center",
+            marginTop: 10,
+            borderRadius: 10,
+            textDecoration: "none"
+          }}
+        >
+          View presentation
+        </a>
+
         <div
           style={{
             marginTop: 24,

@@ -1,6 +1,6 @@
 // Builds presentation/index.html as a single self-contained file with all
 // images inlined as base64 data URIs. Re-run after changing assets or content.
-import { readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = process.cwd();
@@ -498,6 +498,9 @@ const HTML = `<!doctype html>
 </html>`;
 
 writeFileSync(join(ROOT, "presentation/index.html"), HTML);
+const webPresentationDir = join(ROOT, "apps/web/public/presentation");
+mkdirSync(webPresentationDir, { recursive: true });
+writeFileSync(join(webPresentationDir, "index.html"), HTML);
 const kb = Math.round(Buffer.byteLength(HTML) / 1024);
-console.log(`Wrote presentation/index.html (${kb} KB, ${slides_count(HTML)} slides)`);
+console.log(`Wrote presentation/index.html and apps/web/public/presentation/index.html (${kb} KB, ${slides_count(HTML)} slides)`);
 function slides_count(h){return (h.match(/class="slide /g)||[]).length;}
