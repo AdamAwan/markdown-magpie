@@ -30,15 +30,13 @@
 - ✅ Task 11 — `gap-reconciler.ts`: revision gate, PR-state pass (absorbs `pull-request-refresh`), assign/propose/critic/apply (merge + split), outbox processor. GitHub + publish/supersede are injectable `ReconcilerDeps` so unit tests stay offline. Added `gapIdsForSummary()` to the question-log store (in-memory uses a synthetic `${questionId}::${summary}` id; Postgres uses the real `bigint`).
 - ✅ Task 12 — `listClusters` now reads persisted clusters (no model call). Added `gapDetailsForIds()` to the question-log store.
 
-**Remaining (Tasks 13–16):**
-- ⏳ Task 13 — manual `POST /clusters/:id/proposal` + `draftFromCluster`.
-- ⏳ Task 14 — task registry: fold `pull-request-refresh` into `gaps-to-pull-requests`, cron `*/10`, `runGapReconciler`. **Decision pending (see plan note):** default to **inline** handler (single-instance) with a noted follow-up for the claim-lease; confirm with the team.
-- ⏳ Task 15 — backfill one cluster per existing proposal (store-based `backfillGapClusters`, recommended over SQL).
-- ⏳ Task 16 — docs (`docs/api.md`) + full verification + `knip`/deadcode sweep.
+**Done (Tasks 13–16), committed, each with passing tests:**
+- ✅ Task 13 — `draftFromCluster` in `features/gaps/service.ts` + `POST /clusters/:id/proposal`. Direct-mode proposals link to the cluster and enqueue a `publish` outbox action; queue-mode links at job completion. Imports `draftFromGaps` from `features/proposals/service.ts` (no circular dependency).
+- ✅ Task 14 — registry folded to a single `gaps-to-pull-requests` reconciler at `*/10 * * * *` running `runGapReconciler` → `reconcileGaps`. **Decision taken: inline** (single-instance) handler, matching the plan default and current scheduler behaviour; the claim-lease follow-up is noted in `task-registry.ts`. Removed `pull-request-refresh`, `refreshPullRequests`, `coveredGapSummaries`, `processGapsIntoPullRequests`, and the unused `selectClustersToDraft`/`fetchPullRequestStatus` imports.
+- ✅ Task 15 — store-based `backfillGapClusters(ctx)` in `scheduling/gap-backfill.ts` (chose store over SQL, no migration `0017`). Idempotent (no-ops when active clusters already exist), orders active proposals before settled ones so an in-flight proposal wins a shared gap, freezes merged/rejected/superseded clusters. Wired best-effort into `bootstrap()`. In-memory tests cover the shared-gap, frozen-cluster, single-active-membership, and idempotency cases.
+- ✅ Task 16 — `docs/api.md` (persisted `PersistedGapCluster` fields + new endpoint) and `docs/architecture.md` (single reconciler task) updated. `clusterGapCandidates`/`requestGapClusters`/`groupByFlow` removed once knip flagged them dead.
 
-**Known cleanup deferred to Task 14/16:** `clusterGapCandidates` / `requestGapClusters` in `features/gaps/service.ts` and `processGapsIntoPullRequests` / `refreshPullRequests` in `scheduling/task-registry.ts` are now partially orphaned but still wired through the registry, so they are NOT dead yet. `npm run deadcode` (knip) has not been run; expect it to flag these once Task 14 removes the registry usage.
-
-**Verification status at handoff:** `npm run lint` (0 errors), `npm run typecheck` (clean), `npm run test:db` (all green) all pass on this branch.
+**Final verification (all green on this branch):** `npm run lint` (0 errors, 5 pre-existing warnings in `packages/retrieval`), `npm run typecheck` (clean), `npm run deadcode` (knip, clean), `npm run test` (all unit suites pass), `npm run test:db` (209 api integration tests + others pass against a throwaway pgvector container).
 
 ---
 
