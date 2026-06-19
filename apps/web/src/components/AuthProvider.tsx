@@ -1,7 +1,7 @@
 "use client";
 
 import { Auth0Provider, useAuth0 } from "@auth0/auth0-react";
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { setAccessTokenProvider } from "../lib/api";
 
 export interface BrowserAuthConfig {
@@ -14,6 +14,23 @@ export interface BrowserAuthConfig {
 function isAuthEnabled(config: BrowserAuthConfig): boolean {
   return Boolean(config.domain && config.clientId && config.audience);
 }
+
+// API scopes the console requests so the issued access token actually carries
+// permissions for the web API. Without an explicit `scope`, the Auth0 SDK only
+// requests `openid profile email`, yielding a token the API rejects/forbids on
+// every protected route. These mirror the web API's defined permissions; an
+// authorized user is granted the subset they're allowed (all of them when the
+// API's user policy is allow_all and RBAC is off).
+const API_SCOPES = [
+  "read:knowledge",
+  "ask:knowledge",
+  "feedback:questions",
+  "manage:knowledge",
+  "manage:jobs",
+  "manage:admin"
+].join(" ");
+
+const REQUESTED_SCOPE = `openid profile email ${API_SCOPES}`;
 
 // Whether Auth0 is configured, read from the runtime config injected by the
 // root layout into window.__MAGPIE_CONFIG__. Components below AuthProvider use
@@ -43,7 +60,7 @@ export function AuthProvider({ children, config }: { children: ReactNode; config
     <Auth0Provider
       domain={config.domain}
       clientId={config.clientId}
-      authorizationParams={{ audience: config.audience, redirect_uri: redirectUri }}
+      authorizationParams={{ audience: config.audience, redirect_uri: redirectUri, scope: REQUESTED_SCOPE }}
       cacheLocation="localstorage"
       useRefreshTokens
     >
@@ -53,10 +70,24 @@ export function AuthProvider({ children, config }: { children: ReactNode; config
 }
 
 function AuthTokenBridge({ children }: { children: ReactNode }) {
-  const { getAccessTokenSilently, isAuthenticated } = useAuth0();
+  const { getAccessTokenSilently, isAuthenticated, isLoading } = useAuth0();
+  const [tokenProviderReady, setTokenProviderReady] = useState(false);
+
   useEffect(() => {
     setAccessTokenProvider(isAuthenticated ? () => getAccessTokenSilently() : undefined);
+    setTokenProviderReady(true);
     return () => setAccessTokenProvider(undefined);
   }, [getAccessTokenSilently, isAuthenticated]);
+
+  // Hold the data-fetching app until the Auth0 session has resolved AND the
+  // access-token provider is armed. Otherwise children mount and fire their
+  // initial API calls before the provider effect runs, so those requests go out
+  // without an Authorization header and 401 on first load (the request that
+  // worked manually only differed by carrying the token). Once auth is resolved
+  // we render regardless of authentication state, so anonymous/auth-disabled
+  // behaviour is unchanged.
+  if (isLoading || !tokenProviderReady) {
+    return <div className="refreshTime" style={{ padding: "2rem" }}>Loading…</div>;
+  }
   return <>{children}</>;
 }
