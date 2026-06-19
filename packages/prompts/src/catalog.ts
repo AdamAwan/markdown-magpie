@@ -45,6 +45,7 @@ Rules:
 - gapSummaries may contain several related gaps; write ONE cohesive article that covers all of them rather than separate sections that repeat each other.
 - Markdown must be reviewable and conservative.
 - Use sourceContext when present as raw material for improving the destination knowledge base.
+- The input may include openPullRequests: the flow's already in-flight proposals and currently open pull requests, each with a title, an optional url, and a target path. Do NOT draft something that duplicates one of these. If your article overlaps an open pull request, build on it and reference it (by title and url) in the rationale instead of restating its content; draft only what those in-flight changes leave uncovered.
 - Cite source file paths, URLs, or agent/internet source names in the rationale.
 - Include frontmatter with title and status: draft.
 

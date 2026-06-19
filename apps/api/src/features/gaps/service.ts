@@ -1,6 +1,6 @@
 import type { GapCandidate, PersistedGapCluster } from "@magpie/core";
 import type { AppContext } from "../../context.js";
-import { draftFromGaps, type SourceContextCache } from "../proposals/service.js";
+import { collectOpenPullRequestContext, draftFromGaps, type SourceContextCache } from "../proposals/service.js";
 
 export async function listCandidates(ctx: AppContext, limit: number): Promise<GapCandidate[]> {
   return ctx.stores.questionLogs.listGapCandidates(limit);
@@ -56,11 +56,18 @@ export async function draftFromCluster(
   }
   const memberships = await ctx.stores.gapClusters.listMembershipsForCluster(clusterId);
   const { summaries } = await ctx.stores.questionLogs.gapDetailsForIds(memberships.map((m) => m.gapId));
+  // Give the drafter this flow's in-flight proposals / open PRs (from the
+  // snapshot) so it can build on or avoid duplicating them. Exclude this
+  // cluster's own proposal so a draft never sees its own PR.
+  const openPullRequests = await collectOpenPullRequestContext(ctx, cluster.flowId, {
+    excludeClusterId: clusterId
+  });
   const outcome = await draftFromGaps(ctx, summaries, {
     flowId: cluster.flowId,
     targetPath: overrides.targetPath,
     destinationId: overrides.destinationId,
-    sourceContextCache: overrides.sourceContextCache
+    sourceContextCache: overrides.sourceContextCache,
+    openPullRequests
   });
   if (!outcome.ok) {
     return outcome;

@@ -353,9 +353,29 @@ export interface DraftMarkdownProposalJobInput {
   triggeringQuestions: string[];
   evidence: Citation[];
   sourceContext?: SourceDataContext[];
+  // The flow's already in-flight proposals and currently open pull requests, so
+  // the drafter is aware of work it should build on or avoid duplicating rather
+  // than drafting in a vacuum. Optional and defaults to absent.
+  openPullRequests?: OpenPullRequestContext[];
   destinationId?: string;
   targetPath?: string;
   expectedOutput: "markdown_proposal";
+}
+
+// One piece of in-flight drafting work in a flow, surfaced to a new draft so it
+// can cross-reference or steer clear of it. Sourced from the flow's on-disk
+// snapshot — not a live host lookup.
+export interface OpenPullRequestContext {
+  // What the in-flight work is about.
+  title: string;
+  // The pull request URL once one is open; absent while the proposal is still in
+  // draft/ready/branch-pushed (no PR raised yet).
+  url?: string;
+  // The destination document the work targets, so a draft can avoid landing a
+  // second article on the same path.
+  targetPath?: string;
+  // Where the work currently sits in the publish lifecycle.
+  status: Proposal["status"];
 }
 
 export interface SourceDataContext {

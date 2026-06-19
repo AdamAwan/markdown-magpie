@@ -3,6 +3,7 @@ import type {
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
   GapCandidate,
+  OpenPullRequestContext,
   Proposal,
   SourceDataContext
 } from "@magpie/core";
@@ -214,6 +215,64 @@ function buildPullRequestBody(proposal: Proposal): string {
 // bytes dozens of times. Callers that draft in a loop pass one cache through.
 export type SourceContextCache = Map<string, SourceDataContext[]>;
 
+// In-flight statuses whose proposals a new draft should be aware of: an open PR
+// (pr-opened) plus the earlier stages that have no PR yet but are still work the
+// drafter shouldn't duplicate. Terminal statuses (merged/rejected/superseded)
+// are excluded — that work is settled.
+const IN_FLIGHT_PROPOSAL_STATUSES: ReadonlyArray<Proposal["status"]> = [
+  "draft",
+  "ready",
+  "branch-pushed",
+  "pr-opened"
+];
+
+// Reads the flow's on-disk snapshot and returns its in-flight proposals / open
+// pull requests as drafting context. Deliberately off the network — it uses only
+// the PR state the fetch job already downloaded — so the reconciler stays offline
+// during drafting (see the fetch/process split). Returns [] when no snapshot
+// exists yet, so callers degrade gracefully to no open-PR context. Pass
+// excludeClusterId to drop the cluster's own in-flight proposal so a draft never
+// sees its own PR.
+export async function collectOpenPullRequestContext(
+  ctx: AppContext,
+  flowId: string | undefined,
+  options: { excludeClusterId?: string } = {}
+): Promise<OpenPullRequestContext[]> {
+  const snapshot = await ctx.stores.snapshots.read(flowId);
+  if (!snapshot) {
+    return [];
+  }
+  // A PR the snapshot already knows is merged or closed is not "currently open",
+  // so drop it even if a stale snapshot still records the proposal as pr-opened.
+  const closedProposalIds = new Set(
+    snapshot.pullRequests.filter((pr) => pr.merged || pr.state === "closed").map((pr) => pr.proposalId)
+  );
+  // Target paths aren't carried in the snapshot; recover them from the proposal
+  // store (local DB, not the host) so the drafter can see what each PR touches.
+  const storedById = new Map((await ctx.stores.proposals.list(500)).map((proposal) => [proposal.id, proposal]));
+
+  const result: OpenPullRequestContext[] = [];
+  for (const proposal of snapshot.proposals) {
+    if (!IN_FLIGHT_PROPOSAL_STATUSES.includes(proposal.status)) {
+      continue;
+    }
+    if (options.excludeClusterId && proposal.gapClusterId === options.excludeClusterId) {
+      continue;
+    }
+    if (closedProposalIds.has(proposal.id)) {
+      continue;
+    }
+    const stored = storedById.get(proposal.id);
+    result.push({
+      title: proposal.title ?? stored?.title ?? "(untitled proposal)",
+      url: proposal.pullRequestUrl ?? stored?.publication?.pullRequestUrl,
+      targetPath: stored?.targetPath,
+      status: proposal.status
+    });
+  }
+  return result;
+}
+
 export async function draftFromGaps(
   ctx: AppContext,
   rawSummaries: string[],
@@ -223,6 +282,9 @@ export async function draftFromGaps(
     sourceIds?: string[];
     destinationId?: string;
     sourceContextCache?: SourceContextCache;
+    // The flow's in-flight proposals / open PRs to make the drafter aware of.
+    // Optional and defaults to none, so the on-demand HTTP path stays unchanged.
+    openPullRequests?: OpenPullRequestContext[];
   } = {}
 ) {
   const uniqueRequested = [...new Set(rawSummaries.map((value) => value.trim()).filter((value) => value.length > 0))];
@@ -275,6 +337,9 @@ export async function draftFromGaps(
     triggeringQuestions: logs.map((log) => log.question),
     evidence,
     sourceContext,
+    // Omit the key entirely when there's nothing in flight, so the serialised
+    // prompt input carries no empty noise.
+    openPullRequests: overrides.openPullRequests?.length ? overrides.openPullRequests : undefined,
     destinationId,
     targetPath: overrides.targetPath?.trim() || undefined,
     provider: ctx.config.get().aiProvider,
