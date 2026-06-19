@@ -31,11 +31,19 @@ export function AuthProvider({ children, config }: { children: ReactNode; config
   if (!isAuthEnabled(config)) {
     return <>{children}</>;
   }
+  // For a browser SPA the OAuth callback must return to the exact origin the app
+  // is served from, so derive redirect_uri from window.location.origin rather
+  // than trusting the configured value. This makes login immune to a misconfigured
+  // AUTH0_REDIRECT_URI (wrong scheme/host) — a real deployment failure mode where
+  // e.g. http://host was set but only https://host is an allowed callback. The
+  // configured value is kept only as an SSR-render fallback (the real redirect
+  // happens client-side, so the origin wins). logout already uses origin too.
+  const redirectUri = typeof window !== "undefined" ? window.location.origin : config.redirectUri;
   return (
     <Auth0Provider
       domain={config.domain}
       clientId={config.clientId}
-      authorizationParams={{ audience: config.audience, redirect_uri: config.redirectUri }}
+      authorizationParams={{ audience: config.audience, redirect_uri: redirectUri }}
       cacheLocation="localstorage"
       useRefreshTokens
     >
