@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useEffect, useMemo, useState } from "react";
+import { Fragment, ReactNode, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useAuth0 } from "@auth0/auth0-react";
@@ -100,15 +100,19 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </div>
         <nav className="sideNav" aria-label="Console sections">
-          {SECTION_NAV.map((entry) => (
-            <NavButton
-              key={entry.section}
-              active={activeSection === entry.section}
-              count={counts[entry.section]}
-              glyph={entry.glyph}
-              label={entry.label}
-              href={entry.path}
-            />
+          {SECTION_NAV.map((entry, index) => (
+            <Fragment key={entry.section}>
+              {index > 0 && entry.group !== SECTION_NAV[index - 1].group ? (
+                <div className="navDivider" role="presentation" />
+              ) : null}
+              <NavButton
+                active={activeSection === entry.section}
+                count={counts[entry.section]}
+                glyph={entry.glyph}
+                label={entry.label}
+                href={entry.path}
+              />
+            </Fragment>
           ))}
         </nav>
         <div className="sideStatus">

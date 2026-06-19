@@ -111,6 +111,13 @@ p {
   gap: 4px;
 }
 
+.navDivider {
+  grid-column: 1 / -1;
+  height: 1px;
+  margin: 6px 8px;
+  background: #d9ded6;
+}
+
 .navButton {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) auto;
