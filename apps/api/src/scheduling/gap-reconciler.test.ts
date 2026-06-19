@@ -130,6 +130,76 @@ describe("reconcileGaps clustering", () => {
   });
 });
 
+describe("reconcileGaps autonomous drafting", () => {
+  it("drafts, links, and publishes a proposal for a brand-new cluster", async () => {
+    const ctx = makeTestContext();
+    const log = await ctx.stores.questionLogs.record({
+      question: "How do I configure X?",
+      executionMode: "direct",
+      chatProvider: "mock",
+      retrievedSectionIds: []
+    });
+    await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
+
+    // No reshape proposed (a single cluster has nothing to merge anyway).
+    ctx.providers.chat = () => ({ complete: async () => ({ content: '{"merges":[],"splits":[]}' }) }) as never;
+
+    let published = 0;
+    await reconcileGaps(ctx, {
+      fetchPullRequestStatus: async () => undefined,
+      publishProposal: async () => {
+        published += 1;
+      },
+      supersedeProposal: async () => {}
+    });
+
+    const clusters = await ctx.stores.gapClusters.listActiveClusters();
+    assert.equal(clusters.length, 1, "one cluster was created for the gap");
+    const proposals = await ctx.stores.proposals.list(500);
+    assert.equal(proposals.length, 1, "a proposal was drafted for the new cluster");
+    assert.equal(proposals[0].gapClusterId, clusters[0].id, "the proposal is linked to its cluster");
+    assert.equal(published, 1, "the drafted proposal's publish action was drained");
+    assert.deepEqual(
+      await ctx.stores.gapClusters.listPendingPublicationActions(),
+      [],
+      "no publication action is left pending"
+    );
+  });
+
+  it("drafts only the uncovered cluster on a later run, never duplicating an existing proposal", async () => {
+    const ctx = makeTestContext();
+    ctx.providers.chat = () => ({ complete: async () => ({ content: '{"merges":[],"splits":[]}' }) }) as never;
+    const deps = {
+      fetchPullRequestStatus: async () => undefined,
+      publishProposal: async () => {},
+      supersedeProposal: async () => {}
+    };
+
+    const log1 = await ctx.stores.questionLogs.record({
+      question: "q1?",
+      executionMode: "direct",
+      chatProvider: "mock",
+      retrievedSectionIds: []
+    });
+    await ctx.stores.questionLogs.recordManualGap(log1.id, "Topic one");
+    await reconcileGaps(ctx, deps);
+    assert.equal((await ctx.stores.proposals.list(500)).length, 1, "first run drafts one proposal");
+
+    // A new, distinct gap advances the catalog and reopens the gate.
+    const log2 = await ctx.stores.questionLogs.record({
+      question: "q2?",
+      executionMode: "direct",
+      chatProvider: "mock",
+      retrievedSectionIds: []
+    });
+    await ctx.stores.questionLogs.recordManualGap(log2.id, "Topic two");
+    await reconcileGaps(ctx, deps);
+
+    const proposals = await ctx.stores.proposals.list(500);
+    assert.equal(proposals.length, 2, "only the newly uncovered cluster was drafted; the existing proposal was untouched");
+  });
+});
+
 describe("reconcileGaps outbox", () => {
   it("retries a failed publish without any model call", async () => {
     const ctx = makeTestContext();

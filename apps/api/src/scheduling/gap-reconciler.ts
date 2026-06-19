@@ -2,6 +2,7 @@ import type { Proposal } from "@magpie/core";
 import { fetchPullRequestStatus as defaultFetchPullRequestStatus } from "@magpie/git";
 import { GAP_RECONCILE_CRITIC, GAP_RECONCILE_PROPOSE } from "@magpie/prompts";
 import type { AppContext } from "../context.js";
+import * as gapsService from "../features/gaps/service.js";
 import * as proposalsService from "../features/proposals/service.js";
 import type { GapClusterRecord } from "../stores/gap-cluster-store.js";
 import { selectRetainingChildOnSplit, selectSurvivingClusterOnMerge } from "./gap-reconciler-lineage.js";
@@ -46,12 +47,19 @@ export async function reconcileGaps(ctx: AppContext, deps: ReconcilerDeps = DEFA
 
   // (a) Revision gate.
   if (catalogRevision === processed && pending.length === 0) {
+    console.log(
+      `Gap reconciler: no gap changes (catalog revision ${catalogRevision}) and no pending publication ` +
+        "actions; ran the PR-state pass only."
+    );
     return;
   }
 
   if (catalogRevision !== processed) {
+    console.log(`Gap reconciler: gap catalog advanced ${processed} -> ${catalogRevision}; reconciling clusters.`);
     await reconcileClusters(ctx);
     await ctx.stores.gapClusters.setProcessedRevision(catalogRevision, new Date().toISOString());
+  } else {
+    console.log(`Gap reconciler: catalog revision unchanged (${catalogRevision}); draining ${pending.length} pending action(s).`);
   }
 
   // (d) Outbox: retry pending/failed publication actions without re-running models.
@@ -79,12 +87,14 @@ async function refreshOpenPullRequests(ctx: AppContext, deps: ReconcilerDeps): P
     if (status.merged) {
       const merged = await ctx.stores.proposals.updateStatus(proposal.id, "merged");
       if (merged) {
+        console.log(`Gap reconciler: proposal ${proposal.id} merged; running cascade and freezing its cluster.`);
         await proposalsService.runMergeCascade(ctx, merged);
         await freezeClusterForProposal(ctx, merged);
       }
     } else if (status.state === "closed") {
       const rejected = await ctx.stores.proposals.updateStatus(proposal.id, "rejected");
       if (rejected) {
+        console.log(`Gap reconciler: proposal ${proposal.id} PR closed without merge; marked rejected and froze its cluster.`);
         await freezeClusterForProposal(ctx, rejected);
       }
     }
@@ -105,6 +115,7 @@ async function reconcileClusters(ctx: AppContext): Promise<void> {
   const activeMemberships = await ctx.stores.gapClusters.listActiveMemberships();
   const assignedGapIds = new Set(activeMemberships.map((m) => m.gapId));
 
+  let clustersCreated = 0;
   for (const candidate of candidates) {
     const gapIds = await ctx.stores.questionLogs.gapIdsForSummary(candidate.summary, candidate.flowId);
     const unassigned = gapIds.filter((id) => !assignedGapIds.has(id));
@@ -117,40 +128,86 @@ async function reconcileClusters(ctx: AppContext): Promise<void> {
       title: candidate.summary.slice(0, 80),
       revision
     });
+    clustersCreated += 1;
     for (const gapId of unassigned) {
       await ctx.stores.gapClusters.assignGapToCluster(cluster.id, gapId, "initial assignment");
       assignedGapIds.add(gapId);
     }
   }
+  console.log(`Gap reconciler: created ${clustersCreated} new cluster(s) from unassigned gaps.`);
 
-  // 2) Propose merges/splits over the full active set.
+  // 2) Propose merges/splits over the full active set. A single cluster has
+  // nothing to merge; splits stay out of the first cut, so this is gated rather
+  // than returning early — drafting below must run for the single-cluster case too.
   const active = await ctx.stores.gapClusters.listActiveClusters();
-  if (active.length < 2) {
-    return; // nothing to merge; single clusters can still split but keep first cut simple
-  }
-  const proposal = await proposeReshape(ctx, active);
+  if (active.length >= 2) {
+    const proposal = await proposeReshape(ctx, active);
 
-  // 3) Critic-confirm and apply each change individually.
-  for (const merge of proposal.merges) {
-    if (merge.clusterIds.length < 2) {
-      continue;
+    // 3) Critic-confirm and apply each change individually.
+    for (const merge of proposal.merges) {
+      if (merge.clusterIds.length < 2) {
+        continue;
+      }
+      const confirmed = await criticConfirm(ctx, "merge", merge.rationale);
+      if (!confirmed) {
+        console.log(`Gap reconciler: critic rejected a proposed merge of ${merge.clusterIds.length} clusters.`);
+        continue;
+      }
+      console.log(`Gap reconciler: critic confirmed a merge of clusters ${merge.clusterIds.join(", ")}.`);
+      await applyMerge(ctx, merge);
     }
-    const confirmed = await criticConfirm(ctx, "merge", merge.rationale);
-    if (!confirmed) {
-      continue;
+    for (const split of proposal.splits) {
+      if (split.children.length < 2) {
+        continue;
+      }
+      const confirmed = await criticConfirm(ctx, "split", split.rationale);
+      if (!confirmed) {
+        console.log(`Gap reconciler: critic rejected a proposed split of cluster ${split.clusterId}.`);
+        continue;
+      }
+      console.log(`Gap reconciler: critic confirmed a split of cluster ${split.clusterId} into ${split.children.length}.`);
+      await applySplit(ctx, split);
     }
-    await applyMerge(ctx, merge);
   }
-  for (const split of proposal.splits) {
-    if (split.children.length < 2) {
+
+  // 4) Draft a proposal for every active cluster that has none yet, so a fresh
+  // cluster becomes a pull request autonomously instead of waiting for a manual
+  // trigger. This is the autonomous gap->PR step the on-demand pipeline used to do.
+  await draftProposalsForUncoveredClusters(ctx);
+}
+
+// Drafts a proposal for each active cluster with no linked proposal. draftFromCluster
+// links the proposal and enqueues its publish action, which drainPublicationOutbox
+// processes in the same run. Frozen clusters (merged/rejected PRs) are excluded by
+// listActiveClusters, so content a reviewer already declined is never re-raised.
+async function draftProposalsForUncoveredClusters(ctx: AppContext): Promise<void> {
+  const active = await ctx.stores.gapClusters.listActiveClusters();
+  const proposals = await ctx.stores.proposals.list(500);
+  const coveredClusterIds = new Set(
+    proposals.map((p) => p.gapClusterId).filter((id): id is string => Boolean(id))
+  );
+
+  let drafted = 0;
+  for (const cluster of active) {
+    if (coveredClusterIds.has(cluster.id)) {
       continue;
     }
-    const confirmed = await criticConfirm(ctx, "split", split.rationale);
-    if (!confirmed) {
-      continue;
+    try {
+      const outcome = await gapsService.draftFromCluster(ctx, cluster.id, {});
+      if (outcome.ok) {
+        drafted += 1;
+        console.log(
+          `Gap reconciler: drafted a proposal for cluster ${cluster.id} ("${cluster.title}") in ${outcome.mode} mode.`
+        );
+      } else {
+        console.warn(`Gap reconciler: could not draft a proposal for cluster ${cluster.id}: ${outcome.code}.`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "draft failed";
+      console.warn(`Gap reconciler: failed to draft a proposal for cluster ${cluster.id}: ${message}`);
     }
-    await applySplit(ctx, split);
   }
+  console.log(`Gap reconciler: drafted ${drafted} new proposal(s) for previously uncovered clusters.`);
 }
 
 async function proposeReshape(ctx: AppContext, active: GapClusterRecord[]): Promise<ReshapeProposal> {
@@ -263,10 +320,17 @@ async function proposalForCluster(ctx: AppContext, clusterId: string): Promise<P
 
 async function drainPublicationOutbox(ctx: AppContext, deps: ReconcilerDeps): Promise<void> {
   const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
+  if (actions.length === 0) {
+    return;
+  }
+  console.log(`Gap reconciler: draining ${actions.length} pending publication action(s).`);
+  let done = 0;
+  let failed = 0;
   for (const action of actions) {
     const proposal = await ctx.stores.proposals.get(action.proposalId);
     if (!proposal) {
       await ctx.stores.gapClusters.markPublicationActionDone(action.id);
+      done += 1;
       continue;
     }
     try {
@@ -276,12 +340,15 @@ async function drainPublicationOutbox(ctx: AppContext, deps: ReconcilerDeps): Pr
         await (deps.supersedeProposal ?? defaultSupersede)(ctx, proposal);
       }
       await ctx.stores.gapClusters.markPublicationActionDone(action.id);
+      done += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : "publication failed";
       await ctx.stores.gapClusters.markPublicationActionFailed(action.id, message);
-      console.warn(`Publication action ${action.id} failed: ${message}`);
+      failed += 1;
+      console.warn(`Publication action ${action.id} (${action.kind}) for proposal ${action.proposalId} failed: ${message}`);
     }
   }
+  console.log(`Gap reconciler: publication outbox drained — ${done} done, ${failed} failed.`);
 }
 
 async function defaultPublish(ctx: AppContext, proposal: Proposal): Promise<void> {
