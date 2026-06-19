@@ -1,9 +1,16 @@
 name: Publish container image
 
 on:
-  push:
+  # Main-branch images are built only after the Verify workflow passes, so the
+  # typecheck/test/lint suite runs once (in Verify) rather than again here.
+  workflow_run:
+    workflows:
+      - Verify
+    types:
+      - completed
     branches:
       - main
+  push:
     tags:
       - "v*.*.*"
   pull_request:
@@ -39,40 +46,20 @@ env:
   PLATFORMS: ${{ inputs.platforms || vars.CONTAINER_IMAGE_PLATFORMS || 'linux/amd64' }}
 
 jobs:
-  verify:
-    name: Typecheck, test, lint
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Test
-        run: npm run test
-
-      - name: Lint
-        run: npm run lint
-
   build:
     name: Build image
     runs-on: ubuntu-latest
-    needs: verify
+    # When triggered by Verify completing, only proceed if it passed. Other
+    # triggers (tags, PRs, manual dispatch) have no upstream run to gate on.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          # For workflow_run, build the exact commit Verify validated rather
+          # than whatever main happens to point at now.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Prepare image metadata
         id: image
