@@ -28,6 +28,18 @@ interface JobView {
 
 type FeedbackKind = "helpful" | "unhelpful" | "knowledge_gap";
 
+// Optional downstream auth for API calls. When the MCP server runs as an OAuth
+// protected resource it authenticates to the API with its own service token
+// (never the inbound user token). Omitting `token` preserves the unauthenticated
+// local-dev behaviour. Shared by both transports (stdio reuses this in Task 5).
+export interface KbClientOptions {
+  token?: string;
+}
+
+function authHeaders(options: KbClientOptions | undefined): Record<string, string> {
+  return options?.token ? { authorization: `Bearer ${options.token}` } : {};
+}
+
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
@@ -47,18 +59,18 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-async function postJson(path: string, body: unknown): Promise<unknown> {
+async function postJson(path: string, body: unknown, options?: KbClientOptions): Promise<unknown> {
   const response = await fetch(apiUrl(path), {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...authHeaders(options) },
     body: JSON.stringify(body)
   });
 
   return readApiResponse(response, path);
 }
 
-export async function getJson(path: string): Promise<unknown> {
-  const response = await fetch(apiUrl(path));
+export async function getJson(path: string, options?: KbClientOptions): Promise<unknown> {
+  const response = await fetch(apiUrl(path), { headers: authHeaders(options) });
   return readApiResponse(response, path);
 }
 
@@ -77,20 +89,20 @@ async function readApiResponse(response: Response, path: string): Promise<unknow
 // answer inline (direct mode) or asynchronously via a job (queue mode); in the
 // queue case we poll until the answer is ready so callers never see internal
 // job, queue, or retrieval-context details.
-export async function askQuestion(question: string): Promise<AskResult> {
-  const ask = asObject(await postJson("/ask", { question }));
+export async function askQuestion(question: string, options?: KbClientOptions): Promise<AskResult> {
+  const ask = asObject(await postJson("/ask", { question }, options));
   const questionId = typeof ask.questionId === "string" ? ask.questionId : undefined;
   const result =
-    ask.result !== undefined ? extractAnswer(ask.result) : await waitForQueuedAnswer(readStatusPath(ask));
+    ask.result !== undefined ? extractAnswer(ask.result) : await waitForQueuedAnswer(readStatusPath(ask), options);
 
   return { ...result, questionId };
 }
 
-async function waitForQueuedAnswer(statusPath: string): Promise<AskResult> {
+async function waitForQueuedAnswer(statusPath: string, options?: KbClientOptions): Promise<AskResult> {
   const deadline = Date.now() + answerTimeoutMs;
 
   for (;;) {
-    const job = readJob(await getJson(statusPath));
+    const job = readJob(await getJson(statusPath, options));
 
     if (job.status === "completed") {
       if (job.output === undefined) {
@@ -206,19 +218,22 @@ function optionalStringArgument(args: Record<string, unknown> | undefined, name:
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-export async function submitFeedback(args: Record<string, unknown> | undefined): Promise<unknown> {
+export async function submitFeedback(
+  args: Record<string, unknown> | undefined,
+  options?: KbClientOptions
+): Promise<unknown> {
   const questionId = stringArgument(args, "questionId");
   const kind = feedbackKindArgument(args);
 
   if (kind === "knowledge_gap") {
     const gapSummary = optionalStringArgument(args, "gapSummary");
     const body = gapSummary ? { summary: gapSummary } : {};
-    const response = asObject(await postJson(`/questions/${encodeURIComponent(questionId)}/gap`, body));
+    const response = asObject(await postJson(`/questions/${encodeURIComponent(questionId)}/gap`, body, options));
     return { questionId, kind, question: response.question };
   }
 
   const response = asObject(
-    await postJson(`/questions/${encodeURIComponent(questionId)}/feedback`, { feedback: kind })
+    await postJson(`/questions/${encodeURIComponent(questionId)}/feedback`, { feedback: kind }, options)
   );
   return { questionId, kind, question: response.question };
 }

@@ -3,10 +3,17 @@ import Script from "next/script";
 import "./styles.css";
 import { ConsoleProvider } from "../components/ConsoleProvider";
 import { AppShell } from "../components/AppShell";
+import { AuthProvider } from "../components/AuthProvider";
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   const runtimeConfig = {
-    apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL || process.env.PUBLIC_API_BASE_URL || ""
+    apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL || process.env.PUBLIC_API_BASE_URL || "",
+    auth: {
+      domain: process.env.NEXT_PUBLIC_AUTH0_DOMAIN || "",
+      clientId: process.env.NEXT_PUBLIC_AUTH0_CLIENT_ID || "",
+      audience: process.env.NEXT_PUBLIC_AUTH0_AUDIENCE || process.env.AUTH0_AUDIENCE || "",
+      redirectUri: process.env.NEXT_PUBLIC_AUTH0_REDIRECT_URI || "http://localhost:3000"
+    }
   };
 
   return (
@@ -24,9 +31,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             __html: `window.__MAGPIE_CONFIG__=${JSON.stringify(runtimeConfig)};`
           }}
         />
-        <ConsoleProvider>
-          <AppShell>{children}</AppShell>
-        </ConsoleProvider>
+        <AuthProvider config={runtimeConfig.auth}>
+          <ConsoleProvider>
+            <AppShell>{children}</AppShell>
+          </ConsoleProvider>
+        </AuthProvider>
       </body>
     </html>
   );

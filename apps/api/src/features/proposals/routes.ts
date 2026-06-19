@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
+import { requireScopes } from "../../auth/middleware.js";
 import { apiLink, parseLimit } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
 import { parseJsonBody } from "../../http/body.js";
@@ -11,7 +12,7 @@ import { draftFromGapsBodySchema, proposalStatusBodySchema } from "./schema.js";
 export function proposalRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
-  app.get("/", async (c) => {
+  app.get("/", requireScopes("read:knowledge"), async (c) => {
     const limit = parseLimit(c.req.query("limit") ?? null, 50);
     const statusFilter = c.req.query("status") ?? null;
     const options = proposalsService.isProposalStatus(statusFilter) ? { status: statusFilter } : undefined;
@@ -49,10 +50,10 @@ export function proposalRoutes(ctx: AppContext): Hono {
     );
   };
 
-  app.post("/from-gap", createFromGaps);
-  app.post("/from-gaps", createFromGaps);
+  app.post("/from-gap", requireScopes("manage:knowledge"), createFromGaps);
+  app.post("/from-gaps", requireScopes("manage:knowledge"), createFromGaps);
 
-  app.get("/:id", async (c) => {
+  app.get("/:id", requireScopes("read:knowledge"), async (c) => {
     const proposal = await proposalsService.get(ctx, c.req.param("id"));
     if (!proposal) {
       throw new HttpError(404, "proposal_not_found");
@@ -62,6 +63,7 @@ export function proposalRoutes(ctx: AppContext): Hono {
 
   app.post(
     "/:id/status",
+    requireScopes("manage:knowledge"),
     zValidator("json", proposalStatusBodySchema, (result, c) => {
       if (!result.success) {
         return c.json({ error: "valid_proposal_status_required" }, 400);
@@ -90,7 +92,7 @@ export function proposalRoutes(ctx: AppContext): Hono {
     }
   );
 
-  app.post("/:id/publish", async (c) => {
+  app.post("/:id/publish", requireScopes("manage:knowledge"), async (c) => {
     const proposal = await proposalsService.get(ctx, c.req.param("id"));
     if (!proposal) {
       throw new HttpError(404, "proposal_not_found");

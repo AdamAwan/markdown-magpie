@@ -4,6 +4,12 @@ declare global {
   interface Window {
     __MAGPIE_CONFIG__?: {
       apiBaseUrl?: string;
+      auth?: {
+        domain?: string;
+        clientId?: string;
+        audience?: string;
+        redirectUri?: string;
+      };
     };
   }
 }
@@ -33,8 +39,26 @@ export interface ApiRequestOptions {
   timeoutMs?: number;
 }
 
+// When Auth0 is configured the AuthProvider registers a provider that returns a
+// fresh access token. When auth is disabled no provider is set and requests go
+// out without an Authorization header, exactly as before.
+let accessTokenProvider: (() => Promise<string>) | undefined;
+
+export function setAccessTokenProvider(provider: (() => Promise<string>) | undefined): void {
+  accessTokenProvider = provider;
+}
+
+async function authHeaders(headers: Record<string, string> = {}): Promise<Record<string, string>> {
+  if (!accessTokenProvider) {
+    return headers;
+  }
+  const token = await accessTokenProvider();
+  return { ...headers, authorization: `Bearer ${token}` };
+}
+
 export async function apiGet<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
   const response = await fetch(resolveApiUrl(path), {
+    headers: await authHeaders(),
     signal: requestSignal(options)
   });
   return readResponse<T>(response);
@@ -43,9 +67,9 @@ export async function apiGet<T>(path: string, options: ApiRequestOptions = {}): 
 export async function apiPost<T>(path: string, body: unknown, options: ApiRequestOptions = {}): Promise<T> {
   const response = await fetch(resolveApiUrl(path), {
     method: "POST",
-    headers: {
+    headers: await authHeaders({
       "content-type": "application/json"
-    },
+    }),
     body: JSON.stringify(body),
     signal: requestSignal(options)
   });
@@ -53,7 +77,11 @@ export async function apiPost<T>(path: string, body: unknown, options: ApiReques
 }
 
 export async function apiDelete<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
-  const response = await fetch(resolveApiUrl(path), { method: "DELETE", signal: requestSignal(options) });
+  const response = await fetch(resolveApiUrl(path), {
+    method: "DELETE",
+    headers: await authHeaders(),
+    signal: requestSignal(options)
+  });
   return readResponse<T>(response);
 }
 

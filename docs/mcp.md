@@ -76,7 +76,48 @@ Input:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MCP_HTTP_PORT` | `4001` | Port the HTTP server listens on. |
-| `MCP_HTTP_HOST` | `0.0.0.0` | Host interface to bind to. |
+| `MCP_HTTP_HOST` | `127.0.0.1` | Host interface to bind to (set `0.0.0.0` to expose on all interfaces). |
+| `MCP_RESOURCE_URL` | `http://localhost:<port>/mcp` | Public URL of the `/mcp` endpoint, advertised in the OAuth protected-resource metadata. |
+| `MCP_API_AUTH_TOKEN` | — | Service token used for downstream API calls. Required when `AUTH_REQUIRED=true` (the server fails fast at startup otherwise). |
+
+### Auth variables (both transports)
+
+Auth is off by default and shared with the API via the `@magpie/auth` package. These variables apply only when `AUTH_REQUIRED=true`; the [Authentication](#authentication) section below explains how they are used.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AUTH_REQUIRED` | `false` | Set `true` to require Auth0-issued bearer tokens. |
+| `AUTH0_ISSUER_BASE_URL` | — | Full Auth0 issuer (e.g. `https://your-tenant.eu.auth0.com`). |
+| `AUTH0_DOMAIN` | — | Alternative to the issuer base; the issuer becomes `https://<domain>/`. |
+| `AUTH0_AUDIENCE` | `https://markdown-magpie.local/api` | API identifier the token must carry. |
+| `AUTH0_JWKS_URI` | `https://<domain>/.well-known/jwks.json` | Optional JWKS endpoint override (derived from the trailing-slash-normalised issuer when unset). |
+| `MCP_AUTH_TOKEN` | — | stdio only: bearer token presented to the API. Required when `AUTH_REQUIRED=true`. |
+
+## Authentication
+
+Authentication is optional and disabled unless `AUTH_REQUIRED=true`. When disabled, both transports run unauthenticated for local development. When enabled, tokens are validated locally against the Auth0 JWKS — see the [Auth0 design](superpowers/specs/2026-06-18-auth0-mcp-gating-design.md) for the full model.
+
+### Streamable HTTP
+
+The HTTP transport acts as an OAuth protected resource:
+
+- It serves protected-resource metadata at `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp` (advertising the resource URL from `MCP_RESOURCE_URL`, the Auth0 authorization server, and the supported scopes).
+- Every request to `/mcp` requires `Authorization: Bearer <token>` when `AUTH_REQUIRED=true`. A missing or invalid token returns `401` with a `WWW-Authenticate: Bearer resource_metadata="..."` header pointing at the metadata document.
+- `tools/call` additionally enforces a per-tool scope; insufficient scope returns `403`. Other methods (`initialize`, `tools/list`, `ping`, ...) need only a valid token.
+
+Per-tool scopes:
+
+| Tool | Required scope |
+| --- | --- |
+| `kb.search` | `read:knowledge` |
+| `kb.ask` | `ask:knowledge` |
+| `kb.feedback` | `feedback:questions` |
+
+The inbound user token is validated locally and **never forwarded** to the API. The HTTP server calls the API with its own separate service token, `MCP_API_AUTH_TOKEN` (a machine-to-machine credential). Startup fails fast if `AUTH_REQUIRED=true` and this token is missing.
+
+### stdio
+
+The stdio transport presents a single bearer token to the API on every call, supplied via `MCP_AUTH_TOKEN`. When `AUTH_REQUIRED=true` and the token is missing, the server fails fast at startup with a non-zero exit.
 
 ## Requirements
 

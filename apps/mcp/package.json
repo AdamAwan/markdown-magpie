@@ -6,13 +6,15 @@
   "scripts": {
     "dev": "tsx src/main.ts",
     "dev:http": "tsx src/http.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "start:http": "node dist/http.js",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
+    "@magpie/auth": "file:../../packages/auth",
     "@modelcontextprotocol/express": "^2.0.0-alpha.2",
     "@modelcontextprotocol/node": "^2.0.0-alpha.2",
     "@modelcontextprotocol/server": "^2.0.0-alpha.2",
@@ -22,6 +24,7 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^25.9.3",
+    "jose": "^6.2.3",
     "typescript": "^6.0.3"
   }
 }

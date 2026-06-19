@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { isValidCron } from "@magpie/core";
 import type { AppContext } from "../../context.js";
+import { requireScopes } from "../../auth/middleware.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import { findScheduledTask, scheduledTasksForResponse } from "../../scheduling/task-registry.js";
@@ -8,9 +9,9 @@ import { findScheduledTask, scheduledTasksForResponse } from "../../scheduling/t
 export function scheduledTaskRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
-  app.get("/", async (c) => c.json({ tasks: await scheduledTasksForResponse(ctx) }));
+  app.get("/", requireScopes("read:knowledge"), async (c) => c.json({ tasks: await scheduledTasksForResponse(ctx) }));
 
-  app.post("/:key/settings", async (c) => {
+  app.post("/:key/settings", requireScopes("manage:jobs"), async (c) => {
     const key = c.req.param("key");
     const task = findScheduledTask(key);
     if (!task) {
@@ -20,14 +21,18 @@ export function scheduledTaskRoutes(ctx: AppContext): Hono {
     const payload = await readJsonBody<{ enabled?: boolean; cron?: string }>(c);
     const cron = typeof payload.cron === "string" ? payload.cron.trim() : "";
     if (!isValidCron(cron)) {
-      throw new HttpError(400, "valid_cron_required", 'cron must be a standard 5-field expression, e.g. "*/10 * * * *".');
+      throw new HttpError(
+        400,
+        "valid_cron_required",
+        'cron must be a standard 5-field expression, e.g. "*/10 * * * *".'
+      );
     }
 
     await ctx.stores.scheduledTasks.updateSettings(key, { enabled: Boolean(payload.enabled), cron });
     return c.json({ tasks: await scheduledTasksForResponse(ctx) });
   });
 
-  app.post("/:key/run", async (c) => {
+  app.post("/:key/run", requireScopes("manage:jobs"), async (c) => {
     const key = c.req.param("key");
     const task = findScheduledTask(key);
     if (!task) {

@@ -612,6 +612,17 @@ If that URL works but the UI still fails, set `NEXT_PUBLIC_API_BASE_URL` to the 
 docker compose restart web
 ```
 
+## Auth0
+
+Authentication is optional and off by default (`AUTH_REQUIRED=false`). To gate the API, web app, and both MCP transports behind Auth0:
+
+- Create an Auth0 SPA for `https://magpie.wastedcake.com` and `http://localhost:3000`.
+- Create an Auth0 API with audience `https://markdown-magpie.local/api` and the scopes listed in [docs/superpowers/specs/2026-06-18-auth0-mcp-gating-design.md](docs/superpowers/specs/2026-06-18-auth0-mcp-gating-design.md).
+- Create a machine-to-machine application for the HTTP MCP server and put its access token in `MCP_API_AUTH_TOKEN`.
+- Set `AUTH_REQUIRED=true` and the `AUTH0_*` / `NEXT_PUBLIC_AUTH0_*` variables (see `.env.example`).
+
+The official Auth0 MCP server can bootstrap these tenant resources, but Markdown Magpie validates tokens at runtime. See [docs/mcp.md](docs/mcp.md) for the MCP-specific auth flow.
+
 ## AI Execution
 
 Markdown Magpie treats AI work as provider-neutral jobs.

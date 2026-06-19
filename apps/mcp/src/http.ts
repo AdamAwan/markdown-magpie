@@ -1,20 +1,54 @@
+import { argv } from "node:process";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpExpressApp } from "@modelcontextprotocol/express";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
-import type { Request, Response } from "express";
+import type { Express, Request, Response } from "express";
+import {
+  AuthError,
+  authSettingsFromEnv,
+  createRemoteAuthVerifier,
+  hasScopes,
+  parseBearerToken,
+  type AuthSettings,
+  type Principal
+} from "@magpie/auth";
+import type { JSONWebKeySet } from "jose";
 import { z } from "zod/v4";
-import { askQuestion, getJson, submitFeedback } from "./kb-client.js";
+import { askQuestion, getJson, submitFeedback, type KbClientOptions } from "./kb-client.js";
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
 const port = parseInt(process.env.MCP_HTTP_PORT ?? "4001", 10);
 
-// ── Main ───────────────────────────────────────────────────────────────────
+const SCOPES_SUPPORTED = ["read:knowledge", "ask:knowledge", "feedback:questions"] as const;
 
-async function main(): Promise<void> {
+// Per-tool scope requirements enforced at the MCP boundary, mirroring the API
+// route scopes. tools/list and other methods need only a valid token.
+const TOOL_SCOPES: Record<string, string> = {
+  "kb.search": "read:knowledge",
+  "kb.ask": "ask:knowledge",
+  "kb.feedback": "feedback:questions"
+};
+
+export interface HttpMcpOptions {
+  auth: AuthSettings & { jwks?: () => Promise<JSONWebKeySet> };
+  // The public URL of this protected resource (the /mcp endpoint). Used for the
+  // protected-resource metadata document and the discovery challenge.
+  resourceUrl: string;
+  // Service token used for downstream API calls. The inbound user token is
+  // NEVER forwarded; this is a separate credential (MCP_API_AUTH_TOKEN).
+  apiToken: string | undefined;
+}
+
+// ── App factory ──────────────────────────────────────────────────────────────
+
+export function createHttpMcpApp(options: HttpMcpOptions): Express {
+  const kbOptions: KbClientOptions = { token: options.apiToken };
+
   const server = new McpServer({
     name: "markdown-magpie",
-    version: "0.1.0",
+    version: "0.1.0"
   });
 
   server.registerTool(
@@ -25,11 +59,11 @@ async function main(): Promise<void> {
       inputSchema: z.object({
         question: z.string().describe(
           "The question to answer from indexed Markdown context."
-        ),
-      }),
+        )
+      })
     },
     async ({ question }) => {
-      const result = await askQuestion(question);
+      const result = await askQuestion(question, kbOptions);
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -45,15 +79,15 @@ async function main(): Promise<void> {
           .optional()
           .describe(
             "Maximum number of sections to return. Defaults to the API limit."
-          ),
-      }),
+          )
+      })
     },
     async ({ query, limit }) => {
       const path =
         limit !== undefined
           ? `/knowledge/search?q=${encodeURIComponent(query)}&limit=${limit}`
           : `/knowledge/search?q=${encodeURIComponent(query)}`;
-      const result = await getJson(path);
+      const result = await getJson(path, kbOptions);
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -75,13 +109,11 @@ async function main(): Promise<void> {
           .optional()
           .describe(
             "Optional summary of the missing knowledge. Only used when kind is 'knowledge_gap'."
-          ),
-      }),
+          )
+      })
     },
     async (args) => {
-      const result = await submitFeedback(
-        args as Record<string, unknown> | undefined
-      );
+      const result = await submitFeedback(args, kbOptions);
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
     }
   );
@@ -89,10 +121,13 @@ async function main(): Promise<void> {
   // Stateless transport — each request is independent.
   // Omit sessionIdGenerator so the SDK treats it as stateless.
   const transport = new NodeStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
+    sessionIdGenerator: undefined
   });
 
-  await server.connect(transport);
+  // Start connecting eagerly but await it lazily inside `handle` (see below), so
+  // that importing this module (e.g. from tests) never boots a live connection.
+  // Any connect rejection is surfaced through the per-request try/catch as a 500.
+  const connected = server.connect(transport);
 
   // Bind to loopback by default; require an explicit opt-in (e.g.
   // MCP_HTTP_HOST=0.0.0.0) to expose the server on all interfaces. Passing the
@@ -101,49 +136,142 @@ async function main(): Promise<void> {
   const host = process.env.MCP_HTTP_HOST ?? "127.0.0.1";
   const app = createMcpExpressApp({ host });
 
-  // POST: client sends JSON-RPC requests
-  app.post("/mcp", async (req: Request, res: Response) => {
+  // ── OAuth protected-resource metadata ─────────────────────────────────────
+  const metadata = {
+    resource: options.resourceUrl,
+    authorization_servers: [options.auth.issuer],
+    bearer_methods_supported: ["header"],
+    scopes_supported: [...SCOPES_SUPPORTED]
+  };
+
+  // The discovery URL is derived from the resource origin so we never hardcode
+  // the production host (RFC 9728 §3.1 anchors it at the resource's origin).
+  const metadataUrl = `${new URL(options.resourceUrl).origin}/.well-known/oauth-protected-resource`;
+
+  const serveMetadata = (_req: Request, res: Response): void => {
+    res.json(metadata);
+  };
+  app.get("/.well-known/oauth-protected-resource", serveMetadata);
+  app.get("/.well-known/oauth-protected-resource/mcp", serveMetadata);
+
+  const verifier = options.auth.required ? createRemoteAuthVerifier(options.auth) : undefined;
+
+  function challenge(res: Response): void {
+    res
+      .status(401)
+      .set("WWW-Authenticate", `Bearer resource_metadata="${metadataUrl}"`)
+      .json({ error: "unauthorized" });
+  }
+
+  // Validates the inbound token (when auth is required) and, for tools/call,
+  // enforces the per-tool scope. Returns true when the request may proceed to
+  // the transport; otherwise it has already written the response.
+  async function authorize(req: Request, res: Response): Promise<boolean> {
+    if (!verifier) {
+      return true;
+    }
+
+    let principal: Principal;
     try {
-      await transport.handleRequest(req, res, req.body);
+      principal = await verifier.verify(parseBearerToken(req.header("authorization")));
+    } catch (error) {
+      if (error instanceof AuthError) {
+        challenge(res);
+        return false;
+      }
+      throw error;
+    }
+
+    const requiredScope = requiredToolScope(req);
+    if (requiredScope && !hasScopes(principal, [requiredScope])) {
+      res.status(403).json({ error: "forbidden" });
+      return false;
+    }
+
+    return true;
+  }
+
+  const handle = async (req: Request, res: Response, body?: unknown): Promise<void> => {
+    try {
+      if (!(await authorize(req, res))) {
+        return;
+      }
+      await connected;
+      await transport.handleRequest(req, res, body);
     } catch (err) {
       if (!res.headersSent) {
-        const message =
-          err instanceof Error ? err.message : "Internal server error";
+        const message = err instanceof Error ? err.message : "Internal server error";
         res.status(500).json({ error: message });
       }
     }
+  };
+
+  // POST: client sends JSON-RPC requests
+  app.post("/mcp", (req: Request, res: Response) => {
+    void handle(req, res, req.body);
   });
 
   // GET: server-initiated messages via SSE
-  app.get("/mcp", async (req: Request, res: Response) => {
-    try {
-      await transport.handleRequest(req, res);
-    } catch (err) {
-      if (!res.headersSent) {
-        const message =
-          err instanceof Error ? err.message : "Internal server error";
-        res.status(500).json({ error: message });
-      }
-    }
+  app.get("/mcp", (req: Request, res: Response) => {
+    void handle(req, res);
   });
 
   // DELETE: session teardown
-  app.delete("/mcp", async (req: Request, res: Response) => {
-    try {
-      await transport.handleRequest(req, res);
-    } catch (err) {
-      if (!res.headersSent) {
-        const message =
-          err instanceof Error ? err.message : "Internal server error";
-        res.status(500).json({ error: message });
-      }
-    }
+  app.delete("/mcp", (req: Request, res: Response) => {
+    void handle(req, res);
   });
 
   // Health check
   app.get("/health", (_req: Request, res: Response) => {
     res.json({ status: "ok" });
   });
+
+  return app;
+}
+
+// Extracts the scope required for a `tools/call` request from the parsed
+// JSON-RPC body. Other methods (initialize, tools/list, ping, ...) need only a
+// valid token, so they map to no scope.
+function requiredToolScope(req: Request): string | undefined {
+  const body: unknown = req.body;
+  if (!body || typeof body !== "object") {
+    return undefined;
+  }
+
+  const message = body as { method?: unknown; params?: unknown };
+  if (message.method !== "tools/call") {
+    return undefined;
+  }
+
+  const params = message.params;
+  if (!params || typeof params !== "object") {
+    return undefined;
+  }
+
+  const name = (params as { name?: unknown }).name;
+  return typeof name === "string" ? TOOL_SCOPES[name] : undefined;
+}
+
+// ── Main ───────────────────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  const auth = authSettingsFromEnv();
+  const apiToken = process.env.MCP_API_AUTH_TOKEN;
+
+  // When auth is required this server acts as an OAuth protected resource and
+  // must authenticate to the API with its own service token. Fail fast so a
+  // misconfigured deploy can't silently call the API unauthenticated.
+  if (auth.required && !apiToken) {
+    console.error(
+      "MCP_API_AUTH_TOKEN is required when AUTH_REQUIRED=true (the HTTP MCP server needs a service token to call the API)."
+    );
+    process.exit(1);
+  }
+
+  const resourceUrl = process.env.MCP_RESOURCE_URL ?? `http://localhost:${port}/mcp`;
+  const host = process.env.MCP_HTTP_HOST ?? "127.0.0.1";
+
+  const app = createHttpMcpApp({ auth, resourceUrl, apiToken });
 
   app.listen(port, host, () => {
     console.error(
@@ -152,7 +280,11 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch((err) => {
-  console.error("MCP HTTP fatal:", err);
-  process.exit(1);
-});
+// Only start the server when run directly (e.g. `node dist/http.js`). Importing
+// this module (tests) must not boot a listener or exit the process.
+if (argv[1] && fileURLToPath(import.meta.url) === argv[1]) {
+  main().catch((err) => {
+    console.error("MCP HTTP fatal:", err);
+    process.exit(1);
+  });
+}

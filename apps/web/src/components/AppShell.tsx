@@ -1,14 +1,45 @@
 "use client";
 
-import { ReactNode, useMemo } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
+import { useAuth0 } from "@auth0/auth0-react";
 import { ConsoleSection } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
 import { sectionSubtitle, sectionTitle } from "../lib/console";
 import { SECTION_NAV, sectionFromPath } from "../lib/sections";
 import { AttentionPanel, NavButton } from "./common";
 import { useConsole } from "./ConsoleProvider";
+import { authConfiguredFromWindow } from "./AuthProvider";
+
+// Login/logout controls. This is only rendered when Auth0 is configured, since
+// useAuth0 throws without an Auth0Provider ancestor (AuthProvider omits the
+// provider entirely when auth is disabled).
+function AuthActions() {
+  const { isAuthenticated, isLoading, user, loginWithRedirect, logout } = useAuth0();
+  if (isLoading) {
+    return <span className="refreshTime">Checking session</span>;
+  }
+  if (!isAuthenticated) {
+    return (
+      <button className="button secondary" onClick={() => void loginWithRedirect()} type="button">
+        Log in
+      </button>
+    );
+  }
+  return (
+    <>
+      <span className="refreshTime">{user?.email ?? user?.name ?? "Signed in"}</span>
+      <button
+        className="button secondary"
+        onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}
+        type="button"
+      >
+        Log out
+      </button>
+    </>
+  );
+}
 
 // Shared console chrome: sidebar (brand, nav, live status) and the topbar. It is
 // rendered once by the root layout and wraps the active section route as
@@ -38,6 +69,15 @@ export function AppShell({ children }: { children: ReactNode }) {
   // URL parsing/host detection; memoised so it doesn't re-run on every render
   // (the provider re-renders on each 4s poll).
   const modelInfo = useMemo(() => extractModelInfo(config), [config]);
+
+  // Whether to show the auth controls. Resolved after mount so the server and
+  // initial client render match (the runtime config lives on window only), and
+  // so AuthActions (which calls useAuth0) mounts only when an Auth0Provider is
+  // present, i.e. when auth is configured.
+  const [authEnabled, setAuthEnabled] = useState(false);
+  useEffect(() => {
+    setAuthEnabled(authConfiguredFromWindow());
+  }, []);
 
   const counts: Partial<Record<ConsoleSection, number>> = {
     ask: questions.length,
@@ -154,6 +194,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <button className="button secondary" disabled={refreshing} onClick={() => void refresh()} type="button">
               {refreshing ? "Refreshing" : "Refresh"}
             </button>
+            {authEnabled ? <AuthActions /> : null}
           </div>
         </header>
 
