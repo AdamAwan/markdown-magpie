@@ -11,7 +11,7 @@ export interface BrowserAuthConfig {
   redirectUri: string;
 }
 
-export function isAuthEnabled(config: BrowserAuthConfig): boolean {
+function isAuthEnabled(config: BrowserAuthConfig): boolean {
   return Boolean(config.domain && config.clientId && config.audience);
 }
 
