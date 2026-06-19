@@ -11,15 +11,13 @@ import { completeJob } from "./service.js";
 test("completeJob on a draft_markdown_proposal job creates a proposal", async () => {
   const ctx = makeTestContext();
 
-  const input: DraftMarkdownProposalJobInput & { provider: "mock" } = {
-    provider: "mock" as never, // FakeJobBroker validates against @magpie/jobs schema which requires a real provider
+  const validInput: DraftMarkdownProposalJobInput & { provider: "codex" } = {
+    provider: "codex",
     gapSummaries: ["How to configure X"],
     triggeringQuestions: ["How do I configure X?"],
     evidence: [],
     expectedOutput: "markdown_proposal"
   };
-  // Use a valid provider for the @magpie/jobs schema
-  const validInput = { ...input, provider: "codex" as const };
   const job = await ctx.jobs.create("draft_markdown_proposal", validInput);
 
   const output: DraftMarkdownProposalJobOutput = {

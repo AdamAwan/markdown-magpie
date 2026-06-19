@@ -31,7 +31,7 @@ export async function ask(ctx: AppContext, question: string): Promise<AskResult>
     // "mock" is a local execution shim; for job creation default to "openai-compatible".
     const configuredProvider = ctx.config.get().aiProvider;
     const jobProvider = isAiProviderName(configuredProvider) ? configuredProvider : "openai-compatible";
-    const input: AnswerQuestionJobInput = {
+    const input: AnswerQuestionJobInput & { provider: AiProviderName } = {
       questionLogId: log.id,
       question,
       context: sections.map(({ section }) => ({
@@ -42,7 +42,7 @@ export async function ask(ctx: AppContext, question: string): Promise<AskResult>
       })),
       provider: jobProvider,
       expectedOutput: "answer_result"
-    } as AnswerQuestionJobInput & { provider: AiProviderName };
+    };
     const job = await ctx.jobs.create("answer_question", input);
     return { kind: "queue", questionId: log.id, job };
   }

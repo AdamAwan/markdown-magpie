@@ -256,7 +256,7 @@ export async function draftFromGaps(
   // The @magpie/jobs schema requires a concrete AI provider (not "mock").
   const configuredProvider = ctx.config.get().aiProvider;
   const jobProvider = isAiProviderName(configuredProvider) ? configuredProvider : "openai-compatible";
-  const input: DraftMarkdownProposalJobInput = {
+  const input: DraftMarkdownProposalJobInput & { provider: AiProviderName } = {
     gapSummaries,
     triggeringQuestions: logs.map((log) => log.question),
     evidence,
@@ -265,7 +265,7 @@ export async function draftFromGaps(
     targetPath: overrides.targetPath?.trim() || undefined,
     provider: jobProvider,
     expectedOutput: "markdown_proposal"
-  } as DraftMarkdownProposalJobInput & { provider: AiProviderName };
+  };
 
   if (ctx.config.get().aiExecutionMode === "direct") {
     const output = await draftMarkdownProposalDirect(ctx, input);
