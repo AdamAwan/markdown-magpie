@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const proposalStatusBodySchema = z.object({
-  status: z.enum(["draft", "ready", "branch-pushed", "pr-opened", "merged", "rejected"])
+  status: z.enum(["draft", "ready", "branch-pushed", "pr-opened", "merged", "rejected", "superseded"])
 });
 
 export const draftFromGapsBodySchema = z.object({

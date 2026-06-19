@@ -202,18 +202,37 @@ Lists knowledge-gap candidates grouped by gap summary. A question is included wh
 
 ### `GET /api/gaps/clusters?limit=<n>`
 
-Returns gap candidates grouped into **suggested clusters** — sets of related gaps that a single
+Returns the **persisted** gap clusters the reconciler maintains — sets of related gaps that a single
 proposal could resolve (e.g. "do cats like cheese?", "is cheese bad for cats?" and "what if a cat
-eats lots of cheese?" form one cluster). Grouping is performed by the configured chat provider;
-the `mock` provider and any non-chat provider fall back to one cluster per gap. Clusters are
-suggestions only — they are recomputed on demand, never persisted, and the reviewer is expected to
-regroup them before drafting. `limit` defaults to `50`.
+eats lots of cheese?" form one cluster). This is a fast read straight from the store with **no model
+call**: clustering happens in the background reconciler, not on this request. Only `active` clusters
+are returned. `limit` defaults to `50`.
 
 ```json
-{ "clusters": [ SuggestedGapCluster, ... ] }
+{ "clusters": [ PersistedGapCluster, ... ] }
 ```
 
-Each `SuggestedGapCluster` has `{ id, title, summaries, questionIds, count, rationale? }`.
+Each `PersistedGapCluster` has `{ id, title, summaries, questionIds, count, rationale?, flowId?,
+status, proposalId?, proposalStatus?, lastReconciledAt }`:
+
+- `status` — always `"active"` for clusters returned here (frozen clusters are historical and omitted).
+- `proposalId` / `proposalStatus` — the proposal linked to the cluster, if one has been drafted.
+- `lastReconciledAt` — when the reconciler last touched the cluster.
+
+### `POST /api/gaps/clusters/:id/proposal`
+
+Manually drafts one proposal for a persisted cluster, links the proposal to the cluster, and queues
+it for publication. The cluster's own flow routes the draft, so the body is optional:
+
+```json
+{ "targetPath": "optional/path.md", "destinationId": "optional-destination" }
+```
+
+Both fields are optional and override the flow's defaults when supplied. The response is the draft
+outcome — in direct mode `{ "ok": true, "mode": "direct", "proposal": Proposal }`, in queue mode
+`{ "ok": true, "mode": "queue", "job": AiJob }`.
+
+- `404 cluster_not_found` — no active cluster with that id.
 
 ## Proposals
 

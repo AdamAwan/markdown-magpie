@@ -17,5 +17,23 @@ export function gapRoutes(ctx: AppContext): Hono {
     return c.json({ clusters: await gapsService.listClusters(ctx, limit) });
   });
 
+  // Manually draft a proposal for one persisted cluster. The body is optional;
+  // targetPath/destinationId override the flow's defaults when supplied.
+  app.post("/clusters/:id/proposal", async (c) => {
+    const id = c.req.param("id");
+    const body = (await c.req.json().catch(() => ({}))) as {
+      targetPath?: unknown;
+      destinationId?: unknown;
+    };
+    const outcome = await gapsService.draftFromCluster(ctx, id, {
+      targetPath: typeof body.targetPath === "string" ? body.targetPath : undefined,
+      destinationId: typeof body.destinationId === "string" ? body.destinationId : undefined
+    });
+    if (!outcome.ok) {
+      return c.json({ error: outcome.code }, 404);
+    }
+    return c.json(outcome);
+  });
+
   return app;
 }

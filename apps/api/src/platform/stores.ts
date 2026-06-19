@@ -1,7 +1,9 @@
 import { DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS, InMemoryAiJobQueue } from "../stores/ai-job-queue.js";
 import { InMemoryCrunchStore } from "../stores/crunch-store.js";
+import { InMemoryGapClusterStore } from "../stores/gap-cluster-store.js";
 import { PostgresAiJobQueue } from "../stores/postgres-ai-job-queue.js";
 import { PostgresCrunchStore } from "../stores/postgres-crunch-store.js";
+import { PostgresGapClusterStore } from "../stores/postgres-gap-cluster-store.js";
 import { PostgresProposalStore } from "../stores/postgres-proposal-store.js";
 import { PostgresQuestionLogStore } from "../stores/postgres-question-log-store.js";
 import { PostgresScheduledTaskStore } from "../stores/postgres-scheduled-task-store.js";
@@ -22,7 +24,8 @@ export type StoreEnvName =
   | "AI_JOB_QUEUE"
   | "CRUNCH_STORE"
   | "SCHEDULED_TASK_STORE"
-  | "SOURCE_SYNC_STORE";
+  | "SOURCE_SYNC_STORE"
+  | "GAP_CLUSTER_STORE";
 
 export function storeBackend(name: StoreEnvName): "memory" | "postgres" {
   return process.env[name] === "postgres" ? "postgres" : storageBackend();
@@ -104,5 +107,13 @@ export function createSourceSyncStore(): InMemorySourceSyncStore | PostgresSourc
     "SOURCE_SYNC_STORE",
     (databaseUrl) => new PostgresSourceSyncStore(databaseUrl),
     () => new InMemorySourceSyncStore()
+  );
+}
+
+export function createGapClusterStore(): InMemoryGapClusterStore | PostgresGapClusterStore {
+  return createStore<InMemoryGapClusterStore | PostgresGapClusterStore>(
+    "GAP_CLUSTER_STORE",
+    (databaseUrl) => new PostgresGapClusterStore(databaseUrl),
+    () => new InMemoryGapClusterStore()
   );
 }

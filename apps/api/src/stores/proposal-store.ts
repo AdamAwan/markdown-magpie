@@ -7,6 +7,7 @@ export interface ProposalInput extends DraftMarkdownProposalJobOutput {
   triggeringQuestionIds?: string[];
   destinationId?: string;
   jobId?: string;
+  gapClusterId?: string;
 }
 
 export interface ProposalListOptions {
@@ -22,6 +23,7 @@ export interface ProposalStore {
   get(id: string): Promise<Proposal | undefined>;
   updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined>;
   recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined>;
+  linkCluster(id: string, gapClusterId: string): Promise<Proposal | undefined>;
   reset(): Promise<void>;
 }
 
@@ -42,6 +44,7 @@ export class InMemoryProposalStore implements ProposalStore {
       destinationId: input.destinationId,
       rationale: input.rationale,
       jobId: input.jobId,
+      gapClusterId: input.gapClusterId,
       createdAt: new Date().toISOString()
     };
 
@@ -86,6 +89,16 @@ export class InMemoryProposalStore implements ProposalStore {
       publication,
       status: publication.pullRequestUrl ? "pr-opened" : "branch-pushed"
     };
+    this.proposals.set(id, updated);
+    return updated;
+  }
+
+  async linkCluster(id: string, gapClusterId: string): Promise<Proposal | undefined> {
+    const existing = this.proposals.get(id);
+    if (!existing) {
+      return undefined;
+    }
+    const updated: Proposal = { ...existing, gapClusterId };
     this.proposals.set(id, updated);
     return updated;
   }

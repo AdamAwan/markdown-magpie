@@ -18,9 +18,9 @@ export class PostgresProposalStore implements ProposalStore {
       `
         INSERT INTO proposals (
           id, title, status, target_path, markdown, evidence, gap_summary,
-          triggering_question_ids, rationale, job_id, destination_id
+          triggering_question_ids, rationale, job_id, destination_id, gap_cluster_id
         )
-        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11::bigint)
         RETURNING *
       `,
       [
@@ -33,7 +33,8 @@ export class PostgresProposalStore implements ProposalStore {
         input.triggeringQuestionIds ?? [],
         input.rationale,
         input.jobId ?? null,
-        input.destinationId ?? null
+        input.destinationId ?? null,
+        input.gapClusterId ?? null
       ]
     );
 
@@ -81,6 +82,14 @@ export class PostgresProposalStore implements ProposalStore {
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
+  async linkCluster(id: string, gapClusterId: string): Promise<Proposal | undefined> {
+    const result = await this.pool.query<ProposalRow>(
+      "UPDATE proposals SET gap_cluster_id = $2::bigint WHERE id = $1 RETURNING *",
+      [id, gapClusterId]
+    );
+    return result.rows[0] ? mapRow(result.rows[0]) : undefined;
+  }
+
   async reset(): Promise<void> {
     const client = await this.pool.connect();
     try {
@@ -108,6 +117,7 @@ interface ProposalRow {
   rationale: string | null;
   job_id: string | null;
   destination_id: string | null;
+  gap_cluster_id: string | null;
   publication: Proposal["publication"] | null;
   created_at: Date;
   merged_at: Date | null;
@@ -124,6 +134,7 @@ function mapRow(row: ProposalRow): Proposal {
     gapSummary: row.gap_summary ?? undefined,
     triggeringQuestionIds: row.triggering_question_ids,
     destinationId: row.destination_id ?? undefined,
+    gapClusterId: row.gap_cluster_id ?? undefined,
     rationale: row.rationale ?? undefined,
     jobId: row.job_id ?? undefined,
     publication: row.publication ?? undefined,

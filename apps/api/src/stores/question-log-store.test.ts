@@ -229,6 +229,42 @@ test("resolveGaps resolves only the matching gap and drops it from candidates", 
   assert.ok(resolvedGap?.resolvedAt);
 });
 
+test("gap catalog revision advances when a manual gap is recorded and when gaps resolve", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const start = await store.getGapCatalogRevision();
+
+  const log = await store.record({
+    question: "How do I configure X?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    retrievedSectionIds: []
+  });
+  await store.recordManualGap(log.id, "How to configure X");
+
+  const afterAdd = await store.getGapCatalogRevision();
+  assert.ok(afterAdd > start, "recording a gap advances the revision");
+
+  await store.resolveGaps([log.id], ["How to configure X"], "prop-1");
+  const afterResolve = await store.getGapCatalogRevision();
+  assert.ok(afterResolve > afterAdd, "resolving a gap advances the revision");
+});
+
+test("gapIdsForSummary returns one stable id per unresolved gap matching the summary", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const a = await store.record({ question: "q1?", executionMode: "direct", chatProvider: "mock", retrievedSectionIds: [] });
+  await store.recordManualGap(a.id, "How to configure X");
+  const b = await store.record({ question: "q2?", executionMode: "direct", chatProvider: "mock", retrievedSectionIds: [] });
+  await store.recordManualGap(b.id, "How to configure X");
+
+  const ids = await store.gapIdsForSummary("How to configure X");
+  assert.equal(ids.length, 2, "two distinct questions share the summary");
+  assert.equal(new Set(ids).size, 2, "ids are distinct per gap");
+
+  // Resolving one gap drops it from the matches.
+  await store.resolveGaps([a.id], ["How to configure X"], "prop-1");
+  assert.deepEqual(await store.gapIdsForSummary("How to configure X"), [`${b.id}::How to configure X`]);
+});
+
 test("resolveGaps is idempotent and only counts newly resolved gaps", async () => {
   const store = new InMemoryQuestionLogStore();
   const log = await store.record({

@@ -150,6 +150,34 @@ export const GAP_CLUSTERING: PromptDefinition = {
     'Prefer several small, focused clusters over one broad cluster.'
 };
 
+export const GAP_RECONCILE_PROPOSE: PromptDefinition = {
+  id: "gap-reconcile-propose",
+  title: "Propose gap-cluster reshapes",
+  description: "Proposes merges/splits over the current persisted gap clusters.",
+  usedBy: ["api · gap reconciler"],
+  outputShape: "{ merges[], splits[] }",
+  instructions:
+    "You are reorganising knowledge-gap clusters. Propose a MERGE only when one " +
+    "document could fully cover both clusters; propose a SPLIT only when members " +
+    "are independently addressable topics. Return JSON only with this shape: " +
+    '{"merges":[{"clusterIds":["string"],"rationale":"string"}],' +
+    '"splits":[{"clusterId":"string","children":[{"gapIds":["string"]}],"rationale":"string"}]}. ' +
+    'If nothing materially changes, return {"merges":[],"splits":[]}.'
+};
+
+export const GAP_RECONCILE_CRITIC: PromptDefinition = {
+  id: "gap-reconcile-critic",
+  title: "Critique a proposed gap-cluster reshape",
+  description: "Strict reviewer that confirms or rejects a single proposed merge or split.",
+  usedBy: ["api · gap reconciler"],
+  outputShape: "{ confirmed, rationale }",
+  instructions:
+    "You are a strict reviewer of a proposed gap-cluster change. Reject unless the " +
+    "change is clearly justified. Return JSON only with this shape: " +
+    '{"confirmed":true|false,"rationale":"string"}. Default to confirmed=false when ' +
+    "the evidence is weak."
+};
+
 export const GENERIC_JOB: PromptDefinition = {
   id: "generic-job",
   title: "Generic job fallback",
@@ -193,6 +221,8 @@ export const promptCatalog: PromptDefinition[] = [
   CRUNCH_KNOWLEDGE_BASE,
   SOURCE_CHANGE_SYNC,
   GAP_CLUSTERING,
+  GAP_RECONCILE_PROPOSE,
+  GAP_RECONCILE_CRITIC,
   GENERIC_JOB,
   JOB_RUNNER_SYSTEM,
   ROUTE_QUESTION_TO_FLOW
