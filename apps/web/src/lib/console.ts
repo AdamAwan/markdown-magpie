@@ -25,6 +25,9 @@ export function sectionTitle(section: ConsoleSection): string {
   if (section === "config") {
     return "Inspect runtime configuration";
   }
+  if (section === "mcp") {
+    return "Connect your AI tools over MCP";
+  }
 
   return "Ask and inspect cited answers";
 }
@@ -53,6 +56,9 @@ export function sectionSubtitle(section: ConsoleSection): string {
   }
   if (section === "config") {
     return "Check execution mode, stores, providers, repository paths, and whether secrets are set.";
+  }
+  if (section === "mcp") {
+    return "Add the Markdown Magpie MCP server to Claude Code, Claude Desktop, VS Code, Cursor, or Continue and query the knowledge base from your editor.";
   }
 
   return "Ask and inspect cited answers";

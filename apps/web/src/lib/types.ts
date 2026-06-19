@@ -38,7 +38,7 @@ export type Feedback = QuestionFeedback;
 
 // --- Web-only types (not part of the backend domain) -----------------------
 
-export type ConsoleSection = "ask" | "knowledge" | "gaps" | "jobs" | "proposals" | "crunch" | "prompts" | "config" | "dataflow";
+export type ConsoleSection = "ask" | "knowledge" | "gaps" | "jobs" | "proposals" | "crunch" | "prompts" | "config" | "dataflow" | "mcp";
 export type AiProviderName = "mock" | "openai-compatible" | "azure-openai" | "codex" | "claude";
 
 export interface Health {

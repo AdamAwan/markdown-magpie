@@ -1870,3 +1870,107 @@ pre {
   margin: 0;
   font-size: 0.95rem;
 }
+
+/* MCP connect guide. Reuses the prompt pipeline's numbered-step layout, plus a
+   copy-to-clipboard code block and a small tool list. */
+.mcpIntro {
+  margin: 0;
+  max-width: 70ch;
+  color: #45513f;
+  line-height: 1.55;
+}
+
+.mcpEndpoint {
+  display: grid;
+  gap: 6px;
+}
+
+.mcpEndpointLabel {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #5a6650;
+}
+
+.mcpChooseHint {
+  margin: 4px 0 0;
+  font-weight: 850;
+  color: #17211d;
+}
+
+/* The two clients are alternatives, not ordered steps — lay them out as peer
+   cards rather than a numbered pipeline. */
+.mcpClients {
+  display: grid;
+  gap: 14px;
+}
+
+/* The code block wrapper is the positioning context for the copy button. */
+.mcpCode {
+  position: relative;
+}
+
+.mcpCode .promptInstructions {
+  /* Leave room for the copy button so long lines never sit under it. */
+  padding-right: 72px;
+}
+
+.mcpCodeInline {
+  white-space: nowrap;
+}
+
+.mcpCodeCopy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  min-height: 28px;
+  border: 1px solid #45513f;
+  background: #2c3a33;
+  color: #f5f7f2;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.mcpCodeCopy:hover {
+  background: #3a4b41;
+}
+
+.mcpTools {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid #d8e0d0;
+  border-radius: 10px;
+  background: #f7faf3;
+}
+
+.mcpToolsTitle {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.mcpToolList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.mcpTool {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mcpTool code {
+  flex: 0 0 auto;
+}
+
+.mcpTool span {
+  color: #45513f;
+  font-size: 0.9rem;
+}

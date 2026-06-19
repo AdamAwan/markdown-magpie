@@ -19,6 +19,7 @@ export const SECTION_NAV: SectionNav[] = [
   { section: "crunch", path: "/crunch", glyph: "Cr", label: "Crunch" },
   { section: "prompts", path: "/prompts", glyph: "Pr", label: "Prompts" },
   { section: "dataflow", path: "/dataflow", glyph: "D", label: "Data Flow" },
+  { section: "mcp", path: "/mcp", glyph: "M", label: "Connect (MCP)" },
   { section: "config", path: "/config", glyph: "C", label: "Config" }
 ];
 
