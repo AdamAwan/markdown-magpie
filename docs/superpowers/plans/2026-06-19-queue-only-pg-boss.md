@@ -247,7 +247,7 @@ git commit -m "feat(jobs): define durable job catalog"
 - Modify: `apps/api/src/test-support/context.ts`
 - Modify: `package-lock.json`
 
-- [ ] **Step 1: Test the fake lifecycle**
+- [x] **Step 1: Test the fake lifecycle**
 
 ```ts
 test("fake broker supports create, claim, heartbeat, complete, cancel, and retry", async () => {
@@ -263,13 +263,13 @@ test("fake broker supports create, claim, heartbeat, complete, cancel, and retry
 });
 ```
 
-- [ ] **Step 2: Run and observe the missing fake**
+- [x] **Step 2: Run and observe the missing fake**
 
 Run: `npm test -w @magpie/api -- --test-name-pattern="fake broker"`
 
 Expected: FAIL because `FakeJobBroker` is missing.
 
-- [ ] **Step 3: Define the application-owned interface**
+- [x] **Step 3: Define the application-owned interface**
 
 Add `@magpie/jobs` as an API workspace dependency and run `npm install` before importing these contracts.
 
@@ -294,17 +294,17 @@ export interface JobBroker {
 
 `JobListFilters` contains optional `type`, `state`, `createdAfter`, `limit` (1-200), and `offset` (>=0). `DesiredSchedule` contains `type`, `key`, `cron`, `input`, and `enabled`.
 
-- [ ] **Step 4: Implement `FakeJobBroker`**
+- [x] **Step 4: Implement `FakeJobBroker`**
 
 Use an insertion-ordered `Map`, catalog validation, deterministic state transitions, and fake schedules. Keep it test-only; do not read environment variables. Add `jobs: JobBroker` to `AppContext`, remove `stores.aiJobs`, and make `makeTestContext()` accept `jobs = new FakeJobBroker()`.
 
-- [ ] **Step 5: Run API tests and root types**
+- [x] **Step 5: Run API tests and root types**
 
 Run: `npm test -w @magpie/api && npm run typecheck`
 
 Expected: existing job service compile failures identify call sites still using `ctx.stores.aiJobs`; update only their dependency reference to `ctx.jobs` without changing behavior yet.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/api/package.json apps/api/src/jobs apps/api/src/context.ts apps/api/src/test-support/context.ts apps/api/src/features/jobs package-lock.json
