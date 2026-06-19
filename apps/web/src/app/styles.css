@@ -465,6 +465,22 @@ select:focus {
   gap: 12px;
 }
 
+/* Let the title take the slack so trailing tags/badges cluster on the right
+   instead of being stranded mid-row by space-between. */
+.rowTop > h3 {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Groups the trailing metadata (flow tag + status badge) into a single flex
+   child so the header is back to two space-between items. */
+.rowMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .pill,
 .status,
 .chip {

@@ -58,13 +58,15 @@ export function AskPanel({
       {answer ? (
         <div className="answerBlock">
           <div className="resultHeader">
-            <span
-              className={`status ${answer.result?.confidence ?? "unknown"}`}
-              title={answer.result ? `Answer confidence: ${answer.result.confidence}` : "Answer is queued"}
-            >
-              {answer.result?.confidence ?? "queued"}
-            </span>
-            <FlowTag flowId={answerFlowId} flowLabels={flowLabels} />
+            <div className="rowMeta">
+              <span
+                className={`status ${answer.result?.confidence ?? "unknown"}`}
+                title={answer.result ? `Answer confidence: ${answer.result.confidence}` : "Answer is queued"}
+              >
+                {answer.result?.confidence ?? "queued"}
+              </span>
+              <FlowTag flowId={answerFlowId} flowLabels={flowLabels} />
+            </div>
             <code>{answer.questionId}</code>
           </div>
           <p>{answer.result?.answer ?? `Queued as ${answer.job?.type ?? "AI job"}`}</p>
@@ -99,10 +101,12 @@ export function AskPanel({
               <article className="row" key={item.id}>
                 <div className="rowTop">
                   <h3>{item.question}</h3>
-                  <FlowTag flowId={item.flowId} flowLabels={flowLabels} />
-                  <span className={`status ${item.confidence}`} title={`Answer confidence: ${item.confidence}`}>
-                    {item.confidence}
-                  </span>
+                  <div className="rowMeta">
+                    <FlowTag flowId={item.flowId} flowLabels={flowLabels} />
+                    <span className={`status ${item.confidence}`} title={`Answer confidence: ${item.confidence}`}>
+                      {item.confidence}
+                    </span>
+                  </div>
                 </div>
                 <p>{item.answer?.answer ?? "Waiting for an answer."}</p>
                 {item.answer?.gaps && item.answer.gaps.length > 0 ? (
