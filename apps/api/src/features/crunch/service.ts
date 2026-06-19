@@ -1,11 +1,12 @@
 import type {
-  AiJob,
   ChangesetChange,
   CrunchKnowledgeBaseJobInput,
   CrunchPlan,
   CrunchRun,
   CrunchRunTrigger
 } from "@magpie/core";
+import type { JobView } from "@magpie/jobs";
+import { isAiProviderName } from "@magpie/jobs";
 import { buildMockCrunchPlan } from "@magpie/core";
 import { CRUNCH_KNOWLEDGE_BASE } from "@magpie/prompts";
 import { LocalGitProposalPublisher } from "@magpie/git";
@@ -36,12 +37,15 @@ export async function triggerCrunchRun(
   const flowId = flow?.id ?? options.flowId;
   const destinationId = flow?.destinationId ?? defaultDestinationId(deps);
   const documents = gatherCrunchDocuments(ctx, destinationId);
+  // The @magpie/jobs schema requires a concrete AI provider (not "mock").
+  const configuredProvider = ctx.config.get().aiProvider;
+  const jobProvider = isAiProviderName(configuredProvider) ? configuredProvider : "openai-compatible";
   const input = {
     flowId,
     destinationId,
     documents,
     expectedOutput: "crunch_plan",
-    provider: ctx.config.get().aiProvider
+    provider: jobProvider
   } satisfies CrunchKnowledgeBaseJobInput & { provider: AiProviderName };
 
   console.log(
@@ -74,7 +78,7 @@ export async function triggerCrunchRun(
     }
   }
 
-  const job = await ctx.stores.aiJobs.enqueue("crunch_knowledge_base", input);
+  const job = await ctx.jobs.create("crunch_knowledge_base", input);
   return ctx.stores.crunchRuns.createRun({
     flowId,
     destinationId,
@@ -119,7 +123,7 @@ export async function crunchKnowledgeBaseDirect(
 
 export async function attachCrunchPlanFromCompletedJob(
   ctx: AppContext,
-  job: AiJob | undefined,
+  job: JobView | undefined,
   output: unknown
 ): Promise<void> {
   if (!job || job.type !== "crunch_knowledge_base") {

@@ -2,12 +2,10 @@ import type { ChatProvider, EmbeddingProvider } from "@magpie/core";
 import { RuntimeConfigHolder } from "./config-holder.js";
 import { BackgroundEmbedder } from "./platform/background-embedder.js";
 import {
-  createAiJobQueue,
   createCrunchStore,
   createProposalStore,
   createQuestionLogStore,
   createScheduledTaskStore,
-  parseClaimTimeoutMs,
   requireDatabaseUrl,
   storeBackend
 } from "./platform/stores.js";
@@ -27,6 +25,8 @@ import {
   getConfiguredKnowledgeSources
 } from "./stores/knowledge-repositories.js";
 import { checkoutRoot, syncConfiguredGitCheckouts, type RepositoryDeps } from "./platform/repositories.js";
+import type { JobBroker } from "./jobs/broker.js";
+import { FakeJobBroker } from "./jobs/fake-broker.js";
 
 export interface AppContext {
   stores: {
@@ -36,8 +36,8 @@ export interface AppContext {
     proposals: ReturnType<typeof createProposalStore>;
     crunchRuns: ReturnType<typeof createCrunchStore>;
     scheduledTasks: ReturnType<typeof createScheduledTaskStore>;
-    aiJobs: ReturnType<typeof createAiJobQueue>;
   };
+  jobs: JobBroker;
   providers: {
     chat: (provider: AiProviderName) => ChatProvider;
     embedding: EmbeddingProvider | undefined;
@@ -51,13 +51,11 @@ export interface AppContext {
     checkoutRoot: string;
   };
   embedder: BackgroundEmbedder;
-  claimTimeoutMs: number;
   repositoryDeps(): RepositoryDeps;
   bootstrap(): Promise<void>;
 }
 
 export async function createAppContext(): Promise<AppContext> {
-  const claimTimeoutMs = parseClaimTimeoutMs(process.env.AI_JOB_CLAIM_TIMEOUT_MS);
   const knowledgeStore =
     storeBackend("KNOWLEDGE_STORE") === "postgres" ? new PostgresKnowledgeStore(requireDatabaseUrl()) : undefined;
   const embedding = knowledgeStore ? createConfiguredEmbeddingProvider() : undefined;
@@ -82,6 +80,9 @@ export async function createAppContext(): Promise<AppContext> {
 
   const embedder = new BackgroundEmbedder(knowledgeStore, embedding);
 
+  // TODO(Task 3): replace with PgBossJobBroker (mandatory Postgres)
+  const jobs: JobBroker = new FakeJobBroker();
+
   const ctx: AppContext = {
     stores: {
       knowledge: knowledgeStore,
@@ -89,9 +90,9 @@ export async function createAppContext(): Promise<AppContext> {
       questionLogs: createQuestionLogStore(),
       proposals: createProposalStore(),
       crunchRuns: createCrunchStore(),
-      scheduledTasks: createScheduledTaskStore(),
-      aiJobs: createAiJobQueue(claimTimeoutMs)
+      scheduledTasks: createScheduledTaskStore()
     },
+    jobs,
     providers: {
       chat: (provider) => createConfiguredChatProvider(provider),
       embedding
@@ -99,7 +100,6 @@ export async function createAppContext(): Promise<AppContext> {
     config: RuntimeConfigHolder.fromEnv(),
     knowledgeConfig,
     embedder,
-    claimTimeoutMs,
     repositoryDeps() {
       return { knowledgeConfig, knowledgeIndex, triggerEmbedding: () => void embedder.trigger() };
     },

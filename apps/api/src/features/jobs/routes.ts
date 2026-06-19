@@ -5,6 +5,7 @@ import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import * as jobsService from "./service.js";
 import { createJobBodySchema } from "./schema.js";
+import type { JobType } from "@magpie/jobs";
 
 export function jobRoutes(ctx: AppContext): Hono {
   const app = new Hono();
@@ -34,12 +35,14 @@ export function jobRoutes(ctx: AppContext): Hono {
       throw new HttpError(400, "worker_name_required");
     }
 
-    const acceptedTypes = (payload.acceptedTypes ?? []).filter(jobsService.isAiJobType);
+    const acceptedTypes = (payload.acceptedTypes ?? []).filter(jobsService.isAiJobType) as JobType[];
     if (acceptedTypes.length === 0) {
       throw new HttpError(400, "accepted_types_required");
     }
 
-    const job = await jobsService.claimJob(ctx, workerName, acceptedTypes);
+    // TODO(Task 4): capability-based claim contract — translate accepted job types to capabilities
+    const capabilities = jobsService.jobTypesToCapabilities(acceptedTypes);
+    const job = await jobsService.claimJob(ctx, workerName, capabilities);
     return c.json({ job: job ?? null });
   });
 

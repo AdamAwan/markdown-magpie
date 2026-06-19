@@ -74,8 +74,7 @@ export function getRuntimeConfig(ctx: AppContext) {
       name: process.env.WATCHER_NAME ?? null,
       pollIntervalMs: process.env.WATCHER_POLL_INTERVAL_MS ?? null,
       aiJobProvider: ctx.config.get().aiProvider,
-      agentApiTimeoutMs: process.env.AGENT_API_TIMEOUT_MS ?? null,
-      claimTimeoutMs: ctx.claimTimeoutMs
+      agentApiTimeoutMs: process.env.AGENT_API_TIMEOUT_MS ?? null
     }
   };
 }
@@ -156,7 +155,7 @@ export async function resetData(ctx: AppContext) {
   await ctx.stores.proposals.reset();
   await ctx.stores.crunchRuns.reset();
   await ctx.stores.scheduledTasks.reset();
-  await ctx.stores.aiJobs.reset();
+  await ctx.jobs.reset();
   if (ctx.stores.knowledge) {
     await ctx.stores.knowledge.reset();
   }

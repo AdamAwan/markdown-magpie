@@ -1,10 +1,11 @@
 import type {
-  AiJob,
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
   GapCandidate,
   Proposal
 } from "@magpie/core";
+import type { JobView } from "@magpie/jobs";
+import { isAiProviderName } from "@magpie/jobs";
 import { resolveProposalTargetPath } from "@magpie/core";
 import { DRAFT_MARKDOWN_PROPOSAL } from "@magpie/prompts";
 import { LocalGitProposalPublisher, raisePullRequest } from "@magpie/git";
@@ -252,6 +253,9 @@ export async function draftFromGaps(
   } else {
     console.log(`Proposal draft will use ${materialFiles.length} source file(s) as raw material.`);
   }
+  // The @magpie/jobs schema requires a concrete AI provider (not "mock").
+  const configuredProvider = ctx.config.get().aiProvider;
+  const jobProvider = isAiProviderName(configuredProvider) ? configuredProvider : "openai-compatible";
   const input: DraftMarkdownProposalJobInput = {
     gapSummaries,
     triggeringQuestions: logs.map((log) => log.question),
@@ -259,7 +263,7 @@ export async function draftFromGaps(
     sourceContext,
     destinationId,
     targetPath: overrides.targetPath?.trim() || undefined,
-    provider: ctx.config.get().aiProvider,
+    provider: jobProvider,
     expectedOutput: "markdown_proposal"
   } as DraftMarkdownProposalJobInput & { provider: AiProviderName };
 
@@ -278,7 +282,7 @@ export async function draftFromGaps(
     return { ok: true as const, mode: "direct" as const, proposal };
   }
 
-  const job = await ctx.stores.aiJobs.enqueue("draft_markdown_proposal", {
+  const job = await ctx.jobs.create("draft_markdown_proposal", {
     ...input,
     triggeringQuestionIds: questionIds
   });
@@ -394,7 +398,7 @@ export function createProposalBranchName(proposal: Proposal): string {
 
 export async function createProposalFromCompletedJob(
   ctx: AppContext,
-  job: AiJob | undefined,
+  job: JobView | undefined,
   output: unknown
 ): Promise<void> {
   if (!job || job.type !== "draft_markdown_proposal" || !isDraftMarkdownProposalJobOutput(output)) {

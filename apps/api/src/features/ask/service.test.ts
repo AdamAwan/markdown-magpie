@@ -21,7 +21,7 @@ test("ask in direct mode returns a direct result and records an answered questio
   assert.equal(log.answer.answer, outcome.result.answer);
 
   // The empty index produces no AI job in direct mode.
-  assert.equal((await ctx.stores.aiJobs.list()).length, 0);
+  assert.equal((await ctx.jobs.list({})).jobs.length, 0);
 });
 
 test("ask in queue mode returns a queue result and enqueues an answer_question job", async () => {
@@ -36,7 +36,7 @@ test("ask in queue mode returns a queue result and enqueues an answer_question j
     return;
   }
 
-  const jobs = await ctx.stores.aiJobs.list();
+  const { jobs } = await ctx.jobs.list({});
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0].type, "answer_question");
   assert.equal(jobs[0].id, outcome.job.id);

@@ -1,5 +1,7 @@
 import type { AnswerQuestionJobInput } from "@magpie/core";
 import { answerQuestion } from "@magpie/retrieval";
+import type { JobView } from "@magpie/jobs";
+import { isAiProviderName } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import type { AiProviderName } from "../../platform/providers.js";
 
@@ -7,7 +9,7 @@ type AskResult =
   | {
       kind: "queue";
       questionId: string;
-      job: Awaited<ReturnType<AppContext["stores"]["aiJobs"]["enqueue"]>>;
+      job: JobView;
     }
   | {
       kind: "direct";
@@ -25,6 +27,10 @@ export async function ask(ctx: AppContext, question: string): Promise<AskResult>
       chatProvider: ctx.config.get().aiProvider,
       retrievedSectionIds: sections.map((ranked) => ranked.section.id)
     });
+    // The @magpie/jobs schema requires a concrete AI provider (not "mock").
+    // "mock" is a local execution shim; for job creation default to "openai-compatible".
+    const configuredProvider = ctx.config.get().aiProvider;
+    const jobProvider = isAiProviderName(configuredProvider) ? configuredProvider : "openai-compatible";
     const input: AnswerQuestionJobInput = {
       questionLogId: log.id,
       question,
@@ -34,10 +40,10 @@ export async function ask(ctx: AppContext, question: string): Promise<AskResult>
         heading: section.heading,
         content: section.content
       })),
-      provider: ctx.config.get().aiProvider,
+      provider: jobProvider,
       expectedOutput: "answer_result"
     } as AnswerQuestionJobInput & { provider: AiProviderName };
-    const job = await ctx.stores.aiJobs.enqueue("answer_question", input);
+    const job = await ctx.jobs.create("answer_question", input);
     return { kind: "queue", questionId: log.id, job };
   }
 

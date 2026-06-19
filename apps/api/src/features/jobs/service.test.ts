@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type {
-  AnswerQuestionJobInput,
   AnswerQuestionJobOutput,
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput
@@ -12,13 +11,16 @@ import { completeJob } from "./service.js";
 test("completeJob on a draft_markdown_proposal job creates a proposal", async () => {
   const ctx = makeTestContext();
 
-  const input: DraftMarkdownProposalJobInput = {
+  const input: DraftMarkdownProposalJobInput & { provider: "mock" } = {
+    provider: "mock" as never, // FakeJobBroker validates against @magpie/jobs schema which requires a real provider
     gapSummaries: ["How to configure X"],
     triggeringQuestions: ["How do I configure X?"],
     evidence: [],
     expectedOutput: "markdown_proposal"
   };
-  const job = await ctx.stores.aiJobs.enqueue("draft_markdown_proposal", input);
+  // Use a valid provider for the @magpie/jobs schema
+  const validInput = { ...input, provider: "codex" as const };
+  const job = await ctx.jobs.create("draft_markdown_proposal", validInput);
 
   const output: DraftMarkdownProposalJobOutput = {
     title: "Configure X",
@@ -46,13 +48,14 @@ test("completeJob on an answer_question job updates the question log with the an
     retrievedSectionIds: []
   });
 
-  const input: AnswerQuestionJobInput = {
+  const input = {
+    provider: "codex" as const,
     questionLogId: log.id,
     question: "How do I configure X?",
     context: [],
-    expectedOutput: "answer_result"
+    expectedOutput: "answer_result" as const
   };
-  const job = await ctx.stores.aiJobs.enqueue("answer_question", input);
+  const job = await ctx.jobs.create("answer_question", input);
 
   const output: AnswerQuestionJobOutput = {
     answer: "Set the X flag in config.",
