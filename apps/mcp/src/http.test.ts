@@ -4,7 +4,7 @@ import http, { type Server } from "node:http";
 import { AddressInfo } from "node:net";
 import type { Express } from "express";
 import { exportJWK, generateKeyPair, SignJWT, type JSONWebKeySet } from "jose";
-import { createHttpMcpApp, type HttpMcpOptions } from "./http.js";
+import { createHttpMcpApp, mcpAuthSettingsFromEnv, type HttpMcpOptions } from "./http.js";
 
 const authIssuer = "https://example.auth0.com/";
 const authAudience = "https://markdown-magpie.local/api";
@@ -103,7 +103,7 @@ function createRequest(
 
 async function makeTestAuth(): Promise<{
   jwks: () => Promise<JSONWebKeySet>;
-  token: (scopes?: string[]) => Promise<string>;
+  token: (scopes?: string[], audience?: string) => Promise<string>;
 }> {
   const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
   const publicJwk = await exportJWK(publicKey);
@@ -114,12 +114,12 @@ async function makeTestAuth(): Promise<{
 
   return {
     jwks: async () => jwks,
-    token: async (scopes = []) => {
+    token: async (scopes = [], audience = authAudience) => {
       const jwt = await new SignJWT({ scope: scopes.join(" ") })
         .setProtectedHeader({ alg: "RS256", kid })
         .setSubject("test-user")
         .setIssuer(authIssuer)
-        .setAudience(authAudience)
+        .setAudience(audience)
         .setIssuedAt()
         .setExpirationTime("5m")
         .sign(privateKey);
@@ -288,6 +288,59 @@ test("a valid scoped tools/call dispatches and calls the API with the service to
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("a token whose aud is the MCP resource url is accepted (MCP audience, not the web API audience)", async () => {
+  const auth = await makeTestAuth();
+  // The server is configured with the /mcp URL as its audience, exactly as
+  // mcpAuthSettingsFromEnv resolves it in production.
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: resourceUrl, jwks: auth.jwks } })
+  );
+  const res = await request(app)
+    .post("/mcp")
+    .set("authorization", await auth.token(["read:knowledge"], resourceUrl))
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+  // Passed the auth boundary: an MCP-audience token is honoured.
+  assert.notEqual(res.status, 401);
+  assert.notEqual(res.status, 403);
+});
+
+test("a token minted for the web API audience is rejected by the MCP server", async () => {
+  const auth = await makeTestAuth();
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: resourceUrl, jwks: auth.jwks } })
+  );
+  // This is the exact bug class: a token whose aud is the WEB API audience must
+  // not be accepted by the MCP server, even though it is otherwise valid.
+  const res = await request(app)
+    .post("/mcp")
+    .set("authorization", await auth.token(["read:knowledge"], authAudience))
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+  assert.equal(res.status, 401);
+});
+
+test("mcpAuthSettingsFromEnv validates against the MCP resource url, not the web API audience", () => {
+  const env: NodeJS.ProcessEnv = {
+    AUTH_REQUIRED: "true",
+    AUTH0_DOMAIN: "wastedcake.eu.auth0.com",
+    AUTH0_AUDIENCE: "https://magpie.wastedcake.com",
+    MCP_RESOURCE_URL: "https://mcp-magpie.wastedcake.com/mcp"
+  };
+  const settings = mcpAuthSettingsFromEnv(env, "https://mcp-magpie.wastedcake.com/mcp");
+  assert.equal(settings.audience, "https://mcp-magpie.wastedcake.com/mcp");
+  assert.notEqual(settings.audience, "https://magpie.wastedcake.com");
+  assert.equal(settings.required, true);
+  assert.equal(settings.issuer, "https://wastedcake.eu.auth0.com/");
+});
+
+test("MCP_AUDIENCE overrides the resource url when explicitly set", () => {
+  const env: NodeJS.ProcessEnv = {
+    MCP_RESOURCE_URL: "https://mcp-magpie.wastedcake.com/mcp",
+    MCP_AUDIENCE: "https://custom.example/audience"
+  };
+  const settings = mcpAuthSettingsFromEnv(env, "https://mcp-magpie.wastedcake.com/mcp");
+  assert.equal(settings.audience, "https://custom.example/audience");
 });
 
 test("auth disabled lets /mcp through without a token", async () => {

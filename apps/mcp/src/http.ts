@@ -31,6 +31,20 @@ const TOOL_SCOPES: Record<string, string> = {
   "kb.feedback": "feedback:questions"
 };
 
+// Resolves the auth settings the HTTP MCP server validates inbound tokens with.
+//
+// Critically, the MCP server has its OWN audience, distinct from the web API
+// audience (AUTH0_AUDIENCE). MCP clients (Claude, Cursor, MCP Inspector) request
+// a token using the RFC 8707 `resource` parameter set to the /mcp URL, so Auth0
+// stamps `aud` = the /mcp URL. Validating those tokens against AUTH0_AUDIENCE (the
+// web API identifier) would reject every correctly-issued MCP token with a 401.
+// The audience therefore comes from MCP_AUDIENCE, defaulting to the public /mcp
+// resource URL. The web API (apps/api) is unchanged and still validates against
+// AUTH0_AUDIENCE.
+export function mcpAuthSettingsFromEnv(env: NodeJS.ProcessEnv, resourceUrl: string): AuthSettings {
+  return { ...authSettingsFromEnv(env), audience: env.MCP_AUDIENCE ?? resourceUrl };
+}
+
 export interface HttpMcpOptions {
   auth: AuthSettings & { jwks?: () => Promise<JSONWebKeySet> };
   // The public URL of this protected resource (the /mcp endpoint). Used for the
@@ -255,7 +269,8 @@ function requiredToolScope(req: Request): string | undefined {
 // ── Main ───────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  const auth = authSettingsFromEnv();
+  const resourceUrl = process.env.MCP_RESOURCE_URL ?? `http://localhost:${port}/mcp`;
+  const auth = mcpAuthSettingsFromEnv(process.env, resourceUrl);
   const apiToken = process.env.MCP_API_AUTH_TOKEN;
 
   // When auth is required this server acts as an OAuth protected resource and
@@ -268,7 +283,6 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const resourceUrl = process.env.MCP_RESOURCE_URL ?? `http://localhost:${port}/mcp`;
   const host = process.env.MCP_HTTP_HOST ?? "127.0.0.1";
 
   const app = createHttpMcpApp({ auth, resourceUrl, apiToken });
