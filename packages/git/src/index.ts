@@ -281,35 +281,57 @@ export interface PullRequestStatus {
   state: "open" | "closed";
 }
 
-// Reads the current state of a previously-raised GitHub pull request. Returns
-// undefined when the URL is not a GitHub PR, no token is configured, or the PR
-// can no longer be found — all cases where the poller should simply skip it.
-// Throws only on an unexpected API error so transient failures surface in logs.
-export async function fetchPullRequestStatus(pullRequestUrl: string | undefined): Promise<PullRequestStatus | undefined> {
+export interface PullRequestPoll {
+  // True when the server answered 304 Not Modified to a conditional request: the
+  // PR is unchanged since `etag`, so the caller keeps its cached reading. A 304
+  // does not count against GitHub's REST rate limit.
+  notModified: boolean;
+  // The freshly-read state (200 response). Undefined when the URL is not a GitHub
+  // PR, no token is configured, the PR is gone (404), or on a 304.
+  status?: PullRequestStatus;
+  // The ETag to store and replay as If-None-Match next time (present on a 200).
+  etag?: string;
+}
+
+// Reads a previously-raised GitHub pull request, optionally conditionally: pass
+// the ETag from a prior poll and an unchanged PR comes back as 304 (notModified)
+// without spending rate limit or re-reading the body. Returns notModified=false
+// with status undefined when the URL is not a GitHub PR, no token is configured,
+// or the PR can no longer be found. Throws only on an unexpected API error.
+export async function fetchPullRequestStatusCached(
+  pullRequestUrl: string | undefined,
+  etag?: string
+): Promise<PullRequestPoll> {
   const ref = parseGitHubPullRequestUrl(pullRequestUrl);
   if (!ref) {
-    return undefined;
+    return { notModified: false };
   }
 
   const token = process.env.GITHUB_TOKEN?.trim();
   if (!token) {
-    return undefined;
+    return { notModified: false };
+  }
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "markdown-magpie"
+  };
+  if (etag) {
+    headers["If-None-Match"] = etag;
   }
 
   const response = await githubFetch(
     `https://api.github.com/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "markdown-magpie"
-      }
-    }
+    { headers }
   );
 
+  if (response.status === 304) {
+    return { notModified: true };
+  }
   if (response.status === 404) {
-    return undefined;
+    return { notModified: false };
   }
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
@@ -317,7 +339,17 @@ export async function fetchPullRequestStatus(pullRequestUrl: string | undefined)
   }
 
   const data = (await response.json()) as { merged?: boolean; state?: string };
-  return { merged: Boolean(data.merged), state: data.state === "closed" ? "closed" : "open" };
+  return {
+    notModified: false,
+    status: { merged: Boolean(data.merged), state: data.state === "closed" ? "closed" : "open" },
+    etag: response.headers.get("etag") ?? undefined
+  };
+}
+
+// Unconditional read, for callers that have no cached ETag. Returns undefined in
+// all the skip cases above. Kept as the simple shape the live PR-state fallback uses.
+export async function fetchPullRequestStatus(pullRequestUrl: string | undefined): Promise<PullRequestStatus | undefined> {
+  return (await fetchPullRequestStatusCached(pullRequestUrl)).status;
 }
 
 // Parses owner/repo/number from a github.com pull request html_url such as

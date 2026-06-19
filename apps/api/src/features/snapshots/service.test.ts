@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { makeTestContext } from "../../test-support/context.js";
 import { refreshSnapshot } from "./service.js";
 
-const noPulls = { fetchPullRequestStatus: async () => undefined };
+const noPulls = { pollPullRequest: async () => ({ notModified: false }) };
 
 describe("refreshSnapshot", () => {
   it("downloads this flow's gaps and in-flight proposals to the snapshot store", async () => {
@@ -54,9 +54,9 @@ describe("refreshSnapshot", () => {
 
     let polls = 0;
     const snapshot = await refreshSnapshot(ctx, undefined, {
-      fetchPullRequestStatus: async () => {
+      pollPullRequest: async () => {
         polls += 1;
-        return { merged: false, state: "open" };
+        return { notModified: false, status: { merged: false, state: "open" }, etag: 'W/"abc"' };
       }
     });
 
@@ -64,6 +64,45 @@ describe("refreshSnapshot", () => {
     assert.equal(snapshot.pullRequests.length, 1);
     assert.equal(snapshot.pullRequests[0].state, "open");
     assert.equal(snapshot.pullRequests[0].proposalId, proposal.id);
+    assert.equal(snapshot.pullRequests[0].etag, 'W/"abc"', "the ETag is stored for the next poll");
+  });
+
+  it("replays the stored ETag and keeps the prior reading on a 304", async () => {
+    const ctx = makeTestContext();
+    const proposal = await ctx.stores.proposals.create({
+      title: "T",
+      targetPath: "t.md",
+      markdown: "#",
+      rationale: "r",
+      evidence: [],
+      triggeringQuestionIds: []
+    });
+    await ctx.stores.proposals.recordPublication(proposal.id, {
+      provider: "local-git",
+      branchName: "b",
+      commitSha: "sha",
+      pullRequestUrl: "https://github.com/o/r/pull/1",
+      publishedAt: new Date().toISOString()
+    });
+
+    // First poll returns a 200 with an ETag.
+    await refreshSnapshot(ctx, undefined, {
+      pollPullRequest: async () => ({ notModified: false, status: { merged: false, state: "open" }, etag: 'W/"v1"' })
+    });
+
+    // Second poll: the service must send the stored ETag and, on 304, keep the reading.
+    let seenEtag: string | undefined = "unset";
+    const snapshot = await refreshSnapshot(ctx, undefined, {
+      pollPullRequest: async (_url, etag) => {
+        seenEtag = etag;
+        return { notModified: true };
+      }
+    });
+
+    assert.equal(seenEtag, 'W/"v1"', "the stored ETag was replayed as If-None-Match");
+    assert.equal(snapshot.pullRequests.length, 1, "the unchanged PR is retained");
+    assert.equal(snapshot.pullRequests[0].state, "open", "the prior reading is kept on 304");
+    assert.equal(snapshot.pullRequests[0].etag, 'W/"v1"', "the ETag is carried forward");
   });
 
   it("scopes gaps and proposals to the requested flow", async () => {

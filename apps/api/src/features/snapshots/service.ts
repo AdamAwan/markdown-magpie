@@ -1,15 +1,17 @@
 import type { Proposal } from "@magpie/core";
-import { fetchPullRequestStatus as defaultFetchPullRequestStatus } from "@magpie/git";
+import { fetchPullRequestStatusCached as defaultPollPullRequest } from "@magpie/git";
 import type { AppContext } from "../../context.js";
 import type { FlowSnapshot, SnapshotProposal, SnapshotPullRequest } from "../../stores/snapshot-store.js";
 
 export interface SnapshotDeps {
-  // Injected so tests can run offline. Defaults to the real GitHub lookup.
-  fetchPullRequestStatus: typeof defaultFetchPullRequestStatus;
+  // Injected so tests can run offline. Defaults to the real conditional GitHub
+  // lookup, which sends If-None-Match when a prior ETag is available so an
+  // unchanged PR returns 304 and costs no rate limit.
+  pollPullRequest: typeof defaultPollPullRequest;
 }
 
 const DEFAULT_DEPS: SnapshotDeps = {
-  fetchPullRequestStatus: defaultFetchPullRequestStatus
+  pollPullRequest: defaultPollPullRequest
 };
 
 function sameFlow(a: string | undefined, b: string | undefined): boolean {
@@ -71,6 +73,7 @@ export async function refreshSnapshot(
   const previousByProposal = new Map((previous?.pullRequests ?? []).map((pr) => [pr.proposalId, pr]));
 
   const pullRequests: SnapshotPullRequest[] = [];
+  let unchanged = 0;
   for (const proposal of flowProposals) {
     if (proposal.status !== "pr-opened") {
       continue;
@@ -79,27 +82,42 @@ export async function refreshSnapshot(
     if (!url) {
       continue;
     }
+    const prior = previousByProposal.get(proposal.id);
+    const fallback = (): SnapshotPullRequest =>
+      prior ? { ...prior, checkedAt: takenAt } : { proposalId: proposal.id, url, merged: false, state: "unknown", checkedAt: takenAt };
     try {
-      const status = await deps.fetchPullRequestStatus(url);
-      if (!status) {
-        // Not a resolvable GitHub PR (or no token); keep any prior reading.
-        const prior = previousByProposal.get(proposal.id);
-        pullRequests.push(prior ?? { proposalId: proposal.id, url, merged: false, state: "unknown", checkedAt: takenAt });
+      // Replay the prior ETag so an unchanged PR comes back 304 (no rate-limit cost).
+      const poll = await deps.pollPullRequest(url, prior?.etag);
+      if (poll.notModified) {
+        unchanged += 1;
+        pullRequests.push(fallback());
         continue;
       }
-      pullRequests.push({ proposalId: proposal.id, url, merged: status.merged, state: status.state, checkedAt: takenAt });
+      if (poll.status) {
+        pullRequests.push({
+          proposalId: proposal.id,
+          url,
+          merged: poll.status.merged,
+          state: poll.status.state,
+          etag: poll.etag ?? prior?.etag,
+          checkedAt: takenAt
+        });
+        continue;
+      }
+      // No status (not a resolvable PR / no token / gone); keep any prior reading.
+      pullRequests.push(fallback());
     } catch (error) {
       const message = error instanceof Error ? error.message : "pull request lookup failed";
       console.warn(`Snapshot refresh [${flowLabel}]: PR status check failed for proposal ${proposal.id}: ${message}`);
-      const prior = previousByProposal.get(proposal.id);
-      pullRequests.push(prior ?? { proposalId: proposal.id, url, merged: false, state: "unknown", checkedAt: takenAt });
+      pullRequests.push(fallback());
     }
   }
 
   const snapshot: FlowSnapshot = { flowId, takenAt, catalogRevision, gaps, proposals, pullRequests };
   await ctx.stores.snapshots.write(snapshot);
   console.log(
-    `Snapshot refresh [${flowLabel}]: ${gaps.length} gap(s), ${proposals.length} proposal(s), ${pullRequests.length} open PR(s).`
+    `Snapshot refresh [${flowLabel}]: ${gaps.length} gap(s), ${proposals.length} proposal(s), ` +
+      `${pullRequests.length} open PR(s) (${unchanged} unchanged via ETag).`
   );
   return snapshot;
 }
