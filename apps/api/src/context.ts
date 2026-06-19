@@ -9,6 +9,7 @@ import {
   createProposalStore,
   createQuestionLogStore,
   createScheduledTaskStore,
+  createSnapshotStore,
   createSourceSyncStore,
   parseClaimTimeoutMs,
   requireDatabaseUrl,
@@ -43,6 +44,7 @@ export interface AppContext {
     sourceSync: ReturnType<typeof createSourceSyncStore>;
     aiJobs: ReturnType<typeof createAiJobQueue>;
     gapClusters: ReturnType<typeof createGapClusterStore>;
+    snapshots: ReturnType<typeof createSnapshotStore>;
   };
   providers: {
     chat: (provider: AiProviderName) => ChatProvider;
@@ -100,7 +102,8 @@ export async function createAppContext(): Promise<AppContext> {
       scheduledTasks: createScheduledTaskStore(),
       sourceSync: createSourceSyncStore(),
       aiJobs: createAiJobQueue(claimTimeoutMs),
-      gapClusters: createGapClusterStore()
+      gapClusters: createGapClusterStore(),
+      snapshots: createSnapshotStore()
     },
     providers: {
       chat: (provider) => createConfiguredChatProvider(provider),

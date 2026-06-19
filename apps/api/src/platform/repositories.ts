@@ -27,6 +27,12 @@ export function checkoutRoot(): string {
   return resolveLocalConfiguredPath(process.env.MAGPIE_CHECKOUT_ROOT ?? ".magpie/checkouts");
 }
 
+// Where the per-flow snapshot fetch job writes its downloaded gaps/proposals/PR
+// data. A sibling of the checkout root by default; override with MAGPIE_SNAPSHOT_ROOT.
+export function snapshotRoot(): string {
+  return resolveLocalConfiguredPath(process.env.MAGPIE_SNAPSHOT_ROOT ?? ".magpie/snapshots");
+}
+
 function resolveLocalConfiguredPath(value: string): string {
   if (path.isAbsolute(value)) {
     return value;

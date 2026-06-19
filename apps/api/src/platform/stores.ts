@@ -12,6 +12,8 @@ import { InMemoryProposalStore } from "../stores/proposal-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
+import { FileSnapshotStore, type SnapshotStore } from "../stores/snapshot-store.js";
+import { snapshotRoot } from "./repositories.js";
 
 export function storageBackend(): "memory" | "postgres" {
   return process.env.STORAGE_BACKEND === "postgres" ? "postgres" : "memory";
@@ -116,4 +118,10 @@ export function createGapClusterStore(): InMemoryGapClusterStore | PostgresGapCl
     (databaseUrl) => new PostgresGapClusterStore(databaseUrl),
     () => new InMemoryGapClusterStore()
   );
+}
+
+// The snapshot is an on-disk artifact (the downloaded-data location), so there is
+// no Postgres variant; unit tests swap in InMemorySnapshotStore via the test context.
+export function createSnapshotStore(): SnapshotStore {
+  return new FileSnapshotStore(snapshotRoot());
 }

@@ -1,5 +1,6 @@
 import type { ScheduledTaskSettings } from "@magpie/core";
 import type { AppContext } from "../context.js";
+import * as snapshotService from "../features/snapshots/service.js";
 import * as sourceSyncService from "../features/source-sync/service.js";
 import { reconcileGaps } from "./gap-reconciler.js";
 
@@ -47,6 +48,16 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
       "to match and the result lands on a review branch. Only documents the knowledge base already covers are touched.",
     defaultCron: "*/10 * * * *",
     run: (ctx, flowId) => syncSourceChangesForFlow(ctx, flowId)
+  },
+  {
+    baseKey: "snapshot-refresh",
+    label: (flow) => `Fetch snapshot · gaps · proposals · PRs · ${flow}`,
+    description:
+      "Downloads this flow's gaps, in-flight proposals, and open pull-request state to an on-disk snapshot the " +
+      "reconciler reads. PR polling happens here, on this job's own cadence, instead of during reconciliation — so " +
+      "the reconciler stops calling the git host live. Runs more often than the reconciler by default.",
+    defaultCron: "*/5 * * * *",
+    run: (ctx, flowId) => snapshotService.refreshSnapshot(ctx, flowId).then(() => undefined)
   }
 ];
 
