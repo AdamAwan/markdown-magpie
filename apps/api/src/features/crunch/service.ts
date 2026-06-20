@@ -26,10 +26,10 @@ export async function getRun(ctx: AppContext, id: string): Promise<CrunchRun | u
 }
 
 // Shared by the manual trigger endpoint and the scheduler. Planning is
-// enqueue-only: both modes create a "running" run linked to a
-// crunch_knowledge_base job and return immediately, so neither the HTTP response
-// nor the scheduler tick blocks on the (potentially slow) model call. The watcher
-// runs the generative work and completes the run via
+// enqueue-only: both the manual trigger and the scheduler create a "running" run
+// linked to a crunch_knowledge_base job and return immediately, so neither the
+// HTTP response nor the scheduler tick blocks on the (potentially slow) model
+// call. The watcher runs the generative work and completes the run via
 // attachCrunchPlanFromCompletedJob().
 export async function triggerCrunchRun(
   ctx: AppContext,
@@ -53,7 +53,7 @@ export async function triggerCrunchRun(
   console.log(
     `Crunch run requested (trigger=${options.trigger}, flow=${flowId ?? "default"}, ` +
       `destination=${destinationId ?? "none"}, documents=${documents.length}, ` +
-      `provider=${ctx.config.get().aiProvider}, mode=${ctx.config.get().aiExecutionMode})`
+      `provider=${ctx.config.get().aiProvider})`
   );
 
   const job = await ctx.jobs.create("crunch_knowledge_base", input);

@@ -162,6 +162,26 @@ test("publishRun returns 409 without enqueuing when no git repository matches", 
   assert.equal((await ctx.jobs.list({})).jobs.length, 0);
 });
 
+test("publishRun returns 409 crunch_run_empty_plan without enqueuing when the plan has no operations", async () => {
+  const ctx = makeTestContext();
+  await seedGitRepository(ctx);
+  const run = await ctx.stores.crunchRuns.createRun({
+    destinationId: "test-repo",
+    trigger: "manual",
+    documentCount: 1,
+    status: "running"
+  });
+  // A completed run whose plan resulted in no operations must not publish.
+  await ctx.stores.crunchRuns.completeRun(run.id, { summary: "nothing to do", operations: [], rationale: "r" });
+
+  const outcome = await publishRun(ctx, run.id);
+  assert.equal(outcome.ok, false);
+  if (outcome.ok) throw new Error("unreachable");
+  assert.equal(outcome.status, 409);
+  assert.equal(outcome.code, "crunch_run_empty_plan");
+  assert.equal((await ctx.jobs.list({})).jobs.length, 0);
+});
+
 test("getRunExecutionContext returns the run plus repo config and never secrets", async () => {
   const ctx = makeTestContext();
   await seedGitRepository(ctx);
