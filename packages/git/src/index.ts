@@ -16,6 +16,23 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+// A hung git subprocess (e.g. a credential prompt on a misconfigured remote) or
+// a stalled GitHub connection would otherwise block indexing and the PR poller
+// indefinitely; large diffs/clones could also blow past execFile's 1 MB default
+// stdout buffer. These bounds are configurable for unusually large repos.
+const GIT_SUBPROCESS_TIMEOUT_MS = positiveIntFromEnv("GIT_TIMEOUT_MS", 120_000);
+const GIT_SUBPROCESS_MAX_BUFFER = positiveIntFromEnv("GIT_MAX_BUFFER_BYTES", 64 * 1024 * 1024);
+const GITHUB_API_TIMEOUT_MS = positiveIntFromEnv("GITHUB_API_TIMEOUT_MS", 30_000);
+
+function positiveIntFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export interface RepositorySyncResult {
   repository: RepositoryRef;
   headSha?: string;
@@ -77,7 +94,12 @@ export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<Gi
     } else {
       const branch = await tryGit(localPath, ["branch", "--show-current"]);
       if (branch.trim() && (await remoteBranchExists(localPath, branch.trim(), authEnv))) {
-        await git(localPath, ["pull", "--ff-only"], authEnv);
+        // Pull the current branch explicitly. A bare `git pull --ff-only` resolves
+        // its merge target from FETCH_HEAD, which the preceding `fetch --prune
+        // origin` populates with every remote branch — so once the bot has pushed
+        // many proposal branches, git aborts with "Cannot fast-forward to multiple
+        // branches." Naming the branch keeps the merge target unambiguous.
+        await git(localPath, ["pull", "--ff-only", "origin", branch.trim()], authEnv);
       }
     }
   }
@@ -86,6 +108,60 @@ export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<Gi
     localPath,
     remoteUrl: request.url
   };
+}
+
+// A single file touched by a range of source commits. `diff` is the unified
+// patch for that file, truncated to keep model input bounded.
+export interface SourceFileChange {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "other";
+  diff: string;
+}
+
+// The current commit on the checkout's HEAD, or undefined when the path is not a
+// git work tree (so callers can degrade rather than throw).
+export async function getHeadSha(localPath: string): Promise<string | undefined> {
+  const sha = (await tryGit(localPath, ["rev-parse", "HEAD"])).trim();
+  return sha || undefined;
+}
+
+// The files changed between two commits, with a (capped) per-file patch. Scope to
+// a subdirectory with `subpath` so a source's configured subpath is the only
+// thing diffed. Returns [] when either ref is missing or nothing changed.
+export async function diffChangedFiles(
+  localPath: string,
+  fromSha: string,
+  toSha: string,
+  options: { subpath?: string; maxDiffChars?: number } = {}
+): Promise<SourceFileChange[]> {
+  const maxDiffChars = options.maxDiffChars ?? 8_000;
+  const pathspec = options.subpath?.trim() ? ["--", options.subpath.trim()] : [];
+
+  const nameStatus = await tryGit(localPath, ["diff", "--name-status", "-M", `${fromSha}..${toSha}`, ...pathspec]);
+  const changes: SourceFileChange[] = [];
+
+  for (const line of nameStatus.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    // Columns are tab-separated: "<status>\t<path>" (renames add an old/new pair).
+    const parts = trimmed.split(/\t/);
+    const code = parts[0]?.[0] ?? "";
+    const filePath = parts.length > 2 ? parts[parts.length - 1] : parts[1];
+    if (!filePath) {
+      continue;
+    }
+
+    const status: SourceFileChange["status"] =
+      code === "A" ? "added" : code === "M" ? "modified" : code === "D" ? "deleted" : code === "R" ? "renamed" : "other";
+
+    const rawDiff = await tryGit(localPath, ["diff", "-M", `${fromSha}..${toSha}`, "--", filePath]);
+    const diff = rawDiff.length > maxDiffChars ? `${rawDiff.slice(0, maxDiffChars)}\n… (diff truncated)` : rawDiff;
+    changes.push({ path: filePath, status, diff });
+  }
+
+  return changes;
 }
 
 export class DryRunPullRequestProvider implements PullRequestProvider {
@@ -127,7 +203,7 @@ export async function raisePullRequest(request: RaisePullRequestRequest): Promis
     return undefined;
   }
 
-  const response = await fetch(`https://api.github.com/repos/${slug.owner}/${slug.repo}/pulls`, {
+  const response = await githubFetch(`https://api.github.com/repos/${slug.owner}/${slug.repo}/pulls`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -146,6 +222,16 @@ export async function raisePullRequest(request: RaisePullRequestRequest): Promis
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
+    // A branch that already has an open PR returns 422. That's not a failure for
+    // us — the desired end state (an open PR for this branch) already holds — so
+    // adopt the existing one and return it instead of throwing and forcing the
+    // publication outbox to retry a request that can never succeed.
+    if (response.status === 422 && /already exists/i.test(detail)) {
+      const existing = await findOpenPullRequest(slug, token, request.headBranch);
+      if (existing) {
+        return existing;
+      }
+    }
     throw new Error(`GitHub pull request creation failed (${response.status}): ${detail.slice(0, 500)}`);
   }
 
@@ -157,6 +243,37 @@ export async function raisePullRequest(request: RaisePullRequestRequest): Promis
   return { url: data.html_url, number: data.number };
 }
 
+// Looks up the open pull request already raised for a branch, so a duplicate
+// create attempt (422) can resolve to the live PR. Returns undefined when none
+// is found or the lookup fails — the caller then surfaces the original error.
+async function findOpenPullRequest(
+  slug: { owner: string; repo: string },
+  token: string,
+  headBranch: string
+): Promise<RaisedPullRequest | undefined> {
+  const head = `${slug.owner}:${headBranch}`;
+  const url = `https://api.github.com/repos/${slug.owner}/${slug.repo}/pulls?state=open&head=${encodeURIComponent(head)}`;
+  let response: Response;
+  try {
+    response = await githubFetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "markdown-magpie"
+      }
+    });
+  } catch {
+    return undefined;
+  }
+  if (!response.ok) {
+    return undefined;
+  }
+  const list = (await response.json().catch(() => [])) as Array<{ html_url?: string; number?: number }>;
+  const match = list.find((pr) => pr.html_url && typeof pr.number === "number");
+  return match ? { url: match.html_url as string, number: match.number as number } : undefined;
+}
+
 export interface PullRequestStatus {
   merged: boolean;
   // GitHub reports a merged PR as state "closed"; `merged` disambiguates a merge
@@ -164,35 +281,57 @@ export interface PullRequestStatus {
   state: "open" | "closed";
 }
 
-// Reads the current state of a previously-raised GitHub pull request. Returns
-// undefined when the URL is not a GitHub PR, no token is configured, or the PR
-// can no longer be found — all cases where the poller should simply skip it.
-// Throws only on an unexpected API error so transient failures surface in logs.
-export async function fetchPullRequestStatus(pullRequestUrl: string | undefined): Promise<PullRequestStatus | undefined> {
+export interface PullRequestPoll {
+  // True when the server answered 304 Not Modified to a conditional request: the
+  // PR is unchanged since `etag`, so the caller keeps its cached reading. A 304
+  // does not count against GitHub's REST rate limit.
+  notModified: boolean;
+  // The freshly-read state (200 response). Undefined when the URL is not a GitHub
+  // PR, no token is configured, the PR is gone (404), or on a 304.
+  status?: PullRequestStatus;
+  // The ETag to store and replay as If-None-Match next time (present on a 200).
+  etag?: string;
+}
+
+// Reads a previously-raised GitHub pull request, optionally conditionally: pass
+// the ETag from a prior poll and an unchanged PR comes back as 304 (notModified)
+// without spending rate limit or re-reading the body. Returns notModified=false
+// with status undefined when the URL is not a GitHub PR, no token is configured,
+// or the PR can no longer be found. Throws only on an unexpected API error.
+export async function fetchPullRequestStatusCached(
+  pullRequestUrl: string | undefined,
+  etag?: string
+): Promise<PullRequestPoll> {
   const ref = parseGitHubPullRequestUrl(pullRequestUrl);
   if (!ref) {
-    return undefined;
+    return { notModified: false };
   }
 
   const token = process.env.GITHUB_TOKEN?.trim();
   if (!token) {
-    return undefined;
+    return { notModified: false };
   }
 
-  const response = await fetch(
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "markdown-magpie"
+  };
+  if (etag) {
+    headers["If-None-Match"] = etag;
+  }
+
+  const response = await githubFetch(
     `https://api.github.com/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "markdown-magpie"
-      }
-    }
+    { headers }
   );
 
+  if (response.status === 304) {
+    return { notModified: true };
+  }
   if (response.status === 404) {
-    return undefined;
+    return { notModified: false };
   }
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
@@ -200,7 +339,17 @@ export async function fetchPullRequestStatus(pullRequestUrl: string | undefined)
   }
 
   const data = (await response.json()) as { merged?: boolean; state?: string };
-  return { merged: Boolean(data.merged), state: data.state === "closed" ? "closed" : "open" };
+  return {
+    notModified: false,
+    status: { merged: Boolean(data.merged), state: data.state === "closed" ? "closed" : "open" },
+    etag: response.headers.get("etag") ?? undefined
+  };
+}
+
+// Unconditional read, for callers that have no cached ETag. Returns undefined in
+// all the skip cases above. Kept as the simple shape the live PR-state fallback uses.
+export async function fetchPullRequestStatus(pullRequestUrl: string | undefined): Promise<PullRequestStatus | undefined> {
+  return (await fetchPullRequestStatusCached(pullRequestUrl)).status;
 }
 
 // Parses owner/repo/number from a github.com pull request html_url such as
@@ -278,14 +427,24 @@ export class LocalGitProposalPublisher {
     const targetPath = resolveTargetPath(request.repository, request.targetPath);
     const remoteUrl = await ensureRemote(root);
     const authEnv = buildGitAuthEnv(remoteUrl);
-    await assertBranchDoesNotExist(root, request.branchName, authEnv);
 
-    const baseRef = await resolveBaseRef(root, request.repository);
+    const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", request.branchName], authEnv);
+    const branchExists = Boolean(remoteBranch.trim());
+
     const tempRoot = await mkdtemp(path.join(tmpdir(), "markdown-magpie-worktree-"));
     const worktreePath = path.join(tempRoot, "checkout");
 
     try {
-      await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, baseRef]);
+      if (branchExists) {
+        // Update path: base the worktree on the existing remote branch tip so our
+        // new commit is a fast-forward — these branches are bot-owned, so the tip
+        // is always our last push and no force is ever needed.
+        await git(root, ["fetch", "origin", request.branchName], authEnv);
+        await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, `origin/${request.branchName}`]);
+      } else {
+        const baseRef = await resolveBaseRef(root, request.repository);
+        await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, baseRef]);
+      }
 
       const absoluteTargetPath = path.resolve(worktreePath, targetPath);
       assertWithinRoot(worktreePath, absoluteTargetPath);
@@ -295,7 +454,17 @@ export class LocalGitProposalPublisher {
 
       const status = await git(worktreePath, ["status", "--porcelain", "--", targetPath]);
       if (!status.trim()) {
-        throw new Error(`Proposal does not change ${targetPath}`);
+        // No content change. On the create path this is an error; on the update
+        // path it just means the regenerated doc is identical — return the current tip.
+        if (!branchExists) {
+          throw new Error(`Proposal does not change ${targetPath}`);
+        }
+        const head = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
+        return {
+          branchName: request.branchName,
+          commitSha: head,
+          remoteUrl: request.repository.remoteUrl ?? request.repository.git?.remoteUrl
+        };
       }
 
       const { name: authorName, email: authorEmail } = resolveCommitterIdentity();
@@ -441,11 +610,26 @@ async function resolveBaseRef(root: string, repository: RepositoryRef): Promise<
   return defaultBranch;
 }
 
+// GitHub REST call with an abort-based timeout so the PR poller can't hang on a
+// stalled connection. The TimeoutError is rethrown as a readable message.
+async function githubFetch(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new Error(`GitHub request timed out after ${GITHUB_API_TIMEOUT_MS}ms`);
+    }
+    throw error;
+  }
+}
+
 async function git(cwd: string, args: string[], env?: Partial<NodeJS.ProcessEnv>): Promise<string> {
   try {
     const result = await execFileAsync("git", args, {
       cwd,
-      env: env ? { ...process.env, ...env } : process.env
+      env: env ? { ...process.env, ...env } : process.env,
+      timeout: GIT_SUBPROCESS_TIMEOUT_MS,
+      maxBuffer: GIT_SUBPROCESS_MAX_BUFFER
     });
     return result.stdout;
   } catch (error) {

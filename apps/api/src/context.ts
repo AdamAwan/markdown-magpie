@@ -1,11 +1,16 @@
 import type { ChatProvider, EmbeddingProvider } from "@magpie/core";
 import { RuntimeConfigHolder } from "./config-holder.js";
 import { BackgroundEmbedder } from "./platform/background-embedder.js";
+import { BackgroundRunner } from "./platform/background-runner.js";
 import {
   createCrunchStore,
+  createGapClusterStore,
   createProposalStore,
   createQuestionLogStore,
+  createReconciliationDecisionStore,
   createScheduledTaskStore,
+  createSnapshotStore,
+  createSourceSyncStore,
   requireDatabaseUrl,
   storeBackend
 } from "./platform/stores.js";
@@ -27,6 +32,7 @@ import {
 import { checkoutRoot, syncConfiguredGitCheckouts, type RepositoryDeps } from "./platform/repositories.js";
 import type { JobBroker } from "./jobs/broker.js";
 import { FakeJobBroker } from "./jobs/fake-broker.js";
+import { backfillGapClusters } from "./scheduling/gap-backfill.js";
 
 export interface AppContext {
   stores: {
@@ -36,6 +42,10 @@ export interface AppContext {
     proposals: ReturnType<typeof createProposalStore>;
     crunchRuns: ReturnType<typeof createCrunchStore>;
     scheduledTasks: ReturnType<typeof createScheduledTaskStore>;
+    sourceSync: ReturnType<typeof createSourceSyncStore>;
+    gapClusters: ReturnType<typeof createGapClusterStore>;
+    reconciliations: ReturnType<typeof createReconciliationDecisionStore>;
+    snapshots: ReturnType<typeof createSnapshotStore>;
   };
   jobs: JobBroker;
   providers: {
@@ -51,6 +61,7 @@ export interface AppContext {
     checkoutRoot: string;
   };
   embedder: BackgroundEmbedder;
+  background: BackgroundRunner;
   repositoryDeps(): RepositoryDeps;
   bootstrap(): Promise<void>;
 }
@@ -79,6 +90,7 @@ export async function createAppContext(): Promise<AppContext> {
   };
 
   const embedder = new BackgroundEmbedder(knowledgeStore, embedding);
+  const background = new BackgroundRunner();
 
   // TODO(Task 3): replace with PgBossJobBroker (mandatory Postgres)
   const jobs: JobBroker = new FakeJobBroker();
@@ -90,7 +102,11 @@ export async function createAppContext(): Promise<AppContext> {
       questionLogs: createQuestionLogStore(),
       proposals: createProposalStore(),
       crunchRuns: createCrunchStore(),
-      scheduledTasks: createScheduledTaskStore()
+      scheduledTasks: createScheduledTaskStore(),
+      sourceSync: createSourceSyncStore(),
+      gapClusters: createGapClusterStore(),
+      reconciliations: createReconciliationDecisionStore(),
+      snapshots: createSnapshotStore()
     },
     jobs,
     providers: {
@@ -100,6 +116,7 @@ export async function createAppContext(): Promise<AppContext> {
     config: RuntimeConfigHolder.fromEnv(),
     knowledgeConfig,
     embedder,
+    background,
     repositoryDeps() {
       return { knowledgeConfig, knowledgeIndex, triggerEmbedding: () => void embedder.trigger() };
     },
@@ -113,6 +130,14 @@ export async function createAppContext(): Promise<AppContext> {
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         console.error(`Failed to hydrate knowledge index from storage: ${message}`);
+      }
+      // Best-effort one-shot migration: give pre-existing proposals a gap cluster
+      // so the reconciler has lineage to work from. No-ops once clusters exist.
+      try {
+        await backfillGapClusters(this);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        console.error(`Failed to backfill gap clusters: ${message}`);
       }
     }
   };

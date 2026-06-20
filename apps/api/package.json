@@ -8,11 +8,13 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**\" --test-coverage-exclude=\"**/*.test.ts\" \"src/**/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.5",
     "@hono/zod-validator": "^0.8.0",
+    "@magpie/auth": "file:../../packages/auth",
     "@magpie/core": "file:../../packages/core",
     "@magpie/git": "file:../../packages/git",
     "@magpie/markdown": "file:../../packages/markdown",
@@ -27,6 +29,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
+    "jose": "^6.2.3",
     "typescript": "^6.0.3"
   }
 }

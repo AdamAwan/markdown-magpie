@@ -59,6 +59,8 @@ test("record stores one gap per detected gap for a multi-topic question", async 
     { summary: "No React integration guidance", source: "auto" },
     { summary: "Dashboard export is undocumented", source: "auto" }
   ]);
+  // Matches the Postgres column default (manual_gap NOT NULL DEFAULT false).
+  assert.equal(log.manualGap, false);
 });
 
 test("recordManualGap preserves auto-detected gaps and adds a manual one", async () => {
@@ -157,6 +159,40 @@ test("listGapCandidates lists each gap of a multi-topic question separately and 
   assert.deepEqual([...(shared?.questionIds ?? [])].sort(), [first.id, second.id].sort());
 });
 
+test("listGapCandidates groups the same gap separately per flow and tags each candidate", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const sharedGap: AnswerResult = {
+    answer: "Not documented.",
+    confidence: "low",
+    citations: [],
+    gaps: [{ summary: "Pricing is undocumented", question: "price?", confidence: "low", citedSectionIds: [] }]
+  };
+  const sales = await store.record({
+    question: "price?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    answer: sharedGap,
+    retrievedSectionIds: [],
+    flowId: "magpie-sales"
+  });
+  const support = await store.record({
+    question: "price?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    answer: sharedGap,
+    retrievedSectionIds: [],
+    flowId: "magpie-support"
+  });
+
+  const candidates = await store.listGapCandidates(50);
+  const byFlow = new Map(candidates.map((candidate) => [candidate.flowId, candidate]));
+
+  // Same summary, two flows -> two candidates, each tagged and scoped to its flow.
+  assert.equal(candidates.length, 2);
+  assert.deepEqual(byFlow.get("magpie-sales")?.questionIds, [sales.id]);
+  assert.deepEqual(byFlow.get("magpie-support")?.questionIds, [support.id]);
+});
+
 test("listGapCandidates excludes a question whose manual gap was cleared", async () => {
   const store = new InMemoryQuestionLogStore();
   const helpful: AnswerResult = { answer: "Yes.", confidence: "high", citations: [] };
@@ -191,6 +227,42 @@ test("resolveGaps resolves only the matching gap and drops it from candidates", 
   const resolvedGap = stored?.gaps?.find((gap) => gap.summary === "No React integration guidance");
   assert.equal(resolvedGap?.resolvedByProposalId, "proposal-1");
   assert.ok(resolvedGap?.resolvedAt);
+});
+
+test("gap catalog revision advances when a manual gap is recorded and when gaps resolve", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const start = await store.getGapCatalogRevision();
+
+  const log = await store.record({
+    question: "How do I configure X?",
+    executionMode: "direct",
+    chatProvider: "mock",
+    retrievedSectionIds: []
+  });
+  await store.recordManualGap(log.id, "How to configure X");
+
+  const afterAdd = await store.getGapCatalogRevision();
+  assert.ok(afterAdd > start, "recording a gap advances the revision");
+
+  await store.resolveGaps([log.id], ["How to configure X"], "prop-1");
+  const afterResolve = await store.getGapCatalogRevision();
+  assert.ok(afterResolve > afterAdd, "resolving a gap advances the revision");
+});
+
+test("gapIdsForSummary returns one stable id per unresolved gap matching the summary", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const a = await store.record({ question: "q1?", executionMode: "direct", chatProvider: "mock", retrievedSectionIds: [] });
+  await store.recordManualGap(a.id, "How to configure X");
+  const b = await store.record({ question: "q2?", executionMode: "direct", chatProvider: "mock", retrievedSectionIds: [] });
+  await store.recordManualGap(b.id, "How to configure X");
+
+  const ids = await store.gapIdsForSummary("How to configure X");
+  assert.equal(ids.length, 2, "two distinct questions share the summary");
+  assert.equal(new Set(ids).size, 2, "ids are distinct per gap");
+
+  // Resolving one gap drops it from the matches.
+  await store.resolveGaps([a.id], ["How to configure X"], "prop-1");
+  assert.deepEqual(await store.gapIdsForSummary("How to configure X"), [`${b.id}::How to configure X`]);
 });
 
 test("resolveGaps is idempotent and only counts newly resolved gaps", async () => {

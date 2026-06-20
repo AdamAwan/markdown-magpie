@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
+import { requireScopes } from "../../auth/middleware.js";
 import { parseLimit } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
@@ -10,12 +11,12 @@ import { feedbackBodySchema } from "./schema.js";
 export function questionRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
-  app.get("/", async (c) => {
+  app.get("/", requireScopes("read:knowledge"), async (c) => {
     const limit = parseLimit(c.req.query("limit") ?? null, 50);
     return c.json({ questions: await questionsService.listQuestions(ctx, limit) });
   });
 
-  app.get("/:id", async (c) => {
+  app.get("/:id", requireScopes("read:knowledge"), async (c) => {
     const log = await questionsService.getQuestion(ctx, c.req.param("id"));
     if (!log) {
       throw new HttpError(404, "question_not_found");
@@ -25,6 +26,7 @@ export function questionRoutes(ctx: AppContext): Hono {
 
   app.post(
     "/:id/feedback",
+    requireScopes("feedback:questions"),
     zValidator("json", feedbackBodySchema, (result, c) => {
       if (!result.success) {
         return c.json({ error: "valid_feedback_required" }, 400);
@@ -41,7 +43,7 @@ export function questionRoutes(ctx: AppContext): Hono {
     }
   );
 
-  app.post("/:id/gap", async (c) => {
+  app.post("/:id/gap", requireScopes("feedback:questions"), async (c) => {
     const payload = await readJsonBody<{ summary?: string }>(c);
     const summary = typeof payload.summary === "string" ? payload.summary : undefined;
 
@@ -52,7 +54,7 @@ export function questionRoutes(ctx: AppContext): Hono {
     return c.json({ question });
   });
 
-  app.delete("/:id/gap", async (c) => {
+  app.delete("/:id/gap", requireScopes("feedback:questions"), async (c) => {
     const question = await questionsService.clearManualGap(ctx, c.req.param("id"));
     if (!question) {
       throw new HttpError(404, "question_not_found");

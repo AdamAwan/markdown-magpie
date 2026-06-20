@@ -27,12 +27,38 @@ export function checkoutRoot(): string {
   return resolveLocalConfiguredPath(process.env.MAGPIE_CHECKOUT_ROOT ?? ".magpie/checkouts");
 }
 
-export function resolveLocalConfiguredPath(value: string): string {
+// Where the per-flow snapshot fetch job writes its downloaded gaps/proposals/PR
+// data. A sibling of the checkout root by default; override with MAGPIE_SNAPSHOT_ROOT.
+export function snapshotRoot(): string {
+  return resolveLocalConfiguredPath(process.env.MAGPIE_SNAPSHOT_ROOT ?? ".magpie/snapshots");
+}
+
+function resolveLocalConfiguredPath(value: string): string {
   if (path.isAbsolute(value)) {
     return value;
   }
 
   return path.resolve(process.env.INIT_CWD ?? process.cwd(), value);
+}
+
+// The directory a client-supplied localPath must stay within. Anchored to the
+// configured checkout root's parent (the working directory), so a request can
+// only ever index something under the deployment's own tree.
+function localPathAllowRoot(): string {
+  return path.resolve(process.env.MAGPIE_LOCAL_INDEX_ROOT ?? process.env.INIT_CWD ?? process.cwd());
+}
+
+// Resolves a client-supplied localPath and rejects any path that escapes the
+// allow-root (path traversal). Returns the resolved absolute path on success.
+function resolveLocalPathWithinRoot(value: string): string {
+  const root = localPathAllowRoot();
+  const resolved = resolveLocalConfiguredPath(value);
+  const relative = path.relative(root, resolved);
+  const escapes = relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  if (escapes) {
+    throw new Error("local_path_outside_root");
+  }
+  return resolved;
 }
 
 export async function resolveConfiguredRepositoryLocalPath(
@@ -63,13 +89,19 @@ export async function resolveConfiguredRepositoryLocalPath(
   return repository.subpath ? path.join(localPath, repository.subpath) : localPath;
 }
 
+// A stable identity for a configured git checkout (id + url), so the same repo
+// configured as both a source and a destination dedupes to one checkout. The NUL
+// separator can't appear in either field.
+function checkoutKey(repository: ConfiguredKnowledgeRepository): string {
+  return `${repository.id}\0${repository.url ?? ""}`;
+}
+
 export async function syncConfiguredGitCheckouts(deps: RepositoryDeps): Promise<void> {
   const gitRepositories = uniqueConfiguredGitRepositories([
     ...deps.knowledgeConfig.sources,
     ...deps.knowledgeConfig.destinations
   ]);
 
-  const checkoutKey = (repository: ConfiguredKnowledgeRepository) => `${repository.id}\0${repository.url ?? ""}`;
   const sourceKeys = new Set(deps.knowledgeConfig.sources.filter((source) => source.kind === "git").map(checkoutKey));
 
   console.log(`Syncing ${gitRepositories.length} configured git checkout(s)`);
@@ -103,7 +135,7 @@ export async function syncConfiguredGitCheckouts(deps: RepositoryDeps): Promise<
   }
 }
 
-export function uniqueConfiguredGitRepositories(
+function uniqueConfiguredGitRepositories(
   repositories: ConfiguredKnowledgeRepository[]
 ): ConfiguredKnowledgeRepository[] {
   const byCheckout = new Map<string, ConfiguredKnowledgeRepository>();
@@ -113,7 +145,7 @@ export function uniqueConfiguredGitRepositories(
       continue;
     }
 
-    byCheckout.set(`${repository.id}\0${repository.url ?? ""}`, repository);
+    byCheckout.set(checkoutKey(repository), repository);
   }
 
   return [...byCheckout.values()];
@@ -236,10 +268,13 @@ export async function resolveIndexSelection(
   if (deps.knowledgeConfig.destinations.length > 0) {
     throw new Error("configured_repository_not_indexable");
   }
-  return resolveKnowledgeRepositorySelection(payload, deps.knowledgeConfig.repositories);
+  const selection = resolveKnowledgeRepositorySelection(payload, deps.knowledgeConfig.repositories);
+  // Constrain a client-supplied localPath to the allow-root so a crafted
+  // "../../etc"-style path can't index files outside the deployment tree.
+  return { ...selection, localPath: resolveLocalPathWithinRoot(selection.localPath) };
 }
 
-export async function indexRepositoryForPayload(
+async function indexRepositoryForPayload(
   deps: RepositoryDeps,
   payload: {
     flowId?: string;
@@ -256,7 +291,7 @@ export async function indexRepositoryForPayload(
   });
 }
 
-export function selectDestinationForIndex(
+function selectDestinationForIndex(
   deps: RepositoryDeps,
   payload: { flowId?: string; repositoryId?: string; localPath?: string },
   destinations: ConfiguredKnowledgeRepository[]
@@ -278,7 +313,7 @@ export function selectDestinationForIndex(
   return resolveConfiguredRepositorySelection(payload, destinations).repository;
 }
 
-export function configuredIndexPayloads(deps: RepositoryDeps): Array<{ flowId?: string; repositoryId?: string }> {
+function configuredIndexPayloads(deps: RepositoryDeps): Array<{ flowId?: string; repositoryId?: string }> {
   if (deps.knowledgeConfig.flows.length > 0) {
     return deps.knowledgeConfig.flows.map((flow) => ({ flowId: flow.id }));
   }

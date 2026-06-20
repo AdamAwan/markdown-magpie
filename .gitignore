@@ -14,4 +14,9 @@ data/
 *.log
 *.tsbuildinfo
 .claude/worktrees/
+.superpowers/
 .worktrees/
+
+# pitch deck: ship the self-contained index.html + optimized assets; raw screenshots regenerate via scripts/shoot.mjs
+presentation/assets/*.png
+presentation/assets/*.jpeg

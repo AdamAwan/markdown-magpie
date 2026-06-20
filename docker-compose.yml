@@ -24,6 +24,16 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/api/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   web:
@@ -38,7 +48,7 @@ services:
       - app
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
   watcher:
@@ -53,7 +63,7 @@ services:
       - app
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
   mcp:
@@ -65,8 +75,36 @@ services:
     stdin_open: true
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     restart: "no"
+
+  mcp-http:
+    image: markdown-magpie:latest
+    command: npm run start:http -w @magpie/mcp
+    env_file: *magpie-env
+    environment:
+      MCP_HTTP_PORT: "4001"
+      # Bind to all interfaces inside the container so the published port is
+      # reachable; the server now defaults to loopback-only without this.
+      MCP_HTTP_HOST: "0.0.0.0"
+    ports:
+      - "4001:4001"
+    profiles:
+      - mcp-http
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4001/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
 
   migrate:
     image: markdown-magpie:latest

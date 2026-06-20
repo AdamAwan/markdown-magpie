@@ -8,8 +8,14 @@ import type {
   SectionToEmbed,
   SectionVectorSearch
 } from "./knowledge-index.js";
+import { chunk, valuesClause } from "./sql-bulk.js";
 
 const { Pool } = pg;
+
+// Bind-parameter budget per statement (Postgres caps at 65535). Documents bind
+// 10 params/row and sections 8, so these chunk sizes stay well under the cap.
+const DOCUMENT_INSERT_CHUNK = 500;
+const SECTION_INSERT_CHUNK = 1000;
 
 export class PostgresKnowledgeStore implements KnowledgePersistence, SectionVectorSearch, EmbeddingPersistence {
   private readonly pool: pg.Pool;
@@ -47,14 +53,17 @@ export class PostgresKnowledgeStore implements KnowledgePersistence, SectionVect
         ]
       );
 
-      for (const document of documents) {
+      // Upsert documents in batched multi-row INSERTs rather than one query per
+      // row (which, on a large repo, meant thousands of serial round-trips while
+      // holding the transaction open).
+      for (const batch of chunk(documents, DOCUMENT_INSERT_CHUNK)) {
         await client.query(
           `
             INSERT INTO documents (
               id, repository_id, path, commit_sha, title, owner, status,
               last_verified, review_cycle_days, content, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+            VALUES ${valuesClause(batch.length, 10, ["now()"])}
             ON CONFLICT (repository_id, path) DO UPDATE
             SET commit_sha = EXCLUDED.commit_sha,
                 title = EXCLUDED.title,
@@ -65,7 +74,7 @@ export class PostgresKnowledgeStore implements KnowledgePersistence, SectionVect
                 content = EXCLUDED.content,
                 updated_at = now()
           `,
-          [
+          batch.flatMap((document) => [
             document.id,
             document.repositoryId,
             document.path,
@@ -76,21 +85,33 @@ export class PostgresKnowledgeStore implements KnowledgePersistence, SectionVect
             document.metadata.lastVerified ?? null,
             document.metadata.reviewCycleDays ?? null,
             document.content
-          ]
+          ])
         );
-
-        await client.query("DELETE FROM document_sections WHERE document_id = $1", [document.id]);
       }
 
-      for (const section of sections) {
+      // Clear existing sections for the (re)indexed documents in one statement so
+      // they can be re-inserted fresh below.
+      await client.query("DELETE FROM document_sections WHERE document_id = ANY($1::text[])", [
+        documents.map((document) => document.id)
+      ]);
+
+      // Prune documents (cascading to their sections) for source files that no
+      // longer exist in the repository, so a re-index doesn't leave stale docs
+      // behind. The incoming set is authoritative for this repository.
+      await client.query(
+        "DELETE FROM documents WHERE repository_id = $1 AND path <> ALL($2::text[])",
+        [summary.repository.id, documents.map((document) => document.path)]
+      );
+
+      for (const batch of chunk(sections, SECTION_INSERT_CHUNK)) {
         await client.query(
           `
             INSERT INTO document_sections (
               id, document_id, path, heading, heading_path, anchor, ordinal, content
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ${valuesClause(batch.length, 8)}
           `,
-          [
+          batch.flatMap((section) => [
             section.id,
             section.documentId,
             section.path,
@@ -99,7 +120,7 @@ export class PostgresKnowledgeStore implements KnowledgePersistence, SectionVect
             section.anchor,
             section.ordinal,
             section.content
-          ]
+          ])
         );
       }
 
@@ -170,17 +191,26 @@ export class PostgresKnowledgeStore implements KnowledgePersistence, SectionVect
     return { repositories, documents, sections };
   }
 
-  async searchByEmbedding(embedding: number[], limit: number): Promise<Array<{ id: string; similarity: number }>> {
+  async searchByEmbedding(
+    embedding: number[],
+    limit: number,
+    repositoryIds?: string[]
+  ): Promise<Array<{ id: string; similarity: number }>> {
     const literal = toVectorLiteral(embedding);
+    // A null filter ($3) matches every repository; otherwise restrict to the flow's
+    // destination via the section -> document -> repository join.
+    const repositoryFilter = repositoryIds && repositoryIds.length > 0 ? repositoryIds : null;
     const result = await this.pool.query<{ id: string; similarity: string }>(
       `
-        SELECT id, 1 - (embedding <=> $1::vector) AS similarity
-        FROM document_sections
-        WHERE embedding IS NOT NULL
-        ORDER BY embedding <=> $1::vector
+        SELECT s.id, 1 - (s.embedding <=> $1::vector) AS similarity
+        FROM document_sections s
+        JOIN documents d ON d.id = s.document_id
+        WHERE s.embedding IS NOT NULL
+          AND ($3::text[] IS NULL OR d.repository_id = ANY($3))
+        ORDER BY s.embedding <=> $1::vector
         LIMIT $2
       `,
-      [literal, limit]
+      [literal, limit, repositoryFilter]
     );
     return result.rows.map((row) => ({ id: row.id, similarity: Number(row.similarity) }));
   }

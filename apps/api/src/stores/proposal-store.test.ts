@@ -31,6 +31,12 @@ test("list excludes merged proposals by default but keeps them fetchable as hist
   );
 });
 
+test("create defaults triggeringQuestionIds to an empty array (matching Postgres coalesce)", async () => {
+  const store = new InMemoryProposalStore();
+  const proposal = await store.create(draft("doc"));
+  assert.deepEqual(proposal.triggeringQuestionIds, []);
+});
+
 test("updateStatus stamps mergedAt once and leaves it stable on later transitions", async () => {
   const store = new InMemoryProposalStore();
   const proposal = await store.create(draft("doc"));

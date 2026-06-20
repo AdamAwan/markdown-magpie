@@ -1,0 +1,9 @@
+**/dist/**
+**/.next/**
+**/.next-*/**
+**/node_modules/**
+.magpie/**
+package-lock.json
+apps/web/public/**
+presentation/**
+**/*.md

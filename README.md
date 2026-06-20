@@ -154,7 +154,7 @@ The root `npm run dev` starts every workspace dev script that exists. Prefer the
 With the API running, index the bundled cats knowledge base:
 
 ```bash
-curl -s -X POST http://localhost:4000/api/repositories/index \
+curl -s -X POST http://localhost:4000/api/knowledge/repositories/index \
   -H 'content-type: application/json' \
   -d '{"repositoryId":"cats"}'
 ```
@@ -162,7 +162,7 @@ curl -s -X POST http://localhost:4000/api/repositories/index \
 Search indexed Markdown sections:
 
 ```bash
-curl -s 'http://localhost:4000/api/search?q=claws'
+curl -s 'http://localhost:4000/api/knowledge/search?q=claws'
 ```
 
 Ask a question:
@@ -412,6 +412,11 @@ On a remote host, use the host IP or domain:
 http://your-host:3000
 ```
 
+Each console section is a real route — `/ask`, `/knowledge`, `/gaps`, `/jobs`,
+`/proposals`, `/crunch`, `/dataflow`, and `/config` — so links are shareable and a
+page refresh keeps you on the section you were viewing. The root `/` redirects to
+`/ask`.
+
 The API health endpoint is:
 
 ```text
@@ -426,27 +431,14 @@ Expected response:
 
 ### 5. Add Demo Knowledge
 
-The web console has a **Knowledge** section where you can paste or upload Markdown. This is the easiest way to seed a showcase.
+The web console's **Knowledge** section lists every configured flow. Select one and click **Index KB** to index its destination knowledge base — the corpus that `/ask` and the MCP tools answer from.
 
-You can also upload Markdown through the API:
+You can also index a flow through the API:
 
 ```bash
-curl -s http://localhost:4000/api/documents/upload \
+curl -s -X POST http://localhost:4000/api/knowledge/repositories/index \
   -H 'content-type: application/json' \
-  -d '{
-    "repositoryId": "showcase",
-    "name": "Showcase Knowledge",
-    "documents": [
-      {
-        "path": "cats/health.md",
-        "content": "# Cat Health\n\nUrgent warning signs include breathing trouble, collapse, seizures, repeated vomiting, and inability to urinate."
-      },
-      {
-        "path": "cats/care.md",
-        "content": "# Cat Care\n\nIntroduce food changes gradually over seven to ten days. Keep water available and monitor appetite."
-      }
-    ]
-  }'
+  -d '{"repositoryId":"cats"}'
 ```
 
 Then ask:
@@ -620,6 +612,17 @@ If that URL works but the UI still fails, set `NEXT_PUBLIC_API_BASE_URL` to the 
 docker compose restart web
 ```
 
+## Auth0
+
+Authentication is optional and off by default (`AUTH_REQUIRED=false`). To gate the API, web app, and both MCP transports behind Auth0:
+
+- Create an Auth0 SPA for `https://magpie.wastedcake.com` and `http://localhost:3000`.
+- Create an Auth0 API with audience `https://markdown-magpie.local/api` and the scopes listed in [docs/superpowers/specs/2026-06-18-auth0-mcp-gating-design.md](docs/superpowers/specs/2026-06-18-auth0-mcp-gating-design.md).
+- Create a machine-to-machine application for the HTTP MCP server and put its access token in `MCP_API_AUTH_TOKEN`.
+- Set `AUTH_REQUIRED=true` and the `AUTH0_*` / `NEXT_PUBLIC_AUTH0_*` variables (see `.env.example`).
+
+The official Auth0 MCP server can bootstrap these tenant resources, but Markdown Magpie validates tokens at runtime. See [docs/mcp.md](docs/mcp.md) for the MCP-specific auth flow.
+
 ## AI Execution
 
 Markdown Magpie treats AI work as provider-neutral jobs.
@@ -632,6 +635,10 @@ There are two intended execution modes:
 `mock` is a provider, not an execution mode. It gives deterministic local responses for development and tests and can be selected in either direct or queue mode.
 
 Watcher mode lowers the barrier to entry because early users can develop and test workflows with the agent tooling they already run locally, without provisioning cloud model credentials.
+
+### AI prompts
+
+All AI/agent prompts live in the `@magpie/prompts` package (`packages/prompts`) as a single catalog of `PromptDefinition` entries. The watcher (queue mode) wraps an instruction with the serialised job input via `buildJobPrompt`; the API and retrieval (direct mode) pass the same instruction text as the chat `system` message. The catalog is served read-only at `GET /api/prompts` and rendered in the console's **Prompts** section, so the exact instruction text sent to the model is always inspectable without reading the source.
 
 ## MVP Milestone
 

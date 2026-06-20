@@ -91,14 +91,14 @@ Answers a question from indexed Markdown context.
   An `answer_question` job is enqueued for a watcher and the question log is written immediately
   with unknown confidence. See [question-logging.md](question-logging.md).
 
-### `GET /api/search?q=<query>&limit=<n>`
+### `GET /api/knowledge/search?q=<query>&limit=<n>`
 
 Searches indexed sections. `limit` defaults to `5`. When hybrid retrieval is active (Postgres + embeddings configured), results are ranked by Reciprocal Rank Fusion of pgvector nearest-neighbour and keyword scores; otherwise keyword scoring is used. Each result carries a `[0,1]` relevance score.
 
 - `400 query_required` — missing `q`.
 - `200` — `{ "sections": [ DocumentSection, ... ] }`.
 
-### `POST /api/repositories/index`
+### `POST /api/knowledge/repositories/index`
 
 Indexes the destination KB for a configured flow. See [ingestion.md](ingestion.md).
 
@@ -119,7 +119,7 @@ still used as fallbacks when `KNOWLEDGE_SOURCES` / `KNOWLEDGE_DESTINATIONS` are 
 - `400 local_path_required` — no repository is configured and no legacy path was supplied.
 - `200` — an indexed-repository summary: `{ repository, documentCount, sectionCount, commitSha }`.
 
-### `GET /api/repositories`
+### `GET /api/knowledge/repositories`
 
 Lists indexed repositories.
 
@@ -127,27 +127,7 @@ Lists indexed repositories.
 { "repositories": [ RepositoryRef, ... ] }
 ```
 
-### `POST /api/documents/upload`
-
-Indexes Markdown documents supplied inline, without a Git checkout.
-
-```json
-{
-  "repositoryId": "uploaded",
-  "name": "Uploaded Markdown",
-  "documents": [{ "path": "guide.md", "content": "# Guide\n..." }]
-}
-```
-
-Paths are normalised (backslashes converted, leading slashes stripped, `.md` appended if
-missing); entries containing `..` or with empty content are dropped. `repositoryId` and
-`name` default to `uploaded` / `Uploaded Markdown`.
-
-- `400 markdown_documents_required` — no valid documents after filtering.
-- `413 markdown_document_too_large` — any document exceeds 250,000 characters.
-- `201` — an indexed-repository summary.
-
-### `GET /api/documents`
+### `GET /api/knowledge/documents`
 
 Lists indexed documents, sorted by path.
 
@@ -222,18 +202,37 @@ Lists knowledge-gap candidates grouped by gap summary. A question is included wh
 
 ### `GET /api/gaps/clusters?limit=<n>`
 
-Returns gap candidates grouped into **suggested clusters** — sets of related gaps that a single
+Returns the **persisted** gap clusters the reconciler maintains — sets of related gaps that a single
 proposal could resolve (e.g. "do cats like cheese?", "is cheese bad for cats?" and "what if a cat
-eats lots of cheese?" form one cluster). Grouping is performed by the configured chat provider;
-the `mock` provider and any non-chat provider fall back to one cluster per gap. Clusters are
-suggestions only — they are recomputed on demand, never persisted, and the reviewer is expected to
-regroup them before drafting. `limit` defaults to `50`.
+eats lots of cheese?" form one cluster). This is a fast read straight from the store with **no model
+call**: clustering happens in the background reconciler, not on this request. Only `active` clusters
+are returned. `limit` defaults to `50`.
 
 ```json
-{ "clusters": [ SuggestedGapCluster, ... ] }
+{ "clusters": [ PersistedGapCluster, ... ] }
 ```
 
-Each `SuggestedGapCluster` has `{ id, title, summaries, questionIds, count, rationale? }`.
+Each `PersistedGapCluster` has `{ id, title, summaries, questionIds, count, rationale?, flowId?,
+status, proposalId?, proposalStatus?, lastReconciledAt }`:
+
+- `status` — always `"active"` for clusters returned here (frozen clusters are historical and omitted).
+- `proposalId` / `proposalStatus` — the proposal linked to the cluster, if one has been drafted.
+- `lastReconciledAt` — when the reconciler last touched the cluster.
+
+### `POST /api/gaps/clusters/:id/proposal`
+
+Manually drafts one proposal for a persisted cluster, links the proposal to the cluster, and queues
+it for publication. The cluster's own flow routes the draft, so the body is optional:
+
+```json
+{ "targetPath": "optional/path.md", "destinationId": "optional-destination" }
+```
+
+Both fields are optional and override the flow's defaults when supplied. The response is the draft
+outcome — in direct mode `{ "ok": true, "mode": "direct", "proposal": Proposal }`, in queue mode
+`{ "ok": true, "mode": "queue", "job": AiJob }`.
+
+- `404 cluster_not_found` — no active cluster with that id.
 
 ## Proposals
 

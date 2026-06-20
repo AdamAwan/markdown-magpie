@@ -47,6 +47,15 @@ COPY --from=build /app/packages packages
 COPY --from=build /app/scripts scripts
 COPY --from=build /app/tsconfig.base.json ./tsconfig.base.json
 
-EXPOSE 3000 4000
+# Run as a non-root user. Create the checkout root owned by that user so a fresh
+# named volume mounted there inherits writable ownership (Docker seeds an empty
+# volume from the image mountpoint's ownership on first use).
+RUN groupadd --system --gid 1001 magpie \
+  && useradd --system --uid 1001 --gid magpie --no-create-home magpie \
+  && mkdir -p /data/checkouts \
+  && chown -R magpie:magpie /data
+USER magpie
+
+EXPOSE 3000 4000 4001
 
 CMD ["npm", "run", "start", "-w", "@magpie/api"]

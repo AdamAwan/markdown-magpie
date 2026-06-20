@@ -26,4 +26,11 @@ describe("fuseRankings", () => {
   it("returns an empty map for no rankings", () => {
     assert.equal(fuseRankings([]).size, 0);
   });
+
+  it("counts a duplicated id within one list only once, at its first rank", () => {
+    const scores = fuseRankings([["x", "y", "x"]]);
+    // x contributes once for its best (first) rank, not twice.
+    assert.equal(scores.get("x"), 1 / 61);
+    assert.equal(scores.get("y"), 1 / 62);
+  });
 });

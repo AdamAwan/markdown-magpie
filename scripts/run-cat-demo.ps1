@@ -192,7 +192,7 @@ if (-not $SkipIndex) {
     repositoryId = "cats"
     name = "Cats Knowledge Base"
   } | ConvertTo-Json
-  Invoke-RestMethod "http://localhost:$ApiPort/api/repositories/index" -Method Post -ContentType "application/json" -Body $body | Out-Null
+  Invoke-RestMethod "http://localhost:$ApiPort/api/knowledge/repositories/index" -Method Post -ContentType "application/json" -Body $body | Out-Null
 }
 
 Start-DemoWindow -Title "Watcher" -Command $watcherCommand

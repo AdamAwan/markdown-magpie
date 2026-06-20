@@ -23,15 +23,30 @@ const DEFAULT_BATCH_SIZE = 64;
 export async function embedPendingSections(options: EmbedPendingOptions): Promise<EmbedPendingResult> {
   const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
   let embeddedCount = 0;
+  // Sections we've already tried to embed. If a pass returns only these, the
+  // store isn't clearing them (e.g. saveSectionEmbedding silently no-ops), so we
+  // stop rather than spin forever — the previous "embeddedThisPass === 0" guard
+  // could never fire, since pending.length === 0 already breaks above.
+  const attempted = new Set<string>();
 
   for (;;) {
     const pending = await options.store.listSectionsNeedingEmbedding(batchSize, options.repositoryId);
     if (pending.length === 0) {
       break;
     }
+    if (pending.every((section) => attempted.has(section.id))) {
+      break;
+    }
 
     const vectors = await options.provider.embed(pending.map((section) => section.text));
+    if (vectors.length !== pending.length) {
+      throw new Error(
+        `Embedding provider returned ${vectors.length} vector(s) for ${pending.length} section(s); refusing to embed a mismatched batch`
+      );
+    }
+
     for (let i = 0; i < pending.length; i += 1) {
+      attempted.add(pending[i].id);
       await options.store.saveSectionEmbedding(pending[i].id, vectors[i]);
       embeddedCount += 1;
     }

@@ -1,13 +1,12 @@
 import type { ScheduledTaskSettings } from "@magpie/core";
-import { fetchPullRequestStatus } from "@magpie/git";
-import { selectClustersToDraft } from "../stores/gap-clustering.js";
 import type { AppContext } from "../context.js";
-import * as gapsService from "../features/gaps/service.js";
-import * as proposalsService from "../features/proposals/service.js";
+import * as snapshotService from "../features/snapshots/service.js";
+import * as sourceSyncService from "../features/source-sync/service.js";
+import { reconcileGaps } from "./gap-reconciler.js";
 
-// A background side-process the operator can schedule from the Crunch page. The
-// registry is the single place to add new scheduled work: give it a key, copy,
-// a default cron, and a handler, and it appears in the UI and the scheduler.
+// A concrete, schedulable side-process. Each one is a single flow's instance of a
+// template below: it has its own key, schedule, and run-lock, so the UI and the
+// scheduler treat per-flow jobs as independent units.
 export interface ScheduledTaskDefinition {
   key: string;
   label: string;
@@ -16,46 +15,104 @@ export interface ScheduledTaskDefinition {
   run(ctx: AppContext): Promise<void>;
 }
 
-export const scheduledTaskDefinitions: ScheduledTaskDefinition[] = [
+// A side-process defined once and expanded to one concrete task per configured
+// flow. Running per flow means a busy flow can be scheduled tighter than a quiet
+// one, a slow or stuck flow can't block the others (separate run-locks), and a
+// gap/PR change in one flow only ever drives that flow's job. The registry is the
+// single place to add new scheduled work: give it a base key, copy, a default
+// cron, and a flow-scoped handler, and it appears per flow in the UI and scheduler.
+interface FlowTaskTemplate {
+  baseKey: string;
+  label(flowName: string): string;
+  description: string;
+  defaultCron: string;
+  run(ctx: AppContext, flowId: string | undefined): Promise<void>;
+}
+
+const flowTaskTemplates: FlowTaskTemplate[] = [
   {
-    key: "pull-request-refresh",
-    label: "Pull request status refresh",
+    baseKey: "gaps-to-pull-requests",
+    label: (flow) => `Clustered gaps → pull requests · ${flow}`,
     description:
-      "Checks open pull requests and advances proposals when they are merged (resolve gaps + re-index) " +
-      "or closed (mark rejected) on the host. Requires GITHUB_TOKEN.",
+      "Reconciles this flow's knowledge gaps into clusters and proposals, detects merged/closed pull requests " +
+      "raised from its proposals, and publishes its open proposals. Requires GITHUB_TOKEN for PR operations.",
     defaultCron: "*/10 * * * *",
-    run: refreshPullRequests
+    run: (ctx, flowId) => reconcileGaps(ctx, flowId)
   },
   {
-    key: "gaps-to-pull-requests",
-    label: "Clustered gaps → pull requests",
+    baseKey: "source-change-sync",
+    label: (flow) => `Source change → knowledge base sync · ${flow}`,
     description:
-      "Clusters the open knowledge gaps, drafts a proposal for any cluster not already covered, then " +
-      "publishes every draft and ready proposal as a pull request (auto-promoting drafts to ready). " +
-      "A fully automated pipeline with no manual review step.",
-    defaultCron: "0 * * * *",
-    run: processGapsIntoPullRequests
+      "Watches this flow's git sources for new commits. When a change outdates a knowledge-base document that " +
+      "already describes the affected behaviour (e.g. a threshold or date that moved), the document is rewritten " +
+      "to match and the result lands on a review branch. Only documents the knowledge base already covers are touched.",
+    defaultCron: "*/10 * * * *",
+    run: (ctx, flowId) => syncSourceChangesForFlow(ctx, flowId)
+  },
+  {
+    baseKey: "snapshot-refresh",
+    label: (flow) => `Fetch snapshot · gaps · proposals · PRs · ${flow}`,
+    description:
+      "Downloads this flow's gaps, in-flight proposals, and open pull-request state to an on-disk snapshot the " +
+      "reconciler reads. PR polling happens here, on this job's own cadence, instead of during reconciliation — so " +
+      "the reconciler stops calling the git host live. Runs more often than the reconciler by default.",
+    defaultCron: "*/5 * * * *",
+    run: (ctx, flowId) => snapshotService.refreshSnapshot(ctx, flowId).then(() => undefined)
   }
 ];
 
-export function findScheduledTask(key: string): ScheduledTaskDefinition | undefined {
-  return scheduledTaskDefinitions.find((task) => task.key === key);
+// Composite key encoding the base task and its flow. The un-routed/default flow
+// (when no flows are configured) uses the DEFAULT_FLOW_TOKEN. Flow ids are slugs,
+// so "::" can't collide with one.
+const FLOW_KEY_SEPARATOR = "::";
+const DEFAULT_FLOW_TOKEN = "default";
+
+function taskKey(baseKey: string, flowId: string | undefined): string {
+  return `${baseKey}${FLOW_KEY_SEPARATOR}${flowId ?? DEFAULT_FLOW_TOKEN}`;
 }
 
-// The default (unsaved) schedule for a registered task, so the UI can render a
-// control before the schedule has ever been saved.
-export function defaultScheduledTaskSettings(task: ScheduledTaskDefinition): ScheduledTaskSettings {
+// The flows to expand tasks over: every configured flow, or a single un-routed
+// "default" flow when none are configured (mirroring the source-sync fallback).
+function expansionFlows(ctx: AppContext): Array<{ id: string | undefined; name: string }> {
+  const flows = ctx.knowledgeConfig.flows;
+  return flows.length > 0
+    ? flows.map((flow) => ({ id: flow.id, name: flow.name }))
+    : [{ id: undefined, name: "default" }];
+}
+
+// Every concrete scheduled task: the cartesian product of templates and flows.
+// Computed from config on each call so adding/removing a flow is picked up
+// without a restart.
+export function listScheduledTasks(ctx: AppContext): ScheduledTaskDefinition[] {
+  return flowTaskTemplates.flatMap((template) =>
+    expansionFlows(ctx).map((flow) => ({
+      key: taskKey(template.baseKey, flow.id),
+      label: template.label(flow.name),
+      description: template.description,
+      defaultCron: template.defaultCron,
+      run: (ctx: AppContext) => template.run(ctx, flow.id)
+    }))
+  );
+}
+
+export function findScheduledTask(ctx: AppContext, key: string): ScheduledTaskDefinition | undefined {
+  return listScheduledTasks(ctx).find((task) => task.key === key);
+}
+
+// The default (unsaved) schedule for a task, so the UI can render a control before
+// the schedule has ever been saved.
+function defaultScheduledTaskSettings(task: ScheduledTaskDefinition): ScheduledTaskSettings {
   return { key: task.key, enabled: false, cron: task.defaultCron };
 }
 
-// Always returns one row per registered task, merging in any saved schedule so
-// the UI can render a control even before the schedule has been saved once.
+// One row per concrete (per-flow) task, merging in any saved schedule so the UI
+// can render a control even before the schedule has been saved once.
 export async function scheduledTasksForResponse(ctx: AppContext): Promise<
   Array<{ key: string; label: string; description: string; settings: ScheduledTaskSettings }>
 > {
   const stored = await ctx.stores.scheduledTasks.listSettings();
   const byKey = new Map(stored.map((setting) => [setting.key, setting]));
-  return scheduledTaskDefinitions.map((task) => ({
+  return listScheduledTasks(ctx).map((task) => ({
     key: task.key,
     label: task.label,
     description: task.description,
@@ -63,121 +120,14 @@ export async function scheduledTasksForResponse(ctx: AppContext): Promise<
   }));
 }
 
-// For every proposal still awaiting its PR, ask the host whether it merged or
-// closed and advance the proposal accordingly. No-ops gracefully when no
-// GITHUB_TOKEN is configured (fetchPullRequestStatus returns undefined).
-async function refreshPullRequests(ctx: AppContext): Promise<void> {
-  const open = await ctx.stores.proposals.list(200, { status: "pr-opened" });
-  for (const proposal of open) {
-    const pullRequestUrl = proposal.publication?.pullRequestUrl;
-    if (!pullRequestUrl) {
-      continue;
-    }
-
-    let status: Awaited<ReturnType<typeof fetchPullRequestStatus>>;
-    try {
-      status = await fetchPullRequestStatus(pullRequestUrl);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "pull request lookup failed";
-      console.warn(`Pull request status check failed for proposal ${proposal.id}: ${message}`);
-      continue;
-    }
-    if (!status) {
-      continue;
-    }
-
-    if (status.merged) {
-      const merged = await ctx.stores.proposals.updateStatus(proposal.id, "merged");
-      if (merged) {
-        console.log(`Detected merged pull request for proposal ${proposal.id}; running merge cascade.`);
-        await proposalsService.runMergeCascade(ctx, merged);
-      }
-    } else if (status.state === "closed") {
-      // Closed without merging is effectively a rejection of the published
-      // proposal; mark it so the task stops chasing a dead PR.
-      await ctx.stores.proposals.updateStatus(proposal.id, "rejected");
-      console.log(`Pull request for proposal ${proposal.id} was closed without merging; marked rejected.`);
-    }
-  }
-}
-
-// The set of gap summaries that already have a proposal, so the gap-to-PR task
-// never drafts the same gap twice. This deliberately includes rejected proposals
-// (a closed PR): without it, an autonomous run would re-draft and re-raise every
-// hour the very content a human just declined. Merged proposals resolve their
-// gaps at the source, so those summaries stop appearing as candidates and need
-// no entry here; proposals.list already omits merged rows.
-export async function coveredGapSummaries(ctx: AppContext): Promise<Set<string>> {
-  const summaries = new Set<string>();
-  for (const proposal of await ctx.stores.proposals.list(500)) {
-    for (const summary of proposalsService.splitGapSummaries(proposal.gapSummary)) {
-      summaries.add(summary);
-    }
-  }
-  return summaries;
-}
-
-// End-to-end gap-to-PR pipeline. First drafts proposals for any gap cluster not
-// already covered, then auto-promotes every draft to ready and publishes all
-// draft/ready proposals as pull requests. Each step is best-effort and logged so
-// one failure can't abort the whole run.
-async function processGapsIntoPullRequests(ctx: AppContext): Promise<void> {
-  // 1) Cluster the open gaps and draft a proposal for each uncovered cluster.
-  const candidates = await ctx.stores.questionLogs.listGapCandidates(200);
-  if (candidates.length > 0) {
-    const clusters = await gapsService.clusterGapCandidates(ctx, candidates);
-    const toDraft = selectClustersToDraft(
-      clusters,
-      candidates.map((candidate) => candidate.summary),
-      await coveredGapSummaries(ctx)
+// Runs the source-change sync for a single flow. Per-flow error isolation is now
+// the scheduler's job (each flow is its own task with its own try/catch), so this
+// no longer loops or swallows failures itself.
+async function syncSourceChangesForFlow(ctx: AppContext, flowId: string | undefined): Promise<void> {
+  const runs = await sourceSyncService.triggerSourceSyncRun(ctx, { flowId, trigger: "scheduled" });
+  for (const run of runs) {
+    console.log(
+      `Source-change sync run ${run.id} (${run.status}) for source ${run.sourceId} in flow ${flowId ?? "default"}.`
     );
-    for (const summaries of toDraft) {
-      try {
-        const outcome = await proposalsService.draftFromGaps(ctx, summaries);
-        if (!outcome.ok) {
-          console.warn(`Gap-to-PR task skipped a cluster: ${outcome.code}`);
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "draft failed";
-        console.warn(`Gap-to-PR task failed to draft a cluster: ${message}`);
-      }
-    }
-  }
-
-  // 2) Get every unpublished proposal to a PR. Drafts are auto-promoted to ready
-  // first; "branch-pushed" proposals are ones whose branch landed but whose PR
-  // never opened (transient host error, or no token at the time), so we retry the
-  // PR for them too. Raising a PR for a branch that already has one is rejected
-  // by the host, so this can't create duplicates.
-  const pending = [
-    ...(await ctx.stores.proposals.list(200, { status: "draft" })),
-    ...(await ctx.stores.proposals.list(200, { status: "ready" })),
-    ...(await ctx.stores.proposals.list(200, { status: "branch-pushed" }))
-  ];
-  for (const proposal of pending) {
-    let candidate = proposal;
-    if (candidate.status === "draft") {
-      const promoted = await ctx.stores.proposals.updateStatus(candidate.id, "ready");
-      if (!promoted) {
-        continue;
-      }
-      candidate = promoted;
-    }
-
-    try {
-      const outcome = await proposalsService.publishReadyProposal(ctx, candidate);
-      if (outcome.ok) {
-        console.log(
-          outcome.pullRequestUrl
-            ? `Gap-to-PR task raised ${outcome.pullRequestUrl} for proposal ${candidate.id}.`
-            : `Gap-to-PR task pushed a branch for proposal ${candidate.id} (no PR raised).`
-        );
-      } else {
-        console.warn(`Gap-to-PR task could not publish proposal ${candidate.id}: ${outcome.code} (${outcome.message}).`);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "publish failed";
-      console.warn(`Gap-to-PR task failed to publish proposal ${candidate.id}: ${message}`);
-    }
   }
 }

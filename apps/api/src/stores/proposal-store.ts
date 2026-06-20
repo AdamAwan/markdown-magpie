@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DraftMarkdownProposalJobOutput, Proposal } from "@magpie/core";
+import type { DraftContext, DraftMarkdownProposalJobOutput, Proposal } from "@magpie/core";
 
 export interface ProposalInput extends DraftMarkdownProposalJobOutput {
   evidence: Proposal["evidence"];
@@ -7,6 +7,8 @@ export interface ProposalInput extends DraftMarkdownProposalJobOutput {
   triggeringQuestionIds?: string[];
   destinationId?: string;
   jobId?: string;
+  gapClusterId?: string;
+  draftContext?: DraftContext;
 }
 
 export interface ProposalListOptions {
@@ -22,6 +24,7 @@ export interface ProposalStore {
   get(id: string): Promise<Proposal | undefined>;
   updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined>;
   recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined>;
+  linkCluster(id: string, gapClusterId: string): Promise<Proposal | undefined>;
   reset(): Promise<void>;
 }
 
@@ -37,10 +40,13 @@ export class InMemoryProposalStore implements ProposalStore {
       markdown: input.markdown,
       evidence: input.evidence,
       gapSummary: input.gapSummary,
-      triggeringQuestionIds: input.triggeringQuestionIds,
+      // Postgres coalesces a missing value to an empty array; mirror that here.
+      triggeringQuestionIds: input.triggeringQuestionIds ?? [],
       destinationId: input.destinationId,
       rationale: input.rationale,
       jobId: input.jobId,
+      gapClusterId: input.gapClusterId,
+      draftContext: input.draftContext,
       createdAt: new Date().toISOString()
     };
 
@@ -85,6 +91,16 @@ export class InMemoryProposalStore implements ProposalStore {
       publication,
       status: publication.pullRequestUrl ? "pr-opened" : "branch-pushed"
     };
+    this.proposals.set(id, updated);
+    return updated;
+  }
+
+  async linkCluster(id: string, gapClusterId: string): Promise<Proposal | undefined> {
+    const existing = this.proposals.get(id);
+    if (!existing) {
+      return undefined;
+    }
+    const updated: Proposal = { ...existing, gapClusterId };
     this.proposals.set(id, updated);
     return updated;
   }

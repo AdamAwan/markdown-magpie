@@ -8,19 +8,35 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @magpie/core && npm run build -w @magpie/prompts && npm run build -w @magpie/markdown && npm run build -w @magpie/retrieval && npm run build -w @magpie/git && npm run build -w @magpie/jobs && npm run build -w @magpie/api && npm run build -w @magpie/watcher && npm run build -w @magpie/mcp && npm run build -w @magpie/web",
+    "build": "npm run build -w @magpie/core && npm run build -w @magpie/prompts && npm run build -w @magpie/markdown && npm run build -w @magpie/retrieval && npm run build -w @magpie/git && npm run build -w @magpie/jobs && npm run build -w @magpie/auth && npm run build -w @magpie/api && npm run build -w @magpie/watcher && npm run build -w @magpie/mcp && npm run build -w @magpie/web",
     "db:migrate": "node scripts/migrate.mjs",
+    "deadcode": "knip",
     "dev:api": "npm run dev -w @magpie/api",
     "dev:watcher": "npm run dev -w @magpie/watcher",
     "dev:web": "npm run dev -w @magpie/web",
     "dev": "npm run dev --workspaces --if-present",
     "eval:api": "node --import tsx scripts/eval-api.ts",
-    "lint": "npm run lint --workspaces --if-present",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "npm run test --workspaces --if-present",
+    "test:db": "node scripts/test-db.mjs npm run test",
+    "test:coverage": "npm run test:coverage --workspaces --if-present",
+    "test:db:coverage": "node scripts/test-db.mjs npm run test:coverage",
     "typecheck": "tsc -p tsconfig.check.json --noEmit"
   },
   "devDependencies": {
-    "typescript": "^6.0.3"
+    "@eslint/js": "^9.39.4",
+    "@testcontainers/postgresql": "^12.0.3",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^17.6.0",
+    "knip": "^6.17.1",
+    "prettier": "^3.8.4",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.1"
   },
   "overrides": {
     "postcss": "^8.5.10"

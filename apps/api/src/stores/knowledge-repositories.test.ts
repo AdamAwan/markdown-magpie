@@ -102,6 +102,27 @@ describe("knowledge repository configuration", () => {
     ]);
   });
 
+  it("parses a flow persona from the persona or description field", () => {
+    const sources = [{ id: "agent", name: "Agent Knowledge", kind: "agent" as const }];
+    const destinations = [
+      { id: "sec", name: "Security KB", url: "https://github.com/example/sec.git", kind: "git" as const },
+      { id: "dev", name: "Dev KB", url: "https://github.com/example/dev.git", kind: "git" as const }
+    ];
+    const flows = getConfiguredKnowledgeFlows(
+      {
+        KNOWLEDGE_FLOWS: JSON.stringify([
+          { id: "sec-flow", sourceIds: ["agent"], destinationId: "sec", persona: "Formal, high-level." },
+          { id: "dev-flow", sourceIds: ["agent"], destinationId: "dev", description: "Factual, with code." }
+        ])
+      },
+      sources,
+      destinations
+    );
+
+    assert.equal(flows.find((flow) => flow.id === "sec-flow")?.persona, "Formal, high-level.");
+    assert.equal(flows.find((flow) => flow.id === "dev-flow")?.persona, "Factual, with code.");
+  });
+
   it("infers one flow per destination when flows are not configured", () => {
     const flows = getConfiguredKnowledgeFlows(
       {},

@@ -17,6 +17,9 @@ export interface ConfiguredKnowledgeFlow {
   name: string;
   sourceIds: string[];
   destinationId: string;
+  // Optional admin-authored snippet describing this flow's audience and answering
+  // style. Appended to the base answer prompt when this flow answers a question.
+  persona?: string;
 }
 
 export interface KnowledgeRepositorySelection {
@@ -131,11 +134,13 @@ function normalizeFlowEntry(value: unknown): ConfiguredKnowledgeFlow | undefined
   }
 
   const id = stringValue(candidate.id) ?? `${sourceIds.join("-")}-to-${destinationId}`;
+  const persona = stringValue(candidate.persona) ?? stringValue(candidate.description);
   return {
     id,
     name: stringValue(candidate.name) ?? id,
     sourceIds,
-    destinationId
+    destinationId,
+    ...(persona ? { persona } : {})
   };
 }
 

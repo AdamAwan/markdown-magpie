@@ -12,6 +12,7 @@
     "sourceMap": true,
     "baseUrl": ".",
     "paths": {
+      "@magpie/auth": ["packages/auth/src/index.ts"],
       "@magpie/core": ["packages/core/src/index.ts"],
       "@magpie/git": ["packages/git/src/index.ts"],
       "@magpie/jobs": ["packages/jobs/src/index.ts"],

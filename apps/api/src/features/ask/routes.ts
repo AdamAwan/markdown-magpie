@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
+import { requireScopes } from "../../auth/middleware.js";
 import { apiLink } from "../../platform/paths.js";
 import * as askService from "./service.js";
 import { askBodySchema } from "./schema.js";
@@ -9,7 +10,8 @@ export function askRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
   app.post(
-    "/ask",
+    "/",
+    requireScopes("ask:knowledge"),
     zValidator("json", askBodySchema, (result, c) => {
       if (!result.success) {
         return c.json({ error: "question_required" }, 400);

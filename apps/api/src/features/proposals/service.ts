@@ -1,8 +1,11 @@
 import type {
+  DraftContext,
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
   GapCandidate,
-  Proposal
+  OpenPullRequestContext,
+  Proposal,
+  SourceDataContext
 } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { isAiProviderName } from "@magpie/jobs";
@@ -55,7 +58,7 @@ export async function runMergeCascade(
 // Resolves the gaps a merged proposal closed: precisely the rows whose question
 // and summary the proposal recorded, so unrelated gaps on a multi-topic question
 // are left untouched. Returns the number of gaps newly resolved.
-export async function resolveGapsForMergedProposal(ctx: AppContext, proposal: Proposal): Promise<number> {
+async function resolveGapsForMergedProposal(ctx: AppContext, proposal: Proposal): Promise<number> {
   const questionIds = proposal.triggeringQuestionIds ?? [];
   const summaries = splitGapSummaries(proposal.gapSummary);
   if (questionIds.length === 0 || summaries.length === 0) {
@@ -70,7 +73,7 @@ export async function resolveGapsForMergedProposal(ctx: AppContext, proposal: Pr
 // Pulls the destination's default branch (where the PR merged) and re-indexes it
 // so the merged document is immediately searchable. Best-effort: a failure here
 // must not undo the merge, so it is logged and reported rather than thrown.
-export async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal): Promise<boolean> {
+async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal): Promise<boolean> {
   try {
     if (ctx.knowledgeConfig.destinations.length > 0) {
       const destination = selectDestinationForProposal(ctx.repositoryDeps(), proposal);
@@ -184,7 +187,7 @@ export async function publishReadyProposal(ctx: AppContext, proposal: Proposal) 
 }
 
 // Human-facing PR description linking the merge back to the gaps it closes.
-export function buildPullRequestBody(proposal: Proposal): string {
+function buildPullRequestBody(proposal: Proposal): string {
   const lines = ["Proposed by Markdown Magpie to close knowledge gaps.", ""];
   if (proposal.rationale) {
     lines.push(proposal.rationale, "");
@@ -207,10 +210,103 @@ export function buildPullRequestBody(proposal: Proposal): string {
 // discriminated outcome: in direct mode the proposal is already created; in
 // queue mode an AI job is enqueued and the proposal lands later via the job
 // completion machinery.
+// A per-run memo of collected source context, keyed by the resolved source-id
+// set. Collecting a source walks its checkout and reads up to 24 files, and that
+// material is identical for every proposal drawn from the same sources — so a
+// reconcile run drafting dozens of proposals would otherwise re-collect the same
+// bytes dozens of times. Callers that draft in a loop pass one cache through.
+export type SourceContextCache = Map<string, SourceDataContext[]>;
+
+// In-flight statuses whose proposals a new draft should be aware of: an open PR
+// (pr-opened) plus the earlier stages that have no PR yet but are still work the
+// drafter shouldn't duplicate. Terminal statuses (merged/rejected/superseded)
+// are excluded — that work is settled.
+const IN_FLIGHT_PROPOSAL_STATUSES: ReadonlyArray<Proposal["status"]> = [
+  "draft",
+  "ready",
+  "branch-pushed",
+  "pr-opened"
+];
+
+// Reads the flow's on-disk snapshot and returns its in-flight proposals / open
+// pull requests as drafting context. Deliberately off the network — it uses only
+// the PR state the fetch job already downloaded — so the reconciler stays offline
+// during drafting (see the fetch/process split). Returns [] when no snapshot
+// exists yet, so callers degrade gracefully to no open-PR context. Pass
+// excludeClusterId to drop the cluster's own in-flight proposal so a draft never
+// sees its own PR.
+export async function collectOpenPullRequestContext(
+  ctx: AppContext,
+  flowId: string | undefined,
+  options: { excludeClusterId?: string } = {}
+): Promise<OpenPullRequestContext[]> {
+  const snapshot = await ctx.stores.snapshots.read(flowId);
+  if (!snapshot) {
+    return [];
+  }
+  // A PR the snapshot already knows is merged or closed is not "currently open",
+  // so drop it even if a stale snapshot still records the proposal as pr-opened.
+  const closedProposalIds = new Set(
+    snapshot.pullRequests.filter((pr) => pr.merged || pr.state === "closed").map((pr) => pr.proposalId)
+  );
+  // Target paths aren't carried in the snapshot; recover them from the proposal
+  // store (local DB, not the host) so the drafter can see what each PR touches.
+  const storedById = new Map((await ctx.stores.proposals.list(500)).map((proposal) => [proposal.id, proposal]));
+
+  const result: OpenPullRequestContext[] = [];
+  for (const proposal of snapshot.proposals) {
+    if (!IN_FLIGHT_PROPOSAL_STATUSES.includes(proposal.status)) {
+      continue;
+    }
+    if (options.excludeClusterId && proposal.gapClusterId === options.excludeClusterId) {
+      continue;
+    }
+    if (closedProposalIds.has(proposal.id)) {
+      continue;
+    }
+    const stored = storedById.get(proposal.id);
+    result.push({
+      title: proposal.title ?? stored?.title ?? "(untitled proposal)",
+      url: proposal.pullRequestUrl ?? stored?.publication?.pullRequestUrl,
+      targetPath: stored?.targetPath,
+      status: proposal.status
+    });
+  }
+  return result;
+}
+
+// Distils the inputs handed to the drafter into the compact, inspectable record
+// kept on the proposal. Records source-file identities (name/path/url) but not
+// their bodies, which can be large and are already captured elsewhere.
+function buildDraftContext(parts: {
+  gapSummaries: string[];
+  sourceContext?: SourceDataContext[];
+  evidence: Proposal["evidence"];
+  openPullRequests?: OpenPullRequestContext[];
+}): DraftContext {
+  return {
+    gapSummaries: parts.gapSummaries,
+    sourceFiles: (parts.sourceContext ?? [])
+      .filter((source) => source.path || source.url)
+      .map((source) => ({ sourceName: source.sourceName, path: source.path, url: source.url })),
+    evidenceCount: parts.evidence.length,
+    openPullRequests: parts.openPullRequests ?? []
+  };
+}
+
 export async function draftFromGaps(
   ctx: AppContext,
   rawSummaries: string[],
-  overrides: { targetPath?: string; flowId?: string; sourceIds?: string[]; destinationId?: string } = {}
+  overrides: {
+    targetPath?: string;
+    flowId?: string;
+    sourceIds?: string[];
+    destinationId?: string;
+    sourceContextCache?: SourceContextCache;
+    // The flow's in-flight proposals / open PRs to make the drafter aware of.
+    // Optional and defaults to none, so the on-demand HTTP path stays unchanged.
+    openPullRequests?: OpenPullRequestContext[];
+  } = {}
 ) {
   const uniqueRequested = [...new Set(rawSummaries.map((value) => value.trim()).filter((value) => value.length > 0))];
 
@@ -236,14 +332,18 @@ export async function draftFromGaps(
   );
   const evidence = dedupeCitations(logs.flatMap((log) => log.answer?.citations ?? []));
   const deps = ctx.repositoryDeps();
-  const flow = selectFlow(deps, overrides.flowId);
+  // Prefer an explicit override; otherwise inherit the flow the matched gaps came
+  // from. Candidates within a cluster share a flow (clustering is per-flow), so
+  // this routes the draft to that flow's destination + sources even on the
+  // autonomous gap-to-PR path, which passes no override.
+  const flow = selectFlow(deps, overrides.flowId ?? derivedFlowId(matched));
   const sourceIds = overrides.sourceIds ?? flow?.sourceIds;
   const destinationId = overrides.destinationId?.trim() || flow?.destinationId || defaultDestinationId(deps);
   console.log(
     `Drafting proposal for ${label} (flow=${flow?.id ?? "none"}, destination=${destinationId ?? "none"}, ` +
       `provider=${ctx.config.get().aiProvider}, mode=${ctx.config.get().aiExecutionMode})`
   );
-  const sourceContext = await collectSourceContext(deps, sourceIds);
+  const sourceContext = await collectSourceContextCached(deps, sourceIds, overrides.sourceContextCache);
   const materialFiles = sourceContext.filter((context) => context.path && context.content !== "Source path does not exist.");
   if (materialFiles.length === 0) {
     console.warn(
@@ -261,6 +361,9 @@ export async function draftFromGaps(
     triggeringQuestions: logs.map((log) => log.question),
     evidence,
     sourceContext,
+    // Omit the key entirely when there's nothing in flight, so the serialised
+    // prompt input carries no empty noise.
+    openPullRequests: overrides.openPullRequests?.length ? overrides.openPullRequests : undefined,
     destinationId,
     targetPath: overrides.targetPath?.trim() || undefined,
     provider: jobProvider,
@@ -275,7 +378,8 @@ export async function draftFromGaps(
       evidence,
       gapSummary: joinGapSummaries(gapSummaries),
       triggeringQuestionIds: questionIds,
-      destinationId: input.destinationId
+      destinationId: input.destinationId,
+      draftContext: buildDraftContext({ gapSummaries, sourceContext, evidence, openPullRequests: overrides.openPullRequests })
     });
 
     console.log(`Created proposal ${proposal.id} directly for ${label} (target ${proposal.targetPath})`);
@@ -291,7 +395,30 @@ export async function draftFromGaps(
   return { ok: true as const, mode: "queue" as const, job };
 }
 
-export async function draftMarkdownProposalDirect(
+// Wraps collectSourceContext with the optional per-run memo. The key is the
+// resolved source-id set (sorted, so order can't fragment it); an undefined set
+// means "the configured default sources", which collectSourceContext resolves
+// deterministically, so it caches safely under a stable sentinel key.
+async function collectSourceContextCached(
+  deps: ReturnType<AppContext["repositoryDeps"]>,
+  sourceIds: string[] | undefined,
+  cache: SourceContextCache | undefined
+): Promise<SourceDataContext[]> {
+  if (!cache) {
+    return collectSourceContext(deps, sourceIds);
+  }
+  const key = sourceIds ? [...sourceIds].sort().join("\0") : "\0default";
+  const cached = cache.get(key);
+  if (cached) {
+    console.log(`Reusing cached source context for [${sourceIds?.join(", ") ?? "default"}] (${cached.length} entr${cached.length === 1 ? "y" : "ies"}).`);
+    return cached;
+  }
+  const collected = await collectSourceContext(deps, sourceIds);
+  cache.set(key, collected);
+  return collected;
+}
+
+async function draftMarkdownProposalDirect(
   ctx: AppContext,
   input: DraftMarkdownProposalJobInput
 ): Promise<DraftMarkdownProposalJobOutput> {
@@ -317,7 +444,7 @@ export async function draftMarkdownProposalDirect(
   return output;
 }
 
-export function createMockMarkdownProposal(
+function createMockMarkdownProposal(
   ctx: AppContext,
   input: DraftMarkdownProposalJobInput
 ): DraftMarkdownProposalJobOutput {
@@ -348,7 +475,7 @@ export function createMockMarkdownProposal(
   };
 }
 
-export function titleFromGapSummary(summary: string): string {
+function titleFromGapSummary(summary: string): string {
   const normalized = summary
     .replace(/^no (?:sufficient )?source material found for:\s*/i, "")
     .replace(/[?.!]+$/g, "")
@@ -364,8 +491,16 @@ export function titleFromGapSummary(summary: string): string {
     .join(" ");
 }
 
+// The flow a set of matched gap candidates agree on, or undefined when they span
+// several flows or none carry one. Used to default a draft's destination/sources
+// to the flow that surfaced the gaps when the caller gives no explicit override.
+function derivedFlowId(candidates: GapCandidate[]): string | undefined {
+  const flowIds = new Set(candidates.map((candidate) => candidate.flowId).filter(Boolean));
+  return flowIds.size === 1 ? [...flowIds][0] : undefined;
+}
+
 // Stored on the proposal as a human-readable record of which gaps it closes.
-export function joinGapSummaries(summaries: string[]): string {
+function joinGapSummaries(summaries: string[]): string {
   return summaries.join("\n");
 }
 
@@ -378,7 +513,7 @@ export function splitGapSummaries(gapSummary: string | undefined): string[] {
     .filter((summary) => summary.length > 0);
 }
 
-export function dedupeCitations(citations: Proposal["evidence"]): Proposal["evidence"] {
+function dedupeCitations(citations: Proposal["evidence"]): Proposal["evidence"] {
   const seen = new Set<string>();
   const result: Proposal["evidence"] = [];
   for (const citation of citations) {
@@ -392,7 +527,7 @@ export function dedupeCitations(citations: Proposal["evidence"]): Proposal["evid
   return result;
 }
 
-export function createProposalBranchName(proposal: Proposal): string {
+function createProposalBranchName(proposal: Proposal): string {
   return `magpie/proposal-${proposal.id.slice(0, 8)}-${slugify(proposal.title).slice(0, 40)}`;
 }
 
@@ -416,7 +551,13 @@ export async function createProposalFromCompletedJob(
     gapSummary: input.gapSummaries ? joinGapSummaries(input.gapSummaries) : undefined,
     triggeringQuestionIds: input.triggeringQuestionIds,
     destinationId: input.destinationId,
-    jobId: job.id
+    jobId: job.id,
+    draftContext: buildDraftContext({
+      gapSummaries: input.gapSummaries ?? [],
+      sourceContext: input.sourceContext,
+      evidence: input.evidence ?? [],
+      openPullRequests: input.openPullRequests
+    })
   });
 }
 

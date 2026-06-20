@@ -1,19 +1,12 @@
 export function parseLimit(value: string | null, defaultLimit: number): number {
-  const parsed = Number.parseInt(value ?? "", 10);
-  if (!Number.isFinite(parsed)) {
+  // Number() (unlike parseInt) rejects trailing garbage like "12abc" rather than
+  // silently parsing it to 12; fall back to the default for anything non-integer.
+  const parsed = Number(value);
+  if (value === null || value.trim() === "" || !Number.isInteger(parsed)) {
     return defaultLimit;
   }
 
   return Math.max(1, Math.min(parsed, 200));
-}
-
-export function normalizeUploadPath(value: string | undefined): string {
-  const path = value?.trim().replace(/\\/g, "/").replace(/^\/+/, "") ?? "";
-  if (!path || path.includes("..")) {
-    return "";
-  }
-
-  return path.toLowerCase().endsWith(".md") ? path : `${path}.md`;
 }
 
 export function normalizeRelativePath(value: string | undefined): string {

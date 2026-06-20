@@ -22,6 +22,47 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     this.pool = new Pool({ connectionString });
   }
 
+  async getGapCatalogRevision(flowId?: string): Promise<number> {
+    const result = await this.pool.query<{ revision: string }>(
+      "SELECT revision FROM gap_catalog WHERE flow_id = $1",
+      [flowId ?? ""]
+    );
+    return result.rows[0] ? Number(result.rows[0].revision) : 0;
+  }
+
+  async gapIdsForSummary(summary: string, flowId?: string): Promise<string[]> {
+    const result = await this.pool.query<{ id: string }>(
+      `
+        SELECT qg.id::text AS id
+        FROM question_gaps qg
+        JOIN questions q ON q.id = qg.question_id
+        WHERE qg.resolved_at IS NULL
+          AND qg.summary = $1
+          AND coalesce(q.flow_id, '') = coalesce($2, '')
+        ORDER BY qg.id ASC
+      `,
+      [summary, flowId ?? null]
+    );
+    return result.rows.map((row) => row.id);
+  }
+
+  async gapDetailsForIds(gapIds: string[]): Promise<{ summaries: string[]; questionIds: string[] }> {
+    if (gapIds.length === 0) {
+      return { summaries: [], questionIds: [] };
+    }
+    const result = await this.pool.query<{ summary: string; question_id: string }>(
+      "SELECT summary, question_id FROM question_gaps WHERE id = ANY($1::bigint[])",
+      [gapIds]
+    );
+    const summaries = new Set<string>();
+    const questionIds = new Set<string>();
+    for (const row of result.rows) {
+      summaries.add(row.summary);
+      questionIds.add(row.question_id);
+    }
+    return { summaries: [...summaries], questionIds: [...questionIds] };
+  }
+
   async record(input: QuestionLogInput): Promise<QuestionLog> {
     const id = randomUUID();
     const client = await this.pool.connect();
@@ -30,9 +71,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       await client.query(
         `
           INSERT INTO questions (
-            id, question, confidence, answer, execution_mode, chat_provider, metadata
+            id, question, confidence, answer, execution_mode, chat_provider, flow_id, metadata
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         `,
         [
           id,
@@ -41,6 +82,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           input.answer?.answer ?? null,
           input.executionMode,
           input.chatProvider,
+          input.flowId ?? null,
           JSON.stringify({
             answer: input.answer ?? null,
             retrievedSectionIds: input.retrievedSectionIds
@@ -48,7 +90,11 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         ]
       );
 
-      await insertGapRows(client, id, autoGapSummaries(input.answer));
+      const autoSummaries = autoGapSummaries(input.answer);
+      await insertGapRows(client, id, autoSummaries);
+      if (autoSummaries.length > 0) {
+        await bumpGapCatalog(client, input.flowId ?? null);
+      }
 
       for (const citation of input.answer?.citations ?? []) {
         await client.query(
@@ -135,6 +181,8 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       // Re-answering replaces auto-detected gaps but preserves any manual flag.
       await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'auto'", [id]);
       await insertGapRows(client, id, autoGapSummaries(input.answer));
+      // Re-answering replaces the auto-detected gaps, changing the candidate set.
+      await bumpGapCatalog(client, existing.flowId ?? null);
       await client.query("DELETE FROM answer_citations WHERE question_id = $1", [id]);
 
       for (const citation of input.answer.citations) {
@@ -197,7 +245,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           SET manual_gap = true,
               manual_gap_at = now()
           WHERE id = $1
-          RETURNING question
+          RETURNING question, flow_id
         `,
         [id]
       );
@@ -209,9 +257,11 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
 
       // Replace any prior manual gap; auto-detected gaps are left untouched. The
       // summary falls back to the question text when none is supplied.
-      const manualSummary = trimmed && trimmed.length > 0 ? trimmed : (result.rows[0] as { question: string }).question;
+      const row = result.rows[0] as { question: string; flow_id: string | null };
+      const manualSummary = trimmed && trimmed.length > 0 ? trimmed : row.question;
       await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'manual'", [id]);
       await insertGapRows(client, id, [manualSummary], "manual");
+      await bumpGapCatalog(client, row.flow_id);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -227,12 +277,13 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      const result = await client.query(
+      const result = await client.query<{ flow_id: string | null }>(
         `
           UPDATE questions
           SET manual_gap = false,
               manual_gap_at = null
           WHERE id = $1
+          RETURNING flow_id
         `,
         [id]
       );
@@ -243,7 +294,10 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       }
 
       // Drop the manual flag's gap; any auto-detected gaps remain candidates.
-      await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'manual'", [id]);
+      const deleted = await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'manual'", [id]);
+      if ((deleted.rowCount ?? 0) > 0) {
+        await bumpGapCatalog(client, result.rows[0].flow_id);
+      }
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -307,18 +361,41 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       return 0;
     }
 
-    const result = await this.pool.query(
-      `
-        UPDATE question_gaps
-        SET resolved_at = now(), resolved_by_proposal_id = $3
-        WHERE question_id = ANY($1)
-          AND summary = ANY($2)
-          AND resolved_at IS NULL
-      `,
-      [questionIds, trimmedSummaries, proposalId]
-    );
-
-    return result.rowCount ?? 0;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<{ question_id: string }>(
+        `
+          UPDATE question_gaps
+          SET resolved_at = now(), resolved_by_proposal_id = $3
+          WHERE question_id = ANY($1)
+            AND summary = ANY($2)
+            AND resolved_at IS NULL
+          RETURNING question_id
+        `,
+        [questionIds, trimmedSummaries, proposalId]
+      );
+      const resolved = result.rowCount ?? 0;
+      // Resolving gaps removes them from the candidate set, so each affected
+      // flow's catalog advances in the same transaction.
+      if (resolved > 0) {
+        const affectedQuestionIds = [...new Set(result.rows.map((r) => r.question_id))];
+        const flows = await client.query<{ flow_id: string }>(
+          "SELECT DISTINCT coalesce(flow_id, '') AS flow_id FROM questions WHERE id = ANY($1)",
+          [affectedQuestionIds]
+        );
+        for (const { flow_id } of flows.rows) {
+          await bumpGapCatalog(client, flow_id);
+        }
+      }
+      await client.query("COMMIT");
+      return resolved;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async reset(): Promise<void> {
@@ -341,20 +418,24 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     // Cluster across individual gap rows so each distinct gap of a multi-topic
     // question can group with the same gap from other questions. A question with
     // both a 'manual' and an 'auto' row for the same summary is counted once.
+    // Group by (summary, flow_id) so the same gap raised under two flows yields
+    // two candidates, each clustering and drafting within its own flow. flow_id
+    // is coalesced to '' so NULL (un-routed) gaps still group with each other.
     const result = await this.pool.query<GapCandidateRow>(
       `
         SELECT
           summary,
+          flow_id,
           array_agg(question_id ORDER BY asked_at DESC) AS question_ids,
           count(*)::int AS count,
           max(asked_at) AS latest_asked_at
         FROM (
-          SELECT DISTINCT qg.summary, q.id AS question_id, q.asked_at
+          SELECT DISTINCT qg.summary, coalesce(q.flow_id, '') AS flow_id, q.id AS question_id, q.asked_at
           FROM question_gaps qg
           JOIN questions q ON q.id = qg.question_id
           WHERE qg.resolved_at IS NULL AND (q.confidence = 'low' OR q.manual_gap = true)
         ) AS distinct_gaps
-        GROUP BY summary
+        GROUP BY summary, flow_id
         ORDER BY count DESC, latest_asked_at DESC
         LIMIT $1
       `,
@@ -366,7 +447,8 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       questionIds: row.question_ids,
       count: row.count,
       latestAskedAt: row.latest_asked_at.toISOString(),
-      confidence: "low"
+      confidence: "low",
+      ...(row.flow_id ? { flowId: row.flow_id } : {})
     }));
   }
 }
@@ -387,6 +469,20 @@ async function insertGapRows(
   }
 }
 
+// Advances the monotonic gap-catalog revision for one flow ('' is the
+// un-routed/default flow). Called inside the same transaction as any change to
+// that flow's unresolved candidate gaps so the reconciler can gate model work on
+// it. Upserts so a flow that has never had a gap still gets its first revision.
+async function bumpGapCatalog(client: pg.PoolClient, flowId: string | null): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO gap_catalog (flow_id, revision) VALUES ($1, 1)
+      ON CONFLICT (flow_id) DO UPDATE SET revision = gap_catalog.revision + 1
+    `,
+    [flowId ?? ""]
+  );
+}
+
 function autoGapSummaries(answer: AnswerResult | undefined): string[] {
   return (answer?.gaps ?? []).map((gap) => gap.summary).filter((summary) => summary.trim().length > 0);
 }
@@ -398,6 +494,7 @@ interface QuestionRow {
   answer: string | null;
   execution_mode: QuestionLog["executionMode"];
   chat_provider: string;
+  flow_id: string | null;
   metadata: {
     answer?: AnswerResult | null;
     retrievedSectionIds?: string[];
@@ -411,6 +508,7 @@ interface QuestionRow {
 
 interface GapCandidateRow {
   summary: string;
+  flow_id: string;
   question_ids: string[];
   count: number;
   latest_asked_at: Date;
@@ -427,6 +525,7 @@ function mapQuestionRow(row: QuestionRow, gaps: QuestionGap[]): QuestionLog {
     retrievedSectionIds: row.metadata.retrievedSectionIds ?? [],
     answer,
     askedAt: row.asked_at.toISOString(),
+    ...(row.flow_id ? { flowId: row.flow_id } : {}),
     feedback: row.feedback ?? undefined,
     feedbackAt: row.feedback_at?.toISOString(),
     gaps,

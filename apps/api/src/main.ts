@@ -19,12 +19,38 @@ async function start(): Promise<void> {
     return;
   }
   const app = buildApp(ctx);
-  serve({ fetch: app.fetch, port }, () => {
+  const server = serve({ fetch: app.fetch, port }, () => {
     console.log(`Markdown Magpie API listening on http://localhost:${port}/api`);
     configService.logStartupConfig(ctx);
     new CrunchScheduler(ctx).start();
     new TaskScheduler(ctx).start();
   });
+
+  // On a normal stop, stop accepting connections and give in-flight background
+  // work (merge cascades, crunch planning, manual task runs) a bounded window to
+  // finish so it isn't silently dropped mid-flight.
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    console.log(`Received ${signal}; draining background work before exit.`);
+    server.close();
+    const drainTimeoutMs = Number.parseInt(process.env.API_SHUTDOWN_DRAIN_MS ?? "10000", 10);
+    const timeout = Number.isFinite(drainTimeoutMs) && drainTimeoutMs > 0 ? drainTimeoutMs : 10_000;
+    Promise.race([
+      ctx.background.whenIdle(),
+      new Promise((resolve) => setTimeout(resolve, timeout))
+    ]).finally(() => {
+      if (ctx.background.pending > 0) {
+        console.warn(`Exiting with ${ctx.background.pending} background task(s) still in flight.`);
+      }
+      process.exit(0);
+    });
+  };
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
 }
 
 void start();

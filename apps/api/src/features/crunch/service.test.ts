@@ -4,14 +4,21 @@ import type { CrunchPlan } from "@magpie/core";
 import { makeTestContext } from "../../test-support/context.js";
 import { changesetFromPlan, triggerCrunchRun } from "./service.js";
 
-test("triggerCrunchRun in direct+mock mode returns a completed run with a plan", async () => {
+test("triggerCrunchRun in direct+mock mode returns a running run, then completes it in the background", async () => {
   const ctx = makeTestContext();
 
   const run = await triggerCrunchRun(ctx, { trigger: "manual" });
 
-  assert.equal(run.status, "completed");
-  assert.ok(run.plan, "a completed run should carry a plan");
+  // Planning is off the request thread, so the run starts "running" with no plan.
+  assert.equal(run.status, "running");
+  assert.equal(run.plan, undefined);
   assert.equal(run.trigger, "manual");
+
+  await ctx.background.whenIdle();
+
+  const completed = await ctx.stores.crunchRuns.getRun(run.id);
+  assert.equal(completed?.status, "completed");
+  assert.ok(completed?.plan, "a completed run should carry a plan");
 });
 
 test("changesetFromPlan applies deletes then writes with last-write-wins per path", async () => {

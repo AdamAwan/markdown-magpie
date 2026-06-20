@@ -3,15 +3,27 @@ import { storeBackend } from "./stores.js";
 
 export type AiProviderName = ChatProviderName | "codex" | "claude";
 
+// Optional per-call timeout overrides for the model endpoints (the packages
+// supply sensible defaults when these are unset). Read here at the composition
+// root so the retrieval package stays free of process/env access.
+function timeoutOverride(name: string): number | undefined {
+  const raw = process.env[name];
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 // Embeddings can target a different endpoint/key than chat (e.g. DeepSeek for
 // Q&A, OpenAI for embeddings). The dedicated OPENAI_COMPATIBLE_EMBEDDING_* vars
 // take precedence, falling back to the shared chat credentials when unset so
 // single-endpoint setups keep working unchanged.
-export function embeddingBaseUrl(): string | undefined {
+function embeddingBaseUrl(): string | undefined {
   return process.env.OPENAI_COMPATIBLE_EMBEDDING_BASE_URL || process.env.OPENAI_COMPATIBLE_BASE_URL || undefined;
 }
 
-export function embeddingApiKey(): string | undefined {
+function embeddingApiKey(): string | undefined {
   return process.env.OPENAI_COMPATIBLE_EMBEDDING_API_KEY || process.env.OPENAI_COMPATIBLE_API_KEY || undefined;
 }
 
@@ -37,7 +49,8 @@ export function createConfiguredEmbeddingProvider() {
     model: process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL,
     azureEndpoint: process.env.AZURE_OPENAI_ENDPOINT,
     azureDeployment: process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
-    azureApiVersion: process.env.AZURE_OPENAI_API_VERSION
+    azureApiVersion: process.env.AZURE_OPENAI_API_VERSION,
+    timeoutMs: timeoutOverride("EMBEDDING_TIMEOUT_MS")
   });
 }
 
@@ -53,7 +66,8 @@ export function createConfiguredChatProvider(provider: AiProviderName) {
     model: process.env.OPENAI_COMPATIBLE_MODEL,
     azureEndpoint: process.env.AZURE_OPENAI_ENDPOINT,
     azureDeployment: process.env.AZURE_OPENAI_CHAT_DEPLOYMENT,
-    azureApiVersion: process.env.AZURE_OPENAI_API_VERSION
+    azureApiVersion: process.env.AZURE_OPENAI_API_VERSION,
+    timeoutMs: timeoutOverride("CHAT_TIMEOUT_MS")
   });
 }
 

@@ -100,6 +100,27 @@ test("singletonCluster derives a title from the gap summary", () => {
   assert.deepEqual(cluster.questionIds, ["q9"]);
 });
 
+test("singletonCluster carries the candidate's flow onto the cluster", () => {
+  const flowed: GapCandidate = { ...candidate("Pricing is undocumented", ["q1"]), flowId: "magpie-sales" };
+  assert.equal(singletonCluster(flowed).flowId, "magpie-sales");
+});
+
+test("assembleClusters tags built clusters with the given flow", () => {
+  const clusters = assembleClusters(
+    [candidate("a", ["q1"]), candidate("b", ["q2"])],
+    { clusters: [{ title: "Group", summaries: ["a", "b"] }] },
+    "magpie-support"
+  );
+  assert.equal(clusters.length, 1);
+  assert.equal(clusters[0].flowId, "magpie-support");
+});
+
+test("clusterId is distinct for the same summaries under different flows", () => {
+  assert.notEqual(clusterId(["a", "b"], "magpie-sales"), clusterId(["a", "b"], "magpie-support"));
+  // Order-independent and stable within a flow.
+  assert.equal(clusterId(["a", "b"], "magpie-sales"), clusterId(["b", "a"], "magpie-sales"));
+});
+
 const clusterOf = (summaries: string[]) => buildCluster(summaries.map((s) => candidate(s, ["q"])), undefined, undefined);
 
 test("selectClustersToDraft returns the live summaries of an uncovered cluster", () => {

@@ -1,0 +1,52 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck, test, lint, build
+    runs-on: ubuntu-latest
+
+    # The integration tests for the Postgres* stores run against a single-use
+    # pgvector container that the test:db wrapper boots, migrates, and tears down
+    # per run (see scripts/test-db.mjs, via Testcontainers). Docker is preinstalled
+    # on ubuntu-latest, so no service container or DATABASE_URL is needed here.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Provisions a throwaway database, migrates it, runs the suite against it,
+      # and drops it — see scripts/test-db.mjs.
+      - name: Test
+        run: npm run test:db
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Dead code (knip)
+        run: npm run deadcode
+
+      # Builds every workspace in dependency order, including the web app's
+      # `next build`. typecheck excludes apps/web (bundler resolution), so this
+      # is what catches web/build-only breaks like an unresolvable import.
+      - name: Build
+        run: npm run build

@@ -7,9 +7,17 @@ const { Pool } = pg;
 
 export class PostgresAiJobQueue implements AiJobQueue {
   private readonly pool: pg.Pool;
+  // Requeuing expired claims is a table-wide UPDATE; running it on every claim
+  // makes it a contention hotspot when several workers poll frequently. Claims
+  // only expire on the claimTimeoutMs scale, so throttling the sweep to at most
+  // once per `requeueIntervalMs` collapses the bursts while still detecting an
+  // expiry within roughly that window.
+  private readonly requeueIntervalMs: number;
+  private lastRequeueAt = 0;
 
   constructor(connectionString: string, private readonly claimTimeoutMs = DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS) {
     this.pool = new Pool({ connectionString });
+    this.requeueIntervalMs = Math.min(this.claimTimeoutMs, 5_000);
   }
 
   async enqueue<TInput>(type: AiJobType, input: TInput): Promise<AiJob<TInput>> {
@@ -54,6 +62,12 @@ export class PostgresAiJobQueue implements AiJobQueue {
   }
 
   private async requeueExpiredClaims(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastRequeueAt < this.requeueIntervalMs) {
+      return;
+    }
+    this.lastRequeueAt = now;
+
     await this.pool.query(
       `
         UPDATE ai_jobs

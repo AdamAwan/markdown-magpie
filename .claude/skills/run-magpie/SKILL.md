@@ -62,9 +62,9 @@ curl -s localhost:4000/api/knowledge/stats   # {repositoryCount,documentCount,se
 
 # If stats are empty (fresh/cleared DB), index the configured flow, then wait for
 # the background embedding pass to finish before searching/asking:
-curl -s -X POST localhost:4000/api/repositories/index -H 'content-type: application/json' -d '{"flowId":"flowerbi"}'
+curl -s -X POST localhost:4000/api/knowledge/repositories/index -H 'content-type: application/json' -d '{"flowId":"flowerbi"}'
 #   → API log prints "Embedded N section(s); 0 remaining" when ready
-curl -s 'localhost:4000/api/search?q=FlowerBI&limit=3'      # sanity: sections returned
+curl -s 'localhost:4000/api/knowledge/search?q=FlowerBI&limit=3'      # sanity: sections returned
 
 # Full primary flow: hybrid retrieval → chat provider → cited answer (direct mode)
 curl -s -X POST localhost:4000/api/ask -H 'content-type: application/json' -d '{"question":"What is FlowerBI?"}'

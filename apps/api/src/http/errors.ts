@@ -20,6 +20,9 @@ export function onError(error: Error, c: Context): Response {
     return c.json(body, error.status);
   }
 
+  // Log the raw message server-side for diagnostics, but never leak internal
+  // error details to clients — return a generic body for non-HttpError 500s.
   const message = error instanceof Error ? error.message : "Unexpected error";
-  return c.json({ error: "internal_error", message }, 500);
+  console.error("Unhandled error:", message);
+  return c.json({ error: "internal_error" }, 500);
 }

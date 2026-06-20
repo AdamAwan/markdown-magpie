@@ -88,7 +88,10 @@ export class InMemoryCrunchStore implements CrunchStore {
   }
 
   async getRunByJobId(jobId: string): Promise<CrunchRun | undefined> {
-    return [...this.runs.values()].find((run) => run.jobId === jobId);
+    // Match Postgres (ORDER BY created_at DESC): return the newest matching run.
+    return [...this.runs.values()]
+      .filter((run) => run.jobId === jobId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
   }
 
   async completeRun(id: string, plan: CrunchPlan): Promise<CrunchRun | undefined> {

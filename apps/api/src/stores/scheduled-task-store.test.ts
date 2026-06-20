@@ -32,3 +32,44 @@ test("touchSchedule updates an existing row and no-ops for an unknown task", asy
 
   assert.equal(await store.touchSchedule("unknown", new Date(0).toISOString(), new Date(1000).toISOString()), undefined);
 });
+
+test("touchSchedule with expectedNextRunAt claims a run exactly once when several tick at the same slot", async () => {
+  const store = new InMemoryScheduledTaskStore();
+  await store.updateSettings("gaps-to-pull-requests", { enabled: true, cron: "0 * * * *" });
+  const due = (await store.getSettings("gaps-to-pull-requests"))?.nextRunAt;
+  assert.ok(due, "an enabled task should have a due time to claim against");
+
+  const next = new Date(Date.parse(due) + 3_600_000).toISOString();
+  // First claimant matches the still-current next_run_at and wins.
+  const winner = await store.touchSchedule("gaps-to-pull-requests", new Date().toISOString(), next, due);
+  assert.ok(winner, "the first claimant should win the slot");
+  assert.equal(winner?.nextRunAt, next);
+
+  // A second instance ticking on the same original due time finds it already
+  // advanced and loses the claim, so it must not run the task.
+  const loser = await store.touchSchedule("gaps-to-pull-requests", new Date().toISOString(), next, due);
+  assert.equal(loser, undefined, "a stale claim must return undefined so the caller skips");
+});
+
+test("tryAcquireRun grants the run-lock to one caller and refuses overlap until released", async () => {
+  const store = new InMemoryScheduledTaskStore();
+
+  // A task that was never saved still locks: the first acquire creates the row.
+  const first = await store.tryAcquireRun("gaps-to-pull-requests", "*/10 * * * *");
+  assert.ok(first, "the first caller should take the run-lock");
+  assert.ok(first?.runningSince, "an acquired lock records when the run started");
+
+  // A second caller (scheduled tick, another tab, another instance) is refused
+  // while the run is in flight.
+  const blocked = await store.tryAcquireRun("gaps-to-pull-requests", "*/10 * * * *");
+  assert.equal(blocked, undefined, "an overlapping run must be refused");
+
+  // The settings expose the running state so the UI can disable its trigger.
+  assert.ok((await store.getSettings("gaps-to-pull-requests"))?.runningSince);
+
+  // Once released, the lock is free for the next run.
+  await store.releaseRun("gaps-to-pull-requests");
+  assert.equal((await store.getSettings("gaps-to-pull-requests"))?.runningSince, undefined);
+  const reacquired = await store.tryAcquireRun("gaps-to-pull-requests", "*/10 * * * *");
+  assert.ok(reacquired, "the lock should be free to take after release");
+});

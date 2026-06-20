@@ -20,7 +20,7 @@ export function normalizeAiProvider(value: string | undefined): AiProviderName |
   return undefined;
 }
 
-export function validateRuntimeAiConfig(aiExecutionMode: AiExecutionMode, aiProvider: AiProviderName): string | undefined {
+function validateRuntimeAiConfig(aiExecutionMode: AiExecutionMode, aiProvider: AiProviderName): string | undefined {
   const configuredProvider = getConfiguredAiProviders().find((provider) => provider.name === aiProvider);
   if (!configuredProvider) {
     return `${aiProvider} is not configured by environment variables`;

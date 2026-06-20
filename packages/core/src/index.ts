@@ -105,6 +105,10 @@ export interface QuestionLog {
   chatProvider: string;
   confidence: Confidence;
   retrievedSectionIds: string[];
+  // The flow this question was routed to (scopes retrieval + persona). Recorded
+  // so a gap can later be attributed to the flow that produced it. Absent for
+  // un-routed/legacy questions.
+  flowId?: string;
   askedAt: string;
   answer?: AnswerResult;
   feedback?: QuestionFeedback;
@@ -120,6 +124,7 @@ export interface QuestionLogInput {
   chatProvider: string;
   answer?: AnswerResult;
   retrievedSectionIds: string[];
+  flowId?: string;
 }
 
 export interface QuestionLogUpdateInput {
@@ -135,6 +140,10 @@ export interface GapCandidate {
   count: number;
   latestAskedAt: string;
   confidence: Confidence;
+  // The flow whose questions surfaced this gap. Candidates are grouped per flow,
+  // so the same summary asked under two flows yields two candidates. Absent when
+  // the underlying questions were not routed to a flow.
+  flowId?: string;
 }
 
 export interface GapCluster {
@@ -158,12 +167,33 @@ export interface SuggestedGapCluster {
   questionIds: string[];
   count: number;
   rationale?: string;
+  // Every member of a cluster belongs to the same flow (clustering runs per
+  // flow), so a drafted proposal can default to this flow's destination/persona.
+  flowId?: string;
+}
+
+// What GET /api/gaps/clusters now returns: an active persisted cluster. Keeps
+// every field SuggestedGapCluster exposed (so the UI is unchanged) and adds the
+// persisted lineage fields. `id` is a stable surrogate that survives membership
+// changes — unlike the content-hash id the on-demand clusterer produced.
+export interface PersistedGapCluster {
+  id: string;
+  title: string;
+  summaries: string[];
+  questionIds: string[];
+  count: number;
+  rationale?: string;
+  flowId?: string;
+  status: "active";
+  proposalId?: string;
+  proposalStatus?: Proposal["status"];
+  lastReconciledAt?: string;
 }
 
 export interface Proposal {
   id: string;
   title: string;
-  status: "draft" | "ready" | "branch-pushed" | "pr-opened" | "merged" | "rejected";
+  status: "draft" | "ready" | "branch-pushed" | "pr-opened" | "merged" | "rejected" | "superseded";
   targetPath: string;
   markdown: string;
   evidence: Citation[];
@@ -174,10 +204,30 @@ export interface Proposal {
   rationale?: string;
   jobId?: string;
   publication?: ProposalPublication;
+  // A compact record of the context the model was given when it drafted this
+  // proposal — the gaps, the source files, how much evidence, and the flow's
+  // in-flight work it was told about. Lets a reviewer see what the draft was
+  // based on, not just its output. Absent on proposals drafted before this was
+  // captured.
+  draftContext?: DraftContext;
   createdAt: string;
   // Stamped when the proposal is marked merged. Marking merged also resolves the
   // gaps it closed so they stop surfacing as candidates.
   mergedAt?: string;
+}
+
+// The inputs handed to the drafter, kept alongside the proposal so the context
+// is inspectable after the fact regardless of execution mode (direct or queued).
+// Deliberately compact: source file identities, not their bodies.
+export interface DraftContext {
+  // The gap summaries the draft set out to close.
+  gapSummaries: string[];
+  // The source files the model received as raw material (identity only).
+  sourceFiles: Array<{ sourceName: string; path?: string; url?: string }>;
+  // How many evidence citations were attached.
+  evidenceCount: number;
+  // The flow's in-flight proposals / open pull requests the model was shown.
+  openPullRequests: OpenPullRequestContext[];
 }
 
 // Canonical location for a drafted proposal within its destination repository.
@@ -238,7 +288,8 @@ export type AiJobType =
   | "draft_markdown_proposal"
   | "detect_contradiction"
   | "suggest_consolidation"
-  | "crunch_knowledge_base";
+  | "crunch_knowledge_base"
+  | "sync_source_change";
 
 export type AiJobStatus = "pending" | "claimed" | "completed" | "failed" | "cancelled";
 
@@ -280,7 +331,19 @@ export interface AnswerQuestionJobInput {
     heading: string;
     content: string;
   }>;
+  // The flow the question was routed to, and that flow's persona snippet. Both are
+  // carried in the job so the watcher (which has no flow config) can apply the
+  // persona via buildJobPrompt. Absent when no flow matched / none configured.
+  flowId?: string;
+  persona?: string;
   expectedOutput: "answer_result";
+}
+
+// Result of routing a question to the single best-matching knowledge flow.
+export interface FlowRouteDecision {
+  flowId: string;
+  confidence: Confidence;
+  rationale?: string;
 }
 
 export interface AnswerQuestionJobOutput {
@@ -310,9 +373,29 @@ export interface DraftMarkdownProposalJobInput {
   triggeringQuestions: string[];
   evidence: Citation[];
   sourceContext?: SourceDataContext[];
+  // The flow's already in-flight proposals and currently open pull requests, so
+  // the drafter is aware of work it should build on or avoid duplicating rather
+  // than drafting in a vacuum. Optional and defaults to absent.
+  openPullRequests?: OpenPullRequestContext[];
   destinationId?: string;
   targetPath?: string;
   expectedOutput: "markdown_proposal";
+}
+
+// One piece of in-flight drafting work in a flow, surfaced to a new draft so it
+// can cross-reference or steer clear of it. Sourced from the flow's on-disk
+// snapshot — not a live host lookup.
+export interface OpenPullRequestContext {
+  // What the in-flight work is about.
+  title: string;
+  // The pull request URL once one is open; absent while the proposal is still in
+  // draft/ready/branch-pushed (no PR raised yet).
+  url?: string;
+  // The destination document the work targets, so a draft can avoid landing a
+  // second article on the same path.
+  targetPath?: string;
+  // Where the work currently sits in the publish lifecycle.
+  status: Proposal["status"];
 }
 
 export interface SourceDataContext {
@@ -439,6 +522,81 @@ export interface CrunchSettings {
   nextRunAt?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Source-change sync — keep the knowledge base honest against its sources
+//
+// Crunch reorganizes the knowledge base against *itself*. Source-change sync
+// corrects it against its *sources*: when an upstream source commit changes the
+// underlying behaviour the KB describes (e.g. a cutoff moves from 2024 to 2025),
+// any KB document that still asserts the old fact is now wrong. This pass detects
+// changed source commits, retrieves the KB documents that already speak to the
+// change, and asks the model to rewrite only those documents to match the new
+// reality — landing the result on a review branch. The plan reuses CrunchPlan:
+// the output is the same multi-file write/delete changeset.
+// ---------------------------------------------------------------------------
+
+export type SourceSyncRunTrigger = "scheduled" | "manual";
+
+// "skipped" records a detected source change that needed no KB edit (nothing in
+// the KB matched it, or the model returned an empty plan) — kept for the operator
+// to see that the change was considered.
+export type SourceSyncRunStatus = "running" | "completed" | "failed" | "published" | "skipped";
+
+// The last source commit a flow has reacted to. The next run diffs the source's
+// new HEAD against this, so only genuinely new commits are processed.
+export interface SourceSyncState {
+  flowId?: string;
+  sourceId: string;
+  lastSha: string;
+  lastCheckedAt: string;
+}
+
+export interface SourceChangeFile {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "other";
+  diff: string;
+}
+
+// A knowledge-base document the change *might* affect — retrieved from the KB and
+// handed to the model as the only documents it is allowed to edit.
+export interface SourceSyncCandidateDocument {
+  path: string;
+  content: string;
+}
+
+export interface SourceChangeSyncJobInput {
+  flowId?: string;
+  destinationId?: string;
+  sourceId: string;
+  sourceName: string;
+  fromSha: string;
+  toSha: string;
+  changes: SourceChangeFile[];
+  candidateDocuments: SourceSyncCandidateDocument[];
+  expectedOutput: "crunch_plan";
+}
+
+export type SourceChangeSyncJobOutput = CrunchPlan;
+
+export interface SourceSyncRun {
+  id: string;
+  flowId?: string;
+  destinationId?: string;
+  sourceId: string;
+  trigger: SourceSyncRunTrigger;
+  status: SourceSyncRunStatus;
+  jobId?: string;
+  plan?: CrunchPlan;
+  error?: string;
+  fromSha?: string;
+  toSha: string;
+  changedFileCount: number;
+  candidateCount: number;
+  publication?: ProposalPublication;
+  createdAt: string;
+  completedAt?: string;
+}
+
 // Schedule for a generic background side-process (e.g. refreshing pull request
 // status). Keyed by a stable task key from the server's task registry, so the
 // Crunch page can drive any number of scheduled side-processes uniformly.
@@ -448,6 +606,10 @@ export interface ScheduledTaskSettings {
   cron: string;
   lastRunAt?: string;
   nextRunAt?: string;
+  // Set while a run (scheduled or manual) is in flight, and cleared when it
+  // finishes. The UI disables "Run now" while this is set, and both trigger
+  // paths refuse to start an overlapping run.
+  runningSince?: string;
 }
 
 // --- Cron scheduling -------------------------------------------------------
@@ -455,6 +617,12 @@ export interface ScheduledTaskSettings {
 //   minute(0-59) hour(0-23) day-of-month(1-31) month(1-12) day-of-week(0-6)
 // Supports "*", lists (a,b), ranges (a-b), and steps (*/n, a-b/n). Sunday is 0
 // (7 is also accepted as Sunday). Times are evaluated in local time.
+//
+// Caveat: evaluation is in local wall-clock time and nextCronTime scans
+// minute-by-minute, so around DST transitions a "skipped" local hour can be
+// missed and a "repeated" local hour can match twice. Acceptable for the
+// coarse maintenance schedules this drives; revisit if minute-precision
+// correctness across DST is ever required.
 
 interface CronFields {
   minute: Set<number>;

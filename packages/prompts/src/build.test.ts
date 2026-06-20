@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import type { AiJob } from "@magpie/core";
 import { buildJobPrompt } from "./build.js";
 import {
-  ANSWER_QUESTION_QUEUE,
+  ANSWER_QUESTION,
   CRUNCH_KNOWLEDGE_BASE,
   DRAFT_MARKDOWN_PROPOSAL,
   GENERIC_JOB,
+  SOURCE_CHANGE_SYNC,
   SUMMARIZE_GAP
 } from "./catalog.js";
 
@@ -26,8 +27,19 @@ test("answer_question embeds question and context after the instructions", () =>
   const prompt = buildJobPrompt(job("answer_question", input));
   assert.equal(
     prompt,
-    `${ANSWER_QUESTION_QUEUE.instructions}\n\nQuestion:\n${input.question}\n\nContext:\n${JSON.stringify(input.context, null, 2)}`
+    `${ANSWER_QUESTION.instructions}\n\nQuestion:\n${input.question}\n\nContext:\n${JSON.stringify(input.context, null, 2)}`
   );
+});
+
+test("answer_question appends the flow persona to the base instructions", () => {
+  const input = { question: "What now?", context: [{ heading: "H", content: "C" }], persona: "Be concise and formal." };
+  const prompt = buildJobPrompt(job("answer_question", input));
+  assert.ok(
+    prompt.startsWith(
+      `${ANSWER_QUESTION.instructions}\n\nPersona (how to look and respond):\nBe concise and formal.`
+    )
+  );
+  assert.match(prompt, /\n\nQuestion:\nWhat now\?/);
 });
 
 test("summarize_gap appends Input block", () => {
@@ -46,6 +58,12 @@ test("crunch_knowledge_base appends Input block", () => {
   const input = { documents: [{ path: "a.md", content: "c" }] };
   const prompt = buildJobPrompt(job("crunch_knowledge_base", input));
   assert.equal(prompt, `${CRUNCH_KNOWLEDGE_BASE.instructions}\n\nInput:\n${JSON.stringify(input, null, 2)}`);
+});
+
+test("sync_source_change uses the source-change-sync prompt, not the generic fallback", () => {
+  const input = { changes: [{ path: "src/a.ts", diff: "..." }], documents: [] };
+  const prompt = buildJobPrompt(job("sync_source_change", input));
+  assert.equal(prompt, `${SOURCE_CHANGE_SYNC.instructions}\n\nInput:\n${JSON.stringify(input, null, 2)}`);
 });
 
 test("unmapped job types fall back to the generic job prompt with the whole job", () => {

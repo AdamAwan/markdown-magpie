@@ -2,13 +2,18 @@ import type { ChatProvider, ChatRequest, ChatResponse } from "@magpie/core";
 import type { AppContext } from "../context.js";
 import { RuntimeConfigHolder } from "../config-holder.js";
 import { BackgroundEmbedder } from "../platform/background-embedder.js";
+import { BackgroundRunner } from "../platform/background-runner.js";
 import { InMemoryCrunchStore } from "../stores/crunch-store.js";
+import { InMemoryGapClusterStore } from "../stores/gap-cluster-store.js";
 import { InMemoryKnowledgeIndex } from "../stores/knowledge-index.js";
 import { InMemoryProposalStore } from "../stores/proposal-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
+import { InMemoryReconciliationDecisionStore } from "../stores/reconciliation-decision-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
 import type { JobBroker } from "../jobs/broker.js";
 import { FakeJobBroker } from "../jobs/fake-broker.js";
+import { InMemorySnapshotStore } from "../stores/snapshot-store.js";
+import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
 
 // A fully-typed ChatProvider stub — no casts. It returns a valid markdown
 // proposal JSON payload so any direct provider path that does reach the chat
@@ -46,7 +51,11 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
       questionLogs: new InMemoryQuestionLogStore(),
       proposals: new InMemoryProposalStore(),
       crunchRuns: new InMemoryCrunchStore(),
-      scheduledTasks: new InMemoryScheduledTaskStore()
+      scheduledTasks: new InMemoryScheduledTaskStore(),
+      sourceSync: new InMemorySourceSyncStore(),
+      gapClusters: new InMemoryGapClusterStore(),
+      reconciliations: new InMemoryReconciliationDecisionStore(),
+      snapshots: new InMemorySnapshotStore()
     },
     jobs: new FakeJobBroker(),
     providers: {
@@ -56,6 +65,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
     config: new RuntimeConfigHolder({ aiExecutionMode: "direct", aiProvider: "mock" }),
     knowledgeConfig,
     embedder,
+    background: new BackgroundRunner(),
     repositoryDeps() {
       return { knowledgeConfig, knowledgeIndex, triggerEmbedding: () => {} };
     },

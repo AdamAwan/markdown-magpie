@@ -35,7 +35,7 @@ the explicit source/destination variables are unset.
 Index a configured flow. This indexes the destination KB, not the raw source:
 
 ```bash
-curl -s -X POST http://localhost:4000/api/repositories/index \
+curl -s -X POST http://localhost:4000/api/knowledge/repositories/index \
   -H 'content-type: application/json' \
   -d '{"flowId":"flowerbi"}'
 ```
@@ -58,7 +58,7 @@ The API:
 ## Search
 
 ```bash
-curl -s 'http://localhost:4000/api/search?q=hotfix'
+curl -s 'http://localhost:4000/api/knowledge/search?q=hotfix'
 ```
 
 When both `KNOWLEDGE_STORE=postgres` and an embeddings provider are configured, retrieval is **hybrid**: a pgvector nearest-neighbour search is fused with an in-memory keyword scorer (heading match +3, content match +1) using Reciprocal Rank Fusion (RRF). Results carry a `[0,1]` relevance score. When either condition is absent the system falls back to keyword-only scoring with no change in API shape.

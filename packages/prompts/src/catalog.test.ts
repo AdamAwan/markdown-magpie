@@ -2,8 +2,27 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { promptCatalog, getPrompt } from "./catalog.js";
 
-test("catalog has exactly 8 prompts", () => {
-  assert.equal(promptCatalog.length, 8);
+test("catalog has exactly 11 prompts", () => {
+  assert.equal(promptCatalog.length, 11);
+});
+
+test("catalog ids are in the fixed, documented order", () => {
+  assert.deepEqual(
+    promptCatalog.map((prompt) => prompt.id),
+    [
+      "answer-question",
+      "summarize-gap",
+      "draft-markdown-proposal",
+      "crunch-knowledge-base",
+      "source-change-sync",
+      "gap-clustering",
+      "gap-reconcile-propose",
+      "gap-reconcile-critic",
+      "generic-job",
+      "job-runner-system",
+      "route-question-to-flow"
+    ]
+  );
 });
 
 test("all prompt ids are unique", () => {
