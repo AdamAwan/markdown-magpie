@@ -19,7 +19,8 @@ _Updated 2026-06-20. Checkout: repository root. Branch: `feat/queue-only-pg-boss
   - Deferred Minor findings for the final whole-branch review: `fake-broker.ts` heartbeat doesn't guard illegal/terminal states; fake records no claimant (`void workerName`).
   - Transitional state to undo later: `createAppContext()` uses a `FakeJobBroker` placeholder (`TODO(Task 3)`) — Task 3 replaces it with the real `PgBossJobBroker`; a `"mock"` → `"openai-compatible"` provider mapping in ask/proposals/crunch services is cleaned up in Task 11.
 - **Task 3 — complete.** `PgBossJobBroker`, public queue/schedule APIs, fair capability claims, durable lifecycle projection, mandatory Postgres composition, and graceful broker startup/shutdown (commit `ee9ccc8`). Real Postgres gate: 174/174 API tests; root typecheck and focused lint clean.
-- **Task 4 — NEXT / not started.** Replace the transitional `/api/ai-jobs` contract with capability-filtered `/api/jobs` lifecycle endpoints, bounded wait, cancellation/retry, schema validation, and redacted display projections.
+- **Task 4 — complete.** `/api/jobs` now exposes capability-filtered claim, heartbeat, bounded wait, structured failure, cancel/retry, schedules, catalog-validated completion, filtered pagination, and non-mutating redacted projections (commit `eb6af52`). 38/38 API test files pass; root typecheck and focused lint clean.
+- **Task 5 — NEXT / not started.** Make answer, proposal, and crunch completion idempotent by job ID, add proposal job-ID uniqueness, and preserve retry semantics before queue acknowledgement.
 
 ---
 
