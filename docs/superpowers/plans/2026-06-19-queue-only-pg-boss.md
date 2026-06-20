@@ -12,13 +12,14 @@
 
 ## Execution Progress (resume marker)
 
-_Updated 2026-06-20. Worktree: `.worktrees/queue-only-pg-boss`. Branch: `feat/queue-only-pg-boss` (pushed). SDD ledger: `.git/.../sdd/progress.md`._
+_Updated 2026-06-20. Checkout: repository root. Branch: `feat/queue-only-pg-boss` (pushed)._
 
 - **Task 1 — complete.** Durable job catalog in `@magpie/jobs` (commits `501bd96`..`bbfecc5`). 7/7 jobs tests pass.
 - **Task 2 — complete.** `JobBroker` boundary + test-only `FakeJobBroker`, `ctx.jobs` wired, `ctx.stores.aiJobs` removed, jobs feature migrated to `JobView` (commits `17c69a1`..`88c6db7`). Reviewed clean after fixing 2 Important findings (dropped `as never`/assertion casts). 87/87 API tests, root typecheck clean.
   - Deferred Minor findings for the final whole-branch review: `fake-broker.ts` heartbeat doesn't guard illegal/terminal states; fake records no claimant (`void workerName`).
   - Transitional state to undo later: `createAppContext()` uses a `FakeJobBroker` placeholder (`TODO(Task 3)`) — Task 3 replaces it with the real `PgBossJobBroker`; a `"mock"` → `"openai-compatible"` provider mapping in ask/proposals/crunch services is cleaned up in Task 11.
-- **Task 3 — NEXT / not started.** Implement `PgBossJobBroker` + Postgres integration tests + mandatory-Postgres composition + `main.ts` lifecycle. Requires local Postgres: `docker compose up -d postgres` (already created; DB `markdown_magpie`, `DATABASE_URL=postgres://postgres:postgres@localhost:5432/markdown_magpie`). Verify pg-boss v12.18 API via Context7 before coding (queue policy field names/units; complete/fail/cancel/retry/touch require queue name + id; schedule API). Brief generated at `.git/.../sdd/task-3-brief.md`.
+- **Task 3 — complete.** `PgBossJobBroker`, public queue/schedule APIs, fair capability claims, durable lifecycle projection, mandatory Postgres composition, and graceful broker startup/shutdown (commit `ee9ccc8`). Real Postgres gate: 174/174 API tests; root typecheck and focused lint clean.
+- **Task 4 — NEXT / not started.** Replace the transitional `/api/ai-jobs` contract with capability-filtered `/api/jobs` lifecycle endpoints, bounded wait, cancellation/retry, schema validation, and redacted display projections.
 
 ---
 
