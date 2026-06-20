@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type {
   AnswerQuestionJobOutput,
+  CrunchPlan,
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput
 } from "@magpie/core";
@@ -83,7 +84,7 @@ test("display projection recursively redacts secrets without mutating stored inp
   assert.equal(input.apiKey, "a");
 });
 
-test("completeJob on a draft_markdown_proposal job creates a proposal", async () => {
+test("proposal completion is idempotent when delivered twice", async () => {
   const ctx = makeTestContext();
 
   const validInput: DraftMarkdownProposalJobInput & { provider: "codex" } = {
@@ -104,14 +105,18 @@ test("completeJob on a draft_markdown_proposal job creates a proposal", async ()
 
   const result = await completeJob(ctx, job.id, output);
   assert.equal(result.ok, true);
+  const first = (await ctx.stores.proposals.list(50))[0];
+  const repeated = await completeJob(ctx, job.id, output);
+  assert.equal(repeated.ok, true);
 
   const created = await ctx.stores.proposals.list(50);
   assert.equal(created.length, 1);
+  assert.equal(created[0].id, first.id);
   assert.equal(created[0].title, "Configure X");
   assert.equal(created[0].jobId, job.id);
 });
 
-test("completeJob on an answer_question job updates the question log with the answer", async () => {
+test("answer completion is idempotent when delivered twice", async () => {
   const ctx = makeTestContext();
 
   const log = await ctx.stores.questionLogs.record({
@@ -138,12 +143,43 @@ test("completeJob on an answer_question job updates the question log with the an
 
   const result = await completeJob(ctx, job.id, output);
   assert.equal(result.ok, true);
+  const repeated = await completeJob(ctx, job.id, output);
+  assert.equal(repeated.ok, true);
 
   const updated = await ctx.stores.questionLogs.get(log.id);
   assert.ok(updated);
   assert.ok(updated.answer);
   assert.equal(updated.answer.answer, "Set the X flag in config.");
   assert.equal(updated.confidence, "high");
+});
+
+test("crunch completion is idempotent when delivered twice", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("crunch_knowledge_base", {
+    provider: "codex", documents: [], expectedOutput: "crunch_plan"
+  });
+  const run = await ctx.stores.crunchRuns.createRun({
+    trigger: "manual", documentCount: 0, jobId: job.id, status: "running"
+  });
+  const plan: CrunchPlan = { summary: "done", operations: [], rationale: "tidy" };
+  assert.equal((await completeJob(ctx, job.id, plan)).ok, true);
+  const first = await ctx.stores.crunchRuns.getRun(run.id);
+  assert.equal((await completeJob(ctx, job.id, plan)).ok, true);
+  const repeated = await ctx.stores.crunchRuns.getRun(run.id);
+  assert.equal(repeated?.status, "completed");
+  assert.equal(repeated?.completedAt, first?.completedAt);
+});
+
+test("retryable crunch failure does not fail the linked run", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("crunch_knowledge_base", {
+    provider: "codex", documents: [], expectedOutput: "crunch_plan"
+  });
+  const run = await ctx.stores.crunchRuns.createRun({
+    trigger: "manual", documentCount: 0, jobId: job.id, status: "running"
+  });
+  await failJob(ctx, job.id, { code: "provider", message: "temporary", category: "provider" });
+  assert.equal((await ctx.stores.crunchRuns.getRun(run.id))?.status, "running");
 });
 
 test("completeJob with an unknown job id returns the job_not_found sentinel", async () => {

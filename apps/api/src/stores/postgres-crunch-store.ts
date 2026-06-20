@@ -72,10 +72,11 @@ export class PostgresCrunchStore implements CrunchStore {
 
   async completeRun(id: string, plan: CrunchPlan): Promise<CrunchRun | undefined> {
     const result = await this.pool.query<CrunchRunRow>(
-      "UPDATE crunch_runs SET status = 'completed', plan = $2, error = NULL, completed_at = now() WHERE id = $1 RETURNING *",
+      `UPDATE crunch_runs SET status = 'completed', plan = $2, error = NULL, completed_at = now()
+       WHERE id = $1 AND status NOT IN ('completed', 'published') RETURNING *`,
       [id, JSON.stringify(plan)]
     );
-    return result.rows[0] ? mapRunRow(result.rows[0]) : undefined;
+    return result.rows[0] ? mapRunRow(result.rows[0]) : this.getRun(id);
   }
 
   async failRun(id: string, error: string): Promise<CrunchRun | undefined> {

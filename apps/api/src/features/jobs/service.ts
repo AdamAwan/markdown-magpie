@@ -70,7 +70,8 @@ export async function waitForJob(
 export async function completeJob(
   ctx: AppContext,
   jobId: string,
-  output: unknown
+  output: unknown,
+  executor = "watcher"
 ): Promise<
   | { ok: false; code: "job_not_found" }
   | { ok: false; code: "invalid_output" }
@@ -97,7 +98,7 @@ export async function completeJob(
     await updateQuestionLogFromCompletedJob(ctx, existingJob, parsed.data);
     await proposalsService.createProposalFromCompletedJob(ctx, existingJob, parsed.data);
     await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, parsed.data);
-    await ctx.jobs.complete(jobId, parsed.data);
+    await ctx.jobs.complete(jobId, { result: parsed.data, executor });
   } catch (error) {
     await ctx.jobs.fail(jobId, {
       code: "completion_failed",
@@ -123,6 +124,9 @@ async function updateQuestionLogFromCompletedJob(
     return;
   }
 
+  const existing = await ctx.stores.questionLogs.get(input.questionLogId);
+  if (existing?.answer) return;
+
   await ctx.stores.questionLogs.updateAnswer(input.questionLogId, {
     answer: output,
     // JobView has no live claimant field; fall back to "watcher"
@@ -139,14 +143,14 @@ export async function failJob(
   jobError: JobError
 ): Promise<JobView | undefined> {
   const failingJob = await ctx.jobs.get(jobId);
-  await ctx.jobs.fail(jobId, jobError);
-  if (failingJob?.type === "crunch_knowledge_base") {
+  const failedJob = await ctx.jobs.fail(jobId, jobError);
+  if (failingJob?.type === "crunch_knowledge_base" && failedJob.state === "failed") {
     const run = await ctx.stores.crunchRuns.getRunByJobId(jobId);
     if (run) {
       await ctx.stores.crunchRuns.failRun(run.id, jobError.message);
     }
   }
-  return ctx.jobs.get(jobId);
+  return failedJob;
 }
 
 function isAnswerQuestionJobOutput(value: unknown): value is AnswerQuestionJobOutput {

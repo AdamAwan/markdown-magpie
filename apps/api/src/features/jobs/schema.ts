@@ -17,7 +17,10 @@ export const claimJobBodySchema = z.object({
   workerName: z.string().trim().min(1),
   capabilities: z.array(capabilitySchema).min(1)
 });
-export const completeJobBodySchema = z.object({ output: z.unknown() });
+export const completeJobBodySchema = z.object({
+  output: z.unknown(),
+  executor: z.string().trim().min(1).optional()
+});
 export const failJobBodySchema = z.object({
   error: z.object({
     code: z.string().min(1), message: z.string().min(1),

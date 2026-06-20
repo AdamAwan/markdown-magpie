@@ -535,16 +535,16 @@ export async function createProposalFromCompletedJob(
   ctx: AppContext,
   job: JobView | undefined,
   output: unknown
-): Promise<void> {
+): Promise<Proposal | undefined> {
   if (!job || job.type !== "draft_markdown_proposal" || !isDraftMarkdownProposalJobOutput(output)) {
-    return;
+    return undefined;
   }
 
   const input = job.input as Partial<DraftMarkdownProposalJobInput> & {
     triggeringQuestionIds?: string[];
   };
 
-  await ctx.stores.proposals.create({
+  return ctx.stores.proposals.create({
     ...output,
     targetPath: resolveProposalTargetPath(destinationSubpath(ctx.repositoryDeps(), input.destinationId), output.title),
     evidence: input.evidence ?? [],

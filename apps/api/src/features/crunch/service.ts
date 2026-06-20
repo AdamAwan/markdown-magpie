@@ -138,6 +138,8 @@ export async function attachCrunchPlanFromCompletedJob(
     return;
   }
 
+  if (run.status === "completed" || run.status === "published") return;
+
   if (isCrunchPlan(output)) {
     await ctx.stores.crunchRuns.completeRun(run.id, output);
   } else {

@@ -53,7 +53,7 @@ export function jobRoutes(ctx: AppContext): Hono {
     const parsed = completeJobBodySchema.safeParse(await readJsonBody(c));
     if (!parsed.success) throw new HttpError(400, "invalid_output");
     try {
-      const outcome = await jobsService.completeJob(ctx, c.req.param("id"), parsed.data.output);
+      const outcome = await jobsService.completeJob(ctx, c.req.param("id"), parsed.data.output, parsed.data.executor);
       if (!outcome.ok) {
         const status = outcome.code === "job_not_found" ? 404 : outcome.code === "job_cancelled" ? 409 : 400;
         throw new HttpError(status, outcome.code);

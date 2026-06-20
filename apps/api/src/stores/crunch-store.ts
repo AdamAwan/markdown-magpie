@@ -95,6 +95,8 @@ export class InMemoryCrunchStore implements CrunchStore {
   }
 
   async completeRun(id: string, plan: CrunchPlan): Promise<CrunchRun | undefined> {
+    const existing = await this.getRun(id);
+    if (existing?.status === "completed" || existing?.status === "published") return existing;
     return this.patchRun(id, { status: "completed", plan, completedAt: new Date().toISOString(), error: undefined });
   }
 
