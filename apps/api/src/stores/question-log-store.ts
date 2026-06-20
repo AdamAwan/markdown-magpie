@@ -122,6 +122,9 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       return undefined;
     }
 
+    // The flow is decided by the watcher after the log is recorded, so a
+    // completion can supply it now; fall back to any flow already on the log.
+    const flowId = input.flowId ?? existing.flowId;
     const updated: QuestionLog = {
       ...existing,
       chatProvider: input.chatProvider ?? existing.chatProvider,
@@ -132,12 +135,13 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       gaps: [
         ...(existing.gaps ?? []).filter((gap) => gap.source === "manual"),
         ...autoGapsFromAnswer(input.answer)
-      ]
+      ],
+      ...(flowId ? { flowId } : {})
     };
 
     this.logs.set(id, updated);
     // Re-answering replaces the auto-detected gaps, changing the candidate set.
-    this.bumpCatalog(existing.flowId);
+    this.bumpCatalog(flowId);
     return updated;
   }
 

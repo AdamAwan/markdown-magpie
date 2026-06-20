@@ -22,24 +22,16 @@ function job(type: AiJob["type"], input: unknown): AiJob {
   };
 }
 
-test("answer_question embeds question and context after the instructions", () => {
-  const input = { question: "What now?", context: [{ heading: "H", content: "C" }] };
+test("answer_question embeds the question and routing flows after the instructions", () => {
+  // The watcher (Task 7) retrieves context at run time and applies the routed
+  // flow's persona; the job input now carries only the question and the routing
+  // candidates.
+  const input = { question: "What now?", flows: [{ id: "support", name: "Support" }] };
   const prompt = buildJobPrompt(job("answer_question", input));
   assert.equal(
     prompt,
-    `${ANSWER_QUESTION.instructions}\n\nQuestion:\n${input.question}\n\nContext:\n${JSON.stringify(input.context, null, 2)}`
+    `${ANSWER_QUESTION.instructions}\n\nQuestion:\n${input.question}\n\nCandidate flows:\n${JSON.stringify(input.flows, null, 2)}`
   );
-});
-
-test("answer_question appends the flow persona to the base instructions", () => {
-  const input = { question: "What now?", context: [{ heading: "H", content: "C" }], persona: "Be concise and formal." };
-  const prompt = buildJobPrompt(job("answer_question", input));
-  assert.ok(
-    prompt.startsWith(
-      `${ANSWER_QUESTION.instructions}\n\nPersona (how to look and respond):\nBe concise and formal.`
-    )
-  );
-  assert.match(prompt, /\n\nQuestion:\nWhat now\?/);
 });
 
 test("summarize_gap appends Input block", () => {

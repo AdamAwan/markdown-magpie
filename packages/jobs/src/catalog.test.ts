@@ -4,6 +4,8 @@ import {
   AI_PROVIDERS,
   JOB_TYPES,
   allQueueDefinitions,
+  answerQuestionInputSchema,
+  answerQuestionOutputSchema,
   jobDefinition,
   queueNameForJob,
   queueNamesForCapabilities
@@ -101,6 +103,50 @@ test("all queue definitions provision every AI provider partition and a dead-let
 test("every concrete work and dead-letter queue name is unique", () => {
   const names = allQueueDefinitions().map((definition) => definition.name);
   assert.equal(new Set(names).size, names.length);
+});
+
+test("answer_question input carries routing flows, not pre-retrieved context", () => {
+  const valid = answerQuestionInputSchema.safeParse({
+    provider: "openai-compatible",
+    questionLogId: "log-1",
+    question: "How do I configure X?",
+    flows: [{ id: "flow-1", name: "Support", persona: "You are helpful" }, { id: "flow-2", name: "Eng" }],
+    expectedOutput: "answer_result"
+  });
+  assert.ok(valid.success, "flows-based input should be accepted");
+
+  const emptyFlows = answerQuestionInputSchema.safeParse({
+    provider: "openai-compatible",
+    question: "q",
+    flows: [],
+    expectedOutput: "answer_result"
+  });
+  assert.ok(emptyFlows.success, "empty flows should be accepted");
+
+  const legacy = answerQuestionInputSchema.safeParse({
+    provider: "openai-compatible",
+    question: "q",
+    context: [{ sectionId: "s", path: "p", heading: "h", content: "c" }],
+    expectedOutput: "answer_result"
+  });
+  assert.ok(!legacy.success, "the old context-array input should be rejected (flows missing)");
+});
+
+test("answer_question output may record the routed flowId", () => {
+  const withFlow = answerQuestionOutputSchema.safeParse({
+    answer: "A",
+    confidence: "high",
+    citations: [],
+    flowId: "flow-1"
+  });
+  assert.ok(withFlow.success, "flowId should be accepted on output");
+
+  const withoutFlow = answerQuestionOutputSchema.safeParse({
+    answer: "A",
+    confidence: "high",
+    citations: []
+  });
+  assert.ok(withoutFlow.success, "flowId is optional on output");
 });
 
 test("queue naming rejects a missing or invalid AI provider", () => {

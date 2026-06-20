@@ -4,11 +4,11 @@ import type { JobError } from "@magpie/jobs";
 import { FakeJobBroker } from "./fake-broker.js";
 
 // A valid answer_question input per the @magpie/jobs answerQuestionInputSchema:
-// provider (enum), question (string), context (array), expectedOutput (literal)
+// provider (enum), question (string), flows (array), expectedOutput (literal)
 const validAnswerInput = {
   provider: "codex" as const,
   question: "How do I configure X?",
-  context: [],
+  flows: [],
   expectedOutput: "answer_result" as const
 };
 

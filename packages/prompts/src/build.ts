@@ -12,15 +12,17 @@ import {
   DRAFT_MARKDOWN_PROPOSAL,
   GENERIC_JOB,
   SOURCE_CHANGE_SYNC,
-  SUMMARIZE_GAP,
-  withPersona
+  SUMMARIZE_GAP
 } from "./catalog.js";
 
 export function buildJobPrompt(job: AiJob): string {
   if (job.type === "answer_question") {
     const input = job.input as AnswerQuestionJobInput;
-    const system = withPersona(ANSWER_QUESTION.instructions, input.persona);
-    return `${system}\n\nQuestion:\n${input.question}\n\nContext:\n${JSON.stringify(input.context, null, 2)}`;
+    // TODO(Task 7): the watcher now routes to a flow and retrieves context at run
+    // time (POST /api/retrieve) rather than reading it off the job input. Until
+    // that lands, the prompt carries the question and the routing candidates; the
+    // chosen flow's persona is applied by the watcher once routing exists.
+    return `${ANSWER_QUESTION.instructions}\n\nQuestion:\n${input.question}\n\nCandidate flows:\n${JSON.stringify(input.flows, null, 2)}`;
   }
 
   if (job.type === "summarize_gap") {

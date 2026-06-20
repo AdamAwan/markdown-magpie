@@ -24,7 +24,7 @@ import {
 const answerInput = (provider: "codex" | "openai-compatible" = "codex") => ({
   provider,
   question: "How?",
-  context: [],
+  flows: [],
   expectedOutput: "answer_result" as const
 });
 
@@ -130,7 +130,7 @@ test("answer completion is idempotent when delivered twice", async () => {
     provider: "codex" as const,
     questionLogId: log.id,
     question: "How do I configure X?",
-    context: [],
+    flows: [],
     expectedOutput: "answer_result" as const
   };
   const job = await ctx.jobs.create("answer_question", input);
@@ -151,6 +151,48 @@ test("answer completion is idempotent when delivered twice", async () => {
   assert.ok(updated.answer);
   assert.equal(updated.answer.answer, "Set the X flag in config.");
   assert.equal(updated.confidence, "high");
+});
+
+test("answer completion persists the routed flowId and retrieved section ids on the log", async () => {
+  const ctx = makeTestContext();
+
+  const log = await ctx.stores.questionLogs.record({
+    question: "How do I configure X?",
+    executionMode: "queue",
+    chatProvider: "openai-compatible",
+    retrievedSectionIds: []
+  });
+
+  const job = await ctx.jobs.create("answer_question", {
+    provider: "openai-compatible" as const,
+    questionLogId: log.id,
+    question: "How do I configure X?",
+    flows: [{ id: "support", name: "Support" }],
+    expectedOutput: "answer_result" as const
+  });
+
+  const output: AnswerQuestionJobOutput = {
+    answer: "Set the X flag in config.",
+    confidence: "high",
+    flowId: "support",
+    citations: [
+      {
+        documentId: "doc-1",
+        sectionId: "support-kb:configure.md:0",
+        path: "configure.md",
+        heading: "Configure",
+        anchor: "configure",
+        excerpt: "Set the X flag."
+      }
+    ]
+  };
+
+  assert.equal((await completeJob(ctx, job.id, output)).ok, true);
+
+  const updated = await ctx.stores.questionLogs.get(log.id);
+  assert.ok(updated);
+  assert.equal(updated.flowId, "support");
+  assert.deepEqual(updated.retrievedSectionIds, ["support-kb:configure.md:0"]);
 });
 
 test("crunch completion is idempotent when delivered twice", async () => {

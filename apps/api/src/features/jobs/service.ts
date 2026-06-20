@@ -130,7 +130,11 @@ async function updateQuestionLogFromCompletedJob(
   await ctx.stores.questionLogs.updateAnswer(input.questionLogId, {
     answer: output,
     // JobView has no live claimant field; fall back to "watcher"
-    chatProvider: typeof input.provider === "string" ? input.provider : "watcher"
+    chatProvider: typeof input.provider === "string" ? input.provider : "watcher",
+    // The watcher routed the question to a flow and retrieved the cited sections;
+    // record both. retrievedSectionIds is derived from the output citations by the
+    // store. flowId is only set when the watcher actually chose a flow.
+    ...(typeof output.flowId === "string" ? { flowId: output.flowId } : {})
   });
 }
 

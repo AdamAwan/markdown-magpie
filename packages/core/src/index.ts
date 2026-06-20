@@ -130,6 +130,10 @@ export interface QuestionLogInput {
 export interface QuestionLogUpdateInput {
   answer: AnswerResult;
   chatProvider?: string;
+  // The flow the question was routed to, recorded on completion. The watcher
+  // decides this after the log is first created, so it lands here, not at record
+  // time. Absent when no flow was chosen.
+  flowId?: string;
 }
 
 export type QuestionFeedback = "helpful" | "unhelpful";
@@ -325,17 +329,15 @@ export interface AgentRunner {
 export interface AnswerQuestionJobInput {
   questionLogId?: string;
   question: string;
-  context: Array<{
-    sectionId: string;
-    path: string;
-    heading: string;
-    content: string;
+  // Routing candidates the watcher chooses between. The watcher routes the
+  // question to one of these flows (a generative call it owns), then retrieves
+  // scoped context via POST /api/retrieve, then answers. May be empty when no
+  // flows are configured, in which case the watcher answers unscoped.
+  flows: Array<{
+    id: string;
+    name: string;
+    persona?: string;
   }>;
-  // The flow the question was routed to, and that flow's persona snippet. Both are
-  // carried in the job so the watcher (which has no flow config) can apply the
-  // persona via buildJobPrompt. Absent when no flow matched / none configured.
-  flowId?: string;
-  persona?: string;
   expectedOutput: "answer_result";
 }
 
@@ -351,6 +353,9 @@ export interface AnswerQuestionJobOutput {
   confidence: Confidence;
   citations: Citation[];
   gaps?: KnowledgeGapSignal[];
+  // The flow the watcher routed the question to, recorded on completion so the
+  // question log reflects which flow answered. Absent when no flow was chosen.
+  flowId?: string;
 }
 
 export interface SummarizeGapJobInput {

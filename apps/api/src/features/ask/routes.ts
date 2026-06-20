@@ -21,22 +21,19 @@ export function askRoutes(ctx: AppContext): Hono {
       const { question } = c.req.valid("json");
 
       const outcome = await askService.ask(ctx, question);
-      if (outcome.kind === "queue") {
-        return c.json(
-          {
-            mode: "queue",
-            questionId: outcome.questionId,
-            job: outcome.job,
-            links: {
-              question: apiLink(`/questions/${outcome.questionId}`),
-              status: apiLink(`/ai-jobs/${outcome.job.id}`)
-            }
-          },
-          202
-        );
-      }
-
-      return c.json({ mode: outcome.mode, questionId: outcome.questionId, result: outcome.result });
+      return c.json(
+        {
+          questionId: outcome.questionId,
+          job: outcome.job,
+          links: {
+            question: apiLink(`/questions/${outcome.questionId}`),
+            job: apiLink(`/jobs/${outcome.job.id}`),
+            wait: apiLink(`/jobs/${outcome.job.id}/wait`),
+            cancel: apiLink(`/jobs/${outcome.job.id}/cancel`)
+          }
+        },
+        202
+      );
     }
   );
 

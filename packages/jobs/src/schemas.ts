@@ -48,11 +48,10 @@ export const answerQuestionInputSchema = z.object({
   provider: providerSchema,
   questionLogId: z.string().optional(),
   question: z.string(),
-  context: z.array(z.object({
-    sectionId: z.string(),
-    path: z.string(),
-    heading: z.string(),
-    content: z.string()
+  flows: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    persona: z.string().optional()
   })),
   expectedOutput: z.literal("answer_result")
 }) satisfies z.ZodType<ProviderInput<CoreAnswerQuestionJobInput>>;
@@ -60,7 +59,8 @@ export const answerQuestionOutputSchema = z.object({
   answer: z.string(),
   confidence: confidenceSchema,
   citations: z.array(citationSchema),
-  gaps: z.array(gapSchema).optional()
+  gaps: z.array(gapSchema).optional(),
+  flowId: z.string().optional()
 }) satisfies z.ZodType<AnswerQuestionJobOutput>;
 
 export const summarizeGapInputSchema = z.object({

@@ -52,8 +52,12 @@ function extractJson(stdout: string): unknown {
 
 // The model returns only { answer, confidence, isKnowledgeGap, gaps[] } — the
 // same shape the direct retrieval path uses. Citations are not trusted from the
-// model; they are derived in code from the context sections the job already
-// carries, so attribution stays reliable and the two answer paths share one prompt.
+// model; they are derived in code from the sections that were retrieved for the
+// question, so attribution stays reliable.
+// TODO(Task 7): the job input no longer carries pre-retrieved context. Once the
+// watcher routes the question and calls POST /api/retrieve, pass the retrieved
+// sections in here and derive citations from them. Until then no citations can be
+// attributed.
 function assertAnswerQuestionOutput(value: unknown, input: AnswerQuestionJobInput): AnswerQuestionJobOutput {
   if (!value || typeof value !== "object") {
     throw new Error("answer_question output must be an object");
@@ -65,7 +69,7 @@ function assertAnswerQuestionOutput(value: unknown, input: AnswerQuestionJobInpu
   }
 
   const isKnowledgeGap = candidate.isKnowledgeGap === true;
-  const citations = input.context.map(toCitation);
+  const citations: Citation[] = [];
   const output: AnswerQuestionJobOutput = {
     answer: candidate.answer,
     confidence: isKnowledgeGap ? "low" : candidate.confidence,
@@ -77,17 +81,6 @@ function assertAnswerQuestionOutput(value: unknown, input: AnswerQuestionJobInpu
   }
 
   return output;
-}
-
-function toCitation(section: AnswerQuestionJobInput["context"][number]): Citation {
-  return {
-    documentId: section.path,
-    sectionId: section.sectionId,
-    path: section.path,
-    heading: section.heading,
-    anchor: section.heading.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-    excerpt: section.content.slice(0, 280)
-  };
 }
 
 // Turns the model's gap strings into knowledge-gap signals, each tagged with the

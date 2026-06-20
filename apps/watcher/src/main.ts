@@ -268,34 +268,23 @@ class MockAgentRunner implements AgentRunner {
     return buildMockCrunchPlan(input.documents ?? []);
   }
 
+  // TODO(Task 7): the job input no longer carries pre-retrieved context. The real
+  // watcher will route the question to a flow and call POST /api/retrieve to get
+  // the sections to cite. Until that lands, the mock answerer has no source
+  // material and reports a gap.
   private answerQuestion(input: AnswerQuestionJobInput): AnswerQuestionJobOutput {
-    if (input.context.length === 0) {
-      return {
-        answer: "I could not find reliable source material for this question.",
-        confidence: "low",
-        citations: [],
-        gaps: [
-          {
-            summary: `No source material found for: ${input.question}`,
-            question: input.question,
-            confidence: "low",
-            citedSectionIds: []
-          }
-        ]
-      };
-    }
-
     return {
-      answer: `Mock answer for: ${input.question}`,
-      confidence: "medium",
-      citations: input.context.map((section) => ({
-        documentId: section.path,
-        sectionId: section.sectionId,
-        path: section.path,
-        heading: section.heading,
-        anchor: section.heading.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-        excerpt: section.content.slice(0, 280)
-      }))
+      answer: "I could not find reliable source material for this question.",
+      confidence: "low",
+      citations: [],
+      gaps: [
+        {
+          summary: `No source material found for: ${input.question}`,
+          question: input.question,
+          confidence: "low",
+          citedSectionIds: []
+        }
+      ]
     };
   }
 
