@@ -273,14 +273,17 @@ configured destination when one exists.
 
 The proposal's location is owned by the system, not the caller: the file lands at
 `<destination docs subpath>/<title-slug>.md` (repository root when the destination has no
-configured subpath). This keeps every proposal's folder structure consistent on its branch
-regardless of whether it was drafted by the mock provider, a direct AI call, or the job queue.
+configured subpath). This keeps every proposal's folder structure consistent on its branch.
 A `targetPath` field in the request body is accepted for backward compatibility but no longer
 determines where the file is written.
 
+Drafting is **enqueue-only**: the route records the request and enqueues a
+`draft_markdown_proposal` job; the watcher runs the generative work and the proposal is created
+later by the job-completion path. The route never drafts inline.
+
 - `400 gap_summary_required` — empty or missing summary.
 - `404 gap_candidate_not_found` — no candidate matches the summary.
-- `202` — `{ "job": AiJob, "links": { "status": "/api/ai-jobs/:id", "proposals": "/api/proposals" } }`.
+- `202` — `{ "job": AiJob, "links": { "job": "/api/jobs/:id", "wait": "/api/jobs/:id/wait", "cancel": "/api/jobs/:id/cancel", "proposals": "/api/proposals" } }`.
 
 ### `GET /api/proposals/:id`
 
@@ -302,17 +305,30 @@ Sets the proposal status directly. Valid values: `draft`, `ready`, `branch-pushe
 
 ### `POST /api/proposals/:id/publish`
 
-Publishes a `ready` proposal to the configured destination via the `local-git` publisher. Git
-destinations are cloned or fast-forward pulled into `MAGPIE_CHECKOUT_ROOT`, then the Markdown is
-committed to a new `magpie/proposal-*` branch and the branch and commit SHA are recorded. Opening a
-hosted pull request from that branch is planned but not yet implemented.
+Publication is **enqueue-only**: the route validates the repository pre-flight (the same checks the
+old synchronous publisher ran) and then enqueues a `publish_proposal` job. The git work — committing
+the Markdown to a new `magpie/proposal-*` branch, pushing it, and opening a pull request — happens in
+the watcher publication runner, which fetches `GET /api/proposals/:id/execution-context` and records
+the result back via job completion. Invalid publishes still fail fast with the same status codes
+before any job is created.
 
 - `404 proposal_not_found`.
 - `409 proposal_not_ready` — only `ready` proposals can be published.
 - `409 proposal_repository_not_found` — no indexed repository matches the target path.
 - `409 proposal_repository_not_git` — the matched repository is not a Git checkout.
-- `409 proposal_publish_failed` — the commit failed; `message` carries the reason.
-- `200` — `{ "proposal": Proposal, "publication": ProposalPublication }`.
+- `202` — `{ "job": AiJob, "links": { "job": "/api/jobs/:id", "wait": "/api/jobs/:id/wait", "cancel": "/api/jobs/:id/cancel", "proposal": "/api/proposals/:id" } }`.
+
+### `GET /api/proposals/:id/execution-context`
+
+The non-generative, credential-free context the watcher publication runner fetches before executing
+git. Returns the proposal record plus the resolved repository config it needs to push a branch and
+open a PR (`id`, `localPath`, `remoteUrl`, `defaultBranch`, `git`). Never returns credentials. Runs
+the same repository resolution + validation as the publish path.
+
+- `404 proposal_not_found`.
+- `409 proposal_repository_not_found` — no indexed repository matches the target path.
+- `409 proposal_repository_not_git` — the matched repository is not a Git checkout.
+- `200` — `{ "proposal": Proposal, "repository": { "id", "localPath", "remoteUrl"?, "defaultBranch", "git"? } }`.
 
 ## AI Jobs
 

@@ -40,11 +40,10 @@ export async function listClusters(ctx: AppContext, limit: number): Promise<Pers
   return result;
 }
 
-// Drafts one proposal from a persisted cluster, linking the proposal back to the
-// cluster and queueing it for publication. The cluster's own flow routes the
-// draft, so the caller only supplies optional target/destination overrides. Only
-// the synchronous (direct-mode) proposal is linked here; in queue mode the
-// proposal is created later by the AI-job completion path and links there.
+// Drafts one proposal from a persisted cluster. The cluster's own flow routes the
+// draft, so the caller only supplies optional target/destination overrides.
+// Drafting is enqueue-only: the proposal is created later by the AI-job completion
+// path, which links it back to its cluster.
 export async function draftFromCluster(
   ctx: AppContext,
   clusterId: string,
@@ -72,9 +71,7 @@ export async function draftFromCluster(
   if (!outcome.ok) {
     return outcome;
   }
-  if (outcome.mode === "direct") {
-    await ctx.stores.proposals.linkCluster(outcome.proposal.id, clusterId);
-    await ctx.stores.gapClusters.enqueuePublicationAction(outcome.proposal.id, "publish");
-  }
+  // Drafting is enqueue-only: the proposal is created later by the job-completion
+  // path, which links it back to its cluster. Nothing to link synchronously here.
   return outcome;
 }

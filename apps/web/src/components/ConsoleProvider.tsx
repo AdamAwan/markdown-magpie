@@ -384,19 +384,13 @@ function useConsoleController() {
     setLoading(true);
     clearMessage();
     try {
-      const result = await apiPost<{ proposal: Proposal; pullRequestUrl?: string; pullRequestWarning?: string }>(
-        `/proposals/${proposalId}/publish`,
-        {}
-      );
-      setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
-      setSelectedProposalId(result.proposal.id);
-      const branchLabel = result.proposal.publication?.branchName ?? "proposal branch";
-      if (result.pullRequestUrl) {
-        showMessage(`Published ${branchLabel} and opened a pull request.`, "success");
-      } else if (result.pullRequestWarning) {
-        showMessage(`Published ${branchLabel}, but PR creation failed: ${result.pullRequestWarning}`, "info");
-      } else {
-        showMessage(`Published ${branchLabel} (no PR raised — configure a host token to enable).`, "success");
+      // Publication is now enqueue-only: the API validates and returns a queued
+      // publish_proposal job. The watcher executes the git and records the
+      // publication back onto the proposal, which a later refresh picks up.
+      const result = await apiPost<{ job?: AiJob }>(`/proposals/${proposalId}/publish`, {});
+      openSection("jobs");
+      if (result.job) {
+        showMessage(`${formatJobType(result.job.type)} queued. We will update this page when it finishes.`, "info");
       }
       await refresh({ preserveMessage: true });
     } catch (error) {

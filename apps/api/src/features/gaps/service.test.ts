@@ -61,12 +61,14 @@ test("listClusters surfaces gap summaries, question ids, and the linked proposal
   assert.equal(result.proposalStatus, "draft");
 });
 
-test("draftFromCluster creates a proposal, links the cluster, and enqueues a publish action", async () => {
-  const ctx = makeTestContext();
+test("draftFromCluster enqueues a draft_markdown_proposal job for the cluster", async () => {
+  const ctx = makeTestContext({
+    config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
+  });
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    executionMode: "queue",
+    chatProvider: "openai-compatible",
     retrievedSectionIds: []
   });
   await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
@@ -77,34 +79,23 @@ test("draftFromCluster creates a proposal, links the cluster, and enqueues a pub
   const outcome = await gaps.draftFromCluster(ctx, cluster.id, {});
   assert.equal(outcome.ok, true);
 
-  const proposals = await ctx.stores.proposals.list(50);
-  const linked = proposals.find((p) => p.gapClusterId === cluster.id);
-  assert.ok(linked, "a proposal is linked to the cluster");
+  // Drafting is enqueue-only: no proposal exists yet (it lands via job completion).
+  assert.deepEqual(await ctx.stores.proposals.list(50), []);
 
-  const pending = await ctx.stores.gapClusters.listPendingPublicationActions();
-  assert.equal(pending.some((a) => a.proposalId === linked!.id && a.kind === "publish"), true);
+  const { jobs } = await ctx.jobs.list({});
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].type, "draft_markdown_proposal");
 });
 
-test("draftFromCluster gives the drafter the flow's open PRs and excludes the cluster's own", async () => {
-  // A non-mock provider so the direct draft path actually calls the chat model,
-  // letting us capture the serialised job input it is handed.
+test("draftFromCluster enqueues without error when the flow has in-flight PRs", async () => {
   const ctx = makeTestContext({
-    config: new RuntimeConfigHolder({ aiExecutionMode: "direct", aiProvider: "claude" })
+    config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
   });
-  let captured: string | undefined;
-  ctx.providers.chat = () =>
-    ({
-      complete: async (request: { messages: Array<{ content: string }> }) => {
-        captured = request.messages[0]?.content;
-        return { content: '{"title":"T","targetPath":"t.md","markdown":"# T\\nbody","rationale":"r"}' };
-      }
-    }) as never;
 
-  // The cluster we are about to draft for.
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    executionMode: "queue",
+    chatProvider: "openai-compatible",
     retrievedSectionIds: []
   });
   await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
@@ -113,21 +104,14 @@ test("draftFromCluster gives the drafter the flow's open PRs and excludes the cl
   await ctx.stores.gapClusters.assignGapToCluster(cluster.id, gapId);
 
   // Another cluster's open PR in the same (default) flow, plus this cluster's own
-  // in-flight proposal which the draft must NOT be shown.
+  // in-flight proposal. collectOpenPullRequestContext's filtering of these is
+  // covered directly in proposals/service.test.ts; here we only assert the draft
+  // still enqueues cleanly when a snapshot is present.
   const other = await ctx.stores.proposals.create({
-    title: "Other doc",
-    targetPath: "other.md",
-    markdown: "#",
-    rationale: "r",
-    evidence: []
+    title: "Other doc", targetPath: "other.md", markdown: "#", rationale: "r", evidence: []
   });
   const own = await ctx.stores.proposals.create({
-    title: "Own doc",
-    targetPath: "own.md",
-    markdown: "#",
-    rationale: "r",
-    evidence: [],
-    gapClusterId: cluster.id
+    title: "Own doc", targetPath: "own.md", markdown: "#", rationale: "r", evidence: [], gapClusterId: cluster.id
   });
   await ctx.stores.snapshots.write({
     flowId: undefined,
@@ -145,17 +129,9 @@ test("draftFromCluster gives the drafter the flow's open PRs and excludes the cl
 
   const outcome = await gaps.draftFromCluster(ctx, cluster.id, {});
   assert.equal(outcome.ok, true);
-  assert.ok(captured, "the drafter was handed an input payload");
-  const input = JSON.parse(captured!) as {
-    openPullRequests?: Array<{ title: string; url?: string; targetPath?: string; status: string }>;
-  };
-  assert.equal(input.openPullRequests?.length, 1, "only the other cluster's open PR is surfaced");
-  assert.deepEqual(input.openPullRequests?.[0], {
-    title: "Other doc",
-    url: "https://github.com/o/r/pull/9",
-    targetPath: "other.md",
-    status: "pr-opened"
-  });
+  const { jobs } = await ctx.jobs.list({});
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].type, "draft_markdown_proposal");
 });
 
 test("draftFromCluster returns cluster_not_found for an unknown or inactive cluster", async () => {

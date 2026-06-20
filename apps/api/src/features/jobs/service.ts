@@ -64,7 +64,7 @@ export async function waitForJob(
 // THE COMPLETION DISPATCHER. Replicates the original handleCompleteJob logic:
 // look up the existing job (404 if missing), persist completion, then fan out to
 // the side-effect handlers in a fixed order — question log update, proposal
-// creation, then crunch-plan attachment. Returns a discriminated outcome so the
+// creation, proposal publication, then crunch-plan attachment. Returns a discriminated outcome so the
 // handler maps job_not_found to 404 while keeping its own try/catch for the 500
 // job_completion_failed path.
 export async function completeJob(
@@ -97,6 +97,7 @@ export async function completeJob(
   try {
     await updateQuestionLogFromCompletedJob(ctx, existingJob, parsed.data);
     await proposalsService.createProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, parsed.data);
     await ctx.jobs.complete(jobId, { result: parsed.data, executor });
   } catch (error) {

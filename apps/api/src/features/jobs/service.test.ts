@@ -116,6 +116,46 @@ test("proposal completion is idempotent when delivered twice", async () => {
   assert.equal(created[0].jobId, job.id);
 });
 
+test("publish_proposal completion records publication and is idempotent when delivered twice", async () => {
+  const ctx = makeTestContext();
+
+  const proposal = await ctx.stores.proposals.create({
+    title: "Configure X",
+    targetPath: "configure-x.md",
+    markdown: "# Configure X\nbody",
+    rationale: "r",
+    evidence: []
+  });
+  await ctx.stores.proposals.updateStatus(proposal.id, "ready");
+
+  const job = await ctx.jobs.create("publish_proposal", { proposalId: proposal.id });
+
+  const output = {
+    proposalId: proposal.id,
+    branchName: "magpie/proposal-abc-configure-x",
+    commitSha: "deadbeef",
+    remoteUrl: "https://github.com/o/r.git",
+    pullRequestUrl: "https://github.com/o/r/pull/9",
+    publishedAt: new Date().toISOString()
+  };
+
+  assert.equal((await completeJob(ctx, job.id, output)).ok, true);
+
+  const published = await ctx.stores.proposals.get(proposal.id);
+  assert.ok(published);
+  assert.equal(published.status, "pr-opened");
+  assert.equal(published.publication?.branchName, output.branchName);
+  assert.equal(published.publication?.commitSha, output.commitSha);
+  assert.equal(published.publication?.remoteUrl, output.remoteUrl);
+  assert.equal(published.publication?.pullRequestUrl, output.pullRequestUrl);
+  assert.equal(published.publication?.publishedAt, output.publishedAt);
+
+  // Re-completing the same job must not change the recorded publication.
+  assert.equal((await completeJob(ctx, job.id, output)).ok, true);
+  const repeated = await ctx.stores.proposals.get(proposal.id);
+  assert.equal(repeated?.publication?.publishedAt, output.publishedAt);
+});
+
 test("answer completion is idempotent when delivered twice", async () => {
   const ctx = makeTestContext();
 

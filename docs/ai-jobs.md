@@ -106,15 +106,18 @@ POST /api/proposals/:id/status
 ```
 
 Once a proposal is `ready` and its target path maps to an indexed Git checkout, it can be
-published to a local branch:
+published:
 
 ```bash
 POST /api/proposals/:id/publish
 ```
 
-This commits the Markdown to a new `magpie/proposal-*` branch via the `local-git` publisher
-and records the branch and commit SHA on the proposal. Opening a hosted pull request from that
-branch is planned but not yet implemented.
+Publication is enqueue-only. The API validates the repository pre-flight and enqueues a
+`publish_proposal` job, returning `202` with the queued job. The watcher publication runner fetches
+`GET /api/proposals/:id/execution-context` (the proposal plus a credential-free repository config),
+commits the Markdown to a new `magpie/proposal-*` branch, pushes it, and opens a pull request, then
+reports the result back via job completion — which records the branch, commit SHA, and PR URL on the
+proposal. Invalid publishes fail fast with the same `404`/`409` codes before any job is created.
 
 ## Crunch — scheduled knowledge-base tidying
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AppContext } from "../context.js";
+import { RuntimeConfigHolder } from "../config-holder.js";
 import { makeTestContext } from "../test-support/context.js";
 import { reconcileGaps } from "./gap-reconciler.js";
 
@@ -145,12 +146,18 @@ describe("reconcileGaps clustering", () => {
 });
 
 describe("reconcileGaps autonomous drafting", () => {
-  it("drafts, links, and publishes a proposal for a brand-new cluster", async () => {
-    const ctx = makeTestContext();
+  // Drafting is now enqueue-only: autonomous reconciliation enqueues a
+  // draft_markdown_proposal job per uncovered cluster. The proposal (and its
+  // publish action) are created later by the Task 7 job-completion path, so these
+  // tests assert the enqueue, not a synchronous proposal.
+  it("enqueues a draft job for a brand-new cluster", async () => {
+    const ctx = makeTestContext({
+      config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
+    });
     const log = await ctx.stores.questionLogs.record({
       question: "How do I configure X?",
-      executionMode: "direct",
-      chatProvider: "mock",
+      executionMode: "queue",
+      chatProvider: "openai-compatible",
       retrievedSectionIds: []
     });
     await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
@@ -158,30 +165,23 @@ describe("reconcileGaps autonomous drafting", () => {
     // No reshape proposed (a single cluster has nothing to merge anyway).
     ctx.providers.chat = () => ({ complete: async () => ({ content: '{"merges":[],"splits":[]}' }) }) as never;
 
-    let published = 0;
     await reconcileGaps(ctx, undefined, {
       fetchPullRequestStatus: async () => undefined,
-      publishProposal: async () => {
-        published += 1;
-      },
+      publishProposal: async () => {},
       supersedeProposal: async () => {}
     });
 
     const clusters = await ctx.stores.gapClusters.listActiveClusters();
     assert.equal(clusters.length, 1, "one cluster was created for the gap");
-    const proposals = await ctx.stores.proposals.list(500);
-    assert.equal(proposals.length, 1, "a proposal was drafted for the new cluster");
-    assert.equal(proposals[0].gapClusterId, clusters[0].id, "the proposal is linked to its cluster");
-    assert.equal(published, 1, "the drafted proposal's publish action was drained");
-    assert.deepEqual(
-      await ctx.stores.gapClusters.listPendingPublicationActions(),
-      [],
-      "no publication action is left pending"
-    );
+    assert.deepEqual(await ctx.stores.proposals.list(500), [], "no proposal is created synchronously");
+    const { jobs } = await ctx.jobs.list({ type: "draft_markdown_proposal" });
+    assert.equal(jobs.length, 1, "a draft job was enqueued for the new cluster");
   });
 
-  it("drafts only the uncovered cluster on a later run, never duplicating an existing proposal", async () => {
-    const ctx = makeTestContext();
+  it("enqueues only the uncovered cluster on a later run, never duplicating", async () => {
+    const ctx = makeTestContext({
+      config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
+    });
     ctx.providers.chat = () => ({ complete: async () => ({ content: '{"merges":[],"splits":[]}' }) }) as never;
     const deps = {
       fetchPullRequestStatus: async () => undefined,
@@ -191,26 +191,37 @@ describe("reconcileGaps autonomous drafting", () => {
 
     const log1 = await ctx.stores.questionLogs.record({
       question: "q1?",
-      executionMode: "direct",
-      chatProvider: "mock",
+      executionMode: "queue",
+      chatProvider: "openai-compatible",
       retrievedSectionIds: []
     });
     await ctx.stores.questionLogs.recordManualGap(log1.id, "Topic one");
     await reconcileGaps(ctx, undefined, deps);
-    assert.equal((await ctx.stores.proposals.list(500)).length, 1, "first run drafts one proposal");
+    // The just-enqueued draft completes into a proposal linked to its cluster, so
+    // the cluster is "covered" before the next run (mirrors the completion path).
+    const [cluster1] = await ctx.stores.gapClusters.listActiveClusters();
+    const proposal1 = await ctx.stores.proposals.create({
+      title: "Topic one", targetPath: "topic-one.md", markdown: "#", rationale: "r", evidence: [],
+      gapClusterId: cluster1.id
+    });
+    assert.ok(proposal1);
+    assert.equal((await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length, 1, "first run enqueues one draft");
 
     // A new, distinct gap advances the catalog and reopens the gate.
     const log2 = await ctx.stores.questionLogs.record({
       question: "q2?",
-      executionMode: "direct",
-      chatProvider: "mock",
+      executionMode: "queue",
+      chatProvider: "openai-compatible",
       retrievedSectionIds: []
     });
     await ctx.stores.questionLogs.recordManualGap(log2.id, "Topic two");
     await reconcileGaps(ctx, undefined, deps);
 
-    const proposals = await ctx.stores.proposals.list(500);
-    assert.equal(proposals.length, 2, "only the newly uncovered cluster was drafted; the existing proposal was untouched");
+    assert.equal(
+      (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length,
+      2,
+      "only the newly uncovered cluster was enqueued; the covered cluster was untouched"
+    );
   });
 });
 

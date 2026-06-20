@@ -272,7 +272,7 @@ async function draftProposalsForUncoveredClusters(ctx: AppContext, flowId: strin
       if (outcome.ok) {
         drafted += 1;
         console.log(
-          `Gap reconciler [${flowId ?? "default"}]: drafted a proposal for cluster ${cluster.id} ("${cluster.title}") in ${outcome.mode} mode.`
+          `Gap reconciler [${flowId ?? "default"}]: enqueued a draft for cluster ${cluster.id} ("${cluster.title}") as job ${outcome.job.id}.`
         );
       } else {
         console.warn(`Gap reconciler [${flowId ?? "default"}]: could not draft a proposal for cluster ${cluster.id}: ${outcome.code}.`);
@@ -476,9 +476,9 @@ async function drainPublicationOutbox(
 }
 
 async function defaultPublish(ctx: AppContext, proposal: Proposal): Promise<void> {
-  // Re-fetch live PR state immediately before mutating (spec: defend against a
-  // state change between reconciliation and publication).
-  const result = await proposalsService.publishReadyProposal(ctx, proposal);
+  // Publication is enqueue-only: the API validates the repository pre-flight and
+  // enqueues a publish_proposal job; the Task 7 watcher runner executes the git.
+  const result = await proposalsService.requestProposalPublication(ctx, proposal);
   if (!result.ok) {
     throw new Error(`${result.code}: ${result.message}`);
   }
