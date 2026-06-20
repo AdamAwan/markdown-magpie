@@ -20,7 +20,13 @@ _Updated 2026-06-20. Checkout: repository root. Branch: `feat/queue-only-pg-boss
   - Transitional state to undo later: `createAppContext()` uses a `FakeJobBroker` placeholder (`TODO(Task 3)`) — Task 3 replaces it with the real `PgBossJobBroker`; a `"mock"` → `"openai-compatible"` provider mapping in ask/proposals/crunch services is cleaned up in Task 11.
 - **Task 3 — complete.** `PgBossJobBroker`, public queue/schedule APIs, fair capability claims, durable lifecycle projection, mandatory Postgres composition, and graceful broker startup/shutdown (commit `ee9ccc8`). Real Postgres gate: 174/174 API tests; root typecheck and focused lint clean.
 - **Task 4 — complete.** `/api/jobs` now exposes capability-filtered claim, heartbeat, bounded wait, structured failure, cancel/retry, schedules, catalog-validated completion, filtered pagination, and non-mutating redacted projections (commit `eb6af52`). 38/38 API test files pass; root typecheck and focused lint clean.
-- **Task 5 — NEXT / not started.** Make answer, proposal, and crunch completion idempotent by job ID, add proposal job-ID uniqueness, and preserve retry semantics before queue acknowledgement.
+- **Task 5 — complete.** Repeated answer, proposal, and crunch completion now converges by job ID; proposal uniqueness is enforced by migration `0022`, queue output records `{ result, executor }`, and retryable crunch failures leave runs active (commit `b63d5cd`). 174 tests pass, migration and root typecheck clean; real Postgres proposal-store suite 6/6.
+- **Task 6 — IN PROGRESS.** Convert ask, proposal drafting/publication, crunch planning/publication, and gap clustering to enqueue-only behavior with no API-side generative or Git execution. Decomposed into sub-tasks 6A–6E; see the design amendment at the head of Task 6 (routing+retrieval moved to the watcher with a new `POST /api/retrieve` callback).
+  - **6A — complete** (commits `f599658`, `e8cf4b8`). `answer_question` contract changed (input `context`→`flows`, output gains `flowId`); `ask()` is enqueue-only; new pure `POST /api/retrieve`; completion records `flowId`+`retrievedSectionIds`. Spec review ✅; code-quality review fixups applied (unknown `flowId`→422; inert-persona note). 180/180 API tests, jobs+prompts green, typecheck clean. Minimal transitional `TODO(Task 7)` stubs left in `apps/watcher/src/{job-prompts,main}.ts` and `packages/prompts/src/build.ts` (watcher mock answerer emits no citations until Task 7 wires the retrieve callback).
+  - **Deferred to Task 11:** `ask()` passes the configured provider through unmapped, so `aiProvider: "mock"` now fails `answer_question` schema validation (mock isn't a job provider). Resolved when Task 11 removes `mock` and makes a real provider mandatory. Do NOT re-add the `mock→openai-compatible` mapping.
+  - **Deferred to Task 10:** `apps/web/src/components/ConsoleProvider.tsx` still reads the removed `answer.mode`/`answer.result` fields (optional-chaining-safe, but its ask polling branch no longer fires). Task 10's web rewrite must switch it to rely on `answer.job`.
+  - **6B — complete** (commits `3a242f2`, `3d64861`). Proposal drafting enqueue-only; publication converted to a `publish_proposal` job with fail-fast 404/409 pre-flight; `publish_proposal` completion handler records publication idempotently; new `GET /api/proposals/:id/execution-context` (no credentials). Git execution removed from the API; pure branch-name/PR-body helpers kept exported for Task 7. Spec review ✅; code-quality ✅ (Approve) with three minor fixups applied. Necessary behaviour-preserving cascades: `gaps/service.ts` (dead direct-branch removed), `gap-reconciler.ts` `defaultPublish` (sync→enqueue), web `ConsoleProvider.tsx` publish handler (reads `{ job }`). 188/188 API tests, typecheck clean.
+  - **6C (crunch), 6D (gaps clustering), 6E (remove `ctx.providers.chat`) — not started.**
 
 ---
 
@@ -501,10 +507,42 @@ git commit -m "fix(api): make job completion idempotent"
 
 ### Task 6: Convert every generative API feature to enqueue-only
 
+> **Design amendment (2026-06-20, confirmed by Adam): routing + retrieval move to the watcher.**
+> The original plan pre-retrieved `context` in the API and embedded it in `answer_question`.
+> But `ask()` flow-routing (`routeQuestionToFlow`) is a *generative* call that must run
+> **before** retrieval (the chosen flow scopes which repo is searched), which conflicts with
+> "the API never calls a generative chat provider". Resolution: order is **route → retrieve →
+> answer**, all performed by the watcher. Because the watcher is HTTP-only and cannot reach the
+> pgvector index, the API exposes a new **non-generative** `POST /api/retrieve` endpoint the
+> watcher calls. Concretely, in this task:
+> - **`@magpie/jobs` schema change** (`packages/jobs/src/schemas.ts`, and `@magpie/core`
+>   `AnswerQuestionJobInput`): drop the pre-fetched `context` array from `answerQuestionInputSchema`;
+>   add `flows: { id, name, persona? }[]` (routing candidates, may be empty). Add optional
+>   `flowId` to `answerQuestionOutputSchema` so completion can record the routed flow.
+> - **`ask()`**: no direct branch, no API-side routing, no API-side retrieval. Record the question
+>   log (flow/sections unknown at enqueue), then `ctx.jobs.create("answer_question", { question,
+>   flows, provider, questionLogId, expectedOutput: "answer_result" })`. Route returns `202`.
+> - **New `POST /api/retrieve`** (mount in `app.ts`): body `{ question, flowId?, limit? }`; resolves
+>   `flowId` → flow → `destinationId`/`repositoryIds` server-side, runs `knowledgeIndex.search`
+>   (unscoped if no `flowId`), returns `{ sections: { sectionId, path, heading, content }[] }`.
+>   No generative calls; embeddings stay in the API.
+> - **Completion handler** (`updateQuestionLogFromCompletedJob`): also persist the output `flowId`
+>   and `retrievedSectionIds` (derive from citations) on the question log.
+> - **Delete `ctx.providers.chat`, `createConfiguredChatProvider`, and the `routingChatProvider`
+>   helper** — the watcher owns routing now (implemented in **Task 7**: the answer runner routes
+>   among `flows`, calls `/api/retrieve`, then answers and derives citations from retrieved sections).
+> - Remove the transitional `"mock" → "openai-compatible"` provider mapping in ask/proposals/crunch
+>   (real provider is required once Direct/mock is gone; full mock removal is Task 11).
+
 **Files:**
+- Modify: `packages/jobs/src/schemas.ts`
+- Modify: `packages/core/src/index.ts` (AnswerQuestionJobInput/Output contract)
 - Modify: `apps/api/src/features/ask/service.ts`
 - Modify: `apps/api/src/features/ask/routes.ts`
 - Modify: `apps/api/src/features/ask/service.test.ts`
+- Create: `apps/api/src/features/retrieve/routes.ts` (+ `service.ts`, `service.test.ts`)
+- Modify: `apps/api/src/app.ts`
+- Modify: `apps/api/src/features/jobs/service.ts` (completion records flowId + retrievedSectionIds)
 - Modify: `apps/api/src/features/proposals/service.ts`
 - Modify: `apps/api/src/features/proposals/routes.ts`
 - Modify: `apps/api/src/features/proposals/service.test.ts`
@@ -542,11 +580,14 @@ Expected: FAIL on current Direct behavior.
 Delete `draftMarkdownProposalDirect`, `createMockMarkdownProposal`, and `crunchKnowledgeBaseDirect`. `ask`, `draftFromGaps`, and `triggerCrunchRun` always call `ctx.jobs.create` with the selected `AI_PROVIDER` embedded in input. Every route returns `202` with links to `/api/jobs/:id`, `/wait`, and `/cancel`.
 
 ```ts
+// Per the design amendment: no API-side routing or retrieval. Pass the routing
+// candidate flows; the watcher routes, calls POST /api/retrieve for scoped sections,
+// then answers. See the amendment block at the top of Task 6.
 const job = await ctx.jobs.create("answer_question", {
   questionLogId: log.id,
   question,
-  context: sections.map(({ section }) => ({
-    sectionId: section.id, path: section.path, heading: section.heading, content: section.content
+  flows: ctx.knowledgeConfig.flows.map((flow) => ({
+    id: flow.id, name: flow.name, ...(flow.persona ? { persona: flow.persona } : {})
   })),
   provider: ctx.config.get().aiProvider,
   expectedOutput: "answer_result"
