@@ -252,6 +252,39 @@ test("crunch completion is idempotent when delivered twice", async () => {
   assert.equal(repeated?.completedAt, first?.completedAt);
 });
 
+test("publish_crunch completion records publication on the run and is idempotent when delivered twice", async () => {
+  const ctx = makeTestContext();
+  const run = await ctx.stores.crunchRuns.createRun({
+    trigger: "manual", documentCount: 1, status: "running"
+  });
+  await ctx.stores.crunchRuns.completeRun(run.id, { summary: "s", operations: [], rationale: "r" });
+
+  const job = await ctx.jobs.create("publish_crunch", { runId: run.id });
+
+  const output = {
+    runId: run.id,
+    branchName: "magpie/crunch-abc",
+    commitSha: "deadbeef",
+    remoteUrl: "https://github.com/o/r.git",
+    publishedAt: new Date().toISOString()
+  };
+
+  assert.equal((await completeJob(ctx, job.id, output)).ok, true);
+
+  const published = await ctx.stores.crunchRuns.getRun(run.id);
+  assert.ok(published);
+  assert.equal(published.status, "published");
+  assert.equal(published.publication?.branchName, output.branchName);
+  assert.equal(published.publication?.commitSha, output.commitSha);
+  assert.equal(published.publication?.remoteUrl, output.remoteUrl);
+  assert.equal(published.publication?.publishedAt, output.publishedAt);
+
+  // Re-completing the same job must not change the recorded publication.
+  assert.equal((await completeJob(ctx, job.id, output)).ok, true);
+  const repeated = await ctx.stores.crunchRuns.getRun(run.id);
+  assert.equal(repeated?.publication?.publishedAt, output.publishedAt);
+});
+
 test("retryable crunch failure does not fail the linked run", async () => {
   const ctx = makeTestContext();
   const job = await ctx.jobs.create("crunch_knowledge_base", {

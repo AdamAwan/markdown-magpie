@@ -465,9 +465,14 @@ function useConsoleController() {
     setLoading(true);
     clearMessage();
     try {
-      const result = await apiPost<{ run: CrunchRun }>(`/crunch/runs/${runId}/publish`, {});
-      setCrunchRuns((current) => current.map((run) => (run.id === runId ? result.run : run)));
-      showMessage(`Published ${result.run.publication?.branchName ?? "crunch branch"}.`, "success");
+      // Publishing now enqueues a publish_crunch job. The watcher executes the
+      // git and records the publication back onto the run, which a later refresh
+      // picks up.
+      const result = await apiPost<{ job?: AiJob }>(`/crunch/runs/${runId}/publish`, {});
+      openSection("jobs");
+      if (result.job) {
+        showMessage(`${formatJobType(result.job.type)} queued. We will update this page when it finishes.`, "info");
+      }
       await refresh({ preserveMessage: true });
     } catch (error) {
       showMessage(errorMessage(error), "danger");

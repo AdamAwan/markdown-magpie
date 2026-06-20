@@ -11,7 +11,6 @@ export interface CrunchRunInput {
   trigger: CrunchRunTrigger;
   documentCount: number;
   jobId?: string;
-  // Direct-mode runs arrive already planned; queued runs start as "running".
   status: CrunchRun["status"];
   plan?: CrunchPlan;
   error?: string;
