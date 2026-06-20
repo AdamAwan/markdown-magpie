@@ -12,8 +12,6 @@ import type { JobView } from "@magpie/jobs";
 import { z } from "zod";
 import { publishProposalOutputSchema } from "@magpie/jobs";
 import { resolveProposalTargetPath } from "@magpie/core";
-
-type PublishProposalJobOutput = z.infer<typeof publishProposalOutputSchema>;
 import type { AppContext } from "../../context.js";
 import type { ProposalListOptions } from "../../stores/proposal-store.js";
 import {
@@ -27,6 +25,8 @@ import {
 import { collectSourceContext } from "../../platform/source-context.js";
 import { slugify } from "../../platform/paths.js";
 import { type AiProviderName } from "../../platform/providers.js";
+
+type PublishProposalJobOutput = z.infer<typeof publishProposalOutputSchema>;
 
 export async function list(ctx: AppContext, limit: number, options?: ProposalListOptions): Promise<Proposal[]> {
   return ctx.stores.proposals.list(limit, options);

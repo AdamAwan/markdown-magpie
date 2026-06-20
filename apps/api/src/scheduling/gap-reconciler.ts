@@ -472,7 +472,7 @@ async function drainPublicationOutbox(
       console.warn(`Publication action ${action.id} (${action.kind}) for proposal ${action.proposalId} failed: ${message}`);
     }
   }
-  console.log(`Gap reconciler [${flowLabel}]: publication outbox drained — ${done} done, ${failed} failed.`);
+  console.log(`Gap reconciler [${flowLabel}]: publication outbox drained — ${done} enqueued, ${failed} failed.`);
 }
 
 async function defaultPublish(ctx: AppContext, proposal: Proposal): Promise<void> {

@@ -280,6 +280,32 @@ test("requestProposalPublication fails fast without enqueuing when no git reposi
   assert.equal((await ctx.jobs.list({})).jobs.length, 0);
 });
 
+test("requestProposalPublication fails fast with proposal_repository_not_git for a non-git repo", async () => {
+  const ctx = makeTestContext();
+  // Index a plain (non-git) directory so findRepositoryForProposal resolves a
+  // RepositoryRef whose git scope is "not-git" — the second validation branch.
+  const root = await mkdtemp(path.join(tmpdir(), "magpie-proposal-nongit-"));
+  await writeFile(path.join(root, "README.md"), "# plain\n", "utf8");
+  await ctx.stores.knowledgeIndex.indexLocalRepository({ localPath: root, repositoryId: "plain-repo", name: "plain-repo" });
+
+  const proposal = await ctx.stores.proposals.create({
+    title: "Configure X",
+    targetPath: "configure-x.md",
+    markdown: "# Configure X\nbody",
+    rationale: "r",
+    evidence: []
+  });
+  await ctx.stores.proposals.updateStatus(proposal.id, "ready");
+  const ready = await ctx.stores.proposals.get(proposal.id);
+  assert.ok(ready);
+
+  const outcome = await proposals.requestProposalPublication(ctx, ready);
+  assert.equal(outcome.ok, false);
+  if (outcome.ok) throw new Error("unreachable");
+  assert.equal(outcome.code, "proposal_repository_not_git");
+  assert.equal((await ctx.jobs.list({})).jobs.length, 0);
+});
+
 test("getProposalExecutionContext returns the proposal plus repo config and never secrets", async () => {
   const ctx = makeTestContext();
   await seedGitRepository(ctx);
