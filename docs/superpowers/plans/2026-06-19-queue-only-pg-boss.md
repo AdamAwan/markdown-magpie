@@ -21,13 +21,16 @@ _Updated 2026-06-20. Checkout: repository root. Branch: `feat/queue-only-pg-boss
 - **Task 3 — complete.** `PgBossJobBroker`, public queue/schedule APIs, fair capability claims, durable lifecycle projection, mandatory Postgres composition, and graceful broker startup/shutdown (commit `ee9ccc8`). Real Postgres gate: 174/174 API tests; root typecheck and focused lint clean.
 - **Task 4 — complete.** `/api/jobs` now exposes capability-filtered claim, heartbeat, bounded wait, structured failure, cancel/retry, schedules, catalog-validated completion, filtered pagination, and non-mutating redacted projections (commit `eb6af52`). 38/38 API test files pass; root typecheck and focused lint clean.
 - **Task 5 — complete.** Repeated answer, proposal, and crunch completion now converges by job ID; proposal uniqueness is enforced by migration `0022`, queue output records `{ result, executor }`, and retryable crunch failures leave runs active (commit `b63d5cd`). 174 tests pass, migration and root typecheck clean; real Postgres proposal-store suite 6/6.
-- **Task 6 — IN PROGRESS.** Convert ask, proposal drafting/publication, crunch planning/publication, and gap clustering to enqueue-only behavior with no API-side generative or Git execution. Decomposed into sub-tasks 6A–6E; see the design amendment at the head of Task 6 (routing+retrieval moved to the watcher with a new `POST /api/retrieve` callback).
+- **Task 6 — COMPLETE (request-path scope).** Ask, proposal drafting/publication, and crunch planning/publication are enqueue-only with no API-side generative or Git execution. Gap clustering (6D) was obsolete and skipped; chat-provider removal (6E) reassigned to Task 8 (only remaining chat callers are background scheduled tasks). Decomposed into sub-tasks 6A–6E; see the design amendment at the head of Task 6 (routing+retrieval moved to the watcher with a new `POST /api/retrieve` callback).
   - **6A — complete** (commits `f599658`, `e8cf4b8`). `answer_question` contract changed (input `context`→`flows`, output gains `flowId`); `ask()` is enqueue-only; new pure `POST /api/retrieve`; completion records `flowId`+`retrievedSectionIds`. Spec review ✅; code-quality review fixups applied (unknown `flowId`→422; inert-persona note). 180/180 API tests, jobs+prompts green, typecheck clean. Minimal transitional `TODO(Task 7)` stubs left in `apps/watcher/src/{job-prompts,main}.ts` and `packages/prompts/src/build.ts` (watcher mock answerer emits no citations until Task 7 wires the retrieve callback).
   - **Deferred to Task 11:** `ask()` passes the configured provider through unmapped, so `aiProvider: "mock"` now fails `answer_question` schema validation (mock isn't a job provider). Resolved when Task 11 removes `mock` and makes a real provider mandatory. Do NOT re-add the `mock→openai-compatible` mapping.
   - **Deferred to Task 10:** `apps/web/src/components/ConsoleProvider.tsx` still reads the removed `answer.mode`/`answer.result` fields (optional-chaining-safe, but its ask polling branch no longer fires). Task 10's web rewrite must switch it to rely on `answer.job`.
   - **6B — complete** (commits `3a242f2`, `3d64861`). Proposal drafting enqueue-only; publication converted to a `publish_proposal` job with fail-fast 404/409 pre-flight; `publish_proposal` completion handler records publication idempotently; new `GET /api/proposals/:id/execution-context` (no credentials). Git execution removed from the API; pure branch-name/PR-body helpers kept exported for Task 7. Spec review ✅; code-quality ✅ (Approve) with three minor fixups applied. Necessary behaviour-preserving cascades: `gaps/service.ts` (dead direct-branch removed), `gap-reconciler.ts` `defaultPublish` (sync→enqueue), web `ConsoleProvider.tsx` publish handler (reads `{ job }`). 188/188 API tests, typecheck clean.
   - **6C — complete** (commit `32c9dda` + fixups). Crunch planning enqueue-only (direct/`ctx.background` path deleted, `ctx.background` itself kept); publication converted to a `publish_crunch` job with fail-fast 404/409 pre-flight (incl. crunch-specific `crunch_run_empty_plan`); `publish_crunch` completion handler records publication idempotently (no PR for crunch); new `GET /api/crunch/runs/:id/execution-context` (no credentials). Spec review ✅; code-quality ✅ (Approve) with the empty-plan no-enqueue test added + stale-comment fixups. Minimal web `ConsoleProvider.tsx` publish cascade. 198/198 API tests, typecheck clean.
-  - **6D (gaps clustering), 6E (remove `ctx.providers.chat`) — not started.**
+  - **6D (gaps clustering) — SKIPPED (scope correction).** The plan's "remove synchronous AI clustering from GET paths / `POST /api/gaps/clusters`" targets an architecture that no longer exists: the gaps feature (`listCandidates`/`listClusters`) is pure reads, and clustering is maintained by the background `gap-reconciler`. Nothing calls a gaps clustering endpoint today; Task 8's `process_gaps_to_pull_requests` introduces `cluster_gap_candidates` where it is actually used. No endpoint added now.
+  - **6E (remove `ctx.providers.chat`) — DEFERRED to Task 8.** After ask/proposals/crunch, the only remaining API generative-chat callers are **background scheduled tasks**, not request paths: `gap-reconciler` `proposeReshape`/`criticConfirm` (registered at `scheduling/task-registry.ts:40`) and `source-sync` `generateSyncPlan` (`task-registry.ts:50`), both run by `TaskScheduler`. They leave the API process when scheduled work moves to watchers in **Task 8** (which deletes `task-scheduler.ts`/`crunch-scheduler.ts`). `ctx.providers.chat` is removed at the end of Task 8, once these are converted. (Confirmed with Adam 2026-06-21: these are the "long-lived work" already on the path out of the API.)
+
+**Task 6 verdict: COMPLETE for its request-path scope (ask, proposals, crunch all enqueue-only).** Gap clustering was obsolete (skipped); chat-provider removal reassigned to Task 8.
 
 ---
 
@@ -716,6 +719,16 @@ git commit -m "refactor(watcher): add capability-based job runners"
 ```
 
 ### Task 8: Move scheduled work to pg-boss jobs
+
+> **Scope note (added 2026-06-21):** Task 8 also inherits Task 6's deferred 6E. The
+> remaining API generative-chat callers are scheduled background tasks — `gap-reconciler`
+> `proposeReshape`/`criticConfirm` and `source-sync` `generateSyncPlan` (both in
+> `scheduling/task-registry.ts`). Task 8 must convert these to the queue/watcher model (their
+> chat work runs on watchers, not the API), and **only then delete `ctx.providers.chat` +
+> `createConfiguredChatProvider`** from API composition (keep the embedding provider). Note
+> `source_change_sync` is not yet a registered job type and the reconciler reshape/critic does
+> not map onto `cluster_gap_candidates`; design the needed contracts here (a brainstorm pass is
+> warranted before implementing).
 
 **Files:**
 - Create: `apps/api/src/jobs/schedule-reconciler.ts`
