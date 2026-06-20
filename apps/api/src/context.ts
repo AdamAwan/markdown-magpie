@@ -31,7 +31,7 @@ import {
 } from "./stores/knowledge-repositories.js";
 import { checkoutRoot, syncConfiguredGitCheckouts, type RepositoryDeps } from "./platform/repositories.js";
 import type { JobBroker } from "./jobs/broker.js";
-import { FakeJobBroker } from "./jobs/fake-broker.js";
+import { PgBossJobBroker } from "./jobs/pg-boss-broker.js";
 import { backfillGapClusters } from "./scheduling/gap-backfill.js";
 
 export interface AppContext {
@@ -67,8 +67,9 @@ export interface AppContext {
 }
 
 export async function createAppContext(): Promise<AppContext> {
+  const databaseUrl = requireDatabaseUrl();
   const knowledgeStore =
-    storeBackend("KNOWLEDGE_STORE") === "postgres" ? new PostgresKnowledgeStore(requireDatabaseUrl()) : undefined;
+    storeBackend("KNOWLEDGE_STORE") === "postgres" ? new PostgresKnowledgeStore(databaseUrl) : undefined;
   const embedding = knowledgeStore ? createConfiguredEmbeddingProvider() : undefined;
   const knowledgeIndex = knowledgeStore
     ? new InMemoryKnowledgeIndex(
@@ -92,8 +93,7 @@ export async function createAppContext(): Promise<AppContext> {
   const embedder = new BackgroundEmbedder(knowledgeStore, embedding);
   const background = new BackgroundRunner();
 
-  // TODO(Task 3): replace with PgBossJobBroker (mandatory Postgres)
-  const jobs: JobBroker = new FakeJobBroker();
+  const jobs: JobBroker = new PgBossJobBroker({ connectionString: databaseUrl });
 
   const ctx: AppContext = {
     stores: {

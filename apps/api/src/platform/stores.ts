@@ -53,7 +53,7 @@ function createStore<T>(name: StoreEnvName, postgres: (databaseUrl: string) => T
 export function requireDatabaseUrl(): string {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
-    throw new Error("DATABASE_URL is required when KNOWLEDGE_STORE=postgres");
+    throw new Error("DATABASE_URL is required for durable job execution");
   }
   return databaseUrl;
 }
