@@ -29,7 +29,10 @@ export function retrieveRoutes(ctx: AppContext): Hono {
         ...(flowId ? { flowId } : {}),
         ...(limit ? { limit } : {})
       });
-      return c.json(result);
+      if (!result.ok) {
+        return c.json({ error: result.code }, 422);
+      }
+      return c.json({ sections: result.sections });
     }
   );
 

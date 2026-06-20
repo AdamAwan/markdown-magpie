@@ -336,6 +336,9 @@ export interface AnswerQuestionJobInput {
   flows: Array<{
     id: string;
     name: string;
+    // NOTE: persona is plumbed through but currently inert — Task 7's answer
+    // runner will apply the chosen flow's persona to the prompt. Until then it
+    // is carried but not consumed.
     persona?: string;
   }>;
   expectedOutput: "answer_result";
