@@ -5,8 +5,83 @@ import type {
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput
 } from "@magpie/core";
+import type { JobView } from "@magpie/jobs";
 import { makeTestContext } from "../../test-support/context.js";
-import { completeJob } from "./service.js";
+import {
+  cancelJob,
+  claimJob,
+  completeJob,
+  failJob,
+  getJob,
+  heartbeatJob,
+  listJobs,
+  projectJob,
+  retryJob,
+  waitForJob
+} from "./service.js";
+
+const answerInput = (provider: "codex" | "openai-compatible" = "codex") => ({
+  provider,
+  question: "How?",
+  context: [],
+  expectedOutput: "answer_result" as const
+});
+
+test("job services filter lists and isolate claims by capability", async () => {
+  const ctx = makeTestContext();
+  const codex = await ctx.jobs.create("answer_question", answerInput());
+  await ctx.jobs.create("answer_question", answerInput("openai-compatible"));
+
+  const listed = await listJobs(ctx, { type: "answer_question", state: "created", limit: 1 });
+  assert.equal(listed.total, 2);
+  assert.equal(listed.jobs.length, 1);
+  assert.equal((await claimJob(ctx, "codex-worker", ["codex"]))?.id, codex.id);
+  assert.equal(await claimJob(ctx, "codex-worker", ["codex"]), undefined);
+});
+
+test("heartbeat, cancellation, and failed-only retry expose lifecycle state", async () => {
+  const ctx = makeTestContext();
+  const created = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+  assert.equal((await heartbeatJob(ctx, created.id)).state, "active");
+  assert.equal((await cancelJob(ctx, created.id)).state, "cancelled");
+  assert.equal((await heartbeatJob(ctx, created.id)).state, "cancelled");
+  await assert.rejects(() => retryJob(ctx, created.id), /only "?failed/i);
+
+  const failed = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+  for (let attempt = 0; attempt <= failed.retryLimit; attempt += 1) {
+    await failJob(ctx, failed.id, { code: "provider", message: "failed", category: "provider" });
+  }
+  assert.equal((await retryJob(ctx, failed.id)).state, "created");
+});
+
+test("wait returns current jobs on timeout and terminal jobs immediately", async () => {
+  const ctx = makeTestContext();
+  const created = await ctx.jobs.create("answer_question", answerInput());
+  const pending = await waitForJob(ctx, created.id, { timeoutMs: 10, pollMs: 1 });
+  assert.equal(pending.terminal, false);
+  assert.equal(pending.job.state, "created");
+  await ctx.jobs.cancel(created.id);
+  const terminal = await waitForJob(ctx, created.id, { timeoutMs: 10, pollMs: 1 });
+  assert.equal(terminal.terminal, true);
+  assert.equal(terminal.job.state, "cancelled");
+});
+
+test("display projection recursively redacts secrets without mutating stored input", () => {
+  const input = { apiKey: "a", nested: [{ token: "b", authorization: "c" }], password: "d", safe: "ok" };
+  const job: JobView = {
+    id: "job", type: "refresh_pull_requests", queueName: "refresh_pull_requests", deadLetter: false,
+    state: "created", input, retryCount: 0, retryLimit: 1, expireInSeconds: 60,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+  };
+  const projected = projectJob(job);
+  assert.deepEqual(projected.input, {
+    apiKey: "[redacted]", nested: [{ token: "[redacted]", authorization: "[redacted]" }],
+    password: "[redacted]", safe: "ok"
+  });
+  assert.equal(input.apiKey, "a");
+});
 
 test("completeJob on a draft_markdown_proposal job creates a proposal", async () => {
   const ctx = makeTestContext();
@@ -77,4 +152,20 @@ test("completeJob with an unknown job id returns the job_not_found sentinel", as
   const result = await completeJob(ctx, "bogus", undefined);
 
   assert.deepEqual(result, { ok: false, code: "job_not_found" });
+});
+
+test("completeJob validates catalog output and rejects completion after cancellation", async () => {
+  const ctx = makeTestContext();
+  const invalid = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+  const invalidResult = await completeJob(ctx, invalid.id, { answer: "missing contract fields" });
+  assert.deepEqual(invalidResult, { ok: false, code: "invalid_output" });
+  assert.equal((await getJob(ctx, invalid.id))?.state, "retry");
+
+  const cancelled = await ctx.jobs.create("answer_question", answerInput());
+  await cancelJob(ctx, cancelled.id);
+  const cancelledResult = await completeJob(ctx, cancelled.id, {
+    answer: "no", confidence: "high", citations: []
+  });
+  assert.deepEqual(cancelledResult, { ok: false, code: "job_cancelled" });
 });

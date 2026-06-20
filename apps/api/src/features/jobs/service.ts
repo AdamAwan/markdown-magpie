@@ -3,8 +3,9 @@ import type {
   AnswerQuestionJobOutput
 } from "@magpie/core";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
-import { isJobType } from "@magpie/jobs";
+import { jobDefinition } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
+import type { JobListFilters } from "../../jobs/broker.js";
 import * as proposalsService from "../proposals/service.js";
 import * as crunchService from "../crunch/service.js";
 
@@ -22,12 +23,42 @@ export async function claimJob(
 }
 
 export async function getJob(ctx: AppContext, id: string): Promise<JobView | undefined> {
-  return ctx.jobs.get(id);
+  const job = await ctx.jobs.get(id);
+  return job ? projectJob(job) : undefined;
 }
 
-export async function listJobs(ctx: AppContext): Promise<JobView[]> {
-  const result = await ctx.jobs.list({});
-  return result.jobs;
+export async function listJobs(ctx: AppContext, filters: JobListFilters = {}): Promise<{ jobs: JobView[]; total: number }> {
+  const result = await ctx.jobs.list(filters);
+  return { ...result, jobs: result.jobs.map(projectJob) };
+}
+
+export async function heartbeatJob(ctx: AppContext, id: string): Promise<JobView> {
+  return ctx.jobs.heartbeat(id);
+}
+
+export async function cancelJob(ctx: AppContext, id: string): Promise<JobView> {
+  return ctx.jobs.cancel(id);
+}
+
+export async function retryJob(ctx: AppContext, id: string): Promise<JobView> {
+  return ctx.jobs.retry(id);
+}
+
+export async function waitForJob(
+  ctx: AppContext,
+  id: string,
+  options: { timeoutMs?: number; pollMs?: number } = {}
+): Promise<{ terminal: boolean; job: JobView }> {
+  const timeoutMs = options.timeoutMs ?? parsePositiveInt(process.env.JOB_WAIT_TIMEOUT_MS, 25_000);
+  const pollMs = options.pollMs ?? parsePositiveInt(process.env.JOB_WAIT_POLL_MS, 250);
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const job = await ctx.jobs.get(id);
+    if (!job) throw new Error(`Job not found: ${id}`);
+    const terminal = isTerminal(job.state);
+    if (terminal || Date.now() >= deadline) return { terminal, job: projectJob(job) };
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
 }
 
 // THE COMPLETION DISPATCHER. Replicates the original handleCompleteJob logic:
@@ -43,25 +74,38 @@ export async function completeJob(
 ): Promise<
   | { ok: false; code: "job_not_found" }
   | { ok: false; code: "invalid_output" }
+  | { ok: false; code: "job_cancelled" }
   | { ok: true; job: JobView | undefined }
 > {
   const existingJob = await ctx.jobs.get(jobId);
   if (!existingJob) {
     return { ok: false, code: "job_not_found" };
   }
+  if (existingJob.state === "cancelled") return { ok: false, code: "job_cancelled" };
 
-  // Worker output is untrusted: it must be an object, and for job types that
-  // feed a downstream store (answers, proposals, crunch plans) it must match
-  // the expected shape. Otherwise we'd silently mark the job complete with
-  // garbage that the side-effect handlers quietly skip.
-  if (!isPlainObject(output) || !outputMatchesJobType(existingJob.type, output)) {
+  const parsed = jobDefinition(existingJob.type).outputSchema.safeParse(output);
+  if (!parsed.success) {
+    await ctx.jobs.fail(jobId, {
+      code: "invalid_output",
+      message: "Watcher output did not match the job contract",
+      category: "validation"
+    });
     return { ok: false, code: "invalid_output" };
   }
 
-  await ctx.jobs.complete(jobId, output);
-  await updateQuestionLogFromCompletedJob(ctx, existingJob, output);
-  await proposalsService.createProposalFromCompletedJob(ctx, existingJob, output);
-  await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, output);
+  try {
+    await updateQuestionLogFromCompletedJob(ctx, existingJob, parsed.data);
+    await proposalsService.createProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, parsed.data);
+    await ctx.jobs.complete(jobId, parsed.data);
+  } catch (error) {
+    await ctx.jobs.fail(jobId, {
+      code: "completion_failed",
+      message: "Job completion side effects failed",
+      category: "internal"
+    });
+    throw error;
+  }
   return { ok: true, job: await ctx.jobs.get(jobId) };
 }
 
@@ -92,102 +136,17 @@ async function updateQuestionLogFromCompletedJob(
 export async function failJob(
   ctx: AppContext,
   jobId: string,
-  errorMessage: string | undefined
+  jobError: JobError
 ): Promise<JobView | undefined> {
   const failingJob = await ctx.jobs.get(jobId);
-  const jobError: JobError = {
-    code: "watcher_failure",
-    message: errorMessage ?? "Unknown watcher failure",
-    category: "internal"
-  };
   await ctx.jobs.fail(jobId, jobError);
   if (failingJob?.type === "crunch_knowledge_base") {
     const run = await ctx.stores.crunchRuns.getRunByJobId(jobId);
     if (run) {
-      await ctx.stores.crunchRuns.failRun(run.id, errorMessage ?? "Crunch job failed");
+      await ctx.stores.crunchRuns.failRun(run.id, jobError.message);
     }
   }
   return ctx.jobs.get(jobId);
-}
-
-// isAiJobType kept for backwards compatibility with the claim route.
-// The claim route still reads acceptedTypes from the request body and translates
-// them to capabilities; this guard validates that the incoming values are known
-// job types before use.
-export { isJobType as isAiJobType };
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-// Validate completion output against the job type, reusing the same guards the
-// side-effect handlers rely on. Job types with no downstream consumer accept any
-// object payload.
-function outputMatchesJobType(type: JobType, output: Record<string, unknown>): boolean {
-  switch (type) {
-    case "answer_question":
-      return isAnswerQuestionJobOutput(output);
-    case "draft_markdown_proposal":
-      return proposalsService.isDraftMarkdownProposalJobOutput(output);
-    case "crunch_knowledge_base":
-      return crunchService.isCrunchPlan(output);
-    default:
-      return true;
-  }
-}
-
-// TODO(Task 4): capability-based claim contract — transitional bridge from
-// accepted job types to capabilities. For now, the claim route accepts
-// acceptedTypes and maps them by extracting their provider requirements from
-// the job body or defaulting to the "maintenance" capability. Because the
-// existing tests pass acceptedTypes as job type strings, we map them through
-// a simple heuristic: if it's a known AI provider job type, the caller must
-// be capable of any provider (we accept all AI provider capabilities). For
-// non-provider jobs, we map directly.
-export function jobTypesToCapabilities(acceptedTypes: JobType[]): JobCapability[] {
-  // All AI providers that could be needed — this is the broadest bridge.
-  // Task 4 will replace this with an explicit capability list from the request.
-  const allProviderCapabilities: JobCapability[] = ["openai-compatible", "azure-openai", "codex", "claude"];
-  const nonProviderCapabilities: JobCapability[] = ["github", "maintenance"];
-
-  const providerTypes = new Set<JobType>([
-    "answer_question",
-    "summarize_gap",
-    "draft_markdown_proposal",
-    "detect_contradiction",
-    "suggest_consolidation",
-    "crunch_knowledge_base",
-    "cluster_gap_candidates"
-  ]);
-  const githubTypes = new Set<JobType>([
-    "refresh_pull_requests",
-    "publish_proposal",
-    "publish_crunch"
-  ]);
-  const maintenanceTypes = new Set<JobType>([
-    "process_gaps_to_pull_requests",
-    "trigger_scheduled_crunch"
-  ]);
-
-  const capabilities = new Set<JobCapability>();
-  for (const type of acceptedTypes) {
-    if (providerTypes.has(type)) {
-      for (const cap of allProviderCapabilities) {
-        capabilities.add(cap);
-      }
-    } else if (githubTypes.has(type)) {
-      capabilities.add("github");
-    } else if (maintenanceTypes.has(type)) {
-      capabilities.add("maintenance");
-    } else {
-      // Unknown type: include all to avoid blocking claim
-      for (const cap of [...allProviderCapabilities, ...nonProviderCapabilities]) {
-        capabilities.add(cap);
-      }
-    }
-  }
-
-  return [...capabilities];
 }
 
 function isAnswerQuestionJobOutput(value: unknown): value is AnswerQuestionJobOutput {
@@ -204,4 +163,31 @@ function isAnswerQuestionJobOutput(value: unknown): value is AnswerQuestionJobOu
       candidate.confidence === "unknown") &&
     Array.isArray(candidate.citations)
   );
+}
+
+export function projectJob(job: JobView): JobView {
+  return {
+    ...job,
+    input: redactSecrets(job.input),
+    output: redactSecrets(job.output),
+    error: redactSecrets(job.error) as JobError | undefined
+  };
+}
+
+function redactSecrets(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactSecrets);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, nested]) => [
+    key,
+    /^(apiKey|token|authorization|password)$/i.test(key) ? "[redacted]" : redactSecrets(nested)
+  ]));
+}
+
+function isTerminal(state: JobView["state"]): boolean {
+  return state === "completed" || state === "failed" || state === "cancelled";
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }

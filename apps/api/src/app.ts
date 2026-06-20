@@ -56,7 +56,7 @@ export function buildApp(ctx: AppContext, options: ApiAuthOptions = {}): Hono {
   api.route("/proposals", proposalRoutes(ctx));
   api.route("/crunch", crunchRoutes(ctx));
   api.route("/scheduled-tasks", scheduledTaskRoutes(ctx));
-  api.route("/ai-jobs", jobRoutes(ctx));
+  api.route("/jobs", jobRoutes(ctx));
   api.route("/prompts", promptRoutes(ctx));
   api.route("/snapshots", snapshotRoutes(ctx));
   api.route("/reconciliations", reconciliationRoutes(ctx));
