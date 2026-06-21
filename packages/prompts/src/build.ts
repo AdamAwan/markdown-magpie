@@ -18,10 +18,11 @@ import {
 export function buildJobPrompt(job: AiJob): string {
   if (job.type === "answer_question") {
     const input = job.input as AnswerQuestionJobInput;
-    // TODO(Task 7): the watcher now routes to a flow and retrieves context at run
-    // time (POST /api/retrieve) rather than reading it off the job input. Until
-    // that lands, the prompt carries the question and the routing candidates; the
-    // chosen flow's persona is applied by the watcher once routing exists.
+    // NOTE(Task 7): the watcher no longer uses this builder for answer_question.
+    // It now does route -> retrieve -> answer itself (apps/watcher/src/runners/
+    // chat.ts), applying the routed flow's persona and deriving citations from the
+    // retrieved sections. This branch is retained only for the legacy AiJob-shaped
+    // prompt surface and is removed with AiJob in Task 11.
     return `${ANSWER_QUESTION.instructions}\n\nQuestion:\n${input.question}\n\nCandidate flows:\n${JSON.stringify(input.flows, null, 2)}`;
   }
 
