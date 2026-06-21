@@ -4,6 +4,7 @@ import { requireScopes } from "../../auth/middleware.js";
 import { normalizeAiExecutionMode, normalizeAiProvider } from "../../config-holder.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
+import { reconcileSchedules } from "../../jobs/schedule-reconciler.js";
 import * as configService from "./service.js";
 
 export function configRoutes(ctx: AppContext): Hono {
@@ -29,6 +30,9 @@ export function configRoutes(ctx: AppContext): Hono {
       throw new HttpError(400, "unsupported_ai_runtime_config", error);
     }
 
+    // Re-derive schedules from current settings. Harmless and idempotent here; it
+    // keeps the queue in sync if a config change ever influences scheduling.
+    await reconcileSchedules(ctx);
     return c.json(configService.getRuntimeConfig(ctx));
   });
 

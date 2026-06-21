@@ -290,8 +290,14 @@ export async function getRunExecutionContext(
 export async function settingsForResponse(ctx: AppContext) {
   const stored = await ctx.stores.crunchRuns.listSettings();
   const byFlow = new Map(stored.map((setting) => [setting.flowId ?? "", setting]));
-  const fallback = (flowId: string | undefined) =>
-    byFlow.get(flowId ?? "") ?? { flowId, enabled: false, cron: DEFAULT_CRUNCH_CRON };
+  // Next-run timing is owned by pg-boss now; join it in by the reconciler's
+  // stable per-flow schedule key (`flow:<flowId|default>`).
+  const schedules = await ctx.jobs.listSchedules();
+  const nextRunByKey = new Map(schedules.map((schedule) => [schedule.key, schedule.nextRunAt]));
+  const fallback = (flowId: string | undefined) => {
+    const setting = byFlow.get(flowId ?? "") ?? { flowId, enabled: false, cron: DEFAULT_CRUNCH_CRON };
+    return { ...setting, nextRunAt: nextRunByKey.get(`flow:${flowId ?? "default"}`) };
+  };
 
   if (ctx.knowledgeConfig.flows.length > 0) {
     return ctx.knowledgeConfig.flows.map((flow) => fallback(flow.id));

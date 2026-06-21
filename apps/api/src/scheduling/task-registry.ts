@@ -1,17 +1,23 @@
 import type { ScheduledTaskSettings } from "@magpie/core";
+import type { JobType } from "@magpie/jobs";
 import type { AppContext } from "../context.js";
 import * as snapshotService from "../features/snapshots/service.js";
 import * as sourceSyncService from "../features/source-sync/service.js";
 import { reconcileGaps } from "./gap-reconciler.js";
 
 // A concrete, schedulable side-process. Each one is a single flow's instance of a
-// template below: it has its own key, schedule, and run-lock, so the UI and the
-// scheduler treat per-flow jobs as independent units.
+// template below: it has its own key, schedule, and queued job, so the UI and the
+// schedule reconciler treat per-flow tasks as independent units. `jobType`/`input`
+// are the queue contract the reconciler maps the saved schedule onto; `run` is the
+// in-process handler still used by the manual "Run now" route until 8E moves it
+// onto the queue.
 export interface ScheduledTaskDefinition {
   key: string;
   label: string;
   description: string;
   defaultCron: string;
+  jobType: JobType;
+  input: unknown;
   run(ctx: AppContext): Promise<void>;
 }
 
@@ -26,6 +32,11 @@ interface FlowTaskTemplate {
   label(flowName: string): string;
   description: string;
   defaultCron: string;
+  // The queued job this task reconciles to, and how to build that job's input
+  // from the task's flow. The job input schemas are the source of truth: the
+  // gaps and snapshot jobs take no input today (`{}`), source sync takes `{flowId}`.
+  jobType: JobType;
+  input(flowId: string | undefined): unknown;
   run(ctx: AppContext, flowId: string | undefined): Promise<void>;
 }
 
@@ -37,6 +48,8 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
       "Reconciles this flow's knowledge gaps into clusters and proposals, detects merged/closed pull requests " +
       "raised from its proposals, and publishes its open proposals. Requires GITHUB_TOKEN for PR operations.",
     defaultCron: "*/10 * * * *",
+    jobType: "process_gaps_to_pull_requests",
+    input: () => ({}),
     run: (ctx, flowId) => reconcileGaps(ctx, flowId)
   },
   {
@@ -47,6 +60,8 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
       "already describes the affected behaviour (e.g. a threshold or date that moved), the document is rewritten " +
       "to match and the result lands on a review branch. Only documents the knowledge base already covers are touched.",
     defaultCron: "*/10 * * * *",
+    jobType: "source_change_sync",
+    input: (flowId) => ({ flowId }),
     run: (ctx, flowId) => syncSourceChangesForFlow(ctx, flowId)
   },
   {
@@ -57,6 +72,8 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
       "reconciler reads. PR polling happens here, on this job's own cadence, instead of during reconciliation — so " +
       "the reconciler stops calling the git host live. Runs more often than the reconciler by default.",
     defaultCron: "*/5 * * * *",
+    jobType: "refresh_pull_requests",
+    input: () => ({}),
     run: (ctx, flowId) => snapshotService.refreshSnapshot(ctx, flowId).then(() => undefined)
   }
 ];
@@ -90,6 +107,8 @@ export function listScheduledTasks(ctx: AppContext): ScheduledTaskDefinition[] {
       label: template.label(flow.name),
       description: template.description,
       defaultCron: template.defaultCron,
+      jobType: template.jobType,
+      input: template.input(flow.id),
       run: (ctx: AppContext) => template.run(ctx, flow.id)
     }))
   );
@@ -105,19 +124,35 @@ function defaultScheduledTaskSettings(task: ScheduledTaskDefinition): ScheduledT
   return { key: task.key, enabled: false, cron: task.defaultCron };
 }
 
+// The schedule control's settings as the UI consumes them: the saved/default
+// enabled+cron, plus the next-run time sourced from pg-boss (not stored here).
+type ScheduledTaskResponseSettings = ScheduledTaskSettings & { nextRunAt?: string };
+
 // One row per concrete (per-flow) task, merging in any saved schedule so the UI
-// can render a control even before the schedule has been saved once.
+// can render a control even before the schedule has been saved once. Next-run
+// timing is read from the queue (pg-boss) and joined by the stable schedule key.
 export async function scheduledTasksForResponse(ctx: AppContext): Promise<
-  Array<{ key: string; label: string; description: string; settings: ScheduledTaskSettings }>
+  Array<{ key: string; label: string; description: string; settings: ScheduledTaskResponseSettings }>
 > {
   const stored = await ctx.stores.scheduledTasks.listSettings();
   const byKey = new Map(stored.map((setting) => [setting.key, setting]));
-  return listScheduledTasks(ctx).map((task) => ({
-    key: task.key,
-    label: task.label,
-    description: task.description,
-    settings: byKey.get(task.key) ?? defaultScheduledTaskSettings(task)
-  }));
+  const schedules = await ctx.jobs.listSchedules();
+  const nextRunByKey = new Map(schedules.map((schedule) => [schedule.key, schedule.nextRunAt]));
+  return listScheduledTasks(ctx).map((task) => {
+    const settings = byKey.get(task.key) ?? defaultScheduledTaskSettings(task);
+    return {
+      key: task.key,
+      label: task.label,
+      description: task.description,
+      settings: { ...settings, nextRunAt: nextRunByKey.get(scheduleKeyForTask(task.key)) }
+    };
+  });
+}
+
+// The pg-boss schedule key the reconciler uses for a task. Must stay in step with
+// `taskScheduleKey` in jobs/schedule-reconciler.ts.
+function scheduleKeyForTask(taskKey: string): string {
+  return `task:${taskKey}`;
 }
 
 // Runs the source-change sync for a single flow. Per-flow error isolation is now

@@ -9,6 +9,7 @@ import {
   type JobType,
   type JobView
 } from "@magpie/jobs";
+import { CronExpressionParser } from "cron-parser";
 import type { DesiredSchedule, JobBroker, JobListFilters, ScheduleView } from "./broker.js";
 
 // Test-only in-memory implementation of JobBroker. Backed by an insertion-ordered
@@ -193,13 +194,14 @@ export class FakeJobBroker implements JobBroker {
 
   async reconcileSchedules(desired: DesiredSchedule[]): Promise<void> {
     for (const schedule of desired) {
-      const existing = this.schedules.get(schedule.key);
       this.schedules.set(schedule.key, {
         key: schedule.key,
         type: schedule.type,
         cron: schedule.cron,
         enabled: schedule.enabled,
-        nextRunAt: existing?.nextRunAt
+        // Mirror the real broker: an enabled schedule exposes its next fire time
+        // (derived from the cron); a disabled one has none.
+        nextRunAt: schedule.enabled ? nextRunFor(schedule.cron) : undefined
       });
     }
   }
@@ -214,5 +216,15 @@ export class FakeJobBroker implements JobBroker {
       throw new Error(`Job not found: ${id}`);
     }
     return job;
+  }
+}
+
+// The next fire time for a cron in UTC, as an ISO string, or undefined when the
+// expression cannot be parsed. UTC matches the real broker's default timezone.
+function nextRunFor(cron: string): string | undefined {
+  try {
+    return CronExpressionParser.parse(cron, { tz: "UTC" }).next().toISOString() ?? undefined;
+  } catch {
+    return undefined;
   }
 }

@@ -5,6 +5,7 @@ import { requireScopes } from "../../auth/middleware.js";
 import { apiLink, parseLimit } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
+import { reconcileSchedules } from "../../jobs/schedule-reconciler.js";
 import * as crunchService from "./service.js";
 import { crunchSettingsBodySchema } from "./schema.js";
 
@@ -54,6 +55,8 @@ export function crunchRoutes(ctx: AppContext): Hono {
         enabled: Boolean(enabled),
         cron
       });
+      // Push the saved schedule into pg-boss so the change takes effect without a restart.
+      await reconcileSchedules(ctx);
       return c.json({ settings: await crunchService.settingsForResponse(ctx) });
     }
   );

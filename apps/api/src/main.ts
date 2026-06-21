@@ -2,8 +2,7 @@ import { serve } from "@hono/node-server";
 import { createAppContext } from "./context.js";
 import { buildApp } from "./app.js";
 import * as configService from "./features/config/service.js";
-import { CrunchScheduler } from "./scheduling/crunch-scheduler.js";
-import { TaskScheduler } from "./scheduling/task-scheduler.js";
+import { reconcileSchedules } from "./jobs/schedule-reconciler.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
 
@@ -12,6 +11,9 @@ async function start(): Promise<void> {
   try {
     await ctx.jobs.start();
     await ctx.bootstrap();
+    // Reconcile saved product schedules into pg-boss now the broker is up. The
+    // queue, not an in-process timer, fires scheduled work from here on.
+    await reconcileSchedules(ctx);
   } catch (error) {
     console.error(
       `API startup failed: ${error instanceof Error ? error.message : "Unknown error"}`
@@ -24,8 +26,6 @@ async function start(): Promise<void> {
   const server = serve({ fetch: app.fetch, port }, () => {
     console.log(`Markdown Magpie API listening on http://localhost:${port}/api`);
     configService.logStartupConfig(ctx);
-    new CrunchScheduler(ctx).start();
-    new TaskScheduler(ctx).start();
   });
 
   // On a normal stop, stop accepting connections and give in-flight background

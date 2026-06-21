@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildMockCrunchPlan, isValidCron, nextCronTime } from "@magpie/core";
-import { InMemoryCrunchStore, nextRunFor } from "./stores/crunch-store.js";
+import { InMemoryCrunchStore } from "./stores/crunch-store.js";
 
 function largeMultiTopicDoc(): string {
   const section = (heading: string) =>
@@ -61,26 +61,16 @@ test("InMemoryCrunchStore.getRunByJobId returns the newest run sharing a job id 
   assert.equal(byJob?.id, newer.id);
 });
 
-test("InMemoryCrunchStore schedules a next run when enabled and clears it when disabled", async () => {
+test("InMemoryCrunchStore persists the enabled flag and cron; run timing is owned by pg-boss", async () => {
   const store = new InMemoryCrunchStore();
 
   const enabled = await store.updateSettings("cats", { enabled: true, cron: "0 2 * * *" });
   assert.equal(enabled.enabled, true);
   assert.equal(enabled.cron, "0 2 * * *");
-  assert.ok(enabled.nextRunAt, "enabled schedule should have a next run time");
 
   const disabled = await store.updateSettings("cats", { enabled: false, cron: "0 2 * * *" });
-  assert.equal(disabled.nextRunAt, undefined);
-});
-
-test("touchSchedule preserves the enabled flag", async () => {
-  const store = new InMemoryCrunchStore();
-  await store.updateSettings(undefined, { enabled: true, cron: "*/30 * * * *" });
-
-  const next = nextRunFor(true, "*/30 * * * *", new Date(0)) ?? "";
-  const touched = await store.touchSchedule(undefined, new Date(0).toISOString(), next);
-  assert.equal(touched.enabled, true);
-  assert.equal(touched.lastRunAt, new Date(0).toISOString());
+  assert.equal(disabled.enabled, false);
+  assert.equal(disabled.cron, "0 2 * * *");
 });
 
 test("nextCronTime resolves the next matching minute in local time", () => {

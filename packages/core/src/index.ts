@@ -526,11 +526,9 @@ export interface CrunchRun {
 export interface CrunchSettings {
   flowId?: string;
   enabled: boolean;
-  // Standard 5-field cron expression (minute hour day-of-month month day-of-week),
-  // evaluated in the API server's local time zone.
+  // Standard 5-field cron expression (minute hour day-of-month month day-of-week).
+  // Next-run timing is owned by pg-boss now, not derived/stored here.
   cron: string;
-  lastRunAt?: string;
-  nextRunAt?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -615,12 +613,6 @@ export interface ScheduledTaskSettings {
   key: string;
   enabled: boolean;
   cron: string;
-  lastRunAt?: string;
-  nextRunAt?: string;
-  // Set while a run (scheduled or manual) is in flight, and cleared when it
-  // finishes. The UI disables "Run now" while this is set, and both trigger
-  // paths refuse to start an overlapping run.
-  runningSince?: string;
 }
 
 // --- Cron scheduling -------------------------------------------------------

@@ -9,6 +9,7 @@ import {
   type JobView,
   type QueueDefinition
 } from "@magpie/jobs";
+import { CronExpressionParser } from "cron-parser";
 import { PgBoss, type ConstructorOptions, type JobWithMetadata } from "pg-boss";
 import type { DesiredSchedule, JobBroker, JobListFilters, ScheduleView } from "./broker.js";
 
@@ -203,7 +204,10 @@ export class PgBossJobBroker implements JobBroker {
       key: publicScheduleKey(schedule.key),
       type: schedule.data.type,
       cron: schedule.cron,
-      enabled: true
+      enabled: true,
+      // pg-boss does not surface a portable next-run timestamp, so derive it from
+      // the cron in the same timezone the schedule fires in.
+      nextRunAt: nextRunFor(schedule.cron, schedule.timezone)
     }] : []);
   }
 
@@ -301,6 +305,16 @@ function dateString(value: Date | null | undefined): string | undefined {
 
 function latestDate(...values: Array<Date | null | undefined>): Date {
   return new Date(Math.max(...values.filter((value): value is Date => value instanceof Date).map((value) => value.getTime())));
+}
+
+// The next fire time for a cron in the schedule's timezone, as an ISO string, or
+// undefined when the expression cannot be parsed.
+function nextRunFor(cron: string, timezone: string): string | undefined {
+  try {
+    return CronExpressionParser.parse(cron, { tz: timezone }).next().toISOString() ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 const SCHEDULE_KEY_PREFIX = "magpie_";

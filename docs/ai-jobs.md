@@ -151,9 +151,11 @@ In `direct` mode the API plans synchronously (the `mock` provider uses a
 deterministic size/fragmentation heuristic). In `queue` mode a job is enqueued
 and the watcher completes it, matching the rest of the job contract.
 
-A run is triggered manually (`POST /api/crunch/run`) or by the in-process
-scheduler. The scheduler is configured per flow via `POST /api/crunch/settings`
-(`{ flowId, enabled, intervalMinutes }`) and fires on an interval. Endpoints:
+A run is triggered manually (`POST /api/crunch/run`) or on a schedule. The
+schedule is configured per flow via `POST /api/crunch/settings`
+(`{ flowId, enabled, cron }`). The saved settings are reconciled into pg-boss
+schedules, which enqueue a `trigger_scheduled_crunch` job on the cron; the
+maintenance watcher runs it. Endpoints:
 
 - `GET /api/crunch/runs` — list recent runs and their plans.
 - `POST /api/crunch/run` — trigger a run now (`{ flowId }`).
@@ -163,8 +165,9 @@ scheduler. The scheduler is configured per flow via `POST /api/crunch/settings`
 
 Crunch state is stored in the `crunch_runs` and `crunch_settings` tables
 (`STORAGE_BACKEND=postgres`), with in-memory fallbacks for local development.
-The scheduler tick interval defaults to 60s and can be tuned with
-`CRUNCH_SCHEDULER_TICK_MS`.
+Run timing is owned by pg-boss (next-run is derived from the cron and surfaced
+on `GET /api/crunch/settings`), not tracked in the settings tables. Schedules
+fire in `JOB_SCHEDULE_TIMEZONE` (default `UTC`).
 
 ## Watcher Model
 

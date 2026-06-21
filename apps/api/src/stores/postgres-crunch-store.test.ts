@@ -145,26 +145,10 @@ describe("PostgresCrunchStore", { skip: databaseUrl ? false : "DATABASE_URL not 
     assert.equal(updated.flowId, flowId);
     assert.equal(updated.enabled, true);
     assert.equal(updated.cron, "0 0 * * *");
-    assert.ok(updated.nextRunAt);
 
     const fetched = await store.getSettings(flowId);
     assert.equal(fetched.enabled, true);
     assert.equal(fetched.cron, "0 0 * * *");
-  });
-
-  it("touches the schedule and updates last/next run times", async () => {
-    const flowId = `flow-${randomUUID()}`;
-    const lastRunAt = new Date().toISOString();
-    const nextRunAt = new Date(Date.now() + 86400000).toISOString();
-
-    const touched = await store.touchSchedule(flowId, lastRunAt, nextRunAt);
-    assert.equal(touched.flowId, flowId);
-    assert.equal(touched.lastRunAt, lastRunAt);
-    assert.equal(touched.nextRunAt, nextRunAt);
-
-    const fetched = await store.getSettings(flowId);
-    assert.equal(fetched.lastRunAt, lastRunAt);
-    assert.equal(fetched.nextRunAt, nextRunAt);
   });
 
   it("returns undefined when updating or fetching an unknown run id", async () => {
