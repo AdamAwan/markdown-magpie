@@ -12,7 +12,7 @@
 
 ## Execution Progress (resume marker)
 
-_Updated 2026-06-20. Checkout: repository root. Branch: `feat/queue-only-pg-boss` (pushed)._
+_Updated 2026-06-21. Checkout: repository root. Branch: `feat/queue-only-pg-boss` (pushed)._
 
 - **Task 1 — complete.** Durable job catalog in `@magpie/jobs` (commits `501bd96`..`bbfecc5`). 7/7 jobs tests pass.
 - **Task 2 — complete.** `JobBroker` boundary + test-only `FakeJobBroker`, `ctx.jobs` wired, `ctx.stores.aiJobs` removed, jobs feature migrated to `JobView` (commits `17c69a1`..`88c6db7`). Reviewed clean after fixing 2 Important findings (dropped `as never`/assertion casts). 87/87 API tests, root typecheck clean.
@@ -31,6 +31,10 @@ _Updated 2026-06-20. Checkout: repository root. Branch: `feat/queue-only-pg-boss
   - **6E (remove `ctx.providers.chat`) — DEFERRED to Task 8.** After ask/proposals/crunch, the only remaining API generative-chat callers are **background scheduled tasks**, not request paths: `gap-reconciler` `proposeReshape`/`criticConfirm` (registered at `scheduling/task-registry.ts:40`) and `source-sync` `generateSyncPlan` (`task-registry.ts:50`), both run by `TaskScheduler`. They leave the API process when scheduled work moves to watchers in **Task 8** (which deletes `task-scheduler.ts`/`crunch-scheduler.ts`). `ctx.providers.chat` is removed at the end of Task 8, once these are converted. (Confirmed with Adam 2026-06-21: these are the "long-lived work" already on the path out of the API.)
 
 **Task 6 verdict: COMPLETE for its request-path scope (ask, proposals, crunch all enqueue-only).** Gap clustering was obsolete (skipped); chat-provider removal reassigned to Task 8.
+
+- **Task 7 — complete** (commits `ada3205`..`f687399`). Watcher rewritten to the capability/runner model: `capabilities.ts` (env→capabilities, no `mock`), `http-client.ts` (`/api/jobs` claim/heartbeat/complete/fail + `/api/retrieve` + execution-context GETs, sends `executor`), `worker-loop.ts` (claim→dispatch→terminal, heartbeat at half catalog interval, `cancelled`-heartbeat aborts runner via `AbortSignal`, shutdown aborts in-flight), and runners (`chat` OpenAI+Azure with route→retrieve→answer and code-derived citations; `cli` SIGTERM→grace→SIGKILL; `publication` github-gated `publish_proposal`/`publish_crunch` via `@magpie/git`). `main.ts` reduced to composition (541→~75 lines); inline mock runner + provider switch deleted. Cross-package: `AbortSignal` threaded through `@magpie/core` `ChatRequest` + `@magpie/retrieval` (`AbortSignal.any`); `/api/retrieve` `RetrievedSection` extended with `documentId`+`anchor` (required by the citation schema). Spec review ✅; code-quality ✅ (Approve-with-fixes) — applied: single capability source via `deriveCapabilities` (removed `runners.map` divergence), faithful `normalizeRelativePath`, symmetric `publishProposalOutputSchema.parse`. 33/33 watcher tests, root typecheck clean.
+  - **Transitional:** `maintenance` is advertised (per Step-1 contract) but has no runner until **Task 8**; nothing enqueues maintenance jobs before then, and the worker loop fails an unsupported-type job safely. `TODO(Task 8)` left in `runners/index.ts`.
+  - **Note:** branch-name/PR-body/changeset helpers were reimplemented locally in `runners/publication.ts` (watcher can't import sibling `apps/api`), matched byte-for-byte to the API. The API's now-orphaned copies (`createProposalBranchName`, `crunchBranchName`, `buildPullRequestBody`) were already knip-dead at the branch baseline (orphaned by Task 6). A future cleanup could move the pure helpers into a shared package.
 
 ---
 
