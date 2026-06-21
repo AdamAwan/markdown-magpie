@@ -734,6 +734,53 @@ git commit -m "refactor(watcher): add capability-based job runners"
 > not map onto `cluster_gap_candidates`; design the needed contracts here (a brainstorm pass is
 > warranted before implementing).
 
+> **Design amendment (2026-06-21, brainstormed + confirmed by Adam).**
+> Three decisions settle the open contract/architecture questions:
+>
+> 1. **Reshape = one combined AI job `reconcile_gap_clusters`.** Input `{ clusters:[{id,flowId?,title}], flowId? }`;
+>    output `{ merges:[{clusterIds,rationale,confirmed}], splits:[{clusterId,children:[{gapIds}],rationale,confirmed}] }`.
+>    The watcher chat runner does propose (`GAP_RECONCILE_PROPOSE`) → critic (`GAP_RECONCILE_CRITIC`) per proposal
+>    internally and returns only critic-confirmed changes. (Not two separate job types; not critic-less.)
+> 2. **Source-sync split:** the API keeps the non-generative gather (git diff + candidate-doc selection — needs
+>    checkout + embeddings) behind an endpoint. New AI job `sync_source_changes_generate_plan`
+>    (in: `SourceChangeSyncJobInput`, out: `CrunchPlan` — both already in `@magpie/core`) runs the model on a
+>    watcher. A new `publish_source_sync` github job (in `{ runId }`) moves the run's git branch write to the
+>    watcher publication runner (mirrors `publish_crunch`, no PR).
+> 3. **Orchestration location = Option A (pragmatic), a documented deviation from spec line 179.** A schedule
+>    emits a per-flow orchestration job; the **maintenance watcher** claims it and POSTs **one thin API endpoint**
+>    that runs the existing (now-lightweight) orchestration server-side. The expensive/generative steps still leave
+>    the API as AI jobs; drafting/publishing already enqueue (Task 6). We do NOT decompose the whole reconciler loop
+>    into many watcher-driven endpoint calls (spec-faithful but a large, risky rewrite). Rationale: after Tasks 6/7
+>    the only blocking in-API work left in `reconcileGaps` is the reshape model call (now an AI job) — the remainder
+>    is cheap, store-coupled bookkeeping. The real goals (no timers; every run a visible/retryable claimed job;
+>    generative + git work on watchers) are met.
+>
+> **Concrete request paths:**
+> - **Gaps→PR:** schedule → per-flow `process_gaps_to_pull_requests` job → maintenance watcher → `POST /api/gaps/reconcile { flowId }`,
+>   which runs `reconcileGaps` server-side; `reconcileClusters` **enqueues + bounded-waits `reconcile_gap_clusters`** for
+>   the reshape instead of calling `ctx.providers.chat`, then applies confirmed merges/splits.
+> - **Source-sync:** schedule → per-flow `source_change_sync` job → maintenance watcher → thin run endpoint; API gathers,
+>   enqueues + waits `sync_source_changes_generate_plan`, records the run, enqueues `publish_source_sync`.
+> - **`refresh_pull_requests`** maintenance runner does the GitHub PR-state check watcher-side; completion handler applies
+>   merged/closed transitions idempotently. **`trigger_scheduled_crunch`** calls the crunch endpoint.
+> - Add `apps/watcher/src/runners/maintenance.ts` so the advertised `maintenance` capability gets a real runner
+>   (resolves Task 7's `TODO(Task 8)`).
+>
+> **Sub-tasks (each with two-stage review):**
+> - **8A** — add the four new job contracts + Zod schemas to `@magpie/jobs` (`reconcile_gap_clusters`,
+>   `sync_source_changes_generate_plan`, `source_change_sync`, `publish_source_sync`); catalog policies + capability routing.
+> - **8B** — `ScheduleReconciler` (+ test); wire at startup (after broker start) and after every settings change; remove
+>   `lastRunAt`/`nextRunAt`/`runningSince` + `touchSchedule`/`tryAcquireRun`/`releaseRun` from crunch + scheduled-task stores;
+>   display next-run from `ctx.jobs.listSchedules()`.
+> - **8C** — gaps: `reconcile_gap_clusters` chat runner; `reconcileClusters` enqueues+waits it (no chat provider);
+>   `POST /api/gaps/reconcile`; `process_gaps_to_pull_requests` maintenance runner.
+> - **8D** — source-sync: gather endpoint + `source_change_sync` orchestration + `sync_source_changes_generate_plan` AI job
+>   + `publish_source_sync` publication job/runner + execution-context endpoint.
+> - **8E** — maintenance runners `refresh_pull_requests` + `trigger_scheduled_crunch`; manual `POST /api/scheduled-tasks/:key/run`
+>   → job; delete `task-scheduler.ts` + `crunch-scheduler.ts` and their `main.ts` starts.
+> - **8F** — remove `ctx.providers.chat` + `createConfiguredChatProvider` (deferred 6E); keep the embedding provider; verify no
+>   API generative-chat callers remain.
+
 **Files:**
 - Create: `apps/api/src/jobs/schedule-reconciler.ts`
 - Create: `apps/api/src/jobs/schedule-reconciler.test.ts`
