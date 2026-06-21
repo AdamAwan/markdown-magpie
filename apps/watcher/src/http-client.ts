@@ -39,6 +39,10 @@ export interface WatcherApi extends WatcherApiClient {
   retrieve(question: string, flowId: string | undefined, limit: number | undefined): Promise<RetrievedSection[]>;
   proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext>;
   crunchExecutionContext(runId: string): Promise<CrunchExecutionContext>;
+  // Drives a flow's gap→PR reconciliation in the API (clustering, the reshape AI
+  // job the API bounded-waits on, drafting and publication enqueue). An absent
+  // flowId reconciles the default flow.
+  reconcileGaps(flowId: string | undefined, signal?: AbortSignal): Promise<{ ok: true }>;
 }
 
 export interface HttpClientOptions {
@@ -95,6 +99,11 @@ export class HttpWatcherApi implements WatcherApi {
     return sections;
   }
 
+  async reconcileGaps(flowId: string | undefined, signal?: AbortSignal): Promise<{ ok: true }> {
+    await this.post("/api/gaps/reconcile", { ...(flowId ? { flowId } : {}) }, signal);
+    return { ok: true };
+  }
+
   async proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext> {
     return this.get<ProposalExecutionContext>(`/api/proposals/${proposalId}/execution-context`);
   }
@@ -103,25 +112,29 @@ export class HttpWatcherApi implements WatcherApi {
     return this.get<CrunchExecutionContext>(`/api/crunch/runs/${runId}/execution-context`);
   }
 
-  private async post<TResponse>(path: string, body: unknown): Promise<TResponse> {
-    return this.request<TResponse>(path, { method: "POST", body: JSON.stringify(body) });
+  private async post<TResponse>(path: string, body: unknown, signal?: AbortSignal): Promise<TResponse> {
+    return this.request<TResponse>(path, { method: "POST", body: JSON.stringify(body) }, signal);
   }
 
   private async get<TResponse>(path: string): Promise<TResponse> {
     return this.request<TResponse>(path, { method: "GET" });
   }
 
-  private async request<TResponse>(path: string, init: RequestInit): Promise<TResponse> {
+  private async request<TResponse>(path: string, init: RequestInit, signal?: AbortSignal): Promise<TResponse> {
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (this.apiToken) {
       headers.authorization = `Bearer ${this.apiToken}`;
     }
+    // Abort on the request timeout, or sooner if the caller's signal (a job
+    // cancellation / watcher shutdown) fires first.
+    const timeout = AbortSignal.timeout(this.timeoutMs);
+    const combined = signal ? AbortSignal.any([timeout, signal]) : timeout;
     let response: Response;
     try {
       response = await fetch(`${this.base}${path}`, {
         ...init,
         headers,
-        signal: AbortSignal.timeout(this.timeoutMs)
+        signal: combined
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === "TimeoutError") {

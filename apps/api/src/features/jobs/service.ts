@@ -61,6 +61,28 @@ export async function waitForJob(
   }
 }
 
+// Creates a job and bounded-waits for it to reach a terminal state, returning the
+// terminal JobView (or the last view seen if the deadline elapses first — check
+// `.state` for whether it actually completed). Used by API flows that need an AI
+// step a watcher executes (e.g. the gap-cluster reshape): the heavy orchestration
+// stays in the API, but the only generative step is an enqueued job we wait on.
+// The default deadline is tied to the job's own expiry; pass `deadlineMs` (or set
+// JOB_RUN_TO_COMPLETION_TIMEOUT_MS) to shorten it, e.g. in tests.
+export async function runJobToCompletion(
+  ctx: AppContext,
+  type: JobType,
+  input: unknown,
+  options: { deadlineMs?: number; pollMs?: number } = {}
+): Promise<JobView> {
+  const job = await createJob(ctx, type, input);
+  const deadlineMs =
+    options.deadlineMs ??
+    parsePositiveInt(process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS, jobDefinition(type).policy.expireInSeconds * 1000);
+  const pollMs = options.pollMs ?? parsePositiveInt(process.env.JOB_WAIT_POLL_MS, 250);
+  const { job: terminal } = await waitForJob(ctx, job.id, { timeoutMs: deadlineMs, pollMs });
+  return terminal;
+}
+
 // THE COMPLETION DISPATCHER. Replicates the original handleCompleteJob logic:
 // look up the existing job (404 if missing), persist completion, then fan out to
 // the side-effect handlers in a fixed order — question log update, proposal

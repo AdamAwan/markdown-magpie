@@ -3,6 +3,7 @@ import { CAPABILITY_GATES } from "../capabilities.js";
 import type { WatcherApi } from "../http-client.js";
 import { ChatRunner } from "./chat.js";
 import { CliRunner, type PromptMode } from "./cli.js";
+import { MaintenanceRunner } from "./maintenance.js";
 import { createGitPublicationDeps, PublicationRunner } from "./publication.js";
 import type { JobRunner } from "./types.js";
 
@@ -83,11 +84,13 @@ export function createConfiguredRunners(env: NodeJS.ProcessEnv, api: WatcherApi)
     runners.push(new PublicationRunner(api, createGitPublicationDeps()));
   }
 
-  // TODO(Task 8): add the maintenance runner here. Maintenance jobs
-  // (refresh_pull_requests, process_gaps_to_pull_requests, trigger_scheduled_crunch)
-  // have no watcher-side runner yet — they are handled by the API's scheduler in
-  // this migration. The `maintenance` capability is still advertised (always ready,
-  // per the catalog contract) but no maintenance jobs are enqueued until Task 8.
+  if (ready("maintenance")) {
+    // Maintenance jobs do no generative or git work themselves; they POST thin API
+    // endpoints that own the orchestration. process_gaps_to_pull_requests is the
+    // first such job (8C); refresh_pull_requests / trigger_scheduled_crunch follow
+    // in later sub-tasks as their endpoints land.
+    runners.push(new MaintenanceRunner(api));
+  }
 
   return runners;
 }

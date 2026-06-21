@@ -68,6 +68,7 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     retrieve: async () => [],
     proposalExecutionContext: async () => PROPOSAL_CONTEXT,
     crunchExecutionContext: async () => CRUNCH_CONTEXT,
+    reconcileGaps: async () => ({ ok: true }),
     ...overrides
   };
 }

@@ -1,9 +1,19 @@
 import type { GapCandidate, PersistedGapCluster } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import { collectOpenPullRequestContext, draftFromGaps, type SourceContextCache } from "../proposals/service.js";
+import { reconcileGaps as runReconcileGaps } from "../../scheduling/gap-reconciler.js";
 
 export async function listCandidates(ctx: AppContext, limit: number): Promise<GapCandidate[]> {
   return ctx.stores.questionLogs.listGapCandidates(limit);
+}
+
+// Runs the full gap→PR reconciliation for one flow (clustering, the reshape AI job
+// the API bounded-waits on, drafting and publication enqueue). This is the thin
+// endpoint the maintenance watcher's process_gaps_to_pull_requests runner POSTs;
+// the heavy orchestration stays here in the API. An absent flowId reconciles the
+// default/un-routed flow.
+export async function reconcileFlow(ctx: AppContext, flowId: string | undefined): Promise<void> {
+  await runReconcileGaps(ctx, flowId);
 }
 
 // Fast read over the persisted clusters the reconciler maintains — no model call.

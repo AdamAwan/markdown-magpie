@@ -1,9 +1,33 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { JobType, JobView } from "@magpie/jobs";
+import { reconcileGapClustersOutputSchema } from "@magpie/jobs";
+import type { z } from "zod";
 import type { AppContext } from "../context.js";
 import { RuntimeConfigHolder } from "../config-holder.js";
+import { FakeJobBroker } from "../jobs/fake-broker.js";
 import { makeTestContext } from "../test-support/context.js";
 import { reconcileGaps } from "./gap-reconciler.js";
+
+type ReconcileOutput = z.infer<typeof reconcileGapClustersOutputSchema>;
+
+// A broker that immediately completes any reconcile_gap_clusters job with the
+// output the watcher's chat runner would have produced, so the reconciler's
+// enqueue+bounded-wait resolves to a terminal job in-process. Other job types
+// behave exactly like the FakeJobBroker (created, never completed).
+class ReshapingJobBroker extends FakeJobBroker {
+  constructor(private readonly buildOutput: (input: unknown) => ReconcileOutput) {
+    super();
+  }
+
+  override async create(type: JobType, input: unknown): Promise<JobView> {
+    const job = await super.create(type, input);
+    if (type === "reconcile_gap_clusters") {
+      return super.complete(job.id, this.buildOutput(job.input));
+    }
+    return job;
+  }
+}
 
 describe("reconcileGaps revision gate", () => {
   it("does no model work when the catalog revision is unchanged and no actions pending", async () => {
@@ -77,31 +101,24 @@ describe("reconcileGaps clustering", () => {
   });
 
   it("does not reshape when the critic rejects the proposed merge", async () => {
-    const ctx = makeTestContext();
-    // Seed two clusters each with a gap.
+    // The reshape AI job runs in the watcher now; the reconciler enqueues it and
+    // applies only confirmed changes. Here the job comes back with the merge
+    // unconfirmed (critic rejected it), so nothing is applied.
+    const jobs = new ReshapingJobBroker((input) => {
+      const clusterIds = (input as { clusters: Array<{ id: string }> }).clusters.map((c) => c.id);
+      return { merges: [{ clusterIds, rationale: "x", confirmed: false }], splits: [] };
+    });
+    const ctx = makeTestContext({
+      jobs,
+      config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
+    });
     await seedTwoClustersWithGaps(ctx);
-
-    let proposeCalls = 0;
-    let criticCalls = 0;
-    ctx.providers.chat = () =>
-      ({
-        complete: async (req: { system?: string }) => {
-          // The system prompt distinguishes the critic call from the propose call.
-          if ((req.system ?? "").includes("strict reviewer")) {
-            criticCalls += 1;
-            return { content: '{"confirmed":false,"rationale":"weak"}' };
-          }
-          proposeCalls += 1;
-          const [a, b] = (await ctx.stores.gapClusters.listActiveClusters()).map((c) => c.id);
-          return { content: `{"merges":[{"clusterIds":["${a}","${b}"],"rationale":"x"}],"splits":[]}` };
-        }
-      }) as never;
 
     const before = await ctx.stores.gapClusters.listActiveClusters();
     await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
     const after = await ctx.stores.gapClusters.listActiveClusters();
 
-    assert.ok(proposeCalls >= 1 && criticCalls >= 1, "propose then critic were called");
+    assert.equal((await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length, 1, "the reshape job was enqueued");
     assert.equal(after.length, before.length, "rejected merge left clusters unchanged");
 
     const decisions = await ctx.stores.reconciliations.list(50);
@@ -113,19 +130,15 @@ describe("reconcileGaps clustering", () => {
   });
 
   it("applies a critic-confirmed merge, keeping every gap exactly once", async () => {
-    const ctx = makeTestContext();
+    const jobs = new ReshapingJobBroker((input) => {
+      const clusterIds = (input as { clusters: Array<{ id: string }> }).clusters.map((c) => c.id);
+      return { merges: [{ clusterIds, rationale: "x", confirmed: true }], splits: [] };
+    });
+    const ctx = makeTestContext({
+      jobs,
+      config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
+    });
     await seedTwoClustersWithGaps(ctx);
-
-    ctx.providers.chat = () =>
-      ({
-        complete: async (req: { system?: string }) => {
-          if ((req.system ?? "").includes("strict reviewer")) {
-            return { content: '{"confirmed":true,"rationale":"one doc covers both"}' };
-          }
-          const [a, b] = (await ctx.stores.gapClusters.listActiveClusters()).map((c) => c.id);
-          return { content: `{"merges":[{"clusterIds":["${a}","${b}"],"rationale":"x"}],"splits":[]}` };
-        }
-      }) as never;
 
     const membershipsBefore = await ctx.stores.gapClusters.listActiveMemberships();
     await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
@@ -142,6 +155,35 @@ describe("reconcileGaps clustering", () => {
     assert.equal(merge.confirmed, true);
     assert.equal(merge.applied, true, "a confirmed merge is applied");
     assert.equal(merge.rationale, "x");
+  });
+
+  it("skips reshape (without throwing) when the reshape job never reaches a watcher", async () => {
+    // A plain FakeJobBroker never completes the enqueued reconcile job, so the
+    // bounded-wait hits its (tiny) deadline. Reshape is best-effort: the rest of
+    // reconcileGaps must still run, exactly as the old code only reshaped when it
+    // could. We drive a tiny deadline via the env override.
+    const previous = process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS;
+    process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS = "20";
+    try {
+      const ctx = makeTestContext({
+        config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
+      });
+      await seedTwoClustersWithGaps(ctx);
+
+      const before = await ctx.stores.gapClusters.listActiveClusters();
+      await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
+      const after = await ctx.stores.gapClusters.listActiveClusters();
+
+      assert.equal((await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length, 1, "the reshape job was enqueued");
+      assert.equal(after.length, before.length, "no reshape applied on timeout");
+      assert.deepEqual(await ctx.stores.reconciliations.list(50), [], "no decision recorded when the job never ran");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS;
+      } else {
+        process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS = previous;
+      }
+    }
   });
 });
 

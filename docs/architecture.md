@@ -94,6 +94,13 @@ Background tasks registered in the scheduler (configured from the Crunch page):
   idempotent outbox, and (folding in the former `pull-request-refresh` task) checks open pull
   requests — resolving the gaps a merged PR closed and re-indexing, or marking a closed PR's
   proposal rejected (default: every 10 minutes; requires `GITHUB_TOKEN` for PR operations).
+  In queue mode this runs as a `process_gaps_to_pull_requests` maintenance job: a watcher POSTs
+  the API's `/api/gaps/reconcile` endpoint, where the orchestration lives. The reconciler's only
+  generative step — the cluster reshape (propose merge/split, then critic-confirm) — is itself a
+  provider-partitioned `reconcile_gap_clusters` AI job the API enqueues and bounded-waits on, so
+  no generative work runs in the API process. Reshape is best-effort: if no chat watcher is
+  available within the deadline, the reconciler logs and skips it, still running clustering,
+  drafting, publication, and the PR-state pass.
 - `source-change-sync` — watches each flow's git sources and rewrites knowledge-base documents
   a source change has outdated (default: every 10 minutes).
 

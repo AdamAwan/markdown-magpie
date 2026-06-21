@@ -1,0 +1,81 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import type { JobView } from "@magpie/jobs";
+import type { WatcherApi } from "../http-client.js";
+import { MaintenanceRunner } from "./maintenance.js";
+
+function job(type: JobView["type"], input: unknown): JobView {
+  return {
+    id: "j",
+    type,
+    queueName: type,
+    deadLetter: false,
+    state: "active",
+    input,
+    retryCount: 0,
+    retryLimit: 2,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    expireInSeconds: 3600
+  };
+}
+
+function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
+  return {
+    claim: async () => undefined,
+    heartbeat: async () => ({ cancelled: false }),
+    complete: async () => undefined,
+    fail: async () => undefined,
+    retrieve: async () => [],
+    proposalExecutionContext: async () => ({ proposal: {}, repository: {} }),
+    crunchExecutionContext: async () => ({ run: {}, repository: {} }),
+    reconcileGaps: async () => ({ ok: true }),
+    ...overrides
+  };
+}
+
+describe("MaintenanceRunner", () => {
+  it("declares the maintenance capability and only supports process_gaps_to_pull_requests", () => {
+    const runner = new MaintenanceRunner(fakeApi());
+    assert.equal(runner.capability, "maintenance");
+    assert.ok(runner.supports("process_gaps_to_pull_requests"));
+    assert.ok(!runner.supports("answer_question"));
+    assert.ok(!runner.supports("refresh_pull_requests"));
+  });
+
+  it("POSTs the reconcile endpoint and returns schema-valid output", async () => {
+    let called: string | undefined = "unset";
+    const api = fakeApi({
+      reconcileGaps: async (flowId) => {
+        called = flowId;
+        return { ok: true };
+      }
+    });
+    const runner = new MaintenanceRunner(api);
+    const output = (await runner.run(job("process_gaps_to_pull_requests", {}), new AbortController().signal)) as {
+      drafted: number;
+      published: number;
+    };
+    assert.equal(called, undefined, "no flowId in input ⇒ reconcile the default flow");
+    assert.equal(output.drafted, 0);
+    assert.equal(output.published, 0);
+  });
+
+  it("forwards a flowId from the job input when present", async () => {
+    let called: string | undefined = "unset";
+    const api = fakeApi({
+      reconcileGaps: async (flowId) => {
+        called = flowId;
+        return { ok: true };
+      }
+    });
+    const runner = new MaintenanceRunner(api);
+    await runner.run(job("process_gaps_to_pull_requests", { flowId: "flow-x" }), new AbortController().signal);
+    assert.equal(called, "flow-x");
+  });
+
+  it("rejects job types it does not handle", async () => {
+    const runner = new MaintenanceRunner(fakeApi());
+    await assert.rejects(() => runner.run(job("answer_question", {}), new AbortController().signal));
+  });
+});

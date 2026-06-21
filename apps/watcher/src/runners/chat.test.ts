@@ -50,6 +50,7 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     retrieve: async () => SECTIONS,
     proposalExecutionContext: async () => ({ proposal: {}, repository: {} }),
     crunchExecutionContext: async () => ({ run: {}, repository: {} }),
+    reconcileGaps: async () => ({ ok: true }),
     ...overrides
   };
 }
@@ -110,5 +111,69 @@ describe("ChatRunner", () => {
     const controller = new AbortController();
     await runner.run(job("summarize_gap", { questions: ["q"], citedSections: [] }), controller.signal);
     assert.equal(chat.requests.at(-1)?.signal, controller.signal);
+  });
+
+  it("derives reconcile_gap_clusters confirmed flags from the critic, not from propose", async () => {
+    // The propose call returns one merge and one split (both unconfirmed in the
+    // propose payload). The critic then confirms the merge but rejects the split.
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("strict reviewer")) {
+        // Per-proposal critic call. Confirm a merge, reject a split.
+        const content = request.messages.at(-1)?.content ?? "";
+        return content.startsWith("Proposed merge")
+          ? JSON.stringify({ confirmed: true, rationale: "one doc covers both" })
+          : JSON.stringify({ confirmed: false, rationale: "independent topics" });
+      }
+      // Propose call.
+      return JSON.stringify({
+        merges: [{ clusterIds: ["c1", "c2"], rationale: "merge them" }],
+        splits: [{ clusterId: "c3", children: [{ gapIds: ["g1"] }, { gapIds: ["g2"] }], rationale: "split it" }]
+      });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const controller = new AbortController();
+    const output = (await runner.run(
+      job("reconcile_gap_clusters", {
+        provider: "openai-compatible",
+        clusters: [
+          { id: "c1", title: "Alpha" },
+          { id: "c2", title: "Beta" },
+          { id: "c3", title: "Gamma" }
+        ]
+      }),
+      controller.signal
+    )) as {
+      merges: Array<{ clusterIds: string[]; rationale: string; confirmed: boolean }>;
+      splits: Array<{ clusterId: string; children: Array<{ gapIds: string[] }>; rationale: string; confirmed: boolean }>;
+    };
+
+    assert.equal(output.merges.length, 1);
+    assert.equal(output.merges[0].confirmed, true, "the critic confirmed the merge");
+    assert.deepEqual(output.merges[0].clusterIds, ["c1", "c2"]);
+    assert.equal(output.splits.length, 1);
+    assert.equal(output.splits[0].confirmed, false, "the critic rejected the split");
+    // Every chat call honoured the abort signal.
+    assert.ok(chat.requests.every((r) => r.signal === controller.signal));
+  });
+
+  it("treats an unparseable critic verdict as not confirmed for reconcile_gap_clusters", async () => {
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("strict reviewer")) {
+        return "not json at all";
+      }
+      return JSON.stringify({ merges: [{ clusterIds: ["c1", "c2"], rationale: "merge" }], splits: [] });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const output = (await runner.run(
+      job("reconcile_gap_clusters", {
+        provider: "openai-compatible",
+        clusters: [
+          { id: "c1", title: "Alpha" },
+          { id: "c2", title: "Beta" }
+        ]
+      }),
+      new AbortController().signal
+    )) as { merges: Array<{ confirmed: boolean }> };
+    assert.equal(output.merges[0].confirmed, false, "unparseable critic ⇒ not confirmed");
   });
 });

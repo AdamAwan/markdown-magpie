@@ -1,8 +1,9 @@
 import type { Proposal } from "@magpie/core";
 import { fetchPullRequestStatus as defaultFetchPullRequestStatus } from "@magpie/git";
-import { GAP_RECONCILE_CRITIC, GAP_RECONCILE_PROPOSE } from "@magpie/prompts";
+import { reconcileGapClustersOutputSchema } from "@magpie/jobs";
 import type { AppContext } from "../context.js";
 import * as gapsService from "../features/gaps/service.js";
+import { runJobToCompletion } from "../features/jobs/service.js";
 import * as proposalsService from "../features/proposals/service.js";
 import type { GapClusterRecord, PublicationActionRecord } from "../stores/gap-cluster-store.js";
 import { selectRetainingChildOnSplit, selectSurvivingClusterOnMerge } from "./gap-reconciler-lineage.js";
@@ -28,10 +29,6 @@ interface ProposedSplit {
   clusterId: string;
   children: Array<{ gapIds: string[] }>;
   rationale: string;
-}
-interface ReshapeProposal {
-  merges: ProposedMerge[];
-  splits: ProposedSplit[];
 }
 
 // Resolved cluster->flow lookups, reused across a single run so each cluster's
@@ -185,56 +182,57 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
   }
   console.log(`Gap reconciler [${flowLabel}]: created ${clustersCreated} new cluster(s) from unassigned gaps.`);
 
-  // 2) Propose merges/splits over this flow's active clusters only. A single
-  // cluster has nothing to merge; splits stay out of the first cut, so this is
-  // gated rather than returning early — drafting below must run for the
-  // single-cluster case too.
+  // 2) Reshape this flow's active clusters. The propose→critic generative step now
+  // runs as a reconcile_gap_clusters AI job in the watcher; the API enqueues it and
+  // bounded-waits for the critic-confirmed verdicts. A single cluster has nothing
+  // to merge, so this is gated (not an early return) — drafting below must still
+  // run for the single-cluster case. Reshape is best-effort: when no chat watcher
+  // is available (timeout) or the job fails, we log and skip, leaving the rest of
+  // reconcileGaps to run.
   const active = (await ctx.stores.gapClusters.listActiveClusters()).filter((c) => sameFlow(c.flowId, flowId));
   if (active.length >= 2) {
-    const proposal = await proposeReshape(ctx, active);
-
-    // 3) Critic-confirm and apply each change individually.
-    for (const merge of proposal.merges) {
-      if (merge.clusterIds.length < 2) {
-        continue;
+    const reshape = await requestReshape(ctx, active, flowId, flowLabel);
+    if (reshape) {
+      // 3) Apply only the critic-confirmed changes, recording every decision
+      // (confirmed or not) so it's inspectable in the UI, not just in the logs.
+      for (const merge of reshape.merges) {
+        if (merge.clusterIds.length < 2) {
+          continue;
+        }
+        await ctx.stores.reconciliations.record({
+          flowId,
+          kind: "merge",
+          rationale: merge.rationale,
+          confirmed: merge.confirmed,
+          applied: merge.confirmed,
+          clusterIds: merge.clusterIds
+        });
+        if (!merge.confirmed) {
+          console.log(`Gap reconciler [${flowLabel}]: critic rejected a proposed merge of ${merge.clusterIds.length} clusters.`);
+          continue;
+        }
+        console.log(`Gap reconciler [${flowLabel}]: critic confirmed a merge of clusters ${merge.clusterIds.join(", ")}.`);
+        await applyMerge(ctx, { clusterIds: merge.clusterIds, rationale: merge.rationale }, flowId);
       }
-      const confirmed = await criticConfirm(ctx, "merge", merge.rationale);
-      // Record the decision (rationale + critic verdict) so it's inspectable in
-      // the UI, not just in the logs. Only confirmed changes are applied.
-      await ctx.stores.reconciliations.record({
-        flowId,
-        kind: "merge",
-        rationale: merge.rationale,
-        confirmed,
-        applied: confirmed,
-        clusterIds: merge.clusterIds
-      });
-      if (!confirmed) {
-        console.log(`Gap reconciler [${flowLabel}]: critic rejected a proposed merge of ${merge.clusterIds.length} clusters.`);
-        continue;
+      for (const split of reshape.splits) {
+        if (split.children.length < 2) {
+          continue;
+        }
+        await ctx.stores.reconciliations.record({
+          flowId,
+          kind: "split",
+          rationale: split.rationale,
+          confirmed: split.confirmed,
+          applied: split.confirmed,
+          clusterIds: [split.clusterId]
+        });
+        if (!split.confirmed) {
+          console.log(`Gap reconciler [${flowLabel}]: critic rejected a proposed split of cluster ${split.clusterId}.`);
+          continue;
+        }
+        console.log(`Gap reconciler [${flowLabel}]: critic confirmed a split of cluster ${split.clusterId} into ${split.children.length}.`);
+        await applySplit(ctx, { clusterId: split.clusterId, children: split.children, rationale: split.rationale }, flowId);
       }
-      console.log(`Gap reconciler [${flowLabel}]: critic confirmed a merge of clusters ${merge.clusterIds.join(", ")}.`);
-      await applyMerge(ctx, merge, flowId);
-    }
-    for (const split of proposal.splits) {
-      if (split.children.length < 2) {
-        continue;
-      }
-      const confirmed = await criticConfirm(ctx, "split", split.rationale);
-      await ctx.stores.reconciliations.record({
-        flowId,
-        kind: "split",
-        rationale: split.rationale,
-        confirmed,
-        applied: confirmed,
-        clusterIds: [split.clusterId]
-      });
-      if (!confirmed) {
-        console.log(`Gap reconciler [${flowLabel}]: critic rejected a proposed split of cluster ${split.clusterId}.`);
-        continue;
-      }
-      console.log(`Gap reconciler [${flowLabel}]: critic confirmed a split of cluster ${split.clusterId} into ${split.children.length}.`);
-      await applySplit(ctx, split, flowId);
     }
   }
 
@@ -285,35 +283,48 @@ async function draftProposalsForUncoveredClusters(ctx: AppContext, flowId: strin
   console.log(`Gap reconciler [${flowId ?? "default"}]: drafted ${drafted} new proposal(s) for previously uncovered clusters.`);
 }
 
-async function proposeReshape(ctx: AppContext, active: GapClusterRecord[]): Promise<ReshapeProposal> {
-  const summary = active.map((c) => `cluster ${c.id} (flow ${c.flowId ?? "none"}): ${c.title}`).join("\n");
-  const response = await ctx.providers.chat(ctx.config.get().aiProvider).complete({
-    system: GAP_RECONCILE_PROPOSE.instructions,
-    messages: [{ role: "user", content: summary }]
-  });
-  return parseReshape(response.content);
-}
+type Reshape = ReturnType<typeof reconcileGapClustersOutputSchema.parse>;
 
-async function criticConfirm(ctx: AppContext, kind: "merge" | "split", rationale: string): Promise<boolean> {
-  const response = await ctx.providers.chat(ctx.config.get().aiProvider).complete({
-    system: GAP_RECONCILE_CRITIC.instructions,
-    messages: [{ role: "user", content: `Proposed ${kind}. Rationale: ${rationale}` }]
-  });
-  try {
-    const parsed = JSON.parse(response.content) as { confirmed?: boolean };
-    return parsed.confirmed === true;
-  } catch {
-    return false; // unparseable critic = not confirmed
-  }
-}
+// Enqueues the reconcile_gap_clusters AI job for this flow's active clusters and
+// bounded-waits for the watcher to propose→critic-confirm the reshape. Returns the
+// validated verdicts, or `undefined` when the reshape could not be obtained
+// (timeout with no chat watcher, job failure/cancellation, or malformed output) —
+// the caller treats that as "skip reshape this run".
+async function requestReshape(
+  ctx: AppContext,
+  active: GapClusterRecord[],
+  flowId: string | undefined,
+  flowLabel: string
+): Promise<Reshape | undefined> {
+  const input = {
+    clusters: active.map((c) => ({ id: c.id, ...(c.flowId ? { flowId: c.flowId } : {}), title: c.title })),
+    ...(flowId ? { flowId } : {}),
+    provider: ctx.config.get().aiProvider
+  };
 
-function parseReshape(content: string): ReshapeProposal {
+  let terminal;
   try {
-    const parsed = JSON.parse(content) as Partial<ReshapeProposal>;
-    return { merges: parsed.merges ?? [], splits: parsed.splits ?? [] };
-  } catch {
-    return { merges: [], splits: [] };
+    terminal = await runJobToCompletion(ctx, "reconcile_gap_clusters", input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "reshape job failed";
+    console.warn(`Gap reconciler [${flowLabel}]: reshape job could not be enqueued: ${message}; skipping reshape.`);
+    return undefined;
   }
+
+  if (terminal.state !== "completed") {
+    console.warn(
+      `Gap reconciler [${flowLabel}]: reshape job ${terminal.id} did not complete (state ${terminal.state}); ` +
+        "skipping reshape this run."
+    );
+    return undefined;
+  }
+
+  const parsed = reconcileGapClustersOutputSchema.safeParse(terminal.output);
+  if (!parsed.success) {
+    console.warn(`Gap reconciler [${flowLabel}]: reshape job ${terminal.id} returned malformed output; skipping reshape.`);
+    return undefined;
+  }
+  return parsed.data;
 }
 
 async function applyMerge(ctx: AppContext, merge: ProposedMerge, flowId: string | undefined): Promise<void> {

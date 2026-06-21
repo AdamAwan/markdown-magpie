@@ -772,8 +772,18 @@ git commit -m "refactor(watcher): add capability-based job runners"
 > - **8B** — `ScheduleReconciler` (+ test); wire at startup (after broker start) and after every settings change; remove
 >   `lastRunAt`/`nextRunAt`/`runningSince` + `touchSchedule`/`tryAcquireRun`/`releaseRun` from crunch + scheduled-task stores;
 >   display next-run from `ctx.jobs.listSchedules()`.
-> - **8C** — gaps: `reconcile_gap_clusters` chat runner; `reconcileClusters` enqueues+waits it (no chat provider);
->   `POST /api/gaps/reconcile`; `process_gaps_to_pull_requests` maintenance runner.
+> - **8C — COMPLETE (2026-06-22).** gaps: `reconcile_gap_clusters` chat runner (bespoke propose→critic flow in
+>   `apps/watcher/src/runners/chat.ts`, confirmed flags derived from the critic, defensive parsing); `reconcileClusters`
+>   now deletes `proposeReshape`/`criticConfirm` and instead enqueues `reconcile_gap_clusters` via the new
+>   `runJobToCompletion(ctx, type, input, {deadlineMs})` helper (jobs service) + bounded-waits — best-effort, skips
+>   reshape on timeout/failure without throwing (deadline tied to the job's expiry; overridable via
+>   `JOB_RUN_TO_COMPLETION_TIMEOUT_MS`). Added `POST /api/gaps/reconcile {flowId?}` (scope `manage:jobs`, returns
+>   `{ok:true}`) and a `MaintenanceRunner` (`apps/watcher/src/runners/maintenance.ts`) for
+>   `process_gaps_to_pull_requests` that POSTs that endpoint and returns schema-valid `{drafted:0,published:0}` (counts
+>   are accrued by the reconcile run's own enqueues, not returned). Resolved the `TODO(Task 8)` in `runners/index.ts`.
+>   No completion handler needed: `completeJob`'s side-effect handlers all guard by job type, so the two new types
+>   complete cleanly. Schedule emits `process_gaps_to_pull_requests` with input `{}` (registry `input: () => ({})`),
+>   so the maintenance runner reconciles the default flow — no per-flow mismatch.
 > - **8D** — source-sync: gather endpoint + `source_change_sync` orchestration + `sync_source_changes_generate_plan` AI job
 >   + `publish_source_sync` publication job/runner + execution-context endpoint.
 > - **8E** — maintenance runners `refresh_pull_requests` + `trigger_scheduled_crunch`; manual `POST /api/scheduled-tasks/:key/run`
