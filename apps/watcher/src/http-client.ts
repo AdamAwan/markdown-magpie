@@ -14,6 +14,8 @@ export interface WatcherApiClient {
 // RetrievedSection shape; the answer runner cites against these.
 export interface RetrievedSection {
   sectionId: string;
+  documentId: string;
+  anchor: string;
   path: string;
   heading: string;
   content: string;

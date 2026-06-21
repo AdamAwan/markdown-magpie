@@ -61,7 +61,8 @@ export class OpenAICompatibleChatProvider implements ChatProvider {
         })
       },
       this.timeoutMs,
-      "Chat provider"
+      "Chat provider",
+      request.signal
     );
 
     return parseChatCompletionResponse(response);
@@ -97,7 +98,8 @@ export class AzureOpenAIChatProvider implements ChatProvider {
         })
       },
       this.timeoutMs,
-      "Chat provider"
+      "Chat provider",
+      request.signal
     );
 
     return parseChatCompletionResponse(response);

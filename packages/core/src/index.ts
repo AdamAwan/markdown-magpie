@@ -274,6 +274,9 @@ export interface ChatRequest {
     role: "user" | "assistant";
     content: string;
   }>;
+  // Optional caller-supplied cancellation. When the watcher aborts in-flight work
+  // (job cancelled or shutdown) the underlying fetch is torn down, not abandoned.
+  signal?: AbortSignal;
 }
 
 export interface ChatResponse {

@@ -9,6 +9,11 @@ export interface RetrieveRequest {
 
 export interface RetrievedSection {
   sectionId: string;
+  // The owning document and the section's in-document anchor, carried so the
+  // watcher can build faithful citations (the answer-question job's citation
+  // contract requires both) without a second round-trip to the index.
+  documentId: string;
+  anchor: string;
   path: string;
   heading: string;
   content: string;
@@ -33,6 +38,8 @@ export async function retrieve(ctx: AppContext, request: RetrieveRequest): Promi
     ok: true,
     sections: ranked.map(({ section }) => ({
       sectionId: section.id,
+      documentId: section.documentId,
+      anchor: section.anchor,
       path: section.path,
       heading: section.heading,
       content: section.content
