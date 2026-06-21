@@ -147,6 +147,21 @@ describe("WorkerLoop", () => {
     assert.ok(api.heartbeatCalls >= 2, `expected multiple heartbeats, got ${api.heartbeatCalls}`);
   });
 
+  it("fails a claimed job when no runner supports its type", async () => {
+    // The broker can advertise a capability (e.g. maintenance) that has no runner
+    // registered yet; a job of that type must be failed safely, not silently dropped.
+    const api = new FakeApiClient({ jobs: [fakeJob({ type: "refresh_pull_requests" })] });
+    const runner = new FakeRunner(async () => ({})); // only supports answer_question
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", { pollIntervalMs: 1 });
+    await loop.tick();
+    assert.equal(runner.ran, 0, "no runner should have executed");
+    assert.equal(api.completed.length, 0);
+    assert.equal(api.failed.length, 1);
+    assert.equal(api.failed[0].id, "job-1");
+    assert.match(api.failed[0].error.message, /No runner supports/);
+    assert.equal(api.failed[0].error.executor, "w1");
+  });
+
   it("aborts in-flight work on shutdown", async () => {
     const api = new FakeApiClient({ jobs: [fakeJob()] });
     let seenSignal: AbortSignal | undefined;

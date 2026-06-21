@@ -10,7 +10,8 @@ import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import {
   publishCrunchInputSchema,
   publishCrunchOutputSchema,
-  publishProposalInputSchema
+  publishProposalInputSchema,
+  publishProposalOutputSchema
 } from "@magpie/jobs";
 import {
   LocalGitProposalPublisher,
@@ -145,14 +146,15 @@ export class PublicationRunner {
       );
     }
 
-    return {
+    // Validate against the contract before returning, symmetric with publishCrunch.
+    return publishProposalOutputSchema.parse({
       proposalId,
       branchName: publication.branchName,
       commitSha: publication.commitSha,
       ...(publication.remoteUrl ? { remoteUrl: publication.remoteUrl } : {}),
       ...(pullRequestUrl ? { pullRequestUrl } : {}),
       publishedAt: new Date().toISOString()
-    };
+    });
   }
 
   private async publishCrunch(job: JobView): Promise<unknown> {
@@ -288,6 +290,9 @@ function slugify(value: string): string {
   );
 }
 
+// Faithful copy of the API's normalizeRelativePath (apps/api/src/platform/paths.ts):
+// strip backslashes and both leading and trailing slashes, so changeset dedup keys
+// match exactly what the API records.
 function normalizeRelativePath(value: string): string {
-  return value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
+  return value.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
 }

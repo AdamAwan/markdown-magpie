@@ -1,5 +1,5 @@
 import type { JobCapability } from "@magpie/jobs";
-import { CAPABILITY_GATES } from "./capabilities.js";
+import { CAPABILITY_GATES, deriveCapabilities } from "./capabilities.js";
 import { HttpWatcherApi } from "./http-client.js";
 import { createConfiguredRunners } from "./runners/index.js";
 import { WorkerLoop } from "./worker-loop.js";
@@ -20,9 +20,13 @@ const api = new HttpWatcherApi({
 });
 
 const runners = createConfiguredRunners(process.env, api);
-// Advertise exactly the capabilities we have a runner for, so the broker never
-// hands us a job we cannot execute.
-const capabilities = [...new Set(runners.map((runner) => runner.capability))];
+// Advertise capabilities from the single source of truth (the readiness gates),
+// honouring the catalog contract that `maintenance` is always available. Every
+// advertised capability has a runner here EXCEPT `maintenance`: its runner lands
+// in Task 8, and no maintenance jobs are enqueued before then, so the broker has
+// nothing to hand us in the meantime. If one ever arrived early the worker loop
+// fails it safely (see WorkerLoop.execute's "no runner supports" branch).
+const capabilities = deriveCapabilities(process.env);
 
 console.log(`Markdown Magpie watcher '${watcherName}' starting`);
 console.log(`API: ${apiBaseUrl}`);

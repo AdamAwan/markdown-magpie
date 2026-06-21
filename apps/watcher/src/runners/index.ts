@@ -83,10 +83,11 @@ export function createConfiguredRunners(env: NodeJS.ProcessEnv, api: WatcherApi)
     runners.push(new PublicationRunner(api, createGitPublicationDeps()));
   }
 
-  // Maintenance jobs (refresh_pull_requests, process_gaps_to_pull_requests,
-  // trigger_scheduled_crunch) have no watcher-side runner yet — they are handled
-  // by the API's scheduler in this migration. The capability is still advertised
-  // (always ready) so the broker can route them, but no runner is registered here.
+  // TODO(Task 8): add the maintenance runner here. Maintenance jobs
+  // (refresh_pull_requests, process_gaps_to_pull_requests, trigger_scheduled_crunch)
+  // have no watcher-side runner yet — they are handled by the API's scheduler in
+  // this migration. The `maintenance` capability is still advertised (always ready,
+  // per the catalog contract) but no maintenance jobs are enqueued until Task 8.
 
   return runners;
 }
