@@ -21,11 +21,15 @@ const EXPIRATION_SECONDS = {
   suggest_consolidation: 10 * 60,
   crunch_knowledge_base: 60 * 60,
   cluster_gap_candidates: 5 * 60,
+  reconcile_gap_clusters: 5 * 60,
+  sync_source_changes_generate_plan: 60 * 60,
   refresh_pull_requests: 5 * 60,
   process_gaps_to_pull_requests: 60 * 60,
   trigger_scheduled_crunch: 60 * 60,
+  source_change_sync: 60 * 60,
   publish_proposal: 15 * 60,
-  publish_crunch: 15 * 60
+  publish_crunch: 15 * 60,
+  publish_source_sync: 15 * 60
 } as const;
 
 test("every job type is unique and has schemas and a valid policy", () => {
@@ -76,8 +80,49 @@ test("github capability yields only GitHub work queues", () => {
   assert.deepEqual(queueNamesForCapabilities(["github"]), [
     "refresh_pull_requests",
     "publish_proposal",
-    "publish_crunch"
+    "publish_crunch",
+    "publish_source_sync"
   ]);
+});
+
+test("maintenance capability yields only orchestration work queues", () => {
+  assert.deepEqual(queueNamesForCapabilities(["maintenance"]), [
+    "process_gaps_to_pull_requests",
+    "trigger_scheduled_crunch",
+    "source_change_sync"
+  ]);
+});
+
+test("reconcile_gap_clusters routes by provider like other AI work", () => {
+  const definition = jobDefinition("reconcile_gap_clusters");
+  assert.equal(definition.requiredCapability({ provider: "codex" }), "codex");
+  assert.equal(queueNameForJob("reconcile_gap_clusters", { provider: "codex" }), "reconcile_gap_clusters__codex");
+
+  const codexQueues = queueNamesForCapabilities(["codex"]);
+  assert.ok(codexQueues.includes("reconcile_gap_clusters__codex"));
+  const githubQueues = queueNamesForCapabilities(["github"]);
+  assert.ok(!githubQueues.includes("reconcile_gap_clusters__codex"));
+});
+
+test("sync_source_changes_generate_plan routes by provider", () => {
+  assert.equal(
+    queueNameForJob("sync_source_changes_generate_plan", { provider: "claude" }),
+    "sync_source_changes_generate_plan__claude"
+  );
+  const claudeQueues = queueNamesForCapabilities(["claude"]);
+  assert.ok(claudeQueues.includes("sync_source_changes_generate_plan__claude"));
+});
+
+test("source_change_sync is a maintenance queue named by its type", () => {
+  const definition = jobDefinition("source_change_sync");
+  assert.equal(definition.requiredCapability({}), "maintenance");
+  assert.equal(queueNameForJob("source_change_sync", {}), "source_change_sync");
+});
+
+test("publish_source_sync is a github queue named by its type", () => {
+  const definition = jobDefinition("publish_source_sync");
+  assert.equal(definition.requiredCapability({ runId: "run-1" }), "github");
+  assert.equal(queueNameForJob("publish_source_sync", { runId: "run-1" }), "publish_source_sync");
 });
 
 test("all queue definitions provision every AI provider partition and a dead-letter queue", () => {

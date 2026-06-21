@@ -4,8 +4,10 @@ import type {
   AnswerQuestionJobOutput,
   CrunchKnowledgeBaseJobInput as CoreCrunchKnowledgeBaseJobInput,
   CrunchKnowledgeBaseJobOutput,
+  CrunchPlan,
   DraftMarkdownProposalJobInput as CoreDraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
+  SourceChangeSyncJobInput as CoreSourceChangeSyncJobInput,
   SummarizeGapJobInput as CoreSummarizeGapJobInput,
   SummarizeGapJobOutput
 } from "@magpie/core";
@@ -145,6 +147,52 @@ export const clusterGapCandidatesOutputSchema = z.object({
   clusters: z.array(z.object({ label: z.string(), summaries: z.array(z.string()).min(1) }))
 });
 
+export const reconcileGapClustersInputSchema = z.object({
+  clusters: z.array(z.object({
+    id: z.string(),
+    flowId: z.string().optional(),
+    title: z.string()
+  })),
+  flowId: z.string().optional(),
+  provider: providerSchema
+});
+export const reconcileGapClustersOutputSchema = z.object({
+  merges: z.array(z.object({
+    clusterIds: z.array(z.string()),
+    rationale: z.string(),
+    confirmed: z.boolean()
+  })),
+  splits: z.array(z.object({
+    clusterId: z.string(),
+    children: z.array(z.object({ gapIds: z.array(z.string()) })),
+    rationale: z.string(),
+    confirmed: z.boolean()
+  }))
+});
+
+const sourceChangeFileSchema = z.object({
+  path: z.string(),
+  status: z.enum(["added", "modified", "deleted", "renamed", "other"]),
+  diff: z.string()
+});
+export const syncSourceChangesGeneratePlanInputSchema = z.object({
+  provider: providerSchema,
+  flowId: z.string().optional(),
+  destinationId: z.string().optional(),
+  sourceId: z.string(),
+  sourceName: z.string(),
+  fromSha: z.string(),
+  toSha: z.string(),
+  changes: z.array(sourceChangeFileSchema),
+  candidateDocuments: z.array(documentSchema),
+  expectedOutput: z.literal("crunch_plan")
+}) satisfies z.ZodType<ProviderInput<CoreSourceChangeSyncJobInput>>;
+export const syncSourceChangesGeneratePlanOutputSchema = z.object({
+  summary: z.string(),
+  operations: z.array(crunchOperationSchema),
+  rationale: z.string()
+}) satisfies z.ZodType<CrunchPlan>;
+
 export const refreshPullRequestsInputSchema = z.object({});
 export const refreshPullRequestsOutputSchema = z.object({
   results: z.array(z.object({
@@ -175,6 +223,21 @@ export const publishProposalOutputSchema = z.object({
 
 export const publishCrunchInputSchema = z.object({ runId: z.string() });
 export const publishCrunchOutputSchema = z.object({
+  runId: z.string(),
+  branchName: z.string(),
+  commitSha: z.string(),
+  remoteUrl: z.string().optional(),
+  publishedAt: z.string()
+});
+
+export const sourceChangeSyncInputSchema = z.object({ flowId: z.string().optional() });
+export const sourceChangeSyncOutputSchema = z.object({
+  runId: z.string().optional(),
+  planned: z.boolean()
+});
+
+export const publishSourceSyncInputSchema = z.object({ runId: z.string() });
+export const publishSourceSyncOutputSchema = z.object({
   runId: z.string(),
   branchName: z.string(),
   commitSha: z.string(),

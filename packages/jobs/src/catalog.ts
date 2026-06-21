@@ -70,11 +70,15 @@ const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
   suggest_consolidation: define("suggest_consolidation", "provider", schemas.suggestConsolidationInputSchema, schemas.suggestConsolidationOutputSchema, 10 * 60),
   crunch_knowledge_base: define("crunch_knowledge_base", "provider", schemas.crunchKnowledgeBaseInputSchema, schemas.crunchKnowledgeBaseOutputSchema, 60 * 60),
   cluster_gap_candidates: define("cluster_gap_candidates", "provider", schemas.clusterGapCandidatesInputSchema, schemas.clusterGapCandidatesOutputSchema, 5 * 60),
+  reconcile_gap_clusters: define("reconcile_gap_clusters", "provider", schemas.reconcileGapClustersInputSchema, schemas.reconcileGapClustersOutputSchema, 5 * 60),
+  sync_source_changes_generate_plan: define("sync_source_changes_generate_plan", "provider", schemas.syncSourceChangesGeneratePlanInputSchema, schemas.syncSourceChangesGeneratePlanOutputSchema, 60 * 60),
   refresh_pull_requests: define("refresh_pull_requests", "github", schemas.refreshPullRequestsInputSchema, schemas.refreshPullRequestsOutputSchema, 5 * 60),
   process_gaps_to_pull_requests: define("process_gaps_to_pull_requests", "maintenance", schemas.processGapsToPullRequestsInputSchema, schemas.processGapsToPullRequestsOutputSchema, 60 * 60),
   trigger_scheduled_crunch: define("trigger_scheduled_crunch", "maintenance", schemas.triggerScheduledCrunchInputSchema, schemas.triggerScheduledCrunchOutputSchema, 60 * 60),
+  source_change_sync: define("source_change_sync", "maintenance", schemas.sourceChangeSyncInputSchema, schemas.sourceChangeSyncOutputSchema, 60 * 60),
   publish_proposal: define("publish_proposal", "github", schemas.publishProposalInputSchema, schemas.publishProposalOutputSchema, 15 * 60),
-  publish_crunch: define("publish_crunch", "github", schemas.publishCrunchInputSchema, schemas.publishCrunchOutputSchema, 15 * 60)
+  publish_crunch: define("publish_crunch", "github", schemas.publishCrunchInputSchema, schemas.publishCrunchOutputSchema, 15 * 60),
+  publish_source_sync: define("publish_source_sync", "github", schemas.publishSourceSyncInputSchema, schemas.publishSourceSyncOutputSchema, 15 * 60)
 });
 
 export function jobDefinition(type: JobType): JobDefinition {
@@ -92,7 +96,9 @@ const aiJobTypes = new Set<JobType>([
   "detect_contradiction",
   "suggest_consolidation",
   "crunch_knowledge_base",
-  "cluster_gap_candidates"
+  "cluster_gap_candidates",
+  "reconcile_gap_clusters",
+  "sync_source_changes_generate_plan"
 ]);
 
 function concreteWorkQueues(): QueueDefinition[] {

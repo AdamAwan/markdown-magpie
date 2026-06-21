@@ -8,11 +8,15 @@ export const JOB_TYPES = [
   "suggest_consolidation",
   "crunch_knowledge_base",
   "cluster_gap_candidates",
+  "reconcile_gap_clusters",
+  "sync_source_changes_generate_plan",
   "refresh_pull_requests",
   "process_gaps_to_pull_requests",
   "trigger_scheduled_crunch",
+  "source_change_sync",
   "publish_proposal",
-  "publish_crunch"
+  "publish_crunch",
+  "publish_source_sync"
 ] as const;
 
 export type JobType = (typeof JOB_TYPES)[number];
