@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { JobState, JobView, ScheduleView, WatcherStatus, WatcherView } from "../lib/types";
+import { JobCapability, JobState, JobType, JobView, ScheduleView, WatcherStatus, WatcherView } from "../lib/types";
 import { formatJobType, isActiveJob } from "../lib/console";
 
 const JOB_STATES: JobState[] = ["created", "retry", "active", "completed", "cancelled", "failed", "blocked"];
@@ -8,6 +8,27 @@ const JOB_STATES: JobState[] = ["created", "retry", "active", "completed", "canc
 // is offered only for a failed job. Both map to the broker endpoints the API
 // exposes at /jobs/:id/cancel and /jobs/:id/retry.
 const CANCELLABLE: ReadonlySet<JobState> = new Set<JobState>(["created", "retry", "active"]);
+
+const PROVIDER_JOB_TYPES = [
+  "answer_question",
+  "summarize_gap",
+  "draft_markdown_proposal",
+  "detect_contradiction",
+  "suggest_consolidation",
+  "crunch_knowledge_base",
+  "cluster_gap_candidates",
+  "reconcile_gap_clusters",
+  "sync_source_changes_generate_plan"
+] as const satisfies readonly JobType[];
+
+const CAPABILITY_JOB_TYPES = {
+  "openai-compatible": PROVIDER_JOB_TYPES,
+  "azure-openai": PROVIDER_JOB_TYPES,
+  codex: PROVIDER_JOB_TYPES,
+  claude: PROVIDER_JOB_TYPES,
+  github: ["refresh_pull_requests", "publish_proposal", "publish_crunch", "publish_source_sync"],
+  maintenance: ["process_gaps_to_pull_requests", "trigger_scheduled_crunch", "source_change_sync"]
+} as const satisfies Record<JobCapability, readonly JobType[]>;
 
 export function JobsPanel({
   jobs,
@@ -239,7 +260,8 @@ function WorkersTable({ workers, onSelect }: { workers: WatcherView[]; onSelect:
         <div className="tableHead workerHead">
           <span>Worker</span>
           <span>Status</span>
-          <span>Capabilities</span>
+          <span>Capability</span>
+          <span>Job types</span>
           <span>Current job</span>
           <span>Last seen</span>
         </div>
@@ -254,9 +276,7 @@ function WorkersTable({ workers, onSelect }: { workers: WatcherView[]; onSelect:
               <span className={`status ${workerStatusClass(worker.status)}`} title={`Worker ${worker.status}`}>
                 {worker.status}
               </span>
-              <span title={worker.capabilities.join(", ")}>
-                {worker.capabilities.length > 0 ? worker.capabilities.join(", ") : "—"}
-              </span>
+              <WorkerAssignments capabilities={worker.capabilities} />
               <span>
                 {worker.currentJobId ? (
                   <button
@@ -283,6 +303,31 @@ function WorkersTable({ workers, onSelect }: { workers: WatcherView[]; onSelect:
   );
 }
 
+function WorkerAssignments({ capabilities }: { capabilities: string[] }) {
+  if (capabilities.length === 0) {
+    return <span className="workerAssignmentsEmpty">—</span>;
+  }
+
+  return (
+    <span className="workerAssignments">
+      {capabilities.map((capability) => {
+        const jobTypes = isJobCapability(capability) ? CAPABILITY_JOB_TYPES[capability] : [];
+        return (
+          <span className="workerAssignment" key={capability}>
+            <code className="workerCapability">{capability}</code>
+            <span className="workerJobTypes">
+              {jobTypes.length > 0 ? jobTypes.map(formatJobType).join(", ") : "Unknown capability"}
+            </span>
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+function isJobCapability(value: string): value is JobCapability {
+  return Object.hasOwn(CAPABILITY_JOB_TYPES, value);
+}
 // Maps the worker status to an existing status-pill colour: busy reuses the amber
 // "running" look, idle the green "available" look.
 function workerStatusClass(status: WatcherStatus): string {

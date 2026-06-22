@@ -1303,10 +1303,13 @@ code {
   grid-template-columns: minmax(160px, 1.2fr) minmax(140px, 1fr) minmax(120px, 0.8fr) minmax(160px, 1fr);
 }
 
-/* Connected-workers table: worker / status / capabilities / current job / last seen. */
+/* Connected-workers table: worker / status / capability / job types / current job / last seen. */
 .workerHead,
 .workerRow {
-  grid-template-columns: minmax(180px, 1.4fr) 90px minmax(140px, 1.2fr) minmax(110px, 0.8fr) minmax(110px, 0.8fr);
+  grid-template-columns: minmax(180px, 1.2fr) 80px minmax(150px, 0.9fr) minmax(320px, 2fr) minmax(100px, 0.7fr) minmax(
+      100px,
+      0.7fr
+    );
 }
 
 .jobWorkers {
@@ -1326,6 +1329,41 @@ code {
   text-transform: none;
 }
 
+.workerAssignments,
+.workerAssignmentsEmpty {
+  grid-column: span 2;
+}
+
+.workerAssignments {
+  display: grid;
+  gap: 8px;
+}
+
+.workerAssignment {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.9fr) minmax(320px, 2fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.workerAssignment + .workerAssignment {
+  border-top: 1px solid #edf0eb;
+  padding-top: 8px;
+}
+
+.workerCapability {
+  width: fit-content;
+  border-radius: 4px;
+  background: #eef4f7;
+  padding: 2px 5px;
+  color: #2d5775;
+  font-size: 11px;
+}
+
+.workerJobTypes {
+  color: #4d5a54;
+  line-height: 1.45;
+}
 .workerJob {
   border: 0;
   padding: 0;
@@ -1663,6 +1701,15 @@ pre {
     grid-template-columns: 1fr;
   }
 
+  .workerAssignments,
+  .workerAssignmentsEmpty {
+    grid-column: auto;
+  }
+
+  .workerAssignment {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
   .menuOpen .sideNav {
     grid-template-columns: 1fr;
   }

@@ -44,7 +44,7 @@ import type {
 // whole job catalog, none of which the browser needs. Instead the four provider
 // names are declared here as a static client-side constant, and `satisfies`
 // pins them to the AiProviderName contract so the two can never drift.
-export type { AiProviderName, JobError, JobState, JobType, JobView } from "@magpie/jobs";
+export type { AiProviderName, JobCapability, JobError, JobState, JobType, JobView } from "@magpie/jobs";
 
 import type { AiProviderName, JobType, JobView } from "@magpie/jobs";
 
