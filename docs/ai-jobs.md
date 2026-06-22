@@ -247,9 +247,9 @@ Provider support should stay behind `AgentRunner` adapters:
 
 ## Storage
 
-Use `STORAGE_BACKEND=postgres` for local development and deployments. AI jobs are stored in
-Postgres tables, including `ai_jobs`.
+Use `STORAGE_BACKEND=postgres` for local development and deployments.
 
-The older `AI_JOB_QUEUE` variable still works as a compatibility override for the job queue only.
-
-Postgres claiming uses `FOR UPDATE SKIP LOCKED`, so multiple watchers can safely poll the same queue once the API is running against a real database.
+Jobs and schedules are owned entirely by pg-boss (the `JobBroker`), which manages its own
+Postgres tables. The legacy custom `ai_jobs` table and its `AI_JOB_QUEUE` override have been
+removed. pg-boss handles claiming, retries, and overlap protection so multiple watchers can
+safely poll the same queues once the API is running against a real database.

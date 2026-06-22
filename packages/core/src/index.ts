@@ -285,40 +285,6 @@ export interface EmbeddingProvider {
   embed(texts: string[]): Promise<number[][]>;
 }
 
-export type AiJobType =
-  | "answer_question"
-  | "summarize_gap"
-  | "draft_markdown_proposal"
-  | "detect_contradiction"
-  | "suggest_consolidation"
-  | "crunch_knowledge_base"
-  | "sync_source_change";
-
-export type AiJobStatus = "pending" | "claimed" | "completed" | "failed" | "cancelled";
-
-export interface AiJob<TInput = unknown, TOutput = unknown> {
-  id: string;
-  type: AiJobType;
-  status: AiJobStatus;
-  input: TInput;
-  output?: TOutput;
-  error?: string;
-  claimedBy?: string;
-  claimedAt?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface AiJobQueue {
-  enqueue<TInput>(type: AiJobType, input: TInput): Promise<AiJob<TInput>>;
-  claimNext(workerName: string, acceptedTypes: AiJobType[]): Promise<AiJob | undefined>;
-  complete<TOutput>(jobId: string, output: TOutput): Promise<void>;
-  fail(jobId: string, error: string): Promise<void>;
-  get(jobId: string): Promise<AiJob | undefined>;
-  list(): Promise<AiJob[]>;
-  reset(): Promise<void>;
-}
-
 export interface AnswerQuestionJobInput {
   questionLogId?: string;
   question: string;

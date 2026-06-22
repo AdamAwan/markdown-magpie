@@ -1,4 +1,5 @@
 import type { AppContext } from "../../context.js";
+import { reconcileSchedules } from "../../jobs/schedule-reconciler.js";
 import { seedConfiguredKnowledge } from "../../platform/repositories.js";
 import { storageBackend, storeBackend } from "../../platform/stores.js";
 import { embeddingProviderName, getConfiguredAiProviders, retrievalMode } from "../../platform/providers.js";
@@ -18,7 +19,6 @@ export function getRuntimeConfig(ctx: AppContext) {
       knowledgeStore: storeBackend("KNOWLEDGE_STORE"),
       questionLogStore: storeBackend("QUESTION_LOG_STORE"),
       proposalStore: storeBackend("PROPOSAL_STORE"),
-      aiJobQueue: storeBackend("AI_JOB_QUEUE"),
       databaseUrl: maskConnectionString(process.env.DATABASE_URL)
     },
     knowledge: {
@@ -93,7 +93,6 @@ export function logStartupConfig(ctx: AppContext): void {
   add("knowledge store", cfg.stores.knowledgeStore);
   add("question log store", cfg.stores.questionLogStore);
   add("proposal store", cfg.stores.proposalStore);
-  add("ai job queue", cfg.stores.aiJobQueue);
   add("database url", cfg.stores.databaseUrl ?? "not set");
 
   section("AI execution (queue-only; watchers run all AI)");
@@ -148,7 +147,13 @@ export async function resetData(ctx: AppContext) {
   await ctx.stores.crunchRuns.reset();
   await ctx.stores.scheduledTasks.reset();
   await ctx.stores.sourceSync.reset();
+
+  // Clear the durable job queue (pg-boss owns all jobs/schedules now), then
+  // reconcile schedules so the now-empty crunch/scheduled-task settings leave no
+  // orphaned pg-boss schedule rows behind.
   await ctx.jobs.reset();
+  await reconcileSchedules(ctx);
+
   if (ctx.stores.knowledge) {
     await ctx.stores.knowledge.reset();
   }
