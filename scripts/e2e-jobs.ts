@@ -200,16 +200,32 @@ async function scenarioListing(createdJobIds: string[]): Promise<void> {
   const listedIds = new Set(jobs.map((j) => j.id));
   const allVisible = createdJobIds.every((id) => listedIds.has(id));
 
+  // Schedules are reconciled from saved product settings, so a clean DB starts
+  // with none. Seed one real schedule (enable a scheduled task via its settings
+  // endpoint, which reconciles into pg-boss) so this scenario genuinely exercises
+  // the reconciled-schedule-key path rather than assuming pre-seeded schedules.
+  const tasks = await http<{ tasks: Array<{ key: string }> }>("/api/scheduled-tasks");
+  const seedKey = tasks.tasks[0]?.key;
+  let expectedScheduleKey: string | undefined;
+  if (seedKey) {
+    await http(`/api/scheduled-tasks/${encodeURIComponent(seedKey)}/settings`, {
+      method: "POST",
+      body: JSON.stringify({ enabled: true, cron: "*/30 * * * *" })
+    });
+    expectedScheduleKey = `task:${seedKey}`;
+  }
+
   const { schedules } = await http<{ schedules: Array<{ key: string; type: string; cron: string }> }>(
     "/api/jobs/schedules"
   );
   const scheduleKeys = schedules.map((s) => s.key);
+  const seededVisible = expectedScheduleKey ? scheduleKeys.includes(expectedScheduleKey) : false;
 
-  const ok = allVisible && schedules.length > 0;
+  const ok = allVisible && seededVisible;
   record(
     name,
     ok,
-    `jobs listed: ${jobs.length}/${total} (all created visible=${allVisible}); schedules: ${schedules.length} [${scheduleKeys.join(", ")}]`
+    `jobs listed: ${jobs.length}/${total} (all created visible=${allVisible}); seeded schedule key ${expectedScheduleKey ?? "(none)"} visible=${seededVisible}; schedules: [${scheduleKeys.join(", ")}]`
   );
 }
 

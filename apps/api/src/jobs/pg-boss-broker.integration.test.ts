@@ -8,17 +8,21 @@ const runIntegration = process.env.RUN_PG_INTEGRATION === "1";
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/markdown_magpie";
 const schema = `pgboss_test_${process.pid}`;
 
+// answer_question input matches the current catalog schema: routing candidate
+// flows are required (the watcher routes over them); `context` was removed when
+// retrieval moved into the watcher. An empty flows array is valid (the unscoped
+// case the ask service emits when no flows are configured).
 const codexAnswer = (question: string) => ({
   provider: "codex" as const,
   question,
-  context: [],
+  flows: [],
   expectedOutput: "answer_result" as const
 });
 
 const openAiAnswer = (question: string) => ({
   provider: "openai-compatible" as const,
   question,
-  context: [],
+  flows: [],
   expectedOutput: "answer_result" as const
 });
 
