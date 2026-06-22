@@ -937,6 +937,31 @@ not the long-gone `page.tsx`/single stylesheet split.
 
 **Task 13 — COMPLETE** (commits `e2075c9` env, `05898f9` compose, `ddd3bed` docs/scripts, + `docs/mvp.md` one-line fix; review ✅ Approve). Env examples, Docker Compose, all user docs, `scripts/eval-api.ts`, and `run-cat-demo.ps1` rewritten to the queue-only end state. `.env.example`/`.env.compose.example`: mandatory `DATABASE_URL`+real `AI_PROVIDER`, job knobs (`JOB_WAIT_TIMEOUT_MS`/`JOB_WAIT_POLL_MS`/`JOB_SCHEDULE_TIMEZONE`/`CLI_CANCEL_GRACE_MS`/`JOB_RUN_TO_COMPLETION_TIMEOUT_MS`), per-provider watcher capability detection (matches `capabilities.ts`); removed all mock/execution-mode/claim-timeout/scheduler-tick vars (and dead vars not read by code — `JOB_RETENTION_DAYS` deliberately NOT added). Compose: **Redis removed**; `api`→`migrate`(completed)→`postgres`(healthy), web/watcher/mcp→`api`(healthy); `AI_PROVIDER: ${AI_PROVIDER:?…}` on api+watcher; `CLAUDE_CLI_PATH` left undefaulted so the watcher doesn't falsely advertise the claude capability; `docker compose config` validates. Docs verified against real endpoints/shapes (`/api/jobs/*` wait/cancel/retry/schedules, `{questionId,job,links}` ask 202, `/api/config` provider-only). `eval-api.ts` now create→wait→poll. Review confirmed no dead env vars / no non-existent endpoints documented / sound compose deps+healthcheck. Typecheck + build clean.
 
+**Task 14 — COMPLETE** (commits `6bd8463` scripts+fixture+compose, `93de0bd` harness fixes, `80c9f3a` chat_provider fallout fix; status DONE_WITH_CONCERNS→resolved). End-to-end queue lifecycle validated **live against the real docker stack**.
+- **Design correction (documented deviation):** the plan's CLI fixture (`AI_PROVIDER=codex`) can't answer — `CliRunner` excludes `answer_question` (route→retrieve→answer is chat-only). The E2E instead drives a deterministic **fake OpenAI-compatible chat server** (`scripts/fixtures/openai-fixture.mjs`) with `AI_PROVIDER=openai-compatible`, wired via `docker-compose.e2e.yml`; `[slow]`/`[fail]` semantics live in the fixture. This exercises the real answer path.
+- **Migrations:** the previously-unapplied `0023` + `0024` applied cleanly on stack startup; full `0001→0024` chain re-applies on a fresh DB.
+- **Four E2E scenarios all PASS live:** (1) answer job completes, envelope `{result,executor}` + answer/citations present; (2) `[slow]` job cancelled mid-flight → `cancelled`; (3) `[fail]` job retries 1→2→3 then permanent `failed`; (4) created job IDs + reconciled schedule keys (`task:…`, `flow:…`) visible in `/api/jobs` + `/api/jobs/schedules`.
+- **Gates:** `RUN_PG_INTEGRATION=1 npm test -w @magpie/api` → **280/280 pass** (real Postgres, post-`0024` schema); `npm test` (all workspaces) 0 fail; `npm run build` + `npm run typecheck` clean; `docker compose --profile app ps` all healthy; stack torn down after.
+- **`scripts/e2e-jobs.ts`** (`npm run e2e:jobs`) + the fixture are test-only instrumentation, not selectable product providers.
+- **Fallout fixed (`80c9f3a`):** dropping `questions.chat_provider`'s DEFAULT in `0024` exposed one TEST helper (`postgres-gap-cluster-store.test.ts insertGap`) that omitted the now-NOT-NULL column; fixed to supply `'codex'`. Swept all `INSERT INTO questions` sites — the sole PRODUCT insert already supplies it correctly; no product bug.
+
+---
+
+## 🎉 MIGRATION COMPLETE — all Tasks 1–14 done and reviewed.
+
+_Updated 2026-06-22. Branch `feat/queue-only-pg-boss` (67 commits ahead of `main`), pushed; HEAD `80c9f3a`._
+
+The API runs no generative work; every AI/maintenance operation is a durable pg-boss job claimed by capability-filtered watchers; both in-API cron timers are gone; Direct mode and the runtime `mock` provider are removed; the custom `ai_jobs` store is deleted; MCP/web/docs/Compose are updated; and the full lifecycle (incl. migrations `0023`/`0024`) is validated live + by 280 real-Postgres integration tests.
+
+**Final Review gate ✅** — obsolete-reference scan (`AI_EXECUTION_MODE|AI_JOB_QUEUE|AI_PROVIDER=mock|/api/ai-jobs|/ai-jobs`) returns only benign hits: two README links to the doc file `docs/ai-jobs.md`, and a test `ENV_KEYS` list that *clears* legacy keys for hermeticity. No obsolete runtime references.
+
+**Open follow-ups (non-blocking, for a future pass — NOT part of merge readiness):**
+- Snapshot store (`refreshSnapshot`/`FileSnapshotStore`) has no writer now that PR polling is a watcher job — wire `refresh_pull_requests` results into it or retire it + `collectOpenPullRequestContext` (8E carry-forward).
+- The pure branch-name/PR-body/changeset helpers are duplicated in `apps/watcher/src/runners/publication.ts` (watcher can't import `apps/api`) — consider a shared package (Task 7 note).
+- Working tree carries one pre-existing unrelated deletion (`docs/superpowers/RESUME-shared-prompt-catalog.md`) from prior shared-prompt-catalog work — left untouched all session; the user should `git checkout`/`git rm` to resolve.
+
+**NOT merged to `main`** — branch is ready for the user's review/merge decision.
+
 **Files actually changed:**
 - `apps/web/src/lib/types.ts` — dropped `AiExecutionMode` + old `AiJob`; re-export `JobView`/`JobState`/`JobType`/`JobError`/`AiProviderName` types from `@magpie/jobs`; added `ScheduleView`, paginated `JobsResponse`, `CrunchSettingsView`, `ScheduledTaskSettingsView`, and the enqueue-only `AskResponse` (`{ questionId, job, links? }`). `AI_PROVIDERS` is a local `as const satisfies readonly AiProviderName[]` constant — deliberately NOT imported from `@magpie/jobs` so the client bundle never pulls zod + the job catalog (a runtime value import of it broke the Turbopack build).
 - `apps/web/src/lib/console.ts` — `buildAttentionNotices`/`isActiveJob`/`jobTransitionMessages` now key off `JobView.state` (`created|retry|active|blocked` active; `completed|failed|cancelled` terminal); dropped the `executionMode === "queue"` gate (queue-only world always needs a watcher).
