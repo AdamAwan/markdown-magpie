@@ -24,7 +24,7 @@ _Updated 2026-06-21. Checkout: repository root. Branch: `feat/queue-only-pg-boss
 - **Task 6 — COMPLETE (request-path scope).** Ask, proposal drafting/publication, and crunch planning/publication are enqueue-only with no API-side generative or Git execution. Gap clustering (6D) was obsolete and skipped; chat-provider removal (6E) reassigned to Task 8 (only remaining chat callers are background scheduled tasks). Decomposed into sub-tasks 6A–6E; see the design amendment at the head of Task 6 (routing+retrieval moved to the watcher with a new `POST /api/retrieve` callback).
   - **6A — complete** (commits `f599658`, `e8cf4b8`). `answer_question` contract changed (input `context`→`flows`, output gains `flowId`); `ask()` is enqueue-only; new pure `POST /api/retrieve`; completion records `flowId`+`retrievedSectionIds`. Spec review ✅; code-quality review fixups applied (unknown `flowId`→422; inert-persona note). 180/180 API tests, jobs+prompts green, typecheck clean. Minimal transitional `TODO(Task 7)` stubs left in `apps/watcher/src/{job-prompts,main}.ts` and `packages/prompts/src/build.ts` (watcher mock answerer emits no citations until Task 7 wires the retrieve callback).
   - **Deferred to Task 11:** `ask()` passes the configured provider through unmapped, so `aiProvider: "mock"` now fails `answer_question` schema validation (mock isn't a job provider). Resolved when Task 11 removes `mock` and makes a real provider mandatory. Do NOT re-add the `mock→openai-compatible` mapping.
-  - **Deferred to Task 10:** `apps/web/src/components/ConsoleProvider.tsx` still reads the removed `answer.mode`/`answer.result` fields (optional-chaining-safe, but its ask polling branch no longer fires). Task 10's web rewrite must switch it to rely on `answer.job`.
+  - **Deferred to Task 10 — RESOLVED in Task 10.** `apps/web/src/components/ConsoleProvider.tsx` no longer reads `answer.mode`/`answer.result`. The refresh effect keeps `answer.job` fresh from the `/jobs` list; the answer lands on the question log (rendered by `AskPanel`); the ask handler `waitForJob`s the queued `answer_question` job. See the Task 10 entry below.
   - **6B — complete** (commits `3a242f2`, `3d64861`). Proposal drafting enqueue-only; publication converted to a `publish_proposal` job with fail-fast 404/409 pre-flight; `publish_proposal` completion handler records publication idempotently; new `GET /api/proposals/:id/execution-context` (no credentials). Git execution removed from the API; pure branch-name/PR-body helpers kept exported for Task 7. Spec review ✅; code-quality ✅ (Approve) with three minor fixups applied. Necessary behaviour-preserving cascades: `gaps/service.ts` (dead direct-branch removed), `gap-reconciler.ts` `defaultPublish` (sync→enqueue), web `ConsoleProvider.tsx` publish handler (reads `{ job }`). 188/188 API tests, typecheck clean.
   - **6C — complete** (commit `32c9dda` + fixups). Crunch planning enqueue-only (direct/`ctx.background` path deleted, `ctx.background` itself kept); publication converted to a `publish_crunch` job with fail-fast 404/409 pre-flight (incl. crunch-specific `crunch_run_empty_plan`); `publish_crunch` completion handler records publication idempotently (no PR for crunch); new `GET /api/crunch/runs/:id/execution-context` (no credentials). Spec review ✅; code-quality ✅ (Approve) with the empty-plan no-enqueue test added + stale-comment fixups. Minimal web `ConsoleProvider.tsx` publish cascade. 198/198 API tests, typecheck clean.
   - **6D (gaps clustering) — SKIPPED (scope correction).** The plan's "remove synchronous AI clustering from GET paths / `POST /api/gaps/clusters`" targets an architecture that no longer exists: the gaps feature (`listCandidates`/`listClusters`) is pure reads, and clustering is maintained by the background `gap-reconciler`. Nothing calls a gaps clustering endpoint today; Task 8's `process_gaps_to_pull_requests` introduces `cluster_gap_candidates` where it is actually used. No endpoint added now.
@@ -925,15 +925,36 @@ git commit -m "refactor(mcp): await durable answer jobs"
 
 ### Task 10: Update web interactions and operations console
 
-**Files:**
-- Modify: `apps/web/src/app/page.tsx`
-- Modify: `apps/web/src/app/styles.css`
+**Task 10 — COMPLETE.** The web app had been refactored into a component
+structure since the plan was written; the work landed against the real files,
+not the long-gone `page.tsx`/single stylesheet split.
 
-- [ ] **Step 1: Replace client types**
+**Files actually changed:**
+- `apps/web/src/lib/types.ts` — dropped `AiExecutionMode` + old `AiJob`; re-export `JobView`/`JobState`/`JobType`/`JobError`/`AiProviderName` types from `@magpie/jobs`; added `ScheduleView`, paginated `JobsResponse`, `CrunchSettingsView`, `ScheduledTaskSettingsView`, and the enqueue-only `AskResponse` (`{ questionId, job, links? }`). `AI_PROVIDERS` is a local `as const satisfies readonly AiProviderName[]` constant — deliberately NOT imported from `@magpie/jobs` so the client bundle never pulls zod + the job catalog (a runtime value import of it broke the Turbopack build).
+- `apps/web/src/lib/console.ts` — `buildAttentionNotices`/`isActiveJob`/`jobTransitionMessages` now key off `JobView.state` (`created|retry|active|blocked` active; `completed|failed|cancelled` terminal); dropped the `executionMode === "queue"` gate (queue-only world always needs a watcher).
+- `apps/web/src/components/ConsoleProvider.tsx` — `jobs` state is `JobView[]`; `/ai-jobs` → `/jobs?limit=100` (`JobsResponse`); added `/jobs/schedules` fetch; the single reusable `waitForJob(Pick<JobView,"id">)` helper used after ask, proposal draft, gap-cluster draft, crunch (via `run.jobId`), and manual scheduled-task run; new `selectJob`/`cancelJob`/`retryJob` actions for the panel.
+- `apps/web/src/components/JobsPanel.tsx` — full rewrite: state/type filters, totals, attempt/age/timing columns, selected-job detail (redacted input/output/error + timings), cancel for created/retry/active, retry for failed, active-schedules table.
+- `apps/web/src/components/ConfigPanel.tsx` — execution-mode state/select and support-flag logic removed; provider select is the four static `AI_PROVIDERS`; saves `{ ai: { provider } }`; no `mock`.
+- `apps/web/src/components/AskPanel.tsx` — answer now read from the question log (the watcher writes it on completion); the live block shows job state while queued.
+- `apps/web/src/components/AppShell.tsx` — "Mode" status line replaced with active "Provider"; latest-job badge uses `.state`.
+- `apps/web/src/components/CrunchPanel.tsx` — schedule editor reads only `enabled`/`cron`/`nextRunAt`; dropped `lastRunAt`/`runningSince` UI (gone server-side).
+- `apps/web/src/app/jobs/page.tsx`, `apps/web/src/app/styles.css` — wire the new panel props; add jobs/schedule/detail CSS.
+
+**Resolution of the deferred Task-6 item:** `ConsoleProvider` no longer reads
+`answer.mode`/`answer.result`. The refresh effect keeps `answer.job` fresh from
+the `/jobs` list (the answer itself lands on the question log, which `AskPanel`
+renders); the ask handler `waitForJob`s the queued `answer_question` job. Publish
+handlers read `{ job }` and wait on it.
+
+**Verified:** `npm run typecheck -w @magpie/web` ✅, `npm run build -w @magpie/web` ✅, focused `eslint` on all changed files ✅ (web has no lint/test scripts of its own). No `/ai-jobs`, `AiExecutionMode`, `executionMode`, or `mock` provider remains in `apps/web/src`.
+
+<details><summary>Original step plan (for reference)</summary>
+
+- [x] **Step 1: Replace client types**
 
 Remove `AiExecutionMode` and old `AiJob`. Add `JobView`, `ScheduleView`, paginated `JobsResponse`, and provider names without `mock`. Rename all `/ai-jobs` requests to `/jobs`.
 
-- [ ] **Step 2: Add one reusable wait helper**
+- [x] **Step 2: Add one reusable wait helper**
 
 ```ts
 async function waitForJob(job: JobView): Promise<JobView> {
@@ -945,30 +966,29 @@ async function waitForJob(job: JobView): Promise<JobView> {
 
 Use it after ask, proposal draft, gap clustering, crunch, and manual scheduled-task creation. If still active, show a queued message and let normal refresh polling update the page.
 
-- [ ] **Step 3: Replace the Jobs panel**
+- [x] **Step 3: Replace the Jobs panel**
 
 Add state/type filters, totals, attempt/age/timing columns, selected job detail with redacted input/output/error, cancel for created/retry/active, retry for failed, and an active schedules table. Fetch `/jobs?limit=100`, `/jobs/:id`, and `/jobs/schedules`.
 
-- [ ] **Step 4: Simplify Config panel**
+- [x] **Step 4: Simplify Config panel**
 
 Remove execution-mode state/select and support flags. Provider selection contains the four statically supported names `openai-compatible`, `azure-openai`, `codex`, and `claude`; API-side credentials do not control availability because credentials belong to watchers. Saving posts `{ ai: { provider } }`. Remove all mock fallbacks.
 
-- [ ] **Step 5: Update schedule displays**
+- [x] **Step 5: Update schedule displays**
 
 Use reconciled schedule response values for next run. Remove UI assumptions that `lastRunAt` is maintained by API tick loops.
 
-- [ ] **Step 6: Verify**
+- [x] **Step 6: Verify**
 
 Run: `npm run typecheck -w @magpie/web && npm run build -w @magpie/web`
 
-Expected: PASS.
+Expected: PASS. (Confirmed.)
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
-```bash
-git add apps/web/src/app/page.tsx apps/web/src/app/styles.css
-git commit -m "feat(web): add jobs and schedules operations view"
-```
+Staged precisely against the real refactored web files (see the file list above), not the long-removed `page.tsx`.
+
+</details>
 
 ### Task 11: Remove Direct mode and runtime mock support
 
