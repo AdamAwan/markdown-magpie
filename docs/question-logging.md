@@ -13,10 +13,10 @@ Markdown Magpie records question interactions so the knowledge base can learn fr
 Each question log records:
 
 - Question text.
-- Execution mode.
-- Chat provider or watcher.
+- Chat provider that produced the answer.
 - Confidence.
 - Retrieved section IDs.
+- Flow the question was routed to, when known.
 - Answer result.
 - Citations.
 - Gaps, when present. A single question can record several gaps — each
@@ -43,4 +43,8 @@ Gaps can also be flagged manually — via the **Knowledge gap** chip in the cons
 
 ## Queued Answers
 
-When `AI_EXECUTION_MODE=queue`, the API logs the queued question immediately with unknown confidence. The `answer_question` job includes the question log ID, and the API updates the log when the watcher completes the job.
+Every answer runs through the queue. When a question is asked, the API logs it
+immediately with unknown confidence and enqueues an `answer_question` job
+carrying the question log ID. A watcher routes the question to a flow, retrieves
+context, synthesises the answer, and completes the job; completion updates the
+log with the answer, confidence, chosen flow, and any detected gaps.

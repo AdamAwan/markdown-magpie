@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("codex", "mock", "claude", "openai-compatible")]
+  [ValidateSet("codex", "claude", "openai-compatible", "azure-openai")]
   [string] $Provider = "codex",
   [string] $CodexCliPath = "codex",
   [string] $ClaudeCliPath = "claude",
@@ -120,13 +120,21 @@ if ($Provider -eq "codex" -and -not (Test-CommandExists $CodexCliPath)) {
 }
 
 if ($Provider -eq "claude" -and -not (Test-CommandExists $ClaudeCliPath)) {
-  throw "Claude CLI '$ClaudeCliPath' was not found on PATH. Pass -ClaudeCliPath or choose -Provider mock."
+  throw "Claude CLI '$ClaudeCliPath' was not found on PATH. Pass -ClaudeCliPath or choose another -Provider."
 }
 
 if ($Provider -eq "openai-compatible") {
   foreach ($name in @("OPENAI_COMPATIBLE_BASE_URL", "OPENAI_COMPATIBLE_API_KEY", "OPENAI_COMPATIBLE_MODEL")) {
     if (-not [Environment]::GetEnvironmentVariable($name, "Process")) {
       throw "$name is required when -Provider openai-compatible is selected."
+    }
+  }
+}
+
+if ($Provider -eq "azure-openai") {
+  foreach ($name in @("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_CHAT_DEPLOYMENT")) {
+    if (-not [Environment]::GetEnvironmentVariable($name, "Process")) {
+      throw "$name is required when -Provider azure-openai is selected."
     }
   }
 }
@@ -152,7 +160,7 @@ $webLog = Join-Path $logDir "cat-demo-web.log"
 $apiCommand = @"
 Set-Location '$repoRoot'
 `$env:PORT = '$ApiPort'
-`$env:AI_EXECUTION_MODE = 'queue'
+`$env:AI_PROVIDER = '$Provider'
 Write-Host 'Markdown Magpie API: http://localhost:$ApiPort' -ForegroundColor Green
 npm run dev:api *>&1 | Tee-Object -FilePath '$apiLog'
 "@
@@ -160,7 +168,7 @@ npm run dev:api *>&1 | Tee-Object -FilePath '$apiLog'
 $watcherCommand = @"
 Set-Location '$repoRoot'
 `$env:API_BASE_URL = 'http://localhost:$ApiPort'
-`$env:AI_JOB_PROVIDER = '$Provider'
+`$env:AI_PROVIDER = '$Provider'
 `$env:CODEX_CLI_PATH = '$CodexCliPath'
 `$env:CODEX_CLI_ARGS = 'exec'
 `$env:CODEX_CLI_PROMPT_MODE = 'arg'
@@ -170,6 +178,9 @@ Set-Location '$repoRoot'
 `$env:OPENAI_COMPATIBLE_BASE_URL = '$env:OPENAI_COMPATIBLE_BASE_URL'
 `$env:OPENAI_COMPATIBLE_API_KEY = '$env:OPENAI_COMPATIBLE_API_KEY'
 `$env:OPENAI_COMPATIBLE_MODEL = '$env:OPENAI_COMPATIBLE_MODEL'
+`$env:AZURE_OPENAI_ENDPOINT = '$env:AZURE_OPENAI_ENDPOINT'
+`$env:AZURE_OPENAI_API_KEY = '$env:AZURE_OPENAI_API_KEY'
+`$env:AZURE_OPENAI_CHAT_DEPLOYMENT = '$env:AZURE_OPENAI_CHAT_DEPLOYMENT'
 Write-Host 'Markdown Magpie watcher provider: $Provider' -ForegroundColor Green
 npm run dev:watcher *>&1 | Tee-Object -FilePath '$watcherLog'
 "@

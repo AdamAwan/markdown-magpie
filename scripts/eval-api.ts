@@ -7,13 +7,15 @@ interface EvalCase {
 
 interface AskResponse {
   questionId: string;
-  result?: {
-    answer: string;
-    citations: unknown[];
-  };
+  job: { id: string };
   links?: {
     question?: string;
+    wait?: string;
   };
+}
+
+interface JobWaitResponse {
+  job: { id: string; state: string };
 }
 
 interface QuestionResponse {
@@ -77,32 +79,54 @@ async function main(): Promise<void> {
 }
 
 async function ask(question: string): Promise<{ answer: string; citations: unknown[] }> {
+  // POST /ask returns 202 with a job; the watcher routes + answers it. Block on
+  // GET /jobs/:id/wait (200 once terminal, 202 when still running — re-issue),
+  // then read the stored answer from GET /questions/:id.
   const response = await postJson<AskResponse>("/ask", { question });
-  if (response.result) {
-    return response.result;
+  const waitPath = response.links?.wait;
+  const questionPath = response.links?.question;
+  if (!waitPath || !questionPath) {
+    throw new Error(`Queued answer for ${response.questionId} did not include wait/question links`);
   }
 
-  if (!response.links?.question) {
-    throw new Error(`Queued answer for ${response.questionId} did not include a question link`);
-  }
-
-  const attempts = Math.max(1, Math.ceil(timeoutMs / pollIntervalMs));
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    await delay(pollIntervalMs);
-    const result = await getJson<QuestionResponse>(response.links.question);
-    if (result.question.answer) {
-      return result.question.answer;
+  const deadline = Date.now() + timeoutMs;
+  let terminalState: string | undefined;
+  while (Date.now() < deadline) {
+    const { status, body } = await getWithStatus<JobWaitResponse>(waitPath);
+    if (status === 200) {
+      terminalState = body.job.state;
+      break;
     }
+    // 202 => not terminal yet; re-issue the long-poll after a short pause.
+    await delay(pollIntervalMs);
   }
 
-  throw new Error(
-    `Timed out waiting for queued answer ${response.questionId}. Start the watcher or run the API with AI_EXECUTION_MODE=mock/direct for evals.`
-  );
+  if (!terminalState) {
+    throw new Error(`Timed out waiting for job ${response.job.id} (question ${response.questionId}). Is a watcher running?`);
+  }
+  if (terminalState !== "completed") {
+    throw new Error(`Job ${response.job.id} for question ${response.questionId} ended in state '${terminalState}'.`);
+  }
+
+  const result = await getJson<QuestionResponse>(questionPath);
+  if (!result.question.answer) {
+    throw new Error(`Job ${response.job.id} completed but question ${response.questionId} has no stored answer.`);
+  }
+  return result.question.answer;
 }
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(apiUrl(path));
   return readResponse<T>(response, path);
+}
+
+async function getWithStatus<T>(path: string): Promise<{ status: number; body: T }> {
+  const response = await fetch(apiUrl(path));
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`${path} failed with ${response.status}: ${text}`);
+  }
+  return { status: response.status, body: JSON.parse(text) as T };
 }
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {

@@ -78,26 +78,28 @@ The default `.env.example` points at:
 ```env
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/markdown_magpie
 STORAGE_BACKEND=postgres
-AI_EXECUTION_MODE=direct
-AI_PROVIDER=mock
+AI_PROVIDER=openai-compatible
 ```
 
-### 3. Prepare Postgres and Redis
+`AI_PROVIDER` is mandatory and must name a real watcher provider
+(`openai-compatible` | `azure-openai` | `codex` | `claude`). Set the matching
+provider credentials (see `.env.example`) for the watcher that will run jobs.
 
-The inner dev loop runs the app processes **on your host** with `npm`, while the
-external dependencies run in containers. The Compose file gates every app service
-behind the `app` profile, so a bare `up` starts only the dependencies:
+### 3. Prepare Postgres
+
+The inner dev loop runs the app processes **on your host** with `npm`, while
+Postgres runs in a container. The Compose file gates every app service behind the
+`app` profile, so a bare `up` starts only the dependency:
 
 ```bash
-docker compose up -d        # postgres + redis only, published on localhost
+docker compose up -d        # postgres only, published on localhost
 ```
 
-This is the recommended way to satisfy `DATABASE_URL` for local development
-(Postgres also backs the AI job queue, so it covers `AI_EXECUTION_MODE=queue`
-too; Redis comes up alongside it for future Redis-backed adapters). Ports `5432`
-and `6379` are published, which is why `.env.example` points at `localhost`. (If
-you prefer, provision Postgres any other way you like — Compose is just the
-convenient option.)
+This is the recommended way to satisfy `DATABASE_URL` for local development.
+Postgres is mandatory: it backs every store **and** the pg-boss job queue that
+all AI work runs through. Port `5432` is published, which is why `.env.example`
+points at `localhost`. (If you prefer, provision Postgres any other way you like
+— Compose is just the convenient option.)
 
 With Postgres reachable at `DATABASE_URL`, run migrations from the host:
 
@@ -133,11 +135,13 @@ Open:
 http://localhost:3000
 ```
 
-For queued AI job work, run the API in queue mode and start a watcher in another shell:
+All AI work runs through the job queue, so the watcher is required for any
+answering, drafting, or crunching. Run the API and a watcher in separate shells;
+the watcher needs the credentials for the configured `AI_PROVIDER`:
 
 ```bash
-AI_EXECUTION_MODE=queue AI_PROVIDER=mock npm run dev:api
-AI_PROVIDER=mock npm run dev:watcher
+npm run dev:api
+npm run dev:watcher        # advertises a capability per provider whose creds are set
 ```
 
 For MCP work, build first and run the MCP server from an MCP client:
@@ -165,12 +169,21 @@ Search indexed Markdown sections:
 curl -s 'http://localhost:4000/api/knowledge/search?q=claws'
 ```
 
-Ask a question:
+Ask a question. `POST /api/ask` returns `202` with a job and links; a watcher
+must be running to answer it. Block on the `wait` link until the job is terminal,
+then read the answer from the question link:
 
 ```bash
+# POST returns 202 with { questionId, job, links: { question, wait, ... } }
 curl -s http://localhost:4000/api/ask \
   -H 'content-type: application/json' \
   -d '{"question":"How should I introduce a new cat food?"}'
+
+# Block until the job is terminal (200 when done, 202 while still running)
+curl -s http://localhost:4000/api/jobs/<job-id>/wait
+
+# Read the stored answer
+curl -s http://localhost:4000/api/questions/<question-id>
 ```
 
 Inspect logged questions and gap candidates:
@@ -180,10 +193,13 @@ curl -s http://localhost:4000/api/questions
 curl -s http://localhost:4000/api/gaps/candidates
 ```
 
-The PowerShell cats demo starts the API in queued mode, starts the watcher, starts the web console, indexes `knowledge-bases/cats`, and writes logs under `tmp/`:
+The PowerShell cats demo starts the API, the watcher, and the web console,
+indexes `knowledge-bases/cats`, and writes logs under `tmp/`. Pick a real
+provider (and have its credentials/CLI available):
 
 ```powershell
-.\scripts\run-cat-demo.ps1 -Provider mock -StopExisting
+.\scripts\run-cat-demo.ps1 -Provider codex -StopExisting
+# or -Provider openai-compatible / claude / azure-openai
 ```
 
 ### Troubleshooting
@@ -198,9 +214,9 @@ The default non-development deployment target is Docker Compose:
 
 - API container
 - Web container
+- Watcher container (runs all AI jobs)
 - MCP container
-- Postgres with `pgvector`
-- Redis-compatible queue, if needed by the selected job adapter
+- Postgres with `pgvector` (also hosts the pg-boss job queue)
 - Local object storage, if raw document snapshots are enabled
 
 Managed cloud services are optional adapters. Azure is the preferred managed path when a concrete provider is needed, but the product should remain portable.
@@ -216,17 +232,16 @@ The Compose deployment uses **one shared Markdown Magpie application image** and
 - `watcher`: background AI job worker
 - `mcp`: optional stdio MCP server process, enabled with the `mcp` Compose profile
 - `migrate`: one-shot database migration job
-- `postgres`: Postgres 16 with `pgvector`
-- `redis`: Redis 7, available for future Redis-backed adapters
+- `postgres`: Postgres 16 with `pgvector` (also hosts the pg-boss job queue)
 
-The app services (`api`, `web`, `watcher`, `migrate`) are gated behind the `app`
-Compose profile; `postgres` and `redis` have no profile and so are always
-started. This is what lets the same file serve two modes: a bare
-`docker compose up` brings up only the dependencies (for the host-based dev loop
-in [Local Development](#local-development)), while `docker compose --profile app up`
+The app services (`api`, `web`, `watcher`, `mcp`, `migrate`) are gated behind the
+`app`/`mcp` Compose profiles; `postgres` has no profile and so is always started.
+This is what lets the same file serve two modes: a bare `docker compose up`
+brings up only the dependency (for the host-based dev loop in
+[Local Development](#local-development)), while `docker compose --profile app up`
 runs the full stack described here.
 
-Postgres and Redis use their own upstream images. The Markdown Magpie code is built once into `markdown-magpie:latest`, then Compose starts each app process with a different command. This keeps deployment simple while preserving the right runtime shape: one container per long-running process.
+Postgres uses its own upstream image. The Markdown Magpie code is built once into `markdown-magpie:latest`, then Compose starts each app process with a different command. This keeps deployment simple while preserving the right runtime shape: one container per long-running process.
 
 ### Prerequisites
 
@@ -252,22 +267,24 @@ cd markdown-magpie
 
 ### 1. Configure the Compose Environment
 
-The Compose file always loads `.env.compose.example`. For a quick showcase, you can use it as-is.
-
-Create `.env.compose` only when you need private overrides or secrets. Compose loads it on top of `.env.compose.example`:
+The Compose file always loads `.env.compose.example`, then `.env.compose` on top
+for secrets and overrides:
 
 ```bash
 cp .env.compose.example .env.compose
 ```
 
-For a local or single-host showcase, the defaults are enough.
+`AI_PROVIDER` is mandatory — both `api` and `watcher` declare it as
+`${AI_PROVIDER:?AI_PROVIDER must be set}`, so Compose refuses to start without a
+real provider. Set `AI_PROVIDER` and the matching provider credentials in
+`.env.compose` (or export them in your shell) before bringing the stack up; there
+is no built-in fallback provider.
 
 For a remote host or VPS, keep the container-internal URLs as service names:
 
 ```env
 DATABASE_URL=postgres://postgres:postgres@postgres:5432/markdown_magpie
 API_BASE_URL=http://api:4000
-QUEUE_URL=redis://redis:6379
 ```
 
 The web UI uses `NEXT_PUBLIC_API_BASE_URL` or `PUBLIC_API_BASE_URL` exactly as configured, trimming only trailing slashes. If neither is set, browser API calls stay on the same origin as the web app.
@@ -293,21 +310,15 @@ http://203.0.113.10:4000
 
 If you later put the app behind a reverse proxy or a custom domain, set `NEXT_PUBLIC_API_BASE_URL` or `PUBLIC_API_BASE_URL` in `.env.compose` to that exact public API URL.
 
-### 2. Choose the AI Mode
+### 2. Choose the AI Provider
 
-The easiest showcase mode is queue execution with the deterministic mock provider:
+All AI work runs through the queue: the `watcher` container claims jobs and calls
+the configured provider. `AI_PROVIDER` is mandatory. Set it and the matching
+credentials in `.env.compose`.
 
-```env
-AI_EXECUTION_MODE=queue
-AI_PROVIDER=mock
-```
-
-This requires no external keys. The watcher will claim queued jobs and return deterministic demo answers/proposals.
-
-To use an OpenAI-compatible API from the watcher, edit `.env.compose`:
+For an OpenAI-compatible API:
 
 ```env
-AI_EXECUTION_MODE=queue
 AI_PROVIDER=openai-compatible
 OPENAI_COMPATIBLE_BASE_URL=https://api.openai.com/v1
 OPENAI_COMPATIBLE_API_KEY=your-key
@@ -316,20 +327,9 @@ OPENAI_COMPATIBLE_MODEL=gpt-4.1-mini
 
 Any OpenAI-compatible `/chat/completions` endpoint can be used.
 
-To make the API answer directly instead of queueing work for the watcher:
+For Azure OpenAI:
 
 ```env
-AI_EXECUTION_MODE=direct
-AI_PROVIDER=openai-compatible
-OPENAI_COMPATIBLE_BASE_URL=https://api.openai.com/v1
-OPENAI_COMPATIBLE_API_KEY=your-key
-OPENAI_COMPATIBLE_MODEL=gpt-4.1-mini
-```
-
-For Azure OpenAI direct mode:
-
-```env
-AI_EXECUTION_MODE=direct
 AI_PROVIDER=azure-openai
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
 AZURE_OPENAI_API_KEY=your-key
@@ -337,7 +337,14 @@ AZURE_OPENAI_CHAT_DEPLOYMENT=your-chat-deployment
 AZURE_OPENAI_API_VERSION=2024-10-21
 ```
 
-When multiple providers are configured in the environment, switch between valid direct and queue combinations from the web console's **Config** page without restarting the API. Storage remains a startup setting.
+For an external agent CLI, set `AI_PROVIDER=codex` (or `claude`) and make sure
+the watcher container can reach the CLI (`CODEX_CLI_PATH` / `CLAUDE_CLI_PATH`).
+The watcher advertises a capability only when the matching credentials are
+present, so the credentials must live wherever the watcher runs.
+
+When multiple providers are configured in the environment, switch the active
+provider from the web console's **Config** page without restarting the API.
+Storage remains a startup setting.
 
 ### 3. Build and Start Everything
 
@@ -348,13 +355,13 @@ docker compose --profile app up --build -d
 ```
 
 The `--profile app` flag is what starts the application containers; without it,
-`docker compose up` brings up only Postgres and Redis (the dependencies-only mode
-used for [local development](#local-development)).
+`docker compose up` brings up only Postgres (the dependency-only mode used for
+[local development](#local-development)).
 
 The first boot will:
 
 1. Build `markdown-magpie:latest`.
-2. Start Postgres and Redis.
+2. Start Postgres.
 3. Wait for Postgres to become healthy.
 4. Run `npm run db:migrate` in the one-shot `migrate` container.
 5. Start the API, web UI, and watcher containers.
@@ -365,7 +372,7 @@ Check service status:
 docker compose ps
 ```
 
-You should see `api`, `web`, `watcher`, `postgres`, and `redis` running. The `migrate` service should show as exited successfully.
+You should see `api`, `web`, `watcher`, and `postgres` running. The `migrate` service should show as exited successfully.
 
 The MCP server is a stdio process intended to be launched by an MCP client, so it is not started by default. It depends on the `api` service, so activate the `app` profile alongside `mcp` (or have the stack already running from the step above):
 
@@ -377,7 +384,7 @@ docker compose --profile app --profile mcp run --rm mcp
 
 The MCP server speaks the standard MCP **stdio transport** (newline-delimited JSON-RPC) and proxies to the API at `API_BASE_URL` (default `http://localhost:4000`). It exposes two tools:
 
-- `kb.ask` — ask a question and get back a cited answer (`{ answer, confidence, citations }`). When the API runs in `queue` execution mode, the server waits for the background job to finish and returns the final answer; internal job, queue, and retrieval-context details are never exposed to the client.
+- `kb.ask` — ask a question and get back a cited answer (`{ answer, confidence, citations }`). The server enqueues the question, waits for the watcher to finish the background job, and returns the final answer; internal job, queue, and retrieval-context details are never exposed to the client.
 - `kb.search` — keyword search over indexed Markdown sections.
 
 To connect Claude Code, build once (`npm run build`) and add a project-scoped `.mcp.json` at the repo root (already included in this repository):
@@ -394,7 +401,7 @@ To connect Claude Code, build once (`npm run build`) and add a project-scoped `.
 }
 ```
 
-The API must be running and reachable at `API_BASE_URL`. In `queue` mode a watcher must also be running to process answer jobs. The wait behaviour is tunable via `ANSWER_POLL_INTERVAL_MS` (default `1000`) and `ANSWER_TIMEOUT_MS` (default `120000`).
+The API must be running and reachable at `API_BASE_URL`, and a watcher must be running to process answer jobs. The wait behaviour is tunable via `ANSWER_POLL_INTERVAL_MS` (default `1000`) and `ANSWER_TIMEOUT_MS` (default `120000`).
 
 See [docs/mcp.md](docs/mcp.md) for details.
 
@@ -441,19 +448,22 @@ curl -s -X POST http://localhost:4000/api/knowledge/repositories/index \
   -d '{"repositoryId":"cats"}'
 ```
 
-Then ask:
+Then ask. `POST /api/ask` returns `202` with a job; the watcher completes it
+shortly. Refresh the web UI, or block on the job's `wait` link and read the
+answer:
 
 ```bash
 curl -s http://localhost:4000/api/ask \
   -H 'content-type: application/json' \
   -d '{"question":"What cat warning signs are urgent?"}'
+curl -s http://localhost:4000/api/jobs/<job-id>/wait
+curl -s http://localhost:4000/api/questions
 ```
 
-In queue mode, the API returns a job first. The watcher should complete it shortly. Refresh the web UI or inspect jobs:
+Inspect the queue at any time:
 
 ```bash
-curl -s http://localhost:4000/api/ai-jobs
-curl -s http://localhost:4000/api/questions
+curl -s http://localhost:4000/api/jobs
 ```
 
 ### 6. Create a Proposal Demo
@@ -468,7 +478,7 @@ A useful showcase flow is:
 6. Open **Jobs** and wait for the watcher to complete the proposal job.
 7. Open **Proposals** and review the generated Markdown.
 
-With `AI_PROVIDER=mock`, the generated proposal is deterministic. With `AI_PROVIDER=openai-compatible`, the watcher asks the configured model to return structured JSON and stores the resulting Markdown proposal.
+With `AI_PROVIDER=openai-compatible` (or any configured provider), the watcher asks the configured model to return structured JSON and stores the resulting Markdown proposal.
 
 ### Operations
 
@@ -538,7 +548,7 @@ For a remote showcase, open:
 - TCP `3000` for the web UI
 - TCP `4000` for the API
 
-Do not expose Postgres (`5432`) or Redis (`6379`) publicly. The current Compose file maps them to host ports for operator convenience. For a public server, restrict those ports with your host firewall, or remove the `ports` entries for `postgres` and `redis` and keep them available only on the Compose network.
+Do not expose Postgres (`5432`) publicly. The current Compose file maps it to a host port for operator convenience. For a public server, restrict that port with your host firewall, or remove the `ports` entry for `postgres` and keep it available only on the Compose network.
 
 ### Reverse Proxy Notes
 
@@ -625,20 +635,21 @@ The official Auth0 MCP server can bootstrap these tenant resources, but Markdown
 
 ## AI Execution
 
-Markdown Magpie treats AI work as provider-neutral jobs.
+Markdown Magpie treats AI work as provider-neutral jobs on a pg-boss queue in
+Postgres. **The API never calls a model inline.** It enqueues a job; a separate
+**watcher** process claims it, calls the configured provider, and posts the
+result back over HTTP. `AI_PROVIDER` is mandatory and selects the provider:
+`openai-compatible`, `azure-openai`, `codex`, or `claude`.
 
-There are two intended execution modes:
-
-- `direct`: the API calls a configured model provider directly, such as Azure OpenAI, OpenAI-compatible APIs, Anthropic, or local model gateways.
-- `queue`: the API enqueues AI jobs and an external watcher claims them. This lets users run Codex, Claude Code, or another local agent as the model provider.
-
-`mock` is a provider, not an execution mode. It gives deterministic local responses for development and tests and can be selected in either direct or queue mode.
-
-Watcher mode lowers the barrier to entry because early users can develop and test workflows with the agent tooling they already run locally, without provisioning cloud model credentials.
+The watcher lowers the barrier to entry because early users can develop and test
+workflows with the agent tooling they already run locally (Codex, Claude Code),
+without provisioning cloud model credentials. A watcher advertises a provider's
+capability only when that provider's credentials are present, and the API routes a
+job only to a capability a running watcher offers. See [docs/ai-jobs.md](docs/ai-jobs.md).
 
 ### AI prompts
 
-All AI/agent prompts live in the `@magpie/prompts` package (`packages/prompts`) as a single catalog of `PromptDefinition` entries. The watcher (queue mode) wraps an instruction with the serialised job input via `buildJobPrompt`; the API and retrieval (direct mode) pass the same instruction text as the chat `system` message. The catalog is served read-only at `GET /api/prompts` and rendered in the console's **Prompts** section, so the exact instruction text sent to the model is always inspectable without reading the source.
+All AI/agent prompts live in the `@magpie/prompts` package (`packages/prompts`) as a single catalog of `PromptDefinition` entries. The watcher wraps an instruction with the serialised job input via `buildJobPrompt` before sending it to the provider. The catalog is served read-only at `GET /api/prompts` and rendered in the console's **Prompts** section, so the exact instruction text sent to the model is always inspectable without reading the source.
 
 ## MVP Milestone
 

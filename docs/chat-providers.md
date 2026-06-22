@@ -1,46 +1,52 @@
 # Chat Providers
 
-Markdown Magpie keeps answer synthesis behind the `ChatProvider` interface.
+Answer synthesis runs on the **watcher**, not the API. The API never calls a
+model inline: it enqueues an `answer_question` job, and a watcher configured with
+a chat provider claims and completes it (see [ai-jobs.md](ai-jobs.md)).
+
+`AI_PROVIDER` is mandatory and selects which provider the system routes work to.
+Valid values: `openai-compatible`, `azure-openai`, `codex`, `claude`. A watcher
+only advertises (and therefore claims) a provider's capability once that
+provider's credentials are set in its environment, so the watcher must carry the
+credentials matching the chosen `AI_PROVIDER`.
 
 ## Providers
 
-### `mock`
-
-Default provider. It produces deterministic answers from retrieved Markdown context and requires no API key.
-
-```bash
-AI_PROVIDER=mock npm run dev:api
-```
-
 ### `openai-compatible`
 
-Uses an OpenAI-compatible `/chat/completions` endpoint.
+Uses an OpenAI-compatible `/chat/completions` endpoint. The watcher advertises
+this capability only when all three vars are set.
 
 ```bash
-AI_PROVIDER=openai-compatible \
 OPENAI_COMPATIBLE_BASE_URL=https://example.com/v1 \
 OPENAI_COMPATIBLE_API_KEY=... \
 OPENAI_COMPATIBLE_MODEL=... \
-npm run dev:api
+npm run dev:watcher
 ```
 
 ### `azure-openai`
 
-Uses Azure OpenAI chat completions.
+Uses Azure OpenAI chat completions. The watcher advertises this capability when
+`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_CHAT_DEPLOYMENT`
+are all set.
 
 ```bash
-AI_PROVIDER=azure-openai \
 AZURE_OPENAI_ENDPOINT=https://example.openai.azure.com \
 AZURE_OPENAI_API_KEY=... \
 AZURE_OPENAI_CHAT_DEPLOYMENT=... \
 AZURE_OPENAI_API_VERSION=2024-10-21 \
-npm run dev:api
+npm run dev:watcher
 ```
 
-## Execution Modes
+### `codex` / `claude`
 
-`AI_PROVIDER` controls direct answer synthesis when `AI_EXECUTION_MODE=direct`.
+Run an external agent CLI. The watcher advertises the `codex` capability when
+`CODEX_CLI_PATH` is set and the `claude` capability when `CLAUDE_CLI_PATH` is
+set (both default to a bare command resolved on `PATH`).
 
-`AI_EXECUTION_MODE=queue` bypasses direct synthesis and enqueues an `answer_question` job for the watcher instead.
+```bash
+CODEX_CLI_PATH=codex npm run dev:watcher   # or CLAUDE_CLI_PATH=claude
+```
 
-Configured provider choices can be switched at runtime from the web console's Config page. Environment variables still define which providers are available.
+See [ai-jobs.md](ai-jobs.md) for the full job contract and capability model, and
+`.env.example` for every supported variable.

@@ -28,26 +28,25 @@ Liveness check.
 
 Returns the resolved runtime configuration: API settings, storage backends (with the
 database URL masked), configured knowledge repositories, provider settings and secret
-presence (`set` / `not set`), the AI runtime (current execution mode and provider, plus the
-available `direct` and `queue` providers), watcher settings, and retrieval settings including
-`retrieval.mode` (`hybrid` or `keyword`) and a plain-language `reason`.
+presence (`set` / `not set`), the AI runtime (current provider plus the available
+providers), watcher settings, and retrieval settings including `retrieval.mode`
+(`hybrid` or `keyword`) and a plain-language `reason`.
 
 ### `POST /api/config`
 
-Switches the AI execution mode and provider at runtime. Accepts either a flat or nested shape:
+Switches the active AI provider at runtime. Accepts either a flat or nested shape:
 
 ```json
-{ "aiExecutionMode": "direct", "aiProvider": "mock" }
+{ "aiProvider": "openai-compatible" }
 ```
 
 ```json
-{ "ai": { "executionMode": "queue", "provider": "openai-compatible" } }
+{ "ai": { "provider": "openai-compatible" } }
 ```
 
 - `200` — returns the updated config (same shape as `GET /api/config`).
-- `400 valid_ai_runtime_config_required` — mode or provider missing/unrecognised.
-- `400 unsupported_ai_runtime_config` — the provider is not configured by environment
-  variables, or cannot run in the requested mode (e.g. a queue-only provider in `direct`).
+- `400 valid_ai_provider_required` — provider missing or unrecognised.
+- `400 unsupported_ai_provider` — the provider is not configured by environment variables.
 
 See [chat-providers.md](chat-providers.md) for provider configuration.
 
@@ -57,7 +56,7 @@ Resets the application to its fresh-from-`.env` state. Intended for demos.
 
 **Warning:** This endpoint is unauthenticated and destructive. It is a demo aid and must not be exposed in a production deployment.
 
-Clears all questions (and their citations), proposals, gap clusters, AI jobs, and the indexed knowledge (sections, documents, repositories); resets the runtime AI config (execution mode / provider) to the `.env` defaults; then re-syncs the configured git checkouts and re-indexes the configured knowledge sources.
+Clears all questions (and their citations), proposals, gap clusters, jobs, and the indexed knowledge (sections, documents, repositories); resets the runtime AI provider to the `.env` default; then re-syncs the configured git checkouts and re-indexes the configured knowledge sources.
 
 Request body: none.
 
@@ -85,11 +84,11 @@ Answers a question from indexed Markdown context.
 ```
 
 - `400 question_required` — empty or missing question.
-- In `direct` mode → `200` with `{ "mode": "direct", "questionId": "...", "result": { ... } }`,
-  where `result` is an `AnswerResult` (answer, confidence, citations, optional gap signal).
-- In `queue` mode → `202` with `{ "mode": "queue", "questionId": "...", "job": { ... }, "links": { ... } }`.
+- `202` — `{ "questionId": "...", "job": Job, "links": { "question": "/api/questions/:id",
+  "job": "/api/jobs/:id", "wait": "/api/jobs/:id/wait", "cancel": "/api/jobs/:id/cancel" } }`.
   An `answer_question` job is enqueued for a watcher and the question log is written immediately
-  with unknown confidence. See [question-logging.md](question-logging.md).
+  with unknown confidence. Block on `links.wait` until the job is terminal, then read the answer
+  from `links.question`. See [ai-jobs.md](ai-jobs.md) and [question-logging.md](question-logging.md).
 
 ### `GET /api/knowledge/search?q=<query>&limit=<n>`
 
@@ -228,9 +227,9 @@ it for publication. The cluster's own flow routes the draft, so the body is opti
 { "targetPath": "optional/path.md", "destinationId": "optional-destination" }
 ```
 
-Both fields are optional and override the flow's defaults when supplied. The response is the draft
-outcome — in direct mode `{ "ok": true, "mode": "direct", "proposal": Proposal }`, in queue mode
-`{ "ok": true, "mode": "queue", "job": AiJob }`.
+Both fields are optional and override the flow's defaults when supplied. Drafting is
+enqueue-only: the response is `{ "ok": true, "job": Job }`, and the proposal is created when
+the watcher completes the `draft_markdown_proposal` job.
 
 - `404 cluster_not_found` — no active cluster with that id.
 
@@ -283,7 +282,7 @@ later by the job-completion path. The route never drafts inline.
 
 - `400 gap_summary_required` — empty or missing summary.
 - `404 gap_candidate_not_found` — no candidate matches the summary.
-- `202` — `{ "job": AiJob, "links": { "job": "/api/jobs/:id", "wait": "/api/jobs/:id/wait", "cancel": "/api/jobs/:id/cancel", "proposals": "/api/proposals" } }`.
+- `202` — `{ "job": Job, "links": { "job": "/api/jobs/:id", "wait": "/api/jobs/:id/wait", "cancel": "/api/jobs/:id/cancel", "proposals": "/api/proposals" } }`.
 
 ### `GET /api/proposals/:id`
 
@@ -316,7 +315,7 @@ before any job is created.
 - `409 proposal_not_ready` — only `ready` proposals can be published.
 - `409 proposal_repository_not_found` — no indexed repository matches the target path.
 - `409 proposal_repository_not_git` — the matched repository is not a Git checkout.
-- `202` — `{ "job": AiJob, "links": { "job": "/api/jobs/:id", "wait": "/api/jobs/:id/wait", "cancel": "/api/jobs/:id/cancel", "proposal": "/api/proposals/:id" } }`.
+- `202` — `{ "job": Job, "links": { "job": "/api/jobs/:id", "wait": "/api/jobs/:id/wait", "cancel": "/api/jobs/:id/cancel", "proposal": "/api/proposals/:id" } }`.
 
 ### `GET /api/proposals/:id/execution-context`
 
@@ -330,13 +329,15 @@ the same repository resolution + validation as the publish path.
 - `409 proposal_repository_not_git` — the matched repository is not a Git checkout.
 - `200` — `{ "proposal": Proposal, "repository": { "id", "localPath", "remoteUrl"?, "defaultBranch", "git"? } }`.
 
-## AI Jobs
+## Jobs
 
-The full job contract — payload shapes, the watcher model, and provider configuration — lives
-in [ai-jobs.md](ai-jobs.md). Job types: `answer_question`, `summarize_gap`,
-`draft_markdown_proposal`, `detect_contradiction`, `suggest_consolidation`.
+All AI work runs through the pg-boss queue. The full job contract — payload shapes, job
+states, the client flow, the watcher model, and provider configuration — lives in
+[ai-jobs.md](ai-jobs.md). Job types include `answer_question`, `summarize_gap`,
+`draft_markdown_proposal`, `crunch_knowledge_base`, `publish_proposal`, and the maintenance
+jobs. Job states: `created`, `retry`, `active`, `completed`, `cancelled`, `failed`, `blocked`.
 
-### `POST /api/ai-jobs`
+### `POST /api/jobs`
 
 Creates a job.
 
@@ -344,60 +345,54 @@ Creates a job.
 { "type": "draft_markdown_proposal", "input": { ... } }
 ```
 
-- `400 valid_job_type_required` — unknown or missing type.
-- `201` — `{ "job": AiJob }`.
+- `400 invalid_job` — unknown/missing type or invalid input.
+- `202` — `{ "job": Job }`.
 
-### `GET /api/ai-jobs`
+### `GET /api/jobs`
 
-Lists all jobs.
+Lists jobs. Optional query: `type`, `state`, `createdAfter`, `limit` (default 100, max 200),
+`offset`.
 
 ```json
-{ "jobs": [ AiJob, ... ] }
+{ "jobs": [ Job, ... ] }
 ```
 
-### `GET /api/ai-jobs/:id`
+### `GET /api/jobs/:id`
 
 - `404 job_not_found`.
-- `200` — `{ "job": AiJob }`.
+- `200` — `{ "job": Job }`.
 
-### `POST /api/ai-jobs/claim`
+### `GET /api/jobs/:id/wait`
 
-Claims the oldest pending job matching the worker's accepted types.
-
-```json
-{ "workerName": "local-dev-watcher", "acceptedTypes": ["answer_question", "draft_markdown_proposal"] }
-```
-
-- `400 worker_name_required`.
-- `400 accepted_types_required` — none of the supplied types are recognised.
-- `200` — `{ "job": AiJob }` or `{ "job": null }` when nothing is pending.
-
-### `POST /api/ai-jobs/:id/complete`
-
-Completes a claimed job. On completion the API updates the originating question log
-(`answer_question`) or stores the generated proposal (`draft_markdown_proposal`).
-
-```json
-{ "output": { ... } }
-```
+Long-polls until the job is terminal. `200` with `{ "job": Job }` once terminal; `202` with
+the current `{ "job": Job }` while still running — re-issue to keep waiting (`JOB_WAIT_TIMEOUT_MS`
+bounds each call, `JOB_WAIT_POLL_MS` the server poll cadence).
 
 - `404 job_not_found`.
-- `500 job_completion_failed` — `message` carries the reason.
-- `200` — `{ "job": AiJob }`.
 
-### `POST /api/ai-jobs/:id/fail`
+### `GET /api/jobs/schedules`
 
-Marks a job as failed.
+Lists registered pg-boss cron schedules: `{ "schedules": [ ... ] }`.
 
-```json
-{ "error": "Provider timed out" }
-```
+### `POST /api/jobs/:id/cancel`
 
-- `404 job_not_found`.
-- `200` — `{ "job": AiJob }`.
+Cancels a job (terminal). `404 job_not_found`; `200` — `{ "job": Job }`.
+
+### `POST /api/jobs/:id/retry`
+
+Retries a `failed` job. `409 job_not_failed` if it is not failed; `404 job_not_found`;
+`200` — `{ "job": Job }`.
+
+### Watcher-only endpoints
+
+`POST /api/jobs/claim`, `POST /api/jobs/:id/heartbeat`, `POST /api/jobs/:id/complete`, and
+`POST /api/jobs/:id/fail` are driven by the watcher. Claim takes
+`{ "workerName", "capabilities": [...] }` and returns `{ "job": Job }` or `{ "job": null }`;
+fail takes a structured `error` object. See [ai-jobs.md](ai-jobs.md).
 
 ## Type Reference
 
 The response shapes referenced above (`AnswerResult`, `Citation`, `DocumentSection`,
 `KnowledgeDocument`, `RepositoryRef`, `QuestionLog`, `GapCandidate`, `Proposal`,
-`ProposalPublication`, `AiJob`) are defined in `packages/core/src/index.ts`.
+`ProposalPublication`) are defined in `packages/core/src/index.ts`. The `Job` shape
+(`JobView`) is defined in `packages/jobs/src/types.ts`.
