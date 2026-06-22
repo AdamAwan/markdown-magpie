@@ -1,0 +1,39 @@
+# E2E override — adds the deterministic OpenAI-compatible chat fixture used by the
+# Task 14 queue-lifecycle smoke test (npm run e2e:jobs).
+#
+# Usage (the fixture is baked into the markdown-magpie image, so build the app
+# image first via the `app` profile):
+#
+#   AI_PROVIDER=openai-compatible \
+#   OPENAI_COMPATIBLE_BASE_URL=http://openai-fixture:8800/v1 \
+#   OPENAI_COMPATIBLE_API_KEY=dummy \
+#   OPENAI_COMPATIBLE_MODEL=fixture \
+#   docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
+#     --profile app --profile e2e up -d --build
+#
+# The fixture is isolated to the `e2e` profile so it never starts under the normal
+# `app` profile. The watcher reaches it at http://openai-fixture:8800/v1 via the
+# OPENAI_COMPATIBLE_BASE_URL override above.
+services:
+  openai-fixture:
+    image: markdown-magpie:latest
+    command: node scripts/fixtures/openai-fixture.mjs
+    environment:
+      FIXTURE_PORT: "8800"
+      # Long enough for the cancel scenario to land while the answer call is in
+      # flight; interruptible so a client abort short-circuits it.
+      FIXTURE_SLOW_DELAY_MS: "20000"
+    ports:
+      - "8800:8800"
+    profiles:
+      - e2e
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8800/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
