@@ -44,6 +44,10 @@
   .hud b{color:var(--ink);font-weight:600;}
   .hint{position:fixed;bottom:18px;left:22px;z-index:50;font-size:12px;color:var(--muted);
     background:rgba(255,255,255,.6);border:1px solid var(--line);border-radius:99px;padding:6px 12px;}
+  .exit{position:fixed;top:18px;right:22px;z-index:50;font-size:12.5px;font-weight:600;color:var(--ink);
+    background:rgba(255,255,255,.7);backdrop-filter:blur(6px);border:1px solid var(--line);border-radius:99px;
+    padding:7px 13px;text-decoration:none;}
+  .exit:hover{background:#fff;border-color:var(--line-2);}
 
   /* cards */
   .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(14px,1.6vw,22px);}
@@ -448,6 +452,7 @@
 
 </div>
 
+<a class="exit" href="/">Back to login</a>
 <div class="hud"><span id="counter">1 / 13</span> · <b id="hud-title">Title</b></div>
 <div class="hint">← → navigate &nbsp;·&nbsp; <b>O</b> overview &nbsp;·&nbsp; <b>F</b> fullscreen</div>
 

@@ -6,7 +6,7 @@ import { RuntimeConfig } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
 
 type ModelInfo = ReturnType<typeof extractModelInfo>;
-type FlowKey = "overview" | "ask" | "improvement" | "automation" | "perflow";
+type FlowKey = "overview" | "ask" | "improvement" | "automation" | "gappr" | "perflow";
 
 // Initialize mermaid exactly once on the client. startOnLoad is false because we
 // render each diagram on demand via mermaid.run rather than letting it scan the
@@ -54,6 +54,12 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
             onClick={() => setActiveFlow("automation")}
           >
             Automation &amp; Crunch
+          </button>
+          <button
+            className={activeFlow === "gappr" ? "flowTab active" : "flowTab"}
+            onClick={() => setActiveFlow("gappr")}
+          >
+            Gap to PR Jobs
           </button>
           <button
             className={activeFlow === "perflow" ? "flowTab active" : "flowTab"}
@@ -148,8 +154,11 @@ function buildDiagram(flow: FlowKey, modelInfo: ModelInfo): string {
   if (flow === "automation") {
     return automationDiagram(modelInfo);
   }
+  if (flow === "gappr") {
+    return gapToPullRequestDiagram();
+  }
   if (flow === "perflow") {
-    return perFlowJobsDiagram(modelInfo);
+    return perFlowJobsDiagram();
   }
   return overviewDiagram(modelInfo);
 }
@@ -267,8 +276,8 @@ function continuousImprovementDiagram(modelInfo: ModelInfo): string {
     end
 
     subgraph AutoPath["<b>AUTOMATED (cron: gaps → PRs)</b>"]
-        AutoDraft["🤖 ${chatLabel}<br/>Auto-draft<br/>uncovered clusters"]
-        AutoPromote["⏩ Auto-publish<br/>(skips human review)"]
+        AutoDraft["📦 Provider job<br/>Auto-draft uncovered clusters<br/>(${chatLabel})"]
+        AutoPromote["📦 GitHub job<br/>Auto-publish<br/>(skips human review)"]
         AutoDraft --> AutoPromote
     end
 
@@ -305,10 +314,10 @@ function automationDiagram(modelInfo: ModelInfo): string {
     end
 
     subgraph GapsTask["<b>gaps → pull requests</b> · process<br/>(per flow · every 10 min)"]
-        GRead["📖 Read PR state<br/>from snapshot"]
-        GCluster["📊 Cluster this flow's gaps"]
-        GDraft["🤖 ${chatLabel}<br/>Draft uncovered clusters"]
-        GPublish["🚀 Publish PRs<br/>(no manual review)"]
+        GRead["🔧 Maintenance watcher<br/>calls API reconciler"]
+        GCluster["🧭 API assigns clusters<br/>+ enqueues reshape job"]
+        GDraft["📦 Enqueue provider jobs<br/>to draft uncovered clusters"]
+        GPublish["📦 Drain outbox + enqueue<br/>GitHub publication jobs"]
         GRead --> GCluster
         GCluster --> GDraft
         GDraft --> GPublish
@@ -331,7 +340,7 @@ function automationDiagram(modelInfo: ModelInfo): string {
     end
 
     Scheduler -->|one job per flow| FGather
-    Scheduler -->|one job per flow| GRead
+    Scheduler -->|maintenance orchestrator job per flow| GRead
     Scheduler -->|one job per flow| SWatch
     Scheduler -->|per flow| CrPlan
 
@@ -348,15 +357,68 @@ function automationDiagram(modelInfo: ModelInfo): string {
     style CrunchTask fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px`;
 }
 
+// A sequence diagram makes the job boundaries and capability hand-offs explicit.
+// The maintenance watcher coordinates through the API; provider and GitHub work
+// remain independently claimable queue jobs and may run on other watcher processes.
+function gapToPullRequestDiagram(): string {
+  return `sequenceDiagram
+    autonumber
+    participant S as Scheduler
+    participant Q as pg-boss Job Queue
+    participant M as Maintenance Watcher
+    participant A as API Reconciler
+    participant P as Provider Watcher
+    participant G as GitHub Watcher
+    participant H as Git Host
+
+    Note over M,G: Watcher means worker process. A process advertises one or more capabilities but executes one job at a time.
+    S->>Q: enqueue process_gaps_to_pull_requests
+    Q->>M: claim [maintenance]
+    M->>A: POST /api/gaps/reconcile
+    A->>A: refresh PR state, revision gate, assign clusters
+
+    opt two or more active clusters
+        A->>Q: enqueue reconcile_gap_clusters
+        Note over A,P: API bounded-waits for this provider job
+        Q->>P: claim [configured AI provider]
+        P-->>A: complete reshape job
+    end
+
+    loop each uncovered cluster
+        A->>Q: enqueue draft_markdown_proposal
+    end
+    A-->>M: reconciliation request complete
+    M-->>Q: complete maintenance job
+
+    loop queued draft jobs
+        Q->>P: claim [configured AI provider]
+        P->>A: complete draft and store proposal and publish action
+    end
+
+    Note over S,A: A later reconcile drains publication actions after drafts complete
+    S->>Q: enqueue next process_gaps_to_pull_requests
+    Q->>M: claim [maintenance]
+    M->>A: POST /api/gaps/reconcile
+    A->>Q: enqueue publish_proposal
+    A-->>M: reconciliation request complete
+    M-->>Q: complete maintenance job
+
+    Q->>G: claim publish_proposal [github]
+    G->>H: push branch and open pull request
+    G->>A: complete publish job and record PR URL
+
+    Q->>G: claim refresh_pull_requests [github]
+    G->>H: read PR state
+    G->>A: complete refresh job
+    A->>A: on merge, resolve gaps and re-index
+
+    Note over M,P: The nested reshape needs another free provider-capable watcher. With only one watcher process, reshape times out and is skipped. Drafting still continues.`;
+}
 // Zooms into one flow's two jobs and the fetch/process split between them: a fetch
 // job polls the host and writes a snapshot; the reconciler reads that snapshot and
 // never touches the host in the steady state. Everything is scoped to the flow —
 // its own PRs, its own revision gate, its own outbox, its own crons and run-locks.
-function perFlowJobsDiagram(modelInfo: ModelInfo): string {
-  const chatLabel = modelInfo.chatModel && modelInfo.chatHost
-    ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
-    : modelInfo.chatModel || "Chat Model";
-
+function perFlowJobsDiagram(): string {
   return `graph TD
     Sched["⏱️ Scheduler tick"]
     Sched -->|fan out: jobs per flow| FA["🧵 Flow A jobs<br/>own crons + run-locks"]
@@ -375,11 +437,11 @@ function perFlowJobsDiagram(modelInfo: ModelInfo): string {
     end
 
     subgraph Recon["<b>PROCESS</b> · reconciler (Flow A · ~10 min)"]
-        ReadPR["📖 Read PR state from snapshot<br/>(live poll only if missing)"]
+        ReadPR["🔧 API reconciler reads PR state<br/>(live poll only if missing)"]
         Gate{"Flow A's gap-catalog<br/>revision advanced?"}
-        Cluster["📊 Cluster Flow A's gaps<br/>(reshape within flow only)"]
-        Draft["🤖 ${chatLabel}<br/>Draft uncovered clusters"]
-        Outbox["📬 Drain Flow A's<br/>publish outbox"]
+        Cluster["🧭 Assign Flow A's gaps<br/>+ enqueue provider reshape job"]
+        Draft["📦 Enqueue provider draft jobs<br/>for uncovered clusters"]
+        Outbox["📦 Drain Flow A's outbox<br/>+ enqueue GitHub jobs"]
         ReadPR --> Gate
         Gate -->|unchanged| Outbox
         Gate -->|advanced| Cluster
@@ -390,8 +452,8 @@ function perFlowJobsDiagram(modelInfo: ModelInfo): string {
     Write -.->|snapshot| ReadPR
     ReadPR -->|merged| Resolve["✅ Resolve gaps<br/>+ Re-index KB"]
     ReadPR -->|closed| Reject["🚫 Mark rejected<br/>+ freeze cluster"]
-    Outbox --> Host["🌐 Git Host<br/>Flow A's Pull Requests"]
-    Host -.->|next fetch| Poll
+    Outbox --> GitHubWorker["🔧 GitHub watcher<br/>pushes branch + opens PR"]
+    GitHubWorker -.->|next fetch| Poll
 
     style Fetch fill:#fbfcfa,stroke:#285f74,stroke-width:2px
     style Recon fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`;
