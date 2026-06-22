@@ -1,0 +1,39 @@
+# Standalone watcher — runs ONLY the watcher process, configured entirely from
+# the repo-root .env. Use this to lend AI capacity to an API that lives
+# elsewhere (a remote/staging deployment, or the API running on this host).
+#
+#   docker compose -f docker-compose.watcher.yml up --build
+#
+# The watcher polls API_BASE_URL for claimable jobs and completes them with
+# whichever provider's credentials are present in .env (openai-compatible,
+# azure-openai, codex or claude). It needs no Postgres of its own — all state
+# lives behind the API.
+name: markdown-magpie-watcher
+
+services:
+  watcher:
+    build:
+      context: .
+    image: markdown-magpie:latest
+    command: npm run start -w @magpie/watcher
+    # Pull every WATCHER_*, API_BASE_URL, AUTH0_* and provider credential
+    # straight from your .env.
+    env_file:
+      - .env
+    environment:
+      # .env defaults MAGPIE_CHECKOUT_ROOT to a relative path (.magpie/checkouts);
+      # override it to an absolute, writable path inside the container (the image
+      # pre-creates /data/checkouts owned by the runtime user) and back it with a
+      # named volume so clones survive restarts.
+      MAGPIE_CHECKOUT_ROOT: /data/checkouts
+    volumes:
+      - watcher-checkouts:/data/checkouts
+    # Lets the container reach an API running on the host: point
+    # API_BASE_URL at http://host.docker.internal:4000 in .env when the API is
+    # on localhost. (A remote API URL needs nothing here.)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  watcher-checkouts:
