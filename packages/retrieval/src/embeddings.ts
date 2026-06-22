@@ -3,7 +3,7 @@ import { DEFAULT_EMBEDDING_TIMEOUT_MS, fetchWithTimeout } from "./http.js";
 
 export const EMBEDDING_DIMENSIONS = 1536;
 
-export type EmbeddingProviderName = "mock" | "openai-compatible" | "azure-openai";
+export type EmbeddingProviderName = "openai-compatible" | "azure-openai";
 
 export interface EmbeddingProviderConfig {
   provider: EmbeddingProviderName;
@@ -14,18 +14,6 @@ export interface EmbeddingProviderConfig {
   azureDeployment?: string;
   azureApiVersion?: string;
   timeoutMs?: number;
-}
-
-export class MockEmbeddingProvider implements EmbeddingProvider {
-  async embed(texts: string[]): Promise<number[][]> {
-    // Correctly-dimensioned, non-zero, deterministic. Never written to pgvector
-    // (hybrid is disabled for the mock provider) — exists only to satisfy the interface.
-    return texts.map((text) => {
-      const vector = new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
-      vector[0] = text.length || 1;
-      return vector;
-    });
-  }
 }
 
 export class OpenAICompatibleEmbeddingProvider implements EmbeddingProvider {
@@ -113,7 +101,7 @@ export function createEmbeddingProvider(config: EmbeddingProviderConfig): Embedd
     );
   }
 
-  return new MockEmbeddingProvider();
+  throw new Error(`Unsupported embedding provider: ${String(config.provider)}`);
 }
 
 async function parseEmbeddingResponse(response: Response, expectedCount: number): Promise<number[][]> {

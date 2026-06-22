@@ -1,7 +1,7 @@
 import type { ChatProvider, ChatRequest, ChatResponse } from "@magpie/core";
 import { DEFAULT_CHAT_TIMEOUT_MS, fetchWithTimeout } from "./http.js";
 
-export type ChatProviderName = "mock" | "openai-compatible" | "azure-openai";
+export type ChatProviderName = "openai-compatible" | "azure-openai";
 
 export interface ChatProviderConfig {
   provider: ChatProviderName;
@@ -12,28 +12,6 @@ export interface ChatProviderConfig {
   azureDeployment?: string;
   azureApiVersion?: string;
   timeoutMs?: number;
-}
-
-export class MockChatProvider implements ChatProvider {
-  async complete(request: ChatRequest): Promise<ChatResponse> {
-    const prompt = request.messages.at(-1)?.content ?? "";
-    const question = extractBlock(prompt, "Question") || "the question";
-    const context = extractBlock(prompt, "Context");
-    const firstRelevantParagraph = context
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => line && !line.startsWith("#"));
-
-    if (!firstRelevantParagraph) {
-      return {
-        content: "I could not find reliable source material for this question."
-      };
-    }
-
-    return {
-      content: `Based on the indexed Markdown, ${answerLeadIn(question)} ${firstRelevantParagraph}`
-    };
-  }
 }
 
 export class OpenAICompatibleChatProvider implements ChatProvider {
@@ -136,7 +114,7 @@ export function createChatProvider(config: ChatProviderConfig): ChatProvider {
     );
   }
 
-  return new MockChatProvider();
+  throw new Error(`Unsupported chat provider: ${String(config.provider)}`);
 }
 
 async function parseChatCompletionResponse(response: Response): Promise<ChatResponse> {
@@ -157,23 +135,6 @@ async function parseChatCompletionResponse(response: Response): Promise<ChatResp
   }
 
   return { content };
-}
-
-function extractBlock(prompt: string, label: string): string {
-  const pattern = new RegExp(`${label}:\\n([\\s\\S]*?)(?:\\n\\n[A-Z][A-Za-z ]+:\\n|$)`);
-  return pattern.exec(prompt)?.[1]?.trim() ?? "";
-}
-
-function answerLeadIn(question: string): string {
-  if (/rollback/i.test(question)) {
-    return "rollback guidance is:";
-  }
-
-  if (/deploy|deployment/i.test(question)) {
-    return "deployment guidance is:";
-  }
-
-  return "the relevant guidance is:";
 }
 
 function trimTrailingSlash(value: string): string {

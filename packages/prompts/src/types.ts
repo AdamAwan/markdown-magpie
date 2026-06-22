@@ -5,7 +5,7 @@ export interface PromptDefinition {
   title: string;
   /** What the prompt is for. */
   description: string;
-  /** Where this prompt is used, e.g. ["watcher · queue mode", "api · direct mode"]. */
+  /** Where this prompt is used, e.g. ["watcher", "watcher · routing"]. */
   usedBy: string[];
   /** Short description of the JSON the model must return. */
   outputShape: string;

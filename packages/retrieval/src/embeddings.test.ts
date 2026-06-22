@@ -107,9 +107,10 @@ describe("createEmbeddingProvider", () => {
     );
   });
 
-  it("falls back to a mock provider with the correct dimensions", async () => {
-    const provider = createEmbeddingProvider({ provider: "mock" });
-    const [vector] = await provider.embed(["hello"]);
-    assert.equal(vector.length, EMBEDDING_DIMENSIONS);
+  it("requires the Azure embedding settings", () => {
+    assert.throws(
+      () => createEmbeddingProvider({ provider: "azure-openai", apiKey: "k", azureEndpoint: "e" }),
+      /AZURE_OPENAI_EMBEDDING_DEPLOYMENT/
+    );
   });
 });
