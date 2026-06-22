@@ -29,18 +29,54 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     retrieve: async () => [],
     proposalExecutionContext: async () => ({ proposal: {}, repository: {} }),
     crunchExecutionContext: async () => ({ run: {}, repository: {} }),
+    sourceSyncExecutionContext: async () => ({ run: {}, sourceName: "", repository: {} }),
     reconcileGaps: async () => ({ ok: true }),
+    runSourceSync: async () => ({ runIds: [] }),
     ...overrides
   };
 }
 
 describe("MaintenanceRunner", () => {
-  it("declares the maintenance capability and only supports process_gaps_to_pull_requests", () => {
+  it("declares the maintenance capability and supports the maintenance job types", () => {
     const runner = new MaintenanceRunner(fakeApi());
     assert.equal(runner.capability, "maintenance");
     assert.ok(runner.supports("process_gaps_to_pull_requests"));
+    assert.ok(runner.supports("source_change_sync"));
     assert.ok(!runner.supports("answer_question"));
     assert.ok(!runner.supports("refresh_pull_requests"));
+  });
+
+  it("POSTs the source-sync orchestration endpoint and returns schema-valid run ids", async () => {
+    let called: string | undefined = "unset";
+    const api = fakeApi({
+      runSourceSync: async (flowId) => {
+        called = flowId;
+        return { runIds: ["run-1", "run-2"] };
+      }
+    });
+    const runner = new MaintenanceRunner(api);
+    const output = (await runner.run(job("source_change_sync", {}), new AbortController().signal)) as {
+      runIds: string[];
+    };
+    assert.equal(called, undefined, "no flowId in input ⇒ watch every configured git source");
+    assert.deepEqual(output.runIds, ["run-1", "run-2"]);
+  });
+
+  it("forwards a flowId to the source-sync orchestration endpoint when present", async () => {
+    let called: string | undefined = "unset";
+    const api = fakeApi({
+      runSourceSync: async (flowId) => {
+        called = flowId;
+        return { runIds: [] };
+      }
+    });
+    const runner = new MaintenanceRunner(api);
+    const output = (await runner.run(
+      job("source_change_sync", { flowId: "flow-x" }),
+      new AbortController().signal
+    )) as { runIds: string[] };
+    assert.equal(called, "flow-x");
+    assert.deepEqual(output.runIds, []);
   });
 
   it("POSTs the reconcile endpoint and returns schema-valid output", async () => {

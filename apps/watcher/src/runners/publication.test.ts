@@ -5,6 +5,7 @@ import { publishCrunchOutputSchema, publishProposalOutputSchema } from "@magpie/
 import type {
   CrunchExecutionContext,
   ProposalExecutionContext,
+  SourceSyncExecutionContext,
   WatcherApi
 } from "../http-client.js";
 import { PublicationRunner } from "./publication.js";
@@ -59,6 +60,15 @@ const CRUNCH_CONTEXT: CrunchExecutionContext = {
   repository: REPOSITORY
 };
 
+const SOURCE_SYNC_CONTEXT: SourceSyncExecutionContext = {
+  run: {
+    id: "run-aabbccdd",
+    changeset: [{ path: "guide.md", content: "# Guide\nupdated" }]
+  },
+  sourceName: "Pricing repo",
+  repository: REPOSITORY
+};
+
 function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
   return {
     claim: async () => undefined,
@@ -68,7 +78,9 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     retrieve: async () => [],
     proposalExecutionContext: async () => PROPOSAL_CONTEXT,
     crunchExecutionContext: async () => CRUNCH_CONTEXT,
+    sourceSyncExecutionContext: async () => SOURCE_SYNC_CONTEXT,
     reconcileGaps: async () => ({ ok: true }),
+    runSourceSync: async () => ({ runIds: [] }),
     ...overrides
   };
 }

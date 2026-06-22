@@ -596,6 +596,10 @@ export interface SourceSyncRun {
   status: SourceSyncRunStatus;
   jobId?: string;
   plan?: CrunchPlan;
+  // The constrained changeset the API derived from the plan at gather time (only
+  // writes to candidate documents). Persisted so the publish job can fetch it
+  // without re-deriving the candidate set. Absent on skipped/failed runs.
+  changeset?: ChangesetChange[];
   error?: string;
   fromSha?: string;
   toSha: string;

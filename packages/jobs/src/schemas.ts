@@ -231,9 +231,11 @@ export const publishCrunchOutputSchema = z.object({
 });
 
 export const sourceChangeSyncInputSchema = z.object({ flowId: z.string().optional() });
+// triggerSourceSyncRun reacts to 0..N git sources per flow, creating one run per
+// source that had a new commit to consider. The output honestly reports every run
+// id created (empty when no source had a change worth a run).
 export const sourceChangeSyncOutputSchema = z.object({
-  runId: z.string().optional(),
-  planned: z.boolean()
+  runIds: z.array(z.string())
 });
 
 export const publishSourceSyncInputSchema = z.object({ runId: z.string() });

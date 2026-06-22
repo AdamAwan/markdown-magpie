@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CrunchPlan, ProposalPublication, SourceSyncRun, SourceSyncState } from "@magpie/core";
+import type { ChangesetChange, CrunchPlan, ProposalPublication, SourceSyncRun, SourceSyncState } from "@magpie/core";
 
 export interface SourceSyncRunInput {
   flowId?: string;
@@ -9,6 +9,7 @@ export interface SourceSyncRunInput {
   status: SourceSyncRun["status"];
   jobId?: string;
   plan?: CrunchPlan;
+  changeset?: ChangesetChange[];
   error?: string;
   fromSha?: string;
   toSha: string;
@@ -61,6 +62,7 @@ export class InMemorySourceSyncStore implements SourceSyncStore {
       status: input.status,
       jobId: input.jobId,
       plan: input.plan,
+      changeset: input.changeset,
       error: input.error,
       fromSha: input.fromSha,
       toSha: input.toSha,

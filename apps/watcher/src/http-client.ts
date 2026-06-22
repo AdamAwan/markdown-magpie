@@ -33,16 +33,27 @@ export interface CrunchExecutionContext {
   repository: unknown;
 }
 
+export interface SourceSyncExecutionContext {
+  run: unknown;
+  sourceName: unknown;
+  repository: unknown;
+}
+
 // The full surface the runners and loop use. The loop only needs WatcherApiClient;
 // runners additionally use the retrieve + execution-context calls.
 export interface WatcherApi extends WatcherApiClient {
   retrieve(question: string, flowId: string | undefined, limit: number | undefined): Promise<RetrievedSection[]>;
   proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext>;
   crunchExecutionContext(runId: string): Promise<CrunchExecutionContext>;
+  sourceSyncExecutionContext(runId: string): Promise<SourceSyncExecutionContext>;
   // Drives a flow's gap→PR reconciliation in the API (clustering, the reshape AI
   // job the API bounded-waits on, drafting and publication enqueue). An absent
   // flowId reconciles the default flow.
   reconcileGaps(flowId: string | undefined, signal?: AbortSignal): Promise<{ ok: true }>;
+  // Drives source-change sync in the API (checkout/diff/candidate gather + the
+  // generative plan job the API bounded-waits on + publication enqueue), returning
+  // the run ids created. An absent flowId watches every configured git source.
+  runSourceSync(flowId: string | undefined, signal?: AbortSignal): Promise<{ runIds: string[] }>;
 }
 
 export interface HttpClientOptions {
@@ -104,12 +115,25 @@ export class HttpWatcherApi implements WatcherApi {
     return { ok: true };
   }
 
+  async runSourceSync(flowId: string | undefined, signal?: AbortSignal): Promise<{ runIds: string[] }> {
+    const { runIds } = await this.post<{ runIds: string[] }>(
+      "/api/source-sync/run",
+      { ...(flowId ? { flowId } : {}) },
+      signal
+    );
+    return { runIds };
+  }
+
   async proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext> {
     return this.get<ProposalExecutionContext>(`/api/proposals/${proposalId}/execution-context`);
   }
 
   async crunchExecutionContext(runId: string): Promise<CrunchExecutionContext> {
     return this.get<CrunchExecutionContext>(`/api/crunch/runs/${runId}/execution-context`);
+  }
+
+  async sourceSyncExecutionContext(runId: string): Promise<SourceSyncExecutionContext> {
+    return this.get<SourceSyncExecutionContext>(`/api/source-sync/runs/${runId}/execution-context`);
   }
 
   private async post<TResponse>(path: string, body: unknown, signal?: AbortSignal): Promise<TResponse> {

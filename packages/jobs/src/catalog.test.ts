@@ -119,6 +119,14 @@ test("source_change_sync is a maintenance queue named by its type", () => {
   assert.equal(queueNameForJob("source_change_sync", {}), "source_change_sync");
 });
 
+test("source_change_sync output reports the run ids it created (0..N)", () => {
+  const schema = jobDefinition("source_change_sync").outputSchema;
+  assert.ok(schema.safeParse({ runIds: [] }).success, "empty run set is valid");
+  assert.ok(schema.safeParse({ runIds: ["run-1", "run-2"] }).success, "multiple runs are valid");
+  // The legacy {runId, planned} shape is gone; runIds is required.
+  assert.ok(!schema.safeParse({ planned: true }).success, "missing runIds is rejected");
+});
+
 test("publish_source_sync is a github queue named by its type", () => {
   const definition = jobDefinition("publish_source_sync");
   assert.equal(definition.requiredCapability({ runId: "run-1" }), "github");

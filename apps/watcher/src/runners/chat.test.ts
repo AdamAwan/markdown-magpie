@@ -50,7 +50,9 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     retrieve: async () => SECTIONS,
     proposalExecutionContext: async () => ({ proposal: {}, repository: {} }),
     crunchExecutionContext: async () => ({ run: {}, repository: {} }),
+    sourceSyncExecutionContext: async () => ({ run: {}, sourceName: "", repository: {} }),
     reconcileGaps: async () => ({ ok: true }),
+    runSourceSync: async () => ({ runIds: [] }),
     ...overrides
   };
 }

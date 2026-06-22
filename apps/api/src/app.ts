@@ -11,6 +11,7 @@ import { questionRoutes } from "./features/questions/routes.js";
 import { gapRoutes } from "./features/gaps/routes.js";
 import { proposalRoutes } from "./features/proposals/routes.js";
 import { crunchRoutes } from "./features/crunch/routes.js";
+import { sourceSyncRoutes } from "./features/source-sync/routes.js";
 import { scheduledTaskRoutes } from "./features/scheduled-tasks/routes.js";
 import { jobRoutes } from "./features/jobs/routes.js";
 import { promptRoutes } from "./features/prompts/routes.js";
@@ -57,6 +58,7 @@ export function buildApp(ctx: AppContext, options: ApiAuthOptions = {}): Hono {
   api.route("/gaps", gapRoutes(ctx));
   api.route("/proposals", proposalRoutes(ctx));
   api.route("/crunch", crunchRoutes(ctx));
+  api.route("/source-sync", sourceSyncRoutes(ctx));
   api.route("/scheduled-tasks", scheduledTaskRoutes(ctx));
   api.route("/jobs", jobRoutes(ctx));
   api.route("/prompts", promptRoutes(ctx));
