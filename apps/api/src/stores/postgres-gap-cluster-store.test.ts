@@ -81,7 +81,7 @@ async function insertGap(databaseUrl: string): Promise<string> {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   try {
     const q = await pool.query<{ id: string }>(
-      "INSERT INTO questions (id, question, asked_at) VALUES ($1, 'q', now()) RETURNING id",
+      "INSERT INTO questions (id, question, chat_provider, asked_at) VALUES ($1, 'q', 'codex', now()) RETURNING id",
       [`q-${randomUUID()}`]
     );
     const g = await pool.query<{ id: string }>(
