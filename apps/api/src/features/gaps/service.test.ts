@@ -6,14 +6,6 @@ import * as gaps from "./service.js";
 
 test("listClusters reads persisted active clusters and makes no model call", async () => {
   const ctx = makeTestContext();
-  let chatCalls = 0;
-  ctx.providers.chat = () =>
-    ({
-      complete: async () => {
-        chatCalls += 1;
-        return { content: "{}" };
-      }
-    }) as never;
 
   const cluster = await ctx.stores.gapClusters.createCluster({
     flowId: "f",
@@ -23,7 +15,6 @@ test("listClusters reads persisted active clusters and makes no model call", asy
   });
 
   const result = await gaps.listClusters(ctx, 50);
-  assert.equal(chatCalls, 0, "no clustering model call on read");
   assert.equal(result.length, 1);
   assert.equal(result[0].id, cluster.id);
   assert.equal(result[0].status, "active");

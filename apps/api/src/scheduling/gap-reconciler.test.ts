@@ -55,18 +55,15 @@ class ThrowingPollJobBroker extends FakeJobBroker {
 describe("reconcileGaps revision gate", () => {
   it("does no model work when the catalog revision is unchanged and no actions pending", async () => {
     const ctx = makeTestContext();
-    let chatCalls = 0;
-    ctx.providers.chat = () =>
-      ({
-        complete: async () => {
-          chatCalls += 1;
-          return { content: "{}" };
-        }
-      }) as never;
 
-    // processed revision already equals the catalog revision (both 0), no actions.
+    // processed revision already equals the catalog revision (both 0), no actions:
+    // with nothing changed the reconciler enqueues no reshape job.
     await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
-    assert.equal(chatCalls, 0, "no model calls when nothing changed");
+    assert.equal(
+      (await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length,
+      0,
+      "no reshape job enqueued when nothing changed"
+    );
   });
 
   it("still runs the PR-state pass even when model work is skipped", async () => {
@@ -112,9 +109,7 @@ describe("reconcileGaps clustering", () => {
     });
     await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
 
-    // No merges/splits proposed.
-    ctx.providers.chat = () => ({ complete: async () => ({ content: '{"merges":[],"splits":[]}' }) }) as never;
-
+    // A single new cluster has nothing to merge, so no reshape job is requested.
     await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
 
     const clusters = await ctx.stores.gapClusters.listActiveClusters();
@@ -257,9 +252,7 @@ describe("reconcileGaps autonomous drafting", () => {
     });
     await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
 
-    // No reshape proposed (a single cluster has nothing to merge anyway).
-    ctx.providers.chat = () => ({ complete: async () => ({ content: '{"merges":[],"splits":[]}' }) }) as never;
-
+    // A single cluster has nothing to merge, so no reshape job is requested.
     await reconcileGaps(ctx, undefined, {
       fetchPullRequestStatus: async () => undefined,
       publishProposal: async () => {},
@@ -277,7 +270,6 @@ describe("reconcileGaps autonomous drafting", () => {
     const ctx = makeTestContext({
       config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
     });
-    ctx.providers.chat = () => ({ complete: async () => ({ content: '{"merges":[],"splits":[]}' }) }) as never;
     const deps = {
       fetchPullRequestStatus: async () => undefined,
       publishProposal: async () => {},
@@ -333,15 +325,6 @@ describe("reconcileGaps outbox", () => {
     });
     await ctx.stores.gapClusters.enqueuePublicationAction(proposal.id, "publish");
 
-    let chatCalls = 0;
-    ctx.providers.chat = () =>
-      ({
-        complete: async () => {
-          chatCalls += 1;
-          return { content: "{}" };
-        }
-      }) as never;
-
     let publishCalls = 0;
     await reconcileGaps(ctx, undefined, {
       fetchPullRequestStatus: async () => undefined,
@@ -351,7 +334,6 @@ describe("reconcileGaps outbox", () => {
       supersedeProposal: async () => {}
     });
 
-    assert.equal(chatCalls, 0, "outbox retry makes no model call");
     assert.equal(publishCalls, 1, "the pending publish action ran");
     assert.deepEqual(await ctx.stores.gapClusters.listPendingPublicationActions(), []);
   });

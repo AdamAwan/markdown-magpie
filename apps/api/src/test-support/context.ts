@@ -1,4 +1,3 @@
-import type { ChatProvider, ChatRequest, ChatResponse } from "@magpie/core";
 import type { AppContext } from "../context.js";
 import { RuntimeConfigHolder } from "../config-holder.js";
 import { BackgroundEmbedder } from "../platform/background-embedder.js";
@@ -14,21 +13,6 @@ import type { JobBroker } from "../jobs/broker.js";
 import { FakeJobBroker } from "../jobs/fake-broker.js";
 import { InMemorySnapshotStore } from "../stores/snapshot-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
-
-// A fully-typed ChatProvider stub — no casts. It returns a valid markdown
-// proposal JSON payload so any direct provider path that does reach the chat
-// model (e.g. a non-mock direct draft) parses cleanly. The mock-provider and
-// empty-index code paths used by these tests never actually call complete(),
-// but the stub keeps the AppContext.providers.chat contract honest.
-function stubChat(): ChatProvider {
-  return {
-    async complete(_request: ChatRequest): Promise<ChatResponse> {
-      return {
-        content: '{"title":"T","targetPath":"t.md","markdown":"# T\\nbody","rationale":"r"}'
-      };
-    }
-  };
-}
 
 // Builds an AppContext wired entirely to in-memory stores in direct/mock mode,
 // matching the real AppContext interface field-for-field. Pass overrides to
@@ -59,7 +43,6 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
     },
     jobs: new FakeJobBroker(),
     providers: {
-      chat: () => stubChat(),
       embedding: undefined
     },
     config: new RuntimeConfigHolder({ aiExecutionMode: "direct", aiProvider: "mock" }),

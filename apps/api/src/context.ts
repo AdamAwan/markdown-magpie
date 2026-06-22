@@ -1,4 +1,4 @@
-import type { ChatProvider, EmbeddingProvider } from "@magpie/core";
+import type { EmbeddingProvider } from "@magpie/core";
 import { RuntimeConfigHolder } from "./config-holder.js";
 import { BackgroundEmbedder } from "./platform/background-embedder.js";
 import { BackgroundRunner } from "./platform/background-runner.js";
@@ -14,11 +14,7 @@ import {
   requireDatabaseUrl,
   storeBackend
 } from "./platform/stores.js";
-import {
-  type AiProviderName,
-  createConfiguredChatProvider,
-  createConfiguredEmbeddingProvider
-} from "./platform/providers.js";
+import { createConfiguredEmbeddingProvider } from "./platform/providers.js";
 import { InMemoryKnowledgeIndex } from "./stores/knowledge-index.js";
 import { PostgresKnowledgeStore } from "./stores/postgres-knowledge-store.js";
 import {
@@ -49,7 +45,6 @@ export interface AppContext {
   };
   jobs: JobBroker;
   providers: {
-    chat: (provider: AiProviderName) => ChatProvider;
     embedding: EmbeddingProvider | undefined;
   };
   config: RuntimeConfigHolder;
@@ -110,7 +105,6 @@ export async function createAppContext(): Promise<AppContext> {
     },
     jobs,
     providers: {
-      chat: (provider) => createConfiguredChatProvider(provider),
       embedding
     },
     config: RuntimeConfigHolder.fromEnv(),

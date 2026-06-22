@@ -1,4 +1,4 @@
-import { createChatProvider, createEmbeddingProvider, type ChatProviderName, type EmbeddingProviderName } from "@magpie/retrieval";
+import { createEmbeddingProvider, type ChatProviderName, type EmbeddingProviderName } from "@magpie/retrieval";
 import { storeBackend } from "./stores.js";
 
 export type AiProviderName = ChatProviderName | "codex" | "claude";
@@ -51,23 +51,6 @@ export function createConfiguredEmbeddingProvider() {
     azureDeployment: process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
     azureApiVersion: process.env.AZURE_OPENAI_API_VERSION,
     timeoutMs: timeoutOverride("EMBEDDING_TIMEOUT_MS")
-  });
-}
-
-export function createConfiguredChatProvider(provider: AiProviderName) {
-  if (provider !== "mock" && provider !== "openai-compatible" && provider !== "azure-openai") {
-    throw new Error(`${provider} cannot be used as a direct chat provider`);
-  }
-
-  return createChatProvider({
-    provider,
-    apiKey: process.env.OPENAI_COMPATIBLE_API_KEY || process.env.AZURE_OPENAI_API_KEY,
-    baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL,
-    model: process.env.OPENAI_COMPATIBLE_MODEL,
-    azureEndpoint: process.env.AZURE_OPENAI_ENDPOINT,
-    azureDeployment: process.env.AZURE_OPENAI_CHAT_DEPLOYMENT,
-    azureApiVersion: process.env.AZURE_OPENAI_API_VERSION,
-    timeoutMs: timeoutOverride("CHAT_TIMEOUT_MS")
   });
 }
 
