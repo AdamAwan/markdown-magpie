@@ -71,8 +71,12 @@ export class WorkerLoop {
   }
 
   private async execute(job: JobView): Promise<void> {
+    const startedAt = Date.now();
+    console.log(`Got job ${job.id} (${job.type})`);
+
     const runner = this.runners.find((candidate) => candidate.supports(job.type));
     if (!runner) {
+      console.error(`No runner supports job type ${job.type}; failing job ${job.id}`);
       await this.api.fail(job.id, this.toJobError(job, new Error(`No runner supports job type ${job.type}`)));
       return;
     }
@@ -86,15 +90,20 @@ export class WorkerLoop {
       // A cancellation reaches a terminal state server-side; don't try to
       // complete a job the server already moved out from under us.
       if (controller.signal.aborted) {
+        console.log(`Job ${job.id} (${job.type}) cancelled after ${elapsed(startedAt)}`);
         return;
       }
       await this.api.complete(job.id, output);
+      console.log(`Done job ${job.id} (${job.type}) in ${elapsed(startedAt)}`);
     } catch (error) {
       if (controller.signal.aborted) {
         // Aborted by cancellation or shutdown — the job is (or will be) terminal
         // server-side, so do not record a redundant failure.
+        console.log(`Job ${job.id} (${job.type}) cancelled after ${elapsed(startedAt)}`);
         return;
       }
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Job ${job.id} (${job.type}) failed after ${elapsed(startedAt)}: ${message}`);
       await this.api.fail(job.id, this.toJobError(job, error));
     } finally {
       heartbeat.stop();
@@ -111,6 +120,7 @@ export class WorkerLoop {
         .heartbeat(job.id)
         .then((result) => {
           if (result.cancelled) {
+            console.log(`Job ${job.id} (${job.type}) cancellation requested by server; aborting`);
             controller.abort(new Error("job cancelled"));
           }
         })
@@ -147,4 +157,10 @@ function heartbeatIntervalMs(job: JobView): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Formats a job duration for log lines: sub-second as ms, otherwise seconds.
+function elapsed(startMs: number): string {
+  const ms = Date.now() - startMs;
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }

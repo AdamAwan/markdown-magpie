@@ -25,6 +25,7 @@ export class RefreshPullRequestsRunner {
 
   async run(_job: JobView, signal: AbortSignal): Promise<unknown> {
     const open = await this.api.listOpenPullRequests(signal);
+    console.log(`refresh_pull_requests: checking ${open.length} open pull request(s)`);
     const results: Array<{ proposalId: string; state: "open" | "closed"; merged: boolean }> = [];
     for (const pr of open) {
       // Honour cancellation/shutdown between host calls so a long list aborts promptly.
@@ -43,6 +44,7 @@ export class RefreshPullRequestsRunner {
       }
       results.push({ proposalId: pr.proposalId, state: status.state, merged: status.merged });
     }
+    console.log(`refresh_pull_requests: resolved ${results.length}/${open.length} pull request(s)`);
     return refreshPullRequestsOutputSchema.parse({ results });
   }
 }

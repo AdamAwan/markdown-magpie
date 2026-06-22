@@ -59,7 +59,9 @@ export class CliRunner {
 
   async run(job: JobView, signal: AbortSignal): Promise<unknown> {
     const prompt = this.buildPromptOverride ? this.buildPromptOverride(job) : buildPrompt(job);
+    console.log(`${job.type}[${job.id}]: invoking ${this.command} CLI (${this.promptMode} mode)`);
     const stdout = await this.spawnCli(prompt, signal);
+    console.log(`${job.type}[${job.id}]: ${this.command} CLI finished, ${stdout.length} char(s) of output`);
     return parseJobOutput(job, stdout);
   }
 

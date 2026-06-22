@@ -136,10 +136,12 @@ export class PublicationRunner {
 
   private async publishProposal(job: JobView): Promise<unknown> {
     const { proposalId } = publishProposalInputSchema.parse(job.input);
+    console.log(`publish_proposal[${job.id}]: fetching execution context for proposal ${proposalId}`);
     const context = await this.api.proposalExecutionContext(proposalId);
     const { proposal, repository } = parseProposalContext(context);
 
     const branchName = createProposalBranchName(proposal);
+    console.log(`publish_proposal[${job.id}]: publishing "${proposal.title}" to branch ${branchName}`);
     const publication = await this.deps.publishProposal({
       repository: toRepositoryRef(repository),
       branchName,
@@ -147,6 +149,7 @@ export class PublicationRunner {
       markdown: proposal.markdown,
       targetPath: proposal.targetPath
     });
+    console.log(`publish_proposal[${job.id}]: pushed ${publication.branchName} at ${publication.commitSha.slice(0, 8)}`);
 
     // The branch is pushed; try to open a PR. A PR failure must not lose the
     // branch, so degrade to a branch-only publish.
@@ -161,6 +164,9 @@ export class PublicationRunner {
         body: buildPullRequestBody(proposal)
       });
       pullRequestUrl = raised?.url;
+      if (pullRequestUrl) {
+        console.log(`publish_proposal[${job.id}]: opened pull request ${pullRequestUrl}`);
+      }
     } catch (error) {
       console.warn(
         `Branch ${publication.branchName} pushed, but PR creation failed: ${error instanceof Error ? error.message : "unknown error"}`
@@ -180,17 +186,23 @@ export class PublicationRunner {
 
   private async publishCrunch(job: JobView): Promise<unknown> {
     const { runId } = publishCrunchInputSchema.parse(job.input);
+    console.log(`publish_crunch[${job.id}]: fetching execution context for run ${runId}`);
     const context = await this.api.crunchExecutionContext(runId);
     const { run, repository } = parseCrunchContext(context);
 
     const changes = changesetFromPlan(run);
     const operationCount = run.plan.operations.length;
+    const branchName = crunchBranchName(run);
+    console.log(
+      `publish_crunch[${job.id}]: publishing ${operationCount} operation(s) (${changes.length} file change(s)) to branch ${branchName}`
+    );
     const publication = await this.deps.publishChangeset({
       repository: toRepositoryRef(repository),
-      branchName: crunchBranchName(run),
+      branchName,
       title: `docs: crunch tidy (${operationCount} operation${operationCount === 1 ? "" : "s"})`,
       changes
     });
+    console.log(`publish_crunch[${job.id}]: pushed ${publication.branchName} at ${publication.commitSha.slice(0, 8)}`);
 
     // Crunch raises no PR. Validate against the contract before returning.
     return publishCrunchOutputSchema.parse({
@@ -204,17 +216,25 @@ export class PublicationRunner {
 
   private async publishSourceSync(job: JobView): Promise<unknown> {
     const { runId } = publishSourceSyncInputSchema.parse(job.input);
+    console.log(`publish_source_sync[${job.id}]: fetching execution context for run ${runId}`);
     const context = await this.api.sourceSyncExecutionContext(runId);
     const { run, sourceName, repository } = parseSourceSyncContext(context);
 
     const documentCount = run.changeset.length;
+    const branchName = sourceSyncBranchName(run);
+    console.log(
+      `publish_source_sync[${job.id}]: publishing ${documentCount} document(s) from ${sourceName} to branch ${branchName}`
+    );
     const publication = await this.deps.publishChangeset({
       repository: toRepositoryRef(repository),
-      branchName: sourceSyncBranchName(run),
+      branchName,
       // Match the title the API used before git moved out.
       title: `docs: sync to ${sourceName} change (${documentCount} document${documentCount === 1 ? "" : "s"})`,
       changes: run.changeset
     });
+    console.log(
+      `publish_source_sync[${job.id}]: pushed ${publication.branchName} at ${publication.commitSha.slice(0, 8)}`
+    );
 
     // Source-sync raises no PR. Validate against the contract before returning.
     return publishSourceSyncOutputSchema.parse({

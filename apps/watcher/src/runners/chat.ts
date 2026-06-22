@@ -69,15 +69,18 @@ export class ChatRunner {
     // 1. Route the question to the best-matching flow (a generative call). When
     //    routing degrades (no flows, provider error), flowId stays undefined and
     //    retrieval runs unscoped.
+    console.log(`answer_question[${job.id}]: routing question across ${flows.length} flow(s)`);
     const decision = await routeQuestionToFlow(input.question, flows, this.chat);
     const flowId = decision?.flowId;
     const routedFlow = flowId ? flows.find((flow) => flow.id === flowId) : undefined;
 
     // 2. Retrieve the scoped sections from the API (the watcher cannot reach
     //    pgvector itself).
+    console.log(`answer_question[${job.id}]: retrieving sections for flow ${flowId ?? "(unscoped)"}`);
     const sections = await this.api.retrieve(input.question, flowId, undefined);
 
     // 3. Answer using those sections, applying the routed flow's persona.
+    console.log(`answer_question[${job.id}]: generating answer from ${sections.length} section(s)`);
     const context = sections.map((section) => `# ${section.heading}\n${section.content}`).join("\n\n");
     const response = await this.chat.complete({
       system: withPersona(ANSWER_QUESTION.instructions, routedFlow?.persona),
@@ -101,6 +104,7 @@ export class ChatRunner {
     const summary = input.clusters
       .map((cluster) => `cluster ${cluster.id} (flow ${cluster.flowId ?? "none"}): ${cluster.title}`)
       .join("\n");
+    console.log(`reconcile_gap_clusters[${job.id}]: proposing reshape over ${input.clusters.length} cluster(s)`);
     const proposeResponse = await this.chat.complete({
       system: GAP_RECONCILE_PROPOSE.instructions,
       messages: [{ role: "user", content: summary }],
@@ -108,6 +112,9 @@ export class ChatRunner {
     });
     const proposal = parseReshape(proposeResponse.content);
 
+    console.log(
+      `reconcile_gap_clusters[${job.id}]: critic-confirming ${proposal.merges.length} merge(s), ${proposal.splits.length} split(s)`
+    );
     const merges: ReconcileOutput["merges"] = [];
     for (const merge of proposal.merges) {
       const confirmed = await this.criticConfirm("merge", merge.rationale, signal);

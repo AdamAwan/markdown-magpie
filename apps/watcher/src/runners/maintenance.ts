@@ -42,6 +42,7 @@ export class MaintenanceRunner {
     // The job's input schema is `{}`, but the schedule may carry a flowId for a
     // per-flow reconcile; read it defensively without widening the contract.
     const flowId = readFlowId(job.input);
+    console.log(`process_gaps_to_pull_requests[${job.id}]: reconciling gaps for flow ${flowId ?? "(default)"}`);
     await this.api.reconcileGaps(flowId, signal);
 
     // TODO(Task 8E/follow-up): reconcile endpoint returns no counts; returning
@@ -54,7 +55,9 @@ export class MaintenanceRunner {
     // The job's input schema is `{}`, but the schedule may carry a flowId for a
     // per-flow watch; read it defensively without widening the contract.
     const flowId = readFlowId(job.input);
+    console.log(`source_change_sync[${job.id}]: syncing sources for flow ${flowId ?? "(all)"}`);
     const { runIds } = await this.api.runSourceSync(flowId, signal);
+    console.log(`source_change_sync[${job.id}]: created ${runIds.length} sync run(s)`);
     return sourceChangeSyncOutputSchema.parse({ runIds });
   }
 
@@ -63,7 +66,9 @@ export class MaintenanceRunner {
     // /api/crunch/run does the heavy gather + planning-job enqueue. We just relay
     // the trigger and return the created run/job ids.
     const flowId = readFlowId(job.input);
+    console.log(`trigger_scheduled_crunch[${job.id}]: triggering crunch for flow ${flowId ?? "(default)"}`);
     const { runId, jobId } = await this.api.triggerScheduledCrunch(flowId, signal);
+    console.log(`trigger_scheduled_crunch[${job.id}]: started run ${runId} (planning job ${jobId})`);
     return triggerScheduledCrunchOutputSchema.parse({ runId, jobId });
   }
 }
