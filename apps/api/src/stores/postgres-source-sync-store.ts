@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import type { CrunchPlan, ProposalPublication, SourceSyncRun, SourceSyncState } from "@magpie/core";
+import type { ChangesetChange, CrunchPlan, ProposalPublication, SourceSyncRun, SourceSyncState } from "@magpie/core";
 import type { SourceSyncRunInput, SourceSyncStore } from "./source-sync-store.js";
 
 const { Pool } = pg;
@@ -53,10 +53,10 @@ export class PostgresSourceSyncStore implements SourceSyncStore {
     const result = await this.pool.query<SourceSyncRunRow>(
       `
         INSERT INTO source_sync_runs (
-          id, flow_id, destination_id, source_id, trigger, status, job_id, plan, error,
+          id, flow_id, destination_id, source_id, trigger, status, job_id, plan, changeset, error,
           from_sha, to_sha, changed_file_count, candidate_count, completed_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, ${terminal ? "now()" : "NULL"})
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, ${terminal ? "now()" : "NULL"})
         RETURNING *
       `,
       [
@@ -68,6 +68,7 @@ export class PostgresSourceSyncStore implements SourceSyncStore {
         input.status,
         input.jobId ?? null,
         input.plan ? JSON.stringify(input.plan) : null,
+        input.changeset ? JSON.stringify(input.changeset) : null,
         input.error ?? null,
         input.fromSha ?? null,
         input.toSha,
@@ -131,6 +132,7 @@ interface SourceSyncRunRow {
   status: SourceSyncRun["status"];
   job_id: string | null;
   plan: CrunchPlan | null;
+  changeset: ChangesetChange[] | null;
   error: string | null;
   from_sha: string | null;
   to_sha: string;
@@ -160,6 +162,7 @@ function mapRunRow(row: SourceSyncRunRow): SourceSyncRun {
     status: row.status,
     jobId: row.job_id ?? undefined,
     plan: row.plan ?? undefined,
+    changeset: row.changeset ?? undefined,
     error: row.error ?? undefined,
     fromSha: row.from_sha ?? undefined,
     toSha: row.to_sha,

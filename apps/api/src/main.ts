@@ -2,19 +2,23 @@ import { serve } from "@hono/node-server";
 import { createAppContext } from "./context.js";
 import { buildApp } from "./app.js";
 import * as configService from "./features/config/service.js";
-import { CrunchScheduler } from "./scheduling/crunch-scheduler.js";
-import { TaskScheduler } from "./scheduling/task-scheduler.js";
+import { reconcileSchedules } from "./jobs/schedule-reconciler.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4000", 10);
 
 async function start(): Promise<void> {
   const ctx = await createAppContext();
   try {
+    await ctx.jobs.start();
     await ctx.bootstrap();
+    // Reconcile saved product schedules into pg-boss now the broker is up. The
+    // queue, not an in-process timer, fires scheduled work from here on.
+    await reconcileSchedules(ctx);
   } catch (error) {
     console.error(
-      `Failed to sync configured git repositories: ${error instanceof Error ? error.message : "Unknown error"}`
+      `API startup failed: ${error instanceof Error ? error.message : "Unknown error"}`
     );
+    await ctx.jobs.stop().catch(() => undefined);
     process.exitCode = 1;
     return;
   }
@@ -22,8 +26,6 @@ async function start(): Promise<void> {
   const server = serve({ fetch: app.fetch, port }, () => {
     console.log(`Markdown Magpie API listening on http://localhost:${port}/api`);
     configService.logStartupConfig(ctx);
-    new CrunchScheduler(ctx).start();
-    new TaskScheduler(ctx).start();
   });
 
   // On a normal stop, stop accepting connections and give in-flight background
@@ -42,7 +44,7 @@ async function start(): Promise<void> {
     Promise.race([
       ctx.background.whenIdle(),
       new Promise((resolve) => setTimeout(resolve, timeout))
-    ]).finally(() => {
+    ]).then(() => ctx.jobs.stop()).finally(() => {
       if (ctx.background.pending > 0) {
         console.warn(`Exiting with ${ctx.background.pending} background task(s) still in flight.`);
       }
@@ -53,4 +55,7 @@ async function start(): Promise<void> {
   process.once("SIGTERM", () => shutdown("SIGTERM"));
 }
 
-void start();
+void start().catch((error) => {
+  console.error(`API startup failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+  process.exitCode = 1;
+});

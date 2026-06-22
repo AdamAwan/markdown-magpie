@@ -3,22 +3,25 @@ import type {
   CrunchPlan,
   KnowledgeDocument,
   RankedSection,
+  RepositoryRef,
   SourceChangeFile,
   SourceChangeSyncJobInput,
   SourceSyncCandidateDocument,
   SourceSyncRun,
   SourceSyncRunTrigger
 } from "@magpie/core";
-import { SOURCE_CHANGE_SYNC } from "@magpie/prompts";
+import type { JobView } from "@magpie/jobs";
+import { publishSourceSyncOutputSchema, syncSourceChangesGeneratePlanOutputSchema } from "@magpie/jobs";
+import { z } from "zod";
 import {
-  LocalGitProposalPublisher,
   diffChangedFiles,
   ensureGitCheckout,
   getHeadSha,
   type SourceFileChange
 } from "@magpie/git";
 import type { AppContext } from "../../context.js";
-import { changesetFromPlan, isCrunchPlan } from "../crunch/service.js";
+import { changesetFromPlan } from "../crunch/service.js";
+import { runJobToCompletion } from "../jobs/service.js";
 import {
   checkoutRoot,
   defaultDestinationId,
@@ -27,7 +30,7 @@ import {
 } from "../../platform/repositories.js";
 import type { ConfiguredKnowledgeRepository } from "../../stores/knowledge-repositories.js";
 import { normalizeRelativePath } from "../../platform/paths.js";
-import { parseJsonObject } from "../../platform/json.js";
+import { type AiProviderName } from "../../platform/providers.js";
 
 // How many retrieved sections to consider, and how many distinct documents to
 // hand the model as editable candidates. Kept small so the model sees only the
@@ -206,6 +209,9 @@ async function syncGitSource(
     trigger,
     status: "completed",
     plan,
+    // Persist the constrained changeset so the publish_source_sync job can fetch
+    // exactly what to write without re-deriving the candidate set.
+    changeset,
     fromSha: previous.lastSha,
     toSha: headSha,
     changedFileCount: changes.length,
@@ -216,71 +222,188 @@ async function syncGitSource(
   // should not re-plan it. A publish failure is surfaced on the run for the
   // operator to retry from, not by re-running the model.
   await store.setState(flowId, source.id, headSha);
-  await publishRun(ctx, run, changeset, source.name);
+  // Git now leaves the API: enqueue publication (fire-and-forget) after the
+  // repository pre-flight, mirroring publish_crunch. The watcher executes git.
+  await enqueuePublication(ctx, run.id);
   return (await store.getRun(run.id)) ?? run;
 }
 
+// The generative step now leaves the API: enqueue the AI job and bounded-wait for
+// the watcher to produce the plan, exactly like the gap reshape (8C). On a
+// non-completed terminal state, malformed output, timeout, or enqueue failure this
+// throws so syncGitSource's catch path records the run as failed and leaves the
+// baseline unchanged for a retry.
 async function generateSyncPlan(ctx: AppContext, input: SourceChangeSyncJobInput): Promise<CrunchPlan> {
-  if (ctx.config.get().aiProvider === "mock") {
-    // The mock provider cannot reason about a diff; return a no-op plan so the
-    // pipeline runs end-to-end in demos/tests without inventing edits.
+  const jobInput = {
+    ...input,
+    provider: ctx.config.get().aiProvider
+  } satisfies SourceChangeSyncJobInput & { provider: AiProviderName };
+
+  const terminal = await runJobToCompletion(ctx, "sync_source_changes_generate_plan", jobInput);
+  if (terminal.state !== "completed") {
+    throw new Error(`source-sync plan job ${terminal.id} did not complete (state ${terminal.state})`);
+  }
+
+  const parsed = syncSourceChangesGeneratePlanOutputSchema.safeParse(terminal.output);
+  if (!parsed.success) {
+    throw new Error(`source-sync plan job ${terminal.id} returned malformed output`);
+  }
+  return parsed.data;
+}
+
+// Enqueue-only publication: validate the repository pre-flight (no repo / not-git
+// ⇒ leave unpublished) then enqueue publish_source_sync. Git execution happens in
+// the watcher runner, which fetches the execution context. Mirrors publish_crunch.
+async function enqueuePublication(ctx: AppContext, runId: string): Promise<void> {
+  const resolved = await resolvePublishRepository(ctx, runId);
+  if (!resolved.ok) {
+    console.warn(`Source-sync run ${runId}: ${resolved.message ?? resolved.code}; left unpublished.`);
+    return;
+  }
+  const job = await ctx.jobs.create("publish_source_sync", { runId });
+  console.log(`Enqueued publish_source_sync job ${job.id} for source-sync run ${runId}`);
+}
+
+type SourceSyncPublishValidationError = {
+  ok: false;
+  status: 404 | 409;
+  code:
+    | "source_sync_run_not_found"
+    | "source_sync_run_not_publishable"
+    | "source_sync_run_empty_changeset"
+    | "source_sync_repository_not_found"
+    | "source_sync_repository_not_git";
+  message?: string;
+};
+
+// Shared pre-flight for the publish enqueue path and the execution-context
+// endpoint: a run is publishable only if it completed with a non-empty persisted
+// changeset and its destination maps to a Git checkout. Mirrors crunch's
+// resolvePublishRepository so an invalid publish fails fast with the same status.
+async function resolvePublishRepository(
+  ctx: AppContext,
+  runId: string
+): Promise<{ ok: true; run: SourceSyncRun; repository: RepositoryRef } | SourceSyncPublishValidationError> {
+  const run = await ctx.stores.sourceSync.getRun(runId);
+  if (!run) {
+    return { ok: false, status: 404, code: "source_sync_run_not_found" };
+  }
+  if (run.status !== "completed" || !run.changeset) {
     return {
-      summary: "Mock provider does not generate source-sync edits.",
-      operations: [],
-      rationale: "mock"
+      ok: false,
+      status: 409,
+      code: "source_sync_run_not_publishable",
+      message: "Only completed source-sync runs with a changeset can be published."
+    };
+  }
+  if (run.changeset.length === 0) {
+    return {
+      ok: false,
+      status: 409,
+      code: "source_sync_run_empty_changeset",
+      message: "This source-sync run does not change any files."
     };
   }
 
-  const response = await ctx.providers.chat(ctx.config.get().aiProvider).complete({
-    system: SOURCE_CHANGE_SYNC.instructions,
-    messages: [{ role: "user", content: JSON.stringify(input, null, 2) }]
-  });
-  const output = parseJsonObject(response.content);
-  if (!isCrunchPlan(output)) {
-    throw new Error("Direct source-sync provider returned invalid plan output");
-  }
-  return output;
-}
-
-async function publishRun(
-  ctx: AppContext,
-  run: SourceSyncRun,
-  changeset: ChangesetChange[],
-  sourceName: string
-): Promise<void> {
   const repository = await findRepositoryForDestination(ctx.repositoryDeps(), run.destinationId);
   if (!repository) {
-    console.warn(`Source-sync run ${run.id}: no indexed repository for destination ${run.destinationId ?? "default"}; left unpublished.`);
-    return;
+    return {
+      ok: false,
+      status: 409,
+      code: "source_sync_repository_not_found",
+      message: "No indexed Git repository matches this source-sync run's destination."
+    };
   }
   if (repository.git?.scope === "not-git" || !repository.git?.workTreeRoot) {
-    console.warn(`Source-sync run ${run.id}: destination is not a git checkout; left unpublished.`);
-    return;
+    return {
+      ok: false,
+      status: 409,
+      code: "source_sync_repository_not_git",
+      message: "The matched repository is not a Git checkout."
+    };
   }
 
-  try {
-    const publisher = new LocalGitProposalPublisher();
-    const publication = await publisher.publishChangeset({
-      repository,
-      branchName: sourceSyncBranchName(run),
-      title: `docs: sync to ${sourceName} change (${changeset.length} document${changeset.length === 1 ? "" : "s"})`,
-      changes: changeset
-    });
-    await ctx.stores.sourceSync.recordRunPublication(run.id, {
-      provider: "local-git",
-      branchName: publication.branchName,
-      commitSha: publication.commitSha,
-      remoteUrl: publication.remoteUrl,
-      publishedAt: new Date().toISOString()
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "source-sync publish failed";
-    console.warn(`Source-sync run ${run.id} could not publish: ${message}`);
-  }
+  return { ok: true, run, repository };
 }
 
-function sourceSyncBranchName(run: SourceSyncRun): string {
-  return `magpie/source-sync-${run.id.slice(0, 8)}`;
+type ExecutionContextRepository = Pick<RepositoryRef, "id" | "localPath" | "remoteUrl" | "defaultBranch" | "git">;
+
+// The non-generative, credential-free view the watcher's publish_source_sync
+// runner fetches before executing git: the run (with its persisted changeset), the
+// resolved source name for the commit title, and exactly the repository fields the
+// runner needs. Runs the same pre-flight as the enqueue path, so it returns the
+// same 404/409 conditions.
+export async function getRunExecutionContext(
+  ctx: AppContext,
+  runId: string
+): Promise<
+  | { ok: true; run: SourceSyncRun; sourceName: string; repository: ExecutionContextRepository }
+  | SourceSyncPublishValidationError
+> {
+  const resolved = await resolvePublishRepository(ctx, runId);
+  if (!resolved.ok) {
+    return resolved;
+  }
+  const { id, localPath, remoteUrl, defaultBranch, git } = resolved.repository;
+  return {
+    ok: true,
+    run: resolved.run,
+    sourceName: resolveSourceName(ctx, resolved.run.sourceId),
+    repository: { id, localPath, remoteUrl, defaultBranch, git }
+  };
+}
+
+// Looks up the configured source's human name for the commit title, falling back
+// to the source id when the source is no longer configured.
+function resolveSourceName(ctx: AppContext, sourceId: string): string {
+  const source = ctx.repositoryDeps().knowledgeConfig.sources.find((candidate) => candidate.id === sourceId);
+  return source?.name ?? sourceId;
+}
+
+export async function listRuns(ctx: AppContext, limit: number): Promise<SourceSyncRun[]> {
+  return ctx.stores.sourceSync.listRuns(limit);
+}
+
+export async function getRun(ctx: AppContext, id: string): Promise<SourceSyncRun | undefined> {
+  return ctx.stores.sourceSync.getRun(id);
+}
+
+type PublishSourceSyncJobOutput = z.infer<typeof publishSourceSyncOutputSchema>;
+
+// Completion handler for publish_source_sync jobs: records the validated git
+// publication the watcher performed (branch, commit, optional remote url) onto the
+// linked run. Idempotent by runId — a run that already carries a publication is
+// left untouched, so re-completing the same job never double-applies or regresses
+// the recorded metadata. Source-sync raises no PR. Mirrors the crunch handler.
+export async function recordSourceSyncPublicationFromCompletedJob(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<SourceSyncRun | undefined> {
+  if (!job || job.type !== "publish_source_sync") {
+    return undefined;
+  }
+  const parsed = publishSourceSyncOutputSchema.safeParse(output);
+  if (!parsed.success) {
+    return undefined;
+  }
+  const result: PublishSourceSyncJobOutput = parsed.data;
+
+  const existing = await ctx.stores.sourceSync.getRun(result.runId);
+  if (!existing) {
+    return undefined;
+  }
+  if (existing.publication) {
+    return existing;
+  }
+
+  return ctx.stores.sourceSync.recordRunPublication(result.runId, {
+    provider: "local-git",
+    branchName: result.branchName,
+    commitSha: result.commitSha,
+    remoteUrl: result.remoteUrl,
+    publishedAt: result.publishedAt
+  });
 }
 
 // --- Pure helpers (unit-tested) --------------------------------------------

@@ -1,71 +1,148 @@
 import type {
-  AiJob,
-  AiJobType,
   AnswerQuestionJobInput,
   AnswerQuestionJobOutput
 } from "@magpie/core";
+import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
+import { jobDefinition } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
+import type { JobListFilters } from "../../jobs/broker.js";
+import { refreshPullRequestsOutputSchema } from "@magpie/jobs";
 import * as proposalsService from "../proposals/service.js";
 import * as crunchService from "../crunch/service.js";
+import * as sourceSyncService from "../source-sync/service.js";
+import { applyPullRequestTransition } from "../../scheduling/gap-reconciler.js";
 
-export async function createJob(ctx: AppContext, type: AiJobType, input: unknown): Promise<AiJob> {
-  return ctx.stores.aiJobs.enqueue(type, input ?? {});
+export async function createJob(ctx: AppContext, type: JobType, input: unknown): Promise<JobView> {
+  return ctx.jobs.create(type, input ?? {});
 }
 
 export async function claimJob(
   ctx: AppContext,
   workerName: string,
-  acceptedTypes: AiJobType[]
-): Promise<AiJob | undefined> {
-  return ctx.stores.aiJobs.claimNext(workerName, acceptedTypes);
+  // TODO(Task 4): capability-based claim contract
+  capabilities: JobCapability[]
+): Promise<JobView | undefined> {
+  return ctx.jobs.claim(workerName, capabilities);
 }
 
-export async function getJob(ctx: AppContext, id: string): Promise<AiJob | undefined> {
-  return ctx.stores.aiJobs.get(id);
+export async function getJob(ctx: AppContext, id: string): Promise<JobView | undefined> {
+  const job = await ctx.jobs.get(id);
+  return job ? projectJob(job) : undefined;
 }
 
-export async function listJobs(ctx: AppContext): Promise<AiJob[]> {
-  return ctx.stores.aiJobs.list();
+export async function listJobs(ctx: AppContext, filters: JobListFilters = {}): Promise<{ jobs: JobView[]; total: number }> {
+  const result = await ctx.jobs.list(filters);
+  return { ...result, jobs: result.jobs.map(projectJob) };
+}
+
+export async function heartbeatJob(ctx: AppContext, id: string): Promise<JobView> {
+  return ctx.jobs.heartbeat(id);
+}
+
+export async function cancelJob(ctx: AppContext, id: string): Promise<JobView> {
+  return ctx.jobs.cancel(id);
+}
+
+export async function retryJob(ctx: AppContext, id: string): Promise<JobView> {
+  return ctx.jobs.retry(id);
+}
+
+export async function waitForJob(
+  ctx: AppContext,
+  id: string,
+  options: { timeoutMs?: number; pollMs?: number } = {}
+): Promise<{ terminal: boolean; job: JobView }> {
+  const timeoutMs = options.timeoutMs ?? parsePositiveInt(process.env.JOB_WAIT_TIMEOUT_MS, 25_000);
+  const pollMs = options.pollMs ?? parsePositiveInt(process.env.JOB_WAIT_POLL_MS, 250);
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const job = await ctx.jobs.get(id);
+    if (!job) throw new Error(`Job not found: ${id}`);
+    const terminal = isTerminal(job.state);
+    if (terminal || Date.now() >= deadline) return { terminal, job: projectJob(job) };
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
+// Creates a job and bounded-waits for it to reach a terminal state, returning the
+// terminal JobView (or the last view seen if the deadline elapses first — check
+// `.state` for whether it actually completed). Used by API flows that need an AI
+// step a watcher executes (e.g. the gap-cluster reshape): the heavy orchestration
+// stays in the API, but the only generative step is an enqueued job we wait on.
+// The default deadline is tied to the job's own expiry; pass `deadlineMs` (or set
+// JOB_RUN_TO_COMPLETION_TIMEOUT_MS) to shorten it, e.g. in tests.
+export async function runJobToCompletion(
+  ctx: AppContext,
+  type: JobType,
+  input: unknown,
+  options: { deadlineMs?: number; pollMs?: number } = {}
+): Promise<JobView> {
+  const job = await createJob(ctx, type, input);
+  const deadlineMs =
+    options.deadlineMs ??
+    parsePositiveInt(process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS, jobDefinition(type).policy.expireInSeconds * 1000);
+  const pollMs = options.pollMs ?? parsePositiveInt(process.env.JOB_WAIT_POLL_MS, 250);
+  const { job: terminal } = await waitForJob(ctx, job.id, { timeoutMs: deadlineMs, pollMs });
+  return terminal;
 }
 
 // THE COMPLETION DISPATCHER. Replicates the original handleCompleteJob logic:
 // look up the existing job (404 if missing), persist completion, then fan out to
 // the side-effect handlers in a fixed order — question log update, proposal
-// creation, then crunch-plan attachment. Returns a discriminated outcome so the
+// creation, proposal publication, crunch-plan attachment, crunch publication,
+// then source-sync publication. Returns a discriminated outcome so the
 // handler maps job_not_found to 404 while keeping its own try/catch for the 500
 // job_completion_failed path.
 export async function completeJob(
   ctx: AppContext,
   jobId: string,
-  output: unknown
+  output: unknown,
+  executor = "watcher"
 ): Promise<
   | { ok: false; code: "job_not_found" }
   | { ok: false; code: "invalid_output" }
-  | { ok: true; job: AiJob | undefined }
+  | { ok: false; code: "job_cancelled" }
+  | { ok: true; job: JobView | undefined }
 > {
-  const existingJob = await ctx.stores.aiJobs.get(jobId);
+  const existingJob = await ctx.jobs.get(jobId);
   if (!existingJob) {
     return { ok: false, code: "job_not_found" };
   }
+  if (existingJob.state === "cancelled") return { ok: false, code: "job_cancelled" };
 
-  // Worker output is untrusted: it must be an object, and for job types that
-  // feed a downstream store (answers, proposals, crunch plans) it must match
-  // the expected shape. Otherwise we'd silently mark the job complete with
-  // garbage that the side-effect handlers quietly skip.
-  if (!isPlainObject(output) || !outputMatchesJobType(existingJob.type, output)) {
+  const parsed = jobDefinition(existingJob.type).outputSchema.safeParse(output);
+  if (!parsed.success) {
+    await ctx.jobs.fail(jobId, {
+      code: "invalid_output",
+      message: "Watcher output did not match the job contract",
+      category: "validation"
+    });
     return { ok: false, code: "invalid_output" };
   }
 
-  await ctx.stores.aiJobs.complete(jobId, output);
-  await updateQuestionLogFromCompletedJob(ctx, existingJob, output);
-  await proposalsService.createProposalFromCompletedJob(ctx, existingJob, output);
-  await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, output);
-  return { ok: true, job: await ctx.stores.aiJobs.get(jobId) };
+  try {
+    await updateQuestionLogFromCompletedJob(ctx, existingJob, parsed.data);
+    await proposalsService.createProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, parsed.data);
+    await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, parsed.data);
+    await crunchService.recordCrunchPublicationFromCompletedJob(ctx, existingJob, parsed.data);
+    await sourceSyncService.recordSourceSyncPublicationFromCompletedJob(ctx, existingJob, parsed.data);
+    await applyRefreshPullRequestsTransitions(ctx, existingJob, parsed.data);
+    await ctx.jobs.complete(jobId, { result: parsed.data, executor });
+  } catch (error) {
+    await ctx.jobs.fail(jobId, {
+      code: "completion_failed",
+      message: "Job completion side effects failed",
+      category: "internal"
+    });
+    throw error;
+  }
+  return { ok: true, job: await ctx.jobs.get(jobId) };
 }
 
 async function updateQuestionLogFromCompletedJob(
   ctx: AppContext,
-  job: AiJob | undefined,
+  job: JobView | undefined,
   output: unknown
 ): Promise<void> {
   if (!job || job.type !== "answer_question" || !isAnswerQuestionJobOutput(output)) {
@@ -77,10 +154,42 @@ async function updateQuestionLogFromCompletedJob(
     return;
   }
 
+  const existing = await ctx.stores.questionLogs.get(input.questionLogId);
+  if (existing?.answer) return;
+
   await ctx.stores.questionLogs.updateAnswer(input.questionLogId, {
     answer: output,
-    chatProvider: typeof input.provider === "string" ? input.provider : (job.claimedBy ?? "watcher")
+    // JobView has no live claimant field; fall back to "watcher"
+    chatProvider: typeof input.provider === "string" ? input.provider : "watcher",
+    // The watcher routed the question to a flow and retrieved the cited sections;
+    // record both. retrievedSectionIds is derived from the output citations by the
+    // store. flowId is only set when the watcher actually chose a flow.
+    ...(typeof output.flowId === "string" ? { flowId: output.flowId } : {})
   });
+}
+
+// Completion handler for refresh_pull_requests: the github watcher polled each open
+// PR and reported its merged/closed state; apply the proposal-status transitions the
+// reconciler would otherwise apply from a snapshot. Reuses the shared
+// applyPullRequestTransition so the merged→cascade+freeze / closed→rejected+freeze
+// behaviour can never drift from the reconciler, and is idempotent (the shared
+// function only transitions a still-open proposal), so re-completing the same job
+// converges without running a merge cascade twice.
+async function applyRefreshPullRequestsTransitions(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<void> {
+  if (!job || job.type !== "refresh_pull_requests") {
+    return;
+  }
+  const parsed = refreshPullRequestsOutputSchema.safeParse(output);
+  if (!parsed.success) {
+    return;
+  }
+  for (const result of parsed.data.results) {
+    await applyPullRequestTransition(ctx, result.proposalId, { merged: result.merged, state: result.state });
+  }
 }
 
 // Marks a job failed and preserves the original crunch side-effect: when the
@@ -89,48 +198,17 @@ async function updateQuestionLogFromCompletedJob(
 export async function failJob(
   ctx: AppContext,
   jobId: string,
-  errorMessage: string | undefined
-): Promise<AiJob | undefined> {
-  const failingJob = await ctx.stores.aiJobs.get(jobId);
-  await ctx.stores.aiJobs.fail(jobId, errorMessage ?? "Unknown watcher failure");
-  if (failingJob?.type === "crunch_knowledge_base") {
+  jobError: JobError
+): Promise<JobView | undefined> {
+  const failingJob = await ctx.jobs.get(jobId);
+  const failedJob = await ctx.jobs.fail(jobId, jobError);
+  if (failingJob?.type === "crunch_knowledge_base" && failedJob.state === "failed") {
     const run = await ctx.stores.crunchRuns.getRunByJobId(jobId);
     if (run) {
-      await ctx.stores.crunchRuns.failRun(run.id, errorMessage ?? "Crunch job failed");
+      await ctx.stores.crunchRuns.failRun(run.id, jobError.message);
     }
   }
-  return ctx.stores.aiJobs.get(jobId);
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-// Validate completion output against the job type, reusing the same guards the
-// side-effect handlers rely on. Job types with no downstream consumer accept any
-// object payload.
-function outputMatchesJobType(type: AiJobType, output: Record<string, unknown>): boolean {
-  switch (type) {
-    case "answer_question":
-      return isAnswerQuestionJobOutput(output);
-    case "draft_markdown_proposal":
-      return proposalsService.isDraftMarkdownProposalJobOutput(output);
-    case "crunch_knowledge_base":
-      return crunchService.isCrunchPlan(output);
-    default:
-      return true;
-  }
-}
-
-export function isAiJobType(value: unknown): value is AiJobType {
-  return (
-    value === "answer_question" ||
-    value === "summarize_gap" ||
-    value === "draft_markdown_proposal" ||
-    value === "detect_contradiction" ||
-    value === "suggest_consolidation" ||
-    value === "crunch_knowledge_base"
-  );
+  return failedJob;
 }
 
 function isAnswerQuestionJobOutput(value: unknown): value is AnswerQuestionJobOutput {
@@ -147,4 +225,31 @@ function isAnswerQuestionJobOutput(value: unknown): value is AnswerQuestionJobOu
       candidate.confidence === "unknown") &&
     Array.isArray(candidate.citations)
   );
+}
+
+export function projectJob(job: JobView): JobView {
+  return {
+    ...job,
+    input: redactSecrets(job.input),
+    output: redactSecrets(job.output),
+    error: redactSecrets(job.error) as JobError | undefined
+  };
+}
+
+function redactSecrets(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactSecrets);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, nested]) => [
+    key,
+    /^(apiKey|token|authorization|password)$/i.test(key) ? "[redacted]" : redactSecrets(nested)
+  ]));
+}
+
+function isTerminal(state: JobView["state"]): boolean {
+  return state === "completed" || state === "failed" || state === "cancelled";
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }

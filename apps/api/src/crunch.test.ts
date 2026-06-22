@@ -1,41 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildMockCrunchPlan, isValidCron, nextCronTime } from "@magpie/core";
-import { InMemoryCrunchStore, nextRunFor } from "./stores/crunch-store.js";
-
-function largeMultiTopicDoc(): string {
-  const section = (heading: string) =>
-    `## ${heading}\n\n${"This section has enough prose to make the document large. ".repeat(12)}\n`;
-  return `# Big Document\n\n${section("Setup")}${section("Usage")}${section("Troubleshooting")}`;
-}
-
-test("buildMockCrunchPlan splits a large multi-topic document into focused files", () => {
-  const plan = buildMockCrunchPlan([{ path: "docs/big.md", content: largeMultiTopicDoc() }]);
-  const split = plan.operations.find((operation) => operation.kind === "split");
-
-  assert.ok(split, "expected a split operation");
-  assert.deepEqual(split?.deletes, ["docs/big.md"]);
-  assert.equal(split?.writes.length, 3);
-  assert.ok(split?.writes.every((write) => write.path.startsWith("docs/big/")));
-});
-
-test("buildMockCrunchPlan consolidates several small documents in one folder", () => {
-  const plan = buildMockCrunchPlan([
-    { path: "cats/care.md", content: "# Care\n\nKeep water available." },
-    { path: "cats/health.md", content: "# Health\n\nWatch for warning signs." }
-  ]);
-  const consolidate = plan.operations.find((operation) => operation.kind === "consolidate");
-
-  assert.ok(consolidate, "expected a consolidate operation");
-  assert.equal(consolidate?.writes.length, 1);
-  assert.equal(consolidate?.writes[0].path, "cats/overview.md");
-  assert.deepEqual(consolidate?.deletes.sort(), ["cats/care.md", "cats/health.md"]);
-});
-
-test("buildMockCrunchPlan leaves a tidy knowledge base unchanged", () => {
-  const plan = buildMockCrunchPlan([{ path: "solo.md", content: "# Solo\n\nA single focused document." }]);
-  assert.equal(plan.operations.length, 0);
-});
+import { isValidCron, nextCronTime } from "@magpie/core";
+import { InMemoryCrunchStore } from "./stores/crunch-store.js";
 
 test("InMemoryCrunchStore completes a queued run by job id", async () => {
   const store = new InMemoryCrunchStore();
@@ -61,26 +27,16 @@ test("InMemoryCrunchStore.getRunByJobId returns the newest run sharing a job id 
   assert.equal(byJob?.id, newer.id);
 });
 
-test("InMemoryCrunchStore schedules a next run when enabled and clears it when disabled", async () => {
+test("InMemoryCrunchStore persists the enabled flag and cron; run timing is owned by pg-boss", async () => {
   const store = new InMemoryCrunchStore();
 
   const enabled = await store.updateSettings("cats", { enabled: true, cron: "0 2 * * *" });
   assert.equal(enabled.enabled, true);
   assert.equal(enabled.cron, "0 2 * * *");
-  assert.ok(enabled.nextRunAt, "enabled schedule should have a next run time");
 
   const disabled = await store.updateSettings("cats", { enabled: false, cron: "0 2 * * *" });
-  assert.equal(disabled.nextRunAt, undefined);
-});
-
-test("touchSchedule preserves the enabled flag", async () => {
-  const store = new InMemoryCrunchStore();
-  await store.updateSettings(undefined, { enabled: true, cron: "*/30 * * * *" });
-
-  const next = nextRunFor(true, "*/30 * * * *", new Date(0)) ?? "";
-  const touched = await store.touchSchedule(undefined, new Date(0).toISOString(), next);
-  assert.equal(touched.enabled, true);
-  assert.equal(touched.lastRunAt, new Date(0).toISOString());
+  assert.equal(disabled.enabled, false);
+  assert.equal(disabled.cron, "0 2 * * *");
 });
 
 test("nextCronTime resolves the next matching minute in local time", () => {

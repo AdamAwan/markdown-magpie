@@ -5,6 +5,7 @@ import { requireScopes } from "../../auth/middleware.js";
 import { apiLink, parseLimit } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
+import { reconcileSchedules } from "../../jobs/schedule-reconciler.js";
 import * as crunchService from "./service.js";
 import { crunchSettingsBodySchema } from "./schema.js";
 
@@ -23,13 +24,9 @@ export function crunchRoutes(ctx: AppContext): Hono {
         flowId: payload.flowId?.trim() || undefined,
         trigger: "manual"
       });
-      // Planning happens off the request thread; the run starts "running" and is
-      // completed in the background (direct) or by the watcher (queue). Return
-      // 202 with a status link so the client can poll for the plan.
-      if (run.status === "running") {
-        return c.json({ run, links: { status: apiLink(`/crunch/runs/${run.id}`) } }, 202);
-      }
-      return c.json({ run }, run.status === "failed" ? 502 : 200);
+      // Planning is enqueue-only: the run starts "running" and is completed by the
+      // watcher. Return 202 with a status link so the client can poll for the plan.
+      return c.json({ run, links: { status: apiLink(`/crunch/runs/${run.id}`) } }, 202);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Crunch run failed to start";
       throw new HttpError(500, "crunch_run_failed", message);
@@ -58,16 +55,41 @@ export function crunchRoutes(ctx: AppContext): Hono {
         enabled: Boolean(enabled),
         cron
       });
+      // Push the saved schedule into pg-boss so the change takes effect without a restart.
+      await reconcileSchedules(ctx);
       return c.json({ settings: await crunchService.settingsForResponse(ctx) });
     }
   );
 
   app.post("/runs/:id/publish", requireScopes("manage:knowledge"), async (c) => {
+    // Git execution happens in the Task 7 watcher runner; the API validates the
+    // run and repository pre-flight then enqueues. Invalid publishes still fail
+    // fast with the original 404/409 codes before any job is created.
     const outcome = await crunchService.publishRun(ctx, c.req.param("id"));
     if (!outcome.ok) {
       throw new HttpError(outcome.status, outcome.code, outcome.message);
     }
-    return c.json({ run: outcome.run, publication: outcome.publication });
+    return c.json(
+      {
+        job: outcome.job,
+        links: {
+          job: apiLink(`/jobs/${outcome.job.id}`),
+          wait: apiLink(`/jobs/${outcome.job.id}/wait`),
+          cancel: apiLink(`/jobs/${outcome.job.id}/cancel`)
+        }
+      },
+      202
+    );
+  });
+
+  // The non-generative execution context the Task 7 publication runner fetches
+  // before executing git: the run plus the credential-free repository config.
+  app.get("/runs/:id/execution-context", requireScopes("manage:knowledge"), async (c) => {
+    const outcome = await crunchService.getRunExecutionContext(ctx, c.req.param("id"));
+    if (!outcome.ok) {
+      throw new HttpError(outcome.status, outcome.code, outcome.message);
+    }
+    return c.json({ run: outcome.run, repository: outcome.repository });
   });
 
   app.get("/runs/:id", requireScopes("read:knowledge"), async (c) => {

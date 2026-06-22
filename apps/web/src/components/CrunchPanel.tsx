@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { isValidCron } from "@magpie/core";
-import { ConfiguredKnowledgeFlow, CrunchRun, CrunchSettings, ScheduledTask } from "../lib/types";
+import { ConfiguredKnowledgeFlow, CrunchRun, CrunchSettingsView, ScheduledTask } from "../lib/types";
 
 export function CrunchPanel({
   flows,
@@ -23,7 +23,7 @@ export function CrunchPanel({
   onSaveTask: (key: string, enabled: boolean, cron: string) => Promise<void>;
   runs: CrunchRun[];
   scheduledTasks: ScheduledTask[];
-  settings: CrunchSettings[];
+  settings: CrunchSettingsView[];
 }) {
   const flowName = (flowId?: string) => flows.find((flow) => flow.id === flowId)?.name ?? flowId ?? "Default knowledge base";
 
@@ -102,7 +102,7 @@ function CrunchScheduleCard({
   loading: boolean;
   onRun: (flowId?: string) => Promise<void>;
   onSave: (flowId: string | undefined, enabled: boolean, cron: string) => Promise<void>;
-  setting: CrunchSettings;
+  setting: CrunchSettingsView;
 }) {
   return (
     <ScheduleEditor
@@ -112,7 +112,6 @@ function CrunchScheduleCard({
       placeholder="0 2 * * *"
       setting={setting}
       title={flowName}
-      lastRunLabel="Last scheduled run"
     />
   );
 }
@@ -137,7 +136,6 @@ function ScheduledTaskCard({
       placeholder="*/10 * * * *"
       setting={task.settings}
       title={task.label}
-      lastRunLabel="Last run"
     />
   );
 }
@@ -148,7 +146,6 @@ function ScheduledTaskCard({
 // flag clears on save so the freshly persisted values mirror back in.
 function ScheduleEditor({
   description,
-  lastRunLabel,
   loading,
   onRun,
   onSave,
@@ -157,12 +154,11 @@ function ScheduleEditor({
   title
 }: {
   description?: string;
-  lastRunLabel: string;
   loading: boolean;
   onRun: () => Promise<void>;
   onSave: (enabled: boolean, cron: string) => Promise<void>;
   placeholder: string;
-  setting: { enabled: boolean; cron: string; nextRunAt?: string; lastRunAt?: string; runningSince?: string };
+  setting: { enabled: boolean; cron: string; nextRunAt?: string };
   title: string;
 }) {
   const [enabled, setEnabled] = useState(setting.enabled);
@@ -199,10 +195,10 @@ function ScheduleEditor({
           </p>
         </div>
         <span
-          className={`status ${setting.runningSince ? "running" : setting.enabled ? "completed" : "pending"}`}
-          title={setting.runningSince ? "A run is in progress" : "Schedule status"}
+          className={`status ${setting.enabled ? "completed" : "pending"}`}
+          title="Schedule status"
         >
-          {setting.runningSince ? "Running" : setting.enabled ? "On" : "Off"}
+          {setting.enabled ? "On" : "Off"}
         </span>
       </div>
       {description ? <p className="hint">{description}</p> : null}
@@ -243,12 +239,12 @@ function ScheduleEditor({
           </button>
           <button
             className="button"
-            disabled={loading || Boolean(setting.runningSince)}
+            disabled={loading}
             onClick={() => void onRun()}
-            title={setting.runningSince ? "A run is already in progress" : "Run this side-process now"}
+            title="Run this now"
             type="button"
           >
-            {setting.runningSince ? "Running…" : "Run now"}
+            Run now
           </button>
         </div>
       </div>
@@ -268,11 +264,6 @@ function ScheduleEditor({
         ))}
       </div>
       {!cronValid ? <p className="crunchError">Not a valid 5-field cron expression.</p> : null}
-      {setting.lastRunAt ? (
-        <p className="hint">
-          {lastRunLabel} {new Date(setting.lastRunAt).toLocaleString()}
-        </p>
-      ) : null}
     </article>
   );
 }

@@ -1,86 +1,93 @@
 import { Hono } from "hono";
-import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import * as jobsService from "./service.js";
-import { createJobBodySchema } from "./schema.js";
+import {
+  claimJobBodySchema, completeJobBodySchema, createJobBodySchema, failJobBodySchema, listJobsQuerySchema
+} from "./schema.js";
 
 export function jobRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
-  app.post(
-    "/",
-    requireScopes("manage:jobs"),
-    zValidator("json", createJobBodySchema, (result, c) => {
-      if (!result.success) {
-        return c.json({ error: "valid_job_type_required" }, 400);
-      }
-    }),
-    async (c) => {
-      const { type, input } = c.req.valid("json");
+  app.post("/", requireScopes("manage:jobs"), async (c) => {
+    const parsed = createJobBodySchema.safeParse(await readJsonBody(c));
+    if (!parsed.success) throw new HttpError(400, "invalid_job");
+    return c.json({ job: await jobsService.createJob(ctx, parsed.data.type, parsed.data.input) }, 202);
+  });
 
-      const job = await jobsService.createJob(ctx, type, input);
-      return c.json({ job }, 201);
-    }
-  );
+  app.get("/", requireScopes("read:knowledge"), async (c) => {
+    const parsed = listJobsQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) throw new HttpError(400, "invalid_job_filters");
+    return c.json(await jobsService.listJobs(ctx, parsed.data));
+  });
 
-  app.get("/", requireScopes("read:knowledge"), async (c) => c.json({ jobs: await jobsService.listJobs(ctx) }));
+  app.get("/schedules", requireScopes("read:knowledge"), async (c) =>
+    c.json({ schedules: await ctx.jobs.listSchedules() }));
 
   app.post("/claim", requireScopes("manage:jobs"), async (c) => {
-    const payload = await readJsonBody<{ workerName?: string; acceptedTypes?: unknown[] }>(c);
-    const workerName = payload.workerName?.trim();
-
-    if (!workerName) {
-      throw new HttpError(400, "worker_name_required");
-    }
-
-    const rawTypes = Array.isArray(payload.acceptedTypes) ? payload.acceptedTypes : [];
-    const acceptedTypes = rawTypes.filter(jobsService.isAiJobType);
-    if (acceptedTypes.length === 0) {
-      throw new HttpError(400, "accepted_types_required");
-    }
-
-    const job = await jobsService.claimJob(ctx, workerName, acceptedTypes);
+    const parsed = claimJobBodySchema.safeParse(await readJsonBody(c));
+    if (!parsed.success) throw new HttpError(400, "worker_capabilities_required");
+    const job = await jobsService.claimJob(ctx, parsed.data.workerName, parsed.data.capabilities);
     return c.json({ job: job ?? null });
   });
 
-  app.post("/:id/complete", requireScopes("manage:jobs"), async (c) => {
-    const payload = await readJsonBody<{ output?: unknown }>(c);
-
+  app.get("/:id/wait", requireScopes("read:knowledge"), async (c) => {
     try {
-      const outcome = await jobsService.completeJob(ctx, c.req.param("id"), payload.output);
+      const result = await jobsService.waitForJob(ctx, c.req.param("id"));
+      return c.json({ job: result.job }, result.terminal ? 200 : 202);
+    } catch {
+      throw new HttpError(404, "job_not_found");
+    }
+  });
+
+  app.post("/:id/heartbeat", requireScopes("manage:jobs"), async (c) => {
+    try {
+      const job = await jobsService.heartbeatJob(ctx, c.req.param("id"));
+      return c.json({ job, cancelled: job.state === "cancelled" });
+    } catch { throw new HttpError(404, "job_not_found"); }
+  });
+
+  app.post("/:id/complete", requireScopes("manage:jobs"), async (c) => {
+    const parsed = completeJobBodySchema.safeParse(await readJsonBody(c));
+    if (!parsed.success) throw new HttpError(400, "invalid_output");
+    try {
+      const outcome = await jobsService.completeJob(ctx, c.req.param("id"), parsed.data.output, parsed.data.executor);
       if (!outcome.ok) {
-        throw new HttpError(outcome.code === "job_not_found" ? 404 : 400, outcome.code);
+        const status = outcome.code === "job_not_found" ? 404 : outcome.code === "job_cancelled" ? 409 : 400;
+        throw new HttpError(status, outcome.code);
       }
       return c.json({ job: outcome.job });
     } catch (error) {
-      if (error instanceof HttpError) {
-        throw error;
-      }
-      const message = error instanceof Error ? error.message : "Unexpected completion failure";
-      throw new HttpError(500, "job_completion_failed", message);
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(500, "job_completion_failed");
     }
   });
 
   app.post("/:id/fail", requireScopes("manage:jobs"), async (c) => {
-    const payload = await readJsonBody<{ error?: string }>(c);
-    const errorMessage = typeof payload.error === "string" ? payload.error : undefined;
+    const parsed = failJobBodySchema.safeParse(await readJsonBody(c));
+    if (!parsed.success) throw new HttpError(400, "invalid_job_error");
+    try { return c.json({ job: await jobsService.failJob(ctx, c.req.param("id"), parsed.data.error) }); }
+    catch { throw new HttpError(404, "job_not_found"); }
+  });
 
-    try {
-      const job = await jobsService.failJob(ctx, c.req.param("id"), errorMessage);
-      return c.json({ job });
-    } catch {
+  app.post("/:id/cancel", requireScopes("manage:jobs"), async (c) => {
+    try { return c.json({ job: await jobsService.cancelJob(ctx, c.req.param("id")) }); }
+    catch { throw new HttpError(404, "job_not_found"); }
+  });
+
+  app.post("/:id/retry", requireScopes("manage:jobs"), async (c) => {
+    try { return c.json({ job: await jobsService.retryJob(ctx, c.req.param("id")) }); }
+    catch (error) {
+      if (error instanceof Error && /only failed/i.test(error.message)) throw new HttpError(409, "job_not_failed");
       throw new HttpError(404, "job_not_found");
     }
   });
 
   app.get("/:id", requireScopes("read:knowledge"), async (c) => {
     const job = await jobsService.getJob(ctx, c.req.param("id"));
-    if (!job) {
-      throw new HttpError(404, "job_not_found");
-    }
+    if (!job) throw new HttpError(404, "job_not_found");
     return c.json({ job });
   });
 

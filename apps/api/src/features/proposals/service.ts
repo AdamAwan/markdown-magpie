@@ -1,16 +1,17 @@
 import type {
-  AiJob,
   DraftContext,
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
   GapCandidate,
   OpenPullRequestContext,
   Proposal,
+  RepositoryRef,
   SourceDataContext
 } from "@magpie/core";
+import type { JobView } from "@magpie/jobs";
+import { z } from "zod";
+import { publishProposalOutputSchema } from "@magpie/jobs";
 import { resolveProposalTargetPath } from "@magpie/core";
-import { DRAFT_MARKDOWN_PROPOSAL } from "@magpie/prompts";
-import { LocalGitProposalPublisher, raisePullRequest } from "@magpie/git";
 import type { AppContext } from "../../context.js";
 import type { ProposalListOptions } from "../../stores/proposal-store.js";
 import {
@@ -22,9 +23,9 @@ import {
   selectFlow
 } from "../../platform/repositories.js";
 import { collectSourceContext } from "../../platform/source-context.js";
-import { parseJsonObject } from "../../platform/json.js";
-import { slugify } from "../../platform/paths.js";
 import { type AiProviderName } from "../../platform/providers.js";
+
+type PublishProposalJobOutput = z.infer<typeof publishProposalOutputSchema>;
 
 export async function list(ctx: AppContext, limit: number, options?: ProposalListOptions): Promise<Proposal[]> {
   return ctx.stores.proposals.list(limit, options);
@@ -113,15 +114,24 @@ async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal
   }
 }
 
-// Pushes a "ready" proposal's branch and raises a PR for it, degrading to a
-// branch-only publish if the PR can't be opened. Shared by the HTTP publish
-// route and the scheduled gap-to-PR task, so the result is a discriminated
-// outcome rather than an HTTP response — callers map it to their own surface.
-export async function publishReadyProposal(ctx: AppContext, proposal: Proposal) {
+type PublishValidationError = {
+  ok: false;
+  code: "proposal_repository_not_found" | "proposal_repository_not_git";
+  message: string;
+};
+
+// Resolves and validates the Git repository a proposal would publish into. This
+// is the shared pre-flight that both the publish enqueue path and the
+// execution-context endpoint run, so an invalid publish fails fast with the same
+// status before any job is enqueued or handed to the watcher.
+async function resolvePublishRepository(
+  ctx: AppContext,
+  proposal: Proposal
+): Promise<{ ok: true; repository: RepositoryRef } | PublishValidationError> {
   const repository = await findRepositoryForProposal(ctx.repositoryDeps(), proposal);
   if (!repository) {
     return {
-      ok: false as const,
+      ok: false,
       code: "proposal_repository_not_found",
       message: "No indexed Git repository matches this proposal target path."
     };
@@ -129,74 +139,61 @@ export async function publishReadyProposal(ctx: AppContext, proposal: Proposal) 
 
   if (repository.git?.scope === "not-git" || !repository.git?.workTreeRoot) {
     return {
-      ok: false as const,
+      ok: false,
       code: "proposal_repository_not_git",
       message: "The matched repository is not a Git checkout."
     };
   }
 
-  try {
-    const publisher = new LocalGitProposalPublisher();
-    const publication = await publisher.publish({
-      repository,
-      branchName: createProposalBranchName(proposal),
-      title: `docs: ${proposal.title}`,
-      markdown: proposal.markdown,
-      targetPath: proposal.targetPath
-    });
-    // The branch is now on the remote; try to open a PR for it. A PR failure
-    // (unsupported host, bad token, API error) must not lose the pushed branch,
-    // so we degrade to a branch-only publish and surface the reason.
-    let pullRequestUrl: string | undefined;
-    let pullRequestWarning: string | undefined;
-    try {
-      const baseBranch = repository.defaultBranch || repository.git?.defaultBranch || "main";
-      const raised = await raisePullRequest({
-        remoteUrl: publication.remoteUrl,
-        headBranch: publication.branchName,
-        baseBranch,
-        title: `docs: ${proposal.title}`,
-        body: buildPullRequestBody(proposal)
-      });
-      pullRequestUrl = raised?.url;
-      console.log(
-        raised
-          ? `Raised pull request ${raised.url} for proposal ${proposal.id}`
-          : `Pushed branch ${publication.branchName}; no PR raised (unsupported host or missing token).`
-      );
-    } catch (error) {
-      pullRequestWarning = error instanceof Error ? error.message : "Pull request creation failed";
-      console.warn(`Branch ${publication.branchName} pushed, but PR creation failed: ${pullRequestWarning}`);
-    }
-
-    const updatedProposal = await ctx.stores.proposals.recordPublication(proposal.id, {
-      provider: "local-git",
-      branchName: publication.branchName,
-      commitSha: publication.commitSha,
-      remoteUrl: publication.remoteUrl,
-      pullRequestUrl,
-      publishedAt: new Date().toISOString()
-    });
-
-    return { ok: true as const, proposal: updatedProposal, publication, pullRequestUrl, pullRequestWarning };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Proposal publish failed";
-    return { ok: false as const, code: "proposal_publish_failed", message };
-  }
+  return { ok: true, repository };
 }
 
-// Human-facing PR description linking the merge back to the gaps it closes.
-function buildPullRequestBody(proposal: Proposal): string {
-  const lines = ["Proposed by Markdown Magpie to close knowledge gaps.", ""];
-  if (proposal.rationale) {
-    lines.push(proposal.rationale, "");
+// Enqueues a publish_proposal job for a "ready" proposal after re-running the
+// same repository pre-flight the synchronous publish used. Git execution now
+// happens in the Task 7 watcher runner (which fetches the execution context and
+// reuses the pure branch-name / PR-body helpers exported here); the API only
+// validates and enqueues, so an unpublishable proposal still fails fast with the
+// original 404/409 codes before any job exists.
+export async function requestProposalPublication(
+  ctx: AppContext,
+  proposal: Proposal
+): Promise<{ ok: true; job: JobView } | PublishValidationError> {
+  const resolved = await resolvePublishRepository(ctx, proposal);
+  if (!resolved.ok) {
+    return resolved;
   }
-  const summaries = splitGapSummaries(proposal.gapSummary);
-  if (summaries.length > 0) {
-    lines.push("Gaps addressed:");
-    lines.push(...summaries.map((summary) => `- ${summary}`));
+
+  const job = await ctx.jobs.create("publish_proposal", { proposalId: proposal.id });
+  console.log(`Enqueued publish_proposal job ${job.id} for proposal ${proposal.id}`);
+  return { ok: true, job };
+}
+
+type ExecutionContextRepository = Pick<RepositoryRef, "id" | "localPath" | "remoteUrl" | "defaultBranch" | "git">;
+
+// The non-generative, credential-free view the Task 7 publication runner fetches
+// before executing git: the proposal record plus exactly the repository fields it
+// needs to push a branch and open a PR. Runs the same repository resolution +
+// validation as the publish path, so it returns the same 404/409 conditions.
+export async function getProposalExecutionContext(
+  ctx: AppContext,
+  proposalId: string
+): Promise<
+  | { ok: true; proposal: Proposal; repository: ExecutionContextRepository }
+  | { ok: false; code: "proposal_not_found"; message: string }
+  | PublishValidationError
+> {
+  const proposal = await ctx.stores.proposals.get(proposalId);
+  if (!proposal) {
+    return { ok: false, code: "proposal_not_found", message: "Proposal not found." };
   }
-  return lines.join("\n").trim();
+
+  const resolved = await resolvePublishRepository(ctx, proposal);
+  if (!resolved.ok) {
+    return resolved;
+  }
+
+  const { id, localPath, remoteUrl, defaultBranch, git } = resolved.repository;
+  return { ok: true, proposal, repository: { id, localPath, remoteUrl, defaultBranch, git } };
 }
 
 // Drafts ONE proposal from one or more gap candidates. The reviewer (via the
@@ -205,10 +202,9 @@ function buildPullRequestBody(proposal: Proposal): string {
 // cluster from /from-gaps). Evidence and triggering questions are unioned across
 // every gap in the cluster so the drafter sees the full picture once.
 // Core of "draft one proposal from a confirmed cluster of gap summaries",
-// independent of HTTP so the scheduled gap-to-PR task can reuse it. Returns a
-// discriminated outcome: in direct mode the proposal is already created; in
-// queue mode an AI job is enqueued and the proposal lands later via the job
-// completion machinery.
+// independent of HTTP so the scheduled gap-to-PR task can reuse it. Enqueues a
+// draft_markdown_proposal job; the proposal lands later via the job completion
+// machinery (createProposalFromCompletedJob).
 // A per-run memo of collected source context, keyed by the resolved source-id
 // set. Collecting a source walks its checkout and reads up to 24 files, and that
 // material is identical for every proposal drawn from the same sources — so a
@@ -340,7 +336,7 @@ export async function draftFromGaps(
   const destinationId = overrides.destinationId?.trim() || flow?.destinationId || defaultDestinationId(deps);
   console.log(
     `Drafting proposal for ${label} (flow=${flow?.id ?? "none"}, destination=${destinationId ?? "none"}, ` +
-      `provider=${ctx.config.get().aiProvider}, mode=${ctx.config.get().aiExecutionMode})`
+      `provider=${ctx.config.get().aiProvider})`
   );
   const sourceContext = await collectSourceContextCached(deps, sourceIds, overrides.sourceContextCache);
   const materialFiles = sourceContext.filter((context) => context.path && context.content !== "Source path does not exist.");
@@ -352,7 +348,10 @@ export async function draftFromGaps(
   } else {
     console.log(`Proposal draft will use ${materialFiles.length} source file(s) as raw material.`);
   }
-  const input: DraftMarkdownProposalJobInput = {
+  // Drafting is enqueue-only: the watcher runs the generative work and the
+  // proposal lands later via createProposalFromCompletedJob. The configured
+  // provider is passed through as-is (the @magpie/jobs contract validates it).
+  const input: DraftMarkdownProposalJobInput & { provider: AiProviderName } = {
     gapSummaries,
     triggeringQuestions: logs.map((log) => log.question),
     evidence,
@@ -364,31 +363,15 @@ export async function draftFromGaps(
     targetPath: overrides.targetPath?.trim() || undefined,
     provider: ctx.config.get().aiProvider,
     expectedOutput: "markdown_proposal"
-  } as DraftMarkdownProposalJobInput & { provider: AiProviderName };
+  };
 
-  if (ctx.config.get().aiExecutionMode === "direct") {
-    const output = await draftMarkdownProposalDirect(ctx, input);
-    const proposal = await ctx.stores.proposals.create({
-      ...output,
-      targetPath: resolveProposalTargetPath(destinationSubpath(deps, input.destinationId), output.title),
-      evidence,
-      gapSummary: joinGapSummaries(gapSummaries),
-      triggeringQuestionIds: questionIds,
-      destinationId: input.destinationId,
-      draftContext: buildDraftContext({ gapSummaries, sourceContext, evidence, openPullRequests: overrides.openPullRequests })
-    });
-
-    console.log(`Created proposal ${proposal.id} directly for ${label} (target ${proposal.targetPath})`);
-    return { ok: true as const, mode: "direct" as const, proposal };
-  }
-
-  const job = await ctx.stores.aiJobs.enqueue("draft_markdown_proposal", {
+  const job = await ctx.jobs.create("draft_markdown_proposal", {
     ...input,
     triggeringQuestionIds: questionIds
   });
 
   console.log(`Enqueued draft_markdown_proposal job ${job.id} for ${label}`);
-  return { ok: true as const, mode: "queue" as const, job };
+  return { ok: true as const, job };
 }
 
 // Wraps collectSourceContext with the optional per-run memo. The key is the
@@ -412,79 +395,6 @@ async function collectSourceContextCached(
   const collected = await collectSourceContext(deps, sourceIds);
   cache.set(key, collected);
   return collected;
-}
-
-async function draftMarkdownProposalDirect(
-  ctx: AppContext,
-  input: DraftMarkdownProposalJobInput
-): Promise<DraftMarkdownProposalJobOutput> {
-  if (ctx.config.get().aiProvider === "mock") {
-    return createMockMarkdownProposal(ctx, input);
-  }
-
-  const response = await ctx.providers.chat(ctx.config.get().aiProvider).complete({
-    system: DRAFT_MARKDOWN_PROPOSAL.instructions,
-    messages: [
-      {
-        role: "user",
-        content: JSON.stringify(input, null, 2)
-      }
-    ]
-  });
-  const output = parseJsonObject(response.content);
-
-  if (!isDraftMarkdownProposalJobOutput(output)) {
-    throw new Error("Direct proposal provider returned invalid markdown proposal output");
-  }
-
-  return output;
-}
-
-function createMockMarkdownProposal(
-  ctx: AppContext,
-  input: DraftMarkdownProposalJobInput
-): DraftMarkdownProposalJobOutput {
-  const title = titleFromGapSummary(input.gapSummaries[0] ?? "");
-  const targetPath = resolveProposalTargetPath(destinationSubpath(ctx.repositoryDeps(), input.destinationId), title);
-  const gapList = input.gapSummaries.length
-    ? input.gapSummaries.map((summary) => `- ${summary}`).join("\n")
-    : "- No gap summaries recorded.";
-  const gapHeading = input.gapSummaries.length === 1 ? "Gap" : "Gaps";
-  const triggeringQuestions = input.triggeringQuestions.length
-    ? input.triggeringQuestions.map((question) => `- ${question}`).join("\n")
-    : "- No triggering questions recorded.";
-  const evidence = input.evidence.length
-    ? input.evidence.map((citation) => `- ${citation.path}#${citation.anchor}: ${citation.heading}`).join("\n")
-    : "- No supporting citations were available.";
-  const sourceMaterial = input.sourceContext?.length
-    ? input.sourceContext
-        .slice(0, 8)
-        .map((source) => `- ${source.sourceName}${source.path ? ` (${source.path})` : source.url ? ` (${source.url})` : ""}`)
-        .join("\n")
-    : "- No raw source context was attached.";
-
-  return {
-    title,
-    targetPath,
-    markdown: `---\ntitle: ${JSON.stringify(title)}\nstatus: draft\n---\n\n# ${title}\n\n## ${gapHeading}\n\n${gapList}\n\n## Triggering Questions\n\n${triggeringQuestions}\n\n## Proposed Guidance\n\nAdd reviewed guidance that directly answers ${input.gapSummaries.length === 1 ? "this gap" : "these related gaps"}. Keep the final content specific, source-backed, and easy for maintainers to verify.\n\n## Raw Source Material\n\n${sourceMaterial}\n\n## Evidence\n\n${evidence}\n`,
-    rationale: "Generated from the selected gap candidate(s) using the deterministic mock provider."
-  };
-}
-
-function titleFromGapSummary(summary: string): string {
-  const normalized = summary
-    .replace(/^no (?:sufficient )?source material found for:\s*/i, "")
-    .replace(/[?.!]+$/g, "")
-    .trim();
-  if (!normalized) {
-    return "Knowledge Gap Proposal";
-  }
-
-  return normalized
-    .split(/\s+/)
-    .slice(0, 10)
-    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
-    .join(" ");
 }
 
 // The flow a set of matched gap candidates agree on, or undefined when they span
@@ -523,24 +433,20 @@ function dedupeCitations(citations: Proposal["evidence"]): Proposal["evidence"] 
   return result;
 }
 
-function createProposalBranchName(proposal: Proposal): string {
-  return `magpie/proposal-${proposal.id.slice(0, 8)}-${slugify(proposal.title).slice(0, 40)}`;
-}
-
 export async function createProposalFromCompletedJob(
   ctx: AppContext,
-  job: AiJob | undefined,
+  job: JobView | undefined,
   output: unknown
-): Promise<void> {
+): Promise<Proposal | undefined> {
   if (!job || job.type !== "draft_markdown_proposal" || !isDraftMarkdownProposalJobOutput(output)) {
-    return;
+    return undefined;
   }
 
   const input = job.input as Partial<DraftMarkdownProposalJobInput> & {
     triggeringQuestionIds?: string[];
   };
 
-  await ctx.stores.proposals.create({
+  return ctx.stores.proposals.create({
     ...output,
     targetPath: resolveProposalTargetPath(destinationSubpath(ctx.repositoryDeps(), input.destinationId), output.title),
     evidence: input.evidence ?? [],
@@ -557,6 +463,38 @@ export async function createProposalFromCompletedJob(
   });
 }
 
+// Completion handler for publish_proposal jobs: records the validated git
+// publication the watcher performed (branch, commit, optional remote/PR url) onto
+// the linked proposal. Idempotent by proposalId — a proposal that already carries
+// a publication is left untouched, so re-completing the same job never
+// double-applies or regresses the recorded metadata.
+export async function recordPublicationFromCompletedJob(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<Proposal | undefined> {
+  if (!job || job.type !== "publish_proposal" || !isPublishProposalJobOutput(output)) {
+    return undefined;
+  }
+
+  const existing = await ctx.stores.proposals.get(output.proposalId);
+  if (!existing) {
+    return undefined;
+  }
+  if (existing.publication) {
+    return existing;
+  }
+
+  return ctx.stores.proposals.recordPublication(output.proposalId, {
+    provider: "local-git",
+    branchName: output.branchName,
+    commitSha: output.commitSha,
+    remoteUrl: output.remoteUrl,
+    pullRequestUrl: output.pullRequestUrl,
+    publishedAt: output.publishedAt
+  });
+}
+
 export function isProposalStatus(value: unknown): value is Proposal["status"] {
   return (
     value === "draft" ||
@@ -568,7 +506,11 @@ export function isProposalStatus(value: unknown): value is Proposal["status"] {
   );
 }
 
-export function isDraftMarkdownProposalJobOutput(value: unknown): value is DraftMarkdownProposalJobOutput {
+function isPublishProposalJobOutput(value: unknown): value is PublishProposalJobOutput {
+  return publishProposalOutputSchema.safeParse(value).success;
+}
+
+function isDraftMarkdownProposalJobOutput(value: unknown): value is DraftMarkdownProposalJobOutput {
   if (!value || typeof value !== "object") {
     return false;
   }

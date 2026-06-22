@@ -1,9 +1,19 @@
 import type { GapCandidate, PersistedGapCluster } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import { collectOpenPullRequestContext, draftFromGaps, type SourceContextCache } from "../proposals/service.js";
+import { reconcileGaps as runReconcileGaps } from "../../scheduling/gap-reconciler.js";
 
 export async function listCandidates(ctx: AppContext, limit: number): Promise<GapCandidate[]> {
   return ctx.stores.questionLogs.listGapCandidates(limit);
+}
+
+// Runs the full gap→PR reconciliation for one flow (clustering, the reshape AI job
+// the API bounded-waits on, drafting and publication enqueue). This is the thin
+// endpoint the maintenance watcher's process_gaps_to_pull_requests runner POSTs;
+// the heavy orchestration stays here in the API. An absent flowId reconciles the
+// default/un-routed flow.
+export async function reconcileFlow(ctx: AppContext, flowId: string | undefined): Promise<void> {
+  await runReconcileGaps(ctx, flowId);
 }
 
 // Fast read over the persisted clusters the reconciler maintains — no model call.
@@ -40,11 +50,10 @@ export async function listClusters(ctx: AppContext, limit: number): Promise<Pers
   return result;
 }
 
-// Drafts one proposal from a persisted cluster, linking the proposal back to the
-// cluster and queueing it for publication. The cluster's own flow routes the
-// draft, so the caller only supplies optional target/destination overrides. Only
-// the synchronous (direct-mode) proposal is linked here; in queue mode the
-// proposal is created later by the AI-job completion path and links there.
+// Drafts one proposal from a persisted cluster. The cluster's own flow routes the
+// draft, so the caller only supplies optional target/destination overrides.
+// Drafting is enqueue-only: the proposal is created later by the AI-job completion
+// path, which links it back to its cluster.
 export async function draftFromCluster(
   ctx: AppContext,
   clusterId: string,
@@ -72,9 +81,7 @@ export async function draftFromCluster(
   if (!outcome.ok) {
     return outcome;
   }
-  if (outcome.mode === "direct") {
-    await ctx.stores.proposals.linkCluster(outcome.proposal.id, clusterId);
-    await ctx.stores.gapClusters.enqueuePublicationAction(outcome.proposal.id, "publish");
-  }
+  // Drafting is enqueue-only: the proposal is created later by the job-completion
+  // path, which links it back to its cluster. Nothing to link synchronously here.
   return outcome;
 }

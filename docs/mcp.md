@@ -32,12 +32,15 @@ Returns the final answer only:
 }
 ```
 
-The API supports two execution modes:
+Answers are always produced asynchronously by a durable job:
 
-- **direct** — the API answers inline and the server returns the answer immediately.
-- **queue** — the API enqueues a background job (processed by a watcher). The server polls the job's status endpoint until it completes, then returns the finished answer.
+1. `POST /api/ask` records the question and enqueues an `answer_question` job, returning **202** with `{ questionId, job, links }` — no inline answer.
+2. The server waits on the job via `GET /api/jobs/:id/wait`. The wait endpoint long-polls server-side and returns **200** with the terminal job, or **202** with the current projection when its wait limit expires.
+3. If the wait returns a non-terminal job (state `created`, `retry`, or `active`), the server falls back to polling the detail endpoint `GET /api/jobs/:id` every `ANSWER_POLL_INTERVAL_MS` until the job reaches a terminal state or `ANSWER_TIMEOUT_MS` elapses.
 
-In both modes the client receives the answer payload above plus the `questionId`. Other internal details — execution mode, job identifiers, retrieval context, provider names, and status links — are not exposed to the client.
+Job states are `created | retry | active` (non-terminal) and `completed | cancelled | failed` (terminal). On `completed`, the terminal job `output` is the envelope `{ result, executor }`; the answer fields live in `result`. On `failed`/`cancelled`, or if the timeout is exceeded, `kb.ask` raises an error naming the job id and state (no payload data is echoed).
+
+The client receives only the answer payload above plus the `questionId`. Internal details — job identifiers, retrieval context, provider names, and status links — are not exposed to the client.
 
 ### `kb.search`
 
@@ -68,7 +71,7 @@ Input:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `API_BASE_URL` | `http://localhost:4000` | Base URL of the Markdown Magpie API. |
-| `ANSWER_POLL_INTERVAL_MS` | `1000` | How often `kb.ask` polls a queued answer job. |
+| `ANSWER_POLL_INTERVAL_MS` | `1000` | How often `kb.ask` polls the answer job's detail endpoint after a non-terminal wait. |
 | `ANSWER_TIMEOUT_MS` | `120000` | How long `kb.ask` waits for a queued answer before failing. |
 
 ### Streamable HTTP only
@@ -122,7 +125,7 @@ The stdio transport presents a single bearer token to the API on every call, sup
 ## Requirements
 
 - The API must be running and reachable at `API_BASE_URL`.
-- In `queue` execution mode, a watcher must be running to process `answer_question` jobs; otherwise `kb.ask` will time out.
+- A watcher must be running to process `answer_question` jobs; otherwise `kb.ask` will time out.
 
 ## Running
 
@@ -172,7 +175,7 @@ A project-scoped `.mcp.json` at the repository root registers the server with Cl
 }
 ```
 
-Build first (`npm run build`) so `apps/mcp/dist/main.js` exists, ensure the API (and a watcher, in queue mode) are running, then start Claude Code from the repository root and approve the server when prompted.
+Build first (`npm run build`) so `apps/mcp/dist/main.js` exists, ensure the API and a watcher are running, then start Claude Code from the repository root and approve the server when prompted.
 
 ### Hermes Agent (Streamable HTTP)
 

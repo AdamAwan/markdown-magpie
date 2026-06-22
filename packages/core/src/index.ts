@@ -101,7 +101,6 @@ export interface QuestionGap {
 export interface QuestionLog {
   id: string;
   question: string;
-  executionMode: AiExecutionMode;
   chatProvider: string;
   confidence: Confidence;
   retrievedSectionIds: string[];
@@ -120,7 +119,6 @@ export interface QuestionLog {
 
 export interface QuestionLogInput {
   question: string;
-  executionMode: AiExecutionMode;
   chatProvider: string;
   answer?: AnswerResult;
   retrievedSectionIds: string[];
@@ -130,6 +128,10 @@ export interface QuestionLogInput {
 export interface QuestionLogUpdateInput {
   answer: AnswerResult;
   chatProvider?: string;
+  // The flow the question was routed to, recorded on completion. The watcher
+  // decides this after the log is first created, so it lands here, not at record
+  // time. Absent when no flow was chosen.
+  flowId?: string;
 }
 
 export type QuestionFeedback = "helpful" | "unhelpful";
@@ -217,8 +219,8 @@ export interface Proposal {
 }
 
 // The inputs handed to the drafter, kept alongside the proposal so the context
-// is inspectable after the fact regardless of execution mode (direct or queued).
-// Deliberately compact: source file identities, not their bodies.
+// is inspectable after the fact. Deliberately compact: source file identities,
+// not their bodies.
 export interface DraftContext {
   // The gap summaries the draft set out to close.
   gapSummaries: string[];
@@ -270,6 +272,9 @@ export interface ChatRequest {
     role: "user" | "assistant";
     content: string;
   }>;
+  // Optional caller-supplied cancellation. When the watcher aborts in-flight work
+  // (job cancelled or shutdown) the underlying fetch is torn down, not abandoned.
+  signal?: AbortSignal;
 }
 
 export interface ChatResponse {
@@ -280,62 +285,21 @@ export interface EmbeddingProvider {
   embed(texts: string[]): Promise<number[][]>;
 }
 
-export type AiExecutionMode = "direct" | "queue";
-
-export type AiJobType =
-  | "answer_question"
-  | "summarize_gap"
-  | "draft_markdown_proposal"
-  | "detect_contradiction"
-  | "suggest_consolidation"
-  | "crunch_knowledge_base"
-  | "sync_source_change";
-
-export type AiJobStatus = "pending" | "claimed" | "completed" | "failed" | "cancelled";
-
-export interface AiJob<TInput = unknown, TOutput = unknown> {
-  id: string;
-  type: AiJobType;
-  status: AiJobStatus;
-  input: TInput;
-  output?: TOutput;
-  error?: string;
-  claimedBy?: string;
-  claimedAt?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface AiJobQueue {
-  enqueue<TInput>(type: AiJobType, input: TInput): Promise<AiJob<TInput>>;
-  claimNext(workerName: string, acceptedTypes: AiJobType[]): Promise<AiJob | undefined>;
-  complete<TOutput>(jobId: string, output: TOutput): Promise<void>;
-  fail(jobId: string, error: string): Promise<void>;
-  get(jobId: string): Promise<AiJob | undefined>;
-  list(): Promise<AiJob[]>;
-  reset(): Promise<void>;
-}
-
-export interface AgentRunner {
-  name: string;
-  supports(jobType: AiJobType): boolean;
-  run(job: AiJob): Promise<unknown>;
-}
-
 export interface AnswerQuestionJobInput {
   questionLogId?: string;
   question: string;
-  context: Array<{
-    sectionId: string;
-    path: string;
-    heading: string;
-    content: string;
+  // Routing candidates the watcher chooses between. The watcher routes the
+  // question to one of these flows (a generative call it owns), then retrieves
+  // scoped context via POST /api/retrieve, then answers. May be empty when no
+  // flows are configured, in which case the watcher answers unscoped.
+  flows: Array<{
+    id: string;
+    name: string;
+    // NOTE: persona is plumbed through but currently inert — Task 7's answer
+    // runner will apply the chosen flow's persona to the prompt. Until then it
+    // is carried but not consumed.
+    persona?: string;
   }>;
-  // The flow the question was routed to, and that flow's persona snippet. Both are
-  // carried in the job so the watcher (which has no flow config) can apply the
-  // persona via buildJobPrompt. Absent when no flow matched / none configured.
-  flowId?: string;
-  persona?: string;
   expectedOutput: "answer_result";
 }
 
@@ -351,6 +315,9 @@ export interface AnswerQuestionJobOutput {
   confidence: Confidence;
   citations: Citation[];
   gaps?: KnowledgeGapSignal[];
+  // The flow the watcher routed the question to, recorded on completion so the
+  // question log reflects which flow answered. Absent when no flow was chosen.
+  flowId?: string;
 }
 
 export interface SummarizeGapJobInput {
@@ -515,11 +482,9 @@ export interface CrunchRun {
 export interface CrunchSettings {
   flowId?: string;
   enabled: boolean;
-  // Standard 5-field cron expression (minute hour day-of-month month day-of-week),
-  // evaluated in the API server's local time zone.
+  // Standard 5-field cron expression (minute hour day-of-month month day-of-week).
+  // Next-run timing is owned by pg-boss now, not derived/stored here.
   cron: string;
-  lastRunAt?: string;
-  nextRunAt?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -587,6 +552,10 @@ export interface SourceSyncRun {
   status: SourceSyncRunStatus;
   jobId?: string;
   plan?: CrunchPlan;
+  // The constrained changeset the API derived from the plan at gather time (only
+  // writes to candidate documents). Persisted so the publish job can fetch it
+  // without re-deriving the candidate set. Absent on skipped/failed runs.
+  changeset?: ChangesetChange[];
   error?: string;
   fromSha?: string;
   toSha: string;
@@ -604,12 +573,6 @@ export interface ScheduledTaskSettings {
   key: string;
   enabled: boolean;
   cron: string;
-  lastRunAt?: string;
-  nextRunAt?: string;
-  // Set while a run (scheduled or manual) is in flight, and cleared when it
-  // finishes. The UI disables "Run now" while this is set, and both trigger
-  // paths refuse to start an overlapping run.
-  runningSince?: string;
 }
 
 // --- Cron scheduling -------------------------------------------------------
@@ -761,141 +724,3 @@ export interface PublishChangesetRequest {
   changes: ChangesetChange[];
 }
 
-function crunchSlug(value: string): string {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 60)
-      .replace(/-+$/g, "") || "section"
-  );
-}
-
-function documentFolder(filePath: string): string {
-  const segments = filePath.replace(/\\/g, "/").split("/");
-  return segments.length > 1 ? segments.slice(0, -1).join("/") : "";
-}
-
-function countHeadings(content: string, level: number): string[] {
-  const prefix = `${"#".repeat(level)} `;
-  return content
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith(prefix))
-    .map((line) => line.slice(prefix.length).trim())
-    .filter(Boolean);
-}
-
-// Deterministic, dependency-free tidy heuristics shared by the API's direct
-// mock executor and the watcher's mock runner so demos and tests agree:
-//   - SPLIT a document that has grown large (> 1,800 chars) and covers several
-//     topics (>= 3 level-2 headings) into one file per "##" section.
-//   - CONSOLIDATE a folder that has fragmented into several small documents
-//     (>= 2 docs, each < 1,200 chars, none being split) into one overview file.
-// Real providers replace this with a model call; the shape of the output is the
-// same CrunchPlan either way.
-export function buildMockCrunchPlan(documents: CrunchFileWrite[]): CrunchPlan {
-  const operations: CrunchOperation[] = [];
-  const splitPaths = new Set<string>();
-
-  for (const document of [...documents].sort((left, right) => left.path.localeCompare(right.path))) {
-    const sections = countHeadings(document.content, 2);
-    if (document.content.length <= 1800 || sections.length < 3) {
-      continue;
-    }
-
-    splitPaths.add(document.path);
-    const folder = documentFolder(document.path);
-    const baseName = (document.path.replace(/\\/g, "/").split("/").at(-1) ?? document.path).replace(/\.md$/i, "");
-    const baseDir = folder ? `${folder}/${crunchSlug(baseName)}` : crunchSlug(baseName);
-    const blocks = splitByHeading(document.content, 2);
-    const writes: CrunchFileWrite[] = blocks.map((block) => ({
-      path: `${baseDir}/${crunchSlug(block.heading)}.md`,
-      content: `# ${block.heading}\n\n${block.body.trim()}\n`
-    }));
-
-    operations.push({
-      kind: "split",
-      title: `Split ${document.path} into ${writes.length} focused documents`,
-      reason: `This document is ${document.content.length} characters across ${sections.length} top-level sections, mixing several topics. Splitting one section per file keeps each document focused and easier to retrieve.`,
-      sources: [document.path],
-      writes,
-      deletes: [document.path]
-    });
-  }
-
-  const byFolder = new Map<string, CrunchFileWrite[]>();
-  for (const document of documents) {
-    if (splitPaths.has(document.path)) {
-      continue;
-    }
-    if (document.content.length >= 1200) {
-      continue;
-    }
-    const folder = documentFolder(document.path);
-    byFolder.set(folder, [...(byFolder.get(folder) ?? []), document]);
-  }
-
-  for (const [folder, folderDocuments] of [...byFolder.entries()].sort(([left], [right]) => left.localeCompare(right))) {
-    if (folderDocuments.length < 2) {
-      continue;
-    }
-
-    const sorted = [...folderDocuments].sort((left, right) => left.path.localeCompare(right.path));
-    const overviewPath = folder ? `${folder}/overview.md` : "overview.md";
-    const heading = folder ? `${folder} overview` : "Overview";
-    const body = sorted
-      .map((document) => {
-        const title = (document.path.replace(/\\/g, "/").split("/").at(-1) ?? document.path).replace(/\.md$/i, "");
-        return `## ${title}\n\n${stripFrontmatter(document.content).trim()}`;
-      })
-      .join("\n\n");
-
-    operations.push({
-      kind: "consolidate",
-      title: `Consolidate ${sorted.length} small documents in ${folder || "the root"} into one overview`,
-      reason: `${sorted.length} short documents (each under 1,200 characters) cover closely related material in the same folder. Merging them into a single overview reduces fragmentation and duplicate context.`,
-      sources: sorted.map((document) => document.path),
-      writes: [{ path: overviewPath, content: `# ${heading}\n\n${body}\n` }],
-      deletes: sorted.map((document) => document.path)
-    });
-  }
-
-  return {
-    summary:
-      operations.length === 0
-        ? "The knowledge base already looks tidy — no consolidations or splits are needed."
-        : `${operations.length} tidy operation(s): ${operations.filter((operation) => operation.kind === "split").length} split, ${operations.filter((operation) => operation.kind === "consolidate").length} consolidate.`,
-    operations,
-    rationale: "Generated by the deterministic mock crunch planner from document size and folder fragmentation heuristics."
-  };
-}
-
-function stripFrontmatter(content: string): string {
-  const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(content);
-  return match ? content.slice(match[0].length) : content;
-}
-
-function splitByHeading(content: string, level: number): Array<{ heading: string; body: string }> {
-  const prefix = `${"#".repeat(level)} `;
-  const lines = stripFrontmatter(content).split(/\r?\n/);
-  const blocks: Array<{ heading: string; body: string }> = [];
-  let current: { heading: string; body: string[] } | undefined;
-
-  for (const line of lines) {
-    if (line.startsWith(prefix)) {
-      if (current) {
-        blocks.push({ heading: current.heading, body: current.body.join("\n") });
-      }
-      current = { heading: line.slice(prefix.length).trim() || "Section", body: [] };
-    } else if (current) {
-      current.body.push(line);
-    }
-  }
-
-  if (current) {
-    blocks.push({ heading: current.heading, body: current.body.join("\n") });
-  }
-
-  return blocks;
-}

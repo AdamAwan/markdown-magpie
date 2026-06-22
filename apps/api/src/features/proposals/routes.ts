@@ -34,15 +34,13 @@ export function proposalRoutes(ctx: AppContext): Hono {
       throw new HttpError(outcome.code === "gap_summary_required" ? 400 : 404, outcome.code);
     }
 
-    if (outcome.mode === "direct") {
-      return c.json({ proposal: outcome.proposal }, 201);
-    }
-
     return c.json(
       {
         job: outcome.job,
         links: {
-          status: apiLink(`/ai-jobs/${outcome.job.id}`),
+          job: apiLink(`/jobs/${outcome.job.id}`),
+          wait: apiLink(`/jobs/${outcome.job.id}/wait`),
+          cancel: apiLink(`/jobs/${outcome.job.id}/cancel`),
           proposals: apiLink("/proposals")
         }
       },
@@ -102,17 +100,38 @@ export function proposalRoutes(ctx: AppContext): Hono {
       throw new HttpError(409, "proposal_not_ready", "Only ready proposals can be published.");
     }
 
-    const outcome = await proposalsService.publishReadyProposal(ctx, proposal);
+    // Git execution happens in the Task 7 watcher runner; the API validates the
+    // repository pre-flight then enqueues. Invalid publishes still fail fast with
+    // the original 409 codes before any job is created.
+    const outcome = await proposalsService.requestProposalPublication(ctx, proposal);
     if (!outcome.ok) {
       throw new HttpError(409, outcome.code, outcome.message);
     }
 
-    return c.json({
-      proposal: outcome.proposal,
-      publication: outcome.publication,
-      pullRequestUrl: outcome.pullRequestUrl,
-      pullRequestWarning: outcome.pullRequestWarning
-    });
+    return c.json(
+      {
+        job: outcome.job,
+        links: {
+          job: apiLink(`/jobs/${outcome.job.id}`),
+          wait: apiLink(`/jobs/${outcome.job.id}/wait`),
+          cancel: apiLink(`/jobs/${outcome.job.id}/cancel`),
+          proposal: apiLink(`/proposals/${proposal.id}`)
+        }
+      },
+      202
+    );
+  });
+
+  // The non-generative execution context the Task 7 publication runner fetches
+  // before executing git: the proposal plus the credential-free repository config.
+  app.get("/:id/execution-context", requireScopes("manage:knowledge"), async (c) => {
+    const outcome = await proposalsService.getProposalExecutionContext(ctx, c.req.param("id"));
+    if (!outcome.ok) {
+      const status = outcome.code === "proposal_not_found" ? 404 : 409;
+      throw new HttpError(status, outcome.code, "message" in outcome ? outcome.message : undefined);
+    }
+
+    return c.json({ proposal: outcome.proposal, repository: outcome.repository });
   });
 
   return app;

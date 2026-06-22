@@ -22,6 +22,7 @@ export interface ProposalStore {
   create(input: ProposalInput): Promise<Proposal>;
   list(limit: number, options?: ProposalListOptions): Promise<Proposal[]>;
   get(id: string): Promise<Proposal | undefined>;
+  getByJobId(jobId: string): Promise<Proposal | undefined>;
   updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined>;
   recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined>;
   linkCluster(id: string, gapClusterId: string): Promise<Proposal | undefined>;
@@ -32,6 +33,10 @@ export class InMemoryProposalStore implements ProposalStore {
   private readonly proposals = new Map<string, Proposal>();
 
   async create(input: ProposalInput): Promise<Proposal> {
+    if (input.jobId) {
+      const existing = await this.getByJobId(input.jobId);
+      if (existing) return existing;
+    }
     const proposal: Proposal = {
       id: randomUUID(),
       title: input.title,
@@ -63,6 +68,10 @@ export class InMemoryProposalStore implements ProposalStore {
 
   async get(id: string): Promise<Proposal | undefined> {
     return this.proposals.get(id);
+  }
+
+  async getByJobId(jobId: string): Promise<Proposal | undefined> {
+    return [...this.proposals.values()].find((proposal) => proposal.jobId === jobId);
   }
 
   async updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined> {

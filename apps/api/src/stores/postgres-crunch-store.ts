@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import type { CrunchPlan, CrunchRun, CrunchSettings, ProposalPublication } from "@magpie/core";
-import { DEFAULT_CRUNCH_CRON, nextRunFor, type CrunchRunInput, type CrunchStore } from "./crunch-store.js";
+import { DEFAULT_CRUNCH_CRON, type CrunchRunInput, type CrunchStore } from "./crunch-store.js";
 
 const { Pool } = pg;
 
@@ -72,10 +72,11 @@ export class PostgresCrunchStore implements CrunchStore {
 
   async completeRun(id: string, plan: CrunchPlan): Promise<CrunchRun | undefined> {
     const result = await this.pool.query<CrunchRunRow>(
-      "UPDATE crunch_runs SET status = 'completed', plan = $2, error = NULL, completed_at = now() WHERE id = $1 RETURNING *",
+      `UPDATE crunch_runs SET status = 'completed', plan = $2, error = NULL, completed_at = now()
+       WHERE id = $1 AND status NOT IN ('completed', 'published') RETURNING *`,
       [id, JSON.stringify(plan)]
     );
-    return result.rows[0] ? mapRunRow(result.rows[0]) : undefined;
+    return result.rows[0] ? mapRunRow(result.rows[0]) : this.getRun(id);
   }
 
   async failRun(id: string, error: string): Promise<CrunchRun | undefined> {
@@ -113,33 +114,18 @@ export class PostgresCrunchStore implements CrunchStore {
     flowId: string | undefined,
     patch: { enabled: boolean; cron: string }
   ): Promise<CrunchSettings> {
-    const nextRunAt = nextRunFor(patch.enabled, patch.cron, new Date()) ?? null;
+    // last_run_at/next_run_at columns still exist (dropped in Task 12) but are no
+    // longer written or read — pg-boss owns run timing now.
     const result = await this.pool.query<CrunchSettingsRow>(
       `
-        INSERT INTO crunch_settings (flow_id, enabled, cron, next_run_at)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO crunch_settings (flow_id, enabled, cron)
+        VALUES ($1, $2, $3)
         ON CONFLICT (flow_id) DO UPDATE
           SET enabled = EXCLUDED.enabled,
-              cron = EXCLUDED.cron,
-              next_run_at = EXCLUDED.next_run_at
+              cron = EXCLUDED.cron
         RETURNING *
       `,
-      [settingsFlowId(flowId), patch.enabled, patch.cron, nextRunAt]
-    );
-    return mapSettingsRow(result.rows[0]);
-  }
-
-  async touchSchedule(flowId: string | undefined, lastRunAt: string, nextRunAt: string): Promise<CrunchSettings> {
-    const result = await this.pool.query<CrunchSettingsRow>(
-      `
-        INSERT INTO crunch_settings (flow_id, enabled, cron, last_run_at, next_run_at)
-        VALUES ($1, false, $2, $3, $4)
-        ON CONFLICT (flow_id) DO UPDATE
-          SET last_run_at = EXCLUDED.last_run_at,
-              next_run_at = EXCLUDED.next_run_at
-        RETURNING *
-      `,
-      [settingsFlowId(flowId), DEFAULT_CRUNCH_CRON, lastRunAt, nextRunAt]
+      [settingsFlowId(flowId), patch.enabled, patch.cron]
     );
     return mapSettingsRow(result.rows[0]);
   }
@@ -179,8 +165,6 @@ interface CrunchSettingsRow {
   flow_id: string;
   enabled: boolean;
   cron: string;
-  last_run_at: Date | null;
-  next_run_at: Date | null;
 }
 
 function mapRunRow(row: CrunchRunRow): CrunchRun {
@@ -204,8 +188,6 @@ function mapSettingsRow(row: CrunchSettingsRow): CrunchSettings {
   return {
     flowId: row.flow_id ? row.flow_id : undefined,
     enabled: row.enabled,
-    cron: row.cron,
-    lastRunAt: row.last_run_at ? row.last_run_at.toISOString() : undefined,
-    nextRunAt: row.next_run_at ? row.next_run_at.toISOString() : undefined
+    cron: row.cron
   };
 }

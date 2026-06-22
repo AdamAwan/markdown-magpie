@@ -1,24 +1,69 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { JobType, JobView } from "@magpie/jobs";
+import { reconcileGapClustersOutputSchema } from "@magpie/jobs";
+import type { z } from "zod";
 import type { AppContext } from "../context.js";
+import { RuntimeConfigHolder } from "../config-holder.js";
+import { FakeJobBroker } from "../jobs/fake-broker.js";
 import { makeTestContext } from "../test-support/context.js";
 import { reconcileGaps } from "./gap-reconciler.js";
+
+type ReconcileOutput = z.infer<typeof reconcileGapClustersOutputSchema>;
+
+// A broker that immediately completes any reconcile_gap_clusters job with the
+// output the watcher's chat runner would have produced, so the reconciler's
+// enqueue+bounded-wait resolves to a terminal job in-process. Other job types
+// behave exactly like the FakeJobBroker (created, never completed).
+class ReshapingJobBroker extends FakeJobBroker {
+  constructor(private readonly buildOutput: (input: unknown) => ReconcileOutput) {
+    super();
+  }
+
+  override async create(type: JobType, input: unknown): Promise<JobView> {
+    const job = await super.create(type, input);
+    if (type === "reconcile_gap_clusters") {
+      return super.complete(job.id, this.buildOutput(job.input));
+    }
+    return job;
+  }
+}
+
+// A broker that enqueues the reconcile job normally but then throws when the
+// bounded-wait polls it (runJobToCompletion -> waitForJob -> get). This mirrors a
+// broker dying mid-poll: requestReshape's try/catch must swallow it and skip the
+// reshape, leaving the rest of reconcileGaps to run.
+class ThrowingPollJobBroker extends FakeJobBroker {
+  private reshapeJobId: string | undefined;
+
+  override async create(type: JobType, input: unknown): Promise<JobView> {
+    const job = await super.create(type, input);
+    if (type === "reconcile_gap_clusters") {
+      this.reshapeJobId = job.id;
+    }
+    return job;
+  }
+
+  override async get(id: string): Promise<JobView | undefined> {
+    if (id === this.reshapeJobId) {
+      throw new Error("broker connection lost mid-poll");
+    }
+    return super.get(id);
+  }
+}
 
 describe("reconcileGaps revision gate", () => {
   it("does no model work when the catalog revision is unchanged and no actions pending", async () => {
     const ctx = makeTestContext();
-    let chatCalls = 0;
-    ctx.providers.chat = () =>
-      ({
-        complete: async () => {
-          chatCalls += 1;
-          return { content: "{}" };
-        }
-      }) as never;
 
-    // processed revision already equals the catalog revision (both 0), no actions.
+    // processed revision already equals the catalog revision (both 0), no actions:
+    // with nothing changed the reconciler enqueues no reshape job.
     await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
-    assert.equal(chatCalls, 0, "no model calls when nothing changed");
+    assert.equal(
+      (await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length,
+      0,
+      "no reshape job enqueued when nothing changed"
+    );
   });
 
   it("still runs the PR-state pass even when model work is skipped", async () => {
@@ -58,15 +103,12 @@ describe("reconcileGaps clustering", () => {
     const ctx = makeTestContext();
     const log = await ctx.stores.questionLogs.record({
       question: "How do I configure X?",
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: []
     });
     await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
 
-    // No merges/splits proposed.
-    ctx.providers.chat = () => ({ complete: async () => ({ content: '{"merges":[],"splits":[]}' }) }) as never;
-
+    // A single new cluster has nothing to merge, so no reshape job is requested.
     await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
 
     const clusters = await ctx.stores.gapClusters.listActiveClusters();
@@ -76,31 +118,24 @@ describe("reconcileGaps clustering", () => {
   });
 
   it("does not reshape when the critic rejects the proposed merge", async () => {
-    const ctx = makeTestContext();
-    // Seed two clusters each with a gap.
+    // The reshape AI job runs in the watcher now; the reconciler enqueues it and
+    // applies only confirmed changes. Here the job comes back with the merge
+    // unconfirmed (critic rejected it), so nothing is applied.
+    const jobs = new ReshapingJobBroker((input) => {
+      const clusterIds = (input as { clusters: Array<{ id: string }> }).clusters.map((c) => c.id);
+      return { merges: [{ clusterIds, rationale: "x", confirmed: false }], splits: [] };
+    });
+    const ctx = makeTestContext({
+      jobs,
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
+    });
     await seedTwoClustersWithGaps(ctx);
-
-    let proposeCalls = 0;
-    let criticCalls = 0;
-    ctx.providers.chat = () =>
-      ({
-        complete: async (req: { system?: string }) => {
-          // The system prompt distinguishes the critic call from the propose call.
-          if ((req.system ?? "").includes("strict reviewer")) {
-            criticCalls += 1;
-            return { content: '{"confirmed":false,"rationale":"weak"}' };
-          }
-          proposeCalls += 1;
-          const [a, b] = (await ctx.stores.gapClusters.listActiveClusters()).map((c) => c.id);
-          return { content: `{"merges":[{"clusterIds":["${a}","${b}"],"rationale":"x"}],"splits":[]}` };
-        }
-      }) as never;
 
     const before = await ctx.stores.gapClusters.listActiveClusters();
     await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
     const after = await ctx.stores.gapClusters.listActiveClusters();
 
-    assert.ok(proposeCalls >= 1 && criticCalls >= 1, "propose then critic were called");
+    assert.equal((await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length, 1, "the reshape job was enqueued");
     assert.equal(after.length, before.length, "rejected merge left clusters unchanged");
 
     const decisions = await ctx.stores.reconciliations.list(50);
@@ -112,19 +147,15 @@ describe("reconcileGaps clustering", () => {
   });
 
   it("applies a critic-confirmed merge, keeping every gap exactly once", async () => {
-    const ctx = makeTestContext();
+    const jobs = new ReshapingJobBroker((input) => {
+      const clusterIds = (input as { clusters: Array<{ id: string }> }).clusters.map((c) => c.id);
+      return { merges: [{ clusterIds, rationale: "x", confirmed: true }], splits: [] };
+    });
+    const ctx = makeTestContext({
+      jobs,
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
+    });
     await seedTwoClustersWithGaps(ctx);
-
-    ctx.providers.chat = () =>
-      ({
-        complete: async (req: { system?: string }) => {
-          if ((req.system ?? "").includes("strict reviewer")) {
-            return { content: '{"confirmed":true,"rationale":"one doc covers both"}' };
-          }
-          const [a, b] = (await ctx.stores.gapClusters.listActiveClusters()).map((c) => c.id);
-          return { content: `{"merges":[{"clusterIds":["${a}","${b}"],"rationale":"x"}],"splits":[]}` };
-        }
-      }) as never;
 
     const membershipsBefore = await ctx.stores.gapClusters.listActiveMemberships();
     await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
@@ -142,47 +173,102 @@ describe("reconcileGaps clustering", () => {
     assert.equal(merge.applied, true, "a confirmed merge is applied");
     assert.equal(merge.rationale, "x");
   });
+
+  it("skips reshape (without throwing) when the reshape job never reaches a watcher", async () => {
+    // A plain FakeJobBroker never completes the enqueued reconcile job, so the
+    // bounded-wait hits its (tiny) deadline. Reshape is best-effort: the rest of
+    // reconcileGaps must still run, exactly as the old code only reshaped when it
+    // could. We drive a tiny deadline via the env override.
+    const previous = process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS;
+    process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS = "20";
+    try {
+      const ctx = makeTestContext({
+        config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
+      });
+      await seedTwoClustersWithGaps(ctx);
+
+      const before = await ctx.stores.gapClusters.listActiveClusters();
+      await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
+      const after = await ctx.stores.gapClusters.listActiveClusters();
+
+      assert.equal((await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length, 1, "the reshape job was enqueued");
+      assert.equal(after.length, before.length, "no reshape applied on timeout");
+      assert.deepEqual(await ctx.stores.reconciliations.list(50), [], "no decision recorded when the job never ran");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS;
+      } else {
+        process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS = previous;
+      }
+    }
+  });
+
+  it("skips reshape (without throwing) when the broker throws mid-poll", async () => {
+    // The broker enqueues the reshape job but then throws when the bounded-wait
+    // polls it. requestReshape wraps enqueue+wait in try/catch and treats a throw
+    // as "skip reshape, continue reconcile" — so no merge/split is applied, no
+    // reconciliation is recorded, no error escapes reconcileGaps, and the rest of
+    // the run (e.g. drafting) still happens. Distinct from the timeout-skip test:
+    // here the failure is a thrown error from the broker, not a quiet deadline.
+    const jobs = new ThrowingPollJobBroker();
+    const ctx = makeTestContext({
+      jobs,
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
+    });
+    await seedTwoClustersWithGaps(ctx);
+
+    const before = await ctx.stores.gapClusters.listActiveClusters();
+    // Must resolve, not reject: the broker throw is caught inside requestReshape.
+    await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
+    const after = await ctx.stores.gapClusters.listActiveClusters();
+
+    assert.equal((await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length, 1, "the reshape job was enqueued");
+    assert.equal(after.length, before.length, "no reshape applied when the broker threw");
+    assert.deepEqual(await ctx.stores.reconciliations.list(50), [], "no decision recorded when the reshape threw");
+    // The rest of reconcileGaps still ran: each uncovered cluster got a draft job.
+    assert.equal(
+      (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length,
+      before.length,
+      "reconcile continued past the skipped reshape and drafted the uncovered clusters"
+    );
+  });
 });
 
 describe("reconcileGaps autonomous drafting", () => {
-  it("drafts, links, and publishes a proposal for a brand-new cluster", async () => {
-    const ctx = makeTestContext();
+  // Drafting is now enqueue-only: autonomous reconciliation enqueues a
+  // draft_markdown_proposal job per uncovered cluster. The proposal (and its
+  // publish action) are created later by the Task 7 job-completion path, so these
+  // tests assert the enqueue, not a synchronous proposal.
+  it("enqueues a draft job for a brand-new cluster", async () => {
+    const ctx = makeTestContext({
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
+    });
     const log = await ctx.stores.questionLogs.record({
       question: "How do I configure X?",
-      executionMode: "direct",
-      chatProvider: "mock",
+      
+      chatProvider: "openai-compatible",
       retrievedSectionIds: []
     });
     await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
 
-    // No reshape proposed (a single cluster has nothing to merge anyway).
-    ctx.providers.chat = () => ({ complete: async () => ({ content: '{"merges":[],"splits":[]}' }) }) as never;
-
-    let published = 0;
+    // A single cluster has nothing to merge, so no reshape job is requested.
     await reconcileGaps(ctx, undefined, {
       fetchPullRequestStatus: async () => undefined,
-      publishProposal: async () => {
-        published += 1;
-      },
+      publishProposal: async () => {},
       supersedeProposal: async () => {}
     });
 
     const clusters = await ctx.stores.gapClusters.listActiveClusters();
     assert.equal(clusters.length, 1, "one cluster was created for the gap");
-    const proposals = await ctx.stores.proposals.list(500);
-    assert.equal(proposals.length, 1, "a proposal was drafted for the new cluster");
-    assert.equal(proposals[0].gapClusterId, clusters[0].id, "the proposal is linked to its cluster");
-    assert.equal(published, 1, "the drafted proposal's publish action was drained");
-    assert.deepEqual(
-      await ctx.stores.gapClusters.listPendingPublicationActions(),
-      [],
-      "no publication action is left pending"
-    );
+    assert.deepEqual(await ctx.stores.proposals.list(500), [], "no proposal is created synchronously");
+    const { jobs } = await ctx.jobs.list({ type: "draft_markdown_proposal" });
+    assert.equal(jobs.length, 1, "a draft job was enqueued for the new cluster");
   });
 
-  it("drafts only the uncovered cluster on a later run, never duplicating an existing proposal", async () => {
-    const ctx = makeTestContext();
-    ctx.providers.chat = () => ({ complete: async () => ({ content: '{"merges":[],"splits":[]}' }) }) as never;
+  it("enqueues only the uncovered cluster on a later run, never duplicating", async () => {
+    const ctx = makeTestContext({
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
+    });
     const deps = {
       fetchPullRequestStatus: async () => undefined,
       publishProposal: async () => {},
@@ -191,26 +277,37 @@ describe("reconcileGaps autonomous drafting", () => {
 
     const log1 = await ctx.stores.questionLogs.record({
       question: "q1?",
-      executionMode: "direct",
-      chatProvider: "mock",
+      
+      chatProvider: "openai-compatible",
       retrievedSectionIds: []
     });
     await ctx.stores.questionLogs.recordManualGap(log1.id, "Topic one");
     await reconcileGaps(ctx, undefined, deps);
-    assert.equal((await ctx.stores.proposals.list(500)).length, 1, "first run drafts one proposal");
+    // The just-enqueued draft completes into a proposal linked to its cluster, so
+    // the cluster is "covered" before the next run (mirrors the completion path).
+    const [cluster1] = await ctx.stores.gapClusters.listActiveClusters();
+    const proposal1 = await ctx.stores.proposals.create({
+      title: "Topic one", targetPath: "topic-one.md", markdown: "#", rationale: "r", evidence: [],
+      gapClusterId: cluster1.id
+    });
+    assert.ok(proposal1);
+    assert.equal((await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length, 1, "first run enqueues one draft");
 
     // A new, distinct gap advances the catalog and reopens the gate.
     const log2 = await ctx.stores.questionLogs.record({
       question: "q2?",
-      executionMode: "direct",
-      chatProvider: "mock",
+      
+      chatProvider: "openai-compatible",
       retrievedSectionIds: []
     });
     await ctx.stores.questionLogs.recordManualGap(log2.id, "Topic two");
     await reconcileGaps(ctx, undefined, deps);
 
-    const proposals = await ctx.stores.proposals.list(500);
-    assert.equal(proposals.length, 2, "only the newly uncovered cluster was drafted; the existing proposal was untouched");
+    assert.equal(
+      (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length,
+      2,
+      "only the newly uncovered cluster was enqueued; the covered cluster was untouched"
+    );
   });
 });
 
@@ -227,15 +324,6 @@ describe("reconcileGaps outbox", () => {
     });
     await ctx.stores.gapClusters.enqueuePublicationAction(proposal.id, "publish");
 
-    let chatCalls = 0;
-    ctx.providers.chat = () =>
-      ({
-        complete: async () => {
-          chatCalls += 1;
-          return { content: "{}" };
-        }
-      }) as never;
-
     let publishCalls = 0;
     await reconcileGaps(ctx, undefined, {
       fetchPullRequestStatus: async () => undefined,
@@ -245,7 +333,6 @@ describe("reconcileGaps outbox", () => {
       supersedeProposal: async () => {}
     });
 
-    assert.equal(chatCalls, 0, "outbox retry makes no model call");
     assert.equal(publishCalls, 1, "the pending publish action ran");
     assert.deepEqual(await ctx.stores.gapClusters.listPendingPublicationActions(), []);
   });
@@ -300,15 +387,13 @@ describe("reconcileGaps PR state from snapshot", () => {
 async function seedTwoClustersWithGaps(ctx: AppContext): Promise<void> {
   const log1 = await ctx.stores.questionLogs.record({
     question: "q1?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     retrievedSectionIds: []
   });
   await ctx.stores.questionLogs.recordManualGap(log1.id, "Cheese");
   const log2 = await ctx.stores.questionLogs.record({
     question: "q2?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     retrievedSectionIds: []
   });
   await ctx.stores.questionLogs.recordManualGap(log2.id, "Cats");

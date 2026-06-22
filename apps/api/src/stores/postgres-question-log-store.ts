@@ -71,16 +71,15 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       await client.query(
         `
           INSERT INTO questions (
-            id, question, confidence, answer, execution_mode, chat_provider, flow_id, metadata
+            id, question, confidence, answer, chat_provider, flow_id, metadata
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
         `,
         [
           id,
           input.question,
           input.answer?.confidence ?? "unknown",
           input.answer?.answer ?? null,
-          input.executionMode,
           input.chatProvider,
           input.flowId ?? null,
           JSON.stringify({
@@ -158,6 +157,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       answer: input.answer,
       retrievedSectionIds: input.answer.citations.map((citation) => citation.sectionId)
     };
+    // The flow is decided by the watcher after the log is recorded, so a
+    // completion can supply it now; fall back to any flow already on the row.
+    const flowId = input.flowId ?? existing.flowId ?? null;
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -167,7 +169,8 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           SET confidence = $2,
               answer = $3,
               chat_provider = $4,
-              metadata = $5
+              metadata = $5,
+              flow_id = $6
           WHERE id = $1
         `,
         [
@@ -175,14 +178,15 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           input.answer.confidence,
           input.answer.answer,
           input.chatProvider ?? existing.chatProvider,
-          JSON.stringify(metadata)
+          JSON.stringify(metadata),
+          flowId
         ]
       );
       // Re-answering replaces auto-detected gaps but preserves any manual flag.
       await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'auto'", [id]);
       await insertGapRows(client, id, autoGapSummaries(input.answer));
       // Re-answering replaces the auto-detected gaps, changing the candidate set.
-      await bumpGapCatalog(client, existing.flowId ?? null);
+      await bumpGapCatalog(client, flowId);
       await client.query("DELETE FROM answer_citations WHERE question_id = $1", [id]);
 
       for (const citation of input.answer.citations) {
@@ -492,7 +496,6 @@ interface QuestionRow {
   question: string;
   confidence: Confidence;
   answer: string | null;
-  execution_mode: QuestionLog["executionMode"];
   chat_provider: string;
   flow_id: string | null;
   metadata: {
@@ -519,7 +522,6 @@ function mapQuestionRow(row: QuestionRow, gaps: QuestionGap[]): QuestionLog {
   return {
     id: row.id,
     question: row.question,
-    executionMode: row.execution_mode,
     chatProvider: row.chat_provider,
     confidence: row.confidence,
     retrievedSectionIds: row.metadata.retrievedSectionIds ?? [],

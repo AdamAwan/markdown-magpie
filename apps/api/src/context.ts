@@ -1,9 +1,8 @@
-import type { ChatProvider, EmbeddingProvider } from "@magpie/core";
+import type { EmbeddingProvider } from "@magpie/core";
 import { RuntimeConfigHolder } from "./config-holder.js";
 import { BackgroundEmbedder } from "./platform/background-embedder.js";
 import { BackgroundRunner } from "./platform/background-runner.js";
 import {
-  createAiJobQueue,
   createCrunchStore,
   createGapClusterStore,
   createProposalStore,
@@ -12,15 +11,10 @@ import {
   createScheduledTaskStore,
   createSnapshotStore,
   createSourceSyncStore,
-  parseClaimTimeoutMs,
   requireDatabaseUrl,
   storeBackend
 } from "./platform/stores.js";
-import {
-  type AiProviderName,
-  createConfiguredChatProvider,
-  createConfiguredEmbeddingProvider
-} from "./platform/providers.js";
+import { createConfiguredEmbeddingProvider } from "./platform/providers.js";
 import { InMemoryKnowledgeIndex } from "./stores/knowledge-index.js";
 import { PostgresKnowledgeStore } from "./stores/postgres-knowledge-store.js";
 import {
@@ -32,6 +26,8 @@ import {
   getConfiguredKnowledgeSources
 } from "./stores/knowledge-repositories.js";
 import { checkoutRoot, syncConfiguredGitCheckouts, type RepositoryDeps } from "./platform/repositories.js";
+import type { JobBroker } from "./jobs/broker.js";
+import { PgBossJobBroker } from "./jobs/pg-boss-broker.js";
 import { backfillGapClusters } from "./scheduling/gap-backfill.js";
 
 export interface AppContext {
@@ -43,13 +39,12 @@ export interface AppContext {
     crunchRuns: ReturnType<typeof createCrunchStore>;
     scheduledTasks: ReturnType<typeof createScheduledTaskStore>;
     sourceSync: ReturnType<typeof createSourceSyncStore>;
-    aiJobs: ReturnType<typeof createAiJobQueue>;
     gapClusters: ReturnType<typeof createGapClusterStore>;
     reconciliations: ReturnType<typeof createReconciliationDecisionStore>;
     snapshots: ReturnType<typeof createSnapshotStore>;
   };
+  jobs: JobBroker;
   providers: {
-    chat: (provider: AiProviderName) => ChatProvider;
     embedding: EmbeddingProvider | undefined;
   };
   config: RuntimeConfigHolder;
@@ -62,15 +57,14 @@ export interface AppContext {
   };
   embedder: BackgroundEmbedder;
   background: BackgroundRunner;
-  claimTimeoutMs: number;
   repositoryDeps(): RepositoryDeps;
   bootstrap(): Promise<void>;
 }
 
 export async function createAppContext(): Promise<AppContext> {
-  const claimTimeoutMs = parseClaimTimeoutMs(process.env.AI_JOB_CLAIM_TIMEOUT_MS);
+  const databaseUrl = requireDatabaseUrl();
   const knowledgeStore =
-    storeBackend("KNOWLEDGE_STORE") === "postgres" ? new PostgresKnowledgeStore(requireDatabaseUrl()) : undefined;
+    storeBackend("KNOWLEDGE_STORE") === "postgres" ? new PostgresKnowledgeStore(databaseUrl) : undefined;
   const embedding = knowledgeStore ? createConfiguredEmbeddingProvider() : undefined;
   const knowledgeIndex = knowledgeStore
     ? new InMemoryKnowledgeIndex(
@@ -94,6 +88,8 @@ export async function createAppContext(): Promise<AppContext> {
   const embedder = new BackgroundEmbedder(knowledgeStore, embedding);
   const background = new BackgroundRunner();
 
+  const jobs: JobBroker = new PgBossJobBroker({ connectionString: databaseUrl });
+
   const ctx: AppContext = {
     stores: {
       knowledge: knowledgeStore,
@@ -103,20 +99,18 @@ export async function createAppContext(): Promise<AppContext> {
       crunchRuns: createCrunchStore(),
       scheduledTasks: createScheduledTaskStore(),
       sourceSync: createSourceSyncStore(),
-      aiJobs: createAiJobQueue(claimTimeoutMs),
       gapClusters: createGapClusterStore(),
       reconciliations: createReconciliationDecisionStore(),
       snapshots: createSnapshotStore()
     },
+    jobs,
     providers: {
-      chat: (provider) => createConfiguredChatProvider(provider),
       embedding
     },
     config: RuntimeConfigHolder.fromEnv(),
     knowledgeConfig,
     embedder,
     background,
-    claimTimeoutMs,
     repositoryDeps() {
       return { knowledgeConfig, knowledgeIndex, triggerEmbedding: () => void embedder.trigger() };
     },

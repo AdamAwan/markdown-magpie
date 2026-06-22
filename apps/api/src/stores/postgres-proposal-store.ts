@@ -22,6 +22,8 @@ export class PostgresProposalStore implements ProposalStore {
           draft_context
         )
         VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11::bigint, $12)
+        ON CONFLICT (job_id) WHERE job_id IS NOT NULL
+        DO UPDATE SET job_id = EXCLUDED.job_id
         RETURNING *
       `,
       [
@@ -58,6 +60,11 @@ export class PostgresProposalStore implements ProposalStore {
 
   async get(id: string): Promise<Proposal | undefined> {
     const result = await this.pool.query<ProposalRow>("SELECT * FROM proposals WHERE id = $1", [id]);
+    return result.rows[0] ? mapRow(result.rows[0]) : undefined;
+  }
+
+  async getByJobId(jobId: string): Promise<Proposal | undefined> {
+    const result = await this.pool.query<ProposalRow>("SELECT * FROM proposals WHERE job_id = $1", [jobId]);
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 

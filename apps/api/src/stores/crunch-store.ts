@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { CrunchPlan, CrunchRun, CrunchRunTrigger, CrunchSettings, ProposalPublication } from "@magpie/core";
-import { nextCronTime } from "@magpie/core";
 
 // Daily at 02:00 local time.
 export const DEFAULT_CRUNCH_CRON = "0 2 * * *";
@@ -11,7 +10,6 @@ export interface CrunchRunInput {
   trigger: CrunchRunTrigger;
   documentCount: number;
   jobId?: string;
-  // Direct-mode runs arrive already planned; queued runs start as "running".
   status: CrunchRun["status"];
   plan?: CrunchPlan;
   error?: string;
@@ -28,7 +26,6 @@ export interface CrunchStore {
   listSettings(): Promise<CrunchSettings[]>;
   getSettings(flowId: string | undefined): Promise<CrunchSettings>;
   updateSettings(flowId: string | undefined, patch: { enabled: boolean; cron: string }): Promise<CrunchSettings>;
-  touchSchedule(flowId: string | undefined, lastRunAt: string, nextRunAt: string): Promise<CrunchSettings>;
   reset(): Promise<void>;
 }
 
@@ -36,15 +33,6 @@ export interface CrunchStore {
 // gets exactly one settings row.
 function settingsKey(flowId: string | undefined): string {
   return flowId ?? "";
-}
-
-// The next scheduled run for an enabled cron, or undefined when disabled or the
-// expression is invalid.
-export function nextRunFor(enabled: boolean, cron: string, from: Date): string | undefined {
-  if (!enabled) {
-    return undefined;
-  }
-  return nextCronTime(cron, from)?.toISOString();
 }
 
 function defaultSettings(flowId: string | undefined): CrunchSettings {
@@ -95,6 +83,8 @@ export class InMemoryCrunchStore implements CrunchStore {
   }
 
   async completeRun(id: string, plan: CrunchPlan): Promise<CrunchRun | undefined> {
+    const existing = await this.getRun(id);
+    if (existing?.status === "completed" || existing?.status === "published") return existing;
     return this.patchRun(id, { status: "completed", plan, completedAt: new Date().toISOString(), error: undefined });
   }
 
@@ -132,16 +122,8 @@ export class InMemoryCrunchStore implements CrunchStore {
     const next: CrunchSettings = {
       ...current,
       enabled: patch.enabled,
-      cron: patch.cron,
-      nextRunAt: nextRunFor(patch.enabled, patch.cron, new Date())
+      cron: patch.cron
     };
-    this.settings.set(settingsKey(flowId), next);
-    return next;
-  }
-
-  async touchSchedule(flowId: string | undefined, lastRunAt: string, nextRunAt: string): Promise<CrunchSettings> {
-    const current = await this.getSettings(flowId);
-    const next: CrunchSettings = { ...current, lastRunAt, nextRunAt };
     this.settings.set(settingsKey(flowId), next);
     return next;
   }

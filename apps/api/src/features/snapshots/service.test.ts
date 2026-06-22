@@ -10,8 +10,7 @@ describe("refreshSnapshot", () => {
     const ctx = makeTestContext();
     const log = await ctx.stores.questionLogs.record({
       question: "How do I configure X?",
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: []
     });
     await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");

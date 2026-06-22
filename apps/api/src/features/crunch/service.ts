@@ -1,20 +1,21 @@
 import type {
-  AiJob,
   ChangesetChange,
   CrunchKnowledgeBaseJobInput,
   CrunchPlan,
   CrunchRun,
-  CrunchRunTrigger
+  CrunchRunTrigger,
+  RepositoryRef
 } from "@magpie/core";
-import { buildMockCrunchPlan } from "@magpie/core";
-import { CRUNCH_KNOWLEDGE_BASE } from "@magpie/prompts";
-import { LocalGitProposalPublisher } from "@magpie/git";
+import type { JobView } from "@magpie/jobs";
+import { z } from "zod";
+import { publishCrunchOutputSchema } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { DEFAULT_CRUNCH_CRON } from "../../stores/crunch-store.js";
 import { defaultDestinationId, findRepositoryForDestination, selectFlow } from "../../platform/repositories.js";
 import { normalizeRelativePath } from "../../platform/paths.js";
-import { parseJsonObject } from "../../platform/json.js";
 import { type AiProviderName } from "../../platform/providers.js";
+
+type PublishCrunchJobOutput = z.infer<typeof publishCrunchOutputSchema>;
 
 export async function listRuns(ctx: AppContext, limit: number): Promise<CrunchRun[]> {
   return ctx.stores.crunchRuns.listRuns(limit);
@@ -24,11 +25,12 @@ export async function getRun(ctx: AppContext, id: string): Promise<CrunchRun | u
   return ctx.stores.crunchRuns.getRun(id);
 }
 
-// Shared by the manual trigger endpoint and the scheduler. Both modes return a
-// "running" run immediately so neither the HTTP response nor the scheduler tick
-// blocks on the (potentially slow) planning step. In direct mode the model call
-// runs in the background and completes the run; in queue mode a job is enqueued
-// and the watcher completes the run via attachCrunchPlanFromCompletedJob().
+// Shared by the manual trigger endpoint and the scheduler. Planning is
+// enqueue-only: both the manual trigger and the scheduler create a "running" run
+// linked to a crunch_knowledge_base job and return immediately, so neither the
+// HTTP response nor the scheduler tick blocks on the (potentially slow) model
+// call. The watcher runs the generative work and completes the run via
+// attachCrunchPlanFromCompletedJob().
 export async function triggerCrunchRun(
   ctx: AppContext,
   options: { flowId?: string; trigger: CrunchRunTrigger }
@@ -38,6 +40,8 @@ export async function triggerCrunchRun(
   const flowId = flow?.id ?? options.flowId;
   const destinationId = flow?.destinationId ?? defaultDestinationId(deps);
   const documents = gatherCrunchDocuments(ctx, destinationId);
+  // The configured provider is passed through as-is; the @magpie/jobs contract
+  // validates it.
   const input = {
     flowId,
     destinationId,
@@ -49,35 +53,10 @@ export async function triggerCrunchRun(
   console.log(
     `Crunch run requested (trigger=${options.trigger}, flow=${flowId ?? "default"}, ` +
       `destination=${destinationId ?? "none"}, documents=${documents.length}, ` +
-      `provider=${ctx.config.get().aiProvider}, mode=${ctx.config.get().aiExecutionMode})`
+      `provider=${ctx.config.get().aiProvider})`
   );
 
-  if (ctx.config.get().aiExecutionMode === "direct") {
-    // The model call can be slow, so create the run as "running" and plan it off
-    // the request thread, mirroring the queue-mode lifecycle. Callers poll
-    // GET /crunch/runs/:id (or the runs list) for completion.
-    const run = await ctx.stores.crunchRuns.createRun({
-      flowId,
-      destinationId,
-      trigger: options.trigger,
-      documentCount: documents.length,
-      status: "running"
-    });
-
-    ctx.background.run(`crunch ${run.id}`, async () => {
-      try {
-        const plan = await crunchKnowledgeBaseDirect(ctx, input);
-        await ctx.stores.crunchRuns.completeRun(run.id, plan);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Crunch planning failed";
-        await ctx.stores.crunchRuns.failRun(run.id, message);
-      }
-    });
-
-    return run;
-  }
-
-  const job = await ctx.stores.aiJobs.enqueue("crunch_knowledge_base", input);
+  const job = await ctx.jobs.create("crunch_knowledge_base", input);
   return ctx.stores.crunchRuns.createRun({
     flowId,
     destinationId,
@@ -94,35 +73,9 @@ function gatherCrunchDocuments(ctx: AppContext, destinationId: string | undefine
   return scoped.map((document) => ({ path: document.path, content: document.content }));
 }
 
-async function crunchKnowledgeBaseDirect(
-  ctx: AppContext,
-  input: CrunchKnowledgeBaseJobInput
-): Promise<CrunchPlan> {
-  if (ctx.config.get().aiProvider === "mock") {
-    return buildMockCrunchPlan(input.documents);
-  }
-
-  const response = await ctx.providers.chat(ctx.config.get().aiProvider).complete({
-    system: CRUNCH_KNOWLEDGE_BASE.instructions,
-    messages: [
-      {
-        role: "user",
-        content: JSON.stringify(input, null, 2)
-      }
-    ]
-  });
-  const output = parseJsonObject(response.content);
-
-  if (!isCrunchPlan(output)) {
-    throw new Error("Direct crunch provider returned invalid plan output");
-  }
-
-  return output;
-}
-
 export async function attachCrunchPlanFromCompletedJob(
   ctx: AppContext,
-  job: AiJob | undefined,
+  job: JobView | undefined,
   output: unknown
 ): Promise<void> {
   if (!job || job.type !== "crunch_knowledge_base") {
@@ -134,6 +87,8 @@ export async function attachCrunchPlanFromCompletedJob(
     return;
   }
 
+  if (run.status === "completed" || run.status === "published") return;
+
   if (isCrunchPlan(output)) {
     await ctx.stores.crunchRuns.completeRun(run.id, output);
   } else {
@@ -141,7 +96,39 @@ export async function attachCrunchPlanFromCompletedJob(
   }
 }
 
-export function isCrunchPlan(value: unknown): value is CrunchPlan {
+// Completion handler for publish_crunch jobs: records the validated git
+// publication the watcher performed (branch, commit, optional remote url) onto
+// the linked run. Idempotent by runId — a run that already carries a publication
+// is left untouched, so re-completing the same job never double-applies or
+// regresses the recorded metadata. Crunch raises no PR, so there is no
+// pullRequestUrl.
+export async function recordCrunchPublicationFromCompletedJob(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<CrunchRun | undefined> {
+  if (!job || job.type !== "publish_crunch" || !isPublishCrunchJobOutput(output)) {
+    return undefined;
+  }
+
+  const existing = await ctx.stores.crunchRuns.getRun(output.runId);
+  if (!existing) {
+    return undefined;
+  }
+  if (existing.publication) {
+    return existing;
+  }
+
+  return ctx.stores.crunchRuns.recordRunPublication(output.runId, {
+    provider: "local-git",
+    branchName: output.branchName,
+    commitSha: output.commitSha,
+    remoteUrl: output.remoteUrl,
+    publishedAt: output.publishedAt
+  });
+}
+
+function isCrunchPlan(value: unknown): value is CrunchPlan {
   if (!value || typeof value !== "object") {
     return false;
   }
@@ -162,10 +149,15 @@ export function isCrunchPlan(value: unknown): value is CrunchPlan {
   );
 }
 
+function isPublishCrunchJobOutput(value: unknown): value is PublishCrunchJobOutput {
+  return publishCrunchOutputSchema.safeParse(value).success;
+}
+
 // Flattens a plan's operations into a single de-duplicated changeset. Deletes are
 // applied first, then writes, so a path that is both deleted and (re)written ends
 // up as a write — a split that reuses the original path stays a write, not a
-// delete.
+// delete. Pure: exported so the Task 7 publication runner derives the same
+// changeset the API validated.
 export function changesetFromPlan(plan: CrunchPlan): ChangesetChange[] {
   const changes = new Map<string, ChangesetChange>();
   for (const operation of plan.operations) {
@@ -181,35 +173,44 @@ export function changesetFromPlan(plan: CrunchPlan): ChangesetChange[] {
   return [...changes.values()];
 }
 
-function crunchBranchName(run: CrunchRun): string {
-  return `magpie/crunch-${run.id.slice(0, 8)}`;
-}
+type PublishValidationError = {
+  ok: false;
+  status: 404 | 409;
+  code:
+    | "crunch_run_not_found"
+    | "crunch_run_not_publishable"
+    | "crunch_run_empty_plan"
+    | "crunch_repository_not_found"
+    | "crunch_repository_not_git";
+  message?: string;
+};
 
-// Publishes a completed crunch run's plan to a Git branch. Returns a
-// discriminated outcome the handler maps to status codes: 404
-// crunch_run_not_found; 409 crunch_run_not_publishable / crunch_run_empty_plan /
-// crunch_repository_not_found / crunch_repository_not_git / crunch_publish_failed;
-// success carries the updated run and publication for a 200.
-export async function publishRun(ctx: AppContext, runId: string) {
+// Resolves and validates that a run is publishable and that its destination maps
+// to a Git checkout. This is the shared pre-flight that both the publish enqueue
+// path and the execution-context endpoint run, so an invalid publish fails fast
+// with the same status before any job is enqueued or handed to the watcher.
+async function resolvePublishRepository(
+  ctx: AppContext,
+  runId: string
+): Promise<{ ok: true; run: CrunchRun; repository: RepositoryRef } | PublishValidationError> {
   const run = await ctx.stores.crunchRuns.getRun(runId);
   if (!run) {
-    return { ok: false as const, status: 404 as const, code: "crunch_run_not_found" };
+    return { ok: false, status: 404, code: "crunch_run_not_found" };
   }
 
   if (run.status !== "completed" || !run.plan) {
     return {
-      ok: false as const,
-      status: 409 as const,
+      ok: false,
+      status: 409,
       code: "crunch_run_not_publishable",
       message: "Only completed crunch runs with a plan can be published."
     };
   }
 
-  const changes = changesetFromPlan(run.plan);
-  if (changes.length === 0) {
+  if (changesetFromPlan(run.plan).length === 0) {
     return {
-      ok: false as const,
-      status: 409 as const,
+      ok: false,
+      status: 409,
       code: "crunch_run_empty_plan",
       message: "This crunch plan does not change any files."
     };
@@ -218,8 +219,8 @@ export async function publishRun(ctx: AppContext, runId: string) {
   const repository = await findRepositoryForDestination(ctx.repositoryDeps(), run.destinationId);
   if (!repository) {
     return {
-      ok: false as const,
-      status: 409 as const,
+      ok: false,
+      status: 409,
       code: "crunch_repository_not_found",
       message: "No indexed Git repository matches this crunch run's destination."
     };
@@ -227,34 +228,53 @@ export async function publishRun(ctx: AppContext, runId: string) {
 
   if (repository.git?.scope === "not-git" || !repository.git?.workTreeRoot) {
     return {
-      ok: false as const,
-      status: 409 as const,
+      ok: false,
+      status: 409,
       code: "crunch_repository_not_git",
       message: "The matched repository is not a Git checkout."
     };
   }
 
-  try {
-    const publisher = new LocalGitProposalPublisher();
-    const publication = await publisher.publishChangeset({
-      repository,
-      branchName: crunchBranchName(run),
-      title: `docs: crunch tidy (${run.plan.operations.length} operation${run.plan.operations.length === 1 ? "" : "s"})`,
-      changes
-    });
-    const updatedRun = await ctx.stores.crunchRuns.recordRunPublication(run.id, {
-      provider: "local-git",
-      branchName: publication.branchName,
-      commitSha: publication.commitSha,
-      remoteUrl: publication.remoteUrl,
-      publishedAt: new Date().toISOString()
-    });
+  return { ok: true, run, repository };
+}
 
-    return { ok: true as const, run: updatedRun, publication };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Crunch publish failed";
-    return { ok: false as const, status: 409 as const, code: "crunch_publish_failed", message };
+// Enqueues a publish_crunch job for a completed crunch run after running the
+// repository pre-flight. Git execution now happens in the Task 7 watcher runner
+// (which fetches the execution context and reuses the pure changeset / branch-name
+// helpers exported here); the API only validates and enqueues, so an
+// unpublishable run still fails fast with the original 404/409 codes before any
+// job exists. Crunch publish raises no PR.
+export async function publishRun(
+  ctx: AppContext,
+  runId: string
+): Promise<{ ok: true; job: JobView } | PublishValidationError> {
+  const resolved = await resolvePublishRepository(ctx, runId);
+  if (!resolved.ok) {
+    return resolved;
   }
+
+  const job = await ctx.jobs.create("publish_crunch", { runId });
+  console.log(`Enqueued publish_crunch job ${job.id} for crunch run ${runId}`);
+  return { ok: true, job };
+}
+
+type ExecutionContextRepository = Pick<RepositoryRef, "id" | "localPath" | "remoteUrl" | "defaultBranch" | "git">;
+
+// The non-generative, credential-free view the Task 7 publication runner fetches
+// before executing git: the run record plus exactly the repository fields it
+// needs to push a branch. Runs the same resolution + validation as the publish
+// path, so it returns the same 404/409 conditions.
+export async function getRunExecutionContext(
+  ctx: AppContext,
+  runId: string
+): Promise<{ ok: true; run: CrunchRun; repository: ExecutionContextRepository } | PublishValidationError> {
+  const resolved = await resolvePublishRepository(ctx, runId);
+  if (!resolved.ok) {
+    return resolved;
+  }
+
+  const { id, localPath, remoteUrl, defaultBranch, git } = resolved.repository;
+  return { ok: true, run: resolved.run, repository: { id, localPath, remoteUrl, defaultBranch, git } };
 }
 
 // Always returns one settings row per configured flow (or a single default-flow
@@ -263,8 +283,14 @@ export async function publishRun(ctx: AppContext, runId: string) {
 export async function settingsForResponse(ctx: AppContext) {
   const stored = await ctx.stores.crunchRuns.listSettings();
   const byFlow = new Map(stored.map((setting) => [setting.flowId ?? "", setting]));
-  const fallback = (flowId: string | undefined) =>
-    byFlow.get(flowId ?? "") ?? { flowId, enabled: false, cron: DEFAULT_CRUNCH_CRON };
+  // Next-run timing is owned by pg-boss now; join it in by the reconciler's
+  // stable per-flow schedule key (`flow:<flowId|default>`).
+  const schedules = await ctx.jobs.listSchedules();
+  const nextRunByKey = new Map(schedules.map((schedule) => [schedule.key, schedule.nextRunAt]));
+  const fallback = (flowId: string | undefined) => {
+    const setting = byFlow.get(flowId ?? "") ?? { flowId, enabled: false, cron: DEFAULT_CRUNCH_CRON };
+    return { ...setting, nextRunAt: nextRunByKey.get(`flow:${flowId ?? "default"}`) };
+  };
 
   if (ctx.knowledgeConfig.flows.length > 0) {
     return ctx.knowledgeConfig.flows.map((flow) => fallback(flow.id));

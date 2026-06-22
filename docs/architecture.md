@@ -19,7 +19,7 @@ The core packages define interfaces for:
 
 - Chat completion
 - Embeddings
-- AI work execution
+- AI job execution (queue + watcher)
 - Git repository sync
 - Pull request creation
 - Job scheduling
@@ -30,27 +30,26 @@ An object storage interface is planned but not yet defined in the core packages.
 
 Azure is the preferred managed deployment option when a hosted provider is required, but it should not leak into core domain logic.
 
-## AI Execution Modes
+## AI Job Execution
 
-AI work is modeled as jobs, not as a hard dependency on one model vendor.
+All AI work is modeled as jobs on a pg-boss queue in Postgres, not as a hard
+dependency on one model vendor. **The API never calls a model inline.** It
+enqueues a job; a separate **watcher** process claims it, invokes the configured
+provider, and posts the result back over HTTP. The API and watcher share only the
+HTTP API and the managed-checkout volume — the watcher has no direct database
+access.
 
-### Direct Provider
+`AI_PROVIDER` is mandatory and selects the provider work is routed to:
 
-The API calls a configured provider synchronously or through an internal queue.
+- `openai-compatible` — any OpenAI-compatible `/chat/completions` endpoint.
+- `azure-openai` — Azure OpenAI chat completions.
+- `codex` / `claude` — an external agent CLI (Codex or Claude Code) the watcher
+  shells out to.
 
-Examples:
-
-- Azure OpenAI
-- OpenAI-compatible APIs
-- Anthropic
-- Local model gateways
-- Mock provider
-
-### External Agent Watcher
-
-The API writes AI jobs to the database. A user runs a watcher process locally or in a container. The watcher claims pending jobs, invokes an external agent, and posts results back to the API.
-
-This lets Codex, Claude Code, or another CLI-based agent act as an AI provider.
+A watcher advertises a provider's **capability** only when that provider's
+credentials are present in its environment, and the API routes a job to a
+capability only a running watcher actually offers. See
+[ai-jobs.md](ai-jobs.md) for the job contract and capability model.
 
 Useful jobs include:
 
@@ -94,6 +93,13 @@ Background tasks registered in the scheduler (configured from the Crunch page):
   idempotent outbox, and (folding in the former `pull-request-refresh` task) checks open pull
   requests — resolving the gaps a merged PR closed and re-indexing, or marking a closed PR's
   proposal rejected (default: every 10 minutes; requires `GITHUB_TOKEN` for PR operations).
+  This runs as a `process_gaps_to_pull_requests` maintenance job: a watcher POSTs
+  the API's `/api/gaps/reconcile` endpoint, where the orchestration lives. The reconciler's only
+  generative step — the cluster reshape (propose merge/split, then critic-confirm) — is itself a
+  provider-partitioned `reconcile_gap_clusters` AI job the API enqueues and bounded-waits on, so
+  no generative work runs in the API process. Reshape is best-effort: if no chat watcher is
+  available within the deadline, the reconciler logs and skips it, still running clustering,
+  drafting, publication, and the PR-state pass.
 - `source-change-sync` — watches each flow's git sources and rewrites knowledge-base documents
   a source change has outdated (default: every 10 minutes).
 

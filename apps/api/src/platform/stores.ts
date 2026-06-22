@@ -1,7 +1,5 @@
-import { DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS, InMemoryAiJobQueue } from "../stores/ai-job-queue.js";
 import { InMemoryCrunchStore } from "../stores/crunch-store.js";
 import { InMemoryGapClusterStore } from "../stores/gap-cluster-store.js";
-import { PostgresAiJobQueue } from "../stores/postgres-ai-job-queue.js";
 import { PostgresCrunchStore } from "../stores/postgres-crunch-store.js";
 import { PostgresGapClusterStore } from "../stores/postgres-gap-cluster-store.js";
 import { PostgresProposalStore } from "../stores/postgres-proposal-store.js";
@@ -25,7 +23,6 @@ export type StoreEnvName =
   | "KNOWLEDGE_STORE"
   | "QUESTION_LOG_STORE"
   | "PROPOSAL_STORE"
-  | "AI_JOB_QUEUE"
   | "CRUNCH_STORE"
   | "SCHEDULED_TASK_STORE"
   | "SOURCE_SYNC_STORE"
@@ -53,26 +50,9 @@ function createStore<T>(name: StoreEnvName, postgres: (databaseUrl: string) => T
 export function requireDatabaseUrl(): string {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
-    throw new Error("DATABASE_URL is required when KNOWLEDGE_STORE=postgres");
+    throw new Error("DATABASE_URL is required for durable job execution");
   }
   return databaseUrl;
-}
-
-export function parseClaimTimeoutMs(value: string | undefined): number {
-  const parsed = Number.parseInt(value ?? "", 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return DEFAULT_AI_JOB_CLAIM_TIMEOUT_MS;
-  }
-
-  return parsed;
-}
-
-export function createAiJobQueue(claimTimeoutMs: number): InMemoryAiJobQueue | PostgresAiJobQueue {
-  return createStore<InMemoryAiJobQueue | PostgresAiJobQueue>(
-    "AI_JOB_QUEUE",
-    (databaseUrl) => new PostgresAiJobQueue(databaseUrl, claimTimeoutMs),
-    () => new InMemoryAiJobQueue(claimTimeoutMs)
-  );
 }
 
 export function createQuestionLogStore(): InMemoryQuestionLogStore | PostgresQuestionLogStore {

@@ -21,22 +21,20 @@ describe("PostgresScheduledTaskStore", { skip: databaseUrl ? false : "DATABASE_U
     assert.equal(created.key, key);
     assert.equal(created.enabled, true);
     assert.equal(created.cron, cron);
-    assert.ok(created.nextRunAt, "enabled task should have a next run time");
 
     const fetched = await store.getSettings(key);
     assert.equal(fetched?.key, key);
     assert.equal(fetched?.enabled, true);
     assert.equal(fetched?.cron, cron);
-    assert.equal(fetched?.nextRunAt, created.nextRunAt);
   });
 
-  it("clears nextRunAt when a task is disabled", async () => {
+  it("toggles the enabled flag without losing the cron", async () => {
     const key = `disable-${randomUUID()}`;
 
     await store.updateSettings(key, { enabled: true, cron: "0 * * * *" });
     const disabled = await store.updateSettings(key, { enabled: false, cron: "0 * * * *" });
     assert.equal(disabled.enabled, false);
-    assert.equal(disabled.nextRunAt, undefined);
+    assert.equal(disabled.cron, "0 * * * *");
   });
 
   it("re-enables a task with a new cron schedule", async () => {
@@ -47,28 +45,6 @@ describe("PostgresScheduledTaskStore", { skip: databaseUrl ? false : "DATABASE_U
     const reEnabled = await store.updateSettings(key, { enabled: true, cron: "0 0 * * *" });
     assert.equal(reEnabled.enabled, true);
     assert.equal(reEnabled.cron, "0 0 * * *");
-    assert.ok(reEnabled.nextRunAt);
-  });
-
-  it("updates lastRunAt and nextRunAt via touchSchedule", async () => {
-    const key = `touch-${randomUUID()}`;
-    const lastRun = new Date(Date.now() - 60000).toISOString();
-    const nextRun = new Date(Date.now() + 60000).toISOString();
-
-    await store.updateSettings(key, { enabled: true, cron: "0 * * * *" });
-
-    const touched = await store.touchSchedule(key, lastRun, nextRun);
-    assert.equal(touched?.lastRunAt, lastRun);
-    assert.equal(touched?.nextRunAt, nextRun);
-    // enabled and cron are preserved across a touch.
-    assert.equal(touched?.enabled, true);
-    assert.equal(touched?.cron, "0 * * * *");
-  });
-
-  it("touchSchedule returns undefined for an unknown task", async () => {
-    const unknown = `unknown-${randomUUID()}`;
-    const touched = await store.touchSchedule(unknown, new Date(0).toISOString(), new Date(1000).toISOString());
-    assert.equal(touched, undefined);
   });
 
   it("includes created tasks in listSettings", async () => {

@@ -7,12 +7,17 @@
     "dev": "node --env-file=../../.env --import tsx src/main.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@magpie/core": "file:../../packages/core",
+    "@magpie/git": "file:../../packages/git",
+    "@magpie/jobs": "file:../../packages/jobs",
     "@magpie/prompts": "file:../../packages/prompts",
-    "tsx": "^4.22.4"
+    "@magpie/retrieval": "file:../../packages/retrieval",
+    "tsx": "^4.22.4",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",

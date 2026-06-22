@@ -91,6 +91,10 @@ Both `text-embedding-3-small` and `ada-002` produce 1536-dimensional vectors and
 
 ## Ask
 
-`POST /api/ask` retrieves up to five indexed sections using the active retrieval mode (hybrid or keyword) and passes them as context. Answer confidence is derived from the relevance scores of the retrieved sections.
-
-In `AI_EXECUTION_MODE=queue`, the retrieved sections are embedded in the `answer_question` job payload for the watcher.
+`POST /api/ask` is enqueue-only: it records the question log and enqueues an
+`answer_question` job, returning `202` (see [api.md](api.md)). All generative
+work runs in the watcher, which routes the question to a flow, calls
+`POST /api/retrieve` for scoped context using the active retrieval mode (hybrid
+or keyword), then synthesises the answer. Answer confidence is derived from the
+relevance scores of the retrieved sections. The watcher completes the job, which
+updates the question log with the answer, flow, and citations.

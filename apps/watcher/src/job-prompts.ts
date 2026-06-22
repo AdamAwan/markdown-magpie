@@ -1,38 +1,142 @@
-import type {
-  AiJob,
-  AnswerQuestionJobInput,
-  AnswerQuestionJobOutput,
-  Citation,
-  CrunchKnowledgeBaseJobOutput,
-  DraftMarkdownProposalJobOutput,
-  KnowledgeGapSignal,
-  SummarizeGapJobOutput
-} from "@magpie/core";
-import { buildJobPrompt } from "@magpie/prompts";
+import type { Citation, Confidence, KnowledgeGapSignal } from "@magpie/core";
+import type { JobView } from "@magpie/jobs";
+import { jobDefinition } from "@magpie/jobs";
+import type { z } from "zod";
+import {
+  CRUNCH_KNOWLEDGE_BASE,
+  DRAFT_MARKDOWN_PROPOSAL,
+  GENERIC_JOB,
+  SUMMARIZE_GAP
+} from "@magpie/prompts";
+import type { RetrievedSection } from "./http-client.js";
 
-export function buildPrompt(job: AiJob): string {
-  return buildJobPrompt(job);
+// The answer-question output the watcher returns after route -> retrieve ->
+// answer. Citations are derived in code (never trusted from the model), so this
+// is built by buildAnswerOutput rather than parsed from the model's JSON.
+export interface AnswerOutput {
+  answer: string;
+  confidence: Confidence;
+  citations: Citation[];
+  gaps?: KnowledgeGapSignal[];
+  flowId?: string;
 }
 
-export function parseJobOutput(job: AiJob, stdout: string): unknown {
+// Per-job prompt for the generic chat path (everything except answer_question,
+// which the answer runner assembles itself with its retrieved context). The
+// job's input is embedded as JSON after the task instructions.
+export function buildPrompt(job: JobView): string {
+  switch (job.type) {
+    case "summarize_gap":
+      return `${SUMMARIZE_GAP.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
+    case "draft_markdown_proposal":
+      return `${DRAFT_MARKDOWN_PROPOSAL.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
+    case "crunch_knowledge_base":
+      return `${CRUNCH_KNOWLEDGE_BASE.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
+    default:
+      return `${GENERIC_JOB.instructions}\n\nJob:\n${JSON.stringify({ type: job.type, input: job.input }, null, 2)}`;
+  }
+}
+
+// Parses and validates a model's JSON against the job's output contract from
+// @magpie/jobs. Tolerates surrounding prose by extracting the first JSON object.
+// answer_question is intentionally not handled here — its output is built from
+// retrieved sections via buildAnswerOutput.
+export function parseJobOutput(job: JobView, stdout: string): unknown {
   const parsed = extractJson(stdout);
-  if (job.type === "answer_question") {
-    return assertAnswerQuestionOutput(parsed, job.input as AnswerQuestionJobInput);
+  const schema = jobDefinition(job.type).outputSchema as z.ZodType<unknown>;
+  const result = schema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(`${job.type} output does not match the job contract: ${result.error.message}`);
+  }
+  return result.data;
+}
+
+// Builds the answer_question output from the model's answer text and the sections
+// the watcher retrieved for the (routed) question. Citations are derived from
+// those sections so attribution stays reliable regardless of what the model
+// claims; a flagged knowledge gap forces low confidence and emits gap signals.
+export function buildAnswerOutput(
+  modelContent: string,
+  sections: RetrievedSection[],
+  question: string,
+  flowId: string | undefined
+): AnswerOutput {
+  const citations = sections.map(toCitation);
+  const structured = parseStructuredAnswer(modelContent);
+  const answer = structured?.answer ?? modelContent.trim();
+
+  if (structured?.isKnowledgeGap || sections.length === 0) {
+    const citedSectionIds = citations.map((citation) => citation.sectionId);
+    const summaries =
+      structured && structured.gaps.length > 0
+        ? structured.gaps
+        : [`No sufficient source material found for: ${question}`];
+    return {
+      answer: answer || "I could not find reliable source material for this question.",
+      confidence: "low",
+      citations,
+      gaps: summaries.map((summary) => toGapSignal(summary, question, citedSectionIds)),
+      ...(flowId ? { flowId } : {})
+    };
   }
 
-  if (job.type === "summarize_gap") {
-    return assertSummarizeGapOutput(parsed);
-  }
+  return {
+    answer,
+    confidence: structured?.confidence ?? "medium",
+    citations,
+    ...(flowId ? { flowId } : {})
+  };
+}
 
-  if (job.type === "draft_markdown_proposal") {
-    return assertDraftMarkdownProposalOutput(parsed);
-  }
+interface StructuredAnswer {
+  answer: string;
+  confidence: Confidence;
+  isKnowledgeGap: boolean;
+  gaps: string[];
+}
 
-  if (job.type === "crunch_knowledge_base") {
-    return assertCrunchKnowledgeBaseOutput(parsed);
+function parseStructuredAnswer(content: string): StructuredAnswer | undefined {
+  let parsed: unknown;
+  try {
+    parsed = extractJson(content);
+  } catch {
+    return undefined;
   }
+  if (!parsed || typeof parsed !== "object") {
+    return undefined;
+  }
+  const candidate = parsed as { answer?: unknown; confidence?: unknown; isKnowledgeGap?: unknown; gaps?: unknown };
+  if (typeof candidate.answer !== "string" || !isConfidence(candidate.confidence)) {
+    return undefined;
+  }
+  const isKnowledgeGap = candidate.isKnowledgeGap === true;
+  return {
+    answer: candidate.answer,
+    confidence: isKnowledgeGap ? "low" : candidate.confidence,
+    isKnowledgeGap,
+    gaps: Array.isArray(candidate.gaps)
+      ? candidate.gaps.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).map((entry) => entry.trim())
+      : []
+  };
+}
 
-  return parsed;
+function toCitation(section: RetrievedSection): Citation {
+  return {
+    documentId: section.documentId,
+    sectionId: section.sectionId,
+    path: section.path,
+    heading: section.heading,
+    anchor: section.anchor,
+    excerpt: section.content.slice(0, 280)
+  };
+}
+
+function toGapSignal(summary: string, question: string, citedSectionIds: string[]): KnowledgeGapSignal {
+  return { summary, question, confidence: "low", citedSectionIds };
+}
+
+function isConfidence(value: unknown): value is Confidence {
+  return value === "high" || value === "medium" || value === "low" || value === "unknown";
 }
 
 function extractJson(stdout: string): unknown {
@@ -43,109 +147,8 @@ function extractJson(stdout: string): unknown {
     const first = trimmed.indexOf("{");
     const last = trimmed.lastIndexOf("}");
     if (first === -1 || last === -1 || last <= first) {
-      throw new Error("Agent output did not contain a JSON object");
+      throw new Error("Model output did not contain a JSON object");
     }
-
     return JSON.parse(trimmed.slice(first, last + 1));
   }
-}
-
-// The model returns only { answer, confidence, isKnowledgeGap, gaps[] } — the
-// same shape the direct retrieval path uses. Citations are not trusted from the
-// model; they are derived in code from the context sections the job already
-// carries, so attribution stays reliable and the two answer paths share one prompt.
-function assertAnswerQuestionOutput(value: unknown, input: AnswerQuestionJobInput): AnswerQuestionJobOutput {
-  if (!value || typeof value !== "object") {
-    throw new Error("answer_question output must be an object");
-  }
-
-  const candidate = value as { answer?: unknown; confidence?: unknown; isKnowledgeGap?: unknown; gaps?: unknown };
-  if (typeof candidate.answer !== "string" || !isConfidence(candidate.confidence)) {
-    throw new Error("answer_question output does not match expected schema");
-  }
-
-  const isKnowledgeGap = candidate.isKnowledgeGap === true;
-  const citations = input.context.map(toCitation);
-  const output: AnswerQuestionJobOutput = {
-    answer: candidate.answer,
-    confidence: isKnowledgeGap ? "low" : candidate.confidence,
-    citations
-  };
-
-  if (isKnowledgeGap) {
-    output.gaps = toGapSignals(candidate.gaps, input.question, citations);
-  }
-
-  return output;
-}
-
-function toCitation(section: AnswerQuestionJobInput["context"][number]): Citation {
-  return {
-    documentId: section.path,
-    sectionId: section.sectionId,
-    path: section.path,
-    heading: section.heading,
-    anchor: section.heading.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-    excerpt: section.content.slice(0, 280)
-  };
-}
-
-// Turns the model's gap strings into knowledge-gap signals, each tagged with the
-// question and the sections that were cited. Falls back to one generated summary
-// when the model flagged a gap but listed no specific summaries.
-function toGapSignals(gaps: unknown, question: string, citations: Citation[]): KnowledgeGapSignal[] {
-  const summaries = Array.isArray(gaps)
-    ? gaps.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).map((entry) => entry.trim())
-    : [];
-  const effective = summaries.length > 0 ? summaries : [`No sufficient source material found for: ${question}`];
-  const citedSectionIds = citations.map((citation) => citation.sectionId);
-  return effective.map((summary) => ({ summary, question, confidence: "low", citedSectionIds }));
-}
-
-function assertSummarizeGapOutput(value: unknown): SummarizeGapJobOutput {
-  const candidate = value as Partial<SummarizeGapJobOutput>;
-  if (!candidate || typeof candidate.summary !== "string" || typeof candidate.priority !== "number") {
-    throw new Error("summarize_gap output does not match expected schema");
-  }
-
-  return candidate as SummarizeGapJobOutput;
-}
-
-function assertDraftMarkdownProposalOutput(value: unknown): DraftMarkdownProposalJobOutput {
-  const candidate = value as Partial<DraftMarkdownProposalJobOutput>;
-  if (
-    !candidate ||
-    typeof candidate.title !== "string" ||
-    typeof candidate.targetPath !== "string" ||
-    typeof candidate.markdown !== "string"
-  ) {
-    throw new Error("draft_markdown_proposal output does not match expected schema");
-  }
-
-  return candidate as DraftMarkdownProposalJobOutput;
-}
-
-function assertCrunchKnowledgeBaseOutput(value: unknown): CrunchKnowledgeBaseJobOutput {
-  const candidate = value as Partial<CrunchKnowledgeBaseJobOutput>;
-  if (!candidate || typeof candidate.summary !== "string" || !Array.isArray(candidate.operations)) {
-    throw new Error("crunch_knowledge_base output does not match expected schema");
-  }
-
-  for (const operation of candidate.operations) {
-    if (
-      !operation ||
-      typeof operation.title !== "string" ||
-      !Array.isArray(operation.writes) ||
-      !Array.isArray(operation.deletes) ||
-      operation.writes.some((write) => typeof write?.path !== "string" || typeof write?.content !== "string")
-    ) {
-      throw new Error("crunch_knowledge_base operation does not match expected schema");
-    }
-  }
-
-  return candidate as CrunchKnowledgeBaseJobOutput;
-}
-
-function isConfidence(value: unknown): value is AnswerQuestionJobOutput["confidence"] {
-  return value === "high" || value === "medium" || value === "low" || value === "unknown";
 }

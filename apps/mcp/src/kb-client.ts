@@ -7,10 +7,17 @@ const apiBaseUrl = trimTrailingSlash(
   (process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/api$/, "")
 );
 
-// When the API answers questions asynchronously (queue execution mode), kb.ask
-// polls the job until it produces an answer instead of returning queue metadata.
+// The API always answers questions asynchronously: POST /ask enqueues an
+// answer_question job and returns 202 with { questionId, job, links }. kb.ask
+// waits on the job's wait link (which long-polls server-side, returning 200 for
+// a terminal job or 202 for the current projection when the wait limit expires)
+// and falls back to detail polling until the job reaches a terminal state.
 const answerPollIntervalMs = parsePositiveInt(process.env.ANSWER_POLL_INTERVAL_MS, 1000);
 const answerTimeoutMs = parsePositiveInt(process.env.ANSWER_TIMEOUT_MS, 120000);
+
+// Durable job lifecycle states (see @magpie/jobs JobState). created | retry |
+// active are non-terminal; completed | cancelled | failed are terminal.
+type JobState = "created" | "retry" | "active" | "completed" | "cancelled" | "failed" | "blocked";
 
 export interface AskResult {
   answer: string;
@@ -21,9 +28,9 @@ export interface AskResult {
 }
 
 interface JobView {
-  status: string;
+  id: string;
+  state: JobState;
   output?: unknown;
-  error?: string;
 }
 
 type FeedbackKind = "helpful" | "unhelpful" | "knowledge_gap";
@@ -90,69 +97,110 @@ async function readApiResponse(response: Response, path: string): Promise<unknow
   return body;
 }
 
-// Asks the API a question and resolves to the final answer only. The API may
-// answer inline (direct mode) or asynchronously via a job (queue mode); in the
-// queue case we poll until the answer is ready so callers never see internal
-// job, queue, or retrieval-context details.
+// Asks the API a question and resolves to the final answer only. POST /ask
+// enqueues a durable answer_question job and returns links to it; we wait on the
+// job (server-side long poll) and fall back to detail polling until it reaches a
+// terminal state, so callers never see internal job, queue, or retrieval-context
+// details. The terminal job's output is the envelope { result, executor }; the
+// answer fields live in `result` (the answerQuestionOutputSchema shape).
 export async function askQuestion(question: string, options?: KbClientOptions): Promise<AskResult> {
   const ask = asObject(await postJson("/ask", { question }, options));
   const questionId = typeof ask.questionId === "string" ? ask.questionId : undefined;
+  const links = readLinks(ask);
+  const deadline = Date.now() + answerTimeoutMs;
+
+  const waited = readJob(await getJson(links.wait, options));
   const result =
-    ask.result !== undefined ? extractAnswer(ask.result) : await waitForQueuedAnswer(readStatusPath(ask), options);
+    waited.state === "completed"
+      ? extractAnswer(readResult(waited))
+      : await pollForAnswer(links.job, waited, deadline, options);
 
   return { ...result, questionId };
 }
 
-async function waitForQueuedAnswer(statusPath: string, options?: KbClientOptions): Promise<AskResult> {
-  const deadline = Date.now() + answerTimeoutMs;
+// Falls back to detail polling (GET /jobs/:id) when the wait endpoint returns a
+// non-terminal projection (202, state in created | retry | active). Maps every
+// terminal state, and turns failed/cancelled or a deadline overrun into a clear
+// error that names the job id and state but never echoes payload data.
+async function pollForAnswer(
+  jobPath: string,
+  initial: JobView,
+  deadline: number,
+  options?: KbClientOptions
+): Promise<AskResult> {
+  let job = initial;
 
   for (;;) {
-    const job = readJob(await getJson(statusPath, options));
-
-    if (job.status === "completed") {
-      if (job.output === undefined) {
-        throw new Error("Answer job completed without producing an answer");
-      }
-
-      return extractAnswer(job.output);
-    }
-
-    if (job.status === "failed" || job.status === "cancelled") {
-      throw new Error(job.error ?? `Answer job ${job.status}`);
+    switch (job.state) {
+      case "completed":
+        return extractAnswer(readResult(job));
+      case "failed":
+      case "cancelled":
+        throw new Error(`Answer job ${job.id} ${job.state}`);
+      // created | retry | active | blocked are non-terminal; keep polling.
+      default:
+        break;
     }
 
     if (Date.now() >= deadline) {
-      throw new Error("Timed out waiting for the answer to be generated");
+      throw new Error(`Timed out waiting for answer job ${job.id} (state ${job.state})`);
     }
 
     await delay(answerPollIntervalMs);
+    job = readJob(await getJson(jobPath, options));
   }
 }
 
-function readStatusPath(ask: Record<string, unknown>): string {
-  const links = ask.links;
-  if (links && typeof links === "object") {
-    const status = (links as Record<string, unknown>).status;
-    if (typeof status === "string" && status.length > 0) {
-      return status;
-    }
+interface AskLinks {
+  wait: string;
+  job: string;
+}
+
+function readLinks(ask: Record<string, unknown>): AskLinks {
+  const links = asObject(ask.links);
+  const wait = links.wait;
+  const job = links.job;
+  if (typeof wait !== "string" || wait.length === 0 || typeof job !== "string" || job.length === 0) {
+    throw new Error("Ask response did not include job wait/detail links");
   }
 
-  throw new Error("Queued answer response did not include a status link");
+  return { wait, job };
 }
 
 function readJob(value: unknown): JobView {
   const job = asObject(asObject(value).job);
-  const status = job.status;
-  if (typeof status !== "string") {
-    throw new Error("Job status response did not include a status");
+  const id = job.id;
+  const state = job.state;
+  if (typeof id !== "string") {
+    throw new Error("Job response did not include an id");
+  }
+  if (!isJobState(state)) {
+    throw new Error("Job response did not include a valid state");
   }
 
-  return {
-    status,
-    output: job.output,
-    error: typeof job.error === "string" ? job.error : undefined
-  };
+  return { id, state, output: job.output };
+}
+
+function isJobState(value: unknown): value is JobState {
+  return (
+    value === "created" ||
+    value === "retry" ||
+    value === "active" ||
+    value === "completed" ||
+    value === "cancelled" ||
+    value === "failed" ||
+    value === "blocked"
+  );
+}
+
+// Unwraps the terminal job output envelope { result, executor }, returning the
+// `result` payload (the answerQuestionOutputSchema shape) that extractAnswer reads.
+function readResult(job: JobView): unknown {
+  if (job.output === undefined) {
+    throw new Error(`Answer job ${job.id} completed without producing an answer`);
+  }
+
+  return asObject(job.output).result;
 }
 
 function extractAnswer(value: unknown): AskResult {

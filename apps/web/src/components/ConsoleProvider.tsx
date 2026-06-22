@@ -3,16 +3,17 @@
 import { useRouter } from "next/navigation";
 import { FormEvent, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AiJob,
   AskResponse,
   ConsoleSection,
   CrunchRun,
-  CrunchSettings,
+  CrunchSettingsView,
   Feedback,
   FlowSnapshot,
   GapCandidate,
   Health,
   IndexRepositoryResponse,
+  JobsResponse,
+  JobView,
   KnowledgeDocument,
   KnowledgeStats,
   PromptSummary,
@@ -22,6 +23,7 @@ import {
   RepositoryRef,
   RuntimeConfig,
   ScheduledTask,
+  ScheduleView,
   SuggestedGapCluster,
   UiMessage
 } from "../lib/types";
@@ -46,10 +48,13 @@ function useConsoleController() {
   const [repositories, setRepositories] = useState<RepositoryRef[]>([]);
   const [gaps, setGaps] = useState<GapCandidate[]>([]);
   const [gapClusters, setGapClusters] = useState<SuggestedGapCluster[]>([]);
-  const [jobs, setJobs] = useState<AiJob[]>([]);
+  const [jobs, setJobs] = useState<JobView[]>([]);
+  const [jobSchedules, setJobSchedules] = useState<ScheduleView[]>([]);
+  const [selectedJobId, setSelectedJobId] = useState<string | undefined>();
+  const [selectedJob, setSelectedJob] = useState<JobView | undefined>();
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [crunchRuns, setCrunchRuns] = useState<CrunchRun[]>([]);
-  const [crunchSettings, setCrunchSettings] = useState<CrunchSettings[]>([]);
+  const [crunchSettings, setCrunchSettings] = useState<CrunchSettingsView[]>([]);
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
   const [prompts, setPrompts] = useState<PromptSummary[]>([]);
   const [flowSnapshots, setFlowSnapshots] = useState<FlowSnapshot[]>([]);
@@ -69,7 +74,7 @@ function useConsoleController() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | undefined>();
   const [message, setMessage] = useState<UiMessage | undefined>();
-  const jobsRef = useRef<AiJob[]>([]);
+  const jobsRef = useRef<JobView[]>([]);
   const messageIdRef = useRef(0);
   // Holds the AbortController for the in-flight refresh. The 4s poll and a manual
   // Refresh can overlap; aborting the previous request before starting a new one
@@ -89,8 +94,8 @@ function useConsoleController() {
     [jobs]
   );
   const attentionNotices = useMemo(
-    () => buildAttentionNotices({ config, health, jobs, openSection, stats }),
-    [config, health, jobs, openSection, stats]
+    () => buildAttentionNotices({ health, jobs, openSection, stats }),
+    [health, jobs, openSection, stats]
   );
   const selectedProposal = proposals.find((proposal) => proposal.id === selectedProposalId) ?? proposals[0];
 
@@ -119,8 +124,7 @@ function useConsoleController() {
     const hasActiveWork =
       jobs.some(isActiveJob) ||
       crunchRuns.some((run) => run.status === "running" || run.status === "pending") ||
-      (answer?.job ? isActiveJob(answer.job) : false) ||
-      (answer?.mode === "queue" && !answer.result);
+      (answer?.job ? isActiveJob(answer.job) : false);
 
     if (!hasActiveWork) {
       return;
@@ -129,7 +133,7 @@ function useConsoleController() {
     const interval = window.setInterval(() => void refresh({ silent: true }), 4_000);
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [answer?.job?.id, answer?.job?.status, answer?.mode, answer?.result, jobs, crunchRuns]);
+  }, [answer?.job?.id, answer?.job?.state, jobs, crunchRuns]);
 
   function showMessage(text: string, tone: UiMessage["tone"] = "info") {
     setMessage({ id: messageIdRef.current++, text, tone });
@@ -139,13 +143,62 @@ function useConsoleController() {
     setMessage(undefined);
   }
 
+  // The one reusable wait helper used after every enqueue (ask, proposal draft,
+  // gap-cluster draft, crunch, manual scheduled-task run). It long-polls the
+  // API's bounded `/jobs/:id/wait`, which returns the terminal job when the
+  // watcher finishes, or the still-active view if its deadline elapses first —
+  // in which case the normal 4s refresh polling keeps the UI updating.
+  async function waitForJob(job: Pick<JobView, "id">): Promise<JobView> {
+    const waited = await apiGet<{ job: JobView }>(`/jobs/${job.id}/wait`);
+    return waited.job;
+  }
+
+  async function selectJob(jobId: string) {
+    setSelectedJobId(jobId);
+    clearMessage();
+    try {
+      const result = await apiGet<{ job: JobView }>(`/jobs/${jobId}`);
+      setSelectedJob(result.job);
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    }
+  }
+
+  async function cancelJob(jobId: string) {
+    clearMessage();
+    try {
+      const result = await apiPost<{ job: JobView }>(`/jobs/${jobId}/cancel`, {});
+      if (selectedJobId === jobId) {
+        setSelectedJob(result.job);
+      }
+      showMessage("Job cancelled.", "success");
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    }
+  }
+
+  async function retryJob(jobId: string) {
+    clearMessage();
+    try {
+      const result = await apiPost<{ job: JobView }>(`/jobs/${jobId}/retry`, {});
+      if (selectedJobId === jobId) {
+        setSelectedJob(result.job);
+      }
+      showMessage("Job re-queued for retry.", "success");
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    }
+  }
+
   function toggleCitations(questionId: string) {
     setExpandedQuestionIds((current) =>
       current.includes(questionId) ? current.filter((id) => id !== questionId) : [...current, questionId]
     );
   }
 
-  function applyJobs(nextJobs: AiJob[], notify: boolean) {
+  function applyJobs(nextJobs: JobView[], notify: boolean) {
     const notices = notify ? jobTransitionMessages(jobsRef.current, nextJobs) : [];
     jobsRef.current = nextJobs;
     setJobs(nextJobs);
@@ -168,7 +221,7 @@ function useConsoleController() {
       clearMessage();
     }
     try {
-      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, proposalsResult, crunchRunsResult, crunchSettingsResult, scheduledTasksResult, configResult, promptsResult, snapshotsResult, reconciliationsResult] = await Promise.all([
+      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, schedulesResult, proposalsResult, crunchRunsResult, crunchSettingsResult, scheduledTasksResult, configResult, promptsResult, snapshotsResult, reconciliationsResult] = await Promise.all([
         apiGet<Health>("/health", { signal }),
         apiGet<KnowledgeStats>("/knowledge/stats", { signal }),
         apiGet<{ repositories: RepositoryRef[] }>("/knowledge/repositories", { signal }),
@@ -176,10 +229,11 @@ function useConsoleController() {
         apiGet<{ questions: QuestionLog[] }>("/questions?limit=8", { signal }),
         apiGet<{ gaps: GapCandidate[] }>("/gaps/candidates?limit=8", { signal }),
         apiGet<{ clusters: SuggestedGapCluster[] }>("/gaps/clusters?limit=8", { signal }),
-        apiGet<{ jobs: AiJob[] }>("/ai-jobs", { signal }),
+        apiGet<JobsResponse>("/jobs?limit=100", { signal }),
+        apiGet<{ schedules: ScheduleView[] }>("/jobs/schedules", { signal }),
         apiGet<{ proposals: Proposal[] }>("/proposals?limit=8", { signal }),
         apiGet<{ runs: CrunchRun[] }>("/crunch/runs?limit=12", { signal }),
-        apiGet<{ settings: CrunchSettings[] }>("/crunch/settings", { signal }),
+        apiGet<{ settings: CrunchSettingsView[] }>("/crunch/settings", { signal }),
         apiGet<{ tasks: ScheduledTask[] }>("/scheduled-tasks", { signal }),
         apiGet<RuntimeConfig>("/config", { signal }),
         apiGet<{ prompts: PromptSummary[] }>("/prompts", { signal }),
@@ -201,6 +255,7 @@ function useConsoleController() {
       setGaps(gapsResult.gaps);
       setGapClusters(clustersResult.clusters);
       applyJobs(jobsResult.jobs, jobsRef.current.length > 0);
+      setJobSchedules(schedulesResult.schedules);
       setProposals(proposalsResult.proposals);
       setCrunchRuns(crunchRunsResult.runs);
       setCrunchSettings(crunchSettingsResult.settings);
@@ -217,21 +272,22 @@ function useConsoleController() {
       );
       setLastRefreshedAt(new Date().toISOString());
 
-      if (answer?.questionId) {
-        const result = await apiGet<{ question: QuestionLog }>(`/questions/${answer.questionId}`, { signal });
-        if (signal.aborted || refreshControllerRef.current !== controller) {
-          return;
+      // The ask response is enqueue-only: the answer lands on the question log
+      // (rendered by the answered-questions list) once the watcher completes the
+      // job. Keep the live `answer.job` view fresh from the jobs list so the
+      // queued/active/terminal status the AskPanel shows tracks reality.
+      setAnswer((current) =>
+        current
+          ? { ...current, job: jobsResult.jobs.find((job) => job.id === current.job.id) ?? current.job }
+          : current
+      );
+
+      // Keep the Jobs-panel detail pane current while the operator has a job open.
+      if (selectedJobId) {
+        const fresh = jobsResult.jobs.find((job) => job.id === selectedJobId);
+        if (fresh) {
+          setSelectedJob(fresh);
         }
-        setAnswer((current) =>
-          current?.questionId === result.question.id
-            ? {
-                ...current,
-                mode: result.question.executionMode,
-                result: result.question.answer,
-                job: jobsResult.jobs.find((job) => job.id === current.job?.id) ?? current.job
-              }
-            : current
-        );
       }
     } catch (error) {
       // A superseded/aborted refresh raising AbortError is expected — stay quiet.
@@ -260,11 +316,18 @@ function useConsoleController() {
     clearMessage();
     try {
       const result = await apiPost<AskResponse>("/ask", { question: question.trim() });
-      setAnswer(result);
       setQuestion("");
-      if (result.job) {
-        showMessage(`${formatJobType(result.job.type)} queued. We will update this page when it finishes.`, "info");
-      }
+      // Bounded-wait for the queued answer; the helper returns the terminal job
+      // (or the still-active view if the watcher is slow), and the 4s refresh
+      // polling keeps the answered-questions list updating either way.
+      const job = await waitForJob(result.job);
+      setAnswer({ ...result, job });
+      showMessage(
+        isActiveJob(job)
+          ? `${formatJobType(job.type)} queued. We will update this page when it finishes.`
+          : `${formatJobType(job.type)} ${job.state}.`,
+        job.state === "failed" ? "danger" : "info"
+      );
       await refresh({ preserveMessage: true });
     } catch (error) {
       showMessage(errorMessage(error), "danger");
@@ -299,7 +362,7 @@ function useConsoleController() {
     setLoading(true);
     clearMessage();
     try {
-      const result = await apiPost<{ job?: AiJob; proposal?: Proposal }>("/proposals/from-gap", {
+      const result = await apiPost<{ job?: JobView; proposal?: Proposal }>("/proposals/from-gap", {
         summary: gap.summary,
         // Draft into the flow the gap actually came from; fall back to the
         // console's selected flow for un-routed/legacy gaps.
@@ -312,7 +375,13 @@ function useConsoleController() {
         openSection("jobs");
       }
       if (result.job) {
-        showMessage(`${formatJobType(result.job.type)} queued. We will update this page when it finishes.`, "info");
+        const job = await waitForJob(result.job);
+        showMessage(
+          isActiveJob(job)
+            ? `${formatJobType(job.type)} queued. We will update this page when it finishes.`
+            : `${formatJobType(job.type)} ${job.state}.`,
+          job.state === "failed" ? "danger" : "info"
+        );
       }
       await refresh({ preserveMessage: true });
     } catch (error) {
@@ -329,7 +398,7 @@ function useConsoleController() {
     setLoading(true);
     clearMessage();
     try {
-      const result = await apiPost<{ job?: AiJob; proposal?: Proposal }>("/proposals/from-gaps", {
+      const result = await apiPost<{ job?: JobView; proposal?: Proposal }>("/proposals/from-gaps", {
         summaries,
         // Use the cluster's own flow (clusters are per-flow); fall back to the
         // console's selected flow when the cluster carries none.
@@ -342,7 +411,13 @@ function useConsoleController() {
         openSection("jobs");
       }
       if (result.job) {
-        showMessage(`${formatJobType(result.job.type)} queued. We will update this page when it finishes.`, "info");
+        const job = await waitForJob(result.job);
+        showMessage(
+          isActiveJob(job)
+            ? `${formatJobType(job.type)} queued. We will update this page when it finishes.`
+            : `${formatJobType(job.type)} ${job.state}.`,
+          job.state === "failed" ? "danger" : "info"
+        );
       }
       await refresh({ preserveMessage: true });
     } catch (error) {
@@ -384,19 +459,19 @@ function useConsoleController() {
     setLoading(true);
     clearMessage();
     try {
-      const result = await apiPost<{ proposal: Proposal; pullRequestUrl?: string; pullRequestWarning?: string }>(
-        `/proposals/${proposalId}/publish`,
-        {}
-      );
-      setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
-      setSelectedProposalId(result.proposal.id);
-      const branchLabel = result.proposal.publication?.branchName ?? "proposal branch";
-      if (result.pullRequestUrl) {
-        showMessage(`Published ${branchLabel} and opened a pull request.`, "success");
-      } else if (result.pullRequestWarning) {
-        showMessage(`Published ${branchLabel}, but PR creation failed: ${result.pullRequestWarning}`, "info");
-      } else {
-        showMessage(`Published ${branchLabel} (no PR raised — configure a host token to enable).`, "success");
+      // Publication is now enqueue-only: the API validates and returns a queued
+      // publish_proposal job. The watcher executes the git and records the
+      // publication back onto the proposal, which a later refresh picks up.
+      const result = await apiPost<{ job?: JobView }>(`/proposals/${proposalId}/publish`, {});
+      openSection("jobs");
+      if (result.job) {
+        const job = await waitForJob(result.job);
+        showMessage(
+          isActiveJob(job)
+            ? `${formatJobType(job.type)} queued. We will update this page when it finishes.`
+            : `${formatJobType(job.type)} ${job.state}.`,
+          job.state === "failed" ? "danger" : "info"
+        );
       }
       await refresh({ preserveMessage: true });
     } catch (error) {
@@ -410,8 +485,22 @@ function useConsoleController() {
     setLoading(true);
     clearMessage();
     try {
+      // Crunch planning is enqueue-only: the run starts "running" backed by a
+      // queued job the watcher executes. Bounded-wait on that job when present so
+      // the message reflects the real outcome; the run-status branches stay as a
+      // fallback for the no-job (already-terminal) case.
       const result = await apiPost<{ run: CrunchRun }>("/crunch/run", { flowId: targetFlowId });
-      if (result.run.status === "completed") {
+      if (result.run.jobId) {
+        const job = await waitForJob({ id: result.run.jobId });
+        showMessage(
+          isActiveJob(job)
+            ? "Crunch queued. We will update this page when it finishes."
+            : job.state === "failed"
+              ? `Crunch failed: ${job.error?.message ?? "unknown error"}`
+              : `Crunch ${job.state}.`,
+          job.state === "failed" ? "danger" : job.state === "completed" ? "success" : "info"
+        );
+      } else if (result.run.status === "completed") {
         showMessage(`Crunch finished: ${result.run.plan?.summary ?? "plan ready"}`, "success");
       } else if (result.run.status === "failed") {
         showMessage(`Crunch failed: ${result.run.error ?? "unknown error"}`, "danger");
@@ -429,7 +518,7 @@ function useConsoleController() {
   async function saveCrunchSchedule(targetFlowId: string | undefined, enabled: boolean, cron: string) {
     clearMessage();
     try {
-      const result = await apiPost<{ settings: CrunchSettings[] }>("/crunch/settings", {
+      const result = await apiPost<{ settings: CrunchSettingsView[] }>("/crunch/settings", {
         flowId: targetFlowId,
         enabled,
         cron
@@ -456,9 +545,15 @@ function useConsoleController() {
     setLoading(true);
     clearMessage();
     try {
-      const result = await apiPost<{ tasks: ScheduledTask[] }>(`/scheduled-tasks/${key}/run`, {});
+      const result = await apiPost<{ job: JobView; tasks: ScheduledTask[] }>(`/scheduled-tasks/${key}/run`, {});
       setScheduledTasks(result.tasks);
-      showMessage("Side-process started; it runs in the background.", "success");
+      const job = await waitForJob(result.job);
+      showMessage(
+        isActiveJob(job)
+          ? "Side-process queued; it runs on the watcher in the background."
+          : `Side-process ${job.state}.`,
+        job.state === "failed" ? "danger" : "success"
+      );
       await refresh({ preserveMessage: true });
     } catch (error) {
       showMessage(errorMessage(error), "danger");
@@ -471,9 +566,20 @@ function useConsoleController() {
     setLoading(true);
     clearMessage();
     try {
-      const result = await apiPost<{ run: CrunchRun }>(`/crunch/runs/${runId}/publish`, {});
-      setCrunchRuns((current) => current.map((run) => (run.id === runId ? result.run : run)));
-      showMessage(`Published ${result.run.publication?.branchName ?? "crunch branch"}.`, "success");
+      // Publishing now enqueues a publish_crunch job. The watcher executes the
+      // git and records the publication back onto the run, which a later refresh
+      // picks up.
+      const result = await apiPost<{ job?: JobView }>(`/crunch/runs/${runId}/publish`, {});
+      openSection("jobs");
+      if (result.job) {
+        const job = await waitForJob(result.job);
+        showMessage(
+          isActiveJob(job)
+            ? `${formatJobType(job.type)} queued. We will update this page when it finishes.`
+            : `${formatJobType(job.type)} ${job.state}.`,
+          job.state === "failed" ? "danger" : "info"
+        );
+      }
       await refresh({ preserveMessage: true });
     } catch (error) {
       showMessage(errorMessage(error), "danger");
@@ -514,6 +620,9 @@ function useConsoleController() {
     gaps,
     gapClusters,
     jobs,
+    jobSchedules,
+    selectedJobId,
+    selectedJob,
     proposals,
     crunchRuns,
     crunchSettings,
@@ -548,6 +657,9 @@ function useConsoleController() {
     toggleCitations,
     openSection,
     refresh,
+    selectJob,
+    cancelJob,
+    retryJob,
     ask,
     sendFeedback,
     toggleKnowledgeGap,

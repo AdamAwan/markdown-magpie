@@ -4,8 +4,8 @@ export const ANSWER_QUESTION: PromptDefinition = {
   id: "answer-question",
   title: "Answer question",
   description:
-    "Answers a question from Markdown knowledge base context. Citations are computed in code from the retrieved sections (search ranking in direct mode, the job's context sections in queue mode), so the model only returns answer/confidence/gap detection. Shared by the direct retrieval path and queued answer_question jobs.",
-  usedBy: ["api · direct mode (retrieval)", "watcher · queue mode"],
+    "Answers a question from Markdown knowledge base context. Citations are computed in code from the watcher's retrieved sections, so the model only returns answer/confidence/gap detection. Used by the watcher's answer_question runner.",
+  usedBy: ["watcher"],
   outputShape: '{ answer, confidence, isKnowledgeGap, gaps[] }',
   instructions:
     'Answer using only the provided Markdown knowledge base context. Return only JSON with this shape: ' +
@@ -19,7 +19,7 @@ export const SUMMARIZE_GAP: PromptDefinition = {
   id: "summarize-gap",
   title: "Summarize knowledge gap",
   description: "Summarises a set of unanswered or weakly answered questions into one prioritised gap.",
-  usedBy: ["watcher · queue mode"],
+  usedBy: ["watcher"],
   outputShape: '{ summary, priority, rationale }',
   instructions: `Summarize these unanswered or weakly answered knowledge base questions.
 
@@ -35,8 +35,8 @@ export const DRAFT_MARKDOWN_PROPOSAL: PromptDefinition = {
   id: "draft-markdown-proposal",
   title: "Draft Markdown proposal",
   description:
-    "Drafts a single cohesive Markdown article that addresses every listed gap. Used by both queued draft jobs and the API direct path.",
-  usedBy: ["watcher · queue mode", "api · direct mode"],
+    "Drafts a single cohesive Markdown article that addresses every listed gap. Used by the watcher's draft_markdown_proposal job.",
+  usedBy: ["watcher"],
   outputShape: '{ title, targetPath, markdown, rationale }',
   instructions: `Draft a single Markdown knowledge base proposal that addresses every gap listed in gapSummaries.
 
@@ -62,8 +62,8 @@ export const CRUNCH_KNOWLEDGE_BASE: PromptDefinition = {
   id: "crunch-knowledge-base",
   title: "Crunch knowledge base",
   description:
-    "Proposes structural maintenance (consolidate/split/rewrite) over the Markdown knowledge base. Used by both queued crunch jobs and the API direct path.",
-  usedBy: ["watcher · queue mode", "api · direct mode"],
+    "Proposes structural maintenance (consolidate/split/rewrite) over the Markdown knowledge base. Used by the watcher's crunch_knowledge_base job.",
+  usedBy: ["watcher"],
   outputShape: '{ summary, operations[], rationale }',
   instructions: `You are tidying a fragmented Markdown knowledge base. Propose structural maintenance only — do not invent new facts.
 
@@ -99,8 +99,8 @@ export const SOURCE_CHANGE_SYNC: PromptDefinition = {
   id: "source-change-sync",
   title: "Sync knowledge base to source changes",
   description:
-    "Given a set of source-code/data changes (diffs) and the knowledge-base documents that may describe the changed behaviour, rewrites only the documents whose stated facts are now contradicted by the change. Used by both queued sync_source_change jobs and the API direct path.",
-  usedBy: ["watcher · queue mode", "api · direct mode"],
+    "Given a set of source-code/data changes (diffs) and the knowledge-base documents that may describe the changed behaviour, rewrites only the documents whose stated facts are now contradicted by the change. Used by the watcher's sync_source_change job.",
+  usedBy: ["watcher"],
   outputShape: '{ summary, operations[], rationale }',
   instructions: `You maintain a Markdown knowledge base that DESCRIBES an external source (code or data). The source has changed, and some knowledge-base documents may now state facts that the change has made wrong. Update those documents so they match the new reality.
 
@@ -141,7 +141,7 @@ export const GAP_CLUSTERING: PromptDefinition = {
   id: "gap-clustering",
   title: "Cluster related gaps",
   description: "Groups related knowledge-base gaps that a single Markdown article could resolve.",
-  usedBy: ["api · direct mode"],
+  usedBy: ["watcher"],
   outputShape: '{ clusters[] }',
   instructions:
     'Group related knowledge-base gaps that a single Markdown article could resolve. ' +
@@ -155,7 +155,7 @@ export const GAP_RECONCILE_PROPOSE: PromptDefinition = {
   id: "gap-reconcile-propose",
   title: "Propose gap-cluster reshapes",
   description: "Proposes merges/splits over the current persisted gap clusters.",
-  usedBy: ["api · gap reconciler"],
+  usedBy: ["watcher · gap reconciler"],
   outputShape: "{ merges[], splits[] }",
   instructions:
     "You are reorganising knowledge-gap clusters. Propose a MERGE only when one " +
@@ -170,7 +170,7 @@ export const GAP_RECONCILE_CRITIC: PromptDefinition = {
   id: "gap-reconcile-critic",
   title: "Critique a proposed gap-cluster reshape",
   description: "Strict reviewer that confirms or rejects a single proposed merge or split.",
-  usedBy: ["api · gap reconciler"],
+  usedBy: ["watcher · gap reconciler"],
   outputShape: "{ confirmed, rationale }",
   instructions:
     "You are a strict reviewer of a proposed gap-cluster change. Reject unless the " +
@@ -184,7 +184,7 @@ export const GENERIC_JOB: PromptDefinition = {
   title: "Generic job fallback",
   description:
     "Fallback prompt for job types without a dedicated prompt (e.g. detect_contradiction, suggest_consolidation).",
-  usedBy: ["watcher · queue mode"],
+  usedBy: ["watcher"],
   outputShape: "JSON (job-specific)",
   instructions: `Complete this Markdown Magpie AI job. Return JSON only.`
 };
@@ -194,7 +194,7 @@ export const JOB_RUNNER_SYSTEM: PromptDefinition = {
   title: "Job runner system message",
   description:
     "System message sent alongside every queued job when the watcher uses an OpenAI-compatible agent runner.",
-  usedBy: ["watcher · queue runner"],
+  usedBy: ["watcher"],
   outputShape: "n/a (system message)",
   instructions: `You complete Markdown Magpie AI jobs. Return only valid JSON matching the requested schema.`
 };
@@ -204,7 +204,7 @@ export const ROUTE_QUESTION_TO_FLOW: PromptDefinition = {
   title: "Route question to flow",
   description:
     "Picks the single best-matching knowledge flow for a question from the configured flows (id, name, and persona). Used before retrieval so the answer is scoped and shaped to one audience.",
-  usedBy: ["api · ask routing (direct + queue)"],
+  usedBy: ["watcher · routing"],
   outputShape: '{ flowId, confidence, rationale }',
   instructions:
     'You route a user question to exactly one knowledge flow. You are given the question and a ' +

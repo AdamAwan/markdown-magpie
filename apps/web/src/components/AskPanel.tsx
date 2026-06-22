@@ -35,9 +35,18 @@ export function AskPanel({
   const filteredQuestions = query
     ? questions.filter((item) => item.question.toLowerCase().includes(query))
     : questions;
-  // The /ask response carries no flow itself; recover it from the logged question
-  // once the post-ask refresh has loaded it, so the live answer is tagged too.
-  const answerFlowId = answer ? questions.find((item) => item.id === answer.questionId)?.flowId : undefined;
+  // The ask response is enqueue-only — it carries the queued job, not an answer.
+  // The answer (and its flow) land on the logged question once the watcher
+  // completes the answer_question job, so recover both from the question log.
+  const answeredQuestion = answer ? questions.find((item) => item.id === answer.questionId) : undefined;
+  const answerResult = answeredQuestion?.answer;
+  const answerFlowId = answeredQuestion?.flowId;
+  const jobActive = answer
+    ? answer.job.state === "created" ||
+      answer.job.state === "retry" ||
+      answer.job.state === "active" ||
+      answer.job.state === "blocked"
+    : false;
 
   return (
     <>
@@ -60,19 +69,19 @@ export function AskPanel({
           <div className="resultHeader">
             <div className="rowMeta">
               <span
-                className={`status ${answer.result?.confidence ?? "unknown"}`}
-                title={answer.result ? `Answer confidence: ${answer.result.confidence}` : "Answer is queued"}
+                className={`status ${answerResult?.confidence ?? (jobActive ? "pending" : "unknown")}`}
+                title={answerResult ? `Answer confidence: ${answerResult.confidence}` : "Answer is queued"}
               >
-                {answer.result?.confidence ?? "queued"}
+                {answerResult?.confidence ?? (jobActive ? "queued" : answer.job.state)}
               </span>
               <FlowTag flowId={answerFlowId} flowLabels={flowLabels} />
             </div>
             <code>{answer.questionId}</code>
           </div>
-          <p>{answer.result?.answer ?? `Queued as ${answer.job?.type ?? "AI job"}`}</p>
-          {answer.result?.citations.length ? (
+          <p>{answerResult?.answer ?? `Queued as ${answer.job.type} (${answer.job.state})`}</p>
+          {answerResult?.citations.length ? (
             <div className="citationStack">
-              {answer.result.citations.map((citation) => (
+              {answerResult.citations.map((citation) => (
                 <CitationRow citation={citation} key={citation.sectionId} />
               ))}
             </div>

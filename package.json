@@ -16,12 +16,14 @@
     "dev:web": "npm run dev -w @magpie/web",
     "dev": "npm run dev --workspaces --if-present",
     "eval:api": "node --import tsx scripts/eval-api.ts",
+    "e2e:jobs": "node --import tsx scripts/e2e-jobs.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "npm run test --workspaces --if-present",
     "test:db": "node scripts/test-db.mjs npm run test",
+    "test:integration": "RUN_PG_INTEGRATION=1 npm test -w @magpie/api -- --test-name-pattern=pg-boss",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
     "test:db:coverage": "node scripts/test-db.mjs npm run test:coverage",
     "typecheck": "tsc -p tsconfig.check.json --noEmit"
@@ -42,6 +44,6 @@
     "postcss": "^8.5.10"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   }
 }

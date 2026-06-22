@@ -16,10 +16,15 @@ export async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs: number,
-  label: string
+  label: string,
+  // Optional caller cancellation, combined with the timeout so either tears the
+  // connection down. Used by the watcher to abort a cancelled/shutdown job.
+  callerSignal?: AbortSignal
 ): Promise<Response> {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = callerSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : timeoutSignal;
   try {
-    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+    return await fetch(url, { ...init, signal });
   } catch (error) {
     if (error instanceof DOMException && error.name === "TimeoutError") {
       throw new Error(`${label} timed out after ${timeoutMs}ms`);

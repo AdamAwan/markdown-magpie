@@ -17,6 +17,18 @@ export function gapRoutes(ctx: AppContext): Hono {
     return c.json({ clusters: await gapsService.listClusters(ctx, limit) });
   });
 
+  // Run the full gap→PR reconciliation for one flow. This is the thin endpoint the
+  // maintenance watcher's process_gaps_to_pull_requests runner POSTs; the heavy
+  // orchestration (clustering, the reshape AI job, drafting and publication
+  // enqueue) stays in the API. The body is optional; an absent flowId reconciles
+  // the default/un-routed flow. Same admin scope as the scheduled-task run route.
+  app.post("/reconcile", requireScopes("manage:jobs"), async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { flowId?: unknown };
+    const flowId = typeof body.flowId === "string" ? body.flowId : undefined;
+    await gapsService.reconcileFlow(ctx, flowId);
+    return c.json({ ok: true });
+  });
+
   // Manually draft a proposal for one persisted cluster. The body is optional;
   // targetPath/destinationId override the flow's defaults when supplied.
   app.post("/clusters/:id/proposal", async (c) => {

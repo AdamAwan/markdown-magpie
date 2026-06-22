@@ -10,7 +10,7 @@
 - Add hybrid retrieval: pgvector nearest-neighbour fused with keyword scoring via RRF, with automatic keyword-only fallback.
 - Answer questions with citations from retrieved sections.
 - Expose `ask` and `search` over HTTP and MCP.
-- Support mock and queued AI execution modes.
+- Execute all AI work as durable pg-boss jobs run by capability-filtered watchers.
 
 ## Milestone 2: Gap Loop
 

@@ -159,15 +159,15 @@ test("GET /api/proposals returns an empty list", async () => {
   assert.deepEqual(await res.json(), { proposals: [] });
 });
 
-test("POST /api/ai-jobs with a bad type returns 400 valid_job_type_required", async () => {
+test("POST /api/jobs with a bad type returns 400 invalid_job", async () => {
   const app = buildApp(makeTestContext());
-  const res = await app.request("/api/ai-jobs", {
+  const res = await app.request("/api/jobs", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ type: "not_a_real_type" })
   });
   assert.equal(res.status, 400);
-  assert.deepEqual(await res.json(), { error: "valid_job_type_required" });
+  assert.deepEqual(await res.json(), { error: "invalid_job" });
 });
 
 test("GET /api/questions/bogus returns 404 question_not_found", async () => {

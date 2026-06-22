@@ -140,8 +140,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="statusLine">
               <span>Latest Job</span>
               <span>
-                {latestJob ? <span className={latestJob.status === "failed" ? "dot offline" : "dot"} /> : null}
-                {latestJob ? latestJob.status : "None"}
+                {latestJob ? <span className={latestJob.state === "failed" ? "dot offline" : "dot"} /> : null}
+                {latestJob ? latestJob.state : "None"}
               </span>
             </div>
           </div>
@@ -149,8 +149,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="statusGroup">
             <p className="statusGroupTitle">Model</p>
             <div className="statusLine">
-              <span>Mode</span>
-              <span>{config?.aiRuntime.executionMode ?? "direct"}</span>
+              <span>Provider</span>
+              <span>{config?.aiRuntime.provider ?? "not set"}</span>
             </div>
             {modelInfo.chatModel && (
               <div className="statusLine">

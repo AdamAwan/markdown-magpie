@@ -22,7 +22,7 @@ const multiGapAnswer: AnswerResult = {
 
 test("recordManualGap flags the question and stores the provided summary as a manual gap", async () => {
   const store = new InMemoryQuestionLogStore();
-  const log = await store.record({ question: "How do I adopt?", executionMode: "direct", chatProvider: "mock", retrievedSectionIds: [] });
+  const log = await store.record({ question: "How do I adopt?", chatProvider: "codex", retrievedSectionIds: [] });
 
   const updated = await store.recordManualGap(log.id, "Adoption process is undocumented");
 
@@ -33,7 +33,7 @@ test("recordManualGap flags the question and stores the provided summary as a ma
 
 test("recordManualGap defaults the summary to the question text", async () => {
   const store = new InMemoryQuestionLogStore();
-  const log = await store.record({ question: "How do I adopt?", executionMode: "direct", chatProvider: "mock", retrievedSectionIds: [] });
+  const log = await store.record({ question: "How do I adopt?", chatProvider: "codex", retrievedSectionIds: [] });
 
   const updated = await store.recordManualGap(log.id);
 
@@ -49,8 +49,7 @@ test("record stores one gap per detected gap for a multi-topic question", async 
   const store = new InMemoryQuestionLogStore();
   const log = await store.record({
     question: "react + export?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     answer: multiGapAnswer,
     retrievedSectionIds: []
   });
@@ -67,8 +66,7 @@ test("recordManualGap preserves auto-detected gaps and adds a manual one", async
   const store = new InMemoryQuestionLogStore();
   const log = await store.record({
     question: "react + export?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     answer: multiGapAnswer,
     retrievedSectionIds: []
   });
@@ -86,8 +84,7 @@ test("clearManualGap removes the manual gap but keeps auto-detected gaps", async
   const store = new InMemoryQuestionLogStore();
   const log = await store.record({
     question: "react + export?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     answer: multiGapAnswer,
     retrievedSectionIds: []
   });
@@ -106,7 +103,7 @@ test("clearManualGap removes the manual gap but keeps auto-detected gaps", async
 test("listGapCandidates includes a manually flagged high-confidence question", async () => {
   const store = new InMemoryQuestionLogStore();
   const helpful: AnswerResult = { answer: "Yes.", confidence: "high", citations: [] };
-  const log = await store.record({ question: "Partial answer?", executionMode: "direct", chatProvider: "mock", answer: helpful, retrievedSectionIds: [] });
+  const log = await store.record({ question: "Partial answer?", chatProvider: "codex", answer: helpful, retrievedSectionIds: [] });
   await store.recordManualGap(log.id, "Needs a full guide");
 
   const candidates = await store.listGapCandidates(50);
@@ -118,7 +115,7 @@ test("listGapCandidates includes a manually flagged high-confidence question", a
 
 test("listGapCandidates still includes auto-detected low-confidence gaps", async () => {
   const store = new InMemoryQuestionLogStore();
-  await store.record({ question: "vaccines?", executionMode: "direct", chatProvider: "mock", answer: lowGapAnswer, retrievedSectionIds: [] });
+  await store.record({ question: "vaccines?", chatProvider: "codex", answer: lowGapAnswer, retrievedSectionIds: [] });
 
   const candidates = await store.listGapCandidates(50);
 
@@ -130,16 +127,14 @@ test("listGapCandidates lists each gap of a multi-topic question separately and 
   const store = new InMemoryQuestionLogStore();
   const first = await store.record({
     question: "react + export?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     answer: multiGapAnswer,
     retrievedSectionIds: []
   });
   // A second question that only shares the dashboard-export gap.
   const second = await store.record({
     question: "how do I export a dashboard?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     answer: {
       answer: "Not documented.",
       confidence: "low",
@@ -169,16 +164,14 @@ test("listGapCandidates groups the same gap separately per flow and tags each ca
   };
   const sales = await store.record({
     question: "price?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     answer: sharedGap,
     retrievedSectionIds: [],
     flowId: "magpie-sales"
   });
   const support = await store.record({
     question: "price?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     answer: sharedGap,
     retrievedSectionIds: [],
     flowId: "magpie-support"
@@ -196,7 +189,7 @@ test("listGapCandidates groups the same gap separately per flow and tags each ca
 test("listGapCandidates excludes a question whose manual gap was cleared", async () => {
   const store = new InMemoryQuestionLogStore();
   const helpful: AnswerResult = { answer: "Yes.", confidence: "high", citations: [] };
-  const log = await store.record({ question: "Partial answer?", executionMode: "direct", chatProvider: "mock", answer: helpful, retrievedSectionIds: [] });
+  const log = await store.record({ question: "Partial answer?", chatProvider: "codex", answer: helpful, retrievedSectionIds: [] });
   await store.recordManualGap(log.id, "Needs a full guide");
   await store.clearManualGap(log.id);
 
@@ -207,8 +200,7 @@ test("resolveGaps resolves only the matching gap and drops it from candidates", 
   const store = new InMemoryQuestionLogStore();
   const log = await store.record({
     question: "react + export?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     answer: multiGapAnswer,
     retrievedSectionIds: []
   });
@@ -235,8 +227,7 @@ test("gap catalog revision advances when a manual gap is recorded and when gaps 
 
   const log = await store.record({
     question: "How do I configure X?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     retrievedSectionIds: []
   });
   await store.recordManualGap(log.id, "How to configure X");
@@ -251,9 +242,9 @@ test("gap catalog revision advances when a manual gap is recorded and when gaps 
 
 test("gapIdsForSummary returns one stable id per unresolved gap matching the summary", async () => {
   const store = new InMemoryQuestionLogStore();
-  const a = await store.record({ question: "q1?", executionMode: "direct", chatProvider: "mock", retrievedSectionIds: [] });
+  const a = await store.record({ question: "q1?", chatProvider: "codex", retrievedSectionIds: [] });
   await store.recordManualGap(a.id, "How to configure X");
-  const b = await store.record({ question: "q2?", executionMode: "direct", chatProvider: "mock", retrievedSectionIds: [] });
+  const b = await store.record({ question: "q2?", chatProvider: "codex", retrievedSectionIds: [] });
   await store.recordManualGap(b.id, "How to configure X");
 
   const ids = await store.gapIdsForSummary("How to configure X");
@@ -269,8 +260,7 @@ test("resolveGaps is idempotent and only counts newly resolved gaps", async () =
   const store = new InMemoryQuestionLogStore();
   const log = await store.record({
     question: "vaccines?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     answer: lowGapAnswer,
     retrievedSectionIds: []
   });

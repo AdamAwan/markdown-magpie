@@ -1,4 +1,5 @@
 import type { AppContext } from "../../context.js";
+import { reconcileSchedules } from "../../jobs/schedule-reconciler.js";
 import { seedConfiguredKnowledge } from "../../platform/repositories.js";
 import { storageBackend, storeBackend } from "../../platform/stores.js";
 import { embeddingProviderName, getConfiguredAiProviders, retrievalMode } from "../../platform/providers.js";
@@ -10,7 +11,6 @@ export function getRuntimeConfig(ctx: AppContext) {
   return {
     api: {
       port,
-      aiExecutionMode: ctx.config.get().aiExecutionMode,
       aiProvider: ctx.config.get().aiProvider,
       nodeEnv: process.env.NODE_ENV ?? "development"
     },
@@ -19,7 +19,6 @@ export function getRuntimeConfig(ctx: AppContext) {
       knowledgeStore: storeBackend("KNOWLEDGE_STORE"),
       questionLogStore: storeBackend("QUESTION_LOG_STORE"),
       proposalStore: storeBackend("PROPOSAL_STORE"),
-      aiJobQueue: storeBackend("AI_JOB_QUEUE"),
       databaseUrl: maskConnectionString(process.env.DATABASE_URL)
     },
     knowledge: {
@@ -31,8 +30,8 @@ export function getRuntimeConfig(ctx: AppContext) {
       checkoutRoot: ctx.knowledgeConfig.checkoutRoot
     },
     providers: {
-      llmProvider: process.env.LLM_PROVIDER ?? "mock",
-      embeddingProvider: embeddingProviderName() ?? "mock",
+      llmProvider: ctx.config.get().aiProvider,
+      embeddingProvider: embeddingProviderName() ?? "none",
       gitProvider: process.env.GIT_PROVIDER ?? "local",
       openAiCompatible: {
         baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL || null,
@@ -55,12 +54,8 @@ export function getRuntimeConfig(ctx: AppContext) {
       }
     },
     aiRuntime: {
-      executionMode: ctx.config.get().aiExecutionMode,
       provider: ctx.config.get().aiProvider,
-      executionModes: ["direct", "queue"],
-      providers: availableProviders,
-      directProviders: availableProviders.filter((provider) => provider.supportsDirect).map((provider) => provider.name),
-      queueProviders: availableProviders.filter((provider) => provider.supportsQueue).map((provider) => provider.name)
+      providers: availableProviders
     },
     retrieval: (() => {
       const { mode, reason } = retrievalMode();
@@ -74,8 +69,7 @@ export function getRuntimeConfig(ctx: AppContext) {
       name: process.env.WATCHER_NAME ?? null,
       pollIntervalMs: process.env.WATCHER_POLL_INTERVAL_MS ?? null,
       aiJobProvider: ctx.config.get().aiProvider,
-      agentApiTimeoutMs: process.env.AGENT_API_TIMEOUT_MS ?? null,
-      claimTimeoutMs: ctx.claimTimeoutMs
+      agentApiTimeoutMs: process.env.AGENT_API_TIMEOUT_MS ?? null
     }
   };
 }
@@ -99,15 +93,11 @@ export function logStartupConfig(ctx: AppContext): void {
   add("knowledge store", cfg.stores.knowledgeStore);
   add("question log store", cfg.stores.questionLogStore);
   add("proposal store", cfg.stores.proposalStore);
-  add("ai job queue", cfg.stores.aiJobQueue);
   add("database url", cfg.stores.databaseUrl ?? "not set");
 
-  section("AI execution");
-  add("execution mode", cfg.aiRuntime.executionMode);
+  section("AI execution (queue-only; watchers run all AI)");
   add("active provider", cfg.aiRuntime.provider);
-  add("configured providers", cfg.aiRuntime.providers.map((provider) => provider.name).join(", "));
-  add("usable in direct mode", cfg.aiRuntime.directProviders.join(", ") || "none");
-  add("usable in queue mode", cfg.aiRuntime.queueProviders.join(", ") || "none");
+  add("selectable providers", cfg.aiRuntime.providers.map((provider) => provider.name).join(", "));
 
   section("Chat provider (openai-compatible)");
   add("base url", cfg.providers.openAiCompatible.baseUrl ?? "not set");
@@ -157,7 +147,13 @@ export async function resetData(ctx: AppContext) {
   await ctx.stores.crunchRuns.reset();
   await ctx.stores.scheduledTasks.reset();
   await ctx.stores.sourceSync.reset();
-  await ctx.stores.aiJobs.reset();
+
+  // Clear the durable job queue (pg-boss owns all jobs/schedules now), then
+  // reconcile schedules so the now-empty crunch/scheduled-task settings leave no
+  // orphaned pg-boss schedule rows behind.
+  await ctx.jobs.reset();
+  await reconcileSchedules(ctx);
+
   if (ctx.stores.knowledge) {
     await ctx.stores.knowledge.reset();
   }
