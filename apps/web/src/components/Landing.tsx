@@ -68,7 +68,7 @@ export function Landing({ onLogin }: { onLogin: () => void }) {
 
         <a
           className="button secondary"
-          href="/presentation/"
+          href="/presentation/index.html"
           style={{
             display: "inline-flex",
             width: "100%",
