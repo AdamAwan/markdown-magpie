@@ -6,6 +6,8 @@ import {
   type JWTPayload
 } from "jose";
 
+export { createApiTokenProvider, type ApiTokenProvider, type ApiTokenProviderConfig } from "./api-token.js";
+
 export interface AuthSettings {
   required: boolean;
   issuer: string;

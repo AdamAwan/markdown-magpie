@@ -1,3 +1,4 @@
+import { authSettingsFromEnv, createApiTokenProvider } from "@magpie/auth";
 import type { JobCapability } from "@magpie/jobs";
 import { CAPABILITY_GATES, deriveCapabilities } from "./capabilities.js";
 import { HttpWatcherApi } from "./http-client.js";
@@ -13,10 +14,26 @@ const apiBaseUrl = process.env.API_BASE_URL ?? "http://localhost:4000";
 const watcherName = process.env.WATCHER_NAME ?? "local-dev-watcher";
 const pollIntervalMs = parsePositiveInt(process.env.WATCHER_POLL_INTERVAL_MS, 2000);
 
+// Authenticate to the API with the watcher's OWN machine-to-machine credential.
+// Prefer client-credentials (WATCHER_API_CLIENT_ID/SECRET) so the token is
+// fetched and refreshed at runtime — a static API_TOKEN expires (~24h on Auth0)
+// and silently 401s every claim afterwards. The downstream audience and token
+// endpoint come from the same Auth0 settings the API validates against. When
+// none of these are set (local dev with AUTH_REQUIRED=false) the provider yields
+// undefined and no Authorization header is sent.
+const authSettings = authSettingsFromEnv();
+const tokenProvider = createApiTokenProvider({
+  staticToken: process.env.API_TOKEN,
+  clientId: process.env.WATCHER_API_CLIENT_ID,
+  clientSecret: process.env.WATCHER_API_CLIENT_SECRET,
+  tokenUrl: `${authSettings.issuer}oauth/token`,
+  audience: authSettings.audience
+});
+
 const api = new HttpWatcherApi({
   apiBaseUrl,
   workerName: watcherName,
-  ...(process.env.API_TOKEN ? { apiToken: process.env.API_TOKEN } : {})
+  token: tokenProvider
 });
 
 const runners = createConfiguredRunners(process.env, api);

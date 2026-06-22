@@ -7,16 +7,17 @@ import type { Express, Request, Response } from "express";
 import {
   AuthError,
   authSettingsFromEnv,
+  createApiTokenProvider,
   createRemoteAuthVerifier,
   hasScopes,
   parseBearerToken,
+  type ApiTokenProvider,
   type AuthSettings,
   type Principal
 } from "@magpie/auth";
 import type { JSONWebKeySet } from "jose";
 import { z } from "zod/v4";
 import { askQuestion, getJson, submitFeedback, type KbClientOptions } from "./kb-client.js";
-import { createApiTokenProvider, type ApiTokenProvider } from "./api-token.js";
 
 // ── Configuration ──────────────────────────────────────────────────────────
 

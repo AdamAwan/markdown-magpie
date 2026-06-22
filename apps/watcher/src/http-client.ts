@@ -1,3 +1,4 @@
+import type { ApiTokenProvider } from "@magpie/auth";
 import type { JobCapability, JobError, JobView } from "@magpie/jobs";
 
 // Everything the worker loop needs from the API's durable job lifecycle. Kept as
@@ -74,8 +75,11 @@ export interface WatcherApi extends WatcherApiClient {
 export interface HttpClientOptions {
   apiBaseUrl: string;
   workerName: string;
-  // Bearer token for the API's scope-protected routes, when configured.
-  apiToken?: string;
+  // Resolves the bearer token for the API's scope-protected routes, when
+  // configured. Called per-request so a client-credentials token is refreshed
+  // transparently before it expires; returns undefined when auth is disabled
+  // (no Authorization header is then sent).
+  token?: ApiTokenProvider;
   requestTimeoutMs?: number;
 }
 
@@ -87,13 +91,13 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 export class HttpWatcherApi implements WatcherApi {
   private readonly base: string;
   private readonly workerName: string;
-  private readonly apiToken?: string;
+  private readonly token?: ApiTokenProvider;
   private readonly timeoutMs: number;
 
   constructor(options: HttpClientOptions) {
     this.base = trimTrailingSlash(options.apiBaseUrl).replace(/\/api$/, "");
     this.workerName = options.workerName;
-    this.apiToken = options.apiToken;
+    this.token = options.token;
     this.timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   }
 
@@ -185,8 +189,9 @@ export class HttpWatcherApi implements WatcherApi {
 
   private async request<TResponse>(path: string, init: RequestInit, signal?: AbortSignal): Promise<TResponse> {
     const headers: Record<string, string> = { "content-type": "application/json" };
-    if (this.apiToken) {
-      headers.authorization = `Bearer ${this.apiToken}`;
+    const token = this.token ? await this.token() : undefined;
+    if (token) {
+      headers.authorization = `Bearer ${token}`;
     }
     // Abort on the request timeout, or sooner if the caller's signal (a job
     // cancellation / watcher shutdown) fires first.

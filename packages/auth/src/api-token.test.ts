@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { createApiTokenProvider } from "./api-token.js";
 
 const fullConfig = {
-  clientId: "mcp-client",
-  clientSecret: "mcp-secret",
+  clientId: "svc-client",
+  clientSecret: "svc-secret",
   tokenUrl: "https://wastedcake.eu.auth0.com/oauth/token",
   audience: "https://magpie.wastedcake.com"
 };
@@ -47,8 +47,8 @@ test("fetches a token via client-credentials and sends the expected grant body",
     assert.equal(await provider(), "fetched-token");
     assert.deepEqual(capturedBody, {
       grant_type: "client_credentials",
-      client_id: "mcp-client",
-      client_secret: "mcp-secret",
+      client_id: "svc-client",
+      client_secret: "svc-secret",
       audience: "https://magpie.wastedcake.com"
     });
   } finally {
@@ -87,7 +87,7 @@ test("throws a clear error when the token endpoint fails", async () => {
   const fetchStub = stubFetch(() => new Response("nope", { status: 401 }));
   try {
     const provider = createApiTokenProvider(fullConfig);
-    await assert.rejects(() => provider(), /Failed to obtain MCP API service token \(401\)/);
+    await assert.rejects(() => provider(), /Failed to obtain API service token \(401\)/);
   } finally {
     fetchStub.restore();
   }

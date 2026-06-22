@@ -1,16 +1,16 @@
-// Service-token provider for the HTTP MCP server's downstream API calls.
+// Service-token provider for downstream API calls made by backend services (the
+// HTTP MCP server and the watcher).
 //
-// The MCP server authenticates to the Markdown Magpie API with its OWN
-// machine-to-machine credential (never the inbound user token). Historically
-// this was a static MCP_API_AUTH_TOKEN pasted into the environment — but Auth0
-// access tokens expire (default 24h), so a static token silently breaks every
-// tools/call a day after deploy. This module fetches the token at runtime via
-// the OAuth client-credentials grant and caches it until shortly before expiry,
-// refreshing transparently.
+// Such a service authenticates to the Markdown Magpie API with its OWN
+// machine-to-machine credential (never an inbound user token). Historically this
+// was a static token pasted into the environment — but Auth0 access tokens expire
+// (default 24h), so a static token silently breaks every call a day after deploy.
+// This module fetches the token at runtime via the OAuth client-credentials grant
+// and caches it until shortly before expiry, refreshing transparently.
 
 export interface ApiTokenProviderConfig {
-  // Legacy static token (MCP_API_AUTH_TOKEN). Used as a fallback when no
-  // client-credentials config is supplied, preserving prior behaviour.
+  // Legacy static token (e.g. MCP_API_AUTH_TOKEN / API_TOKEN). Used as a fallback
+  // when no client-credentials config is supplied, preserving prior behaviour.
   staticToken?: string;
   // Client-credentials configuration (preferred). All four are required to
   // enable runtime token acquisition.
@@ -57,7 +57,7 @@ export function createApiTokenProvider(config: ApiTokenProviderConfig): ApiToken
 
     const text = await response.text();
     if (!response.ok) {
-      throw new Error(`Failed to obtain MCP API service token (${response.status}): ${text}`);
+      throw new Error(`Failed to obtain API service token (${response.status}): ${text}`);
     }
 
     const body = (text ? JSON.parse(text) : {}) as TokenResponse;
