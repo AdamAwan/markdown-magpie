@@ -13,6 +13,7 @@ import { FakeJobBroker } from "../jobs/fake-broker.js";
 import { InMemorySnapshotStore } from "../stores/snapshot-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
 import { InMemoryWatcherRegistryStore } from "../stores/watcher-registry-store.js";
+import { InMemoryJobAcceptanceStore } from "../stores/job-acceptance-store.js";
 
 // Builds an AppContext wired entirely to in-memory stores with fake collaborators,
 // matching the real AppContext interface field-for-field. Pass overrides to
@@ -40,7 +41,8 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
       gapClusters: new InMemoryGapClusterStore(),
       reconciliations: new InMemoryReconciliationDecisionStore(),
       snapshots: new InMemorySnapshotStore(),
-      watchers: new InMemoryWatcherRegistryStore()
+      watchers: new InMemoryWatcherRegistryStore(),
+      jobAcceptances: new InMemoryJobAcceptanceStore()
     },
     jobs: new FakeJobBroker(),
     providers: {

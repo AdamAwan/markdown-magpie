@@ -30,6 +30,8 @@ import { checkoutRoot, syncConfiguredGitCheckouts, type RepositoryDeps } from ".
 import type { JobBroker } from "./jobs/broker.js";
 import { PgBossJobBroker } from "./jobs/pg-boss-broker.js";
 import { backfillGapClusters } from "./scheduling/gap-backfill.js";
+import type { JobAcceptanceStore } from "./stores/job-acceptance-store.js";
+import { PostgresJobAcceptanceStore } from "./stores/postgres-job-acceptance-store.js";
 
 export interface AppContext {
   stores: {
@@ -44,6 +46,7 @@ export interface AppContext {
     reconciliations: ReturnType<typeof createReconciliationDecisionStore>;
     snapshots: ReturnType<typeof createSnapshotStore>;
     watchers: ReturnType<typeof createWatcherRegistryStore>;
+    jobAcceptances: JobAcceptanceStore;
   };
   jobs: JobBroker;
   providers: {
@@ -104,7 +107,8 @@ export async function createAppContext(): Promise<AppContext> {
       gapClusters: createGapClusterStore(),
       reconciliations: createReconciliationDecisionStore(),
       snapshots: createSnapshotStore(),
-      watchers: createWatcherRegistryStore()
+      watchers: createWatcherRegistryStore(),
+      jobAcceptances: new PostgresJobAcceptanceStore(databaseUrl)
     },
     jobs,
     providers: {

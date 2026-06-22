@@ -25,14 +25,7 @@ export const AI_PROVIDERS = ["openai-compatible", "azure-openai", "codex", "clau
 
 export type AiProviderName = (typeof AI_PROVIDERS)[number];
 export type JobCapability = AiProviderName | "github" | "maintenance";
-export type JobState =
-  | "created"
-  | "retry"
-  | "active"
-  | "completed"
-  | "cancelled"
-  | "failed"
-  | "blocked";
+export type JobState = "created" | "retry" | "active" | "completed" | "cancelled" | "failed" | "blocked";
 
 export interface JobError {
   code: string;
@@ -60,6 +53,7 @@ export interface JobView<TInput = unknown, TOutput = unknown> {
   completedAt?: string;
   cancelledAt?: string;
   failedAt?: string;
+  acceptedAt?: string;
   retryAt?: string;
   heartbeatAt?: string;
   heartbeatSeconds?: number;

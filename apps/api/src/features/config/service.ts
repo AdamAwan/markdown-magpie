@@ -127,7 +127,8 @@ export function logStartupConfig(ctx: AppContext): void {
   add("destinations", cfg.knowledge.destinations.map((repo) => `${repo.id}[${repo.kind}]`).join(", ") || "none");
   add(
     "flows",
-    cfg.knowledge.flows.map((flow) => `${flow.id}(${flow.sourceIds.join("+")}->${flow.destinationId})`).join(", ") || "none"
+    cfg.knowledge.flows.map((flow) => `${flow.id}(${flow.sourceIds.join("+")}->${flow.destinationId})`).join(", ") ||
+      "none"
   );
   add("checkout root", cfg.knowledge.checkoutRoot);
 
@@ -147,6 +148,7 @@ export async function resetData(ctx: AppContext) {
   await ctx.stores.crunchRuns.reset();
   await ctx.stores.scheduledTasks.reset();
   await ctx.stores.sourceSync.reset();
+  await ctx.stores.jobAcceptances.reset();
 
   // Clear the durable job queue (pg-boss owns all jobs/schedules now), then
   // reconcile schedules so the now-empty crunch/scheduled-task settings leave no

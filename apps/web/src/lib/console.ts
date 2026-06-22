@@ -77,7 +77,7 @@ export function buildAttentionNotices({
 }): ConsoleNotice[] {
   const notices: ConsoleNotice[] = [];
   const pendingJobs = jobs.filter(isActiveJob);
-  const failedJobs = jobs.filter((job) => job.state === "failed");
+  const failedJobs = jobs.filter((job) => job.state === "failed" && !job.acceptedAt);
 
   if (health && !health.ok) {
     notices.push({
@@ -152,11 +152,13 @@ export function jobTransitionMessages(previousJobs: JobView[], nextJobs: JobView
 }
 
 export function formatJobType(type: string): string {
-  return type
-    .split("_")
-    .filter(Boolean)
-    // filter(Boolean) guarantees a non-empty segment, but guard the first char
-    // anyway so an unexpected empty part can never render the literal "undefined".
-    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : ""))
-    .join(" ");
+  return (
+    type
+      .split("_")
+      .filter(Boolean)
+      // filter(Boolean) guarantees a non-empty segment, but guard the first char
+      // anyway so an unexpected empty part can never render the literal "undefined".
+      .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : ""))
+      .join(" ")
+  );
 }

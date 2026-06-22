@@ -1,7 +1,4 @@
-import type {
-  AnswerQuestionJobInput,
-  AnswerQuestionJobOutput
-} from "@magpie/core";
+import type { AnswerQuestionJobInput, AnswerQuestionJobOutput } from "@magpie/core";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
 import { jobDefinition } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
@@ -37,12 +34,15 @@ export async function claimJob(
 
 export async function getJob(ctx: AppContext, id: string): Promise<JobView | undefined> {
   const job = await ctx.jobs.get(id);
-  return job ? projectJob(job) : undefined;
+  return job ? (await decorateJobs(ctx, [job]))[0] : undefined;
 }
 
-export async function listJobs(ctx: AppContext, filters: JobListFilters = {}): Promise<{ jobs: JobView[]; total: number }> {
+export async function listJobs(
+  ctx: AppContext,
+  filters: JobListFilters = {}
+): Promise<{ jobs: JobView[]; total: number }> {
   const result = await ctx.jobs.list(filters);
-  return { ...result, jobs: result.jobs.map(projectJob) };
+  return { ...result, jobs: await decorateJobs(ctx, result.jobs) };
 }
 
 export async function heartbeatJob(ctx: AppContext, id: string, workerName?: string): Promise<JobView> {
@@ -61,7 +61,17 @@ export async function cancelJob(ctx: AppContext, id: string): Promise<JobView> {
 }
 
 export async function retryJob(ctx: AppContext, id: string): Promise<JobView> {
-  return ctx.jobs.retry(id);
+  await ctx.stores.jobAcceptances.clear(id);
+  const job = await ctx.jobs.retry(id);
+  return projectJob(job);
+}
+
+export async function acceptFailedJob(ctx: AppContext, id: string): Promise<JobView> {
+  const job = await ctx.jobs.get(id);
+  if (!job) throw new Error(`Job not found: ${id}`);
+  if (job.state !== "failed") throw new Error("Only failed jobs can be accepted");
+  const acceptedAt = await ctx.stores.jobAcceptances.accept(id);
+  return { ...projectJob(job), acceptedAt };
 }
 
 export async function waitForJob(
@@ -76,7 +86,7 @@ export async function waitForJob(
     const job = await ctx.jobs.get(id);
     if (!job) throw new Error(`Job not found: ${id}`);
     const terminal = isTerminal(job.state);
-    if (terminal || Date.now() >= deadline) return { terminal, job: projectJob(job) };
+    if (terminal || Date.now() >= deadline) return { terminal, job: (await decorateJobs(ctx, [job]))[0] };
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
 }
@@ -216,11 +226,7 @@ async function applyRefreshPullRequestsTransitions(
 // Marks a job failed and preserves the original crunch side-effect: when the
 // failing job is a crunch_knowledge_base job, its associated run is failed too.
 // The two stores keep their distinct fallback messages from the original handler.
-export async function failJob(
-  ctx: AppContext,
-  jobId: string,
-  jobError: JobError
-): Promise<JobView | undefined> {
+export async function failJob(ctx: AppContext, jobId: string, jobError: JobError): Promise<JobView | undefined> {
   const failingJob = await ctx.jobs.get(jobId);
   const failedJob = await ctx.jobs.fail(jobId, jobError);
   // A failure (retryable or terminal) also frees the watcher to poll again.
@@ -270,13 +276,22 @@ export function projectJob(job: JobView): JobView {
   };
 }
 
+async function decorateJobs(ctx: AppContext, jobs: JobView[]): Promise<JobView[]> {
+  const acceptances = await ctx.stores.jobAcceptances.getMany(
+    jobs.filter((job) => job.state === "failed").map((job) => job.id)
+  );
+  return jobs.map((job) => ({ ...projectJob(job), acceptedAt: acceptances.get(job.id) }));
+}
+
 function redactSecrets(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactSecrets);
   if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(Object.entries(value).map(([key, nested]) => [
-    key,
-    /^(apiKey|token|authorization|password)$/i.test(key) ? "[redacted]" : redactSecrets(nested)
-  ]));
+  return Object.fromEntries(
+    Object.entries(value).map(([key, nested]) => [
+      key,
+      /^(apiKey|token|authorization|password)$/i.test(key) ? "[redacted]" : redactSecrets(nested)
+    ])
+  );
 }
 
 function isTerminal(state: JobView["state"]): boolean {

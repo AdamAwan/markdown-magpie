@@ -16,7 +16,8 @@ export function JobsPanel({
   selectedJob,
   onSelect,
   onCancel,
-  onRetry
+  onRetry,
+  onAccept
 }: {
   jobs: JobView[];
   schedules: ScheduleView[];
@@ -25,6 +26,7 @@ export function JobsPanel({
   onSelect: (jobId: string) => void;
   onCancel: (jobId: string) => Promise<void>;
   onRetry: (jobId: string) => Promise<void>;
+  onAccept: (jobIds: string[]) => Promise<void>;
 }) {
   const [stateFilter, setStateFilter] = useState<JobState | "all">("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -44,7 +46,8 @@ export function JobsPanel({
   );
 
   const activeCount = jobs.filter(isActiveJob).length;
-  const failedCount = jobs.filter((job) => job.state === "failed").length;
+  const failedJobs = jobs.filter((job) => job.state === "failed" && !job.acceptedAt);
+  const failedCount = failedJobs.length;
   const busyWorkerCount = workers.filter((worker) => worker.status === "busy").length;
 
   return (
@@ -54,8 +57,16 @@ export function JobsPanel({
         <span className="pill" title="Jobs loaded (most recent page)">
           {jobs.length}
         </span>
-        {activeCount > 0 ? <span className="pill" title="Jobs still in flight">{activeCount} active</span> : null}
-        {failedCount > 0 ? <span className="status failed" title="Failed jobs">{failedCount} failed</span> : null}
+        {activeCount > 0 ? (
+          <span className="pill" title="Jobs still in flight">
+            {activeCount} active
+          </span>
+        ) : null}
+        {failedCount > 0 ? (
+          <span className="status failed" title="Failed jobs">
+            {failedCount} failed
+          </span>
+        ) : null}
         {workers.length > 0 ? (
           <span className="pill" title="Watchers connected (seen recently)">
             {workers.length} worker{workers.length === 1 ? "" : "s"}
@@ -90,6 +101,15 @@ export function JobsPanel({
           <span className="pill" title="Jobs matching the current filters">
             {filtered.length} shown
           </span>
+          {failedCount > 0 ? (
+            <button
+              className="button secondary"
+              onClick={() => void onAccept(failedJobs.map((job) => job.id))}
+              type="button"
+            >
+              Accept all failures
+            </button>
+          ) : null}
         </div>
 
         <div className="jobTable">
@@ -108,8 +128,15 @@ export function JobsPanel({
               type="button"
             >
               <span title={job.type}>{formatJobType(job.type)}</span>
-              <span className={`status ${job.state}`} title={`Job state: ${job.state}`}>
-                {job.state}
+              <span
+                className={"status " + (job.acceptedAt ? "ready" : job.state)}
+                title={
+                  job.acceptedAt
+                    ? "Failure accepted " + new Date(job.acceptedAt).toLocaleString()
+                    : "Job state: " + job.state
+                }
+              >
+                {job.acceptedAt ? "accepted" : job.state}
               </span>
               <span title={`Retry ${job.retryCount} of ${job.retryLimit}`}>
                 {job.retryCount}/{job.retryLimit}
@@ -123,9 +150,7 @@ export function JobsPanel({
           ) : null}
         </div>
 
-        {selectedJob ? (
-          <JobDetail job={selectedJob} onCancel={onCancel} onRetry={onRetry} />
-        ) : null}
+        {selectedJob ? <JobDetail job={selectedJob} onCancel={onCancel} onRetry={onRetry} onAccept={onAccept} /> : null}
 
         <WorkersTable workers={workers} onSelect={onSelect} />
 
@@ -138,11 +163,13 @@ export function JobsPanel({
 function JobDetail({
   job,
   onCancel,
-  onRetry
+  onRetry,
+  onAccept
 }: {
   job: JobView;
   onCancel: (jobId: string) => Promise<void>;
   onRetry: (jobId: string) => Promise<void>;
+  onAccept: (jobIds: string[]) => Promise<void>;
 }) {
   return (
     <div className="jobDetail">
@@ -164,6 +191,11 @@ function JobDetail({
               Retry
             </button>
           ) : null}
+          {job.state === "failed" && !job.acceptedAt ? (
+            <button className="button secondary" onClick={() => void onAccept([job.id])} type="button">
+              Accept failure
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -174,6 +206,7 @@ function JobDetail({
         <Timing label="Started" value={fmt(job.startedAt)} />
         <Timing label="Completed" value={fmt(job.completedAt)} />
         <Timing label="Failed" value={fmt(job.failedAt)} />
+        <Timing label="Accepted" value={fmt(job.acceptedAt)} />
         <Timing label="Cancelled" value={fmt(job.cancelledAt)} />
         <Timing label="Retry at" value={fmt(job.retryAt)} />
       </dl>
@@ -197,10 +230,7 @@ function JobDetail({
 // job (busy) or polling for one (idle). The clickable current-job id selects that
 // job in the table above when it is on the loaded page.
 function WorkersTable({ workers, onSelect }: { workers: WatcherView[]; onSelect: (jobId: string) => void }) {
-  const sorted = useMemo(
-    () => [...workers].sort((left, right) => left.name.localeCompare(right.name)),
-    [workers]
-  );
+  const sorted = useMemo(() => [...workers].sort((left, right) => left.name.localeCompare(right.name)), [workers]);
 
   return (
     <div className="jobWorkers">

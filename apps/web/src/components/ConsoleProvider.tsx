@@ -1,7 +1,17 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { FormEvent, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  ReactNode,
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import {
   AskResponse,
   ConsoleSection,
@@ -156,6 +166,21 @@ function useConsoleController() {
     return waited.job;
   }
 
+  async function acceptFailedJobs(jobIds: string[]) {
+    clearMessage();
+    try {
+      const results = await Promise.all(
+        jobIds.map((jobId) => apiPost<{ job: JobView }>(`/jobs/${jobId}/accept-failure`, {}))
+      );
+      const selected = results.find((result) => result.job.id === selectedJobId);
+      if (selected) setSelectedJob(selected.job);
+      showMessage(`${jobIds.length} failed job${jobIds.length === 1 ? "" : "s"} accepted.`, "success");
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    }
+  }
+
   async function selectJob(jobId: string) {
     setSelectedJobId(jobId);
     clearMessage();
@@ -224,7 +249,26 @@ function useConsoleController() {
       clearMessage();
     }
     try {
-      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, schedulesResult, workersResult, proposalsResult, crunchRunsResult, crunchSettingsResult, scheduledTasksResult, configResult, promptsResult, snapshotsResult, reconciliationsResult] = await Promise.all([
+      const [
+        healthResult,
+        statsResult,
+        repositoriesResult,
+        documentsResult,
+        questionsResult,
+        gapsResult,
+        clustersResult,
+        jobsResult,
+        schedulesResult,
+        workersResult,
+        proposalsResult,
+        crunchRunsResult,
+        crunchSettingsResult,
+        scheduledTasksResult,
+        configResult,
+        promptsResult,
+        snapshotsResult,
+        reconciliationsResult
+      ] = await Promise.all([
         apiGet<Health>("/health", { signal }),
         apiGet<KnowledgeStats>("/knowledge/stats", { signal }),
         apiGet<{ repositories: RepositoryRef[] }>("/knowledge/repositories", { signal }),
@@ -282,9 +326,7 @@ function useConsoleController() {
       // job. Keep the live `answer.job` view fresh from the jobs list so the
       // queued/active/terminal status the AskPanel shows tracks reality.
       setAnswer((current) =>
-        current
-          ? { ...current, job: jobsResult.jobs.find((job) => job.id === current.job.id) ?? current.job }
-          : current
+        current ? { ...current, job: jobsResult.jobs.find((job) => job.id === current.job.id) ?? current.job } : current
       );
 
       // Keep the Jobs-panel detail pane current while the operator has a job open.
@@ -666,6 +708,7 @@ function useConsoleController() {
     selectJob,
     cancelJob,
     retryJob,
+    acceptFailedJobs,
     ask,
     sendFeedback,
     toggleKnowledgeGap,

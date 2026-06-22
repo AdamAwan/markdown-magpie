@@ -4,7 +4,7 @@ import { useConsole } from "../../components/ConsoleProvider";
 import { JobsPanel } from "../../components/JobsPanel";
 
 export default function JobsPage() {
-  const { jobs, jobSchedules, workers, selectedJob, selectJob, cancelJob, retryJob } = useConsole();
+  const { jobs, jobSchedules, workers, selectedJob, selectJob, cancelJob, retryJob, acceptFailedJobs } = useConsole();
 
   return (
     <section className="fullWorkbench">
@@ -16,6 +16,7 @@ export default function JobsPage() {
         onSelect={selectJob}
         onCancel={cancelJob}
         onRetry={retryJob}
+        onAccept={acceptFailedJobs}
       />
     </section>
   );

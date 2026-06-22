@@ -5,8 +5,12 @@ import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import * as jobsService from "./service.js";
 import {
-  claimJobBodySchema, completeJobBodySchema, createJobBodySchema, failJobBodySchema,
-  heartbeatJobBodySchema, listJobsQuerySchema
+  claimJobBodySchema,
+  completeJobBodySchema,
+  createJobBodySchema,
+  failJobBodySchema,
+  heartbeatJobBodySchema,
+  listJobsQuerySchema
 } from "./schema.js";
 
 export function jobRoutes(ctx: AppContext): Hono {
@@ -25,7 +29,8 @@ export function jobRoutes(ctx: AppContext): Hono {
   });
 
   app.get("/schedules", requireScopes("read:knowledge"), async (c) =>
-    c.json({ schedules: await ctx.jobs.listSchedules() }));
+    c.json({ schedules: await ctx.jobs.listSchedules() })
+  );
 
   app.post("/claim", requireScopes("manage:jobs"), async (c) => {
     const parsed = claimJobBodySchema.safeParse(await readJsonBody(c));
@@ -74,18 +79,34 @@ export function jobRoutes(ctx: AppContext): Hono {
   app.post("/:id/fail", requireScopes("manage:jobs"), async (c) => {
     const parsed = failJobBodySchema.safeParse(await readJsonBody(c));
     if (!parsed.success) throw new HttpError(400, "invalid_job_error");
-    try { return c.json({ job: await jobsService.failJob(ctx, c.req.param("id"), parsed.data.error) }); }
-    catch { throw new HttpError(404, "job_not_found"); }
+    try {
+      return c.json({ job: await jobsService.failJob(ctx, c.req.param("id"), parsed.data.error) });
+    } catch {
+      throw new HttpError(404, "job_not_found");
+    }
   });
 
   app.post("/:id/cancel", requireScopes("manage:jobs"), async (c) => {
-    try { return c.json({ job: await jobsService.cancelJob(ctx, c.req.param("id")) }); }
-    catch { throw new HttpError(404, "job_not_found"); }
+    try {
+      return c.json({ job: await jobsService.cancelJob(ctx, c.req.param("id")) });
+    } catch {
+      throw new HttpError(404, "job_not_found");
+    }
   });
 
   app.post("/:id/retry", requireScopes("manage:jobs"), async (c) => {
-    try { return c.json({ job: await jobsService.retryJob(ctx, c.req.param("id")) }); }
-    catch (error) {
+    try {
+      return c.json({ job: await jobsService.retryJob(ctx, c.req.param("id")) });
+    } catch (error) {
+      if (error instanceof Error && /only failed/i.test(error.message)) throw new HttpError(409, "job_not_failed");
+      throw new HttpError(404, "job_not_found");
+    }
+  });
+
+  app.post("/:id/accept-failure", requireScopes("manage:jobs"), async (c) => {
+    try {
+      return c.json({ job: await jobsService.acceptFailedJob(ctx, c.req.param("id")) });
+    } catch (error) {
       if (error instanceof Error && /only failed/i.test(error.message)) throw new HttpError(409, "job_not_failed");
       throw new HttpError(404, "job_not_found");
     }

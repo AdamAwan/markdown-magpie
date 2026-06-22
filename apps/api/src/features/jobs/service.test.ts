@@ -9,6 +9,7 @@ import type {
 import type { JobView } from "@magpie/jobs";
 import { makeTestContext } from "../../test-support/context.js";
 import {
+  acceptFailedJob,
   cancelJob,
   claimJob,
   completeJob,
@@ -68,10 +69,7 @@ test("connected-watcher registry tracks busy/idle across the job lifecycle", asy
   assert.equal(workers[0].currentJobId, job.id);
 
   // Completing frees the watcher; the earlier-advertised capabilities persist.
-  assert.equal(
-    (await completeJob(ctx, job.id, { answer: "a", confidence: "high", citations: [] }, "w-1")).ok,
-    true
-  );
+  assert.equal((await completeJob(ctx, job.id, { answer: "a", confidence: "high", citations: [] }, "w-1")).ok, true);
   workers = await ctx.stores.watchers.list(window);
   assert.equal(workers[0].status, "idle");
   assert.equal(workers[0].currentJobId, undefined);
@@ -103,6 +101,24 @@ test("heartbeat, cancellation, and failed-only retry expose lifecycle state", as
   assert.equal((await retryJob(ctx, failed.id)).state, "created");
 });
 
+test("accepted failures stop surfacing as unacknowledged and retry clears acceptance", async () => {
+  const ctx = makeTestContext();
+  const created = await ctx.jobs.create("answer_question", answerInput());
+  await assert.rejects(() => acceptFailedJob(ctx, created.id), /only failed/i);
+
+  await claimJob(ctx, "worker", ["codex"]);
+  for (let attempt = 0; attempt <= created.retryLimit; attempt += 1) {
+    await failJob(ctx, created.id, { code: "provider", message: "failed", category: "provider" });
+  }
+
+  const accepted = await acceptFailedJob(ctx, created.id);
+  assert.ok(accepted.acceptedAt);
+  assert.equal((await getJob(ctx, created.id))?.acceptedAt, accepted.acceptedAt);
+  assert.equal((await listJobs(ctx)).jobs[0].acceptedAt, accepted.acceptedAt);
+
+  await retryJob(ctx, created.id);
+  assert.equal((await getJob(ctx, created.id))?.acceptedAt, undefined);
+});
 test("wait returns current jobs on timeout and terminal jobs immediately", async () => {
   const ctx = makeTestContext();
   const created = await ctx.jobs.create("answer_question", answerInput());
@@ -118,14 +134,24 @@ test("wait returns current jobs on timeout and terminal jobs immediately", async
 test("display projection recursively redacts secrets without mutating stored input", () => {
   const input = { apiKey: "a", nested: [{ token: "b", authorization: "c" }], password: "d", safe: "ok" };
   const job: JobView = {
-    id: "job", type: "refresh_pull_requests", queueName: "refresh_pull_requests", deadLetter: false,
-    state: "created", input, retryCount: 0, retryLimit: 1, expireInSeconds: 60,
-    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+    id: "job",
+    type: "refresh_pull_requests",
+    queueName: "refresh_pull_requests",
+    deadLetter: false,
+    state: "created",
+    input,
+    retryCount: 0,
+    retryLimit: 1,
+    expireInSeconds: 60,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
   const projected = projectJob(job);
   assert.deepEqual(projected.input, {
-    apiKey: "[redacted]", nested: [{ token: "[redacted]", authorization: "[redacted]" }],
-    password: "[redacted]", safe: "ok"
+    apiKey: "[redacted]",
+    nested: [{ token: "[redacted]", authorization: "[redacted]" }],
+    password: "[redacted]",
+    safe: "ok"
   });
   assert.equal(input.apiKey, "a");
 });
@@ -307,7 +333,7 @@ test("answer completion persists the routed flowId and retrieved section ids on 
 
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
-    
+
     chatProvider: "openai-compatible",
     retrievedSectionIds: []
   });
@@ -384,10 +410,15 @@ test("source-sync publication completion records the publication once and is ide
 test("crunch completion is idempotent when delivered twice", async () => {
   const ctx = makeTestContext();
   const job = await ctx.jobs.create("crunch_knowledge_base", {
-    provider: "codex", documents: [], expectedOutput: "crunch_plan"
+    provider: "codex",
+    documents: [],
+    expectedOutput: "crunch_plan"
   });
   const run = await ctx.stores.crunchRuns.createRun({
-    trigger: "manual", documentCount: 0, jobId: job.id, status: "running"
+    trigger: "manual",
+    documentCount: 0,
+    jobId: job.id,
+    status: "running"
   });
   const plan: CrunchPlan = { summary: "done", operations: [], rationale: "tidy" };
   assert.equal((await completeJob(ctx, job.id, plan)).ok, true);
@@ -401,7 +432,9 @@ test("crunch completion is idempotent when delivered twice", async () => {
 test("publish_crunch completion records publication on the run and is idempotent when delivered twice", async () => {
   const ctx = makeTestContext();
   const run = await ctx.stores.crunchRuns.createRun({
-    trigger: "manual", documentCount: 1, status: "running"
+    trigger: "manual",
+    documentCount: 1,
+    status: "running"
   });
   await ctx.stores.crunchRuns.completeRun(run.id, { summary: "s", operations: [], rationale: "r" });
 
@@ -434,10 +467,15 @@ test("publish_crunch completion records publication on the run and is idempotent
 test("retryable crunch failure does not fail the linked run", async () => {
   const ctx = makeTestContext();
   const job = await ctx.jobs.create("crunch_knowledge_base", {
-    provider: "codex", documents: [], expectedOutput: "crunch_plan"
+    provider: "codex",
+    documents: [],
+    expectedOutput: "crunch_plan"
   });
   const run = await ctx.stores.crunchRuns.createRun({
-    trigger: "manual", documentCount: 0, jobId: job.id, status: "running"
+    trigger: "manual",
+    documentCount: 0,
+    jobId: job.id,
+    status: "running"
   });
   await failJob(ctx, job.id, { code: "provider", message: "temporary", category: "provider" });
   assert.equal((await ctx.stores.crunchRuns.getRun(run.id))?.status, "running");
@@ -462,7 +500,9 @@ test("completeJob validates catalog output and rejects completion after cancella
   const cancelled = await ctx.jobs.create("answer_question", answerInput());
   await cancelJob(ctx, cancelled.id);
   const cancelledResult = await completeJob(ctx, cancelled.id, {
-    answer: "no", confidence: "high", citations: []
+    answer: "no",
+    confidence: "high",
+    citations: []
   });
   assert.deepEqual(cancelledResult, { ok: false, code: "job_cancelled" });
 });

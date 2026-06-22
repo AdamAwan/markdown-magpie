@@ -57,6 +57,11 @@ Lists the registered pg-boss cron schedules.
 Cancel a job (terminal), or retry a `failed` job (returns `409` if the job is
 not in a failed state).
 
+### `POST /api/jobs/:id/accept-failure`
+
+Acknowledges a failed job without changing its queue state. Accepted failures remain
+available for inspection and retry, but no longer trigger the console warning.
+
 ### Watcher-only endpoints
 
 The watcher drives a job through these; operators rarely call them directly:
