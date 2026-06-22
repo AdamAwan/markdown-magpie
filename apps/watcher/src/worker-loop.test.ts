@@ -168,15 +168,13 @@ describe("WorkerLoop", () => {
     // off, and retry on the next cycle rather than letting the rejection escape
     // and kill the process.
     let calls = 0;
-    let loop: WorkerLoop;
     const api: WatcherApiClient = {
       async claim() {
         calls += 1;
         if (calls === 1) {
           throw new Error("POST /api/jobs/claim failed with 401: unauthorized");
         }
-        // Second poll: wind the loop down and report no work.
-        await loop.stop();
+        // Subsequent polls report no work; the loop is stopped externally below.
         return undefined;
       },
       async heartbeat() {
@@ -185,16 +183,22 @@ describe("WorkerLoop", () => {
       async complete() {},
       async fail() {}
     };
-    loop = new WorkerLoop(api, [], CAPS, "w1", { pollIntervalMs: 1 });
+    const loop = new WorkerLoop(api, [], CAPS, "w1", { pollIntervalMs: 1 });
 
     const originalError = console.error;
     const logged: string[] = [];
     console.error = (message?: unknown) => {
       logged.push(String(message));
     };
+    const running = loop.run();
     try {
-      // Must resolve, not reject, despite the first claim throwing.
-      await loop.run();
+      // Wait until the loop has retried past the throwing first claim, then stop
+      // it. run() must resolve, not reject, despite that first claim throwing.
+      while (calls < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      await loop.stop();
+      await running;
     } finally {
       console.error = originalError;
     }
