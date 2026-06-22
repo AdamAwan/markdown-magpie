@@ -5,7 +5,6 @@ import {
   queueNamesForCapabilities,
   type JobCapability,
   type JobError,
-  type JobState,
   type JobType,
   type JobView
 } from "@magpie/jobs";
