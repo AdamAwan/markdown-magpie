@@ -218,10 +218,9 @@ export function buildPullRequestBody(proposal: Proposal): string {
 // cluster from /from-gaps). Evidence and triggering questions are unioned across
 // every gap in the cluster so the drafter sees the full picture once.
 // Core of "draft one proposal from a confirmed cluster of gap summaries",
-// independent of HTTP so the scheduled gap-to-PR task can reuse it. Returns a
-// discriminated outcome: in direct mode the proposal is already created; in
-// queue mode an AI job is enqueued and the proposal lands later via the job
-// completion machinery.
+// independent of HTTP so the scheduled gap-to-PR task can reuse it. Enqueues a
+// draft_markdown_proposal job; the proposal lands later via the job completion
+// machinery (createProposalFromCompletedJob).
 // A per-run memo of collected source context, keyed by the resolved source-id
 // set. Collecting a source walks its checkout and reads up to 24 files, and that
 // material is identical for every proposal drawn from the same sources — so a

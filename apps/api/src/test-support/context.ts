@@ -14,7 +14,7 @@ import { FakeJobBroker } from "../jobs/fake-broker.js";
 import { InMemorySnapshotStore } from "../stores/snapshot-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
 
-// Builds an AppContext wired entirely to in-memory stores in direct/mock mode,
+// Builds an AppContext wired entirely to in-memory stores with fake collaborators,
 // matching the real AppContext interface field-for-field. Pass overrides to
 // swap in a specific store or provider for a test.
 export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext {
