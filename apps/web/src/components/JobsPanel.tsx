@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { JobCapability, JobState, JobType, JobView, ScheduleView, WatcherStatus, WatcherView } from "../lib/types";
 import { formatJobType, isActiveJob } from "../lib/console";
@@ -41,6 +41,7 @@ export function JobsPanel({
   workers,
   selectedJob,
   onSelect,
+  onClose,
   onCancel,
   onRetry,
   onAccept
@@ -50,6 +51,7 @@ export function JobsPanel({
   workers: WatcherView[];
   selectedJob?: JobView;
   onSelect: (jobId: string) => void;
+  onClose: () => void;
   onCancel: (jobId: string) => Promise<void>;
   onRetry: (jobId: string) => Promise<void>;
   onAccept: (jobIds: string[]) => Promise<void>;
@@ -92,6 +94,18 @@ export function JobsPanel({
   const failedCount = failedJobs.length;
   const busyWorkerCount = workers.filter((worker) => worker.status === "busy").length;
 
+  // On wide screens the detail sits in a sticky right rail and is already in
+  // view; on narrow screens it stacks below the table. Bring it into view when a
+  // *different* job is picked — keyed on the id, not the object, so the 4s poll
+  // refreshing the selected job doesn't yank the viewport while the user reads.
+  const detailRef = useRef<HTMLDivElement>(null);
+  const selectedJobId = selectedJob?.id;
+  useEffect(() => {
+    if (selectedJobId) {
+      detailRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [selectedJobId]);
+
   return (
     <section className="surface">
       <div className="surfaceHeader">
@@ -116,111 +130,117 @@ export function JobsPanel({
           </span>
         ) : null}
       </div>
-      <div className="surfaceBody">
-        <div className="jobFilters">
-          <label className="field">
-            <span>State</span>
-            <select onChange={(event) => setStateFilter(event.target.value as JobState | "all")} value={stateFilter}>
-              <option value="all">All states</option>
-              {JOB_STATES.map((state) => (
-                <option key={state} value={state}>
-                  {state}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Type</span>
-            <select onChange={(event) => setTypeFilter(event.target.value)} value={typeFilter}>
-              <option value="all">All types</option>
-              {jobTypes.map((type) => (
-                <option key={type} value={type}>
-                  {formatJobType(type)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <span className="pill" title="Jobs matching the current filters">
-            {filtered.length} matched
-          </span>
-          {failedCount > 0 ? (
-            <button
-              className="button secondary"
-              onClick={() => void onAccept(failedJobs.map((job) => job.id))}
-              type="button"
-            >
-              Accept all failures
-            </button>
-          ) : null}
-        </div>
-
-        <div className="jobTable">
-          <div className="tableHead">
-            <span>Type</span>
-            <span>State</span>
-            <span>Attempts</span>
-            <span>Age</span>
-            <span>Updated</span>
-          </div>
-          {visibleJobs.map((job) => (
-            <button
-              className={selectedJob?.id === job.id ? "tableRow jobRow selected" : "tableRow jobRow"}
-              key={job.id}
-              onClick={() => onSelect(job.id)}
-              type="button"
-            >
-              <span title={job.type}>{formatJobType(job.type)}</span>
-              <span
-                className={"status " + (job.acceptedAt ? "ready" : job.state)}
-                title={
-                  job.acceptedAt
-                    ? "Failure accepted " + new Date(job.acceptedAt).toLocaleString()
-                    : "Job state: " + job.state
-                }
-              >
-                {job.acceptedAt ? "accepted" : job.state}
-              </span>
-              <span title={`Retry ${job.retryCount} of ${job.retryLimit}`}>
-                {job.retryCount}/{job.retryLimit}
-              </span>
-              <span title={new Date(job.createdAt).toLocaleString()}>{relativeAge(job.createdAt)}</span>
-              <span>{new Date(job.updatedAt).toLocaleString()}</span>
-            </button>
-          ))}
-          {filtered.length === 0 ? (
-            <p className="empty">{jobs.length === 0 ? "No jobs queued." : "No jobs match the current filters."}</p>
-          ) : null}
-        </div>
-
-        {filtered.length > PAGE_SIZE ? (
-          <div className="tablePager">
-            <button
-              className="button secondary"
-              disabled={currentPage === 0}
-              onClick={() => setPage(currentPage - 1)}
-              type="button"
-            >
-              Previous
-            </button>
-            <span className="pagerStatus" aria-live="polite">
-              Page {currentPage + 1} of {pageCount} · showing {visibleJobs.length} of {filtered.length}
+      <div className={selectedJob ? "surfaceBody jobsLayout withDetail" : "surfaceBody jobsLayout"}>
+        <div className="jobsMain">
+          <div className="jobFilters">
+            <label className="field">
+              <span>State</span>
+              <select onChange={(event) => setStateFilter(event.target.value as JobState | "all")} value={stateFilter}>
+                <option value="all">All states</option>
+                {JOB_STATES.map((state) => (
+                  <option key={state} value={state}>
+                    {state}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Type</span>
+              <select onChange={(event) => setTypeFilter(event.target.value)} value={typeFilter}>
+                <option value="all">All types</option>
+                {jobTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {formatJobType(type)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="pill" title="Jobs matching the current filters">
+              {filtered.length} matched
             </span>
-            <button
-              className="button secondary"
-              disabled={currentPage >= pageCount - 1}
-              onClick={() => setPage(currentPage + 1)}
-              type="button"
-            >
-              Next
-            </button>
+            {failedCount > 0 ? (
+              <button
+                className="button secondary"
+                onClick={() => void onAccept(failedJobs.map((job) => job.id))}
+                type="button"
+              >
+                Accept all failures
+              </button>
+            ) : null}
           </div>
+
+          <div className="jobTable">
+            <div className="tableHead">
+              <span>Type</span>
+              <span>State</span>
+              <span>Attempts</span>
+              <span>Age</span>
+              <span>Updated</span>
+            </div>
+            {visibleJobs.map((job) => (
+              <button
+                className={selectedJob?.id === job.id ? "tableRow jobRow selected" : "tableRow jobRow"}
+                key={job.id}
+                onClick={() => onSelect(job.id)}
+                type="button"
+              >
+                <span title={job.type}>{formatJobType(job.type)}</span>
+                <span
+                  className={"status " + (job.acceptedAt ? "ready" : job.state)}
+                  title={
+                    job.acceptedAt
+                      ? "Failure accepted " + new Date(job.acceptedAt).toLocaleString()
+                      : "Job state: " + job.state
+                  }
+                >
+                  {job.acceptedAt ? "accepted" : job.state}
+                </span>
+                <span title={`Retry ${job.retryCount} of ${job.retryLimit}`}>
+                  {job.retryCount}/{job.retryLimit}
+                </span>
+                <span title={new Date(job.createdAt).toLocaleString()}>{relativeAge(job.createdAt)}</span>
+                <span>{new Date(job.updatedAt).toLocaleString()}</span>
+              </button>
+            ))}
+            {filtered.length === 0 ? (
+              <p className="empty">{jobs.length === 0 ? "No jobs queued." : "No jobs match the current filters."}</p>
+            ) : null}
+          </div>
+
+          {filtered.length > PAGE_SIZE ? (
+            <div className="tablePager">
+              <button
+                className="button secondary"
+                disabled={currentPage === 0}
+                onClick={() => setPage(currentPage - 1)}
+                type="button"
+              >
+                Previous
+              </button>
+              <span className="pagerStatus" aria-live="polite">
+                Page {currentPage + 1} of {pageCount} · showing {visibleJobs.length} of {filtered.length}
+              </span>
+              <button
+                className="button secondary"
+                disabled={currentPage >= pageCount - 1}
+                onClick={() => setPage(currentPage + 1)}
+                type="button"
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
+
+          <WorkersTable workers={workers} onSelect={onSelect} />
+
+          <SchedulesTable schedules={schedules} />
+        </div>
+
+        {selectedJob ? (
+          <aside className="jobDetailPanel" ref={detailRef}>
+            <JobDetail job={selectedJob} onClose={onClose} onCancel={onCancel} onRetry={onRetry} onAccept={onAccept} />
+          </aside>
         ) : null}
-
-        {selectedJob ? <JobDetail job={selectedJob} onCancel={onCancel} onRetry={onRetry} onAccept={onAccept} /> : null}
-
-        <WorkersTable workers={workers} onSelect={onSelect} />
-
-        <SchedulesTable schedules={schedules} />
       </div>
     </section>
   );
@@ -228,11 +248,13 @@ export function JobsPanel({
 
 function JobDetail({
   job,
+  onClose,
   onCancel,
   onRetry,
   onAccept
 }: {
   job: JobView;
+  onClose: () => void;
   onCancel: (jobId: string) => Promise<void>;
   onRetry: (jobId: string) => Promise<void>;
   onAccept: (jobIds: string[]) => Promise<void>;
@@ -262,6 +284,9 @@ function JobDetail({
               Accept failure
             </button>
           ) : null}
+          <button aria-label="Close details" className="jobDetailClose" onClick={onClose} title="Close" type="button">
+            ✕
+          </button>
         </div>
       </div>
 
@@ -460,7 +485,8 @@ function workerJobTypes(capabilities: string[]): JobType[] {
 // reverse "how it can do this" tooltip on a job-type pill.
 function providersOf(jobType: JobType, capabilities: string[]): string[] {
   return capabilities.filter(
-    (capability) => isJobCapability(capability) && (CAPABILITY_JOB_TYPES[capability] as readonly JobType[]).includes(jobType)
+    (capability) =>
+      isJobCapability(capability) && (CAPABILITY_JOB_TYPES[capability] as readonly JobType[]).includes(jobType)
   );
 }
 // Maps the worker status to an existing status-pill colour: busy reuses the amber

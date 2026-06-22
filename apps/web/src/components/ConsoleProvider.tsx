@@ -192,6 +192,11 @@ function useConsoleController() {
     }
   }
 
+  function clearSelectedJob() {
+    setSelectedJobId(undefined);
+    setSelectedJob(undefined);
+  }
+
   async function cancelJob(jobId: string) {
     clearMessage();
     try {
@@ -706,6 +711,7 @@ function useConsoleController() {
     openSection,
     refresh,
     selectJob,
+    clearSelectedJob,
     cancelJob,
     retryJob,
     acceptFailedJobs,
