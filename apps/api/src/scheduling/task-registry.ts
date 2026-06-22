@@ -1,16 +1,13 @@
 import type { ScheduledTaskSettings } from "@magpie/core";
 import type { JobType } from "@magpie/jobs";
 import type { AppContext } from "../context.js";
-import * as snapshotService from "../features/snapshots/service.js";
-import * as sourceSyncService from "../features/source-sync/service.js";
-import { reconcileGaps } from "./gap-reconciler.js";
 
 // A concrete, schedulable side-process. Each one is a single flow's instance of a
 // template below: it has its own key, schedule, and queued job, so the UI and the
 // schedule reconciler treat per-flow tasks as independent units. `jobType`/`input`
-// are the queue contract the reconciler maps the saved schedule onto; `run` is the
-// in-process handler still used by the manual "Run now" route until 8E moves it
-// onto the queue.
+// are the queue contract both the schedule reconciler and the manual "Run now"
+// route enqueue — there is no in-process handler; a capability-matched watcher
+// executes the work.
 export interface ScheduledTaskDefinition {
   key: string;
   label: string;
@@ -18,7 +15,6 @@ export interface ScheduledTaskDefinition {
   defaultCron: string;
   jobType: JobType;
   input: unknown;
-  run(ctx: AppContext): Promise<void>;
 }
 
 // A side-process defined once and expanded to one concrete task per configured
@@ -37,7 +33,6 @@ interface FlowTaskTemplate {
   // gaps and snapshot jobs take no input today (`{}`), source sync takes `{flowId}`.
   jobType: JobType;
   input(flowId: string | undefined): unknown;
-  run(ctx: AppContext, flowId: string | undefined): Promise<void>;
 }
 
 const flowTaskTemplates: FlowTaskTemplate[] = [
@@ -49,8 +44,7 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
       "raised from its proposals, and publishes its open proposals. Requires GITHUB_TOKEN for PR operations.",
     defaultCron: "*/10 * * * *",
     jobType: "process_gaps_to_pull_requests",
-    input: () => ({}),
-    run: (ctx, flowId) => reconcileGaps(ctx, flowId)
+    input: () => ({})
   },
   {
     baseKey: "source-change-sync",
@@ -61,8 +55,7 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
       "to match and the result lands on a review branch. Only documents the knowledge base already covers are touched.",
     defaultCron: "*/10 * * * *",
     jobType: "source_change_sync",
-    input: (flowId) => ({ flowId }),
-    run: (ctx, flowId) => syncSourceChangesForFlow(ctx, flowId)
+    input: (flowId) => ({ flowId })
   },
   {
     baseKey: "snapshot-refresh",
@@ -73,8 +66,7 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
       "the reconciler stops calling the git host live. Runs more often than the reconciler by default.",
     defaultCron: "*/5 * * * *",
     jobType: "refresh_pull_requests",
-    input: () => ({}),
-    run: (ctx, flowId) => snapshotService.refreshSnapshot(ctx, flowId).then(() => undefined)
+    input: () => ({})
   }
 ];
 
@@ -108,8 +100,7 @@ export function listScheduledTasks(ctx: AppContext): ScheduledTaskDefinition[] {
       description: template.description,
       defaultCron: template.defaultCron,
       jobType: template.jobType,
-      input: template.input(flow.id),
-      run: (ctx: AppContext) => template.run(ctx, flow.id)
+      input: template.input(flow.id)
     }))
   );
 }
@@ -153,16 +144,4 @@ export async function scheduledTasksForResponse(ctx: AppContext): Promise<
 // `taskScheduleKey` in jobs/schedule-reconciler.ts.
 function scheduleKeyForTask(taskKey: string): string {
   return `task:${taskKey}`;
-}
-
-// Runs the source-change sync for a single flow. Per-flow error isolation is now
-// the scheduler's job (each flow is its own task with its own try/catch), so this
-// no longer loops or swallows failures itself.
-async function syncSourceChangesForFlow(ctx: AppContext, flowId: string | undefined): Promise<void> {
-  const runs = await sourceSyncService.triggerSourceSyncRun(ctx, { flowId, trigger: "scheduled" });
-  for (const run of runs) {
-    console.log(
-      `Source-change sync run ${run.id} (${run.status}) for source ${run.sourceId} in flow ${flowId ?? "default"}.`
-    );
-  }
 }
