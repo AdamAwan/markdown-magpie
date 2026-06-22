@@ -1,7 +1,8 @@
-import { createEmbeddingProvider, type ChatProviderName, type EmbeddingProviderName } from "@magpie/retrieval";
+import { AI_PROVIDERS, type AiProviderName } from "@magpie/jobs";
+import { createEmbeddingProvider, type EmbeddingProviderName } from "@magpie/retrieval";
 import { storeBackend } from "./stores.js";
 
-export type AiProviderName = ChatProviderName | "codex" | "claude";
+export type { AiProviderName } from "@magpie/jobs";
 
 // Optional per-call timeout overrides for the model endpoints (the packages
 // supply sensible defaults when these are unset). Read here at the composition
@@ -66,61 +67,18 @@ export function retrievalMode(): { mode: "hybrid" | "keyword"; reason: string } 
   return { mode: "keyword", reason: "Semantic search requires the Postgres knowledge store (KNOWLEDGE_STORE=postgres)." };
 }
 
-export function getConfiguredAiProviders(): Array<{
-  name: AiProviderName;
-  label: string;
-  supportsDirect: boolean;
-  supportsQueue: boolean;
-}> {
-  const providers: Array<{
-    name: AiProviderName;
-    label: string;
-    supportsDirect: boolean;
-    supportsQueue: boolean;
-  }> = [
-    {
-      name: "mock",
-      label: "Mock",
-      supportsDirect: true,
-      supportsQueue: true
-    }
-  ];
+// The selectable AI providers in the queue-only world. The API never runs AI
+// inline and does not hold provider credentials — watchers do — so this is the
+// fixed set of watcher-supported providers rather than something inferred from
+// the API's own environment. A watcher only picks up jobs for the provider it is
+// actually configured for.
+const PROVIDER_LABELS: Record<AiProviderName, string> = {
+  "openai-compatible": "OpenAI-compatible",
+  "azure-openai": "Azure OpenAI",
+  codex: "Codex CLI",
+  claude: "Claude CLI"
+};
 
-  if (process.env.OPENAI_COMPATIBLE_BASE_URL && process.env.OPENAI_COMPATIBLE_API_KEY && process.env.OPENAI_COMPATIBLE_MODEL) {
-    providers.push({
-      name: "openai-compatible",
-      label: "OpenAI-compatible",
-      supportsDirect: true,
-      supportsQueue: true
-    });
-  }
-
-  if (process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_CHAT_DEPLOYMENT) {
-    providers.push({
-      name: "azure-openai",
-      label: "Azure OpenAI",
-      supportsDirect: true,
-      supportsQueue: false
-    });
-  }
-
-  if (process.env.CODEX_CLI_PATH || process.env.AI_PROVIDER === "codex" || process.env.AI_JOB_PROVIDER === "codex") {
-    providers.push({
-      name: "codex",
-      label: "Codex CLI",
-      supportsDirect: false,
-      supportsQueue: true
-    });
-  }
-
-  if (process.env.CLAUDE_CLI_PATH || process.env.AI_PROVIDER === "claude" || process.env.AI_JOB_PROVIDER === "claude") {
-    providers.push({
-      name: "claude",
-      label: "Claude CLI",
-      supportsDirect: false,
-      supportsQueue: true
-    });
-  }
-
-  return providers;
+export function getConfiguredAiProviders(): Array<{ name: AiProviderName; label: string }> {
+  return AI_PROVIDERS.map((name) => ({ name, label: PROVIDER_LABELS[name] }));
 }

@@ -61,7 +61,7 @@ async function seedCompletedRun(ctx: ReturnType<typeof makeTestContext>): Promis
 
 test("triggerCrunchRun always enqueues a catalog-valid crunch_knowledge_base job with the run linked", async () => {
   const ctx = makeTestContext();
-  ctx.config = new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" });
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
 
   const run = await triggerCrunchRun(ctx, { trigger: "manual" });
 
@@ -85,7 +85,7 @@ test("triggerCrunchRun always enqueues a catalog-valid crunch_knowledge_base job
 
 test("triggerCrunchRun passes the configured provider through unchanged", async () => {
   const ctx = makeTestContext();
-  ctx.config = new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "codex" });
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "codex" });
 
   const run = await triggerCrunchRun(ctx, { trigger: "manual" });
   const { jobs } = await ctx.jobs.list({});

@@ -7,8 +7,7 @@ import { backfillGapClusters } from "./gap-backfill.js";
 async function recordGap(ctx: ReturnType<typeof makeTestContext>, question: string, summary: string) {
   const log = await ctx.stores.questionLogs.record({
     question,
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     retrievedSectionIds: []
   });
   await ctx.stores.questionLogs.recordManualGap(log.id, summary);

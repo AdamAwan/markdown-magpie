@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
-import { normalizeAiExecutionMode, normalizeAiProvider } from "../../config-holder.js";
+import { normalizeAiProvider } from "../../config-holder.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import { reconcileSchedules } from "../../jobs/schedule-reconciler.js";
@@ -14,20 +14,18 @@ export function configRoutes(ctx: AppContext): Hono {
 
   app.post("/", requireScopes("manage:admin"), async (c) => {
     const payload = await readJsonBody<{
-      aiExecutionMode?: string;
       aiProvider?: string;
-      ai?: { executionMode?: string; provider?: string };
+      ai?: { provider?: string };
     }>(c);
-    const nextExecutionMode = normalizeAiExecutionMode(payload.ai?.executionMode ?? payload.aiExecutionMode);
     const nextProvider = normalizeAiProvider(payload.ai?.provider ?? payload.aiProvider);
 
-    if (!nextExecutionMode || !nextProvider) {
-      throw new HttpError(400, "valid_ai_runtime_config_required");
+    if (!nextProvider) {
+      throw new HttpError(400, "valid_ai_provider_required");
     }
 
-    const error = ctx.config.update({ aiExecutionMode: nextExecutionMode, aiProvider: nextProvider });
+    const error = ctx.config.update({ aiProvider: nextProvider });
     if (error) {
-      throw new HttpError(400, "unsupported_ai_runtime_config", error);
+      throw new HttpError(400, "unsupported_ai_provider", error);
     }
 
     // Re-derive schedules from current settings. Harmless and idempotent here; it

@@ -45,7 +45,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
     providers: {
       embedding: undefined
     },
-    config: new RuntimeConfigHolder({ aiExecutionMode: "direct", aiProvider: "mock" }),
+    config: new RuntimeConfigHolder({ aiProvider: "codex" }),
     knowledgeConfig,
     embedder,
     background: new BackgroundRunner(),

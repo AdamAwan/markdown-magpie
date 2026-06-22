@@ -103,8 +103,7 @@ describe("reconcileGaps clustering", () => {
     const ctx = makeTestContext();
     const log = await ctx.stores.questionLogs.record({
       question: "How do I configure X?",
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: []
     });
     await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
@@ -128,7 +127,7 @@ describe("reconcileGaps clustering", () => {
     });
     const ctx = makeTestContext({
       jobs,
-      config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
     });
     await seedTwoClustersWithGaps(ctx);
 
@@ -154,7 +153,7 @@ describe("reconcileGaps clustering", () => {
     });
     const ctx = makeTestContext({
       jobs,
-      config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
     });
     await seedTwoClustersWithGaps(ctx);
 
@@ -184,7 +183,7 @@ describe("reconcileGaps clustering", () => {
     process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS = "20";
     try {
       const ctx = makeTestContext({
-        config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
+        config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
       });
       await seedTwoClustersWithGaps(ctx);
 
@@ -214,7 +213,7 @@ describe("reconcileGaps clustering", () => {
     const jobs = new ThrowingPollJobBroker();
     const ctx = makeTestContext({
       jobs,
-      config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
     });
     await seedTwoClustersWithGaps(ctx);
 
@@ -242,11 +241,11 @@ describe("reconcileGaps autonomous drafting", () => {
   // tests assert the enqueue, not a synchronous proposal.
   it("enqueues a draft job for a brand-new cluster", async () => {
     const ctx = makeTestContext({
-      config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
     });
     const log = await ctx.stores.questionLogs.record({
       question: "How do I configure X?",
-      executionMode: "queue",
+      
       chatProvider: "openai-compatible",
       retrievedSectionIds: []
     });
@@ -268,7 +267,7 @@ describe("reconcileGaps autonomous drafting", () => {
 
   it("enqueues only the uncovered cluster on a later run, never duplicating", async () => {
     const ctx = makeTestContext({
-      config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
     });
     const deps = {
       fetchPullRequestStatus: async () => undefined,
@@ -278,7 +277,7 @@ describe("reconcileGaps autonomous drafting", () => {
 
     const log1 = await ctx.stores.questionLogs.record({
       question: "q1?",
-      executionMode: "queue",
+      
       chatProvider: "openai-compatible",
       retrievedSectionIds: []
     });
@@ -297,7 +296,7 @@ describe("reconcileGaps autonomous drafting", () => {
     // A new, distinct gap advances the catalog and reopens the gate.
     const log2 = await ctx.stores.questionLogs.record({
       question: "q2?",
-      executionMode: "queue",
+      
       chatProvider: "openai-compatible",
       retrievedSectionIds: []
     });
@@ -388,15 +387,13 @@ describe("reconcileGaps PR state from snapshot", () => {
 async function seedTwoClustersWithGaps(ctx: AppContext): Promise<void> {
   const log1 = await ctx.stores.questionLogs.record({
     question: "q1?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     retrievedSectionIds: []
   });
   await ctx.stores.questionLogs.recordManualGap(log1.id, "Cheese");
   const log2 = await ctx.stores.questionLogs.record({
     question: "q2?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     retrievedSectionIds: []
   });
   await ctx.stores.questionLogs.recordManualGap(log2.id, "Cats");

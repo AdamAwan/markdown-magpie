@@ -7,7 +7,7 @@ import { ask } from "./service.js";
 
 test("ask enqueues a catalog-valid answer_question job and records an unanswered log", async () => {
   const ctx = makeTestContext();
-  ctx.config = new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" });
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
 
   const outcome = await ask(ctx, "How do I configure X?");
 
@@ -31,7 +31,7 @@ test("ask enqueues a catalog-valid answer_question job and records an unanswered
 
 test("ask populates routing flows from the configured knowledge flows", async () => {
   const ctx = makeTestContext();
-  ctx.config = new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" });
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
   ctx.knowledgeConfig.flows = [
     { id: "support", name: "Support", sourceIds: ["s"], destinationId: "kb", persona: "Be kind" },
     { id: "eng", name: "Engineering", sourceIds: ["s"], destinationId: "kb2" }
@@ -49,7 +49,7 @@ test("ask populates routing flows from the configured knowledge flows", async ()
 
 test("ask emits an empty flows array when no flows are configured", async () => {
   const ctx = makeTestContext();
-  ctx.config = new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" });
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
 
   await ask(ctx, "How do I configure X?");
 

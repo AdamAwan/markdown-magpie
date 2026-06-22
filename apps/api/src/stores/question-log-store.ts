@@ -93,7 +93,6 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     const log: QuestionLog = {
       id: randomUUID(),
       question: input.question,
-      executionMode: input.executionMode,
       chatProvider: input.chatProvider,
       confidence: input.answer?.confidence ?? "unknown",
       retrievedSectionIds: input.retrievedSectionIds,

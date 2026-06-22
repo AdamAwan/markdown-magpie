@@ -40,8 +40,7 @@ test("runMergeCascade resolves the gaps the merged proposal recorded", async () 
   // gap candidates regardless of confidence.
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     retrievedSectionIds: []
   });
   await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
@@ -81,10 +80,10 @@ test("runMergeCascade resolves the gaps the merged proposal recorded", async () 
 
 test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job", async () => {
   const ctx = makeTestContext();
-  ctx.config = new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" });
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
-    executionMode: "queue",
+    
     chatProvider: "openai-compatible",
     retrievedSectionIds: []
   });
@@ -119,10 +118,9 @@ test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job"
 
 test("draftFromGaps passes the configured provider through unchanged", async () => {
   const ctx = makeTestContext();
-  ctx.config = new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "codex" });
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "codex" });
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
-    executionMode: "queue",
     chatProvider: "codex",
     retrievedSectionIds: []
   });

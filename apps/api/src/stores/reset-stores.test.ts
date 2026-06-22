@@ -20,8 +20,7 @@ test("InMemoryQuestionLogStore.reset removes all questions", async () => {
   const store = new InMemoryQuestionLogStore();
   await store.record({
     question: "How do I adopt a cat?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     retrievedSectionIds: []
   });
 

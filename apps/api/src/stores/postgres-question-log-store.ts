@@ -71,16 +71,15 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       await client.query(
         `
           INSERT INTO questions (
-            id, question, confidence, answer, execution_mode, chat_provider, flow_id, metadata
+            id, question, confidence, answer, chat_provider, flow_id, metadata
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
         `,
         [
           id,
           input.question,
           input.answer?.confidence ?? "unknown",
           input.answer?.answer ?? null,
-          input.executionMode,
           input.chatProvider,
           input.flowId ?? null,
           JSON.stringify({
@@ -497,7 +496,6 @@ interface QuestionRow {
   question: string;
   confidence: Confidence;
   answer: string | null;
-  execution_mode: QuestionLog["executionMode"];
   chat_provider: string;
   flow_id: string | null;
   metadata: {
@@ -524,7 +522,6 @@ function mapQuestionRow(row: QuestionRow, gaps: QuestionGap[]): QuestionLog {
   return {
     id: row.id,
     question: row.question,
-    executionMode: row.execution_mode,
     chatProvider: row.chat_provider,
     confidence: row.confidence,
     retrievedSectionIds: row.metadata.retrievedSectionIds ?? [],

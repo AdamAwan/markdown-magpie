@@ -17,7 +17,6 @@ export async function ask(ctx: AppContext, question: string): Promise<AskResult>
   // them), so the log is recorded without them; completion fills them in.
   const log = await ctx.stores.questionLogs.record({
     question,
-    executionMode: ctx.config.get().aiExecutionMode,
     chatProvider: ctx.config.get().aiProvider,
     retrievedSectionIds: []
   });

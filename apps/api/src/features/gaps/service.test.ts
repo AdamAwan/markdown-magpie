@@ -25,8 +25,7 @@ test("listClusters surfaces gap summaries, question ids, and the linked proposal
   const ctx = makeTestContext();
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
-    executionMode: "direct",
-    chatProvider: "mock",
+    chatProvider: "codex",
     retrievedSectionIds: []
   });
   await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
@@ -54,11 +53,11 @@ test("listClusters surfaces gap summaries, question ids, and the linked proposal
 
 test("draftFromCluster enqueues a draft_markdown_proposal job for the cluster", async () => {
   const ctx = makeTestContext({
-    config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
+    config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
   });
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
-    executionMode: "queue",
+    
     chatProvider: "openai-compatible",
     retrievedSectionIds: []
   });
@@ -80,12 +79,12 @@ test("draftFromCluster enqueues a draft_markdown_proposal job for the cluster", 
 
 test("draftFromCluster enqueues without error when the flow has in-flight PRs", async () => {
   const ctx = makeTestContext({
-    config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
+    config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
   });
 
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
-    executionMode: "queue",
+    
     chatProvider: "openai-compatible",
     retrievedSectionIds: []
   });

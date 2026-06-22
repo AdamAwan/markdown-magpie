@@ -353,7 +353,7 @@ export async function draftFromGaps(
   const destinationId = overrides.destinationId?.trim() || flow?.destinationId || defaultDestinationId(deps);
   console.log(
     `Drafting proposal for ${label} (flow=${flow?.id ?? "none"}, destination=${destinationId ?? "none"}, ` +
-      `provider=${ctx.config.get().aiProvider}, mode=${ctx.config.get().aiExecutionMode})`
+      `provider=${ctx.config.get().aiProvider})`
   );
   const sourceContext = await collectSourceContextCached(deps, sourceIds, overrides.sourceContextCache);
   const materialFiles = sourceContext.filter((context) => context.path && context.content !== "Source path does not exist.");

@@ -87,7 +87,7 @@ async function seed(broker: FakeJobBroker): Promise<Seeded> {
   process.env.MAGPIE_CHECKOUT_ROOT = checkoutRoot;
 
   const ctx = makeTestContext({ jobs: broker });
-  ctx.config = new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" });
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
   ctx.knowledgeConfig.sources = [
     { id: "src-1", name: "Rules repo", kind: "git", url: sourceRemote }
   ];

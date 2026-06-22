@@ -225,8 +225,7 @@ test("answer completion is idempotent when delivered twice", async () => {
 
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
-    executionMode: "queue",
-    chatProvider: "mock",
+    chatProvider: "codex",
     retrievedSectionIds: []
   });
 
@@ -262,7 +261,7 @@ test("answer completion persists the routed flowId and retrieved section ids on 
 
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
-    executionMode: "queue",
+    
     chatProvider: "openai-compatible",
     retrievedSectionIds: []
   });

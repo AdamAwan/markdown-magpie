@@ -39,16 +39,14 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const uniqueId = randomUUID();
     const recorded = await store.record({
       question: `test-roundtrip-${uniqueId}`,
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: [],
       answer: lowConfidenceAnswer()
     });
 
     assert.ok(recorded.id);
     assert.equal(recorded.question, `test-roundtrip-${uniqueId}`);
-    assert.equal(recorded.executionMode, "direct");
-    assert.equal(recorded.chatProvider, "mock");
+    assert.equal(recorded.chatProvider, "codex");
     assert.equal(recorded.manualGap, false);
     assert.ok((recorded.gaps ?? []).length > 0);
 
@@ -62,8 +60,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const uniqueId = randomUUID();
     const recorded = await store.record({
       question: `test-gaps-${uniqueId}`,
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: [],
       answer: multiGapAnswer()
     });
@@ -77,8 +74,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const uniqueId = randomUUID();
     const recorded = await store.record({
       question: `test-feedback-${uniqueId}`,
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: []
     });
 
@@ -94,8 +90,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const uniqueId = randomUUID();
     const recorded = await store.record({
       question: `test-manual-gap-${uniqueId}`,
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: []
     });
 
@@ -110,8 +105,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const questionText = `test-manual-default-${uniqueId}`;
     const recorded = await store.record({
       question: questionText,
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: []
     });
 
@@ -124,8 +118,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const uniqueId = randomUUID();
     const recorded = await store.record({
       question: `test-clear-gap-${uniqueId}`,
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: [],
       answer: multiGapAnswer()
     });
@@ -144,8 +137,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const uniqueId = randomUUID();
     const recorded = await store.record({
       question: `test-update-answer-${uniqueId}`,
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: [],
       answer: lowConfidenceAnswer()
     });
@@ -161,7 +153,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
 
     const updated = await store.updateAnswer(recorded.id, {
       answer: newAnswer,
-      chatProvider: "mock"
+      chatProvider: "codex"
     });
 
     assert.equal(updated?.confidence, "high");
@@ -188,15 +180,13 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const uniqueId = randomUUID();
     const first = await store.record({
       question: `test-list-1-${uniqueId}`,
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: []
     });
 
     const second = await store.record({
       question: `test-list-2-${uniqueId}`,
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: []
     });
 
@@ -215,8 +205,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const uniqueId = randomUUID();
     const recorded = await store.record({
       question: `test-resolve-${uniqueId}`,
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: [],
       answer: multiGapAnswer()
     });
@@ -235,8 +224,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const uniqueId = randomUUID();
     await store.record({
       question: `test-candidate-${uniqueId}`,
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: [],
       answer: lowConfidenceAnswer()
     });
@@ -251,8 +239,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const uniqueId = randomUUID();
     const recorded = await store.record({
       question: `test-manual-candidate-${uniqueId}`,
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: [],
       answer: {
         answer: "Complete answer.",
@@ -277,8 +264,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const sharedGap = `Shared gap ${uniqueId}`;
     const first = await store.record({
       question: `test-shared-1-${uniqueId}`,
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: [],
       answer: {
         answer: "Answer.",
@@ -290,8 +276,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
 
     const second = await store.record({
       question: `test-shared-2-${uniqueId}`,
-      executionMode: "direct",
-      chatProvider: "mock",
+      chatProvider: "codex",
       retrievedSectionIds: [],
       answer: {
         answer: "Answer.",
