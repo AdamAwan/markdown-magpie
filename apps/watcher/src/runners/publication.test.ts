@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { JobView } from "@magpie/jobs";
-import { publishCrunchOutputSchema, publishProposalOutputSchema } from "@magpie/jobs";
+import { publishCrunchOutputSchema, publishProposalOutputSchema, publishSourceSyncOutputSchema } from "@magpie/jobs";
 import type {
   CrunchExecutionContext,
   ProposalExecutionContext,
@@ -95,6 +95,7 @@ describe("PublicationRunner", () => {
     assert.equal(runner.capability, "github");
     assert.ok(runner.supports("publish_proposal"));
     assert.ok(runner.supports("publish_crunch"));
+    assert.ok(runner.supports("publish_source_sync"));
     assert.ok(!runner.supports("answer_question"));
   });
 
@@ -149,5 +150,51 @@ describe("PublicationRunner", () => {
     assert.equal(parsed.branchName, "magpie/crunch-run-abcd");
     assert.equal(parsed.commitSha, "def456");
     assert.ok(Array.isArray(publishedChanges));
+  });
+
+  it("publishes a source-sync changeset with the derived branch and source-named title (no PR)", async () => {
+    let publishedBranch: string | undefined;
+    let publishedTitle: string | undefined;
+    let publishedChanges: unknown;
+    let prRaised = false;
+    const runner = new PublicationRunner(fakeApi(), {
+      publishProposal: async () => ({ branchName: "b", commitSha: "c" }),
+      publishChangeset: async (request) => {
+        publishedBranch = request.branchName;
+        publishedTitle = request.title;
+        publishedChanges = request.changes;
+        return { branchName: request.branchName, commitSha: "fed789", remoteUrl: REPOSITORY.remoteUrl };
+      },
+      raisePullRequest: async () => {
+        prRaised = true;
+        return undefined;
+      }
+    });
+
+    const output = await runner.run(job("publish_source_sync", { runId: "run-aabbccdd" }), new AbortController().signal);
+    const parsed = publishSourceSyncOutputSchema.parse(output);
+    assert.equal(parsed.runId, "run-aabbccdd");
+    assert.equal(parsed.branchName, "magpie/source-sync-run-aabb");
+    assert.equal(publishedBranch, "magpie/source-sync-run-aabb");
+    assert.equal(parsed.commitSha, "fed789");
+    assert.equal(publishedTitle, "docs: sync to Pricing repo change (1 document)");
+    assert.ok(Array.isArray(publishedChanges));
+    assert.equal(prRaised, false, "source-sync raises no PR");
+  });
+
+  it("rejects a source-sync context whose run carries no changeset", async () => {
+    const api = fakeApi({
+      sourceSyncExecutionContext: async () => ({
+        run: { id: "run-aabbccdd" },
+        sourceName: "Pricing repo",
+        repository: REPOSITORY
+      })
+    });
+    const runner = new PublicationRunner(api, {
+      publishProposal: async () => ({ branchName: "b", commitSha: "c" }),
+      publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
+      raisePullRequest: async () => undefined
+    });
+    await assert.rejects(() => runner.run(job("publish_source_sync", { runId: "run-aabbccdd" }), new AbortController().signal));
   });
 });

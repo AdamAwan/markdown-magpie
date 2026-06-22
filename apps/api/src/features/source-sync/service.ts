@@ -11,7 +11,8 @@ import type {
   SourceSyncRunTrigger
 } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
-import { syncSourceChangesGeneratePlanOutputSchema } from "@magpie/jobs";
+import { publishSourceSyncOutputSchema, syncSourceChangesGeneratePlanOutputSchema } from "@magpie/jobs";
+import { z } from "zod";
 import {
   diffChangedFiles,
   ensureGitCheckout,
@@ -371,6 +372,44 @@ export async function listRuns(ctx: AppContext, limit: number): Promise<SourceSy
 
 export async function getRun(ctx: AppContext, id: string): Promise<SourceSyncRun | undefined> {
   return ctx.stores.sourceSync.getRun(id);
+}
+
+type PublishSourceSyncJobOutput = z.infer<typeof publishSourceSyncOutputSchema>;
+
+// Completion handler for publish_source_sync jobs: records the validated git
+// publication the watcher performed (branch, commit, optional remote url) onto the
+// linked run. Idempotent by runId — a run that already carries a publication is
+// left untouched, so re-completing the same job never double-applies or regresses
+// the recorded metadata. Source-sync raises no PR. Mirrors the crunch handler.
+export async function recordSourceSyncPublicationFromCompletedJob(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<SourceSyncRun | undefined> {
+  if (!job || job.type !== "publish_source_sync") {
+    return undefined;
+  }
+  const parsed = publishSourceSyncOutputSchema.safeParse(output);
+  if (!parsed.success) {
+    return undefined;
+  }
+  const result: PublishSourceSyncJobOutput = parsed.data;
+
+  const existing = await ctx.stores.sourceSync.getRun(result.runId);
+  if (!existing) {
+    return undefined;
+  }
+  if (existing.publication) {
+    return existing;
+  }
+
+  return ctx.stores.sourceSync.recordRunPublication(result.runId, {
+    provider: "local-git",
+    branchName: result.branchName,
+    commitSha: result.commitSha,
+    remoteUrl: result.remoteUrl,
+    publishedAt: result.publishedAt
+  });
 }
 
 // --- Pure helpers (unit-tested) --------------------------------------------

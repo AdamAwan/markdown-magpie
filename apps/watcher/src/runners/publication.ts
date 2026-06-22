@@ -11,7 +11,9 @@ import {
   publishCrunchInputSchema,
   publishCrunchOutputSchema,
   publishProposalInputSchema,
-  publishProposalOutputSchema
+  publishProposalOutputSchema,
+  publishSourceSyncInputSchema,
+  publishSourceSyncOutputSchema
 } from "@magpie/jobs";
 import {
   LocalGitProposalPublisher,
@@ -20,7 +22,12 @@ import {
   type RaisedPullRequest
 } from "@magpie/git";
 import { z } from "zod";
-import type { CrunchExecutionContext, ProposalExecutionContext, WatcherApi } from "../http-client.js";
+import type {
+  CrunchExecutionContext,
+  ProposalExecutionContext,
+  SourceSyncExecutionContext,
+  WatcherApi
+} from "../http-client.js";
 
 // The git operations the publication runner needs, injectable so tests exercise
 // the orchestration (context fetch, branch derivation, changeset assembly, PR
@@ -80,12 +87,23 @@ const crunchPlanSchema = z.object({
   )
 });
 const runSchema = z.object({ id: z.string(), plan: crunchPlanSchema });
+const changesetChangeSchema = z.object({
+  path: z.string(),
+  content: z.string().optional(),
+  delete: z.boolean().optional()
+});
+const sourceSyncRunSchema = z.object({ id: z.string(), changeset: z.array(changesetChangeSchema) });
 
 type PublishRepository = z.infer<typeof repositorySchema>;
 type PublishProposal = z.infer<typeof proposalSchema>;
 type PublishRun = z.infer<typeof runSchema>;
+type PublishSourceSyncRun = z.infer<typeof sourceSyncRunSchema>;
 
-const PUBLISH_JOB_TYPES: ReadonlySet<JobType> = new Set(["publish_proposal", "publish_crunch"]);
+const PUBLISH_JOB_TYPES: ReadonlySet<JobType> = new Set([
+  "publish_proposal",
+  "publish_crunch",
+  "publish_source_sync"
+]);
 
 // Executes the queue-only publication jobs with @magpie/git. It fetches the
 // non-generative execution context from the API, derives the same branch name the
@@ -109,6 +127,9 @@ export class PublicationRunner {
     }
     if (job.type === "publish_crunch") {
       return this.publishCrunch(job);
+    }
+    if (job.type === "publish_source_sync") {
+      return this.publishSourceSync(job);
     }
     throw new Error(`PublicationRunner cannot handle ${job.type}`);
   }
@@ -180,6 +201,30 @@ export class PublicationRunner {
       publishedAt: new Date().toISOString()
     });
   }
+
+  private async publishSourceSync(job: JobView): Promise<unknown> {
+    const { runId } = publishSourceSyncInputSchema.parse(job.input);
+    const context = await this.api.sourceSyncExecutionContext(runId);
+    const { run, sourceName, repository } = parseSourceSyncContext(context);
+
+    const documentCount = run.changeset.length;
+    const publication = await this.deps.publishChangeset({
+      repository: toRepositoryRef(repository),
+      branchName: sourceSyncBranchName(run),
+      // Match the title the API used before git moved out.
+      title: `docs: sync to ${sourceName} change (${documentCount} document${documentCount === 1 ? "" : "s"})`,
+      changes: run.changeset
+    });
+
+    // Source-sync raises no PR. Validate against the contract before returning.
+    return publishSourceSyncOutputSchema.parse({
+      runId,
+      branchName: publication.branchName,
+      commitSha: publication.commitSha,
+      ...(publication.remoteUrl ? { remoteUrl: publication.remoteUrl } : {}),
+      publishedAt: new Date().toISOString()
+    });
+  }
 }
 
 function parseProposalContext(context: ProposalExecutionContext): {
@@ -198,6 +243,18 @@ function parseCrunchContext(context: CrunchExecutionContext): {
 } {
   return {
     run: runSchema.parse(context.run),
+    repository: repositorySchema.parse(context.repository)
+  };
+}
+
+function parseSourceSyncContext(context: SourceSyncExecutionContext): {
+  run: PublishSourceSyncRun;
+  sourceName: string;
+  repository: PublishRepository;
+} {
+  return {
+    run: sourceSyncRunSchema.parse(context.run),
+    sourceName: z.string().parse(context.sourceName),
     repository: repositorySchema.parse(context.repository)
   };
 }
@@ -246,6 +303,12 @@ function createProposalBranchName(proposal: PublishProposal): string {
 // The branch a crunch run publishes onto. Mirrors the API's crunchBranchName.
 function crunchBranchName(run: PublishRun): string {
   return `magpie/crunch-${run.id.slice(0, 8)}`;
+}
+
+// The branch a source-sync run publishes onto. Mirrors the API's
+// sourceSyncBranchName so the watcher publishes to the same branch.
+function sourceSyncBranchName(run: PublishSourceSyncRun): string {
+  return `magpie/source-sync-${run.id.slice(0, 8)}`;
 }
 
 // Flattens a plan into a de-duplicated changeset (deletes first, then writes so a

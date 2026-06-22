@@ -8,6 +8,7 @@ import type { AppContext } from "../../context.js";
 import type { JobListFilters } from "../../jobs/broker.js";
 import * as proposalsService from "../proposals/service.js";
 import * as crunchService from "../crunch/service.js";
+import * as sourceSyncService from "../source-sync/service.js";
 
 export async function createJob(ctx: AppContext, type: JobType, input: unknown): Promise<JobView> {
   return ctx.jobs.create(type, input ?? {});
@@ -86,8 +87,8 @@ export async function runJobToCompletion(
 // THE COMPLETION DISPATCHER. Replicates the original handleCompleteJob logic:
 // look up the existing job (404 if missing), persist completion, then fan out to
 // the side-effect handlers in a fixed order — question log update, proposal
-// creation, proposal publication, crunch-plan attachment, then crunch
-// publication. Returns a discriminated outcome so the
+// creation, proposal publication, crunch-plan attachment, crunch publication,
+// then source-sync publication. Returns a discriminated outcome so the
 // handler maps job_not_found to 404 while keeping its own try/catch for the 500
 // job_completion_failed path.
 export async function completeJob(
@@ -123,6 +124,7 @@ export async function completeJob(
     await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, parsed.data);
     await crunchService.recordCrunchPublicationFromCompletedJob(ctx, existingJob, parsed.data);
+    await sourceSyncService.recordSourceSyncPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await ctx.jobs.complete(jobId, { result: parsed.data, executor });
   } catch (error) {
     await ctx.jobs.fail(jobId, {
