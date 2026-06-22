@@ -1907,23 +1907,51 @@ pre {
   margin-bottom: 0;
 }
 
-/* Cards flow into as many columns as the width allows so the schedules read as a
-   tidy grid rather than one tall single-column stack. min(440px, 100%) keeps a
-   single full-width column on narrow viewports instead of overflowing. */
-.crunchSchedules {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr));
-  gap: 12px;
-  align-items: start;
+/* Unified schedules table: flow crunch schedules and side-processes share these
+   columns. Reuses .jobTable/.tableHead/.tableRow; only the column template and
+   the inline editor are crunch-specific. */
+.crunchScheduleHead,
+.crunchScheduleRow {
+  grid-template-columns: minmax(200px, 1.6fr) minmax(120px, 0.9fr) minmax(150px, 1fr) 64px minmax(170px, auto);
 }
 
-.crunchScheduleCard {
-  border: 1px solid #d9ded6;
-  border-radius: 8px;
-  background: #ffffff;
-  padding: 14px 16px;
+.crunchScheduleName {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.3;
+}
+
+.crunchScheduleTitle {
+  font-weight: 700;
+}
+
+.crunchScheduleMeta {
+  color: #8a948f;
+  font-size: 11px;
+  text-transform: none;
+}
+
+.crunchRowActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.crunchRowActions .button {
+  padding: 7px 12px;
+  font-size: 12px;
+}
+
+/* Inline editor revealed under the row being edited. Full-width because it is a
+   plain block sibling inside the single-column .jobTable grid. */
+.crunchScheduleEditor {
   display: grid;
-  gap: 10px;
+  gap: 12px;
+  border-top: 1px solid #e2e6df;
+  border-left: 3px solid #c7d2cb;
+  background: #fbfcfa;
+  padding: 14px 16px 16px;
 }
 
 .crunchScheduleControls {

@@ -27,6 +27,31 @@ export function CrunchPanel({
 }) {
   const flowName = (flowId?: string) => flows.find((flow) => flow.id === flowId)?.name ?? flowId ?? "Default knowledge base";
 
+  // Flow crunch schedules and generic side-processes are two sources with
+  // different save/run endpoints; normalise them into one row shape (with the
+  // right handlers bound per row) so they share a single tidy table.
+  const entries: ScheduleEntry[] = [
+    ...settings.map((setting) => ({
+      id: `flow:${setting.flowId ?? "__default__"}`,
+      name: flowName(setting.flowId),
+      kind: "Flow" as const,
+      setting,
+      placeholder: "0 2 * * *",
+      onSave: (enabled: boolean, cron: string) => onSaveSchedule(setting.flowId, enabled, cron),
+      onRun: () => onRun(setting.flowId)
+    })),
+    ...scheduledTasks.map((task) => ({
+      id: `task:${task.key}`,
+      name: task.label,
+      kind: "Side process" as const,
+      description: task.description,
+      setting: task.settings,
+      placeholder: "*/10 * * * *",
+      onSave: (enabled: boolean, cron: string) => onSaveTask(task.key, enabled, cron),
+      onRun: () => onRunTask(task.key)
+    }))
+  ];
+
   return (
     <section className="surface">
       <div className="surfaceHeader">
@@ -42,29 +67,21 @@ export function CrunchPanel({
         </p>
 
         <section className="crunchSection">
-          <h3 className="crunchSubhead">Knowledge flow schedules</h3>
-          <div className="crunchSchedules">
-            {settings.map((setting) => (
-              <CrunchScheduleCard
-                flowName={flowName(setting.flowId)}
-                key={setting.flowId ?? "__default__"}
-                loading={loading}
-                onRun={onRun}
-                onSave={onSaveSchedule}
-                setting={setting}
-              />
+          <h3 className="crunchSubhead">Schedules</h3>
+          <div className="jobTable">
+            <div className="tableHead crunchScheduleHead">
+              <span>Name</span>
+              <span>Cron</span>
+              <span>Next run</span>
+              <span>Status</span>
+              <span />
+            </div>
+            {entries.map((entry) => (
+              <ScheduleRow entry={entry} key={entry.id} loading={loading} />
             ))}
-            {settings.length === 0 ? <p className="empty">No knowledge flows are configured to crunch.</p> : null}
-          </div>
-        </section>
-
-        <section className="crunchSection">
-          <h3 className="crunchSubhead">Side processes</h3>
-          <div className="crunchSchedules">
-            {scheduledTasks.map((task) => (
-              <ScheduledTaskCard key={task.key} loading={loading} onRun={onRunTask} onSave={onSaveTask} task={task} />
-            ))}
-            {scheduledTasks.length === 0 ? <p className="empty">No scheduled side-processes are registered.</p> : null}
+            {entries.length === 0 ? (
+              <p className="empty">No crunch schedules or side-processes are configured.</p>
+            ) : null}
           </div>
         </section>
 
@@ -96,75 +113,75 @@ const CRON_PRESETS: Array<{ label: string; cron: string }> = [
   { label: "Weekly (Mon 02:00)", cron: "0 2 * * 1" }
 ];
 
-function CrunchScheduleCard({
-  flowName,
-  loading,
-  onRun,
-  onSave,
-  setting
-}: {
-  flowName: string;
-  loading: boolean;
-  onRun: (flowId?: string) => Promise<void>;
-  onSave: (flowId: string | undefined, enabled: boolean, cron: string) => Promise<void>;
-  setting: CrunchSettingsView;
-}) {
+interface ScheduleEntry {
+  id: string;
+  name: string;
+  kind: "Flow" | "Side process";
+  description?: string;
+  setting: { enabled: boolean; cron: string; nextRunAt?: string };
+  placeholder: string;
+  onSave: (enabled: boolean, cron: string) => Promise<void>;
+  onRun: () => Promise<void>;
+}
+
+// One row of the schedules table. Collapsed it shows the schedule at a glance;
+// the Edit button expands an inline editor, so the cron help and presets appear
+// only for the row being edited rather than repeated on every row.
+function ScheduleRow({ entry, loading }: { entry: ScheduleEntry; loading: boolean }) {
+  const [editing, setEditing] = useState(false);
+  const { setting } = entry;
+
   return (
-    <ScheduleEditor
-      loading={loading}
-      onRun={() => onRun(setting.flowId)}
-      onSave={(enabled, cron) => onSave(setting.flowId, enabled, cron)}
-      placeholder="0 2 * * *"
-      setting={setting}
-      title={flowName}
-    />
+    <>
+      <div className="tableRow crunchScheduleRow">
+        <span className="crunchScheduleName">
+          <span className="crunchScheduleTitle">{entry.name}</span>
+          <span className="crunchScheduleMeta">
+            {entry.kind}
+            {entry.description ? ` · ${entry.description}` : ""}
+          </span>
+        </span>
+        <span>{setting.enabled ? <code>{setting.cron}</code> : "—"}</span>
+        <span>{setting.enabled && setting.nextRunAt ? new Date(setting.nextRunAt).toLocaleString() : "—"}</span>
+        <span className={`status ${setting.enabled ? "completed" : "pending"}`} title="Schedule status">
+          {setting.enabled ? "On" : "Off"}
+        </span>
+        <span className="crunchRowActions">
+          <button
+            className="button secondary"
+            disabled={loading}
+            onClick={() => void entry.onRun()}
+            title="Run this now"
+            type="button"
+          >
+            Run now
+          </button>
+          <button aria-expanded={editing} className="button" onClick={() => setEditing((value) => !value)} type="button">
+            {editing ? "Close" : "Edit"}
+          </button>
+        </span>
+      </div>
+      {editing ? (
+        <ScheduleEditor loading={loading} onSave={entry.onSave} placeholder={entry.placeholder} setting={setting} />
+      ) : null}
+    </>
   );
 }
 
-function ScheduledTaskCard({
-  loading,
-  onRun,
-  onSave,
-  task
-}: {
-  loading: boolean;
-  onRun: (key: string) => Promise<void>;
-  onSave: (key: string, enabled: boolean, cron: string) => Promise<void>;
-  task: ScheduledTask;
-}) {
-  return (
-    <ScheduleEditor
-      description={task.description}
-      loading={loading}
-      onRun={() => onRun(task.key)}
-      onSave={(enabled, cron) => onSave(task.key, enabled, cron)}
-      placeholder="*/10 * * * *"
-      setting={task.settings}
-      title={task.label}
-    />
-  );
-}
-
-// The "enabled + cron" editor shared by crunch flow schedules and side-process
-// schedules. It owns the live form state and a dirty flag so a background refresh
-// (which replaces `setting`) never overwrites edits the user is mid-typing; the
-// flag clears on save so the freshly persisted values mirror back in.
+// Inline "enabled + cron" editor, rendered only under the row being edited. It
+// owns the live form state and a dirty flag so a background refresh (which
+// replaces `setting`) never overwrites edits the user is mid-typing; the flag
+// clears on save so the freshly persisted values mirror back in.
 function ScheduleEditor({
-  description,
   loading,
-  onRun,
   onSave,
   placeholder,
-  setting,
-  title
+  setting
 }: {
-  description?: string;
   loading: boolean;
-  onRun: () => Promise<void>;
   onSave: (enabled: boolean, cron: string) => Promise<void>;
   placeholder: string;
   setting: { enabled: boolean; cron: string; nextRunAt?: string };
-  title: string;
 }) {
   const [enabled, setEnabled] = useState(setting.enabled);
   const [cron, setCron] = useState(setting.cron);
@@ -187,26 +204,7 @@ function ScheduleEditor({
   }
 
   return (
-    <article className="crunchScheduleCard">
-      <div className="rowTop">
-        <div>
-          <h3>{title}</h3>
-          <p className="path">
-            {setting.enabled
-              ? `Scheduled (${setting.cron})${
-                  setting.nextRunAt ? ` · next ${new Date(setting.nextRunAt).toLocaleString()}` : ""
-                }`
-              : "Schedule disabled"}
-          </p>
-        </div>
-        <span
-          className={`status ${setting.enabled ? "completed" : "pending"}`}
-          title="Schedule status"
-        >
-          {setting.enabled ? "On" : "Off"}
-        </span>
-      </div>
-      {description ? <p className="hint">{description}</p> : null}
+    <div className="crunchScheduleEditor">
       <div className="crunchScheduleControls">
         <label className="crunchToggle">
           <input
@@ -242,15 +240,6 @@ function ScheduleEditor({
           >
             Save schedule
           </button>
-          <button
-            className="button"
-            disabled={loading}
-            onClick={() => void onRun()}
-            title="Run this now"
-            type="button"
-          >
-            Run now
-          </button>
         </div>
       </div>
       <div className="crunchPresets">
@@ -269,7 +258,7 @@ function ScheduleEditor({
         ))}
       </div>
       {!cronValid ? <p className="crunchError">Not a valid 5-field cron expression.</p> : null}
-    </article>
+    </div>
   );
 }
 
