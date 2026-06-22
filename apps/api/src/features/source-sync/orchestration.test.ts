@@ -5,37 +5,14 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { JobType, JobView } from "@magpie/jobs";
 import type { CrunchPlan } from "@magpie/core";
 import { RuntimeConfigHolder } from "../../config-holder.js";
 import { FakeJobBroker } from "../../jobs/fake-broker.js";
 import { makeTestContext } from "../../test-support/context.js";
+import { completeJob, failJob } from "../jobs/service.js";
 import { getRunExecutionContext, triggerSourceSyncRun } from "./service.js";
 
 const execFileAsync = promisify(execFile);
-
-// A broker that immediately completes any sync_source_changes_generate_plan job
-// with the plan the watcher's chat runner would have produced, so the API's
-// enqueue+bounded-wait resolves to a terminal completed job in-process. Other
-// job types behave like the FakeJobBroker (created, never completed).
-class PlanningJobBroker extends FakeJobBroker {
-  constructor(private readonly buildPlan: (input: unknown) => CrunchPlan) {
-    super();
-  }
-
-  override async create(type: JobType, input: unknown): Promise<JobView> {
-    const job = await super.create(type, input);
-    if (type === "sync_source_changes_generate_plan") {
-      return super.complete(job.id, this.buildPlan(job.input));
-    }
-    return job;
-  }
-}
-
-// A broker that enqueues the plan job but never completes it, so the bounded-wait
-// elapses and returns a non-terminal view (state still "created"). Used to drive
-// the timeout/failure path. The deadline is forced tiny via the option.
-class StallingPlanJobBroker extends FakeJobBroker {}
 
 interface Seeded {
   ctx: ReturnType<typeof makeTestContext>;
@@ -123,82 +100,117 @@ const PLAN: CrunchPlan = {
   rationale: "source bumped the limit"
 };
 
-test("triggerSourceSyncRun enqueues the plan job, persists the constrained changeset, and enqueues publication", async () => {
-  const broker = new PlanningJobBroker(() => PLAN);
+// Re-baselines the seeded source at its parent commit so the next triggerSourceSyncRun
+// sees a one-commit diff to react to, and returns the source checkout path.
+async function baselineAtParent(ctx: Seeded["ctx"], checkoutRoot: string): Promise<string> {
+  await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
+  const repoPath = path.join(checkoutRoot, "src-1");
+  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD~1"], { cwd: repoPath });
+  await ctx.stores.sourceSync.setState(undefined, "src-1", stdout.trim());
+  return repoPath;
+}
+
+test("triggerSourceSyncRun enqueues a running plan job and advances the baseline immediately", async () => {
+  const broker = new FakeJobBroker();
   const { ctx, checkoutRoot, cleanup } = await seed(broker);
   try {
-    // First call baselines at the source's current HEAD; force a re-baseline at the
-    // parent so the second call has a diff to react to.
-    await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
-    assert.ok((await ctx.stores.sourceSync.getState(undefined, "src-1"))?.lastSha, "source baselined");
-    // Rewind baseline to the source's parent commit so the next run has a diff.
-    const repoPath = path.join(checkoutRoot, "src-1");
-    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD~1"], { cwd: repoPath });
-    await ctx.stores.sourceSync.setState(undefined, "src-1", stdout.trim());
+    const repoPath = await baselineAtParent(ctx, checkoutRoot);
 
     const runs = await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
     assert.equal(runs.length, 1);
     const run = runs[0];
-    assert.equal(run.status, "completed");
-    assert.ok(run.plan, "plan persisted");
-    assert.ok(run.changeset, "changeset persisted");
-    assert.equal(run.changeset!.length, 1);
-    assert.equal(run.changeset![0].path, "guide.md");
-    assert.equal(run.changeset![0].content, "# Guide\nThe limit is 2025.\n");
 
-    // A publish_source_sync job was enqueued for the completed run.
-    const { jobs } = await ctx.jobs.list({});
-    const publish = jobs.find((job) => job.type === "publish_source_sync");
-    assert.ok(publish, "publication enqueued");
-    assert.deepEqual(publish.input, { runId: run.id });
+    // Enqueue-only: the run is "running" and linked to a plan job; nothing blocked
+    // on the model and no changeset is derived yet.
+    assert.equal(run.status, "running");
+    assert.ok(run.jobId, "run linked to a plan job");
+    assert.equal(run.changeset, undefined);
+    assert.equal(run.plan, undefined);
 
-    // No git ran in the API: the run is still "completed" with no publication
-    // recorded — publication happens in the watcher off the enqueued job.
-    assert.equal(run.status, "completed");
-    assert.equal(run.publication, undefined);
+    // Exactly one plan job was enqueued, and it is the run's job.
+    const planJob = (await ctx.jobs.list({})).jobs.find((job) => job.type === "sync_source_changes_generate_plan");
+    assert.ok(planJob, "plan job enqueued");
+    assert.equal(planJob.id, run.jobId);
+
+    // The baseline advanced to HEAD at enqueue, so the next tick won't re-plan the
+    // same commit while the job is in flight.
+    const { stdout: head } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repoPath });
+    assert.equal((await ctx.stores.sourceSync.getState(undefined, "src-1"))?.lastSha, head.trim());
+
+    // No publication yet — that waits on the plan job completing.
+    assert.equal((await ctx.jobs.list({})).jobs.filter((job) => job.type === "publish_source_sync").length, 0);
   } finally {
     await cleanup();
   }
 });
 
-test("triggerSourceSyncRun records a failed run when the plan job does not complete", async () => {
-  const broker = new StallingPlanJobBroker();
+test("completing the plan job constrains the changeset, completes the run, and enqueues publication", async () => {
+  const broker = new FakeJobBroker();
   const { ctx, checkoutRoot, cleanup } = await seed(broker);
   try {
-    await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
-    const repoPath = path.join(checkoutRoot, "src-1");
-    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD~1"], { cwd: repoPath });
-    await ctx.stores.sourceSync.setState(undefined, "src-1", stdout.trim());
+    await baselineAtParent(ctx, checkoutRoot);
+    const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
+    const jobId = run.jobId;
+    assert.ok(jobId, "run linked to a plan job");
 
-    // Tiny deadline so the bounded-wait elapses immediately on the never-completed
-    // job, exercising the failure path.
-    process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS = "50";
-    process.env.JOB_WAIT_POLL_MS = "10";
-    try {
-      const runs = await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
-      assert.equal(runs.length, 1);
-      assert.equal(runs[0].status, "failed");
-      assert.ok(runs[0].error, "failure reason recorded");
-    } finally {
-      delete process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS;
-      delete process.env.JOB_WAIT_POLL_MS;
+    // Drive the watcher's completion through the real dispatcher.
+    const outcome = await completeJob(ctx, jobId, PLAN);
+    assert.equal(outcome.ok, true);
+
+    const completed = await ctx.stores.sourceSync.getRun(run.id);
+    assert.equal(completed?.status, "completed");
+    assert.ok(completed?.plan, "plan persisted");
+    assert.equal(completed?.changeset?.length, 1);
+    assert.equal(completed?.changeset?.[0].path, "guide.md");
+    assert.equal(completed?.changeset?.[0].content, "# Guide\nThe limit is 2025.\n");
+
+    // A publish_source_sync job was enqueued for the now-completed run; no git ran in
+    // the API and no publication is recorded yet — that happens in the watcher.
+    const publish = (await ctx.jobs.list({})).jobs.find((job) => job.type === "publish_source_sync");
+    assert.ok(publish, "publication enqueued");
+    assert.deepEqual(publish.input, { runId: run.id });
+    assert.equal(completed?.publication, undefined);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("a plan job that exhausts its retries fails the linked run without rewinding the baseline", async () => {
+  const broker = new FakeJobBroker();
+  const { ctx, checkoutRoot, cleanup } = await seed(broker);
+  try {
+    const repoPath = await baselineAtParent(ctx, checkoutRoot);
+    const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
+    const jobId = run.jobId;
+    assert.ok(jobId, "run linked to a plan job");
+    assert.equal(run.status, "running");
+
+    // Fail the plan job until pg-boss would give up (retryLimit retries, then a
+    // terminal failure). Only the terminal failure fails the run.
+    const jobError = { code: "runner_failed", message: "model unavailable", category: "external" as const, executor: "watcher" };
+    let failed = await failJob(ctx, jobId, jobError);
+    while (failed?.state !== "failed") {
+      failed = await failJob(ctx, jobId, jobError);
     }
 
-    // The baseline is unchanged so a retry will re-attempt: state still at parent.
-    const state = await ctx.stores.sourceSync.getState(undefined, "src-1");
-    const { stdout: parent } = await execFileAsync("git", ["rev-parse", "HEAD~1"], { cwd: repoPath });
-    assert.equal(state?.lastSha, parent.trim(), "baseline left unchanged for retry");
+    const failedRun = await ctx.stores.sourceSync.getRun(run.id);
+    assert.equal(failedRun?.status, "failed");
+    assert.equal(failedRun?.error, "model unavailable");
 
-    // No publication was enqueued for a failed run.
-    const { jobs } = await ctx.jobs.list({});
-    assert.equal(jobs.filter((job) => job.type === "publish_source_sync").length, 0);
+    // The baseline stays at HEAD (advanced at enqueue): a failed run is operator-
+    // visible and not auto-replanned, mirroring crunch.
+    const { stdout: head } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repoPath });
+    assert.equal((await ctx.stores.sourceSync.getState(undefined, "src-1"))?.lastSha, head.trim());
+
+    // No publication for a failed run.
+    assert.equal((await ctx.jobs.list({})).jobs.filter((job) => job.type === "publish_source_sync").length, 0);
   } finally {
     await cleanup();
   }
 });
 
 test("getRunExecutionContext returns the run, changeset, source name and repo for a completed run", async () => {
-  const broker = new PlanningJobBroker(() => PLAN);
+  const broker = new FakeJobBroker();
   const { ctx, cleanup } = await seed(broker);
   try {
     // Build a completed run with a changeset directly via the store, and point its

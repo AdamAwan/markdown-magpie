@@ -92,12 +92,56 @@ export class PostgresSourceSyncStore implements SourceSyncStore {
     return result.rows[0] ? mapRunRow(result.rows[0]) : undefined;
   }
 
+  async getRunByJobId(jobId: string): Promise<SourceSyncRun | undefined> {
+    const result = await this.pool.query<SourceSyncRunRow>(
+      "SELECT * FROM source_sync_runs WHERE job_id = $1 ORDER BY created_at DESC LIMIT 1",
+      [jobId]
+    );
+    return result.rows[0] ? mapRunRow(result.rows[0]) : undefined;
+  }
+
+  async completeRun(id: string, plan: CrunchPlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined> {
+    return this.transitionFromRunning(
+      "UPDATE source_sync_runs SET status = 'completed', plan = $2, changeset = $3, error = NULL, completed_at = now() WHERE id = $1 AND status = 'running' RETURNING *",
+      [id, JSON.stringify(plan), JSON.stringify(changeset)],
+      id
+    );
+  }
+
+  async markSkipped(id: string, plan: CrunchPlan): Promise<SourceSyncRun | undefined> {
+    return this.transitionFromRunning(
+      "UPDATE source_sync_runs SET status = 'skipped', plan = $2, completed_at = now() WHERE id = $1 AND status = 'running' RETURNING *",
+      [id, JSON.stringify(plan)],
+      id
+    );
+  }
+
+  async failRun(id: string, error: string): Promise<SourceSyncRun | undefined> {
+    return this.transitionFromRunning(
+      "UPDATE source_sync_runs SET status = 'failed', error = $2, completed_at = now() WHERE id = $1 AND status = 'running' RETURNING *",
+      [id, error],
+      id
+    );
+  }
+
   async recordRunPublication(id: string, publication: ProposalPublication): Promise<SourceSyncRun | undefined> {
     const result = await this.pool.query<SourceSyncRunRow>(
       "UPDATE source_sync_runs SET status = 'published', publication = $2 WHERE id = $1 RETURNING *",
       [id, JSON.stringify(publication)]
     );
     return result.rows[0] ? mapRunRow(result.rows[0]) : undefined;
+  }
+
+  // Runs a terminal-transition UPDATE guarded by status = 'running'. When the run is
+  // already terminal the UPDATE matches nothing, so fall back to the current row — a
+  // re-delivered completion/failure is then an idempotent no-op rather than a regress.
+  private async transitionFromRunning(
+    sql: string,
+    params: unknown[],
+    id: string
+  ): Promise<SourceSyncRun | undefined> {
+    const result = await this.pool.query<SourceSyncRunRow>(sql, params);
+    return result.rows[0] ? mapRunRow(result.rows[0]) : this.getRun(id);
   }
 
   async reset(): Promise<void> {

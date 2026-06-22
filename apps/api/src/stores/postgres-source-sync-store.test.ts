@@ -170,6 +170,61 @@ describe("PostgresSourceSyncStore", { skip: databaseUrl ? false : "DATABASE_URL 
     assert.deepEqual(fetched?.plan, plan);
   });
 
+  it("links a running run by jobId and completeRun stamps the changeset once", async () => {
+    const sourceId = `src-${randomUUID()}`;
+    const jobId = `job-${randomUUID()}`;
+    const running = await store.createRun({
+      sourceId,
+      trigger: "scheduled",
+      status: "running",
+      jobId,
+      toSha: "head",
+      changedFileCount: 1,
+      candidateCount: 1
+    });
+    assert.equal((await store.getRunByJobId(jobId))?.id, running.id);
+
+    const plan = { summary: "s", operations: [], rationale: "r" };
+    const changeset = [{ path: "guide.md", content: "x" }];
+    const completed = await store.completeRun(running.id, plan, changeset);
+    assert.equal(completed?.status, "completed");
+    assert.deepEqual(completed?.changeset, changeset);
+    assert.ok(completed?.completedAt);
+
+    // Idempotent: a terminal run is not regressed by a late failure.
+    assert.equal((await store.failRun(running.id, "late"))?.status, "completed");
+  });
+
+  it("markSkipped and failRun transition only a running run", async () => {
+    const plan = { summary: "s", operations: [], rationale: "r" };
+
+    const skip = await store.createRun({
+      sourceId: `src-${randomUUID()}`,
+      trigger: "scheduled",
+      status: "running",
+      jobId: `job-${randomUUID()}`,
+      toSha: "head",
+      changedFileCount: 1,
+      candidateCount: 1
+    });
+    const skipped = await store.markSkipped(skip.id, plan);
+    assert.equal(skipped?.status, "skipped");
+    assert.ok(skipped?.plan);
+
+    const fail = await store.createRun({
+      sourceId: `src-${randomUUID()}`,
+      trigger: "scheduled",
+      status: "running",
+      jobId: `job-${randomUUID()}`,
+      toSha: "head",
+      changedFileCount: 1,
+      candidateCount: 1
+    });
+    const failed = await store.failRun(fail.id, "boom");
+    assert.equal(failed?.status, "failed");
+    assert.equal(failed?.error, "boom");
+  });
+
   it("handles running status without completedAt", async () => {
     const sourceId = `src-${randomUUID()}`;
 

@@ -107,7 +107,7 @@ export async function runJobToCompletion(
 // look up the existing job (404 if missing), persist completion, then fan out to
 // the side-effect handlers in a fixed order — question log update, proposal
 // creation, proposal publication, crunch-plan attachment, crunch publication,
-// then source-sync publication. Returns a discriminated outcome so the
+// source-sync plan attachment, then source-sync publication. Returns a discriminated outcome so the
 // handler maps job_not_found to 404 while keeping its own try/catch for the 500
 // job_completion_failed path.
 export async function completeJob(
@@ -143,6 +143,7 @@ export async function completeJob(
     await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, parsed.data);
     await crunchService.recordCrunchPublicationFromCompletedJob(ctx, existingJob, parsed.data);
+    await sourceSyncService.attachSourceSyncPlanFromCompletedJob(ctx, existingJob, parsed.data);
     await sourceSyncService.recordSourceSyncPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await applyRefreshPullRequestsTransitions(ctx, existingJob, parsed.data);
     await ctx.jobs.complete(jobId, { result: parsed.data, executor });
@@ -230,6 +231,15 @@ export async function failJob(
     const run = await ctx.stores.crunchRuns.getRunByJobId(jobId);
     if (run) {
       await ctx.stores.crunchRuns.failRun(run.id, jobError.message);
+    }
+  }
+  // Source-sync planning is enqueue-only, so a terminally failed plan job fails its
+  // linked run too (mirroring the crunch side-effect above). Only a still-"running"
+  // run is failed, so this never regresses a run that already completed.
+  if (failingJob?.type === "sync_source_changes_generate_plan" && failedJob.state === "failed") {
+    const run = await ctx.stores.sourceSync.getRunByJobId(jobId);
+    if (run?.status === "running") {
+      await ctx.stores.sourceSync.failRun(run.id, jobError.message);
     }
   }
   return failedJob;

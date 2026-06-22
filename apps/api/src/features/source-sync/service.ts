@@ -1,6 +1,5 @@
 import type {
   ChangesetChange,
-  CrunchPlan,
   KnowledgeDocument,
   RankedSection,
   RepositoryRef,
@@ -11,7 +10,11 @@ import type {
   SourceSyncRunTrigger
 } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
-import { publishSourceSyncOutputSchema, syncSourceChangesGeneratePlanOutputSchema } from "@magpie/jobs";
+import {
+  publishSourceSyncOutputSchema,
+  syncSourceChangesGeneratePlanInputSchema,
+  syncSourceChangesGeneratePlanOutputSchema
+} from "@magpie/jobs";
 import { z } from "zod";
 import {
   diffChangedFiles,
@@ -21,7 +24,6 @@ import {
 } from "@magpie/git";
 import type { AppContext } from "../../context.js";
 import { changesetFromPlan } from "../crunch/service.js";
-import { runJobToCompletion } from "../jobs/service.js";
 import {
   checkoutRoot,
   defaultDestinationId,
@@ -148,7 +150,15 @@ async function syncGitSource(
     return run;
   }
 
-  const input: SourceChangeSyncJobInput = {
+  // Planning is enqueue-only (mirrors crunch's triggerCrunchRun): enqueue the
+  // generative job, record a "running" run linked to it, and advance the baseline
+  // now so the next tick won't re-react to the same commit while the plan is in
+  // flight. The watcher produces the plan; attachSourceSyncPlanFromCompletedJob then
+  // constrains it to a candidate-only changeset, completes the run, and enqueues
+  // publication. A plan-job failure fails the run (jobs/failJob), and pg-boss already
+  // retries provider work before that terminal failure. Nothing here blocks on the
+  // model, so the maintenance /api/source-sync/run call returns immediately.
+  const input = {
     flowId,
     destinationId,
     sourceId: source.id,
@@ -157,98 +167,77 @@ async function syncGitSource(
     toSha: headSha,
     changes: changes.map(toSourceChangeFile),
     candidateDocuments,
-    expectedOutput: "crunch_plan"
-  };
+    expectedOutput: "crunch_plan",
+    provider: ctx.config.get().aiProvider
+  } satisfies SourceChangeSyncJobInput & { provider: AiProviderName };
 
-  let plan: CrunchPlan;
-  try {
-    plan = await generateSyncPlan(ctx, input);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "source sync planning failed";
-    // Leave the baseline unchanged so a transient failure retries next tick.
-    return store.createRun({
-      flowId,
-      destinationId,
-      sourceId: source.id,
-      trigger,
-      status: "failed",
-      error: message,
-      fromSha: previous.lastSha,
-      toSha: headSha,
-      changedFileCount: changes.length,
-      candidateCount: candidateDocuments.length
-    });
-  }
-
-  // Defence-in-depth: only ever write back documents we offered as candidates,
-  // and never delete — a source-sync corrects existing docs, it does not remove
-  // knowledge.
-  const changeset = constrainToCandidates(changesetFromPlan(plan), candidateDocuments);
-
-  if (changeset.length === 0) {
-    const run = await store.createRun({
-      flowId,
-      destinationId,
-      sourceId: source.id,
-      trigger,
-      status: "skipped",
-      plan,
-      fromSha: previous.lastSha,
-      toSha: headSha,
-      changedFileCount: changes.length,
-      candidateCount: candidateDocuments.length
-    });
-    await store.setState(flowId, source.id, headSha);
-    return run;
-  }
-
+  const job = await ctx.jobs.create("sync_source_changes_generate_plan", input);
   const run = await store.createRun({
     flowId,
     destinationId,
     sourceId: source.id,
     trigger,
-    status: "completed",
-    plan,
-    // Persist the constrained changeset so the publish_source_sync job can fetch
-    // exactly what to write without re-deriving the candidate set.
-    changeset,
+    status: "running",
+    jobId: job.id,
     fromSha: previous.lastSha,
     toSha: headSha,
     changedFileCount: changes.length,
     candidateCount: candidateDocuments.length
   });
-
-  // Advance the baseline now: the change has been planned and recorded, so we
-  // should not re-plan it. A publish failure is surfaced on the run for the
-  // operator to retry from, not by re-running the model.
   await store.setState(flowId, source.id, headSha);
+  console.log(
+    `Source-change sync for ${source.id}: enqueued plan job ${job.id} over ${changes.length} changed file(s) ` +
+      `with ${candidateDocuments.length} candidate(s); run ${run.id} is planning.`
+  );
+  return run;
+}
+
+// Completion handler for sync_source_changes_generate_plan jobs (enqueue-only flow,
+// mirrors crunch's attachCrunchPlanFromCompletedJob). The watcher produced the plan;
+// constrain it to the candidate documents the job was given (defence-in-depth: only
+// ever write back documents we offered, and never delete — a source-sync corrects
+// existing docs, it does not remove knowledge), then complete the linked run with the
+// derived changeset and enqueue publication. An empty changeset means the change
+// needed no KB edit, so the run is recorded as skipped. Idempotent: only a
+// still-"running" run is transitioned, so a re-delivered completion is a no-op.
+export async function attachSourceSyncPlanFromCompletedJob(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<void> {
+  if (!job || job.type !== "sync_source_changes_generate_plan") {
+    return;
+  }
+  const run = await ctx.stores.sourceSync.getRunByJobId(job.id);
+  if (!run || run.status !== "running") {
+    return;
+  }
+
+  const parsed = syncSourceChangesGeneratePlanOutputSchema.safeParse(output);
+  if (!parsed.success) {
+    await ctx.stores.sourceSync.failRun(run.id, "source-sync plan job returned malformed output");
+    return;
+  }
+
+  const changeset = constrainToCandidates(changesetFromPlan(parsed.data), readCandidateDocuments(job.input));
+  if (changeset.length === 0) {
+    await ctx.stores.sourceSync.markSkipped(run.id, parsed.data);
+    return;
+  }
+
+  await ctx.stores.sourceSync.completeRun(run.id, parsed.data, changeset);
   // Git now leaves the API: enqueue publication (fire-and-forget) after the
   // repository pre-flight, mirroring publish_crunch. The watcher executes git.
   await enqueuePublication(ctx, run.id);
-  return (await store.getRun(run.id)) ?? run;
 }
 
-// The generative step now leaves the API: enqueue the AI job and bounded-wait for
-// the watcher to produce the plan, exactly like the gap reshape (8C). On a
-// non-completed terminal state, malformed output, timeout, or enqueue failure this
-// throws so syncGitSource's catch path records the run as failed and leaves the
-// baseline unchanged for a retry.
-async function generateSyncPlan(ctx: AppContext, input: SourceChangeSyncJobInput): Promise<CrunchPlan> {
-  const jobInput = {
-    ...input,
-    provider: ctx.config.get().aiProvider
-  } satisfies SourceChangeSyncJobInput & { provider: AiProviderName };
-
-  const terminal = await runJobToCompletion(ctx, "sync_source_changes_generate_plan", jobInput);
-  if (terminal.state !== "completed") {
-    throw new Error(`source-sync plan job ${terminal.id} did not complete (state ${terminal.state})`);
-  }
-
-  const parsed = syncSourceChangesGeneratePlanOutputSchema.safeParse(terminal.output);
-  if (!parsed.success) {
-    throw new Error(`source-sync plan job ${terminal.id} returned malformed output`);
-  }
-  return parsed.data;
+// Reads back the candidate documents the plan job was given so the completion handler
+// can constrain the plan to them. The input was validated at enqueue, so a parse
+// failure is not expected; degrade to an empty set (⇒ empty changeset ⇒ skipped)
+// rather than throwing inside the completion dispatcher.
+function readCandidateDocuments(input: unknown): SourceSyncCandidateDocument[] {
+  const parsed = syncSourceChangesGeneratePlanInputSchema.safeParse(input);
+  return parsed.success ? parsed.data.candidateDocuments : [];
 }
 
 // Enqueue-only publication: validate the repository pre-flight (no repo / not-git
