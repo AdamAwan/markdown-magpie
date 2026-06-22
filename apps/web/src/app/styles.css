@@ -357,7 +357,8 @@ p {
   gap: 14px;
 }
 
-.knowledgePage {
+.knowledgePage,
+.jobsPage {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 14px;
@@ -1319,10 +1320,6 @@ code {
     );
 }
 
-.jobWorkers {
-  margin-top: 20px;
-}
-
 .workerName {
   display: inline-flex;
   flex-direction: column;
@@ -1427,8 +1424,7 @@ code {
 }
 
 /* Jobs follows the Knowledge master/detail pattern: a compact selector rail on
-   the left and a flexible reader on the right. Workers and schedules are full-
-   width siblings below this workspace. */
+   the left and a flexible reader on the right. */
 .jobsLayout {
   gap: 20px;
 }
@@ -1561,10 +1557,6 @@ code {
   border-radius: 6px;
   background: #ffffff;
   font-size: 12px;
-}
-
-.jobSchedules {
-  margin-top: 20px;
 }
 
 /* Pager under a paged table (jobs). Sits outside .jobTable so it is not laid out

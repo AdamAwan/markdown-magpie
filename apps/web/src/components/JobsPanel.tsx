@@ -94,6 +94,7 @@ export function JobsPanel({
   const failedJobs = jobs.filter((job) => job.state === "failed" && !job.acceptedAt);
   const failedCount = failedJobs.length;
   const busyWorkerCount = workers.filter((worker) => worker.status === "busy").length;
+  const activeScheduleCount = schedules.filter((schedule) => schedule.enabled).length;
 
   // On wide screens the detail sits in a sticky right rail and is already in
   // view; on narrow screens it stacks below the table. Bring it into view when a
@@ -108,147 +109,167 @@ export function JobsPanel({
   }, [selectedJobId]);
 
   return (
-    <section className="surface">
-      <div className="surfaceHeader">
-        <h2>Jobs</h2>
-        <span className="pill" title="Jobs loaded (most recent page)">
-          {jobs.length}
-        </span>
-        {activeCount > 0 ? (
-          <span className="pill" title="Jobs still in flight">
-            {activeCount} active
+    <section className="jobsPage">
+      <section className="surface">
+        <div className="surfaceHeader">
+          <h2>Jobs</h2>
+          <span className="pill" title="Jobs loaded (most recent page)">
+            {jobs.length}
           </span>
-        ) : null}
-        {failedCount > 0 ? (
-          <span className="status failed" title="Failed jobs">
-            {failedCount} failed
-          </span>
-        ) : null}
-        {workers.length > 0 ? (
-          <span className="pill" title="Watchers connected (seen recently)">
-            {workers.length} worker{workers.length === 1 ? "" : "s"}
-            {busyWorkerCount > 0 ? ` · ${busyWorkerCount} busy` : ""}
-          </span>
-        ) : null}
-      </div>
-      <div className="surfaceBody jobsLayout">
-        <div className="jobFilters">
-          <label className="field">
-            <span>State</span>
-            <select onChange={(event) => setStateFilter(event.target.value as JobState | "all")} value={stateFilter}>
-              <option value="all">All states</option>
-              {JOB_STATES.map((state) => (
-                <option key={state} value={state}>
-                  {state}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Type</span>
-            <select onChange={(event) => setTypeFilter(event.target.value)} value={typeFilter}>
-              <option value="all">All types</option>
-              {jobTypes.map((type) => (
-                <option key={type} value={type}>
-                  {formatJobType(type)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <span className="pill" title="Jobs matching the current filters">
-            {filtered.length} matched
-          </span>
+          {activeCount > 0 ? (
+            <span className="pill" title="Jobs still in flight">
+              {activeCount} active
+            </span>
+          ) : null}
           {failedCount > 0 ? (
-            <button
-              className="button secondary"
-              onClick={() => void onAccept(failedJobs.map((job) => job.id))}
-              type="button"
-            >
-              Accept all failures
-            </button>
+            <span className="status failed" title="Failed jobs">
+              {failedCount} failed
+            </span>
           ) : null}
         </div>
-
-        <div className="jobsWorkspace">
-          <div className="jobsMaster">
-            <nav className="jobList" aria-label="Jobs">
-              {visibleJobs.map((job) => (
-                <button
-                  className={displayedJob?.id === job.id ? "jobListItem selected" : "jobListItem"}
-                  key={job.id}
-                  onClick={() => onSelect(job.id)}
-                  type="button"
-                >
-                  <span className="jobListTop">
-                    <strong title={job.type}>{formatJobType(job.type)}</strong>
-                    <span
-                      className={"status " + (job.acceptedAt ? "ready" : job.state)}
-                      title={
-                        job.acceptedAt
-                          ? "Failure accepted " + new Date(job.acceptedAt).toLocaleString()
-                          : "Job state: " + job.state
-                      }
-                    >
-                      {job.acceptedAt ? "accepted" : job.state}
-                    </span>
-                  </span>
-                  <span className="jobListMeta">
-                    <span title={`Retry ${job.retryCount} of ${job.retryLimit}`}>
-                      {job.retryCount}/{job.retryLimit} attempts
-                    </span>
-                    <span title={new Date(job.createdAt).toLocaleString()}>{relativeAge(job.createdAt)} ago</span>
-                    <span title={`Updated ${new Date(job.updatedAt).toLocaleString()}`}>updated</span>
-                  </span>
-                </button>
-              ))}
-              {filtered.length === 0 ? (
-                <p className="empty">{jobs.length === 0 ? "No jobs queued." : "No jobs match the current filters."}</p>
-              ) : null}
-            </nav>
-
-            {filtered.length > PAGE_SIZE ? (
-              <div className="tablePager jobListPager">
-                <button
-                  className="button secondary"
-                  disabled={currentPage === 0}
-                  onClick={() => setPage(currentPage - 1)}
-                  type="button"
-                >
-                  Previous
-                </button>
-                <span className="pagerStatus" aria-live="polite">
-                  {currentPage + 1}/{pageCount}
-                </span>
-                <button
-                  className="button secondary"
-                  disabled={currentPage >= pageCount - 1}
-                  onClick={() => setPage(currentPage + 1)}
-                  type="button"
-                >
-                  Next
-                </button>
-              </div>
+        <div className="surfaceBody jobsLayout">
+          <div className="jobFilters">
+            <label className="field">
+              <span>State</span>
+              <select onChange={(event) => setStateFilter(event.target.value as JobState | "all")} value={stateFilter}>
+                <option value="all">All states</option>
+                {JOB_STATES.map((state) => (
+                  <option key={state} value={state}>
+                    {state}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Type</span>
+              <select onChange={(event) => setTypeFilter(event.target.value)} value={typeFilter}>
+                <option value="all">All types</option>
+                {jobTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {formatJobType(type)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="pill" title="Jobs matching the current filters">
+              {filtered.length} matched
+            </span>
+            {failedCount > 0 ? (
+              <button
+                className="button secondary"
+                onClick={() => void onAccept(failedJobs.map((job) => job.id))}
+                type="button"
+              >
+                Accept all failures
+              </button>
             ) : null}
           </div>
 
-          <aside className="jobDetailPanel" ref={detailRef}>
-            {displayedJob ? (
-              <JobDetail
-                job={displayedJob}
-                onClose={selectedJob ? onClose : undefined}
-                onCancel={onCancel}
-                onRetry={onRetry}
-                onAccept={onAccept}
-              />
-            ) : (
-              <p className="empty">Select a job to view its details.</p>
-            )}
-          </aside>
-        </div>
+          <div className="jobsWorkspace">
+            <div className="jobsMaster">
+              <nav className="jobList" aria-label="Jobs">
+                {visibleJobs.map((job) => (
+                  <button
+                    className={displayedJob?.id === job.id ? "jobListItem selected" : "jobListItem"}
+                    key={job.id}
+                    onClick={() => onSelect(job.id)}
+                    type="button"
+                  >
+                    <span className="jobListTop">
+                      <strong title={job.type}>{formatJobType(job.type)}</strong>
+                      <span
+                        className={"status " + (job.acceptedAt ? "ready" : job.state)}
+                        title={
+                          job.acceptedAt
+                            ? "Failure accepted " + new Date(job.acceptedAt).toLocaleString()
+                            : "Job state: " + job.state
+                        }
+                      >
+                        {job.acceptedAt ? "accepted" : job.state}
+                      </span>
+                    </span>
+                    <span className="jobListMeta">
+                      <span title={`Retry ${job.retryCount} of ${job.retryLimit}`}>
+                        {job.retryCount}/{job.retryLimit} attempts
+                      </span>
+                      <span title={new Date(job.createdAt).toLocaleString()}>{relativeAge(job.createdAt)} ago</span>
+                      <span title={`Updated ${new Date(job.updatedAt).toLocaleString()}`}>updated</span>
+                    </span>
+                  </button>
+                ))}
+                {filtered.length === 0 ? (
+                  <p className="empty">
+                    {jobs.length === 0 ? "No jobs queued." : "No jobs match the current filters."}
+                  </p>
+                ) : null}
+              </nav>
 
-        <WorkersTable workers={workers} onSelect={onSelect} />
-        <SchedulesTable schedules={schedules} />
-      </div>
+              {filtered.length > PAGE_SIZE ? (
+                <div className="tablePager jobListPager">
+                  <button
+                    className="button secondary"
+                    disabled={currentPage === 0}
+                    onClick={() => setPage(currentPage - 1)}
+                    type="button"
+                  >
+                    Previous
+                  </button>
+                  <span className="pagerStatus" aria-live="polite">
+                    {currentPage + 1}/{pageCount}
+                  </span>
+                  <button
+                    className="button secondary"
+                    disabled={currentPage >= pageCount - 1}
+                    onClick={() => setPage(currentPage + 1)}
+                    type="button"
+                  >
+                    Next
+                  </button>
+                </div>
+              ) : null}
+            </div>
+
+            <aside className="jobDetailPanel" ref={detailRef}>
+              {displayedJob ? (
+                <JobDetail
+                  job={displayedJob}
+                  onClose={selectedJob ? onClose : undefined}
+                  onCancel={onCancel}
+                  onRetry={onRetry}
+                  onAccept={onAccept}
+                />
+              ) : (
+                <p className="empty">Select a job to view its details.</p>
+              )}
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section className="surface">
+        <div className="surfaceHeader">
+          <h2>Connected workers</h2>
+          <span className="pill" title="Watchers connected (seen recently)">
+            {workers.length} worker{workers.length === 1 ? "" : "s"}
+          </span>
+          {busyWorkerCount > 0 ? <span className="pill">{busyWorkerCount} busy</span> : null}
+        </div>
+        <div className="surfaceBody">
+          <WorkersTable workers={workers} onSelect={onSelect} />
+        </div>
+      </section>
+
+      <section className="surface">
+        <div className="surfaceHeader">
+          <h2>Active schedules</h2>
+          <span className="pill" title="Enabled schedules">
+            {activeScheduleCount} active
+          </span>
+        </div>
+        <div className="surfaceBody">
+          <SchedulesTable schedules={schedules} />
+        </div>
+      </section>
     </section>
   );
 }
@@ -334,52 +355,49 @@ function WorkersTable({ workers, onSelect }: { workers: WatcherView[]; onSelect:
 
   return (
     <Tooltip.Provider delayDuration={150}>
-      <div className="jobWorkers">
-        <h3 className="crunchSubhead">Connected workers</h3>
-        <div className="jobTable">
-          <div className="tableHead workerHead">
-            <span>Worker</span>
-            <span>Status</span>
-            <span>Capabilities</span>
-            <span>Job types</span>
-            <span>Current job</span>
-            <span>Last seen</span>
-          </div>
-          {sorted.map((worker) => {
-            const { label, shortId } = splitWorkerName(worker.name);
-            return (
-              <div className="tableRow workerRow" key={worker.name}>
-                <span className="workerName" title={worker.name}>
-                  <span>{label}</span>
-                  {shortId ? <span className="workerId">{shortId}</span> : null}
-                </span>
-                <span className={`status ${workerStatusClass(worker.status)}`} title={`Worker ${worker.status}`}>
-                  {worker.status}
-                </span>
-                <WorkerCapabilityPills capabilities={worker.capabilities} />
-                <WorkerJobTypePills capabilities={worker.capabilities} />
-                <span>
-                  {worker.currentJobId ? (
-                    <button
-                      className="workerJob"
-                      onClick={() => onSelect(worker.currentJobId as string)}
-                      title={worker.currentJobId}
-                      type="button"
-                    >
-                      {worker.currentJobId.slice(0, 8)}
-                    </button>
-                  ) : (
-                    "—"
-                  )}
-                </span>
-                <span title={new Date(worker.lastSeenAt).toLocaleString()}>{relativeAge(worker.lastSeenAt)} ago</span>
-              </div>
-            );
-          })}
-          {sorted.length === 0 ? (
-            <p className="empty">No workers connected. Start a watcher to process queued jobs.</p>
-          ) : null}
+      <div className="jobTable">
+        <div className="tableHead workerHead">
+          <span>Worker</span>
+          <span>Status</span>
+          <span>Capabilities</span>
+          <span>Job types</span>
+          <span>Current job</span>
+          <span>Last seen</span>
         </div>
+        {sorted.map((worker) => {
+          const { label, shortId } = splitWorkerName(worker.name);
+          return (
+            <div className="tableRow workerRow" key={worker.name}>
+              <span className="workerName" title={worker.name}>
+                <span>{label}</span>
+                {shortId ? <span className="workerId">{shortId}</span> : null}
+              </span>
+              <span className={`status ${workerStatusClass(worker.status)}`} title={`Worker ${worker.status}`}>
+                {worker.status}
+              </span>
+              <WorkerCapabilityPills capabilities={worker.capabilities} />
+              <WorkerJobTypePills capabilities={worker.capabilities} />
+              <span>
+                {worker.currentJobId ? (
+                  <button
+                    className="workerJob"
+                    onClick={() => onSelect(worker.currentJobId as string)}
+                    title={worker.currentJobId}
+                    type="button"
+                  >
+                    {worker.currentJobId.slice(0, 8)}
+                  </button>
+                ) : (
+                  "—"
+                )}
+              </span>
+              <span title={new Date(worker.lastSeenAt).toLocaleString()}>{relativeAge(worker.lastSeenAt)} ago</span>
+            </div>
+          );
+        })}
+        {sorted.length === 0 ? (
+          <p className="empty">No workers connected. Start a watcher to process queued jobs.</p>
+        ) : null}
       </div>
     </Tooltip.Provider>
   );
@@ -521,27 +539,24 @@ function SchedulesTable({ schedules }: { schedules: ScheduleView[] }) {
   const active = schedules.filter((schedule) => schedule.enabled);
 
   return (
-    <div className="jobSchedules">
-      <h3 className="crunchSubhead">Active schedules</h3>
-      <div className="jobTable">
-        <div className="tableHead scheduleHead">
-          <span>Key</span>
-          <span>Type</span>
-          <span>Cron</span>
-          <span>Next run</span>
-        </div>
-        {active.map((schedule) => (
-          <div className="tableRow scheduleRow" key={schedule.key}>
-            <span title={schedule.key}>{schedule.key}</span>
-            <span title={schedule.type}>{formatJobType(schedule.type)}</span>
-            <span>
-              <code>{schedule.cron}</code>
-            </span>
-            <span>{schedule.nextRunAt ? new Date(schedule.nextRunAt).toLocaleString() : "—"}</span>
-          </div>
-        ))}
-        {active.length === 0 ? <p className="empty">No active schedules.</p> : null}
+    <div className="jobTable">
+      <div className="tableHead scheduleHead">
+        <span>Key</span>
+        <span>Type</span>
+        <span>Cron</span>
+        <span>Next run</span>
       </div>
+      {active.map((schedule) => (
+        <div className="tableRow scheduleRow" key={schedule.key}>
+          <span title={schedule.key}>{schedule.key}</span>
+          <span title={schedule.type}>{formatJobType(schedule.type)}</span>
+          <span>
+            <code>{schedule.cron}</code>
+          </span>
+          <span>{schedule.nextRunAt ? new Date(schedule.nextRunAt).toLocaleString() : "—"}</span>
+        </div>
+      ))}
+      {active.length === 0 ? <p className="empty">No active schedules.</p> : null}
     </div>
   );
 }

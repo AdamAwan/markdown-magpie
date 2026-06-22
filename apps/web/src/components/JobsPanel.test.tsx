@@ -24,17 +24,18 @@ const callbacks = {
   onAccept: async (_jobIds: string[]) => undefined
 };
 
-test("renders a compact job master list and flexible detail workspace", () => {
+test("renders jobs, workers, and schedules as separate panels", () => {
   const html = renderToStaticMarkup(
     <JobsPanel jobs={jobs} schedules={[]} workers={[]} selectedJob={undefined} {...callbacks} />
   );
 
+  assert.equal(html.match(/class="surface"/g)?.length, 3);
+  assert.ok(html.indexOf("<h2>Jobs</h2>") < html.indexOf("<h2>Connected workers</h2>"));
+  assert.ok(html.indexOf("<h2>Connected workers</h2>") < html.indexOf("<h2>Active schedules</h2>"));
   assert.match(html, /class="jobsWorkspace"/);
   assert.match(html, /class="jobList"/);
   assert.match(html, /class="jobDetailPanel"/);
   assert.match(html, /new-job-input/);
-  assert.ok(html.indexOf('class="jobWorkers"') > html.indexOf('class="jobDetailPanel"'));
-  assert.ok(html.indexOf('class="jobSchedules"') > html.indexOf('class="jobDetailPanel"'));
 });
 
 test("shows the explicitly selected job in the detail pane", () => {
