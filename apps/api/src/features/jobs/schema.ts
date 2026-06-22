@@ -17,6 +17,12 @@ export const claimJobBodySchema = z.object({
   workerName: z.string().trim().min(1),
   capabilities: z.array(capabilitySchema).min(1)
 });
+// Heartbeats carry the watcher's name so the registry can keep it marked busy on
+// the job it is running. Optional so older watchers (and internal callers) still
+// heartbeat fine; they just don't refresh their liveness.
+export const heartbeatJobBodySchema = z.object({
+  workerName: z.string().trim().min(1).optional()
+});
 export const completeJobBodySchema = z.object({
   output: z.unknown(),
   executor: z.string().trim().min(1).optional()

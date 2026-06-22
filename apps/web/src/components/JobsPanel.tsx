@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { JobState, JobView, ScheduleView } from "../lib/types";
+import { JobState, JobView, ScheduleView, WatcherStatus, WatcherView } from "../lib/types";
 import { formatJobType, isActiveJob } from "../lib/console";
 
 const JOB_STATES: JobState[] = ["created", "retry", "active", "completed", "cancelled", "failed", "blocked"];
@@ -12,6 +12,7 @@ const CANCELLABLE: ReadonlySet<JobState> = new Set<JobState>(["created", "retry"
 export function JobsPanel({
   jobs,
   schedules,
+  workers,
   selectedJob,
   onSelect,
   onCancel,
@@ -19,6 +20,7 @@ export function JobsPanel({
 }: {
   jobs: JobView[];
   schedules: ScheduleView[];
+  workers: WatcherView[];
   selectedJob?: JobView;
   onSelect: (jobId: string) => void;
   onCancel: (jobId: string) => Promise<void>;
@@ -43,6 +45,7 @@ export function JobsPanel({
 
   const activeCount = jobs.filter(isActiveJob).length;
   const failedCount = jobs.filter((job) => job.state === "failed").length;
+  const busyWorkerCount = workers.filter((worker) => worker.status === "busy").length;
 
   return (
     <section className="surface">
@@ -53,6 +56,12 @@ export function JobsPanel({
         </span>
         {activeCount > 0 ? <span className="pill" title="Jobs still in flight">{activeCount} active</span> : null}
         {failedCount > 0 ? <span className="status failed" title="Failed jobs">{failedCount} failed</span> : null}
+        {workers.length > 0 ? (
+          <span className="pill" title="Watchers connected (seen recently)">
+            {workers.length} worker{workers.length === 1 ? "" : "s"}
+            {busyWorkerCount > 0 ? ` · ${busyWorkerCount} busy` : ""}
+          </span>
+        ) : null}
       </div>
       <div className="surfaceBody">
         <div className="jobFilters">
@@ -118,6 +127,8 @@ export function JobsPanel({
           <JobDetail job={selectedJob} onCancel={onCancel} onRetry={onRetry} />
         ) : null}
 
+        <WorkersTable workers={workers} onSelect={onSelect} />
+
         <SchedulesTable schedules={schedules} />
       </div>
     </section>
@@ -180,6 +191,85 @@ function JobDetail({
       {job.output !== undefined ? <JsonBlock title="Output" value={job.output} /> : null}
     </div>
   );
+}
+
+// The watchers the API has heard from recently, with whether each is running a
+// job (busy) or polling for one (idle). The clickable current-job id selects that
+// job in the table above when it is on the loaded page.
+function WorkersTable({ workers, onSelect }: { workers: WatcherView[]; onSelect: (jobId: string) => void }) {
+  const sorted = useMemo(
+    () => [...workers].sort((left, right) => left.name.localeCompare(right.name)),
+    [workers]
+  );
+
+  return (
+    <div className="jobWorkers">
+      <h3 className="crunchSubhead">Connected workers</h3>
+      <div className="jobTable">
+        <div className="tableHead workerHead">
+          <span>Worker</span>
+          <span>Status</span>
+          <span>Capabilities</span>
+          <span>Current job</span>
+          <span>Last seen</span>
+        </div>
+        {sorted.map((worker) => {
+          const { label, shortId } = splitWorkerName(worker.name);
+          return (
+            <div className="tableRow workerRow" key={worker.name}>
+              <span className="workerName" title={worker.name}>
+                <span>{label}</span>
+                {shortId ? <span className="workerId">{shortId}</span> : null}
+              </span>
+              <span className={`status ${workerStatusClass(worker.status)}`} title={`Worker ${worker.status}`}>
+                {worker.status}
+              </span>
+              <span title={worker.capabilities.join(", ")}>
+                {worker.capabilities.length > 0 ? worker.capabilities.join(", ") : "—"}
+              </span>
+              <span>
+                {worker.currentJobId ? (
+                  <button
+                    className="workerJob"
+                    onClick={() => onSelect(worker.currentJobId as string)}
+                    title={worker.currentJobId}
+                    type="button"
+                  >
+                    {worker.currentJobId.slice(0, 8)}
+                  </button>
+                ) : (
+                  "—"
+                )}
+              </span>
+              <span title={new Date(worker.lastSeenAt).toLocaleString()}>{relativeAge(worker.lastSeenAt)} ago</span>
+            </div>
+          );
+        })}
+        {sorted.length === 0 ? (
+          <p className="empty">No workers connected. Start a watcher to process queued jobs.</p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// Maps the worker status to an existing status-pill colour: busy reuses the amber
+// "running" look, idle the green "available" look.
+function workerStatusClass(status: WatcherStatus): string {
+  return status === "busy" ? "running" : "ready";
+}
+
+// Splits a watcher's unique name (`<label>-<uuid>`) into the operator-set label
+// and a short id (first 8 hex of the uuid) for compact display. Names without a
+// uuid suffix render whole, with no id chip.
+const UUID_SUFFIX = /-([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function splitWorkerName(name: string): { label: string; shortId?: string } {
+  const match = UUID_SUFFIX.exec(name);
+  if (!match) {
+    return { label: name };
+  }
+  const label = name.slice(0, match.index);
+  return { label: label || name, shortId: match[1] };
 }
 
 function SchedulesTable({ schedules }: { schedules: ScheduleView[] }) {

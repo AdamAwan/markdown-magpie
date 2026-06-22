@@ -23,7 +23,9 @@ export type {
   QuestionLog,
   RepositoryRef,
   ScheduledTaskSettings,
-  SuggestedGapCluster
+  SuggestedGapCluster,
+  WatcherStatus,
+  WatcherView
 } from "@magpie/core";
 
 import type {
@@ -31,7 +33,8 @@ import type {
   GapCandidate,
   Proposal,
   QuestionFeedback,
-  ScheduledTaskSettings
+  ScheduledTaskSettings,
+  WatcherView
 } from "@magpie/core";
 
 // Queue/job domain types live in @magpie/jobs (the pg-boss contract). The web
@@ -166,6 +169,12 @@ export interface ScheduleView {
 export interface JobsResponse {
   jobs: JobView[];
   total: number;
+}
+
+// `/workers` returns the watchers currently connected (seen within the API's
+// active window), busy or idle. Drives the Jobs screen's Workers panel.
+export interface WorkersResponse {
+  workers: WatcherView[];
 }
 
 // The crunch settings list response enriches the stored cron with the next run

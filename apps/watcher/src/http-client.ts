@@ -107,7 +107,11 @@ export class HttpWatcherApi implements WatcherApi {
   }
 
   async heartbeat(jobId: string): Promise<{ cancelled: boolean }> {
-    const { cancelled } = await this.post<{ cancelled: boolean }>(`/api/jobs/${jobId}/heartbeat`, {});
+    // Send the worker name so the API keeps this watcher marked busy on the job
+    // it is running (the registry behind the Jobs screen's connected-workers view).
+    const { cancelled } = await this.post<{ cancelled: boolean }>(`/api/jobs/${jobId}/heartbeat`, {
+      workerName: this.workerName
+    });
     return { cancelled: Boolean(cancelled) };
   }
 

@@ -6,6 +6,7 @@ import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
 import { jobDefinition } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import type { JobListFilters } from "../../jobs/broker.js";
+import type { WatcherTouch } from "../../stores/watcher-registry-store.js";
 import { refreshPullRequestsOutputSchema } from "@magpie/jobs";
 import * as proposalsService from "../proposals/service.js";
 import * as crunchService from "../crunch/service.js";
@@ -22,7 +23,16 @@ export async function claimJob(
   // TODO(Task 4): capability-based claim contract
   capabilities: JobCapability[]
 ): Promise<JobView | undefined> {
-  return ctx.jobs.claim(workerName, capabilities);
+  const job = await ctx.jobs.claim(workerName, capabilities);
+  // A claim is the watcher's idle poll: it becomes busy if it got a job, and
+  // stays idle otherwise. This is also where capabilities reach the registry.
+  await touchWatcher(ctx, {
+    name: workerName,
+    capabilities,
+    status: job ? "busy" : "idle",
+    currentJobId: job?.id
+  });
+  return job;
 }
 
 export async function getJob(ctx: AppContext, id: string): Promise<JobView | undefined> {
@@ -35,8 +45,15 @@ export async function listJobs(ctx: AppContext, filters: JobListFilters = {}): P
   return { ...result, jobs: result.jobs.map(projectJob) };
 }
 
-export async function heartbeatJob(ctx: AppContext, id: string): Promise<JobView> {
-  return ctx.jobs.heartbeat(id);
+export async function heartbeatJob(ctx: AppContext, id: string, workerName?: string): Promise<JobView> {
+  const job = await ctx.jobs.heartbeat(id);
+  // A heartbeat only arrives while a watcher is running a job, so it keeps that
+  // watcher marked busy on the job it is processing. workerName is absent on
+  // legacy/internal callers, which simply don't update the registry.
+  if (workerName) {
+    await touchWatcher(ctx, { name: workerName, status: "busy", currentJobId: id });
+  }
+  return job;
 }
 
 export async function cancelJob(ctx: AppContext, id: string): Promise<JobView> {
@@ -129,6 +146,9 @@ export async function completeJob(
     await sourceSyncService.recordSourceSyncPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await applyRefreshPullRequestsTransitions(ctx, existingJob, parsed.data);
     await ctx.jobs.complete(jobId, { result: parsed.data, executor });
+    // The watcher is free again the moment it completes a job; reflect that
+    // immediately rather than waiting for its next idle claim poll.
+    await touchWatcher(ctx, { name: executor, status: "idle" });
   } catch (error) {
     await ctx.jobs.fail(jobId, {
       code: "completion_failed",
@@ -202,6 +222,10 @@ export async function failJob(
 ): Promise<JobView | undefined> {
   const failingJob = await ctx.jobs.get(jobId);
   const failedJob = await ctx.jobs.fail(jobId, jobError);
+  // A failure (retryable or terminal) also frees the watcher to poll again.
+  if (jobError.executor) {
+    await touchWatcher(ctx, { name: jobError.executor, status: "idle" });
+  }
   if (failingJob?.type === "crunch_knowledge_base" && failedJob.state === "failed") {
     const run = await ctx.stores.crunchRuns.getRunByJobId(jobId);
     if (run) {
@@ -247,6 +271,18 @@ function redactSecrets(value: unknown): unknown {
 
 function isTerminal(state: JobView["state"]): boolean {
   return state === "completed" || state === "failed" || state === "cancelled";
+}
+
+// Updates the connected-watcher registry as a side effect of the job lifecycle.
+// Deliberately best-effort: the registry is operator telemetry for the Jobs
+// screen, never a source of truth for execution, so a write failure must not
+// turn a successful claim/heartbeat/completion into an error for the watcher.
+async function touchWatcher(ctx: AppContext, input: WatcherTouch): Promise<void> {
+  try {
+    await ctx.stores.watchers.touch(input);
+  } catch (error) {
+    console.warn(`Watcher registry update failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {

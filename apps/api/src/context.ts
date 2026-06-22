@@ -11,6 +11,7 @@ import {
   createScheduledTaskStore,
   createSnapshotStore,
   createSourceSyncStore,
+  createWatcherRegistryStore,
   requireDatabaseUrl,
   storeBackend
 } from "./platform/stores.js";
@@ -42,6 +43,7 @@ export interface AppContext {
     gapClusters: ReturnType<typeof createGapClusterStore>;
     reconciliations: ReturnType<typeof createReconciliationDecisionStore>;
     snapshots: ReturnType<typeof createSnapshotStore>;
+    watchers: ReturnType<typeof createWatcherRegistryStore>;
   };
   jobs: JobBroker;
   providers: {
@@ -101,7 +103,8 @@ export async function createAppContext(): Promise<AppContext> {
       sourceSync: createSourceSyncStore(),
       gapClusters: createGapClusterStore(),
       reconciliations: createReconciliationDecisionStore(),
-      snapshots: createSnapshotStore()
+      snapshots: createSnapshotStore(),
+      watchers: createWatcherRegistryStore()
     },
     jobs,
     providers: {

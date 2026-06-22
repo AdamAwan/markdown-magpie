@@ -575,6 +575,27 @@ export interface ScheduledTaskSettings {
   cron: string;
 }
 
+// --- Watcher registry ------------------------------------------------------
+// A watcher is busy while it runs a claimed job and idle while it polls for the
+// next one; the API derives this from which lifecycle call last arrived.
+export type WatcherStatus = "idle" | "busy";
+
+// One connected watcher as the Jobs screen sees it. The watcher process makes
+// itself distinct by appending a per-process uuid to its operator-set label
+// (`<WATCHER_NAME>-<uuid>`), so horizontally-scaled replicas never collide on a
+// single registry row. `name` is that full unique identifier; `capabilities`
+// are the job kinds it advertised when it last claimed. Liveness is best-effort:
+// the API records `lastSeenAt` on every claim/heartbeat and drops a watcher from
+// the list once it has been silent past the active window (so a crashed watcher
+// lingers at most that long), without any explicit deregistration.
+export interface WatcherView {
+  name: string;
+  status: WatcherStatus;
+  capabilities: string[];
+  currentJobId?: string;
+  lastSeenAt: string;
+}
+
 // --- Cron scheduling -------------------------------------------------------
 // A small, dependency-free evaluator for standard 5-field cron expressions:
 //   minute(0-59) hour(0-23) day-of-month(1-31) month(1-12) day-of-week(0-6)

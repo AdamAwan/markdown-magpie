@@ -5,7 +5,8 @@ import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import * as jobsService from "./service.js";
 import {
-  claimJobBodySchema, completeJobBodySchema, createJobBodySchema, failJobBodySchema, listJobsQuerySchema
+  claimJobBodySchema, completeJobBodySchema, createJobBodySchema, failJobBodySchema,
+  heartbeatJobBodySchema, listJobsQuerySchema
 } from "./schema.js";
 
 export function jobRoutes(ctx: AppContext): Hono {
@@ -44,9 +45,14 @@ export function jobRoutes(ctx: AppContext): Hono {
 
   app.post("/:id/heartbeat", requireScopes("manage:jobs"), async (c) => {
     try {
-      const job = await jobsService.heartbeatJob(ctx, c.req.param("id"));
+      const parsed = heartbeatJobBodySchema.safeParse(await readJsonBody(c));
+      const workerName = parsed.success ? parsed.data.workerName : undefined;
+      const job = await jobsService.heartbeatJob(ctx, c.req.param("id"), workerName);
       return c.json({ job, cancelled: job.state === "cancelled" });
-    } catch { throw new HttpError(404, "job_not_found"); }
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(404, "job_not_found");
+    }
   });
 
   app.post("/:id/complete", requireScopes("manage:jobs"), async (c) => {

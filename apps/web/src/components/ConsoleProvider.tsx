@@ -25,7 +25,9 @@ import {
   ScheduledTask,
   ScheduleView,
   SuggestedGapCluster,
-  UiMessage
+  UiMessage,
+  WatcherView,
+  WorkersResponse
 } from "../lib/types";
 import { apiDelete, apiGet, apiPost, errorMessage } from "../lib/api";
 import { knowledgeFlows } from "../lib/config";
@@ -50,6 +52,7 @@ function useConsoleController() {
   const [gapClusters, setGapClusters] = useState<SuggestedGapCluster[]>([]);
   const [jobs, setJobs] = useState<JobView[]>([]);
   const [jobSchedules, setJobSchedules] = useState<ScheduleView[]>([]);
+  const [workers, setWorkers] = useState<WatcherView[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string | undefined>();
   const [selectedJob, setSelectedJob] = useState<JobView | undefined>();
   const [proposals, setProposals] = useState<Proposal[]>([]);
@@ -221,7 +224,7 @@ function useConsoleController() {
       clearMessage();
     }
     try {
-      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, schedulesResult, proposalsResult, crunchRunsResult, crunchSettingsResult, scheduledTasksResult, configResult, promptsResult, snapshotsResult, reconciliationsResult] = await Promise.all([
+      const [healthResult, statsResult, repositoriesResult, documentsResult, questionsResult, gapsResult, clustersResult, jobsResult, schedulesResult, workersResult, proposalsResult, crunchRunsResult, crunchSettingsResult, scheduledTasksResult, configResult, promptsResult, snapshotsResult, reconciliationsResult] = await Promise.all([
         apiGet<Health>("/health", { signal }),
         apiGet<KnowledgeStats>("/knowledge/stats", { signal }),
         apiGet<{ repositories: RepositoryRef[] }>("/knowledge/repositories", { signal }),
@@ -231,6 +234,7 @@ function useConsoleController() {
         apiGet<{ clusters: SuggestedGapCluster[] }>("/gaps/clusters?limit=8", { signal }),
         apiGet<JobsResponse>("/jobs?limit=100", { signal }),
         apiGet<{ schedules: ScheduleView[] }>("/jobs/schedules", { signal }),
+        apiGet<WorkersResponse>("/workers", { signal }),
         apiGet<{ proposals: Proposal[] }>("/proposals?limit=8", { signal }),
         apiGet<{ runs: CrunchRun[] }>("/crunch/runs?limit=12", { signal }),
         apiGet<{ settings: CrunchSettingsView[] }>("/crunch/settings", { signal }),
@@ -256,6 +260,7 @@ function useConsoleController() {
       setGapClusters(clustersResult.clusters);
       applyJobs(jobsResult.jobs, jobsRef.current.length > 0);
       setJobSchedules(schedulesResult.schedules);
+      setWorkers(workersResult.workers);
       setProposals(proposalsResult.proposals);
       setCrunchRuns(crunchRunsResult.runs);
       setCrunchSettings(crunchSettingsResult.settings);
@@ -621,6 +626,7 @@ function useConsoleController() {
     gapClusters,
     jobs,
     jobSchedules,
+    workers,
     selectedJobId,
     selectedJob,
     proposals,

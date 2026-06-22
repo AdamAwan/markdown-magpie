@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { authSettingsFromEnv, createApiTokenProvider } from "@magpie/auth";
 import type { JobCapability } from "@magpie/jobs";
 import { CAPABILITY_GATES, deriveCapabilities } from "./capabilities.js";
@@ -11,7 +12,12 @@ import { WorkerLoop } from "./worker-loop.js";
 // and the loop; this file only wires them together.
 
 const apiBaseUrl = process.env.API_BASE_URL ?? "http://localhost:4000";
-const watcherName = process.env.WATCHER_NAME ?? "local-dev-watcher";
+// Append a per-process uuid to the operator-set label so every running watcher —
+// including multiple replicas that share one WATCHER_NAME — is a distinct entry
+// in the connected-workers registry. A restart yields a new id (and the old one
+// ages out of the registry), which is correct: a restarted process is a new one.
+const watcherLabel = process.env.WATCHER_NAME ?? "local-dev-watcher";
+const watcherName = `${watcherLabel}-${randomUUID()}`;
 const pollIntervalMs = parsePositiveInt(process.env.WATCHER_POLL_INTERVAL_MS, 2000);
 
 // Authenticate to the API with the watcher's OWN machine-to-machine credential.

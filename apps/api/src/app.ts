@@ -14,6 +14,7 @@ import { crunchRoutes } from "./features/crunch/routes.js";
 import { sourceSyncRoutes } from "./features/source-sync/routes.js";
 import { scheduledTaskRoutes } from "./features/scheduled-tasks/routes.js";
 import { jobRoutes } from "./features/jobs/routes.js";
+import { workerRoutes } from "./features/workers/routes.js";
 import { promptRoutes } from "./features/prompts/routes.js";
 import { snapshotRoutes } from "./features/snapshots/routes.js";
 import { reconciliationRoutes } from "./features/reconciliations/routes.js";
@@ -61,6 +62,7 @@ export function buildApp(ctx: AppContext, options: ApiAuthOptions = {}): Hono {
   api.route("/source-sync", sourceSyncRoutes(ctx));
   api.route("/scheduled-tasks", scheduledTaskRoutes(ctx));
   api.route("/jobs", jobRoutes(ctx));
+  api.route("/workers", workerRoutes(ctx));
   api.route("/prompts", promptRoutes(ctx));
   api.route("/snapshots", snapshotRoutes(ctx));
   api.route("/reconciliations", reconciliationRoutes(ctx));

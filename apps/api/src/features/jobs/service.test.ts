@@ -40,6 +40,52 @@ test("job services filter lists and isolate claims by capability", async () => {
   assert.equal(await claimJob(ctx, "codex-worker", ["codex"]), undefined);
 });
 
+test("connected-watcher registry tracks busy/idle across the job lifecycle", async () => {
+  const ctx = makeTestContext();
+  const window = 60_000;
+
+  // An idle poll (claim with no work) registers the watcher as idle, capturing
+  // the capabilities it advertised.
+  assert.equal(await claimJob(ctx, "w-1", ["codex"]), undefined);
+  let workers = await ctx.stores.watchers.list(window);
+  assert.equal(workers.length, 1);
+  assert.equal(workers[0].name, "w-1");
+  assert.equal(workers[0].status, "idle");
+  assert.deepEqual(workers[0].capabilities, ["codex"]);
+  assert.equal(workers[0].currentJobId, undefined);
+
+  // Claiming a job flips it to busy on that job.
+  const job = await ctx.jobs.create("answer_question", answerInput());
+  assert.equal((await claimJob(ctx, "w-1", ["codex"]))?.id, job.id);
+  workers = await ctx.stores.watchers.list(window);
+  assert.equal(workers[0].status, "busy");
+  assert.equal(workers[0].currentJobId, job.id);
+
+  // A heartbeat keeps it busy on the same job (and is how a busy watcher stays alive).
+  await heartbeatJob(ctx, job.id, "w-1");
+  workers = await ctx.stores.watchers.list(window);
+  assert.equal(workers[0].status, "busy");
+  assert.equal(workers[0].currentJobId, job.id);
+
+  // Completing frees the watcher; the earlier-advertised capabilities persist.
+  assert.equal(
+    (await completeJob(ctx, job.id, { answer: "a", confidence: "high", citations: [] }, "w-1")).ok,
+    true
+  );
+  workers = await ctx.stores.watchers.list(window);
+  assert.equal(workers[0].status, "idle");
+  assert.equal(workers[0].currentJobId, undefined);
+  assert.deepEqual(workers[0].capabilities, ["codex"]);
+});
+
+test("a watcher drops out of the registry once silent past the active window", async () => {
+  const ctx = makeTestContext();
+  await claimJob(ctx, "w-stale", ["codex"]);
+  // Let real time pass, then list with a 1ms window: the watcher is now stale.
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(await ctx.stores.watchers.list(1), []);
+});
+
 test("heartbeat, cancellation, and failed-only retry expose lifecycle state", async () => {
   const ctx = makeTestContext();
   const created = await ctx.jobs.create("answer_question", answerInput());

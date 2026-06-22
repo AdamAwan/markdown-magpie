@@ -7,11 +7,13 @@ import { PostgresQuestionLogStore } from "../stores/postgres-question-log-store.
 import { PostgresReconciliationDecisionStore } from "../stores/postgres-reconciliation-decision-store.js";
 import { PostgresScheduledTaskStore } from "../stores/postgres-scheduled-task-store.js";
 import { PostgresSourceSyncStore } from "../stores/postgres-source-sync-store.js";
+import { PostgresWatcherRegistryStore } from "../stores/postgres-watcher-registry-store.js";
 import { InMemoryProposalStore } from "../stores/proposal-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
 import { InMemoryReconciliationDecisionStore } from "../stores/reconciliation-decision-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
+import { InMemoryWatcherRegistryStore } from "../stores/watcher-registry-store.js";
 import { FileSnapshotStore, type SnapshotStore } from "../stores/snapshot-store.js";
 import { snapshotRoot } from "./repositories.js";
 
@@ -27,7 +29,8 @@ export type StoreEnvName =
   | "SCHEDULED_TASK_STORE"
   | "SOURCE_SYNC_STORE"
   | "GAP_CLUSTER_STORE"
-  | "RECONCILIATION_DECISION_STORE";
+  | "RECONCILIATION_DECISION_STORE"
+  | "WATCHER_REGISTRY_STORE";
 
 export function storeBackend(name: StoreEnvName): "memory" | "postgres" {
   return process.env[name] === "postgres" ? "postgres" : storageBackend();
@@ -110,6 +113,14 @@ export function createReconciliationDecisionStore():
     "RECONCILIATION_DECISION_STORE",
     (databaseUrl) => new PostgresReconciliationDecisionStore(databaseUrl),
     () => new InMemoryReconciliationDecisionStore()
+  );
+}
+
+export function createWatcherRegistryStore(): InMemoryWatcherRegistryStore | PostgresWatcherRegistryStore {
+  return createStore<InMemoryWatcherRegistryStore | PostgresWatcherRegistryStore>(
+    "WATCHER_REGISTRY_STORE",
+    (databaseUrl) => new PostgresWatcherRegistryStore(databaseUrl),
+    () => new InMemoryWatcherRegistryStore()
   );
 }
 
