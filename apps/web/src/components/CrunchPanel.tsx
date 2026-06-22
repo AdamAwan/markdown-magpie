@@ -1,6 +1,17 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { isValidCron } from "@magpie/core";
 import { ConfiguredKnowledgeFlow, CrunchRun, CrunchSettingsView, ScheduledTask } from "../lib/types";
+
+// How the schedules table is grouped: by the flow-free task type (so a shared
+// description is shown once per type, not repeated per flow) or by flow (so each
+// flow's full set of scheduled work sits together).
+type GroupBy = "type" | "flow";
+
+// The flow-crunch schedule rows have no server-supplied description; this is the
+// type-level blurb shown in their group's info tooltip, mirroring the section hint.
+const FLOW_CRUNCH_DESCRIPTION =
+  "Consolidates overlapping knowledge-base documents and splits bloated ones for this flow, then lands the result " +
+  "on a review branch.";
 
 export function CrunchPanel({
   flows,
@@ -25,15 +36,21 @@ export function CrunchPanel({
   scheduledTasks: ScheduledTask[];
   settings: CrunchSettingsView[];
 }) {
+  const [groupBy, setGroupBy] = useState<GroupBy>("type");
   const flowName = (flowId?: string) => flows.find((flow) => flow.id === flowId)?.name ?? flowId ?? "Default knowledge base";
 
   // Flow crunch schedules and generic side-processes are two sources with
   // different save/run endpoints; normalise them into one row shape (with the
-  // right handlers bound per row) so they share a single tidy table.
+  // right handlers bound per row) so they share a single tidy table. Each entry
+  // carries both axes — the flow-free task type and the flow — so the table can
+  // group by either without re-parsing keys or display labels.
   const entries: ScheduleEntry[] = [
     ...settings.map((setting) => ({
       id: `flow:${setting.flowId ?? "__default__"}`,
-      name: flowName(setting.flowId),
+      typeKey: "flow-crunch",
+      typeLabel: "Knowledge base crunch",
+      typeDescription: FLOW_CRUNCH_DESCRIPTION,
+      flowName: flowName(setting.flowId),
       kind: "Flow" as const,
       setting,
       placeholder: "0 2 * * *",
@@ -42,15 +59,19 @@ export function CrunchPanel({
     })),
     ...scheduledTasks.map((task) => ({
       id: `task:${task.key}`,
-      name: task.label,
+      typeKey: task.baseKey,
+      typeLabel: task.typeLabel,
+      typeDescription: task.description,
+      flowName: flowName(task.flowId),
       kind: "Side process" as const,
-      description: task.description,
       setting: task.settings,
       placeholder: "*/10 * * * *",
       onSave: (enabled: boolean, cron: string) => onSaveTask(task.key, enabled, cron),
       onRun: () => onRunTask(task.key)
     }))
   ];
+
+  const groups = groupEntries(entries, groupBy);
 
   return (
     <section className="surface">
@@ -67,17 +88,47 @@ export function CrunchPanel({
         </p>
 
         <section className="crunchSection">
-          <h3 className="crunchSubhead">Schedules</h3>
+          <div className="crunchSectionHead">
+            <h3 className="crunchSubhead">Schedules</h3>
+            <div className="crunchGroupBy" role="group" aria-label="Group schedules by">
+              <span className="crunchGroupByLabel">Group by</span>
+              <button
+                className={groupBy === "type" ? "chip selected" : "chip"}
+                onClick={() => setGroupBy("type")}
+                type="button"
+              >
+                Job type
+              </button>
+              <button
+                className={groupBy === "flow" ? "chip selected" : "chip"}
+                onClick={() => setGroupBy("flow")}
+                type="button"
+              >
+                Flow
+              </button>
+            </div>
+          </div>
           <div className="jobTable">
             <div className="tableHead crunchScheduleHead">
-              <span>Name</span>
+              <span>{groupBy === "type" ? "Flow" : "Job type"}</span>
               <span>Cron</span>
               <span>Next run</span>
               <span>Status</span>
               <span />
             </div>
-            {entries.map((entry) => (
-              <ScheduleRow entry={entry} key={entry.id} loading={loading} />
+            {groups.map((group) => (
+              <Fragment key={group.key}>
+                <div className="crunchGroupRow">
+                  <span className="crunchGroupLabel">{group.label}</span>
+                  {group.description ? <InfoDot label={group.label} text={group.description} /> : null}
+                  <span className="crunchGroupCount">
+                    {group.entries.length} schedule{group.entries.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                {group.entries.map((entry) => (
+                  <ScheduleRow entry={entry} groupBy={groupBy} key={entry.id} loading={loading} />
+                ))}
+              </Fragment>
             ))}
             {entries.length === 0 ? (
               <p className="empty">No crunch schedules or side-processes are configured.</p>
@@ -115,31 +166,81 @@ const CRON_PRESETS: Array<{ label: string; cron: string }> = [
 
 interface ScheduleEntry {
   id: string;
-  name: string;
+  // The two grouping axes: the flow-free task type (typeKey/typeLabel, with a
+  // shared typeDescription) and the flow it runs for (flowName).
+  typeKey: string;
+  typeLabel: string;
+  typeDescription?: string;
+  flowName: string;
   kind: "Flow" | "Side process";
-  description?: string;
   setting: { enabled: boolean; cron: string; nextRunAt?: string };
   placeholder: string;
   onSave: (enabled: boolean, cron: string) => Promise<void>;
   onRun: () => Promise<void>;
 }
 
+interface ScheduleGroup {
+  key: string;
+  label: string;
+  // Only the by-type grouping carries a description (the shared task blurb shown
+  // once in the group's info tooltip); by-flow groups leave it undefined and the
+  // per-row type label carries its own tooltip instead.
+  description?: string;
+  entries: ScheduleEntry[];
+}
+
+// Bucket entries by the chosen axis, preserving first-seen order so the table is
+// stable across refreshes. Grouping by type collapses the per-flow repetition the
+// old flat list showed (same long description on every row).
+function groupEntries(entries: ScheduleEntry[], by: GroupBy): ScheduleGroup[] {
+  const groups = new Map<string, ScheduleGroup>();
+  for (const entry of entries) {
+    const key = by === "type" ? entry.typeKey : entry.flowName;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        key,
+        label: by === "type" ? entry.typeLabel : entry.flowName,
+        description: by === "type" ? entry.typeDescription : undefined,
+        entries: []
+      };
+      groups.set(key, group);
+    }
+    group.entries.push(entry);
+  }
+  return [...groups.values()];
+}
+
+// A small "i" affordance whose hover/focus tooltip carries the long task
+// description, so the text appears once per group (or once per row) instead of
+// being repeated inline under every schedule.
+function InfoDot({ label, text }: { label: string; text: string }) {
+  return (
+    <span aria-label={`About ${label}: ${text}`} className="crunchInfo" role="img" tabIndex={0} title={text}>
+      i
+    </span>
+  );
+}
+
 // One row of the schedules table. Collapsed it shows the schedule at a glance;
 // the Edit button expands an inline editor, so the cron help and presets appear
-// only for the row being edited rather than repeated on every row.
-function ScheduleRow({ entry, loading }: { entry: ScheduleEntry; loading: boolean }) {
+// only for the row being edited rather than repeated on every row. The row names
+// whichever axis the table is *not* grouped by (flow when grouped by type, and
+// vice versa); when it names the type it also carries the description tooltip.
+function ScheduleRow({ entry, groupBy, loading }: { entry: ScheduleEntry; groupBy: GroupBy; loading: boolean }) {
   const [editing, setEditing] = useState(false);
   const { setting } = entry;
+  const namesType = groupBy === "flow";
 
   return (
     <>
       <div className="tableRow crunchScheduleRow">
         <span className="crunchScheduleName">
-          <span className="crunchScheduleTitle">{entry.name}</span>
-          <span className="crunchScheduleMeta">
-            {entry.kind}
-            {entry.description ? ` · ${entry.description}` : ""}
+          <span className="crunchScheduleTitle">
+            {namesType ? entry.typeLabel : entry.flowName}
+            {namesType && entry.typeDescription ? <InfoDot label={entry.typeLabel} text={entry.typeDescription} /> : null}
           </span>
+          <span className="crunchScheduleMeta">{entry.kind}</span>
         </span>
         <span>{setting.enabled ? <code>{setting.cron}</code> : "—"}</span>
         <span>{setting.enabled && setting.nextRunAt ? new Date(setting.nextRunAt).toLocaleString() : "—"}</span>

@@ -2040,6 +2040,8 @@ pre {
 }
 
 .crunchScheduleTitle {
+  display: inline-flex;
+  align-items: center;
   font-weight: 700;
 }
 
@@ -2111,6 +2113,84 @@ pre {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: #65716b;
+}
+
+/* Schedules header: subhead on the left, group-by toggle on the right. */
+.crunchSectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.crunchSectionHead .crunchSubhead {
+  margin: 0;
+}
+
+.crunchGroupBy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.crunchGroupByLabel {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #65716b;
+}
+
+/* Group separator inside the schedules table. A full-width child of the
+   single-column .jobTable grid (like the inline editor), it names the shared axis
+   once so per-row repetition of the type/flow and its description falls away. */
+.crunchGroupRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid #d6ddd5;
+  padding: 14px 0 6px;
+}
+
+.crunchGroupLabel {
+  font-weight: 800;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #3a423d;
+}
+
+.crunchGroupCount {
+  font-size: 11px;
+  font-weight: 600;
+  color: #8a948f;
+}
+
+/* The "i" info affordance carrying a description in its tooltip. */
+.crunchInfo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 6px;
+  border: 1px solid #b7c2bb;
+  border-radius: 50%;
+  color: #65716b;
+  font-size: 10px;
+  font-weight: 800;
+  font-style: italic;
+  line-height: 1;
+  cursor: help;
+  vertical-align: middle;
+}
+
+.crunchInfo:hover,
+.crunchInfo:focus-visible {
+  border-color: #7d8a83;
+  color: #3a423d;
+  outline: none;
 }
 
 .crunchError {

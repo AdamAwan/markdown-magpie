@@ -189,6 +189,13 @@ export type ScheduledTaskSettingsView = ScheduledTaskSettings & { nextRunAt?: st
 
 export interface ScheduledTask {
   key: string;
+  // `baseKey` is the flow-free task type (shared across flows); `flowId` identifies
+  // the flow this instance runs for. The console groups the schedules table by one
+  // axis or the other, so it relies on these rather than splitting `label`/`key`.
+  baseKey: string;
+  flowId?: string;
+  // Flow-free type name (e.g. "Clustered gaps → pull requests"); `label` adds the flow.
+  typeLabel: string;
   label: string;
   description: string;
   settings: ScheduledTaskSettingsView;
