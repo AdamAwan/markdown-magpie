@@ -122,9 +122,12 @@ const crunchOperationSchema = z.object({
   kind: z.enum(["consolidate", "split", "rewrite"]),
   title: z.string(),
   reason: z.string(),
-  sources: z.array(z.string()),
-  writes: z.array(documentSchema),
-  deletes: z.array(z.string())
+  // The model routinely omits these when empty (e.g. the source-change-sync
+  // prompt forbids deletes outright), so default rather than reject — an absent
+  // array means "none of these", which is what the downstream changeset wants.
+  sources: z.array(z.string()).default([]),
+  writes: z.array(documentSchema).default([]),
+  deletes: z.array(z.string()).default([])
 });
 export const crunchKnowledgeBaseInputSchema = z.object({
   provider: providerSchema,
