@@ -65,7 +65,30 @@ describe("ChatRunner", () => {
     assert.equal(runner.capability, "openai-compatible");
     assert.ok(runner.supports("answer_question"));
     assert.ok(runner.supports("summarize_gap"));
+    assert.ok(runner.supports("sync_source_changes_generate_plan"));
     assert.ok(!runner.supports("publish_proposal"));
+  });
+
+  it("runs buildPrompt -> chat -> parseJobOutput for sync_source_changes_generate_plan", async () => {
+    // The source-sync plan job produces a CrunchPlan; the watcher must claim it
+    // (it is a provider AI job) and validate the model's plan against the contract.
+    const plan = { summary: "Doc updated", operations: [], rationale: "threshold moved" };
+    const chat = new FakeChatProvider(() => JSON.stringify(plan));
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const output = await runner.run(
+      job("sync_source_changes_generate_plan", {
+        provider: "openai-compatible",
+        sourceId: "src-1",
+        sourceName: "Pricing rules",
+        fromSha: "aaa",
+        toSha: "bbb",
+        changes: [{ path: "pricing.ts", status: "modified", diff: "- 10\n+ 20" }],
+        candidateDocuments: [{ path: "kb/pricing.md", content: "The threshold is 10." }],
+        expectedOutput: "crunch_plan"
+      }),
+      new AbortController().signal
+    );
+    assert.deepEqual(output, plan);
   });
 
   it("routes, retrieves, answers, and derives citations for answer_question", async () => {

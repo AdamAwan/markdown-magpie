@@ -17,7 +17,8 @@ const CHAT_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "suggest_consolidation",
   "crunch_knowledge_base",
   "cluster_gap_candidates",
-  "reconcile_gap_clusters"
+  "reconcile_gap_clusters",
+  "sync_source_changes_generate_plan"
 ]);
 
 type ReconcileOutput = z.infer<typeof reconcileGapClustersOutputSchema>;

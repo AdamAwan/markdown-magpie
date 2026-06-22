@@ -13,7 +13,8 @@ const CLI_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "detect_contradiction",
   "suggest_consolidation",
   "crunch_knowledge_base",
-  "cluster_gap_candidates"
+  "cluster_gap_candidates",
+  "sync_source_changes_generate_plan"
 ]);
 
 const DEFAULT_TIMEOUT_MS = 120_000;
