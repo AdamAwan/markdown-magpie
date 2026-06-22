@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import { JobCapability, JobState, JobType, JobView, ScheduleView, WatcherStatus, WatcherView } from "../lib/types";
 import { formatJobType, isActiveJob } from "../lib/console";
 
@@ -298,71 +299,133 @@ function WorkersTable({ workers, onSelect }: { workers: WatcherView[]; onSelect:
   const sorted = useMemo(() => [...workers].sort((left, right) => left.name.localeCompare(right.name)), [workers]);
 
   return (
-    <div className="jobWorkers">
-      <h3 className="crunchSubhead">Connected workers</h3>
-      <div className="jobTable">
-        <div className="tableHead workerHead">
-          <span>Worker</span>
-          <span>Status</span>
-          <span>Capability</span>
-          <span>Job types</span>
-          <span>Current job</span>
-          <span>Last seen</span>
+    <Tooltip.Provider delayDuration={150}>
+      <div className="jobWorkers">
+        <h3 className="crunchSubhead">Connected workers</h3>
+        <div className="jobTable">
+          <div className="tableHead workerHead">
+            <span>Worker</span>
+            <span>Status</span>
+            <span>Capabilities</span>
+            <span>Job types</span>
+            <span>Current job</span>
+            <span>Last seen</span>
+          </div>
+          {sorted.map((worker) => {
+            const { label, shortId } = splitWorkerName(worker.name);
+            return (
+              <div className="tableRow workerRow" key={worker.name}>
+                <span className="workerName" title={worker.name}>
+                  <span>{label}</span>
+                  {shortId ? <span className="workerId">{shortId}</span> : null}
+                </span>
+                <span className={`status ${workerStatusClass(worker.status)}`} title={`Worker ${worker.status}`}>
+                  {worker.status}
+                </span>
+                <WorkerCapabilityPills capabilities={worker.capabilities} />
+                <WorkerJobTypePills capabilities={worker.capabilities} />
+                <span>
+                  {worker.currentJobId ? (
+                    <button
+                      className="workerJob"
+                      onClick={() => onSelect(worker.currentJobId as string)}
+                      title={worker.currentJobId}
+                      type="button"
+                    >
+                      {worker.currentJobId.slice(0, 8)}
+                    </button>
+                  ) : (
+                    "—"
+                  )}
+                </span>
+                <span title={new Date(worker.lastSeenAt).toLocaleString()}>{relativeAge(worker.lastSeenAt)} ago</span>
+              </div>
+            );
+          })}
+          {sorted.length === 0 ? (
+            <p className="empty">No workers connected. Start a watcher to process queued jobs.</p>
+          ) : null}
         </div>
-        {sorted.map((worker) => {
-          const { label, shortId } = splitWorkerName(worker.name);
-          return (
-            <div className="tableRow workerRow" key={worker.name}>
-              <span className="workerName" title={worker.name}>
-                <span>{label}</span>
-                {shortId ? <span className="workerId">{shortId}</span> : null}
-              </span>
-              <span className={`status ${workerStatusClass(worker.status)}`} title={`Worker ${worker.status}`}>
-                {worker.status}
-              </span>
-              <WorkerAssignments capabilities={worker.capabilities} />
-              <span>
-                {worker.currentJobId ? (
-                  <button
-                    className="workerJob"
-                    onClick={() => onSelect(worker.currentJobId as string)}
-                    title={worker.currentJobId}
-                    type="button"
-                  >
-                    {worker.currentJobId.slice(0, 8)}
-                  </button>
-                ) : (
-                  "—"
-                )}
-              </span>
-              <span title={new Date(worker.lastSeenAt).toLocaleString()}>{relativeAge(worker.lastSeenAt)} ago</span>
-            </div>
-          );
-        })}
-        {sorted.length === 0 ? (
-          <p className="empty">No workers connected. Start a watcher to process queued jobs.</p>
-        ) : null}
       </div>
-    </div>
+    </Tooltip.Provider>
   );
 }
 
-function WorkerAssignments({ capabilities }: { capabilities: string[] }) {
+// Capability pills. Hovering a capability shows the job types it lets this
+// worker run — the forward link ("what it can now do").
+function WorkerCapabilityPills({ capabilities }: { capabilities: string[] }) {
   if (capabilities.length === 0) {
-    return <span className="workerAssignmentsEmpty">—</span>;
+    return <span className="workerPillsEmpty">—</span>;
   }
 
   return (
-    <span className="workerAssignments">
+    <span className="workerPills">
       {capabilities.map((capability) => {
         const jobTypes = isJobCapability(capability) ? CAPABILITY_JOB_TYPES[capability] : [];
         return (
-          <span className="workerAssignment" key={capability}>
-            <code className="workerCapability">{capability}</code>
-            <span className="workerJobTypes">
-              {jobTypes.length > 0 ? jobTypes.map(formatJobType).join(", ") : "Unknown capability"}
-            </span>
-          </span>
+          <Tooltip.Root key={capability}>
+            <Tooltip.Trigger asChild>
+              <span className="pill workerPill capabilityPill">{capability}</span>
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content className="workerTooltip" sideOffset={6} collisionPadding={12}>
+                <strong className="workerTooltipName">{capability}</strong>
+                {jobTypes.length > 0 ? (
+                  <>
+                    <span className="workerTooltipLead">
+                      Runs {jobTypes.length} job type{jobTypes.length === 1 ? "" : "s"}:
+                    </span>
+                    <span className="workerTooltipList">
+                      {jobTypes.map((type) => (
+                        <span className="workerTooltipItem" key={type}>
+                          {formatJobType(type)}
+                        </span>
+                      ))}
+                    </span>
+                  </>
+                ) : (
+                  <span className="workerTooltipLead">Unknown capability — no job types mapped.</span>
+                )}
+                <Tooltip.Arrow className="workerTooltipArrow" />
+              </Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
+        );
+      })}
+    </span>
+  );
+}
+
+// Job-type pills: the de-duplicated union of every job type this worker's
+// capabilities can run. Hovering a job type shows which capability provides it —
+// the reverse link ("how it can do this").
+function WorkerJobTypePills({ capabilities }: { capabilities: string[] }) {
+  const jobTypes = workerJobTypes(capabilities);
+  if (jobTypes.length === 0) {
+    return <span className="workerPillsEmpty">—</span>;
+  }
+
+  return (
+    <span className="workerPills">
+      {jobTypes.map((type) => {
+        const providers = providersOf(type, capabilities);
+        return (
+          <Tooltip.Root key={type}>
+            <Tooltip.Trigger asChild>
+              <span className="pill workerPill jobTypePill">{formatJobType(type)}</span>
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content className="workerTooltip" sideOffset={6} collisionPadding={12}>
+                <strong className="workerTooltipName">{formatJobType(type)}</strong>
+                <span className="workerTooltipLead">
+                  {providers.length > 0
+                    ? `Handled via the ${providers.join(", ")} capabilit${providers.length === 1 ? "y" : "ies"}.`
+                    : "No matching capability."}
+                </span>
+                <Tooltip.Arrow className="workerTooltipArrow" />
+              </Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
         );
       })}
     </span>
@@ -371,6 +434,34 @@ function WorkerAssignments({ capabilities }: { capabilities: string[] }) {
 
 function isJobCapability(value: string): value is JobCapability {
   return Object.hasOwn(CAPABILITY_JOB_TYPES, value);
+}
+
+// Job types a worker can run, de-duplicated across its capabilities. The provider
+// capabilities (codex/claude/openai-compatible/azure-openai) share one job-type
+// list, so a worker usually has one provider capability plus github/maintenance.
+function workerJobTypes(capabilities: string[]): JobType[] {
+  const seen = new Set<JobType>();
+  const result: JobType[] = [];
+  for (const capability of capabilities) {
+    if (!isJobCapability(capability)) {
+      continue;
+    }
+    for (const type of CAPABILITY_JOB_TYPES[capability]) {
+      if (!seen.has(type)) {
+        seen.add(type);
+        result.push(type);
+      }
+    }
+  }
+  return result;
+}
+
+// Which of the worker's capabilities provide a given job type — drives the
+// reverse "how it can do this" tooltip on a job-type pill.
+function providersOf(jobType: JobType, capabilities: string[]): string[] {
+  return capabilities.filter(
+    (capability) => isJobCapability(capability) && (CAPABILITY_JOB_TYPES[capability] as readonly JobType[]).includes(jobType)
+  );
 }
 // Maps the worker status to an existing status-pill colour: busy reuses the amber
 // "running" look, idle the green "available" look.

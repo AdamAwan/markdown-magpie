@@ -1329,40 +1329,79 @@ code {
   text-transform: none;
 }
 
-.workerAssignments,
-.workerAssignmentsEmpty {
-  grid-column: span 2;
-}
-
-.workerAssignments {
-  display: grid;
-  gap: 8px;
-}
-
-.workerAssignment {
-  display: grid;
-  grid-template-columns: minmax(150px, 0.9fr) minmax(320px, 2fr);
-  gap: 12px;
+/* With pills that can wrap to a second line, top-align the row so the worker
+   name and status sit level with the first row of pills. */
+.workerRow {
   align-items: start;
 }
 
-.workerAssignment + .workerAssignment {
-  border-top: 1px solid #edf0eb;
-  padding-top: 8px;
+/* Flattened worker capability/job-type cells: each is a wrapping row of pills,
+   linked to the other column by hover tooltips rather than visual grouping. */
+.workerPills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-start;
 }
 
-.workerCapability {
-  width: fit-content;
-  border-radius: 4px;
+.workerPillsEmpty {
+  color: #8a948f;
+}
+
+.workerPill {
+  cursor: default;
+  text-transform: none;
+}
+
+.capabilityPill {
+  border-color: #c4d6e2;
   background: #eef4f7;
-  padding: 2px 5px;
   color: #2d5775;
-  font-size: 11px;
 }
 
-.workerJobTypes {
-  color: #4d5a54;
-  line-height: 1.45;
+.jobTypePill {
+  border-color: #cfe0d2;
+  background: #eef3ec;
+  color: #3d5a48;
+}
+
+/* Worker hover card — same dark style as the repository tooltip. */
+.workerTooltip {
+  z-index: 60;
+  display: grid;
+  gap: 6px;
+  max-width: 320px;
+  border: 1px solid #20322b;
+  border-radius: 6px;
+  background: #17211d;
+  color: #f3f6f1;
+  padding: 10px 12px;
+  font-size: 12px;
+  box-shadow: 0 8px 24px rgba(23, 33, 29, 0.28);
+  animation: fadeIn 0.12s ease;
+}
+
+.workerTooltipName {
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.workerTooltipLead {
+  color: #9fb1a7;
+}
+
+.workerTooltipList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.workerTooltipItem {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.workerTooltipArrow {
+  fill: #17211d;
 }
 .workerJob {
   border: 0;
