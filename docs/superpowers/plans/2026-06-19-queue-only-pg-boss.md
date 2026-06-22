@@ -925,9 +925,11 @@ git commit -m "refactor(mcp): await durable answer jobs"
 
 ### Task 10: Update web interactions and operations console
 
-**Task 10 — COMPLETE.** The web app had been refactored into a component
+**Task 10 — COMPLETE** (commit `006f6bf`; review ✅ Approve). The web app had been refactored into a component
 structure since the plan was written; the work landed against the real files,
 not the long-gone `page.tsx`/single stylesheet split.
+
+> **Cross-task sequencing (flagged by review):** `ConfigPanel` now posts `{ ai: { provider } }` with no `executionMode`, but the API config route still requires `executionMode` until **Task 11, Step 3** drops it — so config "Apply" will 400 on the branch until Task 11 lands. Expected; Task 11 must land before the live/E2E exercise (Task 14). Not a Task 10 defect (web-only change).
 
 **Files actually changed:**
 - `apps/web/src/lib/types.ts` — dropped `AiExecutionMode` + old `AiJob`; re-export `JobView`/`JobState`/`JobType`/`JobError`/`AiProviderName` types from `@magpie/jobs`; added `ScheduleView`, paginated `JobsResponse`, `CrunchSettingsView`, `ScheduledTaskSettingsView`, and the enqueue-only `AskResponse` (`{ questionId, job, links? }`). `AI_PROVIDERS` is a local `as const satisfies readonly AiProviderName[]` constant — deliberately NOT imported from `@magpie/jobs` so the client bundle never pulls zod + the job catalog (a runtime value import of it broke the Turbopack build).
