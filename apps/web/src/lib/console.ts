@@ -1,4 +1,4 @@
-import { AiJob, ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, KnowledgeStats, RuntimeConfig } from "./types";
+import { ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, JobView, KnowledgeStats } from "./types";
 
 export function sectionTitle(section: ConsoleSection): string {
   if (section === "knowledge") {
@@ -55,7 +55,7 @@ export function sectionSubtitle(section: ConsoleSection): string {
     return "Understand how Markdown, embeddings, questions, and proposals flow through the system.";
   }
   if (section === "config") {
-    return "Check execution mode, stores, providers, repository paths, and whether secrets are set.";
+    return "Check the active AI provider, stores, providers, repository paths, and whether secrets are set.";
   }
   if (section === "mcp") {
     return "Add the Markdown Magpie MCP server to Claude Code, Claude Desktop, VS Code, Cursor, or Continue and query the knowledge base from your editor.";
@@ -65,21 +65,19 @@ export function sectionSubtitle(section: ConsoleSection): string {
 }
 
 export function buildAttentionNotices({
-  config,
   health,
   jobs,
   openSection,
   stats
 }: {
-  config?: RuntimeConfig;
   health?: Health;
-  jobs: AiJob[];
+  jobs: JobView[];
   openSection: (section: ConsoleSection) => void;
   stats: KnowledgeStats;
 }): ConsoleNotice[] {
   const notices: ConsoleNotice[] = [];
-  const pendingJobs = jobs.filter((job) => job.status === "pending" || job.status === "claimed");
-  const failedJobs = jobs.filter((job) => job.status === "failed");
+  const pendingJobs = jobs.filter(isActiveJob);
+  const failedJobs = jobs.filter((job) => job.state === "failed");
 
   if (health && !health.ok) {
     notices.push({
@@ -101,11 +99,11 @@ export function buildAttentionNotices({
     });
   }
 
-  if (config?.aiRuntime.executionMode === "queue" && pendingJobs.length > 0) {
+  if (pendingJobs.length > 0) {
     notices.push({
       id: "queue-waiting",
       title: `${pendingJobs.length} queued job${pendingJobs.length === 1 ? "" : "s"} waiting`,
-      body: "Queue mode needs the watcher process. If these jobs stay pending after refresh, start the watcher or switch to direct mode.",
+      body: "Queued work runs on the watcher process. If these jobs stay queued after a refresh, make sure a capability-matched watcher is running.",
       tone: "warning",
       actionLabel: "Open Jobs",
       action: () => openSection("jobs")
@@ -126,24 +124,26 @@ export function buildAttentionNotices({
   return notices;
 }
 
-export function isActiveJob(job: AiJob): boolean {
-  return job.status === "pending" || job.status === "claimed";
+// Non-terminal job states. A job is "active" (still moving towards a result)
+// until it reaches completed/failed/cancelled.
+export function isActiveJob(job: JobView): boolean {
+  return job.state === "created" || job.state === "retry" || job.state === "active" || job.state === "blocked";
 }
 
-export function jobTransitionMessages(previousJobs: AiJob[], nextJobs: AiJob[]): JobTransitionMessage[] {
+export function jobTransitionMessages(previousJobs: JobView[], nextJobs: JobView[]): JobTransitionMessage[] {
   const previousById = new Map(previousJobs.map((job) => [job.id, job]));
 
   return nextJobs.flatMap<JobTransitionMessage>((job) => {
     const previous = previousById.get(job.id);
-    if (!previous || !isActiveJob(previous) || previous.status === job.status) {
+    if (!previous || !isActiveJob(previous) || previous.state === job.state) {
       return [];
     }
 
-    if (job.status === "completed") {
+    if (job.state === "completed") {
       return [{ text: `${formatJobType(job.type)} completed.`, tone: "success" as const }];
     }
 
-    if (job.status === "failed") {
+    if (job.state === "failed") {
       return [{ text: `${formatJobType(job.type)} failed. Open Jobs for details.`, tone: "danger" as const }];
     }
 

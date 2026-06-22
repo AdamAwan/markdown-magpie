@@ -2,10 +2,6 @@
 // (rather than re-declaring them) so the console can never drift from the backend
 // shapes. Only genuinely web-only types are declared locally below.
 export type {
-  AiExecutionMode,
-  AiJob,
-  AiJobStatus,
-  AiJobType,
   AnswerResult,
   Citation,
   Confidence,
@@ -31,14 +27,27 @@ export type {
 } from "@magpie/core";
 
 import type {
-  AiExecutionMode,
-  AiJob,
-  AnswerResult,
+  CrunchSettings,
   GapCandidate,
   Proposal,
   QuestionFeedback,
   ScheduledTaskSettings
 } from "@magpie/core";
+
+// Queue/job domain types live in @magpie/jobs (the pg-boss contract). The web
+// re-exports the TYPES so the console's job/schedule views never drift from the
+// broker's shapes. We deliberately do NOT import the runtime AI_PROVIDERS value
+// from @magpie/jobs into the client bundle: that package pulls in zod and the
+// whole job catalog, none of which the browser needs. Instead the four provider
+// names are declared here as a static client-side constant, and `satisfies`
+// pins them to the AiProviderName contract so the two can never drift.
+export type { AiProviderName, JobError, JobState, JobType, JobView } from "@magpie/jobs";
+
+import type { AiProviderName, JobType, JobView } from "@magpie/jobs";
+
+// The four AI providers a watcher can run. API-side credentials do not gate
+// availability (watchers hold the credentials), so all four are always offered.
+export const AI_PROVIDERS = ["openai-compatible", "azure-openai", "codex", "claude"] as const satisfies readonly AiProviderName[];
 
 // Feedback was the local name for the core QuestionFeedback union; keep the alias
 // so existing call sites continue to read naturally.
@@ -59,7 +68,6 @@ export type ConsoleSection =
   | "config"
   | "dataflow"
   | "mcp";
-export type AiProviderName = "mock" | "openai-compatible" | "azure-openai" | "codex" | "claude";
 
 export interface Health {
   ok: boolean;
@@ -94,17 +102,11 @@ export interface RuntimeConfig {
   };
   providers: Record<string, unknown>;
   aiRuntime: {
-    executionMode: AiExecutionMode;
+    // The active provider the queue uses. Execution mode and per-provider
+    // direct/queue support are no longer surfaced in the console: in the
+    // queue-only world the API never runs AI inline, and watchers hold the
+    // provider credentials, so any of the static AI_PROVIDERS can be selected.
     provider: AiProviderName;
-    executionModes: AiExecutionMode[];
-    directProviders: AiProviderName[];
-    queueProviders: AiProviderName[];
-    providers: Array<{
-      name: AiProviderName;
-      label: string;
-      supportsDirect: boolean;
-      supportsQueue: boolean;
-    }>;
   };
   retrieval: {
     mode: "hybrid" | "keyword";
@@ -149,18 +151,53 @@ export interface UiMessage {
 
 export type JobTransitionMessage = Pick<UiMessage, "text" | "tone">;
 
+// Mirrors the API's reconciled schedule response (apps/api/src/jobs/broker.ts
+// ScheduleView). Next-run timing is owned by pg-boss; the web reads it from
+// `/jobs/schedules` rather than from any API tick loop.
+export interface ScheduleView {
+  key: string;
+  type: JobType;
+  cron: string;
+  enabled: boolean;
+  nextRunAt?: string;
+}
+
+// `/jobs` is paginated: it returns the page of jobs plus the unpaginated total.
+export interface JobsResponse {
+  jobs: JobView[];
+  total: number;
+}
+
+// The crunch settings list response enriches the stored cron with the next run
+// time from the reconciled pg-boss schedule. `lastRunAt`/`runningSince` are gone
+// server-side, so they are not modelled here.
+export type CrunchSettingsView = CrunchSettings & { nextRunAt?: string };
+
+// The scheduled-task list response enriches the stored settings with the next
+// run time from the reconciled pg-boss schedule. `lastRunAt`/`runningSince` are
+// gone server-side (no API tick loop maintains them), so they are not modelled.
+export type ScheduledTaskSettingsView = ScheduledTaskSettings & { nextRunAt?: string };
+
 export interface ScheduledTask {
   key: string;
   label: string;
   description: string;
-  settings: ScheduledTaskSettings;
+  settings: ScheduledTaskSettingsView;
+}
+
+// The ask response is now enqueue-only: it returns the question id and the
+// queued answer_question job (plus follow-up links). There is no inline answer.
+export interface AskLinks {
+  question: string;
+  job: string;
+  wait: string;
+  cancel: string;
 }
 
 export interface AskResponse {
-  mode: string;
   questionId: string;
-  result?: AnswerResult;
-  job?: AiJob;
+  job: JobView;
+  links?: AskLinks;
 }
 
 export interface IndexRepositoryResponse {

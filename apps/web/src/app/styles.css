@@ -1255,6 +1255,83 @@ code {
   text-transform: uppercase;
 }
 
+/* Jobs operations view. The jobs table carries five columns
+   (type/state/attempts/age/updated); schedules carry four. Both reuse .jobTable
+   but set their own column template. */
+.jobFilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  padding-bottom: 12px;
+}
+
+.jobFilters .field {
+  min-width: 180px;
+}
+
+.jobRow {
+  grid-template-columns: minmax(150px, 1.4fr) 100px 90px 70px minmax(160px, 1fr);
+  width: 100%;
+  border: 0;
+  border-top: 1px solid #e2e6df;
+  background: #ffffff;
+  color: #17211d;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+.jobRow:hover {
+  background: #f6f8f4;
+}
+
+.jobRow.selected {
+  background: #eef4f7;
+}
+
+.scheduleHead,
+.scheduleRow {
+  grid-template-columns: minmax(160px, 1.2fr) minmax(140px, 1fr) minmax(120px, 0.8fr) minmax(160px, 1fr);
+}
+
+.jobDetail {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #e2e6df;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.jobTimings {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px 18px;
+  margin: 0;
+}
+
+.jobJson pre,
+.jobError {
+  margin: 0;
+}
+
+.jobJson pre {
+  overflow-x: auto;
+  max-height: 280px;
+  padding: 10px 12px;
+  border: 1px solid #e2e6df;
+  border-radius: 6px;
+  background: #ffffff;
+  font-size: 12px;
+}
+
+.jobSchedules {
+  margin-top: 20px;
+}
+
 .proposalGrid {
   display: grid;
   grid-template-columns: minmax(220px, 0.42fr) minmax(0, 1fr);

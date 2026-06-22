@@ -1,6 +1,16 @@
 import { useEffect, useState } from "react";
-import { AiExecutionMode, AiProviderName, RuntimeConfig, UiMessage } from "../lib/types";
+import { AI_PROVIDERS, AiProviderName, RuntimeConfig, UiMessage } from "../lib/types";
 import { apiGet, apiPost, errorMessage } from "../lib/api";
+
+// Static provider labels. In the queue-only world the API never runs AI inline
+// and watchers hold the provider credentials, so all four providers are always
+// selectable here — availability is no longer gated by API-side credentials.
+const PROVIDER_LABELS: Record<AiProviderName, string> = {
+  "openai-compatible": "OpenAI-compatible",
+  "azure-openai": "Azure OpenAI",
+  codex: "Codex",
+  claude: "Claude"
+};
 
 export function ConfigPanel({
   apiBaseUrl,
@@ -13,8 +23,7 @@ export function ConfigPanel({
   onConfigChange: (config: RuntimeConfig) => void;
   onMessage: (message: string, tone?: UiMessage["tone"]) => void;
 }) {
-  const [executionMode, setExecutionMode] = useState<AiExecutionMode>("direct");
-  const [provider, setProvider] = useState<AiProviderName>("mock");
+  const [provider, setProvider] = useState<AiProviderName>(AI_PROVIDERS[0]);
   const [saving, setSaving] = useState(false);
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -28,7 +37,6 @@ export function ConfigPanel({
       return;
     }
 
-    setExecutionMode(config.aiRuntime.executionMode);
     setProvider(config.aiRuntime.provider);
   }, [config, dirty]);
 
@@ -44,11 +52,6 @@ export function ConfigPanel({
       </section>
     );
   }
-
-  const providerOptions = config.aiRuntime.providers.filter((item) =>
-    executionMode === "direct" ? item.supportsDirect : item.supportsQueue
-  );
-  const selectedProvider = providerOptions.some((item) => item.name === provider) ? provider : providerOptions[0]?.name ?? "mock";
 
   async function resetData() {
     setResetting(true);
@@ -81,8 +84,7 @@ export function ConfigPanel({
     try {
       const result = await apiPost<RuntimeConfig>("/config", {
         ai: {
-          executionMode,
-          provider: selectedProvider
+          provider
         }
       });
       onConfigChange(result);
@@ -106,30 +108,6 @@ export function ConfigPanel({
       </div>
       <div className="surfaceBody">
         <div className="runtimeEditor">
-          <div className="configControl">
-            <span>Execution</span>
-            <div className="segmented" role="group" aria-label="AI execution mode">
-              {config.aiRuntime.executionModes.map((mode) => (
-                <button
-                  className={executionMode === mode ? "segment active" : "segment"}
-                  key={mode}
-                  onClick={() => {
-                    setDirty(true);
-                    setExecutionMode(mode);
-                    const nextProvider = config.aiRuntime.providers.find((item) =>
-                      mode === "direct" ? item.supportsDirect : item.supportsQueue
-                    )?.name;
-                    if (nextProvider && !config.aiRuntime.providers.find((item) => item.name === provider && (mode === "direct" ? item.supportsDirect : item.supportsQueue))) {
-                      setProvider(nextProvider);
-                    }
-                  }}
-                  type="button"
-                >
-                  {mode}
-                </button>
-              ))}
-            </div>
-          </div>
           <label className="configControl">
             <span>Provider</span>
             <select
@@ -137,22 +115,18 @@ export function ConfigPanel({
                 setDirty(true);
                 setProvider(event.target.value as AiProviderName);
               }}
-              value={selectedProvider}
+              value={provider}
             >
-              {providerOptions.map((item) => (
-                <option key={item.name} value={item.name}>
-                  {item.label}
+              {AI_PROVIDERS.map((name) => (
+                <option key={name} value={name}>
+                  {PROVIDER_LABELS[name]}
                 </option>
               ))}
             </select>
           </label>
           <button
             className="button"
-            disabled={
-              saving ||
-              resetting ||
-              (executionMode === config.aiRuntime.executionMode && selectedProvider === config.aiRuntime.provider)
-            }
+            disabled={saving || resetting || provider === config.aiRuntime.provider}
             onClick={() => void saveRuntimeConfig()}
             type="button"
           >
