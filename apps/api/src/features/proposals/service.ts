@@ -23,7 +23,6 @@ import {
   selectFlow
 } from "../../platform/repositories.js";
 import { collectSourceContext } from "../../platform/source-context.js";
-import { slugify } from "../../platform/paths.js";
 import { type AiProviderName } from "../../platform/providers.js";
 
 type PublishProposalJobOutput = z.infer<typeof publishProposalOutputSchema>;
@@ -195,21 +194,6 @@ export async function getProposalExecutionContext(
 
   const { id, localPath, remoteUrl, defaultBranch, git } = resolved.repository;
   return { ok: true, proposal, repository: { id, localPath, remoteUrl, defaultBranch, git } };
-}
-
-// Human-facing PR description linking the merge back to the gaps it closes.
-// Pure: kept exported so the Task 7 publication runner assembles the same body.
-export function buildPullRequestBody(proposal: Proposal): string {
-  const lines = ["Proposed by Markdown Magpie to close knowledge gaps.", ""];
-  if (proposal.rationale) {
-    lines.push(proposal.rationale, "");
-  }
-  const summaries = splitGapSummaries(proposal.gapSummary);
-  if (summaries.length > 0) {
-    lines.push("Gaps addressed:");
-    lines.push(...summaries.map((summary) => `- ${summary}`));
-  }
-  return lines.join("\n").trim();
 }
 
 // Drafts ONE proposal from one or more gap candidates. The reviewer (via the
@@ -449,12 +433,6 @@ function dedupeCitations(citations: Proposal["evidence"]): Proposal["evidence"] 
   return result;
 }
 
-// Pure: the branch a proposal publishes onto. Exported so the Task 7 publication
-// runner derives the same branch name the API used to before git moved out.
-export function createProposalBranchName(proposal: Proposal): string {
-  return `magpie/proposal-${proposal.id.slice(0, 8)}-${slugify(proposal.title).slice(0, 40)}`;
-}
-
 export async function createProposalFromCompletedJob(
   ctx: AppContext,
   job: JobView | undefined,
@@ -532,7 +510,7 @@ function isPublishProposalJobOutput(value: unknown): value is PublishProposalJob
   return publishProposalOutputSchema.safeParse(value).success;
 }
 
-export function isDraftMarkdownProposalJobOutput(value: unknown): value is DraftMarkdownProposalJobOutput {
+function isDraftMarkdownProposalJobOutput(value: unknown): value is DraftMarkdownProposalJobOutput {
   if (!value || typeof value !== "object") {
     return false;
   }

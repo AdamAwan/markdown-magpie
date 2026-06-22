@@ -7,7 +7,7 @@ export interface RetrieveRequest {
   limit?: number;
 }
 
-export interface RetrievedSection {
+interface RetrievedSection {
   sectionId: string;
   // The owning document and the section's in-document anchor, carried so the
   // watcher can build faithful citations (the answer-question job's citation

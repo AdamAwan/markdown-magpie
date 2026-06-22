@@ -240,7 +240,7 @@ export class PgBossJobBroker implements JobBroker {
   }
 }
 
-export function toJobView(queueName: string, job: JobWithMetadata<JobEnvelope>): JobView {
+function toJobView(queueName: string, job: JobWithMetadata<JobEnvelope>): JobView {
   const queue = queueByName.get(queueName);
   if (!queue) throw new Error(`Unknown pg-boss queue: ${queueName}`);
   if (!isJobEnvelope(job.data)) throw new Error(`Invalid job envelope for ${job.id}`);

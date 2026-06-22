@@ -264,12 +264,6 @@ async function enqueuePublication(ctx: AppContext, runId: string): Promise<void>
   console.log(`Enqueued publish_source_sync job ${job.id} for source-sync run ${runId}`);
 }
 
-// Pure: the branch a source-sync run publishes onto. Exported so the watcher's
-// publication runner derives the same branch name the API used to.
-export function sourceSyncBranchName(run: Pick<SourceSyncRun, "id">): string {
-  return `magpie/source-sync-${run.id.slice(0, 8)}`;
-}
-
 type SourceSyncPublishValidationError = {
   ok: false;
   status: 404 | 409;

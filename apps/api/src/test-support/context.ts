@@ -9,7 +9,6 @@ import { InMemoryProposalStore } from "../stores/proposal-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
 import { InMemoryReconciliationDecisionStore } from "../stores/reconciliation-decision-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
-import type { JobBroker } from "../jobs/broker.js";
 import { FakeJobBroker } from "../jobs/fake-broker.js";
 import { InMemorySnapshotStore } from "../stores/snapshot-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
@@ -58,9 +57,4 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
   };
 
   return { ...base, ...overrides };
-}
-
-// Convenience: build a test context with a pre-supplied jobs broker override.
-export function makeTestContextWithJobs(jobs: JobBroker, other: Partial<AppContext> = {}): AppContext {
-  return makeTestContext({ ...other, jobs });
 }

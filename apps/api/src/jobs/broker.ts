@@ -1,7 +1,5 @@
 import type { JobCapability, JobError, JobState, JobType, JobView } from "@magpie/jobs";
 
-export type { JobCapability, JobError, JobState, JobType, JobView };
-
 export interface JobListFilters {
   type?: JobType;
   state?: JobState;

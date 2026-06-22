@@ -128,7 +128,7 @@ export async function recordCrunchPublicationFromCompletedJob(
   });
 }
 
-export function isCrunchPlan(value: unknown): value is CrunchPlan {
+function isCrunchPlan(value: unknown): value is CrunchPlan {
   if (!value || typeof value !== "object") {
     return false;
   }
@@ -171,13 +171,6 @@ export function changesetFromPlan(plan: CrunchPlan): ChangesetChange[] {
     }
   }
   return [...changes.values()];
-}
-
-// Pure: the branch a crunch run publishes onto. Exported so the Task 7
-// publication runner derives the same branch name the API used to before git
-// moved out.
-export function crunchBranchName(run: CrunchRun): string {
-  return `magpie/crunch-${run.id.slice(0, 8)}`;
 }
 
 type PublishValidationError = {
