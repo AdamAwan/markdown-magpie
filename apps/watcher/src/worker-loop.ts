@@ -32,7 +32,19 @@ export class WorkerLoop {
   async run(): Promise<void> {
     this.running = true;
     while (!this.stopping) {
-      const claimed = await this.tick();
+      let claimed = false;
+      try {
+        claimed = await this.tick();
+      } catch (error) {
+        // A claim or terminal-transition error (a transient 5xx, or a 401 before
+        // the watcher's service credential is in place) must NOT crash the
+        // process. Log it and fall through to the poll-interval backoff so the
+        // next cycle retries — otherwise a misconfigured token turns into a
+        // tight container restart loop.
+        if (!this.stopping) {
+          console.error(`Watcher poll failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       if (!claimed && !this.stopping) {
         await sleep(this.options.pollIntervalMs);
       }

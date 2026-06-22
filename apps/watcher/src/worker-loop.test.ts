@@ -162,6 +162,50 @@ describe("WorkerLoop", () => {
     assert.equal(api.failed[0].error.executor, "w1");
   });
 
+  it("logs and keeps polling when a claim throws instead of crashing", async () => {
+    // Reproduces the 401 crash-loop: the first claim rejects (e.g. unauthorized
+    // before the service credential is configured). run() must swallow it, back
+    // off, and retry on the next cycle rather than letting the rejection escape
+    // and kill the process.
+    let calls = 0;
+    let loop: WorkerLoop;
+    const api: WatcherApiClient = {
+      async claim() {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error("POST /api/jobs/claim failed with 401: unauthorized");
+        }
+        // Second poll: wind the loop down and report no work.
+        await loop.stop();
+        return undefined;
+      },
+      async heartbeat() {
+        return { cancelled: false };
+      },
+      async complete() {},
+      async fail() {}
+    };
+    loop = new WorkerLoop(api, [], CAPS, "w1", { pollIntervalMs: 1 });
+
+    const originalError = console.error;
+    const logged: string[] = [];
+    console.error = (message?: unknown) => {
+      logged.push(String(message));
+    };
+    try {
+      // Must resolve, not reject, despite the first claim throwing.
+      await loop.run();
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.ok(calls >= 2, "loop should have retried after the claim error");
+    assert.ok(
+      logged.some((line) => /401/.test(line)),
+      "the claim failure should have been logged"
+    );
+  });
+
   it("aborts in-flight work on shutdown", async () => {
     const api = new FakeApiClient({ jobs: [fakeJob()] });
     let seenSignal: AbortSignal | undefined;
