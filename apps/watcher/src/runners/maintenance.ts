@@ -30,9 +30,9 @@ export class MaintenanceRunner {
     const flowId = readFlowId(job.input);
     await this.api.reconcileGaps(flowId, signal);
 
-    // The endpoint enqueues drafting/publishing during reconcile rather than
-    // returning counts, so report zeros — the output stays schema-valid and the
-    // domain side effects are already recorded by the reconcile run.
+    // TODO(Task 8E/follow-up): reconcile endpoint returns no counts; returning
+    // zeros under-reports actual drafted/published. Surface real counts when the
+    // endpoint exposes them.
     return processGapsToPullRequestsOutputSchema.parse({ drafted: 0, published: 0 });
   }
 }

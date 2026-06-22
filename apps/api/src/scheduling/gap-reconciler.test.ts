@@ -29,6 +29,29 @@ class ReshapingJobBroker extends FakeJobBroker {
   }
 }
 
+// A broker that enqueues the reconcile job normally but then throws when the
+// bounded-wait polls it (runJobToCompletion -> waitForJob -> get). This mirrors a
+// broker dying mid-poll: requestReshape's try/catch must swallow it and skip the
+// reshape, leaving the rest of reconcileGaps to run.
+class ThrowingPollJobBroker extends FakeJobBroker {
+  private reshapeJobId: string | undefined;
+
+  override async create(type: JobType, input: unknown): Promise<JobView> {
+    const job = await super.create(type, input);
+    if (type === "reconcile_gap_clusters") {
+      this.reshapeJobId = job.id;
+    }
+    return job;
+  }
+
+  override async get(id: string): Promise<JobView | undefined> {
+    if (id === this.reshapeJobId) {
+      throw new Error("broker connection lost mid-poll");
+    }
+    return super.get(id);
+  }
+}
+
 describe("reconcileGaps revision gate", () => {
   it("does no model work when the catalog revision is unchanged and no actions pending", async () => {
     const ctx = makeTestContext();
@@ -184,6 +207,36 @@ describe("reconcileGaps clustering", () => {
         process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS = previous;
       }
     }
+  });
+
+  it("skips reshape (without throwing) when the broker throws mid-poll", async () => {
+    // The broker enqueues the reshape job but then throws when the bounded-wait
+    // polls it. requestReshape wraps enqueue+wait in try/catch and treats a throw
+    // as "skip reshape, continue reconcile" — so no merge/split is applied, no
+    // reconciliation is recorded, no error escapes reconcileGaps, and the rest of
+    // the run (e.g. drafting) still happens. Distinct from the timeout-skip test:
+    // here the failure is a thrown error from the broker, not a quiet deadline.
+    const jobs = new ThrowingPollJobBroker();
+    const ctx = makeTestContext({
+      jobs,
+      config: new RuntimeConfigHolder({ aiExecutionMode: "queue", aiProvider: "openai-compatible" })
+    });
+    await seedTwoClustersWithGaps(ctx);
+
+    const before = await ctx.stores.gapClusters.listActiveClusters();
+    // Must resolve, not reject: the broker throw is caught inside requestReshape.
+    await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
+    const after = await ctx.stores.gapClusters.listActiveClusters();
+
+    assert.equal((await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length, 1, "the reshape job was enqueued");
+    assert.equal(after.length, before.length, "no reshape applied when the broker threw");
+    assert.deepEqual(await ctx.stores.reconciliations.list(50), [], "no decision recorded when the reshape threw");
+    // The rest of reconcileGaps still ran: each uncovered cluster got a draft job.
+    assert.equal(
+      (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length,
+      before.length,
+      "reconcile continued past the skipped reshape and drafted the uncovered clusters"
+    );
   });
 });
 
