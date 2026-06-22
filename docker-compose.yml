@@ -15,6 +15,10 @@ services:
     environment:
       PORT: 4000
       MAGPIE_CHECKOUT_ROOT: /data/checkouts
+      # A real provider is mandatory; fail fast if it is unset. Exposing it as an
+      # explicit override (rather than only via env_file) lets E2E pick a fixture
+      # without editing files. Must match the watcher's AI_PROVIDER.
+      AI_PROVIDER: ${AI_PROVIDER:?AI_PROVIDER must be set}
     volumes:
       - magpie-checkouts:/data/checkouts
     ports:
@@ -57,6 +61,22 @@ services:
     env_file: *magpie-env
     environment:
       MAGPIE_CHECKOUT_ROOT: /data/checkouts
+      # Must match the API's AI_PROVIDER; fail fast if unset. Explicit overrides
+      # let E2E select a provider/fixture without editing the env files. The
+      # watcher only advertises (and claims) a capability once its credentials
+      # are present, so provider-specific vars pass through here too.
+      AI_PROVIDER: ${AI_PROVIDER:?AI_PROVIDER must be set}
+      OPENAI_COMPATIBLE_BASE_URL: ${OPENAI_COMPATIBLE_BASE_URL:-}
+      OPENAI_COMPATIBLE_API_KEY: ${OPENAI_COMPATIBLE_API_KEY:-}
+      OPENAI_COMPATIBLE_MODEL: ${OPENAI_COMPATIBLE_MODEL:-}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+      AZURE_OPENAI_CHAT_DEPLOYMENT: ${AZURE_OPENAI_CHAT_DEPLOYMENT:-}
+      # Defaults to the bare `codex` command (per Task 13); pass CLAUDE_CLI_PATH
+      # through only when set so the watcher doesn't advertise the claude
+      # capability unless a Claude CLI is actually configured.
+      CODEX_CLI_PATH: ${CODEX_CLI_PATH:-codex}
+      CLAUDE_CLI_PATH: ${CLAUDE_CLI_PATH:-}
     volumes:
       - magpie-checkouts:/data/checkouts
     profiles:
@@ -132,11 +152,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
 
 volumes:
   postgres-data:
