@@ -88,6 +88,7 @@ export function JobsPanel({
   // current page, and clamping keeps the user on the last real page.
   const currentPage = Math.min(page, pageCount - 1);
   const visibleJobs = filtered.slice(currentPage * PAGE_SIZE, currentPage * PAGE_SIZE + PAGE_SIZE);
+  const displayedJob = selectedJob ?? visibleJobs[0];
 
   const activeCount = jobs.filter(isActiveJob).length;
   const failedJobs = jobs.filter((job) => job.state === "failed" && !job.acceptedAt);
@@ -130,117 +131,123 @@ export function JobsPanel({
           </span>
         ) : null}
       </div>
-      <div className={selectedJob ? "surfaceBody jobsLayout withDetail" : "surfaceBody jobsLayout"}>
-        <div className="jobsMain">
-          <div className="jobFilters">
-            <label className="field">
-              <span>State</span>
-              <select onChange={(event) => setStateFilter(event.target.value as JobState | "all")} value={stateFilter}>
-                <option value="all">All states</option>
-                {JOB_STATES.map((state) => (
-                  <option key={state} value={state}>
-                    {state}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Type</span>
-              <select onChange={(event) => setTypeFilter(event.target.value)} value={typeFilter}>
-                <option value="all">All types</option>
-                {jobTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {formatJobType(type)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <span className="pill" title="Jobs matching the current filters">
-              {filtered.length} matched
-            </span>
-            {failedCount > 0 ? (
-              <button
-                className="button secondary"
-                onClick={() => void onAccept(failedJobs.map((job) => job.id))}
-                type="button"
-              >
-                Accept all failures
-              </button>
-            ) : null}
-          </div>
-
-          <div className="jobTable">
-            <div className="tableHead">
-              <span>Type</span>
-              <span>State</span>
-              <span>Attempts</span>
-              <span>Age</span>
-              <span>Updated</span>
-            </div>
-            {visibleJobs.map((job) => (
-              <button
-                className={selectedJob?.id === job.id ? "tableRow jobRow selected" : "tableRow jobRow"}
-                key={job.id}
-                onClick={() => onSelect(job.id)}
-                type="button"
-              >
-                <span title={job.type}>{formatJobType(job.type)}</span>
-                <span
-                  className={"status " + (job.acceptedAt ? "ready" : job.state)}
-                  title={
-                    job.acceptedAt
-                      ? "Failure accepted " + new Date(job.acceptedAt).toLocaleString()
-                      : "Job state: " + job.state
-                  }
-                >
-                  {job.acceptedAt ? "accepted" : job.state}
-                </span>
-                <span title={`Retry ${job.retryCount} of ${job.retryLimit}`}>
-                  {job.retryCount}/{job.retryLimit}
-                </span>
-                <span title={new Date(job.createdAt).toLocaleString()}>{relativeAge(job.createdAt)}</span>
-                <span>{new Date(job.updatedAt).toLocaleString()}</span>
-              </button>
-            ))}
-            {filtered.length === 0 ? (
-              <p className="empty">{jobs.length === 0 ? "No jobs queued." : "No jobs match the current filters."}</p>
-            ) : null}
-          </div>
-
-          {filtered.length > PAGE_SIZE ? (
-            <div className="tablePager">
-              <button
-                className="button secondary"
-                disabled={currentPage === 0}
-                onClick={() => setPage(currentPage - 1)}
-                type="button"
-              >
-                Previous
-              </button>
-              <span className="pagerStatus" aria-live="polite">
-                Page {currentPage + 1} of {pageCount} · showing {visibleJobs.length} of {filtered.length}
-              </span>
-              <button
-                className="button secondary"
-                disabled={currentPage >= pageCount - 1}
-                onClick={() => setPage(currentPage + 1)}
-                type="button"
-              >
-                Next
-              </button>
-            </div>
+      <div className="surfaceBody jobsLayout">
+        <div className="jobFilters">
+          <label className="field">
+            <span>State</span>
+            <select onChange={(event) => setStateFilter(event.target.value as JobState | "all")} value={stateFilter}>
+              <option value="all">All states</option>
+              {JOB_STATES.map((state) => (
+                <option key={state} value={state}>
+                  {state}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Type</span>
+            <select onChange={(event) => setTypeFilter(event.target.value)} value={typeFilter}>
+              <option value="all">All types</option>
+              {jobTypes.map((type) => (
+                <option key={type} value={type}>
+                  {formatJobType(type)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span className="pill" title="Jobs matching the current filters">
+            {filtered.length} matched
+          </span>
+          {failedCount > 0 ? (
+            <button
+              className="button secondary"
+              onClick={() => void onAccept(failedJobs.map((job) => job.id))}
+              type="button"
+            >
+              Accept all failures
+            </button>
           ) : null}
-
-          <WorkersTable workers={workers} onSelect={onSelect} />
-
-          <SchedulesTable schedules={schedules} />
         </div>
 
-        {selectedJob ? (
+        <div className="jobsWorkspace">
+          <div className="jobsMaster">
+            <nav className="jobList" aria-label="Jobs">
+              {visibleJobs.map((job) => (
+                <button
+                  className={displayedJob?.id === job.id ? "jobListItem selected" : "jobListItem"}
+                  key={job.id}
+                  onClick={() => onSelect(job.id)}
+                  type="button"
+                >
+                  <span className="jobListTop">
+                    <strong title={job.type}>{formatJobType(job.type)}</strong>
+                    <span
+                      className={"status " + (job.acceptedAt ? "ready" : job.state)}
+                      title={
+                        job.acceptedAt
+                          ? "Failure accepted " + new Date(job.acceptedAt).toLocaleString()
+                          : "Job state: " + job.state
+                      }
+                    >
+                      {job.acceptedAt ? "accepted" : job.state}
+                    </span>
+                  </span>
+                  <span className="jobListMeta">
+                    <span title={`Retry ${job.retryCount} of ${job.retryLimit}`}>
+                      {job.retryCount}/{job.retryLimit} attempts
+                    </span>
+                    <span title={new Date(job.createdAt).toLocaleString()}>{relativeAge(job.createdAt)} ago</span>
+                    <span title={`Updated ${new Date(job.updatedAt).toLocaleString()}`}>updated</span>
+                  </span>
+                </button>
+              ))}
+              {filtered.length === 0 ? (
+                <p className="empty">{jobs.length === 0 ? "No jobs queued." : "No jobs match the current filters."}</p>
+              ) : null}
+            </nav>
+
+            {filtered.length > PAGE_SIZE ? (
+              <div className="tablePager jobListPager">
+                <button
+                  className="button secondary"
+                  disabled={currentPage === 0}
+                  onClick={() => setPage(currentPage - 1)}
+                  type="button"
+                >
+                  Previous
+                </button>
+                <span className="pagerStatus" aria-live="polite">
+                  {currentPage + 1}/{pageCount}
+                </span>
+                <button
+                  className="button secondary"
+                  disabled={currentPage >= pageCount - 1}
+                  onClick={() => setPage(currentPage + 1)}
+                  type="button"
+                >
+                  Next
+                </button>
+              </div>
+            ) : null}
+          </div>
+
           <aside className="jobDetailPanel" ref={detailRef}>
-            <JobDetail job={selectedJob} onClose={onClose} onCancel={onCancel} onRetry={onRetry} onAccept={onAccept} />
+            {displayedJob ? (
+              <JobDetail
+                job={displayedJob}
+                onClose={selectedJob ? onClose : undefined}
+                onCancel={onCancel}
+                onRetry={onRetry}
+                onAccept={onAccept}
+              />
+            ) : (
+              <p className="empty">Select a job to view its details.</p>
+            )}
           </aside>
-        ) : null}
+        </div>
+
+        <WorkersTable workers={workers} onSelect={onSelect} />
+        <SchedulesTable schedules={schedules} />
       </div>
     </section>
   );
@@ -254,7 +261,7 @@ function JobDetail({
   onAccept
 }: {
   job: JobView;
-  onClose: () => void;
+  onClose?: () => void;
   onCancel: (jobId: string) => Promise<void>;
   onRetry: (jobId: string) => Promise<void>;
   onAccept: (jobIds: string[]) => Promise<void>;
@@ -284,9 +291,11 @@ function JobDetail({
               Accept failure
             </button>
           ) : null}
-          <button aria-label="Close details" className="jobDetailClose" onClick={onClose} title="Close" type="button">
-            ✕
-          </button>
+          {onClose ? (
+            <button aria-label="Close details" className="jobDetailClose" onClick={onClose} title="Close" type="button">
+              ✕
+            </button>
+          ) : null}
         </div>
       </div>
 
