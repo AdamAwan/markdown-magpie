@@ -1,7 +1,7 @@
 "use client";
 
 import { Auth0Provider, useAuth0 } from "@auth0/auth0-react";
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import { setAccessTokenProvider } from "../lib/api";
 import { Landing } from "./Landing";
 
@@ -32,6 +32,15 @@ const API_SCOPES = [
 ].join(" ");
 
 const REQUESTED_SCOPE = `openid profile email ${API_SCOPES}`;
+
+function isMissingRefreshTokenError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "error" in error &&
+    (error as { error?: unknown }).error === "missing_refresh_token"
+  );
+}
 
 // Whether Auth0 is configured, read from the runtime config injected by the
 // root layout into window.__MAGPIE_CONFIG__. Components below AuthProvider use
@@ -93,19 +102,35 @@ function Splash() {
 // access-token provider is armed, so there is never a token-less request race on
 // first load. Unauthenticated visitors get the Landing page instead.
 function AuthGate({ children }: { children: ReactNode }) {
-  const { getAccessTokenSilently, isAuthenticated, isLoading, loginWithRedirect } = useAuth0();
+  const { getAccessTokenSilently, isAuthenticated, isLoading, loginWithRedirect, logout } = useAuth0();
   const [tokenProviderReady, setTokenProviderReady] = useState(false);
+  const loginRedirectRef = useRef<Promise<string> | undefined>(undefined);
 
   useEffect(() => {
     if (isAuthenticated) {
-      setAccessTokenProvider(() => getAccessTokenSilently());
+      setAccessTokenProvider(async () => {
+        try {
+          return await getAccessTokenSilently();
+        } catch (error) {
+          if (!isMissingRefreshTokenError(error)) {
+            throw error;
+          }
+
+          // Auth0 can retain an authenticated user while its local refresh token
+          // is missing. Clear that stale session and return to the login page.
+          loginRedirectRef.current ??= logout({
+            logoutParams: { returnTo: window.location.origin }
+          }).then(() => new Promise<string>(() => undefined));
+          return loginRedirectRef.current;
+        }
+      });
       setTokenProviderReady(true);
     } else {
       setAccessTokenProvider(undefined);
       setTokenProviderReady(false);
     }
     return () => setAccessTokenProvider(undefined);
-  }, [getAccessTokenSilently, isAuthenticated]);
+  }, [getAccessTokenSilently, isAuthenticated, logout]);
 
   // Session still resolving, or signed in but the provider effect hasn't armed
   // the token yet (effects run after render) — hold so children never mount with
