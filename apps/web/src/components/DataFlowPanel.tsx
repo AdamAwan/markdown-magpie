@@ -6,7 +6,7 @@ import { RuntimeConfig } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
 
 type ModelInfo = ReturnType<typeof extractModelInfo>;
-type FlowKey = "overview" | "ask" | "improvement" | "queue" | "automation" | "perflow";
+type FlowKey = "overview" | "ask" | "improvement" | "automation" | "perflow";
 
 // Initialize mermaid exactly once on the client. startOnLoad is false because we
 // render each diagram on demand via mermaid.run rather than letting it scan the
@@ -48,12 +48,6 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
             onClick={() => setActiveFlow("improvement")}
           >
             Continuous Improvement Cycle
-          </button>
-          <button
-            className={activeFlow === "queue" ? "flowTab active" : "flowTab"}
-            onClick={() => setActiveFlow("queue")}
-          >
-            Queue Architecture
           </button>
           <button
             className={activeFlow === "automation" ? "flowTab active" : "flowTab"}
@@ -151,9 +145,6 @@ function buildDiagram(flow: FlowKey, modelInfo: ModelInfo): string {
   if (flow === "improvement") {
     return continuousImprovementDiagram(modelInfo);
   }
-  if (flow === "queue") {
-    return queueArchitectureDiagram(modelInfo);
-  }
   if (flow === "automation") {
     return automationDiagram(modelInfo);
   }
@@ -198,6 +189,10 @@ function overviewDiagram(modelInfo: ModelInfo): string {
     style Generate fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`;
 }
 
+// Every question is answered the same way: enqueue-only. The API just logs the
+// question and creates an answer_question job carrying the routing candidates; all
+// generative work (route → retrieve → answer) runs in the watcher. There is no
+// synchronous/direct path — the API never calls the model itself.
 function askFlowDiagram(modelInfo: ModelInfo): string {
   const embedLabel = modelInfo.embeddingModel && modelInfo.embeddingHost
     ? `${modelInfo.embeddingModel}<br/>(${modelInfo.embeddingHost})`
@@ -209,41 +204,36 @@ function askFlowDiagram(modelInfo: ModelInfo): string {
   return `graph TD
     Start["❓ Question<br/>Web UI or MCP"]
 
-    Start --> Keyword["🔍 Keyword Search<br/>in Postgres"]
-    Keyword --> DecideMode{Execution<br/>Mode?}
-
-    subgraph Direct["<b>DIRECT MODE</b>"]
-        DirVector["🔢 Vector Search + RRF Fusion<br/>${embedLabel}<br/>(hybrid; keyword-only if no embeddings)"]
-        DirContext["📚 Retrieved<br/>Context"]
-        DirAI["🤖 ${chatLabel}<br/>(Synchronous)<br/>Generates Answer"]
-        DirVector --> DirContext
-        DirContext --> DirAI
+    subgraph Api["<b>API</b> (enqueue-only)"]
+        Log["💾 Log Question<br/>(Postgres)"]
+        JobCreate["📝 Create answer_question Job<br/>(carries flow candidates)"]
+        Log --> JobCreate
     end
 
-    subgraph Queue["<b>QUEUE MODE</b>"]
-        JobCreate["📝 Create AI Job<br/>(keyword context)"]
-        JobQueue["📦 Store in Queue<br/>(Postgres)"]
-        WatcherClaim["👁️ Watcher<br/>Claims Job"]
-        QueueAI["🤖 ${chatLabel}<br/>(When Claimed)<br/>Generates Answer"]
-        JobStore["💾 Store Result"]
-        JobCreate --> JobQueue
-        JobQueue --> WatcherClaim
-        WatcherClaim --> QueueAI
-        QueueAI --> JobStore
+    Start -->|POST /ask| Log
+    JobCreate --> Queue["📦 Job Queue<br/>(Postgres)"]
+
+    subgraph Watcher["<b>WATCHER</b> (all generative work)"]
+        Claim["👁️ Claim Job"]
+        Route["🧭 ${chatLabel}<br/>Route to best Flow"]
+        Retrieve["🔎 POST /api/retrieve<br/>Keyword + Vector + RRF<br/>${embedLabel}<br/>(hybrid; keyword-only if no embeddings)"]
+        Answer["🤖 ${chatLabel}<br/>Answer from scoped context"]
+        Cite["🔖 Derive Citations<br/>from retrieved sections"]
+        Claim --> Route
+        Route --> Retrieve
+        Retrieve --> Answer
+        Answer --> Cite
     end
 
-    DecideMode -->|Immediate| DirVector
-    DecideMode -->|Deferred| JobCreate
+    Queue --> Claim
+    Cite -->|complete job| Store["💾 Store Answer<br/>+ Citations + Flow"]
 
-    DirAI --> Log["💾 Log &<br/>Store"]
-    JobStore --> Log
+    Store --> Return["✓ Answer<br/>with Citations"]
+    Return -->|Web UI long-poll| WebOut["🌐 Web<br/>Response"]
+    Return -->|MCP poll| MCPOut["📡 MCP<br/>Response"]
 
-    Log --> Return["✓ Answer<br/>with Citations"]
-    Return -->|Web UI| WebOut["🌐 Web<br/>Response"]
-    Return -->|MCP| MCPOut["📡 MCP<br/>Response"]
-
-    style Direct fill:#e8f1f7,stroke:#285f74,stroke-width:2px
-    style Queue fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`;
+    style Api fill:#f5f7f2,stroke:#285f74,stroke-width:2px
+    style Watcher fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`;
 }
 
 function continuousImprovementDiagram(modelInfo: ModelInfo): string {
@@ -256,10 +246,10 @@ function continuousImprovementDiagram(modelInfo: ModelInfo): string {
 
     subgraph Detection["<b>GAP DETECTION</b>"]
         Feedback -->|Low Confidence| Auto["🔴 Auto-detect"]
-        Feedback -->|User Feedback| Manual["👤 Mark Unhelpful"]
+        Feedback -->|Reviewer| Manual["👤 Manually Flag Gap"]
         Auto --> Analyze["🔍 Analyze Patterns"]
         Manual --> Analyze
-        Analyze --> Cluster["📊 Cluster Similar<br/>by Semantics"]
+        Analyze --> Cluster["📊 Cluster Similar Gaps<br/>(AI reshape + critic)"]
         Cluster --> Gaps["📋 Gap Candidates<br/>with Evidence"]
     end
 
@@ -278,7 +268,7 @@ function continuousImprovementDiagram(modelInfo: ModelInfo): string {
 
     subgraph AutoPath["<b>AUTOMATED (cron: gaps → PRs)</b>"]
         AutoDraft["🤖 ${chatLabel}<br/>Auto-draft<br/>uncovered clusters"]
-        AutoPromote["⏩ Auto-promote<br/>draft → ready<br/>(no manual review)"]
+        AutoPromote["⏩ Auto-publish<br/>(skips human review)"]
         AutoDraft --> AutoPromote
     end
 
@@ -296,39 +286,6 @@ function continuousImprovementDiagram(modelInfo: ModelInfo): string {
     style Detection fill:#e8f1f7,stroke:#285f74,stroke-width:2px
     style ManualPath fill:#fef9f0,stroke:#8b5a00,stroke-width:2px
     style AutoPath fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px`;
-}
-
-function queueArchitectureDiagram(modelInfo: ModelInfo): string {
-  const chatLabel = modelInfo.chatModel && modelInfo.chatHost
-    ? `${modelInfo.chatModel}<br/>(${modelInfo.chatHost})`
-    : modelInfo.chatModel || "Chat Model";
-
-  return `graph TD
-    User["👤 User/Client<br/>Web UI or MCP"]
-
-    subgraph Direct["<b>DIRECT MODE</b><br/>(Synchronous)"]
-        DirReq["📨 Request"] --> DirAPI["🔌 API<br/>Process"]
-        DirAPI --> DirModel["🤖 ${chatLabel}<br/>Called Directly"]
-        DirModel --> DirResp["✓ Response<br/>Immediate"]
-    end
-
-    subgraph Queue["<b>QUEUE MODE</b><br/>(Asynchronous)"]
-        QReq["📨 Request"] --> QJobCreate["📝 Create<br/>Job Record"]
-        QJobCreate --> QQueue["📦 Job Queue<br/>Postgres"]
-        QQueue --> QWatcher["👁️ Watcher<br/>Process"]
-        QWatcher --> QModel["🤖 ${chatLabel}<br/>Called by Watcher"]
-        QModel --> QResult["💾 Store<br/>Result"]
-        QResult --> QResp["✓ Return<br/>Later"]
-    end
-
-    User -->|Option 1:<br/>Fast| Direct
-    User -->|Option 2:<br/>Flexible| Queue
-
-    DirResp --> Return["📤 Answer to User"]
-    QResp --> Return
-
-    style Direct fill:#e8f1f7,stroke:#285f74,stroke-width:2px
-    style Queue fill:#fef9f0,stroke:#8b5a00,stroke-width:2px`;
 }
 
 function automationDiagram(modelInfo: ModelInfo): string {
