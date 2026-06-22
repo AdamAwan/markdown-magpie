@@ -6,9 +6,11 @@ import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
 import { jobDefinition } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import type { JobListFilters } from "../../jobs/broker.js";
+import { refreshPullRequestsOutputSchema } from "@magpie/jobs";
 import * as proposalsService from "../proposals/service.js";
 import * as crunchService from "../crunch/service.js";
 import * as sourceSyncService from "../source-sync/service.js";
+import { applyPullRequestTransition } from "../../scheduling/gap-reconciler.js";
 
 export async function createJob(ctx: AppContext, type: JobType, input: unknown): Promise<JobView> {
   return ctx.jobs.create(type, input ?? {});
@@ -125,6 +127,7 @@ export async function completeJob(
     await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, parsed.data);
     await crunchService.recordCrunchPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await sourceSyncService.recordSourceSyncPublicationFromCompletedJob(ctx, existingJob, parsed.data);
+    await applyRefreshPullRequestsTransitions(ctx, existingJob, parsed.data);
     await ctx.jobs.complete(jobId, { result: parsed.data, executor });
   } catch (error) {
     await ctx.jobs.fail(jobId, {
@@ -163,6 +166,30 @@ async function updateQuestionLogFromCompletedJob(
     // store. flowId is only set when the watcher actually chose a flow.
     ...(typeof output.flowId === "string" ? { flowId: output.flowId } : {})
   });
+}
+
+// Completion handler for refresh_pull_requests: the github watcher polled each open
+// PR and reported its merged/closed state; apply the proposal-status transitions the
+// reconciler would otherwise apply from a snapshot. Reuses the shared
+// applyPullRequestTransition so the merged→cascade+freeze / closed→rejected+freeze
+// behaviour can never drift from the reconciler, and is idempotent (the shared
+// function only transitions a still-open proposal), so re-completing the same job
+// converges without running a merge cascade twice.
+async function applyRefreshPullRequestsTransitions(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<void> {
+  if (!job || job.type !== "refresh_pull_requests") {
+    return;
+  }
+  const parsed = refreshPullRequestsOutputSchema.safeParse(output);
+  if (!parsed.success) {
+    return;
+  }
+  for (const result of parsed.data.results) {
+    await applyPullRequestTransition(ctx, result.proposalId, { merged: result.merged, state: result.state });
+  }
 }
 
 // Marks a job failed and preserves the original crunch side-effect: when the

@@ -156,6 +156,70 @@ test("publish_proposal completion records publication and is idempotent when del
   assert.equal(repeated?.publication?.publishedAt, output.publishedAt);
 });
 
+test("refresh_pull_requests completion applies merged/closed transitions idempotently", async () => {
+  const ctx = makeTestContext();
+
+  const mergedProposal = await ctx.stores.proposals.create({
+    title: "Merged one",
+    targetPath: "a.md",
+    markdown: "# A",
+    rationale: "r",
+    evidence: [],
+    triggeringQuestionIds: ["q1"],
+    gapSummary: "gap a"
+  });
+  await ctx.stores.proposals.recordPublication(mergedProposal.id, {
+    provider: "local-git",
+    branchName: "magpie/proposal-a",
+    commitSha: "sha",
+    pullRequestUrl: "https://github.com/o/r/pull/1",
+    publishedAt: new Date().toISOString()
+  });
+
+  const closedProposal = await ctx.stores.proposals.create({
+    title: "Closed one",
+    targetPath: "b.md",
+    markdown: "# B",
+    rationale: "r",
+    evidence: []
+  });
+  await ctx.stores.proposals.recordPublication(closedProposal.id, {
+    provider: "local-git",
+    branchName: "magpie/proposal-b",
+    commitSha: "sha",
+    pullRequestUrl: "https://github.com/o/r/pull/2",
+    publishedAt: new Date().toISOString()
+  });
+
+  // Count cascades by observing gap resolution: a merged proposal resolves its gaps.
+  let resolveCalls = 0;
+  const realResolve = ctx.stores.questionLogs.resolveGaps.bind(ctx.stores.questionLogs);
+  ctx.stores.questionLogs.resolveGaps = async (questionIds: string[], summaries: string[], proposalId: string) => {
+    resolveCalls += 1;
+    return realResolve(questionIds, summaries, proposalId);
+  };
+
+  const job = await ctx.jobs.create("refresh_pull_requests", {});
+  const output = {
+    results: [
+      { proposalId: mergedProposal.id, state: "closed" as const, merged: true },
+      { proposalId: closedProposal.id, state: "closed" as const, merged: false }
+    ]
+  };
+
+  assert.equal((await completeJob(ctx, job.id, output)).ok, true);
+  assert.equal((await ctx.stores.proposals.get(mergedProposal.id))?.status, "merged");
+  assert.equal((await ctx.stores.proposals.get(closedProposal.id))?.status, "rejected");
+  const cascadesAfterFirst = resolveCalls;
+
+  // Re-completing the same job must converge: no second cascade, statuses unchanged.
+  const job2 = await ctx.jobs.create("refresh_pull_requests", {});
+  assert.equal((await completeJob(ctx, job2.id, output)).ok, true);
+  assert.equal((await ctx.stores.proposals.get(mergedProposal.id))?.status, "merged");
+  assert.equal((await ctx.stores.proposals.get(closedProposal.id))?.status, "rejected");
+  assert.equal(resolveCalls, cascadesAfterFirst, "merge cascade must not run a second time");
+});
+
 test("answer completion is idempotent when delivered twice", async () => {
   const ctx = makeTestContext();
 

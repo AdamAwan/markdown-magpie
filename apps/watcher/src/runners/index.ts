@@ -5,6 +5,7 @@ import { ChatRunner } from "./chat.js";
 import { CliRunner, type PromptMode } from "./cli.js";
 import { MaintenanceRunner } from "./maintenance.js";
 import { createGitPublicationDeps, PublicationRunner } from "./publication.js";
+import { RefreshPullRequestsRunner } from "./refresh-pull-requests.js";
 import type { JobRunner } from "./types.js";
 
 export type { JobRunner } from "./types.js";
@@ -82,6 +83,9 @@ export function createConfiguredRunners(env: NodeJS.ProcessEnv, api: WatcherApi)
 
   if (ready("github")) {
     runners.push(new PublicationRunner(api, createGitPublicationDeps()));
+    // refresh_pull_requests is a github-capability job: it polls open PRs with the
+    // watcher's GitHub credentials and reports state back for the API to apply.
+    runners.push(new RefreshPullRequestsRunner(api));
   }
 
   if (ready("maintenance")) {

@@ -39,6 +39,13 @@ export interface SourceSyncExecutionContext {
   repository: unknown;
 }
 
+// One of a flow's open pull requests as returned by GET /api/proposals?status=pr-opened,
+// reduced to exactly what the refresh runner needs: the proposal id and the PR URL to poll.
+export interface OpenPullRequestRef {
+  proposalId: string;
+  pullRequestUrl: string;
+}
+
 // The full surface the runners and loop use. The loop only needs WatcherApiClient;
 // runners additionally use the retrieve + execution-context calls.
 export interface WatcherApi extends WatcherApiClient {
@@ -54,6 +61,14 @@ export interface WatcherApi extends WatcherApiClient {
   // generative plan job the API bounded-waits on + publication enqueue), returning
   // the run ids created. An absent flowId watches every configured git source.
   runSourceSync(flowId: string | undefined, signal?: AbortSignal): Promise<{ runIds: string[] }>;
+  // Triggers a scheduled crunch run in the API (enqueue-only on the API side) and
+  // returns the created run + planning job ids. An absent flowId crunches the
+  // default flow.
+  triggerScheduledCrunch(flowId: string | undefined, signal?: AbortSignal): Promise<{ runId: string; jobId: string }>;
+  // The flow's currently open pull requests with a PR URL to poll. Used by the
+  // github-capability refresh runner, which holds the GitHub credentials the API
+  // no longer does.
+  listOpenPullRequests(signal?: AbortSignal): Promise<OpenPullRequestRef[]>;
 }
 
 export interface HttpClientOptions {
@@ -124,6 +139,30 @@ export class HttpWatcherApi implements WatcherApi {
     return { runIds };
   }
 
+  async triggerScheduledCrunch(
+    flowId: string | undefined,
+    signal?: AbortSignal
+  ): Promise<{ runId: string; jobId: string }> {
+    // POST /api/crunch/run returns { run: { id, jobId }, links }. Reduce it to the
+    // run+job ids the trigger_scheduled_crunch contract requires.
+    const { run } = await this.post<{ run: { id: string; jobId: string } }>(
+      "/api/crunch/run",
+      { trigger: "scheduled", ...(flowId ? { flowId } : {}) },
+      signal
+    );
+    return { runId: run.id, jobId: run.jobId };
+  }
+
+  async listOpenPullRequests(signal?: AbortSignal): Promise<OpenPullRequestRef[]> {
+    const { proposals } = await this.get<{
+      proposals: Array<{ id: string; publication?: { pullRequestUrl?: string } }>;
+    }>("/api/proposals?status=pr-opened", signal);
+    return proposals.flatMap((proposal) => {
+      const pullRequestUrl = proposal.publication?.pullRequestUrl;
+      return pullRequestUrl ? [{ proposalId: proposal.id, pullRequestUrl }] : [];
+    });
+  }
+
   async proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext> {
     return this.get<ProposalExecutionContext>(`/api/proposals/${proposalId}/execution-context`);
   }
@@ -140,8 +179,8 @@ export class HttpWatcherApi implements WatcherApi {
     return this.request<TResponse>(path, { method: "POST", body: JSON.stringify(body) }, signal);
   }
 
-  private async get<TResponse>(path: string): Promise<TResponse> {
-    return this.request<TResponse>(path, { method: "GET" });
+  private async get<TResponse>(path: string, signal?: AbortSignal): Promise<TResponse> {
+    return this.request<TResponse>(path, { method: "GET" }, signal);
   }
 
   private async request<TResponse>(path: string, init: RequestInit, signal?: AbortSignal): Promise<TResponse> {

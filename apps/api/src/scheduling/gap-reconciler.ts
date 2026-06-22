@@ -127,19 +127,40 @@ async function refreshOpenPullRequests(
     if (!status) {
       continue;
     }
-    if (status.merged) {
-      const merged = await ctx.stores.proposals.updateStatus(proposal.id, "merged");
-      if (merged) {
-        console.log(`Gap reconciler: proposal ${proposal.id} merged; running cascade and freezing its cluster.`);
-        await proposalsService.runMergeCascade(ctx, merged);
-        await freezeClusterForProposal(ctx, merged);
-      }
-    } else if (status.state === "closed") {
-      const rejected = await ctx.stores.proposals.updateStatus(proposal.id, "rejected");
-      if (rejected) {
-        console.log(`Gap reconciler: proposal ${proposal.id} PR closed without merge; marked rejected and froze its cluster.`);
-        await freezeClusterForProposal(ctx, rejected);
-      }
+    await applyPullRequestTransition(ctx, proposal.id, status);
+  }
+}
+
+// The merged/closed proposal transition, applied by BOTH this reconciler's PR-state
+// pass and the refresh_pull_requests completion handler. Kept here and shared so the
+// two paths can never drift: merged ⇒ updateStatus("merged") + runMergeCascade +
+// freeze the cluster; a close-without-merge ⇒ updateStatus("rejected") + freeze.
+// Idempotent by guarding on the proposal's CURRENT status: only a still-open
+// (pr-opened) proposal is transitioned, so re-applying the same reading — e.g.
+// re-completing a refresh_pull_requests job — is a no-op and never runs the cascade
+// twice. (updateStatus itself returns the proposal even when nothing changed, so the
+// guard, not its return value, is what makes this safe.)
+export async function applyPullRequestTransition(
+  ctx: AppContext,
+  proposalId: string,
+  status: { merged: boolean; state: "open" | "closed" }
+): Promise<void> {
+  const current = await ctx.stores.proposals.get(proposalId);
+  if (!current || current.status !== "pr-opened") {
+    return;
+  }
+  if (status.merged) {
+    const merged = await ctx.stores.proposals.updateStatus(proposalId, "merged");
+    if (merged) {
+      console.log(`Gap reconciler: proposal ${proposalId} merged; running cascade and freezing its cluster.`);
+      await proposalsService.runMergeCascade(ctx, merged);
+      await freezeClusterForProposal(ctx, merged);
+    }
+  } else if (status.state === "closed") {
+    const rejected = await ctx.stores.proposals.updateStatus(proposalId, "rejected");
+    if (rejected) {
+      console.log(`Gap reconciler: proposal ${proposalId} PR closed without merge; marked rejected and froze its cluster.`);
+      await freezeClusterForProposal(ctx, rejected);
     }
   }
 }
