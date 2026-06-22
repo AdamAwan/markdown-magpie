@@ -1,7 +1,6 @@
 :root {
   color-scheme: light;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #17211d;
   background: #f5f7f2;
 }
@@ -68,11 +67,19 @@ p {
   padding: 18px 14px;
 }
 
+.sidebarHeader {
+  display: contents;
+}
+
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 8px 8px 20px;
+}
+
+.menuToggle {
+  display: none;
 }
 
 .brandLogo {
@@ -1540,10 +1547,78 @@ pre {
     height: auto;
     border-right: 0;
     border-bottom: 1px solid #d9ded6;
+    padding: 10px 14px;
   }
 
-  .sideNav {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  .sidebarHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .brand {
+    padding: 4px 0;
+  }
+
+  .brandLogo {
+    width: 36px;
+    height: 36px;
+  }
+
+  .brand strong {
+    margin-top: 2px;
+    font-size: 16px;
+  }
+
+  .menuToggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+    border: 1px solid #d9ded6;
+    border-radius: 6px;
+    background: #ffffff;
+    padding: 8px 12px;
+    color: #17211d;
+    font-size: 14px;
+    font-weight: 800;
+  }
+
+  .menuToggle:hover {
+    border-color: #aeb8aa;
+    background: #f5f7f2;
+  }
+
+  .menuToggle:focus-visible {
+    outline: 3px solid rgb(40 95 116 / 22%);
+    outline-offset: 2px;
+  }
+
+  .menuToggleIcon {
+    display: grid;
+    gap: 3px;
+    width: 16px;
+  }
+
+  .menuToggleIcon span {
+    display: block;
+    height: 2px;
+    border-radius: 2px;
+    background: currentColor;
+  }
+
+  .sideNav,
+  .sideStatus {
+    display: none;
+  }
+
+  .menuOpen .sideNav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 12px;
+    border-top: 1px solid #e2e6df;
+    padding-top: 12px;
   }
 
   .sideStatus,
@@ -1588,8 +1663,12 @@ pre {
     grid-template-columns: 1fr;
   }
 
-  .sideNav {
+  .menuOpen .sideNav {
     grid-template-columns: 1fr;
+  }
+
+  .brandText span {
+    display: none;
   }
 
   .topActions {

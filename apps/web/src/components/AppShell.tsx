@@ -48,6 +48,7 @@ function AuthActions() {
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const activeSection = sectionFromPath(pathname);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const {
     health,
     stats,
@@ -95,15 +96,36 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="appShell">
-      <aside className="sidebar">
-        <div className="brand">
-          <Image className="brandLogo" src="/magpie.jpeg" alt="" aria-hidden="true" width={40} height={40} />
-          <div className="brandText">
-            <span>Markdown Magpie</span>
-            <strong>Knowledge Console</strong>
+      <aside className={mobileMenuOpen ? "sidebar menuOpen" : "sidebar"}>
+        <div className="sidebarHeader">
+          <div className="brand">
+            <Image className="brandLogo" src="/magpie.jpeg" alt="" aria-hidden="true" width={40} height={40} />
+            <div className="brandText">
+              <span>Markdown Magpie</span>
+              <strong>Knowledge Console</strong>
+            </div>
           </div>
+          <button
+            className="menuToggle"
+            type="button"
+            aria-controls="console-navigation"
+            aria-expanded={mobileMenuOpen}
+            onClick={() => setMobileMenuOpen((open) => !open)}
+          >
+            <span className="menuToggleIcon" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+            <span>{mobileMenuOpen ? "Close" : "Menu"}</span>
+          </button>
         </div>
-        <nav className="sideNav" aria-label="Console sections">
+        <nav
+          className="sideNav"
+          id="console-navigation"
+          aria-label="Console sections"
+          onClick={() => setMobileMenuOpen(false)}
+        >
           {SECTION_NAV.map((entry, index) => (
             <Fragment key={entry.section}>
               {index > 0 && entry.group !== SECTION_NAV[index - 1].group ? (
