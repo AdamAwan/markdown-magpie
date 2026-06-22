@@ -1,8 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { JobCapability, JobState, JobType, JobView, ScheduleView, WatcherStatus, WatcherView } from "../lib/types";
 import { formatJobType, isActiveJob } from "../lib/console";
 
 const JOB_STATES: JobState[] = ["created", "retry", "active", "completed", "cancelled", "failed", "blocked"];
+
+// Rows per page in the jobs table. The API already caps the response, so this
+// only pages what is loaded into the console.
+const PAGE_SIZE = 20;
 
 // Cancel is offered while a job is still in flight (created/retry/active); retry
 // is offered only for a failed job. Both map to the broker endpoints the API
@@ -66,6 +70,22 @@ export function JobsPanel({
     [jobs, stateFilter, typeFilter]
   );
 
+  // The list grows without bound, so page the (already filtered + sorted) rows
+  // client-side rather than rendering one ever-lengthening table.
+  const [page, setPage] = useState(0);
+
+  // Reset to the first page when the filters change so a narrowed list never
+  // strands the user on a now-empty page.
+  useEffect(() => {
+    setPage(0);
+  }, [stateFilter, typeFilter]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  // Clamp instead of resetting: the 4s poll can shrink the list under the
+  // current page, and clamping keeps the user on the last real page.
+  const currentPage = Math.min(page, pageCount - 1);
+  const visibleJobs = filtered.slice(currentPage * PAGE_SIZE, currentPage * PAGE_SIZE + PAGE_SIZE);
+
   const activeCount = jobs.filter(isActiveJob).length;
   const failedJobs = jobs.filter((job) => job.state === "failed" && !job.acceptedAt);
   const failedCount = failedJobs.length;
@@ -120,7 +140,7 @@ export function JobsPanel({
             </select>
           </label>
           <span className="pill" title="Jobs matching the current filters">
-            {filtered.length} shown
+            {filtered.length} matched
           </span>
           {failedCount > 0 ? (
             <button
@@ -141,7 +161,7 @@ export function JobsPanel({
             <span>Age</span>
             <span>Updated</span>
           </div>
-          {filtered.map((job) => (
+          {visibleJobs.map((job) => (
             <button
               className={selectedJob?.id === job.id ? "tableRow jobRow selected" : "tableRow jobRow"}
               key={job.id}
@@ -170,6 +190,30 @@ export function JobsPanel({
             <p className="empty">{jobs.length === 0 ? "No jobs queued." : "No jobs match the current filters."}</p>
           ) : null}
         </div>
+
+        {filtered.length > PAGE_SIZE ? (
+          <div className="tablePager">
+            <button
+              className="button secondary"
+              disabled={currentPage === 0}
+              onClick={() => setPage(currentPage - 1)}
+              type="button"
+            >
+              Previous
+            </button>
+            <span className="pagerStatus" aria-live="polite">
+              Page {currentPage + 1} of {pageCount} · showing {visibleJobs.length} of {filtered.length}
+            </span>
+            <button
+              className="button secondary"
+              disabled={currentPage >= pageCount - 1}
+              onClick={() => setPage(currentPage + 1)}
+              type="button"
+            >
+              Next
+            </button>
+          </div>
+        ) : null}
 
         {selectedJob ? <JobDetail job={selectedJob} onCancel={onCancel} onRetry={onRetry} onAccept={onAccept} /> : null}
 

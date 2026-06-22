@@ -41,29 +41,34 @@ export function CrunchPanel({
           bloated ones, then lands the result on a review branch. Schedule it, or run it on demand.
         </p>
 
-        <div className="crunchSchedules">
-          {settings.map((setting) => (
-            <CrunchScheduleCard
-              flowName={flowName(setting.flowId)}
-              key={setting.flowId ?? "__default__"}
-              loading={loading}
-              onRun={onRun}
-              onSave={onSaveSchedule}
-              setting={setting}
-            />
-          ))}
-          {settings.length === 0 ? <p className="empty">No knowledge flows are configured to crunch.</p> : null}
-        </div>
+        <section className="crunchSection">
+          <h3 className="crunchSubhead">Knowledge flow schedules</h3>
+          <div className="crunchSchedules">
+            {settings.map((setting) => (
+              <CrunchScheduleCard
+                flowName={flowName(setting.flowId)}
+                key={setting.flowId ?? "__default__"}
+                loading={loading}
+                onRun={onRun}
+                onSave={onSaveSchedule}
+                setting={setting}
+              />
+            ))}
+            {settings.length === 0 ? <p className="empty">No knowledge flows are configured to crunch.</p> : null}
+          </div>
+        </section>
 
-        <div className="crunchSchedules">
+        <section className="crunchSection">
           <h3 className="crunchSubhead">Side processes</h3>
-          {scheduledTasks.map((task) => (
-            <ScheduledTaskCard key={task.key} loading={loading} onRun={onRunTask} onSave={onSaveTask} task={task} />
-          ))}
-          {scheduledTasks.length === 0 ? <p className="empty">No scheduled side-processes are registered.</p> : null}
-        </div>
+          <div className="crunchSchedules">
+            {scheduledTasks.map((task) => (
+              <ScheduledTaskCard key={task.key} loading={loading} onRun={onRunTask} onSave={onSaveTask} task={task} />
+            ))}
+            {scheduledTasks.length === 0 ? <p className="empty">No scheduled side-processes are registered.</p> : null}
+          </div>
+        </section>
 
-        <div className="crunchRuns">
+        <section className="crunchSection">
           <h3 className="crunchSubhead">Recent runs</h3>
           <div className="list scrollList">
             {runs.map((run) => (
@@ -77,7 +82,7 @@ export function CrunchPanel({
             ))}
             {runs.length === 0 ? <p className="empty">No crunch runs yet. Use “Run now” to create one.</p> : null}
           </div>
-        </div>
+        </section>
       </div>
     </section>
   );

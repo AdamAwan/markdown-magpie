@@ -2,7 +2,7 @@ import { ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, JobView, K
 
 export function sectionTitle(section: ConsoleSection): string {
   if (section === "knowledge") {
-    return "Browse the Markdown knowledge base";
+    return "Manage knowledge flows";
   }
   if (section === "gaps") {
     return "Turn weak answers into proposals";
@@ -34,10 +34,10 @@ export function sectionTitle(section: ConsoleSection): string {
 
 export function sectionSubtitle(section: ConsoleSection): string {
   if (section === "knowledge") {
-    return "Read indexed Markdown documents, search sections, and add new knowledge from one workspace.";
+    return "Review each configured source-to-destination flow and index it into the knowledge base.";
   }
   if (section === "gaps") {
-    return "Prioritize repeated gaps and draft Markdown updates from them.";
+    return "Prioritise repeated gaps and draft Markdown updates from them.";
   }
   if (section === "jobs") {
     return "See queued, claimed, completed, and failed AI work in one stable table.";
@@ -46,7 +46,7 @@ export function sectionSubtitle(section: ConsoleSection): string {
     return "Select a proposal and review its target path, rationale, and Markdown.";
   }
   if (section === "crunch") {
-    return "Schedule an AI pass that consolidates overlapping docs and splits bloated ones, then review and publish the tidy as a branch.";
+    return "Schedule an AI pass that consolidates overlapping docs and splits bloated ones, then review and publish the result as a branch.";
   }
   if (section === "prompts") {
     return "Read the exact instruction text sent to the AI for each job type, and where each prompt is used.";
