@@ -4,5 +4,9 @@
   "ignore": [
     "scripts/**",
     "apps/web/src/lib/types.ts"
-  ]
+  ],
+  "ignoreExportsUsedInFile": {
+    "type": true,
+    "interface": true
+  }
 }
