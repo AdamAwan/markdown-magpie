@@ -6,6 +6,7 @@ import {
   allQueueDefinitions,
   answerQuestionInputSchema,
   answerQuestionOutputSchema,
+  crosslinkPullRequestsInputSchema,
   jobDefinition,
   queueNameForJob,
   queueNamesForCapabilities
@@ -29,7 +30,8 @@ const EXPIRATION_SECONDS = {
   source_change_sync: 60 * 60,
   publish_proposal: 15 * 60,
   publish_crunch: 15 * 60,
-  publish_source_sync: 15 * 60
+  publish_source_sync: 15 * 60,
+  crosslink_pull_requests: 10 * 60
 } as const;
 
 test("every job type is unique and has schemas and a valid policy", () => {
@@ -81,7 +83,8 @@ test("github capability yields only GitHub work queues", () => {
     "refresh_pull_requests",
     "publish_proposal",
     "publish_crunch",
-    "publish_source_sync"
+    "publish_source_sync",
+    "crosslink_pull_requests"
   ]);
 });
 
@@ -208,4 +211,26 @@ test("queue naming rejects a missing or invalid AI provider", () => {
     () => queueNameForJob("answer_question", { provider: "mock" as never }),
     /provider/i
   );
+});
+
+test("crosslink_pull_requests is a registered github job", () => {
+  assert.ok(JOB_TYPES.includes("crosslink_pull_requests"));
+  const def = jobDefinition("crosslink_pull_requests");
+  assert.equal(def.requiredCapability({}), "github");
+});
+
+test("crosslink input schema requires exactly two pull requests", () => {
+  const ok = crosslinkPullRequestsInputSchema.safeParse({
+    targets: ["kb/a.md"],
+    pullRequests: [
+      { proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" },
+      { proposalId: "p2", pullRequestUrl: "https://github.com/o/r/pull/2" }
+    ]
+  });
+  assert.equal(ok.success, true);
+  const bad = crosslinkPullRequestsInputSchema.safeParse({
+    targets: ["kb/a.md"],
+    pullRequests: [{ proposalId: "p1", pullRequestUrl: "u" }]
+  });
+  assert.equal(bad.success, false);
 });
