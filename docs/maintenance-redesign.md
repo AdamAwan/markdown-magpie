@@ -135,11 +135,12 @@ Correctness and growth feel similar but behave oppositely, so they are **separat
 - **improve-patrol** is *proactive*. It grows docs that are fine-but-thin.
   (Covers "what else should we know?".)
 
-Splitting them lets us run them at different cadences and, crucially, **trust them
-differently**: fix-patrol PRs fix demonstrable problems and can be near-auto-mergeable;
-improve-patrol PRs make editorial calls and always want human review. Crunch mixed these,
-which is a large part of why its output felt untrustworthy — you couldn't tell a "this is
-wrong" PR from a "here's more stuff" PR.
+Splitting them lets us run them at different cadences and, crucially, **label them
+differently**: a fix-patrol PR fixes a demonstrable problem (quick to approve), while an
+improve-patrol PR makes an editorial call (needs a real read). Both still go through human
+review before merging to main — see §8 — they're just easy to triage apart. Crunch mixed
+these, which is a large part of why its output felt untrustworthy: you couldn't tell a "this
+is wrong" PR from a "here's more stuff" PR.
 
 ### The patrol trigger
 
@@ -233,10 +234,21 @@ is already ~80% of it.
 
 ---
 
-## Open questions
+## Decisions
 
-- Auto-merge policy for fix-patrol: fully automatic, or auto-merge only certain lenses
-  (e.g. `verify` yes, `split` no)?
-- Cursor fairness: pure least-recently-checked, or weight by traffic (files behind popular
-  questions patrolled more often)?
-- Neighbourhood size *k* for the dedupe lens — fixed, or adaptive to KB size?
+- **Folding & merge policy** — *all* patrol lenses (verify/dedupe/split/complete) fold their
+  changes into the existing open PR for the file-set. **Nothing merges to main unattended:**
+  every PR still goes through human review. fix-patrol and improve-patrol PRs are labelled
+  differently so they're easy to triage, but the merge gate is human for both.
+- **Cursor fairness** — *oldest N + a random sample*. Each tick takes the N least-recently-
+  checked files (exploit: clear the staleness backlog) plus a small random selection of others
+  (explore: nothing goes unvisited forever, and load doesn't synchronise into waves). The
+  oldest-N share dominates; the random share is the safety net.
+- **Neighbourhood size *k*** (dedupe lens) — **adaptive**, not fixed. We don't yet know KB
+  scale, so size *k* from the corpus (e.g. relative to flow size and/or a similarity-score
+  threshold rather than a hard count) and tune once we have real numbers.
+
+## Still open
+
+- Exact split between oldest-N and the random sample (e.g. 80/20?) — settle with real volume.
+- The concrete adaptivity rule for *k* (score threshold vs. proportion of flow) — same.

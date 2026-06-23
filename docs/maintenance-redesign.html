@@ -632,7 +632,7 @@ flow  (e.g. billing-kb)
           <h4>fix-patrol</h4>
           <p style="margin: 4px 0 0; font-size: 13.5px; color: var(--muted)">
             Speaks only when something is demonstrably <strong>wrong</strong>. Silent on healthy
-            files. PRs fix provable problems → near-auto-mergeable.
+            files. PRs fix provable problems → quick to approve (still human-reviewed).
           </p>
           <ul>
             <li><code>verify</code> — a claim it can't prove</li>
@@ -750,23 +750,40 @@ flow  (e.g. billing-kb)
         <code>gap-reconciler.ts</code> is already ~80% of it.
       </p>
 
-      <h2><span class="n">08</span>Open questions</h2>
+      <h2><span class="n">08</span>Decisions</h2>
       <table>
         <tbody>
           <tr>
-            <td><strong>Auto-merge policy</strong></td>
-            <td>Fully automatic for fix-patrol, or per-lens (e.g. <code>verify</code> yes, <code>split</code> no)?</td>
+            <td style="width: 180px"><strong>Folding &amp; merge</strong></td>
+            <td>
+              <em>All</em> patrol lenses fold into the existing open PR for the file-set.
+              <strong>Nothing merges to main unattended</strong> — every PR is human-reviewed.
+              fix vs improve PRs are labelled differently for easy triage; the merge gate is human
+              for both.
+            </td>
           </tr>
           <tr>
             <td><strong>Cursor fairness</strong></td>
-            <td>Pure least-recently-checked, or weight by traffic (files behind popular questions patrolled more)?</td>
+            <td>
+              <strong>Oldest N + a random sample.</strong> Oldest-N clears the staleness backlog
+              (exploit); the random share means nothing goes unvisited forever and load doesn't
+              synchronise into waves (explore). Oldest-N dominates; random is the safety net.
+            </td>
           </tr>
           <tr>
-            <td><strong>Neighbourhood size <em>k</em></strong></td>
-            <td>Fixed for the dedupe lens, or adaptive to KB size?</td>
+            <td><strong>Neighbourhood <em>k</em></strong></td>
+            <td>
+              <strong>Adaptive</strong>, not fixed — scope unknown today. Size <em>k</em> from the
+              corpus (proportion of flow and/or a similarity threshold, not a hard count); tune
+              with real numbers.
+            </td>
           </tr>
         </tbody>
       </table>
+      <p style="font-size: 13.5px; color: var(--muted)">
+        <strong>Still open:</strong> the exact oldest-N / random split (80/20?) and the concrete
+        adaptivity rule for <em>k</em> — both settle once we have real volume.
+      </p>
 
       <footer>
         Markdown Magpie · maintenance redesign proposal · see
