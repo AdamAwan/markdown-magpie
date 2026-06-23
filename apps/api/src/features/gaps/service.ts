@@ -76,7 +76,8 @@ export async function draftFromCluster(
     targetPath: overrides.targetPath,
     destinationId: overrides.destinationId,
     sourceContextCache: overrides.sourceContextCache,
-    openPullRequests
+    openPullRequests,
+    gapClusterId: clusterId
   });
   if (!outcome.ok) {
     return outcome;

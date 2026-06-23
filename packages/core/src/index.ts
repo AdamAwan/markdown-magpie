@@ -346,6 +346,9 @@ export interface DraftMarkdownProposalJobInput {
   openPullRequests?: OpenPullRequestContext[];
   destinationId?: string;
   targetPath?: string;
+  // The gap cluster this draft belongs to, so the created proposal can be linked
+  // back to it on the autonomous path. Absent on the on-demand HTTP draft path.
+  gapClusterId?: string;
   expectedOutput: "markdown_proposal";
 }
 

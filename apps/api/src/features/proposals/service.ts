@@ -301,6 +301,9 @@ export async function draftFromGaps(
     // The flow's in-flight proposals / open PRs to make the drafter aware of.
     // Optional and defaults to none, so the on-demand HTTP path stays unchanged.
     openPullRequests?: OpenPullRequestContext[];
+    // The cluster this draft belongs to, threaded onto the job so the completed
+    // proposal links back to it. Absent on the on-demand path.
+    gapClusterId?: string;
   } = {}
 ) {
   const uniqueRequested = [...new Set(rawSummaries.map((value) => value.trim()).filter((value) => value.length > 0))];
@@ -361,6 +364,7 @@ export async function draftFromGaps(
     openPullRequests: overrides.openPullRequests?.length ? overrides.openPullRequests : undefined,
     destinationId,
     targetPath: overrides.targetPath?.trim() || undefined,
+    gapClusterId: overrides.gapClusterId,
     provider: ctx.config.get().aiProvider,
     expectedOutput: "markdown_proposal"
   };
@@ -453,6 +457,7 @@ export async function createProposalFromCompletedJob(
     gapSummary: input.gapSummaries ? joinGapSummaries(input.gapSummaries) : undefined,
     triggeringQuestionIds: input.triggeringQuestionIds,
     destinationId: input.destinationId,
+    gapClusterId: input.gapClusterId,
     jobId: job.id,
     draftContext: buildDraftContext({
       gapSummaries: input.gapSummaries ?? [],
