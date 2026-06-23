@@ -99,6 +99,14 @@ export class PostgresProposalStore implements ProposalStore {
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
+  async updateMarkdown(id: string, markdown: string): Promise<Proposal | undefined> {
+    const result = await this.pool.query<ProposalRow>(
+      "UPDATE proposals SET markdown = $2 WHERE id = $1 RETURNING *",
+      [id, markdown]
+    );
+    return result.rows[0] ? mapRow(result.rows[0]) : undefined;
+  }
+
   async reset(): Promise<void> {
     const client = await this.pool.connect();
     try {

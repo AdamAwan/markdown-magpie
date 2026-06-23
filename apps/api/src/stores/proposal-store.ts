@@ -26,6 +26,7 @@ export interface ProposalStore {
   updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined>;
   recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined>;
   linkCluster(id: string, gapClusterId: string): Promise<Proposal | undefined>;
+  updateMarkdown(id: string, markdown: string): Promise<Proposal | undefined>;
   reset(): Promise<void>;
 }
 
@@ -110,6 +111,16 @@ export class InMemoryProposalStore implements ProposalStore {
       return undefined;
     }
     const updated: Proposal = { ...existing, gapClusterId };
+    this.proposals.set(id, updated);
+    return updated;
+  }
+
+  async updateMarkdown(id: string, markdown: string): Promise<Proposal | undefined> {
+    const existing = this.proposals.get(id);
+    if (!existing) {
+      return undefined;
+    }
+    const updated: Proposal = { ...existing, markdown };
     this.proposals.set(id, updated);
     return updated;
   }
