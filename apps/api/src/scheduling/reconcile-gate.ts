@@ -85,8 +85,10 @@ const TOUCHABLE_STATUSES = new Set(["draft", "ready", "branch-pushed", "pr-opene
 // Derive the gate's view of the open PRs in a flow from its proposals. Only
 // still-open proposals that already know their target file participate; a closed
 // (merged/rejected/superseded) proposal is not an open PR, and a proposal with no
-// targetPath has no file-set to overlap on. touchable is always true for now —
-// approval state is untracked (see the plan's Global Constraints).
+// targetPath has no file-set to overlap on (Proposal.targetPath is typed
+// non-optional, so in practice this guards the empty-string case). touchable is
+// always true for now — approval state is untracked (see the plan's Global
+// Constraints).
 export function openPullRequestSummaries(proposals: Proposal[]): OpenPullRequestSummary[] {
   const out: OpenPullRequestSummary[] = [];
   for (const proposal of proposals) {

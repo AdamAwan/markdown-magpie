@@ -87,14 +87,20 @@ test("never returns drop", () => {
 const proposal = (id: string, status: string, targetPath?: string): Proposal =>
   ({ id, status, targetPath }) as unknown as Proposal;
 
-test("maps open proposals with a target path into summaries", () => {
+test("maps every open status with a target path into summaries", () => {
+  // Cover all four touchable statuses so removing any from TOUCHABLE_STATUSES
+  // (which deliberately mirrors isOpenProposal) is caught here.
   const out = openPullRequestSummaries([
     proposal("p1", "pr-opened", "kb/a.md"),
-    proposal("p2", "draft", "kb/b.md")
+    proposal("p2", "draft", "kb/b.md"),
+    proposal("p3", "ready", "kb/c.md"),
+    proposal("p4", "branch-pushed", "kb/d.md")
   ]);
   assert.deepEqual(out, [
     { proposalId: "p1", targets: ["kb/a.md"], touchable: true },
-    { proposalId: "p2", targets: ["kb/b.md"], touchable: true }
+    { proposalId: "p2", targets: ["kb/b.md"], touchable: true },
+    { proposalId: "p3", targets: ["kb/c.md"], touchable: true },
+    { proposalId: "p4", targets: ["kb/d.md"], touchable: true }
   ]);
 });
 
