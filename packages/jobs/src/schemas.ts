@@ -93,6 +93,7 @@ export const draftMarkdownProposalInputSchema = z.object({
   sourceContext: z.array(sourceDataContextSchema).optional(),
   destinationId: z.string().optional(),
   targetPath: z.string().optional(),
+  gapClusterId: z.string().optional(),
   expectedOutput: z.literal("markdown_proposal")
 }) satisfies z.ZodType<ProviderInput<CoreDraftMarkdownProposalJobInput>>;
 export const draftMarkdownProposalOutputSchema = z.object({
