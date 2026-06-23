@@ -1,9 +1,35 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { makeTestContext } from "../../test-support/context.js";
-import { listFlowSnapshots, readFlowSnapshot, refreshSnapshot } from "./service.js";
+import {
+  listFlowSnapshots,
+  readFlowSnapshot,
+  recordSnapshotsFromPullRequestResults,
+  refreshSnapshot
+} from "./service.js";
 
-const noPulls = { pollPullRequest: async () => ({ notModified: false }) };
+// The PR states the refresh_pull_requests watcher job reports, keyed by proposal.
+type Reading = { merged: boolean; state: "open" | "closed" };
+const noPulls = new Map<string, Reading>();
+
+async function openPrProposal(ctx: ReturnType<typeof makeTestContext>) {
+  const proposal = await ctx.stores.proposals.create({
+    title: "T",
+    targetPath: "t.md",
+    markdown: "#",
+    rationale: "r",
+    evidence: [],
+    triggeringQuestionIds: []
+  });
+  await ctx.stores.proposals.recordPublication(proposal.id, {
+    provider: "local-git",
+    branchName: "b",
+    commitSha: "sha",
+    pullRequestUrl: "https://github.com/o/r/pull/1",
+    publishedAt: new Date().toISOString()
+  });
+  return proposal;
+}
 
 describe("refreshSnapshot", () => {
   it("downloads this flow's gaps and in-flight proposals to the snapshot store", async () => {
@@ -27,81 +53,39 @@ describe("refreshSnapshot", () => {
 
     assert.ok(snapshot.gaps.some((g) => g.summary === "How to configure X"), "the gap was captured");
     assert.ok(snapshot.proposals.some((p) => p.id === proposal.id), "the proposal was captured");
-    assert.equal(snapshot.pullRequests.length, 0, "a draft proposal has no PR to poll");
+    assert.equal(snapshot.pullRequests.length, 0, "a draft proposal has no PR state");
 
     // The snapshot is persisted, not just returned.
     assert.equal((await ctx.stores.snapshots.read(undefined))?.proposals.length, 1);
   });
 
-  it("polls only this flow's open pull requests", async () => {
+  it("records the watcher-reported state for this flow's open pull requests", async () => {
     const ctx = makeTestContext();
-    const proposal = await ctx.stores.proposals.create({
-      title: "T",
-      targetPath: "t.md",
-      markdown: "#",
-      rationale: "r",
-      evidence: [],
-      triggeringQuestionIds: []
-    });
-    await ctx.stores.proposals.recordPublication(proposal.id, {
-      provider: "local-git",
-      branchName: "b",
-      commitSha: "sha",
-      pullRequestUrl: "https://github.com/o/r/pull/1",
-      publishedAt: new Date().toISOString()
-    });
+    const proposal = await openPrProposal(ctx);
 
-    let polls = 0;
-    const snapshot = await refreshSnapshot(ctx, undefined, {
-      pollPullRequest: async () => {
-        polls += 1;
-        return { notModified: false, status: { merged: false, state: "open" }, etag: 'W/"abc"' };
-      }
-    });
+    const snapshot = await refreshSnapshot(
+      ctx,
+      undefined,
+      new Map([[proposal.id, { merged: false, state: "open" }]])
+    );
 
-    assert.equal(polls, 1, "the one open PR was polled");
     assert.equal(snapshot.pullRequests.length, 1);
     assert.equal(snapshot.pullRequests[0].state, "open");
     assert.equal(snapshot.pullRequests[0].proposalId, proposal.id);
-    assert.equal(snapshot.pullRequests[0].etag, 'W/"abc"', "the ETag is stored for the next poll");
   });
 
-  it("replays the stored ETag and keeps the prior reading on a 304", async () => {
+  it("carries forward the prior reading when the watcher didn't report a PR", async () => {
     const ctx = makeTestContext();
-    const proposal = await ctx.stores.proposals.create({
-      title: "T",
-      targetPath: "t.md",
-      markdown: "#",
-      rationale: "r",
-      evidence: [],
-      triggeringQuestionIds: []
-    });
-    await ctx.stores.proposals.recordPublication(proposal.id, {
-      provider: "local-git",
-      branchName: "b",
-      commitSha: "sha",
-      pullRequestUrl: "https://github.com/o/r/pull/1",
-      publishedAt: new Date().toISOString()
-    });
+    const proposal = await openPrProposal(ctx);
 
-    // First poll returns a 200 with an ETag.
-    await refreshSnapshot(ctx, undefined, {
-      pollPullRequest: async () => ({ notModified: false, status: { merged: false, state: "open" }, etag: 'W/"v1"' })
-    });
+    // First run: the watcher reported the PR as open.
+    await refreshSnapshot(ctx, undefined, new Map([[proposal.id, { merged: false, state: "open" }]]));
 
-    // Second poll: the service must send the stored ETag and, on 304, keep the reading.
-    let seenEtag: string | undefined = "unset";
-    const snapshot = await refreshSnapshot(ctx, undefined, {
-      pollPullRequest: async (_url, etag) => {
-        seenEtag = etag;
-        return { notModified: true };
-      }
-    });
+    // Second run: nothing reported for this PR (e.g. the watcher couldn't resolve it).
+    const snapshot = await refreshSnapshot(ctx, undefined, noPulls);
 
-    assert.equal(seenEtag, 'W/"v1"', "the stored ETag was replayed as If-None-Match");
-    assert.equal(snapshot.pullRequests.length, 1, "the unchanged PR is retained");
-    assert.equal(snapshot.pullRequests[0].state, "open", "the prior reading is kept on 304");
-    assert.equal(snapshot.pullRequests[0].etag, 'W/"v1"', "the ETag is carried forward");
+    assert.equal(snapshot.pullRequests.length, 1, "the unreported PR is retained");
+    assert.equal(snapshot.pullRequests[0].state, "open", "the prior reading is kept");
   });
 
   it("scopes gaps and proposals to the requested flow", async () => {
@@ -123,6 +107,31 @@ describe("refreshSnapshot", () => {
 
     const alphaSnapshot = await refreshSnapshot(ctx, "alpha", noPulls);
     assert.ok(alphaSnapshot.proposals.some((p) => p.id === proposal.id), "alpha's proposal is in the alpha snapshot");
+  });
+});
+
+describe("recordSnapshotsFromPullRequestResults", () => {
+  it("writes the default and every configured flow's snapshot from one job's results", async () => {
+    const ctx = makeTestContext({
+      knowledgeConfig: {
+        sources: [],
+        destinations: [],
+        flows: [{ id: "alpha", name: "Alpha flow", sourceIds: [], destinationId: "d" }],
+        repositories: [],
+        checkoutRoot: ".magpie/checkouts"
+      }
+    });
+    const proposal = await openPrProposal(ctx);
+
+    await recordSnapshotsFromPullRequestResults(ctx, [
+      { proposalId: proposal.id, merged: true, state: "closed" }
+    ]);
+
+    const views = await listFlowSnapshots(ctx);
+    assert.equal(views.length, 2, "both the default and the alpha flow get a snapshot");
+    const defaultSnapshot = views.find((v) => v.flowId === undefined);
+    assert.equal(defaultSnapshot?.pullRequests[0]?.merged, true, "the reported merge reached the default flow's snapshot");
+    assert.equal(defaultSnapshot?.pullRequests[0]?.state, "closed");
   });
 });
 

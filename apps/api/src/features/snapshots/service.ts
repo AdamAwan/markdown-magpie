@@ -1,18 +1,11 @@
 import type { Proposal } from "@magpie/core";
-import { fetchPullRequestStatusCached as defaultPollPullRequest } from "@magpie/git";
 import type { AppContext } from "../../context.js";
 import type { FlowSnapshot, SnapshotProposal, SnapshotPullRequest } from "../../stores/snapshot-store.js";
 
-export interface SnapshotDeps {
-  // Injected so tests can run offline. Defaults to the real conditional GitHub
-  // lookup, which sends If-None-Match when a prior ETag is available so an
-  // unchanged PR returns 304 and costs no rate limit.
-  pollPullRequest: typeof defaultPollPullRequest;
-}
-
-const DEFAULT_DEPS: SnapshotDeps = {
-  pollPullRequest: defaultPollPullRequest
-};
+// A pull request's externally-observed state, as reported by the
+// refresh_pull_requests watcher job. The API holds no GitHub token, so it never
+// polls the host itself — PR state only ever reaches a snapshot through this.
+export type PullRequestReading = { merged: boolean; state: "open" | "closed" };
 
 function sameFlow(a: string | undefined, b: string | undefined): boolean {
   return (a ?? "") === (b ?? "");
@@ -74,14 +67,16 @@ async function proposalFlowId(ctx: AppContext, proposal: Proposal, cache: Cluste
   return cluster?.flowId;
 }
 
-// Downloads one flow's gaps, in-flight proposals, and open-PR state to the
-// snapshot store. This is the "fetch" half of the fetch/process split: it is the
-// only place that polls GitHub, on its own schedule, so the reconciler can read
-// PR state from the snapshot instead of calling the host during reconciliation.
+// Writes one flow's gaps, in-flight proposals, and open-PR state to the snapshot
+// store — the inputs the reconciler would otherwise gather live. Gaps and
+// proposals are read locally; PR state comes from `pullRequestStatuses`, keyed by
+// proposal id, which the refresh_pull_requests watcher job polled (the API holds
+// no GitHub token). A pr-opened proposal the watcher didn't report this run keeps
+// its last known reading rather than regressing to "unknown".
 export async function refreshSnapshot(
   ctx: AppContext,
   flowId: string | undefined,
-  deps: SnapshotDeps = DEFAULT_DEPS
+  pullRequestStatuses: ReadonlyMap<string, PullRequestReading>
 ): Promise<FlowSnapshot> {
   const flowLabel = flowId ?? "default";
   const cache: ClusterFlowCache = new Map();
@@ -106,13 +101,13 @@ export async function refreshSnapshot(
     pullRequestUrl: proposal.publication?.pullRequestUrl
   }));
 
-  // Carry forward the previous poll so a PR we can't reach this run keeps its last
-  // known state rather than regressing to "unknown".
+  // Carry forward the previous reading for any open PR the watcher didn't report
+  // this run, so it keeps its last known state rather than regressing to "unknown".
   const previous = await ctx.stores.snapshots.read(flowId);
   const previousByProposal = new Map((previous?.pullRequests ?? []).map((pr) => [pr.proposalId, pr]));
 
   const pullRequests: SnapshotPullRequest[] = [];
-  let unchanged = 0;
+  let carried = 0;
   for (const proposal of flowProposals) {
     if (proposal.status !== "pr-opened") {
       continue;
@@ -121,42 +116,41 @@ export async function refreshSnapshot(
     if (!url) {
       continue;
     }
-    const prior = previousByProposal.get(proposal.id);
-    const fallback = (): SnapshotPullRequest =>
-      prior ? { ...prior, checkedAt: takenAt } : { proposalId: proposal.id, url, merged: false, state: "unknown", checkedAt: takenAt };
-    try {
-      // Replay the prior ETag so an unchanged PR comes back 304 (no rate-limit cost).
-      const poll = await deps.pollPullRequest(url, prior?.etag);
-      if (poll.notModified) {
-        unchanged += 1;
-        pullRequests.push(fallback());
-        continue;
-      }
-      if (poll.status) {
-        pullRequests.push({
-          proposalId: proposal.id,
-          url,
-          merged: poll.status.merged,
-          state: poll.status.state,
-          etag: poll.etag ?? prior?.etag,
-          checkedAt: takenAt
-        });
-        continue;
-      }
-      // No status (not a resolvable PR / no token / gone); keep any prior reading.
-      pullRequests.push(fallback());
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "pull request lookup failed";
-      console.warn(`Snapshot refresh [${flowLabel}]: PR status check failed for proposal ${proposal.id}: ${message}`);
-      pullRequests.push(fallback());
+    const reported = pullRequestStatuses.get(proposal.id);
+    if (reported) {
+      pullRequests.push({ proposalId: proposal.id, url, merged: reported.merged, state: reported.state, checkedAt: takenAt });
+      continue;
     }
+    const prior = previousByProposal.get(proposal.id);
+    carried += 1;
+    pullRequests.push(
+      prior ? { ...prior, checkedAt: takenAt } : { proposalId: proposal.id, url, merged: false, state: "unknown", checkedAt: takenAt }
+    );
   }
 
   const snapshot: FlowSnapshot = { flowId, takenAt, catalogRevision, gaps, proposals, pullRequests };
   await ctx.stores.snapshots.write(snapshot);
   console.log(
     `Snapshot refresh [${flowLabel}]: ${gaps.length} gap(s), ${proposals.length} proposal(s), ` +
-      `${pullRequests.length} open PR(s) (${unchanged} unchanged via ETag).`
+      `${pullRequests.length} open PR(s) (${carried} carried forward).`
   );
   return snapshot;
+}
+
+// Writes every flow's snapshot from the PR states the refresh_pull_requests watcher
+// job just reported. That job lists every open PR across flows in one run, so a
+// single completion refreshes all flows' snapshots. This is the snapshot store's
+// only production writer; without it the /snapshots page and the reconciler's PR
+// cache stay empty.
+export async function recordSnapshotsFromPullRequestResults(
+  ctx: AppContext,
+  results: ReadonlyArray<{ proposalId: string } & PullRequestReading>
+): Promise<void> {
+  const statuses = new Map<string, PullRequestReading>(
+    results.map((result) => [result.proposalId, { merged: result.merged, state: result.state }])
+  );
+  const flowIds: Array<string | undefined> = [undefined, ...ctx.knowledgeConfig.flows.map((flow) => flow.id)];
+  for (const flowId of flowIds) {
+    await refreshSnapshot(ctx, flowId, statuses);
+  }
 }

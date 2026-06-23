@@ -8,6 +8,7 @@ import { refreshPullRequestsOutputSchema } from "@magpie/jobs";
 import * as proposalsService from "../proposals/service.js";
 import * as crunchService from "../crunch/service.js";
 import * as sourceSyncService from "../source-sync/service.js";
+import * as snapshotsService from "../snapshots/service.js";
 import { applyPullRequestTransition } from "../../scheduling/gap-reconciler.js";
 
 export async function createJob(ctx: AppContext, type: JobType, input: unknown): Promise<JobView> {
@@ -155,7 +156,7 @@ export async function completeJob(
     await crunchService.recordCrunchPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await sourceSyncService.attachSourceSyncPlanFromCompletedJob(ctx, existingJob, parsed.data);
     await sourceSyncService.recordSourceSyncPublicationFromCompletedJob(ctx, existingJob, parsed.data);
-    await applyRefreshPullRequestsTransitions(ctx, existingJob, parsed.data);
+    await handleRefreshPullRequestsCompletion(ctx, existingJob, parsed.data);
     await ctx.jobs.complete(jobId, { result: parsed.data, executor });
     // The watcher is free again the moment it completes a job; reflect that
     // immediately rather than waiting for its next idle claim poll.
@@ -200,13 +201,17 @@ async function updateQuestionLogFromCompletedJob(
 }
 
 // Completion handler for refresh_pull_requests: the github watcher polled each open
-// PR and reported its merged/closed state; apply the proposal-status transitions the
-// reconciler would otherwise apply from a snapshot. Reuses the shared
-// applyPullRequestTransition so the merged→cascade+freeze / closed→rejected+freeze
-// behaviour can never drift from the reconciler, and is idempotent (the shared
-// function only transitions a still-open proposal), so re-completing the same job
-// converges without running a merge cascade twice.
-async function applyRefreshPullRequestsTransitions(
+// PR and reported its merged/closed state. Two side effects follow. First, apply the
+// proposal-status transitions the reconciler would otherwise apply from a snapshot,
+// via the shared applyPullRequestTransition so the merged→cascade+freeze /
+// closed→rejected+freeze behaviour can never drift from the reconciler, and is
+// idempotent (the shared function only transitions a still-open proposal) so
+// re-completing the same job converges without running a merge cascade twice.
+// Second, persist the reported state to the snapshot store — the API holds no GitHub
+// token, so this watcher-reported state is the only way PR status (and the gaps and
+// proposals captured alongside it) reaches the snapshot the /snapshots page and the
+// reconciler's PR-state pass read from.
+async function handleRefreshPullRequestsCompletion(
   ctx: AppContext,
   job: JobView | undefined,
   output: unknown
@@ -221,6 +226,7 @@ async function applyRefreshPullRequestsTransitions(
   for (const result of parsed.data.results) {
     await applyPullRequestTransition(ctx, result.proposalId, { merged: result.merged, state: result.state });
   }
+  await snapshotsService.recordSnapshotsFromPullRequestResults(ctx, parsed.data.results);
 }
 
 // Marks a job failed and preserves the original crunch side-effect: when the
