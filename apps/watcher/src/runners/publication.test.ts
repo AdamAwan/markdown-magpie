@@ -101,6 +101,7 @@ describe("PublicationRunner", () => {
     assert.ok(runner.supports("publish_proposal"));
     assert.ok(runner.supports("publish_crunch"));
     assert.ok(runner.supports("publish_source_sync"));
+    assert.ok(runner.supports("crosslink_pull_requests"));
     assert.ok(!runner.supports("answer_question"));
   });
 
