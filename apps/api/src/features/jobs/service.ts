@@ -10,6 +10,7 @@ import * as crunchService from "../crunch/service.js";
 import * as sourceSyncService from "../source-sync/service.js";
 import * as snapshotsService from "../snapshots/service.js";
 import { applyPullRequestTransition } from "../../scheduling/gap-reconciler.js";
+import * as foldService from "../../scheduling/fold.js";
 
 export async function createJob(ctx: AppContext, type: JobType, input: unknown): Promise<JobView> {
   return ctx.jobs.create(type, input ?? {});
@@ -145,12 +146,24 @@ export async function completeJob(
       message: "Watcher output did not match the job contract",
       category: "validation"
     });
+    if (existingJob.type === "fold_markdown_proposal") {
+      await foldService.enqueueFoldFallback(ctx, existingJob);
+    }
     return { ok: false, code: "invalid_output" };
   }
 
   try {
     await updateQuestionLogFromCompletedJob(ctx, existingJob, parsed.data);
-    await proposalsService.createProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    const draftedProposal = await proposalsService.createProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    if (draftedProposal) {
+      // At-draft fold: best-effort, must never fail the draft completion itself.
+      try {
+        await foldService.reconcileDraftedProposal(ctx, draftedProposal);
+      } catch (error) {
+        console.warn(`Fold check for proposal ${draftedProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    await foldService.applyFoldFromCompletedJob(ctx, existingJob, parsed.data);
     await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, parsed.data);
     await crunchService.recordCrunchPublicationFromCompletedJob(ctx, existingJob, parsed.data);
@@ -253,6 +266,9 @@ export async function failJob(ctx: AppContext, jobId: string, jobError: JobError
     if (run?.status === "running") {
       await ctx.stores.sourceSync.failRun(run.id, jobError.message);
     }
+  }
+  if (failingJob?.type === "fold_markdown_proposal" && failedJob.state === "failed") {
+    await foldService.enqueueFoldFallback(ctx, failingJob);
   }
   return failedJob;
 }
