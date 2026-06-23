@@ -7,6 +7,7 @@ import { runJobToCompletion } from "../features/jobs/service.js";
 import * as proposalsService from "../features/proposals/service.js";
 import type { GapClusterRecord, PublicationActionRecord } from "../stores/gap-cluster-store.js";
 import { selectRetainingChildOnSplit, selectSurvivingClusterOnMerge } from "./gap-reconciler-lineage.js";
+import { sharedTargets } from "./reconcile-gate.js";
 
 export interface ReconcilerDeps {
   // Injected so unit tests stay offline. Defaults to the real GitHub lookup.
@@ -55,6 +56,8 @@ export async function reconcileGaps(
 
   // (b) PR-state pass — only the open pull requests raised from this flow's proposals.
   await refreshOpenPullRequests(ctx, flowId, deps, clusterFlowCache);
+
+  await detectOverlaps(ctx, flowId, clusterFlowCache);
 
   const catalogRevision = await ctx.stores.questionLogs.getGapCatalogRevision(flowId);
   const processed = await ctx.stores.gapClusters.getProcessedRevision(flowId);
@@ -505,6 +508,60 @@ async function drainPublicationOutbox(
     }
   }
   console.log(`Gap reconciler [${flowLabel}]: publication outbox drained — ${done} enqueued, ${failed} failed.`);
+}
+
+// Observe-first overlap detection: when two of this flow's open PRs touch the
+// same file, cross-link them once. Uses the spine's sharedTargets; records each
+// pair in prCrosslinks so a pair is linked once, not every tick. Best-effort —
+// a per-pair failure is logged and never aborts reconcileGaps.
+async function detectOverlaps(
+  ctx: AppContext,
+  flowId: string | undefined,
+  cache: ClusterFlowCache
+): Promise<void> {
+  const open = await ctx.stores.proposals.list(200, { status: "pr-opened" });
+  const candidates: Array<{ id: string; targetPath: string; pullRequestUrl: string }> = [];
+  for (const proposal of open) {
+    if (!sameFlow(await proposalFlowId(ctx, proposal, cache), flowId)) {
+      continue;
+    }
+    const pullRequestUrl = proposal.publication?.pullRequestUrl;
+    if (!pullRequestUrl || !proposal.targetPath) {
+      continue;
+    }
+    candidates.push({ id: proposal.id, targetPath: proposal.targetPath, pullRequestUrl });
+  }
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    for (let j = i + 1; j < candidates.length; j += 1) {
+      const a = candidates[i];
+      const b = candidates[j];
+      const targets = sharedTargets([a.targetPath], [b.targetPath]);
+      if (targets.length === 0) {
+        continue;
+      }
+      try {
+        if (await ctx.stores.prCrosslinks.has(a.id, b.id)) {
+          continue;
+        }
+        await ctx.stores.prCrosslinks.record({ flowId, proposalA: a.id, proposalB: b.id, targets });
+        await ctx.jobs.create("crosslink_pull_requests", {
+          ...(flowId ? { flowId } : {}),
+          targets,
+          pullRequests: [
+            { proposalId: a.id, pullRequestUrl: a.pullRequestUrl },
+            { proposalId: b.id, pullRequestUrl: b.pullRequestUrl }
+          ]
+        });
+        console.log(
+          `Gap reconciler [${flowId ?? "default"}]: cross-linked overlapping PRs for proposals ${a.id} and ${b.id} on ${targets.join(", ")}.`
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "overlap cross-link failed";
+        console.warn(`Overlap cross-link for proposals ${a.id} and ${b.id} failed: ${message}`);
+      }
+    }
+  }
 }
 
 async function defaultPublish(ctx: AppContext, proposal: Proposal): Promise<void> {

@@ -250,3 +250,15 @@ export const publishSourceSyncOutputSchema = z.object({
   remoteUrl: z.string().optional(),
   publishedAt: z.string()
 });
+
+export const crosslinkPullRequestsInputSchema = z.object({
+  flowId: z.string().optional(),
+  targets: z.array(z.string()),
+  pullRequests: z
+    .array(z.object({ proposalId: z.string(), pullRequestUrl: z.string() }))
+    .length(2)
+});
+export const crosslinkPullRequestsOutputSchema = z.object({
+  commented: z.array(z.string()),
+  linkedAt: z.string()
+});

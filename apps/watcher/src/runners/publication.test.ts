@@ -94,12 +94,14 @@ describe("PublicationRunner", () => {
       prepareRepository: async (repository) => repository,
       publishProposal: async () => ({ branchName: "b", commitSha: "c" }),
       publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
-      raisePullRequest: async () => undefined
+      raisePullRequest: async () => undefined,
+      commentOnPullRequest: async () => undefined
     });
     assert.equal(runner.capability, "github");
     assert.ok(runner.supports("publish_proposal"));
     assert.ok(runner.supports("publish_crunch"));
     assert.ok(runner.supports("publish_source_sync"));
+    assert.ok(runner.supports("crosslink_pull_requests"));
     assert.ok(!runner.supports("answer_question"));
   });
 
@@ -112,7 +114,8 @@ describe("PublicationRunner", () => {
         return { branchName: request.branchName, commitSha: "abc123", remoteUrl: REPOSITORY.remoteUrl };
       },
       publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
-      raisePullRequest: async () => ({ url: "https://github.com/acme/docs/pull/7", number: 7 })
+      raisePullRequest: async () => ({ url: "https://github.com/acme/docs/pull/7", number: 7 }),
+      commentOnPullRequest: async () => undefined
     });
 
     const output = await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), new AbortController().signal);
@@ -131,7 +134,8 @@ describe("PublicationRunner", () => {
       publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
       raisePullRequest: async () => {
         throw new Error("pr api down");
-      }
+      },
+      commentOnPullRequest: async () => undefined
     });
     const output = await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), new AbortController().signal);
     const parsed = publishProposalOutputSchema.parse(output);
@@ -152,7 +156,8 @@ describe("PublicationRunner", () => {
       raisePullRequest: async (request) => {
         prHeadBranch = request.headBranch;
         return { url: "https://github.com/acme/docs/pull/9", number: 9 };
-      }
+      },
+      commentOnPullRequest: async () => undefined
     });
 
     const output = await runner.run(job("publish_crunch", { runId: "run-abcdef12" }), new AbortController().signal);
@@ -172,7 +177,8 @@ describe("PublicationRunner", () => {
       publishChangeset: async (request) => ({ branchName: request.branchName, commitSha: "def456", remoteUrl: REPOSITORY.remoteUrl }),
       raisePullRequest: async () => {
         throw new Error("pr api down");
-      }
+      },
+      commentOnPullRequest: async () => undefined
     });
 
     const output = await runner.run(job("publish_crunch", { runId: "run-abcdef12" }), new AbortController().signal);
@@ -198,7 +204,8 @@ describe("PublicationRunner", () => {
       raisePullRequest: async () => {
         prRaised = true;
         return undefined;
-      }
+      },
+      commentOnPullRequest: async () => undefined
     });
 
     const output = await runner.run(job("publish_source_sync", { runId: "run-aabbccdd" }), new AbortController().signal);
@@ -224,7 +231,8 @@ describe("PublicationRunner", () => {
       prepareRepository: async (repository) => repository,
       publishProposal: async () => ({ branchName: "b", commitSha: "c" }),
       publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
-      raisePullRequest: async () => undefined
+      raisePullRequest: async () => undefined,
+      commentOnPullRequest: async () => undefined
     });
     await assert.rejects(() => runner.run(job("publish_source_sync", { runId: "run-aabbccdd" }), new AbortController().signal));
   });
@@ -253,7 +261,8 @@ describe("PublicationRunner", () => {
         publishedPaths.push(request.repository.git?.workTreeRoot ?? request.repository.localPath);
         return { branchName: request.branchName, commitSha: "def456", remoteUrl: REPOSITORY.remoteUrl };
       },
-      raisePullRequest: async () => undefined
+      raisePullRequest: async () => undefined,
+      commentOnPullRequest: async () => undefined
     });
 
     const signal = new AbortController().signal;

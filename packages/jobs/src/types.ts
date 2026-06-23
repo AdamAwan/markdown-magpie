@@ -16,7 +16,8 @@ export const JOB_TYPES = [
   "source_change_sync",
   "publish_proposal",
   "publish_crunch",
-  "publish_source_sync"
+  "publish_source_sync",
+  "crosslink_pull_requests"
 ] as const;
 
 export type JobType = (typeof JOB_TYPES)[number];

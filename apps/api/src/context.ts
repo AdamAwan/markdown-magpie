@@ -5,6 +5,7 @@ import { BackgroundRunner } from "./platform/background-runner.js";
 import {
   createCrunchStore,
   createGapClusterStore,
+  createPrCrosslinkStore,
   createProposalStore,
   createQuestionLogStore,
   createReconciliationDecisionStore,
@@ -44,6 +45,7 @@ export interface AppContext {
     sourceSync: ReturnType<typeof createSourceSyncStore>;
     gapClusters: ReturnType<typeof createGapClusterStore>;
     reconciliations: ReturnType<typeof createReconciliationDecisionStore>;
+    prCrosslinks: ReturnType<typeof createPrCrosslinkStore>;
     snapshots: ReturnType<typeof createSnapshotStore>;
     watchers: ReturnType<typeof createWatcherRegistryStore>;
     jobAcceptances: JobAcceptanceStore;
@@ -106,6 +108,7 @@ export async function createAppContext(): Promise<AppContext> {
       sourceSync: createSourceSyncStore(),
       gapClusters: createGapClusterStore(),
       reconciliations: createReconciliationDecisionStore(),
+      prCrosslinks: createPrCrosslinkStore(),
       snapshots: createSnapshotStore(),
       watchers: createWatcherRegistryStore(),
       jobAcceptances: new PostgresJobAcceptanceStore(databaseUrl)

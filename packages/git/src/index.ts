@@ -736,3 +736,57 @@ function safeCheckoutName(value: string): string {
       .replace(/^-+|-+$/g, "") || "repository"
   );
 }
+
+export interface CommentOnPullRequestRequest {
+  pullRequestUrl: string;
+  body: string;
+}
+
+// Post a comment on a pull request. GitHub treats PR comments as issue comments,
+// so this targets the issues endpoint. Returns the created comment's URL, or
+// undefined when there is no token or the URL is not a GitHub PR URL — quiet
+// degradation symmetric with raisePullRequest.
+export async function commentOnPullRequest(
+  request: CommentOnPullRequestRequest
+): Promise<string | undefined> {
+  const target = parsePullRequestUrl(request.pullRequestUrl);
+  if (!target) {
+    return undefined;
+  }
+  const token = process.env.GITHUB_TOKEN?.trim();
+  if (!token) {
+    return undefined;
+  }
+
+  const response = await githubFetch(
+    `https://api.github.com/repos/${target.owner}/${target.repo}/issues/${target.number}/comments`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+        "User-Agent": "markdown-magpie"
+      },
+      body: JSON.stringify({ body: request.body })
+    }
+  );
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`GitHub PR comment failed (${response.status}): ${detail.slice(0, 500)}`);
+  }
+  const data = (await response.json()) as { html_url?: string };
+  return data.html_url;
+}
+
+function parsePullRequestUrl(
+  url: string
+): { owner: string; repo: string; number: number } | undefined {
+  const match = /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/.exec(url);
+  if (!match) {
+    return undefined;
+  }
+  return { owner: match[1], repo: match[2], number: Number(match[3]) };
+}
