@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { authSettingsFromEnv, createApiTokenProvider } from "@magpie/auth";
 import type { JobCapability } from "@magpie/jobs";
-import { CAPABILITY_GATES, deriveCapabilities } from "./capabilities.js";
+import {
+  CAPABILITY_GATES,
+  DEFAULT_CAPABILITY_RUNTIME,
+  deriveCapabilities,
+  type CapabilityRuntime
+} from "./capabilities.js";
 import { HttpWatcherApi } from "./http-client.js";
 import { createConfiguredRunners } from "./runners/index.js";
 import { WorkerLoop } from "./worker-loop.js";
@@ -42,19 +47,20 @@ const api = new HttpWatcherApi({
   token: tokenProvider
 });
 
-const runners = createConfiguredRunners(process.env, api);
+const capabilityRuntime = DEFAULT_CAPABILITY_RUNTIME;
+const runners = createConfiguredRunners(process.env, api, capabilityRuntime);
 // Advertise capabilities from the single source of truth (the readiness gates),
 // honouring the catalog contract that `maintenance` is always available. Every
 // advertised capability has a runner here EXCEPT `maintenance`: its runner lands
 // in Task 8, and no maintenance jobs are enqueued before then, so the broker has
 // nothing to hand us in the meantime. If one ever arrived early the worker loop
 // fails it safely (see WorkerLoop.execute's "no runner supports" branch).
-const capabilities = deriveCapabilities(process.env);
+const capabilities = deriveCapabilities(process.env, capabilityRuntime);
 
 console.log(`Markdown Magpie watcher '${watcherName}' starting`);
 console.log(`API: ${apiBaseUrl}`);
 console.log(`Poll interval: ${pollIntervalMs}ms`);
-logCapabilityReadiness(process.env);
+logCapabilityReadiness(process.env, capabilityRuntime);
 console.log(`Advertised capabilities: ${capabilities.length ? capabilities.join(", ") : "(none)"}`);
 
 if (capabilities.length === 0) {
@@ -77,14 +83,17 @@ console.log(`Markdown Magpie watcher '${watcherName}' stopped`);
 
 // Logs, per capability, whether each required env var is set or MISSING — never
 // the secret values themselves — so a misconfiguration is visible at startup.
-function logCapabilityReadiness(env: NodeJS.ProcessEnv): void {
+function logCapabilityReadiness(env: NodeJS.ProcessEnv, runtime: CapabilityRuntime): void {
+  console.log(`Git executable: ${runtime.gitAvailable() ? "available" : "MISSING"}`);
   for (const gate of CAPABILITY_GATES) {
     if (gate.requiredEnv.length === 0) {
       console.log(`Capability ${pad(gate.capability)} — always available`);
       continue;
     }
     const states = gate.requiredEnv.map((name) => `${name}: ${env[name]?.trim() ? "set" : "MISSING"}`);
-    console.log(`Capability ${pad(gate.capability)} — ${gate.ready(env) ? "ready" : "NOT ready"} (${states.join(", ")})`);
+    console.log(
+      `Capability ${pad(gate.capability)} — ${gate.ready(env, runtime) ? "ready" : "NOT ready"} (${states.join(", ")})`
+    );
   }
 }
 

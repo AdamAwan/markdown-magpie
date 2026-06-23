@@ -1,4 +1,16 @@
 import type { JobCapability } from "@magpie/jobs";
+import { spawnSync } from "node:child_process";
+
+export interface CapabilityRuntime {
+  gitAvailable(): boolean;
+}
+
+export const DEFAULT_CAPABILITY_RUNTIME: CapabilityRuntime = {
+  gitAvailable: () => {
+    const result = spawnSync("git", ["--version"], { stdio: "ignore" });
+    return result.status === 0;
+  }
+};
 
 // A single readiness gate per capability, expressed against the watcher's
 // environment. The runner factory (runners/index.ts) consults the same gates so
@@ -11,7 +23,7 @@ export interface CapabilityGate {
   // Human-readable names of the env vars this capability requires, so main.ts
   // can log readiness as set/MISSING without hard-coding the list twice.
   requiredEnv: readonly string[];
-  ready(env: NodeJS.ProcessEnv): boolean;
+  ready(env: NodeJS.ProcessEnv, runtime: CapabilityRuntime): boolean;
 }
 
 function allSet(env: NodeJS.ProcessEnv, names: readonly string[]): boolean {
@@ -43,7 +55,8 @@ export const CAPABILITY_GATES: readonly CapabilityGate[] = [
   {
     capability: "github",
     requiredEnv: ["GITHUB_TOKEN", "MAGPIE_GIT_AUTHOR_NAME", "MAGPIE_GIT_AUTHOR_EMAIL"],
-    ready: (env) => allSet(env, ["GITHUB_TOKEN", "MAGPIE_GIT_AUTHOR_NAME", "MAGPIE_GIT_AUTHOR_EMAIL"])
+    ready: (env, runtime) =>
+      allSet(env, ["GITHUB_TOKEN", "MAGPIE_GIT_AUTHOR_NAME", "MAGPIE_GIT_AUTHOR_EMAIL"]) && runtime.gitAvailable()
   },
   {
     // Maintenance jobs need nothing beyond an API connection, so the watcher can
@@ -55,6 +68,9 @@ export const CAPABILITY_GATES: readonly CapabilityGate[] = [
 ];
 
 // The capabilities this watcher will advertise on claim, given its environment.
-export function deriveCapabilities(env: NodeJS.ProcessEnv): JobCapability[] {
-  return CAPABILITY_GATES.filter((gate) => gate.ready(env)).map((gate) => gate.capability);
+export function deriveCapabilities(
+  env: NodeJS.ProcessEnv,
+  runtime: CapabilityRuntime = DEFAULT_CAPABILITY_RUNTIME
+): JobCapability[] {
+  return CAPABILITY_GATES.filter((gate) => gate.ready(env, runtime)).map((gate) => gate.capability);
 }

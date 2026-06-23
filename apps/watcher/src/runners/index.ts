@@ -1,5 +1,9 @@
 import { createChatProvider } from "@magpie/retrieval";
-import { CAPABILITY_GATES } from "../capabilities.js";
+import {
+  CAPABILITY_GATES,
+  DEFAULT_CAPABILITY_RUNTIME,
+  type CapabilityRuntime
+} from "../capabilities.js";
 import type { WatcherApi } from "../http-client.js";
 import { ChatRunner } from "./chat.js";
 import { CliRunner, type PromptMode } from "./cli.js";
@@ -15,10 +19,14 @@ const DEFAULT_CHAT_TIMEOUT_MS = 120_000;
 // Builds exactly the runners this watcher's environment can support, using the
 // same readiness gates the capability advertisement uses (so an advertised
 // capability always has a runner, and vice versa). No mock runner exists.
-export function createConfiguredRunners(env: NodeJS.ProcessEnv, api: WatcherApi): JobRunner[] {
+export function createConfiguredRunners(
+  env: NodeJS.ProcessEnv,
+  api: WatcherApi,
+  runtime: CapabilityRuntime = DEFAULT_CAPABILITY_RUNTIME
+): JobRunner[] {
   const runners: JobRunner[] = [];
   const ready = (capability: string): boolean =>
-    CAPABILITY_GATES.find((gate) => gate.capability === capability)?.ready(env) ?? false;
+    CAPABILITY_GATES.find((gate) => gate.capability === capability)?.ready(env, runtime) ?? false;
 
   const timeoutMs = positiveInt(env.AGENT_API_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS);
 

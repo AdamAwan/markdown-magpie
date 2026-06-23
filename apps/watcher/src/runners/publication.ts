@@ -16,11 +16,13 @@ import {
   publishSourceSyncOutputSchema
 } from "@magpie/jobs";
 import {
+  ensureGitCheckout,
   LocalGitProposalPublisher,
   raisePullRequest,
   type RaisePullRequestRequest,
   type RaisedPullRequest
 } from "@magpie/git";
+import path from "node:path";
 import { z } from "zod";
 import type {
   CrunchExecutionContext,
@@ -33,6 +35,7 @@ import type {
 // the orchestration (context fetch, branch derivation, changeset assembly, PR
 // fallback) without running real git or hitting GitHub.
 export interface PublicationDeps {
+  prepareRepository(repository: RepositoryRef): Promise<RepositoryRef>;
   publishProposal(request: PublishProposalBranchRequest): Promise<PublishProposalBranchResponse>;
   publishChangeset(request: PublishChangesetRequest): Promise<PublishProposalBranchResponse>;
   raisePullRequest(request: RaisePullRequestRequest): Promise<RaisedPullRequest | undefined>;
@@ -42,9 +45,48 @@ export interface PublicationDeps {
 export function createGitPublicationDeps(): PublicationDeps {
   const publisher = new LocalGitProposalPublisher();
   return {
+    prepareRepository: (repository) =>
+      preparePublicationRepository(repository, process.env.MAGPIE_CHECKOUT_ROOT ?? ".magpie/checkouts"),
     publishProposal: (request) => publisher.publish(request),
     publishChangeset: (request) => publisher.publishChangeset(request),
     raisePullRequest
+  };
+}
+
+export async function preparePublicationRepository(
+  repository: RepositoryRef,
+  checkoutRoot: string,
+  checkout: typeof ensureGitCheckout = ensureGitCheckout
+): Promise<RepositoryRef> {
+  const remoteUrl = repository.remoteUrl ?? repository.git?.remoteUrl;
+  if (!remoteUrl) {
+    throw new Error(`Cannot prepare repository ${repository.id}: remote URL is not configured`);
+  }
+
+  const prepared = await checkout({
+    id: repository.id,
+    url: remoteUrl,
+    checkoutRoot,
+    branch: repository.defaultBranch
+  });
+  const relativePath = repository.git?.relativePathFromRoot;
+  const indexedPath = relativePath && relativePath !== "."
+    ? path.join(prepared.localPath, relativePath)
+    : prepared.localPath;
+
+  return {
+    ...repository,
+    localPath: prepared.localPath,
+    remoteUrl: prepared.remoteUrl,
+    git: {
+      scope: repository.git?.scope ?? "repository-root",
+      indexedPath,
+      workTreeRoot: prepared.localPath,
+      ...(relativePath ? { relativePathFromRoot: relativePath } : {}),
+      ...(repository.git?.currentBranch ? { currentBranch: repository.git.currentBranch } : {}),
+      defaultBranch: repository.git?.defaultBranch ?? repository.defaultBranch,
+      remoteUrl: prepared.remoteUrl
+    }
   };
 }
 
@@ -139,11 +181,12 @@ export class PublicationRunner {
     console.log(`publish_proposal[${job.id}]: fetching execution context for proposal ${proposalId}`);
     const context = await this.api.proposalExecutionContext(proposalId);
     const { proposal, repository } = parseProposalContext(context);
+    const preparedRepository = await this.deps.prepareRepository(toRepositoryRef(repository));
 
     const branchName = createProposalBranchName(proposal);
     console.log(`publish_proposal[${job.id}]: publishing "${proposal.title}" to branch ${branchName}`);
     const publication = await this.deps.publishProposal({
-      repository: toRepositoryRef(repository),
+      repository: preparedRepository,
       branchName,
       title: `docs: ${proposal.title}`,
       markdown: proposal.markdown,
@@ -189,6 +232,7 @@ export class PublicationRunner {
     console.log(`publish_crunch[${job.id}]: fetching execution context for run ${runId}`);
     const context = await this.api.crunchExecutionContext(runId);
     const { run, repository } = parseCrunchContext(context);
+    const preparedRepository = await this.deps.prepareRepository(toRepositoryRef(repository));
 
     const changes = changesetFromPlan(run);
     const operationCount = run.plan.operations.length;
@@ -197,7 +241,7 @@ export class PublicationRunner {
       `publish_crunch[${job.id}]: publishing ${operationCount} operation(s) (${changes.length} file change(s)) to branch ${branchName}`
     );
     const publication = await this.deps.publishChangeset({
-      repository: toRepositoryRef(repository),
+      repository: preparedRepository,
       branchName,
       title: `docs: crunch tidy (${operationCount} operation${operationCount === 1 ? "" : "s"})`,
       changes
@@ -219,6 +263,7 @@ export class PublicationRunner {
     console.log(`publish_source_sync[${job.id}]: fetching execution context for run ${runId}`);
     const context = await this.api.sourceSyncExecutionContext(runId);
     const { run, sourceName, repository } = parseSourceSyncContext(context);
+    const preparedRepository = await this.deps.prepareRepository(toRepositoryRef(repository));
 
     const documentCount = run.changeset.length;
     const branchName = sourceSyncBranchName(run);
@@ -226,7 +271,7 @@ export class PublicationRunner {
       `publish_source_sync[${job.id}]: publishing ${documentCount} document(s) from ${sourceName} to branch ${branchName}`
     );
     const publication = await this.deps.publishChangeset({
-      repository: toRepositoryRef(repository),
+      repository: preparedRepository,
       branchName,
       // Match the title the API used before git moved out.
       title: `docs: sync to ${sourceName} change (${documentCount} document${documentCount === 1 ? "" : "s"})`,

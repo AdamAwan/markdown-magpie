@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { RepositoryRef } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { publishCrunchOutputSchema, publishProposalOutputSchema, publishSourceSyncOutputSchema } from "@magpie/jobs";
 import type {
@@ -8,7 +9,7 @@ import type {
   SourceSyncExecutionContext,
   WatcherApi
 } from "../http-client.js";
-import { PublicationRunner } from "./publication.js";
+import { preparePublicationRepository, PublicationRunner } from "./publication.js";
 
 function job(type: JobView["type"], input: unknown): JobView {
   return {
@@ -90,6 +91,7 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
 describe("PublicationRunner", () => {
   it("declares the github capability and supports only publish job types", () => {
     const runner = new PublicationRunner(fakeApi(), {
+      prepareRepository: async (repository) => repository,
       publishProposal: async () => ({ branchName: "b", commitSha: "c" }),
       publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
       raisePullRequest: async () => undefined
@@ -104,6 +106,7 @@ describe("PublicationRunner", () => {
   it("publishes a proposal and returns a schema-valid output with the derived branch", async () => {
     let publishedBranch: string | undefined;
     const runner = new PublicationRunner(fakeApi(), {
+      prepareRepository: async (repository) => repository,
       publishProposal: async (request) => {
         publishedBranch = request.branchName;
         return { branchName: request.branchName, commitSha: "abc123", remoteUrl: REPOSITORY.remoteUrl };
@@ -123,6 +126,7 @@ describe("PublicationRunner", () => {
 
   it("degrades to a branch-only proposal publish when PR raising fails", async () => {
     const runner = new PublicationRunner(fakeApi(), {
+      prepareRepository: async (repository) => repository,
       publishProposal: async (request) => ({ branchName: request.branchName, commitSha: "abc123", remoteUrl: REPOSITORY.remoteUrl }),
       publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
       raisePullRequest: async () => {
@@ -138,6 +142,7 @@ describe("PublicationRunner", () => {
   it("publishes a crunch changeset and returns a schema-valid output", async () => {
     let publishedChanges: unknown;
     const runner = new PublicationRunner(fakeApi(), {
+      prepareRepository: async (repository) => repository,
       publishProposal: async () => ({ branchName: "b", commitSha: "c" }),
       publishChangeset: async (request) => {
         publishedChanges = request.changes;
@@ -160,6 +165,7 @@ describe("PublicationRunner", () => {
     let publishedChanges: unknown;
     let prRaised = false;
     const runner = new PublicationRunner(fakeApi(), {
+      prepareRepository: async (repository) => repository,
       publishProposal: async () => ({ branchName: "b", commitSha: "c" }),
       publishChangeset: async (request) => {
         publishedBranch = request.branchName;
@@ -193,10 +199,108 @@ describe("PublicationRunner", () => {
       })
     });
     const runner = new PublicationRunner(api, {
+      prepareRepository: async (repository) => repository,
       publishProposal: async () => ({ branchName: "b", commitSha: "c" }),
       publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
       raisePullRequest: async () => undefined
     });
     await assert.rejects(() => runner.run(job("publish_source_sync", { runId: "run-aabbccdd" }), new AbortController().signal));
+  });
+
+  it("prepares a watcher-local checkout before every publication flow", async () => {
+    const preparedPaths: string[] = [];
+    const publishedPaths: string[] = [];
+    const runner = new PublicationRunner(fakeApi(), {
+      prepareRepository: async (repository: RepositoryRef) => {
+        preparedPaths.push(repository.localPath);
+        return {
+          ...repository,
+          localPath: "/data/checkouts/repo-1",
+          git: {
+            ...repository.git!,
+            indexedPath: "/data/checkouts/repo-1/docs",
+            workTreeRoot: "/data/checkouts/repo-1"
+          }
+        };
+      },
+      publishProposal: async (request) => {
+        publishedPaths.push(request.repository.git?.workTreeRoot ?? request.repository.localPath);
+        return { branchName: request.branchName, commitSha: "abc123", remoteUrl: REPOSITORY.remoteUrl };
+      },
+      publishChangeset: async (request) => {
+        publishedPaths.push(request.repository.git?.workTreeRoot ?? request.repository.localPath);
+        return { branchName: request.branchName, commitSha: "def456", remoteUrl: REPOSITORY.remoteUrl };
+      },
+      raisePullRequest: async () => undefined
+    });
+
+    const signal = new AbortController().signal;
+    await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), signal);
+    await runner.run(job("publish_crunch", { runId: "run-abcdef12" }), signal);
+    await runner.run(job("publish_source_sync", { runId: "run-aabbccdd" }), signal);
+
+    assert.deepEqual(preparedPaths, ["/tmp/repo", "/tmp/repo", "/tmp/repo"]);
+    assert.deepEqual(publishedPaths, [
+      "/data/checkouts/repo-1",
+      "/data/checkouts/repo-1",
+      "/data/checkouts/repo-1"
+    ]);
+  });
+
+  it("rejects checkout preparation without a repository remote URL", async () => {
+    const repository: RepositoryRef = {
+      id: "repo-1",
+      name: "repo-1",
+      localPath: "/api-host/checkout",
+      defaultBranch: "main",
+      provider: "github"
+    };
+
+    await assert.rejects(
+      () => preparePublicationRepository(repository, "/data/checkouts"),
+      /remote URL/
+    );
+  });
+
+  it("rewrites API-host paths to the watcher checkout and preserves repository subdirectory scope", async () => {
+    const repository: RepositoryRef = {
+      id: "repo-1",
+      name: "repo-1",
+      localPath: "/api-host/checkout/docs",
+      remoteUrl: "https://github.com/acme/docs.git",
+      defaultBranch: "main",
+      provider: "github",
+      git: {
+        scope: "subdirectory",
+        indexedPath: "/api-host/checkout/docs",
+        workTreeRoot: "/api-host/checkout",
+        relativePathFromRoot: "docs",
+        remoteUrl: "https://github.com/acme/docs.git"
+      }
+    };
+    let checkoutRequest: unknown;
+
+    const prepared = await preparePublicationRepository(
+      repository,
+      "/data/checkouts",
+      async (request) => {
+        checkoutRequest = request;
+        return {
+          localPath: "/data/checkouts/repo-1",
+          remoteUrl: "https://github.com/acme/docs.git"
+        };
+      }
+    );
+
+    assert.deepEqual(checkoutRequest, {
+      id: "repo-1",
+      url: "https://github.com/acme/docs.git",
+      checkoutRoot: "/data/checkouts",
+      branch: "main"
+    });
+    assert.equal(prepared.localPath, "/data/checkouts/repo-1");
+    assert.equal(prepared.git?.workTreeRoot, "/data/checkouts/repo-1");
+    assert.equal(prepared.git?.indexedPath, "/data/checkouts/repo-1/docs");
+    assert.equal(prepared.git?.relativePathFromRoot, "docs");
   });
 });

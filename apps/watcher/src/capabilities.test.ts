@@ -59,15 +59,26 @@ describe("deriveCapabilities", () => {
   });
 
   it("advertises github only with a token and a full git author identity", () => {
-    assert.ok(!deriveCapabilities({ GITHUB_TOKEN: "tok" }).includes("github"));
+    const runtime = { gitAvailable: () => true };
+    assert.ok(!deriveCapabilities({ GITHUB_TOKEN: "tok" }, runtime).includes("github"));
     assert.ok(!deriveCapabilities({
       GITHUB_TOKEN: "tok",
       MAGPIE_GIT_AUTHOR_NAME: "Magpie"
-    }).includes("github"));
+    }, runtime).includes("github"));
     assert.ok(deriveCapabilities({
       GITHUB_TOKEN: "tok",
       MAGPIE_GIT_AUTHOR_NAME: "Magpie",
       MAGPIE_GIT_AUTHOR_EMAIL: "magpie@example.com"
-    }).includes("github"));
+    }, runtime).includes("github"));
+  });
+
+  it("does not advertise github when git is unavailable", () => {
+    const env = {
+      GITHUB_TOKEN: "tok",
+      MAGPIE_GIT_AUTHOR_NAME: "Magpie",
+      MAGPIE_GIT_AUTHOR_EMAIL: "magpie@example.com"
+    };
+
+    assert.ok(!deriveCapabilities(env, { gitAvailable: () => false }).includes("github"));
   });
 });
