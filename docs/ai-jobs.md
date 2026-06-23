@@ -168,7 +168,9 @@ maintenance watcher runs it. Endpoints:
 - `POST /api/crunch/run` — trigger a run now (`{ flowId }`).
 - `GET /api/crunch/settings` / `POST /api/crunch/settings` — read/update the schedule.
 - `POST /api/crunch/runs/:id/publish` — commit a completed run's plan (multi-file
-  writes and deletes) to a new `magpie/crunch-*` branch via the `local-git` publisher.
+  writes and deletes) to a new `magpie/crunch-*` branch via the `local-git`
+  publisher and open a pull request for it (the run records the PR url alongside
+  the branch and commit; a PR failure degrades to a branch-only publish).
 
 Crunch state is stored in the `crunch_runs` and `crunch_settings` tables
 (`STORAGE_BACKEND=postgres`), with in-memory fallbacks for local development.

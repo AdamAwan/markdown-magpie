@@ -230,6 +230,7 @@ export const publishCrunchOutputSchema = z.object({
   branchName: z.string(),
   commitSha: z.string(),
   remoteUrl: z.string().optional(),
+  pullRequestUrl: z.string().optional(),
   publishedAt: z.string()
 });
 

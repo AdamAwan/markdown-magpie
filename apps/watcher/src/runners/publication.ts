@@ -237,23 +237,47 @@ export class PublicationRunner {
     const changes = changesetFromPlan(run);
     const operationCount = run.plan.operations.length;
     const branchName = crunchBranchName(run);
+    const title = `docs: crunch tidy (${operationCount} operation${operationCount === 1 ? "" : "s"})`;
     console.log(
       `publish_crunch[${job.id}]: publishing ${operationCount} operation(s) (${changes.length} file change(s)) to branch ${branchName}`
     );
     const publication = await this.deps.publishChangeset({
       repository: preparedRepository,
       branchName,
-      title: `docs: crunch tidy (${operationCount} operation${operationCount === 1 ? "" : "s"})`,
+      title,
       changes
     });
     console.log(`publish_crunch[${job.id}]: pushed ${publication.branchName} at ${publication.commitSha.slice(0, 8)}`);
 
-    // Crunch raises no PR. Validate against the contract before returning.
+    // The branch is pushed; try to open a PR. A PR failure must not lose the
+    // branch, so degrade to a branch-only publish (mirrors publishProposal).
+    let pullRequestUrl: string | undefined;
+    try {
+      const baseBranch = repository.defaultBranch || repository.git?.defaultBranch || "main";
+      const raised = await this.deps.raisePullRequest({
+        remoteUrl: publication.remoteUrl,
+        headBranch: publication.branchName,
+        baseBranch,
+        title,
+        body: buildCrunchPullRequestBody(run)
+      });
+      pullRequestUrl = raised?.url;
+      if (pullRequestUrl) {
+        console.log(`publish_crunch[${job.id}]: opened pull request ${pullRequestUrl}`);
+      }
+    } catch (error) {
+      console.warn(
+        `Branch ${publication.branchName} pushed, but PR creation failed: ${error instanceof Error ? error.message : "unknown error"}`
+      );
+    }
+
+    // Validate against the contract before returning.
     return publishCrunchOutputSchema.parse({
       runId,
       branchName: publication.branchName,
       commitSha: publication.commitSha,
       ...(publication.remoteUrl ? { remoteUrl: publication.remoteUrl } : {}),
+      ...(pullRequestUrl ? { pullRequestUrl } : {}),
       publishedAt: new Date().toISOString()
     });
   }
@@ -405,6 +429,21 @@ function buildPullRequestBody(proposal: PublishProposal): string {
   if (summaries.length > 0) {
     lines.push("Gaps addressed:");
     lines.push(...summaries.map((summary) => `- ${summary}`));
+  }
+  return lines.join("\n").trim();
+}
+
+// Human-facing PR description for a crunch tidy run: the plan summary and
+// rationale, followed by the operation titles so a reviewer sees the shape of
+// the change at a glance.
+function buildCrunchPullRequestBody(run: PublishRun): string {
+  const lines = ["Knowledge-base tidy proposed by Markdown Magpie.", "", run.plan.summary];
+  if (run.plan.rationale) {
+    lines.push("", run.plan.rationale);
+  }
+  if (run.plan.operations.length > 0) {
+    lines.push("", "Operations:");
+    lines.push(...run.plan.operations.map((operation) => `- ${operation.title}`));
   }
   return lines.join("\n").trim();
 }

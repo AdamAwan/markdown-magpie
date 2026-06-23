@@ -139,8 +139,9 @@ describe("PublicationRunner", () => {
     assert.equal(parsed.commitSha, "abc123");
   });
 
-  it("publishes a crunch changeset and returns a schema-valid output", async () => {
+  it("publishes a crunch changeset, raises a PR, and returns a schema-valid output", async () => {
     let publishedChanges: unknown;
+    let prHeadBranch: string | undefined;
     const runner = new PublicationRunner(fakeApi(), {
       prepareRepository: async (repository) => repository,
       publishProposal: async () => ({ branchName: "b", commitSha: "c" }),
@@ -148,7 +149,10 @@ describe("PublicationRunner", () => {
         publishedChanges = request.changes;
         return { branchName: request.branchName, commitSha: "def456", remoteUrl: REPOSITORY.remoteUrl };
       },
-      raisePullRequest: async () => undefined
+      raisePullRequest: async (request) => {
+        prHeadBranch = request.headBranch;
+        return { url: "https://github.com/acme/docs/pull/9", number: 9 };
+      }
     });
 
     const output = await runner.run(job("publish_crunch", { runId: "run-abcdef12" }), new AbortController().signal);
@@ -156,7 +160,25 @@ describe("PublicationRunner", () => {
     assert.equal(parsed.runId, "run-abcdef12");
     assert.equal(parsed.branchName, "magpie/crunch-run-abcd");
     assert.equal(parsed.commitSha, "def456");
+    assert.equal(parsed.pullRequestUrl, "https://github.com/acme/docs/pull/9");
+    assert.equal(prHeadBranch, "magpie/crunch-run-abcd");
     assert.ok(Array.isArray(publishedChanges));
+  });
+
+  it("degrades to a branch-only crunch publish when PR raising fails", async () => {
+    const runner = new PublicationRunner(fakeApi(), {
+      prepareRepository: async (repository) => repository,
+      publishProposal: async () => ({ branchName: "b", commitSha: "c" }),
+      publishChangeset: async (request) => ({ branchName: request.branchName, commitSha: "def456", remoteUrl: REPOSITORY.remoteUrl }),
+      raisePullRequest: async () => {
+        throw new Error("pr api down");
+      }
+    });
+
+    const output = await runner.run(job("publish_crunch", { runId: "run-abcdef12" }), new AbortController().signal);
+    const parsed = publishCrunchOutputSchema.parse(output);
+    assert.equal(parsed.pullRequestUrl, undefined);
+    assert.equal(parsed.commitSha, "def456");
   });
 
   it("publishes a source-sync changeset with the derived branch and source-named title (no PR)", async () => {

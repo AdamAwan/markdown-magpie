@@ -406,16 +406,21 @@ function CrunchRunCard({
             className="button"
             disabled={loading}
             onClick={() => void onPublish(run.id)}
-            title="Commit this tidy plan to a new review branch"
+            title="Push this tidy plan to a branch and open a pull request"
             type="button"
           >
-            Publish branch
+            Create pull request
           </button>
         ) : null}
         {run.publication ? (
           <span className="pill" title={`Published commit ${run.publication.commitSha}`}>
             {run.publication.branchName}
           </span>
+        ) : null}
+        {run.publication?.pullRequestUrl ? (
+          <a href={run.publication.pullRequestUrl} target="_blank" rel="noreferrer">
+            View pull request
+          </a>
         ) : null}
       </div>
       {expanded && operations.length > 0 ? (

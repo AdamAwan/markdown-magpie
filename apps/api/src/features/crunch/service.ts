@@ -97,11 +97,10 @@ export async function attachCrunchPlanFromCompletedJob(
 }
 
 // Completion handler for publish_crunch jobs: records the validated git
-// publication the watcher performed (branch, commit, optional remote url) onto
-// the linked run. Idempotent by runId — a run that already carries a publication
-// is left untouched, so re-completing the same job never double-applies or
-// regresses the recorded metadata. Crunch raises no PR, so there is no
-// pullRequestUrl.
+// publication the watcher performed (branch, commit, optional remote url and
+// pull request url) onto the linked run. Idempotent by runId — a run that
+// already carries a publication is left untouched, so re-completing the same job
+// never double-applies or regresses the recorded metadata.
 export async function recordCrunchPublicationFromCompletedJob(
   ctx: AppContext,
   job: JobView | undefined,
@@ -124,6 +123,7 @@ export async function recordCrunchPublicationFromCompletedJob(
     branchName: output.branchName,
     commitSha: output.commitSha,
     remoteUrl: output.remoteUrl,
+    pullRequestUrl: output.pullRequestUrl,
     publishedAt: output.publishedAt
   });
 }
@@ -243,7 +243,7 @@ async function resolvePublishRepository(
 // (which fetches the execution context and reuses the pure changeset / branch-name
 // helpers exported here); the API only validates and enqueues, so an
 // unpublishable run still fails fast with the original 404/409 codes before any
-// job exists. Crunch publish raises no PR.
+// job exists. The watcher pushes the branch and opens a PR for it.
 export async function publishRun(
   ctx: AppContext,
   runId: string
