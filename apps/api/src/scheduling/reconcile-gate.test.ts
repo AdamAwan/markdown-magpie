@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { sharedTargets, decideReconciliation, type OpenPullRequestSummary } from "./reconcile-gate.js";
+import { sharedTargets, decideReconciliation, openPullRequestSummaries, type OpenPullRequestSummary } from "./reconcile-gate.js";
 import type { ChangeIntent } from "./intent.js";
+import type { Proposal } from "@magpie/core";
 
 test("sharedTargets returns the intersection in a's order", () => {
   assert.deepEqual(
@@ -79,4 +80,30 @@ test("never returns drop", () => {
   for (const prs of [[], [pr("p1", ["kb/a.md"], true)], [pr("p1", ["kb/a.md"], false)]]) {
     assert.notEqual(decideReconciliation(intent(["kb/a.md"]), prs).kind, "drop");
   }
+});
+
+// Minimal Proposal fixtures: only the fields the adapter reads. Cast keeps the
+// test focused without reconstructing the whole record.
+const proposal = (id: string, status: string, targetPath?: string): Proposal =>
+  ({ id, status, targetPath }) as unknown as Proposal;
+
+test("maps open proposals with a target path into summaries", () => {
+  const out = openPullRequestSummaries([
+    proposal("p1", "pr-opened", "kb/a.md"),
+    proposal("p2", "draft", "kb/b.md")
+  ]);
+  assert.deepEqual(out, [
+    { proposalId: "p1", targets: ["kb/a.md"], touchable: true },
+    { proposalId: "p2", targets: ["kb/b.md"], touchable: true }
+  ]);
+});
+
+test("excludes closed proposals and those without a target path", () => {
+  const out = openPullRequestSummaries([
+    proposal("p1", "merged", "kb/a.md"),
+    proposal("p2", "rejected", "kb/b.md"),
+    proposal("p3", "superseded", "kb/c.md"),
+    proposal("p4", "pr-opened", undefined)
+  ]);
+  assert.deepEqual(out, []);
 });

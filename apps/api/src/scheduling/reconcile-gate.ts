@@ -1,4 +1,5 @@
 import type { ChangeIntent } from "./intent.js";
+import type { Proposal } from "@magpie/core";
 
 // The intersection of two file-sets, de-duplicated and in `a`'s order. Two changes
 // overlap (and so must be reconciled rather than raised as rival PRs) exactly when
@@ -75,4 +76,24 @@ export function decideReconciliation(
   // Every overlapping PR is locked (approved / merging). Folding would invalidate
   // a review, so hold this intent for a later round.
   return { kind: "defer", behindProposalId: best(overlapping).proposalId };
+}
+
+// Proposal statuses that are still open and therefore safe to fold into. Mirrors
+// isOpenProposal() in gap-reconciler.ts — kept in sync deliberately.
+const TOUCHABLE_STATUSES = new Set(["draft", "ready", "branch-pushed", "pr-opened"]);
+
+// Derive the gate's view of the open PRs in a flow from its proposals. Only
+// still-open proposals that already know their target file participate; a closed
+// (merged/rejected/superseded) proposal is not an open PR, and a proposal with no
+// targetPath has no file-set to overlap on. touchable is always true for now —
+// approval state is untracked (see the plan's Global Constraints).
+export function openPullRequestSummaries(proposals: Proposal[]): OpenPullRequestSummary[] {
+  const out: OpenPullRequestSummary[] = [];
+  for (const proposal of proposals) {
+    if (!TOUCHABLE_STATUSES.has(proposal.status) || !proposal.targetPath) {
+      continue;
+    }
+    out.push({ proposalId: proposal.id, targets: [proposal.targetPath], touchable: true });
+  }
+  return out;
 }
