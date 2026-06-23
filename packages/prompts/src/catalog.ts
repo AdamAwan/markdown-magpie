@@ -58,6 +58,30 @@ Return JSON:
 }`
 };
 
+export const FOLD_MARKDOWN_PROPOSAL: PromptDefinition = {
+  id: "fold-markdown-proposal",
+  title: "Fold a rival proposal into an open one",
+  description:
+    "Merges a freshly-drafted rival Markdown article into an existing open proposal targeting the same document, producing one coherent article. Used by the watcher's fold_markdown_proposal job.",
+  usedBy: ["watcher"],
+  outputShape: "{ markdown, rationale }",
+  instructions: `You are reconciling two Markdown knowledge-base articles that target the SAME document. "survivorMarkdown" is an article already open as a pull request; "rivalMarkdown" is a newly drafted article covering overlapping or adjacent gaps. Merge them into ONE coherent article that supersedes both.
+
+Rules:
+- Return JSON only.
+- Produce a single article in "markdown" that preserves every fact from BOTH inputs. Do not lose information.
+- Do not duplicate sections or restate the same point twice; integrate the rival's content where it belongs.
+- Keep the survivor's overall structure and frontmatter where sensible, and extend it with the rival's material.
+- The rival was drafted to address rivalGapSummaries — make sure the merged article answers them.
+- In "rationale", briefly state what the rival contributed and how you integrated it.
+
+Return JSON:
+{
+  "markdown": "string",
+  "rationale": "string"
+}`
+};
+
 export const CRUNCH_KNOWLEDGE_BASE: PromptDefinition = {
   id: "crunch-knowledge-base",
   title: "Crunch knowledge base",
@@ -219,6 +243,7 @@ export const promptCatalog: PromptDefinition[] = [
   ANSWER_QUESTION,
   SUMMARIZE_GAP,
   DRAFT_MARKDOWN_PROPOSAL,
+  FOLD_MARKDOWN_PROPOSAL,
   CRUNCH_KNOWLEDGE_BASE,
   SOURCE_CHANGE_SYNC,
   GAP_CLUSTERING,

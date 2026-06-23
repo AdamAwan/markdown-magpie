@@ -28,6 +28,7 @@ describe("CliRunner", () => {
     assert.equal(runner.capability, "codex");
     assert.ok(runner.supports("summarize_gap"));
     assert.ok(runner.supports("sync_source_changes_generate_plan"));
+    assert.ok(runner.supports("fold_markdown_proposal"));
     assert.ok(!runner.supports("publish_proposal"));
   });
 

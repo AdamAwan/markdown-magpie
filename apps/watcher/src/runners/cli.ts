@@ -10,6 +10,7 @@ export type PromptMode = "arg" | "stdin";
 const CLI_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "summarize_gap",
   "draft_markdown_proposal",
+  "fold_markdown_proposal",
   "detect_contradiction",
   "suggest_consolidation",
   "crunch_knowledge_base",
