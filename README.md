@@ -33,7 +33,7 @@ packages/
   prompts/    Shared AI prompt catalog
   retrieval/  Search, embeddings, ranking, and answer orchestration
 docs/          Architecture and feature documentation
-knowledge-bases/cats/  Small demo knowledge base
+knowledge-bases/  Optional local Markdown knowledge bases
 ```
 
 ## Requirements
@@ -116,12 +116,20 @@ The watcher is required for queued AI work such as answering, drafting proposals
 
 ## Quick Demo
 
-With the API and watcher running, index the bundled cats knowledge base:
+Configure a knowledge flow in `.env` first. For a local Markdown folder, create a directory such as `knowledge-bases/product` and set:
+
+```env
+KNOWLEDGE_SOURCES=[{"id":"docs","name":"Product Docs","path":"knowledge-bases/product"}]
+KNOWLEDGE_DESTINATIONS=[{"id":"docs","name":"Product Docs","path":"knowledge-bases/product"}]
+KNOWLEDGE_FLOWS=[{"id":"docs","name":"Product Docs","sourceIds":["docs"],"destinationId":"docs"}]
+```
+
+With the API and watcher running, index the configured flow:
 
 ```bash
 curl -s -X POST http://localhost:4000/api/knowledge/repositories/index \
   -H 'content-type: application/json' \
-  -d '{"repositoryId":"cats"}'
+  -d '{"flowId":"docs"}'
 ```
 
 Ask a question:
@@ -129,7 +137,7 @@ Ask a question:
 ```bash
 curl -s http://localhost:4000/api/ask \
   -H 'content-type: application/json' \
-  -d '{"question":"How should I introduce a new cat food?"}'
+  -d '{"question":"What does this documentation cover?"}'
 ```
 
 `POST /api/ask` returns `202` with a job. Wait for it to finish, then read the stored answer:
@@ -138,14 +146,6 @@ curl -s http://localhost:4000/api/ask \
 curl -s http://localhost:4000/api/jobs/<job-id>/wait
 curl -s http://localhost:4000/api/questions/<question-id>
 ```
-
-On Windows, the bundled demo script starts the API, watcher, and web console, indexes `knowledge-bases/cats`, and writes logs under `tmp/`:
-
-```powershell
-.\scripts\run-cat-demo.ps1 -Provider codex -StopExisting
-```
-
-Use any configured provider: `codex`, `claude`, `openai-compatible`, or `azure-openai`.
 
 ## Docker Compose
 
@@ -214,7 +214,6 @@ npm run test:db
 - [docs/question-logging.md](docs/question-logging.md) - feedback and gap logging
 - [docs/mcp.md](docs/mcp.md) - MCP transports, tools, auth, and clients
 - [docs/mvp.md](docs/mvp.md) - milestone roadmap
-- [infra/azure/README.md](infra/azure/README.md) - optional Azure deployment notes
 
 ## Authentication
 

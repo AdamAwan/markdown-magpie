@@ -9,5 +9,9 @@ dist
 coverage
 tmp
 data
+.codex-remote-attachments
+.claude
+.specstory
+.magpie
 *.log
 *.tsbuildinfo

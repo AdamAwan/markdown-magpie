@@ -102,7 +102,7 @@ Searches indexed sections. `limit` defaults to `5`. When hybrid retrieval is act
 Indexes the destination KB for a configured flow. See [ingestion.md](ingestion.md).
 
 ```json
-{ "flowId": "cats" }
+{ "flowId": "docs" }
 ```
 
 `flowId` must match an entry in `KNOWLEDGE_FLOWS`. The API indexes that flow's destination

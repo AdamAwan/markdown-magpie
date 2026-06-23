@@ -50,9 +50,8 @@ both inlined as base64 so the deck stays a single self-contained file:
   downscale step).
 
 ```bash
-# 1. (re)capture console screenshots from a running stack on :3000
+# 1. (re)capture static console screenshots
 node scripts/shoot.mjs
-node scripts/shoot2.mjs
 # 2. downscale + recompress for inlining
 python3 scripts/optimize-assets.py
 # 3. assemble the single-file deck

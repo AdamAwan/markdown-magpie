@@ -103,7 +103,7 @@ function record(name: string, ok: boolean, detail: string): void {
 // Scenario 1: happy-path answer.
 async function scenarioHappyPath(): Promise<string> {
   const name = "1. happy-path answer";
-  const created = await ask("What is a cat?");
+  const created = await ask("What does the documentation cover?");
   const jobId = created.job.id;
   console.log(`  created answer job ${jobId} (question ${created.questionId})`);
   const job = await pollJob(jobId, (j) => TERMINAL.has(j.state), {
@@ -133,7 +133,7 @@ async function scenarioHappyPath(): Promise<string> {
 // Scenario 2: cancel a slow job mid-flight.
 async function scenarioCancel(): Promise<string> {
   const name = "2. cancel in-flight";
-  const created = await ask("[slow] Tell me everything about cats");
+  const created = await ask("[slow] Tell me everything about the documentation");
   const jobId = created.job.id;
   console.log(`  created slow answer job ${jobId}`);
   // Wait until the watcher has picked it up (active), so the cancel lands on an
@@ -161,7 +161,7 @@ async function scenarioCancel(): Promise<string> {
 // Scenario 3: a [fail] job retries then permanently fails.
 async function scenarioRetryFail(): Promise<string> {
   const name = "3. retry then permanent fail";
-  const created = await ask("[fail] What is a cat?");
+  const created = await ask("[fail] What does the documentation cover?");
   const jobId = created.job.id;
   console.log(`  created failing answer job ${jobId} (retryLimit=${created.job.retryLimit})`);
   // Observe at least one retry (retryCount > 0) as evidence of the retry path.

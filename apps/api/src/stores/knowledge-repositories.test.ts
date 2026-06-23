@@ -13,14 +13,14 @@ describe("knowledge repository configuration", () => {
   it("parses multiple configured knowledge repositories from JSON", () => {
     const repositories = getConfiguredKnowledgeRepositories({
       KNOWLEDGE_REPOSITORIES: JSON.stringify([
-        { id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats" },
-        { id: "docs", name: "Product Docs", path: "../product-docs" }
+        { id: "product", name: "Product Docs", path: "knowledge-bases/product" },
+        { id: "support", name: "Support Docs", path: "../support-docs" }
       ])
     });
 
     assert.deepEqual(repositories, [
-      { id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats", kind: "local" },
-      { id: "docs", name: "Product Docs", path: "../product-docs", kind: "local" }
+      { id: "product", name: "Product Docs", path: "knowledge-bases/product", kind: "local" },
+      { id: "support", name: "Support Docs", path: "../support-docs", kind: "local" }
     ]);
   });
 
@@ -127,15 +127,15 @@ describe("knowledge repository configuration", () => {
     const flows = getConfiguredKnowledgeFlows(
       {},
       [{ id: "agent", name: "Agent Knowledge", kind: "agent" }],
-      [{ id: "cats", name: "Cats KB", url: "https://github.com/example/cats.git", kind: "git" }]
+      [{ id: "docs", name: "Docs KB", url: "https://github.com/example/docs.git", kind: "git" }]
     );
 
     assert.deepEqual(flows, [
       {
-        id: "cats",
-        name: "Cats KB",
+        id: "docs",
+        name: "Docs KB",
         sourceIds: ["agent"],
-        destinationId: "cats"
+        destinationId: "docs"
       }
     ]);
   });
@@ -156,24 +156,24 @@ describe("knowledge repository configuration", () => {
 
   it("falls back to legacy repositories for both sources and destinations", () => {
     const env = {
-      KNOWLEDGE_REPOSITORIES: JSON.stringify([{ id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats" }])
+      KNOWLEDGE_REPOSITORIES: JSON.stringify([{ id: "docs", name: "Product Docs", path: "knowledge-bases/product" }])
     };
 
     assert.deepEqual(getConfiguredKnowledgeSources(env), [
-      { id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats", kind: "local" }
+      { id: "docs", name: "Product Docs", path: "knowledge-bases/product", kind: "local" }
     ]);
     assert.deepEqual(getConfiguredKnowledgeDestinations(env), [
-      { id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats", kind: "local" }
+      { id: "docs", name: "Product Docs", path: "knowledge-bases/product", kind: "local" }
     ]);
   });
 
   it("uses the legacy single path when no multi-repository config is present", () => {
     const repositories = getConfiguredKnowledgeRepositories({
-      KNOWLEDGE_REPO_PATH: "knowledge-bases/cats"
+      KNOWLEDGE_REPO_PATH: "knowledge-bases/product"
     });
 
     assert.deepEqual(repositories, [
-      { id: "cats", name: "cats", path: "knowledge-bases/cats", kind: "local" }
+      { id: "product", name: "product", path: "knowledge-bases/product", kind: "local" }
     ]);
   });
 
@@ -181,15 +181,15 @@ describe("knowledge repository configuration", () => {
     const selection = resolveKnowledgeRepositorySelection(
       { repositoryId: "docs" },
       [
-        { id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats", kind: "local" },
-        { id: "docs", name: "Product Docs", path: "../product-docs", kind: "local" }
+        { id: "product", name: "Product Docs", path: "knowledge-bases/product", kind: "local" },
+        { id: "docs", name: "Reference Docs", path: "../product-docs", kind: "local" }
       ]
     );
 
     assert.deepEqual(selection, {
       localPath: "../product-docs",
       repositoryId: "docs",
-      name: "Product Docs"
+      name: "Reference Docs"
     });
   });
 
@@ -197,8 +197,8 @@ describe("knowledge repository configuration", () => {
     assert.throws(
       () =>
         resolveKnowledgeRepositorySelection(
-          { localPath: "/etc", repositoryId: "cats" },
-          [{ id: "cats", name: "Cats Knowledge Base", path: "knowledge-bases/cats", kind: "local" }]
+          { localPath: "/etc", repositoryId: "product" },
+          [{ id: "product", name: "Product Docs", path: "knowledge-bases/product", kind: "local" }]
         ),
       /localPath is not accepted/
     );
@@ -220,14 +220,14 @@ describe("knowledge repository configuration", () => {
 
   it("keeps legacy local path indexing available when no repositories are configured", () => {
     const selection = resolveKnowledgeRepositorySelection(
-      { localPath: "knowledge-bases/cats", repositoryId: "cats", name: "Cats Knowledge Base" },
+      { localPath: "knowledge-bases/product", repositoryId: "docs", name: "Product Docs" },
       []
     );
 
     assert.deepEqual(selection, {
-      localPath: "knowledge-bases/cats",
-      repositoryId: "cats",
-      name: "Cats Knowledge Base"
+      localPath: "knowledge-bases/product",
+      repositoryId: "docs",
+      name: "Product Docs"
     });
   });
 });

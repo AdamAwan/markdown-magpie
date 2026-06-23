@@ -18,7 +18,7 @@ KNOWLEDGE_FLOWS=[{"id":"flowerbi","name":"FlowerBI KB","sourceIds":["flowerbi"],
 
 Supported source kinds:
 
-- `local`: `{ "path": "knowledge-bases/cats" }`
+- `local`: `{ "path": "knowledge-bases/product" }`
 - `git`: `{ "url": "https://github.com/org/repo.git", "subpath": "docs" }`
 - `internet`: `{ "kind": "internet", "url": "https://example.com/docs" }` or `"internet"`
 - `agent`: `{ "kind": "agent" }` or `"agent"`

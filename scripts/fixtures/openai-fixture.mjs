@@ -99,7 +99,7 @@ const server = createServer(async (req, res) => {
       // Pick the first flow id offered in the user message, else fall back to a
       // deterministic id. Routing returning an unknown id would make the watcher
       // run unscoped, which is still valid; picking a real id keeps it scoped.
-      const flowId = firstFlowId(user) ?? "cats";
+      const flowId = firstFlowId(user) ?? "docs";
       console.log(`[fixture] routing call -> flowId=${flowId}`);
       return sendJson(res, 200, completion(JSON.stringify({ flowId, confidence: "high", rationale: "fixture" })));
     }
@@ -127,7 +127,7 @@ const server = createServer(async (req, res) => {
     }
 
     const answer = {
-      answer: "Cats are small domesticated carnivorous mammals (fixture answer).",
+      answer: "The configured documentation contains the requested information (fixture answer).",
       confidence: "high",
       isKnowledgeGap: false,
       gaps: []

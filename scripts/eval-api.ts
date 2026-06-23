@@ -30,27 +30,37 @@ interface QuestionResponse {
 const apiBaseUrl = (process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/+$/, "").replace(/\/api$/, "");
 const timeoutMs = Number.parseInt(process.env.EVAL_TIMEOUT_MS ?? "30000", 10);
 const pollIntervalMs = 500;
-const cases: EvalCase[] = [
+const cases: EvalCase[] = parseCases(process.env.EVAL_CASES_JSON) ?? [
   {
-    name: "scratching behavior",
-    question: "Why do cats scratch?",
-    mustContain: ["territory", "claws"],
-    minCitations: 1
-  },
-  {
-    name: "adoption preparation",
-    question: "What supplies do I need before adopting a cat?",
-    mustContain: ["veterinarian", "introduction"],
-    minCitations: 1
-  },
-  {
-    name: "urgent warning signs",
-    question: "What are urgent cat warning signs?",
-    mustContain: ["urgent", "breathing"],
+    name: "documentation coverage",
+    question: "What does this documentation cover?",
+    mustContain: [],
     minCitations: 1
   }
 ];
 
+function parseCases(raw: string | undefined): EvalCase[] | undefined {
+  if (!raw?.trim()) return undefined;
+  const parsed = JSON.parse(raw) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new Error("EVAL_CASES_JSON must be an array of eval cases");
+  }
+  return parsed.map((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      throw new Error(`EVAL_CASES_JSON[${index}] must be an object`);
+    }
+    const candidate = entry as Partial<EvalCase>;
+    if (typeof candidate.name !== "string" || typeof candidate.question !== "string") {
+      throw new Error(`EVAL_CASES_JSON[${index}] requires name and question strings`);
+    }
+    return {
+      name: candidate.name,
+      question: candidate.question,
+      mustContain: Array.isArray(candidate.mustContain) ? candidate.mustContain.map(String) : [],
+      minCitations: typeof candidate.minCitations === "number" ? candidate.minCitations : 1
+    };
+  });
+}
 async function main(): Promise<void> {
   let failed = 0;
 

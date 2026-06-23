@@ -11,6 +11,8 @@ coverage/
 tmp/
 data/
 .magpie/
+.specstory/
+.codex-remote-attachments/
 *.log
 *.tsbuildinfo
 .claude/worktrees/
