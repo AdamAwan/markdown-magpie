@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, test } from "node:test";
+import { afterEach, test } from "node:test";
 import { commentOnPullRequest } from "./index.js";
 
 const origFetch = globalThis.fetch;
