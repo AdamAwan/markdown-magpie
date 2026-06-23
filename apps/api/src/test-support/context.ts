@@ -7,6 +7,7 @@ import { InMemoryGapClusterStore } from "../stores/gap-cluster-store.js";
 import { InMemoryKnowledgeIndex } from "../stores/knowledge-index.js";
 import { InMemoryProposalStore } from "../stores/proposal-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
+import { InMemoryPrCrosslinkStore } from "../stores/pr-crosslink-store.js";
 import { InMemoryReconciliationDecisionStore } from "../stores/reconciliation-decision-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
 import { FakeJobBroker } from "../jobs/fake-broker.js";
@@ -40,6 +41,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
       sourceSync: new InMemorySourceSyncStore(),
       gapClusters: new InMemoryGapClusterStore(),
       reconciliations: new InMemoryReconciliationDecisionStore(),
+      prCrosslinks: new InMemoryPrCrosslinkStore(),
       snapshots: new InMemorySnapshotStore(),
       watchers: new InMemoryWatcherRegistryStore(),
       jobAcceptances: new InMemoryJobAcceptanceStore()

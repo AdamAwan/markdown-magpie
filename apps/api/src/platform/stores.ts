@@ -2,6 +2,7 @@ import { InMemoryCrunchStore } from "../stores/crunch-store.js";
 import { InMemoryGapClusterStore } from "../stores/gap-cluster-store.js";
 import { PostgresCrunchStore } from "../stores/postgres-crunch-store.js";
 import { PostgresGapClusterStore } from "../stores/postgres-gap-cluster-store.js";
+import { PostgresPrCrosslinkStore } from "../stores/postgres-pr-crosslink-store.js";
 import { PostgresProposalStore } from "../stores/postgres-proposal-store.js";
 import { PostgresQuestionLogStore } from "../stores/postgres-question-log-store.js";
 import { PostgresReconciliationDecisionStore } from "../stores/postgres-reconciliation-decision-store.js";
@@ -9,6 +10,7 @@ import { PostgresScheduledTaskStore } from "../stores/postgres-scheduled-task-st
 import { PostgresSourceSyncStore } from "../stores/postgres-source-sync-store.js";
 import { PostgresWatcherRegistryStore } from "../stores/postgres-watcher-registry-store.js";
 import { InMemoryProposalStore } from "../stores/proposal-store.js";
+import { InMemoryPrCrosslinkStore } from "../stores/pr-crosslink-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
 import { InMemoryReconciliationDecisionStore } from "../stores/reconciliation-decision-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
@@ -30,7 +32,8 @@ export type StoreEnvName =
   | "SOURCE_SYNC_STORE"
   | "GAP_CLUSTER_STORE"
   | "RECONCILIATION_DECISION_STORE"
-  | "WATCHER_REGISTRY_STORE";
+  | "WATCHER_REGISTRY_STORE"
+  | "PR_CROSSLINK_STORE";
 
 export function storeBackend(name: StoreEnvName): "memory" | "postgres" {
   return process.env[name] === "postgres" ? "postgres" : storageBackend();
@@ -121,6 +124,14 @@ export function createWatcherRegistryStore(): InMemoryWatcherRegistryStore | Pos
     "WATCHER_REGISTRY_STORE",
     (databaseUrl) => new PostgresWatcherRegistryStore(databaseUrl),
     () => new InMemoryWatcherRegistryStore()
+  );
+}
+
+export function createPrCrosslinkStore(): InMemoryPrCrosslinkStore | PostgresPrCrosslinkStore {
+  return createStore<InMemoryPrCrosslinkStore | PostgresPrCrosslinkStore>(
+    "PR_CROSSLINK_STORE",
+    (databaseUrl) => new PostgresPrCrosslinkStore(databaseUrl),
+    () => new InMemoryPrCrosslinkStore()
   );
 }
 
