@@ -31,7 +31,9 @@ const EXPIRATION_SECONDS = {
   publish_proposal: 15 * 60,
   publish_crunch: 15 * 60,
   publish_source_sync: 15 * 60,
-  crosslink_pull_requests: 10 * 60
+  crosslink_pull_requests: 10 * 60,
+  fold_markdown_proposal: 15 * 60,
+  comment_pull_request: 10 * 60
 } as const;
 
 test("every job type is unique and has schemas and a valid policy", () => {
@@ -84,7 +86,8 @@ test("github capability yields only GitHub work queues", () => {
     "publish_proposal",
     "publish_crunch",
     "publish_source_sync",
-    "crosslink_pull_requests"
+    "crosslink_pull_requests",
+    "comment_pull_request"
   ]);
 });
 
@@ -233,4 +236,12 @@ test("crosslink input schema requires exactly two pull requests", () => {
     pullRequests: [{ proposalId: "p1", pullRequestUrl: "u" }]
   });
   assert.equal(bad.success, false);
+});
+
+test("fold_markdown_proposal is a provider AI job; comment_pull_request is github", () => {
+  assert.ok(JOB_TYPES.includes("fold_markdown_proposal"));
+  assert.ok(JOB_TYPES.includes("comment_pull_request"));
+  assert.equal(jobDefinition("fold_markdown_proposal").requiredCapability({ provider: "codex" }), "codex");
+  assert.equal(queueNameForJob("fold_markdown_proposal", { provider: "codex" }), "fold_markdown_proposal__codex");
+  assert.equal(jobDefinition("comment_pull_request").requiredCapability({}), "github");
 });

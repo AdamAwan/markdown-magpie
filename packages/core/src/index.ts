@@ -384,6 +384,24 @@ export interface DraftMarkdownProposalJobOutput {
   rationale: string;
 }
 
+export interface FoldMarkdownProposalJobInput {
+  // The open proposal the rival is folded into; its markdown is updated in place.
+  survivorProposalId: string;
+  // The freshly-drafted proposal being absorbed, then superseded.
+  rivalProposalId: string;
+  targetPath: string;
+  survivorMarkdown: string;
+  rivalMarkdown: string;
+  rivalGapSummaries: string[];
+  rivalEvidence: Citation[];
+  expectedOutput: "folded_markdown";
+}
+
+export interface FoldMarkdownProposalJobOutput {
+  markdown: string;
+  rationale: string;
+}
+
 export interface PullRequestProvider {
   createPullRequest(request: CreatePullRequestRequest): Promise<CreatePullRequestResponse>;
 }

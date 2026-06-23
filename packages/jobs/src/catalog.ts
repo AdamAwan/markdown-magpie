@@ -66,6 +66,7 @@ const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
   answer_question: define("answer_question", "provider", schemas.answerQuestionInputSchema, schemas.answerQuestionOutputSchema, 5 * 60),
   summarize_gap: define("summarize_gap", "provider", schemas.summarizeGapInputSchema, schemas.summarizeGapOutputSchema, 10 * 60),
   draft_markdown_proposal: define("draft_markdown_proposal", "provider", schemas.draftMarkdownProposalInputSchema, schemas.draftMarkdownProposalOutputSchema, 15 * 60),
+  fold_markdown_proposal: define("fold_markdown_proposal", "provider", schemas.foldMarkdownProposalInputSchema, schemas.foldMarkdownProposalOutputSchema, 15 * 60),
   detect_contradiction: define("detect_contradiction", "provider", schemas.detectContradictionInputSchema, schemas.detectContradictionOutputSchema, 10 * 60),
   suggest_consolidation: define("suggest_consolidation", "provider", schemas.suggestConsolidationInputSchema, schemas.suggestConsolidationOutputSchema, 10 * 60),
   crunch_knowledge_base: define("crunch_knowledge_base", "provider", schemas.crunchKnowledgeBaseInputSchema, schemas.crunchKnowledgeBaseOutputSchema, 60 * 60),
@@ -79,7 +80,8 @@ const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
   publish_proposal: define("publish_proposal", "github", schemas.publishProposalInputSchema, schemas.publishProposalOutputSchema, 15 * 60),
   publish_crunch: define("publish_crunch", "github", schemas.publishCrunchInputSchema, schemas.publishCrunchOutputSchema, 15 * 60),
   publish_source_sync: define("publish_source_sync", "github", schemas.publishSourceSyncInputSchema, schemas.publishSourceSyncOutputSchema, 15 * 60),
-  crosslink_pull_requests: define("crosslink_pull_requests", "github", schemas.crosslinkPullRequestsInputSchema, schemas.crosslinkPullRequestsOutputSchema, 10 * 60)
+  crosslink_pull_requests: define("crosslink_pull_requests", "github", schemas.crosslinkPullRequestsInputSchema, schemas.crosslinkPullRequestsOutputSchema, 10 * 60),
+  comment_pull_request: define("comment_pull_request", "github", schemas.commentPullRequestInputSchema, schemas.commentPullRequestOutputSchema, 10 * 60)
 });
 
 export function jobDefinition(type: JobType): JobDefinition {
@@ -94,6 +96,7 @@ const aiJobTypes = new Set<JobType>([
   "answer_question",
   "summarize_gap",
   "draft_markdown_proposal",
+  "fold_markdown_proposal",
   "detect_contradiction",
   "suggest_consolidation",
   "crunch_knowledge_base",

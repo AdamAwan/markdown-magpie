@@ -15,7 +15,9 @@ import {
   publishSourceSyncInputSchema,
   publishSourceSyncOutputSchema,
   crosslinkPullRequestsInputSchema,
-  crosslinkPullRequestsOutputSchema
+  crosslinkPullRequestsOutputSchema,
+  commentPullRequestInputSchema,
+  commentPullRequestOutputSchema
 } from "@magpie/jobs";
 import {
   ensureGitCheckout,
@@ -150,7 +152,8 @@ const PUBLISH_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "publish_proposal",
   "publish_crunch",
   "publish_source_sync",
-  "crosslink_pull_requests"
+  "crosslink_pull_requests",
+  "comment_pull_request"
 ]);
 
 // Executes the queue-only publication jobs with @magpie/git. It fetches the
@@ -181,6 +184,9 @@ export class PublicationRunner {
     }
     if (job.type === "crosslink_pull_requests") {
       return this.crosslinkPullRequests(job);
+    }
+    if (job.type === "comment_pull_request") {
+      return this.commentPullRequest(job);
     }
     throw new Error(`PublicationRunner cannot handle ${job.type}`);
   }
@@ -342,6 +348,12 @@ export class PublicationRunner {
       }
     }
     return crosslinkPullRequestsOutputSchema.parse({ commented, linkedAt: new Date().toISOString() });
+  }
+
+  private async commentPullRequest(job: JobView): Promise<unknown> {
+    const { pullRequestUrl, body } = commentPullRequestInputSchema.parse(job.input);
+    const commentUrl = await this.deps.commentOnPullRequest({ pullRequestUrl, body });
+    return commentPullRequestOutputSchema.parse(commentUrl ? { commentUrl } : {});
   }
 }
 

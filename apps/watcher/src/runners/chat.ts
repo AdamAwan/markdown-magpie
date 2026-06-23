@@ -13,6 +13,7 @@ const CHAT_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "answer_question",
   "summarize_gap",
   "draft_markdown_proposal",
+  "fold_markdown_proposal",
   "detect_contradiction",
   "suggest_consolidation",
   "crunch_knowledge_base",

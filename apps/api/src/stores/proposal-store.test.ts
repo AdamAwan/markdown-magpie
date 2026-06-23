@@ -70,3 +70,22 @@ test("recordPublication marks pr-opened only when a pull request URL is present"
   });
   assert.equal(prOpened?.status, "pr-opened");
 });
+
+test("updateMarkdown replaces the markdown and returns the proposal", async () => {
+  const store = new InMemoryProposalStore();
+  const created = await store.create({
+    title: "Refunds",
+    targetPath: "kb/refunds.md",
+    markdown: "# old",
+    rationale: "r",
+    evidence: []
+  });
+  const updated = await store.updateMarkdown(created.id, "# new");
+  assert.equal(updated?.markdown, "# new");
+  assert.equal((await store.get(created.id))?.markdown, "# new");
+});
+
+test("updateMarkdown returns undefined for an unknown proposal", async () => {
+  const store = new InMemoryProposalStore();
+  assert.equal(await store.updateMarkdown("nope", "x"), undefined);
+});

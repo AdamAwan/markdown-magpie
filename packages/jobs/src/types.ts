@@ -4,6 +4,7 @@ export const JOB_TYPES = [
   "answer_question",
   "summarize_gap",
   "draft_markdown_proposal",
+  "fold_markdown_proposal",
   "detect_contradiction",
   "suggest_consolidation",
   "crunch_knowledge_base",
@@ -17,7 +18,8 @@ export const JOB_TYPES = [
   "publish_proposal",
   "publish_crunch",
   "publish_source_sync",
-  "crosslink_pull_requests"
+  "crosslink_pull_requests",
+  "comment_pull_request"
 ] as const;
 
 export type JobType = (typeof JOB_TYPES)[number];
