@@ -231,7 +231,10 @@ export const refreshPullRequestsOutputSchema = z.object({
   results: z.array(z.object({
     proposalId: z.string(),
     state: z.enum(["open", "closed"]),
-    merged: z.boolean()
+    merged: z.boolean(),
+    // Mirrors @magpie/core ReviewDecision. Optional: the watcher only attaches it
+    // for still-open PRs it could read; a missing value means "undetermined".
+    reviewDecision: z.enum(["approved", "changes_requested", "review_required", "none"]).optional()
   }))
 });
 
