@@ -238,6 +238,13 @@ async function handleRefreshPullRequestsCompletion(
   }
   for (const result of parsed.data.results) {
     await applyPullRequestTransition(ctx, result.proposalId, { merged: result.merged, state: result.state });
+    // Conservative update: only a genuine fresh reading updates the stored decision.
+    // A result with no reviewDecision (an undetermined poll) must never clobber a
+    // known "approved" back to a touchable value — that would re-open an approved
+    // PR to folding, the exact failure this guard prevents.
+    if (result.reviewDecision) {
+      await ctx.stores.proposals.updateReviewDecision(result.proposalId, result.reviewDecision);
+    }
   }
   await snapshotsService.recordSnapshotsFromPullRequestResults(ctx, parsed.data.results);
 }

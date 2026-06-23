@@ -506,3 +506,60 @@ test("completeJob validates catalog output and rejects completion after cancella
   });
   assert.deepEqual(cancelledResult, { ok: false, code: "job_cancelled" });
 });
+
+test("refresh_pull_requests completion persists a reported review decision", async () => {
+  const ctx = makeTestContext();
+  const proposal = await ctx.stores.proposals.create({
+    title: "Refunds",
+    targetPath: "kb/refunds.md",
+    markdown: "# r",
+    rationale: "r",
+    evidence: []
+  });
+  await ctx.stores.proposals.recordPublication(proposal.id, {
+    provider: "local-git",
+    branchName: "b",
+    commitSha: "c",
+    pullRequestUrl: "https://github.com/o/r/pull/3",
+    publishedAt: new Date().toISOString()
+  });
+
+  const job = await ctx.jobs.create("refresh_pull_requests", {});
+  assert.equal(
+    (await completeJob(ctx, job.id, {
+      results: [{ proposalId: proposal.id, state: "open" as const, merged: false, reviewDecision: "approved" as const }]
+    })).ok,
+    true
+  );
+  assert.equal((await ctx.stores.proposals.get(proposal.id))?.reviewDecision, "approved");
+});
+
+test("refresh_pull_requests completion without a reviewDecision leaves a prior one intact", async () => {
+  const ctx = makeTestContext();
+  const proposal = await ctx.stores.proposals.create({
+    title: "Credits",
+    targetPath: "kb/credits.md",
+    markdown: "# c",
+    rationale: "r",
+    evidence: []
+  });
+  await ctx.stores.proposals.recordPublication(proposal.id, {
+    provider: "local-git",
+    branchName: "b",
+    commitSha: "c",
+    pullRequestUrl: "https://github.com/o/r/pull/4",
+    publishedAt: new Date().toISOString()
+  });
+  await ctx.stores.proposals.updateReviewDecision(proposal.id, "approved");
+
+  // A later poll that could not determine the decision (no reviewDecision on the
+  // result) must not clobber the stored approval back to touchable.
+  const job = await ctx.jobs.create("refresh_pull_requests", {});
+  assert.equal(
+    (await completeJob(ctx, job.id, {
+      results: [{ proposalId: proposal.id, state: "open" as const, merged: false }]
+    })).ok,
+    true
+  );
+  assert.equal((await ctx.stores.proposals.get(proposal.id))?.reviewDecision, "approved");
+});
