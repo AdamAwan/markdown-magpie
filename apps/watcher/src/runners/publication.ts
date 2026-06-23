@@ -13,12 +13,15 @@ import {
   publishProposalInputSchema,
   publishProposalOutputSchema,
   publishSourceSyncInputSchema,
-  publishSourceSyncOutputSchema
+  publishSourceSyncOutputSchema,
+  crosslinkPullRequestsInputSchema,
+  crosslinkPullRequestsOutputSchema
 } from "@magpie/jobs";
 import {
   ensureGitCheckout,
   LocalGitProposalPublisher,
   raisePullRequest,
+  commentOnPullRequest,
   type RaisePullRequestRequest,
   type RaisedPullRequest
 } from "@magpie/git";
@@ -39,6 +42,7 @@ export interface PublicationDeps {
   publishProposal(request: PublishProposalBranchRequest): Promise<PublishProposalBranchResponse>;
   publishChangeset(request: PublishChangesetRequest): Promise<PublishProposalBranchResponse>;
   raisePullRequest(request: RaisePullRequestRequest): Promise<RaisedPullRequest | undefined>;
+  commentOnPullRequest(request: { pullRequestUrl: string; body: string }): Promise<string | undefined>;
 }
 
 // Real git-backed deps used in production.
@@ -49,7 +53,8 @@ export function createGitPublicationDeps(): PublicationDeps {
       preparePublicationRepository(repository, process.env.MAGPIE_CHECKOUT_ROOT ?? ".magpie/checkouts"),
     publishProposal: (request) => publisher.publish(request),
     publishChangeset: (request) => publisher.publishChangeset(request),
-    raisePullRequest
+    raisePullRequest,
+    commentOnPullRequest
   };
 }
 
@@ -144,7 +149,8 @@ type PublishSourceSyncRun = z.infer<typeof sourceSyncRunSchema>;
 const PUBLISH_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "publish_proposal",
   "publish_crunch",
-  "publish_source_sync"
+  "publish_source_sync",
+  "crosslink_pull_requests"
 ]);
 
 // Executes the queue-only publication jobs with @magpie/git. It fetches the
@@ -172,6 +178,9 @@ export class PublicationRunner {
     }
     if (job.type === "publish_source_sync") {
       return this.publishSourceSync(job);
+    }
+    if (job.type === "crosslink_pull_requests") {
+      return this.crosslinkPullRequests(job);
     }
     throw new Error(`PublicationRunner cannot handle ${job.type}`);
   }
@@ -313,6 +322,26 @@ export class PublicationRunner {
       ...(publication.remoteUrl ? { remoteUrl: publication.remoteUrl } : {}),
       publishedAt: new Date().toISOString()
     });
+  }
+
+  private async crosslinkPullRequests(job: JobView): Promise<unknown> {
+    const { targets, pullRequests } = crosslinkPullRequestsInputSchema.parse(job.input);
+    const [a, b] = pullRequests;
+    const files = targets.map((t) => `\`${t}\``).join(", ");
+    const commented: string[] = [];
+    for (const [self, other] of [
+      [a, b],
+      [b, a]
+    ] as const) {
+      const body =
+        `🔗 **Magpie:** this PR overlaps ${other.pullRequestUrl} — both edit ${files}. ` +
+        "They may be consolidated. _(automated overlap detection)_";
+      const url = await this.deps.commentOnPullRequest({ pullRequestUrl: self.pullRequestUrl, body });
+      if (url) {
+        commented.push(url);
+      }
+    }
+    return crosslinkPullRequestsOutputSchema.parse({ commented, linkedAt: new Date().toISOString() });
   }
 }
 
