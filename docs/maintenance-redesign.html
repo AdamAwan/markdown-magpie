@@ -1,0 +1,794 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KB Maintenance Redesign · Markdown Magpie</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #17211d;
+        --muted: #65716b;
+        --line: #d9ded6;
+        --line-strong: #b9c4bc;
+        --paper: #ffffff;
+        --wash: #f5f7f2;
+        --wash-2: #edf4f5;
+        --accent: #285f74;
+        --accent-soft: #e5f1f4;
+        --ok: #3d6b43;
+        --ok-soft: #e8f1e6;
+        --warn: #92522f;
+        --warn-soft: #f6ecdf;
+        --bad: #9a3a2d;
+        --bad-soft: #f6e3df;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--wash);
+        color: var(--ink);
+        line-height: 1.55;
+      }
+
+      .wrap {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 48px 28px 96px;
+      }
+
+      header.hero {
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 26px;
+        margin-bottom: 34px;
+      }
+
+      .eyebrow {
+        color: #62702f;
+        font-size: 12px;
+        font-weight: 850;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 8px 0 6px;
+        font-size: 34px;
+        line-height: 1.08;
+      }
+
+      .sub {
+        color: var(--muted);
+        font-size: 15px;
+        max-width: 70ch;
+      }
+
+      .meta {
+        margin-top: 14px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .pill {
+        font-size: 12px;
+        font-weight: 650;
+        padding: 3px 10px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        border: 1px solid #cfe4ea;
+      }
+
+      h2 {
+        margin: 46px 0 6px;
+        font-size: 13px;
+        font-weight: 850;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+
+      h2 .n {
+        color: var(--line-strong);
+        margin-right: 8px;
+      }
+
+      h2 + .lede {
+        margin: 0 0 18px;
+        color: var(--muted);
+        font-size: 15px;
+        max-width: 74ch;
+      }
+
+      p {
+        max-width: 74ch;
+      }
+
+      .card {
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 20px 22px;
+        margin: 18px 0;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+        margin: 14px 0;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+
+      th,
+      td {
+        text-align: left;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+
+      th {
+        background: var(--wash-2);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }
+
+      tr:last-child td {
+        border-bottom: none;
+      }
+
+      code {
+        font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.86em;
+        background: var(--wash-2);
+        padding: 1px 6px;
+        border-radius: 5px;
+        color: #2b3a42;
+      }
+
+      .tag {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 2px 8px;
+        border-radius: 6px;
+        white-space: nowrap;
+      }
+      .tag.event {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+      .tag.patrol {
+        background: var(--warn-soft);
+        color: var(--warn);
+      }
+      .tag.good {
+        background: var(--ok-soft);
+        color: var(--ok);
+      }
+      .tag.bad {
+        background: var(--bad-soft);
+        color: var(--bad);
+      }
+
+      /* ---- flow diagram ---- */
+      .flow {
+        display: grid;
+        grid-template-columns: 220px 56px 1fr 56px 200px;
+        align-items: center;
+        gap: 0;
+        margin: 8px 0 4px;
+      }
+      @media (max-width: 760px) {
+        .flow {
+          grid-template-columns: 1fr;
+          gap: 10px;
+        }
+        .arrow {
+          transform: rotate(90deg);
+          justify-self: center;
+        }
+      }
+
+      .signals {
+        display: grid;
+        gap: 8px;
+      }
+
+      .node {
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 13px;
+        font-weight: 650;
+        border: 1px solid var(--line-strong);
+        background: var(--paper);
+      }
+      .node small {
+        display: block;
+        font-weight: 500;
+        color: var(--muted);
+        font-size: 11.5px;
+        margin-top: 2px;
+      }
+      .node.ev {
+        border-left: 4px solid var(--accent);
+      }
+      .node.pa {
+        border-left: 4px solid var(--warn);
+      }
+
+      .gate {
+        background: linear-gradient(180deg, #ffffff, #f3f8f4);
+        border: 1.5px solid var(--accent);
+        border-radius: 12px;
+        padding: 16px;
+        text-align: center;
+      }
+      .gate strong {
+        display: block;
+        font-size: 14px;
+      }
+      .gate small {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 4px;
+      }
+
+      .out {
+        background: var(--ok-soft);
+        border: 1.5px solid #bcd6b8;
+        border-radius: 12px;
+        padding: 16px;
+        text-align: center;
+        font-weight: 700;
+        color: var(--ok);
+        font-size: 13.5px;
+      }
+      .out small {
+        display: block;
+        font-weight: 500;
+        color: #5c7158;
+        margin-top: 4px;
+      }
+
+      .arrow {
+        text-align: center;
+        color: var(--line-strong);
+        font-size: 26px;
+        font-weight: 700;
+      }
+
+      .rules {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+        margin: 16px 0;
+      }
+      @media (max-width: 640px) {
+        .rules {
+          grid-template-columns: 1fr;
+        }
+      }
+      .rule {
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 16px 18px;
+      }
+      .rule .num {
+        font-size: 12px;
+        font-weight: 850;
+        color: var(--accent);
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .rule h4 {
+        margin: 6px 0 6px;
+        font-size: 15.5px;
+      }
+      .rule p {
+        margin: 0;
+        font-size: 13.5px;
+        color: var(--muted);
+      }
+
+      .two {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin: 16px 0;
+      }
+      @media (max-width: 640px) {
+        .two {
+          grid-template-columns: 1fr;
+        }
+      }
+      .patrolcard {
+        border-radius: 12px;
+        padding: 18px 20px;
+        border: 1px solid var(--line);
+        background: var(--paper);
+      }
+      .patrolcard.fix {
+        border-top: 4px solid var(--ok);
+      }
+      .patrolcard.imp {
+        border-top: 4px solid var(--accent);
+      }
+      .patrolcard h4 {
+        margin: 0 0 4px;
+        font-size: 16px;
+      }
+      .patrolcard .mode {
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .patrolcard.fix .mode {
+        color: var(--ok);
+      }
+      .patrolcard.imp .mode {
+        color: var(--accent);
+      }
+      .patrolcard ul {
+        margin: 10px 0 0;
+        padding-left: 18px;
+        font-size: 13.5px;
+        color: var(--muted);
+      }
+      .patrolcard li {
+        margin: 4px 0;
+      }
+
+      ol.steps {
+        counter-reset: step;
+        list-style: none;
+        padding: 0;
+        margin: 14px 0;
+      }
+      ol.steps li {
+        counter-increment: step;
+        position: relative;
+        padding: 8px 0 8px 40px;
+        border-bottom: 1px dashed var(--line);
+        font-size: 14px;
+        max-width: 74ch;
+      }
+      ol.steps li:last-child {
+        border-bottom: none;
+      }
+      ol.steps li::before {
+        content: counter(step);
+        position: absolute;
+        left: 0;
+        top: 7px;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 700;
+        display: grid;
+        place-items: center;
+      }
+
+      .callout {
+        border-left: 4px solid var(--warn);
+        background: var(--warn-soft);
+        border-radius: 0 10px 10px 0;
+        padding: 12px 16px;
+        font-size: 13.5px;
+        margin: 16px 0;
+      }
+      .callout strong {
+        color: var(--warn);
+      }
+
+      footer {
+        margin-top: 56px;
+        padding-top: 18px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 13px;
+      }
+      footer a {
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="hero">
+        <div class="eyebrow">Markdown Magpie · Design</div>
+        <h1>Knowledge-base maintenance redesign</h1>
+        <p class="sub">
+          Replacing the <code>crunch</code> god-job with a model organised around two axes the
+          original design ignored: <strong>what triggers the work</strong>, and
+          <strong>how much data the work needs to look at</strong>.
+        </p>
+        <div class="meta">
+          <span class="pill">Proposal</span>
+          <span class="pill">2026-06-23</span>
+          <span class="pill">Companion: maintenance-redesign.md</span>
+        </div>
+      </header>
+
+      <h2><span class="n">01</span>The problem</h2>
+      <p class="lede">
+        The pain — "a confusing stream of PRs" — comes almost entirely from one job. Crunch has
+        no scope (it ingests the whole KB) and no single responsibility, so it competes with the
+        gap job, competes with itself, and emits PRs nobody can reason about.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Job</th>
+            <th>Trigger</th>
+            <th>Scope of data</th>
+            <th>Verdict</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>source_change_sync</code></td>
+            <td>source commit</td>
+            <td>diff + ≤6 matching docs</td>
+            <td><span class="tag good">well-scoped</span></td>
+          </tr>
+          <tr>
+            <td><code>gaps-to-pull-requests</code></td>
+            <td>every 10 min</td>
+            <td>gap clusters</td>
+            <td><span class="tag good">mostly fine</span></td>
+          </tr>
+          <tr>
+            <td><code>refresh_pull_requests</code></td>
+            <td>every 5 min</td>
+            <td>open PRs</td>
+            <td><span class="tag good">plumbing</span></td>
+          </tr>
+          <tr>
+            <td><code>trigger_scheduled_crunch</code></td>
+            <td>daily 02:00</td>
+            <td><strong>all docs</strong></td>
+            <td><span class="tag bad">the god-job</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        The root cause isn't "too many jobs". It's that the work was never decomposed by trigger
+        and scope. <strong>Crunch is five jobs wearing one coat.</strong>
+      </p>
+
+      <h2><span class="n">02</span>The reframe: trigger × scope</h2>
+      <p class="lede">
+        Every maintenance action is either <span class="tag event">event-driven</span> (the world
+        changed) or <span class="tag patrol">patrol</span> (the KB rots on its own). And nothing
+        needs the whole KB at once — each concern has a small, natural scope.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Want</th>
+            <th>Lens</th>
+            <th>Trigger</th>
+            <th>Scope it actually needs</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Fill gaps (not in isolation)</td>
+            <td><code>gap</code></td>
+            <td><span class="tag event">event</span> question→gap</td>
+            <td>gap + sibling gaps + open PRs</td>
+          </tr>
+          <tr>
+            <td>Don't rot — source changed</td>
+            <td><code>source-sync</code></td>
+            <td><span class="tag event">event</span> commit</td>
+            <td>diff + docs citing that area</td>
+          </tr>
+          <tr>
+            <td>Don't rot — claims still true?</td>
+            <td><code>verify</code></td>
+            <td><span class="tag patrol">patrol</span></td>
+            <td><strong>one file</strong> + its cited sources</td>
+          </tr>
+          <tr>
+            <td>Tidy — duplication / contradiction</td>
+            <td><code>dedupe</code></td>
+            <td><span class="tag patrol">patrol</span></td>
+            <td>one file + its <em>k</em> nearest neighbours</td>
+          </tr>
+          <tr>
+            <td>Tidy — too big / wrong responsibilities</td>
+            <td><code>split</code></td>
+            <td><span class="tag patrol">patrol</span></td>
+            <td>one file (+ neighbours)</td>
+          </tr>
+          <tr>
+            <td>Completeness ("what else?")</td>
+            <td><code>complete</code></td>
+            <td><span class="tag patrol">patrol</span></td>
+            <td>one file / one topic</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        The whole-KB crunch dissolves into patrol lenses, each on one file or one small
+        neighbourhood. Even <code>dedupe</code> never goes O(n²): it compares the patrolled file
+        only against its <em>k</em> nearest neighbours via the existing KB search.
+      </p>
+
+      <h2><span class="n">03</span>The architecture</h2>
+      <p class="lede">
+        Separate <strong>finding work</strong> from <strong>deciding to publish</strong>, with one
+        shared gate in between.
+      </p>
+
+      <div class="card">
+        <table style="margin: 0; border: none">
+          <tbody>
+            <tr>
+              <td style="width: 120px"><strong>Flow</strong></td>
+              <td>
+                The top-level partition. Each flow has its own gap catalog, clusters, scheduled
+                tasks and snapshot. Everything happens <em>within</em> a flow — the gate never
+                reasons across flows.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>File-set</strong></td>
+              <td>
+                The concrete set of KB document paths a <em>single PR</em> writes to or deletes
+                (<code>writes[].path</code> + <code>deletes[]</code>), inside one flow. A property
+                of an individual PR, not something you configure. Two PRs <strong>overlap</strong>
+                when their file-sets share any path.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <pre style="margin: 14px 0 0; font-size: 12.5px; color: var(--muted); font-family: 'JetBrains Mono', ui-monospace, monospace">
+flow  (e.g. billing-kb)
+ └── many docs
+      └── a PR touches some subset of them   ← that subset is the "file-set"</pre>
+        <p style="margin: 12px 0 0; font-size: 13px; color: var(--muted)">
+          Keying on the file-set is deliberate: keying on the <em>flow</em> is too coarse (one PR
+          per flow serialises everything); keying on a <em>single file</em> is too fine (a
+          <code>split</code> or <code>dedupe</code> spans files). The unit is "the set of files
+          this change spans".
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="flow">
+          <div class="signals">
+            <div class="node ev">gap<small>event · question→gap</small></div>
+            <div class="node ev">source-sync<small>event · commit</small></div>
+            <div class="node pa">fix-patrol<small>patrol · verify/dedupe/split</small></div>
+            <div class="node pa">improve-patrol<small>patrol · complete</small></div>
+          </div>
+          <div class="arrow">→</div>
+          <div class="gate">
+            <strong>RECONCILE GATE</strong>
+            <small>keyed by file-set · fold-on-overlap</small>
+          </div>
+          <div class="arrow">→</div>
+          <div class="out">
+            One PR per file-set
+            <small>tagged by lens</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="rules">
+        <div class="rule">
+          <div class="num">Rule 1</div>
+          <h4>A signal is not a PR</h4>
+          <p>
+            Every lens emits a <em>change intent</em>
+            <code>{ targets, lens, evidence, rationale }</code> — never a branch directly.
+          </p>
+        </div>
+        <div class="rule">
+          <div class="num">Rule 2</div>
+          <h4>One open PR per file-set</h4>
+          <p>
+            A PR is keyed by the files it touches. An intent overlapping an open PR folds into it
+            — it can never spawn a competitor. File-path overlap is only a cheap pre-filter; an
+            <strong>LLM</strong> does the actual fold/rewrite, so no mechanical text merge ever runs.
+          </p>
+        </div>
+      </div>
+      <p>
+        The current gap reconciler already implements Rule 1 (clusters → proposals). The redesign
+        <strong>generalises that gate</strong> so source-sync and the patrols flow through it too.
+      </p>
+
+      <h2><span class="n">04</span>Two patrols, not one</h2>
+      <p class="lede">
+        Correctness and growth feel similar but behave oppositely — so they're separate jobs, run
+        at different cadences and <strong>trusted differently</strong>.
+      </p>
+      <div class="two">
+        <div class="patrolcard fix">
+          <div class="mode">Conservative</div>
+          <h4>fix-patrol</h4>
+          <p style="margin: 4px 0 0; font-size: 13.5px; color: var(--muted)">
+            Speaks only when something is demonstrably <strong>wrong</strong>. Silent on healthy
+            files. PRs fix provable problems → quick to approve (still human-reviewed).
+          </p>
+          <ul>
+            <li><code>verify</code> — a claim it can't prove</li>
+            <li><code>dedupe</code> — a real duplicate / contradiction</li>
+            <li><code>split</code> — a file that outgrew its responsibility</li>
+          </ul>
+        </div>
+        <div class="patrolcard imp">
+          <div class="mode">Proactive</div>
+          <h4>improve-patrol</h4>
+          <p style="margin: 4px 0 0; font-size: 13.5px; color: var(--muted)">
+            Grows docs that are fine-but-thin. Makes editorial calls → always wants human review.
+            Runs on a slower cursor.
+          </p>
+          <ul>
+            <li><code>complete</code> — "what else should we know here?"</li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout">
+        <strong>The patrol trigger is a rolling cursor</strong>, not "all docs daily". Each tick:
+        pick the <em>N</em> least-recently-checked files (or files past a staleness threshold).
+        Rotates through the whole KB over days with bounded cost per tick.
+      </div>
+
+      <h2><span class="n">05</span>The reconcile gate</h2>
+      <p class="lede">
+        For each intent, the gate inspects existing open intents <em>and</em> open PRs, keyed by
+        file/topic, then decides.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Situation</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>No overlap</td>
+            <td><span class="tag good">open a new PR</span></td>
+          </tr>
+          <tr>
+            <td>Overlaps an open, <strong>touchable</strong> PR (open &amp; un-approved)</td>
+            <td><span class="tag event">fold into it</span> — the default</td>
+          </tr>
+          <tr>
+            <td>Overlaps an open PR that's approved / merging</td>
+            <td><span class="tag patrol">defer</span> to next round</td>
+          </tr>
+          <tr>
+            <td>Already covered / superseded</td>
+            <td><span class="tag bad">drop</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="card">
+        <p style="margin: 0 0 8px; font-weight: 650; font-size: 14px">
+          Overlap is detected cheaply, resolved by an LLM
+        </p>
+        <p style="margin: 0 0 6px; font-size: 13.5px; color: var(--muted)">
+          <span class="tag bad">hard</span> <strong>file-set overlap</strong> — two PRs share a
+          document path. Structural, exact, cheap.
+        </p>
+        <p style="margin: 0 0 10px; font-size: 13.5px; color: var(--muted)">
+          <span class="tag patrol">soft</span> <strong>topic overlap</strong> — two PRs touch
+          <em>different</em> files about the same subject (<code>refunds.md</code> vs
+          <code>partial-refunds.md</code>), caught by the dedupe lens's <em>k</em>-nearest-neighbour
+          search. Heuristic.
+        </p>
+        <p style="margin: 0; font-size: 13.5px">
+          Either signal only says two changes <em>might</em> collide. The <strong>LLM does the
+          actual resolution</strong> — given the open PR's diff and the new intent's evidence, it
+          rewrites the sections into one coherent change, attaches the intent as evidence, or rules
+          them independent. Because a model is always in the loop, the soft signal can be generous
+          and we never risk a bad mechanical merge.
+        </p>
+      </div>
+
+      <div class="callout">
+        <strong>Fold-on-overlap guard rail.</strong> Folding mutates an open PR — fine while it's
+        un-approved. Once a reviewer has approved (or it's mid-merge), a new overlapping intent
+        must <strong>not</strong> mutate it; that would silently invalidate the review. The rule is
+        <em>"fold if touchable, else defer"</em>, not "always fold".
+      </div>
+
+      <h2><span class="n">06</span>Why source-sync stays separate from verify</h2>
+      <p>
+        They look like the same "staleness" concern but pull in opposite directions —
+        <strong>source-sync pushes</strong> (a commit landed → propagate to citing docs;
+        event-driven, fast, small) while <strong>verify pulls</strong> (re-check whether claims are
+        still provable, catching drift that <em>didn't</em> arrive via a tracked commit: renames,
+        non-git sources, slow rot). Complementary, and they never collide — both emit intents into
+        the same gate, so if source-sync already has a PR open on a file, verify just folds in.
+      </p>
+
+      <h2><span class="n">07</span>Migration sketch</h2>
+      <p class="lede">Rough order that keeps the system working throughout.</p>
+      <ol class="steps">
+        <li>
+          Introduce the <code>intent</code> type; make <code>gap-reconciler</code> emit/consume it
+          explicitly (it already does in all but name).
+        </li>
+        <li>Generalise the reconcile gate to be lens-agnostic; add touchable/fold/defer logic.</li>
+        <li>Route source-sync through the gate (emit intents instead of publishing branches).</li>
+        <li>Build <strong>fix-patrol</strong>: rolling cursor + verify / dedupe / split lenses.</li>
+        <li>Build <strong>improve-patrol</strong> (complete lens) on a slower cursor.</li>
+        <li>
+          Retire <code>trigger_scheduled_crunch</code> and the <code>crunch_*</code> job types once
+          the patrols cover it.
+        </li>
+      </ol>
+      <p>
+        Start at 1–2: the shared gate plus the intent type is the spine, and
+        <code>gap-reconciler.ts</code> is already ~80% of it.
+      </p>
+
+      <h2><span class="n">08</span>Decisions</h2>
+      <table>
+        <tbody>
+          <tr>
+            <td style="width: 180px"><strong>Folding &amp; merge</strong></td>
+            <td>
+              <em>All</em> patrol lenses fold into the existing open PR for the file-set.
+              <strong>Nothing merges to main unattended</strong> — every PR is human-reviewed.
+              fix vs improve PRs are labelled differently for easy triage; the merge gate is human
+              for both.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Cursor fairness</strong></td>
+            <td>
+              <strong>Oldest N + a random sample.</strong> Oldest-N clears the staleness backlog
+              (exploit); the random share means nothing goes unvisited forever and load doesn't
+              synchronise into waves (explore). Oldest-N dominates; random is the safety net.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Neighbourhood <em>k</em></strong></td>
+            <td>
+              <strong>Adaptive</strong>, not fixed — scope unknown today. Size <em>k</em> from the
+              corpus (proportion of flow and/or a similarity threshold, not a hard count); tune
+              with real numbers.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="font-size: 13.5px; color: var(--muted)">
+        <strong>Still open:</strong> the exact oldest-N / random split (80/20?) and the concrete
+        adaptivity rule for <em>k</em> — both settle once we have real volume.
+      </p>
+
+      <footer>
+        Markdown Magpie · maintenance redesign proposal · see
+        <a href="maintenance-redesign.md">maintenance-redesign.md</a> for the source document.
+      </footer>
+    </div>
+  </body>
+</html>
