@@ -192,6 +192,12 @@ export interface PersistedGapCluster {
   lastReconciledAt?: string;
 }
 
+// The watcher's normalised reading of a pull request's review state. Only
+// "approved" locks a PR against folding; every other value — and the absence of
+// any value — leaves it touchable. Derived from GitHub's GraphQL reviewDecision,
+// falling back to its REST reviews list (see @magpie/git fetchPullRequestReviewDecision).
+export type ReviewDecision = "approved" | "changes_requested" | "review_required" | "none";
+
 export interface Proposal {
   id: string;
   title: string;
@@ -206,6 +212,11 @@ export interface Proposal {
   rationale?: string;
   jobId?: string;
   publication?: ProposalPublication;
+  // The latest review decision observed on this proposal's pull request, polled by
+  // the watcher's refresh_pull_requests job. Absent until the PR has been polled (or
+  // for proposals drafted before this was tracked). An approved PR is non-touchable:
+  // the reconcile gate will not fold another change into it.
+  reviewDecision?: ReviewDecision;
   // A compact record of the context the model was given when it drafted this
   // proposal — the gaps, the source files, how much evidence, and the flow's
   // in-flight work it was told about. Lets a reviewer see what the draft was

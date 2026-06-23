@@ -5,7 +5,8 @@ import type {
   PublishProposalBranchRequest,
   PublishProposalBranchResponse,
   PullRequestProvider,
-  RepositoryRef
+  RepositoryRef,
+  ReviewDecision
 } from "@magpie/core";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -350,6 +351,120 @@ export async function fetchPullRequestStatusCached(
 // all the skip cases above. Kept as the simple shape the live PR-state fallback uses.
 export async function fetchPullRequestStatus(pullRequestUrl: string | undefined): Promise<PullRequestStatus | undefined> {
   return (await fetchPullRequestStatusCached(pullRequestUrl)).status;
+}
+
+// Reads a pull request's review decision. GitHub's GraphQL reviewDecision is the
+// authoritative "approved per policy" signal (it accounts for required reviewers,
+// CODEOWNERS, and branch protection). When the repository requires no reviews
+// GitHub returns null; we then fall back to the REST reviews list and treat any
+// human approval with no outstanding change request as approved. Returns undefined
+// in the same skip cases as fetchPullRequestStatus (not a GitHub PR url, no token)
+// and on any lookup error, so callers treat "couldn't determine" uniformly — an
+// undetermined decision leaves the PR touchable.
+export async function fetchPullRequestReviewDecision(
+  pullRequestUrl: string | undefined
+): Promise<ReviewDecision | undefined> {
+  const ref = parseGitHubPullRequestUrl(pullRequestUrl);
+  const token = process.env.GITHUB_TOKEN?.trim();
+  if (!ref || !token) {
+    return undefined;
+  }
+  try {
+    const decision = await readReviewDecisionFromGraphql(ref, token);
+    if (decision !== null) {
+      return decision;
+    }
+    return await readApprovalFromReviews(ref, token);
+  } catch {
+    // A failed review lookup must never fail the refresh job; "couldn't determine"
+    // is reported as undefined and treated as touchable downstream.
+    return undefined;
+  }
+}
+
+type PullRequestRef = { owner: string; repo: string; number: number };
+
+// GraphQL reviewDecision → our enum. Returns null when GitHub has no policy verdict
+// (the repo requires no reviews), signalling the caller to use the reviews fallback.
+async function readReviewDecisionFromGraphql(
+  ref: PullRequestRef,
+  token: string
+): Promise<Exclude<ReviewDecision, "none"> | null> {
+  const query =
+    "query($owner:String!,$repo:String!,$number:Int!){" +
+    "repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewDecision}}}";
+  const response = await githubFetch("https://api.github.com/graphql", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json",
+      "User-Agent": "markdown-magpie"
+    },
+    body: JSON.stringify({ query, variables: { owner: ref.owner, repo: ref.repo, number: ref.number } })
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub GraphQL review lookup failed (${response.status})`);
+  }
+  const body = (await response.json()) as {
+    data?: { repository?: { pullRequest?: { reviewDecision?: string | null } } };
+  };
+  switch (body.data?.repository?.pullRequest?.reviewDecision ?? null) {
+    case "APPROVED":
+      return "approved";
+    case "CHANGES_REQUESTED":
+      return "changes_requested";
+    case "REVIEW_REQUIRED":
+      return "review_required";
+    default:
+      return null;
+  }
+}
+
+// REST fallback: reduce the reviews list (oldest-first) to the latest meaningful
+// review per author, then any outstanding change request loses, else any approval
+// wins, else none.
+async function readApprovalFromReviews(ref: PullRequestRef, token: string): Promise<ReviewDecision> {
+  const response = await githubFetch(
+    `https://api.github.com/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/reviews?per_page=100`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "markdown-magpie"
+      }
+    }
+  );
+  if (!response.ok) {
+    throw new Error(`GitHub reviews lookup failed (${response.status})`);
+  }
+  const reviews = (await response.json()) as Array<{ state?: string; user?: { login?: string } | null }>;
+  const latestByAuthor = new Map<string, "APPROVED" | "CHANGES_REQUESTED">();
+  for (const review of reviews) {
+    const login = review.user?.login;
+    if (!login) continue;
+    switch (review.state) {
+      case "APPROVED":
+        latestByAuthor.set(login, "APPROVED");
+        break;
+      case "CHANGES_REQUESTED":
+        latestByAuthor.set(login, "CHANGES_REQUESTED");
+        break;
+      case "DISMISSED":
+        latestByAuthor.delete(login);
+        break;
+      // COMMENTED / PENDING and anything else are not verdicts; ignore.
+    }
+  }
+  const verdicts = [...latestByAuthor.values()];
+  if (verdicts.includes("CHANGES_REQUESTED")) {
+    return "changes_requested";
+  }
+  if (verdicts.includes("APPROVED")) {
+    return "approved";
+  }
+  return "none";
 }
 
 // Parses owner/repo/number from a github.com pull request html_url such as
