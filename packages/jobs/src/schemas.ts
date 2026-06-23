@@ -7,6 +7,8 @@ import type {
   CrunchPlan,
   DraftMarkdownProposalJobInput as CoreDraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
+  FoldMarkdownProposalJobInput as CoreFoldMarkdownProposalJobInput,
+  FoldMarkdownProposalJobOutput,
   SourceChangeSyncJobInput as CoreSourceChangeSyncJobInput,
   SummarizeGapJobInput as CoreSummarizeGapJobInput,
   SummarizeGapJobOutput
@@ -102,6 +104,33 @@ export const draftMarkdownProposalOutputSchema = z.object({
   markdown: z.string(),
   rationale: z.string()
 }) satisfies z.ZodType<DraftMarkdownProposalJobOutput>;
+
+export const foldMarkdownProposalInputSchema = z.object({
+  provider: providerSchema,
+  survivorProposalId: z.string(),
+  rivalProposalId: z.string(),
+  targetPath: z.string(),
+  survivorMarkdown: z.string(),
+  rivalMarkdown: z.string(),
+  rivalGapSummaries: z.array(z.string()),
+  rivalEvidence: z.array(citationSchema),
+  expectedOutput: z.literal("folded_markdown")
+}) satisfies z.ZodType<ProviderInput<CoreFoldMarkdownProposalJobInput>>;
+export const foldMarkdownProposalOutputSchema = z.object({
+  markdown: z.string(),
+  rationale: z.string()
+}) satisfies z.ZodType<FoldMarkdownProposalJobOutput>;
+
+// A single-PR comment as a github job (the API holds no GitHub token, so commenting
+// must run in the watcher). crosslink_pull_requests can't serve here — it needs two
+// PRs, and a folded-away rival never has one.
+export const commentPullRequestInputSchema = z.object({
+  pullRequestUrl: z.string(),
+  body: z.string()
+});
+export const commentPullRequestOutputSchema = z.object({
+  commentUrl: z.string().optional()
+});
 
 export const detectContradictionInputSchema = z.object({
   provider: providerSchema,
