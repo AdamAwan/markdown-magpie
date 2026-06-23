@@ -1,11 +1,11 @@
-import type { Proposal } from "@magpie/core";
+import type { Proposal, ReviewDecision } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import type { FlowSnapshot, SnapshotProposal, SnapshotPullRequest } from "../../stores/snapshot-store.js";
 
 // A pull request's externally-observed state, as reported by the
 // refresh_pull_requests watcher job. The API holds no GitHub token, so it never
 // polls the host itself — PR state only ever reaches a snapshot through this.
-export type PullRequestReading = { merged: boolean; state: "open" | "closed" };
+export type PullRequestReading = { merged: boolean; state: "open" | "closed"; reviewDecision?: ReviewDecision };
 
 function sameFlow(a: string | undefined, b: string | undefined): boolean {
   return (a ?? "") === (b ?? "");
@@ -118,7 +118,14 @@ export async function refreshSnapshot(
     }
     const reported = pullRequestStatuses.get(proposal.id);
     if (reported) {
-      pullRequests.push({ proposalId: proposal.id, url, merged: reported.merged, state: reported.state, checkedAt: takenAt });
+      pullRequests.push({
+        proposalId: proposal.id,
+        url,
+        merged: reported.merged,
+        state: reported.state,
+        ...(reported.reviewDecision ? { reviewDecision: reported.reviewDecision } : {}),
+        checkedAt: takenAt
+      });
       continue;
     }
     const prior = previousByProposal.get(proposal.id);
@@ -147,7 +154,10 @@ export async function recordSnapshotsFromPullRequestResults(
   results: ReadonlyArray<{ proposalId: string } & PullRequestReading>
 ): Promise<void> {
   const statuses = new Map<string, PullRequestReading>(
-    results.map((result) => [result.proposalId, { merged: result.merged, state: result.state }])
+    results.map((result) => [
+      result.proposalId,
+      { merged: result.merged, state: result.state, ...(result.reviewDecision ? { reviewDecision: result.reviewDecision } : {}) }
+    ])
   );
   const flowIds: Array<string | undefined> = [undefined, ...ctx.knowledgeConfig.flows.map((flow) => flow.id)];
   for (const flowId of flowIds) {

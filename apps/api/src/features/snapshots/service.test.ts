@@ -124,14 +124,14 @@ describe("recordSnapshotsFromPullRequestResults", () => {
     const proposal = await openPrProposal(ctx);
 
     await recordSnapshotsFromPullRequestResults(ctx, [
-      { proposalId: proposal.id, merged: true, state: "closed" }
+      { proposalId: proposal.id, merged: false, state: "open", reviewDecision: "approved" }
     ]);
 
     const views = await listFlowSnapshots(ctx);
     assert.equal(views.length, 2, "both the default and the alpha flow get a snapshot");
     const defaultSnapshot = views.find((v) => v.flowId === undefined);
-    assert.equal(defaultSnapshot?.pullRequests[0]?.merged, true, "the reported merge reached the default flow's snapshot");
-    assert.equal(defaultSnapshot?.pullRequests[0]?.state, "closed");
+    assert.equal(defaultSnapshot?.pullRequests[0]?.state, "open");
+    assert.equal(defaultSnapshot?.pullRequests[0]?.reviewDecision, "approved", "the review decision reached the snapshot");
   });
 });
 

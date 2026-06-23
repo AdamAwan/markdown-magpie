@@ -1,6 +1,6 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { GapCandidate, Proposal } from "@magpie/core";
+import type { GapCandidate, Proposal, ReviewDecision } from "@magpie/core";
 
 // A flow's proposal as captured in a snapshot — just the fields the processor and
 // a human reviewer need, not the full markdown body.
@@ -20,6 +20,8 @@ export interface SnapshotPullRequest {
   url: string;
   merged: boolean;
   state: "open" | "closed" | "unknown";
+  // The latest review decision the watcher reported for this PR, when known.
+  reviewDecision?: ReviewDecision;
   etag?: string;
   checkedAt: string;
 }
