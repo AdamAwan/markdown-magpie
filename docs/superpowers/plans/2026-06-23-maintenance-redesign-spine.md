@@ -471,8 +471,13 @@ Expected: PASS (2 tests).
 
 - [ ] **Step 5: Verify the whole module typechecks and all tests pass**
 
-Run: `npm run typecheck -w @magpie/api && npm test -w @magpie/api -- --test-name-pattern="sharedTargets|overlap|new PR|folds|defers|prefers|ties|never returns drop|maps open proposals|excludes closed|maintenance lenses|ChangeIntent"`
+Run: `npm run typecheck && npm test -w @magpie/api -- --test-name-pattern="sharedTargets|overlap|new PR|folds|defers|prefers|ties|never returns drop|maps open proposals|excludes closed|maintenance lenses|ChangeIntent"`
 Expected: typecheck clean; all reconcile-spine tests PASS.
+
+> Note: use the **root** `npm run typecheck` (`tsconfig.check.json`), not
+> `npm run typecheck -w @magpie/api` — the api package's own tsconfig emits
+> pre-existing TS6059 `rootDir` errors for every cross-package import and is not
+> the gate.
 
 - [ ] **Step 6: Commit**
 
