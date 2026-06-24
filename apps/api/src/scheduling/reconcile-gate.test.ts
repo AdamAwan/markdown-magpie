@@ -84,8 +84,8 @@ test("never returns drop", () => {
 
 // Minimal Proposal fixtures: only the fields the adapter reads. Cast keeps the
 // test focused without reconstructing the whole record.
-const proposal = (id: string, status: string, targetPath?: string): Proposal =>
-  ({ id, status, targetPath }) as unknown as Proposal;
+const proposal = (id: string, status: string, targetPath?: string, reviewDecision?: string): Proposal =>
+  ({ id, status, targetPath, reviewDecision }) as unknown as Proposal;
 
 test("maps every open status with a target path into summaries", () => {
   // Cover all four touchable statuses so removing any from TOUCHABLE_STATUSES
@@ -101,6 +101,23 @@ test("maps every open status with a target path into summaries", () => {
     { proposalId: "p2", targets: ["kb/b.md"], touchable: true },
     { proposalId: "p3", targets: ["kb/c.md"], touchable: true },
     { proposalId: "p4", targets: ["kb/d.md"], touchable: true }
+  ]);
+});
+
+test("an approved proposal is non-touchable; every other decision stays touchable", () => {
+  const out = openPullRequestSummaries([
+    proposal("p1", "pr-opened", "kb/a.md", "approved"),
+    proposal("p2", "pr-opened", "kb/b.md", "changes_requested"),
+    proposal("p3", "pr-opened", "kb/c.md", "review_required"),
+    proposal("p4", "pr-opened", "kb/d.md", "none"),
+    proposal("p5", "pr-opened", "kb/e.md")
+  ]);
+  assert.deepEqual(out, [
+    { proposalId: "p1", targets: ["kb/a.md"], touchable: false },
+    { proposalId: "p2", targets: ["kb/b.md"], touchable: true },
+    { proposalId: "p3", targets: ["kb/c.md"], touchable: true },
+    { proposalId: "p4", targets: ["kb/d.md"], touchable: true },
+    { proposalId: "p5", targets: ["kb/e.md"], touchable: true }
   ]);
 });
 

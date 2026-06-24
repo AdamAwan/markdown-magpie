@@ -87,15 +87,21 @@ const TOUCHABLE_STATUSES = new Set(["draft", "ready", "branch-pushed", "pr-opene
 // (merged/rejected/superseded) proposal is not an open PR, and a proposal with no
 // targetPath has no file-set to overlap on (Proposal.targetPath is typed
 // non-optional, so in practice this guards the empty-string case). touchable is
-// always true for now — approval state is untracked (see the plan's Global
-// Constraints).
+// true unless the proposal's PR is approved — see Proposal.reviewDecision, polled
+// by the refresh_pull_requests watcher job.
 export function openPullRequestSummaries(proposals: Proposal[]): OpenPullRequestSummary[] {
   const out: OpenPullRequestSummary[] = [];
   for (const proposal of proposals) {
     if (!TOUCHABLE_STATUSES.has(proposal.status) || !proposal.targetPath) {
       continue;
     }
-    out.push({ proposalId: proposal.id, targets: [proposal.targetPath], touchable: true });
+    out.push({
+      proposalId: proposal.id,
+      targets: [proposal.targetPath],
+      // An approved PR is locked: folding another change into it would invalidate the
+      // review. Every other state (and an un-polled proposal) is still touchable.
+      touchable: proposal.reviewDecision !== "approved"
+    });
   }
   return out;
 }
