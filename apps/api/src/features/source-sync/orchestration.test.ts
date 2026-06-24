@@ -340,6 +340,59 @@ test("a source-sync change that overlaps an approved PR is also deferred", async
   }
 });
 
+test("re-gate completes a deferred run once its overlapping PR is gone", async () => {
+  const broker = new FakeJobBroker();
+  const { ctx, checkoutRoot, cleanup } = await seed(broker);
+  try {
+    await baselineAtParent(ctx, checkoutRoot);
+    const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
+    const proposal = await ctx.stores.proposals.create({
+      title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
+      evidence: [], triggeringQuestionIds: []
+    });
+    await completeJob(ctx, run.jobId!, PLAN);
+    assert.equal((await ctx.stores.sourceSync.getRun(run.id))?.status, "deferred");
+
+    // The overlapping PR merges (list() excludes merged ⇒ overlap clears).
+    await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+
+    // Next tick: the source HEAD is unchanged (baseline already advanced), so no new
+    // run is created; only the re-gate acts.
+    await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
+
+    const after = await ctx.stores.sourceSync.getRun(run.id);
+    assert.equal(after?.status, "completed");
+    const publish = (await ctx.jobs.list({})).jobs.find((j) => j.type === "publish_source_sync");
+    assert.ok(publish, "publication enqueued once the overlap cleared");
+    assert.deepEqual(publish.input, { runId: run.id });
+  } finally {
+    await cleanup();
+  }
+});
+
+test("re-gate leaves a deferred run deferred while the overlap persists", async () => {
+  const broker = new FakeJobBroker();
+  const { ctx, checkoutRoot, cleanup } = await seed(broker);
+  try {
+    await baselineAtParent(ctx, checkoutRoot);
+    const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
+    await ctx.stores.proposals.create({
+      title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
+      evidence: [], triggeringQuestionIds: []
+    });
+    await completeJob(ctx, run.jobId!, PLAN);
+    assert.equal((await ctx.stores.sourceSync.getRun(run.id))?.status, "deferred");
+
+    // Overlap still open: re-gate must not publish.
+    await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
+
+    assert.equal((await ctx.stores.sourceSync.getRun(run.id))?.status, "deferred");
+    assert.equal((await ctx.jobs.list({})).jobs.filter((j) => j.type === "publish_source_sync").length, 0);
+  } finally {
+    await cleanup();
+  }
+});
+
 // Indexes a real git clone as the "gitdest" destination so findRepositoryForDestination
 // resolves a git-backed RepositoryRef the publish pre-flight accepts.
 async function indexGitDestination(ctx: ReturnType<typeof makeTestContext>): Promise<void> {

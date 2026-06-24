@@ -46,6 +46,26 @@ const CANDIDATE_DOCUMENT_LIMIT = 6;
 // blow up the embedding/keyword query.
 const RETRIEVAL_QUERY_MAX_CHARS = 6_000;
 
+// Re-gate the flow's deferred runs at the top of each tick: a run deferred because
+// its changeset overlapped an open PR is re-checked, and published once the overlap
+// has cleared (the blocking PR merged/closed). Still-overlapping runs stay deferred.
+// Bounded by the deferred-run count; runs on the existing scheduled cadence.
+async function regateDeferredRuns(ctx: AppContext, flowId: string | undefined): Promise<void> {
+  for (const run of await ctx.stores.sourceSync.listDeferredRuns(flowId)) {
+    if (!run.changeset || run.changeset.length === 0) {
+      continue;
+    }
+    const proposals = await sameFlowOpenProposals(ctx, run.flowId);
+    const decision = decideReconciliation(sourceSyncIntent(run, run.changeset), openPullRequestSummaries(proposals));
+    if (decision.kind !== "open-new") {
+      continue; // still overlapping — leave it deferred for a later tick
+    }
+    await ctx.stores.sourceSync.completeDeferredRun(run.id);
+    await enqueuePublication(ctx, run.id);
+    console.log(`Source-sync re-gate: deferred run ${run.id} overlap cleared; enqueued publication.`);
+  }
+}
+
 // Watches every git source of a flow (or, with no flow, every configured git
 // source) for new commits and reacts to each. Returns one run per source that
 // actually had a new commit to consider; sources with no change since last time
@@ -59,6 +79,10 @@ export async function triggerSourceSyncRun(
   const flow = selectFlow(deps, options.flowId);
   const flowId = flow?.id ?? options.flowId;
   const destinationId = flow?.destinationId ?? defaultDestinationId(deps);
+
+  // Re-gate any runs deferred on a previous tick before reacting to new commits, so
+  // a change held behind a now-closed PR is published promptly.
+  await regateDeferredRuns(ctx, flowId);
 
   const sourceIds = flow ? flow.sourceIds : deps.knowledgeConfig.sources.map((source) => source.id);
   const sources = sourceIds
