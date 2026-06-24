@@ -87,14 +87,28 @@ const sourceDataContextSchema = z.object({
   url: z.string().optional(),
   content: z.string().optional()
 });
+// Mirrors @magpie/core OpenPullRequestContext. The status enum is the full set of
+// @magpie/core Proposal["status"] values so an in-flight proposal at any stage round-trips.
+const openPullRequestContextSchema = z.object({
+  title: z.string(),
+  url: z.string().optional(),
+  targetPath: z.string().optional(),
+  status: z.enum(["draft", "ready", "branch-pushed", "pr-opened", "merged", "rejected", "superseded"])
+});
 export const draftMarkdownProposalInputSchema = z.object({
   provider: providerSchema,
   gapSummaries: z.array(z.string()),
   triggeringQuestions: z.array(z.string()),
   evidence: z.array(citationSchema),
   sourceContext: z.array(sourceDataContextSchema).optional(),
+  // The drafter's awareness of the flow's in-flight work, so it can avoid
+  // duplicating a doc already being drafted or in an open PR.
+  openPullRequests: z.array(openPullRequestContextSchema).optional(),
   destinationId: z.string().optional(),
   targetPath: z.string().optional(),
+  // Read back off the stored job input to link the created proposal to its
+  // triggering questions; must be on the schema or the broker strips it.
+  triggeringQuestionIds: z.array(z.string()).optional(),
   gapClusterId: z.string().optional(),
   expectedOutput: z.literal("markdown_proposal")
 }) satisfies z.ZodType<ProviderInput<CoreDraftMarkdownProposalJobInput>>;

@@ -31,6 +31,40 @@ test("draft input schema leaves gapClusterId absent when not provided", () => {
   assert.equal(parsed.gapClusterId, undefined);
 });
 
+test("draft input schema preserves triggeringQuestionIds and openPullRequests", () => {
+  // Both are read back off the stored job input (triggeringQuestionIds links the
+  // proposal to its triggering questions; openPullRequests makes the drafter aware
+  // of in-flight work). The broker stores schema-parsed input, so a field missing
+  // from the schema is silently stripped — regression guard for that strip.
+  const parsed = draftMarkdownProposalInputSchema.parse({
+    provider: "codex",
+    gapSummaries: ["g"],
+    triggeringQuestions: ["q"],
+    evidence: [],
+    expectedOutput: "markdown_proposal",
+    triggeringQuestionIds: ["question-1", "question-2"],
+    openPullRequests: [
+      { title: "Existing doc", url: "https://github.com/o/r/pull/1", targetPath: "x.md", status: "pr-opened" }
+    ]
+  });
+  assert.deepEqual(parsed.triggeringQuestionIds, ["question-1", "question-2"]);
+  assert.equal(parsed.openPullRequests?.length, 1);
+  assert.equal(parsed.openPullRequests?.[0]?.status, "pr-opened");
+});
+
+test("draft input schema rejects an unknown open pull request status", () => {
+  assert.ok(
+    !draftMarkdownProposalInputSchema.safeParse({
+      provider: "codex",
+      gapSummaries: ["g"],
+      triggeringQuestions: ["q"],
+      evidence: [],
+      expectedOutput: "markdown_proposal",
+      openPullRequests: [{ title: "x", status: "in-review" }]
+    }).success
+  );
+});
+
 test("fold input schema round-trips the survivor/rival fields", () => {
   const parsed = foldMarkdownProposalInputSchema.parse({
     provider: "codex",

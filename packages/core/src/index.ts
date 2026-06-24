@@ -357,6 +357,10 @@ export interface DraftMarkdownProposalJobInput {
   openPullRequests?: OpenPullRequestContext[];
   destinationId?: string;
   targetPath?: string;
+  // The ids of the question logs that triggered this draft, threaded through so the
+  // created proposal links back to them (read in createProposalFromCompletedJob).
+  // Optional: the on-demand HTTP draft path and tests omit it.
+  triggeringQuestionIds?: string[];
   // The gap cluster this draft belongs to, so the created proposal can be linked
   // back to it on the autonomous path. Absent on the on-demand HTTP draft path.
   gapClusterId?: string;
