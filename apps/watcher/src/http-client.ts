@@ -62,6 +62,10 @@ export interface WatcherApi extends WatcherApiClient {
   // generative plan job the API bounded-waits on + publication enqueue), returning
   // the run ids created. An absent flowId watches every configured git source.
   runSourceSync(flowId: string | undefined, signal?: AbortSignal): Promise<{ runIds: string[] }>;
+  // Drives a fix-patrol tick in the API (select the next batch of documents to
+  // check + advance the cursor), returning the run id and how many were checked.
+  // An absent flowId patrols the default flow.
+  runFixPatrol(flowId: string | undefined, signal?: AbortSignal): Promise<{ runId: string; selectedCount: number }>;
   // Triggers a scheduled crunch run in the API (enqueue-only on the API side) and
   // returns the created run + planning job ids. An absent flowId crunches the
   // default flow.
@@ -145,6 +149,17 @@ export class HttpWatcherApi implements WatcherApi {
       signal
     );
     return { runIds };
+  }
+
+  async runFixPatrol(
+    flowId: string | undefined,
+    signal?: AbortSignal
+  ): Promise<{ runId: string; selectedCount: number }> {
+    return this.post<{ runId: string; selectedCount: number }>(
+      "/api/fix-patrol/run",
+      { ...(flowId ? { flowId } : {}) },
+      signal
+    );
   }
 
   async triggerScheduledCrunch(

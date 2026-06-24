@@ -77,6 +77,17 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
     defaultCron: "*/5 * * * *",
     jobType: "refresh_pull_requests",
     input: () => ({})
+  },
+  {
+    baseKey: "fix-patrol",
+    typeLabel: "Fix patrol · rolling knowledge-base check",
+    description:
+      "Rolls a cursor across this flow's knowledge-base documents, checking the least-recently-visited " +
+      "ones each run so the whole knowledge base is revisited over time at a bounded cost per run. " +
+      "Correctness lenses that propose fixes are added in a later step.",
+    defaultCron: "0 * * * *",
+    jobType: "fix_patrol",
+    input: (flowId) => ({ flowId })
   }
 ];
 
