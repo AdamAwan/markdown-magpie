@@ -37,7 +37,10 @@ export interface SourceSyncStore {
   // The re-gate worklist: deferred runs for a flow (default flow = undefined).
   listDeferredRuns(flowId: string | undefined): Promise<SourceSyncRun[]>;
   // deferred → completed: the overlap cleared, so the preserved changeset becomes
-  // publishable through the normal publish pre-flight. No-op on a non-deferred run.
+  // publishable through the normal publish pre-flight. Returns the run ONLY when this
+  // call performed the transition; undefined when the run is missing or already
+  // non-deferred. Callers gate publication on a defined result so two racing re-gate
+  // ticks enqueue publication exactly once (the loser gets undefined and skips).
   completeDeferredRun(id: string): Promise<SourceSyncRun | undefined>;
   failRun(id: string, error: string): Promise<SourceSyncRun | undefined>;
   recordRunPublication(id: string, publication: ProposalPublication): Promise<SourceSyncRun | undefined>;
@@ -134,12 +137,13 @@ export class InMemorySourceSyncStore implements SourceSyncStore {
   }
 
   async completeDeferredRun(id: string): Promise<SourceSyncRun | undefined> {
+    // Returns the run ONLY when this call performed the transition; undefined when the
+    // run is missing or already non-deferred. The read-check-write is synchronous (no
+    // await between), so under the single-threaded event loop exactly one of two racing
+    // re-gates sees "deferred" — see the interface doc.
     const existing = this.runs.get(id);
-    if (!existing) {
+    if (!existing || existing.status !== "deferred") {
       return undefined;
-    }
-    if (existing.status !== "deferred") {
-      return existing;
     }
     const updated: SourceSyncRun = { ...existing, status: "completed", completedAt: new Date().toISOString() };
     this.runs.set(id, updated);

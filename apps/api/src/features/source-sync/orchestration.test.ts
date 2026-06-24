@@ -393,6 +393,39 @@ test("re-gate leaves a deferred run deferred while the overlap persists", async 
   }
 });
 
+test("two concurrent re-gate ticks publish a cleared deferred run exactly once", async () => {
+  const broker = new FakeJobBroker();
+  const { ctx, checkoutRoot, cleanup } = await seed(broker);
+  try {
+    await baselineAtParent(ctx, checkoutRoot);
+    const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
+    const proposal = await ctx.stores.proposals.create({
+      title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
+      evidence: [], triggeringQuestionIds: []
+    });
+    await completeJob(ctx, run.jobId!, PLAN);
+    assert.equal((await ctx.stores.sourceSync.getRun(run.id))?.status, "deferred");
+
+    // The overlapping PR merges, clearing the overlap.
+    await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+
+    // Two ticks race (e.g. the scheduled tick and a manual /source-sync/run). Both read
+    // the still-deferred run before either completes it, so both reach completeDeferredRun.
+    // Only the winner gets the run back and publishes; the loser must skip.
+    await Promise.all([
+      triggerSourceSyncRun(ctx, { trigger: "scheduled" }),
+      triggerSourceSyncRun(ctx, { trigger: "manual" })
+    ]);
+
+    assert.equal((await ctx.stores.sourceSync.getRun(run.id))?.status, "completed");
+    const publishJobs = (await ctx.jobs.list({})).jobs.filter((j) => j.type === "publish_source_sync");
+    assert.equal(publishJobs.length, 1, "the cleared deferred run is published exactly once");
+    assert.deepEqual(publishJobs[0].input, { runId: run.id });
+  } finally {
+    await cleanup();
+  }
+});
+
 // Indexes a real git clone as the "gitdest" destination so findRepositoryForDestination
 // resolves a git-backed RepositoryRef the publish pre-flight accepts.
 async function indexGitDestination(ctx: ReturnType<typeof makeTestContext>): Promise<void> {
