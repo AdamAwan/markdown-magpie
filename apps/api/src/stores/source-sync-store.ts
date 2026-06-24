@@ -29,6 +29,16 @@ export interface SourceSyncStore {
   getRunByJobId(jobId: string): Promise<SourceSyncRun | undefined>;
   completeRun(id: string, plan: CrunchPlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined>;
   markSkipped(id: string, plan: CrunchPlan): Promise<SourceSyncRun | undefined>;
+  // running → deferred: the run's target file-set overlaps an open PR in the same
+  // flow, so its changeset is preserved (never published as a rival) and re-gated
+  // on a later tick. Persists plan + changeset; sets no completedAt; enqueues no
+  // publication. No-op on a run that is no longer "running".
+  deferRun(id: string, plan: CrunchPlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined>;
+  // The re-gate worklist: deferred runs for a flow (default flow = undefined).
+  listDeferredRuns(flowId: string | undefined): Promise<SourceSyncRun[]>;
+  // deferred → completed: the overlap cleared, so the preserved changeset becomes
+  // publishable through the normal publish pre-flight. No-op on a non-deferred run.
+  completeDeferredRun(id: string): Promise<SourceSyncRun | undefined>;
   failRun(id: string, error: string): Promise<SourceSyncRun | undefined>;
   recordRunPublication(id: string, publication: ProposalPublication): Promise<SourceSyncRun | undefined>;
   reset(): Promise<void>;
@@ -108,6 +118,32 @@ export class InMemorySourceSyncStore implements SourceSyncStore {
 
   async markSkipped(id: string, plan: CrunchPlan): Promise<SourceSyncRun | undefined> {
     return this.transitionFromRunning(id, { status: "skipped", plan, completedAt: new Date().toISOString() });
+  }
+
+  async deferRun(id: string, plan: CrunchPlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined> {
+    // Reuses the running-only guard: deferral is a transition out of "running",
+    // like completeRun/markSkipped, but leaves completedAt unset (deferred is a
+    // waiting state, not terminal).
+    return this.transitionFromRunning(id, { status: "deferred", plan, changeset, error: undefined });
+  }
+
+  async listDeferredRuns(flowId: string | undefined): Promise<SourceSyncRun[]> {
+    return [...this.runs.values()]
+      .filter((run) => run.status === "deferred" && (run.flowId ?? "") === (flowId ?? ""))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  async completeDeferredRun(id: string): Promise<SourceSyncRun | undefined> {
+    const existing = this.runs.get(id);
+    if (!existing) {
+      return undefined;
+    }
+    if (existing.status !== "deferred") {
+      return existing;
+    }
+    const updated: SourceSyncRun = { ...existing, status: "completed", completedAt: new Date().toISOString() };
+    this.runs.set(id, updated);
+    return updated;
   }
 
   async failRun(id: string, error: string): Promise<SourceSyncRun | undefined> {

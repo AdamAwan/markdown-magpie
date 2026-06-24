@@ -116,6 +116,40 @@ export class PostgresSourceSyncStore implements SourceSyncStore {
     );
   }
 
+  async deferRun(id: string, plan: CrunchPlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined> {
+    // running → deferred. No completed_at: deferred is a waiting state. Guarded by
+    // status = 'running' so a re-delivered completion never regresses a later state.
+    return this.transitionFromRunning(
+      "UPDATE source_sync_runs SET status = 'deferred', plan = $2, changeset = $3, error = NULL WHERE id = $1 AND status = 'running' RETURNING *",
+      [id, JSON.stringify(plan), JSON.stringify(changeset)],
+      id
+    );
+  }
+
+  async listDeferredRuns(flowId: string | undefined): Promise<SourceSyncRun[]> {
+    // The default flow stores flow_id as NULL (see runFlowId), so match it with IS NULL.
+    const result =
+      flowId === undefined
+        ? await this.pool.query<SourceSyncRunRow>(
+            "SELECT * FROM source_sync_runs WHERE status = 'deferred' AND flow_id IS NULL ORDER BY created_at DESC"
+          )
+        : await this.pool.query<SourceSyncRunRow>(
+            "SELECT * FROM source_sync_runs WHERE status = 'deferred' AND flow_id = $1 ORDER BY created_at DESC",
+            [flowId]
+          );
+    return result.rows.map(mapRunRow);
+  }
+
+  async completeDeferredRun(id: string): Promise<SourceSyncRun | undefined> {
+    // deferred → completed. Guarded by status = 'deferred'; on no match fall back to
+    // the current row so a re-gate that races itself is an idempotent no-op.
+    const result = await this.pool.query<SourceSyncRunRow>(
+      "UPDATE source_sync_runs SET status = 'completed', completed_at = now() WHERE id = $1 AND status = 'deferred' RETURNING *",
+      [id]
+    );
+    return result.rows[0] ? mapRunRow(result.rows[0]) : this.getRun(id);
+  }
+
   async failRun(id: string, error: string): Promise<SourceSyncRun | undefined> {
     return this.transitionFromRunning(
       "UPDATE source_sync_runs SET status = 'failed', error = $2, completed_at = now() WHERE id = $1 AND status = 'running' RETURNING *",
