@@ -5,8 +5,29 @@ import {
   foldMarkdownProposalInputSchema,
   foldMarkdownProposalOutputSchema,
   commentPullRequestInputSchema,
-  refreshPullRequestsOutputSchema
+  refreshPullRequestsOutputSchema,
+  verifyDocumentInputSchema,
+  verifyDocumentOutputSchema
 } from "./schemas.js";
+
+test("verify_document input round-trips path/content/sources with a provider", () => {
+  const ok = verifyDocumentInputSchema.safeParse({
+    provider: "codex",
+    path: "kb/refunds.md",
+    content: "Refunds take 5 days.",
+    sources: [{ sourceId: "s1", sourceName: "Billing", kind: "git", path: "refunds.ts", content: "const days = 7;" }]
+  });
+  assert.equal(ok.success, true);
+});
+
+test("verify_document output rejects an unknown verdict and accepts healthy/unprovable", () => {
+  assert.equal(verifyDocumentOutputSchema.safeParse({ verdict: "healthy", claims: [] }).success, true);
+  assert.equal(
+    verifyDocumentOutputSchema.safeParse({ verdict: "unprovable", claims: [{ claim: "5 days", reason: "source says 7" }] }).success,
+    true
+  );
+  assert.equal(verifyDocumentOutputSchema.safeParse({ verdict: "maybe", claims: [] }).success, false);
+});
 
 test("draft input schema preserves gapClusterId", () => {
   const parsed = draftMarkdownProposalInputSchema.parse({

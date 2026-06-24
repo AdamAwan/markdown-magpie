@@ -24,6 +24,7 @@ const EXPIRATION_SECONDS = {
   cluster_gap_candidates: 5 * 60,
   reconcile_gap_clusters: 5 * 60,
   sync_source_changes_generate_plan: 60 * 60,
+  verify_document: 10 * 60,
   refresh_pull_requests: 5 * 60,
   process_gaps_to_pull_requests: 60 * 60,
   trigger_scheduled_crunch: 60 * 60,
@@ -121,6 +122,15 @@ test("sync_source_changes_generate_plan routes by provider", () => {
   assert.ok(claudeQueues.includes("sync_source_changes_generate_plan__claude"));
 });
 
+test("verify_document routes by provider like other AI work", () => {
+  const definition = jobDefinition("verify_document");
+  assert.equal(definition.requiredCapability({ provider: "codex" }), "codex");
+  assert.equal(queueNameForJob("verify_document", { provider: "codex" }), "verify_document__codex");
+  const codexQueues = queueNamesForCapabilities(["codex"]);
+  assert.ok(codexQueues.includes("verify_document__codex"));
+  assert.ok(!queueNamesForCapabilities(["github"]).includes("verify_document__codex"));
+});
+
 test("source_change_sync is a maintenance queue named by its type", () => {
   const definition = jobDefinition("source_change_sync");
   assert.equal(definition.requiredCapability({}), "maintenance");
@@ -133,10 +143,11 @@ test("fix_patrol is a maintenance queue named by its type", () => {
   assert.equal(queueNameForJob("fix_patrol", { flowId: "billing" }), "fix_patrol");
 });
 
-test("fix_patrol input accepts an optional flowId; output carries runId + selectedCount", () => {
+test("fix_patrol input accepts an optional flowId; output carries runId + selectedCount + findingCount", () => {
   assert.ok(jobDefinition("fix_patrol").inputSchema.safeParse({}).success);
   assert.ok(jobDefinition("fix_patrol").inputSchema.safeParse({ flowId: "billing" }).success);
-  assert.ok(jobDefinition("fix_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3 }).success);
+  assert.ok(jobDefinition("fix_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3, findingCount: 1 }).success);
+  assert.ok(!jobDefinition("fix_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3 }).success);
 });
 
 test("source_change_sync output reports the run ids it created (0..N)", () => {

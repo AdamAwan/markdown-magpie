@@ -36,6 +36,12 @@ describe("buildPrompt", () => {
     const prompt = buildPrompt(job("summarize_gap", { questions: ["why?"], citedSections: [] }));
     assert.match(prompt, /why\?/);
   });
+
+  it("uses the verify-document instructions for a verify_document job", () => {
+    const prompt = buildPrompt(job("verify_document", { path: "kb/a.md", content: "x", sources: [] }));
+    assert.match(prompt, /verify a Markdown knowledge-base document/);
+    assert.match(prompt, /"path"/);
+  });
 });
 
 describe("buildAnswerOutput", () => {

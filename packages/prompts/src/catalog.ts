@@ -161,6 +161,35 @@ Return JSON:
 }`
 };
 
+export const VERIFY_DOCUMENT: PromptDefinition = {
+  id: "verify-document",
+  title: "Verify a document against its sources",
+  description:
+    "Checks whether a knowledge-base document's claims are still provable against the supplied source material, returning only the claims the sources fail to support. Conservative: silent on healthy documents. Used by the watcher's verify_document job.",
+  usedBy: ["watcher · fix-patrol"],
+  outputShape: '{ verdict, claims[] }',
+  instructions: `You verify a Markdown knowledge-base document against the source material it should be derived from. Decide whether each substantive claim the document makes is still supported by the sources.
+
+Input:
+- "path" and "content": the knowledge-base document under review.
+- "sources": the source material (files, references) to check the document against.
+
+Rules:
+- Return JSON only.
+- Be conservative. Flag a claim ONLY when the sources clearly contradict it or clearly fail to support it. When you are unsure, or the sources simply do not mention the claim, treat the document as healthy — do NOT flag it.
+- If every claim is supported (or the sources give you nothing to disprove), return verdict "healthy" with an empty claims array.
+- Otherwise return verdict "unprovable" and list ONLY the specific unprovable claims, each with a short reason citing what the sources say (or fail to say).
+- Do not propose edits or rewrites. You only report.
+
+Return JSON:
+{
+  "verdict": "healthy | unprovable",
+  "claims": [
+    { "claim": "string", "reason": "string" }
+  ]
+}`
+};
+
 export const GAP_CLUSTERING: PromptDefinition = {
   id: "gap-clustering",
   title: "Cluster related gaps",
@@ -246,6 +275,7 @@ export const promptCatalog: PromptDefinition[] = [
   FOLD_MARKDOWN_PROPOSAL,
   CRUNCH_KNOWLEDGE_BASE,
   SOURCE_CHANGE_SYNC,
+  VERIFY_DOCUMENT,
   GAP_CLUSTERING,
   GAP_RECONCILE_PROPOSE,
   GAP_RECONCILE_CRITIC,

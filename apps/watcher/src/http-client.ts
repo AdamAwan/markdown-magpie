@@ -65,7 +65,10 @@ export interface WatcherApi extends WatcherApiClient {
   // Drives a fix-patrol tick in the API (select the next batch of documents to
   // check + advance the cursor), returning the run id and how many were checked.
   // An absent flowId patrols the default flow.
-  runFixPatrol(flowId: string | undefined, signal?: AbortSignal): Promise<{ runId: string; selectedCount: number }>;
+  runFixPatrol(
+    flowId: string | undefined,
+    signal?: AbortSignal
+  ): Promise<{ runId: string; selectedCount: number; findingCount: number }>;
   // Triggers a scheduled crunch run in the API (enqueue-only on the API side) and
   // returns the created run + planning job ids. An absent flowId crunches the
   // default flow.
@@ -154,8 +157,8 @@ export class HttpWatcherApi implements WatcherApi {
   async runFixPatrol(
     flowId: string | undefined,
     signal?: AbortSignal
-  ): Promise<{ runId: string; selectedCount: number }> {
-    return this.post<{ runId: string; selectedCount: number }>(
+  ): Promise<{ runId: string; selectedCount: number; findingCount: number }> {
+    return this.post<{ runId: string; selectedCount: number; findingCount: number }>(
       "/api/fix-patrol/run",
       { ...(flowId ? { flowId } : {}) },
       signal

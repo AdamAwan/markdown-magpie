@@ -407,6 +407,28 @@ export interface SourceDataContext {
   content?: string;
 }
 
+// One claim in a knowledge-base document the verify lens could not substantiate
+// against the document's source material, with the model's reason.
+export interface UnprovableClaim {
+  claim: string;
+  reason: string;
+}
+
+// Input to the verify_document AI job: one knowledge-base document plus the source
+// material to check it against. `provider` is added at enqueue (see @magpie/jobs).
+export interface VerifyDocumentJobInput {
+  path: string;
+  content: string;
+  sources: SourceDataContext[];
+}
+
+// The verify lens's verdict for one document: "healthy" (claims empty) or
+// "unprovable" with the specific claims the sources fail to support.
+export interface VerifyDocumentJobOutput {
+  verdict: "healthy" | "unprovable";
+  claims: UnprovableClaim[];
+}
+
 export interface DraftMarkdownProposalJobOutput {
   title: string;
   targetPath: string;
@@ -624,6 +646,17 @@ export interface SourceSyncRun {
 // is the batch the rolling cursor chose this run; `universeCount` is how many
 // documents the flow had to choose from. No status field — a patrol tick is atomic
 // (select → stamp → record), never pending.
+// A verify-lens result recorded on a patrol run: the document, the claims the
+// sources could not substantiate, and what the reconcile gate decided to do with
+// the emitted intent. `intoProposalId` is set only when the gate folded it into an
+// existing open PR.
+export interface VerifyFinding {
+  path: string;
+  claims: UnprovableClaim[];
+  decision: "open-new" | "fold" | "defer";
+  intoProposalId?: string;
+}
+
 export interface PatrolRun {
   id: string;
   flowId?: string;
@@ -631,6 +664,9 @@ export interface PatrolRun {
   universeCount: number;
   selectedCount: number;
   selected: string[];
+  // The verify-lens findings this tick produced (empty when every checked doc was
+  // healthy or the patrol ran no lens).
+  findings: VerifyFinding[];
   createdAt: string;
 }
 

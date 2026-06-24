@@ -53,7 +53,7 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     sourceSyncExecutionContext: async () => ({ run: {}, sourceName: "", repository: {} }),
     reconcileGaps: async () => ({ ok: true }),
     runSourceSync: async () => ({ runIds: [] }),
-    runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0 }),
+    runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
     triggerScheduledCrunch: async () => ({ runId: "run-1", jobId: "job-1" }),
     listOpenPullRequests: async () => [],
     ...overrides
@@ -67,6 +67,7 @@ describe("ChatRunner", () => {
     assert.ok(runner.supports("answer_question"));
     assert.ok(runner.supports("summarize_gap"));
     assert.ok(runner.supports("sync_source_changes_generate_plan"));
+    assert.ok(runner.supports("verify_document"));
     assert.ok(runner.supports("fold_markdown_proposal"));
     assert.ok(!runner.supports("publish_proposal"));
   });
