@@ -111,9 +111,18 @@ test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job"
   const parsed = jobDefinition("draft_markdown_proposal").inputSchema.safeParse(job.input);
   assert.ok(parsed.success, "enqueued input should match the draft_markdown_proposal contract");
 
-  const input = job.input as { gapSummaries: string[]; provider: string };
+  const input = job.input as {
+    gapSummaries: string[];
+    provider: string;
+    triggeringQuestionIds?: string[];
+    openPullRequests?: { status: string }[];
+  };
   assert.deepEqual(input.gapSummaries, ["How to configure X"]);
   assert.equal(input.provider, "openai-compatible");
+  // Both must survive the broker's schema-parse so the proposal links back to its
+  // triggering questions and the drafter sees the in-flight PR it should not duplicate.
+  assert.ok(input.triggeringQuestionIds?.includes(log.id), "triggeringQuestionIds survives enqueue");
+  assert.equal(input.openPullRequests?.[0]?.status, "pr-opened");
 });
 
 test("draftFromGaps passes the configured provider through unchanged", async () => {

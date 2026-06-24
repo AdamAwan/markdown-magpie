@@ -198,10 +198,25 @@ export interface PersistedGapCluster {
 // falling back to its REST reviews list (see @magpie/git fetchPullRequestReviewDecision).
 export type ReviewDecision = "approved" | "changes_requested" | "review_required" | "none";
 
+// The single source of truth for a proposal's publish-lifecycle stages. Declared
+// as a runtime tuple (not a bare union) so consumers that need the values at
+// runtime — e.g. a zod enum in @magpie/jobs — derive from this one list rather
+// than duplicating the literals and drifting.
+export const PROPOSAL_STATUSES = [
+  "draft",
+  "ready",
+  "branch-pushed",
+  "pr-opened",
+  "merged",
+  "rejected",
+  "superseded"
+] as const;
+type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
+
 export interface Proposal {
   id: string;
   title: string;
-  status: "draft" | "ready" | "branch-pushed" | "pr-opened" | "merged" | "rejected" | "superseded";
+  status: ProposalStatus;
   targetPath: string;
   markdown: string;
   evidence: Citation[];
@@ -357,6 +372,10 @@ export interface DraftMarkdownProposalJobInput {
   openPullRequests?: OpenPullRequestContext[];
   destinationId?: string;
   targetPath?: string;
+  // The ids of the question logs that triggered this draft, threaded through so the
+  // created proposal links back to them (read in createProposalFromCompletedJob).
+  // Optional: the on-demand HTTP draft path and tests omit it.
+  triggeringQuestionIds?: string[];
   // The gap cluster this draft belongs to, so the created proposal can be linked
   // back to it on the autonomous path. Absent on the on-demand HTTP draft path.
   gapClusterId?: string;
