@@ -7,6 +7,7 @@ import { PostgresProposalStore } from "../stores/postgres-proposal-store.js";
 import { PostgresQuestionLogStore } from "../stores/postgres-question-log-store.js";
 import { PostgresReconciliationDecisionStore } from "../stores/postgres-reconciliation-decision-store.js";
 import { PostgresScheduledTaskStore } from "../stores/postgres-scheduled-task-store.js";
+import { PostgresPatrolStore } from "../stores/postgres-patrol-store.js";
 import { PostgresSourceSyncStore } from "../stores/postgres-source-sync-store.js";
 import { PostgresWatcherRegistryStore } from "../stores/postgres-watcher-registry-store.js";
 import { InMemoryProposalStore } from "../stores/proposal-store.js";
@@ -14,6 +15,7 @@ import { InMemoryPrCrosslinkStore } from "../stores/pr-crosslink-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
 import { InMemoryReconciliationDecisionStore } from "../stores/reconciliation-decision-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
+import { InMemoryPatrolStore } from "../stores/patrol-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
 import { InMemoryWatcherRegistryStore } from "../stores/watcher-registry-store.js";
 import { FileSnapshotStore, type SnapshotStore } from "../stores/snapshot-store.js";
@@ -30,6 +32,7 @@ export type StoreEnvName =
   | "CRUNCH_STORE"
   | "SCHEDULED_TASK_STORE"
   | "SOURCE_SYNC_STORE"
+  | "PATROL_STORE"
   | "GAP_CLUSTER_STORE"
   | "RECONCILIATION_DECISION_STORE"
   | "WATCHER_REGISTRY_STORE"
@@ -98,6 +101,14 @@ export function createSourceSyncStore(): InMemorySourceSyncStore | PostgresSourc
     "SOURCE_SYNC_STORE",
     (databaseUrl) => new PostgresSourceSyncStore(databaseUrl),
     () => new InMemorySourceSyncStore()
+  );
+}
+
+export function createPatrolStore(): InMemoryPatrolStore | PostgresPatrolStore {
+  return createStore<InMemoryPatrolStore | PostgresPatrolStore>(
+    "PATROL_STORE",
+    (databaseUrl) => new PostgresPatrolStore(databaseUrl),
+    () => new InMemoryPatrolStore()
   );
 }
 

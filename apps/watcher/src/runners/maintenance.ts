@@ -1,5 +1,6 @@
 import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import {
+  fixPatrolOutputSchema,
   processGapsToPullRequestsOutputSchema,
   sourceChangeSyncOutputSchema,
   triggerScheduledCrunchOutputSchema
@@ -9,7 +10,8 @@ import type { WatcherApi } from "../http-client.js";
 const MAINTENANCE_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "process_gaps_to_pull_requests",
   "source_change_sync",
-  "trigger_scheduled_crunch"
+  "trigger_scheduled_crunch",
+  "fix_patrol"
 ]);
 
 // Runs the scheduled maintenance jobs by POSTing a thin API endpoint, keeping the
@@ -35,6 +37,9 @@ export class MaintenanceRunner {
     if (job.type === "trigger_scheduled_crunch") {
       return this.triggerScheduledCrunch(job, signal);
     }
+    if (job.type === "fix_patrol") {
+      return this.runFixPatrol(job, signal);
+    }
     throw new Error(`MaintenanceRunner cannot handle ${job.type}`);
   }
 
@@ -59,6 +64,14 @@ export class MaintenanceRunner {
     const { runIds } = await this.api.runSourceSync(flowId, signal);
     console.log(`source_change_sync[${job.id}]: created ${runIds.length} sync run(s)`);
     return sourceChangeSyncOutputSchema.parse({ runIds });
+  }
+
+  private async runFixPatrol(job: JobView, signal: AbortSignal): Promise<unknown> {
+    const flowId = readFlowId(job.input);
+    console.log(`fix_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`);
+    const { runId, selectedCount } = await this.api.runFixPatrol(flowId, signal);
+    console.log(`fix_patrol[${job.id}]: checked ${selectedCount} document(s) (run ${runId})`);
+    return fixPatrolOutputSchema.parse({ runId, selectedCount });
   }
 
   private async triggerScheduledCrunch(job: JobView, signal: AbortSignal): Promise<unknown> {

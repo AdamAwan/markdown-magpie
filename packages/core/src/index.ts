@@ -620,6 +620,20 @@ export interface SourceSyncRun {
   completedAt?: string;
 }
 
+// One fix-patrol tick: which documents in a flow were checked and when. `selected`
+// is the batch the rolling cursor chose this run; `universeCount` is how many
+// documents the flow had to choose from. No status field — a patrol tick is atomic
+// (select → stamp → record), never pending.
+export interface PatrolRun {
+  id: string;
+  flowId?: string;
+  trigger: "scheduled" | "manual";
+  universeCount: number;
+  selectedCount: number;
+  selected: string[];
+  createdAt: string;
+}
+
 // Schedule for a generic background side-process (e.g. refreshing pull request
 // status). Keyed by a stable task key from the server's task registry, so the
 // Crunch page can drive any number of scheduled side-processes uniformly.

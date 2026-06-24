@@ -77,6 +77,7 @@ const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
   process_gaps_to_pull_requests: define("process_gaps_to_pull_requests", "maintenance", schemas.processGapsToPullRequestsInputSchema, schemas.processGapsToPullRequestsOutputSchema, 60 * 60),
   trigger_scheduled_crunch: define("trigger_scheduled_crunch", "maintenance", schemas.triggerScheduledCrunchInputSchema, schemas.triggerScheduledCrunchOutputSchema, 60 * 60),
   source_change_sync: define("source_change_sync", "maintenance", schemas.sourceChangeSyncInputSchema, schemas.sourceChangeSyncOutputSchema, 60 * 60),
+  fix_patrol: define("fix_patrol", "maintenance", schemas.fixPatrolInputSchema, schemas.fixPatrolOutputSchema, 60 * 60),
   publish_proposal: define("publish_proposal", "github", schemas.publishProposalInputSchema, schemas.publishProposalOutputSchema, 15 * 60),
   publish_crunch: define("publish_crunch", "github", schemas.publishCrunchInputSchema, schemas.publishCrunchOutputSchema, 15 * 60),
   publish_source_sync: define("publish_source_sync", "github", schemas.publishSourceSyncInputSchema, schemas.publishSourceSyncOutputSchema, 15 * 60),

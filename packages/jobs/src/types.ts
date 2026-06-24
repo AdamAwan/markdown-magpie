@@ -15,6 +15,7 @@ export const JOB_TYPES = [
   "process_gaps_to_pull_requests",
   "trigger_scheduled_crunch",
   "source_change_sync",
+  "fix_patrol",
   "publish_proposal",
   "publish_crunch",
   "publish_source_sync",

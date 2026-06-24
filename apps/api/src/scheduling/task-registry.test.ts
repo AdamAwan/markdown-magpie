@@ -7,13 +7,14 @@ test("with no flows configured, each task expands to a single default-flow insta
   const ctx = makeTestContext(); // knowledgeConfig.flows is []
 
   const tasks = listScheduledTasks(ctx);
-  assert.equal(tasks.length, 3, "gaps + source-sync + snapshot-refresh for the default flow");
+  assert.equal(tasks.length, 4, "gaps + source-sync + snapshot-refresh + fix-patrol for the default flow");
 
   const reconciler = findScheduledTask(ctx, "gaps-to-pull-requests::default");
   assert.ok(reconciler, "the default-flow reconciler is registered");
   assert.equal(reconciler!.defaultCron, "*/10 * * * *");
   assert.ok(findScheduledTask(ctx, "source-change-sync::default"), "the default-flow source sync is registered");
   assert.ok(findScheduledTask(ctx, "snapshot-refresh::default"), "the default-flow snapshot fetch is registered");
+  assert.ok(findScheduledTask(ctx, "fix-patrol::default"), "the default-flow fix patrol is registered");
 
   // The old un-suffixed and separate-refresh keys are gone.
   assert.equal(findScheduledTask(ctx, "gaps-to-pull-requests"), undefined, "tasks are per-flow, never un-suffixed");
@@ -28,14 +29,24 @@ test("each configured flow gets its own per-flow instance of every task", () => 
   ];
 
   const tasks = listScheduledTasks(ctx);
-  assert.equal(tasks.length, 6, "three templates × two flows");
+  assert.equal(tasks.length, 8, "four templates × two flows");
 
   for (const flowId of ["alpha", "beta"]) {
     assert.ok(findScheduledTask(ctx, `gaps-to-pull-requests::${flowId}`), `gaps task exists for ${flowId}`);
     assert.ok(findScheduledTask(ctx, `source-change-sync::${flowId}`), `source sync exists for ${flowId}`);
     assert.ok(findScheduledTask(ctx, `snapshot-refresh::${flowId}`), `snapshot fetch exists for ${flowId}`);
+    assert.ok(findScheduledTask(ctx, `fix-patrol::${flowId}`), `fix patrol exists for ${flowId}`);
   }
 
   // Labels name the flow so the per-flow controls are distinguishable in the UI.
   assert.match(findScheduledTask(ctx, "gaps-to-pull-requests::alpha")!.label, /Alpha/);
+});
+
+test("the fix-patrol task queues the fix_patrol job with the flow in its input", () => {
+  const ctx = makeTestContext();
+  const patrol = findScheduledTask(ctx, "fix-patrol::default");
+  assert.ok(patrol, "a fix-patrol task is registered");
+  assert.equal(patrol!.baseKey, "fix-patrol");
+  assert.equal(patrol!.jobType, "fix_patrol");
+  assert.deepEqual(patrol!.input, { flowId: undefined });
 });
