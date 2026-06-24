@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import type { PatrolRun } from "@magpie/core";
+import type { PatrolRun, VerifyFinding } from "@magpie/core";
 import type { PatrolCursorEntry, PatrolRunInput, PatrolStore } from "./patrol-store.js";
 
 const { Pool } = pg;
@@ -54,11 +54,19 @@ export class PostgresPatrolStore implements PatrolStore {
     const id = randomUUID();
     const result = await this.pool.query<PatrolRunRow>(
       `
-        INSERT INTO patrol_runs (id, flow_id, trigger, universe_count, selected_count, selected)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO patrol_runs (id, flow_id, trigger, universe_count, selected_count, selected, findings)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING *
       `,
-      [id, runFlowId(input.flowId), input.trigger, input.universeCount, input.selectedCount, JSON.stringify(input.selected)]
+      [
+        id,
+        runFlowId(input.flowId),
+        input.trigger,
+        input.universeCount,
+        input.selectedCount,
+        JSON.stringify(input.selected),
+        JSON.stringify(input.findings ?? [])
+      ]
     );
     return mapRunRow(result.rows[0]);
   }
@@ -99,6 +107,7 @@ interface PatrolRunRow {
   universe_count: number;
   selected_count: number;
   selected: string[];
+  findings: VerifyFinding[];
   created_at: Date;
 }
 
@@ -110,7 +119,7 @@ function mapRunRow(row: PatrolRunRow): PatrolRun {
     universeCount: row.universe_count,
     selectedCount: row.selected_count,
     selected: row.selected,
-    findings: [],
+    findings: row.findings ?? [],
     createdAt: row.created_at.toISOString()
   };
 }

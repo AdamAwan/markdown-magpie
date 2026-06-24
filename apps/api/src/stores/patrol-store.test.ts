@@ -47,6 +47,20 @@ test("createRun + listRuns returns newest first; getRun fetches by id", async ()
   assert.equal(await store.getRun("missing"), undefined);
 });
 
+test("createRun records and returns findings, defaulting to an empty array", async () => {
+  const store = new InMemoryPatrolStore();
+  const withFindings = await store.createRun({
+    trigger: "scheduled",
+    universeCount: 1,
+    selectedCount: 1,
+    selected: ["a.md"],
+    findings: [{ path: "a.md", claims: [{ claim: "c", reason: "r" }], decision: "open-new" }]
+  });
+  assert.equal((await store.getRun(withFindings.id))?.findings.length, 1);
+  const noFindings = await store.createRun({ trigger: "scheduled", universeCount: 0, selectedCount: 0, selected: [] });
+  assert.deepEqual((await store.getRun(noFindings.id))?.findings, []);
+});
+
 test("reset clears both the cursor and the run history", async () => {
   const store = new InMemoryPatrolStore();
   await store.stampChecked(undefined, ["a.md"]);
