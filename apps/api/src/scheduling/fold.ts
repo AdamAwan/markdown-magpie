@@ -51,6 +51,15 @@ export async function reconcileDraftedProposal(ctx: AppContext, rival: Proposal)
     rationale: rival.rationale ?? ""
   };
   const decision = decideReconciliation(intent, openPullRequestSummaries(candidates));
+  // The only overlap is an approved (non-touchable) PR: folding would invalidate the
+  // review, so publish the rival as its own PR instead. Nothing auto-publishes a
+  // fresh draft otherwise, so this is a deliberate action; the #21 cross-link
+  // backstop then flags the overlap to the approved PR's owner.
+  if (decision.kind === "defer") {
+    await ctx.stores.gapClusters.enqueuePublicationAction(rival.id, "publish");
+    console.log(`Defer: rival ${rival.id} overlaps only approved PR(s); enqueued it to publish as its own PR.`);
+    return;
+  }
   if (decision.kind !== "fold") {
     return;
   }

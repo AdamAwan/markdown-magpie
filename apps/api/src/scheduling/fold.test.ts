@@ -56,6 +56,29 @@ describe("reconcileDraftedProposal", () => {
     await reconcileDraftedProposal(ctx, rival);
     assert.equal((await ctx.jobs.list({ type: "fold_markdown_proposal" })).jobs.length, 0);
   });
+
+  it("publishes the rival as its own PR when it overlaps only an approved PR", async () => {
+    const ctx = makeTestContext();
+    // Survivor is an open, approved PR on the same file.
+    const survivor = await draft(ctx, { targetPath: "kb/refunds.md" });
+    await ctx.stores.proposals.recordPublication(survivor.id, {
+      provider: "local-git",
+      branchName: "b",
+      commitSha: "c",
+      pullRequestUrl: "https://github.com/o/r/pull/5",
+      publishedAt: new Date().toISOString()
+    });
+    await ctx.stores.proposals.updateReviewDecision(survivor.id, "approved");
+
+    const rival = await draft(ctx, { targetPath: "kb/refunds.md" });
+    await reconcileDraftedProposal(ctx, rival);
+
+    // No fold job — the approved PR is non-touchable, so the gate defers.
+    assert.equal((await ctx.jobs.list({ type: "fold_markdown_proposal" })).jobs.length, 0);
+    // Instead the rival is enqueued to publish as its own PR.
+    const pending = await ctx.stores.gapClusters.listPendingPublicationActions();
+    assert.ok(pending.some((a) => a.proposalId === rival.id && a.kind === "publish"));
+  });
 });
 
 describe("applyFoldFromCompletedJob", () => {
