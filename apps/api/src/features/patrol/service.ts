@@ -1,7 +1,12 @@
 import type { AppContext } from "../../context.js";
-import type { PatrolRun } from "@magpie/core";
+import type { PatrolRun, VerifyDocumentJobInput } from "@magpie/core";
+import { verifyDocumentOutputSchema } from "@magpie/jobs";
 import { selectFlow } from "../../platform/repositories.js";
 import { selectPatrolBatch } from "../../scheduling/patrol-cursor.js";
+import { runVerifyLens, type VerifyDocumentFn } from "../../scheduling/verify-lens.js";
+import { collectSourceContext } from "../../platform/source-context.js";
+import { runJobToCompletion } from "../jobs/service.js";
+import { type AiProviderName } from "../../platform/providers.js";
 
 // Cursor knobs (tunable). batchSize bounds per-tick cost; randomCount is the
 // explore share (~20%); the remainder is the oldest/most-stale exploit share.
@@ -11,36 +16,70 @@ const PATROL_RANDOM_COUNT = 2;
 
 export type FixPatrolOutcome = { ok: true; run: PatrolRun } | { ok: false; code: "unknown_flow" };
 
-// Resolve a flow to the repository ids whose documents the cursor rotates over.
-// Mirrors the retrieve service: a flow scopes to its destination repo; the default
-// flow (undefined) is unscoped (every indexed repository).
-function resolveRepositoryIds(
+// Resolve a flow to the repository ids whose documents the cursor rotates over and
+// the source ids whose material the verify lens checks against. Mirrors the
+// retrieve/source-sync services: a flow scopes to its destination repo + its
+// sources; the default flow (undefined) is unscoped (every indexed repository) and
+// uses the default source set.
+function resolveScope(
   ctx: AppContext,
   flowId: string | undefined
-): { ok: true; repositoryIds: string[] | undefined } | { ok: false; code: "unknown_flow" } {
+):
+  | { ok: true; repositoryIds: string[] | undefined; sourceIds: string[] | undefined }
+  | { ok: false; code: "unknown_flow" } {
   if (!flowId) {
-    return { ok: true, repositoryIds: undefined };
+    return { ok: true, repositoryIds: undefined, sourceIds: undefined };
   }
   const flow = selectFlow(ctx.repositoryDeps(), flowId);
   if (!flow) {
     return { ok: false, code: "unknown_flow" };
   }
-  return { ok: true, repositoryIds: flow.destinationId ? [flow.destinationId] : undefined };
+  return {
+    ok: true,
+    repositoryIds: flow.destinationId ? [flow.destinationId] : undefined,
+    sourceIds: flow.sourceIds
+  };
 }
+
+// Default verify: enqueue a verify_document AI job and bounded-wait for the watcher
+// to complete it (mirrors gap-reconciler's reshape job). Returns undefined on any
+// non-completion so the lens skips that document rather than failing the tick.
+const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sources }) => {
+  const input = {
+    path,
+    content,
+    sources,
+    provider: ctx.config.get().aiProvider
+  } satisfies VerifyDocumentJobInput & { provider: AiProviderName };
+  let terminal;
+  try {
+    terminal = await runJobToCompletion(ctx, "verify_document", input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "verify job failed";
+    console.warn(`Verify lens: verify_document for ${path} could not run — ${message}.`);
+    return undefined;
+  }
+  if (terminal.state !== "completed") {
+    return undefined;
+  }
+  const parsed = verifyDocumentOutputSchema.safeParse(terminal.output);
+  return parsed.success ? parsed.data : undefined;
+};
 
 export async function runFixPatrol(
   ctx: AppContext,
-  options: { flowId?: string; trigger: PatrolRun["trigger"] }
+  options: { flowId?: string; trigger: PatrolRun["trigger"] },
+  deps: { verifyDocument: VerifyDocumentFn } = { verifyDocument: defaultVerifyDocument }
 ): Promise<FixPatrolOutcome> {
-  const scope = resolveRepositoryIds(ctx, options.flowId);
+  const scope = resolveScope(ctx, options.flowId);
   if (!scope.ok) {
     return scope;
   }
 
-  const universe = ctx.stores.knowledgeIndex
+  const documents = ctx.stores.knowledgeIndex
     .listDocuments()
-    .filter((doc) => !scope.repositoryIds || scope.repositoryIds.includes(doc.repositoryId))
-    .map((doc) => doc.path);
+    .filter((doc) => !scope.repositoryIds || scope.repositoryIds.includes(doc.repositoryId));
+  const universe = documents.map((doc) => doc.path);
 
   const cursor = await ctx.stores.patrol.listCursor(options.flowId);
   const checkedAt = new Map(cursor.map((entry) => [entry.docPath, entry.lastCheckedAt]));
@@ -50,9 +89,21 @@ export async function runFixPatrol(
     randomCount: PATROL_RANDOM_COUNT
   });
 
-  // No-op lens slot: later increments run the verify/dedupe/split lenses over
-  // `selected` here and emit ChangeIntents through the reconcile gate. The
-  // skeleton only advances the cursor and records the visit.
+  // Run the verify lens over the selected documents. The source material is the
+  // same for every document in the flow, so collect it once per tick — and only
+  // when there is at least one document to check.
+  const selectedSet = new Set(selected);
+  const selectedDocuments = documents
+    .filter((doc) => selectedSet.has(doc.path))
+    .map((doc) => ({ path: doc.path, content: doc.content }));
+  const sources = selectedDocuments.length > 0 ? await collectSourceContext(ctx.repositoryDeps(), scope.sourceIds) : [];
+  const findings = await runVerifyLens(ctx, {
+    flowId: options.flowId,
+    documents: selectedDocuments,
+    sources,
+    verifyDocument: deps.verifyDocument
+  });
+
   await ctx.stores.patrol.stampChecked(options.flowId, selected);
 
   const run = await ctx.stores.patrol.createRun({
@@ -60,11 +111,12 @@ export async function runFixPatrol(
     trigger: options.trigger,
     universeCount: universe.length,
     selectedCount: selected.length,
-    selected
+    selected,
+    findings
   });
   console.log(
     `Fix-patrol (${options.trigger}) flow=${options.flowId ?? "(default)"}: ` +
-      `checked ${selected.length}/${universe.length} document(s); run ${run.id}.`
+      `checked ${selected.length}/${universe.length} document(s), ${findings.length} finding(s); run ${run.id}.`
   );
   return { ok: true, run };
 }
