@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PROPOSAL_STATUSES } from "@magpie/core";
 import type {
   AnswerQuestionJobInput as CoreAnswerQuestionJobInput,
   AnswerQuestionJobOutput,
@@ -87,13 +88,13 @@ const sourceDataContextSchema = z.object({
   url: z.string().optional(),
   content: z.string().optional()
 });
-// Mirrors @magpie/core OpenPullRequestContext. The status enum is the full set of
-// @magpie/core Proposal["status"] values so an in-flight proposal at any stage round-trips.
+// Mirrors @magpie/core OpenPullRequestContext. status reuses the core
+// PROPOSAL_STATUSES tuple so the enum can't drift from the type it validates.
 const openPullRequestContextSchema = z.object({
   title: z.string(),
   url: z.string().optional(),
   targetPath: z.string().optional(),
-  status: z.enum(["draft", "ready", "branch-pushed", "pr-opened", "merged", "rejected", "superseded"])
+  status: z.enum(PROPOSAL_STATUSES)
 });
 export const draftMarkdownProposalInputSchema = z.object({
   provider: providerSchema,

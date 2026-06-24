@@ -198,10 +198,25 @@ export interface PersistedGapCluster {
 // falling back to its REST reviews list (see @magpie/git fetchPullRequestReviewDecision).
 export type ReviewDecision = "approved" | "changes_requested" | "review_required" | "none";
 
+// The single source of truth for a proposal's publish-lifecycle stages. Declared
+// as a runtime tuple (not a bare union) so consumers that need the values at
+// runtime — e.g. a zod enum in @magpie/jobs — derive from this one list rather
+// than duplicating the literals and drifting.
+export const PROPOSAL_STATUSES = [
+  "draft",
+  "ready",
+  "branch-pushed",
+  "pr-opened",
+  "merged",
+  "rejected",
+  "superseded"
+] as const;
+type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
+
 export interface Proposal {
   id: string;
   title: string;
-  status: "draft" | "ready" | "branch-pushed" | "pr-opened" | "merged" | "rejected" | "superseded";
+  status: ProposalStatus;
   targetPath: string;
   markdown: string;
   evidence: Citation[];
