@@ -22,6 +22,9 @@ import {
   getHeadSha,
   type SourceFileChange
 } from "@magpie/git";
+import type { ChangeIntent } from "../../scheduling/intent.js";
+import { decideReconciliation, openPullRequestSummaries } from "../../scheduling/reconcile-gate.js";
+import { sameFlowOpenProposals } from "../../scheduling/flow.js";
 import type { AppContext } from "../../context.js";
 import { changesetFromPlan } from "../crunch/service.js";
 import {
@@ -225,10 +228,37 @@ export async function attachSourceSyncPlanFromCompletedJob(
     return;
   }
 
-  await ctx.stores.sourceSync.completeRun(run.id, parsed.data, changeset);
-  // Git now leaves the API: enqueue publication (fire-and-forget) after the
-  // repository pre-flight, mirroring publish_crunch. The watcher executes git.
-  await enqueuePublication(ctx, run.id);
+  // SCOPE A — one-way reconcile guard. Before publishing, check the changeset's
+  // file-set against the same-flow open gap proposals. With no overlap we publish
+  // as before; on ANY overlap (the gate's fold OR defer verdict) we defer-and-
+  // preserve: the changeset is kept on the run and re-gated on a later tick, never
+  // published as a rival. Source-sync's baseline already advanced at enqueue, so the
+  // deferred changeset is the sole record of this change — dropping it would lose it.
+  //
+  // We collapse fold→defer deliberately: a real fold would merge this changeset into
+  // the overlapping PR, but source-sync is not (yet) a Proposal, so there is nothing
+  // for the LLM proposal-fold to merge into. GOAL — SCOPE B: make a source-sync
+  // change a first-class Proposal so the gate is symmetric (gap and source-sync each
+  // see the other's PRs) and fold becomes a real LLM changeset merge. See
+  // docs/maintenance-redesign.md §6 and the spec at
+  // docs/superpowers/specs/2026-06-24-source-sync-through-gate-design.md.
+  const proposals = await sameFlowOpenProposals(ctx, run.flowId);
+  const intent = sourceSyncIntent(run, changeset, readChangedSourcePaths(job.input));
+  const decision = decideReconciliation(intent, openPullRequestSummaries(proposals));
+
+  if (decision.kind === "open-new") {
+    await ctx.stores.sourceSync.completeRun(run.id, parsed.data, changeset);
+    // Git now leaves the API: enqueue publication (fire-and-forget) after the
+    // repository pre-flight, mirroring publish_crunch. The watcher executes git.
+    await enqueuePublication(ctx, run.id);
+    return;
+  }
+
+  await ctx.stores.sourceSync.deferRun(run.id, parsed.data, changeset);
+  console.log(
+    `Source-sync run ${run.id}: changeset overlaps an open PR in flow ${run.flowId ?? "default"} ` +
+      `(${decision.kind}); deferred and preserved for re-gate.`
+  );
 }
 
 // Reads back the candidate documents the plan job was given so the completion handler
@@ -396,6 +426,28 @@ export async function recordSourceSyncPublicationFromCompletedJob(
 }
 
 // --- Pure helpers (unit-tested) --------------------------------------------
+
+// Builds the source-sync change intent for the gate. decideReconciliation consumes
+// only `targets`; `evidence` and `rationale` are populated best-effort for logging
+// and the future Scope B fold. Targets are normalised to match how Proposal.targetPath
+// is stored, since the gate compares file-sets by exact string match.
+function sourceSyncIntent(run: SourceSyncRun, changeset: ChangesetChange[], evidence: string[] = []): ChangeIntent {
+  return {
+    lens: "source-sync",
+    flowId: run.flowId,
+    targets: changeset.map((change) => normalizeRelativePath(change.path)),
+    evidence,
+    rationale: `source-sync ${run.sourceId} ${run.fromSha ?? "?"}..${run.toSha}`
+  };
+}
+
+// The source files that changed, read back from the plan job input for the intent's
+// evidence. Best-effort: the input was validated at enqueue, so a parse failure is
+// not expected; degrade to an empty list rather than throwing in the completion path.
+function readChangedSourcePaths(input: unknown): string[] {
+  const parsed = syncSourceChangesGeneratePlanInputSchema.safeParse(input);
+  return parsed.success ? parsed.data.changes.map((change) => change.path) : [];
+}
 
 // Builds the retrieval query from the changed files: paths plus their diffs,
 // truncated so a large commit can't produce an unbounded query.

@@ -285,6 +285,61 @@ test("getRunExecutionContext returns a 409 when the run has no changeset", async
   }
 });
 
+test("a source-sync change that overlaps a touchable open PR is deferred, not published", async () => {
+  const broker = new FakeJobBroker();
+  const { ctx, checkoutRoot, cleanup } = await seed(broker);
+  try {
+    await baselineAtParent(ctx, checkoutRoot);
+    const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
+    const jobId = run.jobId!;
+
+    // An open (draft = touchable) gap proposal already targets the same file the
+    // source-sync changeset will write (guide.md), in the default flow.
+    await ctx.stores.proposals.create({
+      title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
+      evidence: [], triggeringQuestionIds: []
+    });
+
+    const outcome = await completeJob(ctx, jobId, PLAN);
+    assert.equal(outcome.ok, true);
+
+    const after = await ctx.stores.sourceSync.getRun(run.id);
+    assert.equal(after?.status, "deferred");
+    assert.equal(after?.changeset?.length, 1, "changeset preserved on the deferred run");
+    assert.equal(after?.changeset?.[0].path, "guide.md");
+
+    // No rival published.
+    assert.equal((await ctx.jobs.list({})).jobs.filter((j) => j.type === "publish_source_sync").length, 0);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("a source-sync change that overlaps an approved PR is also deferred", async () => {
+  const broker = new FakeJobBroker();
+  const { ctx, checkoutRoot, cleanup } = await seed(broker);
+  try {
+    await baselineAtParent(ctx, checkoutRoot);
+    const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
+    const jobId = run.jobId!;
+
+    const proposal = await ctx.stores.proposals.create({
+      title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
+      evidence: [], triggeringQuestionIds: []
+    });
+    await ctx.stores.proposals.updateReviewDecision(proposal.id, "approved");
+
+    const outcome = await completeJob(ctx, jobId, PLAN);
+    assert.equal(outcome.ok, true);
+
+    const after = await ctx.stores.sourceSync.getRun(run.id);
+    assert.equal(after?.status, "deferred");
+    assert.equal((await ctx.jobs.list({})).jobs.filter((j) => j.type === "publish_source_sync").length, 0);
+  } finally {
+    await cleanup();
+  }
+});
+
 // Indexes a real git clone as the "gitdest" destination so findRepositoryForDestination
 // resolves a git-backed RepositoryRef the publish pre-flight accepts.
 async function indexGitDestination(ctx: ReturnType<typeof makeTestContext>): Promise<void> {
