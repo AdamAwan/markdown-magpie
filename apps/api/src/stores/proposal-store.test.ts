@@ -89,3 +89,18 @@ test("updateMarkdown returns undefined for an unknown proposal", async () => {
   const store = new InMemoryProposalStore();
   assert.equal(await store.updateMarkdown("nope", "x"), undefined);
 });
+
+test("updateReviewDecision sets and returns the decision", async () => {
+  const store = new InMemoryProposalStore();
+  const created = await store.create(draft("refunds"));
+  assert.equal(created.reviewDecision, undefined);
+
+  const updated = await store.updateReviewDecision(created.id, "approved");
+  assert.equal(updated?.reviewDecision, "approved");
+  assert.equal((await store.get(created.id))?.reviewDecision, "approved");
+});
+
+test("updateReviewDecision returns undefined for an unknown proposal", async () => {
+  const store = new InMemoryProposalStore();
+  assert.equal(await store.updateReviewDecision("nope", "approved"), undefined);
+});

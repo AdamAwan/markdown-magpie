@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import type { Citation, DraftContext, Proposal } from "@magpie/core";
+import type { Citation, DraftContext, Proposal, ReviewDecision } from "@magpie/core";
 import type { ProposalInput, ProposalListOptions, ProposalStore } from "./proposal-store.js";
 
 const { Pool } = pg;
@@ -107,6 +107,14 @@ export class PostgresProposalStore implements ProposalStore {
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
+  async updateReviewDecision(id: string, reviewDecision: ReviewDecision): Promise<Proposal | undefined> {
+    const result = await this.pool.query<ProposalRow>(
+      "UPDATE proposals SET review_decision = $2 WHERE id = $1 RETURNING *",
+      [id, reviewDecision]
+    );
+    return result.rows[0] ? mapRow(result.rows[0]) : undefined;
+  }
+
   async reset(): Promise<void> {
     const client = await this.pool.connect();
     try {
@@ -136,6 +144,7 @@ interface ProposalRow {
   destination_id: string | null;
   gap_cluster_id: string | null;
   publication: Proposal["publication"] | null;
+  review_decision: string | null;
   draft_context: DraftContext | null;
   created_at: Date;
   merged_at: Date | null;
@@ -156,6 +165,7 @@ function mapRow(row: ProposalRow): Proposal {
     rationale: row.rationale ?? undefined,
     jobId: row.job_id ?? undefined,
     publication: row.publication ?? undefined,
+    reviewDecision: (row.review_decision as ReviewDecision | null) ?? undefined,
     draftContext: row.draft_context ?? undefined,
     createdAt: row.created_at.toISOString(),
     mergedAt: row.merged_at?.toISOString()

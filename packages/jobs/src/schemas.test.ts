@@ -4,7 +4,8 @@ import {
   draftMarkdownProposalInputSchema,
   foldMarkdownProposalInputSchema,
   foldMarkdownProposalOutputSchema,
-  commentPullRequestInputSchema
+  commentPullRequestInputSchema,
+  refreshPullRequestsOutputSchema
 } from "./schemas.js";
 
 test("draft input schema preserves gapClusterId", () => {
@@ -54,4 +55,26 @@ test("fold output schema requires markdown and rationale", () => {
 test("comment_pull_request input requires url and body", () => {
   assert.ok(commentPullRequestInputSchema.safeParse({ pullRequestUrl: "u", body: "b" }).success);
   assert.ok(!commentPullRequestInputSchema.safeParse({ pullRequestUrl: "u" }).success);
+});
+
+test("refresh output schema accepts a result with a reviewDecision", () => {
+  const parsed = refreshPullRequestsOutputSchema.parse({
+    results: [{ proposalId: "p1", state: "open", merged: false, reviewDecision: "approved" }]
+  });
+  assert.equal(parsed.results[0].reviewDecision, "approved");
+});
+
+test("refresh output schema leaves reviewDecision absent when not provided", () => {
+  const parsed = refreshPullRequestsOutputSchema.parse({
+    results: [{ proposalId: "p1", state: "closed", merged: true }]
+  });
+  assert.equal(parsed.results[0].reviewDecision, undefined);
+});
+
+test("refresh output schema rejects an unknown reviewDecision value", () => {
+  assert.ok(
+    !refreshPullRequestsOutputSchema.safeParse({
+      results: [{ proposalId: "p1", state: "open", merged: false, reviewDecision: "maybe" }]
+    }).success
+  );
 });

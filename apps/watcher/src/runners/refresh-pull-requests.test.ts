@@ -51,8 +51,10 @@ describe("RefreshPullRequestsRunner", () => {
       { proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" },
       { proposalId: "p2", pullRequestUrl: "https://github.com/o/r/pull/2" }
     ]);
-    const runner = new RefreshPullRequestsRunner(api, async (url) =>
-      url?.endsWith("/1") ? { merged: true, state: "closed" } : { merged: false, state: "closed" }
+    const runner = new RefreshPullRequestsRunner(
+      api,
+      async (url) => (url?.endsWith("/1") ? { merged: true, state: "closed" } : { merged: false, state: "closed" }),
+      async () => "none"
     );
     const output = (await runner.run(job(), new AbortController().signal)) as {
       results: Array<{ proposalId: string; state: string; merged: boolean }>;
@@ -63,13 +65,61 @@ describe("RefreshPullRequestsRunner", () => {
     ]);
   });
 
+  it("attaches the review decision for a still-open PR", async () => {
+    const api = fakeApi([{ proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" }]);
+    const runner = new RefreshPullRequestsRunner(
+      api,
+      async () => ({ merged: false, state: "open" }),
+      async () => "approved"
+    );
+    const output = (await runner.run(job(), new AbortController().signal)) as {
+      results: Array<{ proposalId: string; reviewDecision?: string }>;
+    };
+    assert.equal(output.results[0].reviewDecision, "approved");
+  });
+
+  it("does not look up the review decision for a merged/closing PR", async () => {
+    const api = fakeApi([{ proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" }]);
+    let reviewLookups = 0;
+    const runner = new RefreshPullRequestsRunner(
+      api,
+      async () => ({ merged: true, state: "closed" }),
+      async () => {
+        reviewLookups += 1;
+        return "approved";
+      }
+    );
+    const output = (await runner.run(job(), new AbortController().signal)) as {
+      results: Array<{ proposalId: string; reviewDecision?: string }>;
+    };
+    assert.equal(reviewLookups, 0, "a closing PR needs no review lookup");
+    assert.equal(output.results[0].reviewDecision, undefined);
+  });
+
+  it("still reports an open PR when the review lookup throws", async () => {
+    const api = fakeApi([{ proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" }]);
+    const runner = new RefreshPullRequestsRunner(
+      api,
+      async () => ({ merged: false, state: "open" }),
+      async () => {
+        throw new Error("graphql exploded");
+      }
+    );
+    const output = (await runner.run(job(), new AbortController().signal)) as {
+      results: Array<{ proposalId: string; state: string; reviewDecision?: string }>;
+    };
+    assert.deepEqual(output.results, [{ proposalId: "p1", state: "open", merged: false }]);
+  });
+
   it("skips PRs whose status could not be resolved without failing the job", async () => {
     const api = fakeApi([
       { proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" },
       { proposalId: "p2", pullRequestUrl: "not-a-pr" }
     ]);
-    const runner = new RefreshPullRequestsRunner(api, async (url) =>
-      url?.endsWith("/1") ? { merged: false, state: "open" } : undefined
+    const runner = new RefreshPullRequestsRunner(
+      api,
+      async (url) => (url?.endsWith("/1") ? { merged: false, state: "open" } : undefined),
+      async () => "none"
     );
     const output = (await runner.run(job(), new AbortController().signal)) as {
       results: Array<{ proposalId: string }>;
@@ -77,15 +127,19 @@ describe("RefreshPullRequestsRunner", () => {
     assert.deepEqual(output.results.map((r) => r.proposalId), ["p1"]);
   });
 
-  it("continues past a lookup that throws", async () => {
+  it("continues past a status lookup that throws", async () => {
     const api = fakeApi([
       { proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" },
       { proposalId: "p2", pullRequestUrl: "https://github.com/o/r/pull/2" }
     ]);
-    const runner = new RefreshPullRequestsRunner(api, async (url) => {
-      if (url?.endsWith("/1")) throw new Error("rate limited");
-      return { merged: true, state: "closed" };
-    });
+    const runner = new RefreshPullRequestsRunner(
+      api,
+      async (url) => {
+        if (url?.endsWith("/1")) throw new Error("rate limited");
+        return { merged: true, state: "closed" };
+      },
+      async () => "none"
+    );
     const output = (await runner.run(job(), new AbortController().signal)) as {
       results: Array<{ proposalId: string }>;
     };
@@ -98,10 +152,14 @@ describe("RefreshPullRequestsRunner", () => {
       { proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" },
       { proposalId: "p2", pullRequestUrl: "https://github.com/o/r/pull/2" }
     ]);
-    const runner = new RefreshPullRequestsRunner(api, async () => {
-      controller.abort();
-      return { merged: false, state: "open" };
-    });
+    const runner = new RefreshPullRequestsRunner(
+      api,
+      async () => {
+        controller.abort();
+        return { merged: false, state: "open" };
+      },
+      async () => "none"
+    );
     await assert.rejects(() => runner.run(job(), controller.signal));
   });
 });
