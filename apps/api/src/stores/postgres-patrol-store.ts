@@ -110,6 +110,7 @@ function mapRunRow(row: PatrolRunRow): PatrolRun {
     universeCount: row.universe_count,
     selectedCount: row.selected_count,
     selected: row.selected,
+    findings: [],
     createdAt: row.created_at.toISOString()
   };
 }

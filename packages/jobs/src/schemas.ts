@@ -12,7 +12,9 @@ import type {
   FoldMarkdownProposalJobOutput,
   SourceChangeSyncJobInput as CoreSourceChangeSyncJobInput,
   SummarizeGapJobInput as CoreSummarizeGapJobInput,
-  SummarizeGapJobOutput
+  SummarizeGapJobOutput,
+  VerifyDocumentJobInput as CoreVerifyDocumentJobInput,
+  VerifyDocumentJobOutput
 } from "@magpie/core";
 import { AI_PROVIDERS, type AiProviderName, type JobError } from "./types.js";
 
@@ -240,6 +242,17 @@ export const syncSourceChangesGeneratePlanOutputSchema = z.object({
   operations: z.array(crunchOperationSchema),
   rationale: z.string()
 }) satisfies z.ZodType<CrunchPlan>;
+
+export const verifyDocumentInputSchema = z.object({
+  provider: providerSchema,
+  path: z.string(),
+  content: z.string(),
+  sources: z.array(sourceDataContextSchema)
+}) satisfies z.ZodType<ProviderInput<CoreVerifyDocumentJobInput>>;
+export const verifyDocumentOutputSchema = z.object({
+  verdict: z.enum(["healthy", "unprovable"]),
+  claims: z.array(z.object({ claim: z.string(), reason: z.string() }))
+}) satisfies z.ZodType<VerifyDocumentJobOutput>;
 
 export const refreshPullRequestsInputSchema = z.object({});
 export const refreshPullRequestsOutputSchema = z.object({

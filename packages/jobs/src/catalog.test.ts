@@ -24,6 +24,7 @@ const EXPIRATION_SECONDS = {
   cluster_gap_candidates: 5 * 60,
   reconcile_gap_clusters: 5 * 60,
   sync_source_changes_generate_plan: 60 * 60,
+  verify_document: 10 * 60,
   refresh_pull_requests: 5 * 60,
   process_gaps_to_pull_requests: 60 * 60,
   trigger_scheduled_crunch: 60 * 60,
@@ -119,6 +120,15 @@ test("sync_source_changes_generate_plan routes by provider", () => {
   );
   const claudeQueues = queueNamesForCapabilities(["claude"]);
   assert.ok(claudeQueues.includes("sync_source_changes_generate_plan__claude"));
+});
+
+test("verify_document routes by provider like other AI work", () => {
+  const definition = jobDefinition("verify_document");
+  assert.equal(definition.requiredCapability({ provider: "codex" }), "codex");
+  assert.equal(queueNameForJob("verify_document", { provider: "codex" }), "verify_document__codex");
+  const codexQueues = queueNamesForCapabilities(["codex"]);
+  assert.ok(codexQueues.includes("verify_document__codex"));
+  assert.ok(!queueNamesForCapabilities(["github"]).includes("verify_document__codex"));
 });
 
 test("source_change_sync is a maintenance queue named by its type", () => {

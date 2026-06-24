@@ -11,6 +11,7 @@ export const JOB_TYPES = [
   "cluster_gap_candidates",
   "reconcile_gap_clusters",
   "sync_source_changes_generate_plan",
+  "verify_document",
   "refresh_pull_requests",
   "process_gaps_to_pull_requests",
   "trigger_scheduled_crunch",
