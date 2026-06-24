@@ -155,11 +155,30 @@ test("completeDeferredRun moves a deferred run to completed and stamps completed
   assert.ok(completed?.completedAt, "completedAt stamped");
 });
 
-test("completeDeferredRun is a no-op on a non-deferred run", async () => {
+test("completeDeferredRun returns the run only for the call that performs the transition", async () => {
+  const store = new InMemorySourceSyncStore();
+  const run = await runningRun(store);
+  await store.deferRun(run.id, PLAN, CHANGESET);
+
+  // The winning call transitions the run and gets it back, so its caller publishes.
+  const first = await store.completeDeferredRun(run.id);
+  assert.equal(first?.status, "completed");
+
+  // A second (racing) call did nothing, so it returns undefined and its caller skips
+  // publication — this is what prevents the double-publish.
+  const second = await store.completeDeferredRun(run.id);
+  assert.equal(second, undefined);
+});
+
+test("completeDeferredRun returns undefined on a non-deferred run", async () => {
   const store = new InMemorySourceSyncStore();
   const run = await runningRun(store); // still "running"
-  const result = await store.completeDeferredRun(run.id);
-  assert.equal(result?.status, "running");
+  assert.equal(await store.completeDeferredRun(run.id), undefined);
+});
+
+test("completeDeferredRun returns undefined for an unknown id", async () => {
+  const store = new InMemorySourceSyncStore();
+  assert.equal(await store.completeDeferredRun("missing"), undefined);
 });
 
 test("listDeferredRuns returns only deferred runs for the given flow", async () => {

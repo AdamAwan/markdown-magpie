@@ -141,13 +141,14 @@ export class PostgresSourceSyncStore implements SourceSyncStore {
   }
 
   async completeDeferredRun(id: string): Promise<SourceSyncRun | undefined> {
-    // deferred → completed. Guarded by status = 'deferred'; on no match fall back to
-    // the current row so a re-gate that races itself is an idempotent no-op.
+    // deferred → completed. The conditional UPDATE is the synchronization point: of two
+    // racing re-gates, exactly one matches a row and gets it back. A no-match (already
+    // completed / not found) returns undefined so the caller publishes exactly once.
     const result = await this.pool.query<SourceSyncRunRow>(
       "UPDATE source_sync_runs SET status = 'completed', completed_at = now() WHERE id = $1 AND status = 'deferred' RETURNING *",
       [id]
     );
-    return result.rows[0] ? mapRunRow(result.rows[0]) : this.getRun(id);
+    return result.rows[0] ? mapRunRow(result.rows[0]) : undefined;
   }
 
   async failRun(id: string, error: string): Promise<SourceSyncRun | undefined> {

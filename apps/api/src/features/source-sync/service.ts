@@ -60,7 +60,15 @@ async function regateDeferredRuns(ctx: AppContext, flowId: string | undefined): 
     if (decision.kind !== "open-new") {
       continue; // still overlapping — leave it deferred for a later tick
     }
-    await ctx.stores.sourceSync.completeDeferredRun(run.id);
+    // Gate publication on who won the deferred→completed transition: a concurrent tick
+    // (e.g. a manual /source-sync/run racing the scheduled tick) can capture the same
+    // deferred run from listDeferredRuns above. completeDeferredRun returns the run only
+    // to the caller that effected the transition, so the loser gets undefined and skips —
+    // the run is published exactly once.
+    const completed = await ctx.stores.sourceSync.completeDeferredRun(run.id);
+    if (!completed) {
+      continue;
+    }
     await enqueuePublication(ctx, run.id);
     console.log(`Source-sync re-gate: deferred run ${run.id} overlap cleared; enqueued publication.`);
   }
