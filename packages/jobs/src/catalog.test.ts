@@ -28,6 +28,7 @@ const EXPIRATION_SECONDS = {
   process_gaps_to_pull_requests: 60 * 60,
   trigger_scheduled_crunch: 60 * 60,
   source_change_sync: 60 * 60,
+  fix_patrol: 60 * 60,
   publish_proposal: 15 * 60,
   publish_crunch: 15 * 60,
   publish_source_sync: 15 * 60,
@@ -95,7 +96,8 @@ test("maintenance capability yields only orchestration work queues", () => {
   assert.deepEqual(queueNamesForCapabilities(["maintenance"]), [
     "process_gaps_to_pull_requests",
     "trigger_scheduled_crunch",
-    "source_change_sync"
+    "source_change_sync",
+    "fix_patrol"
   ]);
 });
 
@@ -123,6 +125,18 @@ test("source_change_sync is a maintenance queue named by its type", () => {
   const definition = jobDefinition("source_change_sync");
   assert.equal(definition.requiredCapability({}), "maintenance");
   assert.equal(queueNameForJob("source_change_sync", {}), "source_change_sync");
+});
+
+test("fix_patrol is a maintenance queue named by its type", () => {
+  const definition = jobDefinition("fix_patrol");
+  assert.equal(definition.requiredCapability({ flowId: "billing" }), "maintenance");
+  assert.equal(queueNameForJob("fix_patrol", { flowId: "billing" }), "fix_patrol");
+});
+
+test("fix_patrol input accepts an optional flowId; output carries runId + selectedCount", () => {
+  assert.ok(jobDefinition("fix_patrol").inputSchema.safeParse({}).success);
+  assert.ok(jobDefinition("fix_patrol").inputSchema.safeParse({ flowId: "billing" }).success);
+  assert.ok(jobDefinition("fix_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3 }).success);
 });
 
 test("source_change_sync output reports the run ids it created (0..N)", () => {

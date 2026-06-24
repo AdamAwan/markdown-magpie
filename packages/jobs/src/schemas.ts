@@ -290,6 +290,14 @@ export const sourceChangeSyncOutputSchema = z.object({
   runIds: z.array(z.string())
 });
 
+export const fixPatrolInputSchema = z.object({ flowId: z.string().optional() });
+// Per tick the patrol records exactly one run; the output reports its id and how
+// many documents it checked (0 when the flow has no indexed documents yet).
+export const fixPatrolOutputSchema = z.object({
+  runId: z.string(),
+  selectedCount: z.number().int()
+});
+
 export const publishSourceSyncInputSchema = z.object({ runId: z.string() });
 export const publishSourceSyncOutputSchema = z.object({
   runId: z.string(),
