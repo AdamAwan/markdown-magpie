@@ -5,20 +5,7 @@ import type { AppContext } from "../context.js";
 import { splitGapSummaries } from "../features/proposals/service.js";
 import type { ChangeIntent } from "./intent.js";
 import { decideReconciliation, openPullRequestSummaries } from "./reconcile-gate.js";
-
-function sameFlow(a: string | undefined, b: string | undefined): boolean {
-  return (a ?? "") === (b ?? "");
-}
-
-// A proposal's owning flow is its cluster's flow; a cluster-less proposal belongs
-// to the un-routed/default flow.
-async function proposalFlowId(ctx: AppContext, proposal: Proposal): Promise<string | undefined> {
-  if (!proposal.gapClusterId) {
-    return undefined;
-  }
-  const cluster = await ctx.stores.gapClusters.getCluster(proposal.gapClusterId);
-  return cluster?.flowId;
-}
+import { proposalFlowId, sameFlowOpenProposals } from "./flow.js";
 
 // At-draft fold: when a freshly-created draft proposal overlaps a touchable open
 // proposal in the SAME flow, enqueue a fold_markdown_proposal job to merge them.
@@ -32,16 +19,7 @@ export async function reconcileDraftedProposal(ctx: AppContext, rival: Proposal)
   }
 
   const flowId = await proposalFlowId(ctx, rival);
-  const candidates: Proposal[] = [];
-  for (const proposal of await ctx.stores.proposals.list(200)) {
-    if (proposal.id === rival.id) {
-      continue;
-    }
-    if (!sameFlow(await proposalFlowId(ctx, proposal), flowId)) {
-      continue;
-    }
-    candidates.push(proposal);
-  }
+  const candidates = await sameFlowOpenProposals(ctx, flowId, rival.id);
 
   const intent: ChangeIntent = {
     lens: "gap",
