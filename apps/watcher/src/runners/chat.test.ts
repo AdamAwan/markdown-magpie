@@ -53,7 +53,7 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     sourceSyncExecutionContext: async () => ({ run: {}, sourceName: "", repository: {} }),
     reconcileGaps: async () => ({ ok: true }),
     runSourceSync: async () => ({ runIds: [] }),
-    runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0 }),
+    runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
     triggerScheduledCrunch: async () => ({ runId: "run-1", jobId: "job-1" }),
     listOpenPullRequests: async () => [],
     ...overrides

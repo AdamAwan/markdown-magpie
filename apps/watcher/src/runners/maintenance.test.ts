@@ -32,7 +32,7 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     sourceSyncExecutionContext: async () => ({ run: {}, sourceName: "", repository: {} }),
     reconcileGaps: async () => ({ ok: true }),
     runSourceSync: async () => ({ runIds: [] }),
-    runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0 }),
+    runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
     triggerScheduledCrunch: async () => ({ runId: "run-1", jobId: "job-1" }),
     listOpenPullRequests: async () => [],
     ...overrides
@@ -121,17 +121,19 @@ describe("MaintenanceRunner", () => {
     const api = fakeApi({
       runFixPatrol: async (flowId) => {
         calls.push(flowId);
-        return { runId: "run-9", selectedCount: 3 };
+        return { runId: "run-9", selectedCount: 3, findingCount: 1 };
       }
     });
     const runner = new MaintenanceRunner(api);
     const output = (await runner.run(job("fix_patrol", { flowId: "billing" }), new AbortController().signal)) as {
       runId: string;
       selectedCount: number;
+      findingCount: number;
     };
     assert.deepEqual(calls, ["billing"]);
     assert.equal(output.runId, "run-9");
     assert.equal(output.selectedCount, 3);
+    assert.equal(output.findingCount, 1);
   });
 
   it("patrols the default flow when no flowId is present", async () => {
@@ -139,7 +141,7 @@ describe("MaintenanceRunner", () => {
     const api = fakeApi({
       runFixPatrol: async (flowId) => {
         calls.push(flowId);
-        return { runId: "run-10", selectedCount: 0 };
+        return { runId: "run-10", selectedCount: 0, findingCount: 0 };
       }
     });
     const runner = new MaintenanceRunner(api);

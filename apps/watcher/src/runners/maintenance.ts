@@ -69,9 +69,9 @@ export class MaintenanceRunner {
   private async runFixPatrol(job: JobView, signal: AbortSignal): Promise<unknown> {
     const flowId = readFlowId(job.input);
     console.log(`fix_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`);
-    const { runId, selectedCount } = await this.api.runFixPatrol(flowId, signal);
-    console.log(`fix_patrol[${job.id}]: checked ${selectedCount} document(s) (run ${runId})`);
-    return fixPatrolOutputSchema.parse({ runId, selectedCount });
+    const { runId, selectedCount, findingCount } = await this.api.runFixPatrol(flowId, signal);
+    console.log(`fix_patrol[${job.id}]: checked ${selectedCount} document(s), ${findingCount} finding(s) (run ${runId})`);
+    return fixPatrolOutputSchema.parse({ runId, selectedCount, findingCount });
   }
 
   private async triggerScheduledCrunch(job: JobView, signal: AbortSignal): Promise<unknown> {

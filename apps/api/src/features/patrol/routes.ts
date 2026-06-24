@@ -15,8 +15,9 @@ export function fixPatrolRoutes(ctx: AppContext): Hono {
   });
 
   // Thin orchestration endpoint the maintenance watcher's fix_patrol runner POSTs.
-  // Selects the next batch of documents to patrol and advances the cursor; no lens
-  // runs yet. Body optional; an absent flowId patrols the default (unscoped) flow.
+  // Selects the next batch of documents to patrol, runs the verify lens over them,
+  // advances the cursor, and records the run with its findings. Body optional; an
+  // absent flowId patrols the default (unscoped) flow.
   app.post("/run", requireScopes("manage:jobs"), async (c) => {
     const payload = await readJsonBody<{ flowId?: string }>(c);
     const outcome = await patrolService.runFixPatrol(ctx, {
@@ -26,7 +27,11 @@ export function fixPatrolRoutes(ctx: AppContext): Hono {
     if (!outcome.ok) {
       throw new HttpError(400, outcome.code);
     }
-    return c.json({ runId: outcome.run.id, selectedCount: outcome.run.selectedCount });
+    return c.json({
+      runId: outcome.run.id,
+      selectedCount: outcome.run.selectedCount,
+      findingCount: outcome.run.findings.length
+    });
   });
 
   app.get("/runs/:id", requireScopes("read:knowledge"), async (c) => {

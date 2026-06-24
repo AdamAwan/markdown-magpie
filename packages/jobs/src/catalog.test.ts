@@ -143,10 +143,11 @@ test("fix_patrol is a maintenance queue named by its type", () => {
   assert.equal(queueNameForJob("fix_patrol", { flowId: "billing" }), "fix_patrol");
 });
 
-test("fix_patrol input accepts an optional flowId; output carries runId + selectedCount", () => {
+test("fix_patrol input accepts an optional flowId; output carries runId + selectedCount + findingCount", () => {
   assert.ok(jobDefinition("fix_patrol").inputSchema.safeParse({}).success);
   assert.ok(jobDefinition("fix_patrol").inputSchema.safeParse({ flowId: "billing" }).success);
-  assert.ok(jobDefinition("fix_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3 }).success);
+  assert.ok(jobDefinition("fix_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3, findingCount: 1 }).success);
+  assert.ok(!jobDefinition("fix_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3 }).success);
 });
 
 test("source_change_sync output reports the run ids it created (0..N)", () => {

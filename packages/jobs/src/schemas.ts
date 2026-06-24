@@ -308,7 +308,8 @@ export const fixPatrolInputSchema = z.object({ flowId: z.string().optional() });
 // many documents it checked (0 when the flow has no indexed documents yet).
 export const fixPatrolOutputSchema = z.object({
   runId: z.string(),
-  selectedCount: z.number().int()
+  selectedCount: z.number().int(),
+  findingCount: z.number().int()
 });
 
 export const publishSourceSyncInputSchema = z.object({ runId: z.string() });
