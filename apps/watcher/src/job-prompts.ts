@@ -8,7 +8,8 @@ import {
   FOLD_MARKDOWN_PROPOSAL,
   GENERIC_JOB,
   SOURCE_CHANGE_SYNC,
-  SUMMARIZE_GAP
+  SUMMARIZE_GAP,
+  VERIFY_DOCUMENT
 } from "@magpie/prompts";
 import type { RetrievedSection } from "./http-client.js";
 
@@ -38,6 +39,8 @@ export function buildPrompt(job: JobView): string {
       return `${CRUNCH_KNOWLEDGE_BASE.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "sync_source_changes_generate_plan":
       return `${SOURCE_CHANGE_SYNC.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
+    case "verify_document":
+      return `${VERIFY_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     default:
       return `${GENERIC_JOB.instructions}\n\nJob:\n${JSON.stringify({ type: job.type, input: job.input }, null, 2)}`;
   }
