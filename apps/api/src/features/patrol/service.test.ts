@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { makeTestContext } from "../../test-support/context.js";
 import type { VerifyDocumentFn } from "../../scheduling/verify-lens.js";
+import type { DedupeDocumentFn } from "../../scheduling/dedupe-lens.js";
+import type { DedupeDocumentsJobInput } from "@magpie/core";
 import * as patrol from "./service.js";
 import type { CorrectDocumentFn } from "./service.js";
 
@@ -12,11 +14,11 @@ async function indexDocs(ctx: ReturnType<typeof makeTestContext>, paths: string[
   });
 }
 
-// A verifier that reports every document healthy, so the cursor/run tests stay
-// offline and fast (the default verifier would enqueue a verify_document job and
-// bounded-wait on the never-completing fake broker).
-const HEALTHY_DEPS: { verifyDocument: VerifyDocumentFn } = {
-  verifyDocument: async () => ({ verdict: "healthy", claims: [] })
+// Healthy verify + quiet dedupe, so the cursor/run tests stay offline and fast (the
+// real deps would enqueue jobs and bounded-wait on the never-completing fake broker).
+const HEALTHY_DEPS: { verifyDocument: VerifyDocumentFn; dedupeDocument: DedupeDocumentFn } = {
+  verifyDocument: async () => ({ verdict: "healthy", claims: [] }),
+  dedupeDocument: async () => {}
 };
 
 test("runFixPatrol checks a batch, stamps the cursor, and records a run", async () => {
@@ -72,7 +74,7 @@ test("runFixPatrol records verify findings for unprovable documents", async () =
       ? { verdict: "unprovable", claims: [{ claim: "stale", reason: "no source" }] }
       : { verdict: "healthy", claims: [] };
 
-  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, { verifyDocument, correctDocument: async () => {} });
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, { verifyDocument, correctDocument: async () => {}, dedupeDocument: async () => {} });
   assert.ok(outcome.ok);
   if (!outcome.ok) return;
 
@@ -102,7 +104,44 @@ test("runFixPatrol enqueues a correction for each unprovable finding, none for h
     corrected.push({ path: input.path, claims: input.claims.length });
   };
 
-  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, { verifyDocument, correctDocument });
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, { verifyDocument, correctDocument, dedupeDocument: async () => {} });
   assert.ok(outcome.ok);
   assert.deepEqual(corrected, [{ path: "a.md", claims: 1 }]);
+});
+
+test("runFixPatrol runs the dedupe lens over the batch, enqueuing a scan per doc with a near-duplicate", async () => {
+  const ctx = makeTestContext();
+  // Two documents that share a heading — the keyword index ranks each as a strong
+  // neighbour of the other (heading-term matches clear the similarity bar).
+  await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
+    repositoryId: "docs",
+    documents: [
+      { path: "refunds.md", content: "# Refunds Policy Guide\nHow refunds work." },
+      { path: "partial-refunds.md", content: "# Refunds Policy Guide\nHow partial refunds work." }
+    ]
+  });
+  const scanned: DedupeDocumentsJobInput[] = [];
+  const dedupeDocument: DedupeDocumentFn = async (_ctx, input) => {
+    scanned.push(input);
+  };
+
+  const outcome = await patrol.runFixPatrol(
+    ctx,
+    { trigger: "scheduled" },
+    { verifyDocument: async () => ({ verdict: "healthy", claims: [] }), dedupeDocument }
+  );
+  assert.ok(outcome.ok);
+
+  // Each doc found the other as a neighbour, so a dedupe scan was enqueued for both.
+  assert.deepEqual(
+    scanned.map((s) => s.path).sort(),
+    ["partial-refunds.md", "refunds.md"]
+  );
+  const refunds = scanned.find((s) => s.path === "refunds.md");
+  assert.deepEqual(
+    refunds?.neighbours.map((n) => n.path),
+    ["partial-refunds.md"]
+  );
+  // Verify produced no findings, so dedupe runs independently of the verify path.
+  assert.equal(outcome.run.findings.length, 0);
 });

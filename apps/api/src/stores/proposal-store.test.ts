@@ -111,3 +111,34 @@ test("create persists a first-class flowId", async () => {
   assert.equal(proposal.flowId, "billing");
   assert.equal((await store.get(proposal.id))?.flowId, "billing");
 });
+
+test("create persists a multi-file changeset", async () => {
+  const store = new InMemoryProposalStore();
+  const changeset = [
+    { path: "kb/a.md", content: "# A merged" },
+    { path: "kb/b.md", delete: true }
+  ];
+  const proposal = await store.create({ ...draft("a"), changeset });
+  assert.deepEqual(proposal.changeset, changeset);
+  assert.deepEqual((await store.get(proposal.id))?.changeset, changeset);
+});
+
+test("updateChangeset promotes a single-file proposal to a file-set and refreshes markdown", async () => {
+  const store = new InMemoryProposalStore();
+  const created = await store.create(draft("a"));
+  assert.equal(created.changeset, undefined);
+
+  const merged = [
+    { path: "docs/a.md", content: "# A merged" },
+    { path: "docs/b.md", delete: true }
+  ];
+  const updated = await store.updateChangeset(created.id, merged, "# A merged");
+  assert.deepEqual(updated?.changeset, merged);
+  assert.equal(updated?.markdown, "# A merged");
+  assert.equal(updated?.targetPath, created.targetPath);
+});
+
+test("updateChangeset returns undefined for an unknown proposal", async () => {
+  const store = new InMemoryProposalStore();
+  assert.equal(await store.updateChangeset("nope", [], "x"), undefined);
+});

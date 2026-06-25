@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import type { Citation, DraftContext, Proposal, ReviewDecision } from "@magpie/core";
+import type { ChangesetChange, Citation, DraftContext, Proposal, ReviewDecision } from "@magpie/core";
 import type { ProposalInput, ProposalListOptions, ProposalStore } from "./proposal-store.js";
 
 const { Pool } = pg;
@@ -19,9 +19,9 @@ export class PostgresProposalStore implements ProposalStore {
         INSERT INTO proposals (
           id, title, status, target_path, markdown, evidence, gap_summary,
           triggering_question_ids, rationale, job_id, destination_id, gap_cluster_id,
-          draft_context, flow_id
+          draft_context, flow_id, changeset
         )
-        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11::bigint, $12, $13)
+        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11::bigint, $12, $13, $14)
         ON CONFLICT (job_id) WHERE job_id IS NOT NULL
         DO UPDATE SET job_id = EXCLUDED.job_id
         RETURNING *
@@ -39,7 +39,8 @@ export class PostgresProposalStore implements ProposalStore {
         input.destinationId ?? null,
         input.gapClusterId ?? null,
         input.draftContext ? JSON.stringify(input.draftContext) : null,
-        input.flowId ?? null
+        input.flowId ?? null,
+        input.changeset ? JSON.stringify(input.changeset) : null
       ]
     );
 
@@ -108,6 +109,18 @@ export class PostgresProposalStore implements ProposalStore {
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
+  async updateChangeset(
+    id: string,
+    changeset: ChangesetChange[],
+    primaryMarkdown: string
+  ): Promise<Proposal | undefined> {
+    const result = await this.pool.query<ProposalRow>(
+      "UPDATE proposals SET changeset = $2, markdown = $3 WHERE id = $1 RETURNING *",
+      [id, JSON.stringify(changeset), primaryMarkdown]
+    );
+    return result.rows[0] ? mapRow(result.rows[0]) : undefined;
+  }
+
   async updateReviewDecision(id: string, reviewDecision: ReviewDecision): Promise<Proposal | undefined> {
     const result = await this.pool.query<ProposalRow>(
       "UPDATE proposals SET review_decision = $2 WHERE id = $1 RETURNING *",
@@ -145,6 +158,7 @@ interface ProposalRow {
   destination_id: string | null;
   gap_cluster_id: string | null;
   flow_id: string | null;
+  changeset: ChangesetChange[] | null;
   publication: Proposal["publication"] | null;
   review_decision: string | null;
   draft_context: DraftContext | null;
@@ -165,6 +179,7 @@ function mapRow(row: ProposalRow): Proposal {
     destinationId: row.destination_id ?? undefined,
     gapClusterId: row.gap_cluster_id ?? undefined,
     flowId: row.flow_id ?? undefined,
+    changeset: row.changeset ?? undefined,
     rationale: row.rationale ?? undefined,
     jobId: row.job_id ?? undefined,
     publication: row.publication ?? undefined,

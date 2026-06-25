@@ -82,6 +82,34 @@ Return JSON:
 }`
 };
 
+export const FOLD_CHANGESET_PROPOSAL: PromptDefinition = {
+  id: "fold-changeset-proposal",
+  title: "Fold a multi-file rival into an open proposal",
+  description:
+    "Reconciles a multi-file (dedupe/split) rival change into an existing open proposal that overlaps it on at least one document, producing one unified changeset over the union of their file-sets. Used by the watcher's fold_changeset_proposal job.",
+  usedBy: ["watcher · fix-patrol"],
+  outputShape: "{ changeset[], rationale }",
+  instructions: `You are reconciling two multi-file knowledge-base changes that overlap. "survivorChangeset" is the file-set of a change already open as a pull request; "rivalChangeset" is a newly proposed change that touches at least one of the same documents ("sharedPaths"). Merge them into ONE unified changeset that supersedes both.
+
+Rules:
+- Return JSON only.
+- The unified "changeset" must cover the UNION of every path in both inputs.
+- For a path in "sharedPaths", apply BOTH changes coherently: rewrite that document so it reflects the survivor's and the rival's intent together. Never lose information and never simply concatenate — integrate.
+- A path that only one side touches is carried through unchanged (keep its content, or its delete).
+- If a document is deleted by either side, it stays deleted unless the other side meaningfully rewrites it — use your judgement and explain it in the rationale.
+- Use the paths exactly as provided. Every write must contain the full new file content.
+- "rationale" briefly states how you reconciled the overlap.
+
+Return JSON:
+{
+  "changeset": [
+    { "path": "kb/survivor.md", "content": "full reconciled document" },
+    { "path": "kb/other.md", "delete": true }
+  ],
+  "rationale": "string"
+}`
+};
+
 export const CRUNCH_KNOWLEDGE_BASE: PromptDefinition = {
   id: "crunch-knowledge-base",
   title: "Crunch knowledge base",
@@ -218,6 +246,38 @@ Return JSON:
 }`
 };
 
+export const DEDUPE_DOCUMENTS: PromptDefinition = {
+  id: "dedupe-documents",
+  title: "Reconcile a document with a near-duplicate neighbour",
+  description:
+    "Given a knowledge-base document and its nearest neighbours, decides whether it genuinely duplicates or contradicts exactly one of them and, if so, returns a minimal two-file changeset that reconciles the pair. Conservative: silent when there is no real duplicate. Used by the watcher's dedupe_documents job (fix-patrol).",
+  usedBy: ["watcher · fix-patrol"],
+  outputShape: "{ duplicate, rationale, primaryPath, changeset[] }",
+  instructions: `You are tidying a Markdown knowledge base. You are given one document under review ("path"/"content") and its nearest neighbours ("neighbours"). Decide whether the document genuinely DUPLICATES or CONTRADICTS exactly one neighbour, and if so reconcile the pair.
+
+Rules:
+- Return JSON only.
+- Be conservative. Only act when one neighbour clearly covers the same material or states something that contradicts the document. Adjacent or merely related topics are NOT duplicates. When unsure, set "duplicate": false.
+- When there is no real duplicate, return {"duplicate": false, "rationale": "...", "changeset": []}.
+- When there IS a duplicate, pick the better SURVIVOR (usually the more complete document) as "primaryPath", and produce a minimal "changeset" of at most two files that reconciles the pair:
+  - Rewrite the survivor to hold the reconciled content.
+  - Trim the duplicated material from the other document and add a short cross-reference to the survivor. Delete the other document (set "delete": true, no "content") ONLY when trimming would leave it effectively empty.
+- Every changeset path MUST be either the document's path or one of the neighbour paths, exactly as provided. Never invent a path.
+- Preserve all unique information. Do not introduce facts not present in either document.
+- "rationale" is a one-paragraph summary of what you reconciled and why.
+
+Return JSON:
+{
+  "duplicate": true,
+  "rationale": "string",
+  "primaryPath": "existing/survivor.md",
+  "changeset": [
+    { "path": "existing/survivor.md", "content": "full reconciled document" },
+    { "path": "existing/other.md", "content": "trimmed document with a cross-reference" }
+  ]
+}`
+};
+
 export const GAP_CLUSTERING: PromptDefinition = {
   id: "gap-clustering",
   title: "Cluster related gaps",
@@ -301,10 +361,12 @@ export const promptCatalog: PromptDefinition[] = [
   SUMMARIZE_GAP,
   DRAFT_MARKDOWN_PROPOSAL,
   FOLD_MARKDOWN_PROPOSAL,
+  FOLD_CHANGESET_PROPOSAL,
   CRUNCH_KNOWLEDGE_BASE,
   SOURCE_CHANGE_SYNC,
   VERIFY_DOCUMENT,
   CORRECT_DOCUMENT,
+  DEDUPE_DOCUMENTS,
   GAP_CLUSTERING,
   GAP_RECONCILE_PROPOSE,
   GAP_RECONCILE_CRITIC,

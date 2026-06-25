@@ -219,6 +219,13 @@ export interface Proposal {
   status: ProposalStatus;
   targetPath: string;
   markdown: string;
+  // When present, this proposal writes/deletes multiple files and is the source of
+  // truth for both publication and gate overlap. When absent, the proposal is the
+  // single-file [{ path: targetPath, content: markdown }] it has always been.
+  // dedupe (and later split) set it; gap/verify/source-sync leave it undefined.
+  // The proposal still carries a sensible targetPath + markdown — its primary doc,
+  // from which the title, branch name, and PR body derive.
+  changeset?: ChangesetChange[];
   evidence: Citation[];
   gapClusterId?: string;
   // The flow this proposal belongs to, independent of any gap cluster. Gap
@@ -454,6 +461,29 @@ export interface CorrectDocumentJobOutput {
   rationale: string;
 }
 
+// Input to the dedupe_documents AI job: the document under patrol plus its k nearest
+// neighbours (already filtered by similarity and capped). The job decides whether A
+// genuinely duplicates/contradicts one neighbour and, if so, returns the pairwise
+// changeset. `provider` is added at enqueue (see @magpie/jobs).
+export interface DedupeDocumentsJobInput {
+  path: string;
+  content: string;
+  neighbours: Array<{ path: string; content: string }>;
+  destinationId?: string;
+  flowId?: string;
+}
+
+// Output of the dedupe_documents job. Conservative: `duplicate` is false unless A and
+// exactly one neighbour are a real duplicate/contradiction. When true, `changeset` is
+// the pairwise file-set (rewrite the survivor, trim or delete the other) and
+// `primaryPath` names the survivor (doc A).
+export interface DedupeDocumentsJobOutput {
+  duplicate: boolean;
+  rationale: string;
+  primaryPath?: string;
+  changeset?: ChangesetChange[];
+}
+
 export interface DraftMarkdownProposalJobOutput {
   title: string;
   targetPath: string;
@@ -476,6 +506,26 @@ export interface FoldMarkdownProposalJobInput {
 
 export interface FoldMarkdownProposalJobOutput {
   markdown: string;
+  rationale: string;
+}
+
+// Input to the fold_changeset_proposal AI job: a multi-file (dedupe/split) rival that
+// overlaps an open survivor PR on at least one path. The model reconciles the two
+// file-sets into one unified changeset over their union. `provider` is added at enqueue.
+export interface FoldChangesetProposalJobInput {
+  survivorProposalId: string;
+  rivalProposalId: string;
+  survivorChangeset: ChangesetChange[];
+  rivalChangeset: ChangesetChange[];
+  // The paths both file-sets touch — where the model must apply both edits coherently.
+  sharedPaths: string[];
+  expectedOutput: "folded_changeset";
+}
+
+// Output of the fold_changeset_proposal job: the unified file-set the survivor PR is
+// promoted to, plus a short rationale.
+export interface FoldChangesetProposalJobOutput {
+  changeset: ChangesetChange[];
   rationale: string;
 }
 

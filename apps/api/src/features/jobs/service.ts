@@ -146,9 +146,8 @@ export async function completeJob(
       message: "Watcher output did not match the job contract",
       category: "validation"
     });
-    if (existingJob.type === "fold_markdown_proposal") {
-      await foldService.enqueueFoldFallback(ctx, existingJob);
-    }
+    // No-ops unless this is a fold job (single-file or multi-file).
+    await foldService.enqueueFoldFallback(ctx, existingJob);
     return { ok: false, code: "invalid_output" };
   }
 
@@ -173,7 +172,18 @@ export async function completeJob(
         console.warn(`Corrective reconcile for proposal ${correctiveProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    const dedupeProposal = await proposalsService.createDedupeProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    if (dedupeProposal) {
+      // Dedupe reconcile is best-effort too — it gates the multi-file change and either
+      // self-publishes or enqueues the multi-file fold; it must never fail completion.
+      try {
+        await foldService.reconcileDedupeProposal(ctx, dedupeProposal);
+      } catch (error) {
+        console.warn(`Dedupe reconcile for proposal ${dedupeProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     await foldService.applyFoldFromCompletedJob(ctx, existingJob, parsed.data);
+    await foldService.applyChangesetFoldFromCompletedJob(ctx, existingJob, parsed.data);
     await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, parsed.data);
     await crunchService.recordCrunchPublicationFromCompletedJob(ctx, existingJob, parsed.data);
@@ -284,7 +294,10 @@ export async function failJob(ctx: AppContext, jobId: string, jobError: JobError
       await ctx.stores.sourceSync.failRun(run.id, jobError.message);
     }
   }
-  if (failingJob?.type === "fold_markdown_proposal" && failedJob.state === "failed") {
+  if (
+    (failingJob?.type === "fold_markdown_proposal" || failingJob?.type === "fold_changeset_proposal") &&
+    failedJob.state === "failed"
+  ) {
     await foldService.enqueueFoldFallback(ctx, failingJob);
   }
   return failedJob;

@@ -1,5 +1,6 @@
 import type { ChangeIntent } from "./intent.js";
 import type { Proposal } from "@magpie/core";
+import { proposalTargets } from "./changeset.js";
 
 // The intersection of two file-sets, de-duplicated and in `a`'s order. Two changes
 // overlap (and so must be reconciled rather than raised as rival PRs) exactly when
@@ -97,7 +98,10 @@ export function openPullRequestSummaries(proposals: Proposal[]): OpenPullRequest
     }
     out.push({
       proposalId: proposal.id,
-      targets: [proposal.targetPath],
+      // A changeset proposal touches every path in its file-set; a single-file
+      // proposal still reports just its targetPath. So an open dedupe PR on [A, B]
+      // is detected as overlapping a later intent that touches either A or B.
+      targets: proposalTargets(proposal),
       // An approved PR is locked: folding another change into it would invalidate the
       // review. Every other state (and an un-polled proposal) is still touchable.
       touchable: proposal.reviewDecision !== "approved"

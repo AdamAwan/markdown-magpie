@@ -392,3 +392,59 @@ test("createCorrectiveProposalFromCompletedJob creates a labelled draft carrying
   assert.equal(second?.id, first?.id);
   assert.equal((await proposals.list(ctx, 50)).length, 1);
 });
+
+async function dedupeJob(ctx: ReturnType<typeof makeTestContext>) {
+  return ctx.jobs.create("dedupe_documents", {
+    path: "kb/refunds.md",
+    content: "# Refunds",
+    neighbours: [{ path: "kb/partial-refunds.md", content: "# Partial refunds" }],
+    destinationId: "docs",
+    flowId: "billing",
+    provider: "codex"
+  });
+}
+
+test("createDedupeProposalFromCompletedJob drafts a file-set proposal carrying the changeset and flowId", async () => {
+  const ctx = makeTestContext();
+  const job = await dedupeJob(ctx);
+  const changeset = [
+    { path: "kb/refunds.md", content: "# Refunds\nincludes partial refunds" },
+    { path: "kb/partial-refunds.md", delete: true }
+  ];
+  const output = { duplicate: true, rationale: "merged the duplicate", primaryPath: "kb/refunds.md", changeset };
+
+  const first = await proposals.createDedupeProposalFromCompletedJob(ctx, job, output);
+  assert.ok(first);
+  assert.equal(first?.flowId, "billing");
+  assert.equal(first?.targetPath, "kb/refunds.md");
+  assert.equal(first?.markdown, "# Refunds\nincludes partial refunds");
+  assert.deepEqual(first?.changeset, changeset);
+  assert.ok(first?.title.startsWith("Dedupe:"));
+
+  // Idempotent on jobId.
+  const second = await proposals.createDedupeProposalFromCompletedJob(ctx, job, output);
+  assert.equal(second?.id, first?.id);
+});
+
+test("createDedupeProposalFromCompletedJob is silent when no duplicate was found", async () => {
+  const ctx = makeTestContext();
+  const job = await dedupeJob(ctx);
+  const result = await proposals.createDedupeProposalFromCompletedJob(ctx, job, {
+    duplicate: false,
+    rationale: "no real overlap",
+    changeset: []
+  });
+  assert.equal(result, undefined);
+});
+
+test("createDedupeProposalFromCompletedJob skips a changeset whose primaryPath has no write", async () => {
+  const ctx = makeTestContext();
+  const job = await dedupeJob(ctx);
+  const result = await proposals.createDedupeProposalFromCompletedJob(ctx, job, {
+    duplicate: true,
+    rationale: "malformed",
+    primaryPath: "kb/refunds.md",
+    changeset: [{ path: "kb/partial-refunds.md", delete: true }]
+  });
+  assert.equal(result, undefined);
+});

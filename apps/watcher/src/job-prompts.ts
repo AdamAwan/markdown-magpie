@@ -5,7 +5,9 @@ import type { z } from "zod";
 import {
   CORRECT_DOCUMENT,
   CRUNCH_KNOWLEDGE_BASE,
+  DEDUPE_DOCUMENTS,
   DRAFT_MARKDOWN_PROPOSAL,
+  FOLD_CHANGESET_PROPOSAL,
   FOLD_MARKDOWN_PROPOSAL,
   GENERIC_JOB,
   SOURCE_CHANGE_SYNC,
@@ -36,6 +38,8 @@ export function buildPrompt(job: JobView): string {
       return `${DRAFT_MARKDOWN_PROPOSAL.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "fold_markdown_proposal":
       return `${FOLD_MARKDOWN_PROPOSAL.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
+    case "fold_changeset_proposal":
+      return `${FOLD_CHANGESET_PROPOSAL.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "crunch_knowledge_base":
       return `${CRUNCH_KNOWLEDGE_BASE.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "sync_source_changes_generate_plan":
@@ -44,6 +48,8 @@ export function buildPrompt(job: JobView): string {
       return `${VERIFY_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "correct_document":
       return `${CORRECT_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
+    case "dedupe_documents":
+      return `${DEDUPE_DOCUMENTS.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     default:
       return `${GENERIC_JOB.instructions}\n\nJob:\n${JSON.stringify({ type: job.type, input: job.input }, null, 2)}`;
   }

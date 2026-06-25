@@ -128,6 +128,46 @@ describe("PublicationRunner", () => {
     assert.equal(parsed.pullRequestUrl, "https://github.com/acme/docs/pull/7");
   });
 
+  it("publishes a changeset proposal via publishChangeset, not the single-file path", async () => {
+    let changesetCall: { branchName: string; changes: unknown } | undefined;
+    let singleFileCalled = false;
+    const changesetContext: ProposalExecutionContext = {
+      proposal: {
+        id: "prop-12345678",
+        title: "Dedupe deploy guide",
+        markdown: "# Deploy\nmerged",
+        targetPath: "ops/deploy.md",
+        changeset: [
+          { path: "ops/deploy.md", content: "# Deploy\nmerged" },
+          { path: "ops/deploy-old.md", delete: true }
+        ]
+      },
+      repository: REPOSITORY
+    };
+    const runner = new PublicationRunner(fakeApi({ proposalExecutionContext: async () => changesetContext }), {
+      prepareRepository: async (repository) => repository,
+      publishProposal: async () => {
+        singleFileCalled = true;
+        return { branchName: "b", commitSha: "c" };
+      },
+      publishChangeset: async (request) => {
+        changesetCall = { branchName: request.branchName, changes: request.changes };
+        return { branchName: request.branchName, commitSha: "abc123", remoteUrl: REPOSITORY.remoteUrl };
+      },
+      raisePullRequest: async () => ({ url: "https://github.com/acme/docs/pull/9", number: 9 }),
+      commentOnPullRequest: async () => undefined
+    });
+
+    const output = await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), new AbortController().signal);
+    const parsed = publishProposalOutputSchema.parse(output);
+    assert.equal(singleFileCalled, false, "single-file publish must not run for a changeset proposal");
+    assert.deepEqual(changesetCall?.changes, [
+      { path: "ops/deploy.md", content: "# Deploy\nmerged" },
+      { path: "ops/deploy-old.md", delete: true }
+    ]);
+    assert.equal(parsed.pullRequestUrl, "https://github.com/acme/docs/pull/9");
+  });
+
   it("degrades to a branch-only proposal publish when PR raising fails", async () => {
     const runner = new PublicationRunner(fakeApi(), {
       prepareRepository: async (repository) => repository,

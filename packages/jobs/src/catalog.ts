@@ -75,6 +75,8 @@ const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
   sync_source_changes_generate_plan: define("sync_source_changes_generate_plan", "provider", schemas.syncSourceChangesGeneratePlanInputSchema, schemas.syncSourceChangesGeneratePlanOutputSchema, 60 * 60),
   verify_document: define("verify_document", "provider", schemas.verifyDocumentInputSchema, schemas.verifyDocumentOutputSchema, 10 * 60),
   correct_document: define("correct_document", "provider", schemas.correctDocumentInputSchema, schemas.correctDocumentOutputSchema, 10 * 60),
+  dedupe_documents: define("dedupe_documents", "provider", schemas.dedupeDocumentsInputSchema, schemas.dedupeDocumentsOutputSchema, 10 * 60),
+  fold_changeset_proposal: define("fold_changeset_proposal", "provider", schemas.foldChangesetProposalInputSchema, schemas.foldChangesetProposalOutputSchema, 15 * 60),
   refresh_pull_requests: define("refresh_pull_requests", "github", schemas.refreshPullRequestsInputSchema, schemas.refreshPullRequestsOutputSchema, 5 * 60),
   process_gaps_to_pull_requests: define("process_gaps_to_pull_requests", "maintenance", schemas.processGapsToPullRequestsInputSchema, schemas.processGapsToPullRequestsOutputSchema, 60 * 60),
   trigger_scheduled_crunch: define("trigger_scheduled_crunch", "maintenance", schemas.triggerScheduledCrunchInputSchema, schemas.triggerScheduledCrunchOutputSchema, 60 * 60),
@@ -107,7 +109,9 @@ const aiJobTypes = new Set<JobType>([
   "reconcile_gap_clusters",
   "sync_source_changes_generate_plan",
   "verify_document",
-  "correct_document"
+  "correct_document",
+  "dedupe_documents",
+  "fold_changeset_proposal"
 ]);
 
 function concreteWorkQueues(): QueueDefinition[] {
