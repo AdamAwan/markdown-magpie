@@ -10,6 +10,8 @@ import type {
   DraftMarkdownProposalJobOutput,
   FoldMarkdownProposalJobInput as CoreFoldMarkdownProposalJobInput,
   FoldMarkdownProposalJobOutput,
+  FoldChangesetProposalJobInput as CoreFoldChangesetProposalJobInput,
+  FoldChangesetProposalJobOutput,
   SourceChangeSyncJobInput as CoreSourceChangeSyncJobInput,
   SummarizeGapJobInput as CoreSummarizeGapJobInput,
   SummarizeGapJobOutput,
@@ -293,6 +295,20 @@ export const dedupeDocumentsOutputSchema = z.object({
   primaryPath: z.string().optional(),
   changeset: z.array(changesetChangeSchema).optional()
 }) satisfies z.ZodType<DedupeDocumentsJobOutput>;
+
+export const foldChangesetProposalInputSchema = z.object({
+  provider: providerSchema,
+  survivorProposalId: z.string(),
+  rivalProposalId: z.string(),
+  survivorChangeset: z.array(changesetChangeSchema),
+  rivalChangeset: z.array(changesetChangeSchema),
+  sharedPaths: z.array(z.string()),
+  expectedOutput: z.literal("folded_changeset")
+}) satisfies z.ZodType<ProviderInput<CoreFoldChangesetProposalJobInput>>;
+export const foldChangesetProposalOutputSchema = z.object({
+  changeset: z.array(changesetChangeSchema),
+  rationale: z.string()
+}) satisfies z.ZodType<FoldChangesetProposalJobOutput>;
 
 export const refreshPullRequestsInputSchema = z.object({});
 export const refreshPullRequestsOutputSchema = z.object({

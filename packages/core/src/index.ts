@@ -509,6 +509,26 @@ export interface FoldMarkdownProposalJobOutput {
   rationale: string;
 }
 
+// Input to the fold_changeset_proposal AI job: a multi-file (dedupe/split) rival that
+// overlaps an open survivor PR on at least one path. The model reconciles the two
+// file-sets into one unified changeset over their union. `provider` is added at enqueue.
+export interface FoldChangesetProposalJobInput {
+  survivorProposalId: string;
+  rivalProposalId: string;
+  survivorChangeset: ChangesetChange[];
+  rivalChangeset: ChangesetChange[];
+  // The paths both file-sets touch — where the model must apply both edits coherently.
+  sharedPaths: string[];
+  expectedOutput: "folded_changeset";
+}
+
+// Output of the fold_changeset_proposal job: the unified file-set the survivor PR is
+// promoted to, plus a short rationale.
+export interface FoldChangesetProposalJobOutput {
+  changeset: ChangesetChange[];
+  rationale: string;
+}
+
 export interface PullRequestProvider {
   createPullRequest(request: CreatePullRequestRequest): Promise<CreatePullRequestResponse>;
 }

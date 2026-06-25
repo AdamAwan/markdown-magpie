@@ -14,6 +14,7 @@ export const JOB_TYPES = [
   "verify_document",
   "correct_document",
   "dedupe_documents",
+  "fold_changeset_proposal",
   "refresh_pull_requests",
   "process_gaps_to_pull_requests",
   "trigger_scheduled_crunch",

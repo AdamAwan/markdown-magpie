@@ -82,6 +82,34 @@ Return JSON:
 }`
 };
 
+export const FOLD_CHANGESET_PROPOSAL: PromptDefinition = {
+  id: "fold-changeset-proposal",
+  title: "Fold a multi-file rival into an open proposal",
+  description:
+    "Reconciles a multi-file (dedupe/split) rival change into an existing open proposal that overlaps it on at least one document, producing one unified changeset over the union of their file-sets. Used by the watcher's fold_changeset_proposal job.",
+  usedBy: ["watcher · fix-patrol"],
+  outputShape: "{ changeset[], rationale }",
+  instructions: `You are reconciling two multi-file knowledge-base changes that overlap. "survivorChangeset" is the file-set of a change already open as a pull request; "rivalChangeset" is a newly proposed change that touches at least one of the same documents ("sharedPaths"). Merge them into ONE unified changeset that supersedes both.
+
+Rules:
+- Return JSON only.
+- The unified "changeset" must cover the UNION of every path in both inputs.
+- For a path in "sharedPaths", apply BOTH changes coherently: rewrite that document so it reflects the survivor's and the rival's intent together. Never lose information and never simply concatenate — integrate.
+- A path that only one side touches is carried through unchanged (keep its content, or its delete).
+- If a document is deleted by either side, it stays deleted unless the other side meaningfully rewrites it — use your judgement and explain it in the rationale.
+- Use the paths exactly as provided. Every write must contain the full new file content.
+- "rationale" briefly states how you reconciled the overlap.
+
+Return JSON:
+{
+  "changeset": [
+    { "path": "kb/survivor.md", "content": "full reconciled document" },
+    { "path": "kb/other.md", "delete": true }
+  ],
+  "rationale": "string"
+}`
+};
+
 export const CRUNCH_KNOWLEDGE_BASE: PromptDefinition = {
   id: "crunch-knowledge-base",
   title: "Crunch knowledge base",
@@ -333,6 +361,7 @@ export const promptCatalog: PromptDefinition[] = [
   SUMMARIZE_GAP,
   DRAFT_MARKDOWN_PROPOSAL,
   FOLD_MARKDOWN_PROPOSAL,
+  FOLD_CHANGESET_PROPOSAL,
   CRUNCH_KNOWLEDGE_BASE,
   SOURCE_CHANGE_SYNC,
   VERIFY_DOCUMENT,
