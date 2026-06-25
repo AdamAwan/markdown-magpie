@@ -63,6 +63,50 @@ export async function reconcileDraftedProposal(ctx: AppContext, rival: Proposal)
   );
 }
 
+// Gate + publish a corrective (verify-lens) proposal. Unlike the gap at-draft hook,
+// this OWNS publication: a clusterless patrol proposal is not published by the gap
+// cluster reconciler, so open-new and defer both publish it as its own PR; only a
+// touchable overlap folds. Best-effort — the caller (completeJob) guards throws.
+export async function reconcileCorrectiveProposal(ctx: AppContext, proposal: Proposal): Promise<void> {
+  if (proposal.status !== "draft" || !proposal.targetPath) {
+    return;
+  }
+  const flowId = await proposalFlowId(ctx, proposal);
+  const candidates = await sameFlowOpenProposals(ctx, flowId, proposal.id);
+  const intent: ChangeIntent = {
+    lens: "verify",
+    flowId,
+    targets: [proposal.targetPath],
+    evidence: proposal.evidence.map((citation) => citation.path),
+    rationale: proposal.rationale ?? ""
+  };
+  const decision = decideReconciliation(intent, openPullRequestSummaries(candidates));
+
+  if (decision.kind === "fold") {
+    const survivor = await ctx.stores.proposals.get(decision.intoProposalId);
+    if (survivor) {
+      await ctx.jobs.create("fold_markdown_proposal", {
+        provider: ctx.config.get().aiProvider,
+        survivorProposalId: survivor.id,
+        rivalProposalId: proposal.id,
+        targetPath: proposal.targetPath,
+        survivorMarkdown: survivor.markdown,
+        rivalMarkdown: proposal.markdown,
+        rivalGapSummaries: [],
+        rivalEvidence: proposal.evidence,
+        expectedOutput: "folded_markdown"
+      });
+      console.log(`Verify fold: enqueued fold of corrective ${proposal.id} into ${survivor.id} on ${proposal.targetPath}.`);
+      return;
+    }
+    // Survivor vanished between gate and fetch — fall through to self-publish.
+  }
+
+  // open-new, defer, or a fold whose survivor disappeared: publish as its own PR.
+  await ctx.stores.gapClusters.enqueuePublicationAction(proposal.id, "publish");
+  console.log(`Verify corrective ${proposal.id} (${decision.kind}) on ${proposal.targetPath}: enqueued to publish.`);
+}
+
 // Applies a completed fold: update the survivor's markdown, absorb the rival's gap
 // cluster into the survivor's (so the rival's gaps resolve when the survivor merges),
 // supersede the rival, and re-publish the survivor through the outbox. Idempotent on

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { makeTestContext } from "../test-support/context.js";
-import { reconcileDraftedProposal, applyFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
+import { reconcileDraftedProposal, reconcileCorrectiveProposal, applyFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
 import type { AppContext } from "../context.js";
 
 async function clusterWithGap(ctx: AppContext, flowId: string | undefined, summary: string): Promise<string> {
@@ -78,6 +78,56 @@ describe("reconcileDraftedProposal", () => {
     // Instead the rival is enqueued to publish as its own PR.
     const pending = await ctx.stores.gapClusters.listPendingPublicationActions();
     assert.ok(pending.some((a) => a.proposalId === rival.id && a.kind === "publish"));
+  });
+});
+
+describe("reconcileCorrectiveProposal", () => {
+  it("open-new (no overlap) enqueues a publish action", async () => {
+    const ctx = makeTestContext();
+    const proposal = await ctx.stores.proposals.create({
+      title: "Verify: correct unprovable claims in a.md",
+      targetPath: "a.md",
+      markdown: "# a",
+      rationale: "r",
+      evidence: [],
+      flowId: "billing"
+    });
+    await reconcileCorrectiveProposal(ctx, proposal);
+    const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
+    assert.deepEqual(
+      actions.map((a) => ({ proposalId: a.proposalId, kind: a.kind })),
+      [{ proposalId: proposal.id, kind: "publish" }]
+    );
+  });
+
+  it("fold (overlapping touchable PR) enqueues a fold_markdown_proposal job, no publish", async () => {
+    const ctx = makeTestContext();
+    const survivor = await ctx.stores.proposals.create({
+      title: "Gap doc",
+      targetPath: "a.md",
+      markdown: "# survivor",
+      rationale: "r",
+      evidence: [],
+      flowId: "billing"
+    });
+    await ctx.stores.proposals.recordPublication(survivor.id, {
+      provider: "local-git",
+      branchName: "b",
+      commitSha: "c",
+      pullRequestUrl: "https://github.com/o/r/pull/1",
+      publishedAt: new Date().toISOString()
+    });
+    const rival = await ctx.stores.proposals.create({
+      title: "Verify: correct unprovable claims in a.md",
+      targetPath: "a.md",
+      markdown: "# rival",
+      rationale: "r",
+      evidence: [],
+      flowId: "billing"
+    });
+    await reconcileCorrectiveProposal(ctx, rival);
+    assert.equal((await ctx.jobs.list({ type: "fold_markdown_proposal" })).jobs.length, 1);
+    assert.deepEqual(await ctx.stores.gapClusters.listPendingPublicationActions(), []);
   });
 });
 

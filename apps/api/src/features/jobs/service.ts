@@ -163,6 +163,16 @@ export async function completeJob(
         console.warn(`Fold check for proposal ${draftedProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    const correctiveProposal = await proposalsService.createCorrectiveProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    if (correctiveProposal) {
+      // Corrective reconcile is best-effort, like the at-draft fold hook: it must
+      // never fail the job completion itself.
+      try {
+        await foldService.reconcileCorrectiveProposal(ctx, correctiveProposal);
+      } catch (error) {
+        console.warn(`Corrective reconcile for proposal ${correctiveProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     await foldService.applyFoldFromCompletedJob(ctx, existingJob, parsed.data);
     await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, parsed.data);

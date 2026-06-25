@@ -563,3 +563,25 @@ test("refresh_pull_requests completion without a reviewDecision leaves a prior o
   );
   assert.equal((await ctx.stores.proposals.get(proposal.id))?.reviewDecision, "approved");
 });
+
+test("completeJob on a correct_document job creates a corrective proposal and enqueues its publication", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("correct_document", {
+    path: "a.md",
+    content: "# a",
+    claims: [{ claim: "stale", reason: "x" }],
+    sources: [],
+    destinationId: "docs",
+    flowId: "billing",
+    provider: "codex"
+  });
+  const result = await completeJob(ctx, job.id, { markdown: "# a (fixed)", rationale: "fixed" });
+  assert.equal(result.ok, true);
+
+  const proposal = (await ctx.stores.proposals.list(50)).find((p) => p.targetPath === "a.md");
+  assert.ok(proposal);
+  assert.equal(proposal?.flowId, "billing");
+
+  const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
+  assert.ok(actions.some((a) => a.proposalId === proposal?.id && a.kind === "publish"));
+});

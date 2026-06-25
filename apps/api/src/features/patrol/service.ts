@@ -1,5 +1,5 @@
 import type { AppContext } from "../../context.js";
-import type { PatrolRun, VerifyDocumentJobInput } from "@magpie/core";
+import type { CorrectDocumentJobInput, PatrolRun, VerifyDocumentJobInput } from "@magpie/core";
 import { verifyDocumentOutputSchema } from "@magpie/jobs";
 import { selectFlow } from "../../platform/repositories.js";
 import { selectPatrolBatch } from "../../scheduling/patrol-cursor.js";
@@ -66,11 +66,30 @@ const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sou
   return parsed.success ? parsed.data : undefined;
 };
 
+// Runs the corrective repair for one document. The default enqueues a
+// correct_document AI job (enqueue-only — the corrective proposal is drafted and
+// gated later, on job completion, via completeJob); tests inject a spy/fake.
+export type CorrectDocumentFn = (ctx: AppContext, input: CorrectDocumentJobInput) => Promise<void>;
+
+const defaultCorrectDocument: CorrectDocumentFn = async (ctx, input) => {
+  await ctx.jobs.create("correct_document", {
+    path: input.path,
+    content: input.content,
+    claims: input.claims,
+    sources: input.sources,
+    destinationId: input.destinationId,
+    flowId: input.flowId,
+    provider: ctx.config.get().aiProvider
+  } satisfies CorrectDocumentJobInput & { provider: AiProviderName });
+};
+
 export async function runFixPatrol(
   ctx: AppContext,
   options: { flowId?: string; trigger: PatrolRun["trigger"] },
-  deps: { verifyDocument: VerifyDocumentFn } = { verifyDocument: defaultVerifyDocument }
+  deps: { verifyDocument?: VerifyDocumentFn; correctDocument?: CorrectDocumentFn } = {}
 ): Promise<FixPatrolOutcome> {
+  const verifyDocument = deps.verifyDocument ?? defaultVerifyDocument;
+  const correctDocument = deps.correctDocument ?? defaultCorrectDocument;
   const scope = resolveScope(ctx, options.flowId);
   if (!scope.ok) {
     return scope;
@@ -101,8 +120,26 @@ export async function runFixPatrol(
     flowId: options.flowId,
     documents: selectedDocuments,
     sources,
-    verifyDocument: deps.verifyDocument
+    verifyDocument
   });
+
+  // Each unprovable finding becomes a corrective proposal: enqueue a correct_document
+  // job grounded in the same source material the verify lens saw. Enqueue-only — the
+  // proposal is drafted and gated later, on job completion.
+  for (const finding of findings) {
+    const document = documents.find((doc) => doc.path === finding.path);
+    if (!document) {
+      continue;
+    }
+    await correctDocument(ctx, {
+      path: finding.path,
+      content: document.content,
+      claims: finding.claims,
+      sources,
+      destinationId: document.repositoryId,
+      flowId: options.flowId
+    });
+  }
 
   await ctx.stores.patrol.stampChecked(options.flowId, selected);
 

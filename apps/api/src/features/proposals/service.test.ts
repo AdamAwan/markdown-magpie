@@ -366,3 +366,29 @@ test("getProposalExecutionContext returns 409 codes when no git repository match
   if (outcome.ok) throw new Error("unreachable");
   assert.equal(outcome.code, "proposal_repository_not_found");
 });
+
+test("createCorrectiveProposalFromCompletedJob creates a labelled draft carrying the flowId, idempotent on jobId", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("correct_document", {
+    path: "a.md",
+    content: "# a",
+    claims: [{ claim: "stale", reason: "x" }],
+    sources: [],
+    destinationId: "docs",
+    flowId: "billing",
+    provider: "codex"
+  });
+  const output = { markdown: "# a (fixed)", rationale: "removed stale claim" };
+
+  const first = await proposals.createCorrectiveProposalFromCompletedJob(ctx, job, output);
+  assert.ok(first);
+  assert.equal(first?.flowId, "billing");
+  assert.equal(first?.targetPath, "a.md");
+  assert.equal(first?.markdown, "# a (fixed)");
+  assert.ok(first?.title.startsWith("Verify:"));
+
+  // Re-delivery: same jobId -> same proposal, no duplicate.
+  const second = await proposals.createCorrectiveProposalFromCompletedJob(ctx, job, output);
+  assert.equal(second?.id, first?.id);
+  assert.equal((await proposals.list(ctx, 50)).length, 1);
+});
