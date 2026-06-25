@@ -14,7 +14,9 @@ import type {
   SummarizeGapJobInput as CoreSummarizeGapJobInput,
   SummarizeGapJobOutput,
   VerifyDocumentJobInput as CoreVerifyDocumentJobInput,
-  VerifyDocumentJobOutput
+  VerifyDocumentJobOutput,
+  CorrectDocumentJobInput as CoreCorrectDocumentJobInput,
+  CorrectDocumentJobOutput
 } from "@magpie/core";
 import { AI_PROVIDERS, type AiProviderName, type JobError } from "./types.js";
 
@@ -253,6 +255,20 @@ export const verifyDocumentOutputSchema = z.object({
   verdict: z.enum(["healthy", "unprovable"]),
   claims: z.array(z.object({ claim: z.string(), reason: z.string() }))
 }) satisfies z.ZodType<VerifyDocumentJobOutput>;
+
+export const correctDocumentInputSchema = z.object({
+  provider: providerSchema,
+  path: z.string(),
+  content: z.string(),
+  claims: z.array(z.object({ claim: z.string(), reason: z.string() })),
+  sources: z.array(sourceDataContextSchema),
+  destinationId: z.string().optional(),
+  flowId: z.string().optional()
+}) satisfies z.ZodType<ProviderInput<CoreCorrectDocumentJobInput>>;
+export const correctDocumentOutputSchema = z.object({
+  markdown: z.string(),
+  rationale: z.string()
+}) satisfies z.ZodType<CorrectDocumentJobOutput>;
 
 export const refreshPullRequestsInputSchema = z.object({});
 export const refreshPullRequestsOutputSchema = z.object({

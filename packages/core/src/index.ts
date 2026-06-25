@@ -221,6 +221,11 @@ export interface Proposal {
   markdown: string;
   evidence: Citation[];
   gapClusterId?: string;
+  // The flow this proposal belongs to, independent of any gap cluster. Gap
+  // proposals leave this unset and resolve their flow via the cluster; patrol-lens
+  // proposals (verify, and later dedupe/split/complete) set it directly so the
+  // reconcile gate sees them as same-flow and the per-flow outbox drains them.
+  flowId?: string;
   gapSummary?: string;
   triggeringQuestionIds?: string[];
   destinationId?: string;
@@ -427,6 +432,26 @@ export interface VerifyDocumentJobInput {
 export interface VerifyDocumentJobOutput {
   verdict: "healthy" | "unprovable";
   claims: UnprovableClaim[];
+}
+
+// Input to the correct_document AI job: a document the verify lens flagged as
+// unprovable, the specific claims to repair, and the source material to ground the
+// repair in. `provider` is added at enqueue (see @magpie/jobs).
+export interface CorrectDocumentJobInput {
+  path: string;
+  content: string;
+  claims: UnprovableClaim[];
+  sources: SourceDataContext[];
+  destinationId?: string;
+  flowId?: string;
+}
+
+// Output of the correct_document job: the full corrected document body (each
+// flagged claim rewritten to match a source excerpt, or removed when unsupportable)
+// plus a short rationale.
+export interface CorrectDocumentJobOutput {
+  markdown: string;
+  rationale: string;
 }
 
 export interface DraftMarkdownProposalJobOutput {

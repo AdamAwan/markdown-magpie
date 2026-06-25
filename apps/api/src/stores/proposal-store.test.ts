@@ -104,3 +104,10 @@ test("updateReviewDecision returns undefined for an unknown proposal", async () 
   const store = new InMemoryProposalStore();
   assert.equal(await store.updateReviewDecision("nope", "approved"), undefined);
 });
+
+test("create persists a first-class flowId", async () => {
+  const store = new InMemoryProposalStore();
+  const proposal = await store.create({ ...draft("doc"), flowId: "billing" });
+  assert.equal(proposal.flowId, "billing");
+  assert.equal((await store.get(proposal.id))?.flowId, "billing");
+});

@@ -190,6 +190,34 @@ Return JSON:
 }`
 };
 
+export const CORRECT_DOCUMENT: PromptDefinition = {
+  id: "correct-document",
+  title: "Correct a document's unprovable claims",
+  description:
+    "Repairs a knowledge-base document the verify lens flagged: each unprovable claim is rewritten to match a supporting source excerpt, or removed when the sources do not support it. Returns the full corrected document. Used by the watcher's correct_document job.",
+  usedBy: ["watcher · fix-patrol"],
+  outputShape: "{ markdown, rationale }",
+  instructions: `You correct a Markdown knowledge-base document whose listed claims could not be proven against its source material. Produce a corrected version of the WHOLE document.
+
+Input:
+- "path" and "content": the document under repair.
+- "claims": the specific unprovable claims to fix, each with a reason.
+- "sources": the source material to ground every correction in.
+
+Rules:
+- Return JSON only.
+- For each listed claim: rewrite it so it matches what the sources actually support, quoting/paraphrasing only what the sources say. If NOTHING in the sources supports the claim, REMOVE it and smooth the surrounding prose.
+- Never introduce a new assertion that the sources do not support. Do not invent figures, dates, or facts.
+- Leave every other part of the document unchanged.
+- "rationale" is a one-paragraph summary of what you changed and why.
+
+Return JSON:
+{
+  "markdown": "the full corrected document",
+  "rationale": "string"
+}`
+};
+
 export const GAP_CLUSTERING: PromptDefinition = {
   id: "gap-clustering",
   title: "Cluster related gaps",
@@ -276,6 +304,7 @@ export const promptCatalog: PromptDefinition[] = [
   CRUNCH_KNOWLEDGE_BASE,
   SOURCE_CHANGE_SYNC,
   VERIFY_DOCUMENT,
+  CORRECT_DOCUMENT,
   GAP_CLUSTERING,
   GAP_RECONCILE_PROPOSE,
   GAP_RECONCILE_CRITIC,

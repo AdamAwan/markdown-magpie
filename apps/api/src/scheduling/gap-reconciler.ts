@@ -440,6 +440,9 @@ async function proposalFlowId(
   proposal: Proposal,
   cache: ClusterFlowCache
 ): Promise<string | undefined> {
+  if (proposal.flowId) {
+    return proposal.flowId;
+  }
   const clusterId = proposal.gapClusterId;
   if (!clusterId) {
     return undefined;

@@ -25,6 +25,7 @@ const EXPIRATION_SECONDS = {
   reconcile_gap_clusters: 5 * 60,
   sync_source_changes_generate_plan: 60 * 60,
   verify_document: 10 * 60,
+  correct_document: 10 * 60,
   refresh_pull_requests: 5 * 60,
   process_gaps_to_pull_requests: 60 * 60,
   trigger_scheduled_crunch: 60 * 60,
@@ -129,6 +130,14 @@ test("verify_document routes by provider like other AI work", () => {
   const codexQueues = queueNamesForCapabilities(["codex"]);
   assert.ok(codexQueues.includes("verify_document__codex"));
   assert.ok(!queueNamesForCapabilities(["github"]).includes("verify_document__codex"));
+});
+
+test("correct_document routes by provider like other AI work", () => {
+  const definition = jobDefinition("correct_document");
+  assert.equal(definition.requiredCapability({ provider: "codex" }), "codex");
+  assert.equal(queueNameForJob("correct_document", { provider: "codex" }), "correct_document__codex");
+  assert.ok(queueNamesForCapabilities(["codex"]).includes("correct_document__codex"));
+  assert.ok(!queueNamesForCapabilities(["github"]).includes("correct_document__codex"));
 });
 
 test("source_change_sync is a maintenance queue named by its type", () => {

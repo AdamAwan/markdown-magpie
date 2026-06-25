@@ -19,9 +19,9 @@ export class PostgresProposalStore implements ProposalStore {
         INSERT INTO proposals (
           id, title, status, target_path, markdown, evidence, gap_summary,
           triggering_question_ids, rationale, job_id, destination_id, gap_cluster_id,
-          draft_context
+          draft_context, flow_id
         )
-        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11::bigint, $12)
+        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11::bigint, $12, $13)
         ON CONFLICT (job_id) WHERE job_id IS NOT NULL
         DO UPDATE SET job_id = EXCLUDED.job_id
         RETURNING *
@@ -38,7 +38,8 @@ export class PostgresProposalStore implements ProposalStore {
         input.jobId ?? null,
         input.destinationId ?? null,
         input.gapClusterId ?? null,
-        input.draftContext ? JSON.stringify(input.draftContext) : null
+        input.draftContext ? JSON.stringify(input.draftContext) : null,
+        input.flowId ?? null
       ]
     );
 
@@ -143,6 +144,7 @@ interface ProposalRow {
   job_id: string | null;
   destination_id: string | null;
   gap_cluster_id: string | null;
+  flow_id: string | null;
   publication: Proposal["publication"] | null;
   review_decision: string | null;
   draft_context: DraftContext | null;
@@ -162,6 +164,7 @@ function mapRow(row: ProposalRow): Proposal {
     triggeringQuestionIds: row.triggering_question_ids,
     destinationId: row.destination_id ?? undefined,
     gapClusterId: row.gap_cluster_id ?? undefined,
+    flowId: row.flow_id ?? undefined,
     rationale: row.rationale ?? undefined,
     jobId: row.job_id ?? undefined,
     publication: row.publication ?? undefined,
