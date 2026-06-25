@@ -1,9 +1,10 @@
 import type { AppContext } from "../../context.js";
-import type { CorrectDocumentJobInput, PatrolRun, VerifyDocumentJobInput } from "@magpie/core";
+import type { CorrectDocumentJobInput, DedupeDocumentsJobInput, PatrolRun, VerifyDocumentJobInput } from "@magpie/core";
 import { verifyDocumentOutputSchema } from "@magpie/jobs";
 import { selectFlow } from "../../platform/repositories.js";
 import { selectPatrolBatch } from "../../scheduling/patrol-cursor.js";
 import { runVerifyLens, type VerifyDocumentFn } from "../../scheduling/verify-lens.js";
+import { runDedupeLens, type DedupeDocumentFn } from "../../scheduling/dedupe-lens.js";
 import { collectSourceContext } from "../../platform/source-context.js";
 import { runJobToCompletion } from "../jobs/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
@@ -83,13 +84,31 @@ const defaultCorrectDocument: CorrectDocumentFn = async (ctx, input) => {
   } satisfies CorrectDocumentJobInput & { provider: AiProviderName });
 };
 
+// Default dedupe: enqueue a dedupe_documents AI job (enqueue-only — the corrective
+// proposal is drafted and gated later, on job completion). Tests inject a spy/fake.
+const defaultDedupeDocument: DedupeDocumentFn = async (ctx, input) => {
+  await ctx.jobs.create("dedupe_documents", {
+    path: input.path,
+    content: input.content,
+    neighbours: input.neighbours,
+    destinationId: input.destinationId,
+    flowId: input.flowId,
+    provider: ctx.config.get().aiProvider
+  } satisfies DedupeDocumentsJobInput & { provider: AiProviderName });
+};
+
 export async function runFixPatrol(
   ctx: AppContext,
   options: { flowId?: string; trigger: PatrolRun["trigger"] },
-  deps: { verifyDocument?: VerifyDocumentFn; correctDocument?: CorrectDocumentFn } = {}
+  deps: {
+    verifyDocument?: VerifyDocumentFn;
+    correctDocument?: CorrectDocumentFn;
+    dedupeDocument?: DedupeDocumentFn;
+  } = {}
 ): Promise<FixPatrolOutcome> {
   const verifyDocument = deps.verifyDocument ?? defaultVerifyDocument;
   const correctDocument = deps.correctDocument ?? defaultCorrectDocument;
+  const dedupeDocument = deps.dedupeDocument ?? defaultDedupeDocument;
   const scope = resolveScope(ctx, options.flowId);
   if (!scope.ok) {
     return scope;
@@ -141,6 +160,18 @@ export async function runFixPatrol(
     });
   }
 
+  // Run the dedupe lens over the same batch: for each selected document, find its
+  // nearest neighbours and enqueue a dedupe_documents scan when any are close enough.
+  // The neighbour search is scoped to the same repositories as the cursor.
+  const dedupeScans = await runDedupeLens(ctx, {
+    flowId: options.flowId,
+    documents: documents
+      .filter((doc) => selectedSet.has(doc.path))
+      .map((doc) => ({ path: doc.path, content: doc.content, repositoryId: doc.repositoryId })),
+    repositoryIds: scope.repositoryIds,
+    dedupeDocument
+  });
+
   await ctx.stores.patrol.stampChecked(options.flowId, selected);
 
   const run = await ctx.stores.patrol.createRun({
@@ -153,7 +184,8 @@ export async function runFixPatrol(
   });
   console.log(
     `Fix-patrol (${options.trigger}) flow=${options.flowId ?? "(default)"}: ` +
-      `checked ${selected.length}/${universe.length} document(s), ${findings.length} finding(s); run ${run.id}.`
+      `checked ${selected.length}/${universe.length} document(s), ${findings.length} finding(s), ` +
+      `${dedupeScans} dedupe scan(s) enqueued; run ${run.id}.`
   );
   return { ok: true, run };
 }
