@@ -116,13 +116,21 @@ const repositorySchema = z.object({
   defaultBranch: z.string(),
   git: gitContextSchema.optional()
 });
+const changesetChangeSchema = z.object({
+  path: z.string(),
+  content: z.string().optional(),
+  delete: z.boolean().optional()
+});
 const proposalSchema = z.object({
   id: z.string(),
   title: z.string(),
   markdown: z.string(),
   targetPath: z.string(),
   rationale: z.string().optional(),
-  gapSummary: z.string().optional()
+  gapSummary: z.string().optional(),
+  // A multi-file proposal (dedupe/split) carries its full file-set here; when
+  // present it is published as a changeset rather than the single targetPath.
+  changeset: z.array(changesetChangeSchema).optional()
 });
 const crunchPlanSchema = z.object({
   summary: z.string(),
@@ -136,11 +144,6 @@ const crunchPlanSchema = z.object({
   )
 });
 const runSchema = z.object({ id: z.string(), plan: crunchPlanSchema });
-const changesetChangeSchema = z.object({
-  path: z.string(),
-  content: z.string().optional(),
-  delete: z.boolean().optional()
-});
 const sourceSyncRunSchema = z.object({ id: z.string(), changeset: z.array(changesetChangeSchema) });
 
 type PublishRepository = z.infer<typeof repositorySchema>;
@@ -199,14 +202,31 @@ export class PublicationRunner {
     const preparedRepository = await this.deps.prepareRepository(toRepositoryRef(repository));
 
     const branchName = createProposalBranchName(proposal);
-    console.log(`publish_proposal[${job.id}]: publishing "${proposal.title}" to branch ${branchName}`);
-    const publication = await this.deps.publishProposal({
-      repository: preparedRepository,
-      branchName,
-      title: `docs: ${proposal.title}`,
-      markdown: proposal.markdown,
-      targetPath: proposal.targetPath
-    });
+    const title = `docs: ${proposal.title}`;
+    // A changeset proposal (dedupe/split) writes/deletes its whole file-set in one
+    // branch via publishChangeset; a single-file proposal publishes as it always has.
+    // Branch name, title, and PR body all derive from the primary doc either way.
+    let publication: PublishProposalBranchResponse;
+    if (proposal.changeset && proposal.changeset.length > 0) {
+      console.log(
+        `publish_proposal[${job.id}]: publishing "${proposal.title}" (${proposal.changeset.length} file change(s)) to branch ${branchName}`
+      );
+      publication = await this.deps.publishChangeset({
+        repository: preparedRepository,
+        branchName,
+        title,
+        changes: proposal.changeset
+      });
+    } else {
+      console.log(`publish_proposal[${job.id}]: publishing "${proposal.title}" to branch ${branchName}`);
+      publication = await this.deps.publishProposal({
+        repository: preparedRepository,
+        branchName,
+        title,
+        markdown: proposal.markdown,
+        targetPath: proposal.targetPath
+      });
+    }
     console.log(`publish_proposal[${job.id}]: pushed ${publication.branchName} at ${publication.commitSha.slice(0, 8)}`);
 
     // The branch is pushed; try to open a PR. A PR failure must not lose the
