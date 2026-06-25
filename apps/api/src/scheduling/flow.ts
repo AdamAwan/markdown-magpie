@@ -8,9 +8,13 @@ function sameFlow(a: string | undefined, b: string | undefined): boolean {
   return (a ?? "") === (b ?? "");
 }
 
-// A proposal's owning flow is its cluster's flow; a cluster-less proposal belongs
-// to the un-routed/default flow.
+// A proposal's owning flow. A first-class flowId (set by the patrol lenses) wins;
+// otherwise it is the proposal's cluster's flow; a proposal with neither belongs to
+// the un-routed/default flow.
 export async function proposalFlowId(ctx: AppContext, proposal: Proposal): Promise<string | undefined> {
+  if (proposal.flowId) {
+    return proposal.flowId;
+  }
   if (!proposal.gapClusterId) {
     return undefined;
   }

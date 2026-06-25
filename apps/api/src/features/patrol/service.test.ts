@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { makeTestContext } from "../../test-support/context.js";
 import type { VerifyDocumentFn } from "../../scheduling/verify-lens.js";
 import * as patrol from "./service.js";
+import type { CorrectDocumentFn } from "./service.js";
 
 async function indexDocs(ctx: ReturnType<typeof makeTestContext>, paths: string[]): Promise<void> {
   await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
@@ -71,7 +72,7 @@ test("runFixPatrol records verify findings for unprovable documents", async () =
       ? { verdict: "unprovable", claims: [{ claim: "stale", reason: "no source" }] }
       : { verdict: "healthy", claims: [] };
 
-  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, { verifyDocument });
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, { verifyDocument, correctDocument: async () => {} });
   assert.ok(outcome.ok);
   if (!outcome.ok) return;
 
@@ -87,4 +88,21 @@ test("runFixPatrol records verify findings for unprovable documents", async () =
     outcome.run.findings.some((f) => f.path === "b.md"),
     false
   );
+});
+
+test("runFixPatrol enqueues a correction for each unprovable finding, none for healthy", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md", "b.md"]);
+  const verifyDocument: VerifyDocumentFn = async (_ctx, input) =>
+    input.path === "a.md"
+      ? { verdict: "unprovable", claims: [{ claim: "stale", reason: "no source" }] }
+      : { verdict: "healthy", claims: [] };
+  const corrected: Array<{ path: string; claims: number }> = [];
+  const correctDocument: CorrectDocumentFn = async (_ctx, input) => {
+    corrected.push({ path: input.path, claims: input.claims.length });
+  };
+
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, { verifyDocument, correctDocument });
+  assert.ok(outcome.ok);
+  assert.deepEqual(corrected, [{ path: "a.md", claims: 1 }]);
 });

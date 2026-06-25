@@ -1,4 +1,5 @@
 import type {
+  CorrectDocumentJobInput,
   DraftContext,
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
@@ -10,7 +11,7 @@ import type {
 } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { z } from "zod";
-import { publishProposalOutputSchema } from "@magpie/jobs";
+import { correctDocumentOutputSchema, publishProposalOutputSchema } from "@magpie/jobs";
 import { resolveProposalTargetPath } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import type { ProposalListOptions } from "../../stores/proposal-store.js";
@@ -465,6 +466,39 @@ export async function createProposalFromCompletedJob(
       evidence: input.evidence ?? [],
       openPullRequests: input.openPullRequests
     })
+  });
+}
+
+// Completion handler for correct_document jobs: a verify-lens repair landed, so
+// create a draft Proposal for it. flowId is carried first-class so the gate and the
+// per-flow outbox treat it as same-flow; the title is prefixed for PR-stream triage.
+// The store de-dupes by jobId, so a re-delivered completion returns the same proposal
+// rather than drafting a duplicate.
+export async function createCorrectiveProposalFromCompletedJob(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<Proposal | undefined> {
+  if (!job || job.type !== "correct_document") {
+    return undefined;
+  }
+  const parsed = correctDocumentOutputSchema.safeParse(output);
+  if (!parsed.success) {
+    return undefined;
+  }
+  const input = job.input as Partial<CorrectDocumentJobInput>;
+  if (!input.path) {
+    return undefined;
+  }
+  return ctx.stores.proposals.create({
+    title: `Verify: correct unprovable claims in ${input.path}`,
+    targetPath: input.path,
+    markdown: parsed.data.markdown,
+    rationale: parsed.data.rationale,
+    evidence: [],
+    flowId: input.flowId,
+    destinationId: input.destinationId,
+    jobId: job.id
   });
 }
 

@@ -3,6 +3,7 @@ import type { JobView } from "@magpie/jobs";
 import { jobDefinition } from "@magpie/jobs";
 import type { z } from "zod";
 import {
+  CORRECT_DOCUMENT,
   CRUNCH_KNOWLEDGE_BASE,
   DRAFT_MARKDOWN_PROPOSAL,
   FOLD_MARKDOWN_PROPOSAL,
@@ -41,6 +42,8 @@ export function buildPrompt(job: JobView): string {
       return `${SOURCE_CHANGE_SYNC.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "verify_document":
       return `${VERIFY_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
+    case "correct_document":
+      return `${CORRECT_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     default:
       return `${GENERIC_JOB.instructions}\n\nJob:\n${JSON.stringify({ type: job.type, input: job.input }, null, 2)}`;
   }

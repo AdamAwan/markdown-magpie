@@ -8,6 +8,7 @@ export interface ProposalInput extends DraftMarkdownProposalJobOutput {
   destinationId?: string;
   jobId?: string;
   gapClusterId?: string;
+  flowId?: string;
   draftContext?: DraftContext;
 }
 
@@ -53,6 +54,7 @@ export class InMemoryProposalStore implements ProposalStore {
       rationale: input.rationale,
       jobId: input.jobId,
       gapClusterId: input.gapClusterId,
+      flowId: input.flowId,
       draftContext: input.draftContext,
       createdAt: new Date().toISOString()
     };
