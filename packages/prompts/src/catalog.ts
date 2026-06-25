@@ -218,6 +218,38 @@ Return JSON:
 }`
 };
 
+export const DEDUPE_DOCUMENTS: PromptDefinition = {
+  id: "dedupe-documents",
+  title: "Reconcile a document with a near-duplicate neighbour",
+  description:
+    "Given a knowledge-base document and its nearest neighbours, decides whether it genuinely duplicates or contradicts exactly one of them and, if so, returns a minimal two-file changeset that reconciles the pair. Conservative: silent when there is no real duplicate. Used by the watcher's dedupe_documents job (fix-patrol).",
+  usedBy: ["watcher · fix-patrol"],
+  outputShape: "{ duplicate, rationale, primaryPath, changeset[] }",
+  instructions: `You are tidying a Markdown knowledge base. You are given one document under review ("path"/"content") and its nearest neighbours ("neighbours"). Decide whether the document genuinely DUPLICATES or CONTRADICTS exactly one neighbour, and if so reconcile the pair.
+
+Rules:
+- Return JSON only.
+- Be conservative. Only act when one neighbour clearly covers the same material or states something that contradicts the document. Adjacent or merely related topics are NOT duplicates. When unsure, set "duplicate": false.
+- When there is no real duplicate, return {"duplicate": false, "rationale": "...", "changeset": []}.
+- When there IS a duplicate, pick the better SURVIVOR (usually the more complete document) as "primaryPath", and produce a minimal "changeset" of at most two files that reconciles the pair:
+  - Rewrite the survivor to hold the reconciled content.
+  - Trim the duplicated material from the other document and add a short cross-reference to the survivor. Delete the other document (set "delete": true, no "content") ONLY when trimming would leave it effectively empty.
+- Every changeset path MUST be either the document's path or one of the neighbour paths, exactly as provided. Never invent a path.
+- Preserve all unique information. Do not introduce facts not present in either document.
+- "rationale" is a one-paragraph summary of what you reconciled and why.
+
+Return JSON:
+{
+  "duplicate": true,
+  "rationale": "string",
+  "primaryPath": "existing/survivor.md",
+  "changeset": [
+    { "path": "existing/survivor.md", "content": "full reconciled document" },
+    { "path": "existing/other.md", "content": "trimmed document with a cross-reference" }
+  ]
+}`
+};
+
 export const GAP_CLUSTERING: PromptDefinition = {
   id: "gap-clustering",
   title: "Cluster related gaps",
@@ -305,6 +337,7 @@ export const promptCatalog: PromptDefinition[] = [
   SOURCE_CHANGE_SYNC,
   VERIFY_DOCUMENT,
   CORRECT_DOCUMENT,
+  DEDUPE_DOCUMENTS,
   GAP_CLUSTERING,
   GAP_RECONCILE_PROPOSE,
   GAP_RECONCILE_CRITIC,

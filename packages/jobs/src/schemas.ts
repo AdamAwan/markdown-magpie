@@ -16,7 +16,10 @@ import type {
   VerifyDocumentJobInput as CoreVerifyDocumentJobInput,
   VerifyDocumentJobOutput,
   CorrectDocumentJobInput as CoreCorrectDocumentJobInput,
-  CorrectDocumentJobOutput
+  CorrectDocumentJobOutput,
+  DedupeDocumentsJobInput as CoreDedupeDocumentsJobInput,
+  DedupeDocumentsJobOutput,
+  ChangesetChange
 } from "@magpie/core";
 import { AI_PROVIDERS, type AiProviderName, type JobError } from "./types.js";
 
@@ -269,6 +272,27 @@ export const correctDocumentOutputSchema = z.object({
   markdown: z.string(),
   rationale: z.string()
 }) satisfies z.ZodType<CorrectDocumentJobOutput>;
+
+const changesetChangeSchema = z.object({
+  path: z.string(),
+  content: z.string().optional(),
+  delete: z.boolean().optional()
+}) satisfies z.ZodType<ChangesetChange>;
+
+export const dedupeDocumentsInputSchema = z.object({
+  provider: providerSchema,
+  path: z.string(),
+  content: z.string(),
+  neighbours: z.array(z.object({ path: z.string(), content: z.string() })),
+  destinationId: z.string().optional(),
+  flowId: z.string().optional()
+}) satisfies z.ZodType<ProviderInput<CoreDedupeDocumentsJobInput>>;
+export const dedupeDocumentsOutputSchema = z.object({
+  duplicate: z.boolean(),
+  rationale: z.string(),
+  primaryPath: z.string().optional(),
+  changeset: z.array(changesetChangeSchema).optional()
+}) satisfies z.ZodType<DedupeDocumentsJobOutput>;
 
 export const refreshPullRequestsInputSchema = z.object({});
 export const refreshPullRequestsOutputSchema = z.object({

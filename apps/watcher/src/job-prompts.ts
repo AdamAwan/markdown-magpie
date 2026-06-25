@@ -5,6 +5,7 @@ import type { z } from "zod";
 import {
   CORRECT_DOCUMENT,
   CRUNCH_KNOWLEDGE_BASE,
+  DEDUPE_DOCUMENTS,
   DRAFT_MARKDOWN_PROPOSAL,
   FOLD_MARKDOWN_PROPOSAL,
   GENERIC_JOB,
@@ -44,6 +45,8 @@ export function buildPrompt(job: JobView): string {
       return `${VERIFY_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "correct_document":
       return `${CORRECT_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
+    case "dedupe_documents":
+      return `${DEDUPE_DOCUMENTS.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     default:
       return `${GENERIC_JOB.instructions}\n\nJob:\n${JSON.stringify({ type: job.type, input: job.input }, null, 2)}`;
   }

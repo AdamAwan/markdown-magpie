@@ -461,6 +461,29 @@ export interface CorrectDocumentJobOutput {
   rationale: string;
 }
 
+// Input to the dedupe_documents AI job: the document under patrol plus its k nearest
+// neighbours (already filtered by similarity and capped). The job decides whether A
+// genuinely duplicates/contradicts one neighbour and, if so, returns the pairwise
+// changeset. `provider` is added at enqueue (see @magpie/jobs).
+export interface DedupeDocumentsJobInput {
+  path: string;
+  content: string;
+  neighbours: Array<{ path: string; content: string }>;
+  destinationId?: string;
+  flowId?: string;
+}
+
+// Output of the dedupe_documents job. Conservative: `duplicate` is false unless A and
+// exactly one neighbour are a real duplicate/contradiction. When true, `changeset` is
+// the pairwise file-set (rewrite the survivor, trim or delete the other) and
+// `primaryPath` names the survivor (doc A).
+export interface DedupeDocumentsJobOutput {
+  duplicate: boolean;
+  rationale: string;
+  primaryPath?: string;
+  changeset?: ChangesetChange[];
+}
+
 export interface DraftMarkdownProposalJobOutput {
   title: string;
   targetPath: string;

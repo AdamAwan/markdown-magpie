@@ -26,6 +26,7 @@ const EXPIRATION_SECONDS = {
   sync_source_changes_generate_plan: 60 * 60,
   verify_document: 10 * 60,
   correct_document: 10 * 60,
+  dedupe_documents: 10 * 60,
   refresh_pull_requests: 5 * 60,
   process_gaps_to_pull_requests: 60 * 60,
   trigger_scheduled_crunch: 60 * 60,
@@ -138,6 +139,14 @@ test("correct_document routes by provider like other AI work", () => {
   assert.equal(queueNameForJob("correct_document", { provider: "codex" }), "correct_document__codex");
   assert.ok(queueNamesForCapabilities(["codex"]).includes("correct_document__codex"));
   assert.ok(!queueNamesForCapabilities(["github"]).includes("correct_document__codex"));
+});
+
+test("dedupe_documents routes by provider like other AI work", () => {
+  const definition = jobDefinition("dedupe_documents");
+  assert.equal(definition.requiredCapability({ provider: "codex" }), "codex");
+  assert.equal(queueNameForJob("dedupe_documents", { provider: "codex" }), "dedupe_documents__codex");
+  assert.ok(queueNamesForCapabilities(["codex"]).includes("dedupe_documents__codex"));
+  assert.ok(!queueNamesForCapabilities(["github"]).includes("dedupe_documents__codex"));
 });
 
 test("source_change_sync is a maintenance queue named by its type", () => {
