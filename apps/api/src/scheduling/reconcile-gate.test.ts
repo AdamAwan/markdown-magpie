@@ -87,6 +87,22 @@ test("never returns drop", () => {
 const proposal = (id: string, status: string, targetPath?: string, reviewDecision?: string): Proposal =>
   ({ id, status, targetPath, reviewDecision }) as unknown as Proposal;
 
+test("a changeset proposal reports every path in its file-set as targets", () => {
+  const changesetProposal = {
+    id: "p1",
+    status: "pr-opened",
+    targetPath: "kb/a.md",
+    markdown: "# A",
+    changeset: [
+      { path: "kb/a.md", content: "# A merged" },
+      { path: "kb/b.md", delete: true }
+    ]
+  } as unknown as Proposal;
+  assert.deepEqual(openPullRequestSummaries([changesetProposal]), [
+    { proposalId: "p1", targets: ["kb/a.md", "kb/b.md"], touchable: true }
+  ]);
+});
+
 test("maps every open status with a target path into summaries", () => {
   // Cover all four touchable statuses so removing any from TOUCHABLE_STATUSES
   // (which deliberately mirrors isOpenProposal) is caught here.
