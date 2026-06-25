@@ -188,6 +188,39 @@ test("proposal completion is idempotent when delivered twice", async () => {
   assert.equal(created[0].jobId, job.id);
 });
 
+test("dedupe_documents completion drafts a file-set proposal and gates it (open-new → publish)", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("dedupe_documents", {
+    path: "kb/refunds.md",
+    content: "# Refunds",
+    neighbours: [{ path: "kb/partial-refunds.md", content: "# Partial refunds" }],
+    destinationId: "docs",
+    flowId: "billing",
+    provider: "codex"
+  });
+  const output = {
+    duplicate: true,
+    rationale: "merged the duplicate",
+    primaryPath: "kb/refunds.md",
+    changeset: [
+      { path: "kb/refunds.md", content: "# Refunds\nincludes partial refunds" },
+      { path: "kb/partial-refunds.md", delete: true }
+    ]
+  };
+
+  assert.equal((await completeJob(ctx, job.id, output)).ok, true);
+
+  const proposal = (await ctx.stores.proposals.list(50)).find((p) => p.jobId === job.id);
+  assert.ok(proposal, "a dedupe proposal was drafted");
+  assert.deepEqual(proposal?.changeset, output.changeset);
+  // No same-flow overlap → the clusterless dedupe proposal self-publishes.
+  const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
+  assert.deepEqual(
+    actions.map((a) => a.proposalId),
+    [proposal?.id]
+  );
+});
+
 test("publish_proposal completion records publication and is idempotent when delivered twice", async () => {
   const ctx = makeTestContext();
 

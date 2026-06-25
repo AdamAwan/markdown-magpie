@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { makeTestContext } from "../test-support/context.js";
-import { reconcileDraftedProposal, reconcileCorrectiveProposal, applyFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
+import { reconcileDraftedProposal, reconcileCorrectiveProposal, reconcileDedupeProposal, applyFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
 import type { AppContext } from "../context.js";
 
 async function clusterWithGap(ctx: AppContext, flowId: string | undefined, summary: string): Promise<string> {
@@ -128,6 +128,92 @@ describe("reconcileCorrectiveProposal", () => {
     await reconcileCorrectiveProposal(ctx, rival);
     assert.equal((await ctx.jobs.list({ type: "fold_markdown_proposal" })).jobs.length, 1);
     assert.deepEqual(await ctx.stores.gapClusters.listPendingPublicationActions(), []);
+  });
+});
+
+describe("reconcileDedupeProposal", () => {
+  const dedupeRival = (ctx: ReturnType<typeof makeTestContext>) =>
+    ctx.stores.proposals.create({
+      title: "Dedupe: reconcile kb/a.md with kb/b.md",
+      targetPath: "kb/a.md",
+      markdown: "# A merged",
+      rationale: "merged the duplicate",
+      evidence: [],
+      flowId: "billing",
+      changeset: [
+        { path: "kb/a.md", content: "# A merged" },
+        { path: "kb/b.md", delete: true }
+      ]
+    });
+
+  it("open-new (no overlap) enqueues a publish action", async () => {
+    const ctx = makeTestContext();
+    const proposal = await dedupeRival(ctx);
+    await reconcileDedupeProposal(ctx, proposal);
+    const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
+    assert.deepEqual(
+      actions.map((a) => ({ proposalId: a.proposalId, kind: a.kind })),
+      [{ proposalId: proposal.id, kind: "publish" }]
+    );
+    assert.equal((await ctx.jobs.list({ type: "fold_changeset_proposal" })).jobs.length, 0);
+  });
+
+  it("fold (touchable PR overlapping a file in the file-set) enqueues a fold_changeset_proposal, no publish", async () => {
+    const ctx = makeTestContext();
+    // An open PR on kb/b.md — the doc the dedupe would delete — overlaps the file-set.
+    const survivor = await ctx.stores.proposals.create({
+      title: "Gap doc",
+      targetPath: "kb/b.md",
+      markdown: "# survivor",
+      rationale: "r",
+      evidence: [],
+      flowId: "billing"
+    });
+    await ctx.stores.proposals.recordPublication(survivor.id, {
+      provider: "local-git",
+      branchName: "b",
+      commitSha: "c",
+      pullRequestUrl: "https://github.com/o/r/pull/1",
+      publishedAt: new Date().toISOString()
+    });
+    const rival = await dedupeRival(ctx);
+
+    await reconcileDedupeProposal(ctx, rival);
+    const foldJobs = (await ctx.jobs.list({ type: "fold_changeset_proposal" })).jobs;
+    assert.equal(foldJobs.length, 1);
+    assert.equal((foldJobs[0].input as { survivorProposalId: string }).survivorProposalId, survivor.id);
+    assert.deepEqual((foldJobs[0].input as { sharedPaths: string[] }).sharedPaths, ["kb/b.md"]);
+    assert.deepEqual(await ctx.stores.gapClusters.listPendingPublicationActions(), []);
+  });
+
+  it("defer (overlap only an approved PR) self-publishes the dedupe change", async () => {
+    const ctx = makeTestContext();
+    const approved = await ctx.stores.proposals.create({
+      title: "Gap doc",
+      targetPath: "kb/b.md",
+      markdown: "# approved",
+      rationale: "r",
+      evidence: [],
+      flowId: "billing"
+    });
+    await ctx.stores.proposals.recordPublication(approved.id, {
+      provider: "local-git",
+      branchName: "b",
+      commitSha: "c",
+      pullRequestUrl: "https://github.com/o/r/pull/2",
+      publishedAt: new Date().toISOString()
+    });
+    await ctx.stores.proposals.updateReviewDecision(approved.id, "approved");
+    const rival = await dedupeRival(ctx);
+
+    await reconcileDedupeProposal(ctx, rival);
+    // Folding into an approved PR would invalidate its review, so the dedupe self-publishes.
+    assert.equal((await ctx.jobs.list({ type: "fold_changeset_proposal" })).jobs.length, 0);
+    const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
+    assert.deepEqual(
+      actions.map((a) => a.proposalId),
+      [rival.id]
+    );
   });
 });
 

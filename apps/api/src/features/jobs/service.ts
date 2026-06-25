@@ -173,6 +173,16 @@ export async function completeJob(
         console.warn(`Corrective reconcile for proposal ${correctiveProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    const dedupeProposal = await proposalsService.createDedupeProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    if (dedupeProposal) {
+      // Dedupe reconcile is best-effort too — it gates the multi-file change and either
+      // self-publishes or enqueues the multi-file fold; it must never fail completion.
+      try {
+        await foldService.reconcileDedupeProposal(ctx, dedupeProposal);
+      } catch (error) {
+        console.warn(`Dedupe reconcile for proposal ${dedupeProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     await foldService.applyFoldFromCompletedJob(ctx, existingJob, parsed.data);
     await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, parsed.data);

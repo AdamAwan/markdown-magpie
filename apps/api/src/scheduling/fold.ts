@@ -4,8 +4,9 @@ import { foldMarkdownProposalOutputSchema } from "@magpie/jobs";
 import type { AppContext } from "../context.js";
 import { splitGapSummaries } from "../features/proposals/service.js";
 import type { ChangeIntent } from "./intent.js";
-import { decideReconciliation, openPullRequestSummaries } from "./reconcile-gate.js";
+import { decideReconciliation, openPullRequestSummaries, sharedTargets } from "./reconcile-gate.js";
 import { proposalFlowId, sameFlowOpenProposals } from "./flow.js";
+import { proposalChangeset, proposalTargets } from "./changeset.js";
 
 // At-draft fold: when a freshly-created draft proposal overlaps a touchable open
 // proposal in the SAME flow, enqueue a fold_markdown_proposal job to merge them.
@@ -105,6 +106,50 @@ export async function reconcileCorrectiveProposal(ctx: AppContext, proposal: Pro
   // open-new, defer, or a fold whose survivor disappeared: publish as its own PR.
   await ctx.stores.gapClusters.enqueuePublicationAction(proposal.id, "publish");
   console.log(`Verify corrective ${proposal.id} (${decision.kind}) on ${proposal.targetPath}: enqueued to publish.`);
+}
+
+// Gate + publish a dedupe proposal — the multi-file analogue of
+// reconcileCorrectiveProposal. It gates on the proposal's whole file-set (both docs the
+// dedupe touches), and OWNS publication: open-new and defer self-publish; a touchable
+// overlap enqueues a fold_changeset_proposal job (the multi-file fold). Best-effort —
+// the caller (completeJob) guards throws.
+export async function reconcileDedupeProposal(ctx: AppContext, proposal: Proposal): Promise<void> {
+  if (proposal.status !== "draft" || !proposal.targetPath) {
+    return;
+  }
+  const flowId = await proposalFlowId(ctx, proposal);
+  const candidates = await sameFlowOpenProposals(ctx, flowId, proposal.id);
+  const targets = proposalTargets(proposal);
+  const intent: ChangeIntent = {
+    lens: "dedupe",
+    flowId,
+    targets,
+    evidence: proposal.evidence.map((citation) => citation.path),
+    rationale: proposal.rationale ?? ""
+  };
+  const decision = decideReconciliation(intent, openPullRequestSummaries(candidates));
+
+  if (decision.kind === "fold") {
+    const survivor = await ctx.stores.proposals.get(decision.intoProposalId);
+    if (survivor) {
+      await ctx.jobs.create("fold_changeset_proposal", {
+        provider: ctx.config.get().aiProvider,
+        survivorProposalId: survivor.id,
+        rivalProposalId: proposal.id,
+        survivorChangeset: proposalChangeset(survivor),
+        rivalChangeset: proposalChangeset(proposal),
+        sharedPaths: sharedTargets(proposalTargets(survivor), targets),
+        expectedOutput: "folded_changeset"
+      });
+      console.log(`Dedupe fold: enqueued fold of ${proposal.id} into ${survivor.id} on [${targets.join(", ")}].`);
+      return;
+    }
+    // Survivor vanished between gate and fetch — fall through to self-publish.
+  }
+
+  // open-new, defer, or a fold whose survivor disappeared: publish as its own PR.
+  await ctx.stores.gapClusters.enqueuePublicationAction(proposal.id, "publish");
+  console.log(`Dedupe ${proposal.id} (${decision.kind}) on [${targets.join(", ")}]: enqueued to publish.`);
 }
 
 // Applies a completed fold: update the survivor's markdown, absorb the rival's gap
