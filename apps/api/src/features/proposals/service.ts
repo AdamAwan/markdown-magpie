@@ -1,5 +1,6 @@
 import type {
   CorrectDocumentJobInput,
+  DedupeDocumentsJobInput,
   DraftContext,
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
@@ -11,7 +12,7 @@ import type {
 } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { z } from "zod";
-import { correctDocumentOutputSchema, publishProposalOutputSchema } from "@magpie/jobs";
+import { correctDocumentOutputSchema, dedupeDocumentsOutputSchema, publishProposalOutputSchema } from "@magpie/jobs";
 import { resolveProposalTargetPath } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import type { ProposalListOptions } from "../../stores/proposal-store.js";
@@ -495,6 +496,48 @@ export async function createCorrectiveProposalFromCompletedJob(
     targetPath: input.path,
     markdown: parsed.data.markdown,
     rationale: parsed.data.rationale,
+    evidence: [],
+    flowId: input.flowId,
+    destinationId: input.destinationId,
+    jobId: job.id
+  });
+}
+
+// Completion handler for dedupe_documents jobs: a dedupe-lens scan landed. When it
+// found a real duplicate, create a draft Proposal carrying the pairwise changeset and
+// its flowId (so the gate and per-flow outbox treat it as same-flow). The primary doc
+// (survivor) supplies targetPath + markdown for display/branch/PR. Silent when the scan
+// found no duplicate or returned a malformed changeset. Idempotent on jobId.
+export async function createDedupeProposalFromCompletedJob(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<Proposal | undefined> {
+  if (!job || job.type !== "dedupe_documents") {
+    return undefined;
+  }
+  const parsed = dedupeDocumentsOutputSchema.safeParse(output);
+  if (!parsed.success) {
+    return undefined;
+  }
+  const { duplicate, changeset, primaryPath, rationale } = parsed.data;
+  if (!duplicate || !changeset || !primaryPath) {
+    return undefined;
+  }
+  // The survivor must have a concrete body to publish and display; a changeset that
+  // names a primary it does not actually write is malformed — skip it.
+  const primaryWrite = changeset.find((change) => change.path === primaryPath);
+  if (!primaryWrite || primaryWrite.content === undefined) {
+    return undefined;
+  }
+  const otherPath = changeset.find((change) => change.path !== primaryPath)?.path ?? "a neighbour";
+  const input = job.input as Partial<DedupeDocumentsJobInput>;
+  return ctx.stores.proposals.create({
+    title: `Dedupe: reconcile ${primaryPath} with ${otherPath}`,
+    targetPath: primaryPath,
+    markdown: primaryWrite.content,
+    changeset,
+    rationale,
     evidence: [],
     flowId: input.flowId,
     destinationId: input.destinationId,
