@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DraftContext, DraftMarkdownProposalJobOutput, Proposal, ReviewDecision } from "@magpie/core";
+import type { ChangesetChange, DraftContext, DraftMarkdownProposalJobOutput, Proposal, ReviewDecision } from "@magpie/core";
 
 export interface ProposalInput extends DraftMarkdownProposalJobOutput {
   evidence: Proposal["evidence"];
@@ -9,6 +9,9 @@ export interface ProposalInput extends DraftMarkdownProposalJobOutput {
   jobId?: string;
   gapClusterId?: string;
   flowId?: string;
+  // A multi-file file-set. When set, the proposal writes/deletes these documents
+  // rather than the single targetPath/markdown; dedupe (and later split) set it.
+  changeset?: ChangesetChange[];
   draftContext?: DraftContext;
 }
 
@@ -28,6 +31,9 @@ export interface ProposalStore {
   recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined>;
   linkCluster(id: string, gapClusterId: string): Promise<Proposal | undefined>;
   updateMarkdown(id: string, markdown: string): Promise<Proposal | undefined>;
+  // Promote a proposal to a merged file-set (used by the multi-file fold): replace
+  // its changeset and refresh the primary markdown. targetPath is never rewritten.
+  updateChangeset(id: string, changeset: ChangesetChange[], primaryMarkdown: string): Promise<Proposal | undefined>;
   updateReviewDecision(id: string, reviewDecision: ReviewDecision): Promise<Proposal | undefined>;
   reset(): Promise<void>;
 }
@@ -55,6 +61,7 @@ export class InMemoryProposalStore implements ProposalStore {
       jobId: input.jobId,
       gapClusterId: input.gapClusterId,
       flowId: input.flowId,
+      changeset: input.changeset,
       draftContext: input.draftContext,
       createdAt: new Date().toISOString()
     };
@@ -124,6 +131,20 @@ export class InMemoryProposalStore implements ProposalStore {
       return undefined;
     }
     const updated: Proposal = { ...existing, markdown };
+    this.proposals.set(id, updated);
+    return updated;
+  }
+
+  async updateChangeset(
+    id: string,
+    changeset: ChangesetChange[],
+    primaryMarkdown: string
+  ): Promise<Proposal | undefined> {
+    const existing = this.proposals.get(id);
+    if (!existing) {
+      return undefined;
+    }
+    const updated: Proposal = { ...existing, changeset, markdown: primaryMarkdown };
     this.proposals.set(id, updated);
     return updated;
   }

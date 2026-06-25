@@ -219,6 +219,13 @@ export interface Proposal {
   status: ProposalStatus;
   targetPath: string;
   markdown: string;
+  // When present, this proposal writes/deletes multiple files and is the source of
+  // truth for both publication and gate overlap. When absent, the proposal is the
+  // single-file [{ path: targetPath, content: markdown }] it has always been.
+  // dedupe (and later split) set it; gap/verify/source-sync leave it undefined.
+  // The proposal still carries a sensible targetPath + markdown — its primary doc,
+  // from which the title, branch name, and PR body derive.
+  changeset?: ChangesetChange[];
   evidence: Citation[];
   gapClusterId?: string;
   // The flow this proposal belongs to, independent of any gap cluster. Gap
