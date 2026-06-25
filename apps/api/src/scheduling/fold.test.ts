@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { makeTestContext } from "../test-support/context.js";
-import { reconcileDraftedProposal, reconcileCorrectiveProposal, reconcileDedupeProposal, applyFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
+import { reconcileDraftedProposal, reconcileCorrectiveProposal, reconcileDedupeProposal, applyFoldFromCompletedJob, applyChangesetFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
 import type { AppContext } from "../context.js";
 
 async function clusterWithGap(ctx: AppContext, flowId: string | undefined, summary: string): Promise<string> {
@@ -315,6 +315,75 @@ describe("applyFoldFromCompletedJob", () => {
   });
 });
 
+describe("applyChangesetFoldFromCompletedJob", () => {
+  async function setup(ctx: ReturnType<typeof makeTestContext>) {
+    const survivor = await draft(ctx, { targetPath: "kb/b.md" });
+    await ctx.stores.proposals.recordPublication(survivor.id, {
+      provider: "local-git",
+      branchName: "b",
+      commitSha: "c",
+      pullRequestUrl: "https://github.com/o/r/pull/1",
+      publishedAt: new Date().toISOString()
+    });
+    const rival = await ctx.stores.proposals.create({
+      title: "Dedupe: reconcile kb/a.md with kb/b.md",
+      targetPath: "kb/a.md",
+      markdown: "# A merged",
+      rationale: "r",
+      evidence: [],
+      flowId: "billing",
+      changeset: [
+        { path: "kb/a.md", content: "# A merged" },
+        { path: "kb/b.md", delete: true }
+      ]
+    });
+    const job = await ctx.jobs.create("fold_changeset_proposal", {
+      provider: "codex",
+      survivorProposalId: survivor.id,
+      rivalProposalId: rival.id,
+      survivorChangeset: [{ path: "kb/b.md", content: "# B" }],
+      rivalChangeset: rival.changeset!,
+      sharedPaths: ["kb/b.md"],
+      expectedOutput: "folded_changeset"
+    });
+    return { survivor, rival, job };
+  }
+
+  it("promotes the survivor to the merged file-set, supersedes the rival, and re-publishes", async () => {
+    const ctx = makeTestContext();
+    const { survivor, rival, job } = await setup(ctx);
+    const merged = [
+      { path: "kb/b.md", content: "# B\nnow covers A" },
+      { path: "kb/a.md", delete: true }
+    ];
+
+    await applyChangesetFoldFromCompletedJob(ctx, await ctx.jobs.get(job.id), { changeset: merged, rationale: "merged" });
+
+    const updated = await ctx.stores.proposals.get(survivor.id);
+    assert.deepEqual(updated?.changeset, merged);
+    assert.equal(updated?.markdown, "# B\nnow covers A"); // primary (targetPath kb/b.md) content
+    assert.equal(updated?.targetPath, "kb/b.md");
+    assert.equal((await ctx.stores.proposals.get(rival.id))?.status, "superseded");
+    const pending = await ctx.stores.gapClusters.listPendingPublicationActions();
+    assert.ok(pending.some((a) => a.proposalId === survivor.id && a.kind === "publish"));
+    assert.equal((await ctx.jobs.list({ type: "comment_pull_request" })).jobs.length, 1);
+  });
+
+  it("no-ops when the rival is already superseded (idempotent)", async () => {
+    const ctx = makeTestContext();
+    const { survivor, rival, job } = await setup(ctx);
+    await ctx.stores.proposals.updateStatus(rival.id, "superseded");
+
+    await applyChangesetFoldFromCompletedJob(ctx, await ctx.jobs.get(job.id), {
+      changeset: [{ path: "kb/b.md", content: "# changed" }],
+      rationale: "x"
+    });
+    // Survivor untouched (still single-file), no publish enqueued.
+    assert.equal((await ctx.stores.proposals.get(survivor.id))?.changeset, undefined);
+    assert.deepEqual(await ctx.stores.gapClusters.listPendingPublicationActions(), []);
+  });
+});
+
 describe("enqueueFoldFallback", () => {
   it("enqueues the rival's publish so the gap is not lost", async () => {
     const ctx = makeTestContext();
@@ -329,6 +398,31 @@ describe("enqueueFoldFallback", () => {
       rivalGapSummaries: [],
       rivalEvidence: [],
       expectedOutput: "folded_markdown"
+    });
+    await enqueueFoldFallback(ctx, await ctx.jobs.get(job.id));
+    const pending = await ctx.stores.gapClusters.listPendingPublicationActions();
+    assert.ok(pending.some((a) => a.proposalId === rival.id && a.kind === "publish"));
+  });
+
+  it("also republishes a still-draft rival when a multi-file fold job fails", async () => {
+    const ctx = makeTestContext();
+    const rival = await ctx.stores.proposals.create({
+      title: "Dedupe: reconcile kb/a.md with kb/b.md",
+      targetPath: "kb/a.md",
+      markdown: "# A merged",
+      rationale: "r",
+      evidence: [],
+      flowId: "billing",
+      changeset: [{ path: "kb/a.md", content: "# A merged" }, { path: "kb/b.md", delete: true }]
+    });
+    const job = await ctx.jobs.create("fold_changeset_proposal", {
+      provider: "codex",
+      survivorProposalId: "missing",
+      rivalProposalId: rival.id,
+      survivorChangeset: [{ path: "kb/b.md", content: "# B" }],
+      rivalChangeset: rival.changeset!,
+      sharedPaths: ["kb/b.md"],
+      expectedOutput: "folded_changeset"
     });
     await enqueueFoldFallback(ctx, await ctx.jobs.get(job.id));
     const pending = await ctx.stores.gapClusters.listPendingPublicationActions();

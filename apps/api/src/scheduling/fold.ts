@@ -1,6 +1,6 @@
 import type { Proposal } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
-import { foldMarkdownProposalOutputSchema } from "@magpie/jobs";
+import { foldChangesetProposalOutputSchema, foldMarkdownProposalOutputSchema } from "@magpie/jobs";
 import type { AppContext } from "../context.js";
 import { splitGapSummaries } from "../features/proposals/service.js";
 import type { ChangeIntent } from "./intent.js";
@@ -204,11 +204,59 @@ export async function applyFoldFromCompletedJob(
   console.log(`Fold: merged rival ${rival.id} into survivor ${survivor.id}; survivor re-publish enqueued.`);
 }
 
-// Fold failed terminally: publish the rival as its own PR so its gap is never lost.
-// The #21 cross-link backstop then catches the A/B overlap. Only acts on a rival
-// still in draft (nothing was applied).
+// Applies a completed multi-file fold: promote the survivor to the merged file-set
+// (replacing its changeset and refreshing the primary markdown), supersede the rival,
+// and re-publish the survivor through the outbox. The multi-file analogue of
+// applyFoldFromCompletedJob; dedupe proposals are clusterless, so there is no gap
+// cluster to absorb. Idempotent on a rival that is already superseded.
+export async function applyChangesetFoldFromCompletedJob(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<void> {
+  if (!job || job.type !== "fold_changeset_proposal") {
+    return;
+  }
+  const parsed = foldChangesetProposalOutputSchema.safeParse(output);
+  if (!parsed.success) {
+    return;
+  }
+  const input = job.input as { survivorProposalId?: string; rivalProposalId?: string };
+  if (!input.survivorProposalId || !input.rivalProposalId) {
+    return;
+  }
+  const survivor = await ctx.stores.proposals.get(input.survivorProposalId);
+  const rival = await ctx.stores.proposals.get(input.rivalProposalId);
+  if (!survivor || !rival || rival.status === "superseded") {
+    return;
+  }
+
+  // The survivor's primary doc keeps its targetPath; its body becomes that path's new
+  // content in the merged changeset (falling back to the existing markdown if, oddly,
+  // the merge dropped the primary path).
+  const primaryMarkdown =
+    parsed.data.changeset.find((change) => change.path === survivor.targetPath)?.content ?? survivor.markdown;
+  await ctx.stores.proposals.updateChangeset(survivor.id, parsed.data.changeset, primaryMarkdown);
+  await ctx.stores.proposals.updateStatus(rival.id, "superseded");
+  await ctx.stores.gapClusters.enqueuePublicationAction(survivor.id, "publish");
+
+  const pullRequestUrl = survivor.publication?.pullRequestUrl;
+  if (pullRequestUrl) {
+    await ctx.jobs.create("comment_pull_request", {
+      pullRequestUrl,
+      body:
+        `🪶 **Magpie:** folded "${rival.title}" into this PR — it reconciles overlapping documents. ` +
+        "This PR has been updated to include that material. _(automated fold-on-overlap)_"
+    });
+  }
+  console.log(`Changeset fold: merged rival ${rival.id} into survivor ${survivor.id}; survivor re-publish enqueued.`);
+}
+
+// Fold failed terminally: publish the rival as its own PR so its change is never lost.
+// The #21 cross-link backstop then catches the overlap. Only acts on a rival still in
+// draft (nothing was applied). Handles both the single-file and multi-file fold jobs.
 export async function enqueueFoldFallback(ctx: AppContext, job: JobView | undefined): Promise<void> {
-  if (!job || job.type !== "fold_markdown_proposal") {
+  if (!job || (job.type !== "fold_markdown_proposal" && job.type !== "fold_changeset_proposal")) {
     return;
   }
   const input = job.input as { rivalProposalId?: string };
