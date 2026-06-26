@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { makeTestContext } from "../test-support/context.js";
-import { reconcileDraftedProposal, reconcileCorrectiveProposal, reconcileDedupeProposal, applyFoldFromCompletedJob, applyChangesetFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
+import { reconcileDraftedProposal, reconcileCorrectiveProposal, reconcileDedupeProposal, reconcileSplitProposal, applyFoldFromCompletedJob, applyChangesetFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
 import type { AppContext } from "../context.js";
 
 async function clusterWithGap(ctx: AppContext, flowId: string | undefined, summary: string): Promise<string> {
@@ -214,6 +214,62 @@ describe("reconcileDedupeProposal", () => {
       actions.map((a) => a.proposalId),
       [rival.id]
     );
+  });
+});
+
+describe("reconcileSplitProposal", () => {
+  const splitRival = (ctx: ReturnType<typeof makeTestContext>) =>
+    ctx.stores.proposals.create({
+      title: "Split: reorganise kb/operations.md",
+      targetPath: "kb/operations.md",
+      markdown: "# Operations",
+      rationale: "moved billing out",
+      evidence: [],
+      flowId: "billing",
+      changeset: [
+        { path: "kb/operations.md", content: "# Operations" },
+        { path: "kb/billing.md", delete: true },
+        { path: "kb/billing-guide.md", content: "# Billing Guide" }
+      ]
+    });
+
+  it("open-new (no overlap) enqueues a publish action", async () => {
+    const ctx = makeTestContext();
+    const proposal = await splitRival(ctx);
+    await reconcileSplitProposal(ctx, proposal);
+    const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
+    assert.deepEqual(
+      actions.map((a) => ({ proposalId: a.proposalId, kind: a.kind })),
+      [{ proposalId: proposal.id, kind: "publish" }]
+    );
+    assert.equal((await ctx.jobs.list({ type: "fold_changeset_proposal" })).jobs.length, 0);
+  });
+
+  it("fold (touchable PR overlapping any touched path) enqueues fold_changeset_proposal", async () => {
+    const ctx = makeTestContext();
+    const survivor = await ctx.stores.proposals.create({
+      title: "Billing doc",
+      targetPath: "kb/billing-guide.md",
+      markdown: "# survivor",
+      rationale: "r",
+      evidence: [],
+      flowId: "billing"
+    });
+    await ctx.stores.proposals.recordPublication(survivor.id, {
+      provider: "local-git",
+      branchName: "b",
+      commitSha: "c",
+      pullRequestUrl: "https://github.com/o/r/pull/1",
+      publishedAt: new Date().toISOString()
+    });
+    const rival = await splitRival(ctx);
+
+    await reconcileSplitProposal(ctx, rival);
+    const foldJobs = (await ctx.jobs.list({ type: "fold_changeset_proposal" })).jobs;
+    assert.equal(foldJobs.length, 1);
+    assert.equal((foldJobs[0].input as { survivorProposalId: string }).survivorProposalId, survivor.id);
+    assert.deepEqual((foldJobs[0].input as { sharedPaths: string[] }).sharedPaths, ["kb/billing-guide.md"]);
+    assert.deepEqual(await ctx.stores.gapClusters.listPendingPublicationActions(), []);
   });
 });
 

@@ -221,6 +221,42 @@ test("dedupe_documents completion drafts a file-set proposal and gates it (open-
   );
 });
 
+test("split_document completion drafts a file-set proposal and gates it (open-new -> publish)", async () => {
+  const ctx = makeTestContext();
+  await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
+    repositoryId: "docs",
+    documents: [{ path: "kb/operations.md", content: "# Operations" }]
+  });
+  const job = await ctx.jobs.create("split_document", {
+    path: "kb/operations.md",
+    content: "# Operations",
+    neighbours: [],
+    destinationId: "docs",
+    flowId: "billing",
+    provider: "codex"
+  });
+  const output = {
+    split: true,
+    rationale: "moved billing detail out",
+    primaryPath: "kb/operations.md",
+    changeset: [
+      { path: "kb/operations.md", content: "# Operations\nSee billing." },
+      { path: "kb/billing-guide.md", content: "# Billing Guide" }
+    ]
+  };
+
+  assert.equal((await completeJob(ctx, job.id, output)).ok, true);
+
+  const proposal = (await ctx.stores.proposals.list(50)).find((p) => p.jobId === job.id);
+  assert.ok(proposal, "a split proposal was drafted");
+  assert.deepEqual(proposal?.changeset, output.changeset);
+  const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
+  assert.deepEqual(
+    actions.map((a) => a.proposalId),
+    [proposal?.id]
+  );
+});
+
 test("publish_proposal completion records publication and is idempotent when delivered twice", async () => {
   const ctx = makeTestContext();
 
