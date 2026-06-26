@@ -15,6 +15,7 @@ import {
 import {
   AskResponse,
   ConsoleSection,
+  MaintenanceRun,
   Feedback,
   FlowSnapshot,
   GapCandidate,
@@ -65,6 +66,7 @@ function useConsoleController() {
   const [selectedJob, setSelectedJob] = useState<JobView | undefined>();
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
+  const [maintenanceRuns, setMaintenanceRuns] = useState<MaintenanceRun[]>([]);
   const [prompts, setPrompts] = useState<PromptSummary[]>([]);
   const [flowSnapshots, setFlowSnapshots] = useState<FlowSnapshot[]>([]);
   const [reconciliationDecisions, setReconciliationDecisions] = useState<ReconciliationDecision[]>([]);
@@ -260,6 +262,7 @@ function useConsoleController() {
         workersResult,
         proposalsResult,
         scheduledTasksResult,
+        maintenanceRunsResult,
         configResult,
         promptsResult,
         snapshotsResult,
@@ -277,6 +280,7 @@ function useConsoleController() {
         apiGet<WorkersResponse>("/workers", { signal }),
         apiGet<{ proposals: Proposal[] }>("/proposals?limit=8", { signal }),
         apiGet<{ tasks: ScheduledTask[] }>("/scheduled-tasks", { signal }),
+        apiGet<{ runs: MaintenanceRun[] }>("/maintenance-runs?limit=30", { signal }),
         apiGet<RuntimeConfig>("/config", { signal }),
         apiGet<{ prompts: PromptSummary[] }>("/prompts", { signal }),
         apiGet<{ snapshots: FlowSnapshot[] }>("/snapshots", { signal }),
@@ -301,6 +305,7 @@ function useConsoleController() {
       setWorkers(workersResult.workers);
       setProposals(proposalsResult.proposals);
       setScheduledTasks(scheduledTasksResult.tasks);
+      setMaintenanceRuns(maintenanceRunsResult.runs);
       setPrompts(promptsResult.prompts);
       setFlowSnapshots(snapshotsResult.snapshots);
       setReconciliationDecisions(reconciliationsResult.decisions);
@@ -590,6 +595,7 @@ function useConsoleController() {
     selectedJob,
     proposals,
     scheduledTasks,
+    maintenanceRuns,
     prompts,
     flowSnapshots,
     reconciliationDecisions,

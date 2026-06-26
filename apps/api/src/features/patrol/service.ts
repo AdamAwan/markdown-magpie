@@ -3,9 +3,10 @@ import type {
   CorrectDocumentJobInput,
   DedupeDocumentsJobInput,
   ImproveDocumentJobInput,
-  PatrolRun,
+  MaintenanceRun,
   SplitDocumentJobInput,
-  VerifyDocumentJobInput
+  VerifyDocumentJobInput,
+  VerifyFinding
 } from "@magpie/core";
 import { verifyDocumentOutputSchema } from "@magpie/jobs";
 import { selectFlow } from "../../platform/repositories.js";
@@ -25,8 +26,12 @@ const PATROL_RANDOM_COUNT = 2;
 const IMPROVE_PATROL_BATCH_SIZE = 2;
 const IMPROVE_PATROL_RANDOM_COUNT = 1;
 
-export type FixPatrolOutcome = { ok: true; run: PatrolRun } | { ok: false; code: "unknown_flow" };
-export type ImprovePatrolOutcome = { ok: true; run: PatrolRun; enqueuedCount: number } | { ok: false; code: "unknown_flow" };
+export type FixPatrolOutcome =
+  | { ok: true; runId: string; universeCount: number; selectedCount: number; selected: string[]; findings: VerifyFinding[] }
+  | { ok: false; code: "unknown_flow" };
+export type ImprovePatrolOutcome =
+  | { ok: true; runId: string; universeCount: number; selectedCount: number; selected: string[]; enqueuedCount: number }
+  | { ok: false; code: "unknown_flow" };
 
 // Resolve a flow to the repository ids whose documents the cursor rotates over and
 // the source ids whose material the verify lens checks against. Mirrors the
@@ -136,7 +141,7 @@ const defaultImproveDocument: ImproveDocumentFn = async (ctx, input) => {
 
 export async function runFixPatrol(
   ctx: AppContext,
-  options: { flowId?: string; trigger: PatrolRun["trigger"] },
+  options: { flowId?: string; trigger: MaintenanceRun["trigger"] },
   deps: {
     verifyDocument?: VerifyDocumentFn;
     correctDocument?: CorrectDocumentFn;
@@ -225,25 +230,27 @@ export async function runFixPatrol(
 
   await ctx.stores.patrol.stampChecked(options.flowId, selected);
 
-  const run = await ctx.stores.patrol.createRun({
+  const run = await ctx.stores.maintenanceRuns.record({
+    taskType: "fix_patrol",
     flowId: options.flowId,
     trigger: options.trigger,
-    universeCount: universe.length,
-    selectedCount: selected.length,
-    selected,
-    findings
+    status: "completed",
+    summary:
+      `checked ${selected.length}/${universe.length} doc${selected.length === 1 ? "" : "s"} · ` +
+      `${findings.length} finding${findings.length === 1 ? "" : "s"}`,
+    details: { universeCount: universe.length, selectedCount: selected.length, selected, findings }
   });
   console.log(
     `Fix-patrol (${options.trigger}) flow=${options.flowId ?? "(default)"}: ` +
       `checked ${selected.length}/${universe.length} document(s), ${findings.length} finding(s), ` +
       `${dedupeScans} dedupe scan(s), ${splitScans} split scan(s) enqueued; run ${run.id}.`
   );
-  return { ok: true, run };
+  return { ok: true, runId: run.id, universeCount: universe.length, selectedCount: selected.length, selected, findings };
 }
 
 export async function runImprovePatrol(
   ctx: AppContext,
-  options: { flowId?: string; trigger: PatrolRun["trigger"] },
+  options: { flowId?: string; trigger: MaintenanceRun["trigger"] },
   deps: { improveDocument?: ImproveDocumentFn } = {}
 ): Promise<ImprovePatrolOutcome> {
   const improveDocument = deps.improveDocument ?? defaultImproveDocument;
@@ -288,24 +295,19 @@ export async function runImprovePatrol(
   }
 
   await ctx.stores.patrol.stampChecked(options.flowId, selected, "improve");
-  const run = await ctx.stores.patrol.createRun({
+  const run = await ctx.stores.maintenanceRuns.record({
+    taskType: "improve_patrol",
     flowId: options.flowId,
     trigger: options.trigger,
-    universeCount: universe.length,
-    selectedCount: selected.length,
-    selected,
-    findings: []
+    status: "completed",
+    summary:
+      `checked ${selected.length}/${universe.length} doc${selected.length === 1 ? "" : "s"} · ` +
+      `${enqueuedCount} improve scan${enqueuedCount === 1 ? "" : "s"}`,
+    details: { universeCount: universe.length, selectedCount: selected.length, selected, enqueuedCount }
   });
   console.log(
     `Improve-patrol (${options.trigger}) flow=${options.flowId ?? "(default)"}: ` +
       `checked ${selected.length}/${universe.length} document(s), ${enqueuedCount} improve scan(s) enqueued; run ${run.id}.`
   );
-  return { ok: true, run, enqueuedCount };
-}
-export async function listRuns(ctx: AppContext, limit: number): Promise<PatrolRun[]> {
-  return ctx.stores.patrol.listRuns(limit);
-}
-
-export async function getRun(ctx: AppContext, id: string): Promise<PatrolRun | undefined> {
-  return ctx.stores.patrol.getRun(id);
+  return { ok: true, runId: run.id, universeCount: universe.length, selectedCount: selected.length, selected, enqueuedCount };
 }

@@ -8,6 +8,7 @@ import {
   createProposalStore,
   createQuestionLogStore,
   createReconciliationDecisionStore,
+  createMaintenanceRunStore,
   createPatrolStore,
   createScheduledTaskStore,
   createSnapshotStore,
@@ -45,6 +46,7 @@ export interface AppContext {
     patrol: ReturnType<typeof createPatrolStore>;
     gapClusters: ReturnType<typeof createGapClusterStore>;
     reconciliations: ReturnType<typeof createReconciliationDecisionStore>;
+    maintenanceRuns: ReturnType<typeof createMaintenanceRunStore>;
     prCrosslinks: ReturnType<typeof createPrCrosslinkStore>;
     snapshots: ReturnType<typeof createSnapshotStore>;
     watchers: ReturnType<typeof createWatcherRegistryStore>;
@@ -108,6 +110,7 @@ export async function createAppContext(): Promise<AppContext> {
       patrol: createPatrolStore(),
       gapClusters: createGapClusterStore(),
       reconciliations: createReconciliationDecisionStore(),
+      maintenanceRuns: createMaintenanceRunStore(),
       prCrosslinks: createPrCrosslinkStore(),
       snapshots: createSnapshotStore(),
       watchers: createWatcherRegistryStore(),

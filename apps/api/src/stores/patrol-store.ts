@@ -1,16 +1,3 @@
-import { randomUUID } from "node:crypto";
-import type { PatrolRun, VerifyFinding } from "@magpie/core";
-
-export interface PatrolRunInput {
-  flowId?: string;
-  trigger: PatrolRun["trigger"];
-  universeCount: number;
-  selectedCount: number;
-  selected: string[];
-  // The verify-lens findings this run produced; defaults to none.
-  findings?: VerifyFinding[];
-}
-
 export type PatrolCursorKind = "fix" | "improve";
 
 export interface PatrolCursorEntry {
@@ -18,17 +5,15 @@ export interface PatrolCursorEntry {
   lastCheckedAt: string;
 }
 
-// The patrol state for a flow: per-document cursors plus a history of patrol runs.
-// Fix and improve patrols keep separate cursor freshness so editorial growth does
-// not make correctness checks look recent.
+// The patrol cursor for a flow: when each document was last checked. Fix and
+// improve patrols keep separate cursor freshness so editorial growth does not make
+// correctness checks look recent. (Run history is the generic MaintenanceRun store,
+// not here.)
 export interface PatrolStore {
   // The cursor for a flow (default flow = undefined): when each doc was last checked.
   listCursor(flowId: string | undefined, kind?: PatrolCursorKind): Promise<PatrolCursorEntry[]>;
   // Upsert last_checked_at = now() for each doc in one batch.
   stampChecked(flowId: string | undefined, docPaths: string[], kind?: PatrolCursorKind): Promise<void>;
-  createRun(input: PatrolRunInput): Promise<PatrolRun>;
-  listRuns(limit: number): Promise<PatrolRun[]>;
-  getRun(id: string): Promise<PatrolRun | undefined>;
   reset(): Promise<void>;
 }
 
@@ -43,11 +28,6 @@ export class InMemoryPatrolStore implements PatrolStore {
     string,
     { flowId: string | undefined; kind: PatrolCursorKind; docPath: string; lastCheckedAt: string }
   >();
-  // Each run carries an insertion sequence so newest-first ordering is stable even
-  // when two runs share a millisecond createdAt (Postgres relies on now() precision
-  // + created_at DESC; this is the in-memory equivalent).
-  private readonly runs = new Map<string, { run: PatrolRun; seq: number }>();
-  private nextSeq = 0;
 
   async listCursor(flowId: string | undefined, kind: PatrolCursorKind = "fix"): Promise<PatrolCursorEntry[]> {
     return [...this.cursor.values()]
@@ -62,38 +42,7 @@ export class InMemoryPatrolStore implements PatrolStore {
     }
   }
 
-  async createRun(input: PatrolRunInput): Promise<PatrolRun> {
-    const run: PatrolRun = {
-      id: randomUUID(),
-      flowId: input.flowId,
-      trigger: input.trigger,
-      universeCount: input.universeCount,
-      selectedCount: input.selectedCount,
-      selected: input.selected,
-      findings: input.findings ?? [],
-      createdAt: new Date().toISOString()
-    };
-    this.runs.set(run.id, { run, seq: this.nextSeq++ });
-    return run;
-  }
-
-  async listRuns(limit: number): Promise<PatrolRun[]> {
-    return [...this.runs.values()]
-      .sort((left, right) =>
-        right.run.createdAt !== left.run.createdAt
-          ? right.run.createdAt.localeCompare(left.run.createdAt)
-          : right.seq - left.seq
-      )
-      .slice(0, limit)
-      .map((entry) => entry.run);
-  }
-
-  async getRun(id: string): Promise<PatrolRun | undefined> {
-    return this.runs.get(id)?.run;
-  }
-
   async reset(): Promise<void> {
     this.cursor.clear();
-    this.runs.clear();
   }
 }

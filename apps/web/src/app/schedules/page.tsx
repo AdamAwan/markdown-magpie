@@ -5,7 +5,7 @@ import { SchedulesPanel } from "../../components/SchedulesPanel";
 import { knowledgeFlows } from "../../lib/config";
 
 export default function SchedulesPage() {
-  const { config, loading, runScheduledTask, saveScheduledTask, scheduledTasks } = useConsole();
+  const { config, loading, runScheduledTask, saveScheduledTask, scheduledTasks, maintenanceRuns } = useConsole();
 
   return (
     <section className="fullWorkbench">
@@ -15,6 +15,7 @@ export default function SchedulesPage() {
         onRunTask={runScheduledTask}
         onSaveTask={saveScheduledTask}
         scheduledTasks={scheduledTasks}
+        maintenanceRuns={maintenanceRuns}
       />
     </section>
   );

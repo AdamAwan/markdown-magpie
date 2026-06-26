@@ -252,6 +252,19 @@ already ~80% of it.
   scale, so size *k* from the corpus (e.g. relative to flow size and/or a similarity-score
   threshold rather than a hard count) and tune once we have real numbers.
 
+## Follow-on work (post step 6)
+
+- **Generic maintenance-run audit (shipped):** every scheduled task (fix-patrol,
+  improve-patrol, gaps→PR) records one `MaintenanceRun` per tick — a uniform,
+  queryable execution audit surfaced on the Schedules page. This replaced the
+  bespoke `PatrolRun` record. Source-sync's `SourceSyncRun` is the last to migrate:
+  it carries the changeset/defer/publication lifecycle and only sheds those when
+  source-sync becomes a first-class Proposal (Scope B below), at which point it
+  joins the generic audit.
+- **Scope B (planned):** make source-change-sync a first-class Proposal so it folds
+  symmetrically through the gate (today it can only defer), publishing a reviewable
+  PR like the other lenses.
+
 ## Still open
 
 - Exact split between oldest-N and the random sample (e.g. 80/20?) — settle with real volume.

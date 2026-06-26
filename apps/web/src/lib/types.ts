@@ -5,6 +5,7 @@ export type {
   AnswerResult,
   Citation,
   Confidence,
+  MaintenanceRun,
   DocumentMetadata,
   GapCandidate,
   GitRepositoryContext,

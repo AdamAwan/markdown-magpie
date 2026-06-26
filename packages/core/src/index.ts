@@ -709,10 +709,6 @@ export interface SourceSyncRun {
   completedAt?: string;
 }
 
-// One fix-patrol tick: which documents in a flow were checked and when. `selected`
-// is the batch the rolling cursor chose this run; `universeCount` is how many
-// documents the flow had to choose from. No status field — a patrol tick is atomic
-// (select → stamp → record), never pending.
 // A verify-lens result recorded on a patrol run: the document, the claims the
 // sources could not substantiate, and what the reconcile gate decided to do with
 // the emitted intent. `intoProposalId` is set only when the gate folded it into an
@@ -724,18 +720,38 @@ export interface VerifyFinding {
   intoProposalId?: string;
 }
 
-export interface PatrolRun {
+// ---------------------------------------------------------------------------
+// Maintenance-run audit — one durable record per scheduled-task execution
+//
+// Every scheduled maintenance task (the patrols, gaps→PR, and later source-sync)
+// writes a MaintenanceRun when it runs: a uniform, queryable audit of WHAT ran,
+// for which flow, and how it turned out — including no-op and failed ticks. It is
+// an execution audit only; the downstream proposal's publish/merge lifecycle lives
+// on the Proposal, not here. The task-specific payload goes in `details` so the
+// shared shape stays generic.
+// ---------------------------------------------------------------------------
+
+export type MaintenanceTaskType = "fix_patrol" | "improve_patrol" | "process_gaps_to_pull_requests";
+
+export type MaintenanceRunStatus = "running" | "completed" | "failed";
+
+export interface MaintenanceRun {
   id: string;
+  taskType: MaintenanceTaskType;
   flowId?: string;
   trigger: "scheduled" | "manual";
-  universeCount: number;
-  selectedCount: number;
-  selected: string[];
-  // The verify-lens findings this tick produced (empty when every checked doc was
-  // healthy or the patrol ran no lens).
-  findings: VerifyFinding[];
-  createdAt: string;
+  status: MaintenanceRunStatus;
+  // One-line human summary, e.g. "checked 5/40 docs · 1 finding".
+  summary: string;
+  error?: string;
+  // Task-specific payload (JSONB in Postgres). Open by design so each task records
+  // what it has without widening the shared shape.
+  details: Record<string, unknown>;
+  startedAt: string;
+  completedAt?: string;
 }
+
+export type NewMaintenanceRun = Omit<MaintenanceRun, "id" | "startedAt"> & { startedAt?: string };
 
 // Schedule for a generic background side-process (e.g. refreshing pull request
 // status). Keyed by a stable task key from the server's task registry, so the

@@ -8,6 +8,7 @@ import { InMemoryProposalStore } from "../stores/proposal-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
 import { InMemoryPrCrosslinkStore } from "../stores/pr-crosslink-store.js";
 import { InMemoryReconciliationDecisionStore } from "../stores/reconciliation-decision-store.js";
+import { InMemoryMaintenanceRunStore } from "../stores/maintenance-run-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
 import { FakeJobBroker } from "../jobs/fake-broker.js";
 import { InMemoryPatrolStore } from "../stores/patrol-store.js";
@@ -41,6 +42,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
       patrol: new InMemoryPatrolStore(),
       gapClusters: new InMemoryGapClusterStore(),
       reconciliations: new InMemoryReconciliationDecisionStore(),
+      maintenanceRuns: new InMemoryMaintenanceRunStore(),
       prCrosslinks: new InMemoryPrCrosslinkStore(),
       snapshots: new InMemorySnapshotStore(),
       watchers: new InMemoryWatcherRegistryStore(),

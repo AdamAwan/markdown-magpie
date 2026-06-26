@@ -405,3 +405,27 @@ async function seedTwoClustersWithGaps(ctx: AppContext): Promise<void> {
   await ctx.stores.gapClusters.assignGapToCluster(c1.id, g1);
   await ctx.stores.gapClusters.assignGapToCluster(c2.id, g2);
 }
+
+describe("reconcileGaps audit", () => {
+  it("records a completed maintenance run for the tick", async () => {
+    const ctx = makeTestContext();
+    await reconcileGaps(ctx, undefined);
+    const runs = await ctx.stores.maintenanceRuns.list({ taskType: "process_gaps_to_pull_requests", limit: 10 });
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0].status, "completed");
+    assert.equal(runs[0].taskType, "process_gaps_to_pull_requests");
+  });
+
+  it("records a failed run and rethrows when the reconcile throws", async () => {
+    const ctx = makeTestContext();
+    // Force the inner reconcile to throw after the (empty) PR-state pass.
+    ctx.stores.questionLogs.getGapCatalogRevision = async () => {
+      throw new Error("reconcile exploded");
+    };
+    await assert.rejects(() => reconcileGaps(ctx, undefined), /reconcile exploded/);
+    const runs = await ctx.stores.maintenanceRuns.list({ taskType: "process_gaps_to_pull_requests", limit: 10 });
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0].status, "failed");
+    assert.equal(runs[0].error, "reconcile exploded");
+  });
+});

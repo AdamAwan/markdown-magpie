@@ -1,6 +1,12 @@
 import { Fragment, useEffect, useState } from "react";
 import { isValidCron } from "@magpie/core";
-import { ConfiguredKnowledgeFlow, ScheduledTask } from "../lib/types";
+import { ConfiguredKnowledgeFlow, MaintenanceRun, ScheduledTask } from "../lib/types";
+
+// Humanise a maintenance task type for display, e.g. "fix_patrol" -> "Fix patrol".
+function taskTypeLabel(taskType: string): string {
+  const words = taskType.replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
 
 // How the schedules table is grouped: by the flow-free task type (so a shared
 // description is shown once per type, not repeated per flow) or by flow (so each
@@ -12,13 +18,15 @@ export function SchedulesPanel({
   loading,
   onRunTask,
   onSaveTask,
-  scheduledTasks
+  scheduledTasks,
+  maintenanceRuns
 }: {
   flows: ConfiguredKnowledgeFlow[];
   loading: boolean;
   onRunTask: (key: string) => Promise<void>;
   onSaveTask: (key: string, enabled: boolean, cron: string) => Promise<void>;
   scheduledTasks: ScheduledTask[];
+  maintenanceRuns: MaintenanceRun[];
 }) {
   const [groupBy, setGroupBy] = useState<GroupBy>("type");
   const flowName = (flowId?: string) => flows.find((flow) => flow.id === flowId)?.name ?? flowId ?? "Default knowledge base";
@@ -98,6 +106,31 @@ export function SchedulesPanel({
               </Fragment>
             ))}
             {entries.length === 0 ? <p className="empty">No scheduled tasks are configured.</p> : null}
+          </div>
+        </section>
+
+        <section className="crunchSection">
+          <h3 className="crunchSubhead">Recent runs</h3>
+          <div className="jobTable">
+            <div className="tableHead crunchScheduleHead">
+              <span>Task</span>
+              <span>Flow</span>
+              <span>When</span>
+              <span>Status</span>
+              <span>Summary</span>
+            </div>
+            {maintenanceRuns.map((run) => (
+              <div className="tableRow crunchScheduleRow" key={run.id}>
+                <span className="crunchScheduleTitle">{taskTypeLabel(run.taskType)}</span>
+                <span>{flowName(run.flowId)}</span>
+                <span>{new Date(run.startedAt).toLocaleString()}</span>
+                <span className={`status ${run.status === "failed" ? "failed" : "completed"}`} title={run.error ?? "Run status"}>
+                  {run.status}
+                </span>
+                <span className="crunchScheduleMeta">{run.error ?? run.summary}</span>
+              </div>
+            ))}
+            {maintenanceRuns.length === 0 ? <p className="empty">No runs recorded yet.</p> : null}
           </div>
         </section>
       </div>

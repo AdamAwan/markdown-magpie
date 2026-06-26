@@ -153,6 +153,23 @@ test("the retired /crunch route is gone", async () => {
   assert.deepEqual(await res.json(), { error: "not_found" });
 });
 
+test("GET /api/maintenance-runs lists recorded runs", async () => {
+  const ctx = makeTestContext();
+  await ctx.stores.maintenanceRuns.record({
+    taskType: "fix_patrol",
+    trigger: "scheduled",
+    status: "completed",
+    summary: "checked 1/1 doc · 0 findings",
+    details: {}
+  });
+  const app = buildApp(ctx);
+  const res = await app.request("/api/maintenance-runs");
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { runs: Array<{ taskType: string; summary: string }> };
+  assert.equal(body.runs.length, 1);
+  assert.equal(body.runs[0].taskType, "fix_patrol");
+});
+
 test("OPTIONS preflight returns 204", async () => {
   const app = buildApp(makeTestContext());
   const res = await app.request("/api/ask", { method: "OPTIONS" });
