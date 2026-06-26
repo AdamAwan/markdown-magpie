@@ -356,11 +356,12 @@ export const publishProposalOutputSchema = z.object({
 });
 
 export const sourceChangeSyncInputSchema = z.object({ flowId: z.string().optional() });
-// triggerSourceSyncRun reacts to 0..N git sources per flow, creating one run per
-// source that had a new commit to consider. The output honestly reports every run
-// id created (empty when no source had a change worth a run).
+// triggerSourceSyncRun reacts to 0..N git sources per flow. Source-specific
+// execution history is recorded in MaintenanceRun; non-empty changes become
+// first-class proposals.
 export const sourceChangeSyncOutputSchema = z.object({
-  runIds: z.array(z.string())
+  maintenanceRunIds: z.array(z.string()),
+  proposalIds: z.array(z.string())
 });
 
 export const fixPatrolInputSchema = z.object({ flowId: z.string().optional() });
@@ -377,15 +378,6 @@ export const improvePatrolOutputSchema = z.object({
   runId: z.string(),
   selectedCount: z.number().int(),
   enqueuedCount: z.number().int()
-});
-
-export const publishSourceSyncInputSchema = z.object({ runId: z.string() });
-export const publishSourceSyncOutputSchema = z.object({
-  runId: z.string(),
-  branchName: z.string(),
-  commitSha: z.string(),
-  remoteUrl: z.string().optional(),
-  publishedAt: z.string()
 });
 
 export const crosslinkPullRequestsInputSchema = z.object({

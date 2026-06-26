@@ -640,16 +640,6 @@ export interface MaintenancePlan {
 // the output is the same multi-file write/delete changeset.
 // ---------------------------------------------------------------------------
 
-export type SourceSyncRunTrigger = "scheduled" | "manual";
-
-// "skipped" records a detected source change that needed no KB edit (nothing in
-// the KB matched it, or the model returned an empty plan) — kept for the operator
-// to see that the change was considered. "deferred" records a change whose target
-// file-set overlaps an open PR in the same flow: the changeset is preserved and
-// re-gated on a later source-sync tick rather than published as a rival (see
-// docs/maintenance-redesign.md §5 and the source-sync gate hook).
-export type SourceSyncRunStatus = "running" | "completed" | "failed" | "published" | "skipped" | "deferred";
-
 // The last source commit a flow has reacted to. The next run diffs the source's
 // new HEAD against this, so only genuinely new commits are processed.
 export interface SourceSyncState {
@@ -686,29 +676,6 @@ export interface SourceChangeSyncJobInput {
 
 export type SourceChangeSyncJobOutput = MaintenancePlan;
 
-export interface SourceSyncRun {
-  id: string;
-  flowId?: string;
-  destinationId?: string;
-  sourceId: string;
-  trigger: SourceSyncRunTrigger;
-  status: SourceSyncRunStatus;
-  jobId?: string;
-  plan?: MaintenancePlan;
-  // The constrained changeset the API derived from the plan at gather time (only
-  // writes to candidate documents). Persisted so the publish job can fetch it
-  // without re-deriving the candidate set. Absent on skipped/failed runs.
-  changeset?: ChangesetChange[];
-  error?: string;
-  fromSha?: string;
-  toSha: string;
-  changedFileCount: number;
-  candidateCount: number;
-  publication?: ProposalPublication;
-  createdAt: string;
-  completedAt?: string;
-}
-
 // A verify-lens result recorded on a patrol run: the document, the claims the
 // sources could not substantiate, and what the reconcile gate decided to do with
 // the emitted intent. `intoProposalId` is set only when the gate folded it into an
@@ -731,7 +698,11 @@ export interface VerifyFinding {
 // shared shape stays generic.
 // ---------------------------------------------------------------------------
 
-export type MaintenanceTaskType = "fix_patrol" | "improve_patrol" | "process_gaps_to_pull_requests";
+export type MaintenanceTaskType =
+  | "fix_patrol"
+  | "improve_patrol"
+  | "process_gaps_to_pull_requests"
+  | "source_change_sync";
 
 export type MaintenanceRunStatus = "running" | "completed" | "failed";
 
@@ -931,4 +902,3 @@ export interface PublishChangesetRequest {
   title: string;
   changes: ChangesetChange[];
 }
-
