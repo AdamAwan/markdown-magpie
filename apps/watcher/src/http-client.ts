@@ -29,11 +29,6 @@ export interface ProposalExecutionContext {
   repository: unknown;
 }
 
-export interface CrunchExecutionContext {
-  run: unknown;
-  repository: unknown;
-}
-
 export interface SourceSyncExecutionContext {
   run: unknown;
   sourceName: unknown;
@@ -52,7 +47,6 @@ export interface OpenPullRequestRef {
 export interface WatcherApi extends WatcherApiClient {
   retrieve(question: string, flowId: string | undefined, limit: number | undefined): Promise<RetrievedSection[]>;
   proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext>;
-  crunchExecutionContext(runId: string): Promise<CrunchExecutionContext>;
   sourceSyncExecutionContext(runId: string): Promise<SourceSyncExecutionContext>;
   // Drives a flow's gap→PR reconciliation in the API (clustering, the reshape AI
   // job the API bounded-waits on, drafting and publication enqueue). An absent
@@ -77,10 +71,6 @@ export interface WatcherApi extends WatcherApiClient {
     flowId: string | undefined,
     signal?: AbortSignal
   ): Promise<{ runId: string; selectedCount: number; enqueuedCount: number }>;
-  // Triggers a scheduled crunch run in the API (enqueue-only on the API side) and
-  // returns the created run + planning job ids. An absent flowId crunches the
-  // default flow.
-  triggerScheduledCrunch(flowId: string | undefined, signal?: AbortSignal): Promise<{ runId: string; jobId: string }>;
   // The flow's currently open pull requests with a PR URL to poll. Used by the
   // github-capability refresh runner, which holds the GitHub credentials the API
   // no longer does.
@@ -184,20 +174,6 @@ export class HttpWatcherApi implements WatcherApi {
     );
   }
 
-  async triggerScheduledCrunch(
-    flowId: string | undefined,
-    signal?: AbortSignal
-  ): Promise<{ runId: string; jobId: string }> {
-    // POST /api/crunch/run returns { run: { id, jobId }, links }. Reduce it to the
-    // run+job ids the trigger_scheduled_crunch contract requires.
-    const { run } = await this.post<{ run: { id: string; jobId: string } }>(
-      "/api/crunch/run",
-      { trigger: "scheduled", ...(flowId ? { flowId } : {}) },
-      signal
-    );
-    return { runId: run.id, jobId: run.jobId };
-  }
-
   async listOpenPullRequests(signal?: AbortSignal): Promise<OpenPullRequestRef[]> {
     const { proposals } = await this.get<{
       proposals: Array<{ id: string; publication?: { pullRequestUrl?: string } }>;
@@ -210,10 +186,6 @@ export class HttpWatcherApi implements WatcherApi {
 
   async proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext> {
     return this.get<ProposalExecutionContext>(`/api/proposals/${proposalId}/execution-context`);
-  }
-
-  async crunchExecutionContext(runId: string): Promise<CrunchExecutionContext> {
-    return this.get<CrunchExecutionContext>(`/api/crunch/runs/${runId}/execution-context`);
   }
 
   async sourceSyncExecutionContext(runId: string): Promise<SourceSyncExecutionContext> {

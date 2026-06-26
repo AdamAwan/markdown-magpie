@@ -98,9 +98,8 @@ export function createConfiguredRunners(
 
   if (ready("maintenance")) {
     // Maintenance jobs do no generative or git work themselves; they POST thin API
-    // endpoints that own the orchestration. process_gaps_to_pull_requests is the
-    // first such job (8C); refresh_pull_requests / trigger_scheduled_crunch follow
-    // in later sub-tasks as their endpoints land.
+    // endpoints that own the orchestration (gap reconcile, source-sync, fix/improve
+    // patrol).
     runners.push(new MaintenanceRunner(api));
   }
 

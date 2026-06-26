@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { RepositoryRef } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
-import { publishCrunchOutputSchema, publishProposalOutputSchema, publishSourceSyncOutputSchema } from "@magpie/jobs";
+import { publishProposalOutputSchema, publishSourceSyncOutputSchema } from "@magpie/jobs";
 import type {
-  CrunchExecutionContext,
   ProposalExecutionContext,
   SourceSyncExecutionContext,
   WatcherApi
@@ -47,20 +46,6 @@ const PROPOSAL_CONTEXT: ProposalExecutionContext = {
   repository: REPOSITORY
 };
 
-const CRUNCH_CONTEXT: CrunchExecutionContext = {
-  run: {
-    id: "run-abcdef12",
-    plan: {
-      summary: "tidy",
-      rationale: "overlap",
-      operations: [
-        { kind: "consolidate", title: "merge", reason: "dupes", sources: ["a.md", "b.md"], writes: [{ path: "merged.md", content: "x" }], deletes: ["b.md"] }
-      ]
-    }
-  },
-  repository: REPOSITORY
-};
-
 const SOURCE_SYNC_CONTEXT: SourceSyncExecutionContext = {
   run: {
     id: "run-aabbccdd",
@@ -78,13 +63,11 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     fail: async () => undefined,
     retrieve: async () => [],
     proposalExecutionContext: async () => PROPOSAL_CONTEXT,
-    crunchExecutionContext: async () => CRUNCH_CONTEXT,
     sourceSyncExecutionContext: async () => SOURCE_SYNC_CONTEXT,
     reconcileGaps: async () => ({ ok: true }),
     runSourceSync: async () => ({ runIds: [] }),
     runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
     runImprovePatrol: async () => ({ runId: "run-1", selectedCount: 0, enqueuedCount: 0 }),
-    triggerScheduledCrunch: async () => ({ runId: "run-1", jobId: "job-1" }),
     listOpenPullRequests: async () => [],
     ...overrides
   };
@@ -101,7 +84,6 @@ describe("PublicationRunner", () => {
     });
     assert.equal(runner.capability, "github");
     assert.ok(runner.supports("publish_proposal"));
-    assert.ok(runner.supports("publish_crunch"));
     assert.ok(runner.supports("publish_source_sync"));
     assert.ok(runner.supports("crosslink_pull_requests"));
     assert.ok(!runner.supports("answer_question"));
@@ -185,50 +167,6 @@ describe("PublicationRunner", () => {
     assert.equal(parsed.commitSha, "abc123");
   });
 
-  it("publishes a crunch changeset, raises a PR, and returns a schema-valid output", async () => {
-    let publishedChanges: unknown;
-    let prHeadBranch: string | undefined;
-    const runner = new PublicationRunner(fakeApi(), {
-      prepareRepository: async (repository) => repository,
-      publishProposal: async () => ({ branchName: "b", commitSha: "c" }),
-      publishChangeset: async (request) => {
-        publishedChanges = request.changes;
-        return { branchName: request.branchName, commitSha: "def456", remoteUrl: REPOSITORY.remoteUrl };
-      },
-      raisePullRequest: async (request) => {
-        prHeadBranch = request.headBranch;
-        return { url: "https://github.com/acme/docs/pull/9", number: 9 };
-      },
-      commentOnPullRequest: async () => undefined
-    });
-
-    const output = await runner.run(job("publish_crunch", { runId: "run-abcdef12" }), new AbortController().signal);
-    const parsed = publishCrunchOutputSchema.parse(output);
-    assert.equal(parsed.runId, "run-abcdef12");
-    assert.equal(parsed.branchName, "magpie/crunch-run-abcd");
-    assert.equal(parsed.commitSha, "def456");
-    assert.equal(parsed.pullRequestUrl, "https://github.com/acme/docs/pull/9");
-    assert.equal(prHeadBranch, "magpie/crunch-run-abcd");
-    assert.ok(Array.isArray(publishedChanges));
-  });
-
-  it("degrades to a branch-only crunch publish when PR raising fails", async () => {
-    const runner = new PublicationRunner(fakeApi(), {
-      prepareRepository: async (repository) => repository,
-      publishProposal: async () => ({ branchName: "b", commitSha: "c" }),
-      publishChangeset: async (request) => ({ branchName: request.branchName, commitSha: "def456", remoteUrl: REPOSITORY.remoteUrl }),
-      raisePullRequest: async () => {
-        throw new Error("pr api down");
-      },
-      commentOnPullRequest: async () => undefined
-    });
-
-    const output = await runner.run(job("publish_crunch", { runId: "run-abcdef12" }), new AbortController().signal);
-    const parsed = publishCrunchOutputSchema.parse(output);
-    assert.equal(parsed.pullRequestUrl, undefined);
-    assert.equal(parsed.commitSha, "def456");
-  });
-
   it("publishes a source-sync changeset with the derived branch and source-named title (no PR)", async () => {
     let publishedBranch: string | undefined;
     let publishedTitle: string | undefined;
@@ -309,15 +247,10 @@ describe("PublicationRunner", () => {
 
     const signal = new AbortController().signal;
     await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), signal);
-    await runner.run(job("publish_crunch", { runId: "run-abcdef12" }), signal);
     await runner.run(job("publish_source_sync", { runId: "run-aabbccdd" }), signal);
 
-    assert.deepEqual(preparedPaths, ["/tmp/repo", "/tmp/repo", "/tmp/repo"]);
-    assert.deepEqual(publishedPaths, [
-      "/data/checkouts/repo-1",
-      "/data/checkouts/repo-1",
-      "/data/checkouts/repo-1"
-    ]);
+    assert.deepEqual(preparedPaths, ["/tmp/repo", "/tmp/repo"]);
+    assert.deepEqual(publishedPaths, ["/data/checkouts/repo-1", "/data/checkouts/repo-1"]);
   });
 
   it("rejects checkout preparation without a repository remote URL", async () => {
