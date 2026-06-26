@@ -46,7 +46,38 @@ function sameFlow(a: string | undefined, b: string | undefined): boolean {
 // the PR-state pass and drains the publication outbox for this flow; only does
 // model clustering work when the flow's gap-catalog revision has advanced past
 // what was last processed for it.
+// Records one MaintenanceRun per reconcile tick (completed, or failed + rethrow) so
+// the Schedules audit shows every run — including no-op ticks that changed nothing.
 export async function reconcileGaps(
+  ctx: AppContext,
+  flowId: string | undefined,
+  deps: ReconcilerDeps = DEFAULT_DEPS
+): Promise<void> {
+  try {
+    await reconcileGapsInner(ctx, flowId, deps);
+  } catch (error) {
+    await ctx.stores.maintenanceRuns.record({
+      taskType: "process_gaps_to_pull_requests",
+      flowId,
+      trigger: "scheduled",
+      status: "failed",
+      summary: `reconcile failed for flow ${flowId ?? "(default)"}`,
+      error: error instanceof Error ? error.message : String(error),
+      details: {}
+    });
+    throw error;
+  }
+  await ctx.stores.maintenanceRuns.record({
+    taskType: "process_gaps_to_pull_requests",
+    flowId,
+    trigger: "scheduled",
+    status: "completed",
+    summary: `reconciled flow ${flowId ?? "(default)"}`,
+    details: {}
+  });
+}
+
+async function reconcileGapsInner(
   ctx: AppContext,
   flowId: string | undefined,
   deps: ReconcilerDeps = DEFAULT_DEPS
