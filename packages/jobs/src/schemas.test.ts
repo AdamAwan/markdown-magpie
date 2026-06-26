@@ -6,6 +6,8 @@ import {
   foldMarkdownProposalOutputSchema,
   commentPullRequestInputSchema,
   refreshPullRequestsOutputSchema,
+  improveDocumentInputSchema,
+  improveDocumentOutputSchema,
   splitDocumentInputSchema,
   splitDocumentOutputSchema,
   verifyDocumentInputSchema,
@@ -132,6 +134,28 @@ test("split_document schemas round-trip a bounded changeset", () => {
     }).success
   );
   assert.ok(splitDocumentOutputSchema.safeParse({ split: false, rationale: "already focused", changeset: [] }).success);
+});
+
+test("improve_document schemas round-trip explicit improve and no-op outputs", () => {
+  assert.ok(
+    improveDocumentInputSchema.safeParse({
+      provider: "codex",
+      path: "kb/refunds.md",
+      content: "# Refunds",
+      sources: [{ sourceId: "s1", sourceName: "Billing", kind: "git", path: "refunds.ts", content: "partial refunds are supported" }],
+      destinationId: "docs",
+      flowId: "billing"
+    }).success
+  );
+  assert.ok(
+    improveDocumentOutputSchema.safeParse({
+      improved: true,
+      markdown: "# Refunds\nPartial refunds are supported.",
+      rationale: "Added source-backed partial refund coverage."
+    }).success
+  );
+  assert.ok(improveDocumentOutputSchema.safeParse({ improved: false, rationale: "No clear source-backed addition." }).success);
+  assert.ok(!improveDocumentOutputSchema.safeParse({ improved: true, rationale: "missing markdown" }).success);
 });
 
 test("comment_pull_request input requires url and body", () => {

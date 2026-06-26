@@ -499,6 +499,20 @@ export interface SplitDocumentJobOutput {
   changeset?: ChangesetChange[];
 }
 
+export interface ImproveDocumentJobInput {
+  path: string;
+  content: string;
+  sources: SourceDataContext[];
+  destinationId?: string;
+  flowId?: string;
+}
+
+export interface ImproveDocumentJobOutput {
+  improved: boolean;
+  markdown?: string;
+  rationale: string;
+}
+
 export interface DraftMarkdownProposalJobOutput {
   title: string;
   targetPath: string;

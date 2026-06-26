@@ -34,6 +34,21 @@ export function fixPatrolRoutes(ctx: AppContext): Hono {
     });
   });
 
+  app.post("/improve/run", requireScopes("manage:jobs"), async (c) => {
+    const payload = await readJsonBody<{ flowId?: string }>(c);
+    const outcome = await patrolService.runImprovePatrol(ctx, {
+      flowId: payload.flowId?.trim() || undefined,
+      trigger: "scheduled"
+    });
+    if (!outcome.ok) {
+      throw new HttpError(400, outcome.code);
+    }
+    return c.json({
+      runId: outcome.run.id,
+      selectedCount: outcome.run.selectedCount,
+      enqueuedCount: outcome.enqueuedCount
+    });
+  });
   app.get("/runs/:id", requireScopes("read:knowledge"), async (c) => {
     const run = await patrolService.getRun(ctx, c.req.param("id"));
     if (!run) {

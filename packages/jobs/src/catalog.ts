@@ -77,12 +77,14 @@ const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
   correct_document: define("correct_document", "provider", schemas.correctDocumentInputSchema, schemas.correctDocumentOutputSchema, 10 * 60),
   dedupe_documents: define("dedupe_documents", "provider", schemas.dedupeDocumentsInputSchema, schemas.dedupeDocumentsOutputSchema, 10 * 60),
   split_document: define("split_document", "provider", schemas.splitDocumentInputSchema, schemas.splitDocumentOutputSchema, 10 * 60),
+  improve_document: define("improve_document", "provider", schemas.improveDocumentInputSchema, schemas.improveDocumentOutputSchema, 10 * 60),
   fold_changeset_proposal: define("fold_changeset_proposal", "provider", schemas.foldChangesetProposalInputSchema, schemas.foldChangesetProposalOutputSchema, 15 * 60),
   refresh_pull_requests: define("refresh_pull_requests", "github", schemas.refreshPullRequestsInputSchema, schemas.refreshPullRequestsOutputSchema, 5 * 60),
   process_gaps_to_pull_requests: define("process_gaps_to_pull_requests", "maintenance", schemas.processGapsToPullRequestsInputSchema, schemas.processGapsToPullRequestsOutputSchema, 60 * 60),
   trigger_scheduled_crunch: define("trigger_scheduled_crunch", "maintenance", schemas.triggerScheduledCrunchInputSchema, schemas.triggerScheduledCrunchOutputSchema, 60 * 60),
   source_change_sync: define("source_change_sync", "maintenance", schemas.sourceChangeSyncInputSchema, schemas.sourceChangeSyncOutputSchema, 60 * 60),
   fix_patrol: define("fix_patrol", "maintenance", schemas.fixPatrolInputSchema, schemas.fixPatrolOutputSchema, 60 * 60),
+  improve_patrol: define("improve_patrol", "maintenance", schemas.improvePatrolInputSchema, schemas.improvePatrolOutputSchema, 60 * 60),
   publish_proposal: define("publish_proposal", "github", schemas.publishProposalInputSchema, schemas.publishProposalOutputSchema, 15 * 60),
   publish_crunch: define("publish_crunch", "github", schemas.publishCrunchInputSchema, schemas.publishCrunchOutputSchema, 15 * 60),
   publish_source_sync: define("publish_source_sync", "github", schemas.publishSourceSyncInputSchema, schemas.publishSourceSyncOutputSchema, 15 * 60),
@@ -113,6 +115,7 @@ const aiJobTypes = new Set<JobType>([
   "correct_document",
   "dedupe_documents",
   "split_document",
+  "improve_document",
   "fold_changeset_proposal"
 ]);
 

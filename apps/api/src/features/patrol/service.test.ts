@@ -4,7 +4,7 @@ import { makeTestContext } from "../../test-support/context.js";
 import type { VerifyDocumentFn } from "../../scheduling/verify-lens.js";
 import type { DedupeDocumentFn } from "../../scheduling/dedupe-lens.js";
 import type { SplitDocumentFn } from "../../scheduling/split-lens.js";
-import type { DedupeDocumentsJobInput, SplitDocumentJobInput } from "@magpie/core";
+import type { DedupeDocumentsJobInput, ImproveDocumentJobInput, SplitDocumentJobInput } from "@magpie/core";
 import * as patrol from "./service.js";
 import type { CorrectDocumentFn } from "./service.js";
 
@@ -180,4 +180,32 @@ test("runFixPatrol runs the split lens over broad selected documents", async () 
     scanned[0].neighbours.map((n) => n.path),
     ["customer-billing.md"]
   );
+});
+
+test("runImprovePatrol uses its own cursor and enqueues an improve job for every selected doc", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md", "b.md", "c.md"]);
+
+  const fix = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, HEALTHY_DEPS);
+  assert.ok(fix.ok);
+  assert.equal((await ctx.stores.patrol.listCursor(undefined)).length, 3, "fix cursor stamped all docs in the small universe");
+
+  const improved: ImproveDocumentJobInput[] = [];
+  const outcome = await patrol.runImprovePatrol(ctx, { trigger: "scheduled" }, {
+    improveDocument: async (_ctx, input) => {
+      improved.push(input);
+    }
+  });
+
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  assert.equal(outcome.run.selectedCount, 2, "improve-patrol uses the smaller editorial batch");
+  assert.equal(outcome.enqueuedCount, outcome.run.selectedCount);
+  assert.deepEqual(
+    improved.map((job) => job.path).sort(),
+    [...outcome.run.selected].sort()
+  );
+  assert.deepEqual((await ctx.stores.patrol.listCursor(undefined)).map((e) => e.docPath).sort(), ["a.md", "b.md", "c.md"]);
+  assert.deepEqual((await ctx.stores.patrol.listCursor(undefined, "improve")).map((e) => e.docPath).sort(), [...outcome.run.selected].sort());
+  assert.ok(improved.every((job) => job.destinationId === "docs"));
 });

@@ -32,7 +32,13 @@ const CAPABILITY_JOB_TYPES = {
   codex: PROVIDER_JOB_TYPES,
   claude: PROVIDER_JOB_TYPES,
   github: ["refresh_pull_requests", "publish_proposal", "publish_crunch", "publish_source_sync"],
-  maintenance: ["process_gaps_to_pull_requests", "trigger_scheduled_crunch", "source_change_sync"]
+  maintenance: [
+    "process_gaps_to_pull_requests",
+    "trigger_scheduled_crunch",
+    "source_change_sync",
+    "fix_patrol",
+    "improve_patrol"
+  ]
 } as const satisfies Record<JobCapability, readonly JobType[]>;
 
 export function JobsPanel({

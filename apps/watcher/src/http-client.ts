@@ -69,6 +69,14 @@ export interface WatcherApi extends WatcherApiClient {
     flowId: string | undefined,
     signal?: AbortSignal
   ): Promise<{ runId: string; selectedCount: number; findingCount: number }>;
+  // Drives an improve-patrol tick in the API (select the next batch on the improve
+  // cursor + enqueue one improve_document scan per selected document + advance the
+  // cursor), returning the run id, how many were selected, and how many scans were
+  // enqueued. An absent flowId patrols the default flow.
+  runImprovePatrol(
+    flowId: string | undefined,
+    signal?: AbortSignal
+  ): Promise<{ runId: string; selectedCount: number; enqueuedCount: number }>;
   // Triggers a scheduled crunch run in the API (enqueue-only on the API side) and
   // returns the created run + planning job ids. An absent flowId crunches the
   // default flow.
@@ -160,6 +168,17 @@ export class HttpWatcherApi implements WatcherApi {
   ): Promise<{ runId: string; selectedCount: number; findingCount: number }> {
     return this.post<{ runId: string; selectedCount: number; findingCount: number }>(
       "/api/fix-patrol/run",
+      { ...(flowId ? { flowId } : {}) },
+      signal
+    );
+  }
+
+  async runImprovePatrol(
+    flowId: string | undefined,
+    signal?: AbortSignal
+  ): Promise<{ runId: string; selectedCount: number; enqueuedCount: number }> {
+    return this.post<{ runId: string; selectedCount: number; enqueuedCount: number }>(
+      "/api/fix-patrol/improve/run",
       { ...(flowId ? { flowId } : {}) },
       signal
     );

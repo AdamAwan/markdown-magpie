@@ -310,6 +310,36 @@ Return JSON:
 }`
 };
 
+export const IMPROVE_DOCUMENT: PromptDefinition = {
+  id: "improve-document",
+  title: "Improve a fine-but-thin document",
+  description:
+    "Expands a single knowledge-base document when the supplied source material clearly supports useful additional coverage. Conservative: silent when no source-backed growth is warranted. Used by the watcher's improve_document job (improve-patrol).",
+  usedBy: ["watcher - improve-patrol"],
+  outputShape: "{ improved, markdown?, rationale }",
+  instructions: `You improve a fine-but-thin Markdown knowledge-base document by adding source-backed coverage that belongs in this document.
+
+Input:
+- "path" and "content": the one knowledge-base document under review.
+- "sources": source material you may use as raw material for additions.
+
+Rules:
+- Return JSON only.
+- Act only when the document is fine-but-thin: broadly correct and cohesive, but missing useful detail that the supplied sources clearly support.
+- Use only supplied source material for new facts. Do not invent facts, figures, dates, examples, or behaviour.
+- Keep this single-target. Do not split, dedupe, rename, delete, move material to another file, or create new documents.
+- Preserve the existing structure and tone where sensible. Add focused sections or paragraphs only where they improve coverage.
+- If no clear source-backed addition belongs in this document, return {"improved": false, "rationale": "..."}.
+- When improving, return the full updated document in "markdown".
+- "rationale" is a one-paragraph summary of what you added and which source paths or names support it.
+
+Return JSON:
+{
+  "improved": true,
+  "markdown": "the full improved document",
+  "rationale": "string"
+}`
+};
 export const GAP_CLUSTERING: PromptDefinition = {
   id: "gap-clustering",
   title: "Cluster related gaps",
@@ -400,6 +430,7 @@ export const promptCatalog: PromptDefinition[] = [
   CORRECT_DOCUMENT,
   DEDUPE_DOCUMENTS,
   SPLIT_DOCUMENT,
+  IMPROVE_DOCUMENT,
   GAP_CLUSTERING,
   GAP_RECONCILE_PROPOSE,
   GAP_RECONCILE_CRITIC,

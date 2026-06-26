@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { makeTestContext } from "../test-support/context.js";
-import { reconcileDraftedProposal, reconcileCorrectiveProposal, reconcileDedupeProposal, reconcileSplitProposal, applyFoldFromCompletedJob, applyChangesetFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
+import { reconcileDraftedProposal, reconcileCorrectiveProposal, reconcileDedupeProposal, reconcileSplitProposal, reconcileImproveProposal, applyFoldFromCompletedJob, applyChangesetFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
 import type { AppContext } from "../context.js";
 
 async function clusterWithGap(ctx: AppContext, flowId: string | undefined, summary: string): Promise<string> {
@@ -273,6 +273,80 @@ describe("reconcileSplitProposal", () => {
   });
 });
 
+describe("reconcileImproveProposal", () => {
+  const improveRival = (ctx: ReturnType<typeof makeTestContext>) =>
+    ctx.stores.proposals.create({
+      title: "Improve: expand kb/refunds.md",
+      targetPath: "kb/refunds.md",
+      markdown: "# Refunds\nPartial refunds are supported.",
+      rationale: "Added source-backed coverage.",
+      evidence: [],
+      flowId: "billing"
+    });
+
+  it("open-new (no overlap) enqueues a publish action", async () => {
+    const ctx = makeTestContext();
+    const proposal = await improveRival(ctx);
+    await reconcileImproveProposal(ctx, proposal);
+    const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
+    assert.deepEqual(
+      actions.map((a) => ({ proposalId: a.proposalId, kind: a.kind })),
+      [{ proposalId: proposal.id, kind: "publish" }]
+    );
+  });
+
+  it("fold (overlapping touchable PR) enqueues a fold_markdown_proposal job", async () => {
+    const ctx = makeTestContext();
+    const survivor = await ctx.stores.proposals.create({
+      title: "Gap doc",
+      targetPath: "kb/refunds.md",
+      markdown: "# survivor",
+      rationale: "r",
+      evidence: [],
+      flowId: "billing"
+    });
+    await ctx.stores.proposals.recordPublication(survivor.id, {
+      provider: "local-git",
+      branchName: "b",
+      commitSha: "c",
+      pullRequestUrl: "https://github.com/o/r/pull/1",
+      publishedAt: new Date().toISOString()
+    });
+    const rival = await improveRival(ctx);
+
+    await reconcileImproveProposal(ctx, rival);
+    const foldJobs = (await ctx.jobs.list({ type: "fold_markdown_proposal" })).jobs;
+    assert.equal(foldJobs.length, 1);
+    assert.equal((foldJobs[0].input as { rivalProposalId: string }).rivalProposalId, rival.id);
+    assert.deepEqual(await ctx.stores.gapClusters.listPendingPublicationActions(), []);
+  });
+
+  it("defer (overlap only an approved PR) self-publishes the improve proposal", async () => {
+    const ctx = makeTestContext();
+    const approved = await ctx.stores.proposals.create({
+      title: "Approved doc",
+      targetPath: "kb/refunds.md",
+      markdown: "# approved",
+      rationale: "r",
+      evidence: [],
+      flowId: "billing"
+    });
+    await ctx.stores.proposals.recordPublication(approved.id, {
+      provider: "local-git",
+      branchName: "b",
+      commitSha: "c",
+      pullRequestUrl: "https://github.com/o/r/pull/2",
+      publishedAt: new Date().toISOString()
+    });
+    await ctx.stores.proposals.updateReviewDecision(approved.id, "approved");
+    const rival = await improveRival(ctx);
+
+    await reconcileImproveProposal(ctx, rival);
+    assert.equal((await ctx.jobs.list({ type: "fold_markdown_proposal" })).jobs.length, 0);
+    const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
+    assert.deepEqual(actions.map((a) => a.proposalId), [rival.id]);
+  });
+});
 describe("applyFoldFromCompletedJob", () => {
   it("updates survivor markdown, absorbs the rival cluster, supersedes the rival, and enqueues a publish", async () => {
     const ctx = makeTestContext();
