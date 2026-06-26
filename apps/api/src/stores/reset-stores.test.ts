@@ -18,7 +18,7 @@ test("resetData clears domain stores and resets the job queue", async () => {
     chatProvider: "codex",
     retrievedSectionIds: []
   });
-  await ctx.jobs.create("trigger_scheduled_crunch", { flowId: "default" });
+  await ctx.jobs.create("source_change_sync", { flowId: "default" });
 
   let reset = false;
   const originalReset = ctx.jobs.reset.bind(ctx.jobs);

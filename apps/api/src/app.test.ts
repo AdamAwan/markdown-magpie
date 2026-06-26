@@ -146,6 +146,13 @@ test("unknown route returns not_found", async () => {
   assert.deepEqual(await res.json(), { error: "not_found" });
 });
 
+test("the retired /crunch route is gone", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/crunch/runs");
+  assert.equal(res.status, 404);
+  assert.deepEqual(await res.json(), { error: "not_found" });
+});
+
 test("OPTIONS preflight returns 204", async () => {
   const app = buildApp(makeTestContext());
   const res = await app.request("/api/ask", { method: "OPTIONS" });

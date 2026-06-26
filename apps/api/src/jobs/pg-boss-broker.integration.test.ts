@@ -164,8 +164,8 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
 
   await t.test("reconciles schedules idempotently and removes stale schedules", async () => {
     const desired = [{
-      type: "trigger_scheduled_crunch" as const,
-      key: "flow:docs",
+      type: "source_change_sync" as const,
+      key: "task:source-change-sync::docs",
       cron: "*/5 * * * *",
       input: { flowId: "docs" },
       enabled: true
@@ -173,8 +173,8 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
     await broker.reconcileSchedules(desired);
     await broker.reconcileSchedules(desired);
     assert.deepEqual((await broker.listSchedules()).map(({ key, type, cron, enabled }) => ({ key, type, cron, enabled })), [{
-      key: "flow:docs",
-      type: "trigger_scheduled_crunch",
+      key: "task:source-change-sync::docs",
+      type: "source_change_sync",
       cron: "*/5 * * * *",
       enabled: true
     }]);

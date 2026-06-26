@@ -145,14 +145,13 @@ export function logStartupConfig(ctx: AppContext): void {
 export async function resetData(ctx: AppContext) {
   await ctx.stores.questionLogs.reset();
   await ctx.stores.proposals.reset();
-  await ctx.stores.crunchRuns.reset();
   await ctx.stores.scheduledTasks.reset();
   await ctx.stores.sourceSync.reset();
   await ctx.stores.patrol.reset();
   await ctx.stores.jobAcceptances.reset();
 
   // Clear the durable job queue (pg-boss owns all jobs/schedules now), then
-  // reconcile schedules so the now-empty crunch/scheduled-task settings leave no
+  // reconcile schedules so the now-empty scheduled-task settings leave no
   // orphaned pg-boss schedule rows behind.
   await ctx.jobs.reset();
   await reconcileSchedules(ctx);
