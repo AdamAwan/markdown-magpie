@@ -13,6 +13,7 @@ import { InMemoryPrCrosslinkStore } from "../stores/pr-crosslink-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
 import { InMemoryReconciliationDecisionStore } from "../stores/reconciliation-decision-store.js";
 import { InMemoryMaintenanceRunStore } from "../stores/maintenance-run-store.js";
+import { PostgresMaintenanceRunStore } from "../stores/postgres-maintenance-run-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
 import { InMemoryPatrolStore } from "../stores/patrol-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
@@ -121,9 +122,12 @@ export function createReconciliationDecisionStore():
   );
 }
 
-export function createMaintenanceRunStore(): InMemoryMaintenanceRunStore {
-  // Postgres backend wired in a later task; in-memory for now.
-  return new InMemoryMaintenanceRunStore();
+export function createMaintenanceRunStore(): InMemoryMaintenanceRunStore | PostgresMaintenanceRunStore {
+  return createStore<InMemoryMaintenanceRunStore | PostgresMaintenanceRunStore>(
+    "MAINTENANCE_RUN_STORE",
+    (databaseUrl) => new PostgresMaintenanceRunStore(databaseUrl),
+    () => new InMemoryMaintenanceRunStore()
+  );
 }
 
 export function createWatcherRegistryStore(): InMemoryWatcherRegistryStore | PostgresWatcherRegistryStore {
