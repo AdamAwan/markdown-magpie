@@ -257,6 +257,49 @@ test("split_document completion drafts a file-set proposal and gates it (open-ne
   );
 });
 
+test("improve_document completion drafts a proposal and gates it (open-new -> publish)", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("improve_document", {
+    path: "kb/refunds.md",
+    content: "# Refunds",
+    sources: [],
+    destinationId: "docs",
+    flowId: "billing",
+    provider: "codex"
+  });
+
+  assert.equal(
+    (await completeJob(ctx, job.id, {
+      improved: true,
+      markdown: "# Refunds\nPartial refunds are supported.",
+      rationale: "Added source-backed coverage."
+    })).ok,
+    true
+  );
+
+  const proposal = (await ctx.stores.proposals.list(50)).find((p) => p.jobId === job.id);
+  assert.ok(proposal, "an improve proposal was drafted");
+  assert.equal(proposal?.flowId, "billing");
+  assert.ok(proposal?.title.startsWith("Improve:"));
+  const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
+  assert.deepEqual(actions.map((a) => a.proposalId), [proposal?.id]);
+});
+
+test("improve_document no-op completion creates no proposal or publication action", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("improve_document", {
+    path: "kb/refunds.md",
+    content: "# Refunds",
+    sources: [],
+    destinationId: "docs",
+    flowId: "billing",
+    provider: "codex"
+  });
+
+  assert.equal((await completeJob(ctx, job.id, { improved: false, rationale: "Already complete." })).ok, true);
+  assert.deepEqual(await ctx.stores.proposals.list(50), []);
+  assert.deepEqual(await ctx.stores.gapClusters.listPendingPublicationActions(), []);
+});
 test("publish_proposal completion records publication and is idempotent when delivered twice", async () => {
   const ctx = makeTestContext();
 

@@ -24,6 +24,16 @@ test("the cursor is scoped per flow; the default flow is its own set", async () 
   assert.deepEqual((await store.listCursor("billing")).map((e) => e.docPath), ["b.md"]);
 });
 
+
+test("cursor kinds keep fix and improve patrol freshness separate", async () => {
+  const store = new InMemoryPatrolStore();
+  await store.stampChecked("billing", ["fix.md"]);
+  await store.stampChecked("billing", ["improve.md"], "improve");
+
+  assert.deepEqual((await store.listCursor("billing")).map((e) => e.docPath), ["fix.md"]);
+  assert.deepEqual((await store.listCursor("billing", "improve")).map((e) => e.docPath), ["improve.md"]);
+  assert.deepEqual(await store.listCursor(undefined, "improve"), []);
+});
 test("createRun + listRuns returns newest first; getRun fetches by id", async () => {
   const store = new InMemoryPatrolStore();
   const first = await store.createRun({

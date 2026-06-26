@@ -10,6 +10,7 @@ import {
   FOLD_CHANGESET_PROPOSAL,
   FOLD_MARKDOWN_PROPOSAL,
   GENERIC_JOB,
+  IMPROVE_DOCUMENT,
   SOURCE_CHANGE_SYNC,
   SPLIT_DOCUMENT,
   SUMMARIZE_GAP,
@@ -53,6 +54,8 @@ export function buildPrompt(job: JobView): string {
       return `${DEDUPE_DOCUMENTS.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "split_document":
       return `${SPLIT_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
+    case "improve_document":
+      return `${IMPROVE_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     default:
       return `${GENERIC_JOB.instructions}\n\nJob:\n${JSON.stringify({ type: job.type, input: job.input }, null, 2)}`;
   }

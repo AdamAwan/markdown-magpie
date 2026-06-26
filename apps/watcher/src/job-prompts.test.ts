@@ -48,6 +48,12 @@ describe("buildPrompt", () => {
     assert.match(prompt, /outgrown a single responsibility/);
     assert.match(prompt, /"neighbours"/);
   });
+
+  it("uses the improve-document instructions for an improve_document job", () => {
+    const prompt = buildPrompt(job("improve_document", { path: "kb/a.md", content: "# A", sources: [] }));
+    assert.match(prompt, /fine-but-thin/);
+    assert.match(prompt, /"sources"/);
+  });
 });
 
 describe("buildAnswerOutput", () => {

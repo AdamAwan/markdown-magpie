@@ -516,3 +516,54 @@ test("createSplitProposalFromCompletedJob rejects changes to unrelated existing 
   });
   assert.equal(result, undefined);
 });
+
+async function improveJob(ctx: ReturnType<typeof makeTestContext>, content = "# Refunds") {
+  return ctx.jobs.create("improve_document", {
+    path: "kb/refunds.md",
+    content,
+    sources: [{ sourceId: "s1", sourceName: "Billing", kind: "git", path: "refunds.ts", content: "partial refunds are supported" }],
+    destinationId: "docs",
+    flowId: "billing",
+    provider: "codex"
+  });
+}
+
+test("createImproveProposalFromCompletedJob drafts a labelled single-file proposal carrying flowId", async () => {
+  const ctx = makeTestContext();
+  const job = await improveJob(ctx);
+  const output = {
+    improved: true,
+    markdown: "# Refunds\nPartial refunds are supported.",
+    rationale: "Added source-backed partial refund coverage."
+  };
+
+  const first = await proposals.createImproveProposalFromCompletedJob(ctx, job, output);
+  assert.ok(first);
+  assert.equal(first?.flowId, "billing");
+  assert.equal(first?.destinationId, "docs");
+  assert.equal(first?.targetPath, "kb/refunds.md");
+  assert.equal(first?.markdown, output.markdown);
+  assert.ok(first?.title.startsWith("Improve:"));
+
+  const second = await proposals.createImproveProposalFromCompletedJob(ctx, job, output);
+  assert.equal(second?.id, first?.id);
+  assert.equal((await proposals.list(ctx, 50)).length, 1);
+});
+
+test("createImproveProposalFromCompletedJob is silent for no-op or unchanged improvements", async () => {
+  const ctx = makeTestContext();
+  const job = await improveJob(ctx, "# Refunds");
+
+  assert.equal(
+    await proposals.createImproveProposalFromCompletedJob(ctx, job, { improved: false, rationale: "Already complete." }),
+    undefined
+  );
+  assert.equal(
+    await proposals.createImproveProposalFromCompletedJob(ctx, job, {
+      improved: true,
+      markdown: "# Refunds",
+      rationale: "No material change."
+    }),
+    undefined
+  );
+});

@@ -1,6 +1,7 @@
 import type {
   CorrectDocumentJobInput,
   DedupeDocumentsJobInput,
+  ImproveDocumentJobInput,
   DraftContext,
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
@@ -13,7 +14,7 @@ import type {
 } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { z } from "zod";
-import { correctDocumentOutputSchema, dedupeDocumentsOutputSchema, publishProposalOutputSchema, splitDocumentOutputSchema } from "@magpie/jobs";
+import { correctDocumentOutputSchema, dedupeDocumentsOutputSchema, improveDocumentOutputSchema, publishProposalOutputSchema, splitDocumentOutputSchema } from "@magpie/jobs";
 import { resolveProposalTargetPath } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import type { ProposalListOptions } from "../../stores/proposal-store.js";
@@ -604,6 +605,37 @@ export async function createSplitProposalFromCompletedJob(
   });
 }
 
+// Completion handler for improve_document jobs: an improve-patrol scan landed. It
+// creates a single-file, clusterless editorial-growth proposal only when the model
+// explicitly improved the document and returned a changed full body. Idempotent on
+// jobId, like the other patrol proposal flows.
+export async function createImproveProposalFromCompletedJob(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<Proposal | undefined> {
+  if (!job || job.type !== "improve_document") {
+    return undefined;
+  }
+  const parsed = improveDocumentOutputSchema.safeParse(output);
+  if (!parsed.success || !parsed.data.improved || !parsed.data.markdown) {
+    return undefined;
+  }
+  const input = job.input as Partial<ImproveDocumentJobInput>;
+  if (!input.path || parsed.data.markdown.trim() === input.content?.trim()) {
+    return undefined;
+  }
+  return ctx.stores.proposals.create({
+    title: `Improve: expand ${input.path}`,
+    targetPath: input.path,
+    markdown: parsed.data.markdown,
+    rationale: parsed.data.rationale,
+    evidence: [],
+    flowId: input.flowId,
+    destinationId: input.destinationId,
+    jobId: job.id
+  });
+}
 // Completion handler for publish_proposal jobs: records the validated git
 // publication the watcher performed (branch, commit, optional remote/PR url) onto
 // the linked proposal. Idempotent by proposalId — a proposal that already carries

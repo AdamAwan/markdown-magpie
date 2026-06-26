@@ -28,12 +28,14 @@ const EXPIRATION_SECONDS = {
   correct_document: 10 * 60,
   dedupe_documents: 10 * 60,
   split_document: 10 * 60,
+  improve_document: 10 * 60,
   fold_changeset_proposal: 15 * 60,
   refresh_pull_requests: 5 * 60,
   process_gaps_to_pull_requests: 60 * 60,
   trigger_scheduled_crunch: 60 * 60,
   source_change_sync: 60 * 60,
   fix_patrol: 60 * 60,
+  improve_patrol: 60 * 60,
   publish_proposal: 15 * 60,
   publish_crunch: 15 * 60,
   publish_source_sync: 15 * 60,
@@ -102,7 +104,8 @@ test("maintenance capability yields only orchestration work queues", () => {
     "process_gaps_to_pull_requests",
     "trigger_scheduled_crunch",
     "source_change_sync",
-    "fix_patrol"
+    "fix_patrol",
+    "improve_patrol"
   ]);
 });
 
@@ -159,6 +162,14 @@ test("split_document routes by provider like other AI work", () => {
   assert.ok(!queueNamesForCapabilities(["github"]).includes("split_document__codex"));
 });
 
+test("improve_document routes by provider like other AI work", () => {
+  const definition = jobDefinition("improve_document");
+  assert.equal(definition.requiredCapability({ provider: "codex" }), "codex");
+  assert.equal(queueNameForJob("improve_document", { provider: "codex" }), "improve_document__codex");
+  assert.ok(queueNamesForCapabilities(["codex"]).includes("improve_document__codex"));
+  assert.ok(!queueNamesForCapabilities(["github"]).includes("improve_document__codex"));
+});
+
 test("fold_changeset_proposal routes by provider like other AI work", () => {
   const definition = jobDefinition("fold_changeset_proposal");
   assert.equal(definition.requiredCapability({ provider: "codex" }), "codex");
@@ -184,6 +195,16 @@ test("fix_patrol input accepts an optional flowId; output carries runId + select
   assert.ok(jobDefinition("fix_patrol").inputSchema.safeParse({ flowId: "billing" }).success);
   assert.ok(jobDefinition("fix_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3, findingCount: 1 }).success);
   assert.ok(!jobDefinition("fix_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3 }).success);
+});
+
+test("improve_patrol is a maintenance queue whose output reports enqueued improve scans", () => {
+  const definition = jobDefinition("improve_patrol");
+  assert.equal(definition.requiredCapability({ flowId: "billing" }), "maintenance");
+  assert.equal(queueNameForJob("improve_patrol", { flowId: "billing" }), "improve_patrol");
+  assert.ok(definition.inputSchema.safeParse({}).success);
+  assert.ok(definition.inputSchema.safeParse({ flowId: "billing" }).success);
+  assert.ok(definition.outputSchema.safeParse({ runId: "r1", selectedCount: 2, enqueuedCount: 2 }).success);
+  assert.ok(!definition.outputSchema.safeParse({ runId: "r1", selectedCount: 2 }).success);
 });
 
 test("source_change_sync output reports the run ids it created (0..N)", () => {

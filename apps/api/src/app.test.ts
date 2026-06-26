@@ -194,7 +194,7 @@ test("GET /api/prompts returns the catalog", async () => {
   const res = await app.request("/api/prompts");
   assert.equal(res.status, 200);
   const body = (await res.json()) as { prompts: Array<Record<string, unknown>> };
-  assert.equal(body.prompts.length, 17);
+  assert.equal(body.prompts.length, 18);
   for (const prompt of body.prompts) {
     assert.equal(typeof prompt.id, "string");
     assert.equal(typeof prompt.title, "string");

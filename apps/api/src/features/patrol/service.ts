@@ -2,6 +2,7 @@ import type { AppContext } from "../../context.js";
 import type {
   CorrectDocumentJobInput,
   DedupeDocumentsJobInput,
+  ImproveDocumentJobInput,
   PatrolRun,
   SplitDocumentJobInput,
   VerifyDocumentJobInput
@@ -21,8 +22,11 @@ import { type AiProviderName } from "../../platform/providers.js";
 // See docs/maintenance-redesign.md (Decisions: cursor fairness).
 const PATROL_BATCH_SIZE = 10;
 const PATROL_RANDOM_COUNT = 2;
+const IMPROVE_PATROL_BATCH_SIZE = 2;
+const IMPROVE_PATROL_RANDOM_COUNT = 1;
 
 export type FixPatrolOutcome = { ok: true; run: PatrolRun } | { ok: false; code: "unknown_flow" };
+export type ImprovePatrolOutcome = { ok: true; run: PatrolRun; enqueuedCount: number } | { ok: false; code: "unknown_flow" };
 
 // Resolve a flow to the repository ids whose documents the cursor rotates over and
 // the source ids whose material the verify lens checks against. Mirrors the
@@ -115,6 +119,19 @@ const defaultSplitDocument: SplitDocumentFn = async (ctx, input) => {
     flowId: input.flowId,
     provider: ctx.config.get().aiProvider
   } satisfies SplitDocumentJobInput & { provider: AiProviderName });
+};
+
+export type ImproveDocumentFn = (ctx: AppContext, input: ImproveDocumentJobInput) => Promise<void>;
+
+const defaultImproveDocument: ImproveDocumentFn = async (ctx, input) => {
+  await ctx.jobs.create("improve_document", {
+    path: input.path,
+    content: input.content,
+    sources: input.sources,
+    destinationId: input.destinationId,
+    flowId: input.flowId,
+    provider: ctx.config.get().aiProvider
+  } satisfies ImproveDocumentJobInput & { provider: AiProviderName });
 };
 
 export async function runFixPatrol(
@@ -224,6 +241,67 @@ export async function runFixPatrol(
   return { ok: true, run };
 }
 
+export async function runImprovePatrol(
+  ctx: AppContext,
+  options: { flowId?: string; trigger: PatrolRun["trigger"] },
+  deps: { improveDocument?: ImproveDocumentFn } = {}
+): Promise<ImprovePatrolOutcome> {
+  const improveDocument = deps.improveDocument ?? defaultImproveDocument;
+  const scope = resolveScope(ctx, options.flowId);
+  if (!scope.ok) {
+    return scope;
+  }
+
+  const documents = ctx.stores.knowledgeIndex
+    .listDocuments()
+    .filter((doc) => !scope.repositoryIds || scope.repositoryIds.includes(doc.repositoryId));
+  const universe = documents.map((doc) => doc.path);
+
+  const cursor = await ctx.stores.patrol.listCursor(options.flowId, "improve");
+  const checkedAt = new Map(cursor.map((entry) => [entry.docPath, entry.lastCheckedAt]));
+  const selected = selectPatrolBatch(universe, checkedAt, {
+    batchSize: IMPROVE_PATROL_BATCH_SIZE,
+    randomCount: IMPROVE_PATROL_RANDOM_COUNT
+  });
+
+  const selectedSet = new Set(selected);
+  const selectedDocuments = documents
+    .filter((doc) => selectedSet.has(doc.path))
+    .map((doc) => ({ path: doc.path, content: doc.content, repositoryId: doc.repositoryId }));
+  const sources = selectedDocuments.length > 0 ? await collectSourceContext(ctx.repositoryDeps(), scope.sourceIds) : [];
+
+  let enqueuedCount = 0;
+  for (const document of selectedDocuments) {
+    try {
+      await improveDocument(ctx, {
+        path: document.path,
+        content: document.content,
+        sources,
+        destinationId: document.repositoryId,
+        flowId: options.flowId
+      });
+      enqueuedCount += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "improve failed";
+      console.warn(`Improve-patrol: skipping ${document.path} - ${message}.`);
+    }
+  }
+
+  await ctx.stores.patrol.stampChecked(options.flowId, selected, "improve");
+  const run = await ctx.stores.patrol.createRun({
+    flowId: options.flowId,
+    trigger: options.trigger,
+    universeCount: universe.length,
+    selectedCount: selected.length,
+    selected,
+    findings: []
+  });
+  console.log(
+    `Improve-patrol (${options.trigger}) flow=${options.flowId ?? "(default)"}: ` +
+      `checked ${selected.length}/${universe.length} document(s), ${enqueuedCount} improve scan(s) enqueued; run ${run.id}.`
+  );
+  return { ok: true, run, enqueuedCount };
+}
 export async function listRuns(ctx: AppContext, limit: number): Promise<PatrolRun[]> {
   return ctx.stores.patrol.listRuns(limit);
 }

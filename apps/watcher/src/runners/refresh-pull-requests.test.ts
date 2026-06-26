@@ -33,6 +33,7 @@ function fakeApi(open: OpenPullRequestRef[]): WatcherApi {
     reconcileGaps: async () => ({ ok: true }),
     runSourceSync: async () => ({ runIds: [] }),
     runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
+    runImprovePatrol: async () => ({ runId: "run-1", selectedCount: 0, enqueuedCount: 0 }),
     triggerScheduledCrunch: async () => ({ runId: "run-1", jobId: "job-1" }),
     listOpenPullRequests: async () => open
   };

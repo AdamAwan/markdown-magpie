@@ -23,6 +23,8 @@ import type {
   DedupeDocumentsJobOutput,
   SplitDocumentJobInput as CoreSplitDocumentJobInput,
   SplitDocumentJobOutput,
+  ImproveDocumentJobInput as CoreImproveDocumentJobInput,
+  ImproveDocumentJobOutput,
   ChangesetChange
 } from "@magpie/core";
 import { AI_PROVIDERS, type AiProviderName, type JobError } from "./types.js";
@@ -313,6 +315,19 @@ export const splitDocumentOutputSchema = z.object({
   changeset: z.array(changesetChangeSchema).optional()
 }) satisfies z.ZodType<SplitDocumentJobOutput>;
 
+export const improveDocumentInputSchema = z.object({
+  provider: providerSchema,
+  path: z.string(),
+  content: z.string(),
+  sources: z.array(sourceDataContextSchema),
+  destinationId: z.string().optional(),
+  flowId: z.string().optional()
+}) satisfies z.ZodType<ProviderInput<CoreImproveDocumentJobInput>>;
+export const improveDocumentOutputSchema = z.union([
+  z.object({ improved: z.literal(false), rationale: z.string(), markdown: z.string().optional() }),
+  z.object({ improved: z.literal(true), markdown: z.string(), rationale: z.string() })
+]) satisfies z.ZodType<ImproveDocumentJobOutput>;
+
 export const foldChangesetProposalInputSchema = z.object({
   provider: providerSchema,
   survivorProposalId: z.string(),
@@ -383,6 +398,13 @@ export const fixPatrolOutputSchema = z.object({
   runId: z.string(),
   selectedCount: z.number().int(),
   findingCount: z.number().int()
+});
+
+export const improvePatrolInputSchema = z.object({ flowId: z.string().optional() });
+export const improvePatrolOutputSchema = z.object({
+  runId: z.string(),
+  selectedCount: z.number().int(),
+  enqueuedCount: z.number().int()
 });
 
 export const publishSourceSyncInputSchema = z.object({ runId: z.string() });

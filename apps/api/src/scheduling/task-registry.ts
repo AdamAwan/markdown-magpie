@@ -88,6 +88,17 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
     defaultCron: "0 * * * *",
     jobType: "fix_patrol",
     input: (flowId) => ({ flowId })
+  },
+  {
+    baseKey: "improve-patrol",
+    typeLabel: "Improve patrol · rolling editorial expansion",
+    description:
+      "Rolls its own cursor across this flow's knowledge-base documents, sending the least-recently-improved " +
+      "ones to the model with the flow's source material so fine-but-thin documents grow source-backed coverage. " +
+      "Separate from Fix patrol: it proposes editorial expansion, not correctness or structural fixes.",
+    defaultCron: "0 * * * *",
+    jobType: "improve_patrol",
+    input: (flowId) => ({ flowId })
   }
 ];
 
