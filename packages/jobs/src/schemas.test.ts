@@ -6,6 +6,8 @@ import {
   foldMarkdownProposalOutputSchema,
   commentPullRequestInputSchema,
   refreshPullRequestsOutputSchema,
+  splitDocumentInputSchema,
+  splitDocumentOutputSchema,
   verifyDocumentInputSchema,
   verifyDocumentOutputSchema
 } from "./schemas.js";
@@ -105,6 +107,31 @@ test("fold input schema round-trips the survivor/rival fields", () => {
 test("fold output schema requires markdown and rationale", () => {
   assert.ok(foldMarkdownProposalOutputSchema.safeParse({ markdown: "m", rationale: "r" }).success);
   assert.ok(!foldMarkdownProposalOutputSchema.safeParse({ markdown: "m" }).success);
+});
+
+test("split_document schemas round-trip a bounded changeset", () => {
+  assert.ok(
+    splitDocumentInputSchema.safeParse({
+      provider: "codex",
+      path: "kb/refunds.md",
+      content: "# Refunds",
+      neighbours: [{ path: "kb/refund-operations.md", content: "# Refund operations" }],
+      destinationId: "docs",
+      flowId: "billing"
+    }).success
+  );
+  assert.ok(
+    splitDocumentOutputSchema.safeParse({
+      split: true,
+      rationale: "separated policy from operations",
+      primaryPath: "kb/refunds.md",
+      changeset: [
+        { path: "kb/refunds.md", content: "# Refunds\nSee refund-operations.md." },
+        { path: "kb/refund-operations.md", content: "# Refund operations\nMoved detail." }
+      ]
+    }).success
+  );
+  assert.ok(splitDocumentOutputSchema.safeParse({ split: false, rationale: "already focused", changeset: [] }).success);
 });
 
 test("comment_pull_request input requires url and body", () => {

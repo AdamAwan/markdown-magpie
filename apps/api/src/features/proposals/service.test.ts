@@ -448,3 +448,71 @@ test("createDedupeProposalFromCompletedJob skips a changeset whose primaryPath h
   });
   assert.equal(result, undefined);
 });
+
+
+async function splitJob(ctx: ReturnType<typeof makeTestContext>) {
+  await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
+    repositoryId: "docs",
+    documents: [
+      { path: "kb/operations.md", content: "# Operations" },
+      { path: "kb/billing.md", content: "# Billing" },
+      { path: "kb/unrelated.md", content: "# Unrelated" }
+    ]
+  });
+  return ctx.jobs.create("split_document", {
+    path: "kb/operations.md",
+    content: "# Operations",
+    neighbours: [{ path: "kb/billing.md", content: "# Billing" }],
+    destinationId: "docs",
+    flowId: "billing",
+    provider: "codex"
+  });
+}
+
+test("createSplitProposalFromCompletedJob drafts a constrained file-set proposal", async () => {
+  const ctx = makeTestContext();
+  const job = await splitJob(ctx);
+  const changeset = [
+    { path: "kb/operations.md", content: "# Operations\nSee the focused billing guide." },
+    { path: "kb/billing.md", delete: true },
+    { path: "kb/billing-guide.md", content: "# Billing Guide\nMoved billing detail." }
+  ];
+  const output = { split: true, rationale: "moved billing detail out", primaryPath: "kb/operations.md", changeset };
+
+  const first = await proposals.createSplitProposalFromCompletedJob(ctx, job, output);
+  assert.ok(first);
+  assert.equal(first?.flowId, "billing");
+  assert.equal(first?.targetPath, "kb/operations.md");
+  assert.equal(first?.markdown, "# Operations\nSee the focused billing guide.");
+  assert.deepEqual(first?.changeset, changeset);
+  assert.ok(first?.title.startsWith("Split:"));
+
+  const second = await proposals.createSplitProposalFromCompletedJob(ctx, job, output);
+  assert.equal(second?.id, first?.id);
+});
+
+test("createSplitProposalFromCompletedJob is silent when the document stays cohesive", async () => {
+  const ctx = makeTestContext();
+  const job = await splitJob(ctx);
+  const result = await proposals.createSplitProposalFromCompletedJob(ctx, job, {
+    split: false,
+    rationale: "already cohesive",
+    changeset: []
+  });
+  assert.equal(result, undefined);
+});
+
+test("createSplitProposalFromCompletedJob rejects changes to unrelated existing docs", async () => {
+  const ctx = makeTestContext();
+  const job = await splitJob(ctx);
+  const result = await proposals.createSplitProposalFromCompletedJob(ctx, job, {
+    split: true,
+    rationale: "too broad",
+    primaryPath: "kb/operations.md",
+    changeset: [
+      { path: "kb/operations.md", content: "# Operations" },
+      { path: "kb/unrelated.md", content: "# Rewritten unrelated" }
+    ]
+  });
+  assert.equal(result, undefined);
+});

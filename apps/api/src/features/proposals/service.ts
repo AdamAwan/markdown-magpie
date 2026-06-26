@@ -8,11 +8,12 @@ import type {
   OpenPullRequestContext,
   Proposal,
   RepositoryRef,
-  SourceDataContext
+  SourceDataContext,
+  SplitDocumentJobInput
 } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { z } from "zod";
-import { correctDocumentOutputSchema, dedupeDocumentsOutputSchema, publishProposalOutputSchema } from "@magpie/jobs";
+import { correctDocumentOutputSchema, dedupeDocumentsOutputSchema, publishProposalOutputSchema, splitDocumentOutputSchema } from "@magpie/jobs";
 import { resolveProposalTargetPath } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import type { ProposalListOptions } from "../../stores/proposal-store.js";
@@ -534,6 +535,64 @@ export async function createDedupeProposalFromCompletedJob(
   const input = job.input as Partial<DedupeDocumentsJobInput>;
   return ctx.stores.proposals.create({
     title: `Dedupe: reconcile ${primaryPath} with ${otherPath}`,
+    targetPath: primaryPath,
+    markdown: primaryWrite.content,
+    changeset,
+    rationale,
+    evidence: [],
+    flowId: input.flowId,
+    destinationId: input.destinationId,
+    jobId: job.id
+  });
+}
+
+// Completion handler for split_document jobs: a split-lens scan landed. Split is the
+// inverse of dedupe: one broad source document becomes a parent plus focused docs,
+// optionally cleaning up supplied neighbours. The changeset is constrained so the
+// model may only update/delete the source and supplied neighbours, while genuinely
+// new paths must be writes.
+export async function createSplitProposalFromCompletedJob(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<Proposal | undefined> {
+  if (!job || job.type !== "split_document") {
+    return undefined;
+  }
+  const parsed = splitDocumentOutputSchema.safeParse(output);
+  if (!parsed.success) {
+    return undefined;
+  }
+  const input = job.input as Partial<SplitDocumentJobInput>;
+  if (!input.path) {
+    return undefined;
+  }
+  const { split, changeset, primaryPath, rationale } = parsed.data;
+  if (!split || !changeset || !primaryPath || primaryPath !== input.path) {
+    return undefined;
+  }
+
+  const primaryWrite = changeset.find((change) => change.path === primaryPath);
+  if (!primaryWrite || primaryWrite.content === undefined) {
+    return undefined;
+  }
+
+  const allowedExistingPaths = new Set([input.path, ...(input.neighbours ?? []).map((neighbour) => neighbour.path)]);
+  const indexedExistingPaths = new Set(ctx.stores.knowledgeIndex.listDocuments().map((document) => document.path));
+  for (const change of changeset) {
+    if (allowedExistingPaths.has(change.path)) {
+      continue;
+    }
+    if (indexedExistingPaths.has(change.path)) {
+      return undefined;
+    }
+    if (change.delete || change.content === undefined) {
+      return undefined;
+    }
+  }
+
+  return ctx.stores.proposals.create({
+    title: `Split: reorganise ${primaryPath}`,
     targetPath: primaryPath,
     markdown: primaryWrite.content,
     changeset,

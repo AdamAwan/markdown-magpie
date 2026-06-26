@@ -484,6 +484,21 @@ export interface DedupeDocumentsJobOutput {
   changeset?: ChangesetChange[];
 }
 
+export interface SplitDocumentJobInput {
+  path: string;
+  content: string;
+  neighbours: Array<{ path: string; content: string }>;
+  destinationId?: string;
+  flowId?: string;
+}
+
+export interface SplitDocumentJobOutput {
+  split: boolean;
+  rationale: string;
+  primaryPath?: string;
+  changeset?: ChangesetChange[];
+}
+
 export interface DraftMarkdownProposalJobOutput {
   title: string;
   targetPath: string;

@@ -182,6 +182,15 @@ export async function completeJob(
         console.warn(`Dedupe reconcile for proposal ${dedupeProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    const splitProposal = await proposalsService.createSplitProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    if (splitProposal) {
+      // Split reconcile follows the same multi-file, clusterless ownership as dedupe.
+      try {
+        await foldService.reconcileSplitProposal(ctx, splitProposal);
+      } catch (error) {
+        console.warn(`Split reconcile for proposal ${splitProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     await foldService.applyFoldFromCompletedJob(ctx, existingJob, parsed.data);
     await foldService.applyChangesetFoldFromCompletedJob(ctx, existingJob, parsed.data);
     await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, parsed.data);

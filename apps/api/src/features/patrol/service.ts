@@ -1,10 +1,17 @@
 import type { AppContext } from "../../context.js";
-import type { CorrectDocumentJobInput, DedupeDocumentsJobInput, PatrolRun, VerifyDocumentJobInput } from "@magpie/core";
+import type {
+  CorrectDocumentJobInput,
+  DedupeDocumentsJobInput,
+  PatrolRun,
+  SplitDocumentJobInput,
+  VerifyDocumentJobInput
+} from "@magpie/core";
 import { verifyDocumentOutputSchema } from "@magpie/jobs";
 import { selectFlow } from "../../platform/repositories.js";
 import { selectPatrolBatch } from "../../scheduling/patrol-cursor.js";
 import { runVerifyLens, type VerifyDocumentFn } from "../../scheduling/verify-lens.js";
 import { runDedupeLens, type DedupeDocumentFn } from "../../scheduling/dedupe-lens.js";
+import { runSplitLens, type SplitDocumentFn } from "../../scheduling/split-lens.js";
 import { collectSourceContext } from "../../platform/source-context.js";
 import { runJobToCompletion } from "../jobs/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
@@ -97,6 +104,19 @@ const defaultDedupeDocument: DedupeDocumentFn = async (ctx, input) => {
   } satisfies DedupeDocumentsJobInput & { provider: AiProviderName });
 };
 
+// Default split: enqueue a split_document AI job (enqueue-only - the corrective
+// proposal is drafted and gated later, on job completion).
+const defaultSplitDocument: SplitDocumentFn = async (ctx, input) => {
+  await ctx.jobs.create("split_document", {
+    path: input.path,
+    content: input.content,
+    neighbours: input.neighbours,
+    destinationId: input.destinationId,
+    flowId: input.flowId,
+    provider: ctx.config.get().aiProvider
+  } satisfies SplitDocumentJobInput & { provider: AiProviderName });
+};
+
 export async function runFixPatrol(
   ctx: AppContext,
   options: { flowId?: string; trigger: PatrolRun["trigger"] },
@@ -104,11 +124,13 @@ export async function runFixPatrol(
     verifyDocument?: VerifyDocumentFn;
     correctDocument?: CorrectDocumentFn;
     dedupeDocument?: DedupeDocumentFn;
+    splitDocument?: SplitDocumentFn;
   } = {}
 ): Promise<FixPatrolOutcome> {
   const verifyDocument = deps.verifyDocument ?? defaultVerifyDocument;
   const correctDocument = deps.correctDocument ?? defaultCorrectDocument;
   const dedupeDocument = deps.dedupeDocument ?? defaultDedupeDocument;
+  const splitDocument = deps.splitDocument ?? defaultSplitDocument;
   const scope = resolveScope(ctx, options.flowId);
   if (!scope.ok) {
     return scope;
@@ -172,6 +194,18 @@ export async function runFixPatrol(
     dedupeDocument
   });
 
+  // Run the split lens over the same batch: broad or oversized documents are sent
+  // to a multi-file changeset proposal flow that can move material into focused
+  // documents and clean up touched neighbours.
+  const splitScans = await runSplitLens(ctx, {
+    flowId: options.flowId,
+    documents: documents
+      .filter((doc) => selectedSet.has(doc.path))
+      .map((doc) => ({ path: doc.path, content: doc.content, repositoryId: doc.repositoryId })),
+    repositoryIds: scope.repositoryIds,
+    splitDocument
+  });
+
   await ctx.stores.patrol.stampChecked(options.flowId, selected);
 
   const run = await ctx.stores.patrol.createRun({
@@ -185,7 +219,7 @@ export async function runFixPatrol(
   console.log(
     `Fix-patrol (${options.trigger}) flow=${options.flowId ?? "(default)"}: ` +
       `checked ${selected.length}/${universe.length} document(s), ${findings.length} finding(s), ` +
-      `${dedupeScans} dedupe scan(s) enqueued; run ${run.id}.`
+      `${dedupeScans} dedupe scan(s), ${splitScans} split scan(s) enqueued; run ${run.id}.`
   );
   return { ok: true, run };
 }

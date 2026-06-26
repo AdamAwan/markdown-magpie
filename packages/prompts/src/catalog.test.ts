@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { promptCatalog, getPrompt } from "./catalog.js";
 
-test("catalog has exactly 16 prompts", () => {
-  assert.equal(promptCatalog.length, 16);
+test("catalog has exactly 17 prompts", () => {
+  assert.equal(promptCatalog.length, 17);
 });
 
 test("catalog ids are in the fixed, documented order", () => {
@@ -20,6 +20,7 @@ test("catalog ids are in the fixed, documented order", () => {
       "verify-document",
       "correct-document",
       "dedupe-documents",
+      "split-document",
       "gap-clustering",
       "gap-reconcile-propose",
       "gap-reconcile-critic",
