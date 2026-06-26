@@ -64,11 +64,14 @@ MaintenanceRun {
   summary: string;                  // one-line human text, e.g. "checked 5 docs · 1 finding"
   error?: string;
   details: MaintenanceRunDetails;   // JSONB; task-specific (see below)
-  producedProposalIds: string[];    // proposals this run created (audit: which PRs came from this tick)
   startedAt: string;
   completedAt?: string;
 }
 ```
+
+(No `producedProposalIds`: the lenses enqueue AI jobs and the proposals are created
+asynchronously when those jobs complete — they don't exist yet at record time. A
+proposal→run back-link could be added later if wanted; it's not built here.)
 
 - `status` carries `running` for future async tasks (source-sync at B). The A
   tasks run synchronously inside the API tick, so they write a terminal
