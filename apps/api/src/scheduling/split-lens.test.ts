@@ -32,7 +32,9 @@ test("runSplitLens enqueues split_document only for structurally broad documents
       { path: "kb/broad.md", content: broadContent, repositoryId: "docs" }
     ],
     repositoryIds: ["docs"],
-    splitDocument: async (_ctx, input) => calls.push(input)
+    splitDocument: async (_ctx, input) => {
+      calls.push(input);
+    }
   });
   assert.equal(enqueued, 1);
   assert.equal(calls[0].path, "kb/broad.md");
