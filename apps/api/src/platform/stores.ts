@@ -12,6 +12,7 @@ import { InMemoryProposalStore } from "../stores/proposal-store.js";
 import { InMemoryPrCrosslinkStore } from "../stores/pr-crosslink-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
 import { InMemoryReconciliationDecisionStore } from "../stores/reconciliation-decision-store.js";
+import { InMemoryMaintenanceRunStore } from "../stores/maintenance-run-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
 import { InMemoryPatrolStore } from "../stores/patrol-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
@@ -32,6 +33,7 @@ export type StoreEnvName =
   | "PATROL_STORE"
   | "GAP_CLUSTER_STORE"
   | "RECONCILIATION_DECISION_STORE"
+  | "MAINTENANCE_RUN_STORE"
   | "WATCHER_REGISTRY_STORE"
   | "PR_CROSSLINK_STORE";
 
@@ -117,6 +119,11 @@ export function createReconciliationDecisionStore():
     (databaseUrl) => new PostgresReconciliationDecisionStore(databaseUrl),
     () => new InMemoryReconciliationDecisionStore()
   );
+}
+
+export function createMaintenanceRunStore(): InMemoryMaintenanceRunStore {
+  // Postgres backend wired in a later task; in-memory for now.
+  return new InMemoryMaintenanceRunStore();
 }
 
 export function createWatcherRegistryStore(): InMemoryWatcherRegistryStore | PostgresWatcherRegistryStore {
