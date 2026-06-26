@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ChangesetChange, CrunchPlan, ProposalPublication, SourceSyncRun, SourceSyncState } from "@magpie/core";
+import type { ChangesetChange, MaintenancePlan, ProposalPublication, SourceSyncRun, SourceSyncState } from "@magpie/core";
 
 export interface SourceSyncRunInput {
   flowId?: string;
@@ -8,7 +8,7 @@ export interface SourceSyncRunInput {
   trigger: SourceSyncRun["trigger"];
   status: SourceSyncRun["status"];
   jobId?: string;
-  plan?: CrunchPlan;
+  plan?: MaintenancePlan;
   changeset?: ChangesetChange[];
   error?: string;
   fromSha?: string;
@@ -27,13 +27,13 @@ export interface SourceSyncStore {
   listRuns(limit: number): Promise<SourceSyncRun[]>;
   getRun(id: string): Promise<SourceSyncRun | undefined>;
   getRunByJobId(jobId: string): Promise<SourceSyncRun | undefined>;
-  completeRun(id: string, plan: CrunchPlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined>;
-  markSkipped(id: string, plan: CrunchPlan): Promise<SourceSyncRun | undefined>;
+  completeRun(id: string, plan: MaintenancePlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined>;
+  markSkipped(id: string, plan: MaintenancePlan): Promise<SourceSyncRun | undefined>;
   // running → deferred: the run's target file-set overlaps an open PR in the same
   // flow, so its changeset is preserved (never published as a rival) and re-gated
   // on a later tick. Persists plan + changeset; sets no completedAt; enqueues no
   // publication. No-op on a run that is no longer "running".
-  deferRun(id: string, plan: CrunchPlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined>;
+  deferRun(id: string, plan: MaintenancePlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined>;
   // The re-gate worklist: deferred runs for a flow (default flow = undefined).
   listDeferredRuns(flowId: string | undefined): Promise<SourceSyncRun[]>;
   // deferred → completed: the overlap cleared, so the preserved changeset becomes
@@ -109,7 +109,7 @@ export class InMemorySourceSyncStore implements SourceSyncStore {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
   }
 
-  async completeRun(id: string, plan: CrunchPlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined> {
+  async completeRun(id: string, plan: MaintenancePlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined> {
     return this.transitionFromRunning(id, {
       status: "completed",
       plan,
@@ -119,11 +119,11 @@ export class InMemorySourceSyncStore implements SourceSyncStore {
     });
   }
 
-  async markSkipped(id: string, plan: CrunchPlan): Promise<SourceSyncRun | undefined> {
+  async markSkipped(id: string, plan: MaintenancePlan): Promise<SourceSyncRun | undefined> {
     return this.transitionFromRunning(id, { status: "skipped", plan, completedAt: new Date().toISOString() });
   }
 
-  async deferRun(id: string, plan: CrunchPlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined> {
+  async deferRun(id: string, plan: MaintenancePlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined> {
     // Reuses the running-only guard: deferral is a transition out of "running",
     // like completeRun/markSkipped, but leaves completedAt unset (deferred is a
     // waiting state, not terminal).

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type {
   AnswerQuestionJobOutput,
-  CrunchPlan,
+  MaintenancePlan,
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput
 } from "@magpie/core";
@@ -524,7 +524,7 @@ test("crunch completion is idempotent when delivered twice", async () => {
   const job = await ctx.jobs.create("crunch_knowledge_base", {
     provider: "codex",
     documents: [],
-    expectedOutput: "crunch_plan"
+    expectedOutput: "maintenance_plan"
   });
   const run = await ctx.stores.crunchRuns.createRun({
     trigger: "manual",
@@ -532,7 +532,7 @@ test("crunch completion is idempotent when delivered twice", async () => {
     jobId: job.id,
     status: "running"
   });
-  const plan: CrunchPlan = { summary: "done", operations: [], rationale: "tidy" };
+  const plan: MaintenancePlan = { summary: "done", operations: [], rationale: "tidy" };
   assert.equal((await completeJob(ctx, job.id, plan)).ok, true);
   const first = await ctx.stores.crunchRuns.getRun(run.id);
   assert.equal((await completeJob(ctx, job.id, plan)).ok, true);
@@ -581,7 +581,7 @@ test("retryable crunch failure does not fail the linked run", async () => {
   const job = await ctx.jobs.create("crunch_knowledge_base", {
     provider: "codex",
     documents: [],
-    expectedOutput: "crunch_plan"
+    expectedOutput: "maintenance_plan"
   });
   const run = await ctx.stores.crunchRuns.createRun({
     trigger: "manual",

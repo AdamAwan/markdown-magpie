@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { CrunchPlan } from "@magpie/core";
+import type { MaintenancePlan } from "@magpie/core";
 import { jobDefinition } from "@magpie/jobs";
 import { RuntimeConfigHolder } from "../../config-holder.js";
 import { makeTestContext } from "../../test-support/context.js";
@@ -35,7 +35,7 @@ async function seedGitRepository(ctx: ReturnType<typeof makeTestContext>): Promi
 }
 
 async function seedCompletedRun(ctx: ReturnType<typeof makeTestContext>): Promise<string> {
-  const plan: CrunchPlan = {
+  const plan: MaintenancePlan = {
     summary: "tidy",
     operations: [
       {
@@ -224,7 +224,7 @@ test("getRunExecutionContext returns a 409 code when no git repository matches",
 });
 
 test("changesetFromPlan applies deletes then writes with last-write-wins per path", async () => {
-  const plan: CrunchPlan = {
+  const plan: MaintenancePlan = {
     summary: "tidy",
     operations: [
       {

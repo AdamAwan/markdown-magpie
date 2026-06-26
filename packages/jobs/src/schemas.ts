@@ -5,7 +5,7 @@ import type {
   AnswerQuestionJobOutput,
   CrunchKnowledgeBaseJobInput as CoreCrunchKnowledgeBaseJobInput,
   CrunchKnowledgeBaseJobOutput,
-  CrunchPlan,
+  MaintenancePlan,
   DraftMarkdownProposalJobInput as CoreDraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
   FoldMarkdownProposalJobInput as CoreFoldMarkdownProposalJobInput,
@@ -176,7 +176,7 @@ export const suggestConsolidationOutputSchema = z.object({
   suggestions: z.array(z.object({ title: z.string(), reason: z.string(), paths: z.array(z.string()).min(1) }))
 });
 
-const crunchOperationSchema = z.object({
+const maintenanceOperationSchema = z.object({
   kind: z.enum(["consolidate", "split", "rewrite"]),
   title: z.string(),
   reason: z.string(),
@@ -192,11 +192,11 @@ export const crunchKnowledgeBaseInputSchema = z.object({
   flowId: z.string().optional(),
   destinationId: z.string().optional(),
   documents: z.array(documentSchema),
-  expectedOutput: z.literal("crunch_plan")
+  expectedOutput: z.literal("maintenance_plan")
 }) satisfies z.ZodType<ProviderInput<CoreCrunchKnowledgeBaseJobInput>>;
 export const crunchKnowledgeBaseOutputSchema = z.object({
   summary: z.string(),
-  operations: z.array(crunchOperationSchema),
+  operations: z.array(maintenanceOperationSchema),
   rationale: z.string()
 }) satisfies z.ZodType<CrunchKnowledgeBaseJobOutput>;
 
@@ -246,13 +246,13 @@ export const syncSourceChangesGeneratePlanInputSchema = z.object({
   toSha: z.string(),
   changes: z.array(sourceChangeFileSchema),
   candidateDocuments: z.array(documentSchema),
-  expectedOutput: z.literal("crunch_plan")
+  expectedOutput: z.literal("maintenance_plan")
 }) satisfies z.ZodType<ProviderInput<CoreSourceChangeSyncJobInput>>;
 export const syncSourceChangesGeneratePlanOutputSchema = z.object({
   summary: z.string(),
-  operations: z.array(crunchOperationSchema),
+  operations: z.array(maintenanceOperationSchema),
   rationale: z.string()
-}) satisfies z.ZodType<CrunchPlan>;
+}) satisfies z.ZodType<MaintenancePlan>;
 
 export const verifyDocumentInputSchema = z.object({
   provider: providerSchema,

@@ -604,38 +604,38 @@ export interface PublishProposalBranchResponse {
 // inherently multi-file: it writes and deletes several documents at once.
 // ---------------------------------------------------------------------------
 
-export type CrunchOperationKind = "consolidate" | "split" | "rewrite";
+export type MaintenanceOperationKind = "consolidate" | "split" | "rewrite";
 
-export interface CrunchFileWrite {
+export interface MaintenanceFileWrite {
   path: string;
   content: string;
 }
 
-export interface CrunchOperation {
-  kind: CrunchOperationKind;
+export interface MaintenanceOperation {
+  kind: MaintenanceOperationKind;
   title: string;
   reason: string;
   // Existing document paths this operation reorganizes (read and usually
   // replaced). Kept for the reviewer to see what was touched.
   sources: string[];
-  writes: CrunchFileWrite[];
+  writes: MaintenanceFileWrite[];
   deletes: string[];
 }
 
-export interface CrunchPlan {
+export interface MaintenancePlan {
   summary: string;
-  operations: CrunchOperation[];
+  operations: MaintenanceOperation[];
   rationale: string;
 }
 
 export interface CrunchKnowledgeBaseJobInput {
   flowId?: string;
   destinationId?: string;
-  documents: CrunchFileWrite[];
-  expectedOutput: "crunch_plan";
+  documents: MaintenanceFileWrite[];
+  expectedOutput: "maintenance_plan";
 }
 
-export type CrunchKnowledgeBaseJobOutput = CrunchPlan;
+export type CrunchKnowledgeBaseJobOutput = MaintenancePlan;
 
 export type CrunchRunTrigger = "scheduled" | "manual";
 
@@ -648,7 +648,7 @@ export interface CrunchRun {
   trigger: CrunchRunTrigger;
   status: CrunchRunStatus;
   jobId?: string;
-  plan?: CrunchPlan;
+  plan?: MaintenancePlan;
   error?: string;
   documentCount: number;
   publication?: ProposalPublication;
@@ -673,7 +673,7 @@ export interface CrunchSettings {
 // any KB document that still asserts the old fact is now wrong. This pass detects
 // changed source commits, retrieves the KB documents that already speak to the
 // change, and asks the model to rewrite only those documents to match the new
-// reality — landing the result on a review branch. The plan reuses CrunchPlan:
+// reality — landing the result on a review branch. The plan reuses MaintenancePlan:
 // the output is the same multi-file write/delete changeset.
 // ---------------------------------------------------------------------------
 
@@ -718,10 +718,10 @@ export interface SourceChangeSyncJobInput {
   toSha: string;
   changes: SourceChangeFile[];
   candidateDocuments: SourceSyncCandidateDocument[];
-  expectedOutput: "crunch_plan";
+  expectedOutput: "maintenance_plan";
 }
 
-export type SourceChangeSyncJobOutput = CrunchPlan;
+export type SourceChangeSyncJobOutput = MaintenancePlan;
 
 export interface SourceSyncRun {
   id: string;
@@ -731,7 +731,7 @@ export interface SourceSyncRun {
   trigger: SourceSyncRunTrigger;
   status: SourceSyncRunStatus;
   jobId?: string;
-  plan?: CrunchPlan;
+  plan?: MaintenancePlan;
   // The constrained changeset the API derived from the plan at gather time (only
   // writes to candidate documents). Persisted so the publish job can fetch it
   // without re-deriving the candidate set. Absent on skipped/failed runs.

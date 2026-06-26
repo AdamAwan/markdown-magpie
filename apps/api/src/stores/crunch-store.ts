@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CrunchPlan, CrunchRun, CrunchRunTrigger, CrunchSettings, ProposalPublication } from "@magpie/core";
+import type { MaintenancePlan, CrunchRun, CrunchRunTrigger, CrunchSettings, ProposalPublication } from "@magpie/core";
 
 // Daily at 02:00 local time.
 export const DEFAULT_CRUNCH_CRON = "0 2 * * *";
@@ -11,7 +11,7 @@ export interface CrunchRunInput {
   documentCount: number;
   jobId?: string;
   status: CrunchRun["status"];
-  plan?: CrunchPlan;
+  plan?: MaintenancePlan;
   error?: string;
 }
 
@@ -20,7 +20,7 @@ export interface CrunchStore {
   listRuns(limit: number): Promise<CrunchRun[]>;
   getRun(id: string): Promise<CrunchRun | undefined>;
   getRunByJobId(jobId: string): Promise<CrunchRun | undefined>;
-  completeRun(id: string, plan: CrunchPlan): Promise<CrunchRun | undefined>;
+  completeRun(id: string, plan: MaintenancePlan): Promise<CrunchRun | undefined>;
   failRun(id: string, error: string): Promise<CrunchRun | undefined>;
   recordRunPublication(id: string, publication: ProposalPublication): Promise<CrunchRun | undefined>;
   listSettings(): Promise<CrunchSettings[]>;
@@ -82,7 +82,7 @@ export class InMemoryCrunchStore implements CrunchStore {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
   }
 
-  async completeRun(id: string, plan: CrunchPlan): Promise<CrunchRun | undefined> {
+  async completeRun(id: string, plan: MaintenancePlan): Promise<CrunchRun | undefined> {
     const existing = await this.getRun(id);
     if (existing?.status === "completed" || existing?.status === "published") return existing;
     return this.patchRun(id, { status: "completed", plan, completedAt: new Date().toISOString(), error: undefined });

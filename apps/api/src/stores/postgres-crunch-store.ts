@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import type { CrunchPlan, CrunchRun, CrunchSettings, ProposalPublication } from "@magpie/core";
+import type { MaintenancePlan, CrunchRun, CrunchSettings, ProposalPublication } from "@magpie/core";
 import { DEFAULT_CRUNCH_CRON, type CrunchRunInput, type CrunchStore } from "./crunch-store.js";
 
 const { Pool } = pg;
@@ -70,7 +70,7 @@ export class PostgresCrunchStore implements CrunchStore {
     return result.rows[0] ? mapRunRow(result.rows[0]) : undefined;
   }
 
-  async completeRun(id: string, plan: CrunchPlan): Promise<CrunchRun | undefined> {
+  async completeRun(id: string, plan: MaintenancePlan): Promise<CrunchRun | undefined> {
     const result = await this.pool.query<CrunchRunRow>(
       `UPDATE crunch_runs SET status = 'completed', plan = $2, error = NULL, completed_at = now()
        WHERE id = $1 AND status NOT IN ('completed', 'published') RETURNING *`,
@@ -153,7 +153,7 @@ interface CrunchRunRow {
   trigger: CrunchRun["trigger"];
   status: CrunchRun["status"];
   job_id: string | null;
-  plan: CrunchPlan | null;
+  plan: MaintenancePlan | null;
   error: string | null;
   document_count: number;
   publication: ProposalPublication | null;

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ChangesetChange, CrunchPlan } from "@magpie/core";
+import type { ChangesetChange, MaintenancePlan } from "@magpie/core";
 import { InMemorySourceSyncStore } from "./source-sync-store.js";
 
-const PLAN: CrunchPlan = { summary: "s", operations: [], rationale: "r" };
+const PLAN: MaintenancePlan = { summary: "s", operations: [], rationale: "r" };
 const CHANGESET: ChangesetChange[] = [{ path: "guide.md", content: "x" }];
 
 async function runningRun(store: InMemorySourceSyncStore, flowId?: string) {

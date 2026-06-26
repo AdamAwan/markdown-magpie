@@ -1,7 +1,7 @@
 import type {
   ChangesetChange,
   CrunchKnowledgeBaseJobInput,
-  CrunchPlan,
+  MaintenancePlan,
   CrunchRun,
   CrunchRunTrigger,
   RepositoryRef
@@ -30,7 +30,7 @@ export async function getRun(ctx: AppContext, id: string): Promise<CrunchRun | u
 // linked to a crunch_knowledge_base job and return immediately, so neither the
 // HTTP response nor the scheduler tick blocks on the (potentially slow) model
 // call. The watcher runs the generative work and completes the run via
-// attachCrunchPlanFromCompletedJob().
+// attachMaintenancePlanFromCompletedJob().
 export async function triggerCrunchRun(
   ctx: AppContext,
   options: { flowId?: string; trigger: CrunchRunTrigger }
@@ -46,7 +46,7 @@ export async function triggerCrunchRun(
     flowId,
     destinationId,
     documents,
-    expectedOutput: "crunch_plan",
+    expectedOutput: "maintenance_plan",
     provider: ctx.config.get().aiProvider
   } satisfies CrunchKnowledgeBaseJobInput & { provider: AiProviderName };
 
@@ -73,7 +73,7 @@ function gatherCrunchDocuments(ctx: AppContext, destinationId: string | undefine
   return scoped.map((document) => ({ path: document.path, content: document.content }));
 }
 
-export async function attachCrunchPlanFromCompletedJob(
+export async function attachMaintenancePlanFromCompletedJob(
   ctx: AppContext,
   job: JobView | undefined,
   output: unknown
@@ -89,7 +89,7 @@ export async function attachCrunchPlanFromCompletedJob(
 
   if (run.status === "completed" || run.status === "published") return;
 
-  if (isCrunchPlan(output)) {
+  if (isMaintenancePlan(output)) {
     await ctx.stores.crunchRuns.completeRun(run.id, output);
   } else {
     await ctx.stores.crunchRuns.failRun(run.id, "Crunch job returned an invalid plan");
@@ -128,12 +128,12 @@ export async function recordCrunchPublicationFromCompletedJob(
   });
 }
 
-function isCrunchPlan(value: unknown): value is CrunchPlan {
+function isMaintenancePlan(value: unknown): value is MaintenancePlan {
   if (!value || typeof value !== "object") {
     return false;
   }
 
-  const candidate = value as Partial<CrunchPlan>;
+  const candidate = value as Partial<MaintenancePlan>;
   if (typeof candidate.summary !== "string" || !Array.isArray(candidate.operations)) {
     return false;
   }
@@ -158,7 +158,7 @@ function isPublishCrunchJobOutput(value: unknown): value is PublishCrunchJobOutp
 // up as a write — a split that reuses the original path stays a write, not a
 // delete. Pure: exported so the Task 7 publication runner derives the same
 // changeset the API validated.
-export function changesetFromPlan(plan: CrunchPlan): ChangesetChange[] {
+export function changesetFromPlan(plan: MaintenancePlan): ChangesetChange[] {
   const changes = new Map<string, ChangesetChange>();
   for (const operation of plan.operations) {
     for (const deletion of operation.deletes) {

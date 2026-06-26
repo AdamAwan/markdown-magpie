@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { CrunchPlan } from "@magpie/core";
+import type { MaintenancePlan } from "@magpie/core";
 import { RuntimeConfigHolder } from "../../config-holder.js";
 import { FakeJobBroker } from "../../jobs/fake-broker.js";
 import { makeTestContext } from "../../test-support/context.js";
@@ -85,7 +85,7 @@ async function seed(broker: FakeJobBroker): Promise<Seeded> {
   };
 }
 
-const PLAN: CrunchPlan = {
+const PLAN: MaintenancePlan = {
   summary: "Update the limit",
   operations: [
     {

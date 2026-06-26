@@ -202,7 +202,7 @@ export async function completeJob(
     await foldService.applyFoldFromCompletedJob(ctx, existingJob, parsed.data);
     await foldService.applyChangesetFoldFromCompletedJob(ctx, existingJob, parsed.data);
     await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, parsed.data);
-    await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, parsed.data);
+    await crunchService.attachMaintenancePlanFromCompletedJob(ctx, existingJob, parsed.data);
     await crunchService.recordCrunchPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await sourceSyncService.attachSourceSyncPlanFromCompletedJob(ctx, existingJob, parsed.data);
     await sourceSyncService.recordSourceSyncPublicationFromCompletedJob(ctx, existingJob, parsed.data);

@@ -202,7 +202,7 @@ async function syncGitSource(
     toSha: headSha,
     changes: changes.map(toSourceChangeFile),
     candidateDocuments,
-    expectedOutput: "crunch_plan",
+    expectedOutput: "maintenance_plan",
     provider: ctx.config.get().aiProvider
   } satisfies SourceChangeSyncJobInput & { provider: AiProviderName };
 
@@ -228,7 +228,7 @@ async function syncGitSource(
 }
 
 // Completion handler for sync_source_changes_generate_plan jobs (enqueue-only flow,
-// mirrors crunch's attachCrunchPlanFromCompletedJob). The watcher produced the plan;
+// mirrors crunch's attachMaintenancePlanFromCompletedJob). The watcher produced the plan;
 // constrain it to the candidate documents the job was given (defence-in-depth: only
 // ever write back documents we offered, and never delete — a source-sync corrects
 // existing docs, it does not remove knowledge), then complete the linked run with the

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
-import type { CrunchPlan } from "@magpie/core";
+import type { MaintenancePlan } from "@magpie/core";
 import { PostgresCrunchStore } from "./postgres-crunch-store.js";
 import type { CrunchRunInput } from "./crunch-store.js";
 
@@ -23,7 +23,7 @@ function draftRun(): CrunchRunInput {
   };
 }
 
-function samplePlan(): CrunchPlan {
+function samplePlan(): MaintenancePlan {
   return { summary: "Consolidate cat care docs", operations: [], rationale: "Reduce duplication" };
 }
 
