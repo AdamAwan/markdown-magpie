@@ -20,7 +20,6 @@ const EXPIRATION_SECONDS = {
   draft_markdown_proposal: 15 * 60,
   detect_contradiction: 10 * 60,
   suggest_consolidation: 10 * 60,
-  crunch_knowledge_base: 60 * 60,
   cluster_gap_candidates: 5 * 60,
   reconcile_gap_clusters: 5 * 60,
   sync_source_changes_generate_plan: 60 * 60,
@@ -32,12 +31,10 @@ const EXPIRATION_SECONDS = {
   fold_changeset_proposal: 15 * 60,
   refresh_pull_requests: 5 * 60,
   process_gaps_to_pull_requests: 60 * 60,
-  trigger_scheduled_crunch: 60 * 60,
   source_change_sync: 60 * 60,
   fix_patrol: 60 * 60,
   improve_patrol: 60 * 60,
   publish_proposal: 15 * 60,
-  publish_crunch: 15 * 60,
   publish_source_sync: 15 * 60,
   crosslink_pull_requests: 10 * 60,
   fold_markdown_proposal: 15 * 60,
@@ -92,7 +89,6 @@ test("github capability yields only GitHub work queues", () => {
   assert.deepEqual(queueNamesForCapabilities(["github"]), [
     "refresh_pull_requests",
     "publish_proposal",
-    "publish_crunch",
     "publish_source_sync",
     "crosslink_pull_requests",
     "comment_pull_request"
@@ -102,7 +98,6 @@ test("github capability yields only GitHub work queues", () => {
 test("maintenance capability yields only orchestration work queues", () => {
   assert.deepEqual(queueNamesForCapabilities(["maintenance"]), [
     "process_gaps_to_pull_requests",
-    "trigger_scheduled_crunch",
     "source_change_sync",
     "fix_patrol",
     "improve_patrol"

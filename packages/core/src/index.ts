@@ -594,14 +594,13 @@ export interface PublishProposalBranchResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Crunch — scheduled knowledge-base tidying
+// Maintenance plan — a multi-file write/delete changeset
 //
-// Over time an answer-driven knowledge base fragments: overlapping notes pile
-// up and single documents grow to cover several unrelated topics. "Crunch" is a
-// scheduled AI maintenance pass that proposes structural fixes — consolidating
-// overlapping documents and splitting bloated ones — and lands the result on a
-// review branch. Unlike a Proposal (one Markdown file), a crunch plan is
-// inherently multi-file: it writes and deletes several documents at once.
+// Some maintenance passes (currently source-change sync) restructure several
+// knowledge-base documents at once rather than editing a single Markdown file.
+// They express the change as a MaintenancePlan: a list of operations that
+// consolidate, split, or rewrite documents, which the API flattens into a
+// changeset and lands on a review branch.
 // ---------------------------------------------------------------------------
 
 export type MaintenanceOperationKind = "consolidate" | "split" | "rewrite";
@@ -626,42 +625,6 @@ export interface MaintenancePlan {
   summary: string;
   operations: MaintenanceOperation[];
   rationale: string;
-}
-
-export interface CrunchKnowledgeBaseJobInput {
-  flowId?: string;
-  destinationId?: string;
-  documents: MaintenanceFileWrite[];
-  expectedOutput: "maintenance_plan";
-}
-
-export type CrunchKnowledgeBaseJobOutput = MaintenancePlan;
-
-export type CrunchRunTrigger = "scheduled" | "manual";
-
-export type CrunchRunStatus = "pending" | "running" | "completed" | "failed" | "published";
-
-export interface CrunchRun {
-  id: string;
-  flowId?: string;
-  destinationId?: string;
-  trigger: CrunchRunTrigger;
-  status: CrunchRunStatus;
-  jobId?: string;
-  plan?: MaintenancePlan;
-  error?: string;
-  documentCount: number;
-  publication?: ProposalPublication;
-  createdAt: string;
-  completedAt?: string;
-}
-
-export interface CrunchSettings {
-  flowId?: string;
-  enabled: boolean;
-  // Standard 5-field cron expression (minute hour day-of-month month day-of-week).
-  // Next-run timing is owned by pg-boss now, not derived/stored here.
-  cron: string;
 }
 
 // ---------------------------------------------------------------------------

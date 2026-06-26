@@ -110,43 +110,6 @@ Return JSON:
 }`
 };
 
-export const CRUNCH_KNOWLEDGE_BASE: PromptDefinition = {
-  id: "crunch-knowledge-base",
-  title: "Crunch knowledge base",
-  description:
-    "Proposes structural maintenance (consolidate/split/rewrite) over the Markdown knowledge base. Used by the watcher's crunch_knowledge_base job.",
-  usedBy: ["watcher"],
-  outputShape: '{ summary, operations[], rationale }',
-  instructions: `You are tidying a fragmented Markdown knowledge base. Propose structural maintenance only — do not invent new facts.
-
-Goal:
-- CONSOLIDATE documents that overlap or are too small and scattered into a single cohesive document.
-- SPLIT documents that have grown large and cover several unrelated topics into focused documents.
-- Preserve all existing information. Only reorganize, merge, and lightly rewrite headings.
-
-Rules:
-- Return JSON only.
-- Every operation must list the source paths it reorganizes, the files to write (full new content), and the files to delete.
-- Use existing document paths exactly as provided in the input.
-- If the knowledge base is already tidy, return an empty operations array.
-
-Return JSON:
-{
-  "summary": "string",
-  "operations": [
-    {
-      "kind": "consolidate | split | rewrite",
-      "title": "string",
-      "reason": "string",
-      "sources": ["existing/path.md"],
-      "writes": [{ "path": "new/path.md", "content": "string" }],
-      "deletes": ["existing/path.md"]
-    }
-  ],
-  "rationale": "string"
-}`
-};
-
 export const SOURCE_CHANGE_SYNC: PromptDefinition = {
   id: "source-change-sync",
   title: "Sync knowledge base to source changes",
@@ -424,7 +387,6 @@ export const promptCatalog: PromptDefinition[] = [
   DRAFT_MARKDOWN_PROPOSAL,
   FOLD_MARKDOWN_PROPOSAL,
   FOLD_CHANGESET_PROPOSAL,
-  CRUNCH_KNOWLEDGE_BASE,
   SOURCE_CHANGE_SYNC,
   VERIFY_DOCUMENT,
   CORRECT_DOCUMENT,

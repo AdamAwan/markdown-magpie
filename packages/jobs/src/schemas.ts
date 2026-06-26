@@ -3,8 +3,6 @@ import { PROPOSAL_STATUSES } from "@magpie/core";
 import type {
   AnswerQuestionJobInput as CoreAnswerQuestionJobInput,
   AnswerQuestionJobOutput,
-  CrunchKnowledgeBaseJobInput as CoreCrunchKnowledgeBaseJobInput,
-  CrunchKnowledgeBaseJobOutput,
   MaintenancePlan,
   DraftMarkdownProposalJobInput as CoreDraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
@@ -187,19 +185,6 @@ const maintenanceOperationSchema = z.object({
   writes: z.array(documentSchema).default([]),
   deletes: z.array(z.string()).default([])
 });
-export const crunchKnowledgeBaseInputSchema = z.object({
-  provider: providerSchema,
-  flowId: z.string().optional(),
-  destinationId: z.string().optional(),
-  documents: z.array(documentSchema),
-  expectedOutput: z.literal("maintenance_plan")
-}) satisfies z.ZodType<ProviderInput<CoreCrunchKnowledgeBaseJobInput>>;
-export const crunchKnowledgeBaseOutputSchema = z.object({
-  summary: z.string(),
-  operations: z.array(maintenanceOperationSchema),
-  rationale: z.string()
-}) satisfies z.ZodType<CrunchKnowledgeBaseJobOutput>;
-
 export const clusterGapCandidatesInputSchema = z.object({
   candidates: z.array(z.object({ summary: z.string(), questionIds: z.array(z.string()) })),
   provider: providerSchema
@@ -360,22 +345,9 @@ export const processGapsToPullRequestsOutputSchema = z.object({
   published: z.number().int()
 });
 
-export const triggerScheduledCrunchInputSchema = z.object({ flowId: z.string().optional() });
-export const triggerScheduledCrunchOutputSchema = z.object({ runId: z.string(), jobId: z.string() });
-
 export const publishProposalInputSchema = z.object({ proposalId: z.string() });
 export const publishProposalOutputSchema = z.object({
   proposalId: z.string(),
-  branchName: z.string(),
-  commitSha: z.string(),
-  remoteUrl: z.string().optional(),
-  pullRequestUrl: z.string().optional(),
-  publishedAt: z.string()
-});
-
-export const publishCrunchInputSchema = z.object({ runId: z.string() });
-export const publishCrunchOutputSchema = z.object({
-  runId: z.string(),
   branchName: z.string(),
   commitSha: z.string(),
   remoteUrl: z.string().optional(),
