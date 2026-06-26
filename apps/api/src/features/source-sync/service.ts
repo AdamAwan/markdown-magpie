@@ -1,6 +1,7 @@
 import type {
   ChangesetChange,
   KnowledgeDocument,
+  MaintenancePlan,
   RankedSection,
   RepositoryRef,
   SourceChangeFile,
@@ -26,7 +27,6 @@ import type { ChangeIntent } from "../../scheduling/intent.js";
 import { decideReconciliation, openPullRequestSummaries } from "../../scheduling/reconcile-gate.js";
 import { sameFlowOpenProposals } from "../../scheduling/flow.js";
 import type { AppContext } from "../../context.js";
-import { changesetFromPlan } from "../crunch/service.js";
 import {
   checkoutRoot,
   defaultDestinationId,
@@ -522,6 +522,26 @@ export function constrainToCandidates(
 ): ChangesetChange[] {
   const allowed = new Set(candidateDocuments.map((document) => normalizeRelativePath(document.path)));
   return changes.filter((change) => !change.delete && allowed.has(normalizeRelativePath(change.path)));
+}
+
+// Flattens a plan's operations into a single de-duplicated changeset. Deletes are
+// applied first, then writes, so a path that is both deleted and (re)written ends
+// up as a write — a split that reuses the original path stays a write, not a
+// delete. Pure: the publication runner mirrors this so it derives the same
+// changeset the API validated.
+export function changesetFromPlan(plan: MaintenancePlan): ChangesetChange[] {
+  const changes = new Map<string, ChangesetChange>();
+  for (const operation of plan.operations) {
+    for (const deletion of operation.deletes) {
+      changes.set(normalizeRelativePath(deletion), { path: deletion, delete: true });
+    }
+  }
+  for (const operation of plan.operations) {
+    for (const write of operation.writes) {
+      changes.set(normalizeRelativePath(write.path), { path: write.path, content: write.content });
+    }
+  }
+  return [...changes.values()];
 }
 
 function toSourceChangeFile(change: SourceFileChange): SourceChangeFile {

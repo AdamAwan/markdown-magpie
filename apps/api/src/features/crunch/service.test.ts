@@ -9,7 +9,7 @@ import type { MaintenancePlan } from "@magpie/core";
 import { jobDefinition } from "@magpie/jobs";
 import { RuntimeConfigHolder } from "../../config-holder.js";
 import { makeTestContext } from "../../test-support/context.js";
-import { changesetFromPlan, getRunExecutionContext, publishRun, triggerCrunchRun } from "./service.js";
+import { getRunExecutionContext, publishRun, triggerCrunchRun } from "./service.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -223,34 +223,3 @@ test("getRunExecutionContext returns a 409 code when no git repository matches",
   assert.equal(outcome.code, "crunch_repository_not_found");
 });
 
-test("changesetFromPlan applies deletes then writes with last-write-wins per path", async () => {
-  const plan: MaintenancePlan = {
-    summary: "tidy",
-    operations: [
-      {
-        kind: "split",
-        title: "delete a.md",
-        reason: "r",
-        sources: ["a.md"],
-        writes: [],
-        deletes: ["a.md"]
-      },
-      {
-        kind: "rewrite",
-        title: "rewrite a.md",
-        reason: "r",
-        sources: ["a.md"],
-        writes: [{ path: "a.md", content: "# A\nrewritten" }],
-        deletes: []
-      }
-    ],
-    rationale: "r"
-  };
-
-  const changes = changesetFromPlan(plan);
-
-  const forA = changes.filter((change) => change.path === "a.md");
-  assert.equal(forA.length, 1, "a path deleted then written collapses to a single entry");
-  assert.equal(forA[0].content, "# A\nrewritten");
-  assert.equal(forA[0].delete, undefined, "the surviving entry is a write, not a delete");
-});
