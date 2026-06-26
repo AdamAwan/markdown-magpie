@@ -709,10 +709,6 @@ export interface SourceSyncRun {
   completedAt?: string;
 }
 
-// One fix-patrol tick: which documents in a flow were checked and when. `selected`
-// is the batch the rolling cursor chose this run; `universeCount` is how many
-// documents the flow had to choose from. No status field — a patrol tick is atomic
-// (select → stamp → record), never pending.
 // A verify-lens result recorded on a patrol run: the document, the claims the
 // sources could not substantiate, and what the reconcile gate decided to do with
 // the emitted intent. `intoProposalId` is set only when the gate folded it into an
@@ -722,19 +718,6 @@ export interface VerifyFinding {
   claims: UnprovableClaim[];
   decision: "open-new" | "fold" | "defer";
   intoProposalId?: string;
-}
-
-export interface PatrolRun {
-  id: string;
-  flowId?: string;
-  trigger: "scheduled" | "manual";
-  universeCount: number;
-  selectedCount: number;
-  selected: string[];
-  // The verify-lens findings this tick produced (empty when every checked doc was
-  // healthy or the patrol ran no lens).
-  findings: VerifyFinding[];
-  createdAt: string;
 }
 
 // ---------------------------------------------------------------------------

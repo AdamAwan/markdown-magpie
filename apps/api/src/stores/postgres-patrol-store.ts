@@ -1,20 +1,14 @@
-import { randomUUID } from "node:crypto";
 import pg from "pg";
-import type { PatrolRun, VerifyFinding } from "@magpie/core";
-import type { PatrolCursorEntry, PatrolCursorKind, PatrolRunInput, PatrolStore } from "./patrol-store.js";
+import type { PatrolCursorEntry, PatrolCursorKind, PatrolStore } from "./patrol-store.js";
 
 const { Pool } = pg;
 
 // patrol_cursor.flow_id is NOT NULL with a "" default so the composite primary key
-// dedupes the default-flow row (a NULL would not be deduped by ON CONFLICT).
+// dedupes the default-flow row (a NULL would not be deduped by ON CONFLICT). The
+// improve cursor namespaces the flow id so it stays distinct from the fix cursor.
 function cursorFlowId(flowId: string | undefined, kind: PatrolCursorKind = "fix"): string {
   const base = flowId ?? "";
   return kind === "fix" ? base : `${kind}:${base}`;
-}
-
-// patrol_runs.flow_id is nullable (the default flow stores NULL).
-function runFlowId(flowId: string | undefined): string | null {
-  return flowId ?? null;
 }
 
 export class PostgresPatrolStore implements PatrolStore {
@@ -51,76 +45,7 @@ export class PostgresPatrolStore implements PatrolStore {
     );
   }
 
-  async createRun(input: PatrolRunInput): Promise<PatrolRun> {
-    const id = randomUUID();
-    const result = await this.pool.query<PatrolRunRow>(
-      `
-        INSERT INTO patrol_runs (id, flow_id, trigger, universe_count, selected_count, selected, findings)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING *
-      `,
-      [
-        id,
-        runFlowId(input.flowId),
-        input.trigger,
-        input.universeCount,
-        input.selectedCount,
-        JSON.stringify(input.selected),
-        JSON.stringify(input.findings ?? [])
-      ]
-    );
-    return mapRunRow(result.rows[0]);
-  }
-
-  async listRuns(limit: number): Promise<PatrolRun[]> {
-    const result = await this.pool.query<PatrolRunRow>(
-      "SELECT * FROM patrol_runs ORDER BY created_at DESC LIMIT $1",
-      [limit]
-    );
-    return result.rows.map(mapRunRow);
-  }
-
-  async getRun(id: string): Promise<PatrolRun | undefined> {
-    const result = await this.pool.query<PatrolRunRow>("SELECT * FROM patrol_runs WHERE id = $1", [id]);
-    return result.rows[0] ? mapRunRow(result.rows[0]) : undefined;
-  }
-
   async reset(): Promise<void> {
-    const client = await this.pool.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query("DELETE FROM patrol_runs");
-      await client.query("DELETE FROM patrol_cursor");
-      await client.query("COMMIT");
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
-    }
+    await this.pool.query("DELETE FROM patrol_cursor");
   }
-}
-
-interface PatrolRunRow {
-  id: string;
-  flow_id: string | null;
-  trigger: PatrolRun["trigger"];
-  universe_count: number;
-  selected_count: number;
-  selected: string[];
-  findings: VerifyFinding[];
-  created_at: Date;
-}
-
-function mapRunRow(row: PatrolRunRow): PatrolRun {
-  return {
-    id: row.id,
-    flowId: row.flow_id ?? undefined,
-    trigger: row.trigger,
-    universeCount: row.universe_count,
-    selectedCount: row.selected_count,
-    selected: row.selected,
-    findings: row.findings ?? [],
-    createdAt: row.created_at.toISOString()
-  };
 }

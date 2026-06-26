@@ -27,24 +27,26 @@ const HEALTHY_DEPS: {
   splitDocument: async () => {}
 };
 
-test("runFixPatrol checks a batch, stamps the cursor, and records a run", async () => {
+test("runFixPatrol checks a batch, stamps the cursor, and records a maintenance run", async () => {
   const ctx = makeTestContext();
   await indexDocs(ctx, ["a.md", "b.md", "c.md"]);
 
   const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, HEALTHY_DEPS);
   assert.ok(outcome.ok);
   if (!outcome.ok) return;
-  assert.equal(outcome.run.universeCount, 3);
-  assert.equal(outcome.run.selectedCount, outcome.run.selected.length);
-  assert.ok(outcome.run.selectedCount > 0 && outcome.run.selectedCount <= 3);
+  assert.equal(outcome.universeCount, 3);
+  assert.equal(outcome.selectedCount, outcome.selected.length);
+  assert.ok(outcome.selectedCount > 0 && outcome.selectedCount <= 3);
 
   // The selected docs are now stamped in the cursor.
   const cursor = await ctx.stores.patrol.listCursor(undefined);
-  assert.deepEqual(cursor.map((e) => e.docPath).sort(), [...outcome.run.selected].sort());
+  assert.deepEqual(cursor.map((e) => e.docPath).sort(), [...outcome.selected].sort());
 
-  // It is the most recent run, fetchable by id.
-  assert.equal((await patrol.listRuns(ctx, 10))[0].id, outcome.run.id);
-  assert.equal((await patrol.getRun(ctx, outcome.run.id))?.id, outcome.run.id);
+  // It is recorded as a fix_patrol maintenance run, fetchable by id.
+  const runs = await ctx.stores.maintenanceRuns.list({ limit: 10 });
+  assert.equal(runs[0].id, outcome.runId);
+  assert.equal(runs[0].taskType, "fix_patrol");
+  assert.equal((await ctx.stores.maintenanceRuns.get(outcome.runId))?.id, outcome.runId);
 });
 
 test("with a universe no larger than a batch, the cursor covers every document after one tick", async () => {
@@ -60,7 +62,7 @@ test("an unknown flow is rejected without recording a run", async () => {
   const ctx = makeTestContext();
   const outcome = await patrol.runFixPatrol(ctx, { flowId: "ghost", trigger: "scheduled" }, HEALTHY_DEPS);
   assert.deepEqual(outcome, { ok: false, code: "unknown_flow" });
-  assert.deepEqual(await patrol.listRuns(ctx, 10), []);
+  assert.deepEqual(await ctx.stores.maintenanceRuns.list({ limit: 10 }), []);
 });
 
 test("an empty universe records a zero-selected run", async () => {
@@ -68,8 +70,10 @@ test("an empty universe records a zero-selected run", async () => {
   const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, HEALTHY_DEPS);
   assert.ok(outcome.ok);
   if (!outcome.ok) return;
-  assert.equal(outcome.run.universeCount, 0);
-  assert.equal(outcome.run.selectedCount, 0);
+  assert.equal(outcome.universeCount, 0);
+  assert.equal(outcome.selectedCount, 0);
+  const runs = await ctx.stores.maintenanceRuns.list({ limit: 10 });
+  assert.equal(runs[0].status, "completed");
 });
 
 test("runFixPatrol records verify findings for unprovable documents", async () => {
@@ -86,16 +90,20 @@ test("runFixPatrol records verify findings for unprovable documents", async () =
 
   // Every selected doc is still stamped, regardless of verdict.
   const cursor = await ctx.stores.patrol.listCursor(undefined);
-  assert.deepEqual(cursor.map((e) => e.docPath).sort(), [...outcome.run.selected].sort());
+  assert.deepEqual(cursor.map((e) => e.docPath).sort(), [...outcome.selected].sort());
 
   // The unprovable doc produced one open-new finding; the healthy one produced none.
-  const aFindings = outcome.run.findings.filter((f) => f.path === "a.md");
+  const aFindings = outcome.findings.filter((f) => f.path === "a.md");
   assert.equal(aFindings.length, 1);
   assert.equal(aFindings[0].decision, "open-new");
   assert.equal(
-    outcome.run.findings.some((f) => f.path === "b.md"),
+    outcome.findings.some((f) => f.path === "b.md"),
     false
   );
+
+  // The findings are persisted on the run's details for the audit.
+  const run = await ctx.stores.maintenanceRuns.get(outcome.runId);
+  assert.deepEqual((run?.details as { findings?: unknown }).findings, outcome.findings);
 });
 
 test("runFixPatrol enqueues a correction for each unprovable finding, none for healthy", async () => {
@@ -137,6 +145,7 @@ test("runFixPatrol runs the dedupe lens over the batch, enqueuing a scan per doc
     { verifyDocument: async () => ({ verdict: "healthy", claims: [] }), dedupeDocument }
   );
   assert.ok(outcome.ok);
+  if (!outcome.ok) return;
 
   // Each doc found the other as a neighbour, so a dedupe scan was enqueued for both.
   assert.deepEqual(
@@ -149,7 +158,7 @@ test("runFixPatrol runs the dedupe lens over the batch, enqueuing a scan per doc
     ["partial-refunds.md"]
   );
   // Verify produced no findings, so dedupe runs independently of the verify path.
-  assert.equal(outcome.run.findings.length, 0);
+  assert.equal(outcome.findings.length, 0);
 });
 
 test("runFixPatrol runs the split lens over broad selected documents", async () => {
@@ -199,13 +208,18 @@ test("runImprovePatrol uses its own cursor and enqueues an improve job for every
 
   assert.ok(outcome.ok);
   if (!outcome.ok) return;
-  assert.equal(outcome.run.selectedCount, 2, "improve-patrol uses the smaller editorial batch");
-  assert.equal(outcome.enqueuedCount, outcome.run.selectedCount);
+  assert.equal(outcome.selectedCount, 2, "improve-patrol uses the smaller editorial batch");
+  assert.equal(outcome.enqueuedCount, outcome.selectedCount);
   assert.deepEqual(
     improved.map((job) => job.path).sort(),
-    [...outcome.run.selected].sort()
+    [...outcome.selected].sort()
   );
   assert.deepEqual((await ctx.stores.patrol.listCursor(undefined)).map((e) => e.docPath).sort(), ["a.md", "b.md", "c.md"]);
-  assert.deepEqual((await ctx.stores.patrol.listCursor(undefined, "improve")).map((e) => e.docPath).sort(), [...outcome.run.selected].sort());
+  assert.deepEqual((await ctx.stores.patrol.listCursor(undefined, "improve")).map((e) => e.docPath).sort(), [...outcome.selected].sort());
   assert.ok(improved.every((job) => job.destinationId === "docs"));
+
+  // The tick is recorded as an improve_patrol maintenance run.
+  const runs = await ctx.stores.maintenanceRuns.list({ taskType: "improve_patrol", limit: 10 });
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].id, outcome.runId);
 });
