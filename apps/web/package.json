@@ -7,7 +7,7 @@
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
-    "test": "TSX_TSCONFIG_PATH=tsconfig.test.json node --import tsx --test src/**/*.test.tsx",
+    "test": "tsx --tsconfig tsconfig.test.json --test src/**/*.test.ts src/**/*.test.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

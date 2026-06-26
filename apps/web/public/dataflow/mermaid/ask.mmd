@@ -1,0 +1,30 @@
+graph TD
+    Start["Question from Web UI or MCP"]
+
+    subgraph Api [API enqueue only]
+        Log["Log Question in Postgres"]
+        JobCreate["Create answer_question Job with flow candidates"]
+        Log --> JobCreate
+    end
+
+    Start -->|POST /ask| Log
+    JobCreate --> Queue["Job Queue in Postgres"]
+
+    subgraph Watcher [WATCHER all generative work]
+        Claim["Claim Job"]
+        Route["Chat Model Routes to Best Flow"]
+        Retrieve["POST /api/retrieve Keyword Vector RRF Embedding Model"]
+        Answer["Chat Model Answers from Scoped Context"]
+        Cite["Derive Citations from Retrieved Sections"]
+        Claim --> Route
+        Route --> Retrieve
+        Retrieve --> Answer
+        Answer --> Cite
+    end
+
+    Queue --> Claim
+    Cite -->|complete job| Store["Store Answer Citations and Flow"]
+
+    Store --> Return["Answer with Citations"]
+    Return -->|Web UI long-poll| WebOut["Web Response"]
+    Return -->|MCP poll| MCPOut["MCP Response"]

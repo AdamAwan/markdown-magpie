@@ -1,0 +1,52 @@
+sequenceDiagram
+    autonumber
+    participant S as Scheduler
+    participant Q as pg-boss Job Queue
+    participant M as Maintenance Watcher
+    participant A as API Reconciler
+    participant P as Provider Watcher
+    participant G as GitHub Watcher
+    participant H as Git Host
+
+    Note over M,G: Watcher means worker process. A process advertises one or more capabilities but executes one job at a time.
+    S->>Q: enqueue process_gaps_to_pull_requests
+    Q->>M: claim maintenance
+    M->>A: POST /api/gaps/reconcile
+    A->>A: refresh PR state, revision gate, assign clusters
+
+    opt two or more active clusters
+        A->>Q: enqueue reconcile_gap_clusters
+        Note over A,P: API bounded-waits for this provider job
+        Q->>P: claim configured AI provider
+        P-->>A: complete reshape job
+    end
+
+    loop each uncovered cluster
+        A->>Q: enqueue draft_markdown_proposal
+    end
+    A-->>M: reconciliation request complete
+    M-->>Q: complete maintenance job
+
+    loop queued draft jobs
+        Q->>P: claim configured AI provider
+        P->>A: complete draft and store proposal and publish action
+    end
+
+    Note over S,A: A later reconcile drains publication actions after drafts complete
+    S->>Q: enqueue next process_gaps_to_pull_requests
+    Q->>M: claim maintenance
+    M->>A: POST /api/gaps/reconcile
+    A->>Q: enqueue publish_proposal
+    A-->>M: reconciliation request complete
+    M-->>Q: complete maintenance job
+
+    Q->>G: claim publish_proposal with github capability
+    G->>H: push branch and open pull request
+    G->>A: complete publish job and record PR URL
+
+    Q->>G: claim refresh_pull_requests with github capability
+    G->>H: read PR state
+    G->>A: complete refresh job
+    A->>A: on merge, resolve gaps and re-index
+
+    Note over M,P: The nested reshape needs another free provider-capable watcher. With only one watcher process, reshape times out and is skipped. Drafting still continues.

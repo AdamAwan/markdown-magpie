@@ -1,0 +1,25 @@
+graph TD
+    A["Git Markdown Repository"] -->|Sync| B["Parse and Index"]
+    B -->|Generate| C["Postgres DB Indexed Sections"]
+
+    D["User Question Web or MCP"] -->|Retrieve| E["Search Keyword and Vector"]
+    E -->|Context| C
+    C -->|Retrieved Sections| F["Chat Model Synthesizes Answer"]
+    F -->|With Citations| G["Answer with Citations"]
+
+    subgraph Learn [LEARN Feedback Analysis]
+        G -->|Store| H["Log Answer and Feedback"]
+        H -->|Auto-detect Low Confidence| I["Identify Gaps or Manual Flag"]
+        I -->|Group Similar| J["Cluster into Gap Candidates"]
+    end
+
+    subgraph Generate [GENERATE Solution Creation]
+        J -->|Select Gap| K["Pick Gap Candidate"]
+        K -->|Synthesize| L["Chat Model Generates Proposal"]
+        L -->|Store| M["Save Proposal"]
+    end
+
+    M -->|Review| N["Human Review or Scheduled Automation"]
+    N -->|Approve or Auto-promote| O["Publish Pull Request"]
+    O -->|Merged on host| P["Resolve Gaps and Re-index"]
+    P -.->|Updated Docs| C

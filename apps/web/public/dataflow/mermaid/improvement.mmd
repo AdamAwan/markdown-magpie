@@ -1,0 +1,41 @@
+graph TD
+    Start["Questions Answered"] --> Feedback["Collect Feedback"]
+
+    subgraph Detection [GAP DETECTION]
+        Feedback -->|Low Confidence| Auto["Auto-detect"]
+        Feedback -->|Reviewer| Manual["Manually Flag Gap"]
+        Auto --> Analyze["Analyze Patterns"]
+        Manual --> Analyze
+        Analyze --> Cluster["Cluster Similar Gaps with AI Reshape and Critic"]
+        Cluster --> Gaps["Gap Candidates with Evidence"]
+    end
+
+    Gaps --> Path{Review Path?}
+
+    subgraph ManualPath [MANUAL Human in the loop]
+        ManualPick["Human Picks Cluster to Draft"]
+        ManualJob["Create AI Job"]
+        ManualSynth["Chat Model Generates Proposal"]
+        ManualReview["Human Reviews Markdown"]
+        ManualPick --> ManualJob
+        ManualJob --> ManualSynth
+        ManualSynth --> ManualReview
+        ManualReview -->|Changes| ManualJob
+    end
+
+    subgraph AutoPath [AUTOMATED cron gaps to PRs]
+        AutoDraft["Provider job Auto-drafts uncovered clusters with Chat Model"]
+        AutoPromote["GitHub job Auto-publishes and skips human review"]
+        AutoDraft --> AutoPromote
+    end
+
+    Path -->|Manual| ManualPick
+    Path -->|Scheduled| AutoDraft
+
+    ManualReview -->|Approved| Publish["Create Pull Request"]
+    AutoPromote --> Publish
+
+    Publish --> Merged{PR Outcome?}
+    Merged -->|Merged on host| Resolve["Resolve Gaps and Re-index KB"]
+    Merged -->|Closed| Rejected["Mark Rejected"]
+    Resolve -->|Updated Docs| Start

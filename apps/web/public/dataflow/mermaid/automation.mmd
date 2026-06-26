@@ -1,0 +1,48 @@
+graph TD
+    Scheduler["Scheduler per-flow cron and run-lock"]
+
+    subgraph FetchTask [snapshot refresh fetch per flow every 5 min]
+        FGather["Gather this flow gaps and proposals"]
+        FPoll["Poll open PRs conditional ETag"]
+        FWrite["Write snapshot per-flow directory on disk"]
+        FGather --> FPoll
+        FPoll --> FWrite
+    end
+
+    subgraph GapsTask [gaps to pull requests process per flow every 10 min]
+        GRead["Maintenance watcher calls API reconciler"]
+        GCluster["API assigns clusters and enqueues reshape job"]
+        GDraft["Enqueue provider jobs to draft uncovered clusters"]
+        GPublish["Drain outbox and enqueue GitHub publication jobs"]
+        GRead --> GCluster
+        GCluster --> GDraft
+        GDraft --> GPublish
+    end
+
+    subgraph SyncTask [source change to KB sync per flow every 10 min]
+        SWatch["Watch this flow git sources"]
+        SRewrite["Chat Model Rewrites outdated docs it already covers"]
+        SBranch["Publish review branch"]
+        SWatch --> SRewrite
+        SRewrite --> SBranch
+    end
+
+    subgraph PatrolTask [Patrol per flow scheduled]
+        PScan["Chat Model Verifies dedupes splits and improves KB documents"]
+        PProposal["Draft proposals reconciled through the gate"]
+        PPublish["Publish review branch"]
+        PScan --> PProposal
+        PProposal --> PPublish
+    end
+
+    Scheduler -->|one job per flow| FGather
+    Scheduler -->|maintenance orchestrator job per flow| GRead
+    Scheduler -->|one job per flow| SWatch
+    Scheduler -->|per flow| PScan
+
+    FWrite -.->|snapshot| GRead
+    GPublish --> Host["Git Host Pull Requests"]
+    SBranch --> Host
+    PPublish --> Host
+    Host -->|merged| Resolve["Resolve Gaps and Re-index KB"]
+    Host -.->|next fetch| FPoll

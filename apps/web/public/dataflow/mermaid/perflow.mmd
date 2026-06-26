@@ -1,0 +1,35 @@
+graph TD
+    Sched["Scheduler tick"]
+    Sched -->|fan out jobs per flow| FA["Flow A jobs own crons and run-locks"]
+    Sched -->|fan out jobs per flow| FB["Flow B jobs own crons and run-locks"]
+    FA -.->|independent slow flow cannot block the other| FB
+
+    FA --> Gather
+    FA --> ReadPR
+
+    subgraph Fetch [FETCH snapshot refresh Flow A about 5 min]
+        Gather["Gather Flow A gaps and proposals"]
+        Poll["Poll only Flow A open PRs conditional ETag"]
+        Write["Write snapshot to disk"]
+        Gather --> Poll
+        Poll --> Write
+    end
+
+    subgraph Recon [PROCESS reconciler Flow A about 10 min]
+        ReadPR["API reconciler reads PR state"]
+        Gate{Flow A gap-catalog revision advanced?}
+        Cluster["Assign Flow A gaps and enqueue provider reshape job"]
+        Draft["Enqueue provider draft jobs for uncovered clusters"]
+        Outbox["Drain Flow A outbox and enqueue GitHub jobs"]
+        ReadPR --> Gate
+        Gate -->|unchanged| Outbox
+        Gate -->|advanced| Cluster
+        Cluster --> Draft
+        Draft --> Outbox
+    end
+
+    Write -.->|snapshot| ReadPR
+    ReadPR -->|merged| Resolve["Resolve gaps and Re-index KB"]
+    ReadPR -->|closed| Reject["Mark rejected and freeze cluster"]
+    Outbox --> GitHubWorker["GitHub watcher pushes branch and opens PR"]
+    GitHubWorker -.->|next fetch| Poll
