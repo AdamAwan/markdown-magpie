@@ -217,20 +217,24 @@ if source-sync already has a PR open on a file, verify simply folds in.
 
 ---
 
-## 8. Migration sketch (not yet scheduled)
+## 8. Migration sketch
 
-Rough order that keeps the system working throughout:
+Rough order that keeps the system working throughout. **All six steps are shipped.**
 
-1. **Introduce the `intent` type** and make `gap-reconciler` emit/consume it explicitly
+1. ✅ **Introduce the `intent` type** and make `gap-reconciler` emit/consume it explicitly
    (it already does this in all but name).
-2. **Generalise the reconcile gate** to be lens-agnostic; add the touchable/fold/defer logic.
-3. **Route source-sync through the gate** (emit intents instead of publishing branches directly).
-4. **Build fix-patrol** with the rolling cursor + verify/dedupe/split lenses.
-5. **Build improve-patrol** (complete lens) on a slower cursor.
-6. **Retire `trigger_scheduled_crunch`** and its `crunch_*` job types once the patrols cover it.
+2. ✅ **Generalise the reconcile gate** to be lens-agnostic; add the touchable/fold/defer logic.
+3. ✅ **Route source-sync through the gate** (emit intents instead of publishing branches directly).
+4. ✅ **Build fix-patrol** with the rolling cursor + verify/dedupe/split lenses.
+5. ✅ **Build improve-patrol** (complete lens) on a slower cursor.
+6. ✅ **Retire `trigger_scheduled_crunch`** and its `crunch_*` job types now the patrols cover it.
+   The crunch feature, stores, `/crunch` route, web section (repurposed into **Schedules**), and
+   the `crunch_runs`/`crunch_settings` tables are gone. The shared plan shape that source-change
+   sync reuses was renamed `crunch_plan`/`CrunchPlan` → `maintenance_plan`/`MaintenancePlan` so no
+   crunch-named vocabulary remains. `refresh_pull_requests` is unchanged.
 
-Start at step 1–2: the shared gate plus the intent type is the spine, and `gap-reconciler.ts`
-is already ~80% of it.
+The spine — the shared gate plus the intent type — landed in steps 1–2; `gap-reconciler.ts` was
+already ~80% of it.
 
 ---
 

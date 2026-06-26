@@ -4,7 +4,6 @@ import { jobDefinition } from "@magpie/jobs";
 import type { z } from "zod";
 import {
   CORRECT_DOCUMENT,
-  CRUNCH_KNOWLEDGE_BASE,
   DEDUPE_DOCUMENTS,
   DRAFT_MARKDOWN_PROPOSAL,
   FOLD_CHANGESET_PROPOSAL,
@@ -42,8 +41,6 @@ export function buildPrompt(job: JobView): string {
       return `${FOLD_MARKDOWN_PROPOSAL.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "fold_changeset_proposal":
       return `${FOLD_CHANGESET_PROPOSAL.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
-    case "crunch_knowledge_base":
-      return `${CRUNCH_KNOWLEDGE_BASE.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "sync_source_changes_generate_plan":
       return `${SOURCE_CHANGE_SYNC.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "verify_document":

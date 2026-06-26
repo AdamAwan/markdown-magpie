@@ -40,8 +40,8 @@ const STAGES: { id: string; step: string; title: string; blurb: string; promptId
     id: "maintain",
     step: "4",
     title: "Maintain the knowledge base",
-    blurb: "Existing documents are consolidated, split, or rewritten so the base stays tidy as it grows.",
-    promptIds: ["crunch-knowledge-base"]
+    blurb: "Patrols check existing documents and fix, de-duplicate, split, or expand them so the base stays correct and tidy as it grows.",
+    promptIds: ["verify-document", "correct-document", "dedupe-documents", "split-document", "improve-document"]
   },
   {
     id: "plumbing",

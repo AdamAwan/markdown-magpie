@@ -6,7 +6,6 @@ import type { JobListFilters } from "../../jobs/broker.js";
 import type { WatcherTouch } from "../../stores/watcher-registry-store.js";
 import { refreshPullRequestsOutputSchema } from "@magpie/jobs";
 import * as proposalsService from "../proposals/service.js";
-import * as crunchService from "../crunch/service.js";
 import * as sourceSyncService from "../source-sync/service.js";
 import * as snapshotsService from "../snapshots/service.js";
 import { applyPullRequestTransition } from "../../scheduling/gap-reconciler.js";
@@ -118,10 +117,9 @@ export async function runJobToCompletion(
 // THE COMPLETION DISPATCHER. Replicates the original handleCompleteJob logic:
 // look up the existing job (404 if missing), persist completion, then fan out to
 // the side-effect handlers in a fixed order — question log update, proposal
-// creation, proposal publication, crunch-plan attachment, crunch publication,
-// source-sync plan attachment, then source-sync publication. Returns a discriminated outcome so the
-// handler maps job_not_found to 404 while keeping its own try/catch for the 500
-// job_completion_failed path.
+// creation, proposal publication, source-sync plan attachment, then source-sync
+// publication. Returns a discriminated outcome so the handler maps job_not_found
+// to 404 while keeping its own try/catch for the 500 job_completion_failed path.
 export async function completeJob(
   ctx: AppContext,
   jobId: string,
@@ -202,8 +200,6 @@ export async function completeJob(
     await foldService.applyFoldFromCompletedJob(ctx, existingJob, parsed.data);
     await foldService.applyChangesetFoldFromCompletedJob(ctx, existingJob, parsed.data);
     await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, parsed.data);
-    await crunchService.attachCrunchPlanFromCompletedJob(ctx, existingJob, parsed.data);
-    await crunchService.recordCrunchPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await sourceSyncService.attachSourceSyncPlanFromCompletedJob(ctx, existingJob, parsed.data);
     await sourceSyncService.recordSourceSyncPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await handleRefreshPullRequestsCompletion(ctx, existingJob, parsed.data);
@@ -286,9 +282,8 @@ async function handleRefreshPullRequestsCompletion(
   await snapshotsService.recordSnapshotsFromPullRequestResults(ctx, parsed.data.results);
 }
 
-// Marks a job failed and preserves the original crunch side-effect: when the
-// failing job is a crunch_knowledge_base job, its associated run is failed too.
-// The two stores keep their distinct fallback messages from the original handler.
+// Marks a job failed. When an enqueue-only planning job fails terminally, its
+// linked run is failed too so it does not hang in a "running" state.
 export async function failJob(ctx: AppContext, jobId: string, jobError: JobError): Promise<JobView | undefined> {
   const failingJob = await ctx.jobs.get(jobId);
   const failedJob = await ctx.jobs.fail(jobId, jobError);
@@ -296,15 +291,9 @@ export async function failJob(ctx: AppContext, jobId: string, jobError: JobError
   if (jobError.executor) {
     await touchWatcher(ctx, { name: jobError.executor, status: "idle" });
   }
-  if (failingJob?.type === "crunch_knowledge_base" && failedJob.state === "failed") {
-    const run = await ctx.stores.crunchRuns.getRunByJobId(jobId);
-    if (run) {
-      await ctx.stores.crunchRuns.failRun(run.id, jobError.message);
-    }
-  }
   // Source-sync planning is enqueue-only, so a terminally failed plan job fails its
-  // linked run too (mirroring the crunch side-effect above). Only a still-"running"
-  // run is failed, so this never regresses a run that already completed.
+  // linked run too. Only a still-"running" run is failed, so this never regresses a
+  // run that already completed.
   if (failingJob?.type === "sync_source_changes_generate_plan" && failedJob.state === "failed") {
     const run = await ctx.stores.sourceSync.getRunByJobId(jobId);
     if (run?.status === "running") {

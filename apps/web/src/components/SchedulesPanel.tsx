@@ -1,90 +1,57 @@
 import { Fragment, useEffect, useState } from "react";
 import { isValidCron } from "@magpie/core";
-import { ConfiguredKnowledgeFlow, CrunchRun, CrunchSettingsView, ScheduledTask } from "../lib/types";
+import { ConfiguredKnowledgeFlow, ScheduledTask } from "../lib/types";
 
 // How the schedules table is grouped: by the flow-free task type (so a shared
 // description is shown once per type, not repeated per flow) or by flow (so each
 // flow's full set of scheduled work sits together).
 type GroupBy = "type" | "flow";
 
-// The flow-crunch schedule rows have no server-supplied description; this is the
-// type-level blurb shown in their group's info tooltip, mirroring the section hint.
-const FLOW_CRUNCH_DESCRIPTION =
-  "Consolidates overlapping knowledge-base documents and splits bloated ones for this flow, then lands the result " +
-  "on a review branch.";
-
-export function CrunchPanel({
+export function SchedulesPanel({
   flows,
   loading,
-  onPublish,
-  onRun,
   onRunTask,
-  onSaveSchedule,
   onSaveTask,
-  runs,
-  scheduledTasks,
-  settings
+  scheduledTasks
 }: {
   flows: ConfiguredKnowledgeFlow[];
   loading: boolean;
-  onPublish: (runId: string) => Promise<void>;
-  onRun: (flowId?: string) => Promise<void>;
   onRunTask: (key: string) => Promise<void>;
-  onSaveSchedule: (flowId: string | undefined, enabled: boolean, cron: string) => Promise<void>;
   onSaveTask: (key: string, enabled: boolean, cron: string) => Promise<void>;
-  runs: CrunchRun[];
   scheduledTasks: ScheduledTask[];
-  settings: CrunchSettingsView[];
 }) {
   const [groupBy, setGroupBy] = useState<GroupBy>("type");
   const flowName = (flowId?: string) => flows.find((flow) => flow.id === flowId)?.name ?? flowId ?? "Default knowledge base";
 
-  // Flow crunch schedules and generic side-processes are two sources with
-  // different save/run endpoints; normalise them into one row shape (with the
-  // right handlers bound per row) so they share a single tidy table. Each entry
-  // carries both axes — the flow-free task type and the flow — so the table can
-  // group by either without re-parsing keys or display labels.
-  const entries: ScheduleEntry[] = [
-    ...settings.map((setting) => ({
-      id: `flow:${setting.flowId ?? "__default__"}`,
-      typeKey: "flow-crunch",
-      typeLabel: "Knowledge base crunch",
-      typeDescription: FLOW_CRUNCH_DESCRIPTION,
-      flowName: flowName(setting.flowId),
-      kind: "Flow" as const,
-      setting,
-      placeholder: "0 2 * * *",
-      onSave: (enabled: boolean, cron: string) => onSaveSchedule(setting.flowId, enabled, cron),
-      onRun: () => onRun(setting.flowId)
-    })),
-    ...scheduledTasks.map((task) => ({
-      id: `task:${task.key}`,
-      typeKey: task.baseKey,
-      typeLabel: task.typeLabel,
-      typeDescription: task.description,
-      flowName: flowName(task.flowId),
-      kind: "Side process" as const,
-      setting: task.settings,
-      placeholder: "*/10 * * * *",
-      onSave: (enabled: boolean, cron: string) => onSaveTask(task.key, enabled, cron),
-      onRun: () => onRunTask(task.key)
-    }))
-  ];
+  // Each scheduled task carries both grouping axes — the flow-free task type and
+  // the flow it runs for — so the table can group by either without re-parsing
+  // keys or display labels.
+  const entries: ScheduleEntry[] = scheduledTasks.map((task) => ({
+    id: `task:${task.key}`,
+    typeKey: task.baseKey,
+    typeLabel: task.typeLabel,
+    typeDescription: task.description,
+    flowName: flowName(task.flowId),
+    setting: task.settings,
+    placeholder: "*/10 * * * *",
+    onSave: (enabled: boolean, cron: string) => onSaveTask(task.key, enabled, cron),
+    onRun: () => onRunTask(task.key)
+  }));
 
   const groups = groupEntries(entries, groupBy);
 
   return (
     <section className="surface">
       <div className="surfaceHeader">
-        <h2>Crunch</h2>
-        <span className="pill" title="Scheduled knowledge-base tidying runs">
-          {runs.length} run{runs.length === 1 ? "" : "s"}
+        <h2>Schedules</h2>
+        <span className="pill" title="Scheduled background tasks">
+          {entries.length} task{entries.length === 1 ? "" : "s"}
         </span>
       </div>
       <div className="surfaceBody">
         <p className="hint">
-          Crunch runs an AI maintenance pass over the knowledge base: it consolidates overlapping documents and splits
-          bloated ones, then lands the result on a review branch. Schedule it, or run it on demand.
+          Background tasks run on the watcher on a cron schedule: gap reconciliation, source-change sync, and the fix
+          and improve patrols that keep the knowledge base correct and tidy. Enable, disable, or run each on demand.
         </p>
 
         <section className="crunchSection">
@@ -130,25 +97,7 @@ export function CrunchPanel({
                 ))}
               </Fragment>
             ))}
-            {entries.length === 0 ? (
-              <p className="empty">No crunch schedules or side-processes are configured.</p>
-            ) : null}
-          </div>
-        </section>
-
-        <section className="crunchSection">
-          <h3 className="crunchSubhead">Recent runs</h3>
-          <div className="list scrollList">
-            {runs.map((run) => (
-              <CrunchRunCard
-                flowName={flowName(run.flowId)}
-                key={run.id}
-                loading={loading}
-                onPublish={onPublish}
-                run={run}
-              />
-            ))}
-            {runs.length === 0 ? <p className="empty">No crunch runs yet. Use “Run now” to create one.</p> : null}
+            {entries.length === 0 ? <p className="empty">No scheduled tasks are configured.</p> : null}
           </div>
         </section>
       </div>
@@ -172,7 +121,6 @@ interface ScheduleEntry {
   typeLabel: string;
   typeDescription?: string;
   flowName: string;
-  kind: "Flow" | "Side process";
   setting: { enabled: boolean; cron: string; nextRunAt?: string };
   placeholder: string;
   onSave: (enabled: boolean, cron: string) => Promise<void>;
@@ -240,7 +188,6 @@ function ScheduleRow({ entry, groupBy, loading }: { entry: ScheduleEntry; groupB
             {namesType ? entry.typeLabel : entry.flowName}
             {namesType && entry.typeDescription ? <InfoDot label={entry.typeLabel} text={entry.typeDescription} /> : null}
           </span>
-          <span className="crunchScheduleMeta">{entry.kind}</span>
         </span>
         <span>{setting.enabled ? <code>{setting.cron}</code> : "—"}</span>
         <span>{setting.enabled && setting.nextRunAt ? new Date(setting.nextRunAt).toLocaleString() : "—"}</span>
@@ -360,108 +307,5 @@ function ScheduleEditor({
       </div>
       {!cronValid ? <p className="crunchError">Not a valid 5-field cron expression.</p> : null}
     </div>
-  );
-}
-
-function CrunchRunCard({
-  flowName,
-  loading,
-  onPublish,
-  run
-}: {
-  flowName: string;
-  loading: boolean;
-  onPublish: (runId: string) => Promise<void>;
-  run: CrunchRun;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const operations = run.plan?.operations ?? [];
-
-  return (
-    <article className="row crunchRun">
-      <div className="rowTop">
-        <div>
-          <h3>{run.plan?.summary ?? `Crunch run (${run.status})`}</h3>
-          <p className="path">
-            {flowName} · {run.trigger} · {run.documentCount} document{run.documentCount === 1 ? "" : "s"} ·{" "}
-            {new Date(run.createdAt).toLocaleString()}
-          </p>
-        </div>
-        <span className={`status ${run.status}`} title={`Run status: ${run.status}`}>
-          {run.status}
-        </span>
-      </div>
-      {run.error ? <p className="crunchError">{run.error}</p> : null}
-      {run.plan?.rationale ? <p>{run.plan.rationale}</p> : null}
-      <div className="rowActions">
-        {operations.length > 0 ? (
-          <button className="chip" onClick={() => setExpanded((value) => !value)} type="button">
-            {expanded ? "Hide" : "Show"} {operations.length} operation{operations.length === 1 ? "" : "s"}
-          </button>
-        ) : run.status === "completed" ? (
-          <span className="pill">No changes needed</span>
-        ) : null}
-        {run.status === "completed" && operations.length > 0 ? (
-          <button
-            className="button"
-            disabled={loading}
-            onClick={() => void onPublish(run.id)}
-            title="Push this tidy plan to a branch and open a pull request"
-            type="button"
-          >
-            Create pull request
-          </button>
-        ) : null}
-        {run.publication ? (
-          <span className="pill" title={`Published commit ${run.publication.commitSha}`}>
-            {run.publication.branchName}
-          </span>
-        ) : null}
-        {run.publication?.pullRequestUrl ? (
-          <a href={run.publication.pullRequestUrl} target="_blank" rel="noreferrer">
-            View pull request
-          </a>
-        ) : null}
-      </div>
-      {expanded && operations.length > 0 ? (
-        <div className="crunchOperations">
-          {operations.map((operation, index) => (
-            <div className="crunchOperation" key={`${run.id}-op-${index}`}>
-              <div className="rowTop">
-                <strong>{operation.title}</strong>
-                <span className={`status ${operation.kind === "split" ? "ready" : "completed"}`}>{operation.kind}</span>
-              </div>
-              <p>{operation.reason}</p>
-              <div className="crunchFileLists">
-                {operation.writes.length > 0 ? (
-                  <div>
-                    <span className="crunchFileLabel">Writes</span>
-                    <ul className="crunchFileList">
-                      {operation.writes.map((write) => (
-                        <li className="crunchWrite" key={`w-${write.path}`}>
-                          + {write.path}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-                {operation.deletes.length > 0 ? (
-                  <div>
-                    <span className="crunchFileLabel">Deletes</span>
-                    <ul className="crunchFileList">
-                      {operation.deletes.map((deletion) => (
-                        <li className="crunchDelete" key={`d-${deletion}`}>
-                          − {deletion}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </article>
   );
 }

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import type { ChangesetChange, CrunchPlan, ProposalPublication, SourceSyncRun, SourceSyncState } from "@magpie/core";
+import type { ChangesetChange, MaintenancePlan, ProposalPublication, SourceSyncRun, SourceSyncState } from "@magpie/core";
 import type { SourceSyncRunInput, SourceSyncStore } from "./source-sync-store.js";
 
 const { Pool } = pg;
@@ -100,7 +100,7 @@ export class PostgresSourceSyncStore implements SourceSyncStore {
     return result.rows[0] ? mapRunRow(result.rows[0]) : undefined;
   }
 
-  async completeRun(id: string, plan: CrunchPlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined> {
+  async completeRun(id: string, plan: MaintenancePlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined> {
     return this.transitionFromRunning(
       "UPDATE source_sync_runs SET status = 'completed', plan = $2, changeset = $3, error = NULL, completed_at = now() WHERE id = $1 AND status = 'running' RETURNING *",
       [id, JSON.stringify(plan), JSON.stringify(changeset)],
@@ -108,7 +108,7 @@ export class PostgresSourceSyncStore implements SourceSyncStore {
     );
   }
 
-  async markSkipped(id: string, plan: CrunchPlan): Promise<SourceSyncRun | undefined> {
+  async markSkipped(id: string, plan: MaintenancePlan): Promise<SourceSyncRun | undefined> {
     return this.transitionFromRunning(
       "UPDATE source_sync_runs SET status = 'skipped', plan = $2, completed_at = now() WHERE id = $1 AND status = 'running' RETURNING *",
       [id, JSON.stringify(plan)],
@@ -116,7 +116,7 @@ export class PostgresSourceSyncStore implements SourceSyncStore {
     );
   }
 
-  async deferRun(id: string, plan: CrunchPlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined> {
+  async deferRun(id: string, plan: MaintenancePlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined> {
     // running → deferred. No completed_at: deferred is a waiting state. Guarded by
     // status = 'running' so a re-delivered completion never regresses a later state.
     return this.transitionFromRunning(
@@ -210,7 +210,7 @@ interface SourceSyncRunRow {
   trigger: SourceSyncRun["trigger"];
   status: SourceSyncRun["status"];
   job_id: string | null;
-  plan: CrunchPlan | null;
+  plan: MaintenancePlan | null;
   changeset: ChangesetChange[] | null;
   error: string | null;
   from_sha: string | null;

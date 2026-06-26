@@ -146,6 +146,13 @@ test("unknown route returns not_found", async () => {
   assert.deepEqual(await res.json(), { error: "not_found" });
 });
 
+test("the retired /crunch route is gone", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/crunch/runs");
+  assert.equal(res.status, 404);
+  assert.deepEqual(await res.json(), { error: "not_found" });
+});
+
 test("OPTIONS preflight returns 204", async () => {
   const app = buildApp(makeTestContext());
   const res = await app.request("/api/ask", { method: "OPTIONS" });
@@ -194,7 +201,7 @@ test("GET /api/prompts returns the catalog", async () => {
   const res = await app.request("/api/prompts");
   assert.equal(res.status, 200);
   const body = (await res.json()) as { prompts: Array<Record<string, unknown>> };
-  assert.equal(body.prompts.length, 18);
+  assert.equal(body.prompts.length, 17);
   for (const prompt of body.prompts) {
     assert.equal(typeof prompt.id, "string");
     assert.equal(typeof prompt.title, "string");

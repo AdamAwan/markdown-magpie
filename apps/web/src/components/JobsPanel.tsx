@@ -20,7 +20,6 @@ const PROVIDER_JOB_TYPES = [
   "draft_markdown_proposal",
   "detect_contradiction",
   "suggest_consolidation",
-  "crunch_knowledge_base",
   "cluster_gap_candidates",
   "reconcile_gap_clusters",
   "sync_source_changes_generate_plan"
@@ -31,10 +30,9 @@ const CAPABILITY_JOB_TYPES = {
   "azure-openai": PROVIDER_JOB_TYPES,
   codex: PROVIDER_JOB_TYPES,
   claude: PROVIDER_JOB_TYPES,
-  github: ["refresh_pull_requests", "publish_proposal", "publish_crunch", "publish_source_sync"],
+  github: ["refresh_pull_requests", "publish_proposal", "publish_source_sync"],
   maintenance: [
     "process_gaps_to_pull_requests",
-    "trigger_scheduled_crunch",
     "source_change_sync",
     "fix_patrol",
     "improve_patrol"

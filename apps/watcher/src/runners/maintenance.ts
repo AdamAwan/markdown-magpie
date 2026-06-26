@@ -3,15 +3,13 @@ import {
   fixPatrolOutputSchema,
   improvePatrolOutputSchema,
   processGapsToPullRequestsOutputSchema,
-  sourceChangeSyncOutputSchema,
-  triggerScheduledCrunchOutputSchema
+  sourceChangeSyncOutputSchema
 } from "@magpie/jobs";
 import type { WatcherApi } from "../http-client.js";
 
 const MAINTENANCE_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "process_gaps_to_pull_requests",
   "source_change_sync",
-  "trigger_scheduled_crunch",
   "fix_patrol",
   "improve_patrol"
 ]);
@@ -35,9 +33,6 @@ export class MaintenanceRunner {
     }
     if (job.type === "source_change_sync") {
       return this.runSourceSync(job, signal);
-    }
-    if (job.type === "trigger_scheduled_crunch") {
-      return this.triggerScheduledCrunch(job, signal);
     }
     if (job.type === "fix_patrol") {
       return this.runFixPatrol(job, signal);
@@ -87,17 +82,6 @@ export class MaintenanceRunner {
       `improve_patrol[${job.id}]: selected ${selectedCount} document(s), enqueued ${enqueuedCount} scan(s) (run ${runId})`
     );
     return improvePatrolOutputSchema.parse({ runId, selectedCount, enqueuedCount });
-  }
-
-  private async triggerScheduledCrunch(job: JobView, signal: AbortSignal): Promise<unknown> {
-    // The job's input optionally carries the flow to crunch; the API's enqueue-only
-    // /api/crunch/run does the heavy gather + planning-job enqueue. We just relay
-    // the trigger and return the created run/job ids.
-    const flowId = readFlowId(job.input);
-    console.log(`trigger_scheduled_crunch[${job.id}]: triggering crunch for flow ${flowId ?? "(default)"}`);
-    const { runId, jobId } = await this.api.triggerScheduledCrunch(flowId, signal);
-    console.log(`trigger_scheduled_crunch[${job.id}]: started run ${runId} (planning job ${jobId})`);
-    return triggerScheduledCrunchOutputSchema.parse({ runId, jobId });
   }
 }
 

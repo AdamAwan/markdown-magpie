@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { promptCatalog, getPrompt } from "./catalog.js";
 
-test("catalog has exactly 18 prompts", () => {
-  assert.equal(promptCatalog.length, 18);
+test("catalog has exactly 17 prompts", () => {
+  assert.equal(promptCatalog.length, 17);
 });
 
 test("catalog ids are in the fixed, documented order", () => {
@@ -15,7 +15,6 @@ test("catalog ids are in the fixed, documented order", () => {
       "draft-markdown-proposal",
       "fold-markdown-proposal",
       "fold-changeset-proposal",
-      "crunch-knowledge-base",
       "source-change-sync",
       "verify-document",
       "correct-document",
@@ -55,6 +54,6 @@ test("instructions never end with a trailing newline", () => {
 });
 
 test("getPrompt finds by id and returns undefined for unknown", () => {
-  assert.equal(getPrompt("crunch-knowledge-base")?.id, "crunch-knowledge-base");
+  assert.equal(getPrompt("source-change-sync")?.id, "source-change-sync");
   assert.equal(getPrompt("does-not-exist"), undefined);
 });

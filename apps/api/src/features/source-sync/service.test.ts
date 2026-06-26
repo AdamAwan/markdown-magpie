@@ -1,13 +1,46 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ChangesetChange, DocumentSection, KnowledgeDocument, RankedSection } from "@magpie/core";
+import type { ChangesetChange, DocumentSection, KnowledgeDocument, MaintenancePlan, RankedSection } from "@magpie/core";
 import { makeTestContext } from "../../test-support/context.js";
 import {
   buildRetrievalQuery,
+  changesetFromPlan,
   constrainToCandidates,
   selectCandidateDocuments,
   triggerSourceSyncRun
 } from "./service.js";
+
+test("changesetFromPlan applies deletes then writes with last-write-wins per path", () => {
+  const plan: MaintenancePlan = {
+    summary: "tidy",
+    operations: [
+      {
+        kind: "split",
+        title: "delete a.md",
+        reason: "r",
+        sources: ["a.md"],
+        writes: [],
+        deletes: ["a.md"]
+      },
+      {
+        kind: "rewrite",
+        title: "rewrite a.md",
+        reason: "r",
+        sources: ["a.md"],
+        writes: [{ path: "a.md", content: "# A\nrewritten" }],
+        deletes: []
+      }
+    ],
+    rationale: "r"
+  };
+
+  const changes = changesetFromPlan(plan);
+
+  const forA = changes.filter((change) => change.path === "a.md");
+  assert.equal(forA.length, 1, "a path deleted then written collapses to a single entry");
+  assert.equal(forA[0].content, "# A\nrewritten");
+  assert.equal(forA[0].delete, undefined, "the surviving entry is a write, not a delete");
+});
 
 function section(id: string, documentId: string): DocumentSection {
   return { id, documentId, path: "", heading: "", headingPath: [], anchor: "", content: "", ordinal: 0 };

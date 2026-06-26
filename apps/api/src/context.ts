@@ -3,7 +3,6 @@ import { RuntimeConfigHolder } from "./config-holder.js";
 import { BackgroundEmbedder } from "./platform/background-embedder.js";
 import { BackgroundRunner } from "./platform/background-runner.js";
 import {
-  createCrunchStore,
   createGapClusterStore,
   createPrCrosslinkStore,
   createProposalStore,
@@ -41,7 +40,6 @@ export interface AppContext {
     knowledgeIndex: InMemoryKnowledgeIndex;
     questionLogs: ReturnType<typeof createQuestionLogStore>;
     proposals: ReturnType<typeof createProposalStore>;
-    crunchRuns: ReturnType<typeof createCrunchStore>;
     scheduledTasks: ReturnType<typeof createScheduledTaskStore>;
     sourceSync: ReturnType<typeof createSourceSyncStore>;
     patrol: ReturnType<typeof createPatrolStore>;
@@ -105,7 +103,6 @@ export async function createAppContext(): Promise<AppContext> {
       knowledgeIndex,
       questionLogs: createQuestionLogStore(),
       proposals: createProposalStore(),
-      crunchRuns: createCrunchStore(),
       scheduledTasks: createScheduledTaskStore(),
       sourceSync: createSourceSyncStore(),
       patrol: createPatrolStore(),

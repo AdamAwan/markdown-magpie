@@ -2,14 +2,9 @@ import type { AppContext } from "../context.js";
 import { listScheduledTasks } from "../scheduling/task-registry.js";
 import type { DesiredSchedule } from "./broker.js";
 
-// Stable schedule keys. Crunch is keyed by flow; each generic side-process is
-// keyed by its registry task key (already per-flow). These keys are the contract
-// between the saved product settings and the pg-boss schedule rows, so they must
-// not change once shipped.
-function crunchScheduleKey(flowId: string | undefined): string {
-  return `flow:${flowId ?? "default"}`;
-}
-
+// Stable schedule keys. Each generic side-process is keyed by its registry task
+// key (already per-flow). These keys are the contract between the saved product
+// settings and the pg-boss schedule rows, so they must not change once shipped.
 function taskScheduleKey(taskKey: string): string {
   return `task:${taskKey}`;
 }
@@ -18,15 +13,6 @@ function taskScheduleKey(taskKey: string): string {
 // Disabled rows are included so the broker unschedules them; unsaved settings
 // default to disabled and so simply never appear.
 async function buildDesiredSchedules(ctx: AppContext): Promise<DesiredSchedule[]> {
-  const crunchSettings = await ctx.stores.crunchRuns.listSettings();
-  const crunchSchedules: DesiredSchedule[] = crunchSettings.map((setting) => ({
-    type: "trigger_scheduled_crunch",
-    key: crunchScheduleKey(setting.flowId),
-    cron: setting.cron,
-    input: { flowId: setting.flowId },
-    enabled: setting.enabled
-  }));
-
   const taskSettings = await ctx.stores.scheduledTasks.listSettings();
   const tasksByKey = new Map(listScheduledTasks(ctx).map((task) => [task.key, task]));
   const taskSchedules: DesiredSchedule[] = [];
@@ -47,10 +33,10 @@ async function buildDesiredSchedules(ctx: AppContext): Promise<DesiredSchedule[]
     });
   }
 
-  return [...crunchSchedules, ...taskSchedules];
+  return taskSchedules;
 }
 
-// Reconciles the saved crunch and scheduled-task settings into pg-boss schedules.
+// Reconciles the saved scheduled-task settings into pg-boss schedules.
 // Idempotent and safe to run from any instance: it computes the full desired set
 // and hands it to the broker, which schedules/unschedules to match. Call at
 // startup (after the broker starts) and after any settings mutation.

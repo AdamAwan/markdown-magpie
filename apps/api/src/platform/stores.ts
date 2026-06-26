@@ -1,6 +1,4 @@
-import { InMemoryCrunchStore } from "../stores/crunch-store.js";
 import { InMemoryGapClusterStore } from "../stores/gap-cluster-store.js";
-import { PostgresCrunchStore } from "../stores/postgres-crunch-store.js";
 import { PostgresGapClusterStore } from "../stores/postgres-gap-cluster-store.js";
 import { PostgresPrCrosslinkStore } from "../stores/postgres-pr-crosslink-store.js";
 import { PostgresProposalStore } from "../stores/postgres-proposal-store.js";
@@ -29,7 +27,6 @@ export type StoreEnvName =
   | "KNOWLEDGE_STORE"
   | "QUESTION_LOG_STORE"
   | "PROPOSAL_STORE"
-  | "CRUNCH_STORE"
   | "SCHEDULED_TASK_STORE"
   | "SOURCE_SYNC_STORE"
   | "PATROL_STORE"
@@ -77,14 +74,6 @@ export function createProposalStore(): InMemoryProposalStore | PostgresProposalS
     "PROPOSAL_STORE",
     (databaseUrl) => new PostgresProposalStore(databaseUrl),
     () => new InMemoryProposalStore()
-  );
-}
-
-export function createCrunchStore(): InMemoryCrunchStore | PostgresCrunchStore {
-  return createStore<InMemoryCrunchStore | PostgresCrunchStore>(
-    "CRUNCH_STORE",
-    (databaseUrl) => new PostgresCrunchStore(databaseUrl),
-    () => new InMemoryCrunchStore()
   );
 }
 

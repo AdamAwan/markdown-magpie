@@ -5,11 +5,6 @@ export type {
   AnswerResult,
   Citation,
   Confidence,
-  CrunchFileWrite,
-  CrunchOperation,
-  CrunchPlan,
-  CrunchRun,
-  CrunchSettings,
   DocumentMetadata,
   GapCandidate,
   GitRepositoryContext,
@@ -29,7 +24,6 @@ export type {
 } from "@magpie/core";
 
 import type {
-  CrunchSettings,
   GapCandidate,
   Proposal,
   QuestionFeedback,
@@ -66,7 +60,7 @@ export type ConsoleSection =
   | "proposals"
   | "snapshots"
   | "reconciliations"
-  | "crunch"
+  | "schedules"
   | "prompts"
   | "config"
   | "dataflow"
@@ -176,11 +170,6 @@ export interface JobsResponse {
 export interface WorkersResponse {
   workers: WatcherView[];
 }
-
-// The crunch settings list response enriches the stored cron with the next run
-// time from the reconciled pg-boss schedule. `lastRunAt`/`runningSince` are gone
-// server-side, so they are not modelled here.
-export type CrunchSettingsView = CrunchSettings & { nextRunAt?: string };
 
 // The scheduled-task list response enriches the stored settings with the next
 // run time from the reconciled pg-boss schedule. `lastRunAt`/`runningSince` are

@@ -594,74 +594,37 @@ export interface PublishProposalBranchResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Crunch — scheduled knowledge-base tidying
+// Maintenance plan — a multi-file write/delete changeset
 //
-// Over time an answer-driven knowledge base fragments: overlapping notes pile
-// up and single documents grow to cover several unrelated topics. "Crunch" is a
-// scheduled AI maintenance pass that proposes structural fixes — consolidating
-// overlapping documents and splitting bloated ones — and lands the result on a
-// review branch. Unlike a Proposal (one Markdown file), a crunch plan is
-// inherently multi-file: it writes and deletes several documents at once.
+// Some maintenance passes (currently source-change sync) restructure several
+// knowledge-base documents at once rather than editing a single Markdown file.
+// They express the change as a MaintenancePlan: a list of operations that
+// consolidate, split, or rewrite documents, which the API flattens into a
+// changeset and lands on a review branch.
 // ---------------------------------------------------------------------------
 
-export type CrunchOperationKind = "consolidate" | "split" | "rewrite";
+export type MaintenanceOperationKind = "consolidate" | "split" | "rewrite";
 
-export interface CrunchFileWrite {
+export interface MaintenanceFileWrite {
   path: string;
   content: string;
 }
 
-export interface CrunchOperation {
-  kind: CrunchOperationKind;
+export interface MaintenanceOperation {
+  kind: MaintenanceOperationKind;
   title: string;
   reason: string;
   // Existing document paths this operation reorganizes (read and usually
   // replaced). Kept for the reviewer to see what was touched.
   sources: string[];
-  writes: CrunchFileWrite[];
+  writes: MaintenanceFileWrite[];
   deletes: string[];
 }
 
-export interface CrunchPlan {
+export interface MaintenancePlan {
   summary: string;
-  operations: CrunchOperation[];
+  operations: MaintenanceOperation[];
   rationale: string;
-}
-
-export interface CrunchKnowledgeBaseJobInput {
-  flowId?: string;
-  destinationId?: string;
-  documents: CrunchFileWrite[];
-  expectedOutput: "crunch_plan";
-}
-
-export type CrunchKnowledgeBaseJobOutput = CrunchPlan;
-
-export type CrunchRunTrigger = "scheduled" | "manual";
-
-export type CrunchRunStatus = "pending" | "running" | "completed" | "failed" | "published";
-
-export interface CrunchRun {
-  id: string;
-  flowId?: string;
-  destinationId?: string;
-  trigger: CrunchRunTrigger;
-  status: CrunchRunStatus;
-  jobId?: string;
-  plan?: CrunchPlan;
-  error?: string;
-  documentCount: number;
-  publication?: ProposalPublication;
-  createdAt: string;
-  completedAt?: string;
-}
-
-export interface CrunchSettings {
-  flowId?: string;
-  enabled: boolean;
-  // Standard 5-field cron expression (minute hour day-of-month month day-of-week).
-  // Next-run timing is owned by pg-boss now, not derived/stored here.
-  cron: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -673,7 +636,7 @@ export interface CrunchSettings {
 // any KB document that still asserts the old fact is now wrong. This pass detects
 // changed source commits, retrieves the KB documents that already speak to the
 // change, and asks the model to rewrite only those documents to match the new
-// reality — landing the result on a review branch. The plan reuses CrunchPlan:
+// reality — landing the result on a review branch. The plan reuses MaintenancePlan:
 // the output is the same multi-file write/delete changeset.
 // ---------------------------------------------------------------------------
 
@@ -718,10 +681,10 @@ export interface SourceChangeSyncJobInput {
   toSha: string;
   changes: SourceChangeFile[];
   candidateDocuments: SourceSyncCandidateDocument[];
-  expectedOutput: "crunch_plan";
+  expectedOutput: "maintenance_plan";
 }
 
-export type SourceChangeSyncJobOutput = CrunchPlan;
+export type SourceChangeSyncJobOutput = MaintenancePlan;
 
 export interface SourceSyncRun {
   id: string;
@@ -731,7 +694,7 @@ export interface SourceSyncRun {
   trigger: SourceSyncRunTrigger;
   status: SourceSyncRunStatus;
   jobId?: string;
-  plan?: CrunchPlan;
+  plan?: MaintenancePlan;
   // The constrained changeset the API derived from the plan at gather time (only
   // writes to candidate documents). Persisted so the publish job can fetch it
   // without re-deriving the candidate set. Absent on skipped/failed runs.

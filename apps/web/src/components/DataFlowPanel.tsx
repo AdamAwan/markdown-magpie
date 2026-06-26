@@ -53,7 +53,7 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
             className={activeFlow === "automation" ? "flowTab active" : "flowTab"}
             onClick={() => setActiveFlow("automation")}
           >
-            Automation &amp; Crunch
+            Automation &amp; Patrol
           </button>
           <button
             className={activeFlow === "gappr" ? "flowTab active" : "flowTab"}
@@ -331,30 +331,30 @@ function automationDiagram(modelInfo: ModelInfo): string {
         SRewrite --> SBranch
     end
 
-    subgraph CrunchTask["<b>Crunch</b><br/>(per flow · scheduled or on-demand)"]
-        CrPlan["🧹 ${chatLabel}<br/>Build Crunch Plan<br/>(tidy / consolidate)"]
-        CrReview["👁️ Human Reviews<br/>Plan + Operations"]
-        CrPublish["🚀 Publish Branch"]
-        CrPlan --> CrReview
-        CrReview -->|Publish| CrPublish
+    subgraph PatrolTask["<b>Patrol</b><br/>(per flow · scheduled)"]
+        PScan["🩺 ${chatLabel}<br/>Verify / dedupe / split /<br/>improve KB documents"]
+        PProposal["📝 Draft proposals<br/>(reconciled via the gate)"]
+        PPublish["🚀 Publish review branch"]
+        PScan --> PProposal
+        PProposal --> PPublish
     end
 
     Scheduler -->|one job per flow| FGather
     Scheduler -->|maintenance orchestrator job per flow| GRead
     Scheduler -->|one job per flow| SWatch
-    Scheduler -->|per flow| CrPlan
+    Scheduler -->|per flow| PScan
 
     FWrite -.->|snapshot| GRead
     GPublish --> Host["🌐 Git Host<br/>Pull Requests"]
     SBranch --> Host
-    CrPublish --> Host
+    PPublish --> Host
     Host -->|merged| Resolve["✅ Resolve Gaps<br/>+ Re-index KB"]
     Host -.->|next fetch| FPoll
 
     style FetchTask fill:#fbfcfa,stroke:#285f74,stroke-width:2px
     style GapsTask fill:#fef9f0,stroke:#8b5a00,stroke-width:2px
     style SyncTask fill:#e8f1f7,stroke:#285f74,stroke-width:2px
-    style CrunchTask fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px`;
+    style PatrolTask fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px`;
 }
 
 // A sequence diagram makes the job boundaries and capability hand-offs explicit.

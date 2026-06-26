@@ -3,9 +3,7 @@ import { PROPOSAL_STATUSES } from "@magpie/core";
 import type {
   AnswerQuestionJobInput as CoreAnswerQuestionJobInput,
   AnswerQuestionJobOutput,
-  CrunchKnowledgeBaseJobInput as CoreCrunchKnowledgeBaseJobInput,
-  CrunchKnowledgeBaseJobOutput,
-  CrunchPlan,
+  MaintenancePlan,
   DraftMarkdownProposalJobInput as CoreDraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
   FoldMarkdownProposalJobInput as CoreFoldMarkdownProposalJobInput,
@@ -176,7 +174,7 @@ export const suggestConsolidationOutputSchema = z.object({
   suggestions: z.array(z.object({ title: z.string(), reason: z.string(), paths: z.array(z.string()).min(1) }))
 });
 
-const crunchOperationSchema = z.object({
+const maintenanceOperationSchema = z.object({
   kind: z.enum(["consolidate", "split", "rewrite"]),
   title: z.string(),
   reason: z.string(),
@@ -187,19 +185,6 @@ const crunchOperationSchema = z.object({
   writes: z.array(documentSchema).default([]),
   deletes: z.array(z.string()).default([])
 });
-export const crunchKnowledgeBaseInputSchema = z.object({
-  provider: providerSchema,
-  flowId: z.string().optional(),
-  destinationId: z.string().optional(),
-  documents: z.array(documentSchema),
-  expectedOutput: z.literal("crunch_plan")
-}) satisfies z.ZodType<ProviderInput<CoreCrunchKnowledgeBaseJobInput>>;
-export const crunchKnowledgeBaseOutputSchema = z.object({
-  summary: z.string(),
-  operations: z.array(crunchOperationSchema),
-  rationale: z.string()
-}) satisfies z.ZodType<CrunchKnowledgeBaseJobOutput>;
-
 export const clusterGapCandidatesInputSchema = z.object({
   candidates: z.array(z.object({ summary: z.string(), questionIds: z.array(z.string()) })),
   provider: providerSchema
@@ -246,13 +231,13 @@ export const syncSourceChangesGeneratePlanInputSchema = z.object({
   toSha: z.string(),
   changes: z.array(sourceChangeFileSchema),
   candidateDocuments: z.array(documentSchema),
-  expectedOutput: z.literal("crunch_plan")
+  expectedOutput: z.literal("maintenance_plan")
 }) satisfies z.ZodType<ProviderInput<CoreSourceChangeSyncJobInput>>;
 export const syncSourceChangesGeneratePlanOutputSchema = z.object({
   summary: z.string(),
-  operations: z.array(crunchOperationSchema),
+  operations: z.array(maintenanceOperationSchema),
   rationale: z.string()
-}) satisfies z.ZodType<CrunchPlan>;
+}) satisfies z.ZodType<MaintenancePlan>;
 
 export const verifyDocumentInputSchema = z.object({
   provider: providerSchema,
@@ -360,22 +345,9 @@ export const processGapsToPullRequestsOutputSchema = z.object({
   published: z.number().int()
 });
 
-export const triggerScheduledCrunchInputSchema = z.object({ flowId: z.string().optional() });
-export const triggerScheduledCrunchOutputSchema = z.object({ runId: z.string(), jobId: z.string() });
-
 export const publishProposalInputSchema = z.object({ proposalId: z.string() });
 export const publishProposalOutputSchema = z.object({
   proposalId: z.string(),
-  branchName: z.string(),
-  commitSha: z.string(),
-  remoteUrl: z.string().optional(),
-  pullRequestUrl: z.string().optional(),
-  publishedAt: z.string()
-});
-
-export const publishCrunchInputSchema = z.object({ runId: z.string() });
-export const publishCrunchOutputSchema = z.object({
-  runId: z.string(),
   branchName: z.string(),
   commitSha: z.string(),
   remoteUrl: z.string().optional(),

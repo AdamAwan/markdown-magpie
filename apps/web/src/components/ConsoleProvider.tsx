@@ -15,8 +15,6 @@ import {
 import {
   AskResponse,
   ConsoleSection,
-  CrunchRun,
-  CrunchSettingsView,
   Feedback,
   FlowSnapshot,
   GapCandidate,
@@ -66,8 +64,6 @@ function useConsoleController() {
   const [selectedJobId, setSelectedJobId] = useState<string | undefined>();
   const [selectedJob, setSelectedJob] = useState<JobView | undefined>();
   const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [crunchRuns, setCrunchRuns] = useState<CrunchRun[]>([]);
-  const [crunchSettings, setCrunchSettings] = useState<CrunchSettingsView[]>([]);
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
   const [prompts, setPrompts] = useState<PromptSummary[]>([]);
   const [flowSnapshots, setFlowSnapshots] = useState<FlowSnapshot[]>([]);
@@ -134,10 +130,7 @@ function useConsoleController() {
   }, [message]);
 
   useEffect(() => {
-    const hasActiveWork =
-      jobs.some(isActiveJob) ||
-      crunchRuns.some((run) => run.status === "running" || run.status === "pending") ||
-      (answer?.job ? isActiveJob(answer.job) : false);
+    const hasActiveWork = jobs.some(isActiveJob) || (answer?.job ? isActiveJob(answer.job) : false);
 
     if (!hasActiveWork) {
       return;
@@ -146,7 +139,7 @@ function useConsoleController() {
     const interval = window.setInterval(() => void refresh({ silent: true }), 4_000);
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [answer?.job?.id, answer?.job?.state, jobs, crunchRuns]);
+  }, [answer?.job?.id, answer?.job?.state, jobs]);
 
   function showMessage(text: string, tone: UiMessage["tone"] = "info") {
     setMessage({ id: messageIdRef.current++, text, tone });
@@ -157,7 +150,7 @@ function useConsoleController() {
   }
 
   // The one reusable wait helper used after every enqueue (ask, proposal draft,
-  // gap-cluster draft, crunch, manual scheduled-task run). It long-polls the
+  // gap-cluster draft, manual scheduled-task run). It long-polls the
   // API's bounded `/jobs/:id/wait`, which returns the terminal job when the
   // watcher finishes, or the still-active view if its deadline elapses first —
   // in which case the normal 4s refresh polling keeps the UI updating.
@@ -266,8 +259,6 @@ function useConsoleController() {
         schedulesResult,
         workersResult,
         proposalsResult,
-        crunchRunsResult,
-        crunchSettingsResult,
         scheduledTasksResult,
         configResult,
         promptsResult,
@@ -285,8 +276,6 @@ function useConsoleController() {
         apiGet<{ schedules: ScheduleView[] }>("/jobs/schedules", { signal }),
         apiGet<WorkersResponse>("/workers", { signal }),
         apiGet<{ proposals: Proposal[] }>("/proposals?limit=8", { signal }),
-        apiGet<{ runs: CrunchRun[] }>("/crunch/runs?limit=12", { signal }),
-        apiGet<{ settings: CrunchSettingsView[] }>("/crunch/settings", { signal }),
         apiGet<{ tasks: ScheduledTask[] }>("/scheduled-tasks", { signal }),
         apiGet<RuntimeConfig>("/config", { signal }),
         apiGet<{ prompts: PromptSummary[] }>("/prompts", { signal }),
@@ -311,8 +300,6 @@ function useConsoleController() {
       setJobSchedules(schedulesResult.schedules);
       setWorkers(workersResult.workers);
       setProposals(proposalsResult.proposals);
-      setCrunchRuns(crunchRunsResult.runs);
-      setCrunchSettings(crunchSettingsResult.settings);
       setScheduledTasks(scheduledTasksResult.tasks);
       setPrompts(promptsResult.prompts);
       setFlowSnapshots(snapshotsResult.snapshots);
@@ -533,55 +520,6 @@ function useConsoleController() {
     }
   }
 
-  async function runCrunch(targetFlowId?: string) {
-    setLoading(true);
-    clearMessage();
-    try {
-      // Crunch planning is enqueue-only: the run starts "running" backed by a
-      // queued job the watcher executes. Bounded-wait on that job when present so
-      // the message reflects the real outcome; the run-status branches stay as a
-      // fallback for the no-job (already-terminal) case.
-      const result = await apiPost<{ run: CrunchRun }>("/crunch/run", { flowId: targetFlowId });
-      if (result.run.jobId) {
-        const job = await waitForJob({ id: result.run.jobId });
-        showMessage(
-          isActiveJob(job)
-            ? "Crunch queued. We will update this page when it finishes."
-            : job.state === "failed"
-              ? `Crunch failed: ${job.error?.message ?? "unknown error"}`
-              : `Crunch ${job.state}.`,
-          job.state === "failed" ? "danger" : job.state === "completed" ? "success" : "info"
-        );
-      } else if (result.run.status === "completed") {
-        showMessage(`Crunch finished: ${result.run.plan?.summary ?? "plan ready"}`, "success");
-      } else if (result.run.status === "failed") {
-        showMessage(`Crunch failed: ${result.run.error ?? "unknown error"}`, "danger");
-      } else {
-        showMessage("Crunch queued. We will update this page when it finishes.", "info");
-      }
-      await refresh({ preserveMessage: true });
-    } catch (error) {
-      showMessage(errorMessage(error), "danger");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function saveCrunchSchedule(targetFlowId: string | undefined, enabled: boolean, cron: string) {
-    clearMessage();
-    try {
-      const result = await apiPost<{ settings: CrunchSettingsView[] }>("/crunch/settings", {
-        flowId: targetFlowId,
-        enabled,
-        cron
-      });
-      setCrunchSettings(result.settings);
-      showMessage(enabled ? "Crunch schedule enabled." : "Crunch schedule disabled.", "success");
-    } catch (error) {
-      showMessage(errorMessage(error), "danger");
-    }
-  }
-
   async function saveScheduledTask(key: string, enabled: boolean, cron: string) {
     clearMessage();
     try {
@@ -606,32 +544,6 @@ function useConsoleController() {
           : `Side-process ${job.state}.`,
         job.state === "failed" ? "danger" : "success"
       );
-      await refresh({ preserveMessage: true });
-    } catch (error) {
-      showMessage(errorMessage(error), "danger");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function publishCrunchRun(runId: string) {
-    setLoading(true);
-    clearMessage();
-    try {
-      // Publishing now enqueues a publish_crunch job. The watcher executes the
-      // git and records the publication back onto the run, which a later refresh
-      // picks up.
-      const result = await apiPost<{ job?: JobView }>(`/crunch/runs/${runId}/publish`, {});
-      openSection("jobs");
-      if (result.job) {
-        const job = await waitForJob(result.job);
-        showMessage(
-          isActiveJob(job)
-            ? `${formatJobType(job.type)} queued. We will update this page when it finishes.`
-            : `${formatJobType(job.type)} ${job.state}.`,
-          job.state === "failed" ? "danger" : "info"
-        );
-      }
       await refresh({ preserveMessage: true });
     } catch (error) {
       showMessage(errorMessage(error), "danger");
@@ -677,8 +589,6 @@ function useConsoleController() {
     selectedJobId,
     selectedJob,
     proposals,
-    crunchRuns,
-    crunchSettings,
     scheduledTasks,
     prompts,
     flowSnapshots,
@@ -722,11 +632,8 @@ function useConsoleController() {
     draftCluster,
     updateProposalStatus,
     publishProposal,
-    runCrunch,
-    saveCrunchSchedule,
     saveScheduledTask,
     runScheduledTask,
-    publishCrunchRun,
     indexRepository
   };
 }

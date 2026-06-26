@@ -13,7 +13,6 @@ const CLI_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "fold_markdown_proposal",
   "detect_contradiction",
   "suggest_consolidation",
-  "crunch_knowledge_base",
   "cluster_gap_candidates",
   "sync_source_changes_generate_plan"
 ]);

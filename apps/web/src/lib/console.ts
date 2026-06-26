@@ -13,8 +13,8 @@ export function sectionTitle(section: ConsoleSection): string {
   if (section === "proposals") {
     return "Review generated Markdown proposals";
   }
-  if (section === "crunch") {
-    return "Keep the knowledge base tidy";
+  if (section === "schedules") {
+    return "Manage scheduled background tasks";
   }
   if (section === "prompts") {
     return "Browse AI prompts";
@@ -45,8 +45,8 @@ export function sectionSubtitle(section: ConsoleSection): string {
   if (section === "proposals") {
     return "Select a proposal and review its target path, rationale, and Markdown.";
   }
-  if (section === "crunch") {
-    return "Schedule an AI pass that consolidates overlapping docs and splits bloated ones, then review and publish the result as a branch.";
+  if (section === "schedules") {
+    return "Enable, disable, and run the per-flow background tasks: gap reconciliation, source-change sync, and the fix/improve patrols.";
   }
   if (section === "prompts") {
     return "Read the exact instruction text sent to the AI for each job type, and where each prompt is used.";

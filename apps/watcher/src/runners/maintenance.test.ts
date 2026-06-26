@@ -28,13 +28,11 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     fail: async () => undefined,
     retrieve: async () => [],
     proposalExecutionContext: async () => ({ proposal: {}, repository: {} }),
-    crunchExecutionContext: async () => ({ run: {}, repository: {} }),
     sourceSyncExecutionContext: async () => ({ run: {}, sourceName: "", repository: {} }),
     reconcileGaps: async () => ({ ok: true }),
     runSourceSync: async () => ({ runIds: [] }),
     runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
     runImprovePatrol: async () => ({ runId: "run-1", selectedCount: 0, enqueuedCount: 0 }),
-    triggerScheduledCrunch: async () => ({ runId: "run-1", jobId: "job-1" }),
     listOpenPullRequests: async () => [],
     ...overrides
   };
@@ -46,43 +44,11 @@ describe("MaintenanceRunner", () => {
     assert.equal(runner.capability, "maintenance");
     assert.ok(runner.supports("process_gaps_to_pull_requests"));
     assert.ok(runner.supports("source_change_sync"));
-    assert.ok(runner.supports("trigger_scheduled_crunch"));
     assert.ok(runner.supports("fix_patrol"));
     assert.ok(runner.supports("improve_patrol"));
     assert.ok(!runner.supports("answer_question"));
     // refresh_pull_requests is a github-capability job, not maintenance.
     assert.ok(!runner.supports("refresh_pull_requests"));
-  });
-
-  it("POSTs the scheduled-crunch endpoint and returns schema-valid run/job ids", async () => {
-    let called: string | undefined = "unset";
-    const api = fakeApi({
-      triggerScheduledCrunch: async (flowId) => {
-        called = flowId;
-        return { runId: "run-7", jobId: "job-7" };
-      }
-    });
-    const runner = new MaintenanceRunner(api);
-    const output = (await runner.run(job("trigger_scheduled_crunch", {}), new AbortController().signal)) as {
-      runId: string;
-      jobId: string;
-    };
-    assert.equal(called, undefined, "no flowId in input ⇒ crunch the default flow");
-    assert.equal(output.runId, "run-7");
-    assert.equal(output.jobId, "job-7");
-  });
-
-  it("forwards a flowId to the scheduled-crunch endpoint when present", async () => {
-    let called: string | undefined = "unset";
-    const api = fakeApi({
-      triggerScheduledCrunch: async (flowId) => {
-        called = flowId;
-        return { runId: "run-x", jobId: "job-x" };
-      }
-    });
-    const runner = new MaintenanceRunner(api);
-    await runner.run(job("trigger_scheduled_crunch", { flowId: "flow-x" }), new AbortController().signal);
-    assert.equal(called, "flow-x");
   });
 
   it("POSTs the source-sync orchestration endpoint and returns schema-valid run ids", async () => {

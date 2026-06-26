@@ -1,5 +1,4 @@
 import type {
-  ChangesetChange,
   GitRepositoryContext,
   PublishChangesetRequest,
   PublishProposalBranchRequest,
@@ -8,8 +7,6 @@ import type {
 } from "@magpie/core";
 import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import {
-  publishCrunchInputSchema,
-  publishCrunchOutputSchema,
   publishProposalInputSchema,
   publishProposalOutputSchema,
   publishSourceSyncInputSchema,
@@ -30,7 +27,6 @@ import {
 import path from "node:path";
 import { z } from "zod";
 import type {
-  CrunchExecutionContext,
   ProposalExecutionContext,
   SourceSyncExecutionContext,
   WatcherApi
@@ -132,28 +128,14 @@ const proposalSchema = z.object({
   // present it is published as a changeset rather than the single targetPath.
   changeset: z.array(changesetChangeSchema).optional()
 });
-const crunchPlanSchema = z.object({
-  summary: z.string(),
-  rationale: z.string(),
-  operations: z.array(
-    z.object({
-      title: z.string(),
-      writes: z.array(z.object({ path: z.string(), content: z.string() })),
-      deletes: z.array(z.string())
-    })
-  )
-});
-const runSchema = z.object({ id: z.string(), plan: crunchPlanSchema });
 const sourceSyncRunSchema = z.object({ id: z.string(), changeset: z.array(changesetChangeSchema) });
 
 type PublishRepository = z.infer<typeof repositorySchema>;
 type PublishProposal = z.infer<typeof proposalSchema>;
-type PublishRun = z.infer<typeof runSchema>;
 type PublishSourceSyncRun = z.infer<typeof sourceSyncRunSchema>;
 
 const PUBLISH_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "publish_proposal",
-  "publish_crunch",
   "publish_source_sync",
   "crosslink_pull_requests",
   "comment_pull_request"
@@ -178,9 +160,6 @@ export class PublicationRunner {
   async run(job: JobView, _signal: AbortSignal): Promise<unknown> {
     if (job.type === "publish_proposal") {
       return this.publishProposal(job);
-    }
-    if (job.type === "publish_crunch") {
-      return this.publishCrunch(job);
     }
     if (job.type === "publish_source_sync") {
       return this.publishSourceSync(job);
@@ -251,64 +230,9 @@ export class PublicationRunner {
       );
     }
 
-    // Validate against the contract before returning, symmetric with publishCrunch.
+    // Validate against the contract before returning, symmetric with publishSourceSync.
     return publishProposalOutputSchema.parse({
       proposalId,
-      branchName: publication.branchName,
-      commitSha: publication.commitSha,
-      ...(publication.remoteUrl ? { remoteUrl: publication.remoteUrl } : {}),
-      ...(pullRequestUrl ? { pullRequestUrl } : {}),
-      publishedAt: new Date().toISOString()
-    });
-  }
-
-  private async publishCrunch(job: JobView): Promise<unknown> {
-    const { runId } = publishCrunchInputSchema.parse(job.input);
-    console.log(`publish_crunch[${job.id}]: fetching execution context for run ${runId}`);
-    const context = await this.api.crunchExecutionContext(runId);
-    const { run, repository } = parseCrunchContext(context);
-    const preparedRepository = await this.deps.prepareRepository(toRepositoryRef(repository));
-
-    const changes = changesetFromPlan(run);
-    const operationCount = run.plan.operations.length;
-    const branchName = crunchBranchName(run);
-    const title = `docs: crunch tidy (${operationCount} operation${operationCount === 1 ? "" : "s"})`;
-    console.log(
-      `publish_crunch[${job.id}]: publishing ${operationCount} operation(s) (${changes.length} file change(s)) to branch ${branchName}`
-    );
-    const publication = await this.deps.publishChangeset({
-      repository: preparedRepository,
-      branchName,
-      title,
-      changes
-    });
-    console.log(`publish_crunch[${job.id}]: pushed ${publication.branchName} at ${publication.commitSha.slice(0, 8)}`);
-
-    // The branch is pushed; try to open a PR. A PR failure must not lose the
-    // branch, so degrade to a branch-only publish (mirrors publishProposal).
-    let pullRequestUrl: string | undefined;
-    try {
-      const baseBranch = repository.defaultBranch || repository.git?.defaultBranch || "main";
-      const raised = await this.deps.raisePullRequest({
-        remoteUrl: publication.remoteUrl,
-        headBranch: publication.branchName,
-        baseBranch,
-        title,
-        body: buildCrunchPullRequestBody(run)
-      });
-      pullRequestUrl = raised?.url;
-      if (pullRequestUrl) {
-        console.log(`publish_crunch[${job.id}]: opened pull request ${pullRequestUrl}`);
-      }
-    } catch (error) {
-      console.warn(
-        `Branch ${publication.branchName} pushed, but PR creation failed: ${error instanceof Error ? error.message : "unknown error"}`
-      );
-    }
-
-    // Validate against the contract before returning.
-    return publishCrunchOutputSchema.parse({
-      runId,
       branchName: publication.branchName,
       commitSha: publication.commitSha,
       ...(publication.remoteUrl ? { remoteUrl: publication.remoteUrl } : {}),
@@ -387,16 +311,6 @@ function parseProposalContext(context: ProposalExecutionContext): {
   };
 }
 
-function parseCrunchContext(context: CrunchExecutionContext): {
-  run: PublishRun;
-  repository: PublishRepository;
-} {
-  return {
-    run: runSchema.parse(context.run),
-    repository: repositorySchema.parse(context.repository)
-  };
-}
-
 function parseSourceSyncContext(context: SourceSyncExecutionContext): {
   run: PublishSourceSyncRun;
   sourceName: string;
@@ -450,32 +364,10 @@ function createProposalBranchName(proposal: PublishProposal): string {
   return `magpie/proposal-${proposal.id.slice(0, 8)}-${slugify(proposal.title).slice(0, 40)}`;
 }
 
-// The branch a crunch run publishes onto. Mirrors the API's crunchBranchName.
-function crunchBranchName(run: PublishRun): string {
-  return `magpie/crunch-${run.id.slice(0, 8)}`;
-}
-
 // The branch a source-sync run publishes onto. Mirrors the API's
 // sourceSyncBranchName so the watcher publishes to the same branch.
 function sourceSyncBranchName(run: PublishSourceSyncRun): string {
   return `magpie/source-sync-${run.id.slice(0, 8)}`;
-}
-
-// Flattens a plan into a de-duplicated changeset (deletes first, then writes so a
-// rewritten path stays a write). Mirrors the API's changesetFromPlan.
-function changesetFromPlan(run: PublishRun): ChangesetChange[] {
-  const changes = new Map<string, ChangesetChange>();
-  for (const operation of run.plan.operations) {
-    for (const deletion of operation.deletes) {
-      changes.set(normalizeRelativePath(deletion), { path: deletion, delete: true });
-    }
-  }
-  for (const operation of run.plan.operations) {
-    for (const write of operation.writes) {
-      changes.set(normalizeRelativePath(write.path), { path: write.path, content: write.content });
-    }
-  }
-  return [...changes.values()];
 }
 
 // Human-facing PR description, mirroring the API's buildPullRequestBody.
@@ -494,21 +386,6 @@ function buildPullRequestBody(proposal: PublishProposal): string {
   return lines.join("\n").trim();
 }
 
-// Human-facing PR description for a crunch tidy run: the plan summary and
-// rationale, followed by the operation titles so a reviewer sees the shape of
-// the change at a glance.
-function buildCrunchPullRequestBody(run: PublishRun): string {
-  const lines = ["Knowledge-base tidy proposed by Markdown Magpie.", "", run.plan.summary];
-  if (run.plan.rationale) {
-    lines.push("", run.plan.rationale);
-  }
-  if (run.plan.operations.length > 0) {
-    lines.push("", "Operations:");
-    lines.push(...run.plan.operations.map((operation) => `- ${operation.title}`));
-  }
-  return lines.join("\n").trim();
-}
-
 function slugify(value: string): string {
   return (
     value
@@ -516,11 +393,4 @@ function slugify(value: string): string {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "") || "docs-update"
   );
-}
-
-// Faithful copy of the API's normalizeRelativePath (apps/api/src/platform/paths.ts):
-// strip backslashes and both leading and trailing slashes, so changeset dedup keys
-// match exactly what the API records.
-function normalizeRelativePath(value: string): string {
-  return value.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
 }

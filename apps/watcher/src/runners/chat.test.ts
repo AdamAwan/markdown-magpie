@@ -49,13 +49,11 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     fail: async () => undefined,
     retrieve: async () => SECTIONS,
     proposalExecutionContext: async () => ({ proposal: {}, repository: {} }),
-    crunchExecutionContext: async () => ({ run: {}, repository: {} }),
     sourceSyncExecutionContext: async () => ({ run: {}, sourceName: "", repository: {} }),
     reconcileGaps: async () => ({ ok: true }),
     runSourceSync: async () => ({ runIds: [] }),
     runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
     runImprovePatrol: async () => ({ runId: "run-1", selectedCount: 0, enqueuedCount: 0 }),
-    triggerScheduledCrunch: async () => ({ runId: "run-1", jobId: "job-1" }),
     listOpenPullRequests: async () => [],
     ...overrides
   };
@@ -74,7 +72,7 @@ describe("ChatRunner", () => {
   });
 
   it("runs buildPrompt -> chat -> parseJobOutput for sync_source_changes_generate_plan", async () => {
-    // The source-sync plan job produces a CrunchPlan; the watcher must claim it
+    // The source-sync plan job produces a MaintenancePlan; the watcher must claim it
     // (it is a provider AI job) and validate the model's plan against the contract.
     const plan = { summary: "Doc updated", operations: [], rationale: "threshold moved" };
     const chat = new FakeChatProvider(() => JSON.stringify(plan));
@@ -88,7 +86,7 @@ describe("ChatRunner", () => {
         toSha: "bbb",
         changes: [{ path: "pricing.ts", status: "modified", diff: "- 10\n+ 20" }],
         candidateDocuments: [{ path: "kb/pricing.md", content: "The threshold is 10." }],
-        expectedOutput: "crunch_plan"
+        expectedOutput: "maintenance_plan"
       }),
       new AbortController().signal
     );
