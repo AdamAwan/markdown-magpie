@@ -6,7 +6,7 @@ import { RuntimeConfig } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
 
 type ModelInfo = ReturnType<typeof extractModelInfo>;
-type FlowKey = "overview" | "ask" | "improvement" | "automation" | "gappr" | "perflow";
+type FlowKey = "overview" | "ask" | "improvement" | "automation" | "reconcile" | "gappr" | "perflow";
 
 // Initialize mermaid exactly once on the client. startOnLoad is false because we
 // render each diagram on demand via mermaid.run rather than letting it scan the
@@ -54,6 +54,12 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
             onClick={() => setActiveFlow("automation")}
           >
             Automation &amp; Patrol
+          </button>
+          <button
+            className={activeFlow === "reconcile" ? "flowTab active" : "flowTab"}
+            onClick={() => setActiveFlow("reconcile")}
+          >
+            Reconcile Gate
           </button>
           <button
             className={activeFlow === "gappr" ? "flowTab active" : "flowTab"}
@@ -153,6 +159,9 @@ function buildDiagram(flow: FlowKey, modelInfo: ModelInfo): string {
   }
   if (flow === "automation") {
     return automationDiagram(modelInfo);
+  }
+  if (flow === "reconcile") {
+    return reconcileGateDiagram();
   }
   if (flow === "gappr") {
     return gapToPullRequestDiagram();
@@ -355,6 +364,47 @@ function automationDiagram(modelInfo: ModelInfo): string {
     style GapsTask fill:#fef9f0,stroke:#8b5a00,stroke-width:2px
     style SyncTask fill:#e8f1f7,stroke:#285f74,stroke-width:2px
     style PatrolTask fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px`;
+}
+
+// The shared reconcile gate is the spine of the maintenance redesign: every
+// producer (gaps, source-sync, the patrols) expresses its change as a
+// ChangeIntent carrying the file paths it would touch, and the gate resolves
+// each one against the flow's open PRs into open-new / fold / defer. This view
+// makes that lens-agnostic pipeline explicit, and flags the one asymmetry that
+// remains (source-sync cannot fold yet — Scope B).
+function reconcileGateDiagram(): string {
+  return `graph TD
+    subgraph Triggers["<b>Per-flow scheduled triggers</b><br/>(on the watcher)"]
+        T1["⏱️ Gaps → PRs<br/>drafts gap proposal"]
+        T2["⏱️ Source sync<br/>rewrites stale docs"]
+        T3["⏱️ Fix-patrol<br/>verify · dedupe · split"]
+        T4["⏱️ Improve-patrol<br/>expands thin docs"]
+    end
+
+    T1 --> Intent["📨 ChangeIntent<br/>lens · flowId · file targets"]
+    T2 --> Intent
+    T3 --> Intent
+    T4 --> Intent
+
+    Intent --> Gate{"🚦 Reconcile gate<br/>file-set vs open PRs"}
+    Gate -->|no overlap| New["🆕 Open-new<br/>fresh proposal"]
+    Gate -->|overlaps touchable PR| Fold["🔀 Fold<br/>LLM-merge into open PR"]
+    Gate -->|overlaps approved PR| Defer["⏸️ Defer<br/>re-gate next tick"]
+
+    New --> Publish["🚀 publish_proposal<br/>opens PR"]
+    Fold --> Publish
+    Publish --> Review["👤 Human review<br/>→ merge"]
+    Review --> Reindex["🔄 Re-index KB"]
+    Reindex -.->|next tick| Gate
+
+    T2 -.-> ScopeB
+    Defer -.-> ScopeB
+    ScopeB["⚠️ Scope B (proposed): source-sync isn't a Proposal yet,<br/>so it can only defer — never folds, publishes a branch with no PR"]
+
+    style Triggers fill:#fbfcfa,stroke:#285f74,stroke-width:2px
+    style Gate fill:#fef9f0,stroke:#8b5a00,stroke-width:2px
+    style Fold fill:#f0f4f0,stroke:#3d6b43,stroke-width:2px
+    style ScopeB fill:#faece7,stroke:#993c1d,stroke-width:2px`;
 }
 
 // A sequence diagram makes the job boundaries and capability hand-offs explicit.
