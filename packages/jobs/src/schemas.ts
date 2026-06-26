@@ -21,6 +21,8 @@ import type {
   CorrectDocumentJobOutput,
   DedupeDocumentsJobInput as CoreDedupeDocumentsJobInput,
   DedupeDocumentsJobOutput,
+  SplitDocumentJobInput as CoreSplitDocumentJobInput,
+  SplitDocumentJobOutput,
   ChangesetChange
 } from "@magpie/core";
 import { AI_PROVIDERS, type AiProviderName, type JobError } from "./types.js";
@@ -295,6 +297,21 @@ export const dedupeDocumentsOutputSchema = z.object({
   primaryPath: z.string().optional(),
   changeset: z.array(changesetChangeSchema).optional()
 }) satisfies z.ZodType<DedupeDocumentsJobOutput>;
+
+export const splitDocumentInputSchema = z.object({
+  provider: providerSchema,
+  path: z.string(),
+  content: z.string(),
+  neighbours: z.array(z.object({ path: z.string(), content: z.string() })),
+  destinationId: z.string().optional(),
+  flowId: z.string().optional()
+}) satisfies z.ZodType<ProviderInput<CoreSplitDocumentJobInput>>;
+export const splitDocumentOutputSchema = z.object({
+  split: z.boolean(),
+  rationale: z.string(),
+  primaryPath: z.string().optional(),
+  changeset: z.array(changesetChangeSchema).optional()
+}) satisfies z.ZodType<SplitDocumentJobOutput>;
 
 export const foldChangesetProposalInputSchema = z.object({
   provider: providerSchema,

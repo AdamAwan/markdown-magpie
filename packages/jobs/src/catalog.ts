@@ -76,6 +76,7 @@ const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
   verify_document: define("verify_document", "provider", schemas.verifyDocumentInputSchema, schemas.verifyDocumentOutputSchema, 10 * 60),
   correct_document: define("correct_document", "provider", schemas.correctDocumentInputSchema, schemas.correctDocumentOutputSchema, 10 * 60),
   dedupe_documents: define("dedupe_documents", "provider", schemas.dedupeDocumentsInputSchema, schemas.dedupeDocumentsOutputSchema, 10 * 60),
+  split_document: define("split_document", "provider", schemas.splitDocumentInputSchema, schemas.splitDocumentOutputSchema, 10 * 60),
   fold_changeset_proposal: define("fold_changeset_proposal", "provider", schemas.foldChangesetProposalInputSchema, schemas.foldChangesetProposalOutputSchema, 15 * 60),
   refresh_pull_requests: define("refresh_pull_requests", "github", schemas.refreshPullRequestsInputSchema, schemas.refreshPullRequestsOutputSchema, 5 * 60),
   process_gaps_to_pull_requests: define("process_gaps_to_pull_requests", "maintenance", schemas.processGapsToPullRequestsInputSchema, schemas.processGapsToPullRequestsOutputSchema, 60 * 60),
@@ -111,6 +112,7 @@ const aiJobTypes = new Set<JobType>([
   "verify_document",
   "correct_document",
   "dedupe_documents",
+  "split_document",
   "fold_changeset_proposal"
 ]);
 

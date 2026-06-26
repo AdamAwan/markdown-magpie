@@ -278,6 +278,38 @@ Return JSON:
 }`
 };
 
+export const SPLIT_DOCUMENT: PromptDefinition = {
+  id: "split-document",
+  title: "Split an overgrown document",
+  description:
+    "Given one knowledge-base document that may have outgrown its responsibility, decides whether to split it into a parent plus new or existing focused documents. Conservative: silent when the document is already cohesive. Used by the watcher's split_document job (fix-patrol).",
+  usedBy: ["watcher - fix-patrol"],
+  outputShape: "{ split, rationale, primaryPath, changeset[] }",
+  instructions: `You are tidying a Markdown knowledge base. You are given one document under review ("path"/"content") and possible existing homes ("neighbours"). Decide whether the document has genuinely outgrown a single responsibility and should be split into a smaller parent plus one or more focused documents.
+
+Rules:
+- Return JSON only.
+- Be conservative. Only act when the document clearly contains independent responsibilities. Long but cohesive documents should return {"split": false, "rationale": "...", "changeset": []}.
+- When splitting, keep "primaryPath" equal to the original input path and include a full write for that path in "changeset".
+- The parent document should keep the overview, shared context, and links to the focused documents.
+- Prefer moving detail into an existing neighbour when that neighbour is the right home. Create a new document only when no supplied neighbour fits.
+- Existing touched paths MUST be either the input path or one of the supplied neighbour paths. New paths are allowed for new documents only.
+- You may delete a touched existing document only when your split makes it genuinely redundant or effectively empty.
+- Preserve all existing information. Do not introduce facts not present in the input documents.
+- "rationale" is a one-paragraph summary of why the split is warranted.
+
+Return JSON:
+{
+  "split": true,
+  "rationale": "string",
+  "primaryPath": "existing/parent.md",
+  "changeset": [
+    { "path": "existing/parent.md", "content": "full rewritten parent document" },
+    { "path": "existing/focused-doc.md", "content": "full focused document" }
+  ]
+}`
+};
+
 export const GAP_CLUSTERING: PromptDefinition = {
   id: "gap-clustering",
   title: "Cluster related gaps",
@@ -367,6 +399,7 @@ export const promptCatalog: PromptDefinition[] = [
   VERIFY_DOCUMENT,
   CORRECT_DOCUMENT,
   DEDUPE_DOCUMENTS,
+  SPLIT_DOCUMENT,
   GAP_CLUSTERING,
   GAP_RECONCILE_PROPOSE,
   GAP_RECONCILE_CRITIC,

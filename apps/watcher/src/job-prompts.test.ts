@@ -42,6 +42,12 @@ describe("buildPrompt", () => {
     assert.match(prompt, /verify a Markdown knowledge-base document/);
     assert.match(prompt, /"path"/);
   });
+
+  it("uses the split-document instructions for a split_document job", () => {
+    const prompt = buildPrompt(job("split_document", { path: "kb/a.md", content: "# A", neighbours: [] }));
+    assert.match(prompt, /outgrown a single responsibility/);
+    assert.match(prompt, /"neighbours"/);
+  });
 });
 
 describe("buildAnswerOutput", () => {

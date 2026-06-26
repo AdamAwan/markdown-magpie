@@ -27,6 +27,7 @@ const EXPIRATION_SECONDS = {
   verify_document: 10 * 60,
   correct_document: 10 * 60,
   dedupe_documents: 10 * 60,
+  split_document: 10 * 60,
   fold_changeset_proposal: 15 * 60,
   refresh_pull_requests: 5 * 60,
   process_gaps_to_pull_requests: 60 * 60,
@@ -148,6 +149,14 @@ test("dedupe_documents routes by provider like other AI work", () => {
   assert.equal(queueNameForJob("dedupe_documents", { provider: "codex" }), "dedupe_documents__codex");
   assert.ok(queueNamesForCapabilities(["codex"]).includes("dedupe_documents__codex"));
   assert.ok(!queueNamesForCapabilities(["github"]).includes("dedupe_documents__codex"));
+});
+
+test("split_document routes by provider like other AI work", () => {
+  const definition = jobDefinition("split_document");
+  assert.equal(definition.requiredCapability({ provider: "codex" }), "codex");
+  assert.equal(queueNameForJob("split_document", { provider: "codex" }), "split_document__codex");
+  assert.ok(queueNamesForCapabilities(["codex"]).includes("split_document__codex"));
+  assert.ok(!queueNamesForCapabilities(["github"]).includes("split_document__codex"));
 });
 
 test("fold_changeset_proposal routes by provider like other AI work", () => {
