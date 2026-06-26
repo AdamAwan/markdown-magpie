@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { makeTestContext } from "../../test-support/context.js";
 import type { VerifyDocumentFn } from "../../scheduling/verify-lens.js";
 import type { DedupeDocumentFn } from "../../scheduling/dedupe-lens.js";
-import type { DedupeDocumentsJobInput } from "@magpie/core";
+import type { SplitDocumentFn } from "../../scheduling/split-lens.js";
+import type { DedupeDocumentsJobInput, SplitDocumentJobInput } from "@magpie/core";
 import * as patrol from "./service.js";
 import type { CorrectDocumentFn } from "./service.js";
 
@@ -16,9 +17,14 @@ async function indexDocs(ctx: ReturnType<typeof makeTestContext>, paths: string[
 
 // Healthy verify + quiet dedupe, so the cursor/run tests stay offline and fast (the
 // real deps would enqueue jobs and bounded-wait on the never-completing fake broker).
-const HEALTHY_DEPS: { verifyDocument: VerifyDocumentFn; dedupeDocument: DedupeDocumentFn } = {
+const HEALTHY_DEPS: {
+  verifyDocument: VerifyDocumentFn;
+  dedupeDocument: DedupeDocumentFn;
+  splitDocument: SplitDocumentFn;
+} = {
   verifyDocument: async () => ({ verdict: "healthy", claims: [] }),
-  dedupeDocument: async () => {}
+  dedupeDocument: async () => {},
+  splitDocument: async () => {}
 };
 
 test("runFixPatrol checks a batch, stamps the cursor, and records a run", async () => {
@@ -144,4 +150,34 @@ test("runFixPatrol runs the dedupe lens over the batch, enqueuing a scan per doc
   );
   // Verify produced no findings, so dedupe runs independently of the verify path.
   assert.equal(outcome.run.findings.length, 0);
+});
+
+test("runFixPatrol runs the split lens over broad selected documents", async () => {
+  const ctx = makeTestContext();
+  const broadContent =
+    "# Customer Operations\n\n" +
+    ["Intake", "Triage", "Billing", "Escalations", "Reporting", "Review"]
+      .map((heading) => `## ${heading}\nDetails.`)
+      .join("\n");
+  await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
+    repositoryId: "docs",
+    documents: [
+      { path: "customer-operations.md", content: broadContent },
+      { path: "customer-billing.md", content: "# Customer Billing\nDetails." }
+    ]
+  });
+  const scanned: SplitDocumentJobInput[] = [];
+  const splitDocument: SplitDocumentFn = async (_ctx, input) => {
+    scanned.push(input);
+  };
+
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, { ...HEALTHY_DEPS, splitDocument });
+  assert.ok(outcome.ok);
+
+  assert.deepEqual(scanned.map((s) => s.path), ["customer-operations.md"]);
+  assert.equal(scanned[0].destinationId, "docs");
+  assert.deepEqual(
+    scanned[0].neighbours.map((n) => n.path),
+    ["customer-billing.md"]
+  );
 });
