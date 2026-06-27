@@ -257,13 +257,10 @@ already ~80% of it.
 - **Generic maintenance-run audit (shipped):** every scheduled task (fix-patrol,
   improve-patrol, gaps→PR) records one `MaintenanceRun` per tick — a uniform,
   queryable execution audit surfaced on the Schedules page. This replaced the
-  bespoke `PatrolRun` record. Source-sync's `SourceSyncRun` is the last to migrate:
-  it carries the changeset/defer/publication lifecycle and only sheds those when
-  source-sync becomes a first-class Proposal (Scope B below), at which point it
-  joins the generic audit.
-- **Scope B (planned):** make source-change-sync a first-class Proposal so it folds
-  symmetrically through the gate (today it can only defer), publishing a reviewable
-  PR like the other lenses.
+  bespoke `PatrolRun` record. Source-sync's `SourceSyncRun` is the last to migrate;
+  that migration is a follow-up once the changeset lifecycle has settled.
+- **Scope B (shipped):** source-change-sync now creates first-class Proposals, so
+  it folds through the same gate and publishes reviewable PRs like the other lenses.
 
 ## Still open
 

@@ -64,38 +64,19 @@ Section 8 says all six migration steps are shipped, including retirement of
 
 ## What is left to do
 
-### 1. Scope B: make source-sync a first-class Proposal
+### 1. ~~Scope B: make source-sync a first-class Proposal~~ (shipped)
 
-This is the main remaining product follow-up.
-
-Current behavior:
-
-- source-sync goes through the gate
-- on overlap, it defers and preserves its changeset
-- it does not yet fold symmetrically like the other proposal-producing flows
-
-Evidence:
-
-- `docs/maintenance-redesign.md`
-- `apps/api/src/features/source-sync/service.ts`
-
-Concrete gap:
-
-- source-sync still collapses `fold` into `defer` because it is not yet modeled
-  as a first-class Proposal with the same fold path as the other lenses
-
-Why it matters:
-
-- the redesign goal is a symmetric gate where source-sync can fold/open/defer the
-  same way other maintenance intents do
+Source-sync plan completion now creates a `Proposal` with a multi-file changeset
+and routes it through `reconcileSourceSyncProposal`, which folds or publishes
+symmetrically with the other proposal-producing lenses. `publish_source_sync` and
+the direct execution-context path are retired.
 
 ### 2. Migrate source-sync into the generic maintenance-run audit
 
 Current behavior:
 
 - fix-patrol, improve-patrol, and gaps→PR record `MaintenanceRun`
-- source-sync still has its own `SourceSyncRun` lifecycle because it carries
-  changeset/defer/publication state
+- source-sync still has its own `SourceSyncRun` lifecycle
 
 Evidence:
 
@@ -103,17 +84,10 @@ Evidence:
 - `packages/db/migrations/0032_maintenance_runs.sql`
 - `apps/api/src/features/maintenance-runs/routes.ts`
 
-This is coupled to Scope B. Once source-sync becomes a first-class Proposal, its
-special run lifecycle can likely be reduced enough to join the generic audit.
+Now that Scope B is shipped and the deferred/publication lifecycle is removed,
+migrating `SourceSyncRun` to the generic audit is a straightforward follow-up.
 
 ### 3. Clean up stale docs that still describe retired crunch behavior
-
-These are the clearest documentation drifts:
-
-- `docs/api.md`
-- `docs/ai-jobs.md`
-
-Examples:
 
 - `docs/api.md` still lists `crunch_knowledge_base` as an active job type in the
   Jobs section.
@@ -123,29 +97,10 @@ Examples:
 This is not a runtime blocker, but it will mislead anyone using the docs as the
 current contract.
 
-### 4. Align the dataflow docs/UI narrative with backend reality
-
-There is at least one current mismatch:
-
-- `apps/web/src/components/dataflow/flows.ts`
-- `apps/web/src/components/dataflow/flows.test.tsx`
-
-The dataflow graph/test language presents the post-Scope-B symmetric outcome as
-already done, while backend comments in source-sync still describe Scope B as a
-future step.
-
-That should be reconciled one way or the other:
-
-- either implement Scope B
-- or adjust the graph/tests/comments so they all describe the same current state
-
 ## Recommended next steps
 
-1. Implement Scope B for source-sync first.
-2. Fold source-sync into the generic maintenance-run audit as part of that work,
-   or immediately after it.
-3. Update `docs/api.md` and `docs/ai-jobs.md` to remove retired crunch behavior.
-4. Reconcile the dataflow graph/test copy with the actual backend state.
+1. Migrate source-sync into the generic `MaintenanceRun` audit.
+2. Update `docs/api.md` and `docs/ai-jobs.md` to remove retired crunch behavior.
 
 ## Practical checklist
 
