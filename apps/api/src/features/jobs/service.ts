@@ -117,9 +117,9 @@ export async function runJobToCompletion(
 // THE COMPLETION DISPATCHER. Replicates the original handleCompleteJob logic:
 // look up the existing job (404 if missing), persist completion, then fan out to
 // the side-effect handlers in a fixed order — question log update, proposal
-// creation, proposal publication, source-sync plan attachment, then source-sync
-// publication. Returns a discriminated outcome so the handler maps job_not_found
-// to 404 while keeping its own try/catch for the 500 job_completion_failed path.
+// creation, proposal publication, and source-sync proposal creation. Returns a
+// discriminated outcome so the handler maps job_not_found to 404 while keeping
+// its own try/catch for the 500 job_completion_failed path.
 export async function completeJob(
   ctx: AppContext,
   jobId: string,
@@ -200,8 +200,17 @@ export async function completeJob(
     await foldService.applyFoldFromCompletedJob(ctx, existingJob, parsed.data);
     await foldService.applyChangesetFoldFromCompletedJob(ctx, existingJob, parsed.data);
     await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, parsed.data);
-    await sourceSyncService.attachSourceSyncPlanFromCompletedJob(ctx, existingJob, parsed.data);
-    await sourceSyncService.recordSourceSyncPublicationFromCompletedJob(ctx, existingJob, parsed.data);
+    const sourceSyncResult = await sourceSyncService.createSourceSyncProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    if (sourceSyncResult?.proposal) {
+      try {
+        await foldService.reconcileSourceSyncProposal(ctx, sourceSyncResult.proposal);
+      } catch (error) {
+        console.warn(
+          `Source-sync reconcile for proposal ${sourceSyncResult.proposal.id} failed: ` +
+            `${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
     await handleRefreshPullRequestsCompletion(ctx, existingJob, parsed.data);
     await ctx.jobs.complete(jobId, { result: parsed.data, executor });
     // The watcher is free again the moment it completes a job; reflect that
@@ -282,8 +291,8 @@ async function handleRefreshPullRequestsCompletion(
   await snapshotsService.recordSnapshotsFromPullRequestResults(ctx, parsed.data.results);
 }
 
-// Marks a job failed. When an enqueue-only planning job fails terminally, its
-// linked run is failed too so it does not hang in a "running" state.
+// Marks a job failed. When an enqueue-only source-sync planning job fails
+// terminally, record a failed maintenance run for audit visibility.
 export async function failJob(ctx: AppContext, jobId: string, jobError: JobError): Promise<JobView | undefined> {
   const failingJob = await ctx.jobs.get(jobId);
   const failedJob = await ctx.jobs.fail(jobId, jobError);
@@ -291,14 +300,8 @@ export async function failJob(ctx: AppContext, jobId: string, jobError: JobError
   if (jobError.executor) {
     await touchWatcher(ctx, { name: jobError.executor, status: "idle" });
   }
-  // Source-sync planning is enqueue-only, so a terminally failed plan job fails its
-  // linked run too. Only a still-"running" run is failed, so this never regresses a
-  // run that already completed.
   if (failingJob?.type === "sync_source_changes_generate_plan" && failedJob.state === "failed") {
-    const run = await ctx.stores.sourceSync.getRunByJobId(jobId);
-    if (run?.status === "running") {
-      await ctx.stores.sourceSync.failRun(run.id, jobError.message);
-    }
+    await sourceSyncService.recordSourceSyncFailureFromFailedJob(ctx, failingJob, jobError.message);
   }
   if (
     (failingJob?.type === "fold_markdown_proposal" || failingJob?.type === "fold_changeset_proposal") &&

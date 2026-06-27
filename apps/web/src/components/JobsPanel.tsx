@@ -30,7 +30,7 @@ const CAPABILITY_JOB_TYPES = {
   "azure-openai": PROVIDER_JOB_TYPES,
   codex: PROVIDER_JOB_TYPES,
   claude: PROVIDER_JOB_TYPES,
-  github: ["refresh_pull_requests", "publish_proposal", "publish_source_sync"],
+  github: ["refresh_pull_requests", "publish_proposal", "crosslink_pull_requests", "comment_pull_request"],
   maintenance: [
     "process_gaps_to_pull_requests",
     "source_change_sync",

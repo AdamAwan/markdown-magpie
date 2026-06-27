@@ -2,7 +2,7 @@ import type { Proposal } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { foldChangesetProposalOutputSchema, foldMarkdownProposalOutputSchema } from "@magpie/jobs";
 import type { AppContext } from "../context.js";
-import { splitGapSummaries } from "../features/proposals/service.js";
+import { requestProposalPublication, splitGapSummaries } from "../features/proposals/service.js";
 import type { ChangeIntent } from "./intent.js";
 import { decideReconciliation, openPullRequestSummaries, sharedTargets } from "./reconcile-gate.js";
 import { proposalFlowId, sameFlowOpenProposals } from "./flow.js";
@@ -232,6 +232,47 @@ export async function reconcileImproveProposal(ctx: AppContext, proposal: Propos
 
   await ctx.stores.gapClusters.enqueuePublicationAction(proposal.id, "publish");
   console.log(`Improve ${proposal.id} (${decision.kind}) on ${proposal.targetPath}: enqueued to publish.`);
+}
+
+export async function reconcileSourceSyncProposal(ctx: AppContext, proposal: Proposal): Promise<void> {
+  if (proposal.status !== "draft" || !proposal.targetPath) {
+    return;
+  }
+  const flowId = await proposalFlowId(ctx, proposal);
+  const candidates = await sameFlowOpenProposals(ctx, flowId, proposal.id);
+  const targets = proposalTargets(proposal);
+  const decision = decideReconciliation(
+    {
+      lens: "source-sync",
+      flowId,
+      targets,
+      evidence: proposal.draftContext?.sourceFiles.map((file) => file.path ?? file.url ?? file.sourceName) ?? [],
+      rationale: proposal.rationale ?? ""
+    },
+    openPullRequestSummaries(candidates)
+  );
+
+  if (decision.kind === "fold") {
+    const survivor = await ctx.stores.proposals.get(decision.intoProposalId);
+    if (survivor) {
+      await ctx.jobs.create("fold_changeset_proposal", {
+        provider: ctx.config.get().aiProvider,
+        survivorProposalId: survivor.id,
+        rivalProposalId: proposal.id,
+        survivorChangeset: proposalChangeset(survivor),
+        rivalChangeset: proposalChangeset(proposal),
+        sharedPaths: sharedTargets(proposalTargets(survivor), targets),
+        expectedOutput: "folded_changeset"
+      });
+      console.log(`Source-sync fold: enqueued fold of ${proposal.id} into ${survivor.id} on [${targets.join(", ")}].`);
+      return;
+    }
+  }
+
+  const publication = await requestProposalPublication(ctx, proposal);
+  if (publication.ok) {
+    console.log(`Source-sync ${proposal.id} (${decision.kind}) on [${targets.join(", ")}]: enqueued publish_proposal.`);
+  }
 }
 // Applies a completed fold: update the survivor's markdown, absorb the rival's gap
 // cluster into the survivor's (so the rival's gaps resolve when the survivor merges),

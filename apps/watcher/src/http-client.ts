@@ -29,12 +29,6 @@ export interface ProposalExecutionContext {
   repository: unknown;
 }
 
-export interface SourceSyncExecutionContext {
-  run: unknown;
-  sourceName: unknown;
-  repository: unknown;
-}
-
 // One of a flow's open pull requests as returned by GET /api/proposals?status=pr-opened,
 // reduced to exactly what the refresh runner needs: the proposal id and the PR URL to poll.
 export interface OpenPullRequestRef {
@@ -47,15 +41,18 @@ export interface OpenPullRequestRef {
 export interface WatcherApi extends WatcherApiClient {
   retrieve(question: string, flowId: string | undefined, limit: number | undefined): Promise<RetrievedSection[]>;
   proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext>;
-  sourceSyncExecutionContext(runId: string): Promise<SourceSyncExecutionContext>;
   // Drives a flow's gap→PR reconciliation in the API (clustering, the reshape AI
   // job the API bounded-waits on, drafting and publication enqueue). An absent
   // flowId reconciles the default flow.
   reconcileGaps(flowId: string | undefined, signal?: AbortSignal): Promise<{ ok: true }>;
   // Drives source-change sync in the API (checkout/diff/candidate gather + the
-  // generative plan job the API bounded-waits on + publication enqueue), returning
-  // the run ids created. An absent flowId watches every configured git source.
-  runSourceSync(flowId: string | undefined, signal?: AbortSignal): Promise<{ runIds: string[] }>;
+  // generative plan job enqueue), returning any immediately recorded maintenance
+  // runs plus any created proposals. An absent flowId watches every configured git
+  // source.
+  runSourceSync(
+    flowId: string | undefined,
+    signal?: AbortSignal
+  ): Promise<{ maintenanceRunIds: string[]; proposalIds: string[] }>;
   // Drives a fix-patrol tick in the API (select the next batch of documents to
   // check + advance the cursor), returning the run id and how many were checked.
   // An absent flowId patrols the default flow.
@@ -143,13 +140,16 @@ export class HttpWatcherApi implements WatcherApi {
     return { ok: true };
   }
 
-  async runSourceSync(flowId: string | undefined, signal?: AbortSignal): Promise<{ runIds: string[] }> {
-    const { runIds } = await this.post<{ runIds: string[] }>(
+  async runSourceSync(
+    flowId: string | undefined,
+    signal?: AbortSignal
+  ): Promise<{ maintenanceRunIds: string[]; proposalIds: string[] }> {
+    const result = await this.post<{ maintenanceRunIds: string[]; proposalIds: string[] }>(
       "/api/source-sync/run",
       { ...(flowId ? { flowId } : {}) },
       signal
     );
-    return { runIds };
+    return result;
   }
 
   async runFixPatrol(
@@ -186,10 +186,6 @@ export class HttpWatcherApi implements WatcherApi {
 
   async proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext> {
     return this.get<ProposalExecutionContext>(`/api/proposals/${proposalId}/execution-context`);
-  }
-
-  async sourceSyncExecutionContext(runId: string): Promise<SourceSyncExecutionContext> {
-    return this.get<SourceSyncExecutionContext>(`/api/source-sync/runs/${runId}/execution-context`);
   }
 
   private async post<TResponse>(path: string, body: unknown, signal?: AbortSignal): Promise<TResponse> {

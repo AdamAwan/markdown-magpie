@@ -106,5 +106,5 @@ test("buildRetrievalQuery includes paths and diffs and is bounded", async () => 
 test("triggerSourceSyncRun is a no-op when the flow has no git sources", async () => {
   const ctx = makeTestContext();
   const runs = await triggerSourceSyncRun(ctx, { trigger: "manual" });
-  assert.deepEqual(runs, []);
+  assert.deepEqual(runs, { maintenanceRunIds: [], proposalIds: [] });
 });

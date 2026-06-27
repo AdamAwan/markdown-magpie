@@ -481,43 +481,6 @@ test("answer completion persists the routed flowId and retrieved section ids on 
   assert.deepEqual(updated.retrievedSectionIds, ["support-kb:configure.md:0"]);
 });
 
-test("source-sync publication completion records the publication once and is idempotent", async () => {
-  const ctx = makeTestContext();
-  const job = await ctx.jobs.create("publish_source_sync", { runId: "placeholder" });
-  const run = await ctx.stores.sourceSync.createRun({
-    destinationId: "dest",
-    sourceId: "src-1",
-    trigger: "scheduled",
-    status: "completed",
-    plan: { summary: "s", operations: [], rationale: "r" },
-    changeset: [{ path: "guide.md", content: "x" }],
-    toSha: "abc",
-    changedFileCount: 1,
-    candidateCount: 1
-  });
-
-  const output = {
-    runId: run.id,
-    branchName: "magpie/source-sync-" + run.id.slice(0, 8),
-    commitSha: "deadbeef",
-    remoteUrl: "https://github.com/acme/docs.git",
-    publishedAt: "2026-01-01T00:00:00.000Z"
-  };
-
-  assert.equal((await completeJob(ctx, job.id, output)).ok, true);
-  const first = await ctx.stores.sourceSync.getRun(run.id);
-  assert.equal(first?.status, "published");
-  assert.equal(first?.publication?.commitSha, "deadbeef");
-  assert.equal(first?.publication?.branchName, output.branchName);
-
-  // Re-completing the same job (or a duplicate delivery) must not double-apply or
-  // regress the recorded publication.
-  assert.equal((await completeJob(ctx, job.id, output)).ok, true);
-  const repeated = await ctx.stores.sourceSync.getRun(run.id);
-  assert.equal(repeated?.status, "published");
-  assert.deepEqual(repeated?.publication, first?.publication);
-});
-
 test("completeJob with an unknown job id returns the job_not_found sentinel", async () => {
   const ctx = makeTestContext();
 
