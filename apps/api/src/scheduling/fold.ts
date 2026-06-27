@@ -193,13 +193,44 @@ export async function reconcileSplitProposal(ctx: AppContext, proposal: Proposal
   console.log(`Split ${proposal.id} (${decision.kind}) on [${targets.join(", ")}]: enqueued to publish.`);
 }
 
-// Gate + publish a source-sync proposal. Temporary stub — replaced in Task 3 with
-// the real gate/fold/publish implementation.
+// Gate + publish a source-sync proposal. Mirrors the dedupe/split multi-file model:
+// a touchable overlap enqueues fold_changeset_proposal; clear or non-touchable overlap
+// self-publishes as a proposal PR.
 export async function reconcileSourceSyncProposal(ctx: AppContext, proposal: Proposal): Promise<void> {
-  if (proposal.status !== "draft") {
+  if (proposal.status !== "draft" || !proposal.targetPath) {
     return;
   }
+  const flowId = await proposalFlowId(ctx, proposal);
+  const candidates = await sameFlowOpenProposals(ctx, flowId, proposal.id);
+  const targets = proposalTargets(proposal);
+  const intent: ChangeIntent = {
+    lens: "source-sync",
+    flowId,
+    targets,
+    evidence: proposal.draftContext?.sourceFiles.map((source) => source.path ?? source.url ?? source.sourceName) ?? [],
+    rationale: proposal.rationale ?? ""
+  };
+  const decision = decideReconciliation(intent, openPullRequestSummaries(candidates));
+
+  if (decision.kind === "fold") {
+    const survivor = await ctx.stores.proposals.get(decision.intoProposalId);
+    if (survivor) {
+      await ctx.jobs.create("fold_changeset_proposal", {
+        provider: ctx.config.get().aiProvider,
+        survivorProposalId: survivor.id,
+        rivalProposalId: proposal.id,
+        survivorChangeset: proposalChangeset(survivor),
+        rivalChangeset: proposalChangeset(proposal),
+        sharedPaths: sharedTargets(proposalTargets(survivor), targets),
+        expectedOutput: "folded_changeset"
+      });
+      console.log(`Source-sync fold: enqueued fold of ${proposal.id} into ${survivor.id} on [${targets.join(", ")}].`);
+      return;
+    }
+  }
+
   await ctx.jobs.create("publish_proposal", { proposalId: proposal.id });
+  console.log(`Source-sync ${proposal.id} (${decision.kind}) on [${targets.join(", ")}]: enqueued to publish.`);
 }
 
 // Gate + publish an improve proposal. Improve-patrol is the single-file analogue

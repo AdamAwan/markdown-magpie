@@ -292,7 +292,7 @@ test("getRunExecutionContext returns a 409 when the run has no changeset", async
   }
 });
 
-test("a source-sync change that overlaps a touchable open PR is deferred, not published", async () => {
+test("a source-sync change that overlaps a touchable open PR enqueues a fold", async () => {
   const broker = new FakeJobBroker();
   const { ctx, checkoutRoot, cleanup } = await seed(broker);
   try {
@@ -300,8 +300,6 @@ test("a source-sync change that overlaps a touchable open PR is deferred, not pu
     const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
     const jobId = run.jobId!;
 
-    // An open (draft = touchable) gap proposal already targets the same file the
-    // source-sync changeset will write (guide.md), in the default flow.
     await ctx.stores.proposals.create({
       title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
       evidence: [], triggeringQuestionIds: []
@@ -310,19 +308,17 @@ test("a source-sync change that overlaps a touchable open PR is deferred, not pu
     const outcome = await completeJob(ctx, jobId, PLAN);
     assert.equal(outcome.ok, true);
 
-    const after = await ctx.stores.sourceSync.getRun(run.id);
-    assert.equal(after?.status, "deferred");
-    assert.equal(after?.changeset?.length, 1, "changeset preserved on the deferred run");
-    assert.equal(after?.changeset?.[0].path, "guide.md");
-
-    // No rival published.
-    assert.equal((await ctx.jobs.list({})).jobs.filter((j) => j.type === "publish_source_sync").length, 0);
+    const proposal = (await ctx.stores.proposals.list(20)).find((candidate) => candidate.jobId === jobId);
+    assert.ok(proposal, "source-sync proposal created");
+    const foldJob = (await ctx.jobs.list({})).jobs.find((job) => job.type === "fold_changeset_proposal");
+    assert.ok(foldJob, "source-sync proposal folded into touchable overlap");
+    assert.equal((await ctx.jobs.list({})).jobs.some((job) => job.type === "publish_source_sync" as never), false);
   } finally {
     await cleanup();
   }
 });
 
-test("a source-sync change that overlaps an approved PR is also deferred", async () => {
+test("a source-sync change that overlaps an approved PR self-publishes as a proposal", async () => {
   const broker = new FakeJobBroker();
   const { ctx, checkoutRoot, cleanup } = await seed(broker);
   try {
@@ -330,108 +326,25 @@ test("a source-sync change that overlaps an approved PR is also deferred", async
     const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
     const jobId = run.jobId!;
 
-    const proposal = await ctx.stores.proposals.create({
+    const existing = await ctx.stores.proposals.create({
       title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
       evidence: [], triggeringQuestionIds: []
     });
-    await ctx.stores.proposals.updateReviewDecision(proposal.id, "approved");
+    await ctx.stores.proposals.updateReviewDecision(existing.id, "approved");
 
     const outcome = await completeJob(ctx, jobId, PLAN);
     assert.equal(outcome.ok, true);
 
-    const after = await ctx.stores.sourceSync.getRun(run.id);
-    assert.equal(after?.status, "deferred");
-    assert.equal((await ctx.jobs.list({})).jobs.filter((j) => j.type === "publish_source_sync").length, 0);
+    const proposal = (await ctx.stores.proposals.list(20)).find((candidate) => candidate.jobId === jobId);
+    assert.ok(proposal, "source-sync proposal created");
+    const publish = (await ctx.jobs.list({})).jobs.find((job) => job.type === "publish_proposal");
+    assert.ok(publish, "approved overlap self-publishes as proposal");
+    assert.deepEqual(publish.input, { proposalId: proposal.id });
   } finally {
     await cleanup();
   }
 });
 
-test("re-gate completes a deferred run once its overlapping PR is gone", async () => {
-  const broker = new FakeJobBroker();
-  const { ctx, checkoutRoot, cleanup } = await seed(broker);
-  try {
-    await baselineAtParent(ctx, checkoutRoot);
-    const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
-    const proposal = await ctx.stores.proposals.create({
-      title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
-      evidence: [], triggeringQuestionIds: []
-    });
-    await completeJob(ctx, run.jobId!, PLAN);
-    assert.equal((await ctx.stores.sourceSync.getRun(run.id))?.status, "deferred");
-
-    // The overlapping PR merges (list() excludes merged ⇒ overlap clears).
-    await ctx.stores.proposals.updateStatus(proposal.id, "merged");
-
-    // Next tick: the source HEAD is unchanged (baseline already advanced), so no new
-    // run is created; only the re-gate acts.
-    await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
-
-    const after = await ctx.stores.sourceSync.getRun(run.id);
-    assert.equal(after?.status, "completed");
-    const publish = (await ctx.jobs.list({})).jobs.find((j) => j.type === "publish_source_sync");
-    assert.ok(publish, "publication enqueued once the overlap cleared");
-    assert.deepEqual(publish.input, { runId: run.id });
-  } finally {
-    await cleanup();
-  }
-});
-
-test("re-gate leaves a deferred run deferred while the overlap persists", async () => {
-  const broker = new FakeJobBroker();
-  const { ctx, checkoutRoot, cleanup } = await seed(broker);
-  try {
-    await baselineAtParent(ctx, checkoutRoot);
-    const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
-    await ctx.stores.proposals.create({
-      title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
-      evidence: [], triggeringQuestionIds: []
-    });
-    await completeJob(ctx, run.jobId!, PLAN);
-    assert.equal((await ctx.stores.sourceSync.getRun(run.id))?.status, "deferred");
-
-    // Overlap still open: re-gate must not publish.
-    await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
-
-    assert.equal((await ctx.stores.sourceSync.getRun(run.id))?.status, "deferred");
-    assert.equal((await ctx.jobs.list({})).jobs.filter((j) => j.type === "publish_source_sync").length, 0);
-  } finally {
-    await cleanup();
-  }
-});
-
-test("two concurrent re-gate ticks publish a cleared deferred run exactly once", async () => {
-  const broker = new FakeJobBroker();
-  const { ctx, checkoutRoot, cleanup } = await seed(broker);
-  try {
-    await baselineAtParent(ctx, checkoutRoot);
-    const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
-    const proposal = await ctx.stores.proposals.create({
-      title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
-      evidence: [], triggeringQuestionIds: []
-    });
-    await completeJob(ctx, run.jobId!, PLAN);
-    assert.equal((await ctx.stores.sourceSync.getRun(run.id))?.status, "deferred");
-
-    // The overlapping PR merges, clearing the overlap.
-    await ctx.stores.proposals.updateStatus(proposal.id, "merged");
-
-    // Two ticks race (e.g. the scheduled tick and a manual /source-sync/run). Both read
-    // the still-deferred run before either completes it, so both reach completeDeferredRun.
-    // Only the winner gets the run back and publishes; the loser must skip.
-    await Promise.all([
-      triggerSourceSyncRun(ctx, { trigger: "scheduled" }),
-      triggerSourceSyncRun(ctx, { trigger: "manual" })
-    ]);
-
-    assert.equal((await ctx.stores.sourceSync.getRun(run.id))?.status, "completed");
-    const publishJobs = (await ctx.jobs.list({})).jobs.filter((j) => j.type === "publish_source_sync");
-    assert.equal(publishJobs.length, 1, "the cleared deferred run is published exactly once");
-    assert.deepEqual(publishJobs[0].input, { runId: run.id });
-  } finally {
-    await cleanup();
-  }
-});
 
 // Indexes a real git clone as the "gitdest" destination so findRepositoryForDestination
 // resolves a git-backed RepositoryRef the publish pre-flight accepts.
