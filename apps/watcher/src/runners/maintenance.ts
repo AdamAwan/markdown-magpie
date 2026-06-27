@@ -61,9 +61,12 @@ export class MaintenanceRunner {
     // per-flow watch; read it defensively without widening the contract.
     const flowId = readFlowId(job.input);
     console.log(`source_change_sync[${job.id}]: syncing sources for flow ${flowId ?? "(all)"}`);
-    const { runIds } = await this.api.runSourceSync(flowId, signal);
-    console.log(`source_change_sync[${job.id}]: created ${runIds.length} sync run(s)`);
-    return sourceChangeSyncOutputSchema.parse({ runIds });
+    const output = await this.api.runSourceSync(flowId, signal);
+    console.log(
+      `source_change_sync[${job.id}]: recorded ${output.maintenanceRunIds.length} maintenance run(s), ` +
+        `created ${output.proposalIds.length} proposal(s)`
+    );
+    return sourceChangeSyncOutputSchema.parse(output);
   }
 
   private async runFixPatrol(job: JobView, signal: AbortSignal): Promise<unknown> {

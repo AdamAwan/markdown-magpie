@@ -153,6 +153,13 @@ test("the retired /crunch route is gone", async () => {
   assert.deepEqual(await res.json(), { error: "not_found" });
 });
 
+test("source-sync run routes expose only the trigger endpoint", async () => {
+  const app = buildApp(makeTestContext());
+  assert.equal((await app.request("/api/source-sync/runs")).status, 404);
+  assert.equal((await app.request("/api/source-sync/runs/run-1")).status, 404);
+  assert.equal((await app.request("/api/source-sync/runs/run-1/execution-context")).status, 404);
+});
+
 test("GET /api/maintenance-runs lists recorded runs", async () => {
   const ctx = makeTestContext();
   await ctx.stores.maintenanceRuns.record({

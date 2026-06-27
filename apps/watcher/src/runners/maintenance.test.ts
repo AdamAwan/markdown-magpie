@@ -28,9 +28,8 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     fail: async () => undefined,
     retrieve: async () => [],
     proposalExecutionContext: async () => ({ proposal: {}, repository: {} }),
-    sourceSyncExecutionContext: async () => ({ run: {}, sourceName: "", repository: {} }),
     reconcileGaps: async () => ({ ok: true }),
-    runSourceSync: async () => ({ runIds: [] }),
+    runSourceSync: async () => ({ maintenanceRunIds: [], proposalIds: [] }),
     runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
     runImprovePatrol: async () => ({ runId: "run-1", selectedCount: 0, enqueuedCount: 0 }),
     listOpenPullRequests: async () => [],
@@ -51,20 +50,21 @@ describe("MaintenanceRunner", () => {
     assert.ok(!runner.supports("refresh_pull_requests"));
   });
 
-  it("POSTs the source-sync orchestration endpoint and returns schema-valid run ids", async () => {
+  it("POSTs the source-sync orchestration endpoint and returns schema-valid maintenance run and proposal ids", async () => {
     let called: string | undefined = "unset";
     const api = fakeApi({
       runSourceSync: async (flowId) => {
         called = flowId;
-        return { runIds: ["run-1", "run-2"] };
+        return { maintenanceRunIds: ["run-1"], proposalIds: ["proposal-1", "proposal-2"] };
       }
     });
     const runner = new MaintenanceRunner(api);
     const output = (await runner.run(job("source_change_sync", {}), new AbortController().signal)) as {
-      runIds: string[];
+      maintenanceRunIds: string[];
+      proposalIds: string[];
     };
     assert.equal(called, undefined, "no flowId in input ⇒ watch every configured git source");
-    assert.deepEqual(output.runIds, ["run-1", "run-2"]);
+    assert.deepEqual(output, { maintenanceRunIds: ["run-1"], proposalIds: ["proposal-1", "proposal-2"] });
   });
 
   it("forwards a flowId to the source-sync orchestration endpoint when present", async () => {
@@ -72,16 +72,16 @@ describe("MaintenanceRunner", () => {
     const api = fakeApi({
       runSourceSync: async (flowId) => {
         called = flowId;
-        return { runIds: [] };
+        return { maintenanceRunIds: [], proposalIds: [] };
       }
     });
     const runner = new MaintenanceRunner(api);
     const output = (await runner.run(
       job("source_change_sync", { flowId: "flow-x" }),
       new AbortController().signal
-    )) as { runIds: string[] };
+    )) as { maintenanceRunIds: string[]; proposalIds: string[] };
     assert.equal(called, "flow-x");
-    assert.deepEqual(output.runIds, []);
+    assert.deepEqual(output, { maintenanceRunIds: [], proposalIds: [] });
   });
 
   it("POSTs the fix-patrol endpoint and returns schema-valid output", async () => {
