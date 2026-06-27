@@ -379,15 +379,6 @@ export const improvePatrolOutputSchema = z.object({
   enqueuedCount: z.number().int()
 });
 
-export const publishSourceSyncInputSchema = z.object({ runId: z.string() });
-export const publishSourceSyncOutputSchema = z.object({
-  runId: z.string(),
-  branchName: z.string(),
-  commitSha: z.string(),
-  remoteUrl: z.string().optional(),
-  publishedAt: z.string()
-});
-
 export const crosslinkPullRequestsInputSchema = z.object({
   flowId: z.string().optional(),
   targets: z.array(z.string()),
