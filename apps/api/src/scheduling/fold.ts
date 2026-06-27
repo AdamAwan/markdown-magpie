@@ -193,6 +193,15 @@ export async function reconcileSplitProposal(ctx: AppContext, proposal: Proposal
   console.log(`Split ${proposal.id} (${decision.kind}) on [${targets.join(", ")}]: enqueued to publish.`);
 }
 
+// Gate + publish a source-sync proposal. Temporary stub — replaced in Task 3 with
+// the real gate/fold/publish implementation.
+export async function reconcileSourceSyncProposal(ctx: AppContext, proposal: Proposal): Promise<void> {
+  if (proposal.status !== "draft") {
+    return;
+  }
+  await ctx.jobs.create("publish_proposal", { proposalId: proposal.id });
+}
+
 // Gate + publish an improve proposal. Improve-patrol is the single-file analogue
 // of the verify corrective flow, but it represents editorial growth rather than a
 // demonstrated fix. It owns publication because it is clusterless.

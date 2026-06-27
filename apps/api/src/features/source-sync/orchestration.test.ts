@@ -138,13 +138,13 @@ test("triggerSourceSyncRun enqueues a running plan job and advances the baseline
     assert.equal((await ctx.stores.sourceSync.getState(undefined, "src-1"))?.lastSha, head.trim());
 
     // No publication yet — that waits on the plan job completing.
-    assert.equal((await ctx.jobs.list({})).jobs.filter((job) => job.type === "publish_source_sync").length, 0);
+    assert.equal((await ctx.jobs.list({})).jobs.filter((job) => job.type === "publish_source_sync" as never).length, 0);
   } finally {
     await cleanup();
   }
 });
 
-test("completing the plan job constrains the changeset, completes the run, and enqueues publication", async () => {
+test("completing the plan job creates a source-sync proposal and enqueues proposal publication", async () => {
   const broker = new FakeJobBroker();
   const { ctx, checkoutRoot, cleanup } = await seed(broker);
   try {
@@ -153,7 +153,6 @@ test("completing the plan job constrains the changeset, completes the run, and e
     const jobId = run.jobId;
     assert.ok(jobId, "run linked to a plan job");
 
-    // Drive the watcher's completion through the real dispatcher.
     const outcome = await completeJob(ctx, jobId, PLAN);
     assert.equal(outcome.ok, true);
 
@@ -164,12 +163,20 @@ test("completing the plan job constrains the changeset, completes the run, and e
     assert.equal(completed?.changeset?.[0].path, "guide.md");
     assert.equal(completed?.changeset?.[0].content, "# Guide\nThe limit is 2025.\n");
 
-    // A publish_source_sync job was enqueued for the now-completed run; no git ran in
-    // the API and no publication is recorded yet — that happens in the watcher.
-    const publish = (await ctx.jobs.list({})).jobs.find((job) => job.type === "publish_source_sync");
-    assert.ok(publish, "publication enqueued");
-    assert.deepEqual(publish.input, { runId: run.id });
-    assert.equal(completed?.publication, undefined);
+    const proposals = await ctx.stores.proposals.list(20);
+    const proposal = proposals.find((candidate) => candidate.jobId === jobId);
+    assert.ok(proposal, "source-sync proposal created");
+    assert.equal(proposal.flowId, undefined);
+    assert.equal(proposal.destinationId, run.destinationId);
+    assert.equal(proposal.targetPath, "guide.md");
+    assert.equal(proposal.markdown, "# Guide\nThe limit is 2025.\n");
+    assert.equal(proposal.changeset?.length, 1);
+    assert.match(proposal.gapSummary ?? "", /Source sync:/);
+
+    const publishProposal = (await ctx.jobs.list({})).jobs.find((job) => job.type === "publish_proposal");
+    assert.ok(publishProposal, "proposal publication enqueued");
+    assert.deepEqual(publishProposal.input, { proposalId: proposal.id });
+    assert.equal((await ctx.jobs.list({})).jobs.some((job) => job.type === "publish_source_sync" as never), false);
   } finally {
     await cleanup();
   }
@@ -203,7 +210,7 @@ test("a plan job that exhausts its retries fails the linked run without rewindin
     assert.equal((await ctx.stores.sourceSync.getState(undefined, "src-1"))?.lastSha, head.trim());
 
     // No publication for a failed run.
-    assert.equal((await ctx.jobs.list({})).jobs.filter((job) => job.type === "publish_source_sync").length, 0);
+    assert.equal((await ctx.jobs.list({})).jobs.filter((job) => job.type === "publish_source_sync" as never).length, 0);
   } finally {
     await cleanup();
   }
