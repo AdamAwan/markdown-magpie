@@ -3,7 +3,6 @@ import type {
   KnowledgeDocument,
   MaintenancePlan,
   RankedSection,
-  RepositoryRef,
   SourceChangeFile,
   SourceChangeSyncJobInput,
   SourceSyncCandidateDocument,
@@ -25,7 +24,6 @@ import type { AppContext } from "../../context.js";
 import {
   checkoutRoot,
   defaultDestinationId,
-  findRepositoryForDestination,
   selectFlow
 } from "../../platform/repositories.js";
 import type { ConfiguredKnowledgeRepository } from "../../stores/knowledge-repositories.js";
@@ -43,34 +41,6 @@ const CANDIDATE_DOCUMENT_LIMIT = 6;
 // blow up the embedding/keyword query.
 const RETRIEVAL_QUERY_MAX_CHARS = 6_000;
 
-// Re-gate the flow's deferred runs at the top of each tick: a run deferred because
-// its changeset overlapped an open PR is re-checked, and published once the overlap
-// has cleared (the blocking PR merged/closed). Still-overlapping runs stay deferred.
-// Bounded by the deferred-run count; runs on the existing scheduled cadence.
-async function regateDeferredRuns(ctx: AppContext, flowId: string | undefined): Promise<void> {
-  for (const run of await ctx.stores.sourceSync.listDeferredRuns(flowId)) {
-    if (!run.changeset || run.changeset.length === 0) {
-      continue;
-    }
-    const proposals = await sameFlowOpenProposals(ctx, run.flowId);
-    const decision = decideReconciliation(sourceSyncIntent(run, run.changeset), openPullRequestSummaries(proposals));
-    if (decision.kind !== "open-new") {
-      continue; // still overlapping — leave it deferred for a later tick
-    }
-    // Gate publication on who won the deferred→completed transition: a concurrent tick
-    // (e.g. a manual /source-sync/run racing the scheduled tick) can capture the same
-    // deferred run from listDeferredRuns above. completeDeferredRun returns the run only
-    // to the caller that effected the transition, so the loser gets undefined and skips —
-    // the run is published exactly once.
-    const completed = await ctx.stores.sourceSync.completeDeferredRun(run.id);
-    if (!completed) {
-      continue;
-    }
-    await enqueuePublication(ctx, run.id);
-    console.log(`Source-sync re-gate: deferred run ${run.id} overlap cleared; enqueued publication.`);
-  }
-}
-
 // Watches every git source of a flow (or, with no flow, every configured git
 // source) for new commits and reacts to each. Returns one run per source that
 // actually had a new commit to consider; sources with no change since last time
@@ -84,10 +54,6 @@ export async function triggerSourceSyncRun(
   const flow = selectFlow(deps, options.flowId);
   const flowId = flow?.id ?? options.flowId;
   const destinationId = flow?.destinationId ?? defaultDestinationId(deps);
-
-  // Re-gate any runs deferred on a previous tick before reacting to new commits, so
-  // a change held behind a now-closed PR is published promptly.
-  await regateDeferredRuns(ctx, flowId);
 
   const sourceIds = flow ? flow.sourceIds : deps.knowledgeConfig.sources.map((source) => source.id);
   const sources = sourceIds
@@ -275,159 +241,12 @@ function readCandidateDocuments(input: unknown): SourceSyncCandidateDocument[] {
   return parsed.success ? parsed.data.candidateDocuments : [];
 }
 
-// Enqueue-only publication: validate the repository pre-flight (no repo / not-git
-// ⇒ leave unpublished) then enqueue publish_source_sync. Git execution happens in
-// the watcher runner, which fetches the execution context. Mirrors publish_crunch.
-async function enqueuePublication(ctx: AppContext, runId: string): Promise<void> {
-  const resolved = await resolvePublishRepository(ctx, runId);
-  if (!resolved.ok) {
-    console.warn(`Source-sync run ${runId}: ${resolved.message ?? resolved.code}; left unpublished.`);
-    return;
-  }
-  const job = await ctx.jobs.create("publish_source_sync", { runId });
-  console.log(`Enqueued publish_source_sync job ${job.id} for source-sync run ${runId}`);
-}
-
-type SourceSyncPublishValidationError = {
-  ok: false;
-  status: 404 | 409;
-  code:
-    | "source_sync_run_not_found"
-    | "source_sync_run_not_publishable"
-    | "source_sync_run_empty_changeset"
-    | "source_sync_repository_not_found"
-    | "source_sync_repository_not_git";
-  message?: string;
-};
-
-// Shared pre-flight for the publish enqueue path and the execution-context
-// endpoint: a run is publishable only if it completed with a non-empty persisted
-// changeset and its destination maps to a Git checkout. Mirrors crunch's
-// resolvePublishRepository so an invalid publish fails fast with the same status.
-async function resolvePublishRepository(
-  ctx: AppContext,
-  runId: string
-): Promise<{ ok: true; run: SourceSyncRun; repository: RepositoryRef } | SourceSyncPublishValidationError> {
-  const run = await ctx.stores.sourceSync.getRun(runId);
-  if (!run) {
-    return { ok: false, status: 404, code: "source_sync_run_not_found" };
-  }
-  if (run.status !== "completed" || !run.changeset) {
-    return {
-      ok: false,
-      status: 409,
-      code: "source_sync_run_not_publishable",
-      message: "Only completed source-sync runs with a changeset can be published."
-    };
-  }
-  if (run.changeset.length === 0) {
-    return {
-      ok: false,
-      status: 409,
-      code: "source_sync_run_empty_changeset",
-      message: "This source-sync run does not change any files."
-    };
-  }
-
-  const repository = await findRepositoryForDestination(ctx.repositoryDeps(), run.destinationId);
-  if (!repository) {
-    return {
-      ok: false,
-      status: 409,
-      code: "source_sync_repository_not_found",
-      message: "No indexed Git repository matches this source-sync run's destination."
-    };
-  }
-  if (repository.git?.scope === "not-git" || !repository.git?.workTreeRoot) {
-    return {
-      ok: false,
-      status: 409,
-      code: "source_sync_repository_not_git",
-      message: "The matched repository is not a Git checkout."
-    };
-  }
-
-  return { ok: true, run, repository };
-}
-
-type ExecutionContextRepository = Pick<RepositoryRef, "id" | "localPath" | "remoteUrl" | "defaultBranch" | "git">;
-
-// The non-generative, credential-free view the watcher's publish_source_sync
-// runner fetches before executing git: the run (with its persisted changeset), the
-// resolved source name for the commit title, and exactly the repository fields the
-// runner needs. Runs the same pre-flight as the enqueue path, so it returns the
-// same 404/409 conditions.
-export async function getRunExecutionContext(
-  ctx: AppContext,
-  runId: string
-): Promise<
-  | { ok: true; run: SourceSyncRun; sourceName: string; repository: ExecutionContextRepository }
-  | SourceSyncPublishValidationError
-> {
-  const resolved = await resolvePublishRepository(ctx, runId);
-  if (!resolved.ok) {
-    return resolved;
-  }
-  const { id, localPath, remoteUrl, defaultBranch, git } = resolved.repository;
-  return {
-    ok: true,
-    run: resolved.run,
-    sourceName: resolveSourceName(ctx, resolved.run.sourceId),
-    repository: { id, localPath, remoteUrl, defaultBranch, git }
-  };
-}
-
-// Looks up the configured source's human name for the commit title, falling back
-// to the source id when the source is no longer configured.
-function resolveSourceName(ctx: AppContext, sourceId: string): string {
-  const source = ctx.repositoryDeps().knowledgeConfig.sources.find((candidate) => candidate.id === sourceId);
-  return source?.name ?? sourceId;
-}
-
 export async function listRuns(ctx: AppContext, limit: number): Promise<SourceSyncRun[]> {
   return ctx.stores.sourceSync.listRuns(limit);
 }
 
 export async function getRun(ctx: AppContext, id: string): Promise<SourceSyncRun | undefined> {
   return ctx.stores.sourceSync.getRun(id);
-}
-
-type PublishSourceSyncJobOutput = z.infer<typeof publishSourceSyncOutputSchema>;
-
-// Completion handler for publish_source_sync jobs: records the validated git
-// publication the watcher performed (branch, commit, optional remote url) onto the
-// linked run. Idempotent by runId — a run that already carries a publication is
-// left untouched, so re-completing the same job never double-applies or regresses
-// the recorded metadata. Source-sync raises no PR. Mirrors the crunch handler.
-export async function recordSourceSyncPublicationFromCompletedJob(
-  ctx: AppContext,
-  job: JobView | undefined,
-  output: unknown
-): Promise<SourceSyncRun | undefined> {
-  if (!job || job.type !== "publish_source_sync") {
-    return undefined;
-  }
-  const parsed = publishSourceSyncOutputSchema.safeParse(output);
-  if (!parsed.success) {
-    return undefined;
-  }
-  const result: PublishSourceSyncJobOutput = parsed.data;
-
-  const existing = await ctx.stores.sourceSync.getRun(result.runId);
-  if (!existing) {
-    return undefined;
-  }
-  if (existing.publication) {
-    return existing;
-  }
-
-  return ctx.stores.sourceSync.recordRunPublication(result.runId, {
-    provider: "local-git",
-    branchName: result.branchName,
-    commitSha: result.commitSha,
-    remoteUrl: result.remoteUrl,
-    publishedAt: result.publishedAt
-  });
 }
 
 // --- Pure helpers (unit-tested) --------------------------------------------

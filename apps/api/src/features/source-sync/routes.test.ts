@@ -36,13 +36,11 @@ test("POST /api/source-sync/run tolerates a missing body and a flowId", async ()
   assert.deepEqual(await withFlow.json(), { runIds: [] });
 });
 
-test("GET /api/source-sync/runs/:id/execution-context returns 404 for an unknown run", async () => {
-  const ctx = makeTestContext();
-  const app = buildApp(ctx);
+test("GET /api/source-sync/runs/:id/execution-context is retired", async () => {
+  const app = buildApp(makeTestContext());
   const res = await app.request("/api/source-sync/runs/missing/execution-context");
   assert.equal(res.status, 404);
-  const body = (await res.json()) as { error: string };
-  assert.equal(body.error, "source_sync_run_not_found");
+  assert.deepEqual(await res.json(), { error: "not_found" });
 });
 
 test("GET /api/source-sync/runs/:id returns 404 for an unknown run", async () => {
