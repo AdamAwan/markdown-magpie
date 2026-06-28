@@ -29,6 +29,7 @@ export function SchedulesPanel({
   maintenanceRuns: MaintenanceRun[];
 }) {
   const [groupBy, setGroupBy] = useState<GroupBy>("type");
+  const [selectedRun, setSelectedRun] = useState<MaintenanceRun | undefined>();
   const flowName = (flowId?: string) => flows.find((flow) => flow.id === flowId)?.name ?? flowId ?? "Default knowledge base";
 
   // Each scheduled task carries both grouping axes — the flow-free task type and
@@ -112,29 +113,83 @@ export function SchedulesPanel({
         <section className="crunchSection">
           <h3 className="crunchSubhead">Recent runs</h3>
           <div className="jobTable">
-            <div className="tableHead crunchScheduleHead">
+            <div className="tableHead crunchRunHead">
               <span>Task</span>
               <span>Flow</span>
               <span>When</span>
+              <span>Trigger</span>
               <span>Status</span>
               <span>Summary</span>
+              <span />
             </div>
             {maintenanceRuns.map((run) => (
-              <div className="tableRow crunchScheduleRow" key={run.id}>
+              <div className="tableRow crunchRunRow" key={run.id}>
                 <span className="crunchScheduleTitle">{taskTypeLabel(run.taskType)}</span>
                 <span>{flowName(run.flowId)}</span>
                 <span>{new Date(run.startedAt).toLocaleString()}</span>
-                <span className={`status ${run.status === "failed" ? "failed" : "completed"}`} title={run.error ?? "Run status"}>
+                <span>{run.trigger}</span>
+                <span className={`status ${run.status}`} title={run.error ?? "Run status"}>
                   {run.status}
                 </span>
                 <span className="crunchScheduleMeta">{run.error ?? run.summary}</span>
+                <span className="crunchRowActions">
+                  <button
+                    aria-label={`View details for ${taskTypeLabel(run.taskType)} run`}
+                    className="button secondary"
+                    onClick={() => setSelectedRun(run)}
+                    type="button"
+                  >
+                    Details
+                  </button>
+                </span>
               </div>
             ))}
             {maintenanceRuns.length === 0 ? <p className="empty">No runs recorded yet.</p> : null}
           </div>
         </section>
       </div>
+      {selectedRun ? <MaintenanceRunDetailsModal onClose={() => setSelectedRun(undefined)} run={selectedRun} /> : null}
     </section>
+  );
+}
+
+export function MaintenanceRunDetailsModal({ onClose, run }: { onClose: () => void; run: MaintenanceRun }) {
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  const formattedDetails = JSON.stringify(run.details ?? {}, null, 2);
+
+  return (
+    <div className="docModalBackdrop" onClick={onClose} role="presentation">
+      <div
+        aria-label={`${taskTypeLabel(run.taskType)} run details`}
+        aria-modal="true"
+        className="docModal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="docModalHead">
+          <div>
+            <h3>{taskTypeLabel(run.taskType)} · details</h3>
+            <p className="path">
+              {run.id}
+              {run.completedAt ? ` · Completed ${new Date(run.completedAt).toLocaleString()}` : ""}
+            </p>
+          </div>
+          <button className="button secondary" onClick={onClose} type="button">
+            Close
+          </button>
+        </div>
+        <pre className="docModalBody jsonBlock">{formattedDetails}</pre>
+      </div>
+    </div>
   );
 }
 
