@@ -606,20 +606,26 @@ export class LocalGitProposalPublisher {
   }
 
   // Publishes a multi-file changeset (writes and deletes) to a single new
-  // branch in one commit. Used by Crunch, where consolidating or splitting
-  // documents necessarily creates and removes several files at once.
+  // branch in one commit. If the branch already exists, updates it in place so
+  // folded/reconciled changesets can republish onto their existing PR branch.
   async publishChangeset(request: PublishChangesetRequest): Promise<PublishProposalBranchResponse> {
     const root = request.repository.git?.workTreeRoot ?? request.repository.localPath;
     const remoteUrl = await ensureRemote(root);
     const authEnv = buildGitAuthEnv(remoteUrl);
-    await assertBranchDoesNotExist(root, request.branchName, authEnv);
+    const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", request.branchName], authEnv);
+    const branchExists = Boolean(remoteBranch.trim());
 
-    const baseRef = await resolveBaseRef(root, request.repository);
     const tempRoot = await mkdtemp(path.join(tmpdir(), "markdown-magpie-worktree-"));
     const worktreePath = path.join(tempRoot, "checkout");
 
     try {
-      await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, baseRef]);
+      if (branchExists) {
+        await git(root, ["fetch", "origin", request.branchName], authEnv);
+        await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, `origin/${request.branchName}`]);
+      } else {
+        const baseRef = await resolveBaseRef(root, request.repository);
+        await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, baseRef]);
+      }
 
       for (const change of request.changes) {
         const repoRelativePath = resolveTargetPath(request.repository, change.path);
@@ -640,6 +646,14 @@ export class LocalGitProposalPublisher {
 
       const status = await git(worktreePath, ["status", "--porcelain"]);
       if (!status.trim()) {
+        if (branchExists) {
+          const head = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
+          return {
+            branchName: request.branchName,
+            commitSha: head,
+            remoteUrl: request.repository.remoteUrl ?? request.repository.git?.remoteUrl
+          };
+        }
         throw new Error("Crunch plan does not change any files");
       }
 
@@ -700,18 +714,6 @@ async function ensureRemote(root: string): Promise<string> {
     throw new Error("Cannot publish proposal because git remote 'origin' is not configured");
   }
   return remote.trim();
-}
-
-async function assertBranchDoesNotExist(
-  root: string,
-  branchName: string,
-  authEnv?: Partial<NodeJS.ProcessEnv>
-): Promise<void> {
-  const localBranch = await tryGit(root, ["show-ref", "--verify", `refs/heads/${branchName}`]);
-  const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", branchName], authEnv);
-  if (localBranch.trim() || remoteBranch.trim()) {
-    throw new Error(`Cannot publish proposal because branch ${branchName} already exists`);
-  }
 }
 
 async function resolveBaseRef(root: string, repository: RepositoryRef): Promise<string> {

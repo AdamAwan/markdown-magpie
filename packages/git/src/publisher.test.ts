@@ -54,4 +54,31 @@ describe("LocalGitProposalPublisher create-or-update", () => {
     });
     assert.equal(second.commitSha, first.commitSha, "no new commit when content is identical");
   });
+
+  it("updates an existing changeset branch without force", async () => {
+    const { repository } = await initBareRemoteWithClone();
+    const publisher = new LocalGitProposalPublisher();
+
+    const first = await publisher.publishChangeset({
+      repository,
+      branchName: "magpie/changeset",
+      title: "docs: changeset",
+      changes: [
+        { path: "docs/a.md", content: "# A v1\n" },
+        { path: "docs/b.md", content: "# B\n" }
+      ]
+    });
+
+    const second = await publisher.publishChangeset({
+      repository,
+      branchName: "magpie/changeset",
+      title: "docs: changeset (updated)",
+      changes: [
+        { path: "docs/a.md", content: "# A v2\n" },
+        { path: "docs/b.md", delete: true }
+      ]
+    });
+
+    assert.notEqual(second.commitSha, first.commitSha, "a new commit lands on the existing changeset branch");
+  });
 });

@@ -638,9 +638,8 @@ export async function createImproveProposalFromCompletedJob(
 }
 // Completion handler for publish_proposal jobs: records the validated git
 // publication the watcher performed (branch, commit, optional remote/PR url) onto
-// the linked proposal. Idempotent by proposalId — a proposal that already carries
-// a publication is left untouched, so re-completing the same job never
-// double-applies or regresses the recorded metadata.
+// the linked proposal. Re-completing the same job writes the same payload again,
+// while a later republish refreshes the stored branch tip.
 export async function recordPublicationFromCompletedJob(
   ctx: AppContext,
   job: JobView | undefined,
@@ -653,9 +652,6 @@ export async function recordPublicationFromCompletedJob(
   const existing = await ctx.stores.proposals.get(output.proposalId);
   if (!existing) {
     return undefined;
-  }
-  if (existing.publication) {
-    return existing;
   }
 
   return ctx.stores.proposals.recordPublication(output.proposalId, {
