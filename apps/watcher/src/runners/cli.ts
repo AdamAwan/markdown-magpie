@@ -4,9 +4,10 @@ import { buildPrompt, parseJobOutput } from "../job-prompts.js";
 
 export type PromptMode = "arg" | "stdin";
 
-// The CLI AI job types. Same set as the chat runner minus answer_question, which
-// requires the watcher's route/retrieve plumbing and so runs through the chat
-// path only. A CLI provider executes the deterministic generative jobs.
+// The CLI AI job types. Same set as the chat runner minus jobs that require
+// watcher-local orchestration (answer_question route/retrieve and
+// reconcile_gap_clusters propose/critic). A CLI provider executes the
+// deterministic generative jobs.
 const CLI_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "summarize_gap",
   "draft_markdown_proposal",
@@ -14,7 +15,13 @@ const CLI_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "detect_contradiction",
   "suggest_consolidation",
   "cluster_gap_candidates",
-  "sync_source_changes_generate_plan"
+  "sync_source_changes_generate_plan",
+  "verify_document",
+  "correct_document",
+  "dedupe_documents",
+  "split_document",
+  "improve_document",
+  "fold_changeset_proposal"
 ]);
 
 const DEFAULT_TIMEOUT_MS = 120_000;

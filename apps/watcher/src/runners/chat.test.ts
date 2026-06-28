@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ChatProvider, ChatRequest, ChatResponse } from "@magpie/core";
-import type { JobView } from "@magpie/jobs";
+import { JOB_TYPES, jobDefinition, type JobView, type JobType } from "@magpie/jobs";
 import type { RetrievedSection, WatcherApi } from "../http-client.js";
 import { ChatRunner } from "./chat.js";
 
@@ -41,6 +41,16 @@ const SECTIONS: RetrievedSection[] = [
   }
 ];
 
+function providerJobTypes(): JobType[] {
+  return JOB_TYPES.filter((type) => {
+    try {
+      return jobDefinition(type).requiredCapability({ provider: "openai-compatible" }) === "openai-compatible";
+    } catch {
+      return false;
+    }
+  });
+}
+
 function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
   return {
     claim: async () => undefined,
@@ -62,11 +72,9 @@ describe("ChatRunner", () => {
   it("declares its provider capability and supports AI job types", () => {
     const runner = new ChatRunner("openai-compatible", new FakeChatProvider(() => "{}"), fakeApi());
     assert.equal(runner.capability, "openai-compatible");
-    assert.ok(runner.supports("answer_question"));
-    assert.ok(runner.supports("summarize_gap"));
-    assert.ok(runner.supports("sync_source_changes_generate_plan"));
-    assert.ok(runner.supports("verify_document"));
-    assert.ok(runner.supports("fold_markdown_proposal"));
+    for (const type of providerJobTypes()) {
+      assert.ok(runner.supports(type), `chat runner should support provider job type ${type}`);
+    }
     assert.ok(!runner.supports("publish_proposal"));
   });
 
