@@ -157,17 +157,25 @@ export async function completeJob(
       try {
         await foldService.reconcileDraftedProposal(ctx, draftedProposal);
       } catch (error) {
-        console.warn(`Fold check for proposal ${draftedProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+        console.warn(
+          `Fold check for proposal ${draftedProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     }
-    const correctiveProposal = await proposalsService.createCorrectiveProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    const correctiveProposal = await proposalsService.createCorrectiveProposalFromCompletedJob(
+      ctx,
+      existingJob,
+      parsed.data
+    );
     if (correctiveProposal) {
       // Corrective reconcile is best-effort, like the at-draft fold hook: it must
       // never fail the job completion itself.
       try {
         await foldService.reconcileCorrectiveProposal(ctx, correctiveProposal);
       } catch (error) {
-        console.warn(`Corrective reconcile for proposal ${correctiveProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+        console.warn(
+          `Corrective reconcile for proposal ${correctiveProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     }
     const dedupeProposal = await proposalsService.createDedupeProposalFromCompletedJob(ctx, existingJob, parsed.data);
@@ -177,7 +185,9 @@ export async function completeJob(
       try {
         await foldService.reconcileDedupeProposal(ctx, dedupeProposal);
       } catch (error) {
-        console.warn(`Dedupe reconcile for proposal ${dedupeProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+        console.warn(
+          `Dedupe reconcile for proposal ${dedupeProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     }
     const improveProposal = await proposalsService.createImproveProposalFromCompletedJob(ctx, existingJob, parsed.data);
@@ -185,7 +195,9 @@ export async function completeJob(
       try {
         await foldService.reconcileImproveProposal(ctx, improveProposal);
       } catch (error) {
-        console.warn(`Improve reconcile for proposal ${improveProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+        console.warn(
+          `Improve reconcile for proposal ${improveProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     }
     const splitProposal = await proposalsService.createSplitProposalFromCompletedJob(ctx, existingJob, parsed.data);
@@ -194,7 +206,9 @@ export async function completeJob(
       try {
         await foldService.reconcileSplitProposal(ctx, splitProposal);
       } catch (error) {
-        console.warn(`Split reconcile for proposal ${splitProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+        console.warn(
+          `Split reconcile for proposal ${splitProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     }
     await foldService.applyFoldFromCompletedJob(ctx, existingJob, parsed.data);
@@ -207,6 +221,8 @@ export async function completeJob(
     // immediately rather than waiting for its next idle claim poll.
     await touchWatcher(ctx, { name: executor, status: "idle" });
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Completing job ${jobId} (${existingJob.type}) failed: ${message}`);
     await ctx.jobs.fail(jobId, {
       code: "completion_failed",
       message: "Job completion side effects failed",
@@ -278,7 +294,12 @@ async function handleRefreshPullRequestsCompletion(
       await ctx.stores.proposals.updateReviewDecision(result.proposalId, result.reviewDecision);
     }
   }
-  await snapshotsService.recordSnapshotsFromPullRequestResults(ctx, parsed.data.results);
+  try {
+    await snapshotsService.recordSnapshotsFromPullRequestResults(ctx, parsed.data.results);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`refresh_pull_requests: snapshot recording failed after PR transitions were applied: ${message}`);
+  }
 }
 
 // Marks a job failed. When an enqueue-only planning job fails terminally, its
