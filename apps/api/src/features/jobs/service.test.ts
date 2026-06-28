@@ -344,6 +344,43 @@ test("publish_proposal completion records publication and is idempotent when del
   assert.equal(repeated?.publication?.publishedAt, output.publishedAt);
 });
 
+test("publish_proposal completion refreshes publication metadata on republish", async () => {
+  const ctx = makeTestContext();
+
+  const proposal = await ctx.stores.proposals.create({
+    title: "Configure X",
+    targetPath: "configure-x.md",
+    markdown: "# Configure X\nbody",
+    rationale: "r",
+    evidence: []
+  });
+  await ctx.stores.proposals.recordPublication(proposal.id, {
+    provider: "local-git",
+    branchName: "magpie/proposal-abc-configure-x",
+    commitSha: "oldcommit",
+    remoteUrl: "https://github.com/o/r.git",
+    pullRequestUrl: "https://github.com/o/r/pull/9",
+    publishedAt: "2026-01-01T00:00:00.000Z"
+  });
+
+  const job = await ctx.jobs.create("publish_proposal", { proposalId: proposal.id });
+  const output = {
+    proposalId: proposal.id,
+    branchName: "magpie/proposal-abc-configure-x",
+    commitSha: "newcommit",
+    remoteUrl: "https://github.com/o/r.git",
+    pullRequestUrl: "https://github.com/o/r/pull/9",
+    publishedAt: "2026-01-02T00:00:00.000Z"
+  };
+
+  assert.equal((await completeJob(ctx, job.id, output)).ok, true);
+
+  const republished = await ctx.stores.proposals.get(proposal.id);
+  assert.equal(republished?.status, "pr-opened");
+  assert.equal(republished?.publication?.commitSha, output.commitSha);
+  assert.equal(republished?.publication?.publishedAt, output.publishedAt);
+});
+
 test("refresh_pull_requests completion applies merged/closed transitions idempotently", async () => {
   const ctx = makeTestContext();
 
