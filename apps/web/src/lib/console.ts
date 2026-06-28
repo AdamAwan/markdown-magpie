@@ -10,6 +10,9 @@ export function sectionTitle(section: ConsoleSection): string {
   if (section === "jobs") {
     return "Watch AI and MCP job flow";
   }
+  if (section === "activity") {
+    return "Audit background activity";
+  }
   if (section === "proposals") {
     return "Review generated Markdown proposals";
   }
@@ -41,6 +44,9 @@ export function sectionSubtitle(section: ConsoleSection): string {
   }
   if (section === "jobs") {
     return "See queued, claimed, completed, and failed AI work in one stable table.";
+  }
+  if (section === "activity") {
+    return "Review the durable maintenance-run audit for scheduled and manual background work.";
   }
   if (section === "proposals") {
     return "Select a proposal and review its target path, rationale, and Markdown.";

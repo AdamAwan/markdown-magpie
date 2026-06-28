@@ -414,6 +414,21 @@ describe("reconcileGaps audit", () => {
     assert.equal(runs.length, 1);
     assert.equal(runs[0].status, "completed");
     assert.equal(runs[0].taskType, "process_gaps_to_pull_requests");
+    assert.deepEqual(runs[0].details, {
+      catalogRevision: 0,
+      processedRevision: 0,
+      pendingPublicationActions: 0,
+      pullRequestsChecked: 0,
+      pullRequestTransitions: 0,
+      overlapsDetected: 0,
+      clustersCreated: 0,
+      mergeDecisions: 0,
+      splitDecisions: 0,
+      decisionsApplied: 0,
+      proposalsDrafted: 0,
+      publicationActionsDrained: 0,
+      skippedModelWork: true
+    });
   });
 
   it("records a failed run and rethrows when the reconcile throws", async () => {

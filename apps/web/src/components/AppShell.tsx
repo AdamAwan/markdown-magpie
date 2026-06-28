@@ -57,9 +57,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     jobs,
     proposals,
     scheduledTasks,
+    maintenanceRuns,
     prompts,
-    flowSnapshots,
-    reconciliationDecisions,
     config,
     latestJob,
     attentionNotices,
@@ -88,8 +87,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     gaps: gaps.length,
     jobs: jobs.length,
     proposals: proposals.length,
-    snapshots: flowSnapshots.length,
-    reconciliations: reconciliationDecisions.length,
+    activity: maintenanceRuns.length,
     schedules: scheduledTasks.length,
     prompts: prompts.length
   };
