@@ -22,7 +22,6 @@ export const JOB_TYPES = [
   "fix_patrol",
   "improve_patrol",
   "publish_proposal",
-  "publish_source_sync",
   "crosslink_pull_requests",
   "comment_pull_request"
 ] as const;

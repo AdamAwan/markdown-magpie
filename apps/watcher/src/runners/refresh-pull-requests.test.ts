@@ -28,7 +28,6 @@ function fakeApi(open: OpenPullRequestRef[]): WatcherApi {
     fail: async () => undefined,
     retrieve: async () => [],
     proposalExecutionContext: async () => ({ proposal: {}, repository: {} }),
-    sourceSyncExecutionContext: async () => ({ run: {}, sourceName: "", repository: {} }),
     reconcileGaps: async () => ({ ok: true }),
     runSourceSync: async () => ({ runIds: [] }),
     runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),

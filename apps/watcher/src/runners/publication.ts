@@ -9,8 +9,6 @@ import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import {
   publishProposalInputSchema,
   publishProposalOutputSchema,
-  publishSourceSyncInputSchema,
-  publishSourceSyncOutputSchema,
   crosslinkPullRequestsInputSchema,
   crosslinkPullRequestsOutputSchema,
   commentPullRequestInputSchema,
@@ -28,7 +26,6 @@ import path from "node:path";
 import { z } from "zod";
 import type {
   ProposalExecutionContext,
-  SourceSyncExecutionContext,
   WatcherApi
 } from "../http-client.js";
 
@@ -128,15 +125,11 @@ const proposalSchema = z.object({
   // present it is published as a changeset rather than the single targetPath.
   changeset: z.array(changesetChangeSchema).optional()
 });
-const sourceSyncRunSchema = z.object({ id: z.string(), changeset: z.array(changesetChangeSchema) });
-
 type PublishRepository = z.infer<typeof repositorySchema>;
 type PublishProposal = z.infer<typeof proposalSchema>;
-type PublishSourceSyncRun = z.infer<typeof sourceSyncRunSchema>;
 
 const PUBLISH_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "publish_proposal",
-  "publish_source_sync",
   "crosslink_pull_requests",
   "comment_pull_request"
 ]);
@@ -160,9 +153,6 @@ export class PublicationRunner {
   async run(job: JobView, _signal: AbortSignal): Promise<unknown> {
     if (job.type === "publish_proposal") {
       return this.publishProposal(job);
-    }
-    if (job.type === "publish_source_sync") {
-      return this.publishSourceSync(job);
     }
     if (job.type === "crosslink_pull_requests") {
       return this.crosslinkPullRequests(job);
@@ -241,39 +231,6 @@ export class PublicationRunner {
     });
   }
 
-  private async publishSourceSync(job: JobView): Promise<unknown> {
-    const { runId } = publishSourceSyncInputSchema.parse(job.input);
-    console.log(`publish_source_sync[${job.id}]: fetching execution context for run ${runId}`);
-    const context = await this.api.sourceSyncExecutionContext(runId);
-    const { run, sourceName, repository } = parseSourceSyncContext(context);
-    const preparedRepository = await this.deps.prepareRepository(toRepositoryRef(repository));
-
-    const documentCount = run.changeset.length;
-    const branchName = sourceSyncBranchName(run);
-    console.log(
-      `publish_source_sync[${job.id}]: publishing ${documentCount} document(s) from ${sourceName} to branch ${branchName}`
-    );
-    const publication = await this.deps.publishChangeset({
-      repository: preparedRepository,
-      branchName,
-      // Match the title the API used before git moved out.
-      title: `docs: sync to ${sourceName} change (${documentCount} document${documentCount === 1 ? "" : "s"})`,
-      changes: run.changeset
-    });
-    console.log(
-      `publish_source_sync[${job.id}]: pushed ${publication.branchName} at ${publication.commitSha.slice(0, 8)}`
-    );
-
-    // Source-sync raises no PR. Validate against the contract before returning.
-    return publishSourceSyncOutputSchema.parse({
-      runId,
-      branchName: publication.branchName,
-      commitSha: publication.commitSha,
-      ...(publication.remoteUrl ? { remoteUrl: publication.remoteUrl } : {}),
-      publishedAt: new Date().toISOString()
-    });
-  }
-
   private async crosslinkPullRequests(job: JobView): Promise<unknown> {
     const { targets, pullRequests } = crosslinkPullRequestsInputSchema.parse(job.input);
     const [a, b] = pullRequests;
@@ -307,18 +264,6 @@ function parseProposalContext(context: ProposalExecutionContext): {
 } {
   return {
     proposal: proposalSchema.parse(context.proposal),
-    repository: repositorySchema.parse(context.repository)
-  };
-}
-
-function parseSourceSyncContext(context: SourceSyncExecutionContext): {
-  run: PublishSourceSyncRun;
-  sourceName: string;
-  repository: PublishRepository;
-} {
-  return {
-    run: sourceSyncRunSchema.parse(context.run),
-    sourceName: z.string().parse(context.sourceName),
     repository: repositorySchema.parse(context.repository)
   };
 }
@@ -362,12 +307,6 @@ function asGitScope(scope: string): GitRepositoryContext["scope"] {
 // so the watcher publishes to the same branch the API records.
 function createProposalBranchName(proposal: PublishProposal): string {
   return `magpie/proposal-${proposal.id.slice(0, 8)}-${slugify(proposal.title).slice(0, 40)}`;
-}
-
-// The branch a source-sync run publishes onto. Mirrors the API's
-// sourceSyncBranchName so the watcher publishes to the same branch.
-function sourceSyncBranchName(run: PublishSourceSyncRun): string {
-  return `magpie/source-sync-${run.id.slice(0, 8)}`;
 }
 
 // Human-facing PR description, mirroring the API's buildPullRequestBody.

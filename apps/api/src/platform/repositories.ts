@@ -218,36 +218,6 @@ export async function findRepositoryForProposal(
   );
 }
 
-export async function findRepositoryForDestination(
-  deps: RepositoryDeps,
-  destinationId: string | undefined
-): Promise<RepositoryRef | undefined> {
-  if (deps.knowledgeConfig.destinations.length > 0) {
-    const destination = destinationId
-      ? deps.knowledgeConfig.destinations.find((candidate) => candidate.id === destinationId)
-      : deps.knowledgeConfig.destinations.length === 1
-        ? deps.knowledgeConfig.destinations[0]
-        : undefined;
-    if (!destination) {
-      return undefined;
-    }
-
-    const localPath = await resolveConfiguredRepositoryLocalPath(destination);
-    const summary = await deps.knowledgeIndex.indexLocalRepository({
-      localPath,
-      repositoryId: destination.id,
-      name: destination.name
-    });
-    deps.triggerEmbedding();
-    return summary.repository;
-  }
-
-  const repositories = deps.knowledgeIndex.listRepositories();
-  return repositories.length === 1
-    ? repositories[0]
-    : repositories.find((repository) => normalizeRelativePath(repository.git?.relativePathFromRoot) === ".");
-}
-
 export async function resolveIndexSelection(
   deps: RepositoryDeps,
   payload: {

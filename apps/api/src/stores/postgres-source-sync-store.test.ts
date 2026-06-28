@@ -81,23 +81,6 @@ describe("PostgresSourceSyncStore", { skip: databaseUrl ? false : "DATABASE_URL 
     assert.equal(fetched?.toSha, created.toSha);
   });
 
-  it("records run publication and marks status as published", async () => {
-    const sourceId = `src-${randomUUID()}`;
-    const run = await store.createRun(draftRun(sourceId));
-
-    const publication = {
-      provider: "local-git" as const,
-      branchName: `magpie/source-sync-${randomUUID()}`,
-      commitSha: "deadbeef",
-      publishedAt: new Date().toISOString()
-    };
-
-    const published = await store.recordRunPublication(run.id, publication);
-    assert.equal(published?.status, "published");
-    assert.equal(published?.publication?.branchName, publication.branchName);
-    assert.equal((await store.getRun(run.id))?.status, "published");
-  });
-
   it("listRuns returns runs sorted by most recent first", async () => {
     const sourceId = `src-${randomUUID()}`;
 
@@ -126,18 +109,8 @@ describe("PostgresSourceSyncStore", { skip: databaseUrl ? false : "DATABASE_URL 
     assert.equal(runs.length, 1, "listRuns should respect the limit");
   });
 
-  it("returns undefined when getting or updating a non-existent run", async () => {
+  it("returns undefined when getting a non-existent run", async () => {
     assert.equal(await store.getRun("00000000-0000-0000-0000-000000000000"), undefined);
-
-    assert.equal(
-      await store.recordRunPublication("00000000-0000-0000-0000-000000000000", {
-        provider: "local-git",
-        branchName: "magpie/fake",
-        commitSha: "fake",
-        publishedAt: new Date().toISOString()
-      }),
-      undefined
-    );
   });
 
   it("stores optional fields and round-trips them", async () => {

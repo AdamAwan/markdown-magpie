@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { makeTestContext } from "../test-support/context.js";
-import { reconcileDraftedProposal, reconcileCorrectiveProposal, reconcileDedupeProposal, reconcileSplitProposal, reconcileImproveProposal, applyFoldFromCompletedJob, applyChangesetFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
+import { reconcileDraftedProposal, reconcileCorrectiveProposal, reconcileDedupeProposal, reconcileSplitProposal, reconcileImproveProposal, reconcileSourceSyncProposal, applyFoldFromCompletedJob, applyChangesetFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
 import type { AppContext } from "../context.js";
 
 async function clusterWithGap(ctx: AppContext, flowId: string | undefined, summary: string): Promise<string> {
@@ -557,5 +557,90 @@ describe("enqueueFoldFallback", () => {
     await enqueueFoldFallback(ctx, await ctx.jobs.get(job.id));
     const pending = await ctx.stores.gapClusters.listPendingPublicationActions();
     assert.ok(pending.some((a) => a.proposalId === rival.id && a.kind === "publish"));
+  });
+});
+
+describe("reconcileSourceSyncProposal", () => {
+  it("folds a source-sync proposal into a touchable overlapping proposal", async () => {
+    const ctx = makeTestContext();
+    const survivor = await ctx.stores.proposals.create({
+      title: "Guide",
+      targetPath: "guide.md",
+      markdown: "# Guide\nold",
+      rationale: "",
+      evidence: [],
+      triggeringQuestionIds: [],
+      flowId: "docs"
+    });
+    const rival = await ctx.stores.proposals.create({
+      title: "Sync docs to Rules changes",
+      targetPath: "guide.md",
+      markdown: "# Guide\nnew",
+      rationale: "",
+      evidence: [],
+      triggeringQuestionIds: [],
+      flowId: "docs",
+      changeset: [{ path: "guide.md", content: "# Guide\nnew" }]
+    });
+
+    await reconcileSourceSyncProposal(ctx, rival);
+
+    const jobs = (await ctx.jobs.list({})).jobs;
+    const fold = jobs.find((job) => job.type === "fold_changeset_proposal");
+    assert.ok(fold, "fold job enqueued");
+    assert.equal((fold.input as { survivorProposalId: string }).survivorProposalId, survivor.id);
+    assert.equal((fold.input as { rivalProposalId: string }).rivalProposalId, rival.id);
+  });
+
+  it("publishes a source-sync proposal with no overlap", async () => {
+    const ctx = makeTestContext();
+    const proposal = await ctx.stores.proposals.create({
+      title: "Sync docs to Rules changes",
+      targetPath: "guide.md",
+      markdown: "# Guide\nnew",
+      rationale: "",
+      evidence: [],
+      triggeringQuestionIds: [],
+      flowId: "docs",
+      changeset: [{ path: "guide.md", content: "# Guide\nnew" }]
+    });
+
+    await reconcileSourceSyncProposal(ctx, proposal);
+
+    const publishJobs = (await ctx.jobs.list({})).jobs.filter((job) => job.type === "publish_proposal");
+    assert.equal(publishJobs.length, 1);
+    assert.deepEqual((publishJobs[0].input as { proposalId: string }).proposalId, proposal.id);
+  });
+
+  it("publishes a source-sync proposal when overlap is non-touchable (approved)", async () => {
+    const ctx = makeTestContext();
+    const approved = await ctx.stores.proposals.create({
+      title: "Approved Guide",
+      targetPath: "guide.md",
+      markdown: "# Guide\napproved",
+      rationale: "",
+      evidence: [],
+      triggeringQuestionIds: [],
+      flowId: "docs"
+    });
+    await ctx.stores.proposals.updateReviewDecision(approved.id, "approved");
+    const rival = await ctx.stores.proposals.create({
+      title: "Sync docs to Rules changes",
+      targetPath: "guide.md",
+      markdown: "# Guide\nnew",
+      rationale: "",
+      evidence: [],
+      triggeringQuestionIds: [],
+      flowId: "docs",
+      changeset: [{ path: "guide.md", content: "# Guide\nnew" }]
+    });
+
+    await reconcileSourceSyncProposal(ctx, rival);
+
+    const jobs = (await ctx.jobs.list({})).jobs;
+    assert.equal(jobs.some((job) => job.type === "fold_changeset_proposal"), false);
+    const publishJobs = jobs.filter((job) => job.type === "publish_proposal");
+    assert.equal(publishJobs.length, 1);
+    assert.equal((publishJobs[0].input as { proposalId: string }).proposalId, rival.id);
   });
 });

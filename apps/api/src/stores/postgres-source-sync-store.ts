@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import type { ChangesetChange, MaintenancePlan, ProposalPublication, SourceSyncRun, SourceSyncState } from "@magpie/core";
+import type { ChangesetChange, MaintenancePlan, SourceSyncRun, SourceSyncState } from "@magpie/core";
 import type { SourceSyncRunInput, SourceSyncStore } from "./source-sync-store.js";
 
 const { Pool } = pg;
@@ -116,55 +116,12 @@ export class PostgresSourceSyncStore implements SourceSyncStore {
     );
   }
 
-  async deferRun(id: string, plan: MaintenancePlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined> {
-    // running → deferred. No completed_at: deferred is a waiting state. Guarded by
-    // status = 'running' so a re-delivered completion never regresses a later state.
-    return this.transitionFromRunning(
-      "UPDATE source_sync_runs SET status = 'deferred', plan = $2, changeset = $3, error = NULL WHERE id = $1 AND status = 'running' RETURNING *",
-      [id, JSON.stringify(plan), JSON.stringify(changeset)],
-      id
-    );
-  }
-
-  async listDeferredRuns(flowId: string | undefined): Promise<SourceSyncRun[]> {
-    // The default flow stores flow_id as NULL (see runFlowId), so match it with IS NULL.
-    const result =
-      flowId === undefined
-        ? await this.pool.query<SourceSyncRunRow>(
-            "SELECT * FROM source_sync_runs WHERE status = 'deferred' AND flow_id IS NULL ORDER BY created_at DESC"
-          )
-        : await this.pool.query<SourceSyncRunRow>(
-            "SELECT * FROM source_sync_runs WHERE status = 'deferred' AND flow_id = $1 ORDER BY created_at DESC",
-            [flowId]
-          );
-    return result.rows.map(mapRunRow);
-  }
-
-  async completeDeferredRun(id: string): Promise<SourceSyncRun | undefined> {
-    // deferred → completed. The conditional UPDATE is the synchronization point: of two
-    // racing re-gates, exactly one matches a row and gets it back. A no-match (already
-    // completed / not found) returns undefined so the caller publishes exactly once.
-    const result = await this.pool.query<SourceSyncRunRow>(
-      "UPDATE source_sync_runs SET status = 'completed', completed_at = now() WHERE id = $1 AND status = 'deferred' RETURNING *",
-      [id]
-    );
-    return result.rows[0] ? mapRunRow(result.rows[0]) : undefined;
-  }
-
   async failRun(id: string, error: string): Promise<SourceSyncRun | undefined> {
     return this.transitionFromRunning(
       "UPDATE source_sync_runs SET status = 'failed', error = $2, completed_at = now() WHERE id = $1 AND status = 'running' RETURNING *",
       [id, error],
       id
     );
-  }
-
-  async recordRunPublication(id: string, publication: ProposalPublication): Promise<SourceSyncRun | undefined> {
-    const result = await this.pool.query<SourceSyncRunRow>(
-      "UPDATE source_sync_runs SET status = 'published', publication = $2 WHERE id = $1 RETURNING *",
-      [id, JSON.stringify(publication)]
-    );
-    return result.rows[0] ? mapRunRow(result.rows[0]) : undefined;
   }
 
   // Runs a terminal-transition UPDATE guarded by status = 'running'. When the run is
@@ -217,7 +174,6 @@ interface SourceSyncRunRow {
   to_sha: string;
   changed_file_count: number;
   candidate_count: number;
-  publication: ProposalPublication | null;
   created_at: Date;
   completed_at: Date | null;
 }
@@ -247,7 +203,6 @@ function mapRunRow(row: SourceSyncRunRow): SourceSyncRun {
     toSha: row.to_sha,
     changedFileCount: row.changed_file_count,
     candidateCount: row.candidate_count,
-    publication: row.publication ?? undefined,
     createdAt: row.created_at.toISOString(),
     completedAt: row.completed_at ? row.completed_at.toISOString() : undefined
   };

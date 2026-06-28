@@ -10,7 +10,7 @@ import { RuntimeConfigHolder } from "../../config-holder.js";
 import { FakeJobBroker } from "../../jobs/fake-broker.js";
 import { makeTestContext } from "../../test-support/context.js";
 import { completeJob, failJob } from "../jobs/service.js";
-import { getRunExecutionContext, triggerSourceSyncRun } from "./service.js";
+import { triggerSourceSyncRun } from "./service.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -138,13 +138,13 @@ test("triggerSourceSyncRun enqueues a running plan job and advances the baseline
     assert.equal((await ctx.stores.sourceSync.getState(undefined, "src-1"))?.lastSha, head.trim());
 
     // No publication yet — that waits on the plan job completing.
-    assert.equal((await ctx.jobs.list({})).jobs.filter((job) => job.type === "publish_source_sync").length, 0);
+    assert.equal((await ctx.jobs.list({})).jobs.filter((job) => job.type === "publish_source_sync" as never).length, 0);
   } finally {
     await cleanup();
   }
 });
 
-test("completing the plan job constrains the changeset, completes the run, and enqueues publication", async () => {
+test("completing the plan job creates a source-sync proposal and enqueues proposal publication", async () => {
   const broker = new FakeJobBroker();
   const { ctx, checkoutRoot, cleanup } = await seed(broker);
   try {
@@ -153,7 +153,6 @@ test("completing the plan job constrains the changeset, completes the run, and e
     const jobId = run.jobId;
     assert.ok(jobId, "run linked to a plan job");
 
-    // Drive the watcher's completion through the real dispatcher.
     const outcome = await completeJob(ctx, jobId, PLAN);
     assert.equal(outcome.ok, true);
 
@@ -164,12 +163,20 @@ test("completing the plan job constrains the changeset, completes the run, and e
     assert.equal(completed?.changeset?.[0].path, "guide.md");
     assert.equal(completed?.changeset?.[0].content, "# Guide\nThe limit is 2025.\n");
 
-    // A publish_source_sync job was enqueued for the now-completed run; no git ran in
-    // the API and no publication is recorded yet — that happens in the watcher.
-    const publish = (await ctx.jobs.list({})).jobs.find((job) => job.type === "publish_source_sync");
-    assert.ok(publish, "publication enqueued");
-    assert.deepEqual(publish.input, { runId: run.id });
-    assert.equal(completed?.publication, undefined);
+    const proposals = await ctx.stores.proposals.list(20);
+    const proposal = proposals.find((candidate) => candidate.jobId === jobId);
+    assert.ok(proposal, "source-sync proposal created");
+    assert.equal(proposal.flowId, undefined);
+    assert.equal(proposal.destinationId, run.destinationId);
+    assert.equal(proposal.targetPath, "guide.md");
+    assert.equal(proposal.markdown, "# Guide\nThe limit is 2025.\n");
+    assert.equal(proposal.changeset?.length, 1);
+    assert.match(proposal.gapSummary ?? "", /Source sync:/);
+
+    const publishProposal = (await ctx.jobs.list({})).jobs.find((job) => job.type === "publish_proposal");
+    assert.ok(publishProposal, "proposal publication enqueued");
+    assert.deepEqual(publishProposal.input, { proposalId: proposal.id });
+    assert.equal((await ctx.jobs.list({})).jobs.some((job) => job.type === "publish_source_sync" as never), false);
   } finally {
     await cleanup();
   }
@@ -203,89 +210,14 @@ test("a plan job that exhausts its retries fails the linked run without rewindin
     assert.equal((await ctx.stores.sourceSync.getState(undefined, "src-1"))?.lastSha, head.trim());
 
     // No publication for a failed run.
-    assert.equal((await ctx.jobs.list({})).jobs.filter((job) => job.type === "publish_source_sync").length, 0);
+    assert.equal((await ctx.jobs.list({})).jobs.filter((job) => job.type === "publish_source_sync" as never).length, 0);
   } finally {
     await cleanup();
   }
 });
 
-test("getRunExecutionContext returns the run, changeset, source name and repo for a completed run", async () => {
-  const broker = new FakeJobBroker();
-  const { ctx, cleanup } = await seed(broker);
-  try {
-    // Build a completed run with a changeset directly via the store, and point its
-    // destination at the indexed git repo so the pre-flight accepts it. Reset the
-    // index so the git clone is the sole repository the pre-flight can resolve.
-    await ctx.stores.knowledgeIndex.reset();
-    await indexGitDestination(ctx);
-    const run = await ctx.stores.sourceSync.createRun({
-      destinationId: "gitdest",
-      sourceId: "src-1",
-      trigger: "scheduled",
-      status: "completed",
-      plan: PLAN,
-      changeset: [{ path: "guide.md", content: "x" }],
-      toSha: "abc",
-      changedFileCount: 1,
-      candidateCount: 1
-    });
 
-    const outcome = await getRunExecutionContext(ctx, run.id);
-    if (!outcome.ok) {
-      throw new Error(`expected execution context, got ${outcome.code}`);
-    }
-    assert.equal(outcome.run.id, run.id);
-    assert.equal(outcome.run.changeset?.length, 1);
-    assert.equal(outcome.sourceName, "Rules repo");
-    assert.equal(outcome.repository.id, "gitdest");
-    assert.ok(outcome.repository.git, "git context exposed");
-
-    const serialised = JSON.stringify(outcome.repository).toLowerCase();
-    for (const secret of ["token", "password", "apikey", "authorization"]) {
-      assert.equal(serialised.includes(secret), false, `repository config leaked "${secret}"`);
-    }
-  } finally {
-    await cleanup();
-  }
-});
-
-test("getRunExecutionContext returns source_sync_run_not_found for an unknown id", async () => {
-  const broker = new FakeJobBroker();
-  const { ctx, cleanup } = await seed(broker);
-  try {
-    const outcome = await getRunExecutionContext(ctx, "missing");
-    assert.equal(outcome.ok, false);
-    if (outcome.ok) throw new Error("unreachable");
-    assert.equal(outcome.code, "source_sync_run_not_found");
-  } finally {
-    await cleanup();
-  }
-});
-
-test("getRunExecutionContext returns a 409 when the run has no changeset", async () => {
-  const broker = new FakeJobBroker();
-  const { ctx, cleanup } = await seed(broker);
-  try {
-    const run = await ctx.stores.sourceSync.createRun({
-      destinationId: "dest",
-      sourceId: "src-1",
-      trigger: "scheduled",
-      status: "skipped",
-      toSha: "abc",
-      changedFileCount: 1,
-      candidateCount: 0
-    });
-    const outcome = await getRunExecutionContext(ctx, run.id);
-    assert.equal(outcome.ok, false);
-    if (outcome.ok) throw new Error("unreachable");
-    assert.equal(outcome.status, 409);
-    assert.equal(outcome.code, "source_sync_run_not_publishable");
-  } finally {
-    await cleanup();
-  }
-});
-
-test("a source-sync change that overlaps a touchable open PR is deferred, not published", async () => {
+test("a source-sync change that overlaps a touchable open PR enqueues a fold", async () => {
   const broker = new FakeJobBroker();
   const { ctx, checkoutRoot, cleanup } = await seed(broker);
   try {
@@ -293,8 +225,6 @@ test("a source-sync change that overlaps a touchable open PR is deferred, not pu
     const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
     const jobId = run.jobId!;
 
-    // An open (draft = touchable) gap proposal already targets the same file the
-    // source-sync changeset will write (guide.md), in the default flow.
     await ctx.stores.proposals.create({
       title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
       evidence: [], triggeringQuestionIds: []
@@ -303,19 +233,17 @@ test("a source-sync change that overlaps a touchable open PR is deferred, not pu
     const outcome = await completeJob(ctx, jobId, PLAN);
     assert.equal(outcome.ok, true);
 
-    const after = await ctx.stores.sourceSync.getRun(run.id);
-    assert.equal(after?.status, "deferred");
-    assert.equal(after?.changeset?.length, 1, "changeset preserved on the deferred run");
-    assert.equal(after?.changeset?.[0].path, "guide.md");
-
-    // No rival published.
-    assert.equal((await ctx.jobs.list({})).jobs.filter((j) => j.type === "publish_source_sync").length, 0);
+    const proposal = (await ctx.stores.proposals.list(20)).find((candidate) => candidate.jobId === jobId);
+    assert.ok(proposal, "source-sync proposal created");
+    const foldJob = (await ctx.jobs.list({})).jobs.find((job) => job.type === "fold_changeset_proposal");
+    assert.ok(foldJob, "source-sync proposal folded into touchable overlap");
+    assert.equal((await ctx.jobs.list({})).jobs.some((job) => job.type === "publish_source_sync" as never), false);
   } finally {
     await cleanup();
   }
 });
 
-test("a source-sync change that overlaps an approved PR is also deferred", async () => {
+test("a source-sync change that overlaps an approved PR self-publishes as a proposal", async () => {
   const broker = new FakeJobBroker();
   const { ctx, checkoutRoot, cleanup } = await seed(broker);
   try {
@@ -323,125 +251,23 @@ test("a source-sync change that overlaps an approved PR is also deferred", async
     const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
     const jobId = run.jobId!;
 
-    const proposal = await ctx.stores.proposals.create({
+    const existing = await ctx.stores.proposals.create({
       title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
       evidence: [], triggeringQuestionIds: []
     });
-    await ctx.stores.proposals.updateReviewDecision(proposal.id, "approved");
+    await ctx.stores.proposals.updateReviewDecision(existing.id, "approved");
 
     const outcome = await completeJob(ctx, jobId, PLAN);
     assert.equal(outcome.ok, true);
 
-    const after = await ctx.stores.sourceSync.getRun(run.id);
-    assert.equal(after?.status, "deferred");
-    assert.equal((await ctx.jobs.list({})).jobs.filter((j) => j.type === "publish_source_sync").length, 0);
+    const proposal = (await ctx.stores.proposals.list(20)).find((candidate) => candidate.jobId === jobId);
+    assert.ok(proposal, "source-sync proposal created");
+    const publish = (await ctx.jobs.list({})).jobs.find((job) => job.type === "publish_proposal");
+    assert.ok(publish, "approved overlap self-publishes as proposal");
+    assert.deepEqual(publish.input, { proposalId: proposal.id });
   } finally {
     await cleanup();
   }
 });
 
-test("re-gate completes a deferred run once its overlapping PR is gone", async () => {
-  const broker = new FakeJobBroker();
-  const { ctx, checkoutRoot, cleanup } = await seed(broker);
-  try {
-    await baselineAtParent(ctx, checkoutRoot);
-    const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
-    const proposal = await ctx.stores.proposals.create({
-      title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
-      evidence: [], triggeringQuestionIds: []
-    });
-    await completeJob(ctx, run.jobId!, PLAN);
-    assert.equal((await ctx.stores.sourceSync.getRun(run.id))?.status, "deferred");
 
-    // The overlapping PR merges (list() excludes merged ⇒ overlap clears).
-    await ctx.stores.proposals.updateStatus(proposal.id, "merged");
-
-    // Next tick: the source HEAD is unchanged (baseline already advanced), so no new
-    // run is created; only the re-gate acts.
-    await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
-
-    const after = await ctx.stores.sourceSync.getRun(run.id);
-    assert.equal(after?.status, "completed");
-    const publish = (await ctx.jobs.list({})).jobs.find((j) => j.type === "publish_source_sync");
-    assert.ok(publish, "publication enqueued once the overlap cleared");
-    assert.deepEqual(publish.input, { runId: run.id });
-  } finally {
-    await cleanup();
-  }
-});
-
-test("re-gate leaves a deferred run deferred while the overlap persists", async () => {
-  const broker = new FakeJobBroker();
-  const { ctx, checkoutRoot, cleanup } = await seed(broker);
-  try {
-    await baselineAtParent(ctx, checkoutRoot);
-    const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
-    await ctx.stores.proposals.create({
-      title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
-      evidence: [], triggeringQuestionIds: []
-    });
-    await completeJob(ctx, run.jobId!, PLAN);
-    assert.equal((await ctx.stores.sourceSync.getRun(run.id))?.status, "deferred");
-
-    // Overlap still open: re-gate must not publish.
-    await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
-
-    assert.equal((await ctx.stores.sourceSync.getRun(run.id))?.status, "deferred");
-    assert.equal((await ctx.jobs.list({})).jobs.filter((j) => j.type === "publish_source_sync").length, 0);
-  } finally {
-    await cleanup();
-  }
-});
-
-test("two concurrent re-gate ticks publish a cleared deferred run exactly once", async () => {
-  const broker = new FakeJobBroker();
-  const { ctx, checkoutRoot, cleanup } = await seed(broker);
-  try {
-    await baselineAtParent(ctx, checkoutRoot);
-    const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
-    const proposal = await ctx.stores.proposals.create({
-      title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
-      evidence: [], triggeringQuestionIds: []
-    });
-    await completeJob(ctx, run.jobId!, PLAN);
-    assert.equal((await ctx.stores.sourceSync.getRun(run.id))?.status, "deferred");
-
-    // The overlapping PR merges, clearing the overlap.
-    await ctx.stores.proposals.updateStatus(proposal.id, "merged");
-
-    // Two ticks race (e.g. the scheduled tick and a manual /source-sync/run). Both read
-    // the still-deferred run before either completes it, so both reach completeDeferredRun.
-    // Only the winner gets the run back and publishes; the loser must skip.
-    await Promise.all([
-      triggerSourceSyncRun(ctx, { trigger: "scheduled" }),
-      triggerSourceSyncRun(ctx, { trigger: "manual" })
-    ]);
-
-    assert.equal((await ctx.stores.sourceSync.getRun(run.id))?.status, "completed");
-    const publishJobs = (await ctx.jobs.list({})).jobs.filter((j) => j.type === "publish_source_sync");
-    assert.equal(publishJobs.length, 1, "the cleared deferred run is published exactly once");
-    assert.deepEqual(publishJobs[0].input, { runId: run.id });
-  } finally {
-    await cleanup();
-  }
-});
-
-// Indexes a real git clone as the "gitdest" destination so findRepositoryForDestination
-// resolves a git-backed RepositoryRef the publish pre-flight accepts.
-async function indexGitDestination(ctx: ReturnType<typeof makeTestContext>): Promise<void> {
-  const root = await mkdtemp(path.join(tmpdir(), "magpie-srcsync-gitdest-"));
-  const remote = path.join(root, "remote.git");
-  const clone = path.join(root, "clone");
-  const run = (cwd: string, args: string[]) => execFileAsync("git", args, { cwd });
-  await mkdir(remote, { recursive: true });
-  await run(remote, ["init", "--bare", "--initial-branch=main"]);
-  await execFileAsync("git", ["clone", remote, clone]);
-  await run(clone, ["config", "user.name", "Seed"]);
-  await run(clone, ["config", "user.email", "seed@example.com"]);
-  await writeFile(path.join(clone, "guide.md"), "# Guide\n", "utf8");
-  await run(clone, ["add", "-A"]);
-  await run(clone, ["commit", "-m", "seed"]);
-  await run(clone, ["push", "-u", "origin", "main"]);
-  await run(clone, ["fetch", "origin"]);
-  await ctx.stores.knowledgeIndex.indexLocalRepository({ localPath: clone, repositoryId: "gitdest", name: "gitdest" });
-}

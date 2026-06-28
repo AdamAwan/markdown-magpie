@@ -35,7 +35,6 @@ const EXPIRATION_SECONDS = {
   fix_patrol: 60 * 60,
   improve_patrol: 60 * 60,
   publish_proposal: 15 * 60,
-  publish_source_sync: 15 * 60,
   crosslink_pull_requests: 10 * 60,
   fold_markdown_proposal: 15 * 60,
   comment_pull_request: 10 * 60
@@ -89,7 +88,6 @@ test("github capability yields only GitHub work queues", () => {
   assert.deepEqual(queueNamesForCapabilities(["github"]), [
     "refresh_pull_requests",
     "publish_proposal",
-    "publish_source_sync",
     "crosslink_pull_requests",
     "comment_pull_request"
   ]);
@@ -210,10 +208,8 @@ test("source_change_sync output reports the run ids it created (0..N)", () => {
   assert.ok(!schema.safeParse({ planned: true }).success, "missing runIds is rejected");
 });
 
-test("publish_source_sync is a github queue named by its type", () => {
-  const definition = jobDefinition("publish_source_sync");
-  assert.equal(definition.requiredCapability({ runId: "run-1" }), "github");
-  assert.equal(queueNameForJob("publish_source_sync", { runId: "run-1" }), "publish_source_sync");
+test("publish_source_sync is retired", () => {
+  assert.equal(JOB_TYPES.includes("publish_source_sync" as never), false);
 });
 
 test("all queue definitions provision every AI provider partition and a dead-letter queue", () => {

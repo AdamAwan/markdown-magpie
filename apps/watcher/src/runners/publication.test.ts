@@ -2,10 +2,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { RepositoryRef } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
-import { publishProposalOutputSchema, publishSourceSyncOutputSchema } from "@magpie/jobs";
+import { publishProposalOutputSchema } from "@magpie/jobs";
 import type {
   ProposalExecutionContext,
-  SourceSyncExecutionContext,
   WatcherApi
 } from "../http-client.js";
 import { preparePublicationRepository, PublicationRunner } from "./publication.js";
@@ -46,15 +45,6 @@ const PROPOSAL_CONTEXT: ProposalExecutionContext = {
   repository: REPOSITORY
 };
 
-const SOURCE_SYNC_CONTEXT: SourceSyncExecutionContext = {
-  run: {
-    id: "run-aabbccdd",
-    changeset: [{ path: "guide.md", content: "# Guide\nupdated" }]
-  },
-  sourceName: "Pricing repo",
-  repository: REPOSITORY
-};
-
 function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
   return {
     claim: async () => undefined,
@@ -63,7 +53,6 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     fail: async () => undefined,
     retrieve: async () => [],
     proposalExecutionContext: async () => PROPOSAL_CONTEXT,
-    sourceSyncExecutionContext: async () => SOURCE_SYNC_CONTEXT,
     reconcileGaps: async () => ({ ok: true }),
     runSourceSync: async () => ({ runIds: [] }),
     runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
@@ -84,7 +73,7 @@ describe("PublicationRunner", () => {
     });
     assert.equal(runner.capability, "github");
     assert.ok(runner.supports("publish_proposal"));
-    assert.ok(runner.supports("publish_source_sync"));
+    assert.ok(!runner.supports("publish_source_sync" as never));
     assert.ok(runner.supports("crosslink_pull_requests"));
     assert.ok(!runner.supports("answer_question"));
   });
@@ -167,56 +156,6 @@ describe("PublicationRunner", () => {
     assert.equal(parsed.commitSha, "abc123");
   });
 
-  it("publishes a source-sync changeset with the derived branch and source-named title (no PR)", async () => {
-    let publishedBranch: string | undefined;
-    let publishedTitle: string | undefined;
-    let publishedChanges: unknown;
-    let prRaised = false;
-    const runner = new PublicationRunner(fakeApi(), {
-      prepareRepository: async (repository) => repository,
-      publishProposal: async () => ({ branchName: "b", commitSha: "c" }),
-      publishChangeset: async (request) => {
-        publishedBranch = request.branchName;
-        publishedTitle = request.title;
-        publishedChanges = request.changes;
-        return { branchName: request.branchName, commitSha: "fed789", remoteUrl: REPOSITORY.remoteUrl };
-      },
-      raisePullRequest: async () => {
-        prRaised = true;
-        return undefined;
-      },
-      commentOnPullRequest: async () => undefined
-    });
-
-    const output = await runner.run(job("publish_source_sync", { runId: "run-aabbccdd" }), new AbortController().signal);
-    const parsed = publishSourceSyncOutputSchema.parse(output);
-    assert.equal(parsed.runId, "run-aabbccdd");
-    assert.equal(parsed.branchName, "magpie/source-sync-run-aabb");
-    assert.equal(publishedBranch, "magpie/source-sync-run-aabb");
-    assert.equal(parsed.commitSha, "fed789");
-    assert.equal(publishedTitle, "docs: sync to Pricing repo change (1 document)");
-    assert.ok(Array.isArray(publishedChanges));
-    assert.equal(prRaised, false, "source-sync raises no PR");
-  });
-
-  it("rejects a source-sync context whose run carries no changeset", async () => {
-    const api = fakeApi({
-      sourceSyncExecutionContext: async () => ({
-        run: { id: "run-aabbccdd" },
-        sourceName: "Pricing repo",
-        repository: REPOSITORY
-      })
-    });
-    const runner = new PublicationRunner(api, {
-      prepareRepository: async (repository) => repository,
-      publishProposal: async () => ({ branchName: "b", commitSha: "c" }),
-      publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
-      raisePullRequest: async () => undefined,
-      commentOnPullRequest: async () => undefined
-    });
-    await assert.rejects(() => runner.run(job("publish_source_sync", { runId: "run-aabbccdd" }), new AbortController().signal));
-  });
-
   it("prepares a watcher-local checkout before every publication flow", async () => {
     const preparedPaths: string[] = [];
     const publishedPaths: string[] = [];
@@ -247,10 +186,9 @@ describe("PublicationRunner", () => {
 
     const signal = new AbortController().signal;
     await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), signal);
-    await runner.run(job("publish_source_sync", { runId: "run-aabbccdd" }), signal);
 
-    assert.deepEqual(preparedPaths, ["/tmp/repo", "/tmp/repo"]);
-    assert.deepEqual(publishedPaths, ["/data/checkouts/repo-1", "/data/checkouts/repo-1"]);
+    assert.deepEqual(preparedPaths, ["/tmp/repo"]);
+    assert.deepEqual(publishedPaths, ["/data/checkouts/repo-1"]);
   });
 
   it("rejects checkout preparation without a repository remote URL", async () => {

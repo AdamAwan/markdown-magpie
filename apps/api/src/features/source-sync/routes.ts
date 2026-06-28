@@ -28,17 +28,6 @@ export function sourceSyncRoutes(ctx: AppContext): Hono {
     return c.json({ runIds: runs.map((run) => run.id) });
   });
 
-  // The non-generative execution context the watcher's publish_source_sync runner
-  // fetches before executing git: the run (with its persisted changeset), the
-  // source name for the commit title, and the credential-free repository config.
-  app.get("/runs/:id/execution-context", requireScopes("manage:knowledge"), async (c) => {
-    const outcome = await sourceSyncService.getRunExecutionContext(ctx, c.req.param("id"));
-    if (!outcome.ok) {
-      throw new HttpError(outcome.status, outcome.code, outcome.message);
-    }
-    return c.json({ run: outcome.run, sourceName: outcome.sourceName, repository: outcome.repository });
-  });
-
   app.get("/runs/:id", requireScopes("read:knowledge"), async (c) => {
     const run = await sourceSyncService.getRun(ctx, c.req.param("id"));
     if (!run) {

@@ -29,12 +29,6 @@ export interface ProposalExecutionContext {
   repository: unknown;
 }
 
-export interface SourceSyncExecutionContext {
-  run: unknown;
-  sourceName: unknown;
-  repository: unknown;
-}
-
 // One of a flow's open pull requests as returned by GET /api/proposals?status=pr-opened,
 // reduced to exactly what the refresh runner needs: the proposal id and the PR URL to poll.
 export interface OpenPullRequestRef {
@@ -47,7 +41,6 @@ export interface OpenPullRequestRef {
 export interface WatcherApi extends WatcherApiClient {
   retrieve(question: string, flowId: string | undefined, limit: number | undefined): Promise<RetrievedSection[]>;
   proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext>;
-  sourceSyncExecutionContext(runId: string): Promise<SourceSyncExecutionContext>;
   // Drives a flow's gap→PR reconciliation in the API (clustering, the reshape AI
   // job the API bounded-waits on, drafting and publication enqueue). An absent
   // flowId reconciles the default flow.
@@ -186,10 +179,6 @@ export class HttpWatcherApi implements WatcherApi {
 
   async proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext> {
     return this.get<ProposalExecutionContext>(`/api/proposals/${proposalId}/execution-context`);
-  }
-
-  async sourceSyncExecutionContext(runId: string): Promise<SourceSyncExecutionContext> {
-    return this.get<SourceSyncExecutionContext>(`/api/source-sync/runs/${runId}/execution-context`);
   }
 
   private async post<TResponse>(path: string, body: unknown, signal?: AbortSignal): Promise<TResponse> {

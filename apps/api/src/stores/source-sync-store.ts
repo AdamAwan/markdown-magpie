@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ChangesetChange, MaintenancePlan, ProposalPublication, SourceSyncRun, SourceSyncState } from "@magpie/core";
+import type { ChangesetChange, MaintenancePlan, SourceSyncRun, SourceSyncState } from "@magpie/core";
 
 export interface SourceSyncRunInput {
   flowId?: string;
@@ -29,21 +29,7 @@ export interface SourceSyncStore {
   getRunByJobId(jobId: string): Promise<SourceSyncRun | undefined>;
   completeRun(id: string, plan: MaintenancePlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined>;
   markSkipped(id: string, plan: MaintenancePlan): Promise<SourceSyncRun | undefined>;
-  // running → deferred: the run's target file-set overlaps an open PR in the same
-  // flow, so its changeset is preserved (never published as a rival) and re-gated
-  // on a later tick. Persists plan + changeset; sets no completedAt; enqueues no
-  // publication. No-op on a run that is no longer "running".
-  deferRun(id: string, plan: MaintenancePlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined>;
-  // The re-gate worklist: deferred runs for a flow (default flow = undefined).
-  listDeferredRuns(flowId: string | undefined): Promise<SourceSyncRun[]>;
-  // deferred → completed: the overlap cleared, so the preserved changeset becomes
-  // publishable through the normal publish pre-flight. Returns the run ONLY when this
-  // call performed the transition; undefined when the run is missing or already
-  // non-deferred. Callers gate publication on a defined result so two racing re-gate
-  // ticks enqueue publication exactly once (the loser gets undefined and skips).
-  completeDeferredRun(id: string): Promise<SourceSyncRun | undefined>;
   failRun(id: string, error: string): Promise<SourceSyncRun | undefined>;
-  recordRunPublication(id: string, publication: ProposalPublication): Promise<SourceSyncRun | undefined>;
   reset(): Promise<void>;
 }
 
@@ -123,45 +109,8 @@ export class InMemorySourceSyncStore implements SourceSyncStore {
     return this.transitionFromRunning(id, { status: "skipped", plan, completedAt: new Date().toISOString() });
   }
 
-  async deferRun(id: string, plan: MaintenancePlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined> {
-    // Reuses the running-only guard: deferral is a transition out of "running",
-    // like completeRun/markSkipped, but leaves completedAt unset (deferred is a
-    // waiting state, not terminal).
-    return this.transitionFromRunning(id, { status: "deferred", plan, changeset, error: undefined });
-  }
-
-  async listDeferredRuns(flowId: string | undefined): Promise<SourceSyncRun[]> {
-    return [...this.runs.values()]
-      .filter((run) => run.status === "deferred" && (run.flowId ?? "") === (flowId ?? ""))
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-  }
-
-  async completeDeferredRun(id: string): Promise<SourceSyncRun | undefined> {
-    // Returns the run ONLY when this call performed the transition; undefined when the
-    // run is missing or already non-deferred. The read-check-write is synchronous (no
-    // await between), so under the single-threaded event loop exactly one of two racing
-    // re-gates sees "deferred" — see the interface doc.
-    const existing = this.runs.get(id);
-    if (!existing || existing.status !== "deferred") {
-      return undefined;
-    }
-    const updated: SourceSyncRun = { ...existing, status: "completed", completedAt: new Date().toISOString() };
-    this.runs.set(id, updated);
-    return updated;
-  }
-
   async failRun(id: string, error: string): Promise<SourceSyncRun | undefined> {
     return this.transitionFromRunning(id, { status: "failed", error, completedAt: new Date().toISOString() });
-  }
-
-  async recordRunPublication(id: string, publication: ProposalPublication): Promise<SourceSyncRun | undefined> {
-    const existing = this.runs.get(id);
-    if (!existing) {
-      return undefined;
-    }
-    const updated: SourceSyncRun = { ...existing, status: "published", publication };
-    this.runs.set(id, updated);
-    return updated;
   }
 
   // Applies a terminal transition only to a still-running run, so a re-delivered
