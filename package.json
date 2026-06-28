@@ -23,7 +23,7 @@
     "format:check": "prettier --check .",
     "test": "npm run test --workspaces --if-present",
     "test:db": "node scripts/test-db.mjs npm run test",
-    "test:integration": "RUN_PG_INTEGRATION=1 npm test -w @magpie/api -- --test-name-pattern=pg-boss",
+    "test:integration": "RUN_PG_INTEGRATION=1 node --import tsx --test apps/api/src/jobs/pg-boss-broker.integration.test.ts",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
     "test:db:coverage": "node scripts/test-db.mjs npm run test:coverage",
     "typecheck": "tsc -p tsconfig.check.json --noEmit"

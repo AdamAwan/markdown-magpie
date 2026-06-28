@@ -10,7 +10,7 @@ import {
   type QueueDefinition
 } from "@magpie/jobs";
 import { CronExpressionParser } from "cron-parser";
-import { PgBoss, type ConstructorOptions, type JobWithMetadata } from "pg-boss";
+import { PgBoss, type ConstructorOptions, type JobWithMetadata, type UpdateQueueOptions } from "pg-boss";
 import type { DesiredSchedule, JobBroker, JobListFilters, ScheduleView } from "./broker.js";
 
 interface JobEnvelope {
@@ -21,7 +21,13 @@ interface JobEnvelope {
 export interface PgBossJobBrokerOptions {
   connectionString: string;
   schema?: string;
+  queuePolicyOverrides?: PgBossQueuePolicyOverrides;
 }
+
+export type PgBossQueuePolicyOverrides = Partial<Pick<
+  UpdateQueueOptions,
+  "retryLimit" | "retryDelay" | "retryBackoff" | "retryDelayMax"
+>>;
 
 const queueDefinitions = allQueueDefinitions();
 const queueByName = new Map(queueDefinitions.map((queue) => [queue.name, queue]));
@@ -29,6 +35,7 @@ const workQueues = queueDefinitions.filter((queue) => !queue.deadLetter);
 
 export class PgBossJobBroker implements JobBroker {
   private readonly boss: PgBoss;
+  private readonly queuePolicyOverrides: PgBossQueuePolicyOverrides;
   private claimCursor = 0;
 
   constructor(options: PgBossJobBrokerOptions) {
@@ -40,6 +47,7 @@ export class PgBossJobBroker implements JobBroker {
       schedule: true
     };
     this.boss = new PgBoss(bossOptions);
+    this.queuePolicyOverrides = options.queuePolicyOverrides ?? {};
     this.boss.on("error", (error) => console.error(`pg-boss error: ${error.message}`));
     this.boss.on("warning", (warning) => console.warn(`pg-boss warning: ${warning.message}`));
   }
@@ -52,17 +60,7 @@ export class PgBossJobBroker implements JobBroker {
     }
     for (const queue of workQueues) {
       const policy = queue.policy!;
-      const options = {
-        retryLimit: policy.retryLimit,
-        retryDelay: policy.retryDelay,
-        retryBackoff: policy.retryBackoff,
-        retryDelayMax: policy.retryDelayMax,
-        heartbeatSeconds: policy.heartbeatSeconds,
-        expireInSeconds: policy.expireInSeconds,
-        retentionSeconds: policy.retentionSeconds,
-        deleteAfterSeconds: policy.deleteAfterSeconds,
-        deadLetter: policy.deadLetter
-      };
+      const options = pgBossQueueOptions(policy, this.queuePolicyOverrides);
       await this.boss.createQueue(queue.name, options);
       await this.boss.updateQueue(queue.name, options);
     }
@@ -238,6 +236,28 @@ export class PgBossJobBroker implements JobBroker {
     if (!job) throw new Error(`Job not found after pg-boss operation: ${id}`);
     return toJobView(queueName, job);
   }
+}
+
+export function pgBossQueueOptions(
+  policy: Readonly<NonNullable<QueueDefinition["policy"]>>,
+  overrides: PgBossQueuePolicyOverrides = {}
+): UpdateQueueOptions {
+  const options: UpdateQueueOptions = {
+    retryLimit: policy.retryLimit,
+    retryDelay: policy.retryDelay,
+    retryBackoff: policy.retryBackoff,
+    retryDelayMax: policy.retryDelayMax,
+    heartbeatSeconds: policy.heartbeatSeconds,
+    expireInSeconds: policy.expireInSeconds,
+    retentionSeconds: policy.retentionSeconds,
+    deleteAfterSeconds: policy.deleteAfterSeconds,
+    deadLetter: policy.deadLetter,
+    ...overrides
+  };
+  if (options.retryBackoff === false) {
+    delete options.retryDelayMax;
+  }
+  return options;
 }
 
 function toJobView(queueName: string, job: JobWithMetadata<JobEnvelope>): JobView {

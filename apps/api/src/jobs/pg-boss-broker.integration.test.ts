@@ -33,7 +33,15 @@ const providerError: JobError = {
 };
 
 test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegration }, async (t) => {
-  const broker = new PgBossJobBroker({ connectionString: databaseUrl, schema });
+  const broker = new PgBossJobBroker({
+    connectionString: databaseUrl,
+    schema,
+    queuePolicyOverrides: {
+      retryLimit: 1,
+      retryDelay: 1,
+      retryBackoff: false
+    }
+  });
   t.before(() => broker.start());
   t.beforeEach(() => broker.reset());
   t.after(async () => {
@@ -115,7 +123,7 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
     assert.equal(failedAttempt.retryCount, 0);
 
     let claimedRetry;
-    const deadline = Date.now() + 40_000;
+    const deadline = Date.now() + 10_000;
     while (!claimedRetry && Date.now() < deadline) {
       claimedRetry = await broker.claim("worker", ["codex"]);
       if (!claimedRetry) await new Promise((resolve) => setTimeout(resolve, 250));
@@ -138,7 +146,7 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
       if (attempt < exhausted.retryLimit) {
         assert.equal(failed.state, "retry");
         claimed = undefined;
-        const retryDeadline = Date.now() + 180_000;
+        const retryDeadline = Date.now() + 10_000;
         while (!claimed && Date.now() < retryDeadline) {
           claimed = await broker.claim("github-worker", ["github"]);
           if (!claimed) await new Promise((resolve) => setTimeout(resolve, 250));

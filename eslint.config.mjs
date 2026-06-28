@@ -10,6 +10,8 @@ export default tseslint.config(
       "**/.next/**",
       "**/.next-*/**",
       "**/node_modules/**",
+      ".claude/**",
+      ".worktrees/**",
       // Runtime data: knowledge-base source repos the app clones at runtime.
       ".magpie/**",
       "apps/web/next-env.d.ts",
