@@ -268,11 +268,13 @@ test("improve_document completion drafts a proposal and gates it (open-new -> pu
   });
 
   assert.equal(
-    (await completeJob(ctx, job.id, {
-      improved: true,
-      markdown: "# Refunds\nPartial refunds are supported.",
-      rationale: "Added source-backed coverage."
-    })).ok,
+    (
+      await completeJob(ctx, job.id, {
+        improved: true,
+        markdown: "# Refunds\nPartial refunds are supported.",
+        rationale: "Added source-backed coverage."
+      })
+    ).ok,
     true
   );
 
@@ -281,7 +283,10 @@ test("improve_document completion drafts a proposal and gates it (open-new -> pu
   assert.equal(proposal?.flowId, "billing");
   assert.ok(proposal?.title.startsWith("Improve:"));
   const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
-  assert.deepEqual(actions.map((a) => a.proposalId), [proposal?.id]);
+  assert.deepEqual(
+    actions.map((a) => a.proposalId),
+    [proposal?.id]
+  );
 });
 
 test("improve_document no-op completion creates no proposal or publication action", async () => {
@@ -403,6 +408,18 @@ test("refresh_pull_requests completion applies merged/closed transitions idempot
   assert.equal(resolveCalls, cascadesAfterFirst, "merge cascade must not run a second time");
 });
 
+test("refresh_pull_requests completion tolerates snapshot recording failures", async () => {
+  const ctx = makeTestContext();
+  ctx.stores.snapshots.write = async () => {
+    throw new Error("snapshot root is not writable");
+  };
+
+  const job = await ctx.jobs.create("refresh_pull_requests", {});
+
+  assert.equal((await completeJob(ctx, job.id, { results: [] })).ok, true);
+  assert.equal((await ctx.jobs.get(job.id))?.state, "completed");
+});
+
 test("answer completion is idempotent when delivered twice", async () => {
   const ctx = makeTestContext();
 
@@ -481,7 +498,6 @@ test("answer completion persists the routed flowId and retrieved section ids on 
   assert.deepEqual(updated.retrievedSectionIds, ["support-kb:configure.md:0"]);
 });
 
-
 test("completeJob with an unknown job id returns the job_not_found sentinel", async () => {
   const ctx = makeTestContext();
 
@@ -527,9 +543,13 @@ test("refresh_pull_requests completion persists a reported review decision", asy
 
   const job = await ctx.jobs.create("refresh_pull_requests", {});
   assert.equal(
-    (await completeJob(ctx, job.id, {
-      results: [{ proposalId: proposal.id, state: "open" as const, merged: false, reviewDecision: "approved" as const }]
-    })).ok,
+    (
+      await completeJob(ctx, job.id, {
+        results: [
+          { proposalId: proposal.id, state: "open" as const, merged: false, reviewDecision: "approved" as const }
+        ]
+      })
+    ).ok,
     true
   );
   assert.equal((await ctx.stores.proposals.get(proposal.id))?.reviewDecision, "approved");
@@ -557,9 +577,11 @@ test("refresh_pull_requests completion without a reviewDecision leaves a prior o
   // result) must not clobber the stored approval back to touchable.
   const job = await ctx.jobs.create("refresh_pull_requests", {});
   assert.equal(
-    (await completeJob(ctx, job.id, {
-      results: [{ proposalId: proposal.id, state: "open" as const, merged: false }]
-    })).ok,
+    (
+      await completeJob(ctx, job.id, {
+        results: [{ proposalId: proposal.id, state: "open" as const, merged: false }]
+      })
+    ).ok,
     true
   );
   assert.equal((await ctx.stores.proposals.get(proposal.id))?.reviewDecision, "approved");
