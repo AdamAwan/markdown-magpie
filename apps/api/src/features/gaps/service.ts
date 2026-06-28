@@ -7,12 +7,11 @@ export async function listCandidates(ctx: AppContext, limit: number): Promise<Ga
   return ctx.stores.questionLogs.listGapCandidates(limit);
 }
 
-// Runs the full gap→PR reconciliation for one flow (clustering, the reshape AI job
-// the API bounded-waits on, drafting and publication enqueue). This is the thin
-// endpoint the maintenance watcher's process_gaps_to_pull_requests runner POSTs;
-// the heavy orchestration stays here in the API. An absent flowId reconciles the
-// default/un-routed flow.
-export async function reconcileFlow(ctx: AppContext, flowId: string | undefined): Promise<void> {
+// Runs the full gap→PR reconciliation for one configured flow (clustering, the
+// reshape AI job the API bounded-waits on, drafting and publication enqueue).
+// This is the thin endpoint the maintenance watcher's process_gaps_to_pull_requests
+// runner POSTs; the heavy orchestration stays here in the API.
+export async function reconcileFlow(ctx: AppContext, flowId: string): Promise<void> {
   await runReconcileGaps(ctx, flowId);
 }
 

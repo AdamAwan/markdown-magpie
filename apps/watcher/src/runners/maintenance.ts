@@ -44,10 +44,11 @@ export class MaintenanceRunner {
   }
 
   private async processGapsToPullRequests(job: JobView, signal: AbortSignal): Promise<unknown> {
-    // The job's input schema is `{}`, but the schedule may carry a flowId for a
-    // per-flow reconcile; read it defensively without widening the contract.
     const flowId = readFlowId(job.input);
-    console.log(`process_gaps_to_pull_requests[${job.id}]: reconciling gaps for flow ${flowId ?? "(default)"}`);
+    if (!flowId) {
+      throw new Error("process_gaps_to_pull_requests requires flowId");
+    }
+    console.log(`process_gaps_to_pull_requests[${job.id}]: reconciling gaps for flow ${flowId}`);
     await this.api.reconcileGaps(flowId, signal);
 
     // TODO(Task 8E/follow-up): reconcile endpoint returns no counts; returning

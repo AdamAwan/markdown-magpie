@@ -3,26 +3,15 @@ import { test } from "node:test";
 import { makeTestContext } from "../test-support/context.js";
 import { findScheduledTask, listScheduledTasks } from "./task-registry.js";
 
-test("with no flows configured, each task expands to a single default-flow instance", () => {
+test("with no flows configured, no flow-scoped tasks are registered", () => {
   const ctx = makeTestContext(); // knowledgeConfig.flows is []
 
   const tasks = listScheduledTasks(ctx);
-  assert.equal(
-    tasks.length,
-    5,
-    "gaps + source-sync + snapshot-refresh + fix-patrol + improve-patrol for the default flow"
-  );
+  assert.equal(tasks.length, 0);
 
-  const reconciler = findScheduledTask(ctx, "gaps-to-pull-requests::default");
-  assert.ok(reconciler, "the default-flow reconciler is registered");
-  assert.equal(reconciler!.defaultCron, "*/10 * * * *");
-  assert.ok(findScheduledTask(ctx, "source-change-sync::default"), "the default-flow source sync is registered");
-  assert.ok(findScheduledTask(ctx, "snapshot-refresh::default"), "the default-flow snapshot fetch is registered");
-  assert.ok(findScheduledTask(ctx, "fix-patrol::default"), "the default-flow fix patrol is registered");
-  assert.ok(findScheduledTask(ctx, "improve-patrol::default"), "the default-flow improve patrol is registered");
-
-  // The old un-suffixed and separate-refresh keys are gone.
+  // The old un-suffixed, default, and separate-refresh keys are gone.
   assert.equal(findScheduledTask(ctx, "gaps-to-pull-requests"), undefined, "tasks are per-flow, never un-suffixed");
+  assert.equal(findScheduledTask(ctx, "gaps-to-pull-requests::default"), undefined, "there is no synthetic default flow");
   assert.equal(findScheduledTask(ctx, "pull-request-refresh"), undefined, "the separate refresh task stays removed");
 });
 
@@ -61,20 +50,22 @@ test("the gaps-to-pull-requests task queues the reconciler job with the flow in 
 
 test("the fix-patrol task queues the fix_patrol job with the flow in its input", () => {
   const ctx = makeTestContext();
-  const patrol = findScheduledTask(ctx, "fix-patrol::default");
+  ctx.knowledgeConfig.flows = [{ id: "alpha", name: "Alpha", sourceIds: [], destinationId: "kb" }];
+  const patrol = findScheduledTask(ctx, "fix-patrol::alpha");
   assert.ok(patrol, "a fix-patrol task is registered");
   assert.equal(patrol!.baseKey, "fix-patrol");
   assert.equal(patrol!.jobType, "fix_patrol");
-  assert.deepEqual(patrol!.input, { flowId: undefined });
+  assert.deepEqual(patrol!.input, { flowId: "alpha" });
 });
 
 test("the improve-patrol task queues the improve_patrol job with the flow in its input", () => {
   const ctx = makeTestContext();
-  const patrol = findScheduledTask(ctx, "improve-patrol::default");
+  ctx.knowledgeConfig.flows = [{ id: "alpha", name: "Alpha", sourceIds: [], destinationId: "kb" }];
+  const patrol = findScheduledTask(ctx, "improve-patrol::alpha");
   assert.ok(patrol, "an improve-patrol task is registered");
   assert.equal(patrol!.baseKey, "improve-patrol");
   assert.equal(patrol!.jobType, "improve_patrol");
-  assert.deepEqual(patrol!.input, { flowId: undefined });
+  assert.deepEqual(patrol!.input, { flowId: "alpha" });
   // Its human-facing label says Improve, distinct from the Fix patrol task.
   assert.match(patrol!.typeLabel, /Improve patrol/);
 });

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
+import { HttpError } from "../../http/errors.js";
 import { parseLimit } from "../../platform/paths.js";
 import * as gapsService from "./service.js";
 
@@ -17,14 +18,20 @@ export function gapRoutes(ctx: AppContext): Hono {
     return c.json({ clusters: await gapsService.listClusters(ctx, limit) });
   });
 
-  // Run the full gap→PR reconciliation for one flow. This is the thin endpoint the
-  // maintenance watcher's process_gaps_to_pull_requests runner POSTs; the heavy
-  // orchestration (clustering, the reshape AI job, drafting and publication
-  // enqueue) stays in the API. The body is optional; an absent flowId reconciles
-  // the default/un-routed flow. Same admin scope as the scheduled-task run route.
+  // Run the full gap→PR reconciliation for one configured flow. This is the thin
+  // endpoint the maintenance watcher's process_gaps_to_pull_requests runner POSTs;
+  // the heavy orchestration (clustering, the reshape AI job, drafting and
+  // publication enqueue) stays in the API. Same admin scope as the scheduled-task
+  // run route.
   app.post("/reconcile", requireScopes("manage:jobs"), async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as { flowId?: unknown };
-    const flowId = typeof body.flowId === "string" ? body.flowId : undefined;
+    const flowId = typeof body.flowId === "string" ? body.flowId.trim() : "";
+    if (!flowId) {
+      throw new HttpError(400, "flow_id_required");
+    }
+    if (!ctx.knowledgeConfig.flows.some((flow) => flow.id === flowId)) {
+      throw new HttpError(404, "flow_not_found");
+    }
     await gapsService.reconcileFlow(ctx, flowId);
     return c.json({ ok: true });
   });

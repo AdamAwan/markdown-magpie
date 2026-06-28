@@ -5,6 +5,7 @@ import {
   foldMarkdownProposalInputSchema,
   foldMarkdownProposalOutputSchema,
   commentPullRequestInputSchema,
+  processGapsToPullRequestsInputSchema,
   refreshPullRequestsOutputSchema,
   improveDocumentInputSchema,
   improveDocumentOutputSchema,
@@ -13,6 +14,12 @@ import {
   verifyDocumentInputSchema,
   verifyDocumentOutputSchema
 } from "./schemas.js";
+
+test("process_gaps_to_pull_requests input requires and preserves flowId", () => {
+  assert.equal(processGapsToPullRequestsInputSchema.safeParse({}).success, false);
+  const parsed = processGapsToPullRequestsInputSchema.parse({ flowId: "magpie-support" });
+  assert.deepEqual(parsed, { flowId: "magpie-support" });
+});
 
 test("verify_document input round-trips path/content/sources with a provider", () => {
   const ok = verifyDocumentInputSchema.safeParse({

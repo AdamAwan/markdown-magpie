@@ -12,7 +12,7 @@ async function scheduledKeys(ctx: ReturnType<typeof makeTestContext>) {
     .sort((left, right) => left.key.localeCompare(right.key));
 }
 
-test("reconcile builds per-task schedules for the default flow", async () => {
+test("reconcile does not build schedules when no flows are configured", async () => {
   const ctx = makeTestContext();
   await ctx.stores.scheduledTasks.updateSettings("gaps-to-pull-requests::default", { enabled: true, cron: "*/10 * * * *" });
   await ctx.stores.scheduledTasks.updateSettings("source-change-sync::default", { enabled: true, cron: "*/10 * * * *" });
@@ -20,16 +20,13 @@ test("reconcile builds per-task schedules for the default flow", async () => {
 
   await reconcileSchedules(ctx);
 
-  assert.deepEqual(await scheduledKeys(ctx), [
-    { type: "process_gaps_to_pull_requests", key: "task:gaps-to-pull-requests::default", cron: "*/10 * * * *" },
-    { type: "refresh_pull_requests", key: "task:snapshot-refresh::default", cron: "*/5 * * * *" },
-    { type: "source_change_sync", key: "task:source-change-sync::default", cron: "*/10 * * * *" }
-  ].sort((left, right) => left.key.localeCompare(right.key)));
+  assert.deepEqual(await scheduledKeys(ctx), []);
 });
 
 test("reconcile is idempotent: running twice produces the same schedule set", async () => {
   const ctx = makeTestContext();
-  await ctx.stores.scheduledTasks.updateSettings("snapshot-refresh::default", { enabled: true, cron: "*/5 * * * *" });
+  ctx.knowledgeConfig.flows = [{ id: "alpha", name: "Alpha", sourceIds: [], destinationId: "kb" }];
+  await ctx.stores.scheduledTasks.updateSettings("snapshot-refresh::alpha", { enabled: true, cron: "*/5 * * * *" });
 
   await reconcileSchedules(ctx);
   const first = await scheduledKeys(ctx);
@@ -41,15 +38,16 @@ test("reconcile is idempotent: running twice produces the same schedule set", as
 
 test("disabling a setting unschedules its key on the next reconcile", async () => {
   const ctx = makeTestContext();
-  await ctx.stores.scheduledTasks.updateSettings("snapshot-refresh::default", { enabled: true, cron: "*/5 * * * *" });
+  ctx.knowledgeConfig.flows = [{ id: "alpha", name: "Alpha", sourceIds: [], destinationId: "kb" }];
+  await ctx.stores.scheduledTasks.updateSettings("snapshot-refresh::alpha", { enabled: true, cron: "*/5 * * * *" });
   await reconcileSchedules(ctx);
 
   // The FakeJobBroker reflects enabled=false in its ScheduleView, so a disabled
   // schedule is observable as not enabled rather than gone — assert on that.
-  await ctx.stores.scheduledTasks.updateSettings("snapshot-refresh::default", { enabled: false, cron: "*/5 * * * *" });
+  await ctx.stores.scheduledTasks.updateSettings("snapshot-refresh::alpha", { enabled: false, cron: "*/5 * * * *" });
   await reconcileSchedules(ctx);
 
-  const snapshot = (await ctx.jobs.listSchedules()).find((s) => s.key === "task:snapshot-refresh::default");
+  const snapshot = (await ctx.jobs.listSchedules()).find((s) => s.key === "task:snapshot-refresh::alpha");
   assert.equal(snapshot?.enabled, false, "disabled task schedule must be reconciled to enabled=false");
 });
 

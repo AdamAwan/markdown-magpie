@@ -339,7 +339,9 @@ export const refreshPullRequestsOutputSchema = z.object({
   }))
 });
 
-export const processGapsToPullRequestsInputSchema = z.object({});
+export const processGapsToPullRequestsInputSchema = z.object({
+  flowId: z.string()
+});
 export const processGapsToPullRequestsOutputSchema = z.object({
   drafted: z.number().int(),
   published: z.number().int()
