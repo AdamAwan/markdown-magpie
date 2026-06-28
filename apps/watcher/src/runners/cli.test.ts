@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { JobView } from "@magpie/jobs";
+import { JOB_TYPES, jobDefinition, type JobView, type JobType } from "@magpie/jobs";
 import { CliRunner } from "./cli.js";
 
 function job(type: JobView["type"], input: unknown): JobView {
@@ -19,6 +19,20 @@ function job(type: JobView["type"], input: unknown): JobView {
   };
 }
 
+function cliProviderJobTypes(): JobType[] {
+  const chatOnly = new Set<JobType>(["answer_question", "reconcile_gap_clusters"]);
+  return JOB_TYPES.filter((type) => {
+    if (chatOnly.has(type)) {
+      return false;
+    }
+    try {
+      return jobDefinition(type).requiredCapability({ provider: "codex" }) === "codex";
+    } catch {
+      return false;
+    }
+  });
+}
+
 const SUMMARIZE = job("summarize_gap", { questions: ["q"], citedSections: [] });
 const RESULT_JSON = JSON.stringify({ summary: "s", priority: 1, rationale: "r" });
 
@@ -26,9 +40,11 @@ describe("CliRunner", () => {
   it("exposes its provider capability and supports AI job types", () => {
     const runner = new CliRunner({ capability: "codex", command: "true", args: [], promptMode: "arg" });
     assert.equal(runner.capability, "codex");
-    assert.ok(runner.supports("summarize_gap"));
-    assert.ok(runner.supports("sync_source_changes_generate_plan"));
-    assert.ok(runner.supports("fold_markdown_proposal"));
+    for (const type of cliProviderJobTypes()) {
+      assert.ok(runner.supports(type), `CLI runner should support provider job type ${type}`);
+    }
+    assert.ok(!runner.supports("answer_question"));
+    assert.ok(!runner.supports("reconcile_gap_clusters"));
     assert.ok(!runner.supports("publish_proposal"));
   });
 
