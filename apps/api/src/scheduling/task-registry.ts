@@ -40,7 +40,7 @@ interface FlowTaskTemplate {
   defaultCron: string;
   // The queued job this task reconciles to, and how to build that job's input
   // from the task's flow. The job input schemas are the source of truth: the
-  // gaps and snapshot jobs take no input today (`{}`), source sync takes `{flowId}`.
+  // snapshot jobs take no input today (`{}`); per-flow jobs take `{flowId}`.
   jobType: JobType;
   input(flowId: string | undefined): unknown;
 }
@@ -54,7 +54,7 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
       "raised from its proposals, and publishes its open proposals. Requires GITHUB_TOKEN for PR operations.",
     defaultCron: "*/10 * * * *",
     jobType: "process_gaps_to_pull_requests",
-    input: () => ({})
+    input: (flowId) => ({ flowId })
   },
   {
     baseKey: "source-change-sync",
