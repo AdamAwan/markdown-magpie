@@ -48,6 +48,17 @@ test("each configured flow gets its own per-flow instance of every task", () => 
   assert.match(findScheduledTask(ctx, "gaps-to-pull-requests::alpha")!.label, /Alpha/);
 });
 
+test("the gaps-to-pull-requests task queues the reconciler job with the flow in its input", () => {
+  const ctx = makeTestContext();
+  ctx.knowledgeConfig.flows = [{ id: "alpha", name: "Alpha", sourceIds: [], destinationId: "kb" }];
+
+  const reconciler = findScheduledTask(ctx, "gaps-to-pull-requests::alpha");
+  assert.ok(reconciler, "a gaps-to-pull-requests task is registered");
+  assert.equal(reconciler!.baseKey, "gaps-to-pull-requests");
+  assert.equal(reconciler!.jobType, "process_gaps_to_pull_requests");
+  assert.deepEqual(reconciler!.input, { flowId: "alpha" });
+});
+
 test("the fix-patrol task queues the fix_patrol job with the flow in its input", () => {
   const ctx = makeTestContext();
   const patrol = findScheduledTask(ctx, "fix-patrol::default");
