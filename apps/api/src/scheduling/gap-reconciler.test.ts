@@ -266,7 +266,9 @@ describe("reconcileGaps autonomous drafting", () => {
   });
 
   it("enqueues only the uncovered cluster on a later run, never duplicating", async () => {
+    const jobs = new ReshapingJobBroker(() => ({ merges: [], splits: [] }));
     const ctx = makeTestContext({
+      jobs,
       config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
     });
     const deps = {

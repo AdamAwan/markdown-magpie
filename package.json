@@ -22,6 +22,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "npm run test --workspaces --if-present",
+    "test:timings": "node scripts/test-timings.mjs",
+    "test:slow": "node scripts/test-timings.mjs --verify",
     "test:db": "node scripts/test-db.mjs npm run test",
     "test:integration": "RUN_PG_INTEGRATION=1 node --import tsx --test apps/api/src/jobs/pg-boss-broker.integration.test.ts",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
