@@ -112,13 +112,10 @@ function taskKey(baseKey: string, flowId: string | undefined): string {
   return `${baseKey}${FLOW_KEY_SEPARATOR}${flowId ?? DEFAULT_FLOW_TOKEN}`;
 }
 
-// The flows to expand tasks over: every configured flow, or a single un-routed
-// "default" flow when none are configured (mirroring the source-sync fallback).
+// The flows to expand tasks over. Scheduled maintenance is flow-scoped; if no
+// flows are configured, there is no synthetic default flow to run.
 function expansionFlows(ctx: AppContext): Array<{ id: string | undefined; name: string }> {
-  const flows = ctx.knowledgeConfig.flows;
-  return flows.length > 0
-    ? flows.map((flow) => ({ id: flow.id, name: flow.name }))
-    : [{ id: undefined, name: "default" }];
+  return ctx.knowledgeConfig.flows.map((flow) => ({ id: flow.id, name: flow.name }));
 }
 
 // Every concrete scheduled task: the cartesian product of templates and flows.

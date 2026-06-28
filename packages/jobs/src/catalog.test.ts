@@ -177,6 +177,14 @@ test("source_change_sync is a maintenance queue named by its type", () => {
   assert.equal(queueNameForJob("source_change_sync", {}), "source_change_sync");
 });
 
+test("process_gaps_to_pull_requests requires a flowId but stays on the maintenance queue", () => {
+  const definition = jobDefinition("process_gaps_to_pull_requests");
+  assert.equal(definition.requiredCapability({ flowId: "billing" }), "maintenance");
+  assert.equal(queueNameForJob("process_gaps_to_pull_requests", { flowId: "billing" }), "process_gaps_to_pull_requests");
+  assert.ok(!definition.inputSchema.safeParse({}).success);
+  assert.ok(definition.inputSchema.safeParse({ flowId: "billing" }).success);
+});
+
 test("fix_patrol is a maintenance queue named by its type", () => {
   const definition = jobDefinition("fix_patrol");
   assert.equal(definition.requiredCapability({ flowId: "billing" }), "maintenance");

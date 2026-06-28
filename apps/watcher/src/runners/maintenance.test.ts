@@ -149,7 +149,20 @@ describe("MaintenanceRunner", () => {
     assert.deepEqual(calls, [undefined]);
   });
 
-  it("POSTs the reconcile endpoint and returns schema-valid output", async () => {
+  it("rejects gap reconciliation jobs without a flowId", async () => {
+    const api = fakeApi({
+      reconcileGaps: async () => {
+        throw new Error("should not call reconcile without a flowId");
+      }
+    });
+    const runner = new MaintenanceRunner(api);
+    await assert.rejects(
+      () => runner.run(job("process_gaps_to_pull_requests", {}), new AbortController().signal),
+      /requires flowId/
+    );
+  });
+
+  it("POSTs the reconcile endpoint with a flowId and returns schema-valid output", async () => {
     let called: string | undefined = "unset";
     const api = fakeApi({
       reconcileGaps: async (flowId) => {
@@ -158,26 +171,16 @@ describe("MaintenanceRunner", () => {
       }
     });
     const runner = new MaintenanceRunner(api);
-    const output = (await runner.run(job("process_gaps_to_pull_requests", {}), new AbortController().signal)) as {
+    const output = (await runner.run(
+      job("process_gaps_to_pull_requests", { flowId: "flow-x" }),
+      new AbortController().signal
+    )) as {
       drafted: number;
       published: number;
     };
-    assert.equal(called, undefined, "no flowId in input ⇒ reconcile the default flow");
+    assert.equal(called, "flow-x");
     assert.equal(output.drafted, 0);
     assert.equal(output.published, 0);
-  });
-
-  it("forwards a flowId from the job input when present", async () => {
-    let called: string | undefined = "unset";
-    const api = fakeApi({
-      reconcileGaps: async (flowId) => {
-        called = flowId;
-        return { ok: true };
-      }
-    });
-    const runner = new MaintenanceRunner(api);
-    await runner.run(job("process_gaps_to_pull_requests", { flowId: "flow-x" }), new AbortController().signal);
-    assert.equal(called, "flow-x");
   });
 
   it("rejects job types it does not handle", async () => {
