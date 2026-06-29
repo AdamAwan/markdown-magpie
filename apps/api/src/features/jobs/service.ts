@@ -4,7 +4,7 @@ import { jobDefinition } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import type { JobListFilters } from "../../jobs/broker.js";
 import type { WatcherTouch } from "../../stores/watcher-registry-store.js";
-import { refreshPullRequestsOutputSchema } from "@magpie/jobs";
+import { refreshFlowSnapshotOutputSchema } from "@magpie/jobs";
 import * as proposalsService from "../proposals/service.js";
 import * as sourceSyncService from "../source-sync/service.js";
 import * as snapshotsService from "../snapshots/service.js";
@@ -215,7 +215,7 @@ export async function completeJob(
     await foldService.applyChangesetFoldFromCompletedJob(ctx, existingJob, parsed.data);
     await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await sourceSyncService.attachSourceSyncPlanFromCompletedJob(ctx, existingJob, parsed.data);
-    await handleRefreshPullRequestsCompletion(ctx, existingJob, parsed.data);
+    await handleRefreshFlowSnapshotCompletion(ctx, existingJob, parsed.data);
     await ctx.jobs.complete(jobId, { result: parsed.data, executor });
     // The watcher is free again the moment it completes a job; reflect that
     // immediately rather than waiting for its next idle claim poll.
@@ -261,7 +261,7 @@ async function updateQuestionLogFromCompletedJob(
   });
 }
 
-// Completion handler for refresh_pull_requests: the github watcher polled each open
+// Completion handler for refresh_flow_snapshot: the github watcher polled each open
 // PR and reported its merged/closed state. Two side effects follow. First, apply the
 // proposal-status transitions the reconciler would otherwise apply from a snapshot,
 // via the shared applyPullRequestTransition so the merged→cascade+freeze /
@@ -272,15 +272,15 @@ async function updateQuestionLogFromCompletedJob(
 // token, so this watcher-reported state is the only way PR status (and the gaps and
 // proposals captured alongside it) reaches the snapshot the /snapshots page and the
 // reconciler's PR-state pass read from.
-async function handleRefreshPullRequestsCompletion(
+async function handleRefreshFlowSnapshotCompletion(
   ctx: AppContext,
   job: JobView | undefined,
   output: unknown
 ): Promise<void> {
-  if (!job || job.type !== "refresh_pull_requests") {
+  if (!job || job.type !== "refresh_flow_snapshot") {
     return;
   }
-  const parsed = refreshPullRequestsOutputSchema.safeParse(output);
+  const parsed = refreshFlowSnapshotOutputSchema.safeParse(output);
   if (!parsed.success) {
     return;
   }
@@ -298,7 +298,7 @@ async function handleRefreshPullRequestsCompletion(
     await snapshotsService.recordSnapshotsFromPullRequestResults(ctx, parsed.data.results);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`refresh_pull_requests: snapshot recording failed after PR transitions were applied: ${message}`);
+    console.warn(`refresh_flow_snapshot: snapshot recording failed after PR transitions were applied: ${message}`);
   }
 }
 

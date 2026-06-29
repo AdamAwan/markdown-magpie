@@ -217,12 +217,12 @@ async function refreshOpenPullRequests(
 }
 
 // The merged/closed proposal transition, applied by BOTH this reconciler's PR-state
-// pass and the refresh_pull_requests completion handler. Kept here and shared so the
+// pass and the refresh_flow_snapshot completion handler. Kept here and shared so the
 // two paths can never drift: merged ⇒ updateStatus("merged") + runMergeCascade +
 // freeze the cluster; a close-without-merge ⇒ updateStatus("rejected") + freeze.
 // Idempotent by guarding on the proposal's CURRENT status: only a still-open
 // (pr-opened) proposal is transitioned, so re-applying the same reading — e.g.
-// re-completing a refresh_pull_requests job — is a no-op and never runs the cascade
+// re-completing a refresh_flow_snapshot job — is a no-op and never runs the cascade
 // twice. (updateStatus itself returns the proposal even when nothing changed, so the
 // guard, not its return value, is what makes this safe.)
 export async function applyPullRequestTransition(

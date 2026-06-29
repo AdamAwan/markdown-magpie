@@ -37,12 +37,16 @@ The scheduled task inventory is now:
 
 - `process_gaps_to_pull_requests`
 - `source_change_sync`
-- `refresh_pull_requests`
-- `fix_patrol`
-- `improve_patrol`
+- `refresh_flow_snapshot` (renamed from `refresh_pull_requests`)
+- `correctness_patrol` (renamed from `fix_patrol`)
+- `editorial_patrol` (renamed from `improve_patrol`)
 
 These are flow-scoped scheduled tasks, surfaced in the Schedules UI and executed
-through the watcher/job system.
+through the watcher/job system. The last three were renamed for clarity (migration
+`0033_rename_patrol_task_types.sql` forward-migrates historical
+`maintenance_runs.task_type` rows; the old pg-boss schedules are torn down
+automatically by `reconcileSchedules` at startup). The `baseKey`s, REST routes
+(`/api/fix-patrol/*`), and service methods are unchanged.
 
 ### 3. Scheduled crunch is retired
 

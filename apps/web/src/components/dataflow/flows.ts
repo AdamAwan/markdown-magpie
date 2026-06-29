@@ -13,6 +13,7 @@ export type FlowKey =
   | "automation"
   | "reconcile"
   | "gappr"
+  | "schedules"
   | "perflow";
 
 export interface FlowDef {
@@ -398,7 +399,7 @@ function gappr(): FlowGraph {
       },
       { id: "github", kind: "user", label: "🚀 GitHub Watcher\npush branch + open PR" },
       { id: "host", kind: "source", label: "🌐 Git Host\nPull Request" },
-      { id: "refresh", kind: "processing", label: "🔄 GitHub Watcher\nrefresh_pull_requests" },
+      { id: "refresh", kind: "processing", label: "🔄 GitHub Watcher\nrefresh_flow_snapshot" },
       { id: "merge", kind: "processing", label: "✅ API on merge\nresolve gaps + re-index" }
     ],
     edges: [
@@ -489,6 +490,71 @@ function perflow(): FlowGraph {
   };
 }
 
+// The two-tier model behind the schedules: each scheduled task fires exactly one
+// job (tier 1), and four of those orchestrator jobs fan out into the AI/github
+// jobs that do the real work (tier 2). Node labels carry the real job-type
+// identifiers (= the pg-boss queue names) so a row in the Schedules UI, a box
+// here, and a `type=` filter in the job queue can all be matched up. The fifth
+// schedule (snapshot refresh) is a leaf github job: it has no tier-2 fan-out and
+// instead feeds the gap reconciler the PR state it reads.
+function schedules(): FlowGraph {
+  return {
+    direction: "LR",
+    groups: [
+      { id: "tier1", label: "Tier 1 · scheduled jobs — each per-flow cron fires exactly one job" },
+      { id: "tier2", label: "Tier 2 · the jobs those orchestrators enqueue" },
+      { id: "converge", label: "Convergence · every producer meets one gate" }
+    ],
+    nodes: [
+      { id: "sched", kind: "user", label: "⏱️ pg-boss scheduler\nper-flow cron + run-lock" },
+      { id: "tGaps", kind: "processing", label: "Gap drafting\nprocess_gaps_to_pull_requests\n~10m · maintenance", group: "tier1" },
+      { id: "tSync", kind: "processing", label: "Source sync\nsource_change_sync\n~10m · maintenance", group: "tier1" },
+      { id: "tFix", kind: "processing", label: "Correctness patrol\ncorrectness_patrol\nhourly · maintenance", group: "tier1" },
+      { id: "tImp", kind: "processing", label: "Editorial patrol\neditorial_patrol\nhourly · maintenance", group: "tier1" },
+      { id: "tSnap", kind: "processing", label: "Snapshot refresh\nrefresh_flow_snapshot\n~5m · github", group: "tier1" },
+      { id: "jReshape", kind: "ai", label: "reconcile_gap_clusters\n(if ≥2 clusters)", group: "tier2" },
+      { id: "jDraft", kind: "ai", label: "draft_markdown_proposal\nper uncovered cluster", group: "tier2" },
+      { id: "jSyncPlan", kind: "ai", label: "sync_source_changes_generate_plan\nper changed source", group: "tier2" },
+      { id: "jVerify", kind: "ai", label: "verify_document →\ncorrect_document", group: "tier2" },
+      { id: "jDedupe", kind: "ai", label: "dedupe_documents", group: "tier2" },
+      { id: "jSplit", kind: "ai", label: "split_document", group: "tier2" },
+      { id: "jImprove", kind: "ai", label: "improve_document", group: "tier2" },
+      { id: "jSnapshot", kind: "storage", label: "💾 flow snapshot\ngaps · proposals · PR state", group: "tier2" },
+      { id: "gate", kind: "highlight", label: "🚦 Reconcile gate\nopen-new / fold / defer" },
+      {
+        id: "pub",
+        kind: "user",
+        label: "🚀 github jobs\npublish_proposal · fold_markdown_proposal\nfold_changeset_proposal · comment_pull_request",
+        group: "converge"
+      }
+    ],
+    edges: [
+      { from: "sched", to: "tGaps", label: "1 job / flow" },
+      { from: "sched", to: "tSync" },
+      { from: "sched", to: "tFix" },
+      { from: "sched", to: "tImp" },
+      { from: "sched", to: "tSnap" },
+      { from: "tGaps", to: "jReshape", label: "≥2 clusters" },
+      { from: "tGaps", to: "jDraft", label: "uncovered cluster" },
+      { from: "jReshape", to: "jDraft", label: "marks covered", dashed: true },
+      { from: "tSync", to: "jSyncPlan" },
+      { from: "tFix", to: "jVerify" },
+      { from: "tFix", to: "jDedupe" },
+      { from: "tFix", to: "jSplit" },
+      { from: "tImp", to: "jImprove" },
+      { from: "tSnap", to: "jSnapshot" },
+      { from: "jDraft", to: "gate" },
+      { from: "jSyncPlan", to: "gate" },
+      { from: "jVerify", to: "gate" },
+      { from: "jDedupe", to: "gate" },
+      { from: "jSplit", to: "gate" },
+      { from: "jImprove", to: "gate" },
+      { from: "gate", to: "pub", label: "open-new / fold" },
+      { from: "jSnapshot", to: "tGaps", label: "PR state feeds reconciler", dashed: true }
+    ]
+  };
+}
+
 export const FLOWS: FlowDef[] = [
   { key: "overview", title: "System Overview", build: overview },
   { key: "ask", title: "Ask a Question", build: ask },
@@ -496,6 +562,7 @@ export const FLOWS: FlowDef[] = [
   { key: "automation", title: "Scheduled Maintenance", build: automation },
   { key: "reconcile", title: "Reconcile Gate", build: reconcile },
   { key: "gappr", title: "Gap-to-PR Pipeline", build: gappr },
+  { key: "schedules", title: "Scheduled Jobs → Job Types", build: schedules },
   { key: "perflow", title: "Per-Flow Isolation", build: perflow }
 ];
 
@@ -512,7 +579,7 @@ function flowsByKey(keys: FlowKey[]): FlowDef[] {
 export const FLOW_GROUPS: FlowGroupDef[] = [
   { title: "Start here", flows: flowsByKey(["overview"]) },
   { title: "Common workflows", flows: flowsByKey(["ask", "improvement", "automation"]) },
-  { title: "Deep dives", flows: flowsByKey(["reconcile", "gappr", "perflow"]) }
+  { title: "Deep dives", flows: flowsByKey(["reconcile", "gappr", "schedules", "perflow"]) }
 ];
 
 export function buildFlowGraph(key: FlowKey, modelInfo: ModelInfo): FlowGraph {

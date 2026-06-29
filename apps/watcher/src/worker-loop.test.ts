@@ -150,7 +150,7 @@ describe("WorkerLoop", () => {
   it("fails a claimed job when no runner supports its type", async () => {
     // The broker can advertise a capability (e.g. maintenance) that has no runner
     // registered yet; a job of that type must be failed safely, not silently dropped.
-    const api = new FakeApiClient({ jobs: [fakeJob({ type: "refresh_pull_requests" })] });
+    const api = new FakeApiClient({ jobs: [fakeJob({ type: "refresh_flow_snapshot" })] });
     const runner = new FakeRunner(async () => ({})); // only supports answer_question
     const loop = new WorkerLoop(api, [runner], CAPS, "w1", { pollIntervalMs: 1 });
     await loop.tick();

@@ -4,11 +4,11 @@ function taskTypeLabel(taskType: MaintenanceRun["taskType"]): string {
   if (taskType === "process_gaps_to_pull_requests") {
     return "Gap reconciliation";
   }
-  if (taskType === "fix_patrol") {
-    return "Fix patrol";
+  if (taskType === "correctness_patrol") {
+    return "Correctness patrol";
   }
-  if (taskType === "improve_patrol") {
-    return "Improve patrol";
+  if (taskType === "editorial_patrol") {
+    return "Editorial patrol";
   }
   return taskType;
 }
@@ -84,7 +84,7 @@ function detailChips(run: MaintenanceRun): string[] {
     return chips;
   }
 
-  if (run.taskType === "fix_patrol") {
+  if (run.taskType === "correctness_patrol") {
     return [
       `${numberDetail(run.details, "selectedCount")}/${numberDetail(run.details, "universeCount")} docs checked`,
       plural(Array.isArray(run.details.findings) ? run.details.findings.length : 0, "finding"),
@@ -92,7 +92,7 @@ function detailChips(run: MaintenanceRun): string[] {
     ];
   }
 
-  if (run.taskType === "improve_patrol") {
+  if (run.taskType === "editorial_patrol") {
     return [
       `${numberDetail(run.details, "selectedCount")}/${numberDetail(run.details, "universeCount")} docs checked`,
       plural(numberDetail(run.details, "enqueuedCount"), "improve scan"),

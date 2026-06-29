@@ -327,8 +327,8 @@ export const foldChangesetProposalOutputSchema = z.object({
   rationale: z.string()
 }) satisfies z.ZodType<FoldChangesetProposalJobOutput>;
 
-export const refreshPullRequestsInputSchema = z.object({});
-export const refreshPullRequestsOutputSchema = z.object({
+export const refreshFlowSnapshotInputSchema = z.object({});
+export const refreshFlowSnapshotOutputSchema = z.object({
   results: z.array(z.object({
     proposalId: z.string(),
     state: z.enum(["open", "closed"]),
@@ -365,17 +365,17 @@ export const sourceChangeSyncOutputSchema = z.object({
   runIds: z.array(z.string())
 });
 
-export const fixPatrolInputSchema = z.object({ flowId: z.string().optional() });
+export const correctnessPatrolInputSchema = z.object({ flowId: z.string().optional() });
 // Per tick the patrol records exactly one run; the output reports its id and how
 // many documents it checked (0 when the flow has no indexed documents yet).
-export const fixPatrolOutputSchema = z.object({
+export const correctnessPatrolOutputSchema = z.object({
   runId: z.string(),
   selectedCount: z.number().int(),
   findingCount: z.number().int()
 });
 
-export const improvePatrolInputSchema = z.object({ flowId: z.string().optional() });
-export const improvePatrolOutputSchema = z.object({
+export const editorialPatrolInputSchema = z.object({ flowId: z.string().optional() });
+export const editorialPatrolOutputSchema = z.object({
   runId: z.string(),
   selectedCount: z.number().int(),
   enqueuedCount: z.number().int()

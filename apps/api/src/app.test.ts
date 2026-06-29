@@ -156,7 +156,7 @@ test("the retired /crunch route is gone", async () => {
 test("GET /api/maintenance-runs lists recorded runs", async () => {
   const ctx = makeTestContext();
   await ctx.stores.maintenanceRuns.record({
-    taskType: "fix_patrol",
+    taskType: "correctness_patrol",
     trigger: "scheduled",
     status: "completed",
     summary: "checked 1/1 doc · 0 findings",
@@ -167,7 +167,7 @@ test("GET /api/maintenance-runs lists recorded runs", async () => {
   assert.equal(res.status, 200);
   const body = (await res.json()) as { runs: Array<{ taskType: string; summary: string }> };
   assert.equal(body.runs.length, 1);
-  assert.equal(body.runs[0].taskType, "fix_patrol");
+  assert.equal(body.runs[0].taskType, "correctness_patrol");
 });
 
 test("OPTIONS preflight returns 204", async () => {

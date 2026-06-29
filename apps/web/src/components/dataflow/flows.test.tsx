@@ -16,15 +16,16 @@ const ALL_KEYS: FlowKey[] = [
   "automation",
   "reconcile",
   "gappr",
+  "schedules",
   "perflow"
 ];
 
 const EXPECTED_GROUPS = [
   { title: "Start here", keys: ["overview"] },
   { title: "Common workflows", keys: ["ask", "improvement", "automation"] },
-  { title: "Deep dives", keys: ["reconcile", "gappr", "perflow"] }
+  { title: "Deep dives", keys: ["reconcile", "gappr", "schedules", "perflow"] }
 ];
-const HORIZONTAL_KEYS: FlowKey[] = ["overview", "ask", "automation", "reconcile", "gappr", "perflow"];
+const HORIZONTAL_KEYS: FlowKey[] = ["overview", "ask", "automation", "reconcile", "gappr", "schedules", "perflow"];
 
 test("exposes every flow with a title and builder", () => {
   assert.deepEqual(

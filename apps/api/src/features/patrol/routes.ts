@@ -8,7 +8,7 @@ import * as patrolService from "./service.js";
 export function fixPatrolRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
-  // Thin orchestration endpoint the maintenance watcher's fix_patrol runner POSTs.
+  // Thin orchestration endpoint the maintenance watcher's correctness_patrol runner POSTs.
   // Selects the next batch of documents to patrol, runs the verify lens over them,
   // advances the cursor, and records a maintenance run with its findings. Body
   // optional; an absent flowId patrols the default (unscoped) flow. (Run history is

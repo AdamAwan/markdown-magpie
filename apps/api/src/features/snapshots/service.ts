@@ -3,7 +3,7 @@ import type { AppContext } from "../../context.js";
 import type { FlowSnapshot, SnapshotProposal, SnapshotPullRequest } from "../../stores/snapshot-store.js";
 
 // A pull request's externally-observed state, as reported by the
-// refresh_pull_requests watcher job. The API holds no GitHub token, so it never
+// refresh_flow_snapshot watcher job. The API holds no GitHub token, so it never
 // polls the host itself — PR state only ever reaches a snapshot through this.
 export type PullRequestReading = { merged: boolean; state: "open" | "closed"; reviewDecision?: ReviewDecision };
 
@@ -70,7 +70,7 @@ async function proposalFlowId(ctx: AppContext, proposal: Proposal, cache: Cluste
 // Writes one flow's gaps, in-flight proposals, and open-PR state to the snapshot
 // store — the inputs the reconciler would otherwise gather live. Gaps and
 // proposals are read locally; PR state comes from `pullRequestStatuses`, keyed by
-// proposal id, which the refresh_pull_requests watcher job polled (the API holds
+// proposal id, which the refresh_flow_snapshot watcher job polled (the API holds
 // no GitHub token). A pr-opened proposal the watcher didn't report this run keeps
 // its last known reading rather than regressing to "unknown".
 export async function refreshSnapshot(
@@ -144,7 +144,7 @@ export async function refreshSnapshot(
   return snapshot;
 }
 
-// Writes every flow's snapshot from the PR states the refresh_pull_requests watcher
+// Writes every flow's snapshot from the PR states the refresh_flow_snapshot watcher
 // job just reported. That job lists every open PR across flows in one run, so a
 // single completion refreshes all flows' snapshots. This is the snapshot store's
 // only production writer; without it the /snapshots page and the reconciler's PR
