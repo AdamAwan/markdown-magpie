@@ -21,6 +21,11 @@ export interface FlowDef {
   build: (modelInfo: ModelInfo) => FlowGraph;
 }
 
+export interface FlowGroupDef {
+  title: string;
+  flows: FlowDef[];
+}
+
 function chatLabel(modelInfo: ModelInfo): string {
   if (modelInfo.chatModel && modelInfo.chatHost) {
     return `${modelInfo.chatModel}\n(${modelInfo.chatHost})`;
@@ -485,13 +490,29 @@ function perflow(): FlowGraph {
 }
 
 export const FLOWS: FlowDef[] = [
-  { key: "overview", title: "Overview", build: overview },
-  { key: "ask", title: "Ask Flow", build: ask },
-  { key: "improvement", title: "Continuous Improvement Cycle", build: improvement },
-  { key: "automation", title: "Automation & Patrol", build: automation },
+  { key: "overview", title: "System Overview", build: overview },
+  { key: "ask", title: "Ask a Question", build: ask },
+  { key: "improvement", title: "Improve the Docs", build: improvement },
+  { key: "automation", title: "Scheduled Maintenance", build: automation },
   { key: "reconcile", title: "Reconcile Gate", build: reconcile },
-  { key: "gappr", title: "Gap to PR Jobs", build: gappr },
-  { key: "perflow", title: "Per-Flow Jobs", build: perflow }
+  { key: "gappr", title: "Gap-to-PR Pipeline", build: gappr },
+  { key: "perflow", title: "Per-Flow Isolation", build: perflow }
+];
+
+function flowsByKey(keys: FlowKey[]): FlowDef[] {
+  return keys.map((key) => {
+    const flow = FLOWS.find((candidate) => candidate.key === key);
+    if (!flow) {
+      throw new Error(`Unknown flow in navigation group: ${key}`);
+    }
+    return flow;
+  });
+}
+
+export const FLOW_GROUPS: FlowGroupDef[] = [
+  { title: "Start here", flows: flowsByKey(["overview"]) },
+  { title: "Common workflows", flows: flowsByKey(["ask", "improvement", "automation"]) },
+  { title: "Deep dives", flows: flowsByKey(["reconcile", "gappr", "perflow"]) }
 ];
 
 export function buildFlowGraph(key: FlowKey, modelInfo: ModelInfo): FlowGraph {

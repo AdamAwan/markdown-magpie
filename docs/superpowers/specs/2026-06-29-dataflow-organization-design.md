@@ -62,6 +62,50 @@ Deep dives
 [Reconcile Gate] [Gap-to-PR Pipeline] [Per-Flow Isolation]
 ```
 
+Mockup of the grouped page structure:
+
+```mermaid
+flowchart TB
+  page["Data Flow Architecture page"]
+  page --> intro["Start here"]
+  page --> workflows["Common workflows"]
+  page --> internals["Deep dives"]
+
+  intro --> overview["System Overview"]
+  workflows --> ask["Ask a Question"]
+  workflows --> improve["Improve the Docs"]
+  workflows --> maintenance["Scheduled Maintenance"]
+  internals --> gate["Reconcile Gate"]
+  internals --> gappr["Gap-to-PR Pipeline"]
+  internals --> perflow["Per-Flow Isolation"]
+
+  overview --> canvas["Single React Flow canvas"]
+  ask --> canvas
+  improve --> canvas
+  maintenance --> canvas
+  gate --> canvas
+  gappr --> canvas
+  perflow --> canvas
+```
+
+Mockup of the intended reader path:
+
+```mermaid
+flowchart LR
+  reader["Technical reader"] --> overview{"Need the big picture?"}
+  overview -->|Yes| system["System Overview"]
+  overview -->|No, I have a workflow question| workflow{"Which workflow?"}
+  overview -->|No, I am debugging internals| deep{"Which internal mechanism?"}
+
+  workflow --> ask["Ask a Question"]
+  workflow --> improve["Improve the Docs"]
+  workflow --> maintenance["Scheduled Maintenance"]
+
+  deep --> gate["Reconcile Gate"]
+  deep --> gappr["Gap-to-PR Pipeline"]
+  deep --> perflow["Per-Flow Isolation"]
+```
+
 The active item should still switch the same React Flow canvas. The default active diagram should remain the overview, now titled `System Overview`.
 
 The groups should be visual hierarchy only. They should not create extra routes, extra canvases, nested cards, or a wizard-like experience.

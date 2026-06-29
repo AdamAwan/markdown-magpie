@@ -1369,7 +1369,7 @@ code {
   color: #3d5a48;
 }
 
-/* Worker hover card — same dark style as the repository tooltip. */
+/* Worker hover card Ã¢â‚¬â€ same dark style as the repository tooltip. */
 .workerTooltip {
   z-index: 60;
   display: grid;
@@ -1901,11 +1901,32 @@ pre {
 }
 
 .flowTabs {
-  display: flex;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(160px, 0.75fr) repeat(2, minmax(220px, 1fr));
+  gap: 14px;
+  align-items: start;
   border-bottom: 2px solid #d9ded6;
   padding-bottom: 12px;
+}
+
+.flowTabGroup {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.flowTabGroupTitle {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.flowTabGroupItems {
+  display: flex;
   flex-wrap: wrap;
+  gap: 8px;
 }
 
 .flowTab {
@@ -1927,6 +1948,12 @@ pre {
 .flowTab.active {
   color: #285f74;
   border-bottom-color: #285f74;
+}
+
+@media (max-width: 900px) {
+  .flowTabs {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Interactive React Flow canvas (replaces the static mermaid diagrams). */
@@ -2095,7 +2122,7 @@ pre {
   flex-wrap: wrap;
 }
 
-/* Crunch — scheduled knowledge-base tidying */
+/* Crunch Ã¢â‚¬â€ scheduled knowledge-base tidying */
 .crunchSection {
   margin-bottom: 28px;
 }
@@ -2528,7 +2555,7 @@ pre {
   color: #17211d;
 }
 
-/* The two clients are alternatives, not ordered steps — lay them out as peer
+/* The two clients are alternatives, not ordered steps Ã¢â‚¬â€ lay them out as peer
    cards rather than a numbered pipeline. */
 .mcpClients {
   display: grid;

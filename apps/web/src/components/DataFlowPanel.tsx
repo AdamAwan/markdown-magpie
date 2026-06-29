@@ -16,7 +16,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { RuntimeConfig } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
-import { FLOWS, buildFlowGraph, type FlowKey } from "./dataflow/flows";
+import { FLOW_GROUPS, buildFlowGraph, type FlowKey } from "./dataflow/flows";
 import { layoutGraph } from "./dataflow/layout";
 import { FlowNode, GroupNode } from "./dataflow/FlowNode";
 
@@ -40,7 +40,7 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
 
     // Provide width/height as top-level node fields (not just style) so React
     // Flow treats the nodes as already measured. That makes nodesInitialized
-    // true synchronously — fitView frames the graph and edges resolve their
+    // true synchronously Ã¢â‚¬â€ fitView frames the graph and edges resolve their
     // endpoints without depending on the per-node ResizeObserver, which is
     // unreliable under Next dev's React 19 StrictMode double-mount.
     const groupNodes: Node[] = layout.groups.map((group) => ({
@@ -107,15 +107,23 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
         <h2>Data Flow Architecture</h2>
       </div>
       <div className="surfaceBody dataFlowPanel">
-        <div className="flowTabs">
-          {FLOWS.map((flow) => (
-            <button
-              key={flow.key}
-              className={activeFlow === flow.key ? "flowTab active" : "flowTab"}
-              onClick={() => setActiveFlow(flow.key)}
-            >
-              {flow.title}
-            </button>
+        <div className="flowTabs" aria-label="Data flow diagrams">
+          {FLOW_GROUPS.map((group) => (
+            <div className="flowTabGroup" key={group.title}>
+              <div className="flowTabGroupTitle">{group.title}</div>
+              <div className="flowTabGroupItems">
+                {group.flows.map((flow) => (
+                  <button
+                    key={flow.key}
+                    className={activeFlow === flow.key ? "flowTab active" : "flowTab"}
+                    onClick={() => setActiveFlow(flow.key)}
+                    type="button"
+                  >
+                    {flow.title}
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
 
