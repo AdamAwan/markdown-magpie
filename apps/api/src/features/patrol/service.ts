@@ -12,6 +12,7 @@ import type {
 import { verifyDocumentOutputSchema } from "@magpie/jobs";
 import { selectFlow } from "../../platform/repositories.js";
 import { selectPatrolBatch } from "../../scheduling/patrol-cursor.js";
+import { flowCoveredPaths } from "../../scheduling/flow.js";
 import { runVerifyLens, type VerifyDocumentFn } from "../../scheduling/verify-lens.js";
 import { runDedupeLens, type DedupeDocumentFn } from "../../scheduling/dedupe-lens.js";
 import { runSplitLens, type SplitDocumentFn } from "../../scheduling/split-lens.js";
@@ -212,10 +213,19 @@ export async function runFixPatrol(
     randomCount: PATROL_RANDOM_COUNT
   });
 
-  // Run the verify lens over the selected documents. The source material is the
+  // Drop any selected document already covered by an open same-flow proposal: its
+  // change is awaiting review in an unmerged PR, so re-scanning it would redraft the
+  // same change and fold it in every tick (see flowCoveredPaths). Covered docs stay
+  // stamped in the cursor so they rotate normally and become eligible again once the
+  // PR merges and its edits reach the index.
+  const covered = await flowCoveredPaths(ctx, options.flowId);
+  const actionable = selected.filter((path) => !covered.has(path));
+  const skipped = selected.length - actionable.length;
+
+  // Run the verify lens over the actionable documents. The source material is the
   // same for every document in the flow, so collect it once per tick — and only
   // when there is at least one document to check.
-  const selectedSet = new Set(selected);
+  const selectedSet = new Set(actionable);
   const selectedDocuments = documents
     .filter((doc) => selectedSet.has(doc.path))
     .map((doc) => ({ path: doc.path, content: doc.content }));
@@ -278,11 +288,13 @@ export async function runFixPatrol(
     status: "completed",
     summary:
       `checked ${selected.length}/${universe.length} doc${selected.length === 1 ? "" : "s"} · ` +
-      `${findings.length} finding${findings.length === 1 ? "" : "s"}`,
+      `${findings.length} finding${findings.length === 1 ? "" : "s"}` +
+      (skipped > 0 ? ` · ${skipped} covered by open PRs` : ""),
     details: {
       universeCount: universe.length,
       selectedCount: selected.length,
       selected,
+      skipped,
       findings,
       intentTraces: verifyFindingIntentTraces(findings, options.flowId)
     }
@@ -290,7 +302,7 @@ export async function runFixPatrol(
   console.log(
     `Fix-patrol (${options.trigger}) flow=${options.flowId ?? "(default)"}: ` +
       `checked ${selected.length}/${universe.length} document(s), ${findings.length} finding(s), ` +
-      `${dedupeScans} dedupe scan(s), ${splitScans} split scan(s) enqueued; run ${run.id}.`
+      `${dedupeScans} dedupe scan(s), ${splitScans} split scan(s) enqueued, ${skipped} covered-skip(s); run ${run.id}.`
   );
   return {
     ok: true,
@@ -325,7 +337,14 @@ export async function runImprovePatrol(
     randomCount: IMPROVE_PATROL_RANDOM_COUNT
   });
 
-  const selectedSet = new Set(selected);
+  // Skip any selected document already covered by an open same-flow proposal — the
+  // improve change would otherwise be redrafted and folded into the open PR every
+  // tick (see flowCoveredPaths). The cursor still stamps the full selection below.
+  const covered = await flowCoveredPaths(ctx, options.flowId);
+  const actionable = selected.filter((path) => !covered.has(path));
+  const skipped = selected.length - actionable.length;
+
+  const selectedSet = new Set(actionable);
   const selectedDocuments = documents
     .filter((doc) => selectedSet.has(doc.path))
     .map((doc) => ({ path: doc.path, content: doc.content, repositoryId: doc.repositoryId }));
@@ -356,12 +375,14 @@ export async function runImprovePatrol(
     status: "completed",
     summary:
       `checked ${selected.length}/${universe.length} doc${selected.length === 1 ? "" : "s"} · ` +
-      `${enqueuedCount} improve scan${enqueuedCount === 1 ? "" : "s"}`,
-    details: { universeCount: universe.length, selectedCount: selected.length, selected, enqueuedCount }
+      `${enqueuedCount} improve scan${enqueuedCount === 1 ? "" : "s"}` +
+      (skipped > 0 ? ` · ${skipped} covered by open PRs` : ""),
+    details: { universeCount: universe.length, selectedCount: selected.length, selected, skipped, enqueuedCount }
   });
   console.log(
     `Improve-patrol (${options.trigger}) flow=${options.flowId ?? "(default)"}: ` +
-      `checked ${selected.length}/${universe.length} document(s), ${enqueuedCount} improve scan(s) enqueued; run ${run.id}.`
+      `checked ${selected.length}/${universe.length} document(s), ${enqueuedCount} improve scan(s) enqueued, ` +
+      `${skipped} covered-skip(s); run ${run.id}.`
   );
   return {
     ok: true,
