@@ -299,7 +299,21 @@ export async function applyFoldFromCompletedJob(
     return;
   }
 
-  await ctx.stores.proposals.updateMarkdown(survivor.id, parsed.data.markdown);
+  // A changeset survivor (dedupe/split) publishes from its `changeset`, not its
+  // `markdown` (see publishProposal in the watcher). Folding a single-file rival into
+  // it must therefore write the merged content into the changeset's primary entry —
+  // updating `markdown` alone would be silently discarded at publish time. A plain
+  // single-file survivor keeps the markdown-only path.
+  const changeset = survivor.changeset;
+  const hasPrimaryWrite = changeset?.some((change) => change.path === survivor.targetPath && !change.delete);
+  if (changeset && hasPrimaryWrite) {
+    const merged = changeset.map((change) =>
+      change.path === survivor.targetPath && !change.delete ? { ...change, content: parsed.data.markdown } : change
+    );
+    await ctx.stores.proposals.updateChangeset(survivor.id, merged, parsed.data.markdown);
+  } else {
+    await ctx.stores.proposals.updateMarkdown(survivor.id, parsed.data.markdown);
+  }
 
   if (survivor.gapClusterId && rival.gapClusterId && survivor.gapClusterId !== rival.gapClusterId) {
     const members = await ctx.stores.gapClusters.listMembershipsForCluster(rival.gapClusterId);

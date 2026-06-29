@@ -379,6 +379,47 @@ describe("applyFoldFromCompletedJob", () => {
     assert.equal((await ctx.jobs.list({ type: "comment_pull_request" })).jobs.length, 0, "no PR to comment on");
   });
 
+  it("writes the merged content into the changeset's primary entry when the survivor is a changeset proposal", async () => {
+    const ctx = makeTestContext();
+    // A dedupe/split survivor publishes from its changeset, not its markdown. A
+    // single-file rival (gap/verify/improve) folding into it must update the
+    // changeset's primary entry, or the merge is silently lost at publish time.
+    const survivor = await ctx.stores.proposals.create({
+      title: "Dedupe: reconcile a with b",
+      targetPath: "kb/a.md",
+      markdown: "# a (stale primary)",
+      rationale: "dup",
+      evidence: [],
+      changeset: [
+        { path: "kb/a.md", content: "# a (stale primary)" },
+        { path: "kb/b.md", delete: true }
+      ]
+    });
+    const rival = await draft(ctx, { targetPath: "kb/a.md" });
+
+    const job = await ctx.jobs.create("fold_markdown_proposal", {
+      provider: "codex",
+      survivorProposalId: survivor.id,
+      rivalProposalId: rival.id,
+      targetPath: "kb/a.md",
+      survivorMarkdown: "# a (stale primary)",
+      rivalMarkdown: "# rival",
+      rivalGapSummaries: [],
+      rivalEvidence: [],
+      expectedOutput: "folded_markdown"
+    });
+    await applyFoldFromCompletedJob(ctx, await ctx.jobs.get(job.id), { markdown: "# a (merged)", rationale: "folded" });
+
+    const updated = await ctx.stores.proposals.get(survivor.id);
+    // The merged content is what publishes: it must live in the changeset's primary entry.
+    assert.equal(updated?.changeset?.find((c) => c.path === "kb/a.md")?.content, "# a (merged)");
+    // The other file in the changeset is carried through untouched.
+    assert.equal(updated?.changeset?.find((c) => c.path === "kb/b.md")?.delete, true);
+    // markdown stays in sync with the primary entry.
+    assert.equal(updated?.markdown, "# a (merged)");
+    assert.equal((await ctx.stores.proposals.get(rival.id))?.status, "superseded");
+  });
+
   it("is idempotent: a second call with the same job is a no-op", async () => {
     const ctx = makeTestContext();
     const cA = await clusterWithGap(ctx, undefined, "survivor2");
