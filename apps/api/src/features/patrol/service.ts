@@ -6,7 +6,8 @@ import type {
   MaintenanceRun,
   SplitDocumentJobInput,
   VerifyDocumentJobInput,
-  VerifyFinding
+  VerifyFinding,
+  ChangeIntentTrace
 } from "@magpie/core";
 import { verifyDocumentOutputSchema } from "@magpie/jobs";
 import { selectFlow } from "../../platform/repositories.js";
@@ -27,7 +28,14 @@ const IMPROVE_PATROL_BATCH_SIZE = 2;
 const IMPROVE_PATROL_RANDOM_COUNT = 1;
 
 export type FixPatrolOutcome =
-  | { ok: true; runId: string; universeCount: number; selectedCount: number; selected: string[]; findings: VerifyFinding[] }
+  | {
+      ok: true;
+      runId: string;
+      universeCount: number;
+      selectedCount: number;
+      selected: string[];
+      findings: VerifyFinding[];
+    }
   | { ok: false; code: "unknown_flow" };
 export type ImprovePatrolOutcome =
   | { ok: true; runId: string; universeCount: number; selectedCount: number; selected: string[]; enqueuedCount: number }
@@ -139,6 +147,39 @@ const defaultImproveDocument: ImproveDocumentFn = async (ctx, input) => {
   } satisfies ImproveDocumentJobInput & { provider: AiProviderName });
 };
 
+function verifyFindingIntentTraces(findings: VerifyFinding[], flowId: string | undefined): ChangeIntentTrace[] {
+  const createdAt = new Date().toISOString();
+  return findings.map((finding) => ({
+    createdAt,
+    intent: {
+      lens: "verify",
+      ...(flowId ? { flowId } : {}),
+      targets: [finding.path],
+      evidence: finding.claims.map((claim) => claim.claim),
+      rationale:
+        finding.claims
+          .map((claim) => claim.reason)
+          .filter(Boolean)
+          .join("; ") || "Verify lens found unprovable claims."
+    },
+    decision:
+      finding.decision === "fold"
+        ? { kind: "fold", intoProposalId: finding.intoProposalId ?? "unknown" }
+        : finding.decision === "defer"
+          ? { kind: "defer", behindProposalId: finding.intoProposalId ?? "unknown" }
+          : { kind: "open-new" },
+    candidatePullRequests: [],
+    outcome: finding.intoProposalId
+      ? { proposalId: finding.intoProposalId }
+      : {
+          reason:
+            finding.decision === "open-new"
+              ? "No overlapping open proposal blocked a new corrective proposal."
+              : undefined
+        }
+  }));
+}
+
 export async function runFixPatrol(
   ctx: AppContext,
   options: { flowId?: string; trigger: MaintenanceRun["trigger"] },
@@ -238,14 +279,27 @@ export async function runFixPatrol(
     summary:
       `checked ${selected.length}/${universe.length} doc${selected.length === 1 ? "" : "s"} · ` +
       `${findings.length} finding${findings.length === 1 ? "" : "s"}`,
-    details: { universeCount: universe.length, selectedCount: selected.length, selected, findings }
+    details: {
+      universeCount: universe.length,
+      selectedCount: selected.length,
+      selected,
+      findings,
+      intentTraces: verifyFindingIntentTraces(findings, options.flowId)
+    }
   });
   console.log(
     `Fix-patrol (${options.trigger}) flow=${options.flowId ?? "(default)"}: ` +
       `checked ${selected.length}/${universe.length} document(s), ${findings.length} finding(s), ` +
       `${dedupeScans} dedupe scan(s), ${splitScans} split scan(s) enqueued; run ${run.id}.`
   );
-  return { ok: true, runId: run.id, universeCount: universe.length, selectedCount: selected.length, selected, findings };
+  return {
+    ok: true,
+    runId: run.id,
+    universeCount: universe.length,
+    selectedCount: selected.length,
+    selected,
+    findings
+  };
 }
 
 export async function runImprovePatrol(
@@ -309,5 +363,12 @@ export async function runImprovePatrol(
     `Improve-patrol (${options.trigger}) flow=${options.flowId ?? "(default)"}: ` +
       `checked ${selected.length}/${universe.length} document(s), ${enqueuedCount} improve scan(s) enqueued; run ${run.id}.`
   );
-  return { ok: true, runId: run.id, universeCount: universe.length, selectedCount: selected.length, selected, enqueuedCount };
+  return {
+    ok: true,
+    runId: run.id,
+    universeCount: universe.length,
+    selectedCount: selected.length,
+    selected,
+    enqueuedCount
+  };
 }
