@@ -1,9 +1,5 @@
 import { createChatProvider } from "@magpie/retrieval";
-import {
-  CAPABILITY_GATES,
-  DEFAULT_CAPABILITY_RUNTIME,
-  type CapabilityRuntime
-} from "../capabilities.js";
+import { CAPABILITY_GATES, DEFAULT_CAPABILITY_RUNTIME, type CapabilityRuntime } from "../capabilities.js";
 import type { WatcherApi } from "../http-client.js";
 import { ChatRunner } from "./chat.js";
 import { CliRunner, type PromptMode } from "./cli.js";
@@ -70,6 +66,7 @@ export function createConfiguredRunners(
         command: env.CODEX_CLI_PATH ?? "codex",
         args: splitArgs(env.CODEX_CLI_ARGS ?? "exec"),
         promptMode: normalizePromptMode(env.CODEX_CLI_PROMPT_MODE),
+        api,
         timeoutMs: positiveInt(env.AGENT_CLI_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS),
         ...(env.CLI_CANCEL_GRACE_MS ? { cancelGraceMs: positiveInt(env.CLI_CANCEL_GRACE_MS, 5_000) } : {})
       })
@@ -83,6 +80,7 @@ export function createConfiguredRunners(
         command: env.CLAUDE_CLI_PATH ?? "claude",
         args: splitArgs(env.CLAUDE_CLI_ARGS ?? "-p"),
         promptMode: normalizePromptMode(env.CLAUDE_CLI_PROMPT_MODE),
+        api,
         timeoutMs: positiveInt(env.AGENT_CLI_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS),
         ...(env.CLI_CANCEL_GRACE_MS ? { cancelGraceMs: positiveInt(env.CLI_CANCEL_GRACE_MS, 5_000) } : {})
       })
