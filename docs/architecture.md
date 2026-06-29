@@ -119,6 +119,15 @@ generative work runs in the API process. Reshape is best-effort: if no chat watc
 is available within the deadline, the reconciler logs and skips it, still running
 clustering, drafting, publication, and the PR-state pass.
 
+Before clustering, the reconciler also **prunes resolved gaps**: a gap is resolved by
+`(question, summary)` when its proposal merges, but a prior reshape may have moved that
+gap into a cluster other than the one the merge freezes. So each tick deactivates the
+cluster membership of any gap now resolved, and freezes any active cluster left with no
+still-open members — keeping "active membership" to mean "this gap belongs to this
+cluster *and* is still open", so a covered gap never re-surfaces as a cluster member or
+gets re-drafted. The draft and cluster-read paths also scope to a cluster's unresolved
+members as defence-in-depth.
+
 > The former whole-knowledge-base **Crunch** pass has been retired; its
 > consolidate/split responsibilities now live in the patrols and the gap reconciler.
 
