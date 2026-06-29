@@ -1958,7 +1958,7 @@ pre {
 
 /* Interactive React Flow canvas (replaces the static mermaid diagrams). */
 .flowCanvas {
-  height: 560px;
+  height: clamp(560px, 72vh, 720px);
   background: linear-gradient(135deg, #fafbf9 0%, #f5f7f2 100%);
   border-radius: 8px;
   border: 1px solid #e2e7df;

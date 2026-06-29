@@ -24,6 +24,7 @@ const EXPECTED_GROUPS = [
   { title: "Common workflows", keys: ["ask", "improvement", "automation"] },
   { title: "Deep dives", keys: ["reconcile", "gappr", "perflow"] }
 ];
+const HORIZONTAL_KEYS: FlowKey[] = ["overview", "ask", "automation", "reconcile", "gappr", "perflow"];
 
 test("exposes every flow with a title and builder", () => {
   assert.deepEqual(
@@ -45,6 +46,13 @@ test("groups flows by reader intent", () => {
     FLOW_GROUPS.flatMap((group) => group.flows.map((flow) => flow.key)),
     ALL_KEYS
   );
+});
+
+test("uses horizontal layout for linear dataflow diagrams", () => {
+  for (const key of HORIZONTAL_KEYS) {
+    assert.equal(buildFlowGraph(key, modelInfo).direction, "LR", `${key} should read left-to-right`);
+  }
+  assert.equal(buildFlowGraph("improvement", modelInfo).direction, "TB", "branch-heavy improvement view stays vertical");
 });
 
 test("every edge and group reference resolves to a node in the same flow", () => {

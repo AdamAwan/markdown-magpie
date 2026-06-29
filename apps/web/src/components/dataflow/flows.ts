@@ -43,7 +43,7 @@ function embedLabel(modelInfo: ModelInfo): string {
 function overview(modelInfo: ModelInfo): FlowGraph {
   const chat = chatLabel(modelInfo);
   return {
-    direction: "TB",
+    direction: "LR",
     groups: [
       { id: "learn", label: "LEARN · Feedback Analysis" },
       { id: "generate", label: "GENERATE · Solution Creation" }
@@ -91,7 +91,7 @@ function ask(modelInfo: ModelInfo): FlowGraph {
   const chat = chatLabel(modelInfo);
   const embed = embedLabel(modelInfo);
   return {
-    direction: "TB",
+    direction: "LR",
     groups: [
       { id: "api", label: "API · enqueue-only" },
       { id: "watcher", label: "WATCHER · all generative work" }
@@ -216,7 +216,7 @@ function improvement(modelInfo: ModelInfo): FlowGraph {
 function automation(modelInfo: ModelInfo): FlowGraph {
   const chat = chatLabel(modelInfo);
   return {
-    direction: "TB",
+    direction: "LR",
     groups: [
       { id: "fetch", label: "snapshot refresh · fetch (per flow · ~5 min)" },
       { id: "gaps", label: "gaps → pull requests · process (per flow · ~10 min)" },
@@ -312,7 +312,7 @@ function automation(modelInfo: ModelInfo): FlowGraph {
 // asymmetry).
 function reconcile(): FlowGraph {
   return {
-    direction: "TB",
+    direction: "LR",
     groups: [{ id: "triggers", label: "Per-flow scheduled triggers (on the watcher)" }],
     nodes: [
       { id: "gapsTrigger", kind: "processing", label: "⏱️ Gaps → PRs\ndrafts gap proposal", group: "triggers" },
@@ -364,7 +364,7 @@ function reconcile(): FlowGraph {
 
 function gappr(): FlowGraph {
   return {
-    direction: "TB",
+    direction: "LR",
     groups: [{ id: "reshape", label: "if ≥2 active clusters (bounded wait)" }],
     nodes: [
       {
@@ -421,7 +421,7 @@ function gappr(): FlowGraph {
 
 function perflow(): FlowGraph {
   return {
-    direction: "TB",
+    direction: "LR",
     groups: [
       { id: "fetch", label: "FETCH · snapshot refresh (Flow A · ~5 min)" },
       { id: "recon", label: "PROCESS · reconciler (Flow A · ~10 min)" }

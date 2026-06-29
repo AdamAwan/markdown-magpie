@@ -36,6 +36,7 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
 
   const built = useMemo(() => {
     const graph = buildFlowGraph(activeFlow, modelInfo);
+    const direction = graph.direction ?? "TB";
     const layout = layoutGraph(graph);
 
     // Provide width/height as top-level node fields (not just style) so React
@@ -59,7 +60,7 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
       id: node.id,
       type: "flowNode",
       position: { x: node.x, y: node.y },
-      data: { label: node.label, kind: node.kind },
+      data: { label: node.label, kind: node.kind, direction },
       width: node.width,
       height: node.height,
       zIndex: 1
@@ -138,7 +139,7 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
             onEdgesChange={onEdgesChange}
             nodeTypes={nodeTypes}
             fitView
-            fitViewOptions={{ padding: 0.15 }}
+            fitViewOptions={{ padding: 0.08 }}
             minZoom={0.2}
             maxZoom={1.5}
             proOptions={{ hideAttribution: false }}
