@@ -15,7 +15,7 @@ import type {
 import type { JobView } from "@magpie/jobs";
 import { z } from "zod";
 import { correctDocumentOutputSchema, dedupeDocumentsOutputSchema, improveDocumentOutputSchema, publishProposalOutputSchema, splitDocumentOutputSchema } from "@magpie/jobs";
-import { resolveProposalTargetPath } from "@magpie/core";
+import { PROPOSAL_STATUSES, resolveProposalTargetPath } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import type { ProposalListOptions } from "../../stores/proposal-store.js";
 import {
@@ -664,15 +664,11 @@ export async function recordPublicationFromCompletedJob(
   });
 }
 
+// Derives the guard from the single source of truth so a new status (e.g. the
+// once-missing "superseded") is recognised automatically — otherwise the list's
+// ?status= filter silently ignores any value omitted here.
 export function isProposalStatus(value: unknown): value is Proposal["status"] {
-  return (
-    value === "draft" ||
-    value === "ready" ||
-    value === "branch-pushed" ||
-    value === "pr-opened" ||
-    value === "merged" ||
-    value === "rejected"
-  );
+  return typeof value === "string" && (PROPOSAL_STATUSES as readonly string[]).includes(value);
 }
 
 function isPublishProposalJobOutput(value: unknown): value is PublishProposalJobOutput {

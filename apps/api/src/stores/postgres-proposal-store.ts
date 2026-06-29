@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
+import { TERMINAL_PROPOSAL_STATUSES } from "@magpie/core";
 import type { ChangesetChange, Citation, DraftContext, Proposal, ReviewDecision } from "@magpie/core";
 import type { ProposalInput, ProposalListOptions, ProposalStore } from "./proposal-store.js";
 
@@ -54,8 +55,10 @@ export class PostgresProposalStore implements ProposalStore {
           [limit, options.status]
         )
       : await this.pool.query<ProposalRow>(
-          "SELECT * FROM proposals WHERE status <> 'merged' ORDER BY created_at DESC LIMIT $1",
-          [limit]
+          // Hide every settled status (merged/rejected/superseded) from the default
+          // inbox; <> ALL is true only when status matches none of them.
+          "SELECT * FROM proposals WHERE status <> ALL($2) ORDER BY created_at DESC LIMIT $1",
+          [limit, [...TERMINAL_PROPOSAL_STATUSES]]
         );
     return result.rows.map(mapRow);
   }
