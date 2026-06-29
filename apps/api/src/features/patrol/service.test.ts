@@ -252,3 +252,69 @@ test("runImprovePatrol uses its own cursor and enqueues an improve job for every
   assert.equal(runs.length, 1);
   assert.equal(runs[0].id, outcome.runId);
 });
+
+test("runImprovePatrol skips a document already covered by an open same-flow proposal", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["covered.md", "free.md"]);
+  // An open proposal already touches covered.md — its change is sitting in an
+  // unmerged PR, so re-improving it would just redraft-and-fold every tick.
+  await ctx.stores.proposals.create({
+    title: "Improve: expand covered.md",
+    targetPath: "covered.md",
+    markdown: "# covered.md\nexpanded",
+    rationale: "thin",
+    evidence: []
+  });
+
+  const improved: ImproveDocumentJobInput[] = [];
+  const outcome = await patrol.runImprovePatrol(
+    ctx,
+    { trigger: "scheduled" },
+    {
+      improveDocument: async (_ctx, input) => {
+        improved.push(input);
+      }
+    }
+  );
+
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  // The cursor still selected both docs, but only the uncovered one was scanned.
+  assert.equal(outcome.selectedCount, 2);
+  assert.deepEqual(
+    improved.map((job) => job.path),
+    ["free.md"]
+  );
+  assert.equal(outcome.enqueuedCount, 1);
+});
+
+test("runFixPatrol skips a document already covered by an open same-flow proposal", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["covered.md", "free.md"]);
+  await ctx.stores.proposals.create({
+    title: "Dedupe: reconcile covered.md",
+    targetPath: "covered.md",
+    markdown: "# covered.md\nreconciled",
+    rationale: "duplicate",
+    evidence: []
+  });
+
+  const verified: string[] = [];
+  const outcome = await patrol.runFixPatrol(
+    ctx,
+    { trigger: "scheduled" },
+    {
+      verifyDocument: async (_ctx, { path }) => {
+        verified.push(path);
+        return { verdict: "healthy", claims: [] };
+      },
+      dedupeDocument: async () => {},
+      splitDocument: async () => {}
+    }
+  );
+
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  // covered.md was selected by the cursor but no lens ran against it.
+  assert.deepEqual(verified, ["free.md"]);
+});

@@ -244,6 +244,16 @@ already ~80% of it.
   changes into the existing open PR for the file-set. **Nothing merges to main unattended:**
   every PR still goes through human review. fix-patrol and improve-patrol PRs are labelled
   differently so they're easy to triage, but the merge gate is human for both.
+- **Don't re-patrol a file already in an open PR** — folding is the resolution when a *new*
+  intent meets an open PR, not a per-tick action. A patrol lens reads document content from
+  the indexed branch, which still lacks an unmerged PR's edits, so left unchecked it would
+  re-propose the same change every tick and re-fold it — spamming `(automated fold-on-overlap)`
+  comments and re-publishing the PR endlessly. The gap lens avoids this by freezing the covered
+  cluster; the clusterless patrol lenses instead **skip, at selection time, any file already
+  covered by an open same-flow proposal** (`flowCoveredPaths` in `apps/api/src/scheduling/flow.ts`,
+  applied in both `runFixPatrol` and `runImprovePatrol`). Covered files stay stamped in the
+  cursor so they rotate normally and become eligible again once the PR merges and its edits
+  reach the index.
 - **Cursor fairness** — *oldest N + a random sample*. Each tick takes the N least-recently-
   checked files (exploit: clear the staleness backlog) plus a small random selection of others
   (explore: nothing goes unvisited forever, and load doesn't synchronise into waves). The
