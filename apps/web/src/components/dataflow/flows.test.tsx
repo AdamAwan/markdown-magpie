@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FLOWS, buildFlowGraph, type FlowKey } from "./flows";
+import { FLOW_GROUPS, FLOWS, buildFlowGraph, type FlowKey } from "./flows";
 
 const modelInfo = {
   chatModel: "claude-opus-4-8",
@@ -19,6 +19,13 @@ const ALL_KEYS: FlowKey[] = [
   "perflow"
 ];
 
+const EXPECTED_GROUPS = [
+  { title: "Start here", keys: ["overview"] },
+  { title: "Common workflows", keys: ["ask", "improvement", "automation"] },
+  { title: "Deep dives", keys: ["reconcile", "gappr", "perflow"] }
+];
+const HORIZONTAL_KEYS: FlowKey[] = ["overview", "ask", "automation", "reconcile", "gappr", "perflow"];
+
 test("exposes every flow with a title and builder", () => {
   assert.deepEqual(
     FLOWS.map((flow) => flow.key),
@@ -28,6 +35,24 @@ test("exposes every flow with a title and builder", () => {
     assert.ok(flow.title.length > 0, `${flow.key} needs a title`);
     assert.equal(typeof flow.build, "function");
   }
+});
+
+test("groups flows by reader intent", () => {
+  assert.deepEqual(
+    FLOW_GROUPS.map((group) => ({ title: group.title, keys: group.flows.map((flow) => flow.key) })),
+    EXPECTED_GROUPS
+  );
+  assert.deepEqual(
+    FLOW_GROUPS.flatMap((group) => group.flows.map((flow) => flow.key)),
+    ALL_KEYS
+  );
+});
+
+test("uses horizontal layout for linear dataflow diagrams", () => {
+  for (const key of HORIZONTAL_KEYS) {
+    assert.equal(buildFlowGraph(key, modelInfo).direction, "LR", `${key} should read left-to-right`);
+  }
+  assert.equal(buildFlowGraph("improvement", modelInfo).direction, "TB", "branch-heavy improvement view stays vertical");
 });
 
 test("every edge and group reference resolves to a node in the same flow", () => {
