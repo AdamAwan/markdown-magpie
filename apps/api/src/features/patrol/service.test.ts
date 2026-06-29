@@ -84,7 +84,11 @@ test("runFixPatrol records verify findings for unprovable documents", async () =
       ? { verdict: "unprovable", claims: [{ claim: "stale", reason: "no source" }] }
       : { verdict: "healthy", claims: [] };
 
-  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, { verifyDocument, correctDocument: async () => {}, dedupeDocument: async () => {} });
+  const outcome = await patrol.runFixPatrol(
+    ctx,
+    { trigger: "scheduled" },
+    { verifyDocument, correctDocument: async () => {}, dedupeDocument: async () => {} }
+  );
   assert.ok(outcome.ok);
   if (!outcome.ok) return;
 
@@ -101,9 +105,18 @@ test("runFixPatrol records verify findings for unprovable documents", async () =
     false
   );
 
-  // The findings are persisted on the run's details for the audit.
+  // The findings and their emitted intents are persisted on the run details for the audit.
   const run = await ctx.stores.maintenanceRuns.get(outcome.runId);
   assert.deepEqual((run?.details as { findings?: unknown }).findings, outcome.findings);
+  const traces = (
+    run?.details as {
+      intentTraces?: Array<{ intent: { lens: string; targets: string[] }; decision: { kind: string } }>;
+    }
+  ).intentTraces;
+  assert.equal(traces?.length, 1);
+  assert.equal(traces?.[0].intent.lens, "verify");
+  assert.deepEqual(traces?.[0].intent.targets, ["a.md"]);
+  assert.equal(traces?.[0].decision.kind, "open-new");
 });
 
 test("runFixPatrol enqueues a correction for each unprovable finding, none for healthy", async () => {
@@ -118,7 +131,11 @@ test("runFixPatrol enqueues a correction for each unprovable finding, none for h
     corrected.push({ path: input.path, claims: input.claims.length });
   };
 
-  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, { verifyDocument, correctDocument, dedupeDocument: async () => {} });
+  const outcome = await patrol.runFixPatrol(
+    ctx,
+    { trigger: "scheduled" },
+    { verifyDocument, correctDocument, dedupeDocument: async () => {} }
+  );
   assert.ok(outcome.ok);
   assert.deepEqual(corrected, [{ path: "a.md", claims: 1 }]);
 });
@@ -148,10 +165,7 @@ test("runFixPatrol runs the dedupe lens over the batch, enqueuing a scan per doc
   if (!outcome.ok) return;
 
   // Each doc found the other as a neighbour, so a dedupe scan was enqueued for both.
-  assert.deepEqual(
-    scanned.map((s) => s.path).sort(),
-    ["partial-refunds.md", "refunds.md"]
-  );
+  assert.deepEqual(scanned.map((s) => s.path).sort(), ["partial-refunds.md", "refunds.md"]);
   const refunds = scanned.find((s) => s.path === "refunds.md");
   assert.deepEqual(
     refunds?.neighbours.map((n) => n.path),
@@ -183,7 +197,10 @@ test("runFixPatrol runs the split lens over broad selected documents", async () 
   const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, { ...HEALTHY_DEPS, splitDocument });
   assert.ok(outcome.ok);
 
-  assert.deepEqual(scanned.map((s) => s.path), ["customer-operations.md"]);
+  assert.deepEqual(
+    scanned.map((s) => s.path),
+    ["customer-operations.md"]
+  );
   assert.equal(scanned[0].destinationId, "docs");
   assert.deepEqual(
     scanned[0].neighbours.map((n) => n.path),
@@ -197,25 +214,37 @@ test("runImprovePatrol uses its own cursor and enqueues an improve job for every
 
   const fix = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, HEALTHY_DEPS);
   assert.ok(fix.ok);
-  assert.equal((await ctx.stores.patrol.listCursor(undefined)).length, 3, "fix cursor stamped all docs in the small universe");
+  assert.equal(
+    (await ctx.stores.patrol.listCursor(undefined)).length,
+    3,
+    "fix cursor stamped all docs in the small universe"
+  );
 
   const improved: ImproveDocumentJobInput[] = [];
-  const outcome = await patrol.runImprovePatrol(ctx, { trigger: "scheduled" }, {
-    improveDocument: async (_ctx, input) => {
-      improved.push(input);
+  const outcome = await patrol.runImprovePatrol(
+    ctx,
+    { trigger: "scheduled" },
+    {
+      improveDocument: async (_ctx, input) => {
+        improved.push(input);
+      }
     }
-  });
+  );
 
   assert.ok(outcome.ok);
   if (!outcome.ok) return;
   assert.equal(outcome.selectedCount, 2, "improve-patrol uses the smaller editorial batch");
   assert.equal(outcome.enqueuedCount, outcome.selectedCount);
+  assert.deepEqual(improved.map((job) => job.path).sort(), [...outcome.selected].sort());
+  assert.deepEqual((await ctx.stores.patrol.listCursor(undefined)).map((e) => e.docPath).sort(), [
+    "a.md",
+    "b.md",
+    "c.md"
+  ]);
   assert.deepEqual(
-    improved.map((job) => job.path).sort(),
+    (await ctx.stores.patrol.listCursor(undefined, "improve")).map((e) => e.docPath).sort(),
     [...outcome.selected].sort()
   );
-  assert.deepEqual((await ctx.stores.patrol.listCursor(undefined)).map((e) => e.docPath).sort(), ["a.md", "b.md", "c.md"]);
-  assert.deepEqual((await ctx.stores.patrol.listCursor(undefined, "improve")).map((e) => e.docPath).sort(), [...outcome.selected].sort());
   assert.ok(improved.every((job) => job.destinationId === "docs"));
 
   // The tick is recorded as an improve_patrol maintenance run.
