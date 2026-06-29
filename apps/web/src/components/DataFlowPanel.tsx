@@ -18,6 +18,7 @@ import { RuntimeConfig } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
 import { FLOW_GROUPS, buildFlowGraph, type FlowKey } from "./dataflow/flows";
 import { layoutGraph } from "./dataflow/layout";
+import { DATAFLOW_FIT_VIEW_OPTIONS, DATAFLOW_MAX_ZOOM, DATAFLOW_MIN_ZOOM } from "./dataflow/viewport";
 import { FlowNode, GroupNode } from "./dataflow/FlowNode";
 
 const nodeTypes: NodeTypes = {
@@ -41,7 +42,7 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
 
     // Provide width/height as top-level node fields (not just style) so React
     // Flow treats the nodes as already measured. That makes nodesInitialized
-    // true synchronously Ã¢â‚¬â€ fitView frames the graph and edges resolve their
+    // true synchronously; fitView frames the graph and edges resolve their
     // endpoints without depending on the per-node ResizeObserver, which is
     // unreliable under Next dev's React 19 StrictMode double-mount.
     const groupNodes: Node[] = layout.groups.map((group) => ({
@@ -139,9 +140,9 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
             onEdgesChange={onEdgesChange}
             nodeTypes={nodeTypes}
             fitView
-            fitViewOptions={{ padding: 0.08 }}
-            minZoom={0.2}
-            maxZoom={1.5}
+            fitViewOptions={DATAFLOW_FIT_VIEW_OPTIONS}
+            minZoom={DATAFLOW_MIN_ZOOM}
+            maxZoom={DATAFLOW_MAX_ZOOM}
             proOptions={{ hideAttribution: false }}
             nodesConnectable={false}
             edgesFocusable={false}
