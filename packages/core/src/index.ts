@@ -213,6 +213,18 @@ export const PROPOSAL_STATUSES = [
 ] as const;
 type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 
+// Settled statuses: the proposal's work is done (merged), declined (rejected), or
+// folded into another proposal (superseded). These are hidden from the default
+// inbox — like an archive — but stay fetchable via an explicit status filter so
+// history is never lost. Derived here once so the proposal stores don't each
+// hand-maintain the literal list and drift (which once left superseded proposals
+// stuck visible in the UI with no action).
+export const TERMINAL_PROPOSAL_STATUSES: ReadonlyArray<ProposalStatus> = [
+  "merged",
+  "rejected",
+  "superseded"
+];
+
 export interface Proposal {
   id: string;
   title: string;

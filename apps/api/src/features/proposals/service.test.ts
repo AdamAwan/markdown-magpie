@@ -567,3 +567,14 @@ test("createImproveProposalFromCompletedJob is silent for no-op or unchanged imp
     undefined
   );
 });
+
+test("isProposalStatus accepts every lifecycle status, including superseded, and rejects others", async () => {
+  // Guards the list's ?status= filter. Must accept the full enum — superseded was
+  // once omitted, so filtering by it was silently dropped.
+  for (const status of ["draft", "ready", "branch-pushed", "pr-opened", "merged", "rejected", "superseded"]) {
+    assert.equal(proposals.isProposalStatus(status), true, `${status} should be a valid status`);
+  }
+  for (const notAStatus of ["", "archived", "SUPERSEDED", undefined, null, 7]) {
+    assert.equal(proposals.isProposalStatus(notAStatus), false, `${String(notAStatus)} should be rejected`);
+  }
+});

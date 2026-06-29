@@ -37,17 +37,26 @@ describe("PostgresProposalStore", { skip: databaseUrl ? false : "DATABASE_URL no
     assert.equal(fetched?.markdown, created.markdown);
   });
 
-  it("excludes merged proposals from the default list but keeps them as history", async () => {
-    const active = await store.create(draft(`active-${Date.now()}`));
-    const merged = await store.create(draft(`merged-${Date.now()}`));
-    await store.updateStatus(merged.id, "merged");
+  it("excludes terminal proposals from the default list but keeps them as history", async () => {
+    const stamp = Date.now();
+    const active = await store.create(draft(`active-${stamp}`));
+    const terminal = [
+      { status: "merged", proposal: await store.create(draft(`merged-${stamp}`)) },
+      { status: "rejected", proposal: await store.create(draft(`rejected-${stamp}`)) },
+      { status: "superseded", proposal: await store.create(draft(`superseded-${stamp}`)) }
+    ] as const;
+    for (const { status, proposal } of terminal) {
+      await store.updateStatus(proposal.id, status);
+    }
 
-    const activeIds = (await store.list(100)).map((proposal) => proposal.id);
+    const activeIds = (await store.list(200)).map((proposal) => proposal.id);
     assert.ok(activeIds.includes(active.id), "active proposal should appear in the default list");
-    assert.ok(!activeIds.includes(merged.id), "merged proposal should be excluded from the default list");
+    for (const { status, proposal } of terminal) {
+      assert.ok(!activeIds.includes(proposal.id), `${status} proposal should be excluded from the default list`);
 
-    const historyIds = (await store.list(100, { status: "merged" })).map((proposal) => proposal.id);
-    assert.ok(historyIds.includes(merged.id), "merged proposal should be fetchable as history");
+      const historyIds = (await store.list(200, { status })).map((row) => row.id);
+      assert.ok(historyIds.includes(proposal.id), `${status} proposal should be fetchable as history`);
+    }
   });
 
   it("stamps mergedAt once and leaves it stable on a re-merge", async () => {

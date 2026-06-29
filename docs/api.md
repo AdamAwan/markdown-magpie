@@ -237,9 +237,16 @@ the watcher completes the `draft_markdown_proposal` job.
 
 See the Proposal Review and Storage sections in [ai-jobs.md](ai-jobs.md).
 
-### `GET /api/proposals?limit=<n>`
+### `GET /api/proposals?limit=<n>&status=<status>`
 
-Lists proposals. `limit` defaults to `50`.
+Lists proposals, newest first. `limit` defaults to `50`.
+
+By default the list is the active inbox: it omits the **settled** statuses
+(`merged`, `rejected`, `superseded`) so nothing terminal lingers there with no
+available action. Pass `status=<status>` to fetch exactly one status instead —
+including the settled ones — so history stays reachable (e.g. `status=superseded`
+to audit what was folded away). An unrecognised `status` is ignored and the
+default inbox is returned.
 
 ```json
 { "proposals": [ Proposal, ... ] }
@@ -292,7 +299,7 @@ later by the job-completion path. The route never drafts inline.
 ### `POST /api/proposals/:id/status`
 
 Sets the proposal status directly. Valid values: `draft`, `ready`, `branch-pushed`,
-`pr-opened`, `merged`, `rejected`.
+`pr-opened`, `merged`, `rejected`, `superseded`.
 
 ```json
 { "status": "ready" }
