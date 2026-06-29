@@ -1,1 +1,1 @@
-export { MAINTENANCE_LENSES, type ChangeIntent, type MaintenanceLens } from "@magpie/core";
+export { MAINTENANCE_LENSES, type ChangeIntent } from "@magpie/core";
