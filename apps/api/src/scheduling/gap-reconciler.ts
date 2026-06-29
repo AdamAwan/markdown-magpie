@@ -277,6 +277,26 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
     proposalsDrafted: 0
   };
 
+  // 0) Evict resolved gaps from whatever active cluster still holds them. A gap
+  // is resolved by (question, summary) when its proposal merges, but a reshape
+  // may have since moved that gap into a different cluster than the one the
+  // merge froze. Pruning here keeps "active membership" meaning "this gap is in
+  // this cluster AND still open", so a covered gap stops surfacing as a member
+  // and never re-drafts. Resolution is global, so this is not flow-scoped.
+  await pruneResolvedMemberships(ctx);
+
+  // 0b) Freeze any of this flow's active clusters left with no live members
+  // after pruning. Their content is fully covered, so they must not draft (or
+  // keep) a proposal; freezing drops them from listActiveClusters.
+  const emptied = (await ctx.stores.gapClusters.listActiveClusters()).filter((c) => sameFlow(c.flowId, flowId));
+  for (const cluster of emptied) {
+    const members = await ctx.stores.gapClusters.listMembershipsForCluster(cluster.id);
+    if (members.length === 0) {
+      await ctx.stores.gapClusters.freezeCluster(cluster.id);
+      console.log(`Gap reconciler [${flowLabel}]: froze cluster ${cluster.id} ("${cluster.title}") — all gaps resolved.`);
+    }
+  }
+
   // 1) Assign this flow's unassigned gaps to their own new cluster.
   const candidates = (await ctx.stores.questionLogs.listGapCandidates(200)).filter((c) => sameFlow(c.flowId, flowId));
   const activeMemberships = await ctx.stores.gapClusters.listActiveMemberships();
@@ -409,6 +429,21 @@ async function draftProposalsForUncoveredClusters(ctx: AppContext, flowId: strin
   }
   console.log(`Gap reconciler [${flowId ?? "default"}]: drafted ${drafted} new proposal(s) for previously uncovered clusters.`);
   return drafted;
+}
+
+// Deactivates the membership of every active-cluster gap that has since been
+// resolved, so a covered gap no longer counts as a live member anywhere.
+async function pruneResolvedMemberships(ctx: AppContext): Promise<void> {
+  const active = await ctx.stores.gapClusters.listActiveMemberships();
+  if (active.length === 0) {
+    return;
+  }
+  const gapIds = active.map((m) => m.gapId);
+  const unresolved = new Set(await ctx.stores.questionLogs.listUnresolvedGapIds(gapIds));
+  const resolved = gapIds.filter((id) => !unresolved.has(id));
+  if (resolved.length > 0) {
+    await ctx.stores.gapClusters.deactivateMembershipsForGaps(resolved);
+  }
 }
 
 type Reshape = ReturnType<typeof reconcileGapClustersOutputSchema.parse>;
