@@ -709,6 +709,48 @@ export interface SourceSyncRun {
 // sources could not substantiate, and what the reconcile gate decided to do with
 // the emitted intent. `intoProposalId` is set only when the gate folded it into an
 // existing open PR.
+
+export const MAINTENANCE_LENSES = ["gap", "source-sync", "verify", "dedupe", "split", "complete"] as const;
+export type MaintenanceLens = (typeof MAINTENANCE_LENSES)[number];
+
+export interface ChangeIntent {
+  lens: MaintenanceLens;
+  flowId?: string;
+  targets: string[];
+  evidence: string[];
+  rationale: string;
+}
+
+export interface ChangeIntentTraceCandidate {
+  proposalId: string;
+  targets: string[];
+  touchable: boolean;
+  overlapTargets: string[];
+}
+
+export interface ChangeIntentTraceOutcome {
+  proposalId?: string;
+  proposalTitle?: string;
+  proposalStatus?: Proposal["status"];
+  pullRequestUrl?: string;
+  foldJobId?: string;
+  reason?: string;
+}
+
+export type ChangeIntentTraceDecision =
+  | { kind: "open-new" }
+  | { kind: "fold"; intoProposalId: string }
+  | { kind: "defer"; behindProposalId: string }
+  | { kind: "drop"; reason: string };
+
+export interface ChangeIntentTrace {
+  createdAt: string;
+  intent: ChangeIntent;
+  decision: ChangeIntentTraceDecision;
+  candidatePullRequests: ChangeIntentTraceCandidate[];
+  outcome?: ChangeIntentTraceOutcome;
+}
+
 export interface VerifyFinding {
   path: string;
   claims: UnprovableClaim[];
@@ -927,4 +969,3 @@ export interface PublishChangesetRequest {
   title: string;
   changes: ChangesetChange[];
 }
-
