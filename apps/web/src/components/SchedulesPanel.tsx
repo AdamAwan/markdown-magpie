@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { isValidCron } from "@magpie/core";
 import { ConfiguredKnowledgeFlow, MaintenanceRun, ScheduledTask } from "../lib/types";
 
-// Humanise a maintenance task type for display, e.g. "fix_patrol" -> "Fix patrol".
+// Humanise a maintenance task type for display, e.g. "correctness_patrol" -> "Correctness patrol".
 function taskTypeLabel(taskType: string): string {
   const words = taskType.replace(/_/g, " ");
   return words.charAt(0).toUpperCase() + words.slice(1);

@@ -29,11 +29,11 @@ const EXPIRATION_SECONDS = {
   split_document: 10 * 60,
   improve_document: 10 * 60,
   fold_changeset_proposal: 15 * 60,
-  refresh_pull_requests: 5 * 60,
+  refresh_flow_snapshot: 5 * 60,
   process_gaps_to_pull_requests: 60 * 60,
   source_change_sync: 60 * 60,
-  fix_patrol: 60 * 60,
-  improve_patrol: 60 * 60,
+  correctness_patrol: 60 * 60,
+  editorial_patrol: 60 * 60,
   publish_proposal: 15 * 60,
   crosslink_pull_requests: 10 * 60,
   fold_markdown_proposal: 15 * 60,
@@ -64,7 +64,7 @@ test("provider work retries three times and non-provider work retries twice", ()
     assert.equal(policy.retryDelay, 15);
     assert.equal(policy.retryDelayMax, 300);
   }
-  for (const type of ["process_gaps_to_pull_requests", "refresh_pull_requests"] as const) {
+  for (const type of ["process_gaps_to_pull_requests", "refresh_flow_snapshot"] as const) {
     const policy = jobDefinition(type).policy;
     assert.equal(policy.retryLimit, 2);
     assert.equal(policy.retryDelay, 30);
@@ -86,7 +86,7 @@ test("codex capability can only claim codex-partitioned AI work", () => {
 
 test("github capability yields only GitHub work queues", () => {
   assert.deepEqual(queueNamesForCapabilities(["github"]), [
-    "refresh_pull_requests",
+    "refresh_flow_snapshot",
     "publish_proposal",
     "crosslink_pull_requests",
     "comment_pull_request"
@@ -97,8 +97,8 @@ test("maintenance capability yields only orchestration work queues", () => {
   assert.deepEqual(queueNamesForCapabilities(["maintenance"]), [
     "process_gaps_to_pull_requests",
     "source_change_sync",
-    "fix_patrol",
-    "improve_patrol"
+    "correctness_patrol",
+    "editorial_patrol"
   ]);
 });
 
@@ -185,23 +185,23 @@ test("process_gaps_to_pull_requests requires a flowId but stays on the maintenan
   assert.ok(definition.inputSchema.safeParse({ flowId: "billing" }).success);
 });
 
-test("fix_patrol is a maintenance queue named by its type", () => {
-  const definition = jobDefinition("fix_patrol");
+test("correctness_patrol is a maintenance queue named by its type", () => {
+  const definition = jobDefinition("correctness_patrol");
   assert.equal(definition.requiredCapability({ flowId: "billing" }), "maintenance");
-  assert.equal(queueNameForJob("fix_patrol", { flowId: "billing" }), "fix_patrol");
+  assert.equal(queueNameForJob("correctness_patrol", { flowId: "billing" }), "correctness_patrol");
 });
 
-test("fix_patrol input accepts an optional flowId; output carries runId + selectedCount + findingCount", () => {
-  assert.ok(jobDefinition("fix_patrol").inputSchema.safeParse({}).success);
-  assert.ok(jobDefinition("fix_patrol").inputSchema.safeParse({ flowId: "billing" }).success);
-  assert.ok(jobDefinition("fix_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3, findingCount: 1 }).success);
-  assert.ok(!jobDefinition("fix_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3 }).success);
+test("correctness_patrol input accepts an optional flowId; output carries runId + selectedCount + findingCount", () => {
+  assert.ok(jobDefinition("correctness_patrol").inputSchema.safeParse({}).success);
+  assert.ok(jobDefinition("correctness_patrol").inputSchema.safeParse({ flowId: "billing" }).success);
+  assert.ok(jobDefinition("correctness_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3, findingCount: 1 }).success);
+  assert.ok(!jobDefinition("correctness_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3 }).success);
 });
 
-test("improve_patrol is a maintenance queue whose output reports enqueued improve scans", () => {
-  const definition = jobDefinition("improve_patrol");
+test("editorial_patrol is a maintenance queue whose output reports enqueued improve scans", () => {
+  const definition = jobDefinition("editorial_patrol");
   assert.equal(definition.requiredCapability({ flowId: "billing" }), "maintenance");
-  assert.equal(queueNameForJob("improve_patrol", { flowId: "billing" }), "improve_patrol");
+  assert.equal(queueNameForJob("editorial_patrol", { flowId: "billing" }), "editorial_patrol");
   assert.ok(definition.inputSchema.safeParse({}).success);
   assert.ok(definition.inputSchema.safeParse({ flowId: "billing" }).success);
   assert.ok(definition.outputSchema.safeParse({ runId: "r1", selectedCount: 2, enqueuedCount: 2 }).success);

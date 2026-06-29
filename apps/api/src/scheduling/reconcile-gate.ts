@@ -89,7 +89,7 @@ const TOUCHABLE_STATUSES = new Set(["draft", "ready", "branch-pushed", "pr-opene
 // targetPath has no file-set to overlap on (Proposal.targetPath is typed
 // non-optional, so in practice this guards the empty-string case). touchable is
 // true unless the proposal's PR is approved — see Proposal.reviewDecision, polled
-// by the refresh_pull_requests watcher job.
+// by the refresh_flow_snapshot watcher job.
 export function openPullRequestSummaries(proposals: Proposal[]): OpenPullRequestSummary[] {
   const out: OpenPullRequestSummary[] = [];
   for (const proposal of proposals) {

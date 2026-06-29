@@ -42,10 +42,10 @@ test("runFixPatrol checks a batch, stamps the cursor, and records a maintenance 
   const cursor = await ctx.stores.patrol.listCursor(undefined);
   assert.deepEqual(cursor.map((e) => e.docPath).sort(), [...outcome.selected].sort());
 
-  // It is recorded as a fix_patrol maintenance run, fetchable by id.
+  // It is recorded as a correctness_patrol maintenance run, fetchable by id.
   const runs = await ctx.stores.maintenanceRuns.list({ limit: 10 });
   assert.equal(runs[0].id, outcome.runId);
-  assert.equal(runs[0].taskType, "fix_patrol");
+  assert.equal(runs[0].taskType, "correctness_patrol");
   assert.equal((await ctx.stores.maintenanceRuns.get(outcome.runId))?.id, outcome.runId);
 });
 
@@ -247,8 +247,8 @@ test("runImprovePatrol uses its own cursor and enqueues an improve job for every
   );
   assert.ok(improved.every((job) => job.destinationId === "docs"));
 
-  // The tick is recorded as an improve_patrol maintenance run.
-  const runs = await ctx.stores.maintenanceRuns.list({ taskType: "improve_patrol", limit: 10 });
+  // The tick is recorded as an editorial_patrol maintenance run.
+  const runs = await ctx.stores.maintenanceRuns.list({ taskType: "editorial_patrol", limit: 10 });
   assert.equal(runs.length, 1);
   assert.equal(runs[0].id, outcome.runId);
 });

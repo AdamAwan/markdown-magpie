@@ -272,7 +272,7 @@ export async function runFixPatrol(
   await ctx.stores.patrol.stampChecked(options.flowId, selected);
 
   const run = await ctx.stores.maintenanceRuns.record({
-    taskType: "fix_patrol",
+    taskType: "correctness_patrol",
     flowId: options.flowId,
     trigger: options.trigger,
     status: "completed",
@@ -350,7 +350,7 @@ export async function runImprovePatrol(
 
   await ctx.stores.patrol.stampChecked(options.flowId, selected, "improve");
   const run = await ctx.stores.maintenanceRuns.record({
-    taskType: "improve_patrol",
+    taskType: "editorial_patrol",
     flowId: options.flowId,
     trigger: options.trigger,
     status: "completed",

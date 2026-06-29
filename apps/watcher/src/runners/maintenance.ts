@@ -1,7 +1,7 @@
 import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import {
-  fixPatrolOutputSchema,
-  improvePatrolOutputSchema,
+  correctnessPatrolOutputSchema,
+  editorialPatrolOutputSchema,
   processGapsToPullRequestsOutputSchema,
   sourceChangeSyncOutputSchema
 } from "@magpie/jobs";
@@ -10,8 +10,8 @@ import type { WatcherApi } from "../http-client.js";
 const MAINTENANCE_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "process_gaps_to_pull_requests",
   "source_change_sync",
-  "fix_patrol",
-  "improve_patrol"
+  "correctness_patrol",
+  "editorial_patrol"
 ]);
 
 // Runs the scheduled maintenance jobs by POSTing a thin API endpoint, keeping the
@@ -34,10 +34,10 @@ export class MaintenanceRunner {
     if (job.type === "source_change_sync") {
       return this.runSourceSync(job, signal);
     }
-    if (job.type === "fix_patrol") {
+    if (job.type === "correctness_patrol") {
       return this.runFixPatrol(job, signal);
     }
-    if (job.type === "improve_patrol") {
+    if (job.type === "editorial_patrol") {
       return this.runImprovePatrol(job, signal);
     }
     throw new Error(`MaintenanceRunner cannot handle ${job.type}`);
@@ -69,20 +69,20 @@ export class MaintenanceRunner {
 
   private async runFixPatrol(job: JobView, signal: AbortSignal): Promise<unknown> {
     const flowId = readFlowId(job.input);
-    console.log(`fix_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`);
+    console.log(`correctness_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`);
     const { runId, selectedCount, findingCount } = await this.api.runFixPatrol(flowId, signal);
-    console.log(`fix_patrol[${job.id}]: checked ${selectedCount} document(s), ${findingCount} finding(s) (run ${runId})`);
-    return fixPatrolOutputSchema.parse({ runId, selectedCount, findingCount });
+    console.log(`correctness_patrol[${job.id}]: checked ${selectedCount} document(s), ${findingCount} finding(s) (run ${runId})`);
+    return correctnessPatrolOutputSchema.parse({ runId, selectedCount, findingCount });
   }
 
   private async runImprovePatrol(job: JobView, signal: AbortSignal): Promise<unknown> {
     const flowId = readFlowId(job.input);
-    console.log(`improve_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`);
+    console.log(`editorial_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`);
     const { runId, selectedCount, enqueuedCount } = await this.api.runImprovePatrol(flowId, signal);
     console.log(
-      `improve_patrol[${job.id}]: selected ${selectedCount} document(s), enqueued ${enqueuedCount} scan(s) (run ${runId})`
+      `editorial_patrol[${job.id}]: selected ${selectedCount} document(s), enqueued ${enqueuedCount} scan(s) (run ${runId})`
     );
-    return improvePatrolOutputSchema.parse({ runId, selectedCount, enqueuedCount });
+    return editorialPatrolOutputSchema.parse({ runId, selectedCount, enqueuedCount });
   }
 }
 

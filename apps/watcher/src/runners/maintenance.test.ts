@@ -43,11 +43,11 @@ describe("MaintenanceRunner", () => {
     assert.equal(runner.capability, "maintenance");
     assert.ok(runner.supports("process_gaps_to_pull_requests"));
     assert.ok(runner.supports("source_change_sync"));
-    assert.ok(runner.supports("fix_patrol"));
-    assert.ok(runner.supports("improve_patrol"));
+    assert.ok(runner.supports("correctness_patrol"));
+    assert.ok(runner.supports("editorial_patrol"));
     assert.ok(!runner.supports("answer_question"));
-    // refresh_pull_requests is a github-capability job, not maintenance.
-    assert.ok(!runner.supports("refresh_pull_requests"));
+    // refresh_flow_snapshot is a github-capability job, not maintenance.
+    assert.ok(!runner.supports("refresh_flow_snapshot"));
   });
 
   it("POSTs the source-sync orchestration endpoint and returns schema-valid run ids", async () => {
@@ -92,7 +92,7 @@ describe("MaintenanceRunner", () => {
       }
     });
     const runner = new MaintenanceRunner(api);
-    const output = (await runner.run(job("fix_patrol", { flowId: "billing" }), new AbortController().signal)) as {
+    const output = (await runner.run(job("correctness_patrol", { flowId: "billing" }), new AbortController().signal)) as {
       runId: string;
       selectedCount: number;
       findingCount: number;
@@ -112,7 +112,7 @@ describe("MaintenanceRunner", () => {
       }
     });
     const runner = new MaintenanceRunner(api);
-    await runner.run(job("fix_patrol", {}), new AbortController().signal);
+    await runner.run(job("correctness_patrol", {}), new AbortController().signal);
     assert.deepEqual(calls, [undefined]);
   });
 
@@ -125,7 +125,7 @@ describe("MaintenanceRunner", () => {
       }
     });
     const runner = new MaintenanceRunner(api);
-    const output = (await runner.run(job("improve_patrol", { flowId: "billing" }), new AbortController().signal)) as {
+    const output = (await runner.run(job("editorial_patrol", { flowId: "billing" }), new AbortController().signal)) as {
       runId: string;
       selectedCount: number;
       enqueuedCount: number;
@@ -145,7 +145,7 @@ describe("MaintenanceRunner", () => {
       }
     });
     const runner = new MaintenanceRunner(api);
-    await runner.run(job("improve_patrol", {}), new AbortController().signal);
+    await runner.run(job("editorial_patrol", {}), new AbortController().signal);
     assert.deepEqual(calls, [undefined]);
   });
 

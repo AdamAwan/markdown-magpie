@@ -6,7 +6,7 @@ import { MaintenanceRunDetailsModal, SchedulesPanel } from "./SchedulesPanel";
 
 const run: MaintenanceRun = {
   id: "run-1",
-  taskType: "fix_patrol",
+  taskType: "correctness_patrol",
   flowId: "docs",
   trigger: "manual",
   status: "completed",
@@ -34,7 +34,7 @@ test("recent runs show trigger and expose a details action", () => {
 
   assert.match(html, />Trigger</);
   assert.match(html, />manual</);
-  assert.match(html, /aria-label="View details for Fix patrol run"/);
+  assert.match(html, /aria-label="View details for Correctness patrol run"/);
 });
 
 test("maintenance run details modal renders formatted JSON details", () => {

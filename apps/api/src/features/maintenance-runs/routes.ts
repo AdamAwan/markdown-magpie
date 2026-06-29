@@ -6,7 +6,7 @@ import type { MaintenanceTaskType } from "@magpie/core";
 
 // The maintenance task types a run can belong to. Used to validate the optional
 // ?taskType filter so an unknown value is ignored rather than passed through.
-const TASK_TYPES = new Set<MaintenanceTaskType>(["fix_patrol", "improve_patrol", "process_gaps_to_pull_requests"]);
+const TASK_TYPES = new Set<MaintenanceTaskType>(["correctness_patrol", "editorial_patrol", "process_gaps_to_pull_requests"]);
 
 // Read-only run history for the scheduled maintenance tasks, surfaced on the
 // Schedules page. Newest-first; optional taskType/flowId filters.

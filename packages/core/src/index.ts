@@ -240,7 +240,7 @@ export interface Proposal {
   jobId?: string;
   publication?: ProposalPublication;
   // The latest review decision observed on this proposal's pull request, polled by
-  // the watcher's refresh_pull_requests job. Absent until the PR has been polled (or
+  // the watcher's refresh_flow_snapshot job. Absent until the PR has been polled (or
   // for proposals drafted before this was tracked). An approved PR is non-touchable:
   // the reconcile gate will not fold another change into it.
   reviewDecision?: ReviewDecision;
@@ -769,7 +769,7 @@ export interface VerifyFinding {
 // shared shape stays generic.
 // ---------------------------------------------------------------------------
 
-export type MaintenanceTaskType = "fix_patrol" | "improve_patrol" | "process_gaps_to_pull_requests";
+export type MaintenanceTaskType = "correctness_patrol" | "editorial_patrol" | "process_gaps_to_pull_requests";
 
 export type MaintenanceRunStatus = "running" | "completed" | "failed";
 

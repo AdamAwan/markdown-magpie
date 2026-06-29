@@ -6,7 +6,7 @@ import {
   foldMarkdownProposalOutputSchema,
   commentPullRequestInputSchema,
   processGapsToPullRequestsInputSchema,
-  refreshPullRequestsOutputSchema,
+  refreshFlowSnapshotOutputSchema,
   improveDocumentInputSchema,
   improveDocumentOutputSchema,
   splitDocumentInputSchema,
@@ -171,14 +171,14 @@ test("comment_pull_request input requires url and body", () => {
 });
 
 test("refresh output schema accepts a result with a reviewDecision", () => {
-  const parsed = refreshPullRequestsOutputSchema.parse({
+  const parsed = refreshFlowSnapshotOutputSchema.parse({
     results: [{ proposalId: "p1", state: "open", merged: false, reviewDecision: "approved" }]
   });
   assert.equal(parsed.results[0].reviewDecision, "approved");
 });
 
 test("refresh output schema leaves reviewDecision absent when not provided", () => {
-  const parsed = refreshPullRequestsOutputSchema.parse({
+  const parsed = refreshFlowSnapshotOutputSchema.parse({
     results: [{ proposalId: "p1", state: "closed", merged: true }]
   });
   assert.equal(parsed.results[0].reviewDecision, undefined);
@@ -186,7 +186,7 @@ test("refresh output schema leaves reviewDecision absent when not provided", () 
 
 test("refresh output schema rejects an unknown reviewDecision value", () => {
   assert.ok(
-    !refreshPullRequestsOutputSchema.safeParse({
+    !refreshFlowSnapshotOutputSchema.safeParse({
       results: [{ proposalId: "p1", state: "open", merged: false, reviewDecision: "maybe" }]
     }).success
   );

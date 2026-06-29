@@ -41,7 +41,7 @@ test("renders change intent trace chips and debug details", () => {
       runs={[
         run({
           id: "run-trace",
-          taskType: "fix_patrol",
+          taskType: "correctness_patrol",
           summary: "checked docs",
           details: {
             intentTraces: [

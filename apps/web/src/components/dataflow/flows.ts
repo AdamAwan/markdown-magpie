@@ -398,7 +398,7 @@ function gappr(): FlowGraph {
       },
       { id: "github", kind: "user", label: "🚀 GitHub Watcher\npush branch + open PR" },
       { id: "host", kind: "source", label: "🌐 Git Host\nPull Request" },
-      { id: "refresh", kind: "processing", label: "🔄 GitHub Watcher\nrefresh_pull_requests" },
+      { id: "refresh", kind: "processing", label: "🔄 GitHub Watcher\nrefresh_flow_snapshot" },
       { id: "merge", kind: "processing", label: "✅ API on merge\nresolve gaps + re-index" }
     ],
     edges: [
