@@ -71,46 +71,55 @@ describe("PostgresKnowledgeStore keyword search", { skip: databaseUrl ? false : 
     const repositoryId = `kw-test-${Date.now()}`;
     const otherRepositoryId = `kw-other-${Date.now()}`;
 
-    const build = (
+    // saveIndexedRepository replaces a repository's whole document set (it prunes
+    // paths absent from the incoming batch), so every document for a repository
+    // must be saved in a single call rather than across multiple calls.
+    const buildRepo = (
       repo: string,
-      docPath: string,
-      heading: string,
-      content: string
+      docs: Array<{ path: string; heading: string; content: string }>
     ): { summary: IndexedRepositorySummary; documents: KnowledgeDocument[]; sections: DocumentSection[] } => {
-      const document: KnowledgeDocument = {
-        id: `${repo}:${docPath}`,
-        repositoryId: repo,
-        path: docPath,
-        metadata: { title: heading, status: "draft", tags: [], relatedDocs: [] },
-        content: `# ${heading}\n${content}\n`
-      };
-      const section: DocumentSection = {
-        id: `${document.id}:0`,
-        documentId: document.id,
-        path: docPath,
-        heading,
-        headingPath: [heading],
-        anchor: "0",
-        content,
-        ordinal: 0
-      };
+      const documents: KnowledgeDocument[] = [];
+      const sections: DocumentSection[] = [];
+      docs.forEach((doc, ordinal) => {
+        const document: KnowledgeDocument = {
+          id: `${repo}:${doc.path}`,
+          repositoryId: repo,
+          path: doc.path,
+          metadata: { title: doc.heading, status: "draft", tags: [], relatedDocs: [] },
+          content: `# ${doc.heading}\n${doc.content}\n`
+        };
+        documents.push(document);
+        sections.push({
+          id: `${document.id}:0`,
+          documentId: document.id,
+          path: doc.path,
+          heading: doc.heading,
+          headingPath: [doc.heading],
+          anchor: "0",
+          content: doc.content,
+          ordinal
+        });
+      });
       return {
         summary: {
           repository: { id: repo, name: repo, defaultBranch: "main", localPath: "/tmp", provider: "local" },
-          documentCount: 1,
-          sectionCount: 1
+          documentCount: documents.length,
+          sectionCount: sections.length
         },
-        documents: [document],
-        sections: [section]
+        documents,
+        sections
       };
     };
 
-    const rollback = build(repositoryId, "rollback.md", "Hotfix Rollback", "Run the rollback workflow and notify the incident lead.");
-    const unrelated = build(repositoryId, "felines.md", "Grooming", "Sticky residue is removed with oil before bathing.");
-    const otherRepo = build(otherRepositoryId, "rollback.md", "Hotfix Rollback", "Run the rollback workflow elsewhere.");
+    const primary = buildRepo(repositoryId, [
+      { path: "rollback.md", heading: "Hotfix Rollback", content: "Run the rollback workflow and notify the incident lead." },
+      { path: "felines.md", heading: "Grooming", content: "Sticky residue is removed with oil before bathing." }
+    ]);
+    const otherRepo = buildRepo(otherRepositoryId, [
+      { path: "rollback.md", heading: "Hotfix Rollback", content: "Run the rollback workflow elsewhere." }
+    ]);
 
-    await store.saveIndexedRepository(rollback.summary, rollback.documents, rollback.sections);
-    await store.saveIndexedRepository(unrelated.summary, unrelated.documents, unrelated.sections);
+    await store.saveIndexedRepository(primary.summary, primary.documents, primary.sections);
     await store.saveIndexedRepository(otherRepo.summary, otherRepo.documents, otherRepo.sections);
 
     const scoped = await store.searchByKeyword("how do I rollback the hotfix", 10, [repositoryId]);
