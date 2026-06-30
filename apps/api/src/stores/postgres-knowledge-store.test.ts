@@ -64,3 +64,71 @@ describe("PostgresKnowledgeStore re-index pruning", { skip: databaseUrl ? false 
     assert.deepEqual(paths.sort(), ["keep.md"]);
   });
 });
+
+describe("PostgresKnowledgeStore keyword search", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
+  it("ranks sections by full-text relevance and respects the repository scope", async () => {
+    const store = new PostgresKnowledgeStore(databaseUrl as string);
+    const repositoryId = `kw-test-${Date.now()}`;
+    const otherRepositoryId = `kw-other-${Date.now()}`;
+
+    // saveIndexedRepository replaces a repository's whole document set (it prunes
+    // paths absent from the incoming batch), so every document for a repository
+    // must be saved in a single call rather than across multiple calls.
+    const buildRepo = (
+      repo: string,
+      docs: Array<{ path: string; heading: string; content: string }>
+    ): { summary: IndexedRepositorySummary; documents: KnowledgeDocument[]; sections: DocumentSection[] } => {
+      const documents: KnowledgeDocument[] = [];
+      const sections: DocumentSection[] = [];
+      docs.forEach((doc, ordinal) => {
+        const document: KnowledgeDocument = {
+          id: `${repo}:${doc.path}`,
+          repositoryId: repo,
+          path: doc.path,
+          metadata: { title: doc.heading, status: "draft", tags: [], relatedDocs: [] },
+          content: `# ${doc.heading}\n${doc.content}\n`
+        };
+        documents.push(document);
+        sections.push({
+          id: `${document.id}:0`,
+          documentId: document.id,
+          path: doc.path,
+          heading: doc.heading,
+          headingPath: [doc.heading],
+          anchor: "0",
+          content: doc.content,
+          ordinal
+        });
+      });
+      return {
+        summary: {
+          repository: { id: repo, name: repo, defaultBranch: "main", localPath: "/tmp", provider: "local" },
+          documentCount: documents.length,
+          sectionCount: sections.length
+        },
+        documents,
+        sections
+      };
+    };
+
+    const primary = buildRepo(repositoryId, [
+      { path: "rollback.md", heading: "Hotfix Rollback", content: "Run the rollback workflow and notify the incident lead." },
+      { path: "felines.md", heading: "Grooming", content: "Sticky residue is removed with oil before bathing." }
+    ]);
+    const otherRepo = buildRepo(otherRepositoryId, [
+      { path: "rollback.md", heading: "Hotfix Rollback", content: "Run the rollback workflow elsewhere." }
+    ]);
+
+    await store.saveIndexedRepository(primary.summary, primary.documents, primary.sections);
+    await store.saveIndexedRepository(otherRepo.summary, otherRepo.documents, otherRepo.sections);
+
+    const scoped = await store.searchByKeyword("how do I rollback the hotfix", 10, [repositoryId]);
+    assert.ok(scoped.length >= 1, "expected at least one keyword hit");
+    assert.equal(scoped[0].id, `${repositoryId}:rollback.md:0`);
+    assert.ok(scoped[0].relevance > 0 && scoped[0].relevance <= 1);
+    assert.ok(scoped.every((hit) => hit.id.startsWith(`${repositoryId}:`)), "scope must exclude the other repository");
+
+    const empty = await store.searchByKeyword("   ", 10, [repositoryId]);
+    assert.deepEqual(empty, []);
+  });
+});

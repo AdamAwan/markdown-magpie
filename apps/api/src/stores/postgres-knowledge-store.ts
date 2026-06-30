@@ -6,6 +6,7 @@ import type {
   KnowledgePersistence,
   LoadedKnowledge,
   SectionEmbeddingToSave,
+  SectionKeywordSearch,
   SectionToEmbed,
   SectionVectorSearch
 } from "./knowledge-index.js";
@@ -21,7 +22,9 @@ const SECTION_INSERT_CHUNK = 1000;
 // the 65535 bind-parameter cap while still cutting round-trips drastically.
 const EMBEDDING_UPDATE_CHUNK = 1000;
 
-export class PostgresKnowledgeStore implements KnowledgePersistence, SectionVectorSearch, EmbeddingPersistence {
+export class PostgresKnowledgeStore
+  implements KnowledgePersistence, SectionVectorSearch, SectionKeywordSearch, EmbeddingPersistence
+{
   private readonly pool: pg.Pool;
 
   constructor(connectionString: string) {
@@ -219,6 +222,36 @@ export class PostgresKnowledgeStore implements KnowledgePersistence, SectionVect
     return result.rows.map((row) => ({ id: row.id, similarity: Number(row.similarity) }));
   }
 
+  async searchByKeyword(
+    query: string,
+    limit: number,
+    repositoryIds?: string[]
+  ): Promise<Array<{ id: string; relevance: number }>> {
+    // Empty/stopword-only queries produce an empty tsquery, which matches nothing.
+    if (query.trim().length === 0) {
+      return [];
+    }
+    // A null filter ($3) matches every repository; otherwise restrict to the flow's
+    // scope via the section -> document -> repository join. websearch_to_tsquery
+    // tolerates free-form user input; the GIN index on search_tsv serves the @@ match.
+    const repositoryFilter = repositoryIds && repositoryIds.length > 0 ? repositoryIds : null;
+    const result = await this.pool.query<{ id: string; relevance: string }>(
+      `
+        SELECT s.id, ts_rank(s.search_tsv, websearch_to_tsquery('english', $1)) AS relevance
+        FROM document_sections s
+        JOIN documents d ON d.id = s.document_id
+        WHERE s.search_tsv @@ websearch_to_tsquery('english', $1)
+          AND ($3::text[] IS NULL OR d.repository_id = ANY($3))
+        ORDER BY relevance DESC
+        LIMIT $2
+      `,
+      [query, limit, repositoryFilter]
+    );
+    // ts_rank is unbounded; normalise into [0,1] so it composes with vector
+    // similarities in the fusion step the same way the in-memory path does.
+    return result.rows.map((row) => ({ id: row.id, relevance: normaliseRank(Number(row.relevance)) }));
+  }
+
   async listSectionsNeedingEmbedding(limit: number, repositoryId?: string): Promise<SectionToEmbed[]> {
     const result = await this.pool.query<{ id: string; heading: string; content: string }>(
       `
@@ -332,4 +365,14 @@ interface SectionRow {
 
 function toVectorLiteral(embedding: number[]): string {
   return `[${embedding.join(",")}]`;
+}
+
+// ts_rank returns a small non-negative score (typically well under 1 for short
+// sections). Map it into [0,1] with a saturating curve so a strong match trends
+// toward 1 while staying comparable to cosine similarities during fusion.
+function normaliseRank(rank: number): number {
+  if (!Number.isFinite(rank) || rank <= 0) {
+    return 0;
+  }
+  return rank / (rank + 0.1);
 }
