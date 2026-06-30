@@ -1,5 +1,16 @@
 import type { PromptDefinition } from "./types.js";
 
+// Shared conservatism contract for the maintenance lenses (verify, dedupe, split,
+// improve). Each lens patrols healthy documents far more often than broken ones, so
+// the default must be inaction: a false negative (doing nothing) is always cheaper
+// than a speculative change a human then has to revert. Each prompt follows this
+// sentence with what a "clear case" means for that lens, and describes its own
+// negative-result return.
+const CONSERVATIVE_CONTRACT =
+  "Be conservative. Act only when the case is clear and strong; when it is weak, " +
+  "ambiguous, or the inputs do not prove it, take NO action and return the negative " +
+  "result described below rather than forcing a change.";
+
 export const ANSWER_QUESTION: PromptDefinition = {
   id: "answer-question",
   title: "Answer question",
@@ -167,7 +178,7 @@ Input:
 
 Rules:
 - Return JSON only.
-- Be conservative. Flag a claim ONLY when the sources clearly contradict it or clearly fail to support it. When you are unsure, or the sources simply do not mention the claim, treat the document as healthy — do NOT flag it.
+- ${CONSERVATIVE_CONTRACT} Here a clear case is a claim the sources clearly contradict or clearly fail to support; when you are unsure, or the sources simply do not mention the claim, treat the document as healthy and do NOT flag it.
 - If every claim is supported (or the sources give you nothing to disprove), return verdict "healthy" with an empty claims array.
 - Otherwise return verdict "unprovable" and list ONLY the specific unprovable claims, each with a short reason citing what the sources say (or fail to say).
 - Do not propose edits or rewrites. You only report.
@@ -220,7 +231,7 @@ export const DEDUPE_DOCUMENTS: PromptDefinition = {
 
 Rules:
 - Return JSON only.
-- Be conservative. Only act when one neighbour clearly covers the same material or states something that contradicts the document. Adjacent or merely related topics are NOT duplicates. When unsure, set "duplicate": false.
+- ${CONSERVATIVE_CONTRACT} Here a clear case is exactly one neighbour that clearly covers the same material as the document or states something that contradicts it; adjacent or merely related topics are NOT duplicates, so set "duplicate": false.
 - When there is no real duplicate, return {"duplicate": false, "rationale": "...", "changeset": []}.
 - When there IS a duplicate, pick the better SURVIVOR (usually the more complete document) as "primaryPath", and produce a minimal "changeset" of at most two files that reconciles the pair:
   - Rewrite the survivor to hold the reconciled content — every unique fact from BOTH documents.
@@ -255,7 +266,7 @@ export const SPLIT_DOCUMENT: PromptDefinition = {
 
 Rules:
 - Return JSON only.
-- Be conservative. Only act when the document clearly contains independent responsibilities. Long but cohesive documents should return {"split": false, "rationale": "...", "changeset": []}.
+- ${CONSERVATIVE_CONTRACT} Here a clear case is a document that plainly carries independent responsibilities; a long but cohesive document is NOT one, so return {"split": false, "rationale": "...", "changeset": []}.
 - When splitting, keep "primaryPath" equal to the original input path and include a full write for that path in "changeset".
 - The parent document should keep the overview, shared context, and links to the focused documents.
 - Prefer moving detail into an existing neighbour when that neighbour is the right home. Create a new document only when no supplied neighbour fits.
@@ -291,7 +302,7 @@ Input:
 
 Rules:
 - Return JSON only.
-- Act only when the document is fine-but-thin: broadly correct and cohesive, but missing useful detail that the supplied sources clearly support.
+- ${CONSERVATIVE_CONTRACT} Here a clear case is a fine-but-thin document — broadly correct and cohesive, but missing useful detail that the supplied sources clearly support.
 - Use only supplied source material for new facts. Do not invent facts, figures, dates, examples, or behaviour.
 - Keep this single-target. Do not split, dedupe, rename, delete, move material to another file, or create new documents.
 - Preserve the existing structure and tone where sensible. Add focused sections or paragraphs only where they improve coverage.
@@ -306,20 +317,6 @@ Return JSON:
   "rationale": "string"
 }`
 };
-export const GAP_CLUSTERING: PromptDefinition = {
-  id: "gap-clustering",
-  title: "Cluster related gaps",
-  description: "Groups related knowledge-base gaps that a single Markdown article could resolve.",
-  usedBy: ["watcher"],
-  outputShape: '{ clusters[] }',
-  instructions:
-    'Group related knowledge-base gaps that a single Markdown article could resolve. ' +
-    'Two gaps belong together only when one proposal would naturally answer both. ' +
-    'Return JSON only with this shape: {"clusters":[{"title":"string","summaries":["string"],"rationale":"string"}]}. ' +
-    'Use the gap summary strings exactly as provided. Every input summary must appear in exactly one cluster. ' +
-    'Prefer several small, focused clusters over one broad cluster.'
-};
-
 export const GAP_RECONCILE_PROPOSE: PromptDefinition = {
   id: "gap-reconcile-propose",
   title: "Propose gap-cluster reshapes",
@@ -396,7 +393,6 @@ export const promptCatalog: PromptDefinition[] = [
   DEDUPE_DOCUMENTS,
   SPLIT_DOCUMENT,
   IMPROVE_DOCUMENT,
-  GAP_CLUSTERING,
   GAP_RECONCILE_PROPOSE,
   GAP_RECONCILE_CRITIC,
   GENERIC_JOB,
