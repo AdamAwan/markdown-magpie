@@ -33,7 +33,7 @@ test("getHeadSha + diffChangedFiles report what changed between two commits", as
 
     assert.equal(await getHeadSha(repo), second);
 
-    const changes = await diffChangedFiles(repo, first, second);
+    const { changes } = await diffChangedFiles(repo, first, second);
     const byPath = new Map(changes.map((change) => [change.path, change]));
 
     assert.equal(byPath.get("rules.md")?.status, "modified");
@@ -57,7 +57,7 @@ test("diffChangedFiles scopes to a subpath", async () => {
     await writeFile(path.join(repo, "root.md"), "root changed\n");
     const second = await commitAll(repo, "change both");
 
-    const scoped = await diffChangedFiles(repo, first, second, { subpath: "docs" });
+    const { changes: scoped } = await diffChangedFiles(repo, first, second, { subpath: "docs" });
     assert.deepEqual(
       scoped.map((change) => change.path),
       ["docs/a.md"],
@@ -88,7 +88,7 @@ test("diffChangedFiles reports a rename's diff under the new path", async () => 
     await writeFile(path.join(repo, "new.md"), "line one\nline two\nline three\nline four\n");
     const second = await commitAll(repo, "rename and edit");
 
-    const changes = await diffChangedFiles(repo, first, second);
+    const { changes } = await diffChangedFiles(repo, first, second);
     const byPath = new Map(changes.map((change) => [change.path, change]));
 
     assert.equal(byPath.get("new.md")?.status, "renamed");
@@ -111,7 +111,7 @@ test("diffChangedFiles reports a deleted file's diff under its path", async () =
     await git(repo, ["rm", "gone.md"]);
     const second = await commitAll(repo, "delete a file");
 
-    const changes = await diffChangedFiles(repo, first, second);
+    const { changes } = await diffChangedFiles(repo, first, second);
     const byPath = new Map(changes.map((change) => [change.path, change]));
 
     assert.equal(byPath.get("gone.md")?.status, "deleted");
@@ -137,7 +137,7 @@ test("diffChangedFiles handles many changed files in a single commit", async () 
     }
     const second = await commitAll(repo, "change all");
 
-    const changes = await diffChangedFiles(repo, first, second);
+    const { changes } = await diffChangedFiles(repo, first, second);
     assert.equal(changes.length, fileCount);
     for (let i = 0; i < fileCount; i += 1) {
       const change = changes.find((c) => c.path === `file-${i}.md`);
@@ -163,7 +163,7 @@ test("diffChangedFiles truncates an individual file's diff to maxDiffChars", asy
     await writeFile(path.join(repo, "big.md"), `${bigLines}\n`);
     const second = await commitAll(repo, "change both, one big one small");
 
-    const changes = await diffChangedFiles(repo, first, second, { maxDiffChars: 200 });
+    const { changes } = await diffChangedFiles(repo, first, second, { maxDiffChars: 200 });
     const byPath = new Map(changes.map((change) => [change.path, change]));
 
     const bigDiff = byPath.get("big.md")?.diff ?? "";
@@ -185,8 +185,61 @@ test("diffChangedFiles returns [] when nothing changed between two equal shas", 
     await writeFile(path.join(repo, "a.md"), "a\n");
     const sha = await commitAll(repo, "initial");
 
-    const changes = await diffChangedFiles(repo, sha, sha);
+    const { changes } = await diffChangedFiles(repo, sha, sha);
     assert.deepEqual(changes, []);
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test("diffChangedFiles caps materialized files at maxFiles but reports the true total", async () => {
+  const repo = await mkdtemp(path.join(tmpdir(), "magpie-source-sync-"));
+  try {
+    await git(repo, ["init", "-q"]);
+    const fileCount = 12;
+    for (let i = 0; i < fileCount; i += 1) {
+      // Zero-pad so name-status order is deterministic and predictable.
+      await writeFile(path.join(repo, `file-${String(i).padStart(2, "0")}.md`), `original ${i}\n`);
+    }
+    const first = await commitAll(repo, "initial");
+    for (let i = 0; i < fileCount; i += 1) {
+      await writeFile(path.join(repo, `file-${String(i).padStart(2, "0")}.md`), `changed ${i}\n`);
+    }
+    const second = await commitAll(repo, "change all");
+
+    const { changes, totalCount } = await diffChangedFiles(repo, first, second, { maxFiles: 5 });
+
+    // Only the first N files are materialized, in deterministic name-status order...
+    assert.equal(changes.length, 5, "only maxFiles entries are materialized");
+    assert.deepEqual(
+      changes.map((change) => change.path),
+      ["file-00.md", "file-01.md", "file-02.md", "file-03.md", "file-04.md"],
+      "the first N files in name-status order"
+    );
+    // ...each with a real patch built (not an empty placeholder)...
+    assert.match(changes[0].diff, /\+changed 0/);
+    // ...and the TRUE total still reflects every changed file.
+    assert.equal(totalCount, fileCount, "totalCount is the true number of changed files");
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test("diffChangedFiles materializes everything and totalCount equals changes.length when under maxFiles", async () => {
+  const repo = await mkdtemp(path.join(tmpdir(), "magpie-source-sync-"));
+  try {
+    await git(repo, ["init", "-q"]);
+    await writeFile(path.join(repo, "a.md"), "a\n");
+    await writeFile(path.join(repo, "b.md"), "b\n");
+    const first = await commitAll(repo, "initial");
+    await writeFile(path.join(repo, "a.md"), "a changed\n");
+    await writeFile(path.join(repo, "b.md"), "b changed\n");
+    const second = await commitAll(repo, "change both");
+
+    const { changes, totalCount } = await diffChangedFiles(repo, first, second, { maxFiles: 1000 });
+    assert.equal(totalCount, 2);
+    assert.equal(changes.length, 2, "a commit under the cap is unaffected");
+    assert.match(changes.find((c) => c.path === "a.md")?.diff ?? "", /\+a changed/);
   } finally {
     await rm(repo, { recursive: true, force: true });
   }

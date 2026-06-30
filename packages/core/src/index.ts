@@ -771,6 +771,13 @@ export interface SourceChangeSyncJobInput {
   fromSha: string;
   toSha: string;
   changes: SourceChangeFile[];
+  // The TRUE number of files the commit range touched. When a pathological commit
+  // exceeds the downstream cap, `changes` carries only the first N (deterministic
+  // order) while this records the real magnitude — so nothing is silently lost.
+  totalChangedFileCount?: number;
+  // True when `changes` was capped: the model is seeing a representative subset of a
+  // larger commit, not the whole thing. Optional/back-compatible with older inputs.
+  changedFilesTruncated?: boolean;
   candidateDocuments: SourceSyncCandidateDocument[];
   expectedOutput: "maintenance_plan";
 }

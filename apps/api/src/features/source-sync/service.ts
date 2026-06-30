@@ -15,6 +15,7 @@ import {
   syncSourceChangesGeneratePlanOutputSchema
 } from "@magpie/jobs";
 import {
+  buildGitAuthEnv,
   diffChangedFiles,
   ensureGitCheckout,
   getHeadSha,
@@ -40,6 +41,30 @@ const CANDIDATE_DOCUMENT_LIMIT = 6;
 // The retrieval query (changed paths + diffs) is capped so a large commit can't
 // blow up the embedding/keyword query.
 const RETRIEVAL_QUERY_MAX_CHARS = 6_000;
+// The maximum number of changed files materialized downstream (into the retrieval
+// query and the AI plan job input). A pathological commit (a vendored-dependency
+// bump, a generated-code refresh, a mass reformat) can touch thousands of files,
+// each carrying a per-file patch capped at 8000 chars — without a cap the job input
+// alone could be tens of megabytes (e.g. 2000 files × 8KB ≈ 16MB). Beyond the first
+// N files the marginal retrieval/planning value is near zero, so we deterministically
+// keep the first N (in name-status order) and still record the TRUE total on the run,
+// so the truncation is visible and nothing is silently dropped without a trace.
+// Configurable for repos whose commits legitimately span many files. Read per call
+// (not memoized at module load) so the limit can be tuned via env without a restart.
+const SOURCE_SYNC_MAX_CHANGED_FILES_DEFAULT = 1_000;
+
+function maxChangedFiles(): number {
+  return positiveIntFromEnv("SOURCE_SYNC_MAX_CHANGED_FILES", SOURCE_SYNC_MAX_CHANGED_FILES_DEFAULT);
+}
+
+function positiveIntFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 // Watches every git source of a flow (or, with no flow, every configured git
 // source) for new commits and reacts to each. Returns one run per source that
@@ -114,11 +139,45 @@ async function syncGitSource(
     return undefined; // No new commits.
   }
 
-  const changes = await diffChangedFiles(checkout.localPath, previous.lastSha, headSha, { subpath: source.subpath });
-  if (changes.length === 0) {
+  const maxFiles = maxChangedFiles();
+  const diff = await diffChangedFiles(checkout.localPath, previous.lastSha, headSha, {
+    subpath: source.subpath,
+    // Only build patch strings for the first N files (the true total still comes
+    // back cheaply), bounding both git's diff output and our in-memory footprint
+    // for a pathological commit.
+    maxFiles,
+    // With a blobless partial clone, diffing last_sha..HEAD lazily fetches the OLD
+    // blobs of changed files from origin; thread the same auth the checkout used so
+    // private sources don't break (and a fetch failure surfaces as an error).
+    authEnv: buildGitAuthEnv(source.url!)
+  });
+  // The TRUE number of files the commit touched (recorded on the run so nothing is
+  // silently lost), and the (possibly truncated) subset we actually materialize and
+  // hand downstream to retrieval + the plan job.
+  const totalChangedFileCount = diff.totalCount;
+  const changes = diff.changes;
+  if (totalChangedFileCount === 0) {
     // Commits landed but nothing inside the watched subpath changed.
     await store.setState(flowId, source.id, headSha);
     return undefined;
+  }
+
+  const changedFilesTruncated = totalChangedFileCount > changes.length;
+  if (changedFilesTruncated) {
+    // No silent data loss: the run still records the true total via changedFileCount
+    // below, the job input carries an explicit truncation flag, and this prominent
+    // warning names both the true total and how many we kept so the truncation is
+    // operator-visible.
+    logger.warn(
+      {
+        sourceId: source.id,
+        flowId: flowId ?? "default",
+        totalChangedFiles: totalChangedFileCount,
+        includedChangedFiles: changes.length,
+        maxChangedFiles: maxFiles
+      },
+      "source-change sync: commit changed more files than the cap — only the first N are materialized downstream"
+    );
   }
 
   const candidateDocuments = selectCandidateDocuments(
@@ -138,11 +197,11 @@ async function syncGitSource(
       status: "skipped",
       fromSha: previous.lastSha,
       toSha: headSha,
-      changedFileCount: changes.length,
+      changedFileCount: totalChangedFileCount,
       candidateCount: 0
     });
     await store.setState(flowId, source.id, headSha);
-    logger.info({ sourceId: source.id, changedFiles: changes.length }, "source-change sync: changed files but no matching knowledge — skipped");
+    logger.info({ sourceId: source.id, changedFiles: totalChangedFileCount }, "source-change sync: changed files but no matching knowledge — skipped");
     return run;
   }
 
@@ -162,6 +221,11 @@ async function syncGitSource(
     fromSha: previous.lastSha,
     toSha: headSha,
     changes: changes.map(toSourceChangeFile),
+    // The true number of files the commit touched and whether `changes` was capped,
+    // so the model prompt (and anything reading the job input) knows it is seeing a
+    // representative subset rather than the whole commit.
+    totalChangedFileCount,
+    changedFilesTruncated,
     candidateDocuments,
     expectedOutput: "maintenance_plan",
     provider: ctx.config.get().aiProvider
@@ -177,11 +241,11 @@ async function syncGitSource(
     jobId: job.id,
     fromSha: previous.lastSha,
     toSha: headSha,
-    changedFileCount: changes.length,
+    changedFileCount: totalChangedFileCount,
     candidateCount: candidateDocuments.length
   });
   await store.setState(flowId, source.id, headSha);
-  logger.info({ sourceId: source.id, jobId: job.id, changedFiles: changes.length, candidates: candidateDocuments.length, runId: run.id }, "source-change sync: enqueued plan job");
+  logger.info({ sourceId: source.id, jobId: job.id, changedFiles: totalChangedFileCount, includedChangedFiles: changes.length, candidates: candidateDocuments.length, runId: run.id }, "source-change sync: enqueued plan job");
   return run;
 }
 
