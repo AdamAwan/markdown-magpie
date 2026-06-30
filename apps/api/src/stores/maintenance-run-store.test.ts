@@ -5,7 +5,7 @@ import { InMemoryMaintenanceRunStore } from "./maintenance-run-store.js";
 test("records and lists runs newest-first, filtered by task type and flow", async () => {
   const store = new InMemoryMaintenanceRunStore();
   const a = await store.record({
-    taskType: "fix_patrol",
+    taskType: "correctness_patrol",
     flowId: "f1",
     trigger: "scheduled",
     status: "completed",
@@ -13,7 +13,7 @@ test("records and lists runs newest-first, filtered by task type and flow", asyn
     details: {}
   });
   await store.record({
-    taskType: "improve_patrol",
+    taskType: "editorial_patrol",
     flowId: "f1",
     trigger: "scheduled",
     status: "completed",
@@ -21,7 +21,7 @@ test("records and lists runs newest-first, filtered by task type and flow", asyn
     details: {}
   });
   const c = await store.record({
-    taskType: "fix_patrol",
+    taskType: "correctness_patrol",
     trigger: "manual",
     status: "failed",
     summary: "c",
@@ -32,7 +32,7 @@ test("records and lists runs newest-first, filtered by task type and flow", asyn
   const all = await store.list({ limit: 10 });
   assert.deepEqual(all.map((r) => r.summary), ["c", "b", "a"]);
 
-  const fix = await store.list({ taskType: "fix_patrol", limit: 10 });
+  const fix = await store.list({ taskType: "correctness_patrol", limit: 10 });
   assert.deepEqual(fix.map((r) => r.summary), ["c", "a"]);
 
   const f1 = await store.list({ flowId: "f1", limit: 10 });
@@ -46,7 +46,7 @@ test("records and lists runs newest-first, filtered by task type and flow", asyn
 test("limit caps the list", async () => {
   const store = new InMemoryMaintenanceRunStore();
   for (let i = 0; i < 5; i += 1) {
-    await store.record({ taskType: "fix_patrol", trigger: "scheduled", status: "completed", summary: `r${i}`, details: {} });
+    await store.record({ taskType: "correctness_patrol", trigger: "scheduled", status: "completed", summary: `r${i}`, details: {} });
   }
   assert.equal((await store.list({ limit: 3 })).length, 3);
 });

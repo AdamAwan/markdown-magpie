@@ -48,24 +48,24 @@ test("the gaps-to-pull-requests task queues the reconciler job with the flow in 
   assert.deepEqual(reconciler!.input, { flowId: "alpha" });
 });
 
-test("the fix-patrol task queues the fix_patrol job with the flow in its input", () => {
+test("the fix-patrol task queues the correctness_patrol job with the flow in its input", () => {
   const ctx = makeTestContext();
   ctx.knowledgeConfig.flows = [{ id: "alpha", name: "Alpha", sourceIds: [], destinationId: "kb" }];
   const patrol = findScheduledTask(ctx, "fix-patrol::alpha");
   assert.ok(patrol, "a fix-patrol task is registered");
   assert.equal(patrol!.baseKey, "fix-patrol");
-  assert.equal(patrol!.jobType, "fix_patrol");
+  assert.equal(patrol!.jobType, "correctness_patrol");
   assert.deepEqual(patrol!.input, { flowId: "alpha" });
 });
 
-test("the improve-patrol task queues the improve_patrol job with the flow in its input", () => {
+test("the improve-patrol task queues the editorial_patrol job with the flow in its input", () => {
   const ctx = makeTestContext();
   ctx.knowledgeConfig.flows = [{ id: "alpha", name: "Alpha", sourceIds: [], destinationId: "kb" }];
   const patrol = findScheduledTask(ctx, "improve-patrol::alpha");
   assert.ok(patrol, "an improve-patrol task is registered");
   assert.equal(patrol!.baseKey, "improve-patrol");
-  assert.equal(patrol!.jobType, "improve_patrol");
+  assert.equal(patrol!.jobType, "editorial_patrol");
   assert.deepEqual(patrol!.input, { flowId: "alpha" });
-  // Its human-facing label says Improve, distinct from the Fix patrol task.
-  assert.match(patrol!.typeLabel, /Improve patrol/);
+  // Its human-facing label says Editorial, distinct from the Correctness patrol task.
+  assert.match(patrol!.typeLabel, /Editorial patrol/);
 });

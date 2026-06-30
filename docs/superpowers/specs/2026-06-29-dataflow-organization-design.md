@@ -27,7 +27,14 @@ The page should use progressive disclosure:
 3. **Deep Dives**
    - `Reconcile Gate`
    - `Gap-to-PR Pipeline`
+   - `Scheduled Jobs → Job Types`
    - `Per-Flow Isolation`
+
+> **Update (2026-06-29):** an eighth diagram, `Scheduled Jobs → Job Types`, was
+> added under Deep dives. It maps each per-flow scheduled task to the one job type
+> it fires (tier 1) and the AI/GitHub jobs that job fans out into (tier 2), with the
+> real job-type identifiers as node labels so a Schedules-UI row, a diagram box, and
+> a job-queue `type=` filter all line up.
 
 This keeps the first read simple, then lets users choose a path based on what they are trying to understand.
 
@@ -41,6 +48,7 @@ This keeps the first read simple, then lets users choose a path based on what th
 | Automation & Patrol | Scheduled Maintenance | Background tasks and patrol lenses |
 | Reconcile Gate | Reconcile Gate | Shared proposal conflict-resolution mechanism |
 | Gap to PR Jobs | Gap-to-PR Pipeline | Detailed job flow for automated gap proposals |
+| _(new)_ | Scheduled Jobs → Job Types | How each scheduled cron maps to its job type and the jobs it enqueues |
 | Per-Flow Jobs | Per-Flow Isolation | How configured flows run independently |
 
 ## UI Design
@@ -59,7 +67,54 @@ Common workflows
 [Ask a Question] [Improve the Docs] [Scheduled Maintenance]
 
 Deep dives
-[Reconcile Gate] [Gap-to-PR Pipeline] [Per-Flow Isolation]
+[Reconcile Gate] [Gap-to-PR Pipeline] [Scheduled Jobs → Job Types] [Per-Flow Isolation]
+```
+
+Mockup of the grouped page structure:
+
+```mermaid
+flowchart TB
+  page["Data Flow Architecture page"]
+  page --> intro["Start here"]
+  page --> workflows["Common workflows"]
+  page --> internals["Deep dives"]
+
+  intro --> overview["System Overview"]
+  workflows --> ask["Ask a Question"]
+  workflows --> improve["Improve the Docs"]
+  workflows --> maintenance["Scheduled Maintenance"]
+  internals --> gate["Reconcile Gate"]
+  internals --> gappr["Gap-to-PR Pipeline"]
+  internals --> schedules["Scheduled Jobs → Job Types"]
+  internals --> perflow["Per-Flow Isolation"]
+
+  overview --> canvas["Single React Flow canvas"]
+  ask --> canvas
+  improve --> canvas
+  maintenance --> canvas
+  gate --> canvas
+  gappr --> canvas
+  schedules --> canvas
+  perflow --> canvas
+```
+
+Mockup of the intended reader path:
+
+```mermaid
+flowchart LR
+  reader["Technical reader"] --> overview{"Need the big picture?"}
+  overview -->|Yes| system["System Overview"]
+  overview -->|No, I have a workflow question| workflow{"Which workflow?"}
+  overview -->|No, I am debugging internals| deep{"Which internal mechanism?"}
+
+  workflow --> ask["Ask a Question"]
+  workflow --> improve["Improve the Docs"]
+  workflow --> maintenance["Scheduled Maintenance"]
+
+  deep --> gate["Reconcile Gate"]
+  deep --> gappr["Gap-to-PR Pipeline"]
+  deep --> schedules["Scheduled Jobs → Job Types"]
+  deep --> perflow["Per-Flow Isolation"]
 ```
 
 The active item should still switch the same React Flow canvas. The default active diagram should remain the overview, now titled `System Overview`.

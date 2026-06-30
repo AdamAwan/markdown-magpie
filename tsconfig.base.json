@@ -16,6 +16,7 @@
       "@magpie/core": ["packages/core/src/index.ts"],
       "@magpie/git": ["packages/git/src/index.ts"],
       "@magpie/jobs": ["packages/jobs/src/index.ts"],
+      "@magpie/logger": ["packages/logger/src/index.ts"],
       "@magpie/markdown": ["packages/markdown/src/index.ts"],
       "@magpie/prompts": ["packages/prompts/src/index.ts"],
       "@magpie/retrieval": ["packages/retrieval/src/index.ts"]

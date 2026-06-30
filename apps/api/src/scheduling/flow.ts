@@ -1,5 +1,6 @@
 import type { Proposal } from "@magpie/core";
 import type { AppContext } from "../context.js";
+import { openPullRequestSummaries } from "./reconcile-gate.js";
 
 // File-local: knip runs strict, and sameFlow is used only within this module.
 // Two flow ids are "the same flow" when they are equal, treating undefined (the
@@ -42,4 +43,27 @@ export async function sameFlowOpenProposals(
     out.push(proposal);
   }
   return out;
+}
+
+// The set of document paths already covered by an open proposal in this flow.
+//
+// A patrol lens (verify / dedupe / split / improve) must not re-propose a path an
+// open same-flow PR already touches. The lens reads document content from the
+// indexed branch, which still lacks the unmerged PR's edits, so it keeps proposing
+// the same change every tick. Each fresh proposal then folds into the open PR —
+// spamming "(automated fold-on-overlap)" comments and re-publishing the PR
+// endlessly (a touchable overlap folds; a locked one defers into a rival PR — both
+// are churn). Unlike the gap lens, which freezes the covered cluster, the
+// clusterless patrol lenses have no such suppression, so we apply it here.
+//
+// Covers every open proposal regardless of touchability — a covered path should be
+// left alone until its PR merges (and the edits reach the index) either way.
+export async function flowCoveredPaths(ctx: AppContext, flowId: string | undefined): Promise<Set<string>> {
+  const covered = new Set<string>();
+  for (const summary of openPullRequestSummaries(await sameFlowOpenProposals(ctx, flowId))) {
+    for (const path of summary.targets) {
+      covered.add(path);
+    }
+  }
+  return covered;
 }

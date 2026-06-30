@@ -10,6 +10,7 @@ import type { FlowNodeKind } from "./types";
 interface FlowNodeData extends Record<string, unknown> {
   label: string;
   kind: FlowNodeKind;
+  direction?: "TB" | "LR";
 }
 
 interface GroupNodeData extends Record<string, unknown> {
@@ -17,11 +18,13 @@ interface GroupNodeData extends Record<string, unknown> {
 }
 
 export function FlowNode({ data }: NodeProps) {
-  const { label, kind } = data as FlowNodeData;
+  const { label, kind, direction } = data as FlowNodeData;
   const lines = label.split("\n");
+  const targetPosition = direction === "LR" ? Position.Left : Position.Top;
+  const sourcePosition = direction === "LR" ? Position.Right : Position.Bottom;
   return (
     <div className={`dfNode dfNode-${kind}`}>
-      <Handle type="target" position={Position.Top} className="dfHandle" />
+      <Handle type="target" position={targetPosition} className="dfHandle" />
       <div className="dfNodeLabel">
         {lines.map((line, index) => (
           <span key={index} className={index === 0 ? "dfNodeLine dfNodeLineHead" : "dfNodeLine"}>
@@ -29,7 +32,7 @@ export function FlowNode({ data }: NodeProps) {
           </span>
         ))}
       </div>
-      <Handle type="source" position={Position.Bottom} className="dfHandle" />
+      <Handle type="source" position={sourcePosition} className="dfHandle" />
     </div>
   );
 }

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { Writable } from "node:stream";
 import { describe, it } from "node:test";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
+import { createLogger } from "@magpie/logger";
 import type { JobRunner } from "./runners/types.js";
 import type { WatcherApiClient } from "./http-client.js";
 import { WorkerLoop } from "./worker-loop.js";
@@ -79,12 +81,33 @@ class FakeRunner implements JobRunner {
   }
 }
 
+function captureLogger() {
+  const chunks: string[] = [];
+  const stream = new Writable({
+    write(chunk, _enc, cb) {
+      chunks.push(chunk.toString());
+      cb();
+    }
+  });
+  return {
+    logger: createLogger({ level: "debug", destination: stream }),
+    lines: () =>
+      chunks
+        .join("")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+  };
+}
+
+const silentLogger = createLogger({ level: "silent" });
+
 const CAPS: JobCapability[] = ["openai-compatible", "maintenance"];
 
 describe("WorkerLoop", () => {
   it("sends the watcher's capabilities on claim", async () => {
     const api = new FakeApiClient({ jobs: [undefined] });
-    const loop = new WorkerLoop(api, [new FakeRunner(async () => ({}))], CAPS, "w1", { pollIntervalMs: 1 });
+    const loop = new WorkerLoop(api, [new FakeRunner(async () => ({}))], CAPS, "w1", silentLogger, { pollIntervalMs: 1 });
     // No job available — claim once, then stop.
     await loop.tick();
     assert.equal(api.claims.length, 1);
@@ -94,7 +117,7 @@ describe("WorkerLoop", () => {
   it("completes a successful job exactly once and never fails it", async () => {
     const api = new FakeApiClient({ jobs: [fakeJob()] });
     const runner = new FakeRunner(async () => ({ answer: "ok" }));
-    const loop = new WorkerLoop(api, [runner], CAPS, "w1", { pollIntervalMs: 1 });
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", silentLogger, { pollIntervalMs: 1 });
     await loop.tick();
     assert.equal(runner.ran, 1);
     assert.equal(api.completed.length, 1);
@@ -107,7 +130,7 @@ describe("WorkerLoop", () => {
     const runner = new FakeRunner(async () => {
       throw new Error("boom");
     });
-    const loop = new WorkerLoop(api, [runner], CAPS, "w1", { pollIntervalMs: 1 });
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", silentLogger, { pollIntervalMs: 1 });
     await loop.tick();
     assert.equal(api.completed.length, 0);
     assert.equal(api.failed.length, 1);
@@ -126,7 +149,7 @@ describe("WorkerLoop", () => {
           signal.addEventListener("abort", () => reject(new Error("aborted by signal")), { once: true });
         })
     );
-    const loop = new WorkerLoop(api, [runner], CAPS, "w1", { pollIntervalMs: 1 });
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", silentLogger, { pollIntervalMs: 1 });
     await loop.tick();
     assert.ok(abortedSignal?.aborted, "runner's signal should be aborted");
     assert.ok(api.heartbeatCalls >= 1, "heartbeat should have been polled");
@@ -142,7 +165,7 @@ describe("WorkerLoop", () => {
       await new Promise((resolve) => setTimeout(resolve, 70));
       return {};
     });
-    const loop = new WorkerLoop(api, [runner], CAPS, "w1", { pollIntervalMs: 1 });
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", silentLogger, { pollIntervalMs: 1 });
     await loop.tick();
     assert.ok(api.heartbeatCalls >= 2, `expected multiple heartbeats, got ${api.heartbeatCalls}`);
   });
@@ -150,9 +173,9 @@ describe("WorkerLoop", () => {
   it("fails a claimed job when no runner supports its type", async () => {
     // The broker can advertise a capability (e.g. maintenance) that has no runner
     // registered yet; a job of that type must be failed safely, not silently dropped.
-    const api = new FakeApiClient({ jobs: [fakeJob({ type: "refresh_pull_requests" })] });
+    const api = new FakeApiClient({ jobs: [fakeJob({ type: "refresh_flow_snapshot" })] });
     const runner = new FakeRunner(async () => ({})); // only supports answer_question
-    const loop = new WorkerLoop(api, [runner], CAPS, "w1", { pollIntervalMs: 1 });
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", silentLogger, { pollIntervalMs: 1 });
     await loop.tick();
     assert.equal(runner.ran, 0, "no runner should have executed");
     assert.equal(api.completed.length, 0);
@@ -183,29 +206,21 @@ describe("WorkerLoop", () => {
       async complete() {},
       async fail() {}
     };
-    const loop = new WorkerLoop(api, [], CAPS, "w1", { pollIntervalMs: 1 });
+    const cap = captureLogger();
+    const loop = new WorkerLoop(api, [], CAPS, "w1", cap.logger, { pollIntervalMs: 1 });
 
-    const originalError = console.error;
-    const logged: string[] = [];
-    console.error = (message?: unknown) => {
-      logged.push(String(message));
-    };
     const running = loop.run();
-    try {
-      // Wait until the loop has retried past the throwing first claim, then stop
-      // it. run() must resolve, not reject, despite that first claim throwing.
-      while (calls < 2) {
-        await new Promise((resolve) => setTimeout(resolve, 2));
-      }
-      await loop.stop();
-      await running;
-    } finally {
-      console.error = originalError;
+    // Wait until the loop has retried past the throwing first claim, then stop
+    // it. run() must resolve, not reject, despite that first claim throwing.
+    while (calls < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
     }
+    await loop.stop();
+    await running;
 
     assert.ok(calls >= 2, "loop should have retried after the claim error");
     assert.ok(
-      logged.some((line) => /401/.test(line)),
+      cap.lines().some((line) => /401/.test(JSON.stringify(line))),
       "the claim failure should have been logged"
     );
   });
@@ -220,12 +235,25 @@ describe("WorkerLoop", () => {
           signal.addEventListener("abort", () => resolve({}), { once: true });
         })
     );
-    const loop = new WorkerLoop(api, [runner], CAPS, "w1", { pollIntervalMs: 1 });
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", silentLogger, { pollIntervalMs: 1 });
     const ticking = loop.tick();
     // Let the runner start, then stop the loop.
     await new Promise((resolve) => setTimeout(resolve, 5));
     await loop.stop();
     await ticking;
     assert.ok(seenSignal?.aborted, "shutdown should abort the active runner's signal");
+  });
+
+  it("logs a structured completion line on success", async () => {
+    const api = new FakeApiClient({ jobs: [fakeJob()] });
+    const runner = new FakeRunner(async () => ({ answer: "ok" }));
+    const cap = captureLogger();
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", cap.logger, { pollIntervalMs: 1 });
+    await loop.tick();
+
+    const done = cap.lines().find((l) => l["outcome"] === "completed");
+    assert.ok(done, "expected a completion log");
+    assert.equal(typeof done["jobId"], "string");
+    assert.equal(typeof done["durationMs"], "number");
   });
 });

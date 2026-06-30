@@ -1,8 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreWorkspaces": ["packages/db"],
-  "ignore": [
-    "scripts/**",
-    "apps/web/src/lib/types.ts"
-  ]
+  "ignore": ["scripts/**", "apps/web/src/lib/types.ts"],
+  "ignoreBinaries": ["next"]
 }

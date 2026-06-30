@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { TERMINAL_PROPOSAL_STATUSES } from "@magpie/core";
 import type { ChangesetChange, DraftContext, DraftMarkdownProposalJobOutput, Proposal, ReviewDecision } from "@magpie/core";
 
 export interface ProposalInput extends DraftMarkdownProposalJobOutput {
@@ -72,7 +73,11 @@ export class InMemoryProposalStore implements ProposalStore {
 
   async list(limit: number, options?: ProposalListOptions): Promise<Proposal[]> {
     return [...this.proposals.values()]
-      .filter((proposal) => (options?.status ? proposal.status === options.status : proposal.status !== "merged"))
+      .filter((proposal) =>
+        options?.status
+          ? proposal.status === options.status
+          : !TERMINAL_PROPOSAL_STATUSES.includes(proposal.status)
+      )
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, limit);
   }

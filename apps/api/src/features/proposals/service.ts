@@ -15,7 +15,7 @@ import type {
 import type { JobView } from "@magpie/jobs";
 import { z } from "zod";
 import { correctDocumentOutputSchema, dedupeDocumentsOutputSchema, improveDocumentOutputSchema, publishProposalOutputSchema, splitDocumentOutputSchema } from "@magpie/jobs";
-import { resolveProposalTargetPath } from "@magpie/core";
+import { PROPOSAL_STATUSES, resolveProposalTargetPath } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import type { ProposalListOptions } from "../../stores/proposal-store.js";
 import {
@@ -28,6 +28,7 @@ import {
 } from "../../platform/repositories.js";
 import { collectSourceContext } from "../../platform/source-context.js";
 import { type AiProviderName } from "../../platform/providers.js";
+import { logger } from "../../logger.js";
 
 type PublishProposalJobOutput = z.infer<typeof publishProposalOutputSchema>;
 
@@ -70,7 +71,7 @@ async function resolveGapsForMergedProposal(ctx: AppContext, proposal: Proposal)
   }
 
   const resolved = await ctx.stores.questionLogs.resolveGaps(questionIds, summaries, proposal.id);
-  console.log(`Resolved ${resolved} gap(s) closed by merged proposal ${proposal.id}`);
+  logger.info({ proposalId: proposal.id, resolved }, "resolved gaps closed by merged proposal");
   return resolved;
 }
 
@@ -82,7 +83,7 @@ async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal
     if (ctx.knowledgeConfig.destinations.length > 0) {
       const destination = selectDestinationForProposal(ctx.repositoryDeps(), proposal);
       if (!destination) {
-        console.warn(`No destination matched merged proposal ${proposal.id}; skipping re-index.`);
+        logger.warn({ proposalId: proposal.id }, "no destination matched merged proposal; skipping re-index");
         return false;
       }
 
@@ -97,7 +98,7 @@ async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal
     } else {
       const repository = await findRepositoryForProposal(ctx.repositoryDeps(), proposal);
       if (!repository) {
-        console.warn(`No repository matched merged proposal ${proposal.id}; skipping re-index.`);
+        logger.warn({ proposalId: proposal.id }, "no repository matched merged proposal; skipping re-index");
         return false;
       }
 
@@ -108,12 +109,12 @@ async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal
       });
     }
 
-    console.log(`Re-indexed destination after merging proposal ${proposal.id}`);
+    logger.info({ proposalId: proposal.id }, "re-indexed destination after merging proposal");
     void ctx.embedder.trigger();
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
-    console.warn(`Re-index after merging proposal ${proposal.id} failed: ${message}`);
+    logger.warn({ proposalId: proposal.id, err: message }, "re-index after merging proposal failed");
     return false;
   }
 }
@@ -168,7 +169,7 @@ export async function requestProposalPublication(
   }
 
   const job = await ctx.jobs.create("publish_proposal", { proposalId: proposal.id });
-  console.log(`Enqueued publish_proposal job ${job.id} for proposal ${proposal.id}`);
+  logger.info({ jobId: job.id, proposalId: proposal.id }, "enqueued publish_proposal job");
   return { ok: true, job };
 }
 
@@ -341,19 +342,13 @@ export async function draftFromGaps(
   const flow = selectFlow(deps, overrides.flowId ?? derivedFlowId(matched));
   const sourceIds = overrides.sourceIds ?? flow?.sourceIds;
   const destinationId = overrides.destinationId?.trim() || flow?.destinationId || defaultDestinationId(deps);
-  console.log(
-    `Drafting proposal for ${label} (flow=${flow?.id ?? "none"}, destination=${destinationId ?? "none"}, ` +
-      `provider=${ctx.config.get().aiProvider})`
-  );
+  logger.info({ label, flowId: flow?.id ?? "none", destinationId: destinationId ?? "none", provider: ctx.config.get().aiProvider }, "drafting proposal");
   const sourceContext = await collectSourceContextCached(deps, sourceIds, overrides.sourceContextCache);
   const materialFiles = sourceContext.filter((context) => context.path && context.content !== "Source path does not exist.");
   if (materialFiles.length === 0) {
-    console.warn(
-      `Drafting proposal for ${label} with no real source files attached — ` +
-        "the model will likely produce a placeholder. Check the source configuration and subpaths."
-    );
+    logger.warn({ label }, "drafting proposal with no real source files attached — model will likely produce a placeholder; check source configuration and subpaths");
   } else {
-    console.log(`Proposal draft will use ${materialFiles.length} source file(s) as raw material.`);
+    logger.debug({ materialFileCount: materialFiles.length }, "proposal draft source files ready");
   }
   // Drafting is enqueue-only: the watcher runs the generative work and the
   // proposal lands later via createProposalFromCompletedJob. The configured
@@ -378,7 +373,7 @@ export async function draftFromGaps(
     triggeringQuestionIds: questionIds
   });
 
-  console.log(`Enqueued draft_markdown_proposal job ${job.id} for ${label}`);
+  logger.info({ jobId: job.id, label }, "enqueued draft_markdown_proposal job");
   return { ok: true as const, job };
 }
 
@@ -397,7 +392,7 @@ async function collectSourceContextCached(
   const key = sourceIds ? [...sourceIds].sort().join("\0") : "\0default";
   const cached = cache.get(key);
   if (cached) {
-    console.log(`Reusing cached source context for [${sourceIds?.join(", ") ?? "default"}] (${cached.length} entr${cached.length === 1 ? "y" : "ies"}).`);
+    logger.debug({ sourceIds: sourceIds?.join(", ") ?? "default", count: cached.length }, "reusing cached source context");
     return cached;
   }
   const collected = await collectSourceContext(deps, sourceIds);
@@ -664,15 +659,11 @@ export async function recordPublicationFromCompletedJob(
   });
 }
 
+// Derives the guard from the single source of truth so a new status (e.g. the
+// once-missing "superseded") is recognised automatically — otherwise the list's
+// ?status= filter silently ignores any value omitted here.
 export function isProposalStatus(value: unknown): value is Proposal["status"] {
-  return (
-    value === "draft" ||
-    value === "ready" ||
-    value === "branch-pushed" ||
-    value === "pr-opened" ||
-    value === "merged" ||
-    value === "rejected"
-  );
+  return typeof value === "string" && (PROPOSAL_STATUSES as readonly string[]).includes(value);
 }
 
 function isPublishProposalJobOutput(value: unknown): value is PublishProposalJobOutput {

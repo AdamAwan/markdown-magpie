@@ -132,6 +132,16 @@ export class PostgresGapClusterStore implements GapClusterStore {
     ]);
   }
 
+  async deactivateMembershipsForGaps(gapIds: string[]): Promise<void> {
+    if (gapIds.length === 0) {
+      return;
+    }
+    await this.pool.query(
+      "UPDATE gap_cluster_memberships SET active = false WHERE active AND gap_id = ANY($1::bigint[])",
+      [gapIds]
+    );
+  }
+
   async getProcessedRevision(flowId?: string): Promise<number> {
     const result = await this.pool.query<{ processed_revision: string }>(
       "SELECT processed_revision FROM gap_reconciler_state WHERE flow_id = $1",

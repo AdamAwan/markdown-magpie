@@ -42,7 +42,10 @@ npm run dev:watcher
 
 Run an external agent CLI. The watcher advertises the `codex` capability when
 `CODEX_CLI_PATH` is set and the `claude` capability when `CLAUDE_CLI_PATH` is
-set (both default to a bare command resolved on `PATH`).
+set (both default to a bare command resolved on `PATH`). CLI providers execute the
+full non-embedding LLM job contract, including cited answers and gap
+reconciliation; semantic embeddings still require an OpenAI-compatible or Azure
+embedding endpoint.
 
 ```bash
 CODEX_CLI_PATH=codex npm run dev:watcher   # or CLAUDE_CLI_PATH=claude

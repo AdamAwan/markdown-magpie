@@ -138,7 +138,7 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
     const cancelledJob = await broker.create("answer_question", codexAnswer("cancel"));
     assert.equal((await broker.cancel(cancelledJob.id)).state, "cancelled");
 
-    const exhausted = await broker.create("refresh_pull_requests", {});
+    const exhausted = await broker.create("refresh_flow_snapshot", {});
     let claimed = await broker.claim("github-worker", ["github"]);
     for (let attempt = 0; attempt <= exhausted.retryLimit; attempt += 1) {
       assert.equal(claimed?.id, exhausted.id);
@@ -163,7 +163,7 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
 
   await t.test("filters lists and resets jobs", async () => {
     await broker.create("answer_question", codexAnswer("listed"));
-    await broker.create("refresh_pull_requests", {});
+    await broker.create("refresh_flow_snapshot", {});
     const listed = await broker.list({ type: "answer_question", state: "created", limit: 1, offset: 0 });
     assert.equal(listed.jobs.length, 1);
     assert.ok(listed.total >= 1);

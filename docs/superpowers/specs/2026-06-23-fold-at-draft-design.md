@@ -69,6 +69,11 @@ A second new dispatcher step, `foldService.applyFoldFromCompletedJob`, fires whe
 
 1. **Update A's content** — `proposals.updateMarkdown(A.id, output.markdown)` (a new store
    method; A's title/targetPath/branch are unchanged, so its PR is updated in place).
+   *Changeset survivors:* when A is a multi-file proposal (a dedupe/split survivor with a
+   `changeset`), it **publishes from its `changeset`, not `markdown`** — so the merged content
+   is written into the changeset's primary entry via `updateChangeset(A.id, …)` instead, with
+   A's other file-set entries carried through untouched. Updating `markdown` alone would be
+   silently dropped at publish time.
 2. **Absorb B's cluster into A's** — move B's cluster's gap memberships onto A's cluster and
    freeze B's cluster, reusing the `assignGapToCluster` + `freezeCluster` machinery from
    `applyMerge`. Viable only because PR #22 links proposals to clusters. This makes the gaps B

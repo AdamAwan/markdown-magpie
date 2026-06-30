@@ -213,6 +213,18 @@ export const PROPOSAL_STATUSES = [
 ] as const;
 type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 
+// Settled statuses: the proposal's work is done (merged), declined (rejected), or
+// folded into another proposal (superseded). These are hidden from the default
+// inbox — like an archive — but stay fetchable via an explicit status filter so
+// history is never lost. Derived here once so the proposal stores don't each
+// hand-maintain the literal list and drift (which once left superseded proposals
+// stuck visible in the UI with no action).
+export const TERMINAL_PROPOSAL_STATUSES: ReadonlyArray<ProposalStatus> = [
+  "merged",
+  "rejected",
+  "superseded"
+];
+
 export interface Proposal {
   id: string;
   title: string;
@@ -240,7 +252,7 @@ export interface Proposal {
   jobId?: string;
   publication?: ProposalPublication;
   // The latest review decision observed on this proposal's pull request, polled by
-  // the watcher's refresh_pull_requests job. Absent until the PR has been polled (or
+  // the watcher's refresh_flow_snapshot job. Absent until the PR has been polled (or
   // for proposals drafted before this was tracked). An approved PR is non-touchable:
   // the reconcile gate will not fold another change into it.
   reviewDecision?: ReviewDecision;
@@ -780,6 +792,48 @@ export interface SourceSyncRun {
 // sources could not substantiate, and what the reconcile gate decided to do with
 // the emitted intent. `intoProposalId` is set only when the gate folded it into an
 // existing open PR.
+
+export const MAINTENANCE_LENSES = ["gap", "source-sync", "verify", "dedupe", "split", "complete"] as const;
+export type MaintenanceLens = (typeof MAINTENANCE_LENSES)[number];
+
+export interface ChangeIntent {
+  lens: MaintenanceLens;
+  flowId?: string;
+  targets: string[];
+  evidence: string[];
+  rationale: string;
+}
+
+export interface ChangeIntentTraceCandidate {
+  proposalId: string;
+  targets: string[];
+  touchable: boolean;
+  overlapTargets: string[];
+}
+
+export interface ChangeIntentTraceOutcome {
+  proposalId?: string;
+  proposalTitle?: string;
+  proposalStatus?: Proposal["status"];
+  pullRequestUrl?: string;
+  foldJobId?: string;
+  reason?: string;
+}
+
+export type ChangeIntentTraceDecision =
+  | { kind: "open-new" }
+  | { kind: "fold"; intoProposalId: string }
+  | { kind: "defer"; behindProposalId: string }
+  | { kind: "drop"; reason: string };
+
+export interface ChangeIntentTrace {
+  createdAt: string;
+  intent: ChangeIntent;
+  decision: ChangeIntentTraceDecision;
+  candidatePullRequests: ChangeIntentTraceCandidate[];
+  outcome?: ChangeIntentTraceOutcome;
+}
+
 export interface VerifyFinding {
   path: string;
   claims: UnprovableClaim[];
@@ -798,7 +852,7 @@ export interface VerifyFinding {
 // shared shape stays generic.
 // ---------------------------------------------------------------------------
 
-export type MaintenanceTaskType = "fix_patrol" | "improve_patrol" | "process_gaps_to_pull_requests";
+export type MaintenanceTaskType = "correctness_patrol" | "editorial_patrol" | "process_gaps_to_pull_requests";
 
 export type MaintenanceRunStatus = "running" | "completed" | "failed";
 
@@ -998,4 +1052,3 @@ export interface PublishChangesetRequest {
   title: string;
   changes: ChangesetChange[];
 }
-

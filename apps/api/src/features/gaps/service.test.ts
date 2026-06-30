@@ -51,6 +51,34 @@ test("listClusters surfaces gap summaries, question ids, and the linked proposal
   assert.equal(result.proposalStatus, "draft");
 });
 
+test("listClusters surfaces only a cluster's still-open gaps, not resolved ones", async () => {
+  const ctx = makeTestContext();
+  const openLog = await ctx.stores.questionLogs.record({
+    question: "How do I configure X?",
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
+  await ctx.stores.questionLogs.recordManualGap(openLog.id, "How to configure X");
+  const resolvedLog = await ctx.stores.questionLogs.record({
+    question: "How do I configure Y?",
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
+  await ctx.stores.questionLogs.recordManualGap(resolvedLog.id, "How to configure Y");
+
+  const cluster = await ctx.stores.gapClusters.createCluster({ title: "Configuration", revision: 1 });
+  for (const summary of ["How to configure X", "How to configure Y"]) {
+    const [gapId] = await ctx.stores.questionLogs.gapIdsForSummary(summary);
+    await ctx.stores.gapClusters.assignGapToCluster(cluster.id, gapId);
+  }
+  await ctx.stores.questionLogs.resolveGaps([resolvedLog.id], ["How to configure Y"], "some-proposal");
+
+  const [result] = await gaps.listClusters(ctx, 50);
+  assert.deepEqual(result.summaries, ["How to configure X"], "the resolved gap is not surfaced");
+  assert.deepEqual(result.questionIds, [openLog.id]);
+  assert.equal(result.count, 1);
+});
+
 test("draftFromCluster enqueues a draft_markdown_proposal job for the cluster", async () => {
   const ctx = makeTestContext({
     config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })

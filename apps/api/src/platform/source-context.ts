@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { logger } from "../logger.js";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { SourceDataContext } from "@magpie/core";
@@ -12,14 +13,12 @@ export async function collectSourceContext(
   sourceIds: string[] | undefined
 ): Promise<SourceDataContext[]> {
   const selectedSources = selectSources(deps, sourceIds);
-  console.log(
-    `Collecting source context from ${selectedSources.length} source(s): ` +
-      (selectedSources.map((source) => `${source.id}(${source.kind})`).join(", ") || "none")
+  logger.debug(
+    { count: selectedSources.length, sources: selectedSources.map((source) => `${source.id}(${source.kind})`).join(", ") || "none" },
+    "collecting source context"
   );
   if (sourceIds?.length && selectedSources.length === 0) {
-    console.warn(
-      `Requested source ids [${sourceIds.join(", ")}] matched no configured sources. Check KNOWLEDGE_SOURCES.`
-    );
+    logger.warn({ sourceIds }, "requested source ids matched no configured sources; check KNOWLEDGE_SOURCES");
   }
   const contexts: SourceDataContext[] = [];
 
@@ -34,7 +33,7 @@ export async function collectSourceContext(
           ? "Use this internet source as supporting raw material."
           : "Use relevant internet research as supporting raw material."
       });
-      console.log(`Source ${source.id}: internet reference${source.url ? ` (${source.url})` : ""}; content is not fetched.`);
+      logger.debug({ sourceId: source.id, url: source.url }, "source: internet reference; content is not fetched");
       continue;
     }
 
@@ -45,7 +44,7 @@ export async function collectSourceContext(
         kind: source.kind,
         content: "Use general agent knowledge as supporting raw material where no configured repository or URL is available."
       });
-      console.log(`Source ${source.id}: agent knowledge reference; no repository content attached.`);
+      logger.debug({ sourceId: source.id }, "source: agent knowledge reference; no repository content attached");
       continue;
     }
 
@@ -56,17 +55,13 @@ export async function collectSourceContext(
       const fileContexts = localContexts.filter((context) => context.path);
       const totalBytes = fileContexts.reduce((sum, context) => sum + (context.content?.length ?? 0), 0);
       if (fileContexts.length === 0) {
-        console.warn(
-          `Source ${source.id}: no usable files collected from ${localPath}` +
-            (source.subpath ? ` (subpath "${source.subpath}")` : "") +
-            ". Drafts from this source will have no real material."
-        );
+        logger.warn({ sourceId: source.id, localPath, subpath: source.subpath }, "source: no usable files collected; drafts will have no real material");
       } else {
-        console.log(`Source ${source.id}: collected ${fileContexts.length} file(s), ${totalBytes} bytes from ${localPath}`);
+        logger.debug({ sourceId: source.id, fileCount: fileContexts.length, totalBytes, localPath }, "source: collected files");
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "unavailable source";
-      console.error(`Source ${source.id}: failed to collect context — ${message}`);
+      logger.error({ sourceId: source.id, err: message }, "source: failed to collect context");
       contexts.push({
         sourceId: source.id,
         sourceName: source.name,
@@ -102,10 +97,7 @@ async function collectLocalSourceContext(
   root: string
 ): Promise<SourceDataContext[]> {
   if (!existsSync(root)) {
-    console.warn(
-      `Source ${source.id}: path ${root} does not exist` +
-        (source.subpath ? ` — configured subpath "${source.subpath}" is missing from the repository.` : ".")
-    );
+    logger.warn({ sourceId: source.id, root, subpath: source.subpath }, "source: path does not exist");
     return [
       {
         sourceId: source.id,
@@ -119,7 +111,7 @@ async function collectLocalSourceContext(
   }
 
   const files = await findSourceContextFiles(root);
-  console.log(`Source ${source.id}: found ${files.length} candidate text file(s) under ${root}`);
+  logger.debug({ sourceId: source.id, fileCount: files.length, root }, "source: found candidate text files");
   const contexts: SourceDataContext[] = [];
   let remainingBytes = 80_000;
 

@@ -16,8 +16,9 @@ import {
 import "@xyflow/react/dist/style.css";
 import { RuntimeConfig } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
-import { FLOWS, buildFlowGraph, type FlowKey } from "./dataflow/flows";
+import { FLOW_GROUPS, buildFlowGraph, type FlowKey } from "./dataflow/flows";
 import { layoutGraph } from "./dataflow/layout";
+import { DATAFLOW_FIT_VIEW_OPTIONS, DATAFLOW_MAX_ZOOM, DATAFLOW_MIN_ZOOM } from "./dataflow/viewport";
 import { FlowNode, GroupNode } from "./dataflow/FlowNode";
 
 const nodeTypes: NodeTypes = {
@@ -36,11 +37,12 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
 
   const built = useMemo(() => {
     const graph = buildFlowGraph(activeFlow, modelInfo);
+    const direction = graph.direction ?? "TB";
     const layout = layoutGraph(graph);
 
     // Provide width/height as top-level node fields (not just style) so React
     // Flow treats the nodes as already measured. That makes nodesInitialized
-    // true synchronously — fitView frames the graph and edges resolve their
+    // true synchronously; fitView frames the graph and edges resolve their
     // endpoints without depending on the per-node ResizeObserver, which is
     // unreliable under Next dev's React 19 StrictMode double-mount.
     const groupNodes: Node[] = layout.groups.map((group) => ({
@@ -59,7 +61,7 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
       id: node.id,
       type: "flowNode",
       position: { x: node.x, y: node.y },
-      data: { label: node.label, kind: node.kind },
+      data: { label: node.label, kind: node.kind, direction },
       width: node.width,
       height: node.height,
       zIndex: 1
@@ -107,15 +109,23 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
         <h2>Data Flow Architecture</h2>
       </div>
       <div className="surfaceBody dataFlowPanel">
-        <div className="flowTabs">
-          {FLOWS.map((flow) => (
-            <button
-              key={flow.key}
-              className={activeFlow === flow.key ? "flowTab active" : "flowTab"}
-              onClick={() => setActiveFlow(flow.key)}
-            >
-              {flow.title}
-            </button>
+        <div className="flowTabs" aria-label="Data flow diagrams">
+          {FLOW_GROUPS.map((group) => (
+            <div className="flowTabGroup" key={group.title}>
+              <div className="flowTabGroupTitle">{group.title}</div>
+              <div className="flowTabGroupItems">
+                {group.flows.map((flow) => (
+                  <button
+                    key={flow.key}
+                    className={activeFlow === flow.key ? "flowTab active" : "flowTab"}
+                    onClick={() => setActiveFlow(flow.key)}
+                    type="button"
+                  >
+                    {flow.title}
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
 
@@ -130,9 +140,9 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
             onEdgesChange={onEdgesChange}
             nodeTypes={nodeTypes}
             fitView
-            fitViewOptions={{ padding: 0.15 }}
-            minZoom={0.2}
-            maxZoom={1.5}
+            fitViewOptions={DATAFLOW_FIT_VIEW_OPTIONS}
+            minZoom={DATAFLOW_MIN_ZOOM}
+            maxZoom={DATAFLOW_MAX_ZOOM}
             proOptions={{ hideAttribution: false }}
             nodesConnectable={false}
             edgesFocusable={false}

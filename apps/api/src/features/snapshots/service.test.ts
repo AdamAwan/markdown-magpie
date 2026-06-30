@@ -8,7 +8,7 @@ import {
   refreshSnapshot
 } from "./service.js";
 
-// The PR states the refresh_pull_requests watcher job reports, keyed by proposal.
+// The PR states the refresh_flow_snapshot watcher job reports, keyed by proposal.
 type Reading = { merged: boolean; state: "open" | "closed" };
 const noPulls = new Map<string, Reading>();
 
