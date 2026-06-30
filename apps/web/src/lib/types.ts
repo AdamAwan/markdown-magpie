@@ -71,6 +71,14 @@ export interface Health {
   service: string;
 }
 
+// Identity of the running API build, served by GET /api/version. Every field is
+// null when the image was built without the build args (local dev).
+export interface BuildInfo {
+  sha: string | null;
+  commitMessage: string | null;
+  committedAt: string | null;
+}
+
 export interface PromptSummary {
   id: string;
   title: string;
