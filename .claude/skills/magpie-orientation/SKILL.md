@@ -14,8 +14,9 @@ before designing changes — the AI-execution model is easy to get wrong from in
 
 ## 1. The queue-only mental model (read this first)
 
-**The API never calls a model inline.** This is the single most important fact and the
-one most likely to be designed against by accident.
+**The API never calls a chat/generative model inline.** This is the single most important
+fact and the one most likely to be designed against by accident. (Embeddings are the one
+exception — see the note at the end of this section.)
 
 ```text
 client → POST /api/ask
@@ -29,9 +30,9 @@ client → POST /api/ask
 
 Implications you must design around:
 
-- **All AI/generative/embedding work is a job + a watcher flow + an API callback.**
-  Never add a code path where the API process calls a chat or embedding provider
-  directly. If you need AI work done, model it as a job.
+- **All generative/chat work is a job + a watcher flow + an API callback.** Never add a
+  code path where the API process calls a *chat/generative* provider directly. If you need
+  generative AI work done, model it as a job.
 - **The watcher is required** for any AI work. Without a running watcher, `POST /api/ask`
   returns a 202 job that never completes. There is **no "direct mode"** — the old
   `AI_EXECUTION_MODE` was removed in the queue-only migration.
@@ -42,12 +43,23 @@ Implications you must design around:
   claude`. A watcher advertises a provider **capability** only when that provider's
   credentials are in its environment, and the API only routes a job to a capability a
   running watcher actually offers.
-- **Job type === pg-boss queue name.** The same string names the Schedules UI row, the
-  `/dataflow` box, and the `type=` filter. Maintenance jobs are *orchestrators* that fan
-  out into AI + GitHub jobs (see `docs/architecture.md` for the tier-1/tier-2 table).
+- **Job type vs. queue name.** The job *type* string names the Schedules UI row, the
+  `/dataflow` box, and the `type=` filter. The pg-boss *queue name* equals the type for
+  non-provider jobs, but **provider (AI) jobs fan out per provider** —
+  `` `${type}__${provider}` `` (e.g. `answer_question__openai_compatible`), see
+  `packages/jobs/src/catalog.ts`. Maintenance jobs are *orchestrators* that fan out into
+  AI + GitHub jobs (see `docs/architecture.md` for the tier-1/tier-2 table).
 
-Authoritative reading: [docs/architecture.md](../../../docs/architecture.md) and
-[docs/ai-jobs.md](../../../docs/ai-jobs.md).
+**Embeddings are the exception to "queue-only".** The API computes embeddings **inline**
+(it holds an embedding provider) for both indexing (`apps/api/src/stores/embed-sections.ts`)
+and query-time retrieval (`apps/api/src/stores/knowledge-index.ts`). So "the API never
+calls a provider inline" is true for *chat/generative* work only — embeddings run in the
+API process, not as watcher jobs.
+
+Authoritative reading: this skill's claims were verified against source; the docs
+[docs/architecture.md](../../../docs/architecture.md) and
+[docs/ai-jobs.md](../../../docs/ai-jobs.md) are useful but predate some changes (e.g. they
+imply *all* AI work including embeddings is queued — it isn't). Trust the code.
 
 ## 2. Where code lives
 

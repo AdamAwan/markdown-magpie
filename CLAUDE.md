@@ -15,9 +15,11 @@ Both live under `.claude/skills/`. Don't re-derive what they cover.
 
 ## Non-negotiables (the rest are in magpie-orientation)
 
-- **AI work is queue-only.** The API never calls a model inline — it enqueues a job; the
-  watcher claims it, calls back into the API for scoped context, invokes the provider, and
-  posts the result back. Never add an inline provider call in the API.
+- **Generative/chat AI work is queue-only.** The API never calls a *chat* model inline —
+  it enqueues a job; the watcher claims it, calls back into the API for scoped context,
+  invokes the provider, and posts the result back. Never add an inline chat-provider call
+  in the API. (Embeddings are the exception: the API computes them inline for indexing and
+  retrieval.)
 - **Never cast through `unknown`** (or `any`) to silence types — fix the types properly.
 - **No hacky workarounds** — fix the root cause the best way.
 - **Validate as you go** (`npm run build`, `npm test`, `npm run typecheck`, `npm run lint`)
