@@ -2139,13 +2139,6 @@ pre {
   grid-template-columns: minmax(200px, 1.6fr) minmax(120px, 0.9fr) minmax(150px, 1fr) 64px minmax(170px, auto);
 }
 
-.crunchRunHead,
-.crunchRunRow {
-  grid-template-columns:
-    minmax(150px, 1.1fr) minmax(120px, 0.9fr) minmax(150px, 1fr) 84px 84px minmax(180px, 1.4fr)
-    minmax(92px, auto);
-}
-
 .crunchScheduleName {
   display: inline-flex;
   flex-direction: column;
@@ -2157,12 +2150,6 @@ pre {
   display: inline-flex;
   align-items: center;
   font-weight: 700;
-}
-
-.crunchScheduleMeta {
-  color: #8a948f;
-  font-size: 11px;
-  text-transform: none;
 }
 
 .crunchRowActions {
