@@ -36,6 +36,30 @@ const queueDefinitions = allQueueDefinitions();
 const queueByName = new Map(queueDefinitions.map((queue) => [queue.name, queue]));
 const workQueues = queueDefinitions.filter((queue) => !queue.deadLetter);
 
+// A JobType fans out to one queue per AI provider (plus each queue's dead-letter
+// queue) for provider-routed job types, or a single work/dead-letter pair
+// otherwise — see packages/jobs/src/catalog.ts. Pre-grouping here lets list()
+// scan only the queues that can possibly hold a given type instead of every
+// queue pg-boss knows about.
+const queuesByType = new Map<JobType, QueueDefinition[]>();
+for (const queue of queueDefinitions) {
+  const existing = queuesByType.get(queue.type);
+  if (existing) existing.push(queue);
+  else queuesByType.set(queue.type, [queue]);
+}
+
+// Bounds how many queues locate() probes concurrently for a single job id, so a
+// get()/mutate() call cannot open one connection per queue (128+ in this catalog)
+// against pg-boss's pool all at once.
+const LOCATE_CONCURRENCY = 8;
+
+// The queues a given job type can land in: its work queue(s) plus their
+// dead-letter queues. Exported standalone (pure, no pg-boss instance needed) so
+// the scoping logic list() relies on is unit-testable without a database.
+export function queueDefinitionsForType(type: JobType): QueueDefinition[] {
+  return queuesByType.get(type) ?? [];
+}
+
 export class PgBossJobBroker implements JobBroker {
   private readonly boss: PgBoss;
   private readonly queuePolicyOverrides: PgBossQueuePolicyOverrides;
@@ -145,13 +169,29 @@ export class PgBossJobBroker implements JobBroker {
     return located ? toJobView(located.queue.name, located.job) : undefined;
   }
 
+  // pg-boss 12's findJobs(name, options) has no limit/offset/orderBy and no
+  // state or createdAt filter — it always returns every row in the named queue's
+  // table (see node_modules/pg-boss/dist/plans.js#findJobs). The one lever we do
+  // have is *which queues* get scanned: when the caller filters by job type, we
+  // only need the (small, fixed) set of queues that type can ever land in —
+  // queuesByType, built from the catalog's provider fan-out — instead of every
+  // queue pg-boss knows about (128 in this catalog at the time of writing).
+  // Without a type filter we still have to scan every queue; that case is
+  // unavoidable with the public API and is unchanged from before.
+  //
+  // Because state/createdAfter/pagination still happen in JS after the fetch,
+  // `total` reflects an exact count of the rows in the scanned queues after
+  // filtering — it is not an approximation, but it does mean a query that scans
+  // many queues without a type filter still loads every job in them to compute
+  // it. There's no count-only pg-boss API that accepts our state/createdAfter
+  // filters to avoid that.
   async list(filters: JobListFilters): Promise<{ jobs: JobView[]; total: number }> {
-    const batches = await Promise.all(queueDefinitions.map(async (queue) => {
+    const queuesToScan = filters.type ? queueDefinitionsForType(filters.type) : queueDefinitions;
+    const batches = await Promise.all(queuesToScan.map(async (queue) => {
       const jobs = await this.boss.findJobs<JobEnvelope>(queue.name);
       return jobs.map((job) => toJobView(queue.name, job));
     }));
     let jobs = batches.flat();
-    if (filters.type) jobs = jobs.filter((job) => job.type === filters.type);
     if (filters.state) jobs = jobs.filter((job) => job.state === filters.state);
     if (filters.createdAfter) jobs = jobs.filter((job) => job.createdAt > filters.createdAfter!);
 
@@ -221,6 +261,16 @@ export class PgBossJobBroker implements JobBroker {
     await this.boss.deleteAllJobs();
   }
 
+  // The post-operation requireJob() fetch here is a second round trip, but it is
+  // not a redundant queue *scan* — it already knows located.queue.name, so it is
+  // a single scoped lookup, not another locate() loop. It can't be replaced with
+  // located.job (the pre-operation row): every current operation (touch/
+  // complete/fail/cancel) changes a field mutate()'s callers depend on
+  // (heartbeatAt, state, output, error, completedAt/cancelledAt/failedAt,
+  // retryCount) and pg-boss's complete/fail/cancel/touch calls return no row data
+  // to apply those changes from (CommandResponse is empty), so returning stale
+  // pre-operation state would be wrong. Only locate()'s queue *scan* is the part
+  // this change bounds (see locate() below); the scoped refetch stays.
   private async mutate(id: string, operation: (queueName: string) => Promise<unknown>): Promise<JobView> {
     const located = await this.locate(id);
     if (!located) throw new Error(`Job not found: ${id}`);
@@ -228,10 +278,21 @@ export class PgBossJobBroker implements JobBroker {
     return this.requireJob(located.queue.name, id);
   }
 
+  // pg-boss has no global "find job by id across all queues" call — every read is
+  // scoped to one queue name (see node_modules/pg-boss/dist/manager.js#findJobs /
+  // #getJobById), and a job id alone doesn't tell us which of this catalog's 128
+  // queues holds it. We still have to probe queues, but probing them
+  // LOCATE_CONCURRENCY-at-a-time instead of one sequential round trip per queue
+  // turns up to 128 serial awaits into a small number of parallel batches.
   private async locate(id: string): Promise<{ queue: QueueDefinition; job: JobWithMetadata<JobEnvelope> } | undefined> {
-    for (const queue of queueDefinitions) {
-      const [job] = await this.boss.findJobs<JobEnvelope>(queue.name, { id });
-      if (job) return { queue, job };
+    for (let start = 0; start < queueDefinitions.length; start += LOCATE_CONCURRENCY) {
+      const batch = queueDefinitions.slice(start, start + LOCATE_CONCURRENCY);
+      const results = await Promise.all(batch.map(async (queue) => {
+        const [job] = await this.boss.findJobs<JobEnvelope>(queue.name, { id });
+        return job ? { queue, job } : undefined;
+      }));
+      const found = results.find((result) => result !== undefined);
+      if (found) return found;
     }
     return undefined;
   }
