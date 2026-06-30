@@ -1,5 +1,6 @@
 import type { Proposal, ReviewDecision } from "@magpie/core";
 import type { AppContext } from "../../context.js";
+import { logger } from "../../logger.js";
 import type { FlowSnapshot, SnapshotProposal, SnapshotPullRequest } from "../../stores/snapshot-store.js";
 
 // A pull request's externally-observed state, as reported by the
@@ -137,10 +138,7 @@ export async function refreshSnapshot(
 
   const snapshot: FlowSnapshot = { flowId, takenAt, catalogRevision, gaps, proposals, pullRequests };
   await ctx.stores.snapshots.write(snapshot);
-  console.log(
-    `Snapshot refresh [${flowLabel}]: ${gaps.length} gap(s), ${proposals.length} proposal(s), ` +
-      `${pullRequests.length} open PR(s) (${carried} carried forward).`
-  );
+  logger.info({ flowLabel, gaps: gaps.length, proposals: proposals.length, openPrs: pullRequests.length, carried }, "snapshot refresh completed");
   return snapshot;
 }
 

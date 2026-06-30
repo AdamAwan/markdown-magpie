@@ -31,6 +31,7 @@ import { normalizeRelativePath } from "../../platform/paths.js";
 import { type AiProviderName } from "../../platform/providers.js";
 import type { ProposalInput } from "../../stores/proposal-store.js";
 import * as foldService from "../../scheduling/fold.js";
+import { logger } from "../../logger.js";
 
 // How many retrieved sections to consider, and how many distinct documents to
 // hand the model as editable candidates. Kept small so the model sees only the
@@ -69,7 +70,7 @@ export async function triggerSourceSyncRun(
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "source sync failed";
-      console.warn(`Source-change sync failed for source ${source.id} (flow ${flowId ?? "default"}): ${message}`);
+      logger.warn({ sourceId: source.id, flowId: flowId ?? "default", err: message }, "source-change sync failed");
     }
   }
 
@@ -106,7 +107,7 @@ async function syncGitSource(
     // is what we react to. Reacting to the entire history on first run would be
     // noise.
     await store.setState(flowId, source.id, headSha);
-    console.log(`Source-change sync baselined ${source.id} (flow ${flowId ?? "default"}) at ${headSha.slice(0, 8)}.`);
+    logger.info({ sourceId: source.id, flowId: flowId ?? "default", sha: headSha.slice(0, 8) }, "source-change sync baselined");
     return undefined;
   }
 
@@ -142,9 +143,7 @@ async function syncGitSource(
       candidateCount: 0
     });
     await store.setState(flowId, source.id, headSha);
-    console.log(
-      `Source-change sync for ${source.id}: ${changes.length} changed file(s) but no matching knowledge — skipped.`
-    );
+    logger.info({ sourceId: source.id, changedFiles: changes.length }, "source-change sync: changed files but no matching knowledge — skipped");
     return run;
   }
 
@@ -183,10 +182,7 @@ async function syncGitSource(
     candidateCount: candidateDocuments.length
   });
   await store.setState(flowId, source.id, headSha);
-  console.log(
-    `Source-change sync for ${source.id}: enqueued plan job ${job.id} over ${changes.length} changed file(s) ` +
-      `with ${candidateDocuments.length} candidate(s); run ${run.id} is planning.`
-  );
+  logger.info({ sourceId: source.id, jobId: job.id, changedFiles: changes.length, candidates: candidateDocuments.length, runId: run.id }, "source-change sync: enqueued plan job");
   return run;
 }
 
