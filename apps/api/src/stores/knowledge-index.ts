@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import type { DocumentSection, EmbeddingProvider, GitRepositoryContext, KnowledgeDocument, RankedSection, RepositoryRef } from "@magpie/core";
 import { parseMarkdownDocument, splitIntoSections } from "@magpie/markdown";
 import { fuseRankings } from "@magpie/retrieval";
+import { logger } from "../logger.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -66,6 +67,14 @@ export interface MarkdownUpload {
 const KEYWORD_RELEVANCE_SCALE = 6;
 // Over-fetch vector candidates before fusion so good hits are not cut off by a small limit.
 const VECTOR_CANDIDATES = 20;
+// How many markdown files indexLocalRepository reads+parses concurrently. High
+// enough to hide per-file I/O latency, low enough to avoid exhausting file
+// descriptors / starving the event loop on repos with very many files.
+const READ_CONCURRENCY = 12;
+// Markdown files larger than this are skipped (with a warning) rather than
+// indexed, so one absurdly large file can't blow up memory or dominate
+// indexing time for the rest of the repository.
+const MAX_MARKDOWN_FILE_BYTES = 5 * 1024 * 1024;
 
 export interface HybridSearchOptions {
   embeddingProvider?: EmbeddingProvider;
@@ -130,24 +139,57 @@ export class InMemoryKnowledgeIndex {
     };
     const commitSha = git.headSha;
     const markdownPaths = await findMarkdownFiles(localPath);
+    // Read+parse with a bounded worker pool instead of one file at a time: local
+    // repos can have thousands of markdown files, and serial I/O made indexing
+    // time scale linearly with file count. `markdownPaths` is sorted, and results
+    // are written into a pre-sized array by original index, so output ordering
+    // stays deterministic regardless of which read finishes first.
+    const loaded: Array<{ document: KnowledgeDocument; sections: DocumentSection[] } | undefined> = new Array(
+      markdownPaths.length
+    );
+
+    for (let start = 0; start < markdownPaths.length; start += READ_CONCURRENCY) {
+      const chunk = markdownPaths.slice(start, start + READ_CONCURRENCY);
+      const results = await Promise.all(
+        chunk.map(async (markdownPath) => {
+          const fileStat = await stat(markdownPath);
+          if (fileStat.size > MAX_MARKDOWN_FILE_BYTES) {
+            logger.warn(
+              { path: markdownPath, bytes: fileStat.size, limitBytes: MAX_MARKDOWN_FILE_BYTES },
+              "skipping markdown file: exceeds max indexing size"
+            );
+            return undefined;
+          }
+
+          const content = await readFile(markdownPath, "utf8");
+          const relativePath = toPosixPath(path.relative(localPath, markdownPath));
+          const parsed = parseMarkdownDocument(content);
+          const document: KnowledgeDocument = {
+            id: `${repository.id}:${relativePath}`,
+            repositoryId: repository.id,
+            path: relativePath,
+            commitSha,
+            metadata: parsed.metadata,
+            content
+          };
+
+          return { document, sections: splitIntoSections(document) };
+        })
+      );
+
+      for (const [offset, result] of results.entries()) {
+        loaded[start + offset] = result;
+      }
+    }
+
     const documents: KnowledgeDocument[] = [];
     const sections: DocumentSection[] = [];
-
-    for (const markdownPath of markdownPaths) {
-      const content = await readFile(markdownPath, "utf8");
-      const relativePath = toPosixPath(path.relative(localPath, markdownPath));
-      const parsed = parseMarkdownDocument(content);
-      const document: KnowledgeDocument = {
-        id: `${repository.id}:${relativePath}`,
-        repositoryId: repository.id,
-        path: relativePath,
-        commitSha,
-        metadata: parsed.metadata,
-        content
-      };
-
-      documents.push(document);
-      sections.push(...splitIntoSections(document));
+    for (const entry of loaded) {
+      if (!entry) {
+        continue;
+      }
+      documents.push(entry.document);
+      sections.push(...entry.sections);
     }
 
     this.repositories.set(repository.id, repository);
@@ -201,16 +243,12 @@ export class InMemoryKnowledgeIndex {
     }
 
     this.repositories.set(repository.id, repository);
-    // Prune docs/sections for files no longer in the set, then drop stale
-    // sections for the surviving documents before re-inserting the fresh ones.
+    // Prune docs/sections for files no longer in the set; surviving documents'
+    // sections are overwritten by id below (pruneRepository already dropped
+    // anything stale for documents that didn't survive).
     this.pruneRepository(repository.id, new Set(documents.map((document) => document.id)));
     for (const document of documents) {
       this.documents.set(document.id, document);
-      for (const [sectionId, section] of this.sections) {
-        if (section.documentId === document.id) {
-          this.sections.delete(sectionId);
-        }
-      }
     }
     for (const section of sections) {
       this.sections.set(section.id, section);
@@ -316,18 +354,34 @@ export class InMemoryKnowledgeIndex {
 
   // Drops previously-indexed documents (and their sections) for a repository
   // that are absent from the freshly-indexed set, so re-indexing a source whose
-  // files were deleted doesn't leave stale docs/sections behind.
+  // files were deleted doesn't leave stale docs/sections behind. Sections are
+  // grouped by documentId once up front (O(S)) rather than re-scanning the full
+  // section map per stale document (O(D×S)).
   private pruneRepository(repositoryId: string, keepDocumentIds: Set<string>): void {
+    const staleDocumentIds: string[] = [];
     for (const [documentId, document] of this.documents) {
-      if (document.repositoryId !== repositoryId || keepDocumentIds.has(documentId)) {
-        continue;
+      if (document.repositoryId === repositoryId && !keepDocumentIds.has(documentId)) {
+        staleDocumentIds.push(documentId);
       }
+    }
+    if (staleDocumentIds.length === 0) {
+      return;
+    }
 
+    const sectionIdsByDocumentId = new Map<string, string[]>();
+    for (const [sectionId, section] of this.sections) {
+      const existing = sectionIdsByDocumentId.get(section.documentId);
+      if (existing) {
+        existing.push(sectionId);
+      } else {
+        sectionIdsByDocumentId.set(section.documentId, [sectionId]);
+      }
+    }
+
+    for (const documentId of staleDocumentIds) {
       this.documents.delete(documentId);
-      for (const [sectionId, section] of this.sections) {
-        if (section.documentId === documentId) {
-          this.sections.delete(sectionId);
-        }
+      for (const sectionId of sectionIdsByDocumentId.get(documentId) ?? []) {
+        this.sections.delete(sectionId);
       }
     }
   }
