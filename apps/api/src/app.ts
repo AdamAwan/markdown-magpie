@@ -20,6 +20,7 @@ import { promptRoutes } from "./features/prompts/routes.js";
 import { snapshotRoutes } from "./features/snapshots/routes.js";
 import { reconciliationRoutes } from "./features/reconciliations/routes.js";
 import { requireAuth, type ApiAuthOptions } from "./auth/middleware.js";
+import { getBuildInfo } from "./build-info.js";
 
 export function buildApp(ctx: AppContext, options: ApiAuthOptions = {}): Hono {
   const app = new Hono();
@@ -48,6 +49,9 @@ export function buildApp(ctx: AppContext, options: ApiAuthOptions = {}): Hono {
   const api = new Hono();
 
   api.get("/health", (c) => c.json({ ok: true, service: "markdown-magpie-api" }));
+  // Public, like /health: lets the console show the live build (commit, message,
+  // merge time) without requiring a token.
+  api.get("/version", (c) => c.json(getBuildInfo()));
   api.use("*", requireAuth(options));
 
   // Every feature module owns one prefix and declares relative paths internally.

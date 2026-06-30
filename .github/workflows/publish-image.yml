@@ -67,6 +67,22 @@ jobs:
           echo "registry=${image_registry}" >> "$GITHUB_OUTPUT"
           echo "ref=${image_registry}/${image_name}" >> "$GITHUB_OUTPUT"
 
+      # Identity of the commit being built, baked into the image so GET
+      # /api/version can report what's live. Reads the checked-out HEAD (the
+      # ref resolved in Checkout above), so it's correct for every trigger.
+      # %cI is the committer date, i.e. when the commit landed on main.
+      - name: Extract build metadata
+        id: build
+        shell: bash
+        run: |
+          {
+            echo "sha=$(git rev-parse --short HEAD)"
+            echo "committed_at=$(git log -1 --pretty=%cI)"
+            echo "message<<__MAGPIE_MSG__"
+            git log -1 --pretty=%s
+            echo "__MAGPIE_MSG__"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU
         if: contains(env.PLATFORMS, ',')
         uses: docker/setup-qemu-action@v3
@@ -104,5 +120,9 @@ jobs:
           push: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.push_image) }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_SHA=${{ steps.build.outputs.sha }}
+            GIT_COMMIT_MESSAGE=${{ steps.build.outputs.message }}
+            GIT_COMMITTED_AT=${{ steps.build.outputs.committed_at }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
