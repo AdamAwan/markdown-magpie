@@ -6,6 +6,7 @@ import {
 } from "@magpie/git";
 import type { ReviewDecision } from "@magpie/core";
 import type { WatcherApi } from "../http-client.js";
+import { logger } from "../logger.js";
 
 // The two GitHub lookups the runner needs, injected so tests stay offline.
 export type FetchPullRequestStatus = typeof defaultFetchPullRequestStatus;
@@ -30,9 +31,9 @@ export class RefreshFlowSnapshotRunner {
     return type === "refresh_flow_snapshot";
   }
 
-  async run(_job: JobView, signal: AbortSignal): Promise<unknown> {
+  async run(job: JobView, signal: AbortSignal): Promise<unknown> {
     const open = await this.api.listOpenPullRequests(signal);
-    console.log(`refresh_flow_snapshot: checking ${open.length} open pull request(s)`);
+    logger.info({ jobId: job.id, openCount: open.length }, `refresh_flow_snapshot: checking ${open.length} open pull request(s)`);
     const results: Array<{ proposalId: string; state: "open" | "closed"; merged: boolean; reviewDecision?: ReviewDecision }> = [];
     for (const pr of open) {
       // Honour cancellation/shutdown between host calls so a long list aborts promptly.
@@ -42,7 +43,7 @@ export class RefreshFlowSnapshotRunner {
         status = await this.fetchPullRequestStatus(pr.pullRequestUrl);
       } catch (error) {
         const message = error instanceof Error ? error.message : "pull request lookup failed";
-        console.warn(`refresh_flow_snapshot: PR status check failed for proposal ${pr.proposalId}: ${message}`);
+        logger.warn({ jobId: job.id, proposalId: pr.proposalId, err: error }, `refresh_flow_snapshot: PR status check failed for proposal ${pr.proposalId}: ${message}`);
         continue;
       }
       if (!status) {
@@ -57,7 +58,7 @@ export class RefreshFlowSnapshotRunner {
           reviewDecision = await this.fetchPullRequestReviewDecision(pr.pullRequestUrl);
         } catch (error) {
           const message = error instanceof Error ? error.message : "review decision lookup failed";
-          console.warn(`refresh_flow_snapshot: review decision check failed for proposal ${pr.proposalId}: ${message}`);
+          logger.warn({ jobId: job.id, proposalId: pr.proposalId, err: error }, `refresh_flow_snapshot: review decision check failed for proposal ${pr.proposalId}: ${message}`);
         }
       }
       results.push({
@@ -67,7 +68,7 @@ export class RefreshFlowSnapshotRunner {
         ...(reviewDecision ? { reviewDecision } : {})
       });
     }
-    console.log(`refresh_flow_snapshot: resolved ${results.length}/${open.length} pull request(s)`);
+    logger.info({ jobId: job.id, resolved: results.length, total: open.length }, `refresh_flow_snapshot: resolved ${results.length}/${open.length} pull request(s)`);
     return refreshFlowSnapshotOutputSchema.parse({ results });
   }
 }

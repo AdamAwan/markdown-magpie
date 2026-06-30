@@ -1,4 +1,5 @@
 import type { ChatProvider, FlowRouteDecision } from "@magpie/core";
+import type { Logger } from "@magpie/logger";
 import { ROUTE_QUESTION_TO_FLOW } from "@magpie/prompts";
 import { normalizeConfidence, parseJsonObject } from "./parse.js";
 
@@ -20,7 +21,8 @@ export interface RoutableFlow {
 export async function routeQuestionToFlow(
   question: string,
   flows: RoutableFlow[],
-  chatProvider: ChatProvider
+  chatProvider: ChatProvider,
+  logger?: Logger
 ): Promise<FlowRouteDecision | undefined> {
   if (flows.length <= 1) {
     return flows[0] ? { flowId: flows[0].id, confidence: "high" } : undefined;
@@ -43,9 +45,9 @@ export async function routeQuestionToFlow(
     });
     content = response.content;
   } catch (error) {
-    // Routing must never fail the ask, but a totally silent swallow hides a
-    // misconfigured provider. Log and degrade to the default flow.
-    console.debug("routeQuestionToFlow: provider call failed, falling back to default flow:", error);
+    // Routing must never fail the ask, but a silent swallow hides a misconfigured
+    // provider. Log (when a logger is supplied) and degrade to the default flow.
+    logger?.warn({ err: error }, "flow routing provider call failed; using default flow");
     return undefined;
   }
 

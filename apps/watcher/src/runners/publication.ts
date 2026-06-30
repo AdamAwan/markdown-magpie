@@ -28,6 +28,7 @@ import type {
   ProposalExecutionContext,
   WatcherApi
 } from "../http-client.js";
+import { logger } from "../logger.js";
 
 // The git operations the publication runner needs, injectable so tests exercise
 // the orchestration (context fetch, branch derivation, changeset assembly, PR
@@ -165,7 +166,7 @@ export class PublicationRunner {
 
   private async publishProposal(job: JobView): Promise<unknown> {
     const { proposalId } = publishProposalInputSchema.parse(job.input);
-    console.log(`publish_proposal[${job.id}]: fetching execution context for proposal ${proposalId}`);
+    logger.info({ jobId: job.id, proposalId }, `publish_proposal[${job.id}]: fetching execution context for proposal ${proposalId}`);
     const context = await this.api.proposalExecutionContext(proposalId);
     const { proposal, repository } = parseProposalContext(context);
     const preparedRepository = await this.deps.prepareRepository(toRepositoryRef(repository));
@@ -177,7 +178,8 @@ export class PublicationRunner {
     // Branch name, title, and PR body all derive from the primary doc either way.
     let publication: PublishProposalBranchResponse;
     if (proposal.changeset && proposal.changeset.length > 0) {
-      console.log(
+      logger.info(
+        { jobId: job.id, proposalId, branchName, fileCount: proposal.changeset.length },
         `publish_proposal[${job.id}]: publishing "${proposal.title}" (${proposal.changeset.length} file change(s)) to branch ${branchName}`
       );
       publication = await this.deps.publishChangeset({
@@ -187,7 +189,7 @@ export class PublicationRunner {
         changes: proposal.changeset
       });
     } else {
-      console.log(`publish_proposal[${job.id}]: publishing "${proposal.title}" to branch ${branchName}`);
+      logger.info({ jobId: job.id, proposalId, branchName }, `publish_proposal[${job.id}]: publishing "${proposal.title}" to branch ${branchName}`);
       publication = await this.deps.publishProposal({
         repository: preparedRepository,
         branchName,
@@ -196,7 +198,7 @@ export class PublicationRunner {
         targetPath: proposal.targetPath
       });
     }
-    console.log(`publish_proposal[${job.id}]: pushed ${publication.branchName} at ${publication.commitSha.slice(0, 8)}`);
+    logger.info({ jobId: job.id, branchName: publication.branchName, commitSha: publication.commitSha.slice(0, 8) }, `publish_proposal[${job.id}]: pushed ${publication.branchName} at ${publication.commitSha.slice(0, 8)}`);
 
     // The branch is pushed; try to open a PR. A PR failure must not lose the
     // branch, so degrade to a branch-only publish.
@@ -212,10 +214,11 @@ export class PublicationRunner {
       });
       pullRequestUrl = raised?.url;
       if (pullRequestUrl) {
-        console.log(`publish_proposal[${job.id}]: opened pull request ${pullRequestUrl}`);
+        logger.info({ jobId: job.id, pullRequestUrl }, `publish_proposal[${job.id}]: opened pull request ${pullRequestUrl}`);
       }
     } catch (error) {
-      console.warn(
+      logger.warn(
+        { jobId: job.id, branchName: publication.branchName, err: error },
         `Branch ${publication.branchName} pushed, but PR creation failed: ${error instanceof Error ? error.message : "unknown error"}`
       );
     }

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import type { ChatProvider, ChatRequest, ChatResponse } from "@magpie/core";
 import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import type { WatcherApi } from "../http-client.js";
+import { logger } from "../logger.js";
 import { PROVIDER_JOB_TYPES, runGenerativeJob } from "./generative.js";
 
 export type PromptMode = "arg" | "stdin";
@@ -65,9 +66,9 @@ export class CliRunner {
     return {
       complete: async (request: ChatRequest): Promise<ChatResponse> => {
         const prompt = renderCliPrompt(request);
-        console.log(`${job.type}[${job.id}]: invoking ${this.command} CLI (${this.promptMode} mode)`);
+        logger.debug({ jobId: job.id, jobType: job.type, command: this.command, promptMode: this.promptMode }, `${job.type}[${job.id}]: invoking ${this.command} CLI (${this.promptMode} mode)`);
         const content = await this.spawnCli(prompt, request.signal ?? new AbortController().signal);
-        console.log(`${job.type}[${job.id}]: ${this.command} CLI finished, ${content.length} char(s) of output`);
+        logger.debug({ jobId: job.id, jobType: job.type, command: this.command, outputLength: content.length }, `${job.type}[${job.id}]: ${this.command} CLI finished, ${content.length} char(s) of output`);
         return { content };
       }
     };

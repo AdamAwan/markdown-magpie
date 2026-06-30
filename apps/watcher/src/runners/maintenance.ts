@@ -6,6 +6,7 @@ import {
   sourceChangeSyncOutputSchema
 } from "@magpie/jobs";
 import type { WatcherApi } from "../http-client.js";
+import { logger } from "../logger.js";
 
 const MAINTENANCE_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "process_gaps_to_pull_requests",
@@ -48,7 +49,7 @@ export class MaintenanceRunner {
     if (!flowId) {
       throw new Error("process_gaps_to_pull_requests requires flowId");
     }
-    console.log(`process_gaps_to_pull_requests[${job.id}]: reconciling gaps for flow ${flowId}`);
+    logger.info({ jobId: job.id, flowId }, `process_gaps_to_pull_requests[${job.id}]: reconciling gaps for flow ${flowId}`);
     await this.api.reconcileGaps(flowId, signal);
 
     // TODO(Task 8E/follow-up): reconcile endpoint returns no counts; returning
@@ -61,25 +62,29 @@ export class MaintenanceRunner {
     // The job's input schema is `{}`, but the schedule may carry a flowId for a
     // per-flow watch; read it defensively without widening the contract.
     const flowId = readFlowId(job.input);
-    console.log(`source_change_sync[${job.id}]: syncing sources for flow ${flowId ?? "(all)"}`);
+    logger.info({ jobId: job.id, flowId: flowId ?? null }, `source_change_sync[${job.id}]: syncing sources for flow ${flowId ?? "(all)"}`);
     const { runIds } = await this.api.runSourceSync(flowId, signal);
-    console.log(`source_change_sync[${job.id}]: created ${runIds.length} sync run(s)`);
+    logger.info({ jobId: job.id, runCount: runIds.length }, `source_change_sync[${job.id}]: created ${runIds.length} sync run(s)`);
     return sourceChangeSyncOutputSchema.parse({ runIds });
   }
 
   private async runFixPatrol(job: JobView, signal: AbortSignal): Promise<unknown> {
     const flowId = readFlowId(job.input);
-    console.log(`correctness_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`);
+    logger.info({ jobId: job.id, flowId: flowId ?? null }, `correctness_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`);
     const { runId, selectedCount, findingCount } = await this.api.runFixPatrol(flowId, signal);
-    console.log(`correctness_patrol[${job.id}]: checked ${selectedCount} document(s), ${findingCount} finding(s) (run ${runId})`);
+    logger.info(
+      { jobId: job.id, runId, selectedCount, findingCount },
+      `correctness_patrol[${job.id}]: checked ${selectedCount} document(s), ${findingCount} finding(s) (run ${runId})`
+    );
     return correctnessPatrolOutputSchema.parse({ runId, selectedCount, findingCount });
   }
 
   private async runImprovePatrol(job: JobView, signal: AbortSignal): Promise<unknown> {
     const flowId = readFlowId(job.input);
-    console.log(`editorial_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`);
+    logger.info({ jobId: job.id, flowId: flowId ?? null }, `editorial_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`);
     const { runId, selectedCount, enqueuedCount } = await this.api.runImprovePatrol(flowId, signal);
-    console.log(
+    logger.info(
+      { jobId: job.id, runId, selectedCount, enqueuedCount },
       `editorial_patrol[${job.id}]: selected ${selectedCount} document(s), enqueued ${enqueuedCount} scan(s) (run ${runId})`
     );
     return editorialPatrolOutputSchema.parse({ runId, selectedCount, enqueuedCount });

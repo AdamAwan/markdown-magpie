@@ -5,6 +5,7 @@ import type {
   VerifyDocumentJobOutput,
   VerifyFinding
 } from "@magpie/core";
+import { logger } from "../logger.js";
 import type { AppContext } from "../context.js";
 import type { ChangeIntent } from "./intent.js";
 import { decideReconciliation, openPullRequestSummaries } from "./reconcile-gate.js";
@@ -60,7 +61,7 @@ export async function runVerifyLens(
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "verify failed";
-      console.warn(`Verify lens: skipping ${document.path} — ${message}.`);
+      logger.warn({ path: document.path, err: message }, "verify lens: skipping document");
       continue;
     }
 

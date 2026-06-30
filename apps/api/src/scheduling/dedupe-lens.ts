@@ -1,6 +1,7 @@
 import type { DedupeDocumentsJobInput } from "@magpie/core";
 import type { AppContext } from "../context.js";
 import { dedupeNeighbours } from "./dedupe-neighbours.js";
+import { logger } from "../logger.js";
 
 // Runs the dedupe check for one document. The default implementation (in the patrol
 // service) enqueues a dedupe_documents AI job; tests inject a spy/fake. Enqueue-only:
@@ -39,7 +40,7 @@ export async function runDedupeLens(
       enqueued += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : "dedupe failed";
-      console.warn(`Dedupe lens: skipping ${document.path} — ${message}.`);
+      logger.warn({ path: document.path, err: message }, "dedupe lens: skipping document");
     }
   }
   return enqueued;

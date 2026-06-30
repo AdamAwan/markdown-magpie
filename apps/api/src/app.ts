@@ -21,9 +21,13 @@ import { snapshotRoutes } from "./features/snapshots/routes.js";
 import { reconciliationRoutes } from "./features/reconciliations/routes.js";
 import { requireAuth, type ApiAuthOptions } from "./auth/middleware.js";
 import { getBuildInfo } from "./build-info.js";
+import { requestLogging } from "./http/logging.js";
+import { logger } from "./logger.js";
 
 export function buildApp(ctx: AppContext, options: ApiAuthOptions = {}): Hono {
   const app = new Hono();
+
+  app.use("*", requestLogging(logger));
 
   app.use(
     "*",

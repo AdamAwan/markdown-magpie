@@ -12,6 +12,7 @@ import {
 import { CronExpressionParser } from "cron-parser";
 import { PgBoss, type ConstructorOptions, type JobWithMetadata, type UpdateQueueOptions } from "pg-boss";
 import type { DesiredSchedule, JobBroker, JobListFilters, ScheduleView } from "./broker.js";
+import { logger } from "../logger.js";
 
 interface JobEnvelope {
   type: JobType;
@@ -48,8 +49,8 @@ export class PgBossJobBroker implements JobBroker {
     };
     this.boss = new PgBoss(bossOptions);
     this.queuePolicyOverrides = options.queuePolicyOverrides ?? {};
-    this.boss.on("error", (error) => console.error(`pg-boss error: ${error.message}`));
-    this.boss.on("warning", (warning) => console.warn(`pg-boss warning: ${warning.message}`));
+    this.boss.on("error", (error) => logger.error({ err: error.message }, "pg-boss error"));
+    this.boss.on("warning", (warning) => logger.warn({ err: warning.message }, "pg-boss warning"));
   }
 
   async start(): Promise<void> {

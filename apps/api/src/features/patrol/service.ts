@@ -19,6 +19,7 @@ import { runSplitLens, type SplitDocumentFn } from "../../scheduling/split-lens.
 import { collectSourceContext } from "../../platform/source-context.js";
 import { runJobToCompletion } from "../jobs/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
+import { logger } from "../../logger.js";
 
 // Cursor knobs (tunable). batchSize bounds per-tick cost; randomCount is the
 // explore share (~20%); the remainder is the oldest/most-stale exploit share.
@@ -82,7 +83,7 @@ const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sou
     terminal = await runJobToCompletion(ctx, "verify_document", input);
   } catch (error) {
     const message = error instanceof Error ? error.message : "verify job failed";
-    console.warn(`Verify lens: verify_document for ${path} could not run — ${message}.`);
+    logger.warn({ path, err: message }, "verify lens: verify_document could not run");
     return undefined;
   }
   if (terminal.state !== "completed") {
@@ -299,10 +300,9 @@ export async function runFixPatrol(
       intentTraces: verifyFindingIntentTraces(findings, options.flowId)
     }
   });
-  console.log(
-    `Fix-patrol (${options.trigger}) flow=${options.flowId ?? "(default)"}: ` +
-      `checked ${selected.length}/${universe.length} document(s), ${findings.length} finding(s), ` +
-      `${dedupeScans} dedupe scan(s), ${splitScans} split scan(s) enqueued, ${skipped} covered-skip(s); run ${run.id}.`
+  logger.info(
+    { trigger: options.trigger, flowId: options.flowId ?? "(default)", checked: selected.length, universe: universe.length, findings: findings.length, dedupeScans, splitScans, skipped, runId: run.id },
+    "fix-patrol completed"
   );
   return {
     ok: true,
@@ -363,7 +363,7 @@ export async function runImprovePatrol(
       enqueuedCount += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : "improve failed";
-      console.warn(`Improve-patrol: skipping ${document.path} - ${message}.`);
+      logger.warn({ path: document.path, err: message }, "improve-patrol: skipping document");
     }
   }
 
@@ -379,10 +379,9 @@ export async function runImprovePatrol(
       (skipped > 0 ? ` · ${skipped} covered by open PRs` : ""),
     details: { universeCount: universe.length, selectedCount: selected.length, selected, skipped, enqueuedCount }
   });
-  console.log(
-    `Improve-patrol (${options.trigger}) flow=${options.flowId ?? "(default)"}: ` +
-      `checked ${selected.length}/${universe.length} document(s), ${enqueuedCount} improve scan(s) enqueued, ` +
-      `${skipped} covered-skip(s); run ${run.id}.`
+  logger.info(
+    { trigger: options.trigger, flowId: options.flowId ?? "(default)", checked: selected.length, universe: universe.length, enqueued: enqueuedCount, skipped, runId: run.id },
+    "improve-patrol completed"
   );
   return {
     ok: true,

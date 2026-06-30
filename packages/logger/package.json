@@ -1,5 +1,5 @@
 {
-  "name": "@magpie/retrieval",
+  "name": "@magpie/logger",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,16 +8,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
-    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**\" --test-coverage-exclude=\"**/*.test.ts\" \"src/**/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@magpie/core": "file:../core",
-    "@magpie/logger": "file:../logger",
-    "@magpie/prompts": "file:../prompts"
+    "pino": "^9.6.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
+    "pino-pretty": "^13.0.0",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }

@@ -1,6 +1,7 @@
 import type { Proposal } from "@magpie/core";
 import type { AppContext } from "../context.js";
 import { splitGapSummaries } from "../features/proposals/service.js";
+import { logger } from "../logger.js";
 
 // Proposal statuses whose cluster should be created frozen: the work is settled,
 // so the cluster is a historical record the reconciler must never reshape.
@@ -57,7 +58,7 @@ export async function backfillGapClusters(ctx: AppContext): Promise<void> {
     }
   }
 
-  console.log(`Backfilled ${created} gap cluster(s) for ${proposals.length} existing proposal(s).`);
+  logger.info({ created, proposals: proposals.length }, "backfilled gap clusters for existing proposals");
 }
 
 // proposals.list omits merged rows by default, so the settled history is fetched

@@ -11,6 +11,7 @@ import { ANSWER_QUESTION, GAP_RECONCILE_CRITIC, GAP_RECONCILE_PROPOSE, withPerso
 import { routeQuestionToFlow, type RoutableFlow } from "@magpie/retrieval";
 import type { z } from "zod";
 import type { WatcherApi } from "../http-client.js";
+import { logger } from "../logger.js";
 import { buildAnswerOutput, buildPrompt, parseJobOutput } from "../job-prompts.js";
 
 export interface GenerativeJobOptions {
@@ -61,15 +62,15 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
     ...(flow.persona ? { persona: flow.persona } : {})
   }));
 
-  console.log(`answer_question[${job.id}]: routing question across ${flows.length} flow(s)`);
-  const decision = await routeQuestionToFlow(input.question, flows, model);
+  logger.debug({ jobId: job.id, flowCount: flows.length }, `answer_question[${job.id}]: routing question across ${flows.length} flow(s)`);
+  const decision = await routeQuestionToFlow(input.question, flows, model, logger);
   const flowId = decision?.flowId;
   const routedFlow = flowId ? flows.find((flow) => flow.id === flowId) : undefined;
 
-  console.log(`answer_question[${job.id}]: retrieving sections for flow ${flowId ?? "(unscoped)"}`);
+  logger.debug({ jobId: job.id, flowId: flowId ?? null }, `answer_question[${job.id}]: retrieving sections for flow ${flowId ?? "(unscoped)"}`);
   const sections = await api.retrieve(input.question, flowId, undefined);
 
-  console.log(`answer_question[${job.id}]: generating answer from ${sections.length} section(s)`);
+  logger.debug({ jobId: job.id, sectionCount: sections.length }, `answer_question[${job.id}]: generating answer from ${sections.length} section(s)`);
   const context = sections.map((section) => `# ${section.heading}\n${section.content}`).join("\n\n");
   const response = await model.complete({
     system: withPersona(ANSWER_QUESTION.instructions, routedFlow?.persona),
@@ -86,7 +87,7 @@ async function reconcileGapClusters({ job, model, signal }: GenerativeJobOptions
   const summary = input.clusters
     .map((cluster) => `cluster ${cluster.id} (flow ${cluster.flowId ?? "none"}): ${cluster.title}`)
     .join("\n");
-  console.log(`reconcile_gap_clusters[${job.id}]: proposing reshape over ${input.clusters.length} cluster(s)`);
+  logger.debug({ jobId: job.id, clusterCount: input.clusters.length }, `reconcile_gap_clusters[${job.id}]: proposing reshape over ${input.clusters.length} cluster(s)`);
   const proposeResponse = await model.complete({
     system: GAP_RECONCILE_PROPOSE.instructions,
     messages: [{ role: "user", content: summary }],
@@ -94,7 +95,8 @@ async function reconcileGapClusters({ job, model, signal }: GenerativeJobOptions
   });
   const proposal = parseReshape(proposeResponse.content);
 
-  console.log(
+  logger.debug(
+    { jobId: job.id, mergeCount: proposal.merges.length, splitCount: proposal.splits.length },
     `reconcile_gap_clusters[${job.id}]: critic-confirming ${proposal.merges.length} merge(s), ${proposal.splits.length} split(s)`
   );
   const merges: ReconcileOutput["merges"] = [];
