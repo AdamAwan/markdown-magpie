@@ -4,6 +4,8 @@ Markdown Magpie is a Git-backed Markdown knowledge maintenance system. It indexe
 
 The project is intentionally provider-neutral: AI work is queued by the API and completed by a separate watcher using OpenAI-compatible chat, Azure OpenAI, Codex, or Claude.
 
+> **Built with AI:** Markdown Magpie is developed primarily by AI coding agents — chiefly Claude (Claude Code) and Codex — with human direction and review. The planning notes under `docs/superpowers/` are the agent-driven specs, plans, and task reports that produced the code.
+
 ## What It Does
 
 1. Sync or read Markdown knowledge sources.
@@ -229,3 +231,7 @@ See `.env.example` and [docs/mcp.md](docs/mcp.md) for the current auth variables
 - `npm run db:migrate` cannot connect: confirm Postgres is running and `DATABASE_URL` points at it.
 - Questions stay queued: start `npm run dev:watcher` and confirm its provider credentials match `AI_PROVIDER`.
 - The web UI cannot call the API: check `NEXT_PUBLIC_API_BASE_URL`, `PUBLIC_API_BASE_URL`, and `http://localhost:4000/api/health`.
+
+## License
+
+Released under the [MIT License](LICENSE).

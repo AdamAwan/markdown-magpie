@@ -19,6 +19,10 @@ data/
 .superpowers/
 .worktrees/
 
-# pitch deck: ship the self-contained index.html + optimized assets; raw screenshots regenerate via scripts/shoot.mjs
+# pitch deck: the served copy at apps/web/public/presentation/index.html is the
+# committed artifact (it ships in the Docker image, which never runs build-deck);
+# the root presentation/index.html is a regenerable standalone copy — rebuild it
+# locally with `node scripts/build-deck.mjs`. Raw screenshots regenerate via shoot.mjs.
+presentation/index.html
 presentation/assets/*.png
 presentation/assets/*.jpeg
