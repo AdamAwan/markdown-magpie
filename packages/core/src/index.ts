@@ -303,6 +303,77 @@ export function resolveProposalTargetPath(subpath: string | undefined, title: st
   return folder ? `${folder}/${fileName}` : fileName;
 }
 
+// --- Flow snapshots ---------------------------------------------------------
+// The downloaded state the fetch job assembles for one flow and the api store
+// persists, so the reconciler reads it instead of polling the host live. The web
+// console reads the same shapes back over /snapshots (as FlowSnapshotView), so the
+// canonical definitions live here rather than being mirrored by hand in the web.
+
+// A flow's proposal as captured in a snapshot — just the fields the processor and
+// a human reviewer need, not the full markdown body.
+export interface SnapshotProposal {
+  id: string;
+  title?: string;
+  status: Proposal["status"];
+  gapClusterId?: string;
+  pullRequestUrl?: string;
+}
+
+// The polled state of one of this flow's open pull requests. `etag` and
+// `checkedAt` back the cache: a later refresh can issue a conditional request and
+// keep the prior state on a 304 instead of re-reading the whole PR.
+export interface SnapshotPullRequest {
+  proposalId: string;
+  url: string;
+  merged: boolean;
+  state: "open" | "closed" | "unknown";
+  // The latest review decision the watcher reported for this PR, when known.
+  reviewDecision?: ReviewDecision;
+  etag?: string;
+  checkedAt: string;
+}
+
+// Everything the fetch job downloads for one flow: the inputs the reconciler would
+// otherwise gather live (gaps, proposals) plus the externally-polled PR state. This
+// is the persisted store shape; FlowSnapshotView adds the flow's human label.
+export interface FlowSnapshot {
+  flowId?: string;
+  takenAt: string;
+  catalogRevision: number;
+  gaps: GapCandidate[];
+  proposals: SnapshotProposal[];
+  pullRequests: SnapshotPullRequest[];
+}
+
+// A snapshot enriched with its flow's human label — the shape the api serves over
+// /snapshots and the web console renders. The default flow has no flowId, so the
+// api supplies a stable label.
+export interface FlowSnapshotView extends FlowSnapshot {
+  flowName: string;
+}
+
+// --- Reconciliation decisions -----------------------------------------------
+// A single clustering decision the reconciler made while reshaping a flow's gap
+// clusters: a proposed merge or split, the model's rationale for it, and whether
+// the critic confirmed and the reconciler applied it. Persisted so a reviewer can
+// see WHY the clustering changed, not just its result — previously this lived only
+// in console logs.
+export interface ReconciliationDecisionRecord {
+  id: string;
+  // The flow the reshape belongs to; undefined for the un-routed/default flow.
+  flowId?: string;
+  kind: "merge" | "split";
+  // The proposing model's rationale for the merge/split.
+  rationale: string;
+  // The critic's verdict on the proposal.
+  confirmed: boolean;
+  // Whether the reconciler went on to apply it (only confirmed changes are applied).
+  applied: boolean;
+  // The clusters involved: every merged cluster, or the single cluster being split.
+  clusterIds: string[];
+  createdAt: string;
+}
+
 export interface ProposalPublication {
   provider: "local-git";
   branchName: string;
