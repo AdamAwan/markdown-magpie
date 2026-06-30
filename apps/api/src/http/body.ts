@@ -1,5 +1,4 @@
 import type { Context } from "hono";
-import type { ZodType, infer as ZodInfer } from "zod";
 import { HttpError } from "./errors.js";
 
 // Reads the request JSON body. An absent/empty body deserialises to `{}` (every
@@ -21,20 +20,4 @@ async function readRawJson(c: Context): Promise<unknown> {
 
 export async function readJsonBody<T extends object>(c: Context): Promise<T> {
   return (await readRawJson(c)) as T;
-}
-
-// Reads the body and validates it against a zod schema, throwing 400 with the
-// given code on a shape mismatch. Unlike a bare readJsonBody<T> cast (erased at
-// runtime), this actually verifies arrays are arrays etc. before the handler
-// iterates/spreads them.
-export async function parseJsonBody<S extends ZodType>(
-  c: Context,
-  schema: S,
-  errorCode: string
-): Promise<ZodInfer<S>> {
-  const result = schema.safeParse(await readRawJson(c));
-  if (!result.success) {
-    throw new HttpError(400, errorCode);
-  }
-  return result.data;
 }

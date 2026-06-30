@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
 import { HttpError } from "../../http/errors.js";
@@ -16,11 +17,17 @@ import {
 export function jobRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
-  app.post("/", requireScopes("manage:jobs"), async (c) => {
-    const parsed = createJobBodySchema.safeParse(await readJsonBody(c));
-    if (!parsed.success) throw new HttpError(400, "invalid_job");
-    return c.json({ job: await jobsService.createJob(ctx, parsed.data.type, parsed.data.input) }, 202);
-  });
+  app.post(
+    "/",
+    requireScopes("manage:jobs"),
+    zValidator("json", createJobBodySchema, (result, c) => {
+      if (!result.success) return c.json({ error: "invalid_job" }, 400);
+    }),
+    async (c) => {
+      const { type, input } = c.req.valid("json");
+      return c.json({ job: await jobsService.createJob(ctx, type, input) }, 202);
+    }
+  );
 
   app.get("/", requireScopes("read:knowledge"), async (c) => {
     const parsed = listJobsQuerySchema.safeParse(c.req.query());
@@ -32,12 +39,18 @@ export function jobRoutes(ctx: AppContext): Hono {
     c.json({ schedules: await ctx.jobs.listSchedules() })
   );
 
-  app.post("/claim", requireScopes("manage:jobs"), async (c) => {
-    const parsed = claimJobBodySchema.safeParse(await readJsonBody(c));
-    if (!parsed.success) throw new HttpError(400, "worker_capabilities_required");
-    const job = await jobsService.claimJob(ctx, parsed.data.workerName, parsed.data.capabilities);
-    return c.json({ job: job ?? null });
-  });
+  app.post(
+    "/claim",
+    requireScopes("manage:jobs"),
+    zValidator("json", claimJobBodySchema, (result, c) => {
+      if (!result.success) return c.json({ error: "worker_capabilities_required" }, 400);
+    }),
+    async (c) => {
+      const { workerName, capabilities } = c.req.valid("json");
+      const job = await jobsService.claimJob(ctx, workerName, capabilities);
+      return c.json({ job: job ?? null });
+    }
+  );
 
   app.get("/:id/wait", requireScopes("read:knowledge"), async (c) => {
     try {
@@ -60,31 +73,43 @@ export function jobRoutes(ctx: AppContext): Hono {
     }
   });
 
-  app.post("/:id/complete", requireScopes("manage:jobs"), async (c) => {
-    const parsed = completeJobBodySchema.safeParse(await readJsonBody(c));
-    if (!parsed.success) throw new HttpError(400, "invalid_output");
-    try {
-      const outcome = await jobsService.completeJob(ctx, c.req.param("id"), parsed.data.output, parsed.data.executor);
-      if (!outcome.ok) {
-        const status = outcome.code === "job_not_found" ? 404 : outcome.code === "job_cancelled" ? 409 : 400;
-        throw new HttpError(status, outcome.code);
+  app.post(
+    "/:id/complete",
+    requireScopes("manage:jobs"),
+    zValidator("json", completeJobBodySchema, (result, c) => {
+      if (!result.success) return c.json({ error: "invalid_output" }, 400);
+    }),
+    async (c) => {
+      const { output, executor } = c.req.valid("json");
+      try {
+        const outcome = await jobsService.completeJob(ctx, c.req.param("id"), output, executor);
+        if (!outcome.ok) {
+          const status = outcome.code === "job_not_found" ? 404 : outcome.code === "job_cancelled" ? 409 : 400;
+          throw new HttpError(status, outcome.code);
+        }
+        return c.json({ job: outcome.job });
+      } catch (error) {
+        if (error instanceof HttpError) throw error;
+        throw new HttpError(500, "job_completion_failed");
       }
-      return c.json({ job: outcome.job });
-    } catch (error) {
-      if (error instanceof HttpError) throw error;
-      throw new HttpError(500, "job_completion_failed");
     }
-  });
+  );
 
-  app.post("/:id/fail", requireScopes("manage:jobs"), async (c) => {
-    const parsed = failJobBodySchema.safeParse(await readJsonBody(c));
-    if (!parsed.success) throw new HttpError(400, "invalid_job_error");
-    try {
-      return c.json({ job: await jobsService.failJob(ctx, c.req.param("id"), parsed.data.error) });
-    } catch {
-      throw new HttpError(404, "job_not_found");
+  app.post(
+    "/:id/fail",
+    requireScopes("manage:jobs"),
+    zValidator("json", failJobBodySchema, (result, c) => {
+      if (!result.success) return c.json({ error: "invalid_job_error" }, 400);
+    }),
+    async (c) => {
+      const { error } = c.req.valid("json");
+      try {
+        return c.json({ job: await jobsService.failJob(ctx, c.req.param("id"), error) });
+      } catch {
+        throw new HttpError(404, "job_not_found");
+      }
     }
-  });
+  );
 
   app.post("/:id/cancel", requireScopes("manage:jobs"), async (c) => {
     try {

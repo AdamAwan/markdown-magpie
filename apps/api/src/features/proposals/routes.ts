@@ -1,11 +1,9 @@
 import { Hono } from "hono";
-import type { Context } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
 import { apiLink, parseLimit } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
-import { parseJsonBody } from "../../http/body.js";
 import * as proposalsService from "./service.js";
 import { draftFromGapsBodySchema, proposalStatusBodySchema } from "./schema.js";
 
@@ -19,37 +17,51 @@ export function proposalRoutes(ctx: AppContext): Hono {
     return c.json({ proposals: await proposalsService.list(ctx, limit, options) });
   });
 
-  const createFromGaps = async (c: Context): Promise<Response> => {
-    const payload = await parseJsonBody(c, draftFromGapsBodySchema, "gap_summary_required");
-
-    const requested = [...(payload.summaries ?? []), ...(payload.summary ? [payload.summary] : [])];
-    const outcome = await proposalsService.draftFromGaps(ctx, requested, {
-      targetPath: payload.targetPath,
-      flowId: payload.flowId,
-      sourceIds: payload.sourceIds,
-      destinationId: payload.destinationId
-    });
-
-    if (!outcome.ok) {
-      throw new HttpError(outcome.code === "gap_summary_required" ? 400 : 404, outcome.code);
-    }
-
-    return c.json(
-      {
-        job: outcome.job,
-        links: {
-          job: apiLink(`/jobs/${outcome.job.id}`),
-          wait: apiLink(`/jobs/${outcome.job.id}/wait`),
-          cancel: apiLink(`/jobs/${outcome.job.id}/cancel`),
-          proposals: apiLink("/proposals")
+  // Shared by /from-gap and /from-gaps. Registering inline (rather than as a bare
+  // handler reused across paths) lets zValidator's validated type flow into
+  // c.req.valid("json").
+  const registerCreateFromGaps = (path: string): void => {
+    app.post(
+      path,
+      requireScopes("manage:knowledge"),
+      zValidator("json", draftFromGapsBodySchema, (result, c) => {
+        if (!result.success) {
+          return c.json({ error: "gap_summary_required" }, 400);
         }
-      },
-      202
+      }),
+      async (c) => {
+        const payload = c.req.valid("json");
+
+        const requested = [...(payload.summaries ?? []), ...(payload.summary ? [payload.summary] : [])];
+        const outcome = await proposalsService.draftFromGaps(ctx, requested, {
+          targetPath: payload.targetPath,
+          flowId: payload.flowId,
+          sourceIds: payload.sourceIds,
+          destinationId: payload.destinationId
+        });
+
+        if (!outcome.ok) {
+          throw new HttpError(outcome.code === "gap_summary_required" ? 400 : 404, outcome.code);
+        }
+
+        return c.json(
+          {
+            job: outcome.job,
+            links: {
+              job: apiLink(`/jobs/${outcome.job.id}`),
+              wait: apiLink(`/jobs/${outcome.job.id}/wait`),
+              cancel: apiLink(`/jobs/${outcome.job.id}/cancel`),
+              proposals: apiLink("/proposals")
+            }
+          },
+          202
+        );
+      }
     );
   };
 
-  app.post("/from-gap", requireScopes("manage:knowledge"), createFromGaps);
-  app.post("/from-gaps", requireScopes("manage:knowledge"), createFromGaps);
+  registerCreateFromGaps("/from-gap");
+  registerCreateFromGaps("/from-gaps");
 
   app.get("/:id", requireScopes("read:knowledge"), async (c) => {
     const proposal = await proposalsService.get(ctx, c.req.param("id"));
