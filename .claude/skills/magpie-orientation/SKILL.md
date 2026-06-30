@@ -1,0 +1,117 @@
+---
+name: magpie-orientation
+description: Architecture and conventions orientation for the Markdown Magpie repo. Use at the start of any development session on this repo to ramp up fast — explains the queue-only AI model, where code lives (apps/ and packages/), and the project conventions and gotchas. Pairs with run-magpie (for actually launching the stack).
+---
+
+# Orienting in Markdown Magpie
+
+Markdown Magpie is a Git-backed Markdown knowledge maintenance system: it indexes docs,
+answers questions with citations, logs weak answers, clusters them into knowledge gaps,
+drafts Markdown improvements, and publishes them as pull requests for review.
+
+It is an **npm-workspace monorepo** (Node ≥22.12, ESM/NodeNext, TypeScript). Read this
+before designing changes — the AI-execution model is easy to get wrong from intuition.
+
+## 1. The queue-only mental model (read this first)
+
+**The API never calls a model inline.** This is the single most important fact and the
+one most likely to be designed against by accident.
+
+```text
+client → POST /api/ask
+  → API records the question + enqueues an `answer_question` job (pg-boss, in Postgres)
+  → API responds 202 with a job id (no answer yet)
+  → watcher claims the job, routes to a flow, calls BACK into the API over HTTP
+      for scoped context (e.g. retrieval), invokes the configured provider,
+      then POSTs the result back to the API
+  → answer is now stored; client reads it via /api/jobs/<id>/wait + /api/questions/<id>
+```
+
+Implications you must design around:
+
+- **All AI/generative/embedding work is a job + a watcher flow + an API callback.**
+  Never add a code path where the API process calls a chat or embedding provider
+  directly. If you need AI work done, model it as a job.
+- **The watcher is required** for any AI work. Without a running watcher, `POST /api/ask`
+  returns a 202 job that never completes. There is **no "direct mode"** — the old
+  `AI_EXECUTION_MODE` was removed in the queue-only migration.
+- **The watcher has no database access.** API and watcher share only (a) the HTTP API
+  and (b) the managed-checkout volume. The watcher gets a tightly scoped payload and
+  posts results back; it does not read/write Postgres directly.
+- **Provider-neutral.** `AI_PROVIDER` selects `openai-compatible | azure-openai | codex |
+  claude`. A watcher advertises a provider **capability** only when that provider's
+  credentials are in its environment, and the API only routes a job to a capability a
+  running watcher actually offers.
+- **Job type === pg-boss queue name.** The same string names the Schedules UI row, the
+  `/dataflow` box, and the `type=` filter. Maintenance jobs are *orchestrators* that fan
+  out into AI + GitHub jobs (see `docs/architecture.md` for the tier-1/tier-2 table).
+
+Authoritative reading: [docs/architecture.md](../../../docs/architecture.md) and
+[docs/ai-jobs.md](../../../docs/ai-jobs.md).
+
+## 2. Where code lives
+
+```text
+apps/
+  api/       HTTP API + job-queue owner. Owns permissions, retrieval orchestration,
+             proposal creation, review workflow, scheduling/cron. Enqueues jobs and
+             exposes the callbacks the watcher uses (e.g. retrieval, /api/gaps/reconcile).
+  watcher/   Worker that claims jobs and calls the provider. Flows live under
+             src/runners/ (chat, generative, maintenance, publication, cli, ...);
+             capability advertisement in src/capabilities.ts.
+  web/       Next.js review + admin console (Schedules, /dataflow, proposals review).
+  mcp/       MCP server — a client surface over the API (kb.ask, kb.search, kb.feedback).
+             Only needed for MCP clients; skip for a normal run.
+packages/
+  core/       Shared domain types + provider interfaces.
+  auth/       Auth0 token validation helpers.
+  db/         Database schema + migrations.
+  git/        Git sync + pull-request adapters (incl. local-git publisher).
+  jobs/       Job contracts: JOB_TYPES, capabilities, input/output schemas, queue
+              policies. Defined in src/types.ts + src/schemas.ts + src/catalog.ts.
+              Start here when adding or changing a job.
+  logger/     Shared structured logging.
+  markdown/   Markdown parsing, frontmatter, sectioning by heading.
+  prompts/    Shared AI prompt catalog.
+  retrieval/  Search (keyword + vector), embeddings, ranking (RRF), routing, and
+              answer orchestration.
+```
+
+Fast lookups: "what jobs exist / what's their payload?" → `packages/jobs/`. "how does
+the watcher run a job?" → `apps/watcher/src/runners/`. "what does the API expose?" →
+`apps/api/src/`. "search/ranking/embeddings?" → `packages/retrieval/`.
+
+## 3. Conventions and gotchas
+
+- **ESM/NodeNext** — relative imports need explicit `.js` extensions (e.g.
+  `./types.js`), even from `.ts` sources. TypeScript throughout.
+- **Never cast through `unknown`** (or use `any` / hacky escape hatches) to silence the
+  type checker. Fix the types properly.
+- **No hacky workarounds** — fix the root cause the best way, don't paper over it.
+- **Validate frequently, not at the end.** Run build + tests as you go so breakage is
+  caught early. Don't batch a large change and validate once.
+- **Commit AND push little and often** so there's always a reliable revert point.
+- **Update documentation** alongside code (`docs/`, README, this skill) when behavior
+  or structure changes.
+
+### Commands
+
+```bash
+npm run build       # build all workspaces (ordered)
+npm run typecheck   # tsc -p tsconfig.check.json --noEmit
+npm run lint        # eslint .   (lint:fix to autofix)
+npm run format:check
+npm test            # unit tests across workspaces
+npm run test:db     # Postgres-backed tests (spins up a DB via scripts/test-db.mjs)
+npm run db:migrate  # apply migrations
+```
+
+To actually **launch and drive the running stack** (Postgres → migrate → API → Watcher →
+Web, with the local `.env` overrides needed because the committed `.env` is the prod
+config), use the **run-magpie** skill — don't re-derive the launch recipe here.
+
+### Planning notes
+
+This repo is developed by AI agents under human review. Specs, plans, and task reports
+live under `docs/superpowers/` (`specs/`, `plans/`, `sdd-notes/`). Check there for the
+intent behind recent work.
