@@ -63,6 +63,17 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     return { summaries: [...summaries], questionIds: [...questionIds] };
   }
 
+  async listUnresolvedGapIds(gapIds: string[]): Promise<string[]> {
+    if (gapIds.length === 0) {
+      return [];
+    }
+    const result = await this.pool.query<{ id: string }>(
+      "SELECT id::text AS id FROM question_gaps WHERE id = ANY($1::bigint[]) AND resolved_at IS NULL",
+      [gapIds]
+    );
+    return result.rows.map((row) => row.id);
+  }
+
   async record(input: QuestionLogInput): Promise<QuestionLog> {
     const id = randomUUID();
     const client = await this.pool.connect();

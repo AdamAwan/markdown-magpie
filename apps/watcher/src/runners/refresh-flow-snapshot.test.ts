@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { JobView } from "@magpie/jobs";
 import type { OpenPullRequestRef, WatcherApi } from "../http-client.js";
-import { RefreshPullRequestsRunner } from "./refresh-pull-requests.js";
+import { RefreshFlowSnapshotRunner } from "./refresh-flow-snapshot.js";
 
 function job(): JobView {
   return {
     id: "j",
-    type: "refresh_pull_requests",
-    queueName: "refresh_pull_requests",
+    type: "refresh_flow_snapshot",
+    queueName: "refresh_flow_snapshot",
     deadLetter: false,
     state: "active",
     input: {},
@@ -36,11 +36,11 @@ function fakeApi(open: OpenPullRequestRef[]): WatcherApi {
   };
 }
 
-describe("RefreshPullRequestsRunner", () => {
-  it("declares the github capability and supports only refresh_pull_requests", () => {
-    const runner = new RefreshPullRequestsRunner(fakeApi([]));
+describe("RefreshFlowSnapshotRunner", () => {
+  it("declares the github capability and supports only refresh_flow_snapshot", () => {
+    const runner = new RefreshFlowSnapshotRunner(fakeApi([]));
     assert.equal(runner.capability, "github");
-    assert.ok(runner.supports("refresh_pull_requests"));
+    assert.ok(runner.supports("refresh_flow_snapshot"));
     assert.ok(!runner.supports("publish_proposal"));
     assert.ok(!runner.supports("process_gaps_to_pull_requests"));
   });
@@ -50,7 +50,7 @@ describe("RefreshPullRequestsRunner", () => {
       { proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" },
       { proposalId: "p2", pullRequestUrl: "https://github.com/o/r/pull/2" }
     ]);
-    const runner = new RefreshPullRequestsRunner(
+    const runner = new RefreshFlowSnapshotRunner(
       api,
       async (url) => (url?.endsWith("/1") ? { merged: true, state: "closed" } : { merged: false, state: "closed" }),
       async () => "none"
@@ -66,7 +66,7 @@ describe("RefreshPullRequestsRunner", () => {
 
   it("attaches the review decision for a still-open PR", async () => {
     const api = fakeApi([{ proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" }]);
-    const runner = new RefreshPullRequestsRunner(
+    const runner = new RefreshFlowSnapshotRunner(
       api,
       async () => ({ merged: false, state: "open" }),
       async () => "approved"
@@ -80,7 +80,7 @@ describe("RefreshPullRequestsRunner", () => {
   it("does not look up the review decision for a merged/closing PR", async () => {
     const api = fakeApi([{ proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" }]);
     let reviewLookups = 0;
-    const runner = new RefreshPullRequestsRunner(
+    const runner = new RefreshFlowSnapshotRunner(
       api,
       async () => ({ merged: true, state: "closed" }),
       async () => {
@@ -97,7 +97,7 @@ describe("RefreshPullRequestsRunner", () => {
 
   it("still reports an open PR when the review lookup throws", async () => {
     const api = fakeApi([{ proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" }]);
-    const runner = new RefreshPullRequestsRunner(
+    const runner = new RefreshFlowSnapshotRunner(
       api,
       async () => ({ merged: false, state: "open" }),
       async () => {
@@ -115,7 +115,7 @@ describe("RefreshPullRequestsRunner", () => {
       { proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" },
       { proposalId: "p2", pullRequestUrl: "not-a-pr" }
     ]);
-    const runner = new RefreshPullRequestsRunner(
+    const runner = new RefreshFlowSnapshotRunner(
       api,
       async (url) => (url?.endsWith("/1") ? { merged: false, state: "open" } : undefined),
       async () => "none"
@@ -131,7 +131,7 @@ describe("RefreshPullRequestsRunner", () => {
       { proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" },
       { proposalId: "p2", pullRequestUrl: "https://github.com/o/r/pull/2" }
     ]);
-    const runner = new RefreshPullRequestsRunner(
+    const runner = new RefreshFlowSnapshotRunner(
       api,
       async (url) => {
         if (url?.endsWith("/1")) throw new Error("rate limited");
@@ -151,7 +151,7 @@ describe("RefreshPullRequestsRunner", () => {
       { proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" },
       { proposalId: "p2", pullRequestUrl: "https://github.com/o/r/pull/2" }
     ]);
-    const runner = new RefreshPullRequestsRunner(
+    const runner = new RefreshFlowSnapshotRunner(
       api,
       async () => {
         controller.abort();

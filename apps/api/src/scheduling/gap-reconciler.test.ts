@@ -304,6 +304,92 @@ describe("reconcileGaps autonomous drafting", () => {
   });
 });
 
+describe("reconcileGaps resolution pruning", () => {
+  // A reshape can move a gap into a cluster other than the one whose proposal
+  // later resolves it (resolution matches on (question, summary); freezing only
+  // touches the resolving proposal's own cluster). The reconciler must drop the
+  // resolved gap from whatever active cluster currently holds it, so a covered
+  // gap stops surfacing as a live member/proposal.
+  it("deactivates the membership of a gap resolved by another proposal", async () => {
+    const ctx = makeTestContext({
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
+    });
+    const summaries = ["Power BI comparison", "Metabase comparison", "Tableau comparison"];
+    const gapIdBySummary = new Map<string, string>();
+    const logIdBySummary = new Map<string, string>();
+    const cluster = await ctx.stores.gapClusters.createCluster({ title: "Comparisons", revision: 1 });
+    for (const summary of summaries) {
+      const log = await ctx.stores.questionLogs.record({
+        question: `${summary}?`,
+        chatProvider: "openai-compatible",
+        retrievedSectionIds: []
+      });
+      await ctx.stores.questionLogs.recordManualGap(log.id, summary);
+      const [gapId] = await ctx.stores.questionLogs.gapIdsForSummary(summary);
+      gapIdBySummary.set(summary, gapId);
+      logIdBySummary.set(summary, log.id);
+      await ctx.stores.gapClusters.assignGapToCluster(cluster.id, gapId);
+    }
+
+    // A different proposal merged and resolved the Metabase gap.
+    await ctx.stores.questionLogs.resolveGaps(
+      [logIdBySummary.get("Metabase comparison") as string],
+      ["Metabase comparison"],
+      "other-proposal"
+    );
+
+    await reconcileGaps(ctx, undefined, {
+      fetchPullRequestStatus: async () => undefined,
+      publishProposal: async () => {},
+      supersedeProposal: async () => {}
+    });
+
+    const members = await ctx.stores.gapClusters.listMembershipsForCluster(cluster.id);
+    const memberGapIds = members.map((m) => m.gapId);
+    assert.ok(
+      !memberGapIds.includes(gapIdBySummary.get("Metabase comparison") as string),
+      "the resolved gap is no longer an active member of the cluster"
+    );
+    assert.deepEqual(
+      [...memberGapIds].sort(),
+      [gapIdBySummary.get("Power BI comparison"), gapIdBySummary.get("Tableau comparison")].sort(),
+      "only the still-open gaps remain active members"
+    );
+  });
+
+  it("freezes a cluster whose every gap is resolved and never re-drafts it", async () => {
+    const ctx = makeTestContext({
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
+    });
+    const log = await ctx.stores.questionLogs.record({
+      question: "How does X work?",
+      chatProvider: "openai-compatible",
+      retrievedSectionIds: []
+    });
+    await ctx.stores.questionLogs.recordManualGap(log.id, "How X works");
+    const cluster = await ctx.stores.gapClusters.createCluster({ title: "How X works", revision: 1 });
+    const [gapId] = await ctx.stores.questionLogs.gapIdsForSummary("How X works");
+    await ctx.stores.gapClusters.assignGapToCluster(cluster.id, gapId);
+
+    // The only gap in the cluster is resolved by a merged proposal.
+    await ctx.stores.questionLogs.resolveGaps([log.id], ["How X works"], "some-proposal");
+
+    await reconcileGaps(ctx, undefined, {
+      fetchPullRequestStatus: async () => undefined,
+      publishProposal: async () => {},
+      supersedeProposal: async () => {}
+    });
+
+    const after = await ctx.stores.gapClusters.getCluster(cluster.id);
+    assert.equal(after?.status, "frozen", "a fully-resolved cluster is frozen");
+    assert.equal(
+      (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length,
+      0,
+      "no proposal is drafted for a fully-resolved cluster"
+    );
+  });
+});
+
 describe("reconcileGaps outbox", () => {
   it("retries a failed publish without any model call", async () => {
     const ctx = makeTestContext();

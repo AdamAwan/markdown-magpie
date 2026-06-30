@@ -211,7 +211,9 @@ running. Capability → required env:
 `AI_PROVIDER` is mandatory and names the chat provider work is routed to
 (`openai-compatible`, `azure-openai`, `codex`, or `claude`). The watcher must
 carry the credentials matching that provider. The watcher can also run a local
-CLI (Codex / Claude Code) as the provider.
+CLI (Codex / Claude Code) as the provider. CLI providers cover the non-embedding
+LLM job contract; embeddings remain configured separately through OpenAI-compatible
+or Azure embedding endpoints.
 
 OpenAI-compatible API watcher:
 

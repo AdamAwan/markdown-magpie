@@ -12,7 +12,7 @@ test("pgBossQueueOptions applies explicit test overrides without changing untouc
     expireInSeconds: 300,
     retentionSeconds: 1_209_600,
     deleteAfterSeconds: 2_592_000,
-    deadLetter: "refresh_pull_requests__dead_letter"
+    deadLetter: "refresh_flow_snapshot__dead_letter"
   }, {
     retryLimit: 1,
     retryDelay: 1,
@@ -27,6 +27,6 @@ test("pgBossQueueOptions applies explicit test overrides without changing untouc
     expireInSeconds: 300,
     retentionSeconds: 1_209_600,
     deleteAfterSeconds: 2_592_000,
-    deadLetter: "refresh_pull_requests__dead_letter"
+    deadLetter: "refresh_flow_snapshot__dead_letter"
   });
 });

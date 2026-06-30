@@ -1,5 +1,6 @@
 import type { EmbeddingProvider } from "@magpie/core";
 import { RuntimeConfigHolder } from "./config-holder.js";
+import { logger } from "./logger.js";
 import { BackgroundEmbedder } from "./platform/background-embedder.js";
 import { BackgroundRunner } from "./platform/background-runner.js";
 import {
@@ -77,7 +78,7 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
     ? new InMemoryKnowledgeIndex(
         knowledgeStore,
         embedding
-          ? { embeddingProvider: embedding, vectorSearch: knowledgeStore, onNotice: (message) => console.warn(message) }
+          ? { embeddingProvider: embedding, vectorSearch: knowledgeStore, onNotice: (message) => logger.warn({ notice: message }, "knowledge index notice") }
           : {}
       )
     : new InMemoryKnowledgeIndex();
@@ -142,7 +143,7 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
         await knowledgeIndex.hydrate();
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
-        console.error(`Failed to hydrate knowledge index from storage: ${message}`);
+        logger.error({ err: message }, "failed to hydrate knowledge index from storage");
       }
       // Best-effort one-shot migration: give pre-existing proposals a gap cluster
       // so the reconciler has lineage to work from. No-ops once clusters exist.
@@ -150,7 +151,7 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
         await backfillGapClusters(this);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
-        console.error(`Failed to backfill gap clusters: ${message}`);
+        logger.error({ err: message }, "failed to backfill gap clusters");
       }
     }
   };

@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { ensureGitCheckout } from "@magpie/git";
+import { logger } from "../logger.js";
 import type { RepositoryRef } from "@magpie/core";
 import {
   type ConfiguredKnowledgeFlow,
@@ -110,32 +111,29 @@ export async function syncConfiguredGitCheckouts(deps: RepositoryDeps): Promise<
 
   const sourceKeys = new Set(deps.knowledgeConfig.sources.filter((source) => source.kind === "git").map(checkoutKey));
 
-  console.log(`Syncing ${gitRepositories.length} configured git checkout(s)`);
+  logger.info({ count: gitRepositories.length }, "syncing configured git checkouts");
   for (const repository of gitRepositories) {
     const localPath = await resolveConfiguredRepositoryLocalPath(repository, deps.checkoutRoot);
     if (existsSync(localPath)) {
-      console.log(`Synced configured git ${repository.id} at ${localPath}`);
+      logger.info({ repositoryId: repository.id, localPath }, "synced configured git checkout");
       continue;
     }
 
-    const subpathHint = repository.subpath
-      ? ` Configured subpath "${repository.subpath}" was not found in the cloned repository.`
-      : "";
     if (sourceKeys.has(checkoutKey(repository))) {
-      console.warn(
-        `Synced configured git source ${repository.id}, but resolved path ${localPath} does not exist.${subpathHint} ` +
-          "Drafts from this source will have no real material until the configuration is corrected."
+      logger.warn(
+        { repositoryId: repository.id, localPath, subpath: repository.subpath },
+        "synced configured git source but resolved path does not exist; drafts will have no real material until configuration is corrected"
       );
     } else {
       try {
         await mkdir(localPath, { recursive: true });
-        console.log(
-          `Created empty destination folder for ${repository.id} at ${localPath}.${subpathHint} ` +
-            "This is expected for a fresh destination; it will be populated when proposals are published."
+        logger.info(
+          { repositoryId: repository.id, localPath, subpath: repository.subpath },
+          "created empty destination folder; expected for fresh destination, will be populated when proposals are published"
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : "unknown error";
-        console.warn(`Could not create destination folder for ${repository.id} at ${localPath}: ${message}`);
+        logger.warn({ repositoryId: repository.id, localPath, err: message }, "could not create destination folder");
       }
     }
   }
@@ -320,7 +318,7 @@ export async function seedConfiguredKnowledge(
       indexed += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : "index_failed";
-      console.warn(`Failed to re-index ${target}: ${message}`);
+      logger.warn({ target, err: message }, "failed to re-index");
       failures.push({ target, message });
     }
   }

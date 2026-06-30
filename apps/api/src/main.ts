@@ -4,6 +4,7 @@ import { loadConfig } from "./platform/config.js";
 import { buildApp } from "./app.js";
 import * as configService from "./features/config/service.js";
 import { reconcileSchedules } from "./jobs/schedule-reconciler.js";
+import { logger } from "./logger.js";
 
 async function start(): Promise<void> {
   // Validate the environment first: a bad/missing required var aborts startup
@@ -18,16 +19,14 @@ async function start(): Promise<void> {
     // queue, not an in-process timer, fires scheduled work from here on.
     await reconcileSchedules(ctx);
   } catch (error) {
-    console.error(
-      `API startup failed: ${error instanceof Error ? error.message : "Unknown error"}`
-    );
+    logger.error({ err: error instanceof Error ? error.message : "Unknown error" }, "API startup failed");
     await ctx.jobs.stop().catch(() => undefined);
     process.exitCode = 1;
     return;
   }
   const app = buildApp(ctx);
   const server = serve({ fetch: app.fetch, port }, () => {
-    console.log(`Markdown Magpie API listening on http://localhost:${port}/api`);
+    logger.info({ port }, "Markdown Magpie API listening");
     configService.logStartupConfig(ctx);
   });
 
@@ -40,14 +39,14 @@ async function start(): Promise<void> {
       return;
     }
     shuttingDown = true;
-    console.log(`Received ${signal}; draining background work before exit.`);
+    logger.info({ signal }, "received signal; draining background work before exit");
     server.close();
     Promise.race([
       ctx.background.whenIdle(),
       new Promise((resolve) => setTimeout(resolve, config.apiShutdownDrainMs))
     ]).then(() => ctx.jobs.stop()).finally(() => {
       if (ctx.background.pending > 0) {
-        console.warn(`Exiting with ${ctx.background.pending} background task(s) still in flight.`);
+        logger.warn({ pending: ctx.background.pending }, "exiting with background tasks still in flight");
       }
       process.exit(0);
     });
@@ -57,6 +56,6 @@ async function start(): Promise<void> {
 }
 
 void start().catch((error) => {
-  console.error(`API startup failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+  logger.error({ err: error instanceof Error ? error.message : "Unknown error" }, "API startup failed");
   process.exitCode = 1;
 });

@@ -1,5 +1,6 @@
 import type { AppContext } from "../../context.js";
 import { reconcileSchedules } from "../../jobs/schedule-reconciler.js";
+import { logger } from "../../logger.js";
 import { seedConfiguredKnowledge } from "../../platform/repositories.js";
 import { storeBackend } from "../../platform/stores.js";
 import { embeddingProviderName, getConfiguredAiProviders, retrievalMode } from "../../platform/providers.js";
@@ -137,7 +138,7 @@ export function logStartupConfig(ctx: AppContext): void {
   add("name", cfg.watcher.name ?? "not set");
   add("poll interval ms", cfg.watcher.pollIntervalMs ?? "default (2000)");
 
-  console.log(`Resolved configuration (env=${cfg.api.nodeEnv}):\n${lines.join("\n")}`);
+  logger.info({ env: cfg.api.nodeEnv }, `Resolved configuration:\n${lines.join("\n")}`);
 }
 
 // Clears all user-generated state then rebuilds the configured knowledge bases.

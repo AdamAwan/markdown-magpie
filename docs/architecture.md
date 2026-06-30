@@ -86,26 +86,50 @@ Proposal generation runs along two paths:
   proposals for any cluster not already covered, publishes them as pull requests, and advances
   proposals as their PRs merge or close — all in one task with no manual review step.
 
-Background tasks registered in the scheduler (configured from the Crunch page):
+### Scheduled tasks and job types
 
-- `gaps-to-pull-requests` — the single gap reconciler: it gates model work on the gap-catalog
-  revision, applies critic-confirmed cluster merges/splits, publishes open proposals through an
-  idempotent outbox, and (folding in the former `pull-request-refresh` task) checks open pull
-  requests — resolving the gaps a merged PR closed and re-indexing, or marking a closed PR's
-  proposal rejected (default: every 10 minutes; requires `GITHUB_TOKEN` for PR operations).
-  This runs as a `process_gaps_to_pull_requests` maintenance job: a watcher POSTs
-  the API's `/api/gaps/reconcile` endpoint, where the orchestration lives. The reconciler's only
-  generative step — the cluster reshape (propose merge/split, then critic-confirm) — is itself a
-  provider-partitioned `reconcile_gap_clusters` AI job the API enqueues and bounded-waits on, so
-  no generative work runs in the API process. Reshape is best-effort: if no chat watcher is
-  available within the deadline, the reconciler logs and skips it, still running clustering,
-  drafting, publication, and the PR-state pass.
-- `source-change-sync` — watches each flow's git sources and rewrites knowledge-base documents
-  a source change has outdated (default: every 10 minutes).
+Background tasks are registered **per flow** in the scheduler and managed from the
+**Schedules** page. The model has two tiers: each scheduled task fires *exactly one*
+job on its cron (tier 1), and four of those are *maintenance orchestrators* that fan
+out into the AI and GitHub jobs that do the real work (tier 2). The job-type
+identifier is also the pg-boss queue name, so the same string names the row in the
+Schedules UI, the box in the dataflow diagram, and the `type=` filter in the job
+queue.
 
-**Crunch** is a separate knowledge-base tidying flow (scheduled or on-demand) that builds a
-plan of consolidation/clean-up operations over a destination's documents; an operator then
-reviews the plan and publishes it as a branch.
+| Scheduled task (UI label) | Job type (= queue name) | Cadence | Capability | Fans out into (tier 2) |
+| --- | --- | --- | --- | --- |
+| Gap drafting | `process_gaps_to_pull_requests` | ~10 min | maintenance | `reconcile_gap_clusters`, `draft_markdown_proposal`, then publish/fold/comment GitHub jobs |
+| Source sync | `source_change_sync` | ~10 min | maintenance | `sync_source_changes_generate_plan` → proposal |
+| Snapshot refresh | `refresh_flow_snapshot` | ~5 min | github | — *(leaf: writes the flow snapshot of gaps, proposals, and PR state the reconciler reads)* |
+| Correctness patrol | `correctness_patrol` | hourly | maintenance | `verify_document` → `correct_document`, `dedupe_documents`, `split_document` |
+| Editorial patrol | `editorial_patrol` | hourly | maintenance | `improve_document` |
+
+Every tier-2 producer that writes a document expresses a `ChangeIntent` and passes
+through the **reconcile gate** (`open-new` / `fold` / `defer`) before a
+`publish_proposal` GitHub job opens or updates the PR — so all four producing
+schedules converge on one mechanism. The **Scheduled Jobs → Job Types** diagram on
+the `/dataflow` page draws the full fan-out.
+
+Orchestration detail: a maintenance watcher claims a `process_gaps_to_pull_requests`
+job and POSTs the API's `/api/gaps/reconcile` endpoint, where the orchestration
+lives. The reconciler's only generative step — the cluster reshape (propose
+merge/split, then critic-confirm) — is itself a provider-partitioned
+`reconcile_gap_clusters` AI job the API enqueues and bounded-waits on, so no
+generative work runs in the API process. Reshape is best-effort: if no chat watcher
+is available within the deadline, the reconciler logs and skips it, still running
+clustering, drafting, publication, and the PR-state pass.
+
+Before clustering, the reconciler also **prunes resolved gaps**: a gap is resolved by
+`(question, summary)` when its proposal merges, but a prior reshape may have moved that
+gap into a cluster other than the one the merge freezes. So each tick deactivates the
+cluster membership of any gap now resolved, and freezes any active cluster left with no
+still-open members — keeping "active membership" to mean "this gap belongs to this
+cluster *and* is still open", so a covered gap never re-surfaces as a cluster member or
+gets re-drafted. The draft and cluster-read paths also scope to a cluster's unresolved
+members as defence-in-depth.
+
+> The former whole-knowledge-base **Crunch** pass has been retired; its
+> consolidate/split responsibilities now live in the patrols and the gap reconciler.
 
 ## Implementation Status
 

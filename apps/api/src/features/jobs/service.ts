@@ -1,10 +1,11 @@
 import type { AnswerQuestionJobInput, AnswerQuestionJobOutput } from "@magpie/core";
+import { logger } from "../../logger.js";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
 import { jobDefinition } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import type { JobListFilters } from "../../jobs/broker.js";
 import type { WatcherTouch } from "../../stores/watcher-registry-store.js";
-import { refreshPullRequestsOutputSchema } from "@magpie/jobs";
+import { refreshFlowSnapshotOutputSchema } from "@magpie/jobs";
 import * as proposalsService from "../proposals/service.js";
 import * as sourceSyncService from "../source-sync/service.js";
 import * as snapshotsService from "../snapshots/service.js";
@@ -158,9 +159,7 @@ export async function completeJob(
       try {
         await foldService.reconcileDraftedProposal(ctx, draftedProposal);
       } catch (error) {
-        console.warn(
-          `Fold check for proposal ${draftedProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`
-        );
+        logger.warn({ proposalId: draftedProposal.id, err: error instanceof Error ? error.message : String(error) }, "fold check for proposal failed");
       }
     }
     const correctiveProposal = await proposalsService.createCorrectiveProposalFromCompletedJob(
@@ -174,9 +173,7 @@ export async function completeJob(
       try {
         await foldService.reconcileCorrectiveProposal(ctx, correctiveProposal);
       } catch (error) {
-        console.warn(
-          `Corrective reconcile for proposal ${correctiveProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`
-        );
+        logger.warn({ proposalId: correctiveProposal.id, err: error instanceof Error ? error.message : String(error) }, "corrective reconcile for proposal failed");
       }
     }
     const dedupeProposal = await proposalsService.createDedupeProposalFromCompletedJob(ctx, existingJob, parsed.data);
@@ -186,9 +183,7 @@ export async function completeJob(
       try {
         await foldService.reconcileDedupeProposal(ctx, dedupeProposal);
       } catch (error) {
-        console.warn(
-          `Dedupe reconcile for proposal ${dedupeProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`
-        );
+        logger.warn({ proposalId: dedupeProposal.id, err: error instanceof Error ? error.message : String(error) }, "dedupe reconcile for proposal failed");
       }
     }
     const improveProposal = await proposalsService.createImproveProposalFromCompletedJob(ctx, existingJob, parsed.data);
@@ -196,9 +191,7 @@ export async function completeJob(
       try {
         await foldService.reconcileImproveProposal(ctx, improveProposal);
       } catch (error) {
-        console.warn(
-          `Improve reconcile for proposal ${improveProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`
-        );
+        logger.warn({ proposalId: improveProposal.id, err: error instanceof Error ? error.message : String(error) }, "improve reconcile for proposal failed");
       }
     }
     const splitProposal = await proposalsService.createSplitProposalFromCompletedJob(ctx, existingJob, parsed.data);
@@ -207,23 +200,21 @@ export async function completeJob(
       try {
         await foldService.reconcileSplitProposal(ctx, splitProposal);
       } catch (error) {
-        console.warn(
-          `Split reconcile for proposal ${splitProposal.id} failed: ${error instanceof Error ? error.message : String(error)}`
-        );
+        logger.warn({ proposalId: splitProposal.id, err: error instanceof Error ? error.message : String(error) }, "split reconcile for proposal failed");
       }
     }
     await foldService.applyFoldFromCompletedJob(ctx, existingJob, parsed.data);
     await foldService.applyChangesetFoldFromCompletedJob(ctx, existingJob, parsed.data);
     await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, parsed.data);
     await sourceSyncService.attachSourceSyncPlanFromCompletedJob(ctx, existingJob, parsed.data);
-    await handleRefreshPullRequestsCompletion(ctx, existingJob, parsed.data);
+    await handleRefreshFlowSnapshotCompletion(ctx, existingJob, parsed.data);
     await ctx.jobs.complete(jobId, { result: parsed.data, executor });
     // The watcher is free again the moment it completes a job; reflect that
     // immediately rather than waiting for its next idle claim poll.
     await touchWatcher(ctx, { name: executor, status: "idle" });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`Completing job ${jobId} (${existingJob.type}) failed: ${message}`);
+    logger.error({ jobId, jobType: existingJob.type, err: message }, "completing job failed");
     await ctx.jobs.fail(jobId, {
       code: "completion_failed",
       message: "Job completion side effects failed",
@@ -262,7 +253,7 @@ async function updateQuestionLogFromCompletedJob(
   });
 }
 
-// Completion handler for refresh_pull_requests: the github watcher polled each open
+// Completion handler for refresh_flow_snapshot: the github watcher polled each open
 // PR and reported its merged/closed state. Two side effects follow. First, apply the
 // proposal-status transitions the reconciler would otherwise apply from a snapshot,
 // via the shared applyPullRequestTransition so the merged→cascade+freeze /
@@ -273,15 +264,15 @@ async function updateQuestionLogFromCompletedJob(
 // token, so this watcher-reported state is the only way PR status (and the gaps and
 // proposals captured alongside it) reaches the snapshot the /snapshots page and the
 // reconciler's PR-state pass read from.
-async function handleRefreshPullRequestsCompletion(
+async function handleRefreshFlowSnapshotCompletion(
   ctx: AppContext,
   job: JobView | undefined,
   output: unknown
 ): Promise<void> {
-  if (!job || job.type !== "refresh_pull_requests") {
+  if (!job || job.type !== "refresh_flow_snapshot") {
     return;
   }
-  const parsed = refreshPullRequestsOutputSchema.safeParse(output);
+  const parsed = refreshFlowSnapshotOutputSchema.safeParse(output);
   if (!parsed.success) {
     return;
   }
@@ -299,7 +290,7 @@ async function handleRefreshPullRequestsCompletion(
     await snapshotsService.recordSnapshotsFromPullRequestResults(ctx, parsed.data.results);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`refresh_pull_requests: snapshot recording failed after PR transitions were applied: ${message}`);
+    logger.warn({ err: message }, "refresh_flow_snapshot: snapshot recording failed after PR transitions were applied");
   }
 }
 
@@ -385,6 +376,6 @@ async function touchWatcher(ctx: AppContext, input: WatcherTouch): Promise<void>
   try {
     await ctx.stores.watchers.touch(input);
   } catch (error) {
-    console.warn(`Watcher registry update failed: ${error instanceof Error ? error.message : String(error)}`);
+    logger.warn({ err: error instanceof Error ? error.message : String(error) }, "watcher registry update failed");
   }
 }

@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@magpie/core": "file:../core",
+    "@magpie/logger": "file:../logger",
     "@magpie/prompts": "file:../prompts"
   },
   "devDependencies": {

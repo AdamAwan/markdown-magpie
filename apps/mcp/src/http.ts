@@ -18,6 +18,7 @@ import {
 import type { JSONWebKeySet } from "jose";
 import { z } from "zod/v4";
 import { askQuestion, getJson, submitFeedback, type KbClientOptions } from "./kb-client.js";
+import { createMcpLogger } from "./logger.js";
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -66,6 +67,8 @@ export interface HttpMcpOptions {
 }
 
 // ── App factory ──────────────────────────────────────────────────────────────
+
+const logger = createMcpLogger("http");
 
 export function createHttpMcpApp(options: HttpMcpOptions): Express {
   // Resolve the downstream service token lazily so an expired M2M token is
@@ -226,17 +229,21 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
   }
 
   const handle = async (req: Request, res: Response, body?: unknown): Promise<void> => {
+    const startMs = Date.now();
     try {
       if (!(await authorize(req, res))) {
+        logger.info({ method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - startMs }, "request completed");
         return;
       }
       await connected;
       await transport.handleRequest(req, res, body);
+      logger.info({ method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - startMs }, "request completed");
     } catch (err) {
       if (!res.headersSent) {
         const message = err instanceof Error ? err.message : "Internal server error";
         res.status(500).json({ error: message });
       }
+      logger.error({ err, method: req.method, path: req.path, status: 500, durationMs: Date.now() - startMs }, "request error");
     }
   };
 
@@ -309,7 +316,7 @@ async function main(): Promise<void> {
   // fast otherwise so a misconfigured deploy can't silently call the API
   // unauthenticated.
   if (auth.required && !apiToken && !hasClientCredentials) {
-    console.error(
+    logger.error(
       "A downstream API service credential is required when AUTH_REQUIRED=true: set " +
         "MCP_API_CLIENT_ID + MCP_API_CLIENT_SECRET (preferred, auto-refreshing) or a static MCP_API_AUTH_TOKEN."
     );
@@ -329,9 +336,7 @@ async function main(): Promise<void> {
   });
 
   app.listen(port, host, () => {
-    console.error(
-      `markdown-magpie MCP (Streamable HTTP) listening on ${host}:${port}`
-    );
+    logger.info(`markdown-magpie MCP (Streamable HTTP) listening on ${host}:${port}`);
   });
 }
 
@@ -339,7 +344,7 @@ async function main(): Promise<void> {
 // this module (tests) must not boot a listener or exit the process.
 if (argv[1] && fileURLToPath(import.meta.url) === argv[1]) {
   main().catch((err) => {
-    console.error("MCP HTTP fatal:", err);
+    logger.error({ err }, "MCP HTTP fatal");
     process.exit(1);
   });
 }

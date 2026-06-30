@@ -56,6 +56,10 @@ export interface GapClusterStore {
   // Moves a gap to `clusterId`, deactivating any other active membership it had.
   assignGapToCluster(clusterId: string, gapId: string, rationale?: string): Promise<void>;
   deactivateClusterMemberships(clusterId: string): Promise<void>;
+  // Deactivates any active membership whose gap is in the given set, wherever it
+  // lives. Used to evict gaps that have been resolved (covered) from the active
+  // cluster currently holding them, regardless of which cluster resolved them.
+  deactivateMembershipsForGaps(gapIds: string[]): Promise<void>;
 
   // Last catalog revision whose clustering is committed, per flow ('' is the
   // un-routed/default flow). Scoped per flow so each flow's reconciler gates on
@@ -162,6 +166,15 @@ export class InMemoryGapClusterStore implements GapClusterStore {
   async deactivateClusterMemberships(clusterId: string): Promise<void> {
     for (const [key, m] of this.memberships) {
       if (m.active && m.clusterId === clusterId) {
+        this.memberships.set(key, { ...m, active: false });
+      }
+    }
+  }
+
+  async deactivateMembershipsForGaps(gapIds: string[]): Promise<void> {
+    const gapSet = new Set(gapIds);
+    for (const [key, m] of this.memberships) {
+      if (m.active && gapSet.has(m.gapId)) {
         this.memberships.set(key, { ...m, active: false });
       }
     }
