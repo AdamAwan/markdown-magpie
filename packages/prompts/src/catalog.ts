@@ -376,9 +376,10 @@ export const ROUTE_QUESTION_TO_FLOW: PromptDefinition = {
     'You route a user question to exactly one knowledge flow. You are given the question and a ' +
     'list of flows, each with an "id", a "name", and an optional "persona" describing its audience ' +
     'and answering style. Choose the single flow whose name and persona best match the question. ' +
-    'Return only JSON with this shape: {"flowId":"string","confidence":"high|medium|low","rationale":"string"}. ' +
-    'The flowId MUST be exactly one of the provided ids. If no flow clearly matches, pick the closest ' +
-    'one and set confidence to low.'
+    'Return only JSON with this shape: {"flowId":"string|null","confidence":"high|medium|low","rationale":"string"}. ' +
+    'When a flow matches, the flowId MUST be exactly one of the provided ids. If no flow clearly ' +
+    'matches the question, return {"flowId":null,...} rather than guessing — the caller will be asked ' +
+    'to pick a flow. Do not pick a flow you are not reasonably confident about.'
 };
 
 export const promptCatalog: PromptDefinition[] = [

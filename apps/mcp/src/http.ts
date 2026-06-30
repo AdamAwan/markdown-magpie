@@ -17,7 +17,7 @@ import {
 } from "@magpie/auth";
 import type { JSONWebKeySet } from "jose";
 import { z } from "zod/v4";
-import { askQuestion, getJson, submitFeedback, type KbClientOptions } from "./kb-client.js";
+import { askQuestion, getJson, listFlows, submitFeedback, type KbClientOptions } from "./kb-client.js";
 import { createMcpLogger } from "./logger.js";
 
 // ── Configuration ──────────────────────────────────────────────────────────
@@ -30,6 +30,7 @@ const SCOPES_SUPPORTED = ["read:knowledge", "ask:knowledge", "feedback:questions
 // route scopes. tools/list and other methods need only a valid token.
 const TOOL_SCOPES: Record<string, string> = {
   "kb.search": "read:knowledge",
+  "kb.flows": "read:knowledge",
   "kb.ask": "ask:knowledge",
   "kb.feedback": "feedback:questions"
 };
@@ -92,15 +93,40 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     "kb.ask",
     {
       description:
-        "Ask a question against the indexed Markdown knowledge base and return a cited answer.",
+        "Ask a question against the indexed Markdown knowledge base and return a cited answer. " +
+        "By default (flow 'auto') the question is routed to the best-matching knowledge flow. " +
+        "If routing cannot determine a flow, the result has flowSelectionRequired with the " +
+        "available flows — call kb.ask again with `flow` set to one of those ids. Use kb.flows " +
+        "to discover flows up front.",
       inputSchema: z.object({
         question: z.string().describe(
           "The question to answer from indexed Markdown context."
-        )
+        ),
+        flow: z
+          .string()
+          .optional()
+          .describe(
+            "Flow to answer within. Defaults to 'auto' (let the router decide). " +
+              "Otherwise must be a flow id from kb.flows."
+          )
       })
     },
-    async ({ question }) => {
-      const result = await askQuestion(question, kbOptions);
+    async ({ question, flow }) => {
+      const result = await askQuestion(question, kbOptions, flow);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.registerTool(
+    "kb.flows",
+    {
+      description:
+        "List the knowledge flows a question can be routed to. Use the returned ids as the " +
+        "`flow` argument to kb.ask.",
+      inputSchema: z.object({})
+    },
+    async () => {
+      const result = await listFlows(kbOptions);
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
     }
   );

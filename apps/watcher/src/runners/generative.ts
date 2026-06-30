@@ -8,11 +8,16 @@ import {
   reconcileGapClustersOutputSchema
 } from "@magpie/jobs";
 import { ANSWER_QUESTION, GAP_RECONCILE_CRITIC, GAP_RECONCILE_PROPOSE, withPersona } from "@magpie/prompts";
-import { routeQuestionToFlow, type RoutableFlow } from "@magpie/retrieval";
+import { routeQuestionToFlow, type FlowRoute, type RoutableFlow } from "@magpie/retrieval";
 import type { z } from "zod";
 import type { WatcherApi } from "../http-client.js";
 import { logger } from "../logger.js";
-import { buildAnswerOutput, buildPrompt, parseJobOutput } from "../job-prompts.js";
+import {
+  buildAnswerOutput,
+  buildFlowSelectionRequiredOutput,
+  buildPrompt,
+  parseJobOutput
+} from "../job-prompts.js";
 
 export interface GenerativeJobOptions {
   job: JobView;
@@ -62,9 +67,16 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
     ...(flow.persona ? { persona: flow.persona } : {})
   }));
 
-  logger.debug({ jobId: job.id, flowCount: flows.length }, `answer_question[${job.id}]: routing question across ${flows.length} flow(s)`);
-  const decision = await routeQuestionToFlow(input.question, flows, model, logger);
-  const flowId = decision?.flowId;
+  const route = await resolveFlow(input.requestedFlowId, input.question, flows, model, job.id);
+
+  // "auto" routing could not pick a flow: withhold the answer and ask the caller
+  // to choose one of the configured flows and re-ask.
+  if (route.status === "unknown") {
+    logger.debug({ jobId: job.id }, `answer_question[${job.id}]: routing unknown; requesting flow selection`);
+    return buildFlowSelectionRequiredOutput(flows);
+  }
+
+  const flowId = route.status === "routed" ? route.flowId : undefined;
   const routedFlow = flowId ? flows.find((flow) => flow.id === flowId) : undefined;
 
   logger.debug({ jobId: job.id, flowId: flowId ?? null }, `answer_question[${job.id}]: retrieving sections for flow ${flowId ?? "(unscoped)"}`);
@@ -79,6 +91,25 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
   });
 
   return buildAnswerOutput(response.content, sections, input.question, flowId);
+}
+
+// Resolves which flow answers the question. A caller-pinned flow
+// (`requestedFlowId`, already validated at the API) skips routing entirely;
+// otherwise the model routes across the configured flows.
+async function resolveFlow(
+  requestedFlowId: string | undefined,
+  question: string,
+  flows: RoutableFlow[],
+  model: ChatProvider,
+  jobId: string
+): Promise<FlowRoute> {
+  if (requestedFlowId) {
+    logger.debug({ jobId, flowId: requestedFlowId }, `answer_question[${jobId}]: using caller-specified flow ${requestedFlowId}`);
+    return { status: "routed", flowId: requestedFlowId, confidence: "high" };
+  }
+
+  logger.debug({ jobId, flowCount: flows.length }, `answer_question[${jobId}]: routing question across ${flows.length} flow(s)`);
+  return routeQuestionToFlow(question, flows, model, logger);
 }
 
 async function reconcileGapClusters({ job, model, signal }: GenerativeJobOptions): Promise<ReconcileOutput> {

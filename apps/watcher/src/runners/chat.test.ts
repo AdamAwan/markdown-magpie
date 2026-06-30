@@ -134,6 +134,74 @@ describe("ChatRunner", () => {
     assert.equal(output.citations.length, 1);
   });
 
+  it("uses a caller-specified flow directly and skips routing", async () => {
+    let retrievedFlow: string | undefined = "unset";
+    const api = fakeApi({
+      retrieve: async (_question, flowId) => {
+        retrievedFlow = flowId;
+        return SECTIONS;
+      }
+    });
+    // Always answer; if routing ran it would be a second (earlier) request.
+    const chat = new FakeChatProvider(() =>
+      JSON.stringify({ answer: "Run the deploy script.", confidence: "high", isKnowledgeGap: false })
+    );
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [
+          { id: "flow-a", name: "Alpha" },
+          { id: "flow-b", name: "Beta" }
+        ],
+        requestedFlowId: "flow-a",
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { flowId?: string };
+
+    assert.equal(retrievedFlow, "flow-a", "should retrieve with the caller-specified flow");
+    assert.equal(output.flowId, "flow-a");
+    assert.equal(chat.requests.length, 1, "should not make a routing call");
+  });
+
+  it("withholds the answer and requests flow selection when routing is unknown", async () => {
+    let retrieveCalled = false;
+    const api = fakeApi({
+      retrieve: async () => {
+        retrieveCalled = true;
+        return SECTIONS;
+      }
+    });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("flow")) {
+        return JSON.stringify({ flowId: null, confidence: "low", rationale: "no match" });
+      }
+      return JSON.stringify({ answer: "should not happen", confidence: "high", isKnowledgeGap: false });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "Something ambiguous?",
+        flows: [
+          { id: "flow-a", name: "Alpha" },
+          { id: "flow-b", name: "Beta" }
+        ],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { confidence: string; flowSelectionRequired?: { availableFlows: Array<{ id: string }> } };
+
+    assert.equal(retrieveCalled, false, "should not retrieve when routing is unknown");
+    assert.equal(output.confidence, "unknown");
+    assert.deepEqual(
+      output.flowSelectionRequired?.availableFlows.map((flow) => flow.id),
+      ["flow-a", "flow-b"]
+    );
+  });
+
   it("runs buildPrompt -> chat -> parseJobOutput for non-answer jobs", async () => {
     const chat = new FakeChatProvider(() => JSON.stringify({ summary: "s", priority: 1, rationale: "r" }));
     const runner = new ChatRunner("openai-compatible", chat, fakeApi());

@@ -70,6 +70,14 @@ export interface Citation {
   excerpt: string;
 }
 
+// When the router cannot decide which flow a question belongs to (and the caller
+// asked for "auto" rather than naming a flow), the answer is withheld and the
+// caller is asked to pick one of these flows and re-ask. Carried on the answer
+// output / result so the UI and MCP can surface the choice.
+export interface FlowSelectionRequired {
+  availableFlows: Array<{ id: string; name: string }>;
+}
+
 export interface AnswerResult {
   answer: string;
   confidence: Confidence;
@@ -78,6 +86,9 @@ export interface AnswerResult {
   // "how do I set this up with React so I can export dashboards?" is two gaps).
   // Each is tracked separately so it can cluster and become its own proposal.
   gaps?: KnowledgeGapSignal[];
+  // Present (with answer withheld, confidence "unknown") when "auto" routing could
+  // not determine a flow; the caller must re-ask naming one of these flows.
+  flowSelectionRequired?: FlowSelectionRequired;
 }
 
 export interface KnowledgeGapSignal {
@@ -421,14 +432,11 @@ export interface AnswerQuestionJobInput {
     // is carried but not consumed.
     persona?: string;
   }>;
+  // The flow the caller pinned the question to. When set, the watcher skips
+  // routing and uses this flow directly. Absent means "auto" — route as usual.
+  // Validated against the configured flows at the API boundary before enqueue.
+  requestedFlowId?: string;
   expectedOutput: "answer_result";
-}
-
-// Result of routing a question to the single best-matching knowledge flow.
-export interface FlowRouteDecision {
-  flowId: string;
-  confidence: Confidence;
-  rationale?: string;
 }
 
 export interface AnswerQuestionJobOutput {
@@ -439,6 +447,9 @@ export interface AnswerQuestionJobOutput {
   // The flow the watcher routed the question to, recorded on completion so the
   // question log reflects which flow answered. Absent when no flow was chosen.
   flowId?: string;
+  // Present (answer withheld, confidence "unknown") when "auto" routing could not
+  // determine a flow; the caller must re-ask naming one of these flows.
+  flowSelectionRequired?: FlowSelectionRequired;
 }
 
 export interface SummarizeGapJobInput {

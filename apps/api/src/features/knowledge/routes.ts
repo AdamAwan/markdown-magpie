@@ -40,6 +40,10 @@ export function knowledgeRoutes(ctx: AppContext): Hono {
 
   app.get("/stats", requireScopes("read:knowledge"), (c) => c.json(knowledgeService.stats(ctx)));
 
+  app.get("/flows", requireScopes("read:knowledge"), (c) =>
+    c.json({ flows: knowledgeService.listFlows(ctx) })
+  );
+
   app.get("/search", requireScopes("read:knowledge"), async (c) => {
     const query = c.req.query("q")?.trim();
     if (!query) {

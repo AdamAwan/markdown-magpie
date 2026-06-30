@@ -1,33 +1,74 @@
 import { FormEvent } from "react";
-import { AskResponse, Feedback, QuestionLog } from "../lib/types";
+import { AnswerResult, AskResponse, Feedback, QuestionLog } from "../lib/types";
 import { CitationRow, FlowTag } from "./common";
+
+// Shown when "auto" routing could not place a question: the answer was withheld
+// and the user picks one of the offered flows to re-ask, pinned to that flow.
+function FlowSelectionPrompt({
+  question,
+  selection,
+  disabled,
+  onReAsk
+}: {
+  question: string;
+  selection: NonNullable<AnswerResult["flowSelectionRequired"]>;
+  disabled: boolean;
+  onReAsk: (question: string, flow: string) => Promise<void>;
+}) {
+  return (
+    <div className="flowSelectPrompt">
+      <p>Pick a flow to answer this question:</p>
+      <div className="rowActions">
+        {selection.availableFlows.map((flow) => (
+          <button
+            className="chip"
+            disabled={disabled}
+            key={flow.id}
+            onClick={() => void onReAsk(question, flow.id)}
+            type="button"
+          >
+            {flow.name}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function AskPanel({
   answer,
   answeredSearch,
+  askFlow,
   expandedQuestionIds,
   flowLabels,
+  flows,
   loading,
   onAsk,
   onFeedback,
+  onReAsk,
   onToggleGap,
   question,
   questions,
   setAnsweredSearch,
+  setAskFlow,
   setQuestion,
   toggleCitations
 }: {
   answer?: AskResponse;
   answeredSearch: string;
+  askFlow: string;
   expandedQuestionIds: string[];
   flowLabels: Record<string, string>;
+  flows: Array<{ id: string; name: string }>;
   loading: boolean;
   onAsk: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onFeedback: (questionId: string, feedback: Feedback) => Promise<void>;
+  onReAsk: (question: string, flow: string) => Promise<void>;
   onToggleGap: (questionId: string, flagged: boolean) => Promise<void>;
   question: string;
   questions: QuestionLog[];
   setAnsweredSearch: (value: string) => void;
+  setAskFlow: (value: string) => void;
   setQuestion: (value: string) => void;
   toggleCitations: (questionId: string) => void;
 }) {
@@ -60,6 +101,19 @@ export function AskPanel({
             value={question}
           />
         </label>
+        {flows.length > 0 ? (
+          <label className="field">
+            <span>Flow</span>
+            <select onChange={(event) => setAskFlow(event.target.value)} value={askFlow}>
+              <option value="auto">Auto (let Magpie decide)</option>
+              {flows.map((flow) => (
+                <option key={flow.id} value={flow.id}>
+                  {flow.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <button className="button" disabled={loading || !question.trim()} type="submit">
           Ask
         </button>
@@ -79,6 +133,14 @@ export function AskPanel({
             <code>{answer.questionId}</code>
           </div>
           <p>{answerResult?.answer ?? `Queued as ${answer.job.type} (${answer.job.state})`}</p>
+          {answerResult?.flowSelectionRequired && answeredQuestion ? (
+            <FlowSelectionPrompt
+              disabled={loading}
+              onReAsk={onReAsk}
+              question={answeredQuestion.question}
+              selection={answerResult.flowSelectionRequired}
+            />
+          ) : null}
           {answerResult?.citations.length ? (
             <div className="citationStack">
               {answerResult.citations.map((citation) => (
@@ -118,6 +180,14 @@ export function AskPanel({
                   </div>
                 </div>
                 <p>{item.answer?.answer ?? "Waiting for an answer."}</p>
+                {item.answer?.flowSelectionRequired ? (
+                  <FlowSelectionPrompt
+                    disabled={loading}
+                    onReAsk={onReAsk}
+                    question={item.question}
+                    selection={item.answer.flowSelectionRequired}
+                  />
+                ) : null}
                 {item.answer?.gaps && item.answer.gaps.length > 0 ? (
                   <ul className="gapList" title="Distinct knowledge gaps detected for this question">
                     {item.answer.gaps.map((gap, index) => (

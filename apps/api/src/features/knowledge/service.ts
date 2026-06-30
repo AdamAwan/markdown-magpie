@@ -74,3 +74,10 @@ export function listDocuments(ctx: AppContext): ReturnType<AppContext["stores"][
 export function stats(ctx: AppContext): ReturnType<AppContext["stores"]["knowledgeIndex"]["getStats"]> {
   return ctx.stores.knowledgeIndex.getStats();
 }
+
+// The configured flows a caller can pin a question to (via /ask `flow`). Exposed
+// at read:knowledge so MCP clients can discover ids without the admin /config
+// scope. Only id and name leak — personas/sources/destinations stay internal.
+export function listFlows(ctx: AppContext): Array<{ id: string; name: string }> {
+  return ctx.knowledgeConfig.flows.map((flow) => ({ id: flow.id, name: flow.name }));
+}
