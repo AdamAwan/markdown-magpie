@@ -58,12 +58,9 @@ const runners = createConfiguredRunners(process.env, api, capabilityRuntime);
 // fails it safely (see WorkerLoop.execute's "no runner supports" branch).
 const capabilities = deriveCapabilities(process.env, capabilityRuntime);
 
-logger.info({ watcherName, apiBaseUrl, pollIntervalMs }, `Markdown Magpie watcher '${watcherName}' starting`);
+logger.info({ watcherName, apiBaseUrl, pollIntervalMs }, "watcher starting");
 logCapabilityReadiness(process.env, capabilityRuntime);
-logger.info(
-  { capabilities: capabilities.length ? capabilities.join(", ") : "(none)" },
-  `Advertised capabilities: ${capabilities.length ? capabilities.join(", ") : "(none)"}`
-);
+logger.info({ capabilities }, "advertised capabilities");
 
 if (capabilities.length === 0) {
   logger.warn("No runner capabilities are configured; the watcher will idle. Configure a provider or GitHub credentials.");
