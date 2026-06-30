@@ -2,20 +2,16 @@
 
 import { useState } from "react";
 
-// The public endpoint of the deployed MCP server. Defined once here so the CLI
-// command and the JSON config below can never drift apart.
-const MCP_URL = "https://mcp-magpie.wastedcake.com/mcp";
-
-const CLI_COMMAND = `claude mcp add --transport http markdown-magpie ${MCP_URL}`;
-
-const JSON_CONFIG = `{
-  "mcpServers": {
-    "markdown-magpie": {
-      "type": "http",
-      "url": "${MCP_URL}"
-    }
+// The public endpoint of the deployed MCP server, resolved from runtime config
+// (window.__MAGPIE_CONFIG__.mcpUrl, injected by the root layout) with a
+// build-time NEXT_PUBLIC_MCP_URL override and a local-dev fallback. Kept out of
+// source so the deployed host is configured per environment, not hardcoded.
+function resolveMcpUrl(): string {
+  if (typeof window !== "undefined" && window.__MAGPIE_CONFIG__?.mcpUrl) {
+    return window.__MAGPIE_CONFIG__.mcpUrl;
   }
-}`;
+  return process.env.NEXT_PUBLIC_MCP_URL || "http://localhost:4001/mcp";
+}
 
 // The tools the server exposes once a client is connected — kept in sync with the
 // kb_* tools registered by the MCP server.
@@ -28,6 +24,17 @@ const TOOLS: { name: string; blurb: string }[] = [
 // Read-only guide: how to point an MCP client at the deployed server and what it
 // can do once connected. Authentication is browser OAuth, triggered on first use.
 export function McpPanel() {
+  const mcpUrl = resolveMcpUrl();
+  const cliCommand = `claude mcp add --transport http markdown-magpie ${mcpUrl}`;
+  const jsonConfig = `{
+  "mcpServers": {
+    "markdown-magpie": {
+      "type": "http",
+      "url": "${mcpUrl}"
+    }
+  }
+}`;
+
   return (
     <div className="surface">
       <div className="surfaceHeader">
@@ -42,7 +49,7 @@ export function McpPanel() {
 
         <div className="mcpEndpoint">
           <span className="mcpEndpointLabel">Server endpoint</span>
-          <CopyBlock code={MCP_URL} oneLine />
+          <CopyBlock code={mcpUrl} oneLine />
         </div>
 
         <p className="mcpChooseHint">Use whichever applies to your client:</p>
@@ -53,7 +60,7 @@ export function McpPanel() {
               <h3>Claude Code</h3>
             </div>
             <p className="promptOutput">Add the server with one command, then run in your terminal:</p>
-            <CopyBlock code={CLI_COMMAND} />
+            <CopyBlock code={cliCommand} />
             <p className="promptOutput">
               Then run <code>/mcp</code> inside Claude Code to trigger the browser OAuth login.
             </p>
@@ -64,7 +71,7 @@ export function McpPanel() {
               <h3>Claude Desktop, VS Code, Cursor &amp; Continue</h3>
             </div>
             <p className="promptOutput">Add the server to the client&apos;s MCP configuration:</p>
-            <CopyBlock code={JSON_CONFIG} />
+            <CopyBlock code={jsonConfig} />
             <p className="promptOutput">
               The first request prompts you to sign in through the browser; the client remembers the session
               afterwards.

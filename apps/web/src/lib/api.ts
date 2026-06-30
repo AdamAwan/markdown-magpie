@@ -4,6 +4,7 @@ declare global {
   interface Window {
     __MAGPIE_CONFIG__?: {
       apiBaseUrl?: string;
+      mcpUrl?: string;
       auth?: {
         domain?: string;
         clientId?: string;

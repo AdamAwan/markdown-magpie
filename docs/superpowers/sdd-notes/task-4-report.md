@@ -56,7 +56,7 @@ None. The change is straightforward: replacing an inline hardcoded string with a
 ## Commit
 ```
 commit bef7bbd
-Author: Adam Awan <awan@fiscaltec.com>
+Author: Adam Awan <adam.awan121@gmail.com>
 Date: [auto-generated timestamp]
 
     refactor(retrieval): source the direct answer prompt from @magpie/prompts

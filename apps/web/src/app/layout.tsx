@@ -15,6 +15,7 @@ export const dynamic = "force-dynamic";
 export default function RootLayout({ children }: { children: ReactNode }) {
   const runtimeConfig = {
     apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL || process.env.PUBLIC_API_BASE_URL || "",
+    mcpUrl: process.env.NEXT_PUBLIC_MCP_URL || process.env.MCP_RESOURCE_URL || "",
     auth: {
       domain: process.env.NEXT_PUBLIC_AUTH0_DOMAIN || process.env.AUTH0_DOMAIN || "",
       clientId: process.env.NEXT_PUBLIC_AUTH0_CLIENT_ID || process.env.AUTH0_CLIENT_ID || "",

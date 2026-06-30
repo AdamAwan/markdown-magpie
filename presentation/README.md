@@ -7,9 +7,15 @@ colleagues. The narrative spine is **"won't lie · won't leak · won't rot"** pl
 
 ## Viewing / presenting
 
-Open **`presentation/index.html`** in any browser — no server, no build, no
-dependencies. Every image is inlined as base64, so the single file is the whole deck
-(≈1.7 MB); you can email it or drop it on any static host.
+The deck is generated. The **committed** copy lives at
+`apps/web/public/presentation/index.html` — it ships in the Docker image (which
+never runs the build) and is what the running app serves at `/presentation/index.html`.
+
+For a standalone copy to open directly, email, or drop on a static host, build it
+once with `node scripts/build-deck.mjs`; that (re)writes both the root
+`presentation/index.html` (git-ignored) and the served copy above. Every image is
+inlined as base64, so the single file is the whole deck (≈1.7 MB) — no server, no
+dependencies.
 
 Keyboard:
 

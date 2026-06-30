@@ -2,11 +2,6 @@
 
 import Image from "next/image";
 
-// Publicly shown demo credentials so evaluators can sign in. This is a
-// deliberately shared, throwaway demo account — keep it scoped/limited in Auth0.
-const DEMO_EMAIL = "demo@example.com";
-const DEMO_PASSWORD = "demo@example.com123";
-
 // Unauthenticated landing page. Rendered by the auth gate whenever there is no
 // authenticated session, so the data-fetching console never mounts (and never
 // fires token-less API requests) until the user has signed in.
@@ -91,26 +86,9 @@ export function Landing({ onLogin }: { onLogin: () => void }) {
             textAlign: "left"
           }}
         >
-          <p style={{ margin: 0, fontWeight: 800, color: "#17211d", fontSize: 13 }}>Demo login</p>
-          <dl
-            style={{
-              margin: "8px 0 0",
-              display: "grid",
-              gridTemplateColumns: "auto 1fr",
-              columnGap: 12,
-              rowGap: 4,
-              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-              fontSize: 13,
-              color: "#17211d"
-            }}
-          >
-            <dt style={{ color: "#65716b" }}>email</dt>
-            <dd style={{ margin: 0 }}>{DEMO_EMAIL}</dd>
-            <dt style={{ color: "#65716b" }}>password</dt>
-            <dd style={{ margin: 0 }}>{DEMO_PASSWORD}</dd>
-          </dl>
-          <p style={{ margin: "10px 0 0", fontSize: 12 }}>
-            Enter these at the login prompt to explore the demo.
+          <p style={{ margin: 0, fontWeight: 800, color: "#17211d", fontSize: 13 }}>Demo access</p>
+          <p style={{ margin: "8px 0 0", fontSize: 13 }}>
+            Contact the admin for demo credentials.
           </p>
         </div>
       </div>
