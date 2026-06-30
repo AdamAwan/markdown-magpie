@@ -1,63 +1,58 @@
 import { AI_PROVIDERS, type AiProviderName } from "@magpie/jobs";
 import { createEmbeddingProvider, type EmbeddingProviderName } from "@magpie/retrieval";
 import { storeBackend } from "./stores.js";
+import type { AppConfig } from "./config.js";
 
 export type { AiProviderName } from "@magpie/jobs";
-
-// Optional per-call timeout overrides for the model endpoints (the packages
-// supply sensible defaults when these are unset). Read here at the composition
-// root so the retrieval package stays free of process/env access.
-function timeoutOverride(name: string): number | undefined {
-  const raw = process.env[name];
-  if (!raw) {
-    return undefined;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
 
 // Embeddings can target a different endpoint/key than chat (e.g. DeepSeek for
 // Q&A, OpenAI for embeddings). The dedicated OPENAI_COMPATIBLE_EMBEDDING_* vars
 // take precedence, falling back to the shared chat credentials when unset so
 // single-endpoint setups keep working unchanged.
-function embeddingBaseUrl(): string | undefined {
-  return process.env.OPENAI_COMPATIBLE_EMBEDDING_BASE_URL || process.env.OPENAI_COMPATIBLE_BASE_URL || undefined;
+function embeddingBaseUrl(config: AppConfig): string | undefined {
+  const oai = config.embeddings.openAiCompatible;
+  return oai.embeddingBaseUrl || oai.baseUrl || undefined;
 }
 
-function embeddingApiKey(): string | undefined {
-  return process.env.OPENAI_COMPATIBLE_EMBEDDING_API_KEY || process.env.OPENAI_COMPATIBLE_API_KEY || undefined;
+function embeddingApiKey(config: AppConfig): string | undefined {
+  const oai = config.embeddings.openAiCompatible;
+  return oai.embeddingApiKey || oai.apiKey || undefined;
 }
 
-export function embeddingProviderName(): EmbeddingProviderName | undefined {
-  if (embeddingBaseUrl() && embeddingApiKey() && process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL) {
+export function embeddingProviderName(config: AppConfig): EmbeddingProviderName | undefined {
+  const oai = config.embeddings.openAiCompatible;
+  const azure = config.embeddings.azureOpenAi;
+  if (embeddingBaseUrl(config) && embeddingApiKey(config) && oai.embeddingModel) {
     return "openai-compatible";
   }
-  if (process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT) {
+  if (azure.endpoint && azure.apiKey && azure.embeddingDeployment) {
     return "azure-openai";
   }
   return undefined;
 }
 
-export function createConfiguredEmbeddingProvider() {
-  const provider = embeddingProviderName();
+export function createConfiguredEmbeddingProvider(config: AppConfig) {
+  const provider = embeddingProviderName(config);
   if (!provider) {
     return undefined;
   }
+  const oai = config.embeddings.openAiCompatible;
+  const azure = config.embeddings.azureOpenAi;
   return createEmbeddingProvider({
     provider,
-    apiKey: embeddingApiKey() || process.env.AZURE_OPENAI_API_KEY,
-    baseUrl: embeddingBaseUrl(),
-    model: process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL,
-    azureEndpoint: process.env.AZURE_OPENAI_ENDPOINT,
-    azureDeployment: process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
-    azureApiVersion: process.env.AZURE_OPENAI_API_VERSION,
-    timeoutMs: timeoutOverride("EMBEDDING_TIMEOUT_MS")
+    apiKey: embeddingApiKey(config) || azure.apiKey,
+    baseUrl: embeddingBaseUrl(config),
+    model: oai.embeddingModel,
+    azureEndpoint: azure.endpoint,
+    azureDeployment: azure.embeddingDeployment,
+    azureApiVersion: azure.apiVersion,
+    timeoutMs: config.embeddings.timeoutMs
   });
 }
 
-export function retrievalMode(): { mode: "hybrid" | "keyword"; reason: string } {
-  const hasEmbeddings = embeddingProviderName() !== undefined;
-  const postgres = storeBackend("KNOWLEDGE_STORE") === "postgres";
+export function retrievalMode(config: AppConfig): { mode: "hybrid" | "keyword"; reason: string } {
+  const hasEmbeddings = embeddingProviderName(config) !== undefined;
+  const postgres = storeBackend(config, "KNOWLEDGE_STORE") === "postgres";
   if (hasEmbeddings && postgres) {
     return { mode: "hybrid", reason: "Semantic + keyword search active." };
   }

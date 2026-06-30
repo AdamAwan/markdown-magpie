@@ -178,29 +178,20 @@ describe("reconcileGaps clustering", () => {
     // A plain FakeJobBroker never completes the enqueued reconcile job, so the
     // bounded-wait hits its (tiny) deadline. Reshape is best-effort: the rest of
     // reconcileGaps must still run, exactly as the old code only reshaped when it
-    // could. We drive a tiny deadline via the env override.
-    const previous = process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS;
-    process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS = "20";
-    try {
-      const ctx = makeTestContext({
-        config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
-      });
-      await seedTwoClustersWithGaps(ctx);
+    // could. We drive a tiny deadline via the runtime config.
+    const ctx = makeTestContext({
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
+    });
+    ctx.settings.jobs.runToCompletionTimeoutMs = 20;
+    await seedTwoClustersWithGaps(ctx);
 
-      const before = await ctx.stores.gapClusters.listActiveClusters();
-      await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
-      const after = await ctx.stores.gapClusters.listActiveClusters();
+    const before = await ctx.stores.gapClusters.listActiveClusters();
+    await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
+    const after = await ctx.stores.gapClusters.listActiveClusters();
 
-      assert.equal((await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length, 1, "the reshape job was enqueued");
-      assert.equal(after.length, before.length, "no reshape applied on timeout");
-      assert.deepEqual(await ctx.stores.reconciliations.list(50), [], "no decision recorded when the job never ran");
-    } finally {
-      if (previous === undefined) {
-        delete process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS;
-      } else {
-        process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS = previous;
-      }
-    }
+    assert.equal((await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length, 1, "the reshape job was enqueued");
+    assert.equal(after.length, before.length, "no reshape applied on timeout");
+    assert.deepEqual(await ctx.stores.reconciliations.list(50), [], "no decision recorded when the job never ran");
   });
 
   it("skips reshape (without throwing) when the broker throws mid-poll", async () => {

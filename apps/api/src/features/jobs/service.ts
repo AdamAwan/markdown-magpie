@@ -80,8 +80,8 @@ export async function waitForJob(
   id: string,
   options: { timeoutMs?: number; pollMs?: number } = {}
 ): Promise<{ terminal: boolean; job: JobView }> {
-  const timeoutMs = options.timeoutMs ?? parsePositiveInt(process.env.JOB_WAIT_TIMEOUT_MS, 25_000);
-  const pollMs = options.pollMs ?? parsePositiveInt(process.env.JOB_WAIT_POLL_MS, 250);
+  const timeoutMs = options.timeoutMs ?? ctx.settings.jobs.waitTimeoutMs;
+  const pollMs = options.pollMs ?? ctx.settings.jobs.waitPollMs;
   const deadline = Date.now() + timeoutMs;
   while (true) {
     const job = await ctx.jobs.get(id);
@@ -108,8 +108,9 @@ export async function runJobToCompletion(
   const job = await createJob(ctx, type, input);
   const deadlineMs =
     options.deadlineMs ??
-    parsePositiveInt(process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS, jobDefinition(type).policy.expireInSeconds * 1000);
-  const pollMs = options.pollMs ?? parsePositiveInt(process.env.JOB_WAIT_POLL_MS, 250);
+    ctx.settings.jobs.runToCompletionTimeoutMs ??
+    jobDefinition(type).policy.expireInSeconds * 1000;
+  const pollMs = options.pollMs ?? ctx.settings.jobs.waitPollMs;
   const { job: terminal } = await waitForJob(ctx, job.id, { timeoutMs: deadlineMs, pollMs });
   return terminal;
 }
@@ -386,9 +387,4 @@ async function touchWatcher(ctx: AppContext, input: WatcherTouch): Promise<void>
   } catch (error) {
     console.warn(`Watcher registry update failed: ${error instanceof Error ? error.message : String(error)}`);
   }
-}
-
-function parsePositiveInt(value: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }

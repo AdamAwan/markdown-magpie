@@ -50,7 +50,7 @@ export async function collectSourceContext(
     }
 
     try {
-      const localPath = await resolveConfiguredRepositoryLocalPath(source);
+      const localPath = await resolveConfiguredRepositoryLocalPath(source, deps.checkoutRoot);
       const localContexts = await collectLocalSourceContext(source, localPath);
       contexts.push(...localContexts);
       const fileContexts = localContexts.filter((context) => context.path);

@@ -22,7 +22,6 @@ import {
 } from "@magpie/git";
 import type { AppContext } from "../../context.js";
 import {
-  checkoutRoot,
   defaultDestinationId,
   selectFlow
 } from "../../platform/repositories.js";
@@ -92,7 +91,7 @@ async function syncGitSource(
     id: source.id,
     url: source.url!,
     branch: source.branch,
-    checkoutRoot: checkoutRoot()
+    checkoutRoot: ctx.knowledgeConfig.checkoutRoot
   });
   const headSha = await getHeadSha(checkout.localPath);
   if (!headSha) {

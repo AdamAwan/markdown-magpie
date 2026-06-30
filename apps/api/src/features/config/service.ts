@@ -1,28 +1,29 @@
 import type { AppContext } from "../../context.js";
 import { reconcileSchedules } from "../../jobs/schedule-reconciler.js";
 import { seedConfiguredKnowledge } from "../../platform/repositories.js";
-import { storageBackend, storeBackend } from "../../platform/stores.js";
+import { storeBackend } from "../../platform/stores.js";
 import { embeddingProviderName, getConfiguredAiProviders, retrievalMode } from "../../platform/providers.js";
-
-const port = Number.parseInt(process.env.PORT ?? "4000", 10);
 
 export function getRuntimeConfig(ctx: AppContext) {
   const availableProviders = getConfiguredAiProviders();
+  const config = ctx.settings;
+  const oai = config.embeddings.openAiCompatible;
+  const azure = config.embeddings.azureOpenAi;
   return {
     api: {
-      port,
+      port: config.port,
       aiProvider: ctx.config.get().aiProvider,
-      nodeEnv: process.env.NODE_ENV ?? "development"
+      nodeEnv: config.nodeEnv
     },
     stores: {
-      storageBackend: storageBackend(),
-      knowledgeStore: storeBackend("KNOWLEDGE_STORE"),
-      questionLogStore: storeBackend("QUESTION_LOG_STORE"),
-      proposalStore: storeBackend("PROPOSAL_STORE"),
-      databaseUrl: maskConnectionString(process.env.DATABASE_URL)
+      storageBackend: config.storage.default,
+      knowledgeStore: storeBackend(config, "KNOWLEDGE_STORE"),
+      questionLogStore: storeBackend(config, "QUESTION_LOG_STORE"),
+      proposalStore: storeBackend(config, "PROPOSAL_STORE"),
+      databaseUrl: maskConnectionString(config.databaseUrl)
     },
     knowledge: {
-      repositoryPath: process.env.KNOWLEDGE_REPO_PATH ?? null,
+      repositoryPath: config.knowledge.repositoryPath ?? null,
       repositories: ctx.knowledgeConfig.repositories,
       sources: ctx.knowledgeConfig.sources,
       destinations: ctx.knowledgeConfig.destinations,
@@ -31,26 +32,26 @@ export function getRuntimeConfig(ctx: AppContext) {
     },
     providers: {
       llmProvider: ctx.config.get().aiProvider,
-      embeddingProvider: embeddingProviderName() ?? "none",
-      gitProvider: process.env.GIT_PROVIDER ?? "local",
+      embeddingProvider: embeddingProviderName(config) ?? "none",
+      gitProvider: config.git.provider,
       openAiCompatible: {
-        baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL || null,
-        model: process.env.OPENAI_COMPATIBLE_MODEL || null,
-        apiKey: secretState(process.env.OPENAI_COMPATIBLE_API_KEY),
-        embeddingBaseUrl: process.env.OPENAI_COMPATIBLE_EMBEDDING_BASE_URL || null,
-        embeddingModel: process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL || null,
-        embeddingApiKey: secretState(process.env.OPENAI_COMPATIBLE_EMBEDDING_API_KEY)
+        baseUrl: oai.baseUrl ?? null,
+        model: oai.model ?? null,
+        apiKey: secretState(oai.apiKey),
+        embeddingBaseUrl: oai.embeddingBaseUrl ?? null,
+        embeddingModel: oai.embeddingModel ?? null,
+        embeddingApiKey: secretState(oai.embeddingApiKey)
       },
       azureOpenAi: {
-        endpoint: process.env.AZURE_OPENAI_ENDPOINT || null,
-        chatDeployment: process.env.AZURE_OPENAI_CHAT_DEPLOYMENT || null,
-        embeddingDeployment: process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT || null,
-        apiVersion: process.env.AZURE_OPENAI_API_VERSION || "2024-10-21",
-        apiKey: secretState(process.env.AZURE_OPENAI_API_KEY)
+        endpoint: azure.endpoint ?? null,
+        chatDeployment: azure.chatDeployment ?? null,
+        embeddingDeployment: azure.embeddingDeployment ?? null,
+        apiVersion: azure.apiVersion,
+        apiKey: secretState(azure.apiKey)
       },
       gitSecrets: {
-        githubToken: secretState(process.env.GITHUB_TOKEN),
-        azureDevopsPat: secretState(process.env.AZURE_DEVOPS_PAT)
+        githubToken: secretState(config.git.githubToken),
+        azureDevopsPat: secretState(config.git.azureDevopsPat)
       }
     },
     aiRuntime: {
@@ -58,18 +59,18 @@ export function getRuntimeConfig(ctx: AppContext) {
       providers: availableProviders
     },
     retrieval: (() => {
-      const { mode, reason } = retrievalMode();
+      const { mode, reason } = retrievalMode(config);
       return {
         mode,
         reason,
-        embeddingProvider: embeddingProviderName() ?? null
+        embeddingProvider: embeddingProviderName(config) ?? null
       };
     })(),
     watcher: {
-      name: process.env.WATCHER_NAME ?? null,
-      pollIntervalMs: process.env.WATCHER_POLL_INTERVAL_MS ?? null,
+      name: config.watcher.name ?? null,
+      pollIntervalMs: config.watcher.pollIntervalMs ?? null,
       aiJobProvider: ctx.config.get().aiProvider,
-      agentApiTimeoutMs: process.env.AGENT_API_TIMEOUT_MS ?? null
+      agentApiTimeoutMs: config.watcher.agentApiTimeoutMs ?? null
     }
   };
 }
@@ -79,7 +80,7 @@ export function getRuntimeConfig(ctx: AppContext) {
 // reuses the same secret masking — values are reported as "set"/"not set", never
 // printed. Set LOG_STARTUP_CONFIG=false to suppress.
 export function logStartupConfig(ctx: AppContext): void {
-  if (process.env.LOG_STARTUP_CONFIG === "false") {
+  if (!ctx.settings.logStartupConfig) {
     return;
   }
 

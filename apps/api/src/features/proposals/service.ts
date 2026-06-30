@@ -88,7 +88,7 @@ async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal
 
       // For a git destination this also fetches and fast-forwards the checkout,
       // bringing in the just-merged commit before we re-index.
-      const localPath = await resolveConfiguredRepositoryLocalPath(destination);
+      const localPath = await resolveConfiguredRepositoryLocalPath(destination, ctx.knowledgeConfig.checkoutRoot);
       await ctx.stores.knowledgeIndex.indexLocalRepository({
         localPath,
         repositoryId: destination.id,

@@ -9,10 +9,10 @@ import {
   type ConfiguredKnowledgeRepository
 } from "../stores/knowledge-repositories.js";
 
-export type StoreBackend = "memory" | "postgres";
+type StoreBackend = "memory" | "postgres";
 
 // The per-store backend overrides. Each defaults to STORAGE_BACKEND when unset.
-export const STORE_ENV_NAMES = [
+const STORE_ENV_NAMES = [
   "KNOWLEDGE_STORE",
   "QUESTION_LOG_STORE",
   "PROPOSAL_STORE",
