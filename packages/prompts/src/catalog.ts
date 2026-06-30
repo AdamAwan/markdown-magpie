@@ -223,8 +223,11 @@ Rules:
 - Be conservative. Only act when one neighbour clearly covers the same material or states something that contradicts the document. Adjacent or merely related topics are NOT duplicates. When unsure, set "duplicate": false.
 - When there is no real duplicate, return {"duplicate": false, "rationale": "...", "changeset": []}.
 - When there IS a duplicate, pick the better SURVIVOR (usually the more complete document) as "primaryPath", and produce a minimal "changeset" of at most two files that reconciles the pair:
-  - Rewrite the survivor to hold the reconciled content.
-  - Trim the duplicated material from the other document and add a short cross-reference to the survivor. Delete the other document (set "delete": true, no "content") ONLY when trimming would leave it effectively empty.
+  - Rewrite the survivor to hold the reconciled content — every unique fact from BOTH documents.
+  - For the OTHER document, do exactly one of:
+    - DELETE it (set "delete": true, no "content"). This is the DEFAULT once the survivor has absorbed its content: a fully-duplicated document must be deleted, not emptied.
+    - KEEP it ONLY when it still holds substantive material of its own that does not belong in the survivor — trim just the duplicated portion, leave that remaining material in place, and add a short cross-reference to the survivor.
+  - NEVER leave a document whose only remaining content is a pointer or redirect (e.g. "moved to ...", "see <survivor>", "this content now lives in ..."). A cross-reference is permitted only alongside real retained content; a document that would be reduced to a bare pointer MUST be deleted instead.
 - Every changeset path MUST be either the document's path or one of the neighbour paths, exactly as provided. Never invent a path.
 - Preserve all unique information. Do not introduce facts not present in either document.
 - "rationale" is a one-paragraph summary of what you reconciled and why.
@@ -236,7 +239,7 @@ Return JSON:
   "primaryPath": "existing/survivor.md",
   "changeset": [
     { "path": "existing/survivor.md", "content": "full reconciled document" },
-    { "path": "existing/other.md", "content": "trimmed document with a cross-reference" }
+    { "path": "existing/other.md", "delete": true }
   ]
 }`
 };
@@ -257,7 +260,7 @@ Rules:
 - The parent document should keep the overview, shared context, and links to the focused documents.
 - Prefer moving detail into an existing neighbour when that neighbour is the right home. Create a new document only when no supplied neighbour fits.
 - Existing touched paths MUST be either the input path or one of the supplied neighbour paths. New paths are allowed for new documents only.
-- You may delete a touched existing document only when your split makes it genuinely redundant or effectively empty.
+- You may delete a touched existing document only when your split moves all of its content elsewhere and leaves it genuinely redundant. When you do, DELETE it (set "delete": true, no "content") — never leave behind a document whose only remaining content is a pointer or redirect (e.g. "moved to ...", "see <parent>"). A bare stub must be deleted, not kept.
 - Preserve all existing information. Do not introduce facts not present in the input documents.
 - "rationale" is a one-paragraph summary of why the split is warranted.
 
