@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 import type { EmbeddingProvider } from "@magpie/core";
 import { InMemoryKnowledgeIndex, type SectionVectorSearch } from "./knowledge-index.js";
@@ -138,5 +141,54 @@ describe("InMemoryKnowledgeIndex.search", () => {
 
     assert.match(ranked[0].section.heading, /Rollback/);
     assert.ok(notices.some((n) => /fall(ing)? back to keyword/i.test(n)));
+  });
+});
+
+describe("InMemoryKnowledgeIndex.indexLocalRepository", () => {
+  it("indexes many files concurrently while keeping document order deterministic", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "magpie-knowledge-index-"));
+    try {
+      // More files than the internal read concurrency pool, so this exercises
+      // multiple chunks of the bounded-concurrency read loop.
+      const fileCount = 30;
+      const expectedPaths: string[] = [];
+      for (let i = 0; i < fileCount; i += 1) {
+        const name = `doc-${String(i).padStart(2, "0")}.md`;
+        await writeFile(path.join(dir, name), `# Doc ${i}\nContent for document ${i}.\n`);
+        expectedPaths.push(name);
+      }
+
+      const index = new InMemoryKnowledgeIndex();
+      const summary = await index.indexLocalRepository({ localPath: dir, repositoryId: "many-files" });
+
+      assert.equal(summary.documentCount, fileCount);
+      const paths = index.listDocuments().map((document) => document.path);
+      assert.deepEqual([...paths].sort(), expectedPaths);
+
+      // listDocuments() sorts by path itself; check insertion produced exactly
+      // one document per file with no duplication/loss from the concurrent reads.
+      assert.equal(new Set(paths).size, fileCount);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips a markdown file that exceeds the max indexing size", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "magpie-knowledge-index-"));
+    try {
+      await writeFile(path.join(dir, "normal.md"), "# Normal\nThis file is indexed.\n");
+      // 6 MB of content, above the 5 MB guard.
+      const oversizedContent = `# Huge\n${"x".repeat(6 * 1024 * 1024)}\n`;
+      await writeFile(path.join(dir, "huge.md"), oversizedContent);
+
+      const index = new InMemoryKnowledgeIndex();
+      const summary = await index.indexLocalRepository({ localPath: dir, repositoryId: "with-huge-file" });
+
+      assert.equal(summary.documentCount, 1);
+      const paths = index.listDocuments().map((document) => document.path);
+      assert.deepEqual(paths, ["normal.md"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

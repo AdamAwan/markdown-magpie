@@ -76,3 +76,118 @@ test("getHeadSha returns undefined outside a git work tree", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("diffChangedFiles reports a rename's diff under the new path", async () => {
+  const repo = await mkdtemp(path.join(tmpdir(), "magpie-source-sync-"));
+  try {
+    await git(repo, ["init", "-q"]);
+    await writeFile(path.join(repo, "old.md"), "line one\nline two\nline three\n");
+    const first = await commitAll(repo, "initial");
+
+    await git(repo, ["mv", "old.md", "new.md"]);
+    await writeFile(path.join(repo, "new.md"), "line one\nline two\nline three\nline four\n");
+    const second = await commitAll(repo, "rename and edit");
+
+    const changes = await diffChangedFiles(repo, first, second);
+    const byPath = new Map(changes.map((change) => [change.path, change]));
+
+    assert.equal(byPath.get("new.md")?.status, "renamed");
+    assert.match(byPath.get("new.md")?.diff ?? "", /rename from old\.md/);
+    assert.match(byPath.get("new.md")?.diff ?? "", /\+line four/);
+    assert.equal(byPath.get("old.md"), undefined, "the stale path is not reported separately");
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test("diffChangedFiles reports a deleted file's diff under its path", async () => {
+  const repo = await mkdtemp(path.join(tmpdir(), "magpie-source-sync-"));
+  try {
+    await git(repo, ["init", "-q"]);
+    await writeFile(path.join(repo, "gone.md"), "content to remove\n");
+    await writeFile(path.join(repo, "stays.md"), "untouched\n");
+    const first = await commitAll(repo, "initial");
+
+    await git(repo, ["rm", "gone.md"]);
+    const second = await commitAll(repo, "delete a file");
+
+    const changes = await diffChangedFiles(repo, first, second);
+    const byPath = new Map(changes.map((change) => [change.path, change]));
+
+    assert.equal(byPath.get("gone.md")?.status, "deleted");
+    assert.match(byPath.get("gone.md")?.diff ?? "", /-content to remove/);
+    assert.equal(byPath.size, 1, "only the changed file is reported");
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test("diffChangedFiles handles many changed files in a single commit", async () => {
+  const repo = await mkdtemp(path.join(tmpdir(), "magpie-source-sync-"));
+  try {
+    await git(repo, ["init", "-q"]);
+    const fileCount = 25;
+    for (let i = 0; i < fileCount; i += 1) {
+      await writeFile(path.join(repo, `file-${i}.md`), `original ${i}\n`);
+    }
+    const first = await commitAll(repo, "initial");
+
+    for (let i = 0; i < fileCount; i += 1) {
+      await writeFile(path.join(repo, `file-${i}.md`), `changed ${i}\n`);
+    }
+    const second = await commitAll(repo, "change all");
+
+    const changes = await diffChangedFiles(repo, first, second);
+    assert.equal(changes.length, fileCount);
+    for (let i = 0; i < fileCount; i += 1) {
+      const change = changes.find((c) => c.path === `file-${i}.md`);
+      assert.ok(change, `expected a change entry for file-${i}.md`);
+      assert.equal(change?.status, "modified");
+      assert.match(change?.diff ?? "", new RegExp(`\\+changed ${i}`));
+    }
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test("diffChangedFiles truncates an individual file's diff to maxDiffChars", async () => {
+  const repo = await mkdtemp(path.join(tmpdir(), "magpie-source-sync-"));
+  try {
+    await git(repo, ["init", "-q"]);
+    await writeFile(path.join(repo, "small.md"), "x\n");
+    await writeFile(path.join(repo, "big.md"), "x\n");
+    const first = await commitAll(repo, "initial");
+
+    await writeFile(path.join(repo, "small.md"), "x changed\n");
+    const bigLines = Array.from({ length: 500 }, (_, i) => `line ${i} with some extra padding text`).join("\n");
+    await writeFile(path.join(repo, "big.md"), `${bigLines}\n`);
+    const second = await commitAll(repo, "change both, one big one small");
+
+    const changes = await diffChangedFiles(repo, first, second, { maxDiffChars: 200 });
+    const byPath = new Map(changes.map((change) => [change.path, change]));
+
+    const bigDiff = byPath.get("big.md")?.diff ?? "";
+    assert.ok(bigDiff.length <= 200 + "\n… (diff truncated)".length);
+    assert.match(bigDiff, /diff truncated/);
+
+    const smallDiff = byPath.get("small.md")?.diff ?? "";
+    assert.doesNotMatch(smallDiff, /diff truncated/);
+    assert.match(smallDiff, /\+x changed/);
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test("diffChangedFiles returns [] when nothing changed between two equal shas", async () => {
+  const repo = await mkdtemp(path.join(tmpdir(), "magpie-source-sync-"));
+  try {
+    await git(repo, ["init", "-q"]);
+    await writeFile(path.join(repo, "a.md"), "a\n");
+    const sha = await commitAll(repo, "initial");
+
+    const changes = await diffChangedFiles(repo, sha, sha);
+    assert.deepEqual(changes, []);
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});

@@ -135,6 +135,13 @@ export async function getHeadSha(localPath: string): Promise<string | undefined>
 // The files changed between two commits, with a (capped) per-file patch. Scope to
 // a subdirectory with `subpath` so a source's configured subpath is the only
 // thing diffed. Returns [] when either ref is missing or nothing changed.
+//
+// Implemented as exactly two git subprocesses regardless of how many files
+// changed: one `--name-status` call for the per-file statuses, and one plain
+// `git diff` over the whole range whose unified output is then split per file
+// in-process. A commit touching hundreds of files previously meant one `git
+// diff` subprocess per file (process spawn + full git invocation each time),
+// which dominated source-sync latency on large commits.
 export async function diffChangedFiles(
   localPath: string,
   fromSha: string,
@@ -144,7 +151,12 @@ export async function diffChangedFiles(
   const maxDiffChars = options.maxDiffChars ?? 8_000;
   const pathspec = options.subpath?.trim() ? ["--", options.subpath.trim()] : [];
 
-  const nameStatus = await tryGit(localPath, ["diff", "--name-status", "-M", `${fromSha}..${toSha}`, ...pathspec]);
+  const [nameStatus, fullDiff] = await Promise.all([
+    tryGit(localPath, ["diff", "--name-status", "-M", `${fromSha}..${toSha}`, ...pathspec]),
+    tryGit(localPath, ["diff", "-M", `${fromSha}..${toSha}`, ...pathspec])
+  ]);
+
+  const diffByPath = splitUnifiedDiffByFile(fullDiff);
   const changes: SourceFileChange[] = [];
 
   for (const line of nameStatus.split(/\r?\n/)) {
@@ -163,12 +175,47 @@ export async function diffChangedFiles(
     const status: SourceFileChange["status"] =
       code === "A" ? "added" : code === "M" ? "modified" : code === "D" ? "deleted" : code === "R" ? "renamed" : "other";
 
-    const rawDiff = await tryGit(localPath, ["diff", "-M", `${fromSha}..${toSha}`, "--", filePath]);
+    const rawDiff = diffByPath.get(filePath) ?? "";
     const diff = rawDiff.length > maxDiffChars ? `${rawDiff.slice(0, maxDiffChars)}\n… (diff truncated)` : rawDiff;
     changes.push({ path: filePath, status, diff });
   }
 
   return changes;
+}
+
+// Splits a multi-file unified diff (as produced by `git diff`) into one entry
+// per file, keyed by the file's "current" path (the `b/` side, or the `a/`
+// side for a deleted file with no `b/` side) — i.e. the same path
+// `--name-status` reports. Each entry's value is that file's own `diff --git
+// ...` chunk, verbatim.
+function splitUnifiedDiffByFile(fullDiff: string): Map<string, string> {
+  const byPath = new Map<string, string>();
+  if (!fullDiff) {
+    return byPath;
+  }
+
+  // Each file's chunk starts with a "diff --git a/<old> b/<new>" header line;
+  // splitting on that boundary (keeping it via a lookahead) yields one chunk
+  // per file without needing to understand hunk syntax.
+  const chunks = fullDiff.split(/(?=^diff --git )/m).filter((chunk) => chunk.length > 0);
+
+  for (const chunk of chunks) {
+    const header = /^diff --git "?a\/(.+?)"? "?b\/(.+?)"?\r?\n/.exec(chunk);
+    if (!header) {
+      continue;
+    }
+    const [, oldPath, newPath] = header;
+    // For a deleted file the diff has no `b/` side content, but the header still
+    // names it `b/<path>` (same as the old path) — using newPath covers every
+    // status `--name-status` can report (A/M/D/R) since git mirrors the path
+    // there even when the file no longer exists at toSha.
+    byPath.set(newPath, chunk);
+    if (oldPath !== newPath) {
+      byPath.set(oldPath, chunk);
+    }
+  }
+
+  return byPath;
 }
 
 export class DryRunPullRequestProvider implements PullRequestProvider {
