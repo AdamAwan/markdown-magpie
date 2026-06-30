@@ -1,9 +1,14 @@
 # AI Job Contract
 
-AI work is represented as jobs on a pg-boss queue in Postgres so Markdown Magpie
-can use hosted model APIs or external tools such as Codex and Claude Code. The
-API enqueues jobs; a watcher claims and completes them. The API never runs a
-model inline.
+Generative (chat) AI work is represented as jobs on a pg-boss queue in Postgres so
+Markdown Magpie can use hosted model APIs or external tools such as Codex and Claude
+Code. The API enqueues these jobs; a watcher claims and completes them. The API never
+runs a *chat* model inline.
+
+Embeddings are the exception: the API computes them inline (it holds an embedding
+provider) for both indexing and query-time retrieval — they are not watcher jobs. See
+the note on CLI providers below; embeddings are configured separately through
+OpenAI-compatible or Azure embedding endpoints.
 
 ## Job states
 
