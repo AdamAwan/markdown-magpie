@@ -39,6 +39,41 @@ describe("PostgresGapClusterStore", { skip: databaseUrl ? false : "DATABASE_URL 
     assert.equal(inB[0].gapId, gapId);
   });
 
+  it("scopes active clusters and memberships to a flow", async () => {
+    const flow = `flow-${randomUUID()}`;
+    const inFlow = await store.createCluster({ flowId: flow, title: `in-${randomUUID()}`, revision: 1 });
+    const otherFlow = await store.createCluster({ flowId: `other-${randomUUID()}`, title: "x", revision: 1 });
+    const gapId = await insertGap(databaseUrl as string);
+    await store.assignGapToCluster(inFlow.id, gapId, "in");
+
+    const clusters = await store.listActiveClustersForFlow(flow);
+    assert.deepEqual(clusters.map((c) => c.id), [inFlow.id]);
+    assert.ok(!clusters.some((c) => c.id === otherFlow.id));
+
+    const memberships = await store.listActiveMembershipsForFlow(flow);
+    assert.deepEqual(memberships.map((m) => m.gapId), [gapId]);
+
+    // The limit bounds the scan.
+    const second = await store.createCluster({ flowId: flow, title: `in2-${randomUUID()}`, revision: 1 });
+    const limited = await store.listActiveClustersForFlow(flow, 1);
+    assert.equal(limited.length, 1);
+    assert.ok([inFlow.id, second.id].includes(limited[0].id));
+  });
+
+  it("batch-assigns many gaps in one call, deactivating any prior membership", async () => {
+    const a = await store.createCluster({ title: `a-${randomUUID()}`, revision: 1 });
+    const b = await store.createCluster({ title: `b-${randomUUID()}`, revision: 1 });
+    const g1 = await insertGap(databaseUrl as string);
+    const g2 = await insertGap(databaseUrl as string);
+    await store.assignGapToCluster(a.id, g1, "first");
+
+    await store.assignGapsToCluster(b.id, [g1, g2], "batch");
+
+    assert.equal((await store.listMembershipsForCluster(a.id)).length, 0);
+    const inB = await store.listMembershipsForCluster(b.id);
+    assert.deepEqual(inB.map((m) => m.gapId).sort(), [g1, g2].sort());
+  });
+
   it("freezes clusters", async () => {
     const c = await store.createCluster({ title: `f-${randomUUID()}`, revision: 1 });
     await store.freezeCluster(c.id);

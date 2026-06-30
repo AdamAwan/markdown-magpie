@@ -2,6 +2,7 @@ import type { Proposal } from "@magpie/core";
 import type { AppContext } from "../context.js";
 import { splitGapSummaries } from "../features/proposals/service.js";
 import { logger } from "../logger.js";
+import { gapSummaryKey } from "../stores/question-log-store.js";
 
 // Proposal statuses whose cluster should be created frozen: the work is settled,
 // so the cluster is a historical record the reconciler must never reshape.
@@ -29,10 +30,25 @@ export async function backfillGapClusters(ctx: AppContext): Promise<void> {
   }
 
   const revision = await ctx.stores.questionLogs.getGapCatalogRevision();
+  const ordered = orderActiveFirst(proposals);
+
+  // Resolve the gap ids for every proposal's summaries in ONE batched query
+  // (backfill is the un-routed/default flow), instead of one query per summary
+  // nested inside the per-proposal loop.
+  const allSummaries = new Set<string>();
+  for (const proposal of ordered) {
+    for (const summary of splitGapSummaries(proposal.gapSummary)) {
+      allSummaries.add(summary);
+    }
+  }
+  const gapIdsBySummary = await ctx.stores.questionLogs.gapIdsForSummaries(
+    [...allSummaries].map((summary) => ({ summary }))
+  );
+
   const claimedGapIds = new Set<string>();
   let created = 0;
 
-  for (const proposal of orderActiveFirst(proposals)) {
+  for (const proposal of ordered) {
     const settled = SETTLED_STATUSES.has(proposal.status);
     const cluster = await ctx.stores.gapClusters.createCluster({
       title: clusterTitle(proposal),
@@ -41,15 +57,21 @@ export async function backfillGapClusters(ctx: AppContext): Promise<void> {
     });
     created += 1;
 
+    // Gather this proposal's unclaimed gaps, then assign them in one batched
+    // multi-row insert rather than one round-trip per gap.
+    const toAssign: string[] = [];
     for (const summary of splitGapSummaries(proposal.gapSummary)) {
-      const gapIds = await ctx.stores.questionLogs.gapIdsForSummary(summary);
+      const gapIds = gapIdsBySummary.get(gapSummaryKey(summary)) ?? [];
       for (const gapId of gapIds) {
         if (claimedGapIds.has(gapId)) {
           continue; // a higher-priority proposal already owns this gap.
         }
-        await ctx.stores.gapClusters.assignGapToCluster(cluster.id, gapId, "backfill");
+        toAssign.push(gapId);
         claimedGapIds.add(gapId);
       }
+    }
+    if (toAssign.length > 0) {
+      await ctx.stores.gapClusters.assignGapsToCluster(cluster.id, toAssign, "backfill");
     }
 
     await ctx.stores.proposals.linkCluster(proposal.id, cluster.id);

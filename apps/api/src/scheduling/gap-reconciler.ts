@@ -7,6 +7,8 @@ import * as gapsService from "../features/gaps/service.js";
 import { runJobToCompletion } from "../features/jobs/service.js";
 import * as proposalsService from "../features/proposals/service.js";
 import type { GapClusterRecord, PublicationActionRecord } from "../stores/gap-cluster-store.js";
+import { pairKey } from "../stores/pr-crosslink-store.js";
+import { gapSummaryKey } from "../stores/question-log-store.js";
 import { selectRetainingChildOnSplit, selectSurvivingClusterOnMerge } from "./gap-reconciler-lineage.js";
 import { sharedTargets } from "./reconcile-gate.js";
 
@@ -282,7 +284,7 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
   // 0b) Freeze any of this flow's active clusters left with no live members
   // after pruning. Their content is fully covered, so they must not draft (or
   // keep) a proposal; freezing drops them from listActiveClusters.
-  const emptied = (await ctx.stores.gapClusters.listActiveClusters()).filter((c) => sameFlow(c.flowId, flowId));
+  const emptied = await ctx.stores.gapClusters.listActiveClustersForFlow(flowId);
   for (const cluster of emptied) {
     const members = await ctx.stores.gapClusters.listMembershipsForCluster(cluster.id);
     if (members.length === 0) {
@@ -291,14 +293,19 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
     }
   }
 
-  // 1) Assign this flow's unassigned gaps to their own new cluster.
+  // 1) Assign this flow's unassigned gaps to their own new cluster. The gap ids
+  // for every candidate are resolved in ONE batched query (not one per
+  // candidate), and only this flow's active memberships are loaded.
   const candidates = (await ctx.stores.questionLogs.listGapCandidates(200)).filter((c) => sameFlow(c.flowId, flowId));
-  const activeMemberships = await ctx.stores.gapClusters.listActiveMemberships();
+  const activeMemberships = await ctx.stores.gapClusters.listActiveMembershipsForFlow(flowId);
   const assignedGapIds = new Set(activeMemberships.map((m) => m.gapId));
+  const gapIdsByCandidate = await ctx.stores.questionLogs.gapIdsForSummaries(
+    candidates.map((candidate) => ({ summary: candidate.summary, flowId: candidate.flowId }))
+  );
 
   let clustersCreated = 0;
   for (const candidate of candidates) {
-    const gapIds = await ctx.stores.questionLogs.gapIdsForSummary(candidate.summary, candidate.flowId);
+    const gapIds = gapIdsByCandidate.get(gapSummaryKey(candidate.summary, candidate.flowId)) ?? [];
     const unassigned = gapIds.filter((id) => !assignedGapIds.has(id));
     if (unassigned.length === 0) {
       continue;
@@ -311,8 +318,8 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
     });
     clustersCreated += 1;
     details.clustersCreated += 1;
+    await ctx.stores.gapClusters.assignGapsToCluster(cluster.id, unassigned, "initial assignment");
     for (const gapId of unassigned) {
-      await ctx.stores.gapClusters.assignGapToCluster(cluster.id, gapId, "initial assignment");
       assignedGapIds.add(gapId);
     }
   }
@@ -325,7 +332,7 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
   // run for the single-cluster case. Reshape is best-effort: when no chat watcher
   // is available (timeout) or the job fails, we log and skip, leaving the rest of
   // reconcileGaps to run.
-  const active = (await ctx.stores.gapClusters.listActiveClusters()).filter((c) => sameFlow(c.flowId, flowId));
+  const active = await ctx.stores.gapClusters.listActiveClustersForFlow(flowId);
   if (active.length >= 2) {
     const reshape = await requestReshape(ctx, active, flowId, flowLabel);
     if (reshape) {
@@ -390,7 +397,7 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
 // rejected PRs) are excluded by listActiveClusters, so content a reviewer already
 // declined is never re-raised.
 async function draftProposalsForUncoveredClusters(ctx: AppContext, flowId: string | undefined): Promise<number> {
-  const active = (await ctx.stores.gapClusters.listActiveClusters()).filter((c) => sameFlow(c.flowId, flowId));
+  const active = await ctx.stores.gapClusters.listActiveClustersForFlow(flowId);
   const proposals = await ctx.stores.proposals.list(500);
   const coveredClusterIds = new Set(
     proposals.map((p) => p.gapClusterId).filter((id): id is string => Boolean(id))
@@ -557,8 +564,10 @@ function isOpenProposal(proposal: Proposal): boolean {
 }
 
 async function proposalForCluster(ctx: AppContext, clusterId: string): Promise<Proposal | undefined> {
-  const all = await ctx.stores.proposals.list(500);
-  return all.find((p) => p.gapClusterId === clusterId);
+  // Targeted lookup: the cluster's linked proposal, instead of reloading the
+  // whole proposal list on every call. getByClusterId mirrors the old
+  // list(500).find() semantics (terminal statuses excluded, newest first).
+  return ctx.stores.proposals.getByClusterId(clusterId);
 }
 
 // A proposal's owning flow is its cluster's flow; a cluster-less proposal belongs
@@ -664,34 +673,60 @@ async function detectOverlaps(
     candidates.push({ id: proposal.id, targetPath: proposal.targetPath, pullRequestUrl });
   }
 
+  // Only PRs touching the same file can overlap (sharedTargets([a],[b]) is
+  // non-empty exactly when a.targetPath === b.targetPath), so group by path and
+  // only compare within a group instead of every pair. The pairs are still
+  // visited in (i, j) index order, so the records, jobs, and logs come out
+  // identical to the old nested loop — just without the wasted cross-path work.
+  const byPath = new Map<string, number[]>();
+  candidates.forEach((candidate, index) => {
+    const bucket = byPath.get(candidate.targetPath);
+    if (bucket) {
+      bucket.push(index);
+    } else {
+      byPath.set(candidate.targetPath, [index]);
+    }
+  });
+  const overlappingPairs: Array<[number, number]> = [];
+  for (const indices of byPath.values()) {
+    for (let a = 0; a < indices.length; a += 1) {
+      for (let b = a + 1; b < indices.length; b += 1) {
+        overlappingPairs.push([indices[a], indices[b]]);
+      }
+    }
+  }
+  overlappingPairs.sort((l, r) => (l[0] - r[0]) || (l[1] - r[1]));
+
+  // One query loads every already-linked pair among the candidates, replacing the
+  // per-pair has() round-trip in the loop below.
+  const linked = await ctx.stores.prCrosslinks.existingPairs(candidates.map((candidate) => candidate.id));
+
   let detected = 0;
-  for (let i = 0; i < candidates.length; i += 1) {
-    for (let j = i + 1; j < candidates.length; j += 1) {
-      const a = candidates[i];
-      const b = candidates[j];
-      const targets = sharedTargets([a.targetPath], [b.targetPath]);
-      if (targets.length === 0) {
+  for (const [i, j] of overlappingPairs) {
+    const a = candidates[i];
+    const b = candidates[j];
+    const targets = sharedTargets([a.targetPath], [b.targetPath]);
+    if (targets.length === 0) {
+      continue;
+    }
+    try {
+      if (linked.has(pairKey(a.id, b.id))) {
         continue;
       }
-      try {
-        if (await ctx.stores.prCrosslinks.has(a.id, b.id)) {
-          continue;
-        }
-        await ctx.stores.prCrosslinks.record({ flowId, proposalA: a.id, proposalB: b.id, targets });
-        detected += 1;
-        await ctx.jobs.create("crosslink_pull_requests", {
-          ...(flowId ? { flowId } : {}),
-          targets,
-          pullRequests: [
-            { proposalId: a.id, pullRequestUrl: a.pullRequestUrl },
-            { proposalId: b.id, pullRequestUrl: b.pullRequestUrl }
-          ]
-        });
-        logger.info({ flowId: flowId ?? "default", proposalA: a.id, proposalB: b.id, targets }, "gap reconciler: cross-linked overlapping PRs");
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "overlap cross-link failed";
-        logger.warn({ proposalA: a.id, proposalB: b.id, err: message }, "overlap cross-link failed");
-      }
+      await ctx.stores.prCrosslinks.record({ flowId, proposalA: a.id, proposalB: b.id, targets });
+      detected += 1;
+      await ctx.jobs.create("crosslink_pull_requests", {
+        ...(flowId ? { flowId } : {}),
+        targets,
+        pullRequests: [
+          { proposalId: a.id, pullRequestUrl: a.pullRequestUrl },
+          { proposalId: b.id, pullRequestUrl: b.pullRequestUrl }
+        ]
+      });
+      logger.info({ flowId: flowId ?? "default", proposalA: a.id, proposalB: b.id, targets }, "gap reconciler: cross-linked overlapping PRs");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "overlap cross-link failed";
+      logger.warn({ proposalA: a.id, proposalB: b.id, err: message }, "overlap cross-link failed");
     }
   }
   return detected;

@@ -24,6 +24,27 @@ export class PostgresPrCrosslinkStore implements PrCrosslinkStore {
     return result.rowCount !== null && result.rowCount > 0;
   }
 
+  async existingPairs(proposalIds: string[]): Promise<Set<string>> {
+    const pairs = new Set<string>();
+    if (proposalIds.length === 0) {
+      return pairs;
+    }
+    // Both endpoints in the candidate set, so the reconciler can test every
+    // pairwise overlap against this set without a per-pair round-trip.
+    const result = await this.pool.query<{ proposal_low: string; proposal_high: string }>(
+      `
+        SELECT proposal_low, proposal_high
+        FROM pr_crosslinks
+        WHERE proposal_low = ANY($1) AND proposal_high = ANY($1)
+      `,
+      [proposalIds]
+    );
+    for (const row of result.rows) {
+      pairs.add(`${row.proposal_low}|${row.proposal_high}`);
+    }
+    return pairs;
+  }
+
   async record(input: NewPrCrosslink): Promise<PrCrosslinkRecord> {
     const { low, high } = normalisePair(input.proposalA, input.proposalB);
     const result = await this.pool.query<CrosslinkRow>(
