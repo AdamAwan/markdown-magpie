@@ -32,12 +32,17 @@ Azure is the preferred managed deployment option when a hosted provider is requi
 
 ## AI Job Execution
 
-All AI work is modeled as jobs on a pg-boss queue in Postgres, not as a hard
-dependency on one model vendor. **The API never calls a model inline.** It
+Generative (chat) AI work is modeled as jobs on a pg-boss queue in Postgres, not as a
+hard dependency on one model vendor. **The API never calls a chat model inline.** It
 enqueues a job; a separate **watcher** process claims it, invokes the configured
 provider, and posts the result back over HTTP. The API and watcher share only the
 HTTP API and the managed-checkout volume — the watcher has no direct database
 access.
+
+Embeddings are the one exception to the queue model: the API computes them **inline**
+(it holds an embedding provider) for both indexing and query-time retrieval, rather than
+dispatching them as watcher jobs. Embedding providers are configured separately from the
+chat provider (see [ai-jobs.md](ai-jobs.md)).
 
 `AI_PROVIDER` is mandatory and selects the provider work is routed to:
 

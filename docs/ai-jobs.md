@@ -1,9 +1,14 @@
 # AI Job Contract
 
-AI work is represented as jobs on a pg-boss queue in Postgres so Markdown Magpie
-can use hosted model APIs or external tools such as Codex and Claude Code. The
-API enqueues jobs; a watcher claims and completes them. The API never runs a
-model inline.
+Generative (chat) AI work is represented as jobs on a pg-boss queue in Postgres so
+Markdown Magpie can use hosted model APIs or external tools such as Codex and Claude
+Code. The API enqueues these jobs; a watcher claims and completes them. The API never
+runs a *chat* model inline.
+
+Embeddings are the exception: the API computes them inline (it holds an embedding
+provider) for both indexing and query-time retrieval — they are not watcher jobs. See
+the note on CLI providers below; embeddings are configured separately through
+OpenAI-compatible or Azure embedding endpoints.
 
 ## Job states
 
@@ -126,57 +131,6 @@ Publication is enqueue-only. The API validates the repository pre-flight and enq
 commits the Markdown to a new `magpie/proposal-*` branch, pushes it, and opens a pull request, then
 reports the result back via job completion — which records the branch, commit SHA, and PR URL on the
 proposal. Invalid publishes fail fast with the same `404`/`409` codes before any job is created.
-
-## Crunch — scheduled knowledge-base tidying
-
-Crunch is a scheduled maintenance pass that fights knowledge-base fragmentation:
-it consolidates overlapping documents and splits bloated, multi-topic documents,
-then lands the result on a review branch.
-
-It uses the `crunch_knowledge_base` job type. The input is every document
-(path + content) for a flow's destination; the output is a `CrunchPlan` — a list
-of operations, each with the source paths it reorganizes, the files to write, and
-the files to delete:
-
-```json
-{
-  "summary": "2 tidy operation(s): 1 split, 1 consolidate.",
-  "operations": [
-    {
-      "kind": "split",
-      "title": "Split docs/big.md into 3 focused documents",
-      "reason": "...",
-      "sources": ["docs/big.md"],
-      "writes": [{ "path": "docs/big/setup.md", "content": "..." }],
-      "deletes": ["docs/big.md"]
-    }
-  ],
-  "rationale": "..."
-}
-```
-
-The API enqueues a `crunch_knowledge_base` job and the watcher completes it,
-matching the rest of the job contract.
-
-A run is triggered manually (`POST /api/crunch/run`) or on a schedule. The
-schedule is configured per flow via `POST /api/crunch/settings`
-(`{ flowId, enabled, cron }`). The saved settings are reconciled into pg-boss
-schedules, which enqueue a `trigger_scheduled_crunch` job on the cron; the
-maintenance watcher runs it. Endpoints:
-
-- `GET /api/crunch/runs` — list recent runs and their plans.
-- `POST /api/crunch/run` — trigger a run now (`{ flowId }`).
-- `GET /api/crunch/settings` / `POST /api/crunch/settings` — read/update the schedule.
-- `POST /api/crunch/runs/:id/publish` — commit a completed run's plan (multi-file
-  writes and deletes) to a new `magpie/crunch-*` branch via the `local-git`
-  publisher and open a pull request for it (the run records the PR url alongside
-  the branch and commit; a PR failure degrades to a branch-only publish).
-
-Crunch state is stored in the `crunch_runs` and `crunch_settings` tables
-(`STORAGE_BACKEND=postgres`), with in-memory fallbacks for local development.
-Run timing is owned by pg-boss (next-run is derived from the cron and surfaced
-on `GET /api/crunch/settings`), not tracked in the settings tables. Schedules
-fire in `JOB_SCHEDULE_TIMEZONE` (default `UTC`).
 
 ## Watcher Model
 
