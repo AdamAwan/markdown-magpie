@@ -15,7 +15,7 @@
 - Node `>=22.12`; TypeScript NodeNext ESM — relative imports inside packages/apps use the `.js` extension.
 - `@magpie/logger` has **no** `@magpie/*` dependencies (a leaf package, like `auth`).
 - Packages MUST NOT read `process.env` or import an app's root logger. Env is read only at app composition roots.
-- knip runs in STRICT mode: every exported symbol must be consumed. `@magpie/logger` exports only `createLogger`, `Logger`, and `LoggerOptions`.
+- knip runs in STRICT mode (`ignoreExportsUsedInFile` unset): an export used only within its own file is flagged. `@magpie/logger` exports only `createLogger` and `Logger`; the options shape is an internal, non-exported `LoggerOptions` interface (consumers pass object literals, structurally typed). Because a package's exports are only "externally used" once a consumer exists, the `deadcode` gate applies from Task 2 onward (the first task that imports `createLogger`/`Logger`); Task 1's per-commit gate is typecheck + lint + its own tests.
 - Logging changes MUST NOT alter control flow or client-facing responses.
 - `apps/web` is out of scope — do not touch it.
 - Level mapping: `console.error → logger.error`, `console.warn → logger.warn`, operator/status `console.log → logger.info`, verbose/diagnostic `console.log → logger.debug`.
@@ -37,9 +37,9 @@
 
 **Interfaces:**
 - Produces:
-  - `createLogger(opts?: LoggerOptions): Logger`
-  - `interface LoggerOptions { level?: string; pretty?: boolean; base?: Record<string, unknown>; destination?: number | NodeJS.WritableStream }`
-  - `type Logger = pino.Logger` — used by class constructors and the retrieval param.
+  - `createLogger(opts?: LoggerOptions): Logger` (where `LoggerOptions` is internal/non-exported)
+  - internal `interface LoggerOptions { level?: string; pretty?: boolean; base?: Record<string, unknown>; destination?: number | NodeJS.WritableStream }`
+  - `type Logger = pino.Logger` — exported; used by class constructors and the retrieval param.
 - Behaviour rules:
   - If `destination` is set → write raw JSON to it (ignore `pretty`). Used for tests and the stdio-MCP-to-stderr case.
   - Else if `pretty` is true → use the `pino-pretty` transport.
@@ -179,7 +179,9 @@ import pino from "pino";
 
 export type Logger = pino.Logger;
 
-export interface LoggerOptions {
+// Internal — not exported. Consumers pass an object literal (structurally typed);
+// exporting a type used only here would trip knip's STRICT unused-export check.
+interface LoggerOptions {
   /** Minimum level to emit. Defaults to "info". */
   level?: string;
   /** Use the human-readable pino-pretty transport (dev). Ignored when `destination` is set. */
@@ -233,8 +235,8 @@ In `tsconfig.base.json`, add to `compilerOptions.paths` (keep alphabetical-ish o
 
 - [ ] **Step 7: Verify gates and commit**
 
-Run: `npm run typecheck && npm run lint && npm run deadcode && npm test -w @magpie/logger`
-Expected: all green. (knip: exports are consumed by the package's own test now; later tasks add app consumers. If knip flags `createLogger`/`Logger`/`LoggerOptions` as unused at this commit, that is expected to clear in Task 2 — if implementing task-by-task with a knip gate per task, defer the `deadcode` check to Task 2's commit and note it here.)
+Run: `npm run typecheck && npm run lint && npm test -w @magpie/logger`
+Expected: all green. (Do NOT gate on `npm run deadcode` for this task: the package's exports gain external consumers only in Task 2, and knip STRICT flags exports used only within their own file. `deadcode` is verified from Task 2 onward. `LoggerOptions` is intentionally non-exported so it is never a standing knip finding.)
 
 ```bash
 git add packages/logger package.json tsconfig.base.json package-lock.json
