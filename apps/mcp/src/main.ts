@@ -1,6 +1,6 @@
 import { argv, stdin, stdout } from "node:process";
 import { fileURLToPath } from "node:url";
-import { askQuestion, getJson, stringArgument, submitFeedback } from "./kb-client.js";
+import { askQuestion, getJson, listFlows, optionalStringArgument, stringArgument, submitFeedback } from "./kb-client.js";
 import { createMcpLogger } from "./logger.js";
 
 type JsonRpcId = string | number | null;
@@ -47,16 +47,35 @@ interface JsonSchema {
 const tools = [
   {
     name: "kb.ask",
-    description: "Ask a question against the indexed Markdown knowledge base and return a cited answer.",
+    description:
+      "Ask a question against the indexed Markdown knowledge base and return a cited answer. " +
+      "By default (flow 'auto') the question is routed to the best-matching knowledge flow. " +
+      "If routing cannot determine a flow, the result has flowSelectionRequired with the available " +
+      "flows — call kb.ask again with `flow` set to one of those ids. Use kb.flows to discover flows up front.",
     inputSchema: {
       type: "object",
       properties: {
         question: {
           type: "string",
           description: "The question to answer from indexed Markdown context."
+        },
+        flow: {
+          type: "string",
+          description:
+            "Flow to answer within. Defaults to 'auto' (let the router decide). Otherwise must be a flow id from kb.flows."
         }
       },
       required: ["question"],
+      additionalProperties: false
+    } satisfies JsonSchema
+  },
+  {
+    name: "kb.flows",
+    description:
+      "List the knowledge flows a question can be routed to. Use the returned ids as the `flow` argument to kb.ask.",
+    inputSchema: {
+      type: "object",
+      properties: {},
       additionalProperties: false
     } satisfies JsonSchema
   },
@@ -224,8 +243,14 @@ async function dispatch(message: JsonRpcRequest): Promise<unknown> {
 async function callTool(params: ToolCallParams): Promise<unknown> {
   if (params.name === "kb.ask") {
     const question = stringArgument(params.arguments, "question");
-    const answer = await askQuestion(question, { token: stdioAuthToken });
+    const flow = optionalStringArgument(params.arguments, "flow");
+    const answer = await askQuestion(question, { token: stdioAuthToken }, flow);
     return textResult(answer);
+  }
+
+  if (params.name === "kb.flows") {
+    const result = await listFlows({ token: stdioAuthToken });
+    return textResult(result);
   }
 
   if (params.name === "kb.search") {

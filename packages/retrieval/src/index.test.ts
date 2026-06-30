@@ -17,13 +17,15 @@ describe("routeQuestionToFlow", () => {
     };
   }
 
-  it("returns undefined with no flows and never calls the provider", async () => {
-    assert.equal(await routeQuestionToFlow("anything", [], throwingProvider()), undefined);
+  it("is unroutable with no flows and never calls the provider", async () => {
+    assert.deepEqual(await routeQuestionToFlow("anything", [], throwingProvider()), {
+      status: "unroutable"
+    });
   });
 
   it("short-circuits to the only flow without calling the provider", async () => {
-    const decision = await routeQuestionToFlow("anything", [flows[0]], throwingProvider());
-    assert.deepEqual(decision, { flowId: "security", confidence: "high" });
+    const route = await routeQuestionToFlow("anything", [flows[0]], throwingProvider());
+    assert.deepEqual(route, { status: "routed", flowId: "security", confidence: "high" });
   });
 
   it("returns the model's chosen flow when it is a known id", async () => {
@@ -32,27 +34,39 @@ describe("routeQuestionToFlow", () => {
         return { content: JSON.stringify({ flowId: "dev", confidence: "high", rationale: "code question" }) };
       }
     };
-    const decision = await routeQuestionToFlow("how do I call the API?", flows, provider);
-    assert.equal(decision?.flowId, "dev");
-    assert.equal(decision?.confidence, "high");
-    assert.equal(decision?.rationale, "code question");
+    const route = await routeQuestionToFlow("how do I call the API?", flows, provider);
+    assert.deepEqual(route, {
+      status: "routed",
+      flowId: "dev",
+      confidence: "high",
+      rationale: "code question"
+    });
   });
 
-  it("returns undefined when the model names an unknown flow", async () => {
+  it("is unknown when the model abstains with flowId null", async () => {
+    const provider: ChatProvider = {
+      async complete() {
+        return { content: JSON.stringify({ flowId: null, confidence: "low", rationale: "no match" }) };
+      }
+    };
+    assert.deepEqual(await routeQuestionToFlow("q", flows, provider), { status: "unknown" });
+  });
+
+  it("is unroutable when the model names an unknown flow", async () => {
     const provider: ChatProvider = {
       async complete() {
         return { content: JSON.stringify({ flowId: "marketing", confidence: "high" }) };
       }
     };
-    assert.equal(await routeQuestionToFlow("q", flows, provider), undefined);
+    assert.deepEqual(await routeQuestionToFlow("q", flows, provider), { status: "unroutable" });
   });
 
-  it("returns undefined when the provider throws", async () => {
+  it("is unroutable when the provider throws", async () => {
     const provider: ChatProvider = {
       async complete() {
         throw new Error("model down");
       }
     };
-    assert.equal(await routeQuestionToFlow("q", flows, provider), undefined);
+    assert.deepEqual(await routeQuestionToFlow("q", flows, provider), { status: "unroutable" });
   });
 });

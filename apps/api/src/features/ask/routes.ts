@@ -18,9 +18,9 @@ export function askRoutes(ctx: AppContext): Hono {
       }
     }),
     async (c) => {
-      const { question } = c.req.valid("json");
+      const { question, flow } = c.req.valid("json");
 
-      const outcome = await askService.ask(ctx, question);
+      const outcome = await askService.ask(ctx, question, flow);
       return c.json(
         {
           questionId: outcome.questionId,

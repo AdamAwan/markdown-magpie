@@ -60,6 +60,9 @@ export const jobErrorSchema = z.object({
   executor: z.string().optional()
 }) satisfies z.ZodType<JobError>;
 
+const flowSelectionRequiredSchema = z.object({
+  availableFlows: z.array(z.object({ id: z.string(), name: z.string() }))
+});
 export const answerQuestionInputSchema = z.object({
   provider: providerSchema,
   questionLogId: z.string().optional(),
@@ -69,6 +72,7 @@ export const answerQuestionInputSchema = z.object({
     name: z.string(),
     persona: z.string().optional()
   })),
+  requestedFlowId: z.string().optional(),
   expectedOutput: z.literal("answer_result")
 }) satisfies z.ZodType<ProviderInput<CoreAnswerQuestionJobInput>>;
 export const answerQuestionOutputSchema = z.object({
@@ -76,7 +80,8 @@ export const answerQuestionOutputSchema = z.object({
   confidence: confidenceSchema,
   citations: z.array(citationSchema),
   gaps: z.array(gapSchema).optional(),
-  flowId: z.string().optional()
+  flowId: z.string().optional(),
+  flowSelectionRequired: flowSelectionRequiredSchema.optional()
 }) satisfies z.ZodType<AnswerQuestionJobOutput>;
 
 export const summarizeGapInputSchema = z.object({
