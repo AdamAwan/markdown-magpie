@@ -73,6 +73,21 @@ export class PostgresProposalStore implements ProposalStore {
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
+  async getByClusterId(gapClusterId: string): Promise<Proposal | undefined> {
+    // Mirror the old list(500).find(): exclude terminal statuses (so a cluster
+    // whose only proposal is settled resolves to undefined), newest first.
+    const result = await this.pool.query<ProposalRow>(
+      `
+        SELECT * FROM proposals
+        WHERE gap_cluster_id = $1::bigint AND status <> ALL($2)
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      [gapClusterId, [...TERMINAL_PROPOSAL_STATUSES]]
+    );
+    return result.rows[0] ? mapRow(result.rows[0]) : undefined;
+  }
+
   async updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined> {
     const result = await this.pool.query<ProposalRow>(
       `

@@ -113,4 +113,26 @@ describe("PostgresProposalStore", { skip: databaseUrl ? false : "DATABASE_URL no
     const relinked = await store.linkCluster(proposal.id, cluster.id);
     assert.equal(relinked?.gapClusterId, cluster.id);
   });
+
+  it("getByClusterId returns the cluster's non-terminal proposal, newest first", async () => {
+    const clusterStore = new PostgresGapClusterStore(databaseUrl as string);
+    const cluster = await clusterStore.createCluster({ title: `c-${randomUUID()}`, revision: 1 });
+
+    assert.equal(await store.getByClusterId(cluster.id), undefined, "no proposal yet");
+
+    const proposal = await store.create({
+      title: "T",
+      targetPath: "t.md",
+      markdown: "#",
+      rationale: "r",
+      evidence: [],
+      gapClusterId: cluster.id
+    });
+    const found = await store.getByClusterId(cluster.id);
+    assert.equal(found?.id, proposal.id);
+
+    // A settled proposal is hidden, matching the old default-list().find() scan.
+    await store.updateStatus(proposal.id, "merged");
+    assert.equal(await store.getByClusterId(cluster.id), undefined, "merged proposal is excluded");
+  });
 });

@@ -13,6 +13,15 @@ function autoGapsFromAnswer(answer: AnswerResult | undefined): QuestionGap[] {
   return (answer?.gaps ?? []).map((gap) => ({ summary: gap.summary, source: "auto" as const }));
 }
 
+// Stable map key for a (summary, flowId) gap pair. The flow is coalesced to ''
+// (matching how Postgres groups un-routed gaps) and prefixed with its byte
+// length so a summary containing the separator can never collide with another
+// (flow, summary) pair.
+export function gapSummaryKey(summary: string, flowId?: string): string {
+  const flow = flowId ?? "";
+  return `${flow.length}:${flow}:${summary}`;
+}
+
 export interface QuestionLogStore {
   record(input: QuestionLogInput): Promise<QuestionLog>;
   updateAnswer(id: string, input: QuestionLogUpdateInput): Promise<QuestionLog | undefined>;
@@ -36,6 +45,13 @@ export interface QuestionLogStore {
   // reconciler keys cluster memberships off these. Postgres returns the bigint
   // question_gaps.id; the in-memory store returns a stable synthetic id.
   gapIdsForSummary(summary: string, flowId?: string): Promise<string[]>;
+  // Batched gapIdsForSummary: resolves the gap ids for many (summary, flowId)
+  // pairs in ONE query so the reconciler avoids the N+1 of calling
+  // gapIdsForSummary once per candidate. Returns a map keyed by
+  // gapSummaryKey(summary, flowId); every requested pair is present, with an
+  // empty array when nothing matches. Ids keep the same ASC ordering as the
+  // single-summary variant.
+  gapIdsForSummaries(pairs: Array<{ summary: string; flowId?: string }>): Promise<Map<string, string[]>>;
   // Resolves a set of gap ids (as produced by gapIdsForSummary) back to their
   // distinct summaries and question ids, for the cluster read path.
   gapDetailsForIds(gapIds: string[]): Promise<{ summaries: string[]; questionIds: string[] }>;
@@ -77,6 +93,19 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       }
     }
     return ids;
+  }
+
+  async gapIdsForSummaries(
+    pairs: Array<{ summary: string; flowId?: string }>
+  ): Promise<Map<string, string[]>> {
+    const result = new Map<string, string[]>();
+    for (const { summary, flowId } of pairs) {
+      const key = gapSummaryKey(summary, flowId);
+      if (!result.has(key)) {
+        result.set(key, await this.gapIdsForSummary(summary, flowId));
+      }
+    }
+    return result;
   }
 
   async gapDetailsForIds(gapIds: string[]): Promise<{ summaries: string[]; questionIds: string[] }> {

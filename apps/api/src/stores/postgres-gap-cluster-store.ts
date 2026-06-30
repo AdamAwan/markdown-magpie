@@ -7,8 +7,13 @@ import type {
   PublicationActionRecord,
   UpdateClusterInput
 } from "./gap-cluster-store.js";
+import { chunk, valuesClause } from "./sql-bulk.js";
 
 const { Pool } = pg;
+
+// gap_cluster_memberships inserts bind 3 params/row (cluster_id, gap_id,
+// rationale); keep the chunk well under Postgres' 65535-param cap.
+const MEMBERSHIP_INSERT_CHUNK = 1000;
 
 interface ClusterRow {
   id: string;
@@ -56,6 +61,20 @@ export class PostgresGapClusterStore implements GapClusterStore {
     return result.rows.map(mapCluster);
   }
 
+  async listActiveClustersForFlow(
+    flowId: string | undefined,
+    limit?: number
+  ): Promise<GapClusterRecord[]> {
+    // Scope to one flow in SQL (coalescing NULL flow_id to '' so the un-routed
+    // flow matches), and bound the scan when a limit is given.
+    const base = "SELECT * FROM gap_clusters WHERE status = 'active' AND coalesce(flow_id, '') = $1 ORDER BY id ASC";
+    const result =
+      limit === undefined
+        ? await this.pool.query<ClusterRow>(base, [flowId ?? ""])
+        : await this.pool.query<ClusterRow>(`${base} LIMIT $2`, [flowId ?? "", limit]);
+    return result.rows.map(mapCluster);
+  }
+
   async getCluster(id: string): Promise<GapClusterRecord | undefined> {
     const result = await this.pool.query<ClusterRow>("SELECT * FROM gap_clusters WHERE id = $1", [id]);
     return result.rows[0] ? mapCluster(result.rows[0]) : undefined;
@@ -100,6 +119,22 @@ export class PostgresGapClusterStore implements GapClusterStore {
     return result.rows.map(mapMembership);
   }
 
+  async listActiveMembershipsForFlow(flowId: string | undefined): Promise<GapClusterMembershipRecord[]> {
+    // Join to the owning cluster so the flow filter lives in SQL; the reconciler
+    // only loads this flow's assigned-gap set instead of every flow's.
+    const result = await this.pool.query<MembershipRow>(
+      `
+        SELECT m.*
+        FROM gap_cluster_memberships m
+        JOIN gap_clusters c ON c.id = m.cluster_id
+        WHERE m.active AND coalesce(c.flow_id, '') = $1
+        ORDER BY m.id ASC
+      `,
+      [flowId ?? ""]
+    );
+    return result.rows.map(mapMembership);
+  }
+
   async listMembershipsForCluster(clusterId: string): Promise<GapClusterMembershipRecord[]> {
     const result = await this.pool.query<MembershipRow>(
       "SELECT * FROM gap_cluster_memberships WHERE active AND cluster_id = $1 ORDER BY id ASC",
@@ -117,6 +152,38 @@ export class PostgresGapClusterStore implements GapClusterStore {
         "INSERT INTO gap_cluster_memberships (cluster_id, gap_id, rationale) VALUES ($1, $2, $3)",
         [clusterId, gapId, rationale ?? null]
       );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async assignGapsToCluster(clusterId: string, gapIds: string[], rationale?: string): Promise<void> {
+    if (gapIds.length === 0) {
+      return;
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Deactivate any prior active membership of these gaps in one statement,
+      // then insert the new memberships in a handful of multi-row INSERTs rather
+      // than one round-trip per gap.
+      await client.query(
+        "UPDATE gap_cluster_memberships SET active = false WHERE active AND gap_id = ANY($1::bigint[])",
+        [gapIds]
+      );
+      for (const batch of chunk(gapIds, MEMBERSHIP_INSERT_CHUNK)) {
+        await client.query(
+          `
+            INSERT INTO gap_cluster_memberships (cluster_id, gap_id, rationale)
+            VALUES ${valuesClause(batch.length, 3)}
+          `,
+          batch.flatMap((gapId) => [clusterId, gapId, rationale ?? null])
+        );
+      }
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");

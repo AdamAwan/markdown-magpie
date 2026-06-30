@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 import type { AnswerResult } from "@magpie/core";
 import { PostgresQuestionLogStore } from "./postgres-question-log-store.js";
+import { gapSummaryKey } from "./question-log-store.js";
 
 // Integration tests for the Postgres-backed question log store. They self-skip
 // unless DATABASE_URL points at a migrated database (see scripts/migrate.mjs);
@@ -293,5 +294,39 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.ok(found.questionIds.includes(first.id), "first question should be in the group");
     assert.ok(found.questionIds.includes(second.id), "second question should be in the group");
     assert.equal(found.count, 2, "count should reflect two questions");
+  });
+
+  it("gapIdsForSummaries batches pairs and matches gapIdsForSummary per pair", async () => {
+    const uniqueId = randomUUID();
+    const summaryX = `batch gap X ${uniqueId}`;
+    const summaryY = `batch gap Y ${uniqueId}`;
+    const lowGap = (summary: string): AnswerResult => ({
+      answer: "Answer.",
+      confidence: "low",
+      citations: [],
+      gaps: [{ summary, question: "test?", confidence: "low", citedSectionIds: [] }]
+    });
+
+    await store.record({ question: `bx1-${uniqueId}`, chatProvider: "codex", retrievedSectionIds: [], answer: lowGap(summaryX) });
+    await store.record({ question: `bx2-${uniqueId}`, chatProvider: "codex", retrievedSectionIds: [], answer: lowGap(summaryX) });
+    await store.record({ question: `by1-${uniqueId}`, chatProvider: "codex", retrievedSectionIds: [], answer: lowGap(summaryY), flowId: `flow-${uniqueId}` });
+
+    const batched = await store.gapIdsForSummaries([
+      { summary: summaryX },
+      { summary: summaryY, flowId: `flow-${uniqueId}` },
+      { summary: summaryX, flowId: `flow-${uniqueId}` }
+    ]);
+
+    // Each pair matches the single-summary variant exactly.
+    assert.deepEqual(
+      batched.get(gapSummaryKey(summaryX))?.sort(),
+      (await store.gapIdsForSummary(summaryX)).sort()
+    );
+    assert.deepEqual(
+      batched.get(gapSummaryKey(summaryY, `flow-${uniqueId}`)),
+      await store.gapIdsForSummary(summaryY, `flow-${uniqueId}`)
+    );
+    // A pair with no matching gaps is present with an empty array.
+    assert.deepEqual(batched.get(gapSummaryKey(summaryX, `flow-${uniqueId}`)), []);
   });
 });

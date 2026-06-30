@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AnswerResult } from "@magpie/core";
-import { InMemoryQuestionLogStore } from "./question-log-store.js";
+import { InMemoryQuestionLogStore, gapSummaryKey } from "./question-log-store.js";
 
 const lowGapAnswer: AnswerResult = {
   answer: "I could not find reliable source material.",
@@ -254,6 +254,33 @@ test("gapIdsForSummary returns one stable id per unresolved gap matching the sum
   // Resolving one gap drops it from the matches.
   await store.resolveGaps([a.id], ["How to configure X"], "prop-1");
   assert.deepEqual(await store.gapIdsForSummary("How to configure X"), [`${b.id}::How to configure X`]);
+});
+
+test("gapIdsForSummaries batches many pairs and matches gapIdsForSummary per pair", async () => {
+  const store = new InMemoryQuestionLogStore();
+  // Two questions share summary X in the default flow; one question has summary Y
+  // in flow f1. The same summary X under f1 has no gaps.
+  const a = await store.record({ question: "q1?", chatProvider: "codex", retrievedSectionIds: [] });
+  await store.recordManualGap(a.id, "X");
+  const b = await store.record({ question: "q2?", chatProvider: "codex", retrievedSectionIds: [] });
+  await store.recordManualGap(b.id, "X");
+  const c = await store.record({ question: "q3?", chatProvider: "codex", retrievedSectionIds: [], flowId: "f1" });
+  await store.recordManualGap(c.id, "Y");
+
+  const result = await store.gapIdsForSummaries([
+    { summary: "X" },
+    { summary: "Y", flowId: "f1" },
+    { summary: "X", flowId: "f1" }
+  ]);
+
+  // Each pair resolves to exactly what the single-summary variant returns.
+  assert.deepEqual(
+    result.get(gapSummaryKey("X"))?.sort(),
+    (await store.gapIdsForSummary("X")).sort()
+  );
+  assert.deepEqual(result.get(gapSummaryKey("Y", "f1")), await store.gapIdsForSummary("Y", "f1"));
+  // A pair with no matching gaps is present with an empty array.
+  assert.deepEqual(result.get(gapSummaryKey("X", "f1")), []);
 });
 
 test("resolveGaps is idempotent and only counts newly resolved gaps", async () => {

@@ -14,6 +14,54 @@ describe("InMemoryGapClusterStore", () => {
     assert.deepEqual(active.map((c) => c.id), [cluster.id]);
   });
 
+  it("scopes active clusters to one flow and honours the limit", async () => {
+    const store = new InMemoryGapClusterStore();
+    const a = await store.createCluster({ flowId: "f1", title: "A", revision: 1 });
+    const b = await store.createCluster({ flowId: "f1", title: "B", revision: 1 });
+    await store.createCluster({ flowId: "f2", title: "C", revision: 1 });
+    const dDefault = await store.createCluster({ title: "D", revision: 1 });
+
+    const f1 = await store.listActiveClustersForFlow("f1");
+    assert.deepEqual(f1.map((c) => c.id).sort(), [a.id, b.id].sort());
+
+    // undefined flow matches the un-routed/default clusters only.
+    const def = await store.listActiveClustersForFlow(undefined);
+    assert.deepEqual(def.map((c) => c.id), [dDefault.id]);
+
+    // Frozen clusters drop out, and the limit bounds the result.
+    await store.freezeCluster(b.id);
+    const limited = await store.listActiveClustersForFlow("f1", 1);
+    assert.equal(limited.length, 1);
+    assert.equal(limited[0].id, a.id);
+  });
+
+  it("scopes active memberships to the cluster's flow", async () => {
+    const store = new InMemoryGapClusterStore();
+    const f1 = await store.createCluster({ flowId: "f1", title: "A", revision: 1 });
+    const f2 = await store.createCluster({ flowId: "f2", title: "B", revision: 1 });
+    await store.assignGapToCluster(f1.id, "gap-1");
+    await store.assignGapToCluster(f2.id, "gap-2");
+
+    const inF1 = await store.listActiveMembershipsForFlow("f1");
+    assert.deepEqual(inF1.map((m) => m.gapId), ["gap-1"]);
+    const inF2 = await store.listActiveMembershipsForFlow("f2");
+    assert.deepEqual(inF2.map((m) => m.gapId), ["gap-2"]);
+  });
+
+  it("batch-assigns many gaps, deactivating any prior membership", async () => {
+    const store = new InMemoryGapClusterStore();
+    const a = await store.createCluster({ title: "A", revision: 1 });
+    const b = await store.createCluster({ title: "B", revision: 1 });
+    await store.assignGapToCluster(a.id, "gap-1", "first");
+
+    // gap-1 moves out of A; gap-2/gap-3 are new.
+    await store.assignGapsToCluster(b.id, ["gap-1", "gap-2", "gap-3"], "batch");
+
+    assert.equal((await store.listMembershipsForCluster(a.id)).length, 0);
+    const inB = await store.listMembershipsForCluster(b.id);
+    assert.deepEqual(inB.map((m) => m.gapId).sort(), ["gap-1", "gap-2", "gap-3"]);
+  });
+
   it("keeps exactly one active membership per gap", async () => {
     const store = new InMemoryGapClusterStore();
     const a = await store.createCluster({ title: "A", revision: 1 });

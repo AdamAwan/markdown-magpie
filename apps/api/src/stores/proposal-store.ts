@@ -28,6 +28,11 @@ export interface ProposalStore {
   list(limit: number, options?: ProposalListOptions): Promise<Proposal[]>;
   get(id: string): Promise<Proposal | undefined>;
   getByJobId(jobId: string): Promise<Proposal | undefined>;
+  // The proposal linked to a gap cluster, if any. Lets the reconciler look up one
+  // cluster's proposal directly instead of scanning the whole proposal list. At
+  // most one proposal links a cluster; when several exist (legacy data) the most
+  // recent is returned, matching the old list(...).find() scan over created_at DESC.
+  getByClusterId(gapClusterId: string): Promise<Proposal | undefined>;
   updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined>;
   recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined>;
   linkCluster(id: string, gapClusterId: string): Promise<Proposal | undefined>;
@@ -88,6 +93,17 @@ export class InMemoryProposalStore implements ProposalStore {
 
   async getByJobId(jobId: string): Promise<Proposal | undefined> {
     return [...this.proposals.values()].find((proposal) => proposal.jobId === jobId);
+  }
+
+  async getByClusterId(gapClusterId: string): Promise<Proposal | undefined> {
+    // Mirror the old list(500).find(): default list hides terminal statuses, so a
+    // cluster whose only proposal is settled resolves to undefined here too.
+    return [...this.proposals.values()]
+      .filter(
+        (proposal) =>
+          proposal.gapClusterId === gapClusterId && !TERMINAL_PROPOSAL_STATUSES.includes(proposal.status)
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
   }
 
   async updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined> {

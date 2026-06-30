@@ -45,6 +45,35 @@ test("list excludes terminal proposals by default but keeps them fetchable as hi
   }
 });
 
+test("getByClusterId returns the linked non-terminal proposal and mirrors the old list().find()", async () => {
+  const store = new InMemoryProposalStore();
+  const linked = await store.create({ ...draft("linked"), gapClusterId: "cluster-1" });
+  await store.create({ ...draft("other"), gapClusterId: "cluster-2" });
+
+  const found = await store.getByClusterId("cluster-1");
+  assert.equal(found?.id, linked.id);
+
+  // An unlinked cluster has no proposal.
+  assert.equal(await store.getByClusterId("cluster-3"), undefined);
+
+  // A settled proposal is hidden (the old code listed via the default inbox,
+  // which excludes terminal statuses), so its cluster resolves to undefined.
+  await store.updateStatus(linked.id, "merged");
+  assert.equal(await store.getByClusterId("cluster-1"), undefined);
+});
+
+test("getByClusterId prefers the most recent proposal when several link a cluster", async () => {
+  const store = new InMemoryProposalStore();
+  const older = await store.create({ ...draft("older"), gapClusterId: "cluster-x" });
+  // Force a strictly-later createdAt on the second proposal.
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const newer = await store.create({ ...draft("newer"), gapClusterId: "cluster-x" });
+
+  const found = await store.getByClusterId("cluster-x");
+  assert.equal(found?.id, newer.id);
+  assert.notEqual(found?.id, older.id);
+});
+
 test("create defaults triggeringQuestionIds to an empty array (matching Postgres coalesce)", async () => {
   const store = new InMemoryProposalStore();
   const proposal = await store.create(draft("doc"));

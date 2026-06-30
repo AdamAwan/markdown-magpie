@@ -46,15 +46,27 @@ export interface UpdateClusterInput {
 
 export interface GapClusterStore {
   listActiveClusters(): Promise<GapClusterRecord[]>;
+  // Active clusters scoped to one flow ('' / undefined is the un-routed/default
+  // flow) in SQL, so the reconciler doesn't load every flow's clusters and filter
+  // in JS each tick. `limit` bounds the scan; clusters are ordered by id ASC to
+  // match listActiveClusters.
+  listActiveClustersForFlow(flowId: string | undefined, limit?: number): Promise<GapClusterRecord[]>;
   getCluster(id: string): Promise<GapClusterRecord | undefined>;
   createCluster(input: CreateClusterInput): Promise<GapClusterRecord>;
   updateCluster(id: string, patch: UpdateClusterInput): Promise<GapClusterRecord | undefined>;
   freezeCluster(id: string): Promise<void>;
 
   listActiveMemberships(): Promise<GapClusterMembershipRecord[]>;
+  // Active memberships whose cluster belongs to one flow, resolved in SQL so the
+  // reconciler only loads its own flow's assigned-gap set rather than every flow's.
+  listActiveMembershipsForFlow(flowId: string | undefined): Promise<GapClusterMembershipRecord[]>;
   listMembershipsForCluster(clusterId: string): Promise<GapClusterMembershipRecord[]>;
   // Moves a gap to `clusterId`, deactivating any other active membership it had.
   assignGapToCluster(clusterId: string, gapId: string, rationale?: string): Promise<void>;
+  // Batched assignGapToCluster: moves many gaps into `clusterId` in one
+  // transaction (deactivate prior memberships, then a single multi-row insert),
+  // instead of one transaction/round-trip per gap. Order of gapIds is preserved.
+  assignGapsToCluster(clusterId: string, gapIds: string[], rationale?: string): Promise<void>;
   deactivateClusterMemberships(clusterId: string): Promise<void>;
   // Deactivates any active membership whose gap is in the given set, wherever it
   // lives. Used to evict gaps that have been resolved (covered) from the active
@@ -98,6 +110,17 @@ export class InMemoryGapClusterStore implements GapClusterStore {
     return [...this.clusters.values()]
       .filter((c) => c.status === "active")
       .sort((l, r) => l.id.localeCompare(r.id));
+  }
+
+  async listActiveClustersForFlow(
+    flowId: string | undefined,
+    limit?: number
+  ): Promise<GapClusterRecord[]> {
+    const flow = flowId ?? "";
+    const matches = [...this.clusters.values()]
+      .filter((c) => c.status === "active" && (c.flowId ?? "") === flow)
+      .sort((l, r) => l.id.localeCompare(r.id));
+    return limit === undefined ? matches : matches.slice(0, limit);
   }
 
   async getCluster(id: string): Promise<GapClusterRecord | undefined> {
@@ -149,6 +172,17 @@ export class InMemoryGapClusterStore implements GapClusterStore {
     return [...this.memberships.values()].filter((m) => m.active);
   }
 
+  async listActiveMembershipsForFlow(flowId: string | undefined): Promise<GapClusterMembershipRecord[]> {
+    const flow = flowId ?? "";
+    return [...this.memberships.values()].filter((m) => {
+      if (!m.active) {
+        return false;
+      }
+      const cluster = this.clusters.get(m.clusterId);
+      return (cluster?.flowId ?? "") === flow;
+    });
+  }
+
   async listMembershipsForCluster(clusterId: string): Promise<GapClusterMembershipRecord[]> {
     return [...this.memberships.values()].filter((m) => m.active && m.clusterId === clusterId);
   }
@@ -161,6 +195,12 @@ export class InMemoryGapClusterStore implements GapClusterStore {
     }
     const id = this.nextId("membership");
     this.memberships.set(id, { id, clusterId, gapId, active: true, rationale, createdAt: this.now() });
+  }
+
+  async assignGapsToCluster(clusterId: string, gapIds: string[], rationale?: string): Promise<void> {
+    for (const gapId of gapIds) {
+      await this.assignGapToCluster(clusterId, gapId, rationale);
+    }
   }
 
   async deactivateClusterMemberships(clusterId: string): Promise<void> {

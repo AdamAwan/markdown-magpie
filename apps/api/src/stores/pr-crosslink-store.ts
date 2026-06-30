@@ -18,6 +18,10 @@ export interface NewPrCrosslink {
 // re-comment them every tick. The pair is order-independent.
 export interface PrCrosslinkStore {
   has(a: string, b: string): Promise<boolean>;
+  // The already-linked pairs among the given proposals, as normalised "low|high"
+  // keys (see pairKey). Lets the reconciler load every existing link for a
+  // candidate set in ONE query instead of a has() round-trip per pair.
+  existingPairs(proposalIds: string[]): Promise<Set<string>>;
   record(input: NewPrCrosslink): Promise<PrCrosslinkRecord>;
   list(limit: number): Promise<PrCrosslinkRecord[]>;
   reset(): Promise<void>;
@@ -28,6 +32,13 @@ export function normalisePair(a: string, b: string): { low: string; high: string
   return a <= b ? { low: a, high: b } : { low: b, high: a };
 }
 
+// Order-independent string key for a pair, used by existingPairs() callers to
+// test membership in the returned set.
+export function pairKey(a: string, b: string): string {
+  const { low, high } = normalisePair(a, b);
+  return `${low}|${high}`;
+}
+
 export class InMemoryPrCrosslinkStore implements PrCrosslinkStore {
   private readonly links: PrCrosslinkRecord[] = [];
   private seq = 0;
@@ -35,6 +46,17 @@ export class InMemoryPrCrosslinkStore implements PrCrosslinkStore {
   async has(a: string, b: string): Promise<boolean> {
     const { low, high } = normalisePair(a, b);
     return this.links.some((l) => l.proposalLow === low && l.proposalHigh === high);
+  }
+
+  async existingPairs(proposalIds: string[]): Promise<Set<string>> {
+    const ids = new Set(proposalIds);
+    const pairs = new Set<string>();
+    for (const link of this.links) {
+      if (ids.has(link.proposalLow) && ids.has(link.proposalHigh)) {
+        pairs.add(`${link.proposalLow}|${link.proposalHigh}`);
+      }
+    }
+    return pairs;
   }
 
   async record(input: NewPrCrosslink): Promise<PrCrosslinkRecord> {

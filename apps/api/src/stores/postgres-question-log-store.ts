@@ -12,7 +12,7 @@ import type {
   QuestionLogInput,
   QuestionLogUpdateInput
 } from "@magpie/core";
-import type { QuestionLogStore } from "./question-log-store.js";
+import { gapSummaryKey, type QuestionLogStore } from "./question-log-store.js";
 import { valuesClause } from "./sql-bulk.js";
 
 const { Pool } = pg;
@@ -46,6 +46,56 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       [summary, flowId ?? null]
     );
     return result.rows.map((row) => row.id);
+  }
+
+  async gapIdsForSummaries(
+    pairs: Array<{ summary: string; flowId?: string }>
+  ): Promise<Map<string, string[]>> {
+    // Pre-seed every requested pair so the caller gets an entry (possibly empty)
+    // for each, matching the in-memory store. Dedupe so a repeated pair binds once.
+    const result = new Map<string, string[]>();
+    const unique = new Map<string, { summary: string; flow: string }>();
+    for (const { summary, flowId } of pairs) {
+      const flow = flowId ?? "";
+      const key = gapSummaryKey(summary, flowId);
+      result.set(key, []);
+      unique.set(key, { summary, flow });
+    }
+    if (unique.size === 0) {
+      return result;
+    }
+
+    // One query resolves every (summary, flow) pair at once: a VALUES list of the
+    // requested pairs is joined to question_gaps, and each row comes back tagged
+    // with its summary+flow so its id routes to the right bucket. ORDER BY qg.id
+    // ASC keeps the same ordering gapIdsForSummary returns within a pair.
+    const summaries: string[] = [];
+    const flows: string[] = [];
+    for (const { summary, flow } of unique.values()) {
+      summaries.push(summary);
+      flows.push(flow);
+    }
+    const rows = await this.pool.query<{ summary: string; flow: string; id: string }>(
+      `
+        WITH pairs AS (
+          SELECT * FROM unnest($1::text[], $2::text[]) AS p(summary, flow)
+        )
+        SELECT p.summary AS summary, p.flow AS flow, qg.id::text AS id
+        FROM pairs p
+        JOIN question_gaps qg ON qg.summary = p.summary AND qg.resolved_at IS NULL
+        JOIN questions q ON q.id = qg.question_id AND coalesce(q.flow_id, '') = p.flow
+        ORDER BY qg.id ASC
+      `,
+      [summaries, flows]
+    );
+
+    for (const row of rows.rows) {
+      const bucket = result.get(gapSummaryKey(row.summary, row.flow));
+      if (bucket) {
+        bucket.push(row.id);
+      }
+    }
+    return result;
   }
 
   async gapDetailsForIds(gapIds: string[]): Promise<{ summaries: string[]; questionIds: string[] }> {
