@@ -27,6 +27,22 @@ const GIT_SUBPROCESS_TIMEOUT_MS = positiveIntFromEnv("GIT_TIMEOUT_MS", 120_000);
 const GIT_SUBPROCESS_MAX_BUFFER = positiveIntFromEnv("GIT_MAX_BUFFER_BYTES", 64 * 1024 * 1024);
 const GITHUB_API_TIMEOUT_MS = positiveIntFromEnv("GITHUB_API_TIMEOUT_MS", 30_000);
 
+// Clone source/destination checkouts as BLOBLESS PARTIAL CLONES (--filter=blob:none):
+// the full commit/ref graph is fetched (so last_sha..HEAD diffs and origin/<branch>
+// publishing still resolve every ref/commit) but historical file blobs are deferred
+// and fetched on demand only for the files actually touched. For a very large source
+// repo this avoids downloading every historical blob up front. Deliberately NOT
+// shallow-by-depth: source-sync diffs last_sha..HEAD and a prior last_sha outside a
+// shallow window would make the diff silently empty (missed changes); blobless
+// filtering keeps all commits/refs so neither diffs nor publishing lose anything.
+// Default on; can be disabled (GIT_PARTIAL_CLONE=0/false/off) for hosts that don't
+// support partial clone — and we also auto-fall-back to a normal clone if --filter
+// is rejected, so a non-supporting remote still ends up with a working checkout.
+// Read per call (not memoized) so the toggle takes effect without a restart.
+function partialCloneEnabled(): boolean {
+  return boolFromEnv("GIT_PARTIAL_CLONE", true);
+}
+
 function positiveIntFromEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   if (!raw) {
@@ -34,6 +50,20 @@ function positiveIntFromEnv(name: string, fallback: number): number {
   }
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function boolFromEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  if (raw === "0" || raw === "false" || raw === "off" || raw === "no") {
+    return false;
+  }
+  if (raw === "1" || raw === "true" || raw === "on" || raw === "yes") {
+    return true;
+  }
+  return fallback;
 }
 
 export interface RepositorySyncResult {
@@ -78,12 +108,7 @@ export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<Gi
   // indexing). Concurrent git on one `.git` races on FETCH_HEAD/index.lock/refs.
   await withCheckoutLock(localPath, async () => {
     if (!existsSync(path.join(localPath, ".git"))) {
-      const cloneArgs = ["clone"];
-      if (request.branch?.trim()) {
-        cloneArgs.push("--branch", request.branch.trim());
-      }
-      cloneArgs.push(request.url, localPath);
-      await git(request.checkoutRoot, cloneArgs, authEnv);
+      await cloneCheckout(request, localPath, authEnv);
       return;
     }
 
@@ -105,9 +130,11 @@ export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<Gi
     const branch = request.branch?.trim() || (await tryGit(localPath, ["branch", "--show-current"])).trim();
     if (branch && (await remoteBranchExists(localPath, branch, authEnv))) {
       if (request.branch?.trim()) {
-        await git(localPath, ["checkout", branch]);
+        // checkout materializes the work tree; on a blobless clone this may lazily
+        // fetch blobs, so it needs the same auth as the clone/fetch.
+        await git(localPath, ["checkout", branch], authEnv);
       }
-      await git(localPath, ["reset", "--hard", `origin/${branch}`]);
+      await git(localPath, ["reset", "--hard", `origin/${branch}`], authEnv);
     }
   });
 
@@ -115,6 +142,60 @@ export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<Gi
     localPath,
     remoteUrl: request.url
   };
+}
+
+// Clones a fresh checkout, preferring a blobless partial clone (gated by
+// partialCloneEnabled / GIT_PARTIAL_CLONE). Adds `--no-tags` so the (potentially large) tag
+// namespace isn't fetched — source-sync and publishing resolve branches/commits,
+// never tags. If the remote rejects `--filter` (older/self-hosted Git without
+// partial-clone support), the partial directory is cleaned up and a plain clone is
+// retried, so a non-supporting remote still ends up with a working checkout.
+async function cloneCheckout(
+  request: GitCheckoutRequest,
+  localPath: string,
+  authEnv: Partial<NodeJS.ProcessEnv>
+): Promise<void> {
+  const baseArgs: string[] = [];
+  if (request.branch?.trim()) {
+    baseArgs.push("--branch", request.branch.trim());
+  }
+  baseArgs.push("--no-tags");
+
+  if (partialCloneEnabled()) {
+    try {
+      await git(
+        request.checkoutRoot,
+        ["clone", "--filter=blob:none", ...baseArgs, request.url, localPath],
+        authEnv
+      );
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "partial clone failed";
+      // A partial clone failed. The likeliest recoverable cause is a remote that
+      // doesn't support the blob:none filter; anything else (bad URL, auth, network)
+      // is a genuine failure that must surface rather than masquerade as "no partial
+      // clone support". Either way a half-written checkout may be left behind, so
+      // remove it before deciding so a fallback retry starts from a clean directory.
+      await rm(localPath, { force: true, recursive: true }).catch(() => undefined);
+      if (!isPartialCloneUnsupported(message)) {
+        throw error instanceof Error ? error : new Error(message);
+      }
+      // Fall through to a plain clone below.
+    }
+  }
+
+  await git(request.checkoutRoot, ["clone", ...baseArgs, request.url, localPath], authEnv);
+}
+
+// True when a `--filter=blob:none` clone failed because the remote/host doesn't
+// support partial clone (older or self-hosted Git, or uploadpack.allowFilter off).
+// Git has no stable machine-readable code for this, so we match the messages those
+// implementations emit when rejecting a filtered fetch.
+function isPartialCloneUnsupported(message: string): boolean {
+  return (
+    /filter/i.test(message) &&
+    /(not support|unsupported|unknown|invalid|does not allow|not allowed|unrecognized|expected)/i.test(message)
+  ) || /uploadpack\.allowfilter|allow.?filter|partial clone/i.test(message);
 }
 
 // A single file touched by a range of source commits. `diff` is the unified
@@ -132,9 +213,20 @@ export async function getHeadSha(localPath: string): Promise<string | undefined>
   return sha || undefined;
 }
 
+// The result of diffing two commits: the per-file changes (each with a capped
+// patch) and the TRUE number of files the range touched. `totalCount` always
+// reflects every changed file even when `changes` was capped via `maxFiles`, so a
+// caller can record the real magnitude of a commit without materializing a patch
+// string per file.
+export interface DiffChangedFilesResult {
+  changes: SourceFileChange[];
+  totalCount: number;
+}
+
 // The files changed between two commits, with a (capped) per-file patch. Scope to
 // a subdirectory with `subpath` so a source's configured subpath is the only
-// thing diffed. Returns [] when either ref is missing or nothing changed.
+// thing diffed. Returns { changes: [], totalCount: 0 } when either ref is missing
+// or nothing changed.
 //
 // Implemented as exactly two git subprocesses regardless of how many files
 // changed: one `--name-status` call for the per-file statuses, and one plain
@@ -142,24 +234,60 @@ export async function getHeadSha(localPath: string): Promise<string | undefined>
 // in-process. A commit touching hundreds of files previously meant one `git
 // diff` subprocess per file (process spawn + full git invocation each time),
 // which dominated source-sync latency on large commits.
+//
+// `maxFiles` bounds memory for a pathological commit: only the first N files (in
+// name-status order) get a patch string built, while `totalCount` still reports
+// the true number of changed files (read cheaply from the name-status output). The
+// patch-building diff is itself scoped to those first N pathspecs so git never has
+// to emit (and this process never has to hold) the full multi-megabyte diff.
+//
+// `authEnv` is threaded onto the git invocations so that, against a blobless
+// partial clone, the on-demand fetch of a changed file's OLD blob (which `git diff
+// fromSha..toSha` needs and which may not be present locally) is authenticated the
+// same way the clone/fetch was — otherwise private-repo diffs would fail. Both
+// passes use `git` (not `tryGit`) so a lazy-fetch/auth failure surfaces as an error
+// rather than being swallowed into an empty diff that would silently miss changes.
 export async function diffChangedFiles(
   localPath: string,
   fromSha: string,
   toSha: string,
-  options: { subpath?: string; maxDiffChars?: number } = {}
-): Promise<SourceFileChange[]> {
+  options: { subpath?: string; maxDiffChars?: number; maxFiles?: number; authEnv?: Partial<NodeJS.ProcessEnv> } = {}
+): Promise<DiffChangedFilesResult> {
   const maxDiffChars = options.maxDiffChars ?? 8_000;
-  const pathspec = options.subpath?.trim() ? ["--", options.subpath.trim()] : [];
+  const subpathArgs = options.subpath?.trim() ? ["--", options.subpath.trim()] : [];
+  const authEnv = options.authEnv;
 
-  const [nameStatus, fullDiff] = await Promise.all([
-    tryGit(localPath, ["diff", "--name-status", "-M", `${fromSha}..${toSha}`, ...pathspec]),
-    tryGit(localPath, ["diff", "-M", `${fromSha}..${toSha}`, ...pathspec])
-  ]);
+  const nameStatus = await git(localPath, ["diff", "--name-status", "-M", `${fromSha}..${toSha}`, ...subpathArgs], authEnv);
+  const allEntries = parseNameStatus(nameStatus);
+  const totalCount = allEntries.length;
+
+  const limit = options.maxFiles && options.maxFiles > 0 ? options.maxFiles : undefined;
+  const entries = limit === undefined ? allEntries : allEntries.slice(0, limit);
+  if (entries.length === 0) {
+    return { changes: [], totalCount };
+  }
+
+  // Scope the patch-building diff to exactly the files we will materialize. When
+  // truncating, this also keeps git from generating the full diff of every file.
+  // The pathspecs use ":(literal)" so paths with glob metacharacters match verbatim;
+  // for a rename we name both endpoints so the patch chunk still resolves.
+  const truncating = limit !== undefined && entries.length < totalCount;
+  const patchPathspec = truncating
+    ? [
+        "--",
+        ...entries.flatMap((entry) =>
+          entry.oldPath && entry.oldPath !== entry.path
+            ? [`:(literal)${entry.path}`, `:(literal)${entry.oldPath}`]
+            : [`:(literal)${entry.path}`]
+        )
+      ]
+    : subpathArgs;
+  const fullDiff = await git(localPath, ["diff", "-M", `${fromSha}..${toSha}`, ...patchPathspec], authEnv);
 
   const diffByPath = splitUnifiedDiffByFile(fullDiff);
   const changes: SourceFileChange[] = [];
 
-  for (const entry of parseNameStatus(nameStatus)) {
+  for (const entry of entries) {
     const status: SourceFileChange["status"] =
       entry.code === "A"
         ? "added"
@@ -176,7 +304,7 @@ export async function diffChangedFiles(
     changes.push({ path: entry.path, status, diff });
   }
 
-  return changes;
+  return { changes, totalCount };
 }
 
 // Splits a multi-file unified diff (as produced by `git diff`) into one entry
@@ -965,7 +1093,7 @@ async function tryGit(cwd: string, args: string[], env?: Partial<NodeJS.ProcessE
 // URL — so it can't leak into the command line that git() echoes back in error
 // messages (which are surfaced to the UI). Returns {} when no token applies, so
 // public repos, SSH remotes, and credential-embedded URLs keep working unchanged.
-function buildGitAuthEnv(remoteUrl: string | undefined): Partial<NodeJS.ProcessEnv> {
+export function buildGitAuthEnv(remoteUrl: string | undefined): Partial<NodeJS.ProcessEnv> {
   const header = buildAuthHeader(remoteUrl);
   if (!header) {
     return {};
