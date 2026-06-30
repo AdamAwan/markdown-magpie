@@ -227,6 +227,8 @@ export const syncSourceChangesGeneratePlanInputSchema = z.object({
   fromSha: z.string(),
   toSha: z.string(),
   changes: z.array(sourceChangeFileSchema),
+  totalChangedFileCount: z.number().int().nonnegative().optional(),
+  changedFilesTruncated: z.boolean().optional(),
   candidateDocuments: z.array(documentSchema),
   expectedOutput: z.literal("maintenance_plan")
 }) satisfies z.ZodType<ProviderInput<CoreSourceChangeSyncJobInput>>;

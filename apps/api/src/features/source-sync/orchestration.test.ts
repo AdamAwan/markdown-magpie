@@ -269,4 +269,128 @@ test("a source-sync change that overlaps an approved PR self-publishes as a prop
   }
 });
 
+// Seeds a destination KB (so a candidate exists) and a source whose SECOND commit
+// touches `bulkFileCount` source files, so a single tick produces a commit that
+// exceeds a low changed-file cap. The KB doc path matches a candidate the plan
+// writes to. Re-baselines so the next triggerSourceSyncRun reacts to the bulk commit.
+async function seedLargeCommit(broker: FakeJobBroker, bulkFileCount: number): Promise<Seeded & { repoPath: string }> {
+  const root = await mkdtemp(path.join(tmpdir(), "magpie-srcsync-bulk-"));
+  const run = (cwd: string, args: string[]) => execFileAsync("git", args, { cwd });
+
+  const destRemote = path.join(root, "dest.git");
+  const destClone = path.join(root, "dest");
+  await mkdir(destRemote, { recursive: true });
+  await run(destRemote, ["init", "--bare", "--initial-branch=main"]);
+  await execFileAsync("git", ["clone", destRemote, destClone]);
+  await run(destClone, ["config", "user.name", "Seed"]);
+  await run(destClone, ["config", "user.email", "seed@example.com"]);
+  await writeFile(path.join(destClone, "guide.md"), "# Guide\nThe limit is 2024.\n", "utf8");
+  await run(destClone, ["add", "-A"]);
+  await run(destClone, ["commit", "-m", "seed"]);
+  await run(destClone, ["push", "-u", "origin", "main"]);
+
+  const sourceRemote = path.join(root, "source.git");
+  const sourceClone = path.join(root, "source");
+  await mkdir(sourceRemote, { recursive: true });
+  await run(sourceRemote, ["init", "--bare", "--initial-branch=main"]);
+  await execFileAsync("git", ["clone", sourceRemote, sourceClone]);
+  await run(sourceClone, ["config", "user.name", "Seed"]);
+  await run(sourceClone, ["config", "user.email", "seed@example.com"]);
+  // First commit: a single rules file (the baseline state).
+  await writeFile(path.join(sourceClone, "rules.ts"), "export const LIMIT = 2024;\n", "utf8");
+  await run(sourceClone, ["add", "-A"]);
+  await run(sourceClone, ["commit", "-m", "first"]);
+  // Second commit: change rules.ts AND add many files, so the diff exceeds the cap.
+  await writeFile(path.join(sourceClone, "rules.ts"), "export const LIMIT = 2025;\n", "utf8");
+  for (let i = 0; i < bulkFileCount; i += 1) {
+    // Include the keyword the KB guide describes so retrieval still finds the
+    // candidate from the capped subset (the first N files, in name-status order).
+    await writeFile(
+      path.join(sourceClone, `bulk-${String(i).padStart(4, "0")}.ts`),
+      `// the limit guide value ${i}\nexport const X${i} = ${i};\n`,
+      "utf8"
+    );
+  }
+  await run(sourceClone, ["add", "-A"]);
+  await run(sourceClone, ["commit", "-m", "bulk"]);
+  await run(sourceClone, ["push", "-u", "origin", "main"]);
+
+  const checkoutRoot = path.join(root, "checkouts");
+  const ctx = makeTestContext({ jobs: broker });
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
+  ctx.knowledgeConfig.checkoutRoot = checkoutRoot;
+  ctx.knowledgeConfig.sources = [{ id: "src-1", name: "Rules repo", kind: "git", url: sourceRemote }];
+  await ctx.stores.knowledgeIndex.indexLocalRepository({ localPath: destClone, repositoryId: "dest", name: "dest" });
+
+  // Baseline at the parent so the next tick diffs the bulk commit.
+  await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
+  const repoPath = path.join(checkoutRoot, "src-1");
+  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD~1"], { cwd: repoPath });
+  await ctx.stores.sourceSync.setState(undefined, "src-1", stdout.trim());
+
+  return { ctx, checkoutRoot, repoPath, cleanup: async () => { await rm(root, { recursive: true, force: true }); } };
+}
+
+test("a commit exceeding SOURCE_SYNC_MAX_CHANGED_FILES caps the job input but records the true total and advances the baseline", async () => {
+  const broker = new FakeJobBroker();
+  const previousCap = process.env.SOURCE_SYNC_MAX_CHANGED_FILES;
+  process.env.SOURCE_SYNC_MAX_CHANGED_FILES = "5";
+  // 1 changed rules.ts + 20 new bulk files = 21 changed files, well over the cap of 5.
+  const bulkFileCount = 20;
+  const { ctx, repoPath, cleanup } = await seedLargeCommit(broker, bulkFileCount);
+  try {
+    const runs = await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
+    assert.equal(runs.length, 1);
+    const run = runs[0];
+
+    // The run records the TRUE total changed-file count, not the capped subset.
+    assert.equal(run.changedFileCount, bulkFileCount + 1, "run records the true total changed files");
+
+    // Only the first N files were materialized into the plan job input...
+    const planJob = (await ctx.jobs.list({})).jobs.find((job) => job.type === "sync_source_changes_generate_plan");
+    assert.ok(planJob, "plan job enqueued");
+    const input = planJob.input as { changes: unknown[]; totalChangedFileCount?: number; changedFilesTruncated?: boolean };
+    assert.equal(input.changes.length, 5, "only the cap's worth of files go downstream");
+    // ...and the truncation is made visible on the job input.
+    assert.equal(input.totalChangedFileCount, bulkFileCount + 1, "job input carries the true total");
+    assert.equal(input.changedFilesTruncated, true, "job input flags the truncation");
+
+    // The baseline still advanced to HEAD (no reprocessing loop).
+    const { stdout: head } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repoPath });
+    assert.equal((await ctx.stores.sourceSync.getState(undefined, "src-1"))?.lastSha, head.trim());
+  } finally {
+    if (previousCap === undefined) {
+      delete process.env.SOURCE_SYNC_MAX_CHANGED_FILES;
+    } else {
+      process.env.SOURCE_SYNC_MAX_CHANGED_FILES = previousCap;
+    }
+    await cleanup();
+  }
+});
+
+test("a commit under SOURCE_SYNC_MAX_CHANGED_FILES is not truncated", async () => {
+  const broker = new FakeJobBroker();
+  const previousCap = process.env.SOURCE_SYNC_MAX_CHANGED_FILES;
+  process.env.SOURCE_SYNC_MAX_CHANGED_FILES = "100";
+  // 1 changed rules.ts + 3 new bulk files = 4 changed files, under the cap of 100.
+  const { ctx, cleanup } = await seedLargeCommit(broker, 3);
+  try {
+    const run = (await triggerSourceSyncRun(ctx, { trigger: "scheduled" }))[0];
+    assert.equal(run.changedFileCount, 4);
+    const planJob = (await ctx.jobs.list({})).jobs.find((job) => job.type === "sync_source_changes_generate_plan");
+    assert.ok(planJob, "plan job enqueued");
+    const input = planJob.input as { changes: unknown[]; totalChangedFileCount?: number; changedFilesTruncated?: boolean };
+    assert.equal(input.changes.length, 4, "all changed files go downstream when under the cap");
+    assert.equal(input.changedFilesTruncated, false, "no truncation flagged");
+    assert.equal(input.totalChangedFileCount, 4);
+  } finally {
+    if (previousCap === undefined) {
+      delete process.env.SOURCE_SYNC_MAX_CHANGED_FILES;
+    } else {
+      process.env.SOURCE_SYNC_MAX_CHANGED_FILES = previousCap;
+    }
+    await cleanup();
+  }
+});
+
 
