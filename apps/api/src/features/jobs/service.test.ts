@@ -134,8 +134,8 @@ test("display projection recursively redacts secrets without mutating stored inp
   const input = { apiKey: "a", nested: [{ token: "b", authorization: "c" }], password: "d", safe: "ok" };
   const job: JobView = {
     id: "job",
-    type: "refresh_pull_requests",
-    queueName: "refresh_pull_requests",
+    type: "refresh_flow_snapshot",
+    queueName: "refresh_flow_snapshot",
     deadLetter: false,
     state: "created",
     input,
@@ -381,7 +381,7 @@ test("publish_proposal completion refreshes publication metadata on republish", 
   assert.equal(republished?.publication?.publishedAt, output.publishedAt);
 });
 
-test("refresh_pull_requests completion applies merged/closed transitions idempotently", async () => {
+test("refresh_flow_snapshot completion applies merged/closed transitions idempotently", async () => {
   const ctx = makeTestContext();
 
   const mergedProposal = await ctx.stores.proposals.create({
@@ -424,7 +424,7 @@ test("refresh_pull_requests completion applies merged/closed transitions idempot
     return realResolve(questionIds, summaries, proposalId);
   };
 
-  const job = await ctx.jobs.create("refresh_pull_requests", {});
+  const job = await ctx.jobs.create("refresh_flow_snapshot", {});
   const output = {
     results: [
       { proposalId: mergedProposal.id, state: "closed" as const, merged: true },
@@ -438,20 +438,20 @@ test("refresh_pull_requests completion applies merged/closed transitions idempot
   const cascadesAfterFirst = resolveCalls;
 
   // Re-completing the same job must converge: no second cascade, statuses unchanged.
-  const job2 = await ctx.jobs.create("refresh_pull_requests", {});
+  const job2 = await ctx.jobs.create("refresh_flow_snapshot", {});
   assert.equal((await completeJob(ctx, job2.id, output)).ok, true);
   assert.equal((await ctx.stores.proposals.get(mergedProposal.id))?.status, "merged");
   assert.equal((await ctx.stores.proposals.get(closedProposal.id))?.status, "rejected");
   assert.equal(resolveCalls, cascadesAfterFirst, "merge cascade must not run a second time");
 });
 
-test("refresh_pull_requests completion tolerates snapshot recording failures", async () => {
+test("refresh_flow_snapshot completion tolerates snapshot recording failures", async () => {
   const ctx = makeTestContext();
   ctx.stores.snapshots.write = async () => {
     throw new Error("snapshot root is not writable");
   };
 
-  const job = await ctx.jobs.create("refresh_pull_requests", {});
+  const job = await ctx.jobs.create("refresh_flow_snapshot", {});
 
   assert.equal((await completeJob(ctx, job.id, { results: [] })).ok, true);
   assert.equal((await ctx.jobs.get(job.id))?.state, "completed");
@@ -561,7 +561,7 @@ test("completeJob validates catalog output and rejects completion after cancella
   assert.deepEqual(cancelledResult, { ok: false, code: "job_cancelled" });
 });
 
-test("refresh_pull_requests completion persists a reported review decision", async () => {
+test("refresh_flow_snapshot completion persists a reported review decision", async () => {
   const ctx = makeTestContext();
   const proposal = await ctx.stores.proposals.create({
     title: "Refunds",
@@ -578,7 +578,7 @@ test("refresh_pull_requests completion persists a reported review decision", asy
     publishedAt: new Date().toISOString()
   });
 
-  const job = await ctx.jobs.create("refresh_pull_requests", {});
+  const job = await ctx.jobs.create("refresh_flow_snapshot", {});
   assert.equal(
     (
       await completeJob(ctx, job.id, {
@@ -592,7 +592,7 @@ test("refresh_pull_requests completion persists a reported review decision", asy
   assert.equal((await ctx.stores.proposals.get(proposal.id))?.reviewDecision, "approved");
 });
 
-test("refresh_pull_requests completion without a reviewDecision leaves a prior one intact", async () => {
+test("refresh_flow_snapshot completion without a reviewDecision leaves a prior one intact", async () => {
   const ctx = makeTestContext();
   const proposal = await ctx.stores.proposals.create({
     title: "Credits",
@@ -612,7 +612,7 @@ test("refresh_pull_requests completion without a reviewDecision leaves a prior o
 
   // A later poll that could not determine the decision (no reviewDecision on the
   // result) must not clobber the stored approval back to touchable.
-  const job = await ctx.jobs.create("refresh_pull_requests", {});
+  const job = await ctx.jobs.create("refresh_flow_snapshot", {});
   assert.equal(
     (
       await completeJob(ctx, job.id, {

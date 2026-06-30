@@ -9,6 +9,7 @@ import { extractModelInfo } from "../lib/config";
 import { sectionSubtitle, sectionTitle } from "../lib/console";
 import { SECTION_NAV, sectionFromPath } from "../lib/sections";
 import { AttentionPanel, NavButton } from "./common";
+import { BuildStatus } from "./BuildStatus";
 import { useConsole } from "./ConsoleProvider";
 import { authConfiguredFromWindow } from "./AuthProvider";
 
@@ -205,6 +206,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               <span>{lastRefreshedAt ? new Date(lastRefreshedAt).toLocaleTimeString() : "Never"}</span>
             </div>
           </div>
+
+          <BuildStatus />
         </div>
       </aside>
 

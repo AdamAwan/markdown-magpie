@@ -1,6 +1,7 @@
 import { argv, stdin, stdout } from "node:process";
 import { fileURLToPath } from "node:url";
 import { askQuestion, getJson, stringArgument, submitFeedback } from "./kb-client.js";
+import { createMcpLogger } from "./logger.js";
 
 type JsonRpcId = string | number | null;
 
@@ -109,6 +110,8 @@ const tools = [
 
 let inputBuffer = Buffer.alloc(0);
 
+const logger = createMcpLogger("stdio");
+
 // Bootstraps the stdio MCP server: enforces the auth guard, resolves the bearer
 // token, and wires up the stdin reader. Runs only when this module is launched
 // as the entrypoint (see the guard at the bottom), so importing it (e.g. from
@@ -117,7 +120,7 @@ function main(): void {
   try {
     stdioAuthToken = resolveStdioAuthToken(process.env);
   } catch (error) {
-    console.error(error instanceof Error ? error.message : "Invalid stdio MCP auth configuration.");
+    logger.error({ err: error }, error instanceof Error ? error.message : "Invalid stdio MCP auth configuration.");
     process.exit(1);
   }
 
@@ -127,7 +130,7 @@ function main(): void {
   });
 
   stdin.on("error", (error) => {
-    console.error(`MCP stdin error: ${error.message}`);
+    logger.error({ err: error }, `MCP stdin error: ${error.message}`);
   });
 }
 
@@ -142,7 +145,7 @@ async function drainMessages(): Promise<void> {
       await handleMessage(message);
     } catch (error) {
       const messageText = error instanceof Error ? error.message : "Unexpected MCP error";
-      console.error(messageText);
+      logger.error({ err: error }, messageText);
     }
   }
 }

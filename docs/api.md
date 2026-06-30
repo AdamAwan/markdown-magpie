@@ -18,10 +18,28 @@ endpoints are served under `/api`. In local development the API base URL is
 
 ### `GET /api/health`
 
-Liveness check.
+Liveness check. Public — served before the auth middleware.
 
 ```json
 { "ok": true, "service": "markdown-magpie-api" }
+```
+
+### `GET /api/version`
+
+Identity of the running build, so clients can tell which commit is live. Public, like
+`/health`. The values are baked into the container image at build time (see the
+Dockerfile `ARG`s and `.github/workflows/publish-image.yml`): `sha` is the deployed
+commit's short SHA, `commitMessage` its subject line, and `committedAt` the commit's
+committer date (i.e. the merge time) as an ISO-8601 string. All three are `null` when
+the image was built without those args (local development), in which case the console
+shows a "Development" build.
+
+```json
+{
+  "sha": "a97380b",
+  "commitMessage": "fix: write folded content into a changeset survivor's primary entry",
+  "committedAt": "2026-06-29T22:14:03+01:00"
+}
 ```
 
 ### `GET /api/config`
@@ -237,9 +255,16 @@ the watcher completes the `draft_markdown_proposal` job.
 
 See the Proposal Review and Storage sections in [ai-jobs.md](ai-jobs.md).
 
-### `GET /api/proposals?limit=<n>`
+### `GET /api/proposals?limit=<n>&status=<status>`
 
-Lists proposals. `limit` defaults to `50`.
+Lists proposals, newest first. `limit` defaults to `50`.
+
+By default the list is the active inbox: it omits the **settled** statuses
+(`merged`, `rejected`, `superseded`) so nothing terminal lingers there with no
+available action. Pass `status=<status>` to fetch exactly one status instead —
+including the settled ones — so history stays reachable (e.g. `status=superseded`
+to audit what was folded away). An unrecognised `status` is ignored and the
+default inbox is returned.
 
 ```json
 { "proposals": [ Proposal, ... ] }
@@ -292,7 +317,7 @@ later by the job-completion path. The route never drafts inline.
 ### `POST /api/proposals/:id/status`
 
 Sets the proposal status directly. Valid values: `draft`, `ready`, `branch-pushed`,
-`pr-opened`, `merged`, `rejected`.
+`pr-opened`, `merged`, `rejected`, `superseded`.
 
 ```json
 { "status": "ready" }

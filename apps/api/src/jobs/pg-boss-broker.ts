@@ -12,6 +12,7 @@ import {
 import { CronExpressionParser } from "cron-parser";
 import { PgBoss, type ConstructorOptions, type JobWithMetadata, type UpdateQueueOptions } from "pg-boss";
 import type { DesiredSchedule, JobBroker, JobListFilters, ScheduleView } from "./broker.js";
+import { logger } from "../logger.js";
 
 interface JobEnvelope {
   type: JobType;
@@ -22,6 +23,8 @@ export interface PgBossJobBrokerOptions {
   connectionString: string;
   schema?: string;
   queuePolicyOverrides?: PgBossQueuePolicyOverrides;
+  // Timezone applied to scheduled (cron) jobs. Defaults to UTC.
+  scheduleTimezone?: string;
 }
 
 export type PgBossQueuePolicyOverrides = Partial<Pick<
@@ -36,6 +39,7 @@ const workQueues = queueDefinitions.filter((queue) => !queue.deadLetter);
 export class PgBossJobBroker implements JobBroker {
   private readonly boss: PgBoss;
   private readonly queuePolicyOverrides: PgBossQueuePolicyOverrides;
+  private readonly scheduleTimezone: string;
   private claimCursor = 0;
 
   constructor(options: PgBossJobBrokerOptions) {
@@ -48,8 +52,9 @@ export class PgBossJobBroker implements JobBroker {
     };
     this.boss = new PgBoss(bossOptions);
     this.queuePolicyOverrides = options.queuePolicyOverrides ?? {};
-    this.boss.on("error", (error) => console.error(`pg-boss error: ${error.message}`));
-    this.boss.on("warning", (warning) => console.warn(`pg-boss warning: ${warning.message}`));
+    this.scheduleTimezone = options.scheduleTimezone ?? "UTC";
+    this.boss.on("error", (error) => logger.error({ err: error.message }, "pg-boss error"));
+    this.boss.on("warning", (warning) => logger.warn({ err: warning.message }, "pg-boss warning"));
   }
 
   async start(): Promise<void> {
@@ -191,7 +196,7 @@ export class PgBossJobBroker implements JobBroker {
         schedule.queueName,
         schedule.cron,
         { type: schedule.type, input: schedule.input } satisfies JobEnvelope,
-        { key: schedule.storageKey, tz: process.env.JOB_SCHEDULE_TIMEZONE ?? "UTC" }
+        { key: schedule.storageKey, tz: this.scheduleTimezone }
       );
     }
   }

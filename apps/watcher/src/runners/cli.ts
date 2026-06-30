@@ -1,28 +1,11 @@
 import { spawn } from "node:child_process";
+import type { ChatProvider, ChatRequest, ChatResponse } from "@magpie/core";
 import type { JobCapability, JobType, JobView } from "@magpie/jobs";
-import { buildPrompt, parseJobOutput } from "../job-prompts.js";
+import type { WatcherApi } from "../http-client.js";
+import { logger } from "../logger.js";
+import { PROVIDER_JOB_TYPES, runGenerativeJob } from "./generative.js";
 
 export type PromptMode = "arg" | "stdin";
-
-// The CLI AI job types. Same set as the chat runner minus jobs that require
-// watcher-local orchestration (answer_question route/retrieve and
-// reconcile_gap_clusters propose/critic). A CLI provider executes the
-// deterministic generative jobs.
-const CLI_JOB_TYPES: ReadonlySet<JobType> = new Set([
-  "summarize_gap",
-  "draft_markdown_proposal",
-  "fold_markdown_proposal",
-  "detect_contradiction",
-  "suggest_consolidation",
-  "cluster_gap_candidates",
-  "sync_source_changes_generate_plan",
-  "verify_document",
-  "correct_document",
-  "dedupe_documents",
-  "split_document",
-  "improve_document",
-  "fold_changeset_proposal"
-]);
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_CANCEL_GRACE_MS = 5_000;
@@ -32,6 +15,7 @@ export interface CliRunnerOptions {
   command: string;
   args: string[];
   promptMode: PromptMode;
+  api?: WatcherApi;
   timeoutMs?: number;
   // How long to wait after SIGTERM before SIGKILL when aborting.
   cancelGraceMs?: number;
@@ -39,14 +23,15 @@ export interface CliRunnerOptions {
   buildPromptOverride?: (job: JobView) => string;
 }
 
-// Runs a generative job via an external CLI agent (codex / claude), preserving
-// the original watcher's prompt arg/stdin modes and timeout behaviour. On abort
-// it sends SIGTERM, waits cancelGraceMs, then SIGKILL.
+// Runs generative jobs via an external CLI agent (codex / claude). The CLI is
+// adapted to the same complete() contract hosted chat providers use, so route,
+// retrieve, answer, and critic-confirm flows stay identical across providers.
 export class CliRunner {
   readonly capability: Extract<JobCapability, "codex" | "claude">;
   private readonly command: string;
   private readonly args: string[];
   private readonly promptMode: PromptMode;
+  private readonly api?: WatcherApi;
   private readonly timeoutMs: number;
   private readonly cancelGraceMs: number;
   private readonly buildPromptOverride?: (job: JobView) => string;
@@ -56,21 +41,37 @@ export class CliRunner {
     this.command = options.command;
     this.args = options.args;
     this.promptMode = options.promptMode;
+    this.api = options.api;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.cancelGraceMs = options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     this.buildPromptOverride = options.buildPromptOverride;
   }
 
   supports(type: JobType): boolean {
-    return CLI_JOB_TYPES.has(type);
+    return PROVIDER_JOB_TYPES.has(type);
   }
 
   async run(job: JobView, signal: AbortSignal): Promise<unknown> {
-    const prompt = this.buildPromptOverride ? this.buildPromptOverride(job) : buildPrompt(job);
-    console.log(`${job.type}[${job.id}]: invoking ${this.command} CLI (${this.promptMode} mode)`);
-    const stdout = await this.spawnCli(prompt, signal);
-    console.log(`${job.type}[${job.id}]: ${this.command} CLI finished, ${stdout.length} char(s) of output`);
-    return parseJobOutput(job, stdout);
+    const model = this.modelFor(job);
+    return runGenerativeJob({
+      job,
+      model,
+      api: this.api ?? missingApi,
+      signal,
+      ...(this.buildPromptOverride ? { buildPromptOverride: this.buildPromptOverride } : {})
+    });
+  }
+
+  private modelFor(job: JobView): ChatProvider {
+    return {
+      complete: async (request: ChatRequest): Promise<ChatResponse> => {
+        const prompt = renderCliPrompt(request);
+        logger.debug({ jobId: job.id, jobType: job.type, command: this.command, promptMode: this.promptMode }, `${job.type}[${job.id}]: invoking ${this.command} CLI (${this.promptMode} mode)`);
+        const content = await this.spawnCli(prompt, request.signal ?? new AbortController().signal);
+        logger.debug({ jobId: job.id, jobType: job.type, command: this.command, outputLength: content.length }, `${job.type}[${job.id}]: ${this.command} CLI finished, ${content.length} char(s) of output`);
+        return { content };
+      }
+    };
   }
 
   private spawnCli(prompt: string, signal: AbortSignal): Promise<string> {
@@ -131,3 +132,26 @@ export class CliRunner {
     });
   }
 }
+
+function renderCliPrompt(request: ChatRequest): string {
+  const messages = request.messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`).join("\n\n");
+  return `SYSTEM:\n${request.system}\n\n${messages}`;
+}
+
+const missingApi: WatcherApi = {
+  claim: async () => undefined,
+  heartbeat: async () => ({ cancelled: false }),
+  complete: async () => undefined,
+  fail: async () => undefined,
+  retrieve: async () => {
+    throw new Error("CLI runner requires a WatcherApi to run answer_question");
+  },
+  proposalExecutionContext: async () => {
+    throw new Error("CLI runner requires a WatcherApi to fetch proposal execution context");
+  },
+  reconcileGaps: async () => ({ ok: true }),
+  runSourceSync: async () => ({ runIds: [] }),
+  runFixPatrol: async () => ({ runId: "", selectedCount: 0, findingCount: 0 }),
+  runImprovePatrol: async () => ({ runId: "", selectedCount: 0, enqueuedCount: 0 }),
+  listOpenPullRequests: async () => []
+};

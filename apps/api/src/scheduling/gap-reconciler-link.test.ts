@@ -49,20 +49,11 @@ describe("autonomous drafts are not re-drafted once linked", () => {
     // reconcile re-runs clustering + drafting. With two clusters, the reshape job
     // will be enqueued but FakeJobBroker never completes it; use a short timeout so
     // requestReshape's bounded-wait resolves quickly and drafting still runs.
-    const prevTimeout = process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS;
-    process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS = "20";
-    try {
-      await seedClusterWithGap(ctx, "Credit notes");
+    ctx.settings.jobs.runToCompletionTimeoutMs = 20;
+    await seedClusterWithGap(ctx, "Credit notes");
 
-      // Second reconcile: drafts the new cluster but NOT A again.
-      await reconcileGaps(ctx, undefined, keepOpen);
-    } finally {
-      if (prevTimeout === undefined) {
-        delete process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS;
-      } else {
-        process.env.JOB_RUN_TO_COMPLETION_TIMEOUT_MS = prevTimeout;
-      }
-    }
+    // Second reconcile: drafts the new cluster but NOT A again.
+    await reconcileGaps(ctx, undefined, keepOpen);
     jobs = (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs;
     assert.equal(draftJobsForCluster(jobs, clusterA), 1, "A is not re-drafted once it has a linked proposal");
   });

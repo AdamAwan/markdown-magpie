@@ -69,35 +69,35 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
   },
   {
     baseKey: "snapshot-refresh",
-    typeLabel: "Fetch snapshot · gaps · proposals · PRs",
+    typeLabel: "Snapshot refresh · gaps · proposals · PRs",
     description:
       "Downloads this flow's gaps, in-flight proposals, and open pull-request state to an on-disk snapshot the " +
       "reconciler reads. PR polling happens here, on this job's own cadence, instead of during reconciliation — so " +
       "the reconciler stops calling the git host live. Runs more often than the reconciler by default.",
     defaultCron: "*/5 * * * *",
-    jobType: "refresh_pull_requests",
+    jobType: "refresh_flow_snapshot",
     input: () => ({})
   },
   {
     baseKey: "fix-patrol",
-    typeLabel: "Fix patrol · rolling knowledge-base check",
+    typeLabel: "Correctness patrol · verify · dedupe · split",
     description:
       "Rolls a cursor across this flow's knowledge-base documents, checking the least-recently-visited " +
       "ones each run so the whole knowledge base is revisited over time at a bounded cost per run. " +
-      "Correctness lenses that propose fixes are added in a later step.",
+      "The verify, dedupe, and split lenses propose corrections, consolidations, and splits.",
     defaultCron: "0 * * * *",
-    jobType: "fix_patrol",
+    jobType: "correctness_patrol",
     input: (flowId) => ({ flowId })
   },
   {
     baseKey: "improve-patrol",
-    typeLabel: "Improve patrol · rolling editorial expansion",
+    typeLabel: "Editorial patrol · expand thin docs",
     description:
       "Rolls its own cursor across this flow's knowledge-base documents, sending the least-recently-improved " +
       "ones to the model with the flow's source material so fine-but-thin documents grow source-backed coverage. " +
-      "Separate from Fix patrol: it proposes editorial expansion, not correctness or structural fixes.",
+      "Separate from the Correctness patrol: it proposes editorial expansion, not correctness or structural fixes.",
     defaultCron: "0 * * * *",
-    jobType: "improve_patrol",
+    jobType: "editorial_patrol",
     input: (flowId) => ({ flowId })
   }
 ];

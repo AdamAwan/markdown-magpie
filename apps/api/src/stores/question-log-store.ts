@@ -39,6 +39,10 @@ export interface QuestionLogStore {
   // Resolves a set of gap ids (as produced by gapIdsForSummary) back to their
   // distinct summaries and question ids, for the cluster read path.
   gapDetailsForIds(gapIds: string[]): Promise<{ summaries: string[]; questionIds: string[] }>;
+  // The subset of the given gap ids that are still unresolved. Used by the
+  // reconciler to prune resolved gaps out of active clusters, and by the draft
+  // path to scope a proposal to a cluster's still-open gaps only.
+  listUnresolvedGapIds(gapIds: string[]): Promise<string[]>;
   reset(): Promise<void>;
 }
 
@@ -87,6 +91,23 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       summaries.add(id.slice(sep + 2));
     }
     return { summaries: [...summaries], questionIds: [...questionIds] };
+  }
+
+  async listUnresolvedGapIds(gapIds: string[]): Promise<string[]> {
+    const unresolved: string[] = [];
+    for (const id of gapIds) {
+      const sep = id.indexOf("::");
+      if (sep === -1) {
+        continue;
+      }
+      const logId = id.slice(0, sep);
+      const summary = id.slice(sep + 2);
+      const gap = this.logs.get(logId)?.gaps?.find((candidate) => candidate.summary === summary);
+      if (gap && !gap.resolvedAt) {
+        unresolved.push(id);
+      }
+    }
+    return unresolved;
   }
 
   async record(input: QuestionLogInput): Promise<QuestionLog> {

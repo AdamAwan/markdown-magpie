@@ -58,13 +58,13 @@ async function seed(broker: FakeJobBroker): Promise<Seeded> {
   await run(sourceClone, ["commit", "-m", "bump"]);
   await run(sourceClone, ["push", "-u", "origin", "main"]);
 
-  // The service derives its checkout root from MAGPIE_CHECKOUT_ROOT; pin it to this
-  // test's temp dir so checkouts are isolated and cleaned up.
+  // The service reads its checkout root from the resolved knowledge config; pin
+  // it to this test's temp dir so checkouts are isolated and cleaned up.
   const checkoutRoot = path.join(root, "checkouts");
-  process.env.MAGPIE_CHECKOUT_ROOT = checkoutRoot;
 
   const ctx = makeTestContext({ jobs: broker });
   ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
+  ctx.knowledgeConfig.checkoutRoot = checkoutRoot;
   ctx.knowledgeConfig.sources = [
     { id: "src-1", name: "Rules repo", kind: "git", url: sourceRemote }
   ];
@@ -79,7 +79,6 @@ async function seed(broker: FakeJobBroker): Promise<Seeded> {
     ctx,
     checkoutRoot,
     cleanup: async () => {
-      delete process.env.MAGPIE_CHECKOUT_ROOT;
       await rm(root, { recursive: true, force: true });
     }
   };

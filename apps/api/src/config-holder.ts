@@ -11,17 +11,13 @@ export function normalizeAiProvider(value: string | undefined): AiProviderName |
 
 export class RuntimeConfigHolder {
   private config: RuntimeAiConfig;
+  // The env-derived seed (from validated startup config). reset() restores this
+  // rather than re-reading the environment, keeping all env access at startup.
+  private readonly initial: RuntimeAiConfig;
 
   constructor(config: RuntimeAiConfig) {
     this.config = config;
-  }
-
-  static fromEnv(): RuntimeConfigHolder {
-    const aiProvider = normalizeAiProvider(process.env.AI_PROVIDER);
-    if (!aiProvider) {
-      throw new Error("AI_PROVIDER must name a supported watcher provider");
-    }
-    return new RuntimeConfigHolder({ aiProvider });
+    this.initial = config;
   }
 
   get(): RuntimeAiConfig {
@@ -34,6 +30,6 @@ export class RuntimeConfigHolder {
   }
 
   reset(): void {
-    this.config = RuntimeConfigHolder.fromEnv().get();
+    this.config = this.initial;
   }
 }

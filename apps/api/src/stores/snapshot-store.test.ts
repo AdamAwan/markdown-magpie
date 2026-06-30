@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import type { FlowSnapshot } from "./snapshot-store.js";
+import type { FlowSnapshot } from "@magpie/core";
 import { FileSnapshotStore, InMemorySnapshotStore } from "./snapshot-store.js";
 
 function sampleSnapshot(flowId: string | undefined): FlowSnapshot {

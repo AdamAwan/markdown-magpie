@@ -6,17 +6,20 @@ import type {
   MaintenanceRun,
   SplitDocumentJobInput,
   VerifyDocumentJobInput,
-  VerifyFinding
+  VerifyFinding,
+  ChangeIntentTrace
 } from "@magpie/core";
 import { verifyDocumentOutputSchema } from "@magpie/jobs";
 import { selectFlow } from "../../platform/repositories.js";
 import { selectPatrolBatch } from "../../scheduling/patrol-cursor.js";
+import { flowCoveredPaths } from "../../scheduling/flow.js";
 import { runVerifyLens, type VerifyDocumentFn } from "../../scheduling/verify-lens.js";
 import { runDedupeLens, type DedupeDocumentFn } from "../../scheduling/dedupe-lens.js";
 import { runSplitLens, type SplitDocumentFn } from "../../scheduling/split-lens.js";
 import { collectSourceContext } from "../../platform/source-context.js";
 import { runJobToCompletion } from "../jobs/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
+import { logger } from "../../logger.js";
 
 // Cursor knobs (tunable). batchSize bounds per-tick cost; randomCount is the
 // explore share (~20%); the remainder is the oldest/most-stale exploit share.
@@ -27,7 +30,14 @@ const IMPROVE_PATROL_BATCH_SIZE = 2;
 const IMPROVE_PATROL_RANDOM_COUNT = 1;
 
 export type FixPatrolOutcome =
-  | { ok: true; runId: string; universeCount: number; selectedCount: number; selected: string[]; findings: VerifyFinding[] }
+  | {
+      ok: true;
+      runId: string;
+      universeCount: number;
+      selectedCount: number;
+      selected: string[];
+      findings: VerifyFinding[];
+    }
   | { ok: false; code: "unknown_flow" };
 export type ImprovePatrolOutcome =
   | { ok: true; runId: string; universeCount: number; selectedCount: number; selected: string[]; enqueuedCount: number }
@@ -73,7 +83,7 @@ const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sou
     terminal = await runJobToCompletion(ctx, "verify_document", input);
   } catch (error) {
     const message = error instanceof Error ? error.message : "verify job failed";
-    console.warn(`Verify lens: verify_document for ${path} could not run — ${message}.`);
+    logger.warn({ path, err: message }, "verify lens: verify_document could not run");
     return undefined;
   }
   if (terminal.state !== "completed") {
@@ -139,6 +149,39 @@ const defaultImproveDocument: ImproveDocumentFn = async (ctx, input) => {
   } satisfies ImproveDocumentJobInput & { provider: AiProviderName });
 };
 
+function verifyFindingIntentTraces(findings: VerifyFinding[], flowId: string | undefined): ChangeIntentTrace[] {
+  const createdAt = new Date().toISOString();
+  return findings.map((finding) => ({
+    createdAt,
+    intent: {
+      lens: "verify",
+      ...(flowId ? { flowId } : {}),
+      targets: [finding.path],
+      evidence: finding.claims.map((claim) => claim.claim),
+      rationale:
+        finding.claims
+          .map((claim) => claim.reason)
+          .filter(Boolean)
+          .join("; ") || "Verify lens found unprovable claims."
+    },
+    decision:
+      finding.decision === "fold"
+        ? { kind: "fold", intoProposalId: finding.intoProposalId ?? "unknown" }
+        : finding.decision === "defer"
+          ? { kind: "defer", behindProposalId: finding.intoProposalId ?? "unknown" }
+          : { kind: "open-new" },
+    candidatePullRequests: [],
+    outcome: finding.intoProposalId
+      ? { proposalId: finding.intoProposalId }
+      : {
+          reason:
+            finding.decision === "open-new"
+              ? "No overlapping open proposal blocked a new corrective proposal."
+              : undefined
+        }
+  }));
+}
+
 export async function runFixPatrol(
   ctx: AppContext,
   options: { flowId?: string; trigger: MaintenanceRun["trigger"] },
@@ -171,10 +214,19 @@ export async function runFixPatrol(
     randomCount: PATROL_RANDOM_COUNT
   });
 
-  // Run the verify lens over the selected documents. The source material is the
+  // Drop any selected document already covered by an open same-flow proposal: its
+  // change is awaiting review in an unmerged PR, so re-scanning it would redraft the
+  // same change and fold it in every tick (see flowCoveredPaths). Covered docs stay
+  // stamped in the cursor so they rotate normally and become eligible again once the
+  // PR merges and its edits reach the index.
+  const covered = await flowCoveredPaths(ctx, options.flowId);
+  const actionable = selected.filter((path) => !covered.has(path));
+  const skipped = selected.length - actionable.length;
+
+  // Run the verify lens over the actionable documents. The source material is the
   // same for every document in the flow, so collect it once per tick — and only
   // when there is at least one document to check.
-  const selectedSet = new Set(selected);
+  const selectedSet = new Set(actionable);
   const selectedDocuments = documents
     .filter((doc) => selectedSet.has(doc.path))
     .map((doc) => ({ path: doc.path, content: doc.content }));
@@ -231,21 +283,35 @@ export async function runFixPatrol(
   await ctx.stores.patrol.stampChecked(options.flowId, selected);
 
   const run = await ctx.stores.maintenanceRuns.record({
-    taskType: "fix_patrol",
+    taskType: "correctness_patrol",
     flowId: options.flowId,
     trigger: options.trigger,
     status: "completed",
     summary:
       `checked ${selected.length}/${universe.length} doc${selected.length === 1 ? "" : "s"} · ` +
-      `${findings.length} finding${findings.length === 1 ? "" : "s"}`,
-    details: { universeCount: universe.length, selectedCount: selected.length, selected, findings }
+      `${findings.length} finding${findings.length === 1 ? "" : "s"}` +
+      (skipped > 0 ? ` · ${skipped} covered by open PRs` : ""),
+    details: {
+      universeCount: universe.length,
+      selectedCount: selected.length,
+      selected,
+      skipped,
+      findings,
+      intentTraces: verifyFindingIntentTraces(findings, options.flowId)
+    }
   });
-  console.log(
-    `Fix-patrol (${options.trigger}) flow=${options.flowId ?? "(default)"}: ` +
-      `checked ${selected.length}/${universe.length} document(s), ${findings.length} finding(s), ` +
-      `${dedupeScans} dedupe scan(s), ${splitScans} split scan(s) enqueued; run ${run.id}.`
+  logger.info(
+    { trigger: options.trigger, flowId: options.flowId ?? "(default)", checked: selected.length, universe: universe.length, findings: findings.length, dedupeScans, splitScans, skipped, runId: run.id },
+    "fix-patrol completed"
   );
-  return { ok: true, runId: run.id, universeCount: universe.length, selectedCount: selected.length, selected, findings };
+  return {
+    ok: true,
+    runId: run.id,
+    universeCount: universe.length,
+    selectedCount: selected.length,
+    selected,
+    findings
+  };
 }
 
 export async function runImprovePatrol(
@@ -271,7 +337,14 @@ export async function runImprovePatrol(
     randomCount: IMPROVE_PATROL_RANDOM_COUNT
   });
 
-  const selectedSet = new Set(selected);
+  // Skip any selected document already covered by an open same-flow proposal — the
+  // improve change would otherwise be redrafted and folded into the open PR every
+  // tick (see flowCoveredPaths). The cursor still stamps the full selection below.
+  const covered = await flowCoveredPaths(ctx, options.flowId);
+  const actionable = selected.filter((path) => !covered.has(path));
+  const skipped = selected.length - actionable.length;
+
+  const selectedSet = new Set(actionable);
   const selectedDocuments = documents
     .filter((doc) => selectedSet.has(doc.path))
     .map((doc) => ({ path: doc.path, content: doc.content, repositoryId: doc.repositoryId }));
@@ -290,24 +363,32 @@ export async function runImprovePatrol(
       enqueuedCount += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : "improve failed";
-      console.warn(`Improve-patrol: skipping ${document.path} - ${message}.`);
+      logger.warn({ path: document.path, err: message }, "improve-patrol: skipping document");
     }
   }
 
   await ctx.stores.patrol.stampChecked(options.flowId, selected, "improve");
   const run = await ctx.stores.maintenanceRuns.record({
-    taskType: "improve_patrol",
+    taskType: "editorial_patrol",
     flowId: options.flowId,
     trigger: options.trigger,
     status: "completed",
     summary:
       `checked ${selected.length}/${universe.length} doc${selected.length === 1 ? "" : "s"} · ` +
-      `${enqueuedCount} improve scan${enqueuedCount === 1 ? "" : "s"}`,
-    details: { universeCount: universe.length, selectedCount: selected.length, selected, enqueuedCount }
+      `${enqueuedCount} improve scan${enqueuedCount === 1 ? "" : "s"}` +
+      (skipped > 0 ? ` · ${skipped} covered by open PRs` : ""),
+    details: { universeCount: universe.length, selectedCount: selected.length, selected, skipped, enqueuedCount }
   });
-  console.log(
-    `Improve-patrol (${options.trigger}) flow=${options.flowId ?? "(default)"}: ` +
-      `checked ${selected.length}/${universe.length} document(s), ${enqueuedCount} improve scan(s) enqueued; run ${run.id}.`
+  logger.info(
+    { trigger: options.trigger, flowId: options.flowId ?? "(default)", checked: selected.length, universe: universe.length, enqueued: enqueuedCount, skipped, runId: run.id },
+    "improve-patrol completed"
   );
-  return { ok: true, runId: run.id, universeCount: universe.length, selectedCount: selected.length, selected, enqueuedCount };
+  return {
+    ok: true,
+    runId: run.id,
+    universeCount: universe.length,
+    selectedCount: selected.length,
+    selected,
+    enqueuedCount
+  };
 }

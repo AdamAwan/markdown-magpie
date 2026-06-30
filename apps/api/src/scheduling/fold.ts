@@ -1,4 +1,5 @@
 import type { Proposal } from "@magpie/core";
+import { logger } from "../logger.js";
 import type { JobView } from "@magpie/jobs";
 import { foldChangesetProposalOutputSchema, foldMarkdownProposalOutputSchema } from "@magpie/jobs";
 import type { AppContext } from "../context.js";
@@ -36,7 +37,7 @@ export async function reconcileDraftedProposal(ctx: AppContext, rival: Proposal)
   // backstop then flags the overlap to the approved PR's owner.
   if (decision.kind === "defer") {
     await ctx.stores.gapClusters.enqueuePublicationAction(rival.id, "publish");
-    console.log(`Defer: rival ${rival.id} overlaps only approved PR(s); enqueued it to publish as its own PR.`);
+    logger.info({ rivalId: rival.id }, "defer: rival overlaps only approved PRs; enqueued to publish as its own PR");
     return;
   }
   if (decision.kind !== "fold") {
@@ -59,9 +60,7 @@ export async function reconcileDraftedProposal(ctx: AppContext, rival: Proposal)
     rivalEvidence: rival.evidence,
     expectedOutput: "folded_markdown"
   });
-  console.log(
-    `Fold: enqueued fold_markdown_proposal to merge rival ${rival.id} into ${survivor.id} on ${rival.targetPath}.`
-  );
+  logger.info({ rivalId: rival.id, survivorId: survivor.id, targetPath: rival.targetPath }, "fold: enqueued fold_markdown_proposal");
 }
 
 // Gate + publish a corrective (verify-lens) proposal. Unlike the gap at-draft hook,
@@ -97,7 +96,7 @@ export async function reconcileCorrectiveProposal(ctx: AppContext, proposal: Pro
         rivalEvidence: proposal.evidence,
         expectedOutput: "folded_markdown"
       });
-      console.log(`Verify fold: enqueued fold of corrective ${proposal.id} into ${survivor.id} on ${proposal.targetPath}.`);
+      logger.info({ proposalId: proposal.id, survivorId: survivor.id, targetPath: proposal.targetPath }, "verify fold: enqueued fold of corrective proposal");
       return;
     }
     // Survivor vanished between gate and fetch — fall through to self-publish.
@@ -105,7 +104,7 @@ export async function reconcileCorrectiveProposal(ctx: AppContext, proposal: Pro
 
   // open-new, defer, or a fold whose survivor disappeared: publish as its own PR.
   await ctx.stores.gapClusters.enqueuePublicationAction(proposal.id, "publish");
-  console.log(`Verify corrective ${proposal.id} (${decision.kind}) on ${proposal.targetPath}: enqueued to publish.`);
+  logger.info({ proposalId: proposal.id, decision: decision.kind, targetPath: proposal.targetPath }, "verify corrective: enqueued to publish");
 }
 
 // Gate + publish a dedupe proposal — the multi-file analogue of
@@ -141,7 +140,7 @@ export async function reconcileDedupeProposal(ctx: AppContext, proposal: Proposa
         sharedPaths: sharedTargets(proposalTargets(survivor), targets),
         expectedOutput: "folded_changeset"
       });
-      console.log(`Dedupe fold: enqueued fold of ${proposal.id} into ${survivor.id} on [${targets.join(", ")}].`);
+      logger.info({ proposalId: proposal.id, survivorId: survivor.id, targets }, "dedupe fold: enqueued fold of proposal");
       return;
     }
     // Survivor vanished between gate and fetch — fall through to self-publish.
@@ -149,7 +148,7 @@ export async function reconcileDedupeProposal(ctx: AppContext, proposal: Proposa
 
   // open-new, defer, or a fold whose survivor disappeared: publish as its own PR.
   await ctx.stores.gapClusters.enqueuePublicationAction(proposal.id, "publish");
-  console.log(`Dedupe ${proposal.id} (${decision.kind}) on [${targets.join(", ")}]: enqueued to publish.`);
+  logger.info({ proposalId: proposal.id, decision: decision.kind, targets }, "dedupe: enqueued to publish");
 }
 
 // Gate + publish a split proposal. This is intentionally the same ownership model
@@ -184,13 +183,13 @@ export async function reconcileSplitProposal(ctx: AppContext, proposal: Proposal
         sharedPaths: sharedTargets(proposalTargets(survivor), targets),
         expectedOutput: "folded_changeset"
       });
-      console.log(`Split fold: enqueued fold of ${proposal.id} into ${survivor.id} on [${targets.join(", ")}].`);
+      logger.info({ proposalId: proposal.id, survivorId: survivor.id, targets }, "split fold: enqueued fold of proposal");
       return;
     }
   }
 
   await ctx.stores.gapClusters.enqueuePublicationAction(proposal.id, "publish");
-  console.log(`Split ${proposal.id} (${decision.kind}) on [${targets.join(", ")}]: enqueued to publish.`);
+  logger.info({ proposalId: proposal.id, decision: decision.kind, targets }, "split: enqueued to publish");
 }
 
 // Gate + publish a source-sync proposal. Mirrors the dedupe/split multi-file model:
@@ -224,13 +223,13 @@ export async function reconcileSourceSyncProposal(ctx: AppContext, proposal: Pro
         sharedPaths: sharedTargets(proposalTargets(survivor), targets),
         expectedOutput: "folded_changeset"
       });
-      console.log(`Source-sync fold: enqueued fold of ${proposal.id} into ${survivor.id} on [${targets.join(", ")}].`);
+      logger.info({ proposalId: proposal.id, survivorId: survivor.id, targets }, "source-sync fold: enqueued fold of proposal");
       return;
     }
   }
 
   await ctx.jobs.create("publish_proposal", { proposalId: proposal.id });
-  console.log(`Source-sync ${proposal.id} (${decision.kind}) on [${targets.join(", ")}]: enqueued to publish.`);
+  logger.info({ proposalId: proposal.id, decision: decision.kind, targets }, "source-sync: enqueued to publish");
 }
 
 // Gate + publish an improve proposal. Improve-patrol is the single-file analogue
@@ -265,13 +264,13 @@ export async function reconcileImproveProposal(ctx: AppContext, proposal: Propos
         rivalEvidence: proposal.evidence,
         expectedOutput: "folded_markdown"
       });
-      console.log(`Improve fold: enqueued fold of ${proposal.id} into ${survivor.id} on ${proposal.targetPath}.`);
+      logger.info({ proposalId: proposal.id, survivorId: survivor.id, targetPath: proposal.targetPath }, "improve fold: enqueued fold of proposal");
       return;
     }
   }
 
   await ctx.stores.gapClusters.enqueuePublicationAction(proposal.id, "publish");
-  console.log(`Improve ${proposal.id} (${decision.kind}) on ${proposal.targetPath}: enqueued to publish.`);
+  logger.info({ proposalId: proposal.id, decision: decision.kind, targetPath: proposal.targetPath }, "improve: enqueued to publish");
 }
 // Applies a completed fold: update the survivor's markdown, absorb the rival's gap
 // cluster into the survivor's (so the rival's gaps resolve when the survivor merges),
@@ -299,7 +298,21 @@ export async function applyFoldFromCompletedJob(
     return;
   }
 
-  await ctx.stores.proposals.updateMarkdown(survivor.id, parsed.data.markdown);
+  // A changeset survivor (dedupe/split) publishes from its `changeset`, not its
+  // `markdown` (see publishProposal in the watcher). Folding a single-file rival into
+  // it must therefore write the merged content into the changeset's primary entry —
+  // updating `markdown` alone would be silently discarded at publish time. A plain
+  // single-file survivor keeps the markdown-only path.
+  const changeset = survivor.changeset;
+  const hasPrimaryWrite = changeset?.some((change) => change.path === survivor.targetPath && !change.delete);
+  if (changeset && hasPrimaryWrite) {
+    const merged = changeset.map((change) =>
+      change.path === survivor.targetPath && !change.delete ? { ...change, content: parsed.data.markdown } : change
+    );
+    await ctx.stores.proposals.updateChangeset(survivor.id, merged, parsed.data.markdown);
+  } else {
+    await ctx.stores.proposals.updateMarkdown(survivor.id, parsed.data.markdown);
+  }
 
   if (survivor.gapClusterId && rival.gapClusterId && survivor.gapClusterId !== rival.gapClusterId) {
     const members = await ctx.stores.gapClusters.listMembershipsForCluster(rival.gapClusterId);
@@ -322,7 +335,7 @@ export async function applyFoldFromCompletedJob(
         "_(automated fold-on-overlap)_"
     });
   }
-  console.log(`Fold: merged rival ${rival.id} into survivor ${survivor.id}; survivor re-publish enqueued.`);
+  logger.info({ rivalId: rival.id, survivorId: survivor.id }, "fold: merged rival into survivor; survivor re-publish enqueued");
 }
 
 // Applies a completed multi-file fold: promote the survivor to the merged file-set
@@ -370,7 +383,7 @@ export async function applyChangesetFoldFromCompletedJob(
         "This PR has been updated to include that material. _(automated fold-on-overlap)_"
     });
   }
-  console.log(`Changeset fold: merged rival ${rival.id} into survivor ${survivor.id}; survivor re-publish enqueued.`);
+  logger.info({ rivalId: rival.id, survivorId: survivor.id }, "changeset fold: merged rival into survivor; survivor re-publish enqueued");
 }
 
 // Fold failed terminally: publish the rival as its own PR so its change is never lost.
@@ -389,5 +402,5 @@ export async function enqueueFoldFallback(ctx: AppContext, job: JobView | undefi
     return;
   }
   await ctx.stores.gapClusters.enqueuePublicationAction(rival.id, "publish");
-  console.log(`Fold fallback: fold job ${job.id} failed; enqueued rival ${rival.id} to publish as its own PR.`);
+  logger.info({ jobId: job.id, rivalId: rival.id }, "fold fallback: fold job failed; enqueued rival to publish as its own PR");
 }

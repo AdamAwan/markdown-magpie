@@ -12,23 +12,37 @@ function draft(title: string): ProposalInput {
   };
 }
 
-test("list excludes merged proposals by default but keeps them fetchable as history", async () => {
+test("list excludes terminal proposals by default but keeps them fetchable as history", async () => {
   const store = new InMemoryProposalStore();
   const active = await store.create(draft("active"));
   const merged = await store.create(draft("merged"));
+  const rejected = await store.create(draft("rejected"));
+  const superseded = await store.create(draft("superseded"));
   await store.updateStatus(merged.id, "merged");
+  await store.updateStatus(rejected.id, "rejected");
+  await store.updateStatus(superseded.id, "superseded");
 
+  // Merged, rejected and superseded are all settled, so the default inbox shows
+  // only the active proposal — no terminal item is left stuck with no action.
   const activeList = await store.list(50);
   assert.deepEqual(
     activeList.map((proposal) => proposal.id),
     [active.id]
   );
 
-  const history = await store.list(50, { status: "merged" });
-  assert.deepEqual(
-    history.map((proposal) => proposal.id),
-    [merged.id]
-  );
+  // Each terminal status remains fetchable by an explicit status filter.
+  const byStatus = [
+    { status: "merged", id: merged.id },
+    { status: "rejected", id: rejected.id },
+    { status: "superseded", id: superseded.id }
+  ] as const;
+  for (const { status, id } of byStatus) {
+    const history = await store.list(50, { status });
+    assert.deepEqual(
+      history.map((proposal) => proposal.id),
+      [id]
+    );
+  }
 });
 
 test("create defaults triggeringQuestionIds to an empty array (matching Postgres coalesce)", async () => {

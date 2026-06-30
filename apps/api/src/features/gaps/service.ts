@@ -29,7 +29,9 @@ export async function listClusters(ctx: AppContext, limit: number): Promise<Pers
   const result: PersistedGapCluster[] = [];
   for (const cluster of clusters.slice(0, limit)) {
     const memberships = await ctx.stores.gapClusters.listMembershipsForCluster(cluster.id);
-    const gapIds = memberships.map((m) => m.gapId);
+    // Show only still-open gaps: a reshape can leave a resolved gap as an active
+    // member until the next reconcile prunes it, but it must not surface here.
+    const gapIds = await ctx.stores.questionLogs.listUnresolvedGapIds(memberships.map((m) => m.gapId));
     const { summaries, questionIds } = await ctx.stores.questionLogs.gapDetailsForIds(gapIds);
     const proposal = proposalByCluster.get(cluster.id);
     result.push({
@@ -63,7 +65,10 @@ export async function draftFromCluster(
     return { ok: false as const, code: "cluster_not_found" };
   }
   const memberships = await ctx.stores.gapClusters.listMembershipsForCluster(clusterId);
-  const { summaries } = await ctx.stores.questionLogs.gapDetailsForIds(memberships.map((m) => m.gapId));
+  // Draft only the cluster's still-open gaps, so a partially-resolved cluster
+  // never re-raises content a merged proposal already covered.
+  const unresolvedGapIds = await ctx.stores.questionLogs.listUnresolvedGapIds(memberships.map((m) => m.gapId));
+  const { summaries } = await ctx.stores.questionLogs.gapDetailsForIds(unresolvedGapIds);
   // Give the drafter this flow's in-flight proposals / open PRs (from the
   // snapshot) so it can build on or avoid duplicating them. Exclude this
   // cluster's own proposal so a draft never sees its own PR.

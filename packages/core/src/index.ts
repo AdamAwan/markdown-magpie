@@ -213,6 +213,18 @@ export const PROPOSAL_STATUSES = [
 ] as const;
 type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 
+// Settled statuses: the proposal's work is done (merged), declined (rejected), or
+// folded into another proposal (superseded). These are hidden from the default
+// inbox — like an archive — but stay fetchable via an explicit status filter so
+// history is never lost. Derived here once so the proposal stores don't each
+// hand-maintain the literal list and drift (which once left superseded proposals
+// stuck visible in the UI with no action).
+export const TERMINAL_PROPOSAL_STATUSES: ReadonlyArray<ProposalStatus> = [
+  "merged",
+  "rejected",
+  "superseded"
+];
+
 export interface Proposal {
   id: string;
   title: string;
@@ -240,7 +252,7 @@ export interface Proposal {
   jobId?: string;
   publication?: ProposalPublication;
   // The latest review decision observed on this proposal's pull request, polled by
-  // the watcher's refresh_pull_requests job. Absent until the PR has been polled (or
+  // the watcher's refresh_flow_snapshot job. Absent until the PR has been polled (or
   // for proposals drafted before this was tracked). An approved PR is non-touchable:
   // the reconcile gate will not fold another change into it.
   reviewDecision?: ReviewDecision;
@@ -289,6 +301,77 @@ export function resolveProposalTargetPath(subpath: string | undefined, title: st
   const folder = (subpath ?? "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
   const fileName = proposalFileName(title);
   return folder ? `${folder}/${fileName}` : fileName;
+}
+
+// --- Flow snapshots ---------------------------------------------------------
+// The downloaded state the fetch job assembles for one flow and the api store
+// persists, so the reconciler reads it instead of polling the host live. The web
+// console reads the same shapes back over /snapshots (as FlowSnapshotView), so the
+// canonical definitions live here rather than being mirrored by hand in the web.
+
+// A flow's proposal as captured in a snapshot — just the fields the processor and
+// a human reviewer need, not the full markdown body.
+export interface SnapshotProposal {
+  id: string;
+  title?: string;
+  status: Proposal["status"];
+  gapClusterId?: string;
+  pullRequestUrl?: string;
+}
+
+// The polled state of one of this flow's open pull requests. `etag` and
+// `checkedAt` back the cache: a later refresh can issue a conditional request and
+// keep the prior state on a 304 instead of re-reading the whole PR.
+export interface SnapshotPullRequest {
+  proposalId: string;
+  url: string;
+  merged: boolean;
+  state: "open" | "closed" | "unknown";
+  // The latest review decision the watcher reported for this PR, when known.
+  reviewDecision?: ReviewDecision;
+  etag?: string;
+  checkedAt: string;
+}
+
+// Everything the fetch job downloads for one flow: the inputs the reconciler would
+// otherwise gather live (gaps, proposals) plus the externally-polled PR state. This
+// is the persisted store shape; FlowSnapshotView adds the flow's human label.
+export interface FlowSnapshot {
+  flowId?: string;
+  takenAt: string;
+  catalogRevision: number;
+  gaps: GapCandidate[];
+  proposals: SnapshotProposal[];
+  pullRequests: SnapshotPullRequest[];
+}
+
+// A snapshot enriched with its flow's human label — the shape the api serves over
+// /snapshots and the web console renders. The default flow has no flowId, so the
+// api supplies a stable label.
+export interface FlowSnapshotView extends FlowSnapshot {
+  flowName: string;
+}
+
+// --- Reconciliation decisions -----------------------------------------------
+// A single clustering decision the reconciler made while reshaping a flow's gap
+// clusters: a proposed merge or split, the model's rationale for it, and whether
+// the critic confirmed and the reconciler applied it. Persisted so a reviewer can
+// see WHY the clustering changed, not just its result — previously this lived only
+// in console logs.
+export interface ReconciliationDecisionRecord {
+  id: string;
+  // The flow the reshape belongs to; undefined for the un-routed/default flow.
+  flowId?: string;
+  kind: "merge" | "split";
+  // The proposing model's rationale for the merge/split.
+  rationale: string;
+  // The critic's verdict on the proposal.
+  confirmed: boolean;
+  // Whether the reconciler went on to apply it (only confirmed changes are applied).
+  applied: boolean;
+  // The clusters involved: every merged cluster, or the single cluster being split.
+  clusterIds: string[];
+  createdAt: string;
 }
 
 export interface ProposalPublication {
@@ -709,6 +792,48 @@ export interface SourceSyncRun {
 // sources could not substantiate, and what the reconcile gate decided to do with
 // the emitted intent. `intoProposalId` is set only when the gate folded it into an
 // existing open PR.
+
+export const MAINTENANCE_LENSES = ["gap", "source-sync", "verify", "dedupe", "split", "complete"] as const;
+export type MaintenanceLens = (typeof MAINTENANCE_LENSES)[number];
+
+export interface ChangeIntent {
+  lens: MaintenanceLens;
+  flowId?: string;
+  targets: string[];
+  evidence: string[];
+  rationale: string;
+}
+
+export interface ChangeIntentTraceCandidate {
+  proposalId: string;
+  targets: string[];
+  touchable: boolean;
+  overlapTargets: string[];
+}
+
+export interface ChangeIntentTraceOutcome {
+  proposalId?: string;
+  proposalTitle?: string;
+  proposalStatus?: Proposal["status"];
+  pullRequestUrl?: string;
+  foldJobId?: string;
+  reason?: string;
+}
+
+export type ChangeIntentTraceDecision =
+  | { kind: "open-new" }
+  | { kind: "fold"; intoProposalId: string }
+  | { kind: "defer"; behindProposalId: string }
+  | { kind: "drop"; reason: string };
+
+export interface ChangeIntentTrace {
+  createdAt: string;
+  intent: ChangeIntent;
+  decision: ChangeIntentTraceDecision;
+  candidatePullRequests: ChangeIntentTraceCandidate[];
+  outcome?: ChangeIntentTraceOutcome;
+}
+
 export interface VerifyFinding {
   path: string;
   claims: UnprovableClaim[];
@@ -727,7 +852,7 @@ export interface VerifyFinding {
 // shared shape stays generic.
 // ---------------------------------------------------------------------------
 
-export type MaintenanceTaskType = "fix_patrol" | "improve_patrol" | "process_gaps_to_pull_requests";
+export type MaintenanceTaskType = "correctness_patrol" | "editorial_patrol" | "process_gaps_to_pull_requests";
 
 export type MaintenanceRunStatus = "running" | "completed" | "failed";
 
@@ -927,4 +1052,3 @@ export interface PublishChangesetRequest {
   title: string;
   changes: ChangesetChange[];
 }
-

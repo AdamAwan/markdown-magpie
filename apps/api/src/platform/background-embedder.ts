@@ -1,6 +1,7 @@
 import type { EmbeddingProvider } from "@magpie/core";
 import { embedPendingSections } from "../stores/embed-sections.js";
 import type { EmbeddingPersistence } from "../stores/knowledge-index.js";
+import { logger } from "../logger.js";
 
 export class BackgroundEmbedder {
   private inFlight = false;
@@ -25,11 +26,11 @@ export class BackgroundEmbedder {
         this.rerunRequested = false;
         const result = await embedPendingSections({ store: this.store, provider: this.provider });
         if (result.embeddedCount > 0) {
-          console.log(`Embedded ${result.embeddedCount} section(s); ${result.remaining} remaining`);
+          logger.debug({ embeddedCount: result.embeddedCount, remaining: result.remaining }, "embedded sections");
         }
       } while (this.rerunRequested);
     } catch (error) {
-      console.warn(`Background embedding failed: ${error instanceof Error ? error.message : "unknown error"}`);
+      logger.warn({ err: error instanceof Error ? error.message : "unknown error" }, "background embedding failed");
     } finally {
       this.inFlight = false;
     }

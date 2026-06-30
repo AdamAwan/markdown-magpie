@@ -3,6 +3,7 @@
 // shapes. Only genuinely web-only types are declared locally below.
 export type {
   AnswerResult,
+  ChangeIntentTrace,
   Citation,
   Confidence,
   MaintenanceRun,
@@ -24,13 +25,7 @@ export type {
   WatcherView
 } from "@magpie/core";
 
-import type {
-  GapCandidate,
-  Proposal,
-  QuestionFeedback,
-  ScheduledTaskSettings,
-  WatcherView
-} from "@magpie/core";
+import type { QuestionFeedback, ScheduledTaskSettings, WatcherView } from "@magpie/core";
 
 // Queue/job domain types live in @magpie/jobs (the pg-boss contract). The web
 // re-exports the TYPES so the console's job/schedule views never drift from the
@@ -45,7 +40,12 @@ import type { AiProviderName, JobType, JobView } from "@magpie/jobs";
 
 // The four AI providers a watcher can run. API-side credentials do not gate
 // availability (watchers hold the credentials), so all four are always offered.
-export const AI_PROVIDERS = ["openai-compatible", "azure-openai", "codex", "claude"] as const satisfies readonly AiProviderName[];
+export const AI_PROVIDERS = [
+  "openai-compatible",
+  "azure-openai",
+  "codex",
+  "claude"
+] as const satisfies readonly AiProviderName[];
 
 // Feedback was the local name for the core QuestionFeedback union; keep the alias
 // so existing call sites continue to read naturally.
@@ -69,6 +69,14 @@ export type ConsoleSection =
 export interface Health {
   ok: boolean;
   service: string;
+}
+
+// Identity of the running API build, served by GET /api/version. Every field is
+// null when the image was built without the build args (local dev).
+export interface BuildInfo {
+  sha: string | null;
+  commitMessage: string | null;
+  committedAt: string | null;
 }
 
 export interface PromptSummary {
@@ -215,43 +223,12 @@ export interface IndexRepositoryResponse {
   };
 }
 
-// Mirrors the API's snapshot shapes (apps/api/src/stores/snapshot-store.ts). The
-// web can't import server modules, so these are kept in sync by hand.
-export interface SnapshotProposal {
-  id: string;
-  title?: string;
-  status: Proposal["status"];
-  gapClusterId?: string;
-  pullRequestUrl?: string;
-}
-
-export interface SnapshotPullRequest {
-  proposalId: string;
-  url: string;
-  merged: boolean;
-  state: "open" | "closed" | "unknown";
-  checkedAt: string;
-}
-
-export interface FlowSnapshot {
-  flowId?: string;
-  flowName: string;
-  takenAt: string;
-  catalogRevision: number;
-  gaps: GapCandidate[];
-  proposals: SnapshotProposal[];
-  pullRequests: SnapshotPullRequest[];
-}
-
-// Mirrors the API's ReconciliationDecisionRecord
-// (apps/api/src/stores/reconciliation-decision-store.ts).
-export interface ReconciliationDecision {
-  id: string;
-  flowId?: string;
-  kind: "merge" | "split";
-  rationale: string;
-  confirmed: boolean;
-  applied: boolean;
-  clusterIds: string[];
-  createdAt: string;
-}
+// The snapshot and reconciliation shapes are canonical domain types in
+// @magpie/core, shared with the api store, so they can never drift from the
+// backend. The console reads `FlowSnapshotView` over /snapshots (the store
+// FlowSnapshot plus its flow label) and `ReconciliationDecisionRecord` over
+// /reconciliations; we re-export them under the console's established names.
+export type {
+  FlowSnapshotView as FlowSnapshot,
+  ReconciliationDecisionRecord as ReconciliationDecision
+} from "@magpie/core";

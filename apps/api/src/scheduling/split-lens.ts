@@ -1,6 +1,7 @@
 import type { SplitDocumentJobInput } from "@magpie/core";
 import type { AppContext } from "../context.js";
 import { splitNeighbours } from "./split-neighbours.js";
+import { logger } from "../logger.js";
 
 const SPLIT_MIN_CHARS = 15_000;
 const SPLIT_MIN_H2_COUNT = 6;
@@ -42,7 +43,7 @@ export async function runSplitLens(
       enqueued += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(`Split lens: skipping ${document.path} - ${message}.`);
+      logger.warn({ path: document.path, err: message }, "split lens: skipping document");
     }
   }
 

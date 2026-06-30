@@ -6,6 +6,8 @@
 // This is in-process and best-effort: tasks do not survive a restart. Long-lived
 // work that must be durable belongs on the AI job queue (watcher) or a scheduled
 // task instead — this is for the tail of an already-started request.
+import { logger } from "../logger.js";
+
 export class BackgroundRunner {
   private readonly inFlight = new Set<Promise<void>>();
 
@@ -17,7 +19,7 @@ export class BackgroundRunner {
         await work();
       } catch (error) {
         const message = error instanceof Error ? error.message : "unknown error";
-        console.warn(`Background task "${label}" failed: ${message}`);
+        logger.warn({ label, err: message }, "background task failed");
       }
     })();
 
