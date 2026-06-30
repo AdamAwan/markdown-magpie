@@ -10,7 +10,7 @@ const flows: RoutableFlow[] = [
   { id: "b", name: "Beta" }
 ];
 
-test("logs at warn and returns undefined when the provider call fails", async () => {
+test("logs at warn and is unroutable when the provider call fails", async () => {
   const chunks: string[] = [];
   const stream = new Writable({
     write(chunk, _enc, cb) {
@@ -25,9 +25,9 @@ test("logs at warn and returns undefined when the provider call fails", async ()
     }
   };
 
-  const decision = await routeQuestionToFlow("q?", flows, failingProvider, logger);
+  const route = await routeQuestionToFlow("q?", flows, failingProvider, logger);
 
-  assert.equal(decision, undefined);
+  assert.deepEqual(route, { status: "unroutable" });
   const lines = chunks.join("").split("\n").filter(Boolean).map((l) => JSON.parse(l));
   assert.ok(lines.some((l) => typeof l.msg === "string" && l.msg.includes("routing")));
 });

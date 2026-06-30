@@ -19,12 +19,21 @@ const answerTimeoutMs = parsePositiveInt(process.env.ANSWER_TIMEOUT_MS, 120000);
 // active are non-terminal; completed | cancelled | failed are terminal.
 type JobState = "created" | "retry" | "active" | "completed" | "cancelled" | "failed" | "blocked";
 
+export interface Flow {
+  id: string;
+  name: string;
+}
+
 export interface AskResult {
   answer: string;
   confidence: string;
   citations: unknown[];
   gaps?: unknown[];
   questionId?: string;
+  // Present when "auto" routing could not determine a flow: the answer is a stock
+  // note (confidence "unknown") and the caller should re-ask kb.ask with `flow`
+  // set to one of these ids.
+  flowSelectionRequired?: { availableFlows: Flow[] };
 }
 
 interface JobView {
@@ -103,8 +112,13 @@ async function readApiResponse(response: Response, path: string): Promise<unknow
 // terminal state, so callers never see internal job, queue, or retrieval-context
 // details. The terminal job's output is the envelope { result, executor }; the
 // answer fields live in `result` (the answerQuestionOutputSchema shape).
-export async function askQuestion(question: string, options?: KbClientOptions): Promise<AskResult> {
-  const ask = asObject(await postJson("/ask", { question }, options));
+export async function askQuestion(
+  question: string,
+  options?: KbClientOptions,
+  flow?: string
+): Promise<AskResult> {
+  const body = flow ? { question, flow } : { question };
+  const ask = asObject(await postJson("/ask", body, options));
   const questionId = typeof ask.questionId === "string" ? ask.questionId : undefined;
   const links = readLinks(ask);
   const deadline = Date.now() + answerTimeoutMs;
@@ -220,7 +234,44 @@ function extractAnswer(value: unknown): AskResult {
     result.gaps = record.gaps;
   }
 
+  const selection = readFlowSelectionRequired(record.flowSelectionRequired);
+  if (selection) {
+    result.flowSelectionRequired = selection;
+  }
+
   return result;
+}
+
+// Reads the structured "pick a flow" signal off an answer payload, tolerating a
+// missing/malformed field by returning undefined (the answer note still stands).
+function readFlowSelectionRequired(value: unknown): { availableFlows: Flow[] } | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const flows = (value as { availableFlows?: unknown }).availableFlows;
+  if (!Array.isArray(flows)) {
+    return undefined;
+  }
+
+  return { availableFlows: flows.filter(isFlow) };
+}
+
+function isFlow(value: unknown): value is Flow {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    typeof (value as Flow).id === "string" &&
+    typeof (value as Flow).name === "string"
+  );
+}
+
+// Lists the flows a caller can pin a question to (GET /knowledge/flows), so an
+// MCP agent can specify `flow` on the first kb.ask rather than waiting to be asked.
+export async function listFlows(options?: KbClientOptions): Promise<{ flows: Flow[] }> {
+  const response = asObject(await getJson("/knowledge/flows", options));
+  const flows = Array.isArray(response.flows) ? response.flows.filter(isFlow) : [];
+  return { flows };
 }
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -257,7 +308,7 @@ export function stringArgument(args: Record<string, unknown> | undefined, name: 
   return value.trim();
 }
 
-function optionalStringArgument(args: Record<string, unknown> | undefined, name: string): string | undefined {
+export function optionalStringArgument(args: Record<string, unknown> | undefined, name: string): string | undefined {
   const value = args?.[name];
   if (value === undefined) {
     return undefined;

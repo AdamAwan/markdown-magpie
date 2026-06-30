@@ -1,0 +1,69 @@
+// Alloy — discover every compose container via the Docker API, tail its
+// stdout/stderr, parse the pino JSON, and push to Loki.
+//
+// Labels are kept low-cardinality on purpose: `service`, `container`, and a
+// mapped `level`. High-cardinality ids (requestId/jobId) are intentionally NOT
+// labels — they stay in the raw JSON line and are queried at read time with
+// `| json | requestId="..."`, so Loki's index does not blow up.
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+  targets = []
+
+  // Use the compose service name (api, watcher, web, mcp-http, postgres, ...)
+  // as the `service` label.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  // Container name (minus the leading slash) as a secondary label.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.containers.targets
+  relabel_rules = discovery.relabel.containers.rules
+  labels        = { job = "docker" }
+  forward_to    = [loki.process.pino.receiver]
+}
+
+loki.process "pino" {
+  // Parse pino JSON only to extract the level for labelling. Non-JSON lines
+  // (postgres, migrate, dev pino-pretty) yield no extracted fields and pass
+  // through with their service/container labels intact. The raw line is left
+  // untouched so `| json | requestId="..."` works at query time.
+  stage.json {
+    expressions = {
+      level = "level",
+    }
+  }
+
+  // pino emits `level` as a number; map it to a human name for the label.
+  stage.template {
+    source   = "level_name"
+    template = "{{ if eq .level \"10\" }}trace{{ else if eq .level \"20\" }}debug{{ else if eq .level \"30\" }}info{{ else if eq .level \"40\" }}warn{{ else if eq .level \"50\" }}error{{ else if eq .level \"60\" }}fatal{{ end }}"
+  }
+
+  stage.labels {
+    values = {
+      level = "level_name",
+    }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

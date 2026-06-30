@@ -1,4 +1,4 @@
-import type { Citation, Confidence, KnowledgeGapSignal } from "@magpie/core";
+import type { Citation, Confidence, FlowSelectionRequired, KnowledgeGapSignal } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { jobDefinition } from "@magpie/jobs";
 import type { z } from "zod";
@@ -26,6 +26,25 @@ export interface AnswerOutput {
   citations: Citation[];
   gaps?: KnowledgeGapSignal[];
   flowId?: string;
+  flowSelectionRequired?: FlowSelectionRequired;
+}
+
+// The answer "auto" routing produces when it cannot determine a flow: no answer,
+// confidence "unknown", and the list of flows the caller should choose between
+// before re-asking. The UI and MCP key off `flowSelectionRequired`, not the prose.
+export function buildFlowSelectionRequiredOutput(
+  flows: Array<{ id: string; name: string }>
+): AnswerOutput {
+  return {
+    answer:
+      "I could not determine which knowledge area this question belongs to. " +
+      "Please choose one of the available flows and ask again.",
+    confidence: "unknown",
+    citations: [],
+    flowSelectionRequired: {
+      availableFlows: flows.map((flow) => ({ id: flow.id, name: flow.name }))
+    }
+  };
 }
 
 // Per-job prompt for the generic chat path (everything except answer_question,

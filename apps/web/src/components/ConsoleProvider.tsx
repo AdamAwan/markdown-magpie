@@ -77,6 +77,9 @@ function useConsoleController() {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<AskResponse | undefined>();
   const [answeredSearch, setAnsweredSearch] = useState("");
+  // Flow the Ask form pins the question to. "auto" lets the watcher route it; any
+  // other value is a configured flow id sent as the /ask `flow` parameter.
+  const [askFlow, setAskFlow] = useState("auto");
   // Starts empty; a reconciliation effect selects the first configured flow once
   // config loads, so no demo-specific id is baked into the default state.
   const [flowId, setFlowId] = useState("");
@@ -350,16 +353,13 @@ function useConsoleController() {
     }
   }
 
-  async function ask(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!question.trim()) {
-      return;
-    }
-
+  // Shared by the Ask form and the "pick a flow" re-ask. `flow` is "auto" or a
+  // configured flow id; the API rejects an unknown id with a 400.
+  async function submitQuestion(questionText: string, flow: string) {
     setLoading(true);
     clearMessage();
     try {
-      const result = await apiPost<AskResponse>("/ask", { question: question.trim() });
+      const result = await apiPost<AskResponse>("/ask", { question: questionText, flow });
       setQuestion("");
       // Bounded-wait for the queued answer; the helper returns the terminal job
       // (or the still-active view if the watcher is slow), and the 4s refresh
@@ -378,6 +378,21 @@ function useConsoleController() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function ask(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!question.trim()) {
+      return;
+    }
+
+    await submitQuestion(question.trim(), askFlow);
+  }
+
+  // Re-asks an earlier question that routing could not place, now pinned to a flow
+  // the user picked from `flowSelectionRequired`.
+  async function reAskWithFlow(questionText: string, flow: string) {
+    await submitQuestion(questionText, flow);
   }
 
   async function sendFeedback(questionId: string, feedback: Feedback) {
@@ -607,6 +622,7 @@ function useConsoleController() {
     question,
     answer,
     answeredSearch,
+    askFlow,
     flowId,
     loading,
     indexingRepo,
@@ -619,6 +635,7 @@ function useConsoleController() {
     setSelectedProposalId,
     setSelectedDocumentId,
     setFlowId,
+    setAskFlow,
     setAnsweredSearch,
     setQuestion,
     showMessage,
@@ -632,6 +649,7 @@ function useConsoleController() {
     retryJob,
     acceptFailedJobs,
     ask,
+    reAskWithFlow,
     sendFeedback,
     toggleKnowledgeGap,
     draftProposal,

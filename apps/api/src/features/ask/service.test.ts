@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { jobDefinition } from "@magpie/jobs";
 import { RuntimeConfigHolder } from "../../config-holder.js";
+import { HttpError } from "../../http/errors.js";
 import { makeTestContext } from "../../test-support/context.js";
 import { ask } from "./service.js";
 
@@ -56,4 +57,54 @@ test("ask emits an empty flows array when no flows are configured", async () => 
   const { jobs } = await ctx.jobs.list({});
   const input = jobs[0].input as { flows: unknown[] };
   assert.deepEqual(input.flows, []);
+});
+
+test("ask pins a caller-specified flow as requestedFlowId", async () => {
+  const ctx = makeTestContext();
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
+  ctx.knowledgeConfig.flows = [
+    { id: "support", name: "Support", sourceIds: ["s"], destinationId: "kb" }
+  ];
+
+  await ask(ctx, "How do I configure X?", "support");
+
+  const { jobs } = await ctx.jobs.list({});
+  const input = jobs[0].input as { requestedFlowId?: string };
+  assert.equal(input.requestedFlowId, "support");
+});
+
+test('ask treats absent and "auto" as routing (no requestedFlowId)', async () => {
+  const ctx = makeTestContext();
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
+  ctx.knowledgeConfig.flows = [
+    { id: "support", name: "Support", sourceIds: ["s"], destinationId: "kb" }
+  ];
+
+  await ask(ctx, "How do I configure X?", "auto");
+
+  const { jobs } = await ctx.jobs.list({});
+  const input = jobs[0].input as { requestedFlowId?: string };
+  assert.equal(input.requestedFlowId, undefined);
+});
+
+test("ask rejects an unknown flow id with a 400", async () => {
+  const ctx = makeTestContext();
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
+  ctx.knowledgeConfig.flows = [
+    { id: "support", name: "Support", sourceIds: ["s"], destinationId: "kb" }
+  ];
+
+  await assert.rejects(
+    () => ask(ctx, "How do I configure X?", "marketing"),
+    (error: unknown) => {
+      assert.ok(error instanceof HttpError);
+      assert.equal(error.status, 400);
+      assert.equal(error.code, "unknown_flow");
+      return true;
+    }
+  );
+
+  // Nothing should be enqueued when validation fails.
+  const { jobs } = await ctx.jobs.list({});
+  assert.equal(jobs.length, 0);
 });

@@ -157,7 +157,62 @@ services:
       timeout: 5s
       retries: 20
 
+  # --- Unified logging (profile: logging) ---------------------------------
+  # Loki + Alloy + Grafana. Brought up alongside the app on the deployed box
+  # with `--profile app --profile logging`; left out of local dev by default.
+
+  # Stores and indexes logs. Not published — only Alloy (push) and Grafana
+  # (query) reach it on the compose network.
+  loki:
+    image: grafana/loki:3.4.2
+    command: -config.file=/etc/loki/loki-config.yaml
+    volumes:
+      - ./deploy/logging/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki-data:/loki
+    profiles:
+      - logging
+    restart: unless-stopped
+
+  # Discovers every container via the Docker API, tails stdout/stderr, parses
+  # the pino JSON, and ships to Loki. Reads the Docker socket read-only.
+  alloy:
+    image: grafana/alloy:v1.7.5
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./deploy/logging/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    profiles:
+      - logging
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  # The UI. Anonymous read-only (trusted-network box), Loki datasource
+  # pre-provisioned. Published on 3001 (3000/4000/4001/5432 are taken).
+  grafana:
+    image: grafana/grafana:11.5.2
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./deploy/logging/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    profiles:
+      - logging
+    depends_on:
+      - loki
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   magpie-api-checkouts:
   magpie-watcher-checkouts:
+  loki-data:
+  grafana-data:
