@@ -20,7 +20,6 @@ const EXPIRATION_SECONDS = {
   draft_markdown_proposal: 15 * 60,
   detect_contradiction: 10 * 60,
   suggest_consolidation: 10 * 60,
-  cluster_gap_candidates: 5 * 60,
   reconcile_gap_clusters: 5 * 60,
   sync_source_changes_generate_plan: 60 * 60,
   verify_document: 10 * 60,
@@ -58,7 +57,7 @@ test("every job type is unique and has schemas and a valid policy", () => {
 });
 
 test("provider work retries three times and non-provider work retries twice", () => {
-  for (const type of ["answer_question", "cluster_gap_candidates"] as const) {
+  for (const type of ["answer_question", "reconcile_gap_clusters"] as const) {
     const policy = jobDefinition(type).policy;
     assert.equal(policy.retryLimit, 3);
     assert.equal(policy.retryDelay, 15);

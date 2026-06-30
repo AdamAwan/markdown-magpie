@@ -122,10 +122,13 @@ export interface DedupeDocumentsJobOutput {
 
 **Prompt** (`dedupe-documents`): conservative. Act only on a *genuine* duplicate or
 contradiction between A and exactly one neighbour; otherwise return `duplicate:false`.
-When acting, produce a minimal 2-file changeset that leaves both docs coherent: prefer
-trimming B and adding a cross-reference over deleting it; delete B only when it would
-become empty. Changeset paths are always a subset of `{A} ∪ neighbours`. `primaryPath`
-is A (the patrolled doc) unless the model judges the neighbour the better survivor.
+When acting, produce a minimal 2-file changeset that leaves both docs coherent: rewrite
+the survivor to hold every unique fact from both, then **delete B by default** once the
+survivor has absorbed its content. Keep B (trimmed, with a cross-reference) only when it
+retains substantive material of its own; never leave a pointer-only stub ("moved to …",
+"see <survivor>") — that must be deleted instead. Changeset paths are always a subset of
+`{A} ∪ neighbours`. `primaryPath` is A (the patrolled doc) unless the model judges the
+neighbour the better survivor.
 
 ---
 

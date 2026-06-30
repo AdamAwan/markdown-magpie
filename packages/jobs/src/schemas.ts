@@ -185,14 +185,6 @@ const maintenanceOperationSchema = z.object({
   writes: z.array(documentSchema).default([]),
   deletes: z.array(z.string()).default([])
 });
-export const clusterGapCandidatesInputSchema = z.object({
-  candidates: z.array(z.object({ summary: z.string(), questionIds: z.array(z.string()) })),
-  provider: providerSchema
-});
-export const clusterGapCandidatesOutputSchema = z.object({
-  clusters: z.array(z.object({ label: z.string(), summaries: z.array(z.string()).min(1) }))
-});
-
 export const reconcileGapClustersInputSchema = z.object({
   clusters: z.array(z.object({
     id: z.string(),

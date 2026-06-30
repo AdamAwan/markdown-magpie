@@ -26,8 +26,8 @@ const STAGES: { id: string; step: string; title: string; blurb: string; promptId
     id: "gaps",
     step: "2",
     title: "Find the gaps",
-    blurb: "Questions the knowledge base couldn't answer are grouped, then summarised into prioritised gaps.",
-    promptIds: ["gap-clustering", "summarize-gap"]
+    blurb: "Questions the knowledge base couldn't answer are summarised into prioritised gaps.",
+    promptIds: ["summarize-gap"]
   },
   {
     id: "propose",

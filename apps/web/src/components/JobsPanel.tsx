@@ -20,7 +20,6 @@ const PROVIDER_JOB_TYPES = [
   "draft_markdown_proposal",
   "detect_contradiction",
   "suggest_consolidation",
-  "cluster_gap_candidates",
   "reconcile_gap_clusters",
   "sync_source_changes_generate_plan"
 ] as const satisfies readonly JobType[];

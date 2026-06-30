@@ -7,7 +7,6 @@ export const JOB_TYPES = [
   "fold_markdown_proposal",
   "detect_contradiction",
   "suggest_consolidation",
-  "cluster_gap_candidates",
   "reconcile_gap_clusters",
   "sync_source_changes_generate_plan",
   "verify_document",
