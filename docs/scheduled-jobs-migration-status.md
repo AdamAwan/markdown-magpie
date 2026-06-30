@@ -91,20 +91,17 @@ Evidence:
 Now that Scope B is shipped and the deferred/publication lifecycle is removed,
 migrating `SourceSyncRun` to the generic audit is a straightforward follow-up.
 
-### 3. Clean up stale docs that still describe retired crunch behavior
+### 3. Clean up stale docs that still describe retired crunch behavior — done
 
-- `docs/api.md` still lists `crunch_knowledge_base` as an active job type in the
-  Jobs section.
-- `docs/ai-jobs.md` still documents `/api/crunch/*`, `crunch_runs`,
-  `crunch_settings`, and `trigger_scheduled_crunch`.
-
-This is not a runtime blocker, but it will mislead anyone using the docs as the
-current contract.
+`docs/api.md` no longer lists `crunch_knowledge_base`, and `docs/ai-jobs.md` no
+longer documents the `/api/crunch/*` endpoints, `crunch_runs`/`crunch_settings`,
+the Crunch section, or `trigger_scheduled_crunch`. The public docs now match the
+current contract. (The `docs/maintenance-redesign.md` design doc still references
+crunch by design — it explains why crunch was retired.)
 
 ## Recommended next steps
 
 1. Migrate source-sync into the generic `MaintenanceRun` audit.
-2. Update `docs/api.md` and `docs/ai-jobs.md` to remove retired crunch behavior.
 
 ## Practical checklist
 
@@ -115,7 +112,7 @@ current contract.
 - [x] Add forward migration dropping crunch tables
 - [ ] Make source-sync a first-class Proposal with symmetric gate behavior
 - [ ] Migrate source-sync off its bespoke run lifecycle into generic maintenance audit
-- [ ] Remove stale crunch references from public docs
+- [x] Remove stale crunch references from public docs
 - [ ] Align dataflow narrative with actual backend behavior
 
 ## Reference files

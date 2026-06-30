@@ -356,11 +356,12 @@ the same repository resolution + validation as the publish path.
 
 ## Jobs
 
-All AI work runs through the pg-boss queue. The full job contract — payload shapes, job
-states, the client flow, the watcher model, and provider configuration — lives in
-[ai-jobs.md](ai-jobs.md). Job types include `answer_question`, `summarize_gap`,
-`draft_markdown_proposal`, `crunch_knowledge_base`, `publish_proposal`, and the maintenance
-jobs. Job states: `created`, `retry`, `active`, `completed`, `cancelled`, `failed`, `blocked`.
+Generative (chat) AI work runs through the pg-boss queue; embeddings are computed inline by
+the API. The full job contract — payload shapes, job states, the client flow, the watcher
+model, and provider configuration — lives in [ai-jobs.md](ai-jobs.md). Job types include
+`answer_question`, `summarize_gap`, `draft_markdown_proposal`, `publish_proposal`, and the
+maintenance jobs. Job states: `created`, `retry`, `active`, `completed`, `cancelled`,
+`failed`, `blocked`.
 
 ### `POST /api/jobs`
 
