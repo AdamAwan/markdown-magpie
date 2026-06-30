@@ -56,6 +56,17 @@ RUN groupadd --system --gid 1001 magpie \
   && chown -R magpie:magpie /data
 USER magpie
 
+# Build identity, surfaced by the API at GET /api/version. Declared this late so
+# the per-commit values don't invalidate the cached dependency/COPY layers above.
+# Populated by .github/workflows/publish-image.yml; absent in local builds, where
+# the endpoint falls back to a "dev" build.
+ARG GIT_SHA=""
+ARG GIT_COMMIT_MESSAGE=""
+ARG GIT_COMMITTED_AT=""
+ENV MAGPIE_BUILD_SHA=$GIT_SHA
+ENV MAGPIE_BUILD_COMMIT_MESSAGE=$GIT_COMMIT_MESSAGE
+ENV MAGPIE_BUILD_COMMITTED_AT=$GIT_COMMITTED_AT
+
 EXPOSE 3000 4000 4001
 
 CMD ["npm", "run", "start", "-w", "@magpie/api"]
