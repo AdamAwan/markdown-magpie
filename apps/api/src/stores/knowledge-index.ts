@@ -42,10 +42,18 @@ export interface SectionToEmbed {
   text: string;
 }
 
+export interface SectionEmbeddingToSave {
+  id: string;
+  embedding: number[];
+}
+
 export interface EmbeddingPersistence {
   listSectionsNeedingEmbedding(limit: number, repositoryId?: string): Promise<SectionToEmbed[]>;
   countSectionsNeedingEmbedding(repositoryId?: string): Promise<number>;
   saveSectionEmbedding(id: string, embedding: number[]): Promise<void>;
+  // Saves every embedding from one provider batch in a single multi-row
+  // statement instead of one round-trip per section.
+  saveSectionEmbeddings(entries: SectionEmbeddingToSave[]): Promise<void>;
 }
 
 export interface MarkdownUpload {

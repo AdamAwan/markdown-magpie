@@ -45,11 +45,15 @@ export async function embedPendingSections(options: EmbedPendingOptions): Promis
       );
     }
 
-    for (let i = 0; i < pending.length; i += 1) {
-      attempted.add(pending[i].id);
-      await options.store.saveSectionEmbedding(pending[i].id, vectors[i]);
-      embeddedCount += 1;
+    for (const section of pending) {
+      attempted.add(section.id);
     }
+    // One multi-row write per provider batch instead of one round-trip per
+    // section (the original loop awaited saveSectionEmbedding sequentially).
+    await options.store.saveSectionEmbeddings(
+      pending.map((section, i) => ({ id: section.id, embedding: vectors[i] }))
+    );
+    embeddedCount += pending.length;
   }
 
   const remaining = await options.store.countSectionsNeedingEmbedding(options.repositoryId);

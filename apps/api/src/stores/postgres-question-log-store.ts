@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import type {
   AnswerResult,
+  Citation,
   Confidence,
   GapCandidate,
   QuestionFeedback,
@@ -12,6 +13,7 @@ import type {
   QuestionLogUpdateInput
 } from "@magpie/core";
 import type { QuestionLogStore } from "./question-log-store.js";
+import { valuesClause } from "./sql-bulk.js";
 
 const { Pool } = pg;
 
@@ -106,31 +108,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         await bumpGapCatalog(client, input.flowId ?? null);
       }
 
-      for (const citation of input.answer?.citations ?? []) {
-        await client.query(
-          `
-            INSERT INTO answer_citations (
-              question_id, section_id, document_id, path, heading, anchor, excerpt
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (question_id, section_id) DO UPDATE
-            SET document_id = EXCLUDED.document_id,
-                path = EXCLUDED.path,
-                heading = EXCLUDED.heading,
-                anchor = EXCLUDED.anchor,
-                excerpt = EXCLUDED.excerpt
-          `,
-          [
-            id,
-            citation.sectionId,
-            citation.documentId,
-            citation.path,
-            citation.heading,
-            citation.anchor,
-            citation.excerpt
-          ]
-        );
-      }
+      await insertCitationRows(client, id, input.answer?.citations ?? [], { onConflictUpdate: true });
 
       await client.query("COMMIT");
     } catch (error) {
@@ -200,25 +178,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       await bumpGapCatalog(client, flowId);
       await client.query("DELETE FROM answer_citations WHERE question_id = $1", [id]);
 
-      for (const citation of input.answer.citations) {
-        await client.query(
-          `
-            INSERT INTO answer_citations (
-              question_id, section_id, document_id, path, heading, anchor, excerpt
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-          `,
-          [
-            id,
-            citation.sectionId,
-            citation.documentId,
-            citation.path,
-            citation.heading,
-            citation.anchor,
-            citation.excerpt
-          ]
-        );
-      }
+      await insertCitationRows(client, id, input.answer.citations, { onConflictUpdate: false });
 
       await client.query("COMMIT");
     } catch (error) {
@@ -468,20 +428,73 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
   }
 }
 
-// Inserts one gap row per summary. Used for both auto-detected gaps (on answer)
-// and manual gaps (on flag); the caller picks the source.
+// Inserts one gap row per summary in a single multi-row INSERT (instead of one
+// round-trip per summary). Used for both auto-detected gaps (on answer) and
+// manual gaps (on flag); the caller picks the source.
 async function insertGapRows(
   client: pg.PoolClient,
   questionId: string,
   summaries: string[],
   source: QuestionGapSource = "auto"
 ): Promise<void> {
-  for (const summary of summaries) {
-    await client.query(
-      "INSERT INTO question_gaps (question_id, summary, source) VALUES ($1, $2, $3)",
-      [questionId, summary, source]
-    );
+  if (summaries.length === 0) {
+    return;
   }
+
+  await client.query(
+    `
+      INSERT INTO question_gaps (question_id, summary, source)
+      VALUES ${valuesClause(summaries.length, 3)}
+    `,
+    summaries.flatMap((summary) => [questionId, summary, source])
+  );
+}
+
+// Inserts one row per citation in a single multi-row INSERT (instead of one
+// round-trip per citation). `record()` may re-insert a citation for a section
+// already cited by an earlier (e.g. retried) write, so it opts into the
+// ON CONFLICT upsert; `updateAnswer()` deletes the question's prior citations
+// first, so a plain insert is sufficient (and exact-matches the prior
+// behavior, which did not upsert there either).
+async function insertCitationRows(
+  client: pg.PoolClient,
+  questionId: string,
+  citations: Citation[],
+  options: { onConflictUpdate: boolean }
+): Promise<void> {
+  if (citations.length === 0) {
+    return;
+  }
+
+  const conflictClause = options.onConflictUpdate
+    ? `
+        ON CONFLICT (question_id, section_id) DO UPDATE
+        SET document_id = EXCLUDED.document_id,
+            path = EXCLUDED.path,
+            heading = EXCLUDED.heading,
+            anchor = EXCLUDED.anchor,
+            excerpt = EXCLUDED.excerpt
+      `
+    : "";
+
+  await client.query(
+    `
+      INSERT INTO answer_citations (
+        question_id, section_id, document_id, path, heading, anchor, excerpt
+      )
+      VALUES ${valuesClause(citations.length, 7)}
+      ${conflictClause}
+    `,
+    citations.flatMap((citation) => [
+      questionId,
+      citation.sectionId,
+      citation.documentId,
+      citation.path,
+      citation.heading,
+      citation.anchor,
+      citation.excerpt
+    ])
+  );
 }
 
 // Advances the monotonic gap-catalog revision for one flow ('' is the

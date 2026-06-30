@@ -4,10 +4,15 @@ import type { EmbeddingProvider } from "@magpie/core";
 import { embedPendingSections } from "./embed-sections.js";
 import type { EmbeddingPersistence, SectionToEmbed } from "./knowledge-index.js";
 
-function fakeStore(pending: SectionToEmbed[]): EmbeddingPersistence & { saved: Map<string, number[]> } {
+function fakeStore(pending: SectionToEmbed[]): EmbeddingPersistence & {
+  saved: Map<string, number[]>;
+  batchCalls: number[];
+} {
   const saved = new Map<string, number[]>();
+  const batchCalls: number[] = [];
   return {
     saved,
+    batchCalls,
     async listSectionsNeedingEmbedding(limit) {
       return pending.filter((s) => !saved.has(s.id)).slice(0, limit);
     },
@@ -16,6 +21,12 @@ function fakeStore(pending: SectionToEmbed[]): EmbeddingPersistence & { saved: M
     },
     async saveSectionEmbedding(id, embedding) {
       saved.set(id, embedding);
+    },
+    async saveSectionEmbeddings(entries) {
+      batchCalls.push(entries.length);
+      for (const entry of entries) {
+        saved.set(entry.id, entry.embedding);
+      }
     }
   };
 }
@@ -44,6 +55,20 @@ describe("embedPendingSections", () => {
     assert.equal(result.remaining, 0);
     assert.equal(store.saved.size, 3);
     assert.equal(store.saved.get("a")?.[0], 5); // "alpha".length
+  });
+
+  it("saves each provider batch in a single batched call instead of one write per section", async () => {
+    const store = fakeStore([
+      { id: "a", text: "alpha" },
+      { id: "b", text: "beta" },
+      { id: "c", text: "gamma" }
+    ]);
+
+    await embedPendingSections({ store, provider, batchSize: 2 });
+
+    // 3 sections at batchSize 2 -> two provider/save batches (2 then 1), not
+    // three individual saveSectionEmbedding calls.
+    assert.deepEqual(store.batchCalls, [2, 1]);
   });
 
   it("is idempotent — already-embedded sections are not re-embedded", async () => {
@@ -87,6 +112,9 @@ describe("embedPendingSections", () => {
         return 1;
       },
       async saveSectionEmbedding() {
+        // no-op: never clears the pending section
+      },
+      async saveSectionEmbeddings() {
         // no-op: never clears the pending section
       }
     };

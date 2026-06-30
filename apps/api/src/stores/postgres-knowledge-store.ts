@@ -5,6 +5,7 @@ import type {
   IndexedRepositorySummary,
   KnowledgePersistence,
   LoadedKnowledge,
+  SectionEmbeddingToSave,
   SectionToEmbed,
   SectionVectorSearch
 } from "./knowledge-index.js";
@@ -16,6 +17,9 @@ const { Pool } = pg;
 // 10 params/row and sections 8, so these chunk sizes stay well under the cap.
 const DOCUMENT_INSERT_CHUNK = 500;
 const SECTION_INSERT_CHUNK = 1000;
+// Embedding updates bind 2 params/row (id, embedding); keep chunks well under
+// the 65535 bind-parameter cap while still cutting round-trips drastically.
+const EMBEDDING_UPDATE_CHUNK = 1000;
 
 export class PostgresKnowledgeStore implements KnowledgePersistence, SectionVectorSearch, EmbeddingPersistence {
   private readonly pool: pg.Pool;
@@ -269,6 +273,27 @@ export class PostgresKnowledgeStore implements KnowledgePersistence, SectionVect
       id,
       toVectorLiteral(embedding)
     ]);
+  }
+
+  async saveSectionEmbeddings(entries: SectionEmbeddingToSave[]): Promise<void> {
+    if (entries.length === 0) {
+      return;
+    }
+
+    // One multi-row UPDATE per chunk instead of one round-trip per section —
+    // a provider batch of, say, 64 embeddings previously meant 64 sequential
+    // UPDATE statements.
+    for (const batch of chunk(entries, EMBEDDING_UPDATE_CHUNK)) {
+      await this.pool.query(
+        `
+          UPDATE document_sections AS s
+          SET embedding = v.embedding::vector
+          FROM (VALUES ${valuesClause(batch.length, 2)}) AS v(id, embedding)
+          WHERE s.id = v.id
+        `,
+        batch.flatMap((entry) => [entry.id, toVectorLiteral(entry.embedding)])
+      );
+    }
   }
 }
 
