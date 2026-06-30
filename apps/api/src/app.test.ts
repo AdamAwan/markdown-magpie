@@ -78,6 +78,24 @@ test("GET /api/health returns ok", async () => {
   assert.deepEqual(await res.json(), { ok: true, service: "markdown-magpie-api" });
 });
 
+test("GET /api/version is public and returns the build info shape", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/version");
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { sha: unknown; commitMessage: unknown; committedAt: unknown };
+  assert.ok("sha" in body);
+  assert.ok("commitMessage" in body);
+  assert.ok("committedAt" in body);
+});
+
+test("auth required leaves version public alongside health", async () => {
+  const auth = await makeTestAuth();
+  const app = buildApp(makeTestContext(), auth.options);
+
+  const res = await app.request("/api/version");
+  assert.equal(res.status, 200);
+});
+
 test("auth required leaves health public and rejects missing token on API routes", async () => {
   const auth = await makeTestAuth();
   const app = buildApp(makeTestContext(), auth.options);
