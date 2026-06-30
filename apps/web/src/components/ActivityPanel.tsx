@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { ChangeIntentTrace, ConfiguredKnowledgeFlow, MaintenanceRun } from "../lib/types";
 
 function taskTypeLabel(taskType: MaintenanceRun["taskType"]): string {
@@ -174,6 +175,8 @@ function TraceDetails({ traces }: { traces: ChangeIntentTrace[] }) {
 }
 
 export function ActivityPanel({ flows, runs }: { flows: ConfiguredKnowledgeFlow[]; runs: MaintenanceRun[] }) {
+  const [selectedRun, setSelectedRun] = useState<MaintenanceRun | undefined>();
+
   return (
     <section className="surface">
       <div className="surfaceHeader">
@@ -207,6 +210,14 @@ export function ActivityPanel({ flows, runs }: { flows: ConfiguredKnowledgeFlow[
                     <span className="pill" title="Run trigger">
                       {run.trigger}
                     </span>
+                    <button
+                      aria-label={`View details for ${taskTypeLabel(run.taskType)} run`}
+                      className="button secondary"
+                      onClick={() => setSelectedRun(run)}
+                      type="button"
+                    >
+                      Details
+                    </button>
                   </span>
                 </div>
                 <p>{run.error ?? run.summary}</p>
@@ -236,6 +247,51 @@ export function ActivityPanel({ flows, runs }: { flows: ConfiguredKnowledgeFlow[
           {runs.length === 0 ? <p className="empty">No activity recorded yet.</p> : null}
         </div>
       </div>
+      {selectedRun ? <MaintenanceRunDetailsModal onClose={() => setSelectedRun(undefined)} run={selectedRun} /> : null}
     </section>
+  );
+}
+
+// The raw maintenance-run record, pretty-printed. The activity cards already
+// summarise each run; this modal is the drill-down for the full `details` JSON
+// (the task-specific payload the chips are derived from) when the summary isn't
+// enough.
+export function MaintenanceRunDetailsModal({ onClose, run }: { onClose: () => void; run: MaintenanceRun }) {
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  const formattedDetails = JSON.stringify(run.details ?? {}, null, 2);
+
+  return (
+    <div className="docModalBackdrop" onClick={onClose} role="presentation">
+      <div
+        aria-label={`${taskTypeLabel(run.taskType)} run details`}
+        aria-modal="true"
+        className="docModal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="docModalHead">
+          <div>
+            <h3>{taskTypeLabel(run.taskType)} · details</h3>
+            <p className="path">
+              {run.id}
+              {run.completedAt ? ` · Completed ${new Date(run.completedAt).toLocaleString()}` : ""}
+            </p>
+          </div>
+          <button className="button secondary" onClick={onClose} type="button">
+            Close
+          </button>
+        </div>
+        <pre className="docModalBody jsonBlock">{formattedDetails}</pre>
+      </div>
+    </div>
   );
 }
