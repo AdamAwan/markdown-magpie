@@ -50,7 +50,7 @@ export class PgBossJobBroker implements JobBroker {
     this.boss = new PgBoss(bossOptions);
     this.queuePolicyOverrides = options.queuePolicyOverrides ?? {};
     this.boss.on("error", (error) => logger.error({ err: error.message }, "pg-boss error"));
-    this.boss.on("warning", (warning) => logger.warn({ warning: warning.message }, "pg-boss warning"));
+    this.boss.on("warning", (warning) => logger.warn({ err: warning.message }, "pg-boss warning"));
   }
 
   async start(): Promise<void> {

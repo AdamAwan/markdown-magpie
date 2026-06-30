@@ -137,7 +137,7 @@ export function logStartupConfig(ctx: AppContext): void {
   add("name", cfg.watcher.name ?? "not set");
   add("poll interval ms", cfg.watcher.pollIntervalMs ?? "default (2000)");
 
-  logger.info({ env: cfg.api.nodeEnv }, `Resolved configuration (env=${cfg.api.nodeEnv}):\n${lines.join("\n")}`);
+  logger.info({ env: cfg.api.nodeEnv }, `Resolved configuration:\n${lines.join("\n")}`);
 }
 
 // Clears all user-generated state then rebuilds the configured knowledge bases.
