@@ -24,6 +24,8 @@ import {
   JobsResponse,
   JobView,
   KnowledgeDocument,
+  KnowledgeDocumentsResponse,
+  KnowledgeRepositoriesResponse,
   KnowledgeStats,
   PromptSummary,
   Proposal,
@@ -43,6 +45,21 @@ import { knowledgeFlows } from "../lib/config";
 import { buildAttentionNotices, formatJobType, isActiveJob, jobTransitionMessages } from "../lib/console";
 import { sectionPath } from "../lib/sections";
 import { OTHER_DOCUMENTS_ID } from "./KnowledgePanel";
+
+// `/knowledge/documents` and `/knowledge/repositories` are now paginated
+// (server default 50, capped at 200 — see apps/api/src/platform/paths.ts
+// parseLimit). The console is a single-page operator view that groups
+// documents by flow/folder client-side, so it asks for the API's max page
+// size rather than adding UI-side pagination controls; large knowledge bases
+// beyond 200 items/repos will only show the first page.
+const KNOWLEDGE_LIST_LIMIT = 200;
+
+// How often the slow tier (documents, repositories, prompts, config) is
+// re-fetched while a job is active. These lists can be large and rarely
+// change mid-job, unlike jobs/workers/health/stats, so re-shipping them every
+// 4s wastes bandwidth on big knowledge bases. 30s keeps the console
+// reasonably current without re-fetching on every fast-tier tick.
+const SLOW_POLL_INTERVAL_MS = 30_000;
 
 // Holds every piece of console state, the data-loading effects and the action
 // handlers that previously lived inline in the single page component. Lifting
@@ -93,8 +110,10 @@ function useConsoleController() {
   // Holds the AbortController for the in-flight refresh. The 4s poll and a manual
   // Refresh can overlap; aborting the previous request before starting a new one
   // (and ignoring a superseded controller's results) stops a slow stale response
-  // from clobbering fresher state.
+  // from clobbering fresher state. Fast and slow tiers each get their own
+  // controller since they now run on independent schedules.
   const refreshControllerRef = useRef<AbortController | undefined>(undefined);
+  const slowRefreshControllerRef = useRef<AbortController | undefined>(undefined);
 
   const openSection = useCallback(
     (section: ConsoleSection) => {
@@ -115,6 +134,17 @@ function useConsoleController() {
 
   useEffect(() => {
     void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The slow tier (documents, repositories, prompts, config, snapshots) changes
+  // far less often than jobs/workers/health/stats, and on a large knowledge base
+  // is by far the most expensive part of a refresh. Polling it on its own ~30s
+  // timer (independent of whether a job is active) keeps it reasonably current
+  // without re-fetching it on every 4s fast-tier tick.
+  useEffect(() => {
+    const interval = window.setInterval(() => void refreshSlow({ silent: true }), SLOW_POLL_INTERVAL_MS);
+    return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -141,7 +171,11 @@ function useConsoleController() {
       return;
     }
 
-    const interval = window.setInterval(() => void refresh({ silent: true }), 4_000);
+    // Only the fast tier (jobs, workers, health, stats, ...) polls this often;
+    // the slow tier (documents, repositories, prompts, config) has its own
+    // independent ~30s timer above so large knowledge bases are not re-fetched
+    // in full every 4s just because a job is active.
+    const interval = window.setInterval(() => void refreshFast({ silent: true }), 4_000);
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [answer?.job?.id, answer?.job?.state, jobs]);
@@ -239,9 +273,12 @@ function useConsoleController() {
     }
   }
 
-  async function refresh(options: { preserveMessage?: boolean; silent?: boolean } = {}) {
-    // Abort any refresh still in flight so its (now stale) response is discarded
-    // and never overwrites the state this newer refresh is about to set.
+  // Fast tier: jobs, workers, health, stats and the small bounded lists (gaps,
+  // questions, proposals, ...) that the active-job 4s poll needs to keep the
+  // Jobs/Ask panels live. Never includes the slow tier's large knowledge lists.
+  async function refreshFast(options: { preserveMessage?: boolean; silent?: boolean } = {}) {
+    // Abort any fast refresh still in flight so its (now stale) response is
+    // discarded and never overwrites the state this newer refresh is about to set.
     refreshControllerRef.current?.abort();
     const controller = new AbortController();
     refreshControllerRef.current = controller;
@@ -255,8 +292,6 @@ function useConsoleController() {
       const [
         healthResult,
         statsResult,
-        repositoriesResult,
-        documentsResult,
         questionsResult,
         gapsResult,
         clustersResult,
@@ -266,15 +301,10 @@ function useConsoleController() {
         proposalsResult,
         scheduledTasksResult,
         maintenanceRunsResult,
-        configResult,
-        promptsResult,
-        snapshotsResult,
         reconciliationsResult
       ] = await Promise.all([
         apiGet<Health>("/health", { signal }),
         apiGet<KnowledgeStats>("/knowledge/stats", { signal }),
-        apiGet<{ repositories: RepositoryRef[] }>("/knowledge/repositories", { signal }),
-        apiGet<{ documents: KnowledgeDocument[] }>("/knowledge/documents", { signal }),
         apiGet<{ questions: QuestionLog[] }>("/questions?limit=8", { signal }),
         apiGet<{ gaps: GapCandidate[] }>("/gaps/candidates?limit=8", { signal }),
         apiGet<{ clusters: SuggestedGapCluster[] }>("/gaps/clusters?limit=8", { signal }),
@@ -284,9 +314,6 @@ function useConsoleController() {
         apiGet<{ proposals: Proposal[] }>("/proposals?limit=8", { signal }),
         apiGet<{ tasks: ScheduledTask[] }>("/scheduled-tasks", { signal }),
         apiGet<{ runs: MaintenanceRun[] }>("/maintenance-runs?limit=30", { signal }),
-        apiGet<RuntimeConfig>("/config", { signal }),
-        apiGet<{ prompts: PromptSummary[] }>("/prompts", { signal }),
-        apiGet<{ snapshots: FlowSnapshot[] }>("/snapshots", { signal }),
         apiGet<{ decisions: ReconciliationDecision[] }>("/reconciliations?limit=20", { signal })
       ]);
 
@@ -298,8 +325,6 @@ function useConsoleController() {
 
       setHealth(healthResult);
       setStats(statsResult);
-      setRepositories(repositoriesResult.repositories);
-      setDocuments(documentsResult.documents);
       setQuestions(questionsResult.questions);
       setGaps(gapsResult.gaps);
       setGapClusters(clustersResult.clusters);
@@ -309,16 +334,8 @@ function useConsoleController() {
       setProposals(proposalsResult.proposals);
       setScheduledTasks(scheduledTasksResult.tasks);
       setMaintenanceRuns(maintenanceRunsResult.runs);
-      setPrompts(promptsResult.prompts);
-      setFlowSnapshots(snapshotsResult.snapshots);
       setReconciliationDecisions(reconciliationsResult.decisions);
-      setConfig(configResult);
       setSelectedProposalId((current) => current ?? proposalsResult.proposals[0]?.id);
-      setSelectedDocumentId((current) =>
-        current && documentsResult.documents.some((document) => document.id === current)
-          ? current
-          : documentsResult.documents[0]?.id
-      );
       setLastRefreshedAt(new Date().toISOString());
 
       // The ask response is enqueue-only: the answer lands on the question log
@@ -351,6 +368,57 @@ function useConsoleController() {
         setRefreshing(false);
       }
     }
+  }
+
+  // Slow tier: the knowledge document/repository lists, prompts, config and flow
+  // snapshots. These can be large (now paginated server-side, see
+  // KNOWLEDGE_LIST_LIMIT) and change far less often than the fast tier, so they
+  // are fetched once on mount, on manual Refresh, and on their own ~30s timer
+  // rather than every 4s alongside jobs/workers.
+  async function refreshSlow(options: { silent?: boolean } = {}) {
+    slowRefreshControllerRef.current?.abort();
+    const controller = new AbortController();
+    slowRefreshControllerRef.current = controller;
+    const { signal } = controller;
+
+    try {
+      const [repositoriesResult, documentsResult, configResult, promptsResult, snapshotsResult] = await Promise.all([
+        apiGet<KnowledgeRepositoriesResponse>(`/knowledge/repositories?limit=${KNOWLEDGE_LIST_LIMIT}`, { signal }),
+        apiGet<KnowledgeDocumentsResponse>(`/knowledge/documents?limit=${KNOWLEDGE_LIST_LIMIT}`, { signal }),
+        apiGet<RuntimeConfig>("/config", { signal }),
+        apiGet<{ prompts: PromptSummary[] }>("/prompts", { signal }),
+        apiGet<{ snapshots: FlowSnapshot[] }>("/snapshots", { signal })
+      ]);
+
+      if (signal.aborted || slowRefreshControllerRef.current !== controller) {
+        return;
+      }
+
+      setRepositories(repositoriesResult.repositories);
+      setDocuments(documentsResult.documents);
+      setConfig(configResult);
+      setPrompts(promptsResult.prompts);
+      setFlowSnapshots(snapshotsResult.snapshots);
+      setSelectedDocumentId((current) =>
+        current && documentsResult.documents.some((document) => document.id === current)
+          ? current
+          : documentsResult.documents[0]?.id
+      );
+    } catch (error) {
+      if (signal.aborted) {
+        return;
+      }
+      if (!options.silent) {
+        showMessage(errorMessage(error), "danger");
+      }
+    }
+  }
+
+  // Used by the mount effect and the manual Refresh button: runs both tiers so
+  // every panel is fully current, while the recurring pollers above only ever
+  // trigger one tier at a time.
+  async function refresh(options: { preserveMessage?: boolean; silent?: boolean } = {}) {
+    await Promise.all([refreshFast(options), refreshSlow({ silent: options.silent })]);
   }
 
   // Shared by the Ask form and the "pick a flow" re-ask. `flow` is "auto" or a

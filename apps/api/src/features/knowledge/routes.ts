@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
-import { parseLimit } from "../../platform/paths.js";
+import { parseLimit, parseOffset } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import * as knowledgeService from "./service.js";
@@ -30,13 +30,17 @@ export function knowledgeRoutes(ctx: AppContext): Hono {
     return c.json(summary);
   });
 
-  app.get("/repositories", requireScopes("read:knowledge"), (c) =>
-    c.json({ repositories: knowledgeService.listRepositories(ctx) })
-  );
+  app.get("/repositories", requireScopes("read:knowledge"), (c) => {
+    const limit = parseLimit(c.req.query("limit") ?? null, 50);
+    const offset = parseOffset(c.req.query("offset") ?? null);
+    return c.json(knowledgeService.listRepositories(ctx, { limit, offset }));
+  });
 
-  app.get("/documents", requireScopes("read:knowledge"), (c) =>
-    c.json({ documents: knowledgeService.listDocuments(ctx) })
-  );
+  app.get("/documents", requireScopes("read:knowledge"), (c) => {
+    const limit = parseLimit(c.req.query("limit") ?? null, 50);
+    const offset = parseOffset(c.req.query("offset") ?? null);
+    return c.json(knowledgeService.listDocuments(ctx, { limit, offset }));
+  });
 
   app.get("/stats", requireScopes("read:knowledge"), (c) => c.json(knowledgeService.stats(ctx)));
 

@@ -63,12 +63,29 @@ export async function search(
   return ctx.stores.knowledgeIndex.search(query, limit);
 }
 
-export function listRepositories(ctx: AppContext): ReturnType<AppContext["stores"]["knowledgeIndex"]["listRepositories"]> {
-  return ctx.stores.knowledgeIndex.listRepositories();
+export interface PaginationOptions {
+  limit: number;
+  offset: number;
 }
 
-export function listDocuments(ctx: AppContext): ReturnType<AppContext["stores"]["knowledgeIndex"]["listDocuments"]> {
-  return ctx.stores.knowledgeIndex.listDocuments();
+export function listRepositories(
+  ctx: AppContext,
+  pagination: PaginationOptions
+): { repositories: ReturnType<AppContext["stores"]["knowledgeIndex"]["listRepositories"]>; total: number } {
+  return {
+    repositories: ctx.stores.knowledgeIndex.listRepositories(pagination),
+    total: ctx.stores.knowledgeIndex.countRepositories()
+  };
+}
+
+export function listDocuments(
+  ctx: AppContext,
+  pagination: PaginationOptions
+): { documents: ReturnType<AppContext["stores"]["knowledgeIndex"]["listDocuments"]>; total: number } {
+  return {
+    documents: ctx.stores.knowledgeIndex.listDocuments(pagination),
+    total: ctx.stores.knowledgeIndex.countDocuments()
+  };
 }
 
 export function stats(ctx: AppContext): ReturnType<AppContext["stores"]["knowledgeIndex"]["getStats"]> {

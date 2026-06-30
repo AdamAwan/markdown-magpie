@@ -35,3 +35,66 @@ test("GET /api/knowledge/flows returns an empty list when none are configured", 
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { flows: [] });
 });
+
+test("GET /api/knowledge/documents paginates with a default limit of 50 and reports the unpaginated total", async () => {
+  const ctx = makeTestContext();
+  await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
+    documents: Array.from({ length: 60 }, (_, index) => ({
+      path: `doc-${String(index).padStart(2, "0")}.md`,
+      content: `# Doc ${index}`
+    }))
+  });
+  const app = buildApp(ctx);
+
+  const res = await app.request("/api/knowledge/documents");
+  const body = (await res.json()) as { documents: Array<{ path: string }>; total: number };
+
+  assert.equal(res.status, 200);
+  assert.equal(body.documents.length, 50);
+  assert.equal(body.total, 60);
+  assert.equal(body.documents[0]?.path, "doc-00.md");
+});
+
+test("GET /api/knowledge/documents honours limit/offset and caps limit at 200", async () => {
+  const ctx = makeTestContext();
+  await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
+    documents: Array.from({ length: 10 }, (_, index) => ({
+      path: `doc-${String(index).padStart(2, "0")}.md`,
+      content: `# Doc ${index}`
+    }))
+  });
+  const app = buildApp(ctx);
+
+  const page = await app.request("/api/knowledge/documents?limit=3&offset=2");
+  const pageBody = (await page.json()) as { documents: Array<{ path: string }>; total: number };
+  assert.equal(pageBody.documents.length, 3);
+  assert.equal(pageBody.total, 10);
+  assert.deepEqual(
+    pageBody.documents.map((document) => document.path),
+    ["doc-02.md", "doc-03.md", "doc-04.md"]
+  );
+
+  const overLimit = await app.request("/api/knowledge/documents?limit=500");
+  const overLimitBody = (await overLimit.json()) as { documents: unknown[]; total: number };
+  assert.equal(overLimitBody.documents.length, 10);
+  assert.equal(overLimitBody.total, 10);
+});
+
+test("GET /api/knowledge/repositories paginates and reports the unpaginated total", async () => {
+  const ctx = makeTestContext();
+  for (let index = 0; index < 3; index += 1) {
+    await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
+      repositoryId: `repo-${index}`,
+      name: `Repo ${index}`,
+      documents: [{ path: "doc.md", content: "# Doc" }]
+    });
+  }
+  const app = buildApp(ctx);
+
+  const res = await app.request("/api/knowledge/repositories?limit=2");
+  const body = (await res.json()) as { repositories: Array<{ id: string }>; total: number };
+
+  assert.equal(res.status, 200);
+  assert.equal(body.repositories.length, 2);
+  assert.equal(body.total, 3);
+});
