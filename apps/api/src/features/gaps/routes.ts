@@ -1,9 +1,11 @@
 import { Hono } from "hono";
+import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
 import { HttpError } from "../../http/errors.js";
 import { parseLimit } from "../../platform/paths.js";
 import * as gapsService from "./service.js";
+import { draftFromClusterBodySchema, reconcileBodySchema } from "./schema.js";
 
 export function gapRoutes(ctx: AppContext): Hono {
   const app = new Hono();
@@ -23,36 +25,43 @@ export function gapRoutes(ctx: AppContext): Hono {
   // the heavy orchestration (clustering, the reshape AI job, drafting and
   // publication enqueue) stays in the API. Same admin scope as the scheduled-task
   // run route.
-  app.post("/reconcile", requireScopes("manage:jobs"), async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { flowId?: unknown };
-    const flowId = typeof body.flowId === "string" ? body.flowId.trim() : "";
-    if (!flowId) {
-      throw new HttpError(400, "flow_id_required");
+  app.post(
+    "/reconcile",
+    requireScopes("manage:jobs"),
+    zValidator("json", reconcileBodySchema, (result, c) => {
+      if (!result.success) {
+        return c.json({ error: "flow_id_required" }, 400);
+      }
+    }),
+    async (c) => {
+      const { flowId } = c.req.valid("json");
+      if (!ctx.knowledgeConfig.flows.some((flow) => flow.id === flowId)) {
+        throw new HttpError(404, "flow_not_found");
+      }
+      await gapsService.reconcileFlow(ctx, flowId);
+      return c.json({ ok: true });
     }
-    if (!ctx.knowledgeConfig.flows.some((flow) => flow.id === flowId)) {
-      throw new HttpError(404, "flow_not_found");
-    }
-    await gapsService.reconcileFlow(ctx, flowId);
-    return c.json({ ok: true });
-  });
+  );
 
   // Manually draft a proposal for one persisted cluster. The body is optional;
   // targetPath/destinationId override the flow's defaults when supplied.
-  app.post("/clusters/:id/proposal", async (c) => {
-    const id = c.req.param("id");
-    const body = (await c.req.json().catch(() => ({}))) as {
-      targetPath?: unknown;
-      destinationId?: unknown;
-    };
-    const outcome = await gapsService.draftFromCluster(ctx, id, {
-      targetPath: typeof body.targetPath === "string" ? body.targetPath : undefined,
-      destinationId: typeof body.destinationId === "string" ? body.destinationId : undefined
-    });
-    if (!outcome.ok) {
-      return c.json({ error: outcome.code }, 404);
+  app.post(
+    "/clusters/:id/proposal",
+    zValidator("json", draftFromClusterBodySchema, (result, c) => {
+      if (!result.success) {
+        return c.json({ error: "invalid_proposal_overrides" }, 400);
+      }
+    }),
+    async (c) => {
+      const id = c.req.param("id");
+      const { targetPath, destinationId } = c.req.valid("json");
+      const outcome = await gapsService.draftFromCluster(ctx, id, { targetPath, destinationId });
+      if (!outcome.ok) {
+        return c.json({ error: outcome.code }, 404);
+      }
+      return c.json(outcome);
     }
-    return c.json(outcome);
-  });
+  );
 
   return app;
 }
