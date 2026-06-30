@@ -1,6 +1,12 @@
-import type { Proposal, ReviewDecision } from "@magpie/core";
+import type {
+  FlowSnapshot,
+  FlowSnapshotView,
+  Proposal,
+  ReviewDecision,
+  SnapshotProposal,
+  SnapshotPullRequest
+} from "@magpie/core";
 import type { AppContext } from "../../context.js";
-import type { FlowSnapshot, SnapshotProposal, SnapshotPullRequest } from "../../stores/snapshot-store.js";
 
 // A pull request's externally-observed state, as reported by the
 // refresh_pull_requests watcher job. The API holds no GitHub token, so it never
@@ -9,12 +15,6 @@ export type PullRequestReading = { merged: boolean; state: "open" | "closed"; re
 
 function sameFlow(a: string | undefined, b: string | undefined): boolean {
   return (a ?? "") === (b ?? "");
-}
-
-// A snapshot enriched with its flow's human label for the UI. The default flow
-// has no flowId, so a stable label is supplied here.
-export interface FlowSnapshotView extends FlowSnapshot {
-  flowName: string;
 }
 
 const DEFAULT_FLOW_LABEL = "Default flow";

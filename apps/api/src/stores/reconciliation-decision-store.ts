@@ -1,23 +1,8 @@
-// A single clustering decision the reconciler made while reshaping a flow's gap
-// clusters: a proposed merge or split, the model's rationale for it, and whether
-// the critic confirmed and the reconciler applied it. Persisted so a reviewer can
-// see WHY the clustering changed, not just its result — previously this lived only
-// in console logs.
-export interface ReconciliationDecisionRecord {
-  id: string;
-  // The flow the reshape belongs to; undefined for the un-routed/default flow.
-  flowId?: string;
-  kind: "merge" | "split";
-  // The proposing model's rationale for the merge/split.
-  rationale: string;
-  // The critic's verdict on the proposal.
-  confirmed: boolean;
-  // Whether the reconciler went on to apply it (only confirmed changes are applied).
-  applied: boolean;
-  // The clusters involved: every merged cluster, or the single cluster being split.
-  clusterIds: string[];
-  createdAt: string;
-}
+// ReconciliationDecisionRecord is a canonical domain shape shared with the web
+// console (which reads it back over /reconciliations), so it lives in @magpie/core
+// rather than being declared here and mirrored by hand. The store-internal types
+// below (the new-decision input and the store contract) stay here.
+import type { ReconciliationDecisionRecord } from "@magpie/core";
 
 export type NewReconciliationDecision = Omit<ReconciliationDecisionRecord, "id" | "createdAt">;
 

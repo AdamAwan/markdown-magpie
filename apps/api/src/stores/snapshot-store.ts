@@ -1,41 +1,9 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { GapCandidate, Proposal, ReviewDecision } from "@magpie/core";
-
-// A flow's proposal as captured in a snapshot — just the fields the processor and
-// a human reviewer need, not the full markdown body.
-export interface SnapshotProposal {
-  id: string;
-  title?: string;
-  status: Proposal["status"];
-  gapClusterId?: string;
-  pullRequestUrl?: string;
-}
-
-// The polled state of one of this flow's open pull requests. `etag` and
-// `checkedAt` back the cache: a later refresh can issue a conditional request and
-// keep the prior state on a 304 instead of re-reading the whole PR.
-export interface SnapshotPullRequest {
-  proposalId: string;
-  url: string;
-  merged: boolean;
-  state: "open" | "closed" | "unknown";
-  // The latest review decision the watcher reported for this PR, when known.
-  reviewDecision?: ReviewDecision;
-  etag?: string;
-  checkedAt: string;
-}
-
-// Everything the fetch job downloads for one flow: the inputs the reconciler would
-// otherwise gather live (gaps, proposals) plus the externally-polled PR state.
-export interface FlowSnapshot {
-  flowId?: string;
-  takenAt: string;
-  catalogRevision: number;
-  gaps: GapCandidate[];
-  proposals: SnapshotProposal[];
-  pullRequests: SnapshotPullRequest[];
-}
+// FlowSnapshot and its parts are canonical domain shapes shared with the web
+// console (which reads them back over /snapshots), so they live in @magpie/core
+// rather than being declared here and mirrored by hand.
+import type { FlowSnapshot, GapCandidate, SnapshotProposal, SnapshotPullRequest } from "@magpie/core";
 
 // The on-disk location the fetch job writes and the processor reads. There is no
 // Postgres variant — the whole point is an inspectable "downloaded data" location.

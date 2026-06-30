@@ -1,9 +1,6 @@
 import pg from "pg";
-import type {
-  NewReconciliationDecision,
-  ReconciliationDecisionRecord,
-  ReconciliationDecisionStore
-} from "./reconciliation-decision-store.js";
+import type { ReconciliationDecisionRecord } from "@magpie/core";
+import type { NewReconciliationDecision, ReconciliationDecisionStore } from "./reconciliation-decision-store.js";
 
 const { Pool } = pg;
 
