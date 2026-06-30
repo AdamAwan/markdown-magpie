@@ -20,7 +20,10 @@ services:
       # without editing files. Must match the watcher's AI_PROVIDER.
       AI_PROVIDER: ${AI_PROVIDER:?AI_PROVIDER must be set}
     volumes:
-      - magpie-checkouts:/data/checkouts
+      # The api and watcher keep SEPARATE checkout volumes. They each clone/fetch/
+      # reset the same repos; sharing one working tree let their git operations race
+      # on `.git` (FETCH_HEAD/index.lock), intermittently failing publication.
+      - magpie-api-checkouts:/data/checkouts
     ports:
       - "4000:4000"
     profiles:
@@ -78,7 +81,8 @@ services:
       CODEX_CLI_PATH: ${CODEX_CLI_PATH:-codex}
       CLAUDE_CLI_PATH: ${CLAUDE_CLI_PATH:-}
     volumes:
-      - magpie-checkouts:/data/checkouts
+      # Separate from the api's checkout volume — see the api service comment.
+      - magpie-watcher-checkouts:/data/checkouts
     profiles:
       - app
     depends_on:
@@ -155,4 +159,5 @@ services:
 
 volumes:
   postgres-data:
-  magpie-checkouts:
+  magpie-api-checkouts:
+  magpie-watcher-checkouts:
