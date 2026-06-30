@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createMcpLogger } from "./logger.js";
+import { createMcpLogger, mcpLogDestination } from "./logger.js";
 
-test("stdio logger does not write to stdout", () => {
-  // The stdio transport multiplexes JSON-RPC on stdout; logs must go to stderr.
-  const logger = createMcpLogger("stdio");
-  // pino exposes the destination fd via [pino.symbols] internals; instead assert
-  // construction succeeds and the level is set — the fd-2 wiring is covered by the
-  // createLogger destination test in @magpie/logger.
-  assert.equal(typeof logger.info, "function");
-  assert.equal(logger.level, logger.level); // smoke: logger constructed
+test("stdio transport logs to stderr (fd 2), never stdout", () => {
+  assert.equal(mcpLogDestination("stdio"), 2);
+});
+
+test("http transport does not pin a file descriptor (uses default stdout)", () => {
+  assert.equal(mcpLogDestination("http"), undefined);
+});
+
+test("createMcpLogger constructs a usable logger for both transports", () => {
+  assert.equal(typeof createMcpLogger("stdio").info, "function");
+  assert.equal(typeof createMcpLogger("http").info, "function");
 });
