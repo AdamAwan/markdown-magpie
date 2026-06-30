@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import type { EmbeddingProvider } from "@magpie/core";
-import { InMemoryKnowledgeIndex, type SectionVectorSearch } from "./knowledge-index.js";
+import {
+  InMemoryKnowledgeIndex,
+  type SectionKeywordSearch,
+  type SectionVectorSearch
+} from "./knowledge-index.js";
 
 const docs = [
   { path: "rollback.md", content: "# Hotfix Rollback\nRun the rollback workflow and notify the incident lead.\n" },
@@ -116,6 +120,62 @@ describe("InMemoryKnowledgeIndex.search", () => {
 
     const ranked = await index.search("rollback", 5);
     assert.ok(ranked.every((result) => !result.section.id.startsWith("repo:gone.md")));
+  });
+
+  it("uses the injected keyword search backend when provided", async () => {
+    const calls: Array<{ query: string; limit: number; repositoryIds?: string[] }> = [];
+    const keywordSearch: SectionKeywordSearch = {
+      async searchByKeyword(query, limit, repositoryIds) {
+        calls.push({ query, limit, repositoryIds });
+        // Return the felines section, which shares no keywords with the question,
+        // proving the in-memory scan was bypassed in favour of the backend.
+        return [{ id: "repo:felines.md:0", relevance: 0.9 }];
+      }
+    };
+    const index = new InMemoryKnowledgeIndex(undefined, { keywordSearch });
+    await seed(index);
+
+    const ranked = await index.search("how do I rollback the hotfix", 5);
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].query, "how do I rollback the hotfix");
+    assert.equal(ranked.length, 1);
+    assert.equal(ranked[0].section.id, "repo:felines.md:0");
+    assert.equal(ranked[0].relevance, 0.9);
+  });
+
+  it("passes the repository scope through to the keyword search backend", async () => {
+    let received: string[] | undefined;
+    const keywordSearch: SectionKeywordSearch = {
+      async searchByKeyword(_query, _limit, repositoryIds) {
+        received = repositoryIds;
+        return [];
+      }
+    };
+    const index = new InMemoryKnowledgeIndex(undefined, { keywordSearch });
+    await seed(index);
+
+    await index.search("rollback", 5, ["repo"]);
+    assert.deepEqual(received, ["repo"]);
+  });
+
+  it("falls back to the in-memory scan when the keyword search backend throws", async () => {
+    const notices: string[] = [];
+    const keywordSearch: SectionKeywordSearch = {
+      async searchByKeyword() {
+        throw new Error("fts backend down");
+      }
+    };
+    const index = new InMemoryKnowledgeIndex(undefined, {
+      keywordSearch,
+      onNotice: (message) => notices.push(message)
+    });
+    await seed(index);
+
+    const ranked = await index.search("how do I rollback the hotfix", 5);
+
+    assert.match(ranked[0].section.heading, /Rollback/);
+    assert.ok(notices.some((n) => /falling back to in-memory/i.test(n)));
   });
 
   it("falls back to keyword search when the embedding call fails", async () => {

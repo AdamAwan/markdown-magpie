@@ -38,6 +38,17 @@ export interface SectionVectorSearch {
   ): Promise<Array<{ id: string; similarity: number }>>;
 }
 
+export interface SectionKeywordSearch {
+  // Runs keyword search in the persistence backend (Postgres full-text search)
+  // rather than scanning every section in memory, returning ranked section ids
+  // with a [0,1] relevance. Repository scoping is applied inside the query.
+  searchByKeyword(
+    query: string,
+    limit: number,
+    repositoryIds?: string[]
+  ): Promise<Array<{ id: string; relevance: number }>>;
+}
+
 export interface SectionToEmbed {
   id: string;
   text: string;
@@ -75,10 +86,15 @@ const READ_CONCURRENCY = 12;
 // indexed, so one absurdly large file can't blow up memory or dominate
 // indexing time for the rest of the repository.
 const MAX_MARKDOWN_FILE_BYTES = 5 * 1024 * 1024;
+// Match the vector side's over-fetch when sourcing keyword candidates for fusion.
+const KEYWORD_CANDIDATES = 20;
 
 export interface HybridSearchOptions {
   embeddingProvider?: EmbeddingProvider;
   vectorSearch?: SectionVectorSearch;
+  // When present (Postgres backend), keyword ranking runs in the database instead
+  // of the in-memory full-scan path. The in-memory path remains the fallback.
+  keywordSearch?: SectionKeywordSearch;
   onNotice?: (message: string) => void;
 }
 
@@ -265,7 +281,7 @@ export class InMemoryKnowledgeIndex {
   }
 
   async search(question: string, limit: number, repositoryIds?: string[]): Promise<RankedSection[]> {
-    const keywordRanked = this.keywordRank(question, repositoryIds);
+    const keywordRanked = await this.keywordRank(question, Math.max(limit, KEYWORD_CANDIDATES), repositoryIds);
 
     const { embeddingProvider, vectorSearch, onNotice } = this.hybrid;
     if (!embeddingProvider || !vectorSearch) {
@@ -288,6 +304,7 @@ export class InMemoryKnowledgeIndex {
 
     const similarityById = new Map(vectorHits.map((hit) => [hit.id, hit.similarity]));
     const keywordRelevanceById = new Map(keywordRanked.map((result) => [result.section.id, result.relevance]));
+    const repositoryFilter = this.repositoryFilterSet(repositoryIds);
 
     return [...new Set([...vectorIds, ...keywordIds])]
       .map((id) => ({
@@ -303,37 +320,74 @@ export class InMemoryKnowledgeIndex {
       .filter((result): result is RankedSection => result !== undefined)
       // Re-apply the repository filter post-fusion so a vector backend that ignores
       // the scope (e.g. a test stub) still cannot leak sections from other flows.
-      .filter((result) => this.sectionInRepositories(result.section, repositoryIds))
+      .filter((result) => this.sectionInRepositories(result.section, repositoryFilter))
       .slice(0, limit);
   }
 
-  private keywordRank(question: string, repositoryIds?: string[]): RankedSection[] {
+  private async keywordRank(question: string, limit: number, repositoryIds?: string[]): Promise<RankedSection[]> {
+    const keywordSearch = this.hybrid.keywordSearch;
+    if (keywordSearch) {
+      try {
+        const hits = await keywordSearch.searchByKeyword(question, limit, repositoryIds);
+        return hits
+          .map((hit) => {
+            const section = this.sections.get(hit.id);
+            return section ? { section, relevance: hit.relevance } : undefined;
+          })
+          .filter((result): result is RankedSection => result !== undefined);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "unknown error";
+        this.hybrid.onNotice?.(`Postgres keyword search unavailable, falling back to in-memory scan: ${message}`);
+      }
+    }
+
+    return this.keywordRankInMemory(question, limit, repositoryIds);
+  }
+
+  // In-memory keyword ranking used when no Postgres backend is configured (tests,
+  // no-persistence mode) or when the Postgres path errors. Scans candidate sections,
+  // scoring them by term overlap, and selects the top-K without a full sort.
+  private keywordRankInMemory(question: string, limit: number, repositoryIds?: string[]): RankedSection[] {
     const terms = tokenize(question);
     if (terms.length === 0) {
       return [];
     }
 
-    return [...this.sections.values()]
-      .filter((section) => this.sectionInRepositories(section, repositoryIds))
-      .map((section) => ({ section, score: scoreSection(section, terms) }))
-      .filter((result) => result.score > 0)
-      .sort((left, right) => right.score - left.score)
-      .map((result) => ({
-        section: result.section,
-        relevance: Math.min(1, result.score / KEYWORD_RELEVANCE_SCALE)
-      }));
+    const repositoryFilter = this.repositoryFilterSet(repositoryIds);
+    const scored: Array<{ section: DocumentSection; score: number }> = [];
+    for (const section of this.sections.values()) {
+      if (!this.sectionInRepositories(section, repositoryFilter)) {
+        continue;
+      }
+      const score = scoreSection(section, terms);
+      if (score > 0) {
+        scored.push({ section, score });
+      }
+    }
+
+    return selectTopK(scored, limit, (left, right) => right.score - left.score).map((result) => ({
+      section: result.section,
+      relevance: Math.min(1, result.score / KEYWORD_RELEVANCE_SCALE)
+    }));
+  }
+
+  // Normalises the optional repository filter to a Set for O(1) membership tests
+  // (the per-section filter ran an Array.includes scan on every section before).
+  private repositoryFilterSet(repositoryIds?: string[]): Set<string> | undefined {
+    return repositoryIds && repositoryIds.length > 0 ? new Set(repositoryIds) : undefined;
   }
 
   // Resolves a section to its owning repository via the document map and tests it
-  // against an optional repository filter. An undefined/empty filter matches every
+  // against an optional repository filter. An undefined filter matches every
   // section (unscoped search); a section whose document is missing is excluded.
-  private sectionInRepositories(section: DocumentSection, repositoryIds?: string[]): boolean {
-    if (!repositoryIds || repositoryIds.length === 0) {
+  private sectionInRepositories(section: DocumentSection, repositoryIds?: string[] | Set<string>): boolean {
+    const filter = repositoryIds instanceof Set ? repositoryIds : this.repositoryFilterSet(repositoryIds);
+    if (!filter) {
       return true;
     }
 
     const repositoryId = this.documents.get(section.documentId)?.repositoryId;
-    return repositoryId !== undefined && repositoryIds.includes(repositoryId);
+    return repositoryId !== undefined && filter.has(repositoryId);
   }
 
   // `options` is optional so the many internal callers that need the full
@@ -450,6 +504,50 @@ async function findMarkdownFiles(root: string): Promise<string[]> {
   }
 
   return files.sort();
+}
+
+// Returns the top `limit` items by `compare` without fully sorting the input.
+// A bounded insertion into a small array beats an O(N log N) sort of every
+// candidate when only a handful of results are kept (limit << N).
+function selectTopK<T>(items: T[], limit: number, compare: (left: T, right: T) => number): T[] {
+  if (limit <= 0) {
+    return [];
+  }
+  if (items.length <= limit) {
+    return [...items].sort(compare);
+  }
+
+  const top: T[] = [];
+  for (const item of items) {
+    if (top.length < limit) {
+      // Keep the buffer sorted (best first) so the weakest kept item is last.
+      const at = lowerBound(top, item, compare);
+      top.splice(at, 0, item);
+      continue;
+    }
+    // Replace the current weakest only if this item ranks ahead of it.
+    if (compare(item, top[top.length - 1]) < 0) {
+      const at = lowerBound(top, item, compare);
+      top.splice(at, 0, item);
+      top.pop();
+    }
+  }
+  return top;
+}
+
+// First index in the sorted `items` where `value` is not strictly better, per `compare`.
+function lowerBound<T>(items: T[], value: T, compare: (left: T, right: T) => number): number {
+  let low = 0;
+  let high = items.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (compare(items[mid], value) < 0) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  return low;
 }
 
 function scoreSection(section: DocumentSection, terms: string[]): number {

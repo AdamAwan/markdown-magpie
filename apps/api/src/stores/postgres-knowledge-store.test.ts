@@ -64,3 +64,62 @@ describe("PostgresKnowledgeStore re-index pruning", { skip: databaseUrl ? false 
     assert.deepEqual(paths.sort(), ["keep.md"]);
   });
 });
+
+describe("PostgresKnowledgeStore keyword search", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
+  it("ranks sections by full-text relevance and respects the repository scope", async () => {
+    const store = new PostgresKnowledgeStore(databaseUrl as string);
+    const repositoryId = `kw-test-${Date.now()}`;
+    const otherRepositoryId = `kw-other-${Date.now()}`;
+
+    const build = (
+      repo: string,
+      docPath: string,
+      heading: string,
+      content: string
+    ): { summary: IndexedRepositorySummary; documents: KnowledgeDocument[]; sections: DocumentSection[] } => {
+      const document: KnowledgeDocument = {
+        id: `${repo}:${docPath}`,
+        repositoryId: repo,
+        path: docPath,
+        metadata: { title: heading, status: "draft", tags: [], relatedDocs: [] },
+        content: `# ${heading}\n${content}\n`
+      };
+      const section: DocumentSection = {
+        id: `${document.id}:0`,
+        documentId: document.id,
+        path: docPath,
+        heading,
+        headingPath: [heading],
+        anchor: "0",
+        content,
+        ordinal: 0
+      };
+      return {
+        summary: {
+          repository: { id: repo, name: repo, defaultBranch: "main", localPath: "/tmp", provider: "local" },
+          documentCount: 1,
+          sectionCount: 1
+        },
+        documents: [document],
+        sections: [section]
+      };
+    };
+
+    const rollback = build(repositoryId, "rollback.md", "Hotfix Rollback", "Run the rollback workflow and notify the incident lead.");
+    const unrelated = build(repositoryId, "felines.md", "Grooming", "Sticky residue is removed with oil before bathing.");
+    const otherRepo = build(otherRepositoryId, "rollback.md", "Hotfix Rollback", "Run the rollback workflow elsewhere.");
+
+    await store.saveIndexedRepository(rollback.summary, rollback.documents, rollback.sections);
+    await store.saveIndexedRepository(unrelated.summary, unrelated.documents, unrelated.sections);
+    await store.saveIndexedRepository(otherRepo.summary, otherRepo.documents, otherRepo.sections);
+
+    const scoped = await store.searchByKeyword("how do I rollback the hotfix", 10, [repositoryId]);
+    assert.ok(scoped.length >= 1, "expected at least one keyword hit");
+    assert.equal(scoped[0].id, `${repositoryId}:rollback.md:0`);
+    assert.ok(scoped[0].relevance > 0 && scoped[0].relevance <= 1);
+    assert.ok(scoped.every((hit) => hit.id.startsWith(`${repositoryId}:`)), "scope must exclude the other repository");
+
+    const empty = await store.searchByKeyword("   ", 10, [repositoryId]);
+    assert.deepEqual(empty, []);
+  });
+});

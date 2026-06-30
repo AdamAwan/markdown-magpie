@@ -75,12 +75,14 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
     storeBackend(config, "KNOWLEDGE_STORE") === "postgres" ? new PostgresKnowledgeStore(databaseUrl) : undefined;
   const embedding = knowledgeStore ? createConfiguredEmbeddingProvider(config) : undefined;
   const knowledgeIndex = knowledgeStore
-    ? new InMemoryKnowledgeIndex(
-        knowledgeStore,
-        embedding
-          ? { embeddingProvider: embedding, vectorSearch: knowledgeStore, onNotice: (message) => logger.warn({ notice: message }, "knowledge index notice") }
-          : {}
-      )
+    ? new InMemoryKnowledgeIndex(knowledgeStore, {
+        // Keyword search runs in Postgres (full-text) whenever the store is present,
+        // independent of embeddings; the vector side is only added when embeddings
+        // are configured. Both fall back to the in-memory path on error.
+        keywordSearch: knowledgeStore,
+        ...(embedding ? { embeddingProvider: embedding, vectorSearch: knowledgeStore } : {}),
+        onNotice: (message) => logger.warn({ notice: message }, "knowledge index notice")
+      })
     : new InMemoryKnowledgeIndex();
 
   const knowledgeConfig = {
