@@ -19,7 +19,8 @@ interface LoggerOptions {
 // env at their composition root) so this package never touches process.env.
 export function createLogger(opts: LoggerOptions = {}): Logger {
   const { level = "info", pretty = false, base, destination } = opts;
-  const options: pino.LoggerOptions = { level, base: base ?? undefined };
+  // Omit `base` when unset so pino keeps its default base (pid, hostname).
+  const options: pino.LoggerOptions = { level, base };
 
   if (destination !== undefined) {
     // Explicit sink: raw JSON, no transport. Used by tests and the stdio MCP
