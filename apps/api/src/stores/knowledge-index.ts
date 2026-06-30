@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { DocumentSection, EmbeddingProvider, GitRepositoryContext, KnowledgeDocument, RankedSection, RepositoryRef } from "@magpie/core";
 import { parseMarkdownDocument, splitIntoSections } from "@magpie/markdown";
+import { isAncestor, listChangedMarkdown, type ChangedMarkdownFile } from "@magpie/git";
 import { fuseRankings } from "@magpie/retrieval";
 import { logger } from "../logger.js";
 
@@ -18,14 +19,37 @@ export interface IndexedRepositorySummary {
   commitSha?: string;
 }
 
+// A loaded repository carries the SHA it was last fully/incrementally indexed at
+// (undefined when never indexed under SHA tracking), so the in-memory index knows
+// the prior commit after a restart and can attempt an incremental reindex.
+export interface LoadedRepository {
+  repository: RepositoryRef;
+  indexedCommitSha?: string;
+}
+
 export interface LoadedKnowledge {
-  repositories: RepositoryRef[];
+  repositories: LoadedRepository[];
   documents: KnowledgeDocument[];
   sections: DocumentSection[];
 }
 
+// One incremental reindex to persist: documents to upsert (with their freshly
+// split sections) and document ids to delete outright (file removed or renamed
+// away). `commitSha` becomes the repository's new indexed_commit_sha.
+export interface IncrementalIndexInput {
+  repository: RepositoryRef;
+  commitSha?: string;
+  upsertedDocuments: KnowledgeDocument[];
+  upsertedSections: DocumentSection[];
+  deletedDocumentIds: string[];
+}
+
 export interface KnowledgePersistence {
   saveIndexedRepository(summary: IndexedRepositorySummary, documents: KnowledgeDocument[], sections: DocumentSection[]): Promise<void>;
+  // Persists only the documents/sections touched by an incremental reindex (plus
+  // the repository's new indexed SHA) in a single transaction, leaving unchanged
+  // rows untouched. Falls outside the full-index save path's whole-repo rewrite.
+  applyIncrementalIndex(input: IncrementalIndexInput): Promise<void>;
   loadAll(): Promise<LoadedKnowledge>;
   reset(): Promise<void>;
 }
@@ -102,6 +126,10 @@ export class InMemoryKnowledgeIndex {
   private readonly documents = new Map<string, KnowledgeDocument>();
   private readonly sections = new Map<string, DocumentSection>();
   private readonly repositories = new Map<string, RepositoryRef>();
+  // The commit each repository was last indexed at, tracked separately from
+  // RepositoryRef (a shared core type) so incremental reindexing has the prior
+  // SHA in memory after a restart. Undefined ⇒ no prior SHA ⇒ full reindex.
+  private readonly indexedShaByRepository = new Map<string, string>();
 
   constructor(
     private readonly persistence?: KnowledgePersistence,
@@ -121,13 +149,16 @@ export class InMemoryKnowledgeIndex {
 
     const { repositories, documents, sections } = await this.persistence.loadAll();
 
-    for (const repository of repositories) {
+    for (const { repository, indexedCommitSha } of repositories) {
       const git = await detectGitContext(repository.localPath);
       this.repositories.set(repository.id, {
         ...repository,
         remoteUrl: repository.remoteUrl ?? git.remoteUrl,
         git
       });
+      if (indexedCommitSha) {
+        this.indexedShaByRepository.set(repository.id, indexedCommitSha);
+      }
     }
     for (const document of documents) {
       this.documents.set(document.id, document);
@@ -153,7 +184,34 @@ export class InMemoryKnowledgeIndex {
       remoteUrl: git.remoteUrl,
       git
     };
-    const commitSha = git.headSha;
+    const headSha = git.headSha;
+    const priorSha = this.indexedShaByRepository.get(repository.id);
+
+    // Decide whether an incremental reindex is provably safe. When any condition
+    // is unmet we fall back to a full reindex — correctness never depends on the
+    // optimization. See chooseIncremental for the exact fallback conditions.
+    const plan = await this.chooseIncremental(repository, git, priorSha, headSha);
+    if (plan.kind === "noop") {
+      // Source is clean and HEAD is unchanged from the last index, and the repo
+      // is already populated: nothing to re-read. Refresh the repository ref so
+      // freshly-detected git context (branch/remote) is still kept current.
+      this.repositories.set(repository.id, repository);
+      return this.summarizeRepository(repository, headSha);
+    }
+    if (plan.kind === "incremental") {
+      return this.incrementalIndex(repository, localPath, headSha, plan.changes);
+    }
+
+    return this.fullIndex(repository, localPath, headSha);
+  }
+
+  // Re-reads and re-parses every markdown file in the source (the original,
+  // always-correct behavior) and replaces the repository's documents/sections.
+  private async fullIndex(
+    repository: RepositoryRef,
+    localPath: string,
+    headSha: string | undefined
+  ): Promise<IndexedRepositorySummary> {
     const markdownPaths = await findMarkdownFiles(localPath);
     // Read+parse with a bounded worker pool instead of one file at a time: local
     // repos can have thousands of markdown files, and serial I/O made indexing
@@ -167,30 +225,9 @@ export class InMemoryKnowledgeIndex {
     for (let start = 0; start < markdownPaths.length; start += READ_CONCURRENCY) {
       const chunk = markdownPaths.slice(start, start + READ_CONCURRENCY);
       const results = await Promise.all(
-        chunk.map(async (markdownPath) => {
-          const fileStat = await stat(markdownPath);
-          if (fileStat.size > MAX_MARKDOWN_FILE_BYTES) {
-            logger.warn(
-              { path: markdownPath, bytes: fileStat.size, limitBytes: MAX_MARKDOWN_FILE_BYTES },
-              "skipping markdown file: exceeds max indexing size"
-            );
-            return undefined;
-          }
-
-          const content = await readFile(markdownPath, "utf8");
-          const relativePath = toPosixPath(path.relative(localPath, markdownPath));
-          const parsed = parseMarkdownDocument(content);
-          const document: KnowledgeDocument = {
-            id: `${repository.id}:${relativePath}`,
-            repositoryId: repository.id,
-            path: relativePath,
-            commitSha,
-            metadata: parsed.metadata,
-            content
-          };
-
-          return { document, sections: splitIntoSections(document) };
-        })
+        chunk.map((markdownPath) =>
+          this.readDocument(repository, localPath, markdownPath, headSha)
+        )
       );
 
       for (const [offset, result] of results.entries()) {
@@ -216,16 +253,259 @@ export class InMemoryKnowledgeIndex {
     for (const section of sections) {
       this.sections.set(section.id, section);
     }
+    this.setIndexedSha(repository.id, headSha);
 
     const summary: IndexedRepositorySummary = {
       repository,
       documentCount: documents.length,
       sectionCount: sections.length,
-      commitSha
+      commitSha: headSha
     };
 
     await this.persistence?.saveIndexedRepository(summary, documents, sections);
     return summary;
+  }
+
+  // Applies only the files that changed between the prior indexed SHA and HEAD.
+  // Unchanged documents are left exactly as they are (their stored commitSha
+  // stays at whatever commit last changed them); only re-read documents get the
+  // new head SHA. Persists the delta via applyIncrementalIndex.
+  private async incrementalIndex(
+    repository: RepositoryRef,
+    localPath: string,
+    headSha: string | undefined,
+    changes: ChangedMarkdownFile[]
+  ): Promise<IndexedRepositorySummary> {
+    const subdirPrefix = subdirectoryPrefix(repository.git);
+
+    // Resolve the diff (work-tree-relative) paths to this index's document-id
+    // path space, which is relative to the indexed subtree. Changes outside the
+    // indexed subtree are ignored. Renames are handled as delete(old)+add(new).
+    const toReadRelativePaths = new Set<string>();
+    const deletedDocumentIds = new Set<string>();
+
+    for (const change of changes) {
+      const newRelative = stripSubdir(change.path, subdirPrefix);
+      const oldRelative = change.oldPath ? stripSubdir(change.oldPath, subdirPrefix) : undefined;
+
+      if (change.status === "deleted") {
+        if (newRelative !== undefined) {
+          deletedDocumentIds.add(`${repository.id}:${newRelative}`);
+        }
+        continue;
+      }
+
+      // added / modified / copied / renamed-target: re-read the new path.
+      if (newRelative !== undefined) {
+        toReadRelativePaths.add(newRelative);
+      }
+      // A rename's source path leaves the indexed subtree (or moves within it):
+      // drop the old document. If the rename source is the same as the new path
+      // it is a no-op; otherwise remove the old id.
+      if (change.status === "renamed" && oldRelative !== undefined && oldRelative !== newRelative) {
+        deletedDocumentIds.add(`${repository.id}:${oldRelative}`);
+      }
+    }
+
+    // A path can appear as both deleted-then-re-added across entries; an upsert
+    // wins over a delete for the same id.
+    const upsertedDocuments: KnowledgeDocument[] = [];
+    const upsertedSections: DocumentSection[] = [];
+    const relativePaths = [...toReadRelativePaths];
+    for (let start = 0; start < relativePaths.length; start += READ_CONCURRENCY) {
+      const chunk = relativePaths.slice(start, start + READ_CONCURRENCY);
+      const results = await Promise.all(
+        chunk.map((relativePath) =>
+          this.readDocument(repository, localPath, path.join(localPath, ...relativePath.split("/")), headSha)
+        )
+      );
+      for (const result of results) {
+        if (!result) {
+          continue;
+        }
+        upsertedDocuments.push(result.document);
+        upsertedSections.push(...result.sections);
+        deletedDocumentIds.delete(result.document.id);
+      }
+    }
+
+    // Apply to the in-memory maps without reloading the world. The set of
+    // documents whose sections must be dropped is the deleted ones plus the
+    // re-read (upserted) ones; build a documentId -> sectionIds index in a single
+    // pass over the section map so removal is O(changed) rather than scanning the
+    // whole section map once per affected document (which was O(changed × total)).
+    const affectedDocumentIds = new Set<string>(deletedDocumentIds);
+    for (const document of upsertedDocuments) {
+      affectedDocumentIds.add(document.id);
+    }
+    const sectionIdsByDocumentId = this.indexSectionIdsByDocument(affectedDocumentIds);
+
+    this.repositories.set(repository.id, repository);
+    for (const documentId of affectedDocumentIds) {
+      for (const sectionId of sectionIdsByDocumentId.get(documentId) ?? []) {
+        this.sections.delete(sectionId);
+      }
+    }
+    for (const documentId of deletedDocumentIds) {
+      this.documents.delete(documentId);
+    }
+    for (const document of upsertedDocuments) {
+      this.documents.set(document.id, document);
+    }
+    for (const section of upsertedSections) {
+      this.sections.set(section.id, section);
+    }
+    this.setIndexedSha(repository.id, headSha);
+
+    await this.persistence?.applyIncrementalIndex({
+      repository,
+      commitSha: headSha,
+      upsertedDocuments,
+      upsertedSections,
+      deletedDocumentIds: [...deletedDocumentIds]
+    });
+
+    return this.summarizeRepository(repository, headSha);
+  }
+
+  // Reads, size-guards, and parses one markdown file into a document + sections.
+  // Returns undefined when the file is missing (e.g. a diff entry already gone)
+  // or exceeds the size guard, so callers skip it.
+  private async readDocument(
+    repository: RepositoryRef,
+    localPath: string,
+    markdownPath: string,
+    commitSha: string | undefined
+  ): Promise<{ document: KnowledgeDocument; sections: DocumentSection[] } | undefined> {
+    let fileStat;
+    try {
+      fileStat = await stat(markdownPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return undefined;
+      }
+      throw error;
+    }
+    if (fileStat.size > MAX_MARKDOWN_FILE_BYTES) {
+      logger.warn(
+        { path: markdownPath, bytes: fileStat.size, limitBytes: MAX_MARKDOWN_FILE_BYTES },
+        "skipping markdown file: exceeds max indexing size"
+      );
+      return undefined;
+    }
+
+    const content = await readFile(markdownPath, "utf8");
+    const relativePath = toPosixPath(path.relative(localPath, markdownPath));
+    const parsed = parseMarkdownDocument(content);
+    const document: KnowledgeDocument = {
+      id: `${repository.id}:${relativePath}`,
+      repositoryId: repository.id,
+      path: relativePath,
+      commitSha,
+      metadata: parsed.metadata,
+      content
+    };
+    return { document, sections: splitIntoSections(document) };
+  }
+
+  // Decides the reindex strategy. Returns "full" whenever incremental cannot be
+  // proven safe, "noop" when HEAD is unchanged and the repo is already populated,
+  // and "incremental" with the markdown diff otherwise.
+  private async chooseIncremental(
+    repository: RepositoryRef,
+    git: GitRepositoryContext,
+    priorSha: string | undefined,
+    headSha: string | undefined
+  ): Promise<{ kind: "full" } | { kind: "noop" } | { kind: "incremental"; changes: ChangedMarkdownFile[] }> {
+    // Not a git work tree, or no resolvable HEAD: nothing to diff against.
+    if (git.scope === "not-git" || !headSha) {
+      return { kind: "full" };
+    }
+    // Working tree has uncommitted edits: a name-status diff between commits would
+    // miss them, so re-read everything.
+    if (git.hasUncommittedChanges) {
+      return { kind: "full" };
+    }
+    // No prior indexed SHA (first index, or pre-feature data): full.
+    if (!priorSha) {
+      return { kind: "full" };
+    }
+    if (priorSha === headSha) {
+      // Already at the indexed commit and clean — skip if populated, else (e.g.
+      // a fresh process that hydrated metadata but no docs) do a full index.
+      return this.repositoryIsPopulated(repository.id) ? { kind: "noop" } : { kind: "full" };
+    }
+    // History rewritten (force-push/rebase) so the prior commit is unreachable:
+    // a prior..head diff would be meaningless. Re-read everything.
+    if (!(await isAncestor(repository.localPath, priorSha, headSha))) {
+      return { kind: "full" };
+    }
+
+    // Diff from the work-tree root so the subdirectory pathspec is interpreted
+    // relative to the root (git pathspecs are cwd-relative), and the returned
+    // paths are root-relative — matching stripSubdir's expectation.
+    const diffCwd = repository.git?.workTreeRoot ?? repository.localPath;
+    const changes = await listChangedMarkdown(diffCwd, priorSha, headSha, {
+      pathspec: subdirectoryPrefix(repository.git)
+    });
+    return { kind: "incremental", changes };
+  }
+
+  private repositoryIsPopulated(repositoryId: string): boolean {
+    for (const document of this.documents.values()) {
+      if (document.repositoryId === repositoryId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private setIndexedSha(repositoryId: string, sha: string | undefined): void {
+    if (sha) {
+      this.indexedShaByRepository.set(repositoryId, sha);
+    } else {
+      this.indexedShaByRepository.delete(repositoryId);
+    }
+  }
+
+  private summarizeRepository(repository: RepositoryRef, commitSha: string | undefined): IndexedRepositorySummary {
+    let documentCount = 0;
+    let sectionCount = 0;
+    for (const document of this.documents.values()) {
+      if (document.repositoryId === repository.id) {
+        documentCount += 1;
+      }
+    }
+    for (const section of this.sections.values()) {
+      const ownerRepository = this.documents.get(section.documentId)?.repositoryId;
+      if (ownerRepository === repository.id) {
+        sectionCount += 1;
+      }
+    }
+    return { repository, documentCount, sectionCount, commitSha };
+  }
+
+  // Builds a documentId -> sectionIds index for the given documents in one pass
+  // over the section map, so callers can delete a batch of documents' sections by
+  // lookup instead of re-scanning the whole map per document. Only the requested
+  // documents are kept, keeping the returned map small.
+  private indexSectionIdsByDocument(documentIds: Set<string>): Map<string, string[]> {
+    const byDocument = new Map<string, string[]>();
+    if (documentIds.size === 0) {
+      return byDocument;
+    }
+    for (const [sectionId, section] of this.sections) {
+      if (!documentIds.has(section.documentId)) {
+        continue;
+      }
+      const existing = byDocument.get(section.documentId);
+      if (existing) {
+        existing.push(sectionId);
+      } else {
+        byDocument.set(section.documentId, [sectionId]);
+      }
+    }
+    return byDocument;
   }
 
   async indexMarkdownDocuments(input: {
@@ -457,7 +737,36 @@ export class InMemoryKnowledgeIndex {
     this.documents.clear();
     this.sections.clear();
     this.repositories.clear();
+    this.indexedShaByRepository.clear();
   }
+}
+
+// The indexed subtree's path relative to the git work-tree root, normalised to a
+// posix prefix (or undefined for a repository-root index). Diff paths from git
+// are work-tree-relative, so this is what we strip to reach the document-id path
+// space (which is relative to the indexed subtree).
+function subdirectoryPrefix(git: GitRepositoryContext | undefined): string | undefined {
+  const relative = git?.relativePathFromRoot;
+  if (!relative || relative === ".") {
+    return undefined;
+  }
+  return relative.replace(/^\/+|\/+$/g, "") || undefined;
+}
+
+// Maps a work-tree-relative diff path into the indexed subtree's path space by
+// stripping the subdirectory prefix. Returns undefined when the path lies
+// outside the indexed subtree (so the change is ignored).
+function stripSubdir(workTreeRelativePath: string, subdirPrefix: string | undefined): string | undefined {
+  const normalized = toPosixPath(workTreeRelativePath).replace(/^\/+/, "");
+  if (!subdirPrefix) {
+    return normalized;
+  }
+  if (normalized === subdirPrefix) {
+    // The subtree path itself can't be a markdown document.
+    return undefined;
+  }
+  const prefix = `${subdirPrefix}/`;
+  return normalized.startsWith(prefix) ? normalized.slice(prefix.length) : undefined;
 }
 
 // No-op (returns the full array) when neither limit nor offset is given, so

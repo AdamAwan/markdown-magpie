@@ -132,3 +132,83 @@ describe("PostgresKnowledgeStore keyword search", { skip: databaseUrl ? false : 
     assert.deepEqual(empty, []);
   });
 });
+
+describe("PostgresKnowledgeStore applyIncrementalIndex", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
+  it("upserts changed docs, deletes removed docs, and advances indexed_commit_sha", async () => {
+    const store = new PostgresKnowledgeStore(databaseUrl as string);
+    const repositoryId = `incr-test-${Date.now()}`;
+    const docId = (p: string): string => `${repositoryId}:${p}`;
+    const makeDoc = (p: string, body: string, commitSha: string): KnowledgeDocument => ({
+      id: docId(p),
+      repositoryId,
+      path: p,
+      commitSha,
+      metadata: { title: p, status: "draft", tags: [], relatedDocs: [] },
+      content: body
+    });
+    const makeSection = (doc: KnowledgeDocument, ordinal: number, content: string): DocumentSection => ({
+      id: `${doc.id}:${ordinal}`,
+      documentId: doc.id,
+      path: doc.path,
+      heading: doc.path,
+      headingPath: [doc.path],
+      anchor: String(ordinal),
+      content,
+      ordinal
+    });
+    const repository = {
+      id: repositoryId,
+      name: repositoryId,
+      defaultBranch: "main",
+      localPath: "/tmp",
+      provider: "local" as const
+    };
+
+    // Seed via the full-index path at commit "sha-1".
+    const keep = makeDoc("keep.md", "# keep\noriginal\n", "sha-1");
+    const edit = makeDoc("edit.md", "# edit\nv1\n", "sha-1");
+    const remove = makeDoc("remove.md", "# remove\nbye\n", "sha-1");
+    const seedDocs = [keep, edit, remove];
+    const seedSections = seedDocs.map((doc, i) => makeSection(doc, 0, `body-${i}`));
+    await store.saveIndexedRepository(
+      { repository, documentCount: seedDocs.length, sectionCount: seedSections.length, commitSha: "sha-1" },
+      seedDocs,
+      seedSections
+    );
+
+    // Incremental at "sha-2": modify edit.md (with two fresh sections), delete
+    // remove.md, leave keep.md untouched.
+    const editV2 = makeDoc("edit.md", "# edit\nv2 changed\n", "sha-2");
+    const editV2Sections = [makeSection(editV2, 0, "v2 a"), makeSection(editV2, 1, "v2 b")];
+    await store.applyIncrementalIndex({
+      repository,
+      commitSha: "sha-2",
+      upsertedDocuments: [editV2],
+      upsertedSections: editV2Sections,
+      deletedDocumentIds: [docId("remove.md")]
+    });
+
+    const loaded = await store.loadAll();
+    const mine = loaded.documents.filter((d) => d.repositoryId === repositoryId);
+    assert.deepEqual(mine.map((d) => d.path).sort(), ["edit.md", "keep.md"]);
+
+    const loadedEdit = mine.find((d) => d.path === "edit.md");
+    assert.match(loadedEdit?.content ?? "", /v2 changed/);
+    assert.equal(loadedEdit?.commitSha, "sha-2", "changed doc advances to the new SHA");
+
+    const loadedKeep = mine.find((d) => d.path === "keep.md");
+    assert.equal(loadedKeep?.commitSha, "sha-1", "untouched doc keeps its original SHA");
+
+    // edit.md's sections were replaced with the two fresh ones.
+    const editSections = loaded.sections.filter((s) => s.documentId === docId("edit.md"));
+    assert.equal(editSections.length, 2);
+
+    // remove.md's sections were deleted along with the document.
+    const removeSections = loaded.sections.filter((s) => s.documentId === docId("remove.md"));
+    assert.equal(removeSections.length, 0);
+
+    // The repository's indexed_commit_sha now reflects the incremental head.
+    const repoRecord = loaded.repositories.find((r) => r.repository.id === repositoryId);
+    assert.equal(repoRecord?.indexedCommitSha, "sha-2");
+  });
+});
