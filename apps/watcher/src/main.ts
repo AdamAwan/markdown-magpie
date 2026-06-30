@@ -8,6 +8,7 @@ import {
   type CapabilityRuntime
 } from "./capabilities.js";
 import { HttpWatcherApi } from "./http-client.js";
+import { logger } from "./logger.js";
 import { createConfiguredRunners } from "./runners/index.js";
 import { WorkerLoop } from "./worker-loop.js";
 
@@ -57,41 +58,43 @@ const runners = createConfiguredRunners(process.env, api, capabilityRuntime);
 // fails it safely (see WorkerLoop.execute's "no runner supports" branch).
 const capabilities = deriveCapabilities(process.env, capabilityRuntime);
 
-console.log(`Markdown Magpie watcher '${watcherName}' starting`);
-console.log(`API: ${apiBaseUrl}`);
-console.log(`Poll interval: ${pollIntervalMs}ms`);
+logger.info({ watcherName, apiBaseUrl, pollIntervalMs }, `Markdown Magpie watcher '${watcherName}' starting`);
 logCapabilityReadiness(process.env, capabilityRuntime);
-console.log(`Advertised capabilities: ${capabilities.length ? capabilities.join(", ") : "(none)"}`);
+logger.info(
+  { capabilities: capabilities.length ? capabilities.join(", ") : "(none)" },
+  `Advertised capabilities: ${capabilities.length ? capabilities.join(", ") : "(none)"}`
+);
 
 if (capabilities.length === 0) {
-  console.warn("No runner capabilities are configured; the watcher will idle. Configure a provider or GitHub credentials.");
+  logger.warn("No runner capabilities are configured; the watcher will idle. Configure a provider or GitHub credentials.");
 }
 
-const loop = new WorkerLoop(api, runners, capabilities, watcherName, { pollIntervalMs });
+const loop = new WorkerLoop(api, runners, capabilities, watcherName, logger, { pollIntervalMs });
 
 process.once("SIGTERM", () => {
-  console.log("Received SIGTERM, shutting down...");
+  logger.info("Received SIGTERM, shutting down...");
   void loop.stop();
 });
 process.once("SIGINT", () => {
-  console.log("Received SIGINT, shutting down...");
+  logger.info("Received SIGINT, shutting down...");
   void loop.stop();
 });
 
 await loop.run();
-console.log(`Markdown Magpie watcher '${watcherName}' stopped`);
+logger.info({ watcherName }, `Markdown Magpie watcher '${watcherName}' stopped`);
 
 // Logs, per capability, whether each required env var is set or MISSING — never
 // the secret values themselves — so a misconfiguration is visible at startup.
 function logCapabilityReadiness(env: NodeJS.ProcessEnv, runtime: CapabilityRuntime): void {
-  console.log(`Git executable: ${runtime.gitAvailable() ? "available" : "MISSING"}`);
+  logger.info({ gitAvailable: runtime.gitAvailable() }, `Git executable: ${runtime.gitAvailable() ? "available" : "MISSING"}`);
   for (const gate of CAPABILITY_GATES) {
     if (gate.requiredEnv.length === 0) {
-      console.log(`Capability ${pad(gate.capability)} — always available`);
+      logger.info({ capability: gate.capability }, `Capability ${pad(gate.capability)} — always available`);
       continue;
     }
     const states = gate.requiredEnv.map((name) => `${name}: ${env[name]?.trim() ? "set" : "MISSING"}`);
-    console.log(
+    logger.info(
+      { capability: gate.capability, ready: gate.ready(env, runtime) },
       `Capability ${pad(gate.capability)} — ${gate.ready(env, runtime) ? "ready" : "NOT ready"} (${states.join(", ")})`
     );
   }

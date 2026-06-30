@@ -1,3 +1,4 @@
+import type { Logger } from "@magpie/logger";
 import type { JobCapability, JobError, JobView } from "@magpie/jobs";
 import type { WatcherApiClient } from "./http-client.js";
 import type { JobRunner } from "./runners/types.js";
@@ -25,6 +26,7 @@ export class WorkerLoop {
     private readonly runners: readonly JobRunner[],
     private readonly capabilities: JobCapability[],
     private readonly workerName: string,
+    private readonly logger: Logger,
     private readonly options: WorkerLoopOptions
   ) {}
 
@@ -42,7 +44,7 @@ export class WorkerLoop {
         // next cycle retries — otherwise a misconfigured token turns into a
         // tight container restart loop.
         if (!this.stopping) {
-          console.error(`Watcher poll failed: ${error instanceof Error ? error.message : String(error)}`);
+          this.logger.error({ err: error }, "watcher poll failed");
         }
       }
       if (!claimed && !this.stopping) {
@@ -72,11 +74,12 @@ export class WorkerLoop {
 
   private async execute(job: JobView): Promise<void> {
     const startedAt = Date.now();
-    console.log(`Got job ${job.id} (${job.type})`);
+    const log = this.logger.child({ jobId: job.id, jobType: job.type });
+    log.info("job claimed");
 
     const runner = this.runners.find((candidate) => candidate.supports(job.type));
     if (!runner) {
-      console.error(`No runner supports job type ${job.type}; failing job ${job.id}`);
+      log.error("no runner supports job type; failing job");
       await this.api.fail(job.id, this.toJobError(job, new Error(`No runner supports job type ${job.type}`)));
       return;
     }
@@ -90,20 +93,19 @@ export class WorkerLoop {
       // A cancellation reaches a terminal state server-side; don't try to
       // complete a job the server already moved out from under us.
       if (controller.signal.aborted) {
-        console.log(`Job ${job.id} (${job.type}) cancelled after ${elapsed(startedAt)}`);
+        log.info({ durationMs: Date.now() - startedAt, outcome: "cancelled" }, "job cancelled");
         return;
       }
       await this.api.complete(job.id, output);
-      console.log(`Done job ${job.id} (${job.type}) in ${elapsed(startedAt)}`);
+      log.info({ durationMs: Date.now() - startedAt, outcome: "completed" }, "job done");
     } catch (error) {
       if (controller.signal.aborted) {
         // Aborted by cancellation or shutdown — the job is (or will be) terminal
         // server-side, so do not record a redundant failure.
-        console.log(`Job ${job.id} (${job.type}) cancelled after ${elapsed(startedAt)}`);
+        log.info({ durationMs: Date.now() - startedAt, outcome: "cancelled" }, "job cancelled");
         return;
       }
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`Job ${job.id} (${job.type}) failed after ${elapsed(startedAt)}: ${message}`);
+      log.error({ durationMs: Date.now() - startedAt, outcome: "failed", err: error }, "job failed");
       await this.api.fail(job.id, this.toJobError(job, error));
     } finally {
       heartbeat.stop();
@@ -120,7 +122,7 @@ export class WorkerLoop {
         .heartbeat(job.id)
         .then((result) => {
           if (result.cancelled) {
-            console.log(`Job ${job.id} (${job.type}) cancellation requested by server; aborting`);
+            this.logger.info({ jobId: job.id }, "job cancellation requested by server; aborting");
             controller.abort(new Error("job cancelled"));
           }
         })
@@ -157,10 +159,4 @@ function heartbeatIntervalMs(job: JobView): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// Formats a job duration for log lines: sub-second as ms, otherwise seconds.
-function elapsed(startMs: number): string {
-  const ms = Date.now() - startMs;
-  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
