@@ -2,9 +2,11 @@ import pg from "pg";
 import type { DocumentSection, KnowledgeDocument, KnowledgeStatus, RepositoryRef } from "@magpie/core";
 import type {
   EmbeddingPersistence,
+  IncrementalIndexInput,
   IndexedRepositorySummary,
   KnowledgePersistence,
   LoadedKnowledge,
+  LoadedRepository,
   SectionEmbeddingToSave,
   SectionKeywordSearch,
   SectionToEmbed,
@@ -41,14 +43,15 @@ export class PostgresKnowledgeStore
       await client.query("BEGIN");
       await client.query(
         `
-          INSERT INTO repositories (id, name, remote_url, default_branch, local_path, provider)
-          VALUES ($1, $2, $3, $4, $5, $6)
+          INSERT INTO repositories (id, name, remote_url, default_branch, local_path, provider, indexed_commit_sha)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
           ON CONFLICT (id) DO UPDATE
           SET name = EXCLUDED.name,
               remote_url = EXCLUDED.remote_url,
               default_branch = EXCLUDED.default_branch,
               local_path = EXCLUDED.local_path,
-              provider = EXCLUDED.provider
+              provider = EXCLUDED.provider,
+              indexed_commit_sha = EXCLUDED.indexed_commit_sha
         `,
         [
           summary.repository.id,
@@ -56,45 +59,12 @@ export class PostgresKnowledgeStore
           summary.repository.remoteUrl ?? null,
           summary.repository.defaultBranch,
           summary.repository.localPath,
-          summary.repository.provider
+          summary.repository.provider,
+          summary.commitSha ?? null
         ]
       );
 
-      // Upsert documents in batched multi-row INSERTs rather than one query per
-      // row (which, on a large repo, meant thousands of serial round-trips while
-      // holding the transaction open).
-      for (const batch of chunk(documents, DOCUMENT_INSERT_CHUNK)) {
-        await client.query(
-          `
-            INSERT INTO documents (
-              id, repository_id, path, commit_sha, title, owner, status,
-              last_verified, review_cycle_days, content, updated_at
-            )
-            VALUES ${valuesClause(batch.length, 10, ["now()"])}
-            ON CONFLICT (repository_id, path) DO UPDATE
-            SET commit_sha = EXCLUDED.commit_sha,
-                title = EXCLUDED.title,
-                owner = EXCLUDED.owner,
-                status = EXCLUDED.status,
-                last_verified = EXCLUDED.last_verified,
-                review_cycle_days = EXCLUDED.review_cycle_days,
-                content = EXCLUDED.content,
-                updated_at = now()
-          `,
-          batch.flatMap((document) => [
-            document.id,
-            document.repositoryId,
-            document.path,
-            document.commitSha ?? summary.commitSha ?? null,
-            document.metadata.title,
-            document.metadata.owner ?? null,
-            document.metadata.status,
-            document.metadata.lastVerified ?? null,
-            document.metadata.reviewCycleDays ?? null,
-            document.content
-          ])
-        );
-      }
+      await this.upsertDocuments(client, documents, summary.commitSha);
 
       // Clear existing sections for the (re)indexed documents in one statement so
       // they can be re-inserted fresh below.
@@ -110,26 +80,7 @@ export class PostgresKnowledgeStore
         [summary.repository.id, documents.map((document) => document.path)]
       );
 
-      for (const batch of chunk(sections, SECTION_INSERT_CHUNK)) {
-        await client.query(
-          `
-            INSERT INTO document_sections (
-              id, document_id, path, heading, heading_path, anchor, ordinal, content
-            )
-            VALUES ${valuesClause(batch.length, 8)}
-          `,
-          batch.flatMap((section) => [
-            section.id,
-            section.documentId,
-            section.path,
-            section.heading,
-            section.headingPath,
-            section.anchor,
-            section.ordinal,
-            section.content
-          ])
-        );
-      }
+      await this.insertSections(client, sections);
 
       await client.query("COMMIT");
     } catch (error) {
@@ -140,10 +91,125 @@ export class PostgresKnowledgeStore
     }
   }
 
+  // Persists a single incremental reindex in one transaction: removes the deleted
+  // documents (their sections cascade via the FK), and for each upserted document
+  // clears its old sections, upserts the document row, and inserts its fresh
+  // sections — then advances the repository's indexed_commit_sha. Unchanged rows
+  // are never touched (unlike saveIndexedRepository's whole-repository rewrite).
+  async applyIncrementalIndex(input: IncrementalIndexInput): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      if (input.deletedDocumentIds.length > 0) {
+        // document_sections.document_id references documents(id); delete sections
+        // first to honour the FK regardless of its ON DELETE behavior.
+        await client.query("DELETE FROM document_sections WHERE document_id = ANY($1::text[])", [
+          input.deletedDocumentIds
+        ]);
+        await client.query("DELETE FROM documents WHERE id = ANY($1::text[])", [input.deletedDocumentIds]);
+      }
+
+      if (input.upsertedDocuments.length > 0) {
+        await this.upsertDocuments(client, input.upsertedDocuments, input.commitSha);
+
+        // Replace each upserted document's sections: drop the old ones, then
+        // insert the freshly split set.
+        await client.query("DELETE FROM document_sections WHERE document_id = ANY($1::text[])", [
+          input.upsertedDocuments.map((document) => document.id)
+        ]);
+        await this.insertSections(client, input.upsertedSections);
+      }
+
+      await client.query("UPDATE repositories SET indexed_commit_sha = $2 WHERE id = $1", [
+        input.repository.id,
+        input.commitSha ?? null
+      ]);
+
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Upserts documents in batched multi-row INSERTs (one query per chunk rather
+  // than one per row, which on a large repo meant thousands of serial round-trips
+  // inside the open transaction). `fallbackCommitSha` fills commit_sha for any
+  // document that doesn't carry its own. Shared by the full and incremental save
+  // paths so a column change can't diverge between them. Runs on the caller's
+  // client so it participates in the caller's transaction.
+  private async upsertDocuments(
+    client: pg.PoolClient,
+    documents: KnowledgeDocument[],
+    fallbackCommitSha: string | undefined
+  ): Promise<void> {
+    for (const batch of chunk(documents, DOCUMENT_INSERT_CHUNK)) {
+      await client.query(
+        `
+          INSERT INTO documents (
+            id, repository_id, path, commit_sha, title, owner, status,
+            last_verified, review_cycle_days, content, updated_at
+          )
+          VALUES ${valuesClause(batch.length, 10, ["now()"])}
+          ON CONFLICT (repository_id, path) DO UPDATE
+          SET commit_sha = EXCLUDED.commit_sha,
+              title = EXCLUDED.title,
+              owner = EXCLUDED.owner,
+              status = EXCLUDED.status,
+              last_verified = EXCLUDED.last_verified,
+              review_cycle_days = EXCLUDED.review_cycle_days,
+              content = EXCLUDED.content,
+              updated_at = now()
+        `,
+        batch.flatMap((document) => [
+          document.id,
+          document.repositoryId,
+          document.path,
+          document.commitSha ?? fallbackCommitSha ?? null,
+          document.metadata.title,
+          document.metadata.owner ?? null,
+          document.metadata.status,
+          document.metadata.lastVerified ?? null,
+          document.metadata.reviewCycleDays ?? null,
+          document.content
+        ])
+      );
+    }
+  }
+
+  // Inserts sections in batched multi-row INSERTs. Callers are responsible for
+  // clearing the affected documents' existing sections first. Shared by the full
+  // and incremental save paths; runs on the caller's transaction client.
+  private async insertSections(client: pg.PoolClient, sections: DocumentSection[]): Promise<void> {
+    for (const batch of chunk(sections, SECTION_INSERT_CHUNK)) {
+      await client.query(
+        `
+          INSERT INTO document_sections (
+            id, document_id, path, heading, heading_path, anchor, ordinal, content
+          )
+          VALUES ${valuesClause(batch.length, 8)}
+        `,
+        batch.flatMap((section) => [
+          section.id,
+          section.documentId,
+          section.path,
+          section.heading,
+          section.headingPath,
+          section.anchor,
+          section.ordinal,
+          section.content
+        ])
+      );
+    }
+  }
+
   async loadAll(): Promise<LoadedKnowledge> {
     const [repositoryRows, documentRows, sectionRows] = await Promise.all([
       this.pool.query<RepositoryRow>(
-        "SELECT id, name, remote_url, default_branch, local_path, provider FROM repositories"
+        "SELECT id, name, remote_url, default_branch, local_path, provider, indexed_commit_sha FROM repositories"
       ),
       this.pool.query<DocumentRow>(
         `
@@ -157,13 +223,16 @@ export class PostgresKnowledgeStore
       )
     ]);
 
-    const repositories: RepositoryRef[] = repositoryRows.rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      remoteUrl: row.remote_url ?? undefined,
-      defaultBranch: row.default_branch,
-      localPath: row.local_path,
-      provider: row.provider as RepositoryRef["provider"]
+    const repositories: LoadedRepository[] = repositoryRows.rows.map((row) => ({
+      repository: {
+        id: row.id,
+        name: row.name,
+        remoteUrl: row.remote_url ?? undefined,
+        defaultBranch: row.default_branch,
+        localPath: row.local_path,
+        provider: row.provider as RepositoryRef["provider"]
+      },
+      indexedCommitSha: row.indexed_commit_sha ?? undefined
     }));
 
     const documents: KnowledgeDocument[] = documentRows.rows.map((row) => ({
@@ -337,6 +406,7 @@ interface RepositoryRow {
   default_branch: string;
   local_path: string;
   provider: string;
+  indexed_commit_sha: string | null;
 }
 
 interface DocumentRow {

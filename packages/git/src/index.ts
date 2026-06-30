@@ -159,25 +159,21 @@ export async function diffChangedFiles(
   const diffByPath = splitUnifiedDiffByFile(fullDiff);
   const changes: SourceFileChange[] = [];
 
-  for (const line of nameStatus.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    // Columns are tab-separated: "<status>\t<path>" (renames add an old/new pair).
-    const parts = trimmed.split(/\t/);
-    const code = parts[0]?.[0] ?? "";
-    const filePath = parts.length > 2 ? parts[parts.length - 1] : parts[1];
-    if (!filePath) {
-      continue;
-    }
-
+  for (const entry of parseNameStatus(nameStatus)) {
     const status: SourceFileChange["status"] =
-      code === "A" ? "added" : code === "M" ? "modified" : code === "D" ? "deleted" : code === "R" ? "renamed" : "other";
+      entry.code === "A"
+        ? "added"
+        : entry.code === "M"
+          ? "modified"
+          : entry.code === "D"
+            ? "deleted"
+            : entry.code === "R"
+              ? "renamed"
+              : "other";
 
-    const rawDiff = diffByPath.get(filePath) ?? "";
+    const rawDiff = diffByPath.get(entry.path) ?? "";
     const diff = rawDiff.length > maxDiffChars ? `${rawDiff.slice(0, maxDiffChars)}\n… (diff truncated)` : rawDiff;
-    changes.push({ path: filePath, status, diff });
+    changes.push({ path: entry.path, status, diff });
   }
 
   return changes;
@@ -216,6 +212,134 @@ function splitUnifiedDiffByFile(fullDiff: string): Map<string, string> {
   }
 
   return byPath;
+}
+
+// One parsed line of `git diff --name-status -M` output. `code` is the leading
+// status letter (A/M/D/R/C/T/U/...); `path` is the file's current path (the
+// rename/copy target); `oldPath` is the pre-rename source, present only for R/C.
+interface NameStatusEntry {
+  code: string;
+  path: string;
+  oldPath?: string;
+}
+
+// Parses `git diff --name-status` output into structured entries. A/M/D lines are
+// "<code>\t<path>"; R/C lines are "<code><score>\t<oldPath>\t<newPath>". Shared by
+// diffChangedFiles and listChangedMarkdown so the tab/rename handling lives once.
+function parseNameStatus(nameStatus: string): NameStatusEntry[] {
+  const entries: NameStatusEntry[] = [];
+  for (const line of nameStatus.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const parts = trimmed.split(/\t/);
+    const code = parts[0]?.[0] ?? "";
+    if (code === "R" || code === "C") {
+      const oldPath = parts[1];
+      const newPath = parts[2];
+      if (!oldPath || !newPath) {
+        continue;
+      }
+      entries.push({ code, path: newPath, oldPath });
+      continue;
+    }
+    const filePath = parts[1];
+    if (!filePath) {
+      continue;
+    }
+    entries.push({ code, path: filePath });
+  }
+  return entries;
+}
+
+// A single markdown file changed between two commits, identified by name-status
+// only (no patch body). `oldPath` is the pre-rename path on a rename/copy; for
+// added/modified/deleted it is undefined. `path` is always the post-change path
+// (the rename target), relative to the work-tree root.
+export interface ChangedMarkdownFile {
+  status: "added" | "modified" | "deleted" | "renamed" | "copied";
+  path: string;
+  oldPath?: string;
+}
+
+// Lists the markdown files that changed between two commits using a name-status
+// diff (no patch bodies — far cheaper than diffChangedFiles when the caller only
+// needs to know *which* files to re-read). Scope to a subtree with `pathspec`.
+// Returns [] when either ref is missing or nothing changed, so callers can treat
+// "couldn't diff" as "no incremental work" and fall back to a full reindex.
+export async function listChangedMarkdown(
+  localPath: string,
+  fromSha: string,
+  toSha: string,
+  options: { pathspec?: string } = {}
+): Promise<ChangedMarkdownFile[]> {
+  const subtree = options.pathspec?.replace(/\/+$/, "").trim();
+  // Scope the diff to the subtree with a ":(literal)" pathspec so directory names
+  // containing glob metacharacters ([ ] * ?) are matched verbatim rather than
+  // interpreted — a glob pathspec built from an arbitrary directory name would
+  // silently match nothing. The pathspec matches the directory and everything
+  // under it; the *.md filter is then applied per result path below.
+  const pathspec = subtree && subtree !== "." ? [`:(literal)${subtree}`] : [];
+  const subtreePrefix = subtree && subtree !== "." ? `${subtree}/` : undefined;
+  const nameStatus = await tryGit(localPath, [
+    "diff",
+    "--name-status",
+    "-M",
+    `${fromSha}..${toSha}`,
+    "--",
+    ...pathspec
+  ]);
+
+  const isMarkdownInSubtree = (filePath: string): boolean => {
+    if (!filePath.toLowerCase().endsWith(".md")) {
+      return false;
+    }
+    return subtreePrefix === undefined || filePath.startsWith(subtreePrefix);
+  };
+
+  const changes: ChangedMarkdownFile[] = [];
+  for (const entry of parseNameStatus(nameStatus)) {
+    if (entry.code === "R" || entry.code === "C") {
+      // A rename/copy is relevant if either endpoint is a markdown file inside
+      // the subtree (a move into or out of the scope still changes the index).
+      if (!entry.oldPath || (!isMarkdownInSubtree(entry.oldPath) && !isMarkdownInSubtree(entry.path))) {
+        continue;
+      }
+      changes.push({ status: entry.code === "R" ? "renamed" : "copied", path: entry.path, oldPath: entry.oldPath });
+      continue;
+    }
+
+    if (!isMarkdownInSubtree(entry.path)) {
+      continue;
+    }
+    const status = entry.code === "A" ? "added" : entry.code === "D" ? "deleted" : "modified";
+    changes.push({ status, path: entry.path });
+  }
+
+  return changes;
+}
+
+// True when `ancestorSha` is an ancestor of (or equal to) `descendantSha` —
+// i.e. the prior commit is still reachable from the current HEAD, so history
+// was not rewritten between them. Uses `git merge-base --is-ancestor`, whose
+// exit code is the answer (0 = ancestor, 1 = not). Returns false on any error
+// (bad/missing ref), so an undecidable check fails closed to a full reindex.
+export async function isAncestor(
+  localPath: string,
+  ancestorSha: string,
+  descendantSha: string
+): Promise<boolean> {
+  try {
+    await execFileAsync("git", ["merge-base", "--is-ancestor", ancestorSha, descendantSha], {
+      cwd: localPath,
+      timeout: GIT_SUBPROCESS_TIMEOUT_MS,
+      maxBuffer: GIT_SUBPROCESS_MAX_BUFFER
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export class DryRunPullRequestProvider implements PullRequestProvider {
