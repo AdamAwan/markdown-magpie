@@ -290,12 +290,25 @@ export class InMemoryKnowledgeIndex {
     return repositoryId !== undefined && repositoryIds.includes(repositoryId);
   }
 
-  listDocuments(): KnowledgeDocument[] {
-    return [...this.documents.values()].sort((left, right) => left.path.localeCompare(right.path));
+  // `options` is optional so the many internal callers that need the full
+  // unbounded list (publication diffing, dedupe/split scheduling, etc.) are
+  // unaffected; only the HTTP route passes limit/offset to paginate.
+  listDocuments(options?: { limit?: number; offset?: number }): KnowledgeDocument[] {
+    const sorted = [...this.documents.values()].sort((left, right) => left.path.localeCompare(right.path));
+    return paginate(sorted, options);
   }
 
-  listRepositories(): RepositoryRef[] {
-    return [...this.repositories.values()].sort((left, right) => left.name.localeCompare(right.name));
+  countDocuments(): number {
+    return this.documents.size;
+  }
+
+  listRepositories(options?: { limit?: number; offset?: number }): RepositoryRef[] {
+    const sorted = [...this.repositories.values()].sort((left, right) => left.name.localeCompare(right.name));
+    return paginate(sorted, options);
+  }
+
+  countRepositories(): number {
+    return this.repositories.size;
   }
 
   getStats(): { repositoryCount: number; documentCount: number; sectionCount: number } {
@@ -329,6 +342,18 @@ export class InMemoryKnowledgeIndex {
     this.sections.clear();
     this.repositories.clear();
   }
+}
+
+// No-op (returns the full array) when neither limit nor offset is given, so
+// internal callers that want everything keep working unchanged.
+function paginate<T>(items: T[], options?: { limit?: number; offset?: number }): T[] {
+  if (!options || (options.limit === undefined && options.offset === undefined)) {
+    return items;
+  }
+
+  const offset = Math.max(0, options.offset ?? 0);
+  const limit = options.limit ?? items.length;
+  return items.slice(offset, offset + limit);
 }
 
 async function findMarkdownFiles(root: string): Promise<string[]> {

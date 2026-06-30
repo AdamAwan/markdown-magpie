@@ -25,7 +25,7 @@ export type {
   WatcherView
 } from "@magpie/core";
 
-import type { QuestionFeedback, ScheduledTaskSettings, WatcherView } from "@magpie/core";
+import type { KnowledgeDocument, QuestionFeedback, RepositoryRef, ScheduledTaskSettings, WatcherView } from "@magpie/core";
 
 // Queue/job domain types live in @magpie/jobs (the pg-boss contract). The web
 // re-exports the TYPES so the console's job/schedule views never drift from the
@@ -177,6 +177,18 @@ export interface JobsResponse {
 // active window), busy or idle. Drives the Jobs screen's Workers panel.
 export interface WorkersResponse {
   workers: WatcherView[];
+}
+
+// `/knowledge/documents` and `/knowledge/repositories` are paginated the same
+// way as `/jobs`: a page of items plus the unpaginated total.
+export interface KnowledgeDocumentsResponse {
+  documents: KnowledgeDocument[];
+  total: number;
+}
+
+export interface KnowledgeRepositoriesResponse {
+  repositories: RepositoryRef[];
+  total: number;
 }
 
 // The scheduled-task list response enriches the stored settings with the next
