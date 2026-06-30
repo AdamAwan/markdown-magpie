@@ -12,6 +12,7 @@ import {
 } from "../stores/knowledge-repositories.js";
 import type { InMemoryKnowledgeIndex } from "../stores/knowledge-index.js";
 import { normalizeRelativePath } from "./paths.js";
+import type { AppConfig } from "./config.js";
 
 export interface RepositoryDeps {
   knowledgeConfig: {
@@ -22,16 +23,20 @@ export interface RepositoryDeps {
   };
   knowledgeIndex: InMemoryKnowledgeIndex;
   triggerEmbedding: () => void;
+  // Resolved absolute roots, threaded from the validated startup config so this
+  // module never reads process.env for the MAGPIE_* path overrides.
+  checkoutRoot: string;
+  localIndexRoot?: string;
 }
 
-export function checkoutRoot(): string {
-  return resolveLocalConfiguredPath(process.env.MAGPIE_CHECKOUT_ROOT ?? ".magpie/checkouts");
+export function checkoutRoot(config: AppConfig): string {
+  return resolveLocalConfiguredPath(config.paths.checkoutRoot);
 }
 
 // Where the per-flow snapshot fetch job writes its downloaded gaps/proposals/PR
 // data. A sibling of the checkout root by default; override with MAGPIE_SNAPSHOT_ROOT.
-export function snapshotRoot(): string {
-  return resolveLocalConfiguredPath(process.env.MAGPIE_SNAPSHOT_ROOT ?? ".magpie/snapshots");
+export function snapshotRoot(config: AppConfig): string {
+  return resolveLocalConfiguredPath(config.paths.snapshotRoot);
 }
 
 function resolveLocalConfiguredPath(value: string): string {
@@ -43,16 +48,16 @@ function resolveLocalConfiguredPath(value: string): string {
 }
 
 // The directory a client-supplied localPath must stay within. Anchored to the
-// configured checkout root's parent (the working directory), so a request can
-// only ever index something under the deployment's own tree.
-function localPathAllowRoot(): string {
-  return path.resolve(process.env.MAGPIE_LOCAL_INDEX_ROOT ?? process.env.INIT_CWD ?? process.cwd());
+// configured local-index root (or the working directory), so a request can only
+// ever index something under the deployment's own tree.
+function localPathAllowRoot(localIndexRoot: string | undefined): string {
+  return path.resolve(localIndexRoot ?? process.env.INIT_CWD ?? process.cwd());
 }
 
 // Resolves a client-supplied localPath and rejects any path that escapes the
 // allow-root (path traversal). Returns the resolved absolute path on success.
-function resolveLocalPathWithinRoot(value: string): string {
-  const root = localPathAllowRoot();
+function resolveLocalPathWithinRoot(value: string, localIndexRoot: string | undefined): string {
+  const root = localPathAllowRoot(localIndexRoot);
   const resolved = resolveLocalConfiguredPath(value);
   const relative = path.relative(root, resolved);
   const escapes = relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
@@ -63,7 +68,8 @@ function resolveLocalPathWithinRoot(value: string): string {
 }
 
 export async function resolveConfiguredRepositoryLocalPath(
-  repository: ConfiguredKnowledgeRepository
+  repository: ConfiguredKnowledgeRepository,
+  checkoutRootPath: string
 ): Promise<string> {
   if (repository.kind === "internet" || repository.kind === "agent") {
     throw new Error(`${repository.kind}_sources_cannot_be_checked_out`);
@@ -78,7 +84,7 @@ export async function resolveConfiguredRepositoryLocalPath(
       id: repository.id,
       url: repository.url,
       branch: repository.branch,
-      checkoutRoot: checkoutRoot()
+      checkoutRoot: checkoutRootPath
     });
     localPath = checkout.localPath;
   } else if (repository.path) {
@@ -107,7 +113,7 @@ export async function syncConfiguredGitCheckouts(deps: RepositoryDeps): Promise<
 
   logger.info({ count: gitRepositories.length }, "syncing configured git checkouts");
   for (const repository of gitRepositories) {
-    const localPath = await resolveConfiguredRepositoryLocalPath(repository);
+    const localPath = await resolveConfiguredRepositoryLocalPath(repository, deps.checkoutRoot);
     if (existsSync(localPath)) {
       logger.info({ repositoryId: repository.id, localPath }, "synced configured git checkout");
       continue;
@@ -182,7 +188,7 @@ export async function findRepositoryForProposal(
       return undefined;
     }
 
-    const localPath = await resolveConfiguredRepositoryLocalPath(destination);
+    const localPath = await resolveConfiguredRepositoryLocalPath(destination, deps.checkoutRoot);
     const summary = await deps.knowledgeIndex.indexLocalRepository({
       localPath,
       repositoryId: destination.id,
@@ -230,7 +236,7 @@ export async function resolveIndexSelection(
   );
   if (indexableDestinations.length > 0) {
     const configured = selectDestinationForIndex(deps, payload, indexableDestinations);
-    const localPath = await resolveConfiguredRepositoryLocalPath(configured);
+    const localPath = await resolveConfiguredRepositoryLocalPath(configured, deps.checkoutRoot);
     return { localPath, repositoryId: configured.id, name: configured.name };
   }
   if (deps.knowledgeConfig.destinations.length > 0) {
@@ -239,7 +245,7 @@ export async function resolveIndexSelection(
   const selection = resolveKnowledgeRepositorySelection(payload, deps.knowledgeConfig.repositories);
   // Constrain a client-supplied localPath to the allow-root so a crafted
   // "../../etc"-style path can't index files outside the deployment tree.
-  return { ...selection, localPath: resolveLocalPathWithinRoot(selection.localPath) };
+  return { ...selection, localPath: resolveLocalPathWithinRoot(selection.localPath, deps.localIndexRoot) };
 }
 
 async function indexRepositoryForPayload(

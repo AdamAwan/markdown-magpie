@@ -1,5 +1,6 @@
 import type { AppContext } from "../context.js";
 import { RuntimeConfigHolder } from "../config-holder.js";
+import { loadConfig } from "../platform/config.js";
 import { BackgroundEmbedder } from "../platform/background-embedder.js";
 import { BackgroundRunner } from "../platform/background-runner.js";
 import { InMemoryGapClusterStore } from "../stores/gap-cluster-store.js";
@@ -29,6 +30,10 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
     repositories: [],
     checkoutRoot: ".magpie/checkouts"
   };
+  const settings = loadConfig({
+    DATABASE_URL: "postgres://postgres:postgres@localhost:5432/markdown_magpie",
+    AI_PROVIDER: "codex"
+  });
   const embedder = new BackgroundEmbedder(undefined, undefined);
 
   const base: AppContext = {
@@ -52,12 +57,19 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
     providers: {
       embedding: undefined
     },
+    settings,
     config: new RuntimeConfigHolder({ aiProvider: "codex" }),
     knowledgeConfig,
     embedder,
     background: new BackgroundRunner(),
     repositoryDeps() {
-      return { knowledgeConfig, knowledgeIndex, triggerEmbedding: () => {} };
+      return {
+        knowledgeConfig,
+        knowledgeIndex,
+        triggerEmbedding: () => {},
+        checkoutRoot: knowledgeConfig.checkoutRoot,
+        localIndexRoot: undefined
+      };
     },
     async bootstrap() {
       // No-op for tests.

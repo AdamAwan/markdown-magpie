@@ -8,10 +8,8 @@ import { PostgresKnowledgeStore } from "./postgres-knowledge-store.js";
 import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
 
 test("resetData clears domain stores and resets the job queue", async () => {
-  // resetData re-derives runtime config from the environment via ctx.config.reset().
-  const previousProvider = process.env.AI_PROVIDER;
-  process.env.AI_PROVIDER = "codex";
-
+  // resetData restores runtime config to the seed via ctx.config.reset(); the
+  // test context seeds the codex provider, so no environment setup is needed.
   const ctx = makeTestContext();
   await ctx.stores.questionLogs.record({
     question: "How do I adopt a cat?",
@@ -27,15 +25,7 @@ test("resetData clears domain stores and resets the job queue", async () => {
     await originalReset();
   };
 
-  try {
-    await resetData(ctx);
-  } finally {
-    if (previousProvider === undefined) {
-      delete process.env.AI_PROVIDER;
-    } else {
-      process.env.AI_PROVIDER = previousProvider;
-    }
-  }
+  await resetData(ctx);
 
   assert.equal(reset, true, "ctx.jobs.reset() should be called");
   assert.deepEqual(await ctx.stores.questionLogs.list(50), []);
