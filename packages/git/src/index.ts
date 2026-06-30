@@ -14,6 +14,8 @@ import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { withCheckoutLock } from "./checkout-lock.js";
+import { withGitRetry } from "./git-retry.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -70,14 +72,21 @@ export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<Gi
   await mkdir(request.checkoutRoot, { recursive: true });
   const authEnv = buildGitAuthEnv(request.url);
 
-  if (!existsSync(path.join(localPath, ".git"))) {
-    const cloneArgs = ["clone"];
-    if (request.branch?.trim()) {
-      cloneArgs.push("--branch", request.branch.trim());
+  // Serialize all mutating git against this checkout: the api and the watcher both
+  // clone/fetch/reset the same working trees, and the api fires this from several
+  // concurrent async paths (reconcile, execution-context, snapshot, source-sync,
+  // indexing). Concurrent git on one `.git` races on FETCH_HEAD/index.lock/refs.
+  await withCheckoutLock(localPath, async () => {
+    if (!existsSync(path.join(localPath, ".git"))) {
+      const cloneArgs = ["clone"];
+      if (request.branch?.trim()) {
+        cloneArgs.push("--branch", request.branch.trim());
+      }
+      cloneArgs.push(request.url, localPath);
+      await git(request.checkoutRoot, cloneArgs, authEnv);
+      return;
     }
-    cloneArgs.push(request.url, localPath);
-    await git(request.checkoutRoot, cloneArgs, authEnv);
-  } else {
+
     const currentRemote = await tryGit(localPath, ["remote", "get-url", "origin"]);
     if (currentRemote.trim() && currentRemote.trim() !== request.url) {
       throw new Error(`Configured checkout ${localPath} already points at ${currentRemote.trim()}`);
@@ -86,24 +95,21 @@ export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<Gi
       await git(localPath, ["remote", "add", "origin", request.url]);
     }
     await git(localPath, ["fetch", "--prune", "origin"], authEnv);
-    if (request.branch?.trim()) {
-      const branch = request.branch.trim();
-      await git(localPath, ["checkout", branch]);
-      if (await remoteBranchExists(localPath, branch, authEnv)) {
-        await git(localPath, ["pull", "--ff-only", "origin", branch], authEnv);
+
+    // Bring the working tree to the remote tip with `reset --hard origin/<branch>`
+    // rather than `pull --ff-only`. These checkouts are bot-owned and never hold
+    // local edits worth keeping, so a deterministic reset is correct — and it avoids
+    // the pull's FETCH_HEAD merge resolution, which (after `fetch --prune` populates
+    // every remote branch) aborts with "Cannot fast-forward to multiple branches"
+    // under concurrency. A reset can't fast-forward-fail or hit a merge ambiguity.
+    const branch = request.branch?.trim() || (await tryGit(localPath, ["branch", "--show-current"])).trim();
+    if (branch && (await remoteBranchExists(localPath, branch, authEnv))) {
+      if (request.branch?.trim()) {
+        await git(localPath, ["checkout", branch]);
       }
-    } else {
-      const branch = await tryGit(localPath, ["branch", "--show-current"]);
-      if (branch.trim() && (await remoteBranchExists(localPath, branch.trim(), authEnv))) {
-        // Pull the current branch explicitly. A bare `git pull --ff-only` resolves
-        // its merge target from FETCH_HEAD, which the preceding `fetch --prune
-        // origin` populates with every remote branch — so once the bot has pushed
-        // many proposal branches, git aborts with "Cannot fast-forward to multiple
-        // branches." Naming the branch keeps the merge target unambiguous.
-        await git(localPath, ["pull", "--ff-only", "origin", branch.trim()], authEnv);
-      }
+      await git(localPath, ["reset", "--hard", `origin/${branch}`]);
     }
-  }
+  });
 
   return {
     localPath,
@@ -538,7 +544,17 @@ function parseGitHubSlug(remoteUrl: string | undefined): { owner: string; repo: 
 
 export class LocalGitProposalPublisher {
   async publish(request: PublishProposalBranchRequest): Promise<PublishProposalBranchResponse> {
+    // Serialize worktree add/push against this checkout — they mutate the shared
+    // `.git` (refs, config, worktree list) and would race a concurrent publish or
+    // ensureGitCheckout on the same root (e.g. "could not lock config file").
     const root = request.repository.git?.workTreeRoot ?? request.repository.localPath;
+    return withCheckoutLock(root, () => this.publishLocked(request, root));
+  }
+
+  private async publishLocked(
+    request: PublishProposalBranchRequest,
+    root: string
+  ): Promise<PublishProposalBranchResponse> {
     const targetPath = resolveTargetPath(request.repository, request.targetPath);
     const remoteUrl = await ensureRemote(root);
     const authEnv = buildGitAuthEnv(remoteUrl);
@@ -610,6 +626,13 @@ export class LocalGitProposalPublisher {
   // folded/reconciled changesets can republish onto their existing PR branch.
   async publishChangeset(request: PublishChangesetRequest): Promise<PublishProposalBranchResponse> {
     const root = request.repository.git?.workTreeRoot ?? request.repository.localPath;
+    return withCheckoutLock(root, () => this.publishChangesetLocked(request, root));
+  }
+
+  private async publishChangesetLocked(
+    request: PublishChangesetRequest,
+    root: string
+  ): Promise<PublishProposalBranchResponse> {
     const remoteUrl = await ensureRemote(root);
     const authEnv = buildGitAuthEnv(remoteUrl);
     const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", request.branchName], authEnv);
@@ -741,18 +764,20 @@ async function githubFetch(url: string, init: RequestInit): Promise<Response> {
 }
 
 async function git(cwd: string, args: string[], env?: Partial<NodeJS.ProcessEnv>): Promise<string> {
-  try {
-    const result = await execFileAsync("git", args, {
-      cwd,
-      env: env ? { ...process.env, ...env } : process.env,
-      timeout: GIT_SUBPROCESS_TIMEOUT_MS,
-      maxBuffer: GIT_SUBPROCESS_MAX_BUFFER
-    });
-    return result.stdout;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "git command failed";
-    throw new Error(message);
-  }
+  return withGitRetry(async () => {
+    try {
+      const result = await execFileAsync("git", args, {
+        cwd,
+        env: env ? { ...process.env, ...env } : process.env,
+        timeout: GIT_SUBPROCESS_TIMEOUT_MS,
+        maxBuffer: GIT_SUBPROCESS_MAX_BUFFER
+      });
+      return result.stdout;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "git command failed";
+      throw new Error(message);
+    }
+  });
 }
 
 async function tryGit(cwd: string, args: string[], env?: Partial<NodeJS.ProcessEnv>): Promise<string> {
