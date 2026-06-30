@@ -18,10 +18,28 @@ endpoints are served under `/api`. In local development the API base URL is
 
 ### `GET /api/health`
 
-Liveness check.
+Liveness check. Public — served before the auth middleware.
 
 ```json
 { "ok": true, "service": "markdown-magpie-api" }
+```
+
+### `GET /api/version`
+
+Identity of the running build, so clients can tell which commit is live. Public, like
+`/health`. The values are baked into the container image at build time (see the
+Dockerfile `ARG`s and `.github/workflows/publish-image.yml`): `sha` is the deployed
+commit's short SHA, `commitMessage` its subject line, and `committedAt` the commit's
+committer date (i.e. the merge time) as an ISO-8601 string. All three are `null` when
+the image was built without those args (local development), in which case the console
+shows a "Development" build.
+
+```json
+{
+  "sha": "a97380b",
+  "commitMessage": "fix: write folded content into a changeset survivor's primary entry",
+  "committedAt": "2026-06-29T22:14:03+01:00"
+}
 ```
 
 ### `GET /api/config`
