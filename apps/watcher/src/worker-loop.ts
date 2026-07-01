@@ -6,6 +6,12 @@ import type { JobRunner } from "./runners/types.js";
 export interface WorkerLoopOptions {
   // How long to wait between claim attempts when no job is available.
   pollIntervalMs: number;
+  // Invoked once per loop iteration (claimed or idle-poll alike), after the
+  // claim/execute cycle settles — including when it threw. This is the
+  // liveness signal the health server's /health endpoint reads: a loop stuck
+  // inside a single iteration (rather than crashing) stops calling this and
+  // /health goes stale. Optional so existing callers/tests are unaffected.
+  onTick?: () => void;
 }
 
 // The default heartbeat cadence (ms) used when a job carries no heartbeatSeconds.
@@ -47,6 +53,7 @@ export class WorkerLoop {
           this.logger.error({ err: error }, "watcher poll failed");
         }
       }
+      this.options.onTick?.();
       if (!claimed && !this.stopping) {
         await sleep(this.options.pollIntervalMs);
       }

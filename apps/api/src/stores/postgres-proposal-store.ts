@@ -4,14 +4,8 @@ import { TERMINAL_PROPOSAL_STATUSES } from "@magpie/core";
 import type { ChangesetChange, Citation, DraftContext, Proposal, ReviewDecision } from "@magpie/core";
 import type { ProposalInput, ProposalListOptions, ProposalStore } from "./proposal-store.js";
 
-const { Pool } = pg;
-
 export class PostgresProposalStore implements ProposalStore {
-  private readonly pool: pg.Pool;
-
-  constructor(connectionString: string) {
-    this.pool = new Pool({ connectionString });
-  }
+  constructor(private readonly pool: pg.Pool) {}
 
   async create(input: ProposalInput): Promise<Proposal> {
     const id = randomUUID();

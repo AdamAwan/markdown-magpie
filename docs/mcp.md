@@ -85,20 +85,20 @@ Input:
 
 ### Auth variables (both transports)
 
-Auth is off by default and shared with the API via the `@magpie/auth` package. These variables apply only when `AUTH_REQUIRED=true`; the [Authentication](#authentication) section below explains how they are used.
+Auth **fails closed** and is shared with the API via the `@magpie/auth` package: it is required unless `AUTH_REQUIRED=false` is set explicitly. These variables must be configured whenever auth is enabled (i.e. unless you have opted out); the [Authentication](#authentication) section below explains how they are used.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AUTH_REQUIRED` | `false` | Set `true` to require Auth0-issued bearer tokens. |
+| `AUTH_REQUIRED` | `true` (fails closed) | Set `false` to explicitly disable Auth0 bearer-token validation. Any other/unset value keeps auth required. |
 | `AUTH0_ISSUER_BASE_URL` | — | Full Auth0 issuer (e.g. `https://your-tenant.eu.auth0.com`). |
 | `AUTH0_DOMAIN` | — | Alternative to the issuer base; the issuer becomes `https://<domain>/`. |
 | `AUTH0_AUDIENCE` | `https://markdown-magpie.local/api` | API identifier the token must carry. |
 | `AUTH0_JWKS_URI` | `https://<domain>/.well-known/jwks.json` | Optional JWKS endpoint override (derived from the trailing-slash-normalised issuer when unset). |
-| `MCP_AUTH_TOKEN` | — | stdio only: bearer token presented to the API. Required when `AUTH_REQUIRED=true`. |
+| `MCP_AUTH_TOKEN` | — | stdio only: bearer token presented to the API. Required unless `AUTH_REQUIRED=false` (the stdio server fails fast at startup otherwise). |
 
 ## Authentication
 
-Authentication is optional and disabled unless `AUTH_REQUIRED=true`. When disabled, both transports run unauthenticated for local development. When enabled, tokens are validated locally against the Auth0 JWKS — see the [Auth0 design](superpowers/specs/2026-06-18-auth0-mcp-gating-design.md) for the full model.
+Authentication **fails closed**: both transports require Auth0-issued tokens unless an operator explicitly sets `AUTH_REQUIRED=false`. Only when explicitly disabled do the transports run unauthenticated for local development. When enabled, tokens are validated locally against the Auth0 JWKS — see the [Auth0 design](superpowers/specs/2026-06-18-auth0-mcp-gating-design.md) for the full model.
 
 ### Streamable HTTP
 

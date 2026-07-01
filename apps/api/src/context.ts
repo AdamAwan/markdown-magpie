@@ -18,7 +18,9 @@ import {
   storeBackend
 } from "./platform/stores.js";
 import { createConfiguredEmbeddingProvider } from "./platform/providers.js";
+import { createDbPool } from "./platform/db-pool.js";
 import type { AppConfig } from "./platform/config.js";
+import type pg from "pg";
 import { InMemoryKnowledgeIndex } from "./stores/knowledge-index.js";
 import { PostgresKnowledgeStore } from "./stores/postgres-knowledge-store.js";
 import {
@@ -50,6 +52,10 @@ export interface AppContext {
     jobAcceptances: JobAcceptanceStore;
   };
   jobs: JobBroker;
+  // The single, process-wide Postgres pool shared by every Postgres-backed store
+  // (see platform/db-pool.ts). Undefined when every store is in-memory (e.g. unit
+  // tests) — readiness treats an absent pool as "no Postgres dependency to check".
+  pool: pg.Pool | undefined;
   providers: {
     embedding: EmbeddingProvider | undefined;
   };
@@ -71,8 +77,11 @@ export interface AppContext {
 
 export async function createAppContext(config: AppConfig): Promise<AppContext> {
   const databaseUrl = config.databaseUrl;
+  // One shared, tuned pool for every Postgres-backed store. The job-acceptance
+  // store is always Postgres-backed, so the pool is always created here.
+  const pool = createDbPool(config);
   const knowledgeStore =
-    storeBackend(config, "KNOWLEDGE_STORE") === "postgres" ? new PostgresKnowledgeStore(databaseUrl) : undefined;
+    storeBackend(config, "KNOWLEDGE_STORE") === "postgres" ? new PostgresKnowledgeStore(pool) : undefined;
   const embedding = knowledgeStore ? createConfiguredEmbeddingProvider(config) : undefined;
   const knowledgeIndex = knowledgeStore
     ? new InMemoryKnowledgeIndex(knowledgeStore, {
@@ -105,20 +114,21 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
     stores: {
       knowledge: knowledgeStore,
       knowledgeIndex,
-      questionLogs: createQuestionLogStore(config),
-      proposals: createProposalStore(config),
-      scheduledTasks: createScheduledTaskStore(config),
-      sourceSync: createSourceSyncStore(config),
-      patrol: createPatrolStore(config),
-      gapClusters: createGapClusterStore(config),
-      reconciliations: createReconciliationDecisionStore(config),
-      maintenanceRuns: createMaintenanceRunStore(config),
-      prCrosslinks: createPrCrosslinkStore(config),
+      questionLogs: createQuestionLogStore(config, pool),
+      proposals: createProposalStore(config, pool),
+      scheduledTasks: createScheduledTaskStore(config, pool),
+      sourceSync: createSourceSyncStore(config, pool),
+      patrol: createPatrolStore(config, pool),
+      gapClusters: createGapClusterStore(config, pool),
+      reconciliations: createReconciliationDecisionStore(config, pool),
+      maintenanceRuns: createMaintenanceRunStore(config, pool),
+      prCrosslinks: createPrCrosslinkStore(config, pool),
       snapshots: createSnapshotStore(config),
-      watchers: createWatcherRegistryStore(config),
-      jobAcceptances: new PostgresJobAcceptanceStore(databaseUrl)
+      watchers: createWatcherRegistryStore(config, pool),
+      jobAcceptances: new PostgresJobAcceptanceStore(pool)
     },
     jobs,
+    pool,
     providers: {
       embedding
     },

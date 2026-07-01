@@ -1,14 +1,8 @@
 import pg from "pg";
 import type { JobAcceptanceStore } from "./job-acceptance-store.js";
 
-const { Pool } = pg;
-
 export class PostgresJobAcceptanceStore implements JobAcceptanceStore {
-  private readonly pool: pg.Pool;
-
-  constructor(connectionString: string) {
-    this.pool = new Pool({ connectionString });
-  }
+  constructor(private readonly pool: pg.Pool) {}
 
   async accept(jobId: string): Promise<string> {
     const result = await this.pool.query<{ accepted_at: Date }>(

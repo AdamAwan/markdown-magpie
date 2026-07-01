@@ -3,8 +3,6 @@ import pg from "pg";
 import type { ChangesetChange, MaintenancePlan, SourceSyncRun, SourceSyncState } from "@magpie/core";
 import type { SourceSyncRunInput, SourceSyncStore } from "./source-sync-store.js";
 
-const { Pool } = pg;
-
 // source_sync_state.flow_id is NOT NULL with a "" default so the composite
 // primary key (flow_id, source_id) dedupes the default-flow row (a NULL would
 // not be deduped by ON CONFLICT).
@@ -18,11 +16,7 @@ function runFlowId(flowId: string | undefined): string | null {
 }
 
 export class PostgresSourceSyncStore implements SourceSyncStore {
-  private readonly pool: pg.Pool;
-
-  constructor(connectionString: string) {
-    this.pool = new Pool({ connectionString });
-  }
+  constructor(private readonly pool: pg.Pool) {}
 
   async getState(flowId: string | undefined, sourceId: string): Promise<SourceSyncState | undefined> {
     const result = await this.pool.query<SourceSyncStateRow>(

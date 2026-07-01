@@ -7,6 +7,7 @@ import {
   deriveCapabilities,
   type CapabilityRuntime
 } from "./capabilities.js";
+import { createHealthServer, loadHealthConfig, TickTracker } from "./health-server.js";
 import { HttpWatcherApi } from "./http-client.js";
 import { logger } from "./logger.js";
 import { createConfiguredRunners } from "./runners/index.js";
@@ -66,8 +67,25 @@ if (capabilities.length === 0) {
   logger.warn("No runner capabilities are configured; the watcher will idle. Configure a provider or GitHub credentials.");
 }
 
-const loop = new WorkerLoop(api, runners, capabilities, watcherName, logger, { pollIntervalMs });
+// Fails fast on a malformed WATCHER_HEALTH_* override rather than silently
+// falling back, so a typo surfaces at startup instead of as a confusing
+// always-unhealthy (or wrong-port) container.
+const healthConfig = loadHealthConfig(process.env);
+const tickTracker = new TickTracker();
+const healthServer = createHealthServer({
+  config: healthConfig,
+  tracker: tickTracker,
+  isReady: () => capabilities.length > 0
+});
 
+const loop = new WorkerLoop(api, runners, capabilities, watcherName, logger, {
+  pollIntervalMs,
+  onTick: () => tickTracker.tick()
+});
+
+// SIGTERM/SIGINT only abort the in-flight runner and stop the poll loop here;
+// the health server is closed once, after loop.run() resolves below, so there
+// is a single shutdown path regardless of which signal (or neither) triggered it.
 process.once("SIGTERM", () => {
   logger.info("Received SIGTERM, shutting down...");
   void loop.stop();
@@ -77,7 +95,11 @@ process.once("SIGINT", () => {
   void loop.stop();
 });
 
+await healthServer.start();
+logger.info({ host: healthConfig.host, port: healthConfig.port }, "health server listening");
+
 await loop.run();
+await healthServer.stop();
 logger.info({ watcherName }, `Markdown Magpie watcher '${watcherName}' stopped`);
 
 // Logs, per capability, whether each required env var is set or MISSING — never

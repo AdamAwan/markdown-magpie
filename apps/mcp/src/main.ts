@@ -1,25 +1,29 @@
 import { argv, stdin, stdout } from "node:process";
 import { fileURLToPath } from "node:url";
+import { isAuthRequired } from "@magpie/auth";
 import { askQuestion, getJson, listFlows, optionalStringArgument, stringArgument, submitFeedback } from "./kb-client.js";
 import { createMcpLogger } from "./logger.js";
 
 type JsonRpcId = string | number | null;
 
 // Bearer token the stdio transport presents to the API on every call. Distinct
-// from the HTTP transport's MCP_API_AUTH_TOKEN service token. Undefined when
-// AUTH_REQUIRED is unset/false, which keeps local-dev calls unauthenticated.
-// Resolved inside main() once the auth guard has run.
+// from the HTTP transport's MCP_API_AUTH_TOKEN service token. Undefined only when
+// auth is explicitly disabled (AUTH_REQUIRED=false), which keeps local-dev calls
+// unauthenticated. Resolved inside main() once the auth guard has run.
 let stdioAuthToken: string | undefined;
 
-// Validates that a stdio token is present when auth is required. Pure (operates
-// on a supplied env object) so the guard is unit-testable without spawning the
-// process; returns the token to use, or throws a clear message that the startup
-// path turns into a non-zero exit.
+// Validates that a stdio token is present when auth is required. Auth fails
+// CLOSED (see isAuthRequired in @magpie/auth): it is required unless an operator
+// explicitly sets AUTH_REQUIRED=false, so an unset/blank/typo'd value keeps the
+// token mandatory rather than silently calling the API unauthenticated. Pure
+// (operates on a supplied env object) so the guard is unit-testable without
+// spawning the process; returns the token to use, or throws a clear message that
+// the startup path turns into a non-zero exit.
 export function resolveStdioAuthToken(env: NodeJS.ProcessEnv): string | undefined {
-  const authRequired = env.AUTH_REQUIRED === "true";
+  const authRequired = isAuthRequired(env.AUTH_REQUIRED);
   const token = env.MCP_AUTH_TOKEN;
   if (authRequired && !token) {
-    throw new Error("MCP_AUTH_TOKEN is required when AUTH_REQUIRED=true for stdio MCP.");
+    throw new Error("MCP_AUTH_TOKEN is required unless AUTH_REQUIRED=false for stdio MCP.");
   }
 
   return token;

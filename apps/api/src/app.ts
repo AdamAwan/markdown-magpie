@@ -24,7 +24,11 @@ import { getBuildInfo } from "./build-info.js";
 import { requestLogging } from "./http/logging.js";
 import { logger } from "./logger.js";
 
-export function buildApp(ctx: AppContext, options: ApiAuthOptions = {}): Hono {
+export function buildApp(ctx: AppContext, options?: ApiAuthOptions): Hono {
+  // Default auth from the validated config (the single source of truth) rather
+  // than re-reading process.env, so the app enforces exactly what loadConfig
+  // validated and tests disable auth purely via the injected context.
+  const authOptions: ApiAuthOptions = options ?? { auth: ctx.settings.auth };
   const app = new Hono();
 
   app.use("*", requestLogging(logger));
@@ -56,7 +60,33 @@ export function buildApp(ctx: AppContext, options: ApiAuthOptions = {}): Hono {
   // Public, like /health: lets the console show the live build (commit, message,
   // merge time) without requiring a token.
   api.get("/version", (c) => c.json(getBuildInfo()));
-  api.use("*", requireAuth(options));
+  // Deep readiness (vs. /health's shallow liveness): verifies the real
+  // dependencies an orchestrator cares about before routing traffic — Postgres
+  // is reachable (SELECT 1 via the shared pool) and the job broker has started.
+  // Public/auth-exempt so probes need no token. 200 when ready, 503 otherwise.
+  api.get("/ready", async (c) => {
+    const brokerStarted = ctx.jobs.isStarted();
+    let databaseOk = true;
+    // No pool means every store is in-memory (e.g. tests) — there is no Postgres
+    // dependency to verify, so it is trivially "ok".
+    if (ctx.pool) {
+      try {
+        await ctx.pool.query("SELECT 1");
+      } catch (error) {
+        databaseOk = false;
+        logger.warn(
+          { err: error instanceof Error ? error.message : "Unknown error" },
+          "readiness: database check failed"
+        );
+      }
+    }
+    const ready = databaseOk && brokerStarted;
+    return c.json(
+      { ready, checks: { database: databaseOk, broker: brokerStarted } },
+      ready ? 200 : 503
+    );
+  });
+  api.use("*", requireAuth(authOptions));
 
   // Every feature module owns one prefix and declares relative paths internally.
   api.route("/config", configRoutes(ctx));

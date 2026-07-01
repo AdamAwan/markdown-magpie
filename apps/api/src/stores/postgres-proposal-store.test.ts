@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import { PostgresGapClusterStore } from "./postgres-gap-cluster-store.js";
 import { PostgresProposalStore } from "./postgres-proposal-store.js";
 import type { ProposalInput } from "./proposal-store.js";
+import { makeTestPool } from "../test-support/db-pool.js";
 
 // Integration tests for the Postgres-backed proposal store. They self-skip
 // unless DATABASE_URL points at a migrated database (see scripts/migrate.mjs);
@@ -23,7 +24,7 @@ function draft(title: string): ProposalInput {
 }
 
 describe("PostgresProposalStore", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
-  const store = new PostgresProposalStore(databaseUrl as string);
+  const store = new PostgresProposalStore(makeTestPool(databaseUrl as string));
 
   it("round-trips a draft through create and get", async () => {
     const created = await store.create(draft(`roundtrip-${Date.now()}`));
@@ -96,7 +97,7 @@ describe("PostgresProposalStore", { skip: databaseUrl ? false : "DATABASE_URL no
   });
 
   it("links a proposal to a gap cluster and reads it back", async () => {
-    const clusterStore = new PostgresGapClusterStore(databaseUrl as string);
+    const clusterStore = new PostgresGapClusterStore(makeTestPool(databaseUrl as string));
     const cluster = await clusterStore.createCluster({ title: `c-${randomUUID()}`, revision: 1 });
 
     const proposal = await store.create({
@@ -115,7 +116,7 @@ describe("PostgresProposalStore", { skip: databaseUrl ? false : "DATABASE_URL no
   });
 
   it("getByClusterId returns the cluster's non-terminal proposal, newest first", async () => {
-    const clusterStore = new PostgresGapClusterStore(databaseUrl as string);
+    const clusterStore = new PostgresGapClusterStore(makeTestPool(databaseUrl as string));
     const cluster = await clusterStore.createCluster({ title: `c-${randomUUID()}`, revision: 1 });
 
     assert.equal(await store.getByClusterId(cluster.id), undefined, "no proposal yet");

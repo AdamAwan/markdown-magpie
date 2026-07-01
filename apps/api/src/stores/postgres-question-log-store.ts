@@ -15,14 +15,8 @@ import type {
 import { gapSummaryKey, type QuestionLogStore } from "./question-log-store.js";
 import { valuesClause } from "./sql-bulk.js";
 
-const { Pool } = pg;
-
 export class PostgresQuestionLogStore implements QuestionLogStore {
-  private readonly pool: pg.Pool;
-
-  constructor(connectionString: string) {
-    this.pool = new Pool({ connectionString });
-  }
+  constructor(private readonly pool: pg.Pool) {}
 
   async getGapCatalogRevision(flowId?: string): Promise<number> {
     const result = await this.pool.query<{ revision: string }>(

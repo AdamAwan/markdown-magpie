@@ -9,8 +9,6 @@ import type {
 } from "./gap-cluster-store.js";
 import { chunk, valuesClause } from "./sql-bulk.js";
 
-const { Pool } = pg;
-
 // gap_cluster_memberships inserts bind 3 params/row (cluster_id, gap_id,
 // rationale); keep the chunk well under Postgres' 65535-param cap.
 const MEMBERSHIP_INSERT_CHUNK = 1000;
@@ -48,11 +46,7 @@ interface ActionRow {
 }
 
 export class PostgresGapClusterStore implements GapClusterStore {
-  private readonly pool: pg.Pool;
-
-  constructor(connectionString: string) {
-    this.pool = new Pool({ connectionString });
-  }
+  constructor(private readonly pool: pg.Pool) {}
 
   async listActiveClusters(): Promise<GapClusterRecord[]> {
     const result = await this.pool.query<ClusterRow>(

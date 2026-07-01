@@ -219,9 +219,9 @@ npm run test:db
 
 ## Authentication
 
-Authentication is optional and off by default with `AUTH_REQUIRED=false`.
+Authentication **fails closed**: it is required unless an operator explicitly opts out by setting `AUTH_REQUIRED=false`. An unset, blank, or misspelled value leaves auth **on**, so a misconfigured deployment is locked down rather than silently exposed. When auth is required, the API also refuses to start unless Auth0 is configured (a missing or placeholder `AUTH0_AUDIENCE` aborts startup).
 
-When enabled, the API, web app, and MCP transports validate Auth0-issued tokens. Configure `AUTH_REQUIRED=true` plus the relevant `AUTH0_*`, `NEXT_PUBLIC_AUTH0_*`, watcher, and MCP service credentials in `.env` or `.env.compose`.
+When enabled, the API, web app, and both MCP transports validate Auth0-issued tokens. Configure the relevant `AUTH0_*`, `NEXT_PUBLIC_AUTH0_*`, watcher, and MCP service credentials in `.env` or `.env.compose`. For local development, run unauthenticated by explicitly setting `AUTH_REQUIRED=false`.
 
 See `.env.example` and [docs/mcp.md](docs/mcp.md) for the current auth variables.
 

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AI_PROVIDERS, isAiProviderName, type AiProviderName } from "@magpie/jobs";
+import { authSettingsFromEnv, isAuthRequired } from "@magpie/auth";
 import {
   getConfiguredKnowledgeDestinations,
   getConfiguredKnowledgeFlows,
@@ -35,6 +36,18 @@ export type StoreEnvName = (typeof STORE_ENV_NAMES)[number];
 // the runtime-mutable AI provider; aiProvider here only seeds that holder.
 export interface AppConfig {
   databaseUrl: string;
+  database: {
+    poolMax: number;
+    idleTimeoutMs: number;
+    connectionTimeoutMs: number;
+    statementTimeoutMs: number;
+  };
+  auth: {
+    required: boolean;
+    issuer: string;
+    audience: string;
+    jwksUri?: string;
+  };
   port: number;
   nodeEnv: string;
   logStartupConfig: boolean;
@@ -125,6 +138,10 @@ const storeOverridesSchema = z.object(
 const schema = z
   .object({
     DATABASE_URL: z.preprocess(emptyToUndefined, z.string().url("must be a valid URL")),
+    DB_POOL_MAX: optionalPositiveInt,
+    DB_IDLE_TIMEOUT_MS: optionalPositiveInt,
+    DB_CONNECTION_TIMEOUT_MS: optionalPositiveInt,
+    DB_STATEMENT_TIMEOUT_MS: optionalPositiveInt,
     // Validated at field level (not in superRefine) so it is still reported when
     // other fields also fail — superRefine is skipped once base parsing errors.
     AI_PROVIDER: z.preprocess(
@@ -181,23 +198,41 @@ const schema = z
   .superRefine((env, ctx) => {
     // Auth wiring lives in @magpie/auth; we only assert coherence here so a
     // misconfigured deployment fails at boot instead of on the first request.
-    if (env.AUTH_REQUIRED === "true") {
-      if (env.AUTH0_AUDIENCE === undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["AUTH0_AUDIENCE"],
-          message: "is required when AUTH_REQUIRED=true"
-        });
-      }
-      if (env.AUTH0_ISSUER_BASE_URL === undefined && env.AUTH0_DOMAIN === undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["AUTH0_ISSUER_BASE_URL"],
-          message: "AUTH0_ISSUER_BASE_URL or AUTH0_DOMAIN is required when AUTH_REQUIRED=true"
-        });
-      }
+    //
+    // Auth fails CLOSED: it is required unless an operator EXPLICITLY opts out
+    // with AUTH_REQUIRED=false. An unset/blank/typo'd value leaves auth on, so a
+    // misconfiguration can never silently expose the whole API.
+    if (!isAuthRequired(env.AUTH_REQUIRED)) {
+      return;
+    }
+    if (env.AUTH0_AUDIENCE === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["AUTH0_AUDIENCE"],
+        message: "is required when auth is enabled (set AUTH_REQUIRED=false to disable auth)"
+      });
+    } else if (env.AUTH0_AUDIENCE === PLACEHOLDER_AUDIENCE) {
+      // The committed example value is a stand-in, not a real Auth0 API
+      // identifier; booting with it would accept tokens for a non-existent
+      // audience, so reject it rather than start in an insecure state.
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["AUTH0_AUDIENCE"],
+        message: `must be a real Auth0 API identifier, not the placeholder ${PLACEHOLDER_AUDIENCE} (set AUTH_REQUIRED=false to disable auth)`
+      });
+    }
+    if (env.AUTH0_ISSUER_BASE_URL === undefined && env.AUTH0_DOMAIN === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["AUTH0_ISSUER_BASE_URL"],
+        message: "AUTH0_ISSUER_BASE_URL or AUTH0_DOMAIN is required when auth is enabled (set AUTH_REQUIRED=false to disable auth)"
+      });
     }
   });
+
+// The committed placeholder audience from .env.example. Real deployments must
+// override it; it is rejected at boot when auth is enabled (see superRefine).
+const PLACEHOLDER_AUDIENCE = "https://markdown-magpie.local/api";
 
 // Reads and validates the API's environment once at startup, returning a typed
 // config object. Throws a single aggregated Error naming every offending var on
@@ -228,6 +263,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   return {
     databaseUrl: parsed.DATABASE_URL,
+    database: {
+      poolMax: parsed.DB_POOL_MAX ?? 10,
+      idleTimeoutMs: parsed.DB_IDLE_TIMEOUT_MS ?? 30_000,
+      connectionTimeoutMs: parsed.DB_CONNECTION_TIMEOUT_MS ?? 10_000,
+      statementTimeoutMs: parsed.DB_STATEMENT_TIMEOUT_MS ?? 30_000
+    },
+    // Single source of truth for auth wiring: required is fail-closed, and the
+    // issuer/audience/jwks are resolved from the same env @magpie/auth uses so
+    // buildApp never has to re-read process.env (which kept tests and config in
+    // disagreement). superRefine above already proved this coheres when enabled.
+    auth: authSettingsFromEnv(env),
     port: parsed.PORT ?? 4000,
     nodeEnv: parsed.NODE_ENV ?? "development",
     logStartupConfig: parsed.LOG_STARTUP_CONFIG !== "false",

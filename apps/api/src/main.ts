@@ -44,12 +44,23 @@ async function start(): Promise<void> {
     Promise.race([
       ctx.background.whenIdle(),
       new Promise((resolve) => setTimeout(resolve, config.apiShutdownDrainMs))
-    ]).then(() => ctx.jobs.stop()).finally(() => {
-      if (ctx.background.pending > 0) {
-        logger.warn({ pending: ctx.background.pending }, "exiting with background tasks still in flight");
-      }
-      process.exit(0);
-    });
+    ])
+      .then(() => ctx.jobs.stop())
+      // Close the shared store pool after the broker so no store query is mid-flight
+      // when its connections are torn down. Best-effort: shutdown exits regardless.
+      .then(() => ctx.pool?.end())
+      .catch((error) =>
+        logger.warn(
+          { err: error instanceof Error ? error.message : "Unknown error" },
+          "error draining background work on shutdown"
+        )
+      )
+      .finally(() => {
+        if (ctx.background.pending > 0) {
+          logger.warn({ pending: ctx.background.pending }, "exiting with background tasks still in flight");
+        }
+        process.exit(0);
+      });
   };
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));

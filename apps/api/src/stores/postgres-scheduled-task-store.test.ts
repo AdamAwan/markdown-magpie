@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 import { PostgresScheduledTaskStore } from "./postgres-scheduled-task-store.js";
+import { makeTestPool } from "../test-support/db-pool.js";
 
 // Integration tests for the Postgres-backed scheduled task store. They self-skip
 // unless DATABASE_URL points at a migrated database (see scripts/migrate.mjs);
@@ -11,7 +12,7 @@ import { PostgresScheduledTaskStore } from "./postgres-scheduled-task-store.js";
 const databaseUrl = process.env.DATABASE_URL;
 
 describe("PostgresScheduledTaskStore", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
-  const store = new PostgresScheduledTaskStore(databaseUrl as string);
+  const store = new PostgresScheduledTaskStore(makeTestPool(databaseUrl as string));
 
   it("round-trips settings through updateSettings and getSettings", async () => {
     const key = `roundtrip-${randomUUID()}`;

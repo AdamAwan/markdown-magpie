@@ -31,6 +31,15 @@ export class AuthError extends Error {
   }
 }
 
+// Auth fails CLOSED: it is required unless an operator EXPLICITLY opts out by
+// setting AUTH_REQUIRED=false (case-insensitive). An unset, blank, or typo'd
+// value leaves auth on, so a misconfigured deployment is locked down rather than
+// silently exposed. This is the single source of truth for that rule — the API
+// config, watcher, and both MCP transports all call it.
+export function isAuthRequired(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() !== "false";
+}
+
 export function authSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): AuthSettings {
   const issuerBase =
     env.AUTH0_ISSUER_BASE_URL ??
@@ -38,7 +47,7 @@ export function authSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): AuthS
   const issuer = trimTrailingSlash(issuerBase) + "/";
 
   return {
-    required: env.AUTH_REQUIRED === "true",
+    required: isAuthRequired(env.AUTH_REQUIRED),
     issuer,
     audience: env.AUTH0_AUDIENCE ?? "https://markdown-magpie.local/api",
     jwksUri: env.AUTH0_JWKS_URI

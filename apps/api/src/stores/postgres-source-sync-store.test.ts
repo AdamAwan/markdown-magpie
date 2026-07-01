@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 import { PostgresSourceSyncStore } from "./postgres-source-sync-store.js";
 import type { SourceSyncRunInput } from "./source-sync-store.js";
+import { makeTestPool } from "../test-support/db-pool.js";
 
 // Integration tests for the Postgres-backed source sync store. They self-skip
 // unless DATABASE_URL points at a migrated database (see scripts/migrate.mjs);
@@ -23,7 +24,7 @@ function draftRun(sourceId: string): SourceSyncRunInput {
 }
 
 describe("PostgresSourceSyncStore", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
-  const store = new PostgresSourceSyncStore(databaseUrl as string);
+  const store = new PostgresSourceSyncStore(makeTestPool(databaseUrl as string));
 
   it("round-trips state through setState and getState", async () => {
     const flowId = `flow-${randomUUID()}`;
