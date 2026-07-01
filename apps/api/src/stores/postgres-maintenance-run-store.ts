@@ -3,19 +3,13 @@ import pg from "pg";
 import type { MaintenanceRun, MaintenanceTaskType, NewMaintenanceRun } from "@magpie/core";
 import type { MaintenanceRunStore } from "./maintenance-run-store.js";
 
-const { Pool } = pg;
-
 // maintenance_runs.flow_id is nullable (the default flow stores NULL).
 function runFlowId(flowId: string | undefined): string | null {
   return flowId ?? null;
 }
 
 export class PostgresMaintenanceRunStore implements MaintenanceRunStore {
-  private readonly pool: pg.Pool;
-
-  constructor(connectionString: string) {
-    this.pool = new Pool({ connectionString });
-  }
+  constructor(private readonly pool: pg.Pool) {}
 
   async record(input: NewMaintenanceRun): Promise<MaintenanceRun> {
     const id = randomUUID();

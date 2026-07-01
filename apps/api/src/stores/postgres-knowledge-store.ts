@@ -14,8 +14,6 @@ import type {
 } from "./knowledge-index.js";
 import { chunk, valuesClause } from "./sql-bulk.js";
 
-const { Pool } = pg;
-
 // Bind-parameter budget per statement (Postgres caps at 65535). Documents bind
 // 10 params/row and sections 8, so these chunk sizes stay well under the cap.
 const DOCUMENT_INSERT_CHUNK = 500;
@@ -27,11 +25,7 @@ const EMBEDDING_UPDATE_CHUNK = 1000;
 export class PostgresKnowledgeStore
   implements KnowledgePersistence, SectionVectorSearch, SectionKeywordSearch, EmbeddingPersistence
 {
-  private readonly pool: pg.Pool;
-
-  constructor(connectionString: string) {
-    this.pool = new Pool({ connectionString });
-  }
+  constructor(private readonly pool: pg.Pool) {}
 
   async saveIndexedRepository(
     summary: IndexedRepositorySummary,

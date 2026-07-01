@@ -21,114 +21,128 @@ import { InMemoryWatcherRegistryStore } from "../stores/watcher-registry-store.j
 import { FileSnapshotStore, type SnapshotStore } from "../stores/snapshot-store.js";
 import { snapshotRoot } from "./repositories.js";
 import type { AppConfig, StoreEnvName } from "./config.js";
+import type pg from "pg";
 
 // The resolved backend for a given store: its explicit override, or the default.
 export function storeBackend(config: AppConfig, name: StoreEnvName): "memory" | "postgres" {
   return config.storage.overrides[name] ?? config.storage.default;
 }
 
-// Pick the Postgres or in-memory implementation for a store. DATABASE_URL is
-// validated as required at startup, so a postgres-backed store can rely on it.
+// Pick the Postgres or in-memory implementation for a store. Postgres-backed
+// stores share the single process-wide pool (see platform/db-pool.ts) rather
+// than each opening their own, so connection use stays bounded.
 function createStore<T>(
   config: AppConfig,
+  pool: pg.Pool,
   name: StoreEnvName,
-  postgres: (databaseUrl: string) => T,
+  postgres: (pool: pg.Pool) => T,
   memory: () => T
 ): T {
   if (storeBackend(config, name) === "postgres") {
-    return postgres(config.databaseUrl);
+    return postgres(pool);
   }
   return memory();
 }
 
-export function createQuestionLogStore(config: AppConfig): InMemoryQuestionLogStore | PostgresQuestionLogStore {
+export function createQuestionLogStore(config: AppConfig, pool: pg.Pool): InMemoryQuestionLogStore | PostgresQuestionLogStore {
   return createStore<InMemoryQuestionLogStore | PostgresQuestionLogStore>(
     config,
+    pool,
     "QUESTION_LOG_STORE",
-    (databaseUrl) => new PostgresQuestionLogStore(databaseUrl),
+    (pool) => new PostgresQuestionLogStore(pool),
     () => new InMemoryQuestionLogStore()
   );
 }
 
-export function createProposalStore(config: AppConfig): InMemoryProposalStore | PostgresProposalStore {
+export function createProposalStore(config: AppConfig, pool: pg.Pool): InMemoryProposalStore | PostgresProposalStore {
   return createStore<InMemoryProposalStore | PostgresProposalStore>(
     config,
+    pool,
     "PROPOSAL_STORE",
-    (databaseUrl) => new PostgresProposalStore(databaseUrl),
+    (pool) => new PostgresProposalStore(pool),
     () => new InMemoryProposalStore()
   );
 }
 
-export function createScheduledTaskStore(config: AppConfig): InMemoryScheduledTaskStore | PostgresScheduledTaskStore {
+export function createScheduledTaskStore(config: AppConfig, pool: pg.Pool): InMemoryScheduledTaskStore | PostgresScheduledTaskStore {
   return createStore<InMemoryScheduledTaskStore | PostgresScheduledTaskStore>(
     config,
+    pool,
     "SCHEDULED_TASK_STORE",
-    (databaseUrl) => new PostgresScheduledTaskStore(databaseUrl),
+    (pool) => new PostgresScheduledTaskStore(pool),
     () => new InMemoryScheduledTaskStore()
   );
 }
 
-export function createSourceSyncStore(config: AppConfig): InMemorySourceSyncStore | PostgresSourceSyncStore {
+export function createSourceSyncStore(config: AppConfig, pool: pg.Pool): InMemorySourceSyncStore | PostgresSourceSyncStore {
   return createStore<InMemorySourceSyncStore | PostgresSourceSyncStore>(
     config,
+    pool,
     "SOURCE_SYNC_STORE",
-    (databaseUrl) => new PostgresSourceSyncStore(databaseUrl),
+    (pool) => new PostgresSourceSyncStore(pool),
     () => new InMemorySourceSyncStore()
   );
 }
 
-export function createPatrolStore(config: AppConfig): InMemoryPatrolStore | PostgresPatrolStore {
+export function createPatrolStore(config: AppConfig, pool: pg.Pool): InMemoryPatrolStore | PostgresPatrolStore {
   return createStore<InMemoryPatrolStore | PostgresPatrolStore>(
     config,
+    pool,
     "PATROL_STORE",
-    (databaseUrl) => new PostgresPatrolStore(databaseUrl),
+    (pool) => new PostgresPatrolStore(pool),
     () => new InMemoryPatrolStore()
   );
 }
 
-export function createGapClusterStore(config: AppConfig): InMemoryGapClusterStore | PostgresGapClusterStore {
+export function createGapClusterStore(config: AppConfig, pool: pg.Pool): InMemoryGapClusterStore | PostgresGapClusterStore {
   return createStore<InMemoryGapClusterStore | PostgresGapClusterStore>(
     config,
+    pool,
     "GAP_CLUSTER_STORE",
-    (databaseUrl) => new PostgresGapClusterStore(databaseUrl),
+    (pool) => new PostgresGapClusterStore(pool),
     () => new InMemoryGapClusterStore()
   );
 }
 
 export function createReconciliationDecisionStore(
-  config: AppConfig
+  config: AppConfig,
+  pool: pg.Pool
 ): InMemoryReconciliationDecisionStore | PostgresReconciliationDecisionStore {
   return createStore<InMemoryReconciliationDecisionStore | PostgresReconciliationDecisionStore>(
     config,
+    pool,
     "RECONCILIATION_DECISION_STORE",
-    (databaseUrl) => new PostgresReconciliationDecisionStore(databaseUrl),
+    (pool) => new PostgresReconciliationDecisionStore(pool),
     () => new InMemoryReconciliationDecisionStore()
   );
 }
 
-export function createMaintenanceRunStore(config: AppConfig): InMemoryMaintenanceRunStore | PostgresMaintenanceRunStore {
+export function createMaintenanceRunStore(config: AppConfig, pool: pg.Pool): InMemoryMaintenanceRunStore | PostgresMaintenanceRunStore {
   return createStore<InMemoryMaintenanceRunStore | PostgresMaintenanceRunStore>(
     config,
+    pool,
     "MAINTENANCE_RUN_STORE",
-    (databaseUrl) => new PostgresMaintenanceRunStore(databaseUrl),
+    (pool) => new PostgresMaintenanceRunStore(pool),
     () => new InMemoryMaintenanceRunStore()
   );
 }
 
-export function createWatcherRegistryStore(config: AppConfig): InMemoryWatcherRegistryStore | PostgresWatcherRegistryStore {
+export function createWatcherRegistryStore(config: AppConfig, pool: pg.Pool): InMemoryWatcherRegistryStore | PostgresWatcherRegistryStore {
   return createStore<InMemoryWatcherRegistryStore | PostgresWatcherRegistryStore>(
     config,
+    pool,
     "WATCHER_REGISTRY_STORE",
-    (databaseUrl) => new PostgresWatcherRegistryStore(databaseUrl),
+    (pool) => new PostgresWatcherRegistryStore(pool),
     () => new InMemoryWatcherRegistryStore()
   );
 }
 
-export function createPrCrosslinkStore(config: AppConfig): InMemoryPrCrosslinkStore | PostgresPrCrosslinkStore {
+export function createPrCrosslinkStore(config: AppConfig, pool: pg.Pool): InMemoryPrCrosslinkStore | PostgresPrCrosslinkStore {
   return createStore<InMemoryPrCrosslinkStore | PostgresPrCrosslinkStore>(
     config,
+    pool,
     "PR_CROSSLINK_STORE",
-    (databaseUrl) => new PostgresPrCrosslinkStore(databaseUrl),
+    (pool) => new PostgresPrCrosslinkStore(pool),
     () => new InMemoryPrCrosslinkStore()
   );
 }

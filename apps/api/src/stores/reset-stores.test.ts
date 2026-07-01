@@ -6,6 +6,7 @@ import { InMemoryQuestionLogStore } from "./question-log-store.js";
 import { InMemoryProposalStore } from "./proposal-store.js";
 import { PostgresKnowledgeStore } from "./postgres-knowledge-store.js";
 import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
+import { makeTestPool } from "../test-support/db-pool.js";
 
 test("resetData clears domain stores and resets the job queue", async () => {
   // resetData restores runtime config to the seed via ctx.config.reset(); the
@@ -80,7 +81,7 @@ const databaseUrl = process.env.DATABASE_URL;
 
 describe("PostgresKnowledgeStore.reset", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
   it("clears knowledge tables without error", async () => {
-    const store = new PostgresKnowledgeStore(databaseUrl as string);
+    const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
     await store.reset();
     const loaded = await store.loadAll();
     assert.deepEqual(loaded.repositories, []);

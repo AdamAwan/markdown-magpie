@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 import { PostgresGapClusterStore } from "./postgres-gap-cluster-store.js";
+import { makeTestPool } from "../test-support/db-pool.js";
 
 // Self-skips unless DATABASE_URL points at a migrated database (see
 // scripts/migrate.mjs). Run via `npm run test:db`.
 const databaseUrl = process.env.DATABASE_URL;
 
 describe("PostgresGapClusterStore", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
-  const store = new PostgresGapClusterStore(databaseUrl as string);
+  const store = new PostgresGapClusterStore(makeTestPool(databaseUrl as string));
 
   it("round-trips an active cluster", async () => {
     const title = `cluster-${randomUUID()}`;

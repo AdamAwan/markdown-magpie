@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import type { JSONWebKeySet } from "jose";
-import { authSettingsFromEnv, createRemoteAuthVerifier, hasScopes, parseBearerToken } from "./index.js";
+import {
+  authSettingsFromEnv,
+  createRemoteAuthVerifier,
+  hasScopes,
+  isAuthRequired,
+  parseBearerToken
+} from "./index.js";
 
 const issuer = "https://example.auth0.com/";
 const audience = "https://markdown-magpie.local/api";
@@ -33,11 +39,24 @@ test("parseBearerToken extracts a bearer token", () => {
   assert.equal(parseBearerToken("Basic abc"), undefined);
 });
 
-test("authSettingsFromEnv uses a stable issuer when auth is disabled and Auth0 env is absent", () => {
-  const settings = authSettingsFromEnv({});
+test("isAuthRequired fails closed: only an explicit AUTH_REQUIRED=false disables auth", () => {
+  // Required by default so a misconfiguration can never silently expose the API.
+  assert.equal(isAuthRequired(undefined), true);
+  assert.equal(isAuthRequired(""), true);
+  assert.equal(isAuthRequired("true"), true);
+  assert.equal(isAuthRequired("nonsense"), true);
+  // The only opt-out, case/whitespace-insensitive.
+  assert.equal(isAuthRequired("false"), false);
+  assert.equal(isAuthRequired(" FALSE "), false);
+});
 
-  assert.equal(settings.required, false);
-  assert.equal(settings.issuer, "https://markdown-magpie.local/");
+test("authSettingsFromEnv requires auth by default and only opts out on AUTH_REQUIRED=false", () => {
+  // Fail closed: an absent AUTH_REQUIRED leaves auth required.
+  assert.equal(authSettingsFromEnv({}).required, true);
+
+  const disabled = authSettingsFromEnv({ AUTH_REQUIRED: "false" });
+  assert.equal(disabled.required, false);
+  assert.equal(disabled.issuer, "https://markdown-magpie.local/");
 });
 
 test("createRemoteAuthVerifier does not construct a remote JWKS URL when JWKS is injected", async () => {

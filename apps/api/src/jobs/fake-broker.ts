@@ -16,13 +16,18 @@ import type { DesiredSchedule, JobBroker, JobListFilters, ScheduleView } from ".
 export class FakeJobBroker implements JobBroker {
   private readonly jobs = new Map<string, JobView>();
   private readonly schedules = new Map<string, ScheduleView>();
+  private started = false;
 
   async start(): Promise<void> {
-    // no-op
+    this.started = true;
   }
 
   async stop(): Promise<void> {
-    // no-op
+    this.started = false;
+  }
+
+  isStarted(): boolean {
+    return this.started;
   }
 
   async reset(): Promise<void> {

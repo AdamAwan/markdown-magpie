@@ -6,14 +6,8 @@ import {
   type PrCrosslinkStore
 } from "./pr-crosslink-store.js";
 
-const { Pool } = pg;
-
 export class PostgresPrCrosslinkStore implements PrCrosslinkStore {
-  private readonly pool: pg.Pool;
-
-  constructor(connectionString: string) {
-    this.pool = new Pool({ connectionString });
-  }
+  constructor(private readonly pool: pg.Pool) {}
 
   async has(a: string, b: string): Promise<boolean> {
     const { low, high } = normalisePair(a, b);

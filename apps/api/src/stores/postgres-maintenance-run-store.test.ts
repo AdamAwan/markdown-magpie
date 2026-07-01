@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 import { PostgresMaintenanceRunStore } from "./postgres-maintenance-run-store.js";
+import { makeTestPool } from "../test-support/db-pool.js";
 
 // Integration tests for the Postgres-backed maintenance-run store. They self-skip
 // unless DATABASE_URL points at a migrated database; CI provides one. Assert by the
@@ -9,7 +10,7 @@ import { PostgresMaintenanceRunStore } from "./postgres-maintenance-run-store.js
 const databaseUrl = process.env.DATABASE_URL;
 
 describe("PostgresMaintenanceRunStore", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
-  const store = new PostgresMaintenanceRunStore(databaseUrl as string);
+  const store = new PostgresMaintenanceRunStore(makeTestPool(databaseUrl as string));
 
   it("records, lists newest-first, filters by task type, and reads one", async () => {
     const flowId = `flow-${randomUUID()}`;

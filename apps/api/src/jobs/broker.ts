@@ -27,6 +27,9 @@ export interface ScheduleView {
 export interface JobBroker {
   start(): Promise<void>;
   stop(): Promise<void>;
+  // Whether start() has completed and stop() has not run since. Readiness reports
+  // the broker as up from this without issuing a query.
+  isStarted(): boolean;
   create(type: JobType, input: unknown): Promise<JobView>;
   claim(workerName: string, capabilities: JobCapability[]): Promise<JobView | undefined>;
   heartbeat(id: string): Promise<JobView>;

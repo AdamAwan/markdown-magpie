@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PostgresPatrolStore } from "./postgres-patrol-store.js";
+import { makeTestPool } from "../test-support/db-pool.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 
 test("PostgresPatrolStore", { skip: databaseUrl ? false : "DATABASE_URL not set" }, async () => {
-  const store = new PostgresPatrolStore(databaseUrl!);
+  const store = new PostgresPatrolStore(makeTestPool(databaseUrl!));
   await store.reset();
 
   await store.stampChecked("billing", ["a.md", "b.md"]);

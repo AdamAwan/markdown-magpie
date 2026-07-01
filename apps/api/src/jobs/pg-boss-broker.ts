@@ -65,6 +65,7 @@ export class PgBossJobBroker implements JobBroker {
   private readonly queuePolicyOverrides: PgBossQueuePolicyOverrides;
   private readonly scheduleTimezone: string;
   private claimCursor = 0;
+  private started = false;
 
   constructor(options: PgBossJobBrokerOptions) {
     const bossOptions: ConstructorOptions = {
@@ -93,10 +94,16 @@ export class PgBossJobBroker implements JobBroker {
       await this.boss.createQueue(queue.name, options);
       await this.boss.updateQueue(queue.name, options);
     }
+    this.started = true;
   }
 
   async stop(): Promise<void> {
+    this.started = false;
     await this.boss.stop();
+  }
+
+  isStarted(): boolean {
+    return this.started;
   }
 
   async create(type: JobType, input: unknown): Promise<JobView> {
