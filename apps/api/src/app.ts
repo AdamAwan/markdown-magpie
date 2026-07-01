@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
+import { secureHeaders } from "hono/secure-headers";
 import type { AppContext } from "./context.js";
 import { onError } from "./http/errors.js";
 import { configRoutes, adminRoutes } from "./features/config/routes.js";
@@ -33,10 +34,19 @@ export function buildApp(ctx: AppContext, options?: ApiAuthOptions): Hono {
 
   app.use("*", requestLogging(logger));
 
+  // Standard security headers (nosniff, frame-deny, HSTS, referrer policy, …) on
+  // every response as defense-in-depth. HSTS is only honoured by browsers over
+  // HTTPS, so it is inert in plain-HTTP local dev; production is expected to
+  // terminate TLS upstream. Runs before cors so the headers are also present on
+  // the short-circuited OPTIONS preflight response.
+  app.use("*", secureHeaders());
+
   app.use(
     "*",
     cors({
-      origin: "*",
+      // Defaults to "*" (any origin); set CORS_ALLOWED_ORIGINS to a comma-
+      // separated allow-list to restrict which web origins may call the API.
+      origin: ctx.settings.cors.allowedOrigins,
       allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
       allowHeaders: ["content-type", "authorization"]
     })

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { exportJWK, generateKeyPair, SignJWT, type JSONWebKeySet } from "jose";
 import { makeTestContext } from "./test-support/context.js";
+import { loadConfig } from "./platform/config.js";
 import { buildApp } from "./app.js";
 
 const authIssuer = "https://auth.test/";
@@ -223,6 +224,46 @@ test("OPTIONS preflight returns 204", async () => {
   const app = buildApp(makeTestContext());
   const res = await app.request("/api/ask", { method: "OPTIONS" });
   assert.equal(res.status, 204);
+});
+
+test("CORS defaults to allow-any-origin", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/health", {
+    headers: { origin: "https://anything.example" }
+  });
+  assert.equal(res.headers.get("access-control-allow-origin"), "*");
+});
+
+function contextWithAllowedOrigins(origins: string): ReturnType<typeof makeTestContext> {
+  const settings = loadConfig({
+    DATABASE_URL: "postgres://postgres:postgres@localhost:5432/markdown_magpie",
+    AI_PROVIDER: "codex",
+    AUTH_REQUIRED: "false",
+    CORS_ALLOWED_ORIGINS: origins
+  });
+  return makeTestContext({ settings });
+}
+
+test("CORS restricts to the configured allow-list", async () => {
+  const app = buildApp(contextWithAllowedOrigins("https://app.example, https://admin.example"));
+
+  const allowed = await app.request("/api/health", {
+    headers: { origin: "https://app.example" }
+  });
+  assert.equal(allowed.headers.get("access-control-allow-origin"), "https://app.example");
+
+  const denied = await app.request("/api/health", {
+    headers: { origin: "https://evil.example" }
+  });
+  assert.notEqual(denied.headers.get("access-control-allow-origin"), "https://evil.example");
+});
+
+test("responses carry standard security headers", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/health");
+  assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(res.headers.get("x-frame-options"), "SAMEORIGIN");
+  assert.ok(res.headers.get("strict-transport-security"));
 });
 
 test("GET /api/proposals returns an empty list", async () => {
