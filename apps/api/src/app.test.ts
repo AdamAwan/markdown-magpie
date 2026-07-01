@@ -153,6 +153,26 @@ test("auth required rejects valid tokens missing route scopes", async () => {
   assert.deepEqual(await res.json(), { error: "forbidden" });
 });
 
+test("auth required rejects drafting a proposal from a cluster without manage:knowledge", async () => {
+  const auth = await makeTestAuth();
+  const app = buildApp(makeTestContext(), auth.options);
+
+  // A read-only principal must not be able to enqueue AI drafting work; this
+  // route is a proposal-writing action and requires manage:knowledge like its
+  // siblings under /api/proposals.
+  const res = await app.request("/api/gaps/clusters/abc/proposal", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: await auth.authorization(["read:knowledge"])
+    },
+    body: JSON.stringify({})
+  });
+
+  assert.equal(res.status, 403);
+  assert.deepEqual(await res.json(), { error: "forbidden" });
+});
+
 test("auth required from environment rejects missing token without explicit auth options", async () => {
   const auth = await makeTestAuth();
   const app = buildApp(makeTestContext(), auth.envOptions);
