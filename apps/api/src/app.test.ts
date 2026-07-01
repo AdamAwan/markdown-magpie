@@ -78,6 +78,37 @@ test("GET /api/health returns ok", async () => {
   assert.deepEqual(await res.json(), { ok: true, service: "markdown-magpie-api" });
 });
 
+test("GET /api/ready reports 503 until the broker has started", async () => {
+  // makeTestContext's broker has no pool and has not been started yet.
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/ready");
+  assert.equal(res.status, 503);
+  const body = (await res.json()) as { ready: boolean; checks: { database: boolean; broker: boolean } };
+  assert.equal(body.ready, false);
+  assert.equal(body.checks.broker, false);
+  // No pool => no Postgres dependency to verify, so the DB check is trivially ok.
+  assert.equal(body.checks.database, true);
+});
+
+test("GET /api/ready reports 200 once the broker is started", async () => {
+  const ctx = makeTestContext();
+  await ctx.jobs.start();
+  const app = buildApp(ctx);
+  const res = await app.request("/api/ready");
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { ready: boolean; checks: { database: boolean; broker: boolean } };
+  assert.deepEqual(body, { ready: true, checks: { database: true, broker: true } });
+});
+
+test("GET /api/ready is public even when auth is required", async () => {
+  const auth = await makeTestAuth();
+  const ctx = makeTestContext();
+  await ctx.jobs.start();
+  const app = buildApp(ctx, auth.options);
+  const res = await app.request("/api/ready");
+  assert.equal(res.status, 200);
+});
+
 test("GET /api/version is public and returns the build info shape", async () => {
   const app = buildApp(makeTestContext());
   const res = await app.request("/api/version");
