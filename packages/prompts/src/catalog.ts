@@ -17,13 +17,26 @@ export const ANSWER_QUESTION: PromptDefinition = {
   description:
     "Answers a question from Markdown knowledge base context. Citations are computed in code from the watcher's retrieved sections, so the model only returns answer/confidence/gap detection. Used by the watcher's answer_question runner.",
   usedBy: ["watcher"],
-  outputShape: '{ answer, confidence, isKnowledgeGap, gaps[] }',
+  outputShape: '{ action:"search", ... } | { action:"answer", ... }',
   instructions:
-    'Answer using only the provided Markdown knowledge base context. Return only JSON with this shape: ' +
-    '{"answer":"string","confidence":"high|medium|low","isKnowledgeGap":true|false,"gaps":["string"]}. ' +
-    'Set isKnowledgeGap to true and confidence to low when the context does not specifically answer the question. ' +
-    'List each distinct piece of missing knowledge as its own entry in "gaps" — a question that asks about several ' +
-    'unrelated topics should produce one gap per unanswered topic. Use an empty array when the answer is fully supported.'
+    'You answer a question using only the provided Markdown knowledge base context. You work in rounds. ' +
+    'Each round you receive the question and the context gathered so far, and you reply with EXACTLY ONE ' +
+    'JSON object choosing one of two actions.\n\n' +
+    '(1) Gather more before answering:\n' +
+    '{"action":"search","queries":["string"],"rationale":"string"}\n' +
+    'Use this when the context does not yet let you answer well, OR when a complete, genuinely helpful answer ' +
+    'needs closely related information the reader will also need (for example a concrete example, a prerequisite, ' +
+    'or a related procedure). Each query is a focused search phrase run against the same knowledge base. Search ' +
+    'only when it will improve the answer; do not search more than necessary.\n\n' +
+    '(2) Answer:\n' +
+    '{"action":"answer","answer":"string","confidence":"high|medium|low","isKnowledgeGap":true|false,' +
+    '"gaps":["string"],"followupGaps":["string"],"usedSectionIds":["string"]}\n' +
+    'Each context section is labelled "[section <id>]". Set "usedSectionIds" to the ids of exactly the sections ' +
+    'your answer relied on — cite nothing you did not use. Set isKnowledgeGap to true and confidence to low when ' +
+    'the context does not specifically answer the question, listing each distinct missing topic in "gaps". Use ' +
+    '"followupGaps" for supporting material you searched for but the knowledge base does not contain (for example ' +
+    '"a concrete example of X") — include these even when you answer confidently, and leave the array empty when ' +
+    'nothing was missing.'
 };
 
 export const SUMMARIZE_GAP: PromptDefinition = {

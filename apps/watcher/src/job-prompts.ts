@@ -91,31 +91,38 @@ export function parseJobOutput(job: JobView, stdout: string): unknown {
   return result.data;
 }
 
-// Builds the answer_question output from the model's answer text and the sections
-// the watcher retrieved for the (routed) question. Citations are derived from
-// those sections so attribution stays reliable regardless of what the model
-// claims; a flagged knowledge gap forces low confidence and emits gap signals.
+// Builds the answer_question output from the model's final answer text and the
+// sections the watcher accumulated across the agentic retrieval loop. Citations
+// are derived from those sections (never trusted from the model) but narrowed to
+// the ones the model says it used; a flagged knowledge gap forces low confidence
+// and emits `auto` gap signals; `followup` gaps — supporting material the model
+// searched for and did not find — are emitted even for a confident answer, but
+// only when the loop actually observed a search return nothing (grounding them to
+// real empty searches rather than model hunches).
 export function buildAnswerOutput(
   modelContent: string,
   sections: RetrievedSection[],
   question: string,
-  flowId: string | undefined
+  flowId: string | undefined,
+  unsatisfiedSearches: Set<string> = new Set()
 ): AnswerOutput {
-  const citations = sections.map(toCitation);
   const structured = parseStructuredAnswer(modelContent);
   const answer = structured?.answer ?? modelContent.trim();
+  const citations = selectCitations(sections, structured?.usedSectionIds ?? []);
+  const citedSectionIds = citations.map((citation) => citation.sectionId);
+  const followupGaps = groundedFollowupGaps(structured, question, citedSectionIds, unsatisfiedSearches);
 
   if (structured?.isKnowledgeGap || sections.length === 0) {
-    const citedSectionIds = citations.map((citation) => citation.sectionId);
     const summaries =
       structured && structured.gaps.length > 0
         ? structured.gaps
         : [`No sufficient source material found for: ${question}`];
+    const autoGaps = summaries.map((summary) => toGapSignal(summary, question, citedSectionIds, "low", "auto"));
     return {
       answer: answer || "I could not find reliable source material for this question.",
       confidence: "low",
       citations,
-      gaps: summaries.map((summary) => toGapSignal(summary, question, citedSectionIds)),
+      gaps: [...autoGaps, ...followupGaps],
       ...(flowId ? { flowId } : {})
     };
   }
@@ -124,8 +131,40 @@ export function buildAnswerOutput(
     answer,
     confidence: structured?.confidence ?? "medium",
     citations,
+    ...(followupGaps.length > 0 ? { gaps: followupGaps } : {}),
     ...(flowId ? { flowId } : {})
   };
+}
+
+// Narrows the accumulated pool to the sections the model actually used, ordered
+// strongest-first. Falls back to the whole pool when the model named no valid ids
+// (or none that were retrieved) so a real answer never loses its attribution.
+function selectCitations(sections: RetrievedSection[], usedSectionIds: string[]): Citation[] {
+  const all = sections.map(toCitation).sort((left, right) => right.relevance - left.relevance);
+  if (usedSectionIds.length === 0) {
+    return all;
+  }
+  const used = new Set(usedSectionIds);
+  const grounded = all.filter((citation) => used.has(citation.sectionId));
+  return grounded.length > 0 ? grounded : all;
+}
+
+// Turns the model's followupGaps into gap signals, but only when the loop saw at
+// least one search return nothing: the model may only claim missing supporting
+// material if it actually went looking and came up empty. Each gap is stamped
+// with the answer's confidence and linked to the sections the answer used.
+function groundedFollowupGaps(
+  structured: StructuredAnswer | undefined,
+  question: string,
+  citedSectionIds: string[],
+  unsatisfiedSearches: Set<string>
+): KnowledgeGapSignal[] {
+  if (!structured || structured.followupGaps.length === 0 || unsatisfiedSearches.size === 0) {
+    return [];
+  }
+  return structured.followupGaps.map((summary) =>
+    toGapSignal(summary, question, citedSectionIds, structured.confidence, "followup")
+  );
 }
 
 interface StructuredAnswer {
@@ -133,6 +172,8 @@ interface StructuredAnswer {
   confidence: Confidence;
   isKnowledgeGap: boolean;
   gaps: string[];
+  followupGaps: string[];
+  usedSectionIds: string[];
 }
 
 function parseStructuredAnswer(content: string): StructuredAnswer | undefined {
@@ -145,7 +186,14 @@ function parseStructuredAnswer(content: string): StructuredAnswer | undefined {
   if (!parsed || typeof parsed !== "object") {
     return undefined;
   }
-  const candidate = parsed as { answer?: unknown; confidence?: unknown; isKnowledgeGap?: unknown; gaps?: unknown };
+  const candidate = parsed as {
+    answer?: unknown;
+    confidence?: unknown;
+    isKnowledgeGap?: unknown;
+    gaps?: unknown;
+    followupGaps?: unknown;
+    usedSectionIds?: unknown;
+  };
   if (typeof candidate.answer !== "string" || !isConfidence(candidate.confidence)) {
     return undefined;
   }
@@ -154,10 +202,16 @@ function parseStructuredAnswer(content: string): StructuredAnswer | undefined {
     answer: candidate.answer,
     confidence: isKnowledgeGap ? "low" : candidate.confidence,
     isKnowledgeGap,
-    gaps: Array.isArray(candidate.gaps)
-      ? candidate.gaps.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).map((entry) => entry.trim())
-      : []
+    gaps: toStringArray(candidate.gaps),
+    followupGaps: toStringArray(candidate.followupGaps),
+    usedSectionIds: toStringArray(candidate.usedSectionIds)
   };
+}
+
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).map((entry) => entry.trim())
+    : [];
 }
 
 function toCitation(section: RetrievedSection): Citation {
@@ -172,15 +226,23 @@ function toCitation(section: RetrievedSection): Citation {
   };
 }
 
-function toGapSignal(summary: string, question: string, citedSectionIds: string[]): KnowledgeGapSignal {
-  return { summary, question, confidence: "low", citedSectionIds, source: "auto" };
+function toGapSignal(
+  summary: string,
+  question: string,
+  citedSectionIds: string[],
+  confidence: Confidence,
+  source: KnowledgeGapSignal["source"]
+): KnowledgeGapSignal {
+  return { summary, question, confidence, citedSectionIds, source };
 }
 
 function isConfidence(value: unknown): value is Confidence {
   return value === "high" || value === "medium" || value === "low" || value === "unknown";
 }
 
-function extractJson(stdout: string): unknown {
+// Parses the first JSON object out of model output, tolerating surrounding prose.
+// Exported so the answer loop can classify assess replies with the same tolerance.
+export function extractJson(stdout: string): unknown {
   const trimmed = stdout.trim();
   try {
     return JSON.parse(trimmed);

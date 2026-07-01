@@ -146,9 +146,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         ]
       );
 
-      const autoSummaries = autoGapSummaries(input.answer);
-      await insertGapRows(client, id, autoSummaries);
-      if (autoSummaries.length > 0) {
+      const gapRows = answerGapRows(input.answer);
+      await insertGapRows(client, id, gapRows);
+      if (gapRows.length > 0) {
         await bumpGapCatalog(client, input.flowId ?? null);
       }
 
@@ -215,10 +215,14 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           flowId
         ]
       );
-      // Re-answering replaces auto-detected gaps but preserves any manual flag.
-      await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'auto'", [id]);
-      await insertGapRows(client, id, autoGapSummaries(input.answer));
-      // Re-answering replaces the auto-detected gaps, changing the candidate set.
+      // Re-answering replaces the answer-derived gaps (auto + followup) but
+      // preserves any manual flag.
+      await client.query(
+        "DELETE FROM question_gaps WHERE question_id = $1 AND source IN ('auto', 'followup')",
+        [id]
+      );
+      await insertGapRows(client, id, answerGapRows(input.answer));
+      // Re-answering replaces the answer-derived gaps, changing the candidate set.
       await bumpGapCatalog(client, flowId);
       await client.query("DELETE FROM answer_citations WHERE question_id = $1", [id]);
 
@@ -279,7 +283,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       const row = result.rows[0] as { question: string; flow_id: string | null };
       const manualSummary = trimmed && trimmed.length > 0 ? trimmed : row.question;
       await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'manual'", [id]);
-      await insertGapRows(client, id, [manualSummary], "manual");
+      await insertGapRows(client, id, [{ summary: manualSummary, source: "manual" }]);
       await bumpGapCatalog(client, row.flow_id);
       await client.query("COMMIT");
     } catch (error) {
@@ -472,25 +476,25 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
   }
 }
 
-// Inserts one gap row per summary in a single multi-row INSERT (instead of one
-// round-trip per summary). Used for both auto-detected gaps (on answer) and
-// manual gaps (on flag); the caller picks the source.
+// Inserts one gap row per gap in a single multi-row INSERT (instead of one
+// round-trip per gap). Each gap carries its own source, so a single answer can
+// write both whole-question ("auto") and supporting-material ("followup") gaps,
+// and the manual-flag path inserts a "manual" gap.
 async function insertGapRows(
   client: pg.PoolClient,
   questionId: string,
-  summaries: string[],
-  source: QuestionGapSource = "auto"
+  gaps: Array<{ summary: string; source: QuestionGapSource }>
 ): Promise<void> {
-  if (summaries.length === 0) {
+  if (gaps.length === 0) {
     return;
   }
 
   await client.query(
     `
       INSERT INTO question_gaps (question_id, summary, source)
-      VALUES ${valuesClause(summaries.length, 3)}
+      VALUES ${valuesClause(gaps.length, 3)}
     `,
-    summaries.flatMap((summary) => [questionId, summary, source])
+    gaps.flatMap((gap) => [questionId, gap.summary, gap.source])
   );
 }
 
@@ -555,8 +559,13 @@ async function bumpGapCatalog(client: pg.PoolClient, flowId: string | null): Pro
   );
 }
 
-function autoGapSummaries(answer: AnswerResult | undefined): string[] {
-  return (answer?.gaps ?? []).map((gap) => gap.summary).filter((summary) => summary.trim().length > 0);
+// The gaps carried on an answer, each preserving its source ("auto" for a
+// whole-question miss, "followup" for missing supporting material a confident
+// answer searched for and could not find). Empty summaries are dropped.
+function answerGapRows(answer: AnswerResult | undefined): Array<{ summary: string; source: QuestionGapSource }> {
+  return (answer?.gaps ?? [])
+    .map((gap) => ({ summary: gap.summary.trim(), source: gap.source }))
+    .filter((gap) => gap.summary.length > 0);
 }
 
 interface QuestionRow {

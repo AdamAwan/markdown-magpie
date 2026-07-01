@@ -92,7 +92,80 @@ describe("buildAnswerOutput", () => {
     assert.equal(output.gaps[0].summary, "no rollback docs");
     assert.equal(output.gaps[0].question, "How do I roll back?");
     assert.deepEqual(output.gaps[0].citedSectionIds, ["doc-1#deploy"]);
+    assert.equal(output.gaps[0].source, "auto");
     assert.equal(output.flowId, undefined);
+  });
+
+  const TWO_SECTIONS: RetrievedSection[] = [
+    { sectionId: "s1", documentId: "d1", anchor: "a1", path: "a.md", heading: "A", content: "Alpha.", relevance: 0.4 },
+    { sectionId: "s2", documentId: "d2", anchor: "a2", path: "b.md", heading: "B", content: "Beta.", relevance: 0.9 }
+  ];
+
+  it("cites only the sections the model says it used, strongest first", () => {
+    const output = buildAnswerOutput(
+      JSON.stringify({ answer: "Use B.", confidence: "high", isKnowledgeGap: false, usedSectionIds: ["s2"] }),
+      TWO_SECTIONS,
+      "Which one?",
+      undefined
+    );
+    assert.deepEqual(
+      output.citations.map((citation) => citation.sectionId),
+      ["s2"],
+      "grounds citations to usedSectionIds"
+    );
+  });
+
+  it("falls back to the whole pool when the model names no valid used sections", () => {
+    const output = buildAnswerOutput(
+      JSON.stringify({ answer: "Both.", confidence: "high", isKnowledgeGap: false, usedSectionIds: ["nope"] }),
+      TWO_SECTIONS,
+      "Which one?",
+      undefined
+    );
+    // Invented id ⇒ fall back to the pool, ordered by relevance (s2 before s1).
+    assert.deepEqual(
+      output.citations.map((citation) => citation.sectionId),
+      ["s2", "s1"]
+    );
+  });
+
+  it("emits a followup gap on a confident answer when a search came back empty", () => {
+    const output = buildAnswerOutput(
+      JSON.stringify({
+        answer: "Deploy with the script.",
+        confidence: "high",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"],
+        followupGaps: ["no staging deploy example"]
+      }),
+      SECTIONS,
+      "How do I deploy?",
+      "flow-1",
+      new Set(["staging deploy example"])
+    );
+    assert.equal(output.confidence, "high", "the answer itself stays confident");
+    assert.ok(output.gaps && output.gaps.length === 1);
+    assert.equal(output.gaps[0].summary, "no staging deploy example");
+    assert.equal(output.gaps[0].source, "followup");
+    assert.equal(output.gaps[0].confidence, "high");
+    assert.deepEqual(output.gaps[0].citedSectionIds, ["doc-1#deploy"]);
+  });
+
+  it("drops followup gaps that no empty search backs (ungrounded)", () => {
+    const output = buildAnswerOutput(
+      JSON.stringify({
+        answer: "Deploy with the script.",
+        confidence: "high",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"],
+        followupGaps: ["a gap the model imagined"]
+      }),
+      SECTIONS,
+      "How do I deploy?",
+      "flow-1",
+      new Set() // no search came back empty
+    );
+    assert.equal(output.gaps, undefined, "no grounded followup gaps ⇒ no gaps emitted");
   });
 });
 

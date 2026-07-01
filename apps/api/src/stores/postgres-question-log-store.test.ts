@@ -163,6 +163,38 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.ok((updated?.gaps ?? []).some((gap) => gap.summary === "New auto gap" && gap.source === "auto"));
   });
 
+  it("persists a followup-sourced gap from a confident answer", async () => {
+    const uniqueId = randomUUID();
+    const answer: AnswerResult = {
+      answer: "Deploy with the script.",
+      confidence: "high",
+      citations: [],
+      gaps: [
+        {
+          summary: `missing deploy example ${uniqueId}`,
+          question: "how do I deploy?",
+          confidence: "high",
+          citedSectionIds: [],
+          source: "followup"
+        }
+      ]
+    };
+
+    const recorded = await store.record({
+      question: `test-followup-${uniqueId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      answer
+    });
+
+    const reloaded = await store.get(recorded.id);
+    assert.equal(reloaded?.confidence, "high", "a followup gap does not force the answer low");
+    assert.ok(
+      (reloaded?.gaps ?? []).some((gap) => gap.summary === `missing deploy example ${uniqueId}` && gap.source === "followup"),
+      "the followup gap is persisted with its source"
+    );
+  });
+
   it("returns undefined when updating feedback on a non-existent question", async () => {
     const result = await store.recordFeedback("00000000-0000-0000-0000-000000000000", "unhelpful");
     assert.equal(result, undefined);

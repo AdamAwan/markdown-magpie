@@ -127,7 +127,11 @@ Answers a question from indexed Markdown context.
   "job": "/api/jobs/:id", "wait": "/api/jobs/:id/wait", "cancel": "/api/jobs/:id/cancel" } }`.
   An `answer_question` job is enqueued for a watcher and the question log is written immediately
   with unknown confidence. Block on `links.wait` until the job is terminal, then read the answer
-  from `links.question`. See [ai-jobs.md](ai-jobs.md) and [question-logging.md](question-logging.md).
+  from `links.question`. The watcher answers via an agentic retrieval loop: it routes the question
+  to a flow, retrieves scoped context (weak matches below a relevance floor are dropped, so a
+  question nothing answers yields no citations), and may run bounded follow-up searches within that
+  flow before answering — citing only the sections it used. See [ai-jobs.md](ai-jobs.md) and
+  [question-logging.md](question-logging.md).
 
 ### `GET /api/knowledge/search?q=<query>&limit=<n>`
 

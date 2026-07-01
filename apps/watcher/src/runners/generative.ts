@@ -7,15 +7,16 @@ import {
   reconcileGapClustersInputSchema,
   reconcileGapClustersOutputSchema
 } from "@magpie/jobs";
-import { ANSWER_QUESTION, GAP_RECONCILE_CRITIC, GAP_RECONCILE_PROPOSE, withPersona } from "@magpie/prompts";
+import { ANSWER_QUESTION, GAP_RECONCILE_CRITIC, GAP_RECONCILE_PROPOSE, JOB_RUNNER_SYSTEM, withPersona } from "@magpie/prompts";
 import { routeQuestionToFlow, type FlowRoute, type RoutableFlow } from "@magpie/retrieval";
 import type { z } from "zod";
-import type { WatcherApi } from "../http-client.js";
+import type { RetrievedSection, WatcherApi } from "../http-client.js";
 import { logger } from "../logger.js";
 import {
   buildAnswerOutput,
   buildFlowSelectionRequiredOutput,
   buildPrompt,
+  extractJson,
   parseJobOutput
 } from "../job-prompts.js";
 
@@ -52,12 +53,22 @@ export async function runGenerativeJob(options: GenerativeJobOptions): Promise<u
 
   const prompt = options.buildPromptOverride ? options.buildPromptOverride(job) : buildPrompt(job);
   const response = await options.model.complete({
-    system: ANSWER_QUESTION.instructions,
+    system: JOB_RUNNER_SYSTEM.instructions,
     messages: [{ role: "user", content: prompt }],
     signal: options.signal
   });
   return parseJobOutput(job, response.content);
 }
+
+// The agentic answer loop. After routing + a seed retrieval the model assesses
+// what it has and may request follow-up searches (within the same flow scope)
+// before answering, so an answer can pull in closely related material rather than
+// being capped at one fixed top-K grab. Bounded by MAX_SEARCH_ROUNDS and
+// MAX_POOL_SECTIONS so a job can never search unboundedly. Queries whose
+// retrieval comes back empty are recorded so the model's followup gaps can be
+// grounded to searches that genuinely found nothing.
+const MAX_SEARCH_ROUNDS = 3;
+const MAX_POOL_SECTIONS = 15;
 
 async function answer({ job, model, api, signal }: GenerativeJobOptions): Promise<unknown> {
   const input = answerQuestionInputSchema.parse(job.input);
@@ -78,19 +89,101 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
 
   const flowId = route.status === "routed" ? route.flowId : undefined;
   const routedFlow = flowId ? flows.find((flow) => flow.id === flowId) : undefined;
+  const system = withPersona(ANSWER_QUESTION.instructions, routedFlow?.persona);
 
-  logger.debug({ jobId: job.id, flowId: flowId ?? null }, `answer_question[${job.id}]: retrieving sections for flow ${flowId ?? "(unscoped)"}`);
-  const sections = await api.retrieve(input.question, flowId, undefined);
+  // Deduped accumulator (sectionId -> section) plus the set of follow-up queries
+  // that returned nothing above the relevance floor.
+  const pool = new Map<string, RetrievedSection>();
+  const unsatisfiedSearches = new Set<string>();
 
-  logger.debug({ jobId: job.id, sectionCount: sections.length }, `answer_question[${job.id}]: generating answer from ${sections.length} section(s)`);
-  const context = sections.map((section) => `# ${section.heading}\n${section.content}`).join("\n\n");
+  logger.debug({ jobId: job.id, flowId: flowId ?? null }, `answer_question[${job.id}]: seeding retrieval for flow ${flowId ?? "(unscoped)"}`);
+  mergeSections(pool, await api.retrieve(input.question, flowId, undefined, signal));
+
+  for (let round = 0; round < MAX_SEARCH_ROUNDS && pool.size < MAX_POOL_SECTIONS; round += 1) {
+    const content = await assess(model, system, input.question, [...pool.values()], false, signal);
+    const assessment = parseAssessment(content);
+    if (assessment.action === "answer") {
+      logger.debug({ jobId: job.id, round, sectionCount: pool.size }, `answer_question[${job.id}]: answered after ${round} search round(s)`);
+      return buildAnswerOutput(content, [...pool.values()], input.question, flowId, unsatisfiedSearches);
+    }
+
+    logger.debug({ jobId: job.id, round, queries: assessment.queries }, `answer_question[${job.id}]: running ${assessment.queries.length} follow-up search(es)`);
+    for (const query of assessment.queries) {
+      const results = await api.retrieve(query, flowId, undefined, signal);
+      if (results.length === 0) {
+        unsatisfiedSearches.add(normalizeQuery(query));
+      }
+      mergeSections(pool, results);
+      if (pool.size >= MAX_POOL_SECTIONS) {
+        break;
+      }
+    }
+  }
+
+  // Ran out of search rounds or hit the section cap: force a final answer from
+  // whatever has accumulated (no further searching allowed).
+  logger.debug({ jobId: job.id, sectionCount: pool.size }, `answer_question[${job.id}]: forcing final answer from ${pool.size} section(s)`);
+  const finalContent = await assess(model, system, input.question, [...pool.values()], true, signal);
+  return buildAnswerOutput(finalContent, [...pool.values()], input.question, flowId, unsatisfiedSearches);
+}
+
+// One assess/answer turn. `forceAnswer` tells the model it has gathered enough and
+// must answer now (used once search rounds are exhausted) so the loop always
+// terminates on an answer rather than another search request.
+async function assess(
+  model: ChatProvider,
+  system: string,
+  question: string,
+  sections: RetrievedSection[],
+  forceAnswer: boolean,
+  signal: AbortSignal
+): Promise<string> {
+  const context =
+    sections.length > 0
+      ? sections.map((section) => `[section ${section.sectionId}] # ${section.heading}\n${section.content}`).join("\n\n")
+      : "(no context retrieved yet)";
+  const directive = forceAnswer
+    ? "\n\nYou have gathered enough context. Answer now using only the context above; do not request more searches."
+    : "";
   const response = await model.complete({
-    system: withPersona(ANSWER_QUESTION.instructions, routedFlow?.persona),
-    messages: [{ role: "user", content: `Question:\n${input.question}\n\nContext:\n${context}` }],
+    system,
+    messages: [{ role: "user", content: `Question:\n${question}\n\nContext:\n${context}${directive}` }],
     signal
   });
+  return response.content;
+}
 
-  return buildAnswerOutput(response.content, sections, input.question, flowId);
+// Classifies an assess reply as a search request or an answer. Only a well-formed
+// {"action":"search",...} with at least one non-empty query counts as a search;
+// anything else (an answer, a missing action, or unparseable output) is treated as
+// an answer so buildAnswerOutput can extract what it can and the loop terminates.
+function parseAssessment(content: string): { action: "search"; queries: string[] } | { action: "answer" } {
+  let parsed: unknown;
+  try {
+    parsed = extractJson(content);
+  } catch {
+    return { action: "answer" };
+  }
+  if (!parsed || typeof parsed !== "object" || (parsed as { action?: unknown }).action !== "search") {
+    return { action: "answer" };
+  }
+  const raw = (parsed as { queries?: unknown }).queries;
+  const queries = Array.isArray(raw)
+    ? raw.filter((query): query is string => typeof query === "string" && query.trim().length > 0).map((query) => query.trim())
+    : [];
+  return queries.length > 0 ? { action: "search", queries } : { action: "answer" };
+}
+
+function mergeSections(pool: Map<string, RetrievedSection>, sections: RetrievedSection[]): void {
+  for (const section of sections) {
+    if (!pool.has(section.sectionId)) {
+      pool.set(section.sectionId, section);
+    }
+  }
+}
+
+function normalizeQuery(query: string): string {
+  return query.trim().toLowerCase();
 }
 
 // Resolves which flow answers the question. A caller-pinned flow
