@@ -1,6 +1,6 @@
 # Markdown Magpie — agent guide
 
-Git-backed Markdown knowledge maintenance system. npm-workspace monorepo, Node ≥22.12,
+Git-backed Markdown knowledge maintenance system. npm-workspace monorepo, Node ≥22.13,
 ESM/NodeNext, TypeScript.
 
 ## Start here

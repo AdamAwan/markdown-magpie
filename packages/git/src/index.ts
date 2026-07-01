@@ -1056,7 +1056,7 @@ async function githubFetch(url: string, init: RequestInit): Promise<Response> {
     return await fetch(url, { ...init, signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) });
   } catch (error) {
     if (error instanceof DOMException && error.name === "TimeoutError") {
-      throw new Error(`GitHub request timed out after ${GITHUB_API_TIMEOUT_MS}ms`);
+      throw new Error(`GitHub request timed out after ${GITHUB_API_TIMEOUT_MS}ms`, { cause: error });
     }
     throw error;
   }
@@ -1074,7 +1074,7 @@ async function git(cwd: string, args: string[], env?: Partial<NodeJS.ProcessEnv>
       return result.stdout;
     } catch (error) {
       const message = error instanceof Error ? error.message : "git command failed";
-      throw new Error(message);
+      throw new Error(message, { cause: error });
     }
   });
 }

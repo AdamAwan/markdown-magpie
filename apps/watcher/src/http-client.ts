@@ -208,7 +208,9 @@ export class HttpWatcherApi implements WatcherApi {
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === "TimeoutError") {
-        throw new Error(`${init.method ?? "GET"} ${path} timed out after ${this.timeoutMs}ms`);
+        throw new Error(`${init.method ?? "GET"} ${path} timed out after ${this.timeoutMs}ms`, {
+          cause: error
+        });
       }
       throw error;
     }
