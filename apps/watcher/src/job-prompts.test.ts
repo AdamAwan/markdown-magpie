@@ -27,7 +27,8 @@ const SECTIONS: RetrievedSection[] = [
     anchor: "deploy",
     path: "ops/deploy.md",
     heading: "Deploy",
-    content: "Run the deploy script then verify health."
+    content: "Run the deploy script then verify health.",
+    relevance: 0.9
   }
 ];
 
@@ -74,7 +75,8 @@ describe("buildAnswerOutput", () => {
       path: "ops/deploy.md",
       heading: "Deploy",
       anchor: "deploy",
-      excerpt: "Run the deploy script then verify health."
+      excerpt: "Run the deploy script then verify health.",
+      relevance: 0.9
     });
   });
 

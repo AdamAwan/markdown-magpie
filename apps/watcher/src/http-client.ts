@@ -20,6 +20,7 @@ export interface RetrievedSection {
   path: string;
   heading: string;
   content: string;
+  relevance: number;
 }
 
 // The credential-free execution context the publication runners fetch before
@@ -39,7 +40,12 @@ export interface OpenPullRequestRef {
 // The full surface the runners and loop use. The loop only needs WatcherApiClient;
 // runners additionally use the retrieve + execution-context calls.
 export interface WatcherApi extends WatcherApiClient {
-  retrieve(question: string, flowId: string | undefined, limit: number | undefined): Promise<RetrievedSection[]>;
+  retrieve(
+    question: string,
+    flowId: string | undefined,
+    limit: number | undefined,
+    signal?: AbortSignal
+  ): Promise<RetrievedSection[]>;
   proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext>;
   // Drives a flow's gap→PR reconciliation in the API (clustering, the reshape AI
   // job the API bounded-waits on, drafting and publication enqueue). An absent
@@ -122,12 +128,21 @@ export class HttpWatcherApi implements WatcherApi {
     await this.post(`/api/jobs/${jobId}/fail`, { error: { ...error, executor: this.workerName } });
   }
 
-  async retrieve(question: string, flowId: string | undefined, limit: number | undefined): Promise<RetrievedSection[]> {
-    const { sections } = await this.post<{ sections: RetrievedSection[] }>("/api/retrieve", {
-      question,
-      ...(flowId ? { flowId } : {}),
-      ...(limit ? { limit } : {})
-    });
+  async retrieve(
+    question: string,
+    flowId: string | undefined,
+    limit: number | undefined,
+    signal?: AbortSignal
+  ): Promise<RetrievedSection[]> {
+    const { sections } = await this.post<{ sections: RetrievedSection[] }>(
+      "/api/retrieve",
+      {
+        question,
+        ...(flowId ? { flowId } : {}),
+        ...(limit ? { limit } : {})
+      },
+      signal
+    );
     return sections;
   }
 

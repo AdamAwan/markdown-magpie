@@ -7,7 +7,7 @@ const lowGapAnswer: AnswerResult = {
   answer: "I could not find reliable source material.",
   confidence: "low",
   citations: [],
-  gaps: [{ summary: "No source material for: vaccines", question: "vaccines?", confidence: "low", citedSectionIds: [] }]
+  gaps: [{ summary: "No source material for: vaccines", question: "vaccines?", confidence: "low", citedSectionIds: [], source: "auto" }]
 };
 
 const multiGapAnswer: AnswerResult = {
@@ -15,8 +15,8 @@ const multiGapAnswer: AnswerResult = {
   confidence: "low",
   citations: [],
   gaps: [
-    { summary: "No React integration guidance", question: "react + export?", confidence: "low", citedSectionIds: [] },
-    { summary: "Dashboard export is undocumented", question: "react + export?", confidence: "low", citedSectionIds: [] }
+    { summary: "No React integration guidance", question: "react + export?", confidence: "low", citedSectionIds: [], source: "auto" },
+    { summary: "Dashboard export is undocumented", question: "react + export?", confidence: "low", citedSectionIds: [], source: "auto" }
   ]
 };
 
@@ -139,7 +139,7 @@ test("listGapCandidates lists each gap of a multi-topic question separately and 
       answer: "Not documented.",
       confidence: "low",
       citations: [],
-      gaps: [{ summary: "Dashboard export is undocumented", question: "export?", confidence: "low", citedSectionIds: [] }]
+      gaps: [{ summary: "Dashboard export is undocumented", question: "export?", confidence: "low", citedSectionIds: [], source: "auto" }]
     },
     retrievedSectionIds: []
   });
@@ -160,7 +160,7 @@ test("listGapCandidates groups the same gap separately per flow and tags each ca
     answer: "Not documented.",
     confidence: "low",
     citations: [],
-    gaps: [{ summary: "Pricing is undocumented", question: "price?", confidence: "low", citedSectionIds: [] }]
+    gaps: [{ summary: "Pricing is undocumented", question: "price?", confidence: "low", citedSectionIds: [], source: "auto" }]
   };
   const sales = await store.record({
     question: "price?",

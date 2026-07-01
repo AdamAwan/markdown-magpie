@@ -68,6 +68,8 @@ export interface Citation {
   anchor: string;
   commitSha?: string;
   excerpt: string;
+  /** The section's retrieval relevance in [0,1]; higher is a stronger match. */
+  relevance: number;
 }
 
 // When the router cannot decide which flow a question belongs to (and the caller
@@ -96,9 +98,13 @@ export interface KnowledgeGapSignal {
   question: string;
   confidence: Confidence;
   citedSectionIds: string[];
+  // How this gap was raised. "auto" = the question went essentially unanswered;
+  // "followup" = a well-answered question still lacked supporting material the
+  // model searched for and could not find; "manual" = flagged by an admin.
+  source: QuestionGapSource;
 }
 
-export type QuestionGapSource = "auto" | "manual";
+export type QuestionGapSource = "auto" | "manual" | "followup";
 
 export interface QuestionGap {
   summary: string;

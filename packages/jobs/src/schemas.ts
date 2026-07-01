@@ -38,13 +38,15 @@ const citationSchema = z.object({
   heading: z.string(),
   anchor: z.string(),
   commitSha: z.string().optional(),
-  excerpt: z.string()
+  excerpt: z.string(),
+  relevance: z.number()
 });
 const gapSchema = z.object({
   summary: z.string(),
   question: z.string(),
   confidence: confidenceSchema,
-  citedSectionIds: z.array(z.string())
+  citedSectionIds: z.array(z.string()),
+  source: z.enum(["auto", "manual", "followup"])
 });
 const documentSchema = z.object({ path: z.string(), content: z.string() });
 

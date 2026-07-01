@@ -58,6 +58,9 @@ export function CitationRow({ citation }: { citation: Citation }) {
       <div className="citationTop">
         <strong>{citation.heading}</strong>
         <code>{citation.sectionId}</code>
+        <span className="citationRelevance" title="Retrieval relevance">
+          {Math.round(citation.relevance * 100)}%
+        </span>
       </div>
       <span>
         {citation.path}

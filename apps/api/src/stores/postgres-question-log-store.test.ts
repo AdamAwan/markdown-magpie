@@ -18,7 +18,7 @@ function lowConfidenceAnswer(): AnswerResult {
     answer: "I could not find reliable source material.",
     confidence: "low",
     citations: [],
-    gaps: [{ summary: "No source material available", question: "test?", confidence: "low", citedSectionIds: [] }]
+    gaps: [{ summary: "No source material available", question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }]
   };
 }
 
@@ -28,8 +28,8 @@ function multiGapAnswer(): AnswerResult {
     confidence: "low",
     citations: [],
     gaps: [
-      { summary: "First gap summary", question: "test?", confidence: "low", citedSectionIds: [] },
-      { summary: "Second gap summary", question: "test?", confidence: "low", citedSectionIds: [] }
+      { summary: "First gap summary", question: "test?", confidence: "low", citedSectionIds: [], source: "auto" },
+      { summary: "Second gap summary", question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }
     ]
   };
 }
@@ -150,7 +150,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
       answer: "Updated answer.",
       confidence: "high",
       citations: [],
-      gaps: [{ summary: "New auto gap", question: "test?", confidence: "low", citedSectionIds: [] }]
+      gaps: [{ summary: "New auto gap", question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }]
     };
 
     const updated = await store.updateAnswer(recorded.id, {
@@ -272,7 +272,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
         answer: "Answer.",
         confidence: "low",
         citations: [],
-        gaps: [{ summary: sharedGap, question: "test?", confidence: "low", citedSectionIds: [] }]
+        gaps: [{ summary: sharedGap, question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }]
       }
     });
 
@@ -284,7 +284,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
         answer: "Answer.",
         confidence: "low",
         citations: [],
-        gaps: [{ summary: sharedGap, question: "test?", confidence: "low", citedSectionIds: [] }]
+        gaps: [{ summary: sharedGap, question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }]
       }
     });
 
@@ -305,7 +305,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
       answer: "Answer.",
       confidence: "low",
       citations: [],
-      gaps: [{ summary, question: "test?", confidence: "low", citedSectionIds: [] }]
+      gaps: [{ summary, question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }]
     });
 
     await store.record({ question: `bx1-${uniqueId}`, chatProvider: "codex", retrievedSectionIds: [], answer: lowGap(summaryX) });

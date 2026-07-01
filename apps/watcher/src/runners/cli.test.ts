@@ -39,7 +39,8 @@ const SECTIONS: RetrievedSection[] = [
     anchor: "deploy",
     path: "ops/deploy.md",
     heading: "Deploy",
-    content: "Run the deploy script."
+    content: "Run the deploy script.",
+    relevance: 0.9
   }
 ];
 

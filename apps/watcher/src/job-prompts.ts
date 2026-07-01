@@ -167,12 +167,13 @@ function toCitation(section: RetrievedSection): Citation {
     path: section.path,
     heading: section.heading,
     anchor: section.anchor,
-    excerpt: section.content.slice(0, 280)
+    excerpt: section.content.slice(0, 280),
+    relevance: section.relevance
   };
 }
 
 function toGapSignal(summary: string, question: string, citedSectionIds: string[]): KnowledgeGapSignal {
-  return { summary, question, confidence: "low", citedSectionIds };
+  return { summary, question, confidence: "low", citedSectionIds, source: "auto" };
 }
 
 function isConfidence(value: unknown): value is Confidence {

@@ -40,6 +40,19 @@ test("retrieve scopes sections to the flow's destination repository", async () =
   assert.equal(sections[0].path, "rollback.md");
   assert.ok(sections[0].heading.length > 0);
   assert.ok(sections[0].content.length > 0);
+  assert.ok(sections[0].relevance > 0, "each section carries its retrieval relevance");
+});
+
+test("retrieve returns no sections for a question nothing matches (no filler citations)", async () => {
+  const ctx = makeTestContext();
+  ctx.knowledgeConfig.flows = [...TWO_FLOWS];
+  await seedTwoRepos(ctx);
+
+  // A question with no term overlap and no strong match must not be padded out
+  // with weak sections — otherwise every bogus question yields citations.
+  const { sections } = expectOk(await retrieve(ctx, { question: "xylophone quantum barnacle" }));
+
+  assert.equal(sections.length, 0);
 });
 
 test("retrieve searches unscoped when no flowId is given", async () => {
