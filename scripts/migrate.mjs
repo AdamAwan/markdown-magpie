@@ -2,6 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { assertMigrationPrefixesUnique } from "./lib/migration-order.mjs";
 
 const { Client } = pg;
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -39,6 +40,10 @@ try {
     const files = (await readdir(migrationsDir))
       .filter((file) => file.endsWith(".sql"))
       .sort();
+
+    // Fail fast before touching the database if the migration set violates the
+    // naming convention (malformed name or a new duplicate sequence prefix).
+    assertMigrationPrefixesUnique(files);
 
     for (const file of files) {
       const existing = await client.query("SELECT 1 FROM schema_migrations WHERE filename = $1", [file]);

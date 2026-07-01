@@ -54,6 +54,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Fast, DB-free unit tests for the repo-level scripts (e.g. the migration
+      # ordering guard). Runs before the DB suite so a naming-convention break
+      # fails quickly without booting a container.
+      - name: Test scripts
+        run: npm run test:scripts
+
       # Provisions a throwaway database, migrates it, runs the suite against it,
       # and drops it — see scripts/test-db.mjs.
       - name: Test
