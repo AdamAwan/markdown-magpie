@@ -13,6 +13,10 @@ import type { JSONWebKeySet } from "jose";
 declare module "hono" {
   interface ContextVariableMap {
     principal?: Principal;
+    // Whether auth is enforced for this app. requireAuth sets it on every request
+    // so requireScopes can FAIL CLOSED: deny a principal-absent request unless
+    // auth was explicitly disabled. Treated as required (true) when unset.
+    authRequired?: boolean;
   }
 }
 
@@ -25,7 +29,10 @@ export interface ApiAuthOptions {
 export function requireAuth(options: ApiAuthOptions): MiddlewareHandler {
   const settings = options.auth ?? { ...authSettingsFromEnv(options.env), jwks: options.jwks };
   if (!settings?.required) {
-    return async (_c, next) => {
+    // Auth explicitly disabled. Mark it on the context so requireScopes knows the
+    // principal-absent passthrough is intentional rather than a missing guard.
+    return async (c, next) => {
+      c.set("authRequired", false);
       await next();
     };
   }
@@ -33,6 +40,7 @@ export function requireAuth(options: ApiAuthOptions): MiddlewareHandler {
   const verifier = createRemoteAuthVerifier(settings);
 
   return async (c, next) => {
+    c.set("authRequired", true);
     try {
       const principal = await verifier.verify(parseBearerToken(c.req.header("authorization")));
       c.set("principal", principal);
@@ -52,9 +60,14 @@ export function requireScopes(...scopes: string[]): MiddlewareHandler {
   return async (c, next) => {
     const principal = c.get("principal");
     if (!principal) {
-      // principal absent => auth disabled (local dev); requireAuth runs first on api.use("*") and guarantees it is set when auth is required.
-      await next();
-      return;
+      // FAIL CLOSED: a missing principal is only allowed when auth was explicitly
+      // disabled (local dev). If auth is required (or the flag is unset because
+      // requireAuth never ran), deny rather than silently allowing the request.
+      if (c.get("authRequired") === false) {
+        await next();
+        return;
+      }
+      return c.json({ error: "unauthorized" }, 401);
     }
 
     if (!hasScopes(principal, scopes)) {

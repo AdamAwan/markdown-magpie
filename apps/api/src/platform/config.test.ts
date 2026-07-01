@@ -6,7 +6,10 @@ import { loadConfig } from "./config.js";
 // rather than mutating process.env.
 const minimalEnv: NodeJS.ProcessEnv = {
   DATABASE_URL: "postgres://postgres:postgres@localhost:5432/markdown_magpie",
-  AI_PROVIDER: "openai-compatible"
+  AI_PROVIDER: "openai-compatible",
+  // Auth fails closed by default; these baseline tests exercise non-auth config,
+  // so they explicitly opt out. Auth-specific behaviour is tested separately.
+  AUTH_REQUIRED: "false"
 };
 
 function assertThrowsNaming(env: NodeJS.ProcessEnv, ...vars: string[]): Error {
@@ -108,14 +111,77 @@ describe("loadConfig — valid configs", () => {
   });
 
   it("accepts AUTH_REQUIRED=true when audience and a domain/issuer are present", () => {
-    assert.doesNotThrow(() =>
-      loadConfig({
-        ...minimalEnv,
-        AUTH_REQUIRED: "true",
-        AUTH0_AUDIENCE: "https://markdown-magpie/api",
+    const config = loadConfig({
+      ...minimalEnv,
+      AUTH_REQUIRED: "true",
+      AUTH0_AUDIENCE: "https://markdown-magpie/api",
+      AUTH0_DOMAIN: "tenant.eu.auth0.com"
+    });
+    assert.equal(config.auth.required, true);
+    assert.equal(config.auth.audience, "https://markdown-magpie/api");
+    assert.equal(config.auth.issuer, "https://tenant.eu.auth0.com/");
+  });
+
+  it("applies the documented database pool defaults", () => {
+    const config = loadConfig(minimalEnv);
+    assert.equal(config.database.poolMax, 10);
+    assert.equal(config.database.idleTimeoutMs, 30_000);
+    assert.equal(config.database.connectionTimeoutMs, 10_000);
+    assert.equal(config.database.statementTimeoutMs, 30_000);
+  });
+
+  it("parses database pool overrides", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      DB_POOL_MAX: "25",
+      DB_IDLE_TIMEOUT_MS: "5000",
+      DB_CONNECTION_TIMEOUT_MS: "2000",
+      DB_STATEMENT_TIMEOUT_MS: "15000"
+    });
+    assert.equal(config.database.poolMax, 25);
+    assert.equal(config.database.idleTimeoutMs, 5000);
+    assert.equal(config.database.connectionTimeoutMs, 2000);
+    assert.equal(config.database.statementTimeoutMs, 15_000);
+  });
+});
+
+describe("loadConfig — auth fails closed", () => {
+  const authEnabledEnv = {
+    DATABASE_URL: minimalEnv.DATABASE_URL,
+    AI_PROVIDER: "codex"
+  } satisfies NodeJS.ProcessEnv;
+
+  it("requires auth when AUTH_REQUIRED is unset (fail closed)", () => {
+    // Unset auth is required, so a valid audience/issuer must be present or boot
+    // aborts — a misconfiguration can never silently disable auth.
+    const config = loadConfig({
+      ...authEnabledEnv,
+      AUTH0_AUDIENCE: "https://real-tenant/api",
+      AUTH0_DOMAIN: "tenant.eu.auth0.com"
+    });
+    assert.equal(config.auth.required, true);
+  });
+
+  it("fails startup when auth is required (unset) but Auth0 settings are missing", () => {
+    assertThrowsNaming(authEnabledEnv, "AUTH0_AUDIENCE", "AUTH0_ISSUER_BASE_URL");
+  });
+
+  it("rejects the placeholder audience when auth is enabled", () => {
+    const error = assertThrowsNaming(
+      {
+        ...authEnabledEnv,
+        AUTH0_AUDIENCE: "https://markdown-magpie.local/api",
         AUTH0_DOMAIN: "tenant.eu.auth0.com"
-      })
+      },
+      "AUTH0_AUDIENCE"
     );
+    assert.match(error.message, /placeholder/i);
+  });
+
+  it("only disables auth on an explicit AUTH_REQUIRED=false", () => {
+    assert.equal(loadConfig({ ...authEnabledEnv, AUTH_REQUIRED: "false" }).auth.required, false);
+    // A typo does NOT disable auth; it stays required and thus needs Auth0 config.
+    assertThrowsNaming({ ...authEnabledEnv, AUTH_REQUIRED: "nope" }, "AUTH0_AUDIENCE");
   });
 });
 

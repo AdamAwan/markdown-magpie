@@ -32,7 +32,10 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
   };
   const settings = loadConfig({
     DATABASE_URL: "postgres://postgres:postgres@localhost:5432/markdown_magpie",
-    AI_PROVIDER: "codex"
+    AI_PROVIDER: "codex",
+    // Auth fails closed by default; the in-memory test context explicitly opts
+    // out so buildApp(makeTestContext()) exercises handlers without tokens.
+    AUTH_REQUIRED: "false"
   });
   const embedder = new BackgroundEmbedder(undefined, undefined);
 
@@ -54,6 +57,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
       jobAcceptances: new InMemoryJobAcceptanceStore()
     },
     jobs: new FakeJobBroker(),
+    pool: undefined,
     providers: {
       embedding: undefined
     },
