@@ -151,13 +151,23 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Convenience Postgres for local development and full-stack demos. The
+  # credentials and published port below are EXAMPLE VALUES ONLY. Do not run this
+  # as-is outside a test environment: production deployments should use a properly
+  # secured database (a strong/rotated password, encryption at rest, and TLS —
+  # typically a managed instance), keep 5432 off the public host, and set
+  # DATABASE_URL to point at it. See docs/security-review.md ("Operator hardening
+  # checklist").
   postgres:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: markdown_magpie
       POSTGRES_USER: postgres
+      # Example-only credential — override for anything beyond local/test use.
       POSTGRES_PASSWORD: postgres
     ports:
+      # Published for host-based development; keep it on the internal network
+      # (drop this mapping) in a real deployment.
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data

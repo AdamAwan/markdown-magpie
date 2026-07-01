@@ -47,6 +47,7 @@ export function gapRoutes(ctx: AppContext): Hono {
   // targetPath/destinationId override the flow's defaults when supplied.
   app.post(
     "/clusters/:id/proposal",
+    requireScopes("manage:knowledge"),
     zValidator("json", draftFromClusterBodySchema, (result, c) => {
       if (!result.success) {
         return c.json({ error: "invalid_proposal_overrides" }, 400);
