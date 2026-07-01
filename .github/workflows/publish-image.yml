@@ -136,16 +136,20 @@ jobs:
       # newly-disclosed CVE can't wedge deploys. Flip exit-code to 1 once the
       # image baseline is clean to gate on HIGH/CRITICAL. The sha- tag is always
       # produced by the metadata step above, so it is a stable ref to scan.
+      - name: Install Trivy
+        if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.push_image) }}
+        run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
       - name: Scan image with Trivy
         if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.push_image) }}
-        uses: aquasecurity/trivy-action@v0.29.0
-        with:
-          image-ref: ${{ steps.image.outputs.ref }}:sha-${{ steps.build.outputs.sha }}
-          format: sarif
-          output: trivy-image.sarif
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "0"
+        run: >-
+          trivy image
+          --format sarif
+          --output trivy-image.sarif
+          --severity HIGH,CRITICAL
+          --ignore-unfixed
+          --exit-code 0
+          ${{ steps.image.outputs.ref }}:sha-${{ steps.build.outputs.sha }}
 
       - name: Upload Trivy results
         if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.push_image) }}

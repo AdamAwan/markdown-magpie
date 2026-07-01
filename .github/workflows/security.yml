@@ -71,14 +71,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      # Install the Trivy CLI directly rather than via the composite
+      # trivy-action, whose older releases pin transitive actions that upstream
+      # later removed. The official install script drops the binary on PATH.
+      - name: Install Trivy
+        run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
       # Static misconfiguration scan of the Dockerfile and compose files —
       # catches things like running as root or exposed insecure defaults
-      # without needing to build the image. Report-only for now (does not fail
-      # the build); tighten to exit-code 1 once the baseline is clean.
+      # without needing to build the image. Report-only for now (--exit-code 0
+      # never fails the build); tighten to --exit-code 1 once the baseline is
+      # clean.
       - name: Trivy config scan
-        uses: aquasecurity/trivy-action@v0.29.0
-        with:
-          scan-type: config
-          scan-ref: .
-          severity: HIGH,CRITICAL
-          exit-code: "0"
+        run: trivy config --severity HIGH,CRITICAL --exit-code 0 .
