@@ -49,6 +49,11 @@ export interface AppConfig {
     jwksUri?: string;
   };
   port: number;
+  cors: {
+    // The Access-Control-Allow-Origin policy. "*" (the default) allows any
+    // origin; an explicit list restricts responses to those origins only.
+    allowedOrigins: "*" | string[];
+  };
   nodeEnv: string;
   logStartupConfig: boolean;
   apiShutdownDrainMs: number;
@@ -151,6 +156,7 @@ const schema = z
       })
     ),
     PORT: optionalPositiveInt,
+    CORS_ALLOWED_ORIGINS: optionalString,
     NODE_ENV: optionalString,
     LOG_STARTUP_CONFIG: optionalString,
     API_SHUTDOWN_DRAIN_MS: optionalPositiveInt,
@@ -234,6 +240,20 @@ const schema = z
 // override it; it is rejected at boot when auth is enabled (see superRefine).
 const PLACEHOLDER_AUDIENCE = "https://markdown-magpie.local/api";
 
+// Parses CORS_ALLOWED_ORIGINS into the Access-Control-Allow-Origin policy.
+// Unset, blank, or a literal "*" means allow any origin (the backwards-compatible
+// default); a comma-separated list restricts responses to exactly those origins.
+function parseAllowedOrigins(value: string | undefined): "*" | string[] {
+  if (value === undefined || value.trim() === "*") {
+    return "*";
+  }
+  const origins = value
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
+  return origins.length > 0 ? origins : "*";
+}
+
 // Reads and validates the API's environment once at startup, returning a typed
 // config object. Throws a single aggregated Error naming every offending var on
 // invalid/missing-required config. `env` is injectable so tests need not mutate
@@ -275,6 +295,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // disagreement). superRefine above already proved this coheres when enabled.
     auth: authSettingsFromEnv(env),
     port: parsed.PORT ?? 4000,
+    cors: {
+      allowedOrigins: parseAllowedOrigins(parsed.CORS_ALLOWED_ORIGINS)
+    },
     nodeEnv: parsed.NODE_ENV ?? "development",
     logStartupConfig: parsed.LOG_STARTUP_CONFIG !== "false",
     apiShutdownDrainMs: parsed.API_SHUTDOWN_DRAIN_MS ?? 10_000,

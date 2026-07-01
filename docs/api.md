@@ -7,8 +7,13 @@ endpoints are served under `/api`. In local development the API base URL is
 ## Conventions
 
 - All requests and responses are JSON (`content-type: application/json`).
-- CORS is open: every response sends `access-control-allow-origin: *`, and `OPTIONS`
-  preflight requests return `204`.
+- CORS defaults to open (`access-control-allow-origin: *`), and `OPTIONS` preflight
+  requests return `204`. Set `CORS_ALLOWED_ORIGINS` to a comma-separated allow-list
+  (e.g. the web origin) to restrict which origins may call the API in production.
+- Every response carries standard security headers (`X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy`, and `Strict-Transport-Security`).
+  HSTS is only honoured by browsers over HTTPS; TLS termination is assumed to happen
+  upstream (the same headers are also emitted by the MCP HTTP server and the web app).
 - Errors return a JSON body with an `error` code, e.g. `{ "error": "question_required" }`.
   Some errors add a human-readable `message`. An uncaught failure returns `500` with
   `{ "error": "internal_error", "message": "..." }`.

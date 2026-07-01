@@ -10,10 +10,23 @@ const distDir = process.env.NEXT_DIST_DIR ?? (process.env.NODE_ENV === "producti
 // (which run web + API same-origin behind a reverse proxy), so this is inert there.
 const devApiProxy = process.env.MAGPIE_DEV_API_PROXY?.replace(/\/+$/, "");
 
+// Standard security headers applied to every route as defense-in-depth. HSTS is
+// only honoured by browsers over HTTPS, so it is inert in plain-HTTP local dev;
+// production is expected to terminate TLS upstream.
+const securityHeaders = [
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "X-Frame-Options", value: "SAMEORIGIN" },
+  { key: "Referrer-Policy", value: "no-referrer" },
+  { key: "Strict-Transport-Security", value: "max-age=15552000; includeSubDomains" }
+];
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   distDir,
   outputFileTracingRoot: workspaceRoot,
+  async headers() {
+    return [{ source: "/:path*", headers: securityHeaders }];
+  },
   async rewrites() {
     if (!devApiProxy) {
       return [];
