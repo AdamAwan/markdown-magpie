@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import type { AnswerResult } from "@magpie/core";
 import { PostgresQuestionLogStore } from "./postgres-question-log-store.js";
 import { gapSummaryKey } from "./question-log-store.js";
+import { makeTestPool } from "../test-support/db-pool.js";
 
 // Integration tests for the Postgres-backed question log store. They self-skip
 // unless DATABASE_URL points at a migrated database (see scripts/migrate.mjs);
@@ -34,7 +35,7 @@ function multiGapAnswer(): AnswerResult {
 }
 
 describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
-  const store = new PostgresQuestionLogStore(databaseUrl as string);
+  const store = new PostgresQuestionLogStore(makeTestPool(databaseUrl as string));
 
   it("round-trips a question through record and get", async () => {
     const uniqueId = randomUUID();

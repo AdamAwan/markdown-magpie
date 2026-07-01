@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 import { PostgresWatcherRegistryStore } from "./postgres-watcher-registry-store.js";
+import { makeTestPool } from "../test-support/db-pool.js";
 
 // Integration tests for the Postgres-backed watcher registry. They self-skip
 // unless DATABASE_URL points at a migrated database (see scripts/migrate.mjs);
@@ -10,7 +11,7 @@ import { PostgresWatcherRegistryStore } from "./postgres-watcher-registry-store.
 const databaseUrl = process.env.DATABASE_URL;
 
 describe("PostgresWatcherRegistryStore", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
-  const store = new PostgresWatcherRegistryStore(databaseUrl as string);
+  const store = new PostgresWatcherRegistryStore(makeTestPool(databaseUrl as string));
 
   it("records an idle watcher with its advertised capabilities", async () => {
     const name = `w-${randomUUID()}`;

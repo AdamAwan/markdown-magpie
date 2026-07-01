@@ -2,14 +2,8 @@ import pg from "pg";
 import type { WatcherView } from "@magpie/core";
 import type { WatcherRegistryStore, WatcherTouch } from "./watcher-registry-store.js";
 
-const { Pool } = pg;
-
 export class PostgresWatcherRegistryStore implements WatcherRegistryStore {
-  private readonly pool: pg.Pool;
-
-  constructor(connectionString: string) {
-    this.pool = new Pool({ connectionString });
-  }
+  constructor(private readonly pool: pg.Pool) {}
 
   async touch(input: WatcherTouch): Promise<void> {
     // Upsert keyed on the watcher's unique name. capabilities is only known on a

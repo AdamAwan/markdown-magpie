@@ -2,14 +2,8 @@ import pg from "pg";
 import type { ReconciliationDecisionRecord } from "@magpie/core";
 import type { NewReconciliationDecision, ReconciliationDecisionStore } from "./reconciliation-decision-store.js";
 
-const { Pool } = pg;
-
 export class PostgresReconciliationDecisionStore implements ReconciliationDecisionStore {
-  private readonly pool: pg.Pool;
-
-  constructor(connectionString: string) {
-    this.pool = new Pool({ connectionString });
-  }
+  constructor(private readonly pool: pg.Pool) {}
 
   async record(input: NewReconciliationDecision): Promise<ReconciliationDecisionRecord> {
     const result = await this.pool.query<DecisionRow>(

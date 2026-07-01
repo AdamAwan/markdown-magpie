@@ -3,12 +3,13 @@ import { describe, it } from "node:test";
 import type { DocumentSection, KnowledgeDocument } from "@magpie/core";
 import { PostgresKnowledgeStore } from "./postgres-knowledge-store.js";
 import type { IndexedRepositorySummary } from "./knowledge-index.js";
+import { makeTestPool } from "../test-support/db-pool.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 
 describe("PostgresKnowledgeStore vector search", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
   it("counts sections needing an embedding without error", async () => {
-    const store = new PostgresKnowledgeStore(databaseUrl as string);
+    const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
     const pending = await store.countSectionsNeedingEmbedding();
     assert.ok(pending >= 0);
   });
@@ -16,7 +17,7 @@ describe("PostgresKnowledgeStore vector search", { skip: databaseUrl ? false : "
 
 describe("PostgresKnowledgeStore re-index pruning", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
   it("removes documents absent from the new source set", async () => {
-    const store = new PostgresKnowledgeStore(databaseUrl as string);
+    const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
     const repositoryId = `prune-test-${Date.now()}`;
     const summary = (paths: string[]): { summary: IndexedRepositorySummary; documents: KnowledgeDocument[]; sections: DocumentSection[] } => {
       const documents: KnowledgeDocument[] = paths.map((path) => ({
@@ -67,7 +68,7 @@ describe("PostgresKnowledgeStore re-index pruning", { skip: databaseUrl ? false 
 
 describe("PostgresKnowledgeStore keyword search", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
   it("ranks sections by full-text relevance and respects the repository scope", async () => {
-    const store = new PostgresKnowledgeStore(databaseUrl as string);
+    const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
     const repositoryId = `kw-test-${Date.now()}`;
     const otherRepositoryId = `kw-other-${Date.now()}`;
 
@@ -135,7 +136,7 @@ describe("PostgresKnowledgeStore keyword search", { skip: databaseUrl ? false : 
 
 describe("PostgresKnowledgeStore applyIncrementalIndex", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
   it("upserts changed docs, deletes removed docs, and advances indexed_commit_sha", async () => {
-    const store = new PostgresKnowledgeStore(databaseUrl as string);
+    const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
     const repositoryId = `incr-test-${Date.now()}`;
     const docId = (p: string): string => `${repositoryId}:${p}`;
     const makeDoc = (p: string, body: string, commitSha: string): KnowledgeDocument => ({

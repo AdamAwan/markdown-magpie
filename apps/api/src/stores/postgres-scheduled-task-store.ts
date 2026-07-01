@@ -2,14 +2,8 @@ import pg from "pg";
 import type { ScheduledTaskSettings } from "@magpie/core";
 import type { ScheduledTaskStore } from "./scheduled-task-store.js";
 
-const { Pool } = pg;
-
 export class PostgresScheduledTaskStore implements ScheduledTaskStore {
-  private readonly pool: pg.Pool;
-
-  constructor(connectionString: string) {
-    this.pool = new Pool({ connectionString });
-  }
+  constructor(private readonly pool: pg.Pool) {}
 
   async listSettings(): Promise<ScheduledTaskSettings[]> {
     const result = await this.pool.query<ScheduledTaskRow>("SELECT * FROM scheduled_task_settings");

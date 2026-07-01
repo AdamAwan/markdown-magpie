@@ -1,8 +1,6 @@
 import pg from "pg";
 import type { PatrolCursorEntry, PatrolCursorKind, PatrolStore } from "./patrol-store.js";
 
-const { Pool } = pg;
-
 // patrol_cursor.flow_id is NOT NULL with a "" default so the composite primary key
 // dedupes the default-flow row (a NULL would not be deduped by ON CONFLICT). The
 // improve cursor namespaces the flow id so it stays distinct from the fix cursor.
@@ -12,11 +10,7 @@ function cursorFlowId(flowId: string | undefined, kind: PatrolCursorKind = "fix"
 }
 
 export class PostgresPatrolStore implements PatrolStore {
-  private readonly pool: pg.Pool;
-
-  constructor(connectionString: string) {
-    this.pool = new Pool({ connectionString });
-  }
+  constructor(private readonly pool: pg.Pool) {}
 
   async listCursor(flowId: string | undefined, kind: PatrolCursorKind = "fix"): Promise<PatrolCursorEntry[]> {
     const result = await this.pool.query<{ doc_path: string; last_checked_at: Date }>(
