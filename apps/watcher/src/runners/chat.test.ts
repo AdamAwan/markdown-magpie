@@ -37,7 +37,8 @@ const SECTIONS: RetrievedSection[] = [
     anchor: "deploy",
     path: "ops/deploy.md",
     heading: "Deploy",
-    content: "Run the deploy script."
+    content: "Run the deploy script.",
+    relevance: 0.9
   }
 ];
 
@@ -132,6 +133,85 @@ describe("ChatRunner", () => {
     assert.equal(retrievedFlow, "flow-b", "should retrieve with the routed flow id");
     assert.equal(output.flowId, "flow-b");
     assert.equal(output.citations.length, 1);
+  });
+
+  it("runs a follow-up search then answers, grounding a followup gap on an empty search", async () => {
+    const queries: string[] = [];
+    const flowsSeen: Array<string | undefined> = [];
+    const api = fakeApi({
+      retrieve: async (question, flowId) => {
+        queries.push(question);
+        flowsSeen.push(flowId);
+        // The seed retrieval (the question) returns a section; the model's
+        // follow-up search for an example finds nothing → grounds a followup gap.
+        return question.includes("example") ? [] : SECTIONS;
+      }
+    });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("route a user question")) {
+        return JSON.stringify({ flowId: "flow-b", confidence: "high" });
+      }
+      // Ask to search for an example first; once that search has run, answer and
+      // report the missing example as a followup gap.
+      if (queries.some((query) => query.includes("example"))) {
+        return JSON.stringify({
+          action: "answer",
+          answer: "Run the deploy script.",
+          confidence: "high",
+          isKnowledgeGap: false,
+          usedSectionIds: ["doc-1#deploy"],
+          followupGaps: ["no concrete deploy example"]
+        });
+      }
+      return JSON.stringify({ action: "search", queries: ["deploy example"], rationale: "want an example" });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-b", name: "Beta" }],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { citations: unknown[]; gaps?: Array<{ source: string; summary: string }> };
+
+    assert.ok(queries.some((q) => q.includes("example")), "should run the model's follow-up search");
+    assert.ok(
+      flowsSeen.every((flowId) => flowId === "flow-b"),
+      "follow-up searches stay within the routed flow"
+    );
+    assert.equal(output.citations.length, 1);
+    assert.ok(output.gaps && output.gaps.length === 1);
+    assert.equal(output.gaps[0].source, "followup");
+    assert.equal(output.gaps[0].summary, "no concrete deploy example");
+  });
+
+  it("passes the abort signal through to retrieval", async () => {
+    const controller = new AbortController();
+    const signals: Array<AbortSignal | undefined> = [];
+    const api = fakeApi({
+      retrieve: async (_question, _flowId, _limit, signal) => {
+        signals.push(signal);
+        return SECTIONS;
+      }
+    });
+    const chat = new FakeChatProvider(() =>
+      JSON.stringify({ action: "answer", answer: "ok", confidence: "high", isKnowledgeGap: false, usedSectionIds: [] })
+    );
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-a", name: "Alpha" }],
+        requestedFlowId: "flow-a",
+        expectedOutput: "answer_result"
+      }),
+      controller.signal
+    );
+    assert.ok(signals.length >= 1);
+    assert.ok(signals.every((signal) => signal === controller.signal), "retrieve receives the job abort signal");
   });
 
   it("uses a caller-specified flow directly and skips routing", async () => {

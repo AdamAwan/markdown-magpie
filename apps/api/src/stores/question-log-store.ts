@@ -9,8 +9,11 @@ import type {
   QuestionLogUpdateInput
 } from "@magpie/core";
 
-function autoGapsFromAnswer(answer: AnswerResult | undefined): QuestionGap[] {
-  return (answer?.gaps ?? []).map((gap) => ({ summary: gap.summary, source: "auto" as const }));
+// Gaps carried on an answer, preserving each signal's source ("auto" for a
+// whole-question miss, "followup" for missing supporting material a confident
+// answer searched for and did not find).
+function gapsFromAnswer(answer: AnswerResult | undefined): QuestionGap[] {
+  return (answer?.gaps ?? []).map((gap) => ({ summary: gap.summary, source: gap.source }));
 }
 
 // Stable map key for a (summary, flowId) gap pair. The flow is coalesced to ''
@@ -147,7 +150,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       confidence: input.answer?.confidence ?? "unknown",
       retrievedSectionIds: input.retrievedSectionIds,
       answer: input.answer,
-      gaps: autoGapsFromAnswer(input.answer),
+      gaps: gapsFromAnswer(input.answer),
       // Match the Postgres column default (manual_gap boolean NOT NULL DEFAULT false).
       manualGap: false,
       askedAt: new Date().toISOString(),
@@ -180,10 +183,10 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       confidence: input.answer.confidence,
       retrievedSectionIds: input.answer.citations.map((citation) => citation.sectionId),
       answer: input.answer,
-      // Re-answering replaces auto-detected gaps but preserves any manual flag.
+      // Re-answering replaces auto-detected and followup gaps but preserves any manual flag.
       gaps: [
         ...(existing.gaps ?? []).filter((gap) => gap.source === "manual"),
-        ...autoGapsFromAnswer(input.answer)
+        ...gapsFromAnswer(input.answer)
       ],
       ...(flowId ? { flowId } : {})
     };

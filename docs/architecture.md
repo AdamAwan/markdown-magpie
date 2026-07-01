@@ -75,7 +75,8 @@ Git Markdown repo
   -> split into sections by heading
   -> store document metadata and section text
   -> generate embeddings
-  -> answer questions with citations (hybrid keyword + vector retrieval)
+  -> answer questions with citations (agentic loop over hybrid keyword + vector
+     retrieval: relevance-floored, model-driven follow-up searches, used-only citations)
   -> record questions, answers, citations, confidence, feedback
   -> cluster weak answers into knowledge gaps
   -> generate Markdown proposals

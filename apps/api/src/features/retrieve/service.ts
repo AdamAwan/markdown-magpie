@@ -17,11 +17,22 @@ interface RetrievedSection {
   path: string;
   heading: string;
   content: string;
+  // The section's fused retrieval relevance in [0,1]. Carried so citations can
+  // show/sort by strength and so weak matches can be floored out (below).
+  relevance: number;
 }
 
 export type RetrieveResult =
   | { ok: true; sections: RetrievedSection[] }
   | { ok: false; code: "unknown_flow" };
+
+// Sections below this fused-relevance floor are dropped rather than returned as
+// weak filler. Without it, hybrid search always yields its top-K (vector search
+// returns nearest neighbours for any query), so even a bogus question produced a
+// full set of citations. Conservative on purpose: it removes clear non-matches,
+// not borderline hits. When nothing clears the floor the caller gets an empty
+// list and treats the question as a knowledge gap.
+const MIN_RELEVANCE = 0.15;
 
 // Pure (non-generative) retrieval the watcher calls after it has routed the
 // question to a flow. Resolving the flow's destination scope server-side keeps
@@ -36,14 +47,17 @@ export async function retrieve(ctx: AppContext, request: RetrieveRequest): Promi
   const ranked = await ctx.stores.knowledgeIndex.search(request.question, limit, scope.repositoryIds);
   return {
     ok: true,
-    sections: ranked.map(({ section }) => ({
-      sectionId: section.id,
-      documentId: section.documentId,
-      anchor: section.anchor,
-      path: section.path,
-      heading: section.heading,
-      content: section.content
-    }))
+    sections: ranked
+      .filter(({ relevance }) => relevance >= MIN_RELEVANCE)
+      .map(({ section, relevance }) => ({
+        sectionId: section.id,
+        documentId: section.documentId,
+        anchor: section.anchor,
+        path: section.path,
+        heading: section.heading,
+        content: section.content,
+        relevance
+      }))
   };
 }
 

@@ -18,7 +18,7 @@ function lowConfidenceAnswer(): AnswerResult {
     answer: "I could not find reliable source material.",
     confidence: "low",
     citations: [],
-    gaps: [{ summary: "No source material available", question: "test?", confidence: "low", citedSectionIds: [] }]
+    gaps: [{ summary: "No source material available", question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }]
   };
 }
 
@@ -28,8 +28,8 @@ function multiGapAnswer(): AnswerResult {
     confidence: "low",
     citations: [],
     gaps: [
-      { summary: "First gap summary", question: "test?", confidence: "low", citedSectionIds: [] },
-      { summary: "Second gap summary", question: "test?", confidence: "low", citedSectionIds: [] }
+      { summary: "First gap summary", question: "test?", confidence: "low", citedSectionIds: [], source: "auto" },
+      { summary: "Second gap summary", question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }
     ]
   };
 }
@@ -150,7 +150,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
       answer: "Updated answer.",
       confidence: "high",
       citations: [],
-      gaps: [{ summary: "New auto gap", question: "test?", confidence: "low", citedSectionIds: [] }]
+      gaps: [{ summary: "New auto gap", question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }]
     };
 
     const updated = await store.updateAnswer(recorded.id, {
@@ -161,6 +161,38 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.equal(updated?.confidence, "high");
     assert.ok((updated?.gaps ?? []).some((gap) => gap.summary === "Manual gap to preserve" && gap.source === "manual"));
     assert.ok((updated?.gaps ?? []).some((gap) => gap.summary === "New auto gap" && gap.source === "auto"));
+  });
+
+  it("persists a followup-sourced gap from a confident answer", async () => {
+    const uniqueId = randomUUID();
+    const answer: AnswerResult = {
+      answer: "Deploy with the script.",
+      confidence: "high",
+      citations: [],
+      gaps: [
+        {
+          summary: `missing deploy example ${uniqueId}`,
+          question: "how do I deploy?",
+          confidence: "high",
+          citedSectionIds: [],
+          source: "followup"
+        }
+      ]
+    };
+
+    const recorded = await store.record({
+      question: `test-followup-${uniqueId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      answer
+    });
+
+    const reloaded = await store.get(recorded.id);
+    assert.equal(reloaded?.confidence, "high", "a followup gap does not force the answer low");
+    assert.ok(
+      (reloaded?.gaps ?? []).some((gap) => gap.summary === `missing deploy example ${uniqueId}` && gap.source === "followup"),
+      "the followup gap is persisted with its source"
+    );
   });
 
   it("returns undefined when updating feedback on a non-existent question", async () => {
@@ -272,7 +304,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
         answer: "Answer.",
         confidence: "low",
         citations: [],
-        gaps: [{ summary: sharedGap, question: "test?", confidence: "low", citedSectionIds: [] }]
+        gaps: [{ summary: sharedGap, question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }]
       }
     });
 
@@ -284,7 +316,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
         answer: "Answer.",
         confidence: "low",
         citations: [],
-        gaps: [{ summary: sharedGap, question: "test?", confidence: "low", citedSectionIds: [] }]
+        gaps: [{ summary: sharedGap, question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }]
       }
     });
 
@@ -305,7 +337,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
       answer: "Answer.",
       confidence: "low",
       citations: [],
-      gaps: [{ summary, question: "test?", confidence: "low", citedSectionIds: [] }]
+      gaps: [{ summary, question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }]
     });
 
     await store.record({ question: `bx1-${uniqueId}`, chatProvider: "codex", retrievedSectionIds: [], answer: lowGap(summaryX) });

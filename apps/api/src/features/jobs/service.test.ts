@@ -522,7 +522,8 @@ test("answer completion persists the routed flowId and retrieved section ids on 
         path: "configure.md",
         heading: "Configure",
         anchor: "configure",
-        excerpt: "Set the X flag."
+        excerpt: "Set the X flag.",
+        relevance: 0.9
       }
     ]
   };

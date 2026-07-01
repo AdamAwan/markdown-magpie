@@ -825,6 +825,20 @@ select:focus {
   font-size: 13px;
 }
 
+/* Let the heading take the slack so the section id and relevance chip cluster
+   on the right instead of being spread out by the row's space-between. */
+.citationTop > strong {
+  flex: 1;
+  min-width: 0;
+}
+
+.citationRelevance {
+  flex: none;
+  color: #4a7a5c;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
 .citation code,
 code {
   color: #65716b;
