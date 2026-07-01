@@ -34,8 +34,8 @@ export class AuthError extends Error {
 // Auth fails CLOSED: it is required unless an operator EXPLICITLY opts out by
 // setting AUTH_REQUIRED=false (case-insensitive). An unset, blank, or typo'd
 // value leaves auth on, so a misconfigured deployment is locked down rather than
-// silently exposed. Keep this in sync with authRequiredFromEnv in
-// apps/api/src/platform/config.ts.
+// silently exposed. This is the single source of truth for that rule — the API
+// config, watcher, and both MCP transports all call it.
 export function isAuthRequired(value: string | undefined): boolean {
   return value?.trim().toLowerCase() !== "false";
 }

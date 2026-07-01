@@ -24,6 +24,22 @@ Liveness check. Public — served before the auth middleware.
 { "ok": true, "service": "markdown-magpie-api" }
 ```
 
+### `GET /api/ready`
+
+Deep readiness check, in contrast to `/health`'s shallow liveness. Verifies the running
+process can actually serve traffic: Postgres is reachable (`SELECT 1` via the shared
+connection pool) and the pg-boss job broker has started. Public — served before the auth
+middleware, so orchestrator probes need no token. Returns `200` when ready and `503`
+otherwise, with a body reporting each dependency:
+
+```json
+{ "ready": true, "checks": { "database": true, "broker": true } }
+```
+
+Use `/ready` for readiness/startup probes (gate traffic on dependencies) and `/health`
+for liveness probes (restart on a hung process). An all-in-memory build (e.g. tests) has
+no Postgres dependency, so `database` is reported `true`.
+
 ### `GET /api/version`
 
 Identity of the running build, so clients can tell which commit is live. Public, like

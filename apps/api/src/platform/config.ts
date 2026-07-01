@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { AI_PROVIDERS, isAiProviderName, type AiProviderName } from "@magpie/jobs";
-import { authSettingsFromEnv } from "@magpie/auth";
+import { authSettingsFromEnv, isAuthRequired } from "@magpie/auth";
 import {
   getConfiguredKnowledgeDestinations,
   getConfiguredKnowledgeFlows,
@@ -202,7 +202,7 @@ const schema = z
     // Auth fails CLOSED: it is required unless an operator EXPLICITLY opts out
     // with AUTH_REQUIRED=false. An unset/blank/typo'd value leaves auth on, so a
     // misconfiguration can never silently expose the whole API.
-    if (!authRequiredFromEnv(env.AUTH_REQUIRED)) {
+    if (!isAuthRequired(env.AUTH_REQUIRED)) {
       return;
     }
     if (env.AUTH0_AUDIENCE === undefined) {
@@ -233,14 +233,6 @@ const schema = z
 // The committed placeholder audience from .env.example. Real deployments must
 // override it; it is rejected at boot when auth is enabled (see superRefine).
 const PLACEHOLDER_AUDIENCE = "https://markdown-magpie.local/api";
-
-// Auth fails CLOSED. It is required by default and only disabled when an operator
-// explicitly sets AUTH_REQUIRED=false (case-insensitive). Any other value —
-// unset, blank, or a typo like "no" — leaves auth required so a misconfigured
-// deployment is locked down rather than wide open.
-export function authRequiredFromEnv(value: string | undefined): boolean {
-  return value?.trim().toLowerCase() !== "false";
-}
 
 // Reads and validates the API's environment once at startup, returning a typed
 // config object. Throws a single aggregated Error naming every offending var on
