@@ -22,6 +22,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "npm run test --workspaces --if-present",
+    "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
     "test:timings": "node scripts/test-timings.mjs",
     "test:slow": "node scripts/test-timings.mjs --verify",
     "test:db": "node scripts/test-db.mjs npm run test",
