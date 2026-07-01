@@ -215,6 +215,7 @@ npm run test:db
 - [docs/ai-jobs.md](docs/ai-jobs.md) - queued AI jobs and watcher model
 - [docs/question-logging.md](docs/question-logging.md) - feedback and gap logging
 - [docs/mcp.md](docs/mcp.md) - MCP transports, tools, auth, and clients
+- [docs/threat-model.md](docs/threat-model.md) - prompt-injection threat model and the mandatory-human-review control
 - [docs/mvp.md](docs/mvp.md) - milestone roadmap
 
 ## Authentication

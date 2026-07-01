@@ -53,6 +53,21 @@ describe("loadConfig — valid configs", () => {
     assert.equal(config.git.provider, "local");
     assert.equal(config.paths.checkoutRoot, ".magpie/checkouts");
     assert.equal(config.paths.snapshotRoot, ".magpie/snapshots");
+    // CORS defaults to allow-any-origin when unset.
+    assert.equal(config.cors.allowedOrigins, "*");
+  });
+
+  it("parses CORS_ALLOWED_ORIGINS into a trimmed allow-list", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      CORS_ALLOWED_ORIGINS: " https://app.example , https://admin.example "
+    });
+    assert.deepEqual(config.cors.allowedOrigins, ["https://app.example", "https://admin.example"]);
+  });
+
+  it("treats a literal * or blank CORS_ALLOWED_ORIGINS as allow-any-origin", () => {
+    assert.equal(loadConfig({ ...minimalEnv, CORS_ALLOWED_ORIGINS: "*" }).cors.allowedOrigins, "*");
+    assert.equal(loadConfig({ ...minimalEnv, CORS_ALLOWED_ORIGINS: "" }).cors.allowedOrigins, "*");
   });
 
   it("treats empty strings as unset (so commented-out .env vars use defaults)", () => {

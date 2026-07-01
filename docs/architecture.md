@@ -91,6 +91,13 @@ Proposal generation runs along two paths:
   proposals for any cluster not already covered, publishes them as pull requests, and advances
   proposals as their PRs merge or close — all in one task with no manual review step.
 
+Both paths stop at a **pull request**: automated flows open and update PRs, but the *merge*
+that changes the source of truth is always a human action on the hosting provider. Because AI
+flows ingest untrusted content (questions, source Markdown, diffs), this mandatory-human-review
+gate is the primary control against prompt injection — see
+[threat-model.md](threat-model.md) for the threat model, the controls already in place, and the
+branch-protection expectations that keep the review gate enforced.
+
 ### Scheduled tasks and job types
 
 Background tasks are registered **per flow** in the scheduler and managed from the
