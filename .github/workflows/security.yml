@@ -1,0 +1,86 @@
+name: Security
+
+# Preventative security scanning that runs alongside the functional Verify
+# workflow. Kept separate so a scanner outage or a newly-disclosed advisory
+# never blocks the core typecheck/test/lint/build gates.
+#
+# Jobs:
+#   - audit:       npm dependency vulnerability gate (fails on high/critical).
+#   - secret-scan: gitleaks scan of the diff / history for committed secrets.
+#   - config-scan: Trivy misconfiguration scan of the Dockerfile & compose files.
+#
+# A weekly schedule catches advisories disclosed after a PR has already merged.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "23 6 * * 1" # Mondays 06:23 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Runtime dependencies only (--omit=dev): a vulnerable build/test-only
+      # package does not ship in the container image. Fails the job on a
+      # high-or-critical advisory so it surfaces on the PR.
+      - name: npm audit (production dependencies)
+        run: npm audit --omit=dev --audit-level=high
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # gitleaks scans commit history for the diff; fetch it all so pushes
+          # to main and the scheduled run cover the full tree, not just HEAD.
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  config-scan:
+    name: Config scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # Install the Trivy CLI directly rather than via the composite
+      # trivy-action, whose older releases pin transitive actions that upstream
+      # later removed. The official install script drops the binary on PATH.
+      - name: Install Trivy
+        run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+      # Static misconfiguration scan of the Dockerfile and compose files —
+      # catches things like running as root or exposed insecure defaults
+      # without needing to build the image. Report-only for now (--exit-code 0
+      # never fails the build); tighten to --exit-code 1 once the baseline is
+      # clean.
+      - name: Trivy config scan
+        run: trivy config --severity HIGH,CRITICAL --exit-code 0 .
