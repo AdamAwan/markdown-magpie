@@ -76,7 +76,7 @@ jobs:
       # without needing to build the image. Report-only for now (does not fail
       # the build); tighten to exit-code 1 once the baseline is clean.
       - name: Trivy config scan
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@v0.29.0
         with:
           scan-type: config
           scan-ref: .
