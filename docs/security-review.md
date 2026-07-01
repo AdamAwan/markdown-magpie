@@ -31,6 +31,16 @@ compromised or prompt-injected model — see [threat-model.md](threat-model.md).
 
 ## 2. Data handled and data flows
 
+**The application is provider- and infrastructure-neutral and imposes no data
+egress of its own.** Where data is stored and where it is sent are determined
+entirely by operator configuration, not by the app. The app requires **Postgres**
+as its datastore, but *where* Postgres runs (local, self-hosted, or a managed
+service) is the hoster's choice. Likewise, the app calls whichever AI provider
+the operator configures — it mandates no particular model or vendor. The sections
+below describe *what* data exists and *which* configuration knobs govern its
+storage and egress, so the hoster can align them with their own data-governance
+policy.
+
 ### Stored in Postgres
 - **Questions and answers** — the full text of user questions, generated
   answers, citations, and feedback. Questions are stored **without a user
