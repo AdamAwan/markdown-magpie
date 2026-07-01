@@ -27,7 +27,7 @@ export async function fetchWithTimeout(
     return await fetch(url, { ...init, signal });
   } catch (error) {
     if (error instanceof DOMException && error.name === "TimeoutError") {
-      throw new Error(`${label} timed out after ${timeoutMs}ms`);
+      throw new Error(`${label} timed out after ${timeoutMs}ms`, { cause: error });
     }
     throw error;
   }

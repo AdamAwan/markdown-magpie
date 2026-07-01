@@ -88,7 +88,7 @@ function createRequest(
       for (const [key, value] of Object.entries(res.headers)) {
         header[key] = Array.isArray(value) ? value.join(", ") : (value ?? "");
       }
-      let body: unknown = undefined;
+      let body: unknown;
       try {
         body = text ? JSON.parse(text) : undefined;
       } catch {

@@ -9,7 +9,7 @@ Markdown Magpie is a Git-backed Markdown knowledge maintenance system: it indexe
 answers questions with citations, logs weak answers, clusters them into knowledge gaps,
 drafts Markdown improvements, and publishes them as pull requests for review.
 
-It is an **npm-workspace monorepo** (Node ≥22.12, ESM/NodeNext, TypeScript). Read this
+It is an **npm-workspace monorepo** (Node ≥22.13, ESM/NodeNext, TypeScript). Read this
 before designing changes — the AI-execution model is easy to get wrong from intuition.
 
 ## 1. The queue-only mental model (read this first)
