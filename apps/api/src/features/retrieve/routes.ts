@@ -3,6 +3,7 @@ import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
+import { rateLimit } from "../../http/rate-limit.js";
 import * as retrieveService from "./service.js";
 
 const retrieveBodySchema = z.object({
@@ -17,6 +18,7 @@ export function retrieveRoutes(ctx: AppContext): Hono {
   app.post(
     "/",
     requireScopes("ask:knowledge"),
+    rateLimit(ctx, "ask"),
     zValidator("json", retrieveBodySchema, (result, c) => {
       if (!result.success) {
         return c.json({ error: "question_required" }, 400);

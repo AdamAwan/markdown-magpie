@@ -60,14 +60,30 @@ export function queueDefinitionsForType(type: JobType): QueueDefinition[] {
   return queuesByType.get(type) ?? [];
 }
 
+// pg-boss's own job states that mean "not yet finished" — a job counted here is
+// occupying capacity right now (queued, awaiting retry, or executing).
+const IN_FLIGHT_STATES = ["created", "retry", "active"] as const;
+
+// pg-boss's default schema when ConstructorOptions.schema is unset. countInFlight
+// queries the job table directly (pg-boss's public API has no count), so it needs
+// the schema name; guarded by SCHEMA_IDENTIFIER since it is interpolated into SQL.
+const DEFAULT_PGBOSS_SCHEMA = "pgboss";
+const SCHEMA_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 export class PgBossJobBroker implements JobBroker {
   private readonly boss: PgBoss;
+  private readonly schema: string;
   private readonly queuePolicyOverrides: PgBossQueuePolicyOverrides;
   private readonly scheduleTimezone: string;
   private claimCursor = 0;
   private started = false;
 
   constructor(options: PgBossJobBrokerOptions) {
+    const schema = options.schema ?? DEFAULT_PGBOSS_SCHEMA;
+    if (!SCHEMA_IDENTIFIER.test(schema)) {
+      throw new Error(`Invalid pg-boss schema name: "${schema}"`);
+    }
+    this.schema = schema;
     const bossOptions: ConstructorOptions = {
       connectionString: options.connectionString,
       schema: options.schema,
@@ -207,6 +223,31 @@ export class PgBossJobBroker implements JobBroker {
     const offset = Math.max(0, filters.offset ?? 0);
     const limit = Math.min(200, Math.max(1, filters.limit ?? 200));
     return { jobs: jobs.slice(offset, offset + limit), total };
+  }
+
+  // One aggregate COUNT over the (partitioned) job table, scoped to the work
+  // queues the given types fan out to and to the in-flight states. This is
+  // deliberately not built on list()/findJobs: that loads every row in each
+  // scanned queue to count in JS, which is far too expensive for a per-request
+  // admission check. pg-boss exposes no count API that takes our filters, so we
+  // query its table directly via getDb() — the name predicate prunes to the
+  // relevant partitions. Dead-letter queues are excluded (a dead-lettered job is
+  // finished work, not in flight).
+  async countInFlight(types: JobType[]): Promise<number> {
+    const queueNames = types
+      .flatMap((type) => queueDefinitionsForType(type))
+      .filter((queue) => !queue.deadLetter)
+      .map((queue) => queue.name);
+    if (queueNames.length === 0) {
+      return 0;
+    }
+    const result = await this.boss.getDb().executeSql(
+      `SELECT count(*)::int AS count
+         FROM "${this.schema}".job
+        WHERE name = ANY($1) AND state = ANY($2)`,
+      [queueNames, [...IN_FLIGHT_STATES]]
+    );
+    return Number(result.rows[0]?.count ?? 0);
   }
 
   async reconcileSchedules(desired: DesiredSchedule[]): Promise<void> {

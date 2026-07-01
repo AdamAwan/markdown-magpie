@@ -17,6 +17,7 @@ import { InMemorySnapshotStore } from "../stores/snapshot-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
 import { InMemoryWatcherRegistryStore } from "../stores/watcher-registry-store.js";
 import { InMemoryJobAcceptanceStore } from "../stores/job-acceptance-store.js";
+import { InMemoryRateLimitStore } from "../stores/rate-limit-store.js";
 
 // Builds an AppContext wired entirely to in-memory stores with fake collaborators,
 // matching the real AppContext interface field-for-field. Pass overrides to
@@ -54,7 +55,8 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
       prCrosslinks: new InMemoryPrCrosslinkStore(),
       snapshots: new InMemorySnapshotStore(),
       watchers: new InMemoryWatcherRegistryStore(),
-      jobAcceptances: new InMemoryJobAcceptanceStore()
+      jobAcceptances: new InMemoryJobAcceptanceStore(),
+      rateLimit: new InMemoryRateLimitStore()
     },
     jobs: new FakeJobBroker(),
     pool: undefined,

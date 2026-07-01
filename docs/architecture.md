@@ -10,6 +10,8 @@ showcases, and single-host deployments.
 - The Git repository is the source of truth for published knowledge.
 - Postgres stores indexes, logs, metadata, proposals, and audit history.
 - The API owns permissions, retrieval orchestration, proposal creation, and review workflow.
+- The API throttles metered work: per-principal request rate limits plus a global
+  cap on concurrent in-flight AI jobs. See [rate-limiting.md](./rate-limiting.md).
 - The MCP server is a client surface over the API.
 - Background jobs perform sync, indexing, clustering, proposal generation, and maintenance checks.
 

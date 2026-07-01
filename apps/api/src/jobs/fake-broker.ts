@@ -196,6 +196,17 @@ export class FakeJobBroker implements JobBroker {
     return { jobs: results, total };
   }
 
+  async countInFlight(types: JobType[]): Promise<number> {
+    const wanted = new Set(types);
+    let count = 0;
+    for (const job of this.jobs.values()) {
+      if (wanted.has(job.type) && (job.state === "created" || job.state === "retry" || job.state === "active")) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
   async reconcileSchedules(desired: DesiredSchedule[]): Promise<void> {
     for (const schedule of desired) {
       this.schedules.set(schedule.key, {
