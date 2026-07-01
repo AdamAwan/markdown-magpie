@@ -1,0 +1,30 @@
+# Dependabot keeps dependencies patched. Two ecosystems are covered:
+#   - npm: the workspace monorepo (single root package-lock.json).
+#   - github-actions: the workflows under .github/workflows.
+# See docs/security-scanning.md for how this fits the overall CI security posture.
+version: 2
+updates:
+  - package-ecosystem: npm
+    # The monorepo has one lockfile at the repository root; Dependabot resolves
+    # workspace dependencies from it.
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+    groups:
+      # Batch low-risk updates into a single PR to keep review noise down.
+      dev-and-minor:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+      - github-actions
