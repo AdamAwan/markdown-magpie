@@ -2,6 +2,7 @@ import type { AnswerQuestionJobInput } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { HttpError } from "../../http/errors.js";
+import { assertAiCapacity } from "../../platform/ai-capacity.js";
 import type { AiProviderName } from "../../platform/providers.js";
 
 interface AskResult {
@@ -24,6 +25,9 @@ const AUTO_FLOW = "auto";
 // otherwise, so a typo fails fast rather than silently answering unscoped).
 export async function ask(ctx: AppContext, question: string, flow?: string): Promise<AskResult> {
   const requestedFlowId = resolveRequestedFlow(ctx, flow);
+  // Enforce the global in-flight AI-job ceiling BEFORE recording the question log
+  // below, so a rejection at capacity never leaves an orphaned log with no job.
+  await assertAiCapacity(ctx);
   // Flow and retrieved sections are unknown at enqueue time (the watcher decides
   // them), so the log is recorded without them; completion fills them in.
   const log = await ctx.stores.questionLogs.record({

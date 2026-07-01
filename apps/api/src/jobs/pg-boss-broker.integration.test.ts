@@ -64,6 +64,25 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
     assert.deepEqual(found?.input, codexAnswer("created"));
   });
 
+  await t.test("countInFlight counts in-flight AI jobs and ignores finished ones", async () => {
+    assert.equal(await broker.countInFlight(["answer_question"]), 0);
+
+    const first = await broker.create("answer_question", codexAnswer("count-1"));
+    await broker.create("answer_question", openAiAnswer("count-2"));
+    // Two created jobs across two provider queues are both in flight.
+    assert.equal(await broker.countInFlight(["answer_question"]), 2);
+
+    // A claimed (active) job still counts; a completed one does not.
+    const claimed = await broker.claim("codex-worker", ["codex"]);
+    assert.equal(claimed?.id, first.id);
+    assert.equal(await broker.countInFlight(["answer_question"]), 2);
+    await broker.complete(first.id, { answer: "done", confidence: "high", citations: [] });
+    assert.equal(await broker.countInFlight(["answer_question"]), 1);
+
+    // A different type's queue is not counted unless asked for.
+    assert.equal(await broker.countInFlight(["draft_markdown_proposal"]), 0);
+  });
+
   await t.test("isolates providers and claims same-queue jobs FIFO", async () => {
     const first = await broker.create("answer_question", codexAnswer("first"));
     const second = await broker.create("answer_question", codexAnswer("second"));

@@ -39,6 +39,11 @@ export interface JobBroker {
   retry(id: string): Promise<JobView>;
   get(id: string): Promise<JobView | undefined>;
   list(filters: JobListFilters): Promise<{ jobs: JobView[]; total: number }>;
+  // Count jobs of the given types currently in flight (states created | retry |
+  // active) across their work queues. Used by the API's AI cost controls to
+  // enforce a global cap on concurrent metered work at enqueue time. Implemented
+  // as a single aggregate count, not a list scan, so it is cheap on the hot path.
+  countInFlight(types: JobType[]): Promise<number>;
   reconcileSchedules(schedules: DesiredSchedule[]): Promise<void>;
   listSchedules(): Promise<ScheduleView[]>;
   reset(): Promise<void>;

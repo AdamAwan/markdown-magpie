@@ -98,6 +98,26 @@ export interface AppConfig {
     runToCompletionTimeoutMs?: number;
     scheduleTimezone: string;
   };
+  // Per-principal request throttling and a global cap on concurrent metered AI
+  // work. Enforced by the API's rate-limit middleware (L1) and enqueue-time
+  // capacity guard (L2). Every decision is logged as a structured event
+  // (event=rate_limit / event=ai_capacity) for dashboards; see docs/rate-limiting.md.
+  rateLimit: {
+    // Master switch. When false, both L1 and L2 are pass-throughs. Independent of
+    // auth, but L1 can only key on a principal, so it also no-ops when a request
+    // has none (auth disabled) even while enabled.
+    enabled: boolean;
+    // Fixed-window width shared by both request tiers.
+    windowMs: number;
+    // Max requests per principal per window for the ask tier (/ask, /retrieve).
+    askPerWindow: number;
+    // Max requests per principal per window for the expensive manual-trigger tier
+    // (source-sync/patrol/scheduled-task run, repository index).
+    triggerPerWindow: number;
+    // Global ceiling on in-flight (created|retry|active) AI jobs. New AI work is
+    // rejected at enqueue with 429 once this many are already in flight.
+    aiMaxInflightJobs: number;
+  };
   watcher: {
     name?: string;
     pollIntervalMs?: number;
@@ -185,6 +205,12 @@ const schema = z
     JOB_WAIT_POLL_MS: optionalPositiveInt,
     JOB_RUN_TO_COMPLETION_TIMEOUT_MS: optionalPositiveInt,
     JOB_SCHEDULE_TIMEZONE: optionalString,
+
+    RATE_LIMIT_ENABLED: optionalString,
+    RATE_LIMIT_WINDOW_MS: optionalPositiveInt,
+    RATE_LIMIT_ASK_PER_WINDOW: optionalPositiveInt,
+    RATE_LIMIT_TRIGGER_PER_WINDOW: optionalPositiveInt,
+    AI_MAX_INFLIGHT_JOBS: optionalPositiveInt,
 
     WATCHER_NAME: optionalString,
     WATCHER_POLL_INTERVAL_MS: optionalPositiveInt,
@@ -341,6 +367,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       waitPollMs: parsed.JOB_WAIT_POLL_MS ?? 250,
       runToCompletionTimeoutMs: parsed.JOB_RUN_TO_COMPLETION_TIMEOUT_MS,
       scheduleTimezone: parsed.JOB_SCHEDULE_TIMEZONE ?? "UTC"
+    },
+    rateLimit: {
+      // On unless explicitly disabled (RATE_LIMIT_ENABLED=false), matching the
+      // fail-safe default used elsewhere in this config.
+      enabled: parsed.RATE_LIMIT_ENABLED !== "false",
+      windowMs: parsed.RATE_LIMIT_WINDOW_MS ?? 60_000,
+      askPerWindow: parsed.RATE_LIMIT_ASK_PER_WINDOW ?? 30,
+      triggerPerWindow: parsed.RATE_LIMIT_TRIGGER_PER_WINDOW ?? 5,
+      aiMaxInflightJobs: parsed.AI_MAX_INFLIGHT_JOBS ?? 20
     },
     watcher: {
       name: parsed.WATCHER_NAME,

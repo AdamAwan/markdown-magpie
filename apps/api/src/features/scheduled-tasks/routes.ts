@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { isValidCron } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
+import { rateLimit } from "../../http/rate-limit.js";
 import { apiLink } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
@@ -34,7 +35,7 @@ export function scheduledTaskRoutes(ctx: AppContext): Hono {
     return c.json({ tasks: await scheduledTasksForResponse(ctx) });
   });
 
-  app.post("/:key/run", requireScopes("manage:jobs"), async (c) => {
+  app.post("/:key/run", requireScopes("manage:jobs"), rateLimit(ctx, "trigger"), async (c) => {
     const outcome = await service.runScheduledTask(ctx, c.req.param("key"));
     if (!outcome.ok) {
       if (outcome.code === "already_running") {

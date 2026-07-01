@@ -95,7 +95,10 @@ export function queueNameForJob(type: JobType, input: unknown): string {
   return jobDefinition(type).queueName(input);
 }
 
-const aiJobTypes = new Set<JobType>([
+// The provider-routed (metered) job types — every type whose work is done by a
+// chat/generative AI provider. Exported so cost controls can count in-flight AI
+// work (see the API's global concurrency cap) without re-deriving the list.
+export const AI_JOB_TYPES = [
   "answer_question",
   "summarize_gap",
   "draft_markdown_proposal",
@@ -110,7 +113,15 @@ const aiJobTypes = new Set<JobType>([
   "split_document",
   "improve_document",
   "fold_changeset_proposal"
-]);
+] as const satisfies readonly JobType[];
+
+const aiJobTypes = new Set<JobType>(AI_JOB_TYPES);
+
+// Whether a job type is provider-routed (metered AI work). Kept in sync with
+// AI_JOB_TYPES, the single source of truth above.
+export function isAiJobType(type: JobType): boolean {
+  return aiJobTypes.has(type);
+}
 
 function concreteWorkQueues(): QueueDefinition[] {
   return JOB_TYPES.flatMap((type) => {

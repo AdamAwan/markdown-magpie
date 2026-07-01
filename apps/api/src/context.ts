@@ -33,6 +33,8 @@ import { PgBossJobBroker } from "./jobs/pg-boss-broker.js";
 import { backfillGapClusters } from "./scheduling/gap-backfill.js";
 import type { JobAcceptanceStore } from "./stores/job-acceptance-store.js";
 import { PostgresJobAcceptanceStore } from "./stores/postgres-job-acceptance-store.js";
+import type { RateLimitStore } from "./stores/rate-limit-store.js";
+import { PostgresRateLimitStore } from "./stores/postgres-rate-limit-store.js";
 
 export interface AppContext {
   stores: {
@@ -50,6 +52,7 @@ export interface AppContext {
     snapshots: ReturnType<typeof createSnapshotStore>;
     watchers: ReturnType<typeof createWatcherRegistryStore>;
     jobAcceptances: JobAcceptanceStore;
+    rateLimit: RateLimitStore;
   };
   jobs: JobBroker;
   // The single, process-wide Postgres pool shared by every Postgres-backed store
@@ -125,7 +128,8 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
       prCrosslinks: createPrCrosslinkStore(config, pool),
       snapshots: createSnapshotStore(config),
       watchers: createWatcherRegistryStore(config, pool),
-      jobAcceptances: new PostgresJobAcceptanceStore(pool)
+      jobAcceptances: new PostgresJobAcceptanceStore(pool),
+      rateLimit: new PostgresRateLimitStore(pool)
     },
     jobs,
     pool,
