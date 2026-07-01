@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpExpressApp } from "@modelcontextprotocol/express";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import {
   AuthError,
   authSettingsFromEnv,
@@ -198,6 +198,22 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
   // localhost binds.
   const host = process.env.MCP_HTTP_HOST ?? "127.0.0.1";
   const app = createMcpExpressApp({ host });
+
+  // Standard security headers on every response as defense-in-depth (the MCP
+  // transport otherwise emits only the WWW-Authenticate challenge). Mirrors the
+  // web API's secureHeaders. HSTS is only honoured by browsers over HTTPS, so it
+  // is inert for plain-HTTP/loopback binds; production terminates TLS upstream.
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.set({
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "SAMEORIGIN",
+      "Referrer-Policy": "no-referrer",
+      "Strict-Transport-Security": "max-age=15552000; includeSubDomains",
+      "Cross-Origin-Resource-Policy": "same-origin",
+      "Cross-Origin-Opener-Policy": "same-origin"
+    });
+    next();
+  });
 
   // ── OAuth protected-resource metadata ─────────────────────────────────────
   const metadata = {
