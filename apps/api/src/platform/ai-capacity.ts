@@ -26,12 +26,9 @@ export async function assertAiCapacity(ctx: AppContext): Promise<void> {
       { event: "ai_capacity", decision: "blocked", inFlight, limit, retryAfterSeconds },
       "ai capacity exceeded"
     );
-    throw new HttpError(
-      429,
-      "ai_capacity",
-      `Too many AI jobs in flight (${inFlight}/${limit})`,
-      { "Retry-After": String(retryAfterSeconds) }
-    );
+    throw new HttpError(429, "ai_capacity", `Too many AI jobs in flight (${inFlight}/${limit})`, {
+      "Retry-After": String(retryAfterSeconds)
+    });
   }
 
   logger.debug({ event: "ai_capacity", decision: "allowed", inFlight, limit }, "ai capacity ok");

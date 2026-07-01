@@ -50,11 +50,12 @@ describe("PostgresRateLimitStore", { skip: databaseUrl ? false : "DATABASE_URL n
   it("counts concurrent hits without losing increments", async () => {
     const key = `test-${randomUUID()}`;
     const now = 1_700_000_200_000;
-    const results = await Promise.all(
-      Array.from({ length: 20 }, () => store.hit(key, 60_000, 100, now))
-    );
+    const results = await Promise.all(Array.from({ length: 20 }, () => store.hit(key, 60_000, 100, now)));
     const counts = results.map((r) => r.count).sort((a, b) => a - b);
     // 20 concurrent atomic increments must yield exactly the counts 1..20.
-    assert.deepEqual(counts, Array.from({ length: 20 }, (_, i) => i + 1));
+    assert.deepEqual(
+      counts,
+      Array.from({ length: 20 }, (_, i) => i + 1)
+    );
   });
 });
