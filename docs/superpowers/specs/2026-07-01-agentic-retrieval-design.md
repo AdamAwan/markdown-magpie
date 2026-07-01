@@ -20,6 +20,12 @@ Citations are weak, and the same weakness makes answers shallow:
    once with the raw question at `limit = 5`. The model cannot pull in a *related*
    thing it judges necessary for a complete answer (e.g. answering "how do I
    deploy?" without also surfacing the required env setup).
+4. **Gaps only fire on whole-question failure.** `buildAnswerOutput` emits gap
+   signals solely in the `isKnowledgeGap || sections.length === 0` branch — i.e.
+   when the question went essentially unanswered. A confidently-answered question
+   that nonetheless *lacked supporting material* (the model wanted to show an
+   example of X, searched for it, and found nothing) raises no gap, even though
+   that is one of the most actionable gap signals the system could produce.
 
 We want the watcher to **drive its own retrieval**: assess what it has, run
 follow-up searches when an answer would be incomplete, and cite only what it
@@ -96,44 +102,96 @@ would mix audiences/domains and cite outside the question's area.)
 - Gap/zero-section branch is unchanged except it now naturally has an empty pool
   when everything fell below the relevance floor.
 
+### 4. Unsatisfied follow-up searches raise grounded `followup` gaps
+
+The agentic loop already knows something the current pipeline never captures:
+**which searches the model itself decided were worth running, and which of those
+came back empty.** That is a precise, self-motivated gap — "to answer this well I
+wanted an example of X, and the KB has none."
+
+- The watcher tracks **unsatisfied searches**: any `search` query whose retrieval
+  returned zero sections above the relevance floor (nothing merged into the pool).
+- On the final `action: "answer"`, the model may emit `followupGaps: string[]` —
+  human summaries of missing supporting material — **independently of
+  `isKnowledgeGap`**. So a `high`-confidence, well-cited answer can still carry
+  gaps. This decouples gap emission from "the question failed."
+- **Grounding (mirrors citation grounding):** a `followupGap` is only kept if it
+  corresponds to a search the watcher actually ran and saw come back empty. The
+  model writes the prose; the watcher vouches that the underlying search was real
+  and unsatisfied. A gap with no matching empty search is dropped, so the model
+  can't invent gaps for material that does exist (or was never looked for).
+- Each kept gap becomes a `KnowledgeGapSignal` with **`source: "followup"`**,
+  `confidence` = the answer's confidence, and `citedSectionIds` = the sections the
+  answer *did* use (the surrounding context the missing piece belongs with). It
+  then flows through the existing gap → cluster → draft → PR pipeline unchanged.
+
+Rationale for a distinct source: these gaps are qualitatively different from
+whole-question misses — they come *from* a good answer and point at a specific
+missing artifact — so the console and gap analytics should be able to surface and
+filter them separately. The clustering/reconciler pipeline treats all sources
+alike; only the label differs.
+
 ## Changes by layer
+
+### `packages/db` (new migration `0035_followup_gap_source.sql`)
+- Widen the `question_gaps.source` CHECK constraint from `('auto','manual')` to
+  `('auto','manual','followup')`. Additive; no backfill (existing rows keep their
+  source).
 
 ### `@magpie/core` (`packages/core/src/index.ts`)
 - `Citation`: add `relevance: number`.
+- `QuestionGapSource`: add `"followup"` → `"auto" | "manual" | "followup"`.
+- `KnowledgeGapSignal`: add `source: QuestionGapSource` (default `"auto"` at the
+  existing call sites) so the watcher can label a signal as `followup` and the
+  persistence path can honour it instead of hard-coding `"auto"`.
 
 ### `@magpie/jobs` (`packages/jobs/src/schemas.ts`)
 - `citationSchema`: add `relevance: z.number()`.
-- `answerQuestionOutputSchema`: unchanged in shape (still
-  `{ answer, confidence, citations, gaps?, flowId?, flowSelectionRequired? }`) —
-  the agentic protocol is internal to the watcher, not part of the job output.
+- `gapSchema`: add `source` (`z.enum(["auto","manual","followup"])`) so the
+  `answer_question` output can carry a per-gap source. The output *shape* is
+  otherwise unchanged (`{ answer, confidence, citations, gaps?, flowId?,
+  flowSelectionRequired? }`); the agentic protocol stays internal to the watcher.
 
 ### `@magpie/prompts` (`packages/prompts/src/catalog.ts`)
 - `ANSWER_QUESTION`: extend to the two-action protocol. Instruct the model to
   emit `{ action: "search", queries, rationale }` when the context is insufficient
   **or** when a complete, genuinely helpful answer needs closely related
   information the user will require; otherwise `{ action: "answer", answer,
-  confidence, isKnowledgeGap, gaps, usedSectionIds }` citing only the sections it
-  relied on. Update `outputShape`. Keep the "answer only from provided context"
-  rule.
+  confidence, isKnowledgeGap, gaps, followupGaps, usedSectionIds }` citing only
+  the sections it relied on. Define `followupGaps` as "supporting material you
+  looked for (e.g. a concrete example of X) but the context does not contain,"
+  emitted **even for a confident answer**, and kept only when it matches a search
+  that actually came back empty. Update `outputShape`. Keep the "answer only from
+  provided context" rule.
 
 ### `@magpie/retrieval`
 - No routing change. If a shared assess/parse helper is warranted, add it here
   next to `routeQuestionToFlow`; otherwise keep parsing in the watcher.
 
-### `apps/api` (`features/retrieve/service.ts`)
-- `RetrievedSection` gains `relevance`; populate from `RankedSection.relevance`.
-- Apply `MIN_RELEVANCE` floor after search. (Consider taking the floor as an
-  optional request field later; hard-code the constant for now — YAGNI.)
+### `apps/api`
+- `features/retrieve/service.ts`: `RetrievedSection` gains `relevance`; populate
+  from `RankedSection.relevance`. Apply the `MIN_RELEVANCE` floor after search.
+  (Consider a per-request floor later; hard-code the constant for now — YAGNI.)
+- Gap persistence (`stores/postgres-question-log-store.ts` +
+  `stores/question-log-store.ts`, and the job-completion path that records answer
+  gaps): honour each `KnowledgeGapSignal.source` instead of hard-coding `"auto"`
+  when writing `question_gaps`. `followup` gaps are written with that source.
 
 ### `apps/watcher` (`src/http-client.ts`, `src/runners/generative.ts`, `src/job-prompts.ts`)
 - `WatcherApi.retrieve`: add an `AbortSignal` param; thread it through the POST.
 - `RetrievedSection` (client mirror): add `relevance`.
 - `generative.ts` `answer()`: implement the assess→search→answer loop with the
   guards above; parse the two-action JSON (tolerant extraction like the existing
-  `extractJson`); accumulate the deduped pool.
+  `extractJson`); accumulate the deduped pool. Track an **unsatisfied-search set**
+  — the queries whose retrieval added zero sections to the pool — and pass it into
+  the output builder for grounding the `followup` gaps.
 - `job-prompts.ts`: `toCitation` carries `relevance`; `buildAnswerOutput` accepts
-  `usedSectionIds` and cites the grounded subset with the empty-fallback rule. Add
-  a small `parseAssessment` helper (or colocate with the loop).
+  `usedSectionIds` (cites the grounded subset with the empty-fallback rule),
+  `followupGaps`, and the unsatisfied-search set. It keeps each `followupGap` only
+  when a corresponding empty search was actually observed, emits them as
+  `KnowledgeGapSignal`s with `source: "followup"` (answer's confidence,
+  `citedSectionIds` = used sections), and merges them with any whole-question
+  (`auto`) gaps from the existing gap branch. Add a `parseAssessment` helper.
 
 ### `apps/web` (`components/common.tsx`, `AskPanel.tsx`)
 - `CitationRow`: show relevance (e.g. a subtle percentage/'·' meter) and keep the
@@ -152,7 +210,13 @@ would mix audiences/domains and cite outside the question's area.)
     model's query and the **routed flow id**; pool dedupes by `sectionId`.
   - guards: stops at `MAX_SEARCH_ROUNDS`; stops at `MAX_POOL_SECTIONS`; abort
     signal passed to every `retrieve`.
-- `job-prompts` unit: `buildAnswerOutput` grounding + fallback + gap branch.
+- `job-prompts` unit: `buildAnswerOutput` citation grounding + fallback + gap
+  branch; **`followupGaps`**: a confident answer with an unsatisfied search →
+  `followup` gap emitted; a `followupGap` with no matching empty search → dropped;
+  `followup` gaps merge alongside `auto` gaps.
+- gap persistence: a `followup`-sourced signal writes `source = 'followup'` to
+  `question_gaps` (Postgres store test).
+- migration: `0035` widens the CHECK; a `followup` insert succeeds.
 - web: `CitationRow` renders relevance; variable citation count.
 
 ## Out of scope (YAGNI)
@@ -161,7 +225,11 @@ would mix audiences/domains and cite outside the question's area.)
 - No per-request tunable relevance floor or configurable round/pool caps —
   constants for now.
 - No re-ranking model or query-rewrite model beyond the assess step's own queries.
-- No change to the `answer_question` **job output** contract or job state — the
-  agentic loop is entirely internal to the watcher run.
+- No change to the `answer_question` job *state* or the overall output *shape* —
+  the agentic loop is internal to the watcher run; only `gapSchema` gains `source`
+  and `citationSchema` gains `relevance`.
 - No inline `[n]` markers tying individual sentences to sources (grounded
   citation *set* only; sentence-level anchoring is a later step).
+- `followup` gaps get no bespoke clustering/reconciler handling — they flow
+  through the existing gap → cluster → draft → PR pipeline; only the source label
+  and (later) console filtering distinguish them.
