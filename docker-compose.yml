@@ -177,9 +177,13 @@ services:
       timeout: 5s
       retries: 20
 
-  # --- Unified logging (profile: logging) ---------------------------------
-  # Loki + Alloy + Grafana. Brought up alongside the app on the deployed box
-  # with `--profile app --profile logging`; left out of local dev by default.
+  # --- Example logging stack (profile: logging) ---------------------------
+  # OPTIONAL and NOT part of the application. This Loki + Alloy + Grafana
+  # setup is just an example of one way to collect the containers' logs — it's
+  # what we happen to run, offered as a hint, not a requirement. The app emits
+  # plain pino JSON to stdout/stderr; ship those wherever you like (or nowhere).
+  # Drop this whole block and the app is unaffected. Left out of local dev by
+  # default; opt in with `--profile app --profile logging`.
 
   # Stores and indexes logs. Not published — only Alloy (push) and Grafana
   # (query) reach it on the compose network.

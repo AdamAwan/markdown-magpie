@@ -121,15 +121,20 @@ completed for a production/internal deployment:
 - [ ] **Terminate TLS upstream.** The app serves plain HTTP; front it with a
       reverse proxy (nginx/Caddy/Traefik) doing TLS. HSTS is already emitted.
 - [ ] **Do not publish internal ports.** In `docker-compose.yml`, Postgres
-      (`5432`) and Grafana (`3001`) are published to the host by default. Keep
-      them on the internal compose network; expose only the proxied web/API
-      origin. Bind app ports to loopback behind the proxy.
+      (`5432`) is published to the host by default (as is Grafana on `3001`, if
+      you run the optional example `logging` profile). Keep them on the internal
+      compose network; expose only the proxied web/API origin. Bind app ports to
+      loopback behind the proxy.
 - [ ] **Replace the default Postgres password.** The compose file ships
       `postgres/postgres` for local use. Use a strong generated credential, and
       prefer a managed database with encryption at rest and automated backups.
-- [ ] **Lock down Grafana.** The logging profile enables anonymous Viewer access
-      with the login form disabled. Put it behind authentication/SSO, or only run
-      the `logging` profile on a trusted, non-exposed host.
+- [ ] **If you use the example logging stack, lock down Grafana.** The optional
+      `logging` profile (Loki + Alloy + Grafana) is only an example of how you
+      *could* collect logs — not part of the app. If you adopt it as-is, note
+      that it enables anonymous Viewer access with the login form disabled: put
+      Grafana behind authentication/SSO, or only run the `logging` profile on a
+      trusted, non-exposed host. If you ship logs some other way (or not at all),
+      this item does not apply.
 - [ ] **Set `CORS_ALLOWED_ORIGINS`** to your web origin(s); do not ship the `*`
       default.
 - [ ] **Configure Auth0 for real** (`AUTH_REQUIRED` unset/true, real
@@ -146,7 +151,9 @@ completed for a production/internal deployment:
       requires it (Docker/K8s secrets, Vault, or a cloud secret manager).
 - [ ] **Confirm log hygiene.** Request logs contain only `{status, durationMs}`.
       Keep provider log levels at INFO in production (DEBUG paths in the watcher
-      are more verbose). Loki retains logs for 7 days by default.
+      are more verbose). Set retention to match your policy in whatever log
+      backend you use (the example logging stack's Loki, if you run it, is
+      configured for 7 days).
 
 ## 5. Known gaps / roadmap
 
@@ -156,8 +163,9 @@ Tracked, not yet implemented — disclose these to reviewers:
   jobs; an authenticated caller can flood the queue. A per-principal limiter is
   recommended (and belongs at the reverse proxy or in the API).
 - **No data-retention policy for questions/answers.** Job records self-purge
-  (14/30 days) and Loki logs purge at 7 days, but stored questions/answers
-  accumulate indefinitely. Add a retention job matching your policy.
+  (14/30 days), but stored questions/answers accumulate indefinitely. Add a
+  retention job matching your policy. (Log retention is separate and lives in
+  whatever log backend you deploy — e.g. 7 days in the example logging stack.)
 - **Flat authorization model** (issue #88): `manage:knowledge` is broad.
 - **Report-only image/config scans.** Trivy scans are non-gating today
   (`exit-code: 0`); flip to gating once the baseline is clean.
