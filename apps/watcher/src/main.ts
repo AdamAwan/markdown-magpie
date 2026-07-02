@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createApiTokenProvider } from "@magpie/auth";
+import { installCrashHandlers } from "@magpie/logger";
 import type { JobCapability } from "@magpie/jobs";
 import {
   CAPABILITY_GATES,
@@ -18,6 +19,12 @@ import { WorkerLoop } from "./worker-loop.js";
 // environment can support, advertise exactly those capabilities, and run the
 // poll/execute loop until a shutdown signal. All job logic lives in the runners
 // and the loop; this file only wires them together.
+
+// Capture crashes outside handled paths (uncaught throws, unhandled rejections)
+// with structured context and a clean non-zero exit for the restart policy,
+// rather than a bare stderr trace. Registered before any work — including config
+// loading below, which throws on a misconfiguration.
+installCrashHandlers(logger);
 
 // Validate all core wiring (API URL, poll interval, auth credentials) up front
 // so a misconfigured watcher fails fast with an aggregated error instead of

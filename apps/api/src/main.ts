@@ -1,10 +1,16 @@
 import { serve } from "@hono/node-server";
+import { installCrashHandlers } from "@magpie/logger";
 import { createAppContext } from "./context.js";
 import { loadConfig } from "./platform/config.js";
 import { buildApp } from "./app.js";
 import * as configService from "./features/config/service.js";
 import { reconcileSchedules } from "./jobs/schedule-reconciler.js";
 import { logger } from "./logger.js";
+
+// Capture crashes outside handled paths (uncaught throws, unhandled rejections)
+// with structured context and a clean non-zero exit for the restart policy,
+// rather than a bare stderr trace. Registered before any work starts.
+installCrashHandlers(logger);
 
 async function start(): Promise<void> {
   // Validate the environment first: a bad/missing required var aborts startup
