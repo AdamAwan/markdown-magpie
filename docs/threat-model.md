@@ -121,8 +121,12 @@ Git host. To keep C4 a real control, a production deployment **must**:
    bot/service account that opens PRs must **not** be able to approve or merge its
    own PRs.
 2. **Keep `manage:knowledge` narrowly granted.** Any principal with that scope
-   can publish proposals and mark them merged; treat it as a privileged role
-   (see issue #88 on the flat authorization model).
+   can publish proposals and mark them merged; treat it as a privileged role. The
+   scope can be narrowed *per flow* with role-based grants — see
+   [authorization.md](authorization.md) (`KNOWLEDGE_ROLE_GRANTS`), which also
+   layers a distinct `admin` capability in front of the destructive
+   `POST /admin/reset`. This is the mitigation for the flat-authorization concern
+   in issue #88.
 3. **Never wire an auto-merge path** for AI-authored PRs. Automation may open and
    update PRs; a human closes the loop.
 4. **Review with provenance in mind.** Reviewers should treat AI-drafted PRs as
