@@ -139,11 +139,38 @@ capability layer rather than a risky scope rename.
 as flow-less, so only a **wildcard** asker (`"*": ["ask"]`) can let the watcher
 auto-route; a single-flow asker must name their flow.
 
-**Known limitation.** Whether per-user `ask` scoping is enforced for MCP clients
-depends on whether the MCP server forwards the end user's token or calls the API
-with its own service token. A service token hits carve-out (3) and bypasses
-flow-scoping. Enforcing per-user `ask` restrictions *through* MCP is a follow-up
-(it requires propagating user identity at the MCP boundary).
+### MCP: acting as the end user (on-behalf-of delegation)
+
+The HTTP MCP server verifies the end user's token at its own edge, but calls the
+downstream API with its **own M2M service token** — which hits carve-out (3) above
+and would bypass flow-scoping. To enforce per-user flow access on the MCP surface,
+the server forwards the verified user's identity so the API authorizes as the user.
+
+It does **not** forward the user's token (that token's audience is the MCP
+resource, not the API). Instead it uses the **trusted on-behalf-of** pattern
+(`packages/auth/src/on-behalf-of.ts`):
+
+- The MCP keeps its M2M token as the transport identity, and adds two headers
+  carrying the user it already verified: `x-on-behalf-of-subject` and
+  `x-on-behalf-of-roles`.
+- The API honors those headers **only** when the authenticated caller holds the
+  `act:on-behalf-of` scope — a permission granted *solely* to the MCP's M2M
+  application. It then authorizes as the forwarded user (their subject + roles),
+  while keeping the caller's scopes as the transport identity
+  (`resolveEffectivePrincipal`, applied in `apps/api/src/auth/middleware.ts`).
+
+Trust chain: the API verifies the M2M token + scope → the caller really is the
+trusted MCP gateway; that gateway asserts a user identity it independently
+verified. A direct user calling the API can't forge this — they don't hold
+`act:on-behalf-of`, so their headers are ignored and their own token's roles apply.
+
+> **Setup (one Auth0 permission, no new machinery).** Define an `act:on-behalf-of`
+> permission on the API (`AUTH0_AUDIENCE`) and grant it to the MCP's M2M
+> application (Applications → APIs → Machine to Machine Applications). That's the
+> only IdP change. Keep the MCP→API channel on a trusted network / TLS, since the
+> headers are trusted once the caller is authenticated. If the scope is *not*
+> granted, MCP calls fall back to the service-identity bypass (carve-out 3) — so,
+> like the rest of this model, per-user enforcement on MCP is opt-in.
 
 ## Considered and rejected
 
@@ -151,6 +178,13 @@ flow-scoping. Enforcing per-user `ask` restrictions *through* MCP is a follow-up
   is single-tenant by design.
 - **Per-`sub` config grants**: a maintenance nightmare with staff churn (every
   joiner/leaver is a redeploy editing opaque subject ids).
+- **MCP → API via RFC 8693 token exchange** (call the API with an exchanged
+  user token): standards-pure, but on Auth0 the only mechanism is **Custom Token
+  Exchange** — an Early-Access feature whose profile is Management-API-only (no
+  dashboard UI) and which requires a hand-written, self-maintained validation
+  Action. That's a lot of IdP machinery for the same result the trusted
+  on-behalf-of header achieves with one permission grant, so we chose delegation.
+  Reconsider only if a compliance rule forbids trusted-header delegation.
 - **Auth0 RBAC `permissions` claim, with the app pushing flows into Auth0 via the
   Management API**: drift-free, but requires a privileged Management-API credential
   in the app and makes the app authoritative for the tenant's scopes — solving a

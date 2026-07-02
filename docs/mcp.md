@@ -118,6 +118,8 @@ Per-tool scopes:
 
 The inbound user token is validated locally and **never forwarded** to the API. The HTTP server calls the API with its own separate service token, `MCP_API_AUTH_TOKEN` (a machine-to-machine credential). Startup fails fast if `AUTH_REQUIRED=true` and this token is missing.
 
+**On-behalf-of delegation.** So the API's per-flow authorization can apply to the real user (not the shared service identity), the HTTP server forwards the verified user's `subject` and `roles` as `x-on-behalf-of-*` headers alongside the service token. The API honors them only when the MCP's M2M application holds the `act:on-behalf-of` permission — grant it on the API in Auth0 to activate per-user enforcement on the MCP surface. See [authorization.md](authorization.md#mcp-acting-as-the-end-user-on-behalf-of-delegation).
+
 ### stdio
 
 The stdio transport presents a single bearer token to the API on every call, supplied via `MCP_AUTH_TOKEN`. When `AUTH_REQUIRED=true` and the token is missing, the server fails fast at startup with a non-zero exit.
