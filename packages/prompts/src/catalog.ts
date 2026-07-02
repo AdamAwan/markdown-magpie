@@ -60,6 +60,32 @@ export const ANSWER_QUESTION: PromptDefinition = {
     'currently lacks the answer — that is a knowledge gap (isKnowledgeGap), not off-topic.'
 };
 
+export const VERIFY_ANSWER: PromptDefinition = {
+  id: "verify-answer",
+  title: "Verify an answer against its context",
+  description:
+    "Post-answer grounding check: confirms every factual claim in a drafted answer is supported by the retrieved context, or returns the unsupported claims plus a revised answer with them removed. Run by the watcher's answer_question runner on medium/high-confidence answers before they are returned.",
+  usedBy: ["watcher"],
+  outputShape: '{ grounded, unsupportedClaims[], revisedAnswer? }',
+  instructions: `You verify a drafted knowledge-base answer against the context it was drafted from. The answer must not assert anything the context does not support.
+
+Input: the question, the answer under review, and the context sections (each labelled "[section <id>]").
+
+Rules:
+- Return JSON only.
+- A claim is unsupported when no context section states it or directly implies it. Certifications, compliance or legal status (e.g. SOC 2, GDPR), figures, dates, names, integrations, guarantees, and capabilities are all claims. Your own general knowledge is NOT support: if the context does not contain it, it is unsupported — even when you believe it is true.
+- Judge substance, not wording: paraphrase and summary of context content are supported. Do not flag tone, emphasis, or formatting.
+- If every claim is supported, return {"grounded":true,"unsupportedClaims":[]}.
+- Otherwise return "grounded":false, phrase each entry of "unsupportedClaims" as the missing topic (for example "SOC 2 compliance status"), and put in "revisedAnswer" the same answer with every unsupported claim removed or corrected to what the context actually says. If removing them leaves nothing useful, "revisedAnswer" states plainly that the knowledge base does not cover the question.
+
+Return JSON:
+{
+  "grounded": false,
+  "unsupportedClaims": ["string"],
+  "revisedAnswer": "string"
+}`
+};
+
 export const SUMMARIZE_GAP: PromptDefinition = {
   id: "summarize-gap",
   title: "Summarize knowledge gap",
@@ -427,6 +453,7 @@ export const ROUTE_QUESTION_TO_FLOW: PromptDefinition = {
 
 export const promptCatalog: PromptDefinition[] = [
   ANSWER_QUESTION,
+  VERIFY_ANSWER,
   SUMMARIZE_GAP,
   DRAFT_MARKDOWN_PROPOSAL,
   FOLD_MARKDOWN_PROPOSAL,

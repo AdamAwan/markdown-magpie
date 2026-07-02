@@ -177,6 +177,67 @@ function selectCitations(
     : { citations: all, attributionFailed: true };
 }
 
+// The grounding verifier's verdict on a drafted answer: either every claim is
+// supported by the retrieved context, or the unsupported claims are listed (as
+// missing topics) alongside a revised answer with them removed.
+export interface GroundingVerdict {
+  grounded: boolean;
+  unsupportedClaims: string[];
+  revisedAnswer?: string;
+}
+
+// Parses the verify-answer model reply. Anything that does not carry a boolean
+// "grounded" is unusable — the caller fails open (keeps the drafted answer) so a
+// flaky verifier degrades to the pre-verification behaviour rather than
+// downgrading every answer.
+export function parseGroundingVerdict(content: string): GroundingVerdict | undefined {
+  let parsed: unknown;
+  try {
+    parsed = extractJson(content);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return undefined;
+  }
+  const candidate = parsed as { grounded?: unknown; unsupportedClaims?: unknown; revisedAnswer?: unknown };
+  if (typeof candidate.grounded !== "boolean") {
+    return undefined;
+  }
+  const revisedAnswer = typeof candidate.revisedAnswer === "string" ? candidate.revisedAnswer.trim() : "";
+  return {
+    grounded: candidate.grounded,
+    unsupportedClaims: toStringArray(candidate.unsupportedClaims),
+    ...(revisedAnswer ? { revisedAnswer } : {})
+  };
+}
+
+// Applies a failed grounding verdict to a built answer: the revised
+// (fabrication-free) answer replaces the draft, confidence drops to low, and each
+// unsupported claim is recorded as an auto gap — a question that tempted the model
+// to fabricate is exactly a question the knowledge base should learn to answer, so
+// the stripped claims feed gap clustering like any other weak answer.
+export function applyGroundingVerdict(
+  output: AnswerOutput,
+  verdict: GroundingVerdict,
+  question: string
+): AnswerOutput {
+  if (verdict.grounded) {
+    return output;
+  }
+  const citedSectionIds = output.citations.map((citation) => citation.sectionId);
+  const claimGaps = verdict.unsupportedClaims.map((claim) =>
+    toGapSignal(claim, question, citedSectionIds, "low", "auto")
+  );
+  const gaps = [...(output.gaps ?? []), ...claimGaps];
+  return {
+    ...output,
+    answer: verdict.revisedAnswer ?? output.answer,
+    confidence: "low",
+    ...(gaps.length > 0 ? { gaps } : {})
+  };
+}
+
 // Turns the model's followupGaps into gap signals, but only when the loop saw at
 // least one search return nothing: the model may only claim missing supporting
 // material if it actually went looking and came up empty. Each gap is stamped

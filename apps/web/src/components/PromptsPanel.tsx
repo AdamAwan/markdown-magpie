@@ -23,8 +23,9 @@ const STAGES: { id: string; step: string; title: string; blurb: string; promptId
     id: "answer",
     step: "1",
     title: "Answer a question",
-    blurb: "A question is routed to the best-matching flow, then answered from retrieved Markdown with citations.",
-    promptIds: ["route-question-to-flow", "answer-question"]
+    blurb:
+      "A question is routed to the best-matching flow, answered from retrieved Markdown with citations, then the drafted answer is verified against that context before it is returned.",
+    promptIds: ["route-question-to-flow", "answer-question", "verify-answer"]
   },
   {
     id: "gaps",

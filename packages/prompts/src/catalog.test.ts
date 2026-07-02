@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { promptCatalog, getPrompt, withPersona, PERSONA_GROUNDING_GUARD } from "./catalog.js";
 
-test("catalog has exactly 16 prompts", () => {
-  assert.equal(promptCatalog.length, 16);
+test("catalog has exactly 17 prompts", () => {
+  assert.equal(promptCatalog.length, 17);
 });
 
 test("catalog ids are in the fixed, documented order", () => {
@@ -11,6 +11,7 @@ test("catalog ids are in the fixed, documented order", () => {
     promptCatalog.map((prompt) => prompt.id),
     [
       "answer-question",
+      "verify-answer",
       "summarize-gap",
       "draft-markdown-proposal",
       "fold-markdown-proposal",
