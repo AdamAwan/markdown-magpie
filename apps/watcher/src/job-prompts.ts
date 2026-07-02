@@ -351,6 +351,21 @@ function parseStructuredAnswer(content: string): StructuredAnswer | undefined {
   };
 }
 
+// The searches to force before accepting an answer the model gave up on. When the
+// model answers low / flags a knowledge gap before any search has run, its own
+// declared gaps name exactly what is missing — turn them into search queries so the
+// pool grows before the loop trusts a low-confidence answer. Returns [] when the
+// answer is confident, off-topic, names nothing to search for, or did not parse
+// (json mode should prevent that; the loop then just accepts the answer).
+export function forcedSearchQueries(modelContent: string, max = 3): string[] {
+  const structured = parseStructuredAnswer(modelContent);
+  if (!structured || structured.outOfScope) {
+    return [];
+  }
+  const gaveUp = structured.isKnowledgeGap || structured.confidence === "low";
+  return gaveUp ? structured.gaps.slice(0, max) : [];
+}
+
 function toStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).map((entry) => entry.trim())

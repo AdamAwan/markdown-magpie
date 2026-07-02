@@ -40,8 +40,12 @@ export const ANSWER_QUESTION: PromptDefinition = {
     'or a related procedure). Also search when you are tempted to include a supporting fact the context does not ' +
     'contain (for example a certification or compliance status such as SOC 2, a figure, or a capability): search ' +
     'for it rather than asserting it, and if the search finds nothing, name it in "followupGaps" instead of ' +
-    'putting it in the answer. Each query is a focused search phrase run against the same knowledge base. Search ' +
-    'only when it will improve the answer; do not search more than necessary.\n\n' +
+    'putting it in the answer. Each query is a focused search phrase run against the same knowledge base. ' +
+    'Prefer searching to answering whenever the context you currently hold does not already, on its own, fully ' +
+    'and specifically answer the question: do not settle on the first round for a low-confidence answer or an ' +
+    '"the knowledge base does not cover X" gap while a focused search might still surface the missing material ' +
+    '— search first, and report a gap only once a search for it has come back empty. Once further searching ' +
+    'stops improving the answer, do not search more than necessary.\n\n' +
     '(2) Answer:\n' +
     '{"action":"answer","answer":"string","confidence":"high|medium|low","isKnowledgeGap":true|false,' +
     '"outOfScope":true|false,"gaps":["string"],"followupGaps":["string"],"usedSectionIds":["string"]}\n' +

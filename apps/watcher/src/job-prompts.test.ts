@@ -6,6 +6,7 @@ import {
   applyGroundingVerdict,
   buildAnswerOutput,
   buildPrompt,
+  forcedSearchQueries,
   parseGroundingVerdict,
   parseJobOutput,
   UNPARSEABLE_ANSWER_FALLBACK
@@ -227,6 +228,56 @@ describe("buildAnswerOutput", () => {
       new Set() // no search came back empty
     );
     assert.equal(output.gaps, undefined, "no grounded followup gaps ⇒ no gaps emitted");
+  });
+});
+
+describe("forcedSearchQueries", () => {
+  it("returns the declared gaps when the model gives up low before searching", () => {
+    const queries = forcedSearchQueries(
+      JSON.stringify({
+        action: "answer",
+        answer: "Not covered.",
+        confidence: "low",
+        isKnowledgeGap: true,
+        gaps: ["security certifications", "compliance status"]
+      })
+    );
+    assert.deepEqual(queries, ["security certifications", "compliance status"]);
+  });
+
+  it("caps the number of forced queries", () => {
+    const queries = forcedSearchQueries(
+      JSON.stringify({ answer: "x", confidence: "low", isKnowledgeGap: true, gaps: ["a", "b", "c", "d", "e"] }),
+      2
+    );
+    assert.deepEqual(queries, ["a", "b"]);
+  });
+
+  it("does not force a search for a confident answer", () => {
+    assert.deepEqual(
+      forcedSearchQueries(JSON.stringify({ answer: "Yes.", confidence: "high", isKnowledgeGap: false, gaps: [] })),
+      []
+    );
+  });
+
+  it("does not force a search for an off-topic question", () => {
+    assert.deepEqual(
+      forcedSearchQueries(
+        JSON.stringify({ answer: "Off topic.", confidence: "low", isKnowledgeGap: true, outOfScope: true, gaps: ["cats"] })
+      ),
+      []
+    );
+  });
+
+  it("returns nothing when a low answer names no gaps to search for", () => {
+    assert.deepEqual(
+      forcedSearchQueries(JSON.stringify({ answer: "Maybe.", confidence: "low", isKnowledgeGap: false, gaps: [] })),
+      []
+    );
+  });
+
+  it("returns nothing for an unparseable reply", () => {
+    assert.deepEqual(forcedSearchQueries("not json"), []);
   });
 });
 
