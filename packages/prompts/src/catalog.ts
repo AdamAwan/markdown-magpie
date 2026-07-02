@@ -37,7 +37,10 @@ export const ANSWER_QUESTION: PromptDefinition = {
     '{"action":"search","queries":["string"],"rationale":"string"}\n' +
     'Use this when the context does not yet let you answer well, OR when a complete, genuinely helpful answer ' +
     'needs closely related information the reader will also need (for example a concrete example, a prerequisite, ' +
-    'or a related procedure). Each query is a focused search phrase run against the same knowledge base. Search ' +
+    'or a related procedure). Also search when you are tempted to include a supporting fact the context does not ' +
+    'contain (for example a certification or compliance status such as SOC 2, a figure, or a capability): search ' +
+    'for it rather than asserting it, and if the search finds nothing, name it in "followupGaps" instead of ' +
+    'putting it in the answer. Each query is a focused search phrase run against the same knowledge base. Search ' +
     'only when it will improve the answer; do not search more than necessary.\n\n' +
     '(2) Answer:\n' +
     '{"action":"answer","answer":"string","confidence":"high|medium|low","isKnowledgeGap":true|false,' +

@@ -269,6 +269,30 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.ok(found, "low-confidence gap should appear in candidates");
   });
 
+  it("listGapCandidates includes a followup gap raised on a confident answer", async () => {
+    // A confident, well-cited answer whose search for supporting material (e.g.
+    // SOC 2 docs) verifiably found nothing: the followup gap must still become
+    // a candidate — candidacy keys on gap rows, not question confidence.
+    const uniqueId = randomUUID();
+    const followupSummary = `SOC 2 compliance status ${uniqueId}`;
+    await store.record({
+      question: `test-followup-candidate-${uniqueId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      answer: {
+        answer: "Deploy with the script.",
+        confidence: "high",
+        citations: [],
+        gaps: [{ summary: followupSummary, question: "secure?", confidence: "high", citedSectionIds: [], source: "followup" }]
+      }
+    });
+
+    const candidates = await store.listGapCandidates(200);
+    const found = candidates.some((candidate) => candidate.summary === followupSummary);
+
+    assert.ok(found, "followup gap on a confident answer should appear in candidates");
+  });
+
   it("listGapCandidates includes manually flagged questions regardless of confidence", async () => {
     const uniqueId = randomUUID();
     const recorded = await store.record({

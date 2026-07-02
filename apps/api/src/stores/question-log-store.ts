@@ -350,12 +350,11 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     // two candidates — each clusters and drafts within its own flow. The flowId
     // is folded into the key, space-separated (flow IDs are slugs with no spaces,
     // so the key can't be ambiguous).
+    // Candidacy keys on unresolved gap rows, not question confidence: gap rows
+    // are only written when something was verifiably missing, and a 'followup'
+    // gap on a confident answer (an observed empty search) must still cluster.
     const groups = new Map<string, { summary: string; flowId?: string; logs: QuestionLog[] }>();
     for (const log of this.logs.values()) {
-      if (log.confidence !== "low" && !log.manualGap) {
-        continue;
-      }
-
       const summaries = new Set(
         (log.gaps ?? []).filter((gap) => !gap.resolvedAt && !gap.dismissedAt).map((gap) => gap.summary)
       );

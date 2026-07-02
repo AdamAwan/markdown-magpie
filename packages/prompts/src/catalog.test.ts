@@ -67,6 +67,11 @@ test("answer-question carries the grounding contract and confidence rubric", () 
   assert.match(instructions, /NEVER supplement from general knowledge/);
   assert.match(instructions, /SOC 2, GDPR/, "names compliance claims as the canonical fabrication");
   assert.match(instructions, /never as\s+licence to invent/, "a sales question is not licence to invent");
+  assert.match(
+    instructions,
+    /search\s+for it rather than asserting it/,
+    "a tempting unsupported fact is searched for, and an empty search becomes a followup gap"
+  );
   assert.match(instructions, /use "high" ONLY when every claim is directly supported/);
 });
 
