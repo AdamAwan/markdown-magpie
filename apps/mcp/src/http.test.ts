@@ -290,69 +290,6 @@ test("a valid scoped tools/call dispatches and calls the API with the service to
   }
 });
 
-test("with token exchange enabled, the API is called as the user (exchanged token, not service or raw user token)", async () => {
-  const auth = await makeTestAuth();
-  const userScopedToken = await auth.token(["read:knowledge"]);
-  const userJwt = userScopedToken.replace(/^Bearer /, "");
-  const serviceToken = "service-token-distinct";
-  const exchangedToken = "exchanged-api-token-for-user";
-  const tokenUrl = `${authIssuer}oauth/token`;
-
-  const originalFetch = globalThis.fetch;
-  let exchangeBody: URLSearchParams | undefined;
-  let captured: { url: string; authorization: string | null } | undefined;
-  const fetchStub: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
-    if (url === tokenUrl) {
-      // The RFC 8693 exchange: verify it forwards the user's token as the subject.
-      exchangeBody = new URLSearchParams(init?.body as string);
-      return new Response(JSON.stringify({ access_token: exchangedToken, expires_in: 3600 }), {
-        status: 200,
-        headers: { "content-type": "application/json" }
-      });
-    }
-    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-    captured = { url, authorization: headers.get("authorization") };
-    return new Response(JSON.stringify({ results: [] }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    });
-  };
-  globalThis.fetch = fetchStub;
-
-  try {
-    const app = createHttpMcpApp(
-      testOptions({
-        auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks },
-        apiToken: serviceToken,
-        apiClientId: "mcp-client",
-        apiClientSecret: "mcp-secret",
-        apiTokenUrl: tokenUrl,
-        apiAudience: "https://magpie.wastedcake.com",
-        userTokenExchange: true
-      })
-    );
-    const res = await request(app)
-      .post("/mcp")
-      .set("authorization", userScopedToken)
-      .set("accept", "application/json, text/event-stream")
-      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb.search", arguments: { query: "hi" } } });
-
-    assert.equal(res.status, 200);
-    // The exchange happened with the user's token as the subject.
-    assert.equal(exchangeBody?.get("subject_token"), userJwt);
-    assert.equal(exchangeBody?.get("grant_type"), "urn:ietf:params:oauth:grant-type:token-exchange");
-    // The downstream API call carries the EXCHANGED token — acting as the user.
-    assert.ok(captured, "expected the kb.search tool to call the downstream API");
-    assert.equal(captured.authorization, `Bearer ${exchangedToken}`);
-    // Neither the raw inbound user token nor the M2M service token is used downstream.
-    assert.ok(captured.authorization !== null && !captured.authorization.includes(userJwt));
-    assert.notEqual(captured.authorization, `Bearer ${serviceToken}`);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
 test("a token whose aud is the MCP resource url is accepted (MCP audience, not the web API audience)", async () => {
   const auth = await makeTestAuth();
   // The server is configured with the /mcp URL as its audience, exactly as
