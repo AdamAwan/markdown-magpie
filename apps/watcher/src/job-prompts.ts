@@ -1,4 +1,4 @@
-import type { Citation, Confidence, FlowSelectionRequired, KnowledgeGapSignal } from "@magpie/core";
+import type { Citation, Confidence, FlowSelectionRequired, KnowledgeGapSignal, OutOfScope } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { jobDefinition } from "@magpie/jobs";
 import type { z } from "zod";
@@ -27,6 +27,7 @@ export interface AnswerOutput {
   gaps?: KnowledgeGapSignal[];
   flowId?: string;
   flowSelectionRequired?: FlowSelectionRequired;
+  outOfScope?: OutOfScope;
 }
 
 // The answer "auto" routing produces when it cannot determine a flow: no answer,
@@ -112,6 +113,21 @@ export function buildAnswerOutput(
   const citedSectionIds = citations.map((citation) => citation.sectionId);
   const followupGaps = groundedFollowupGaps(structured, question, citedSectionIds, unsatisfiedSearches);
 
+  // Off-topic for this flow's knowledge area: the flow declines to answer and — the
+  // point of the whole check — emits NO gaps, so an unrelated question (e.g. "cats"
+  // asked of a product flow) never clusters or drafts a proposal. Checked before the
+  // knowledge-gap branch so empty retrieval on an off-topic question does not fall
+  // through into an auto gap.
+  if (structured?.outOfScope) {
+    return {
+      answer: answer || "This question does not appear to relate to this knowledge base.",
+      confidence: "unknown",
+      citations: [],
+      outOfScope: answer ? { reason: answer } : {},
+      ...(flowId ? { flowId } : {})
+    };
+  }
+
   if (structured?.isKnowledgeGap || sections.length === 0) {
     const summaries =
       structured && structured.gaps.length > 0
@@ -171,6 +187,7 @@ interface StructuredAnswer {
   answer: string;
   confidence: Confidence;
   isKnowledgeGap: boolean;
+  outOfScope: boolean;
   gaps: string[];
   followupGaps: string[];
   usedSectionIds: string[];
@@ -190,6 +207,7 @@ function parseStructuredAnswer(content: string): StructuredAnswer | undefined {
     answer?: unknown;
     confidence?: unknown;
     isKnowledgeGap?: unknown;
+    outOfScope?: unknown;
     gaps?: unknown;
     followupGaps?: unknown;
     usedSectionIds?: unknown;
@@ -202,6 +220,7 @@ function parseStructuredAnswer(content: string): StructuredAnswer | undefined {
     answer: candidate.answer,
     confidence: isKnowledgeGap ? "low" : candidate.confidence,
     isKnowledgeGap,
+    outOfScope: candidate.outOfScope === true,
     gaps: toStringArray(candidate.gaps),
     followupGaps: toStringArray(candidate.followupGaps),
     usedSectionIds: toStringArray(candidate.usedSectionIds)

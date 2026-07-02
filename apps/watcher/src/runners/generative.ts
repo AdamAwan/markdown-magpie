@@ -39,8 +39,10 @@ export const PROVIDER_JOB_TYPES: ReadonlySet<JobType> = new Set(
 );
 
 type ReconcileOutput = z.infer<typeof reconcileGapClustersOutputSchema>;
+type ReconcileInput = z.infer<typeof reconcileGapClustersInputSchema>;
 type ProposedMerge = { clusterIds: string[]; rationale: string };
 type ProposedSplit = { clusterId: string; children: Array<{ gapIds: string[] }>; rationale: string };
+type ProposedDismissal = { clusterId: string; rationale: string };
 
 export async function runGenerativeJob(options: GenerativeJobOptions): Promise<unknown> {
   const { job } = options;
@@ -208,9 +210,7 @@ async function resolveFlow(
 async function reconcileGapClusters({ job, model, signal }: GenerativeJobOptions): Promise<ReconcileOutput> {
   const input = reconcileGapClustersInputSchema.parse(job.input);
 
-  const summary = input.clusters
-    .map((cluster) => `cluster ${cluster.id} (flow ${cluster.flowId ?? "none"}): ${cluster.title}`)
-    .join("\n");
+  const summary = input.clusters.map((cluster) => clusterSummaryLine(cluster)).join("\n");
   logger.debug({ jobId: job.id, clusterCount: input.clusters.length }, `reconcile_gap_clusters[${job.id}]: proposing reshape over ${input.clusters.length} cluster(s)`);
   const proposeResponse = await model.complete({
     system: GAP_RECONCILE_PROPOSE.instructions,
@@ -220,8 +220,8 @@ async function reconcileGapClusters({ job, model, signal }: GenerativeJobOptions
   const proposal = parseReshape(proposeResponse.content);
 
   logger.debug(
-    { jobId: job.id, mergeCount: proposal.merges.length, splitCount: proposal.splits.length },
-    `reconcile_gap_clusters[${job.id}]: critic-confirming ${proposal.merges.length} merge(s), ${proposal.splits.length} split(s)`
+    { jobId: job.id, mergeCount: proposal.merges.length, splitCount: proposal.splits.length, dismissalCount: proposal.dismissals.length },
+    `reconcile_gap_clusters[${job.id}]: critic-confirming ${proposal.merges.length} merge(s), ${proposal.splits.length} split(s), ${proposal.dismissals.length} dismissal(s)`
   );
   const merges: ReconcileOutput["merges"] = [];
   for (const merge of proposal.merges) {
@@ -233,19 +233,48 @@ async function reconcileGapClusters({ job, model, signal }: GenerativeJobOptions
     const confirmed = await criticConfirm(model, "split", split.rationale, signal);
     splits.push({ clusterId: split.clusterId, children: split.children, rationale: split.rationale, confirmed });
   }
+  // Dismissals are permanent, so the critic sees the same scope grounding the
+  // proposer did (persona, top relevance, snippets) and must independently confirm
+  // the cluster is off-topic — not merely uncovered — before we drop it.
+  const dismissals: ReconcileOutput["dismissals"] = [];
+  for (const dismissal of proposal.dismissals) {
+    const cluster = input.clusters.find((entry) => entry.id === dismissal.clusterId);
+    const context = cluster ? clusterSummaryLine(cluster) : undefined;
+    const confirmed = await criticConfirm(model, "dismissal", dismissal.rationale, signal, context);
+    dismissals.push({ clusterId: dismissal.clusterId, rationale: dismissal.rationale, confirmed });
+  }
 
-  return reconcileGapClustersOutputSchema.parse({ merges, splits });
+  return reconcileGapClustersOutputSchema.parse({ merges, splits, dismissals });
+}
+
+// One line describing a cluster for the propose/critic prompts, including the scope
+// grounding the API attached (persona, best retrieval relevance, closest snippets)
+// so the model can tell an off-topic cluster from an on-topic-but-uncovered one.
+function clusterSummaryLine(cluster: ReconcileInput["clusters"][number]): string {
+  const base = `cluster ${cluster.id} (flow ${cluster.flowId ?? "none"}): ${cluster.title}`;
+  if (!cluster.scope) {
+    return base;
+  }
+  const persona = cluster.scope.persona ?? "n/a";
+  const snippets = cluster.scope.snippets.length > 0
+    ? cluster.scope.snippets.map((snippet) => JSON.stringify(snippet)).join(" | ")
+    : "none";
+  return `${base} [scope: persona=${persona}; topRelevance=${cluster.scope.topRelevance.toFixed(2)}; closest content=${snippets}]`;
 }
 
 async function criticConfirm(
   model: ChatProvider,
-  kind: "merge" | "split",
+  kind: "merge" | "split" | "dismissal",
   rationale: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  context?: string
 ): Promise<boolean> {
+  const content = context
+    ? `Proposed ${kind}. Rationale: ${rationale}\n\nCluster under review: ${context}`
+    : `Proposed ${kind}. Rationale: ${rationale}`;
   const response = await model.complete({
     system: GAP_RECONCILE_CRITIC.instructions,
-    messages: [{ role: "user", content: `Proposed ${kind}. Rationale: ${rationale}` }],
+    messages: [{ role: "user", content }],
     signal
   });
   try {
@@ -256,20 +285,21 @@ async function criticConfirm(
   }
 }
 
-function parseReshape(content: string): { merges: ProposedMerge[]; splits: ProposedSplit[] } {
+function parseReshape(content: string): { merges: ProposedMerge[]; splits: ProposedSplit[]; dismissals: ProposedDismissal[] } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(content);
   } catch {
-    return { merges: [], splits: [] };
+    return { merges: [], splits: [], dismissals: [] };
   }
   if (!parsed || typeof parsed !== "object") {
-    return { merges: [], splits: [] };
+    return { merges: [], splits: [], dismissals: [] };
   }
-  const candidate = parsed as { merges?: unknown; splits?: unknown };
+  const candidate = parsed as { merges?: unknown; splits?: unknown; dismissals?: unknown };
   return {
     merges: Array.isArray(candidate.merges) ? candidate.merges.filter(isProposedMerge) : [],
-    splits: Array.isArray(candidate.splits) ? candidate.splits.filter(isProposedSplit) : []
+    splits: Array.isArray(candidate.splits) ? candidate.splits.filter(isProposedSplit) : [],
+    dismissals: Array.isArray(candidate.dismissals) ? candidate.dismissals.filter(isProposedDismissal) : []
   };
 }
 
@@ -283,6 +313,14 @@ function isProposedMerge(value: unknown): value is ProposedMerge {
     candidate.clusterIds.every((id) => typeof id === "string") &&
     typeof candidate.rationale === "string"
   );
+}
+
+function isProposedDismissal(value: unknown): value is ProposedDismissal {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as { clusterId?: unknown; rationale?: unknown };
+  return typeof candidate.clusterId === "string" && typeof candidate.rationale === "string";
 }
 
 function isProposedSplit(value: unknown): value is ProposedSplit {

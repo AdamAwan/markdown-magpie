@@ -128,11 +128,19 @@ the `/dataflow` page draws the full fan-out.
 Orchestration detail: a maintenance watcher claims a `process_gaps_to_pull_requests`
 job and POSTs the API's `/api/gaps/reconcile` endpoint, where the orchestration
 lives. The reconciler's only generative step — the cluster reshape (propose
-merge/split, then critic-confirm) — is itself a provider-partitioned
+merge/split/**dismiss**, then critic-confirm) — is itself a provider-partitioned
 `reconcile_gap_clusters` AI job the API enqueues and bounded-waits on, so no
-generative work runs in the API process. Reshape is best-effort: if no chat watcher
-is available within the deadline, the reconciler logs and skips it, still running
-clustering, drafting, publication, and the PR-state pass.
+generative work runs in the API process. To let the model judge scope, the API
+attaches per-cluster grounding to that job (the flow's persona plus the best
+retrieval relevance and closest snippets for the cluster's topic, via inline
+retrieval against the flow's destination). A **dismissal** is how an off-topic
+cluster — one unrelated to the source knowledge, e.g. a "cats" cluster in a product
+flow — is dropped: the reshape job now runs whenever there is ≥1 active cluster (not
+only ≥2), and a critic-confirmed dismissal moves the cluster to a terminal
+`dismissed` state and stamps its member gaps dismissed, so it never drafts a proposal
+and never re-clusters. Reshape is best-effort: if no chat watcher is available within
+the deadline, the reconciler logs and skips it, still running clustering, drafting,
+publication, and the PR-state pass.
 
 Before clustering, the reconciler also **prunes resolved gaps**: a gap is resolved by
 `(question, summary)` when its proposal merges, but a prior reshape may have moved that

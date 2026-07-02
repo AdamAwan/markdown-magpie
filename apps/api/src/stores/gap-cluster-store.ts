@@ -3,7 +3,11 @@ export interface GapClusterRecord {
   flowId?: string;
   title: string;
   rationale?: string;
-  status: "active" | "frozen";
+  // "dismissed" = the reconciler judged the cluster off-topic for the knowledge base
+  // and dropped it permanently. Like "frozen", a dismissed cluster leaves the active
+  // set so it never drafts; unlike "frozen" (covered/declined), its underlying gaps
+  // are also dismissed so they never re-cluster.
+  status: "active" | "frozen" | "dismissed";
   parentClusterId?: string;
   reconciliationRevision: number;
   createdAt: string;
@@ -55,6 +59,10 @@ export interface GapClusterStore {
   createCluster(input: CreateClusterInput): Promise<GapClusterRecord>;
   updateCluster(id: string, patch: UpdateClusterInput): Promise<GapClusterRecord | undefined>;
   freezeCluster(id: string): Promise<void>;
+  // Permanently marks a cluster off-topic for the knowledge base. Like freezing, it
+  // leaves the active set; the reconciler also dismisses the cluster's member gaps so
+  // they never re-surface. The rationale is stored on the cluster for audit.
+  dismissCluster(id: string, rationale?: string): Promise<void>;
 
   listActiveMemberships(): Promise<GapClusterMembershipRecord[]>;
   // Active memberships whose cluster belongs to one flow, resolved in SQL so the
@@ -165,6 +173,18 @@ export class InMemoryGapClusterStore implements GapClusterStore {
     const existing = this.clusters.get(id);
     if (existing) {
       this.clusters.set(id, { ...existing, status: "frozen", updatedAt: this.now() });
+    }
+  }
+
+  async dismissCluster(id: string, rationale?: string): Promise<void> {
+    const existing = this.clusters.get(id);
+    if (existing) {
+      this.clusters.set(id, {
+        ...existing,
+        status: "dismissed",
+        ...(rationale ? { rationale } : {}),
+        updatedAt: this.now()
+      });
     }
   }
 

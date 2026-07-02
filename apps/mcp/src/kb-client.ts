@@ -34,6 +34,10 @@ export interface AskResult {
   // note (confidence "unknown") and the caller should re-ask kb.ask with `flow`
   // set to one of these ids.
   flowSelectionRequired?: { availableFlows: Flow[] };
+  // Present when the picked flow judged the question off-topic for its knowledge
+  // area: the answer is a stock note (confidence "unknown"), no gaps were raised,
+  // and re-asking will not help unless a different flow fits.
+  outOfScope?: { reason?: string };
 }
 
 interface JobView {
@@ -239,7 +243,22 @@ function extractAnswer(value: unknown): AskResult {
     result.flowSelectionRequired = selection;
   }
 
+  const outOfScope = readOutOfScope(record.outOfScope);
+  if (outOfScope) {
+    result.outOfScope = outOfScope;
+  }
+
   return result;
+}
+
+// Reads the structured "off-topic for this flow" signal off an answer payload,
+// tolerating a missing/malformed field by returning undefined.
+function readOutOfScope(value: unknown): { reason?: string } | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const reason = (value as { reason?: unknown }).reason;
+  return typeof reason === "string" ? { reason } : {};
 }
 
 // Reads the structured "pick a flow" signal off an answer payload, tolerating a

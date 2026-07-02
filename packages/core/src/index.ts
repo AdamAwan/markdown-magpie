@@ -80,6 +80,16 @@ export interface FlowSelectionRequired {
   availableFlows: Array<{ id: string; name: string }>;
 }
 
+// When a flow is picked (routed or pinned) but the question is unrelated to that
+// knowledge area — e.g. a question about cats asked of a product flow — the flow
+// rejects it rather than answering. Distinct from a knowledge gap ("the KB should
+// cover this but doesn't"): an off-topic question raises NO gaps, so it never
+// clusters or drafts a proposal. Carried on the answer output/result so the UI and
+// MCP can surface the rejection distinctly from a low-confidence answer.
+export interface OutOfScope {
+  reason?: string;
+}
+
 export interface AnswerResult {
   answer: string;
   confidence: Confidence;
@@ -91,6 +101,9 @@ export interface AnswerResult {
   // Present (with answer withheld, confidence "unknown") when "auto" routing could
   // not determine a flow; the caller must re-ask naming one of these flows.
   flowSelectionRequired?: FlowSelectionRequired;
+  // Present (with confidence "unknown", no gaps) when the picked flow judged the
+  // question off-topic for its knowledge area and declined to answer.
+  outOfScope?: OutOfScope;
 }
 
 export interface KnowledgeGapSignal {
@@ -113,6 +126,11 @@ export interface QuestionGap {
   // audit but no longer surfaces as a candidate.
   resolvedAt?: string;
   resolvedByProposalId?: string;
+  // Set when the gap reconciler judged this gap off-topic for the knowledge base
+  // (unrelated to the source knowledge) and dismissed it permanently. A dismissed
+  // gap is retained for audit but never surfaces as a candidate or clusters again.
+  dismissedAt?: string;
+  dismissedReason?: string;
 }
 
 export interface QuestionLog {
@@ -371,16 +389,18 @@ export interface FlowSnapshotView extends FlowSnapshot {
 
 // --- Reconciliation decisions -----------------------------------------------
 // A single clustering decision the reconciler made while reshaping a flow's gap
-// clusters: a proposed merge or split, the model's rationale for it, and whether
-// the critic confirmed and the reconciler applied it. Persisted so a reviewer can
-// see WHY the clustering changed, not just its result — previously this lived only
-// in console logs.
+// clusters: a proposed merge, split, or dismissal, the model's rationale for it,
+// and whether the critic confirmed and the reconciler applied it. Persisted so a
+// reviewer can see WHY the clustering changed, not just its result — previously
+// this lived only in console logs.
 export interface ReconciliationDecisionRecord {
   id: string;
   // The flow the reshape belongs to; undefined for the un-routed/default flow.
   flowId?: string;
-  kind: "merge" | "split";
-  // The proposing model's rationale for the merge/split.
+  // "dismiss" = the cluster was judged off-topic for the knowledge base and dropped
+  // permanently (its gaps stamped dismissed) rather than merged or split.
+  kind: "merge" | "split" | "dismiss";
+  // The proposing model's rationale for the merge/split/dismissal.
   rationale: string;
   // The critic's verdict on the proposal.
   confirmed: boolean;
@@ -456,6 +476,9 @@ export interface AnswerQuestionJobOutput {
   // Present (answer withheld, confidence "unknown") when "auto" routing could not
   // determine a flow; the caller must re-ask naming one of these flows.
   flowSelectionRequired?: FlowSelectionRequired;
+  // Present (confidence "unknown", no gaps) when the picked flow judged the
+  // question off-topic for its knowledge area. No gap is raised for it.
+  outOfScope?: OutOfScope;
 }
 
 export interface SummarizeGapJobInput {

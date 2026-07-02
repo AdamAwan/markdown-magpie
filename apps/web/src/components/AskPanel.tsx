@@ -141,6 +141,11 @@ export function AskPanel({
               selection={answerResult.flowSelectionRequired}
             />
           ) : null}
+          {answerResult?.outOfScope ? (
+            <p className="outOfScopeNote" title="This question was judged off-topic for the selected flow, so no knowledge gap was raised.">
+              Off-topic for this flow — no knowledge gap raised.
+            </p>
+          ) : null}
           {answerResult?.citations.length ? (
             <div className="citationStack">
               {answerResult.citations.map((citation) => (
@@ -187,6 +192,11 @@ export function AskPanel({
                     question={item.question}
                     selection={item.answer.flowSelectionRequired}
                   />
+                ) : null}
+                {item.answer?.outOfScope ? (
+                  <p className="outOfScopeNote" title="This question was judged off-topic for the selected flow, so no knowledge gap was raised.">
+                    Off-topic for this flow — no knowledge gap raised.
+                  </p>
                 ) : null}
                 {item.answer?.gaps && item.answer.gaps.length > 0 ? (
                   <ul className="gapList" title="Distinct knowledge gaps detected for this question">

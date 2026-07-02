@@ -33,6 +33,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         FROM question_gaps qg
         JOIN questions q ON q.id = qg.question_id
         WHERE qg.resolved_at IS NULL
+          AND qg.dismissed_at IS NULL
           AND qg.summary = $1
           AND coalesce(q.flow_id, '') = coalesce($2, '')
         ORDER BY qg.id ASC
@@ -76,7 +77,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         )
         SELECT p.summary AS summary, p.flow AS flow, qg.id::text AS id
         FROM pairs p
-        JOIN question_gaps qg ON qg.summary = p.summary AND qg.resolved_at IS NULL
+        JOIN question_gaps qg ON qg.summary = p.summary AND qg.resolved_at IS NULL AND qg.dismissed_at IS NULL
         JOIN questions q ON q.id = qg.question_id AND coalesce(q.flow_id, '') = p.flow
         ORDER BY qg.id ASC
       `,
@@ -114,7 +115,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       return [];
     }
     const result = await this.pool.query<{ id: string }>(
-      "SELECT id::text AS id FROM question_gaps WHERE id = ANY($1::bigint[]) AND resolved_at IS NULL",
+      "SELECT id::text AS id FROM question_gaps WHERE id = ANY($1::bigint[]) AND resolved_at IS NULL AND dismissed_at IS NULL",
       [gapIds]
     );
     return result.rows.map((row) => row.id);
@@ -354,9 +355,11 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       source: QuestionGapSource;
       resolved_at: Date | null;
       resolved_by_proposal_id: string | null;
+      dismissed_at: Date | null;
+      dismissed_reason: string | null;
     }>(
       `
-        SELECT question_id, summary, source, resolved_at, resolved_by_proposal_id
+        SELECT question_id, summary, source, resolved_at, resolved_by_proposal_id, dismissed_at, dismissed_reason
         FROM question_gaps
         WHERE question_id = ANY($1)
         ORDER BY created_at ASC, id ASC
@@ -370,7 +373,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         summary: row.summary,
         source: row.source,
         resolvedAt: row.resolved_at?.toISOString(),
-        resolvedByProposalId: row.resolved_by_proposal_id ?? undefined
+        resolvedByProposalId: row.resolved_by_proposal_id ?? undefined,
+        dismissedAt: row.dismissed_at?.toISOString(),
+        dismissedReason: row.dismissed_reason ?? undefined
       });
       grouped.set(row.question_id, existing);
     }
@@ -421,6 +426,48 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     }
   }
 
+  async dismissGaps(gapIds: string[], reason: string): Promise<number> {
+    if (gapIds.length === 0) {
+      return 0;
+    }
+    const trimmedReason = reason.trim();
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<{ question_id: string }>(
+        `
+          UPDATE question_gaps
+          SET dismissed_at = now(), dismissed_reason = $2
+          WHERE id = ANY($1::bigint[])
+            AND resolved_at IS NULL
+            AND dismissed_at IS NULL
+          RETURNING question_id
+        `,
+        [gapIds, trimmedReason || null]
+      );
+      const dismissed = result.rowCount ?? 0;
+      // Dismissing gaps removes them from the candidate set, so each affected
+      // flow's catalog advances in the same transaction.
+      if (dismissed > 0) {
+        const affectedQuestionIds = [...new Set(result.rows.map((r) => r.question_id))];
+        const flows = await client.query<{ flow_id: string }>(
+          "SELECT DISTINCT coalesce(flow_id, '') AS flow_id FROM questions WHERE id = ANY($1)",
+          [affectedQuestionIds]
+        );
+        for (const { flow_id } of flows.rows) {
+          await bumpGapCatalog(client, flow_id);
+        }
+      }
+      await client.query("COMMIT");
+      return dismissed;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async reset(): Promise<void> {
     const client = await this.pool.connect();
     try {
@@ -456,7 +503,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           SELECT DISTINCT qg.summary, coalesce(q.flow_id, '') AS flow_id, q.id AS question_id, q.asked_at
           FROM question_gaps qg
           JOIN questions q ON q.id = qg.question_id
-          WHERE qg.resolved_at IS NULL AND (q.confidence = 'low' OR q.manual_gap = true)
+          WHERE qg.resolved_at IS NULL AND qg.dismissed_at IS NULL AND (q.confidence = 'low' OR q.manual_gap = true)
         ) AS distinct_gaps
         GROUP BY summary, flow_id
         ORDER BY count DESC, latest_asked_at DESC
