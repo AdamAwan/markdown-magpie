@@ -25,6 +25,7 @@ import {
   buildFlowSelectionRequiredOutput,
   buildPrompt,
   extractJson,
+  forcedSearchQueries,
   parseGroundingVerdict,
   parseJobOutput,
   withVerification,
@@ -142,17 +143,8 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
     answerForced
   });
 
-  for (let round = 0; round < MAX_SEARCH_ROUNDS && pool.size < MAX_POOL_SECTIONS; round += 1) {
-    const content = await assess(model, system, input.question, [...pool.values()], false, signal);
-    const assessment = parseAssessment(content);
-    if (assessment.action === "answer") {
-      logger.debug({ jobId: job.id, round, sectionCount: pool.size }, `answer_question[${job.id}]: answered after ${round} search round(s)`);
-      const output = buildAnswerOutput(content, [...pool.values()], input.question, flowId, unsatisfiedSearches, loopTrace(false));
-      return verifyAnswerGrounding(model, output, [...pool.values()], input.question, signal, job.id);
-    }
-
-    logger.debug({ jobId: job.id, round, queries: assessment.queries }, `answer_question[${job.id}]: running ${assessment.queries.length} follow-up search(es)`);
-    for (const query of assessment.queries) {
+  const runSearches = async (queries: string[], round: number): Promise<void> => {
+    for (const query of queries) {
       const results = await api.retrieve(query, flowId, undefined, signal);
       searches.push({ query, resultCount: results.length, round: round + 1 });
       if (results.length === 0) {
@@ -163,6 +155,35 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
         break;
       }
     }
+  };
+
+  for (let round = 0; round < MAX_SEARCH_ROUNDS && pool.size < MAX_POOL_SECTIONS; round += 1) {
+    const content = await assess(model, system, input.question, [...pool.values()], false, signal);
+    const assessment = parseAssessment(content);
+    if (assessment.action === "answer") {
+      // A model that answers low / flags a knowledge gap on the very first round —
+      // before any search has run — has given up prematurely (the exact failure that
+      // makes the loop look like it "never searches"). Force one search round from
+      // its own declared gaps so it decides with a fuller pool. Guarded on
+      // searches.length === 0, so it fires at most once and the loop still converges.
+      if (searches.length === 0) {
+        const forced = forcedSearchQueries(content);
+        if (forced.length > 0) {
+          logger.debug(
+            { jobId: job.id, round, queries: forced },
+            `answer_question[${job.id}]: forcing ${forced.length} gap-derived search(es) before accepting a low-confidence answer`
+          );
+          await runSearches(forced, round);
+          continue;
+        }
+      }
+      logger.debug({ jobId: job.id, round, sectionCount: pool.size }, `answer_question[${job.id}]: answered after ${round} search round(s)`);
+      const output = buildAnswerOutput(content, [...pool.values()], input.question, flowId, unsatisfiedSearches, loopTrace(false));
+      return verifyAnswerGrounding(model, output, [...pool.values()], input.question, signal, job.id);
+    }
+
+    logger.debug({ jobId: job.id, round, queries: assessment.queries }, `answer_question[${job.id}]: running ${assessment.queries.length} follow-up search(es)`);
+    await runSearches(assessment.queries, round);
   }
 
   // Ran out of search rounds or hit the section cap: force a final answer from
@@ -207,6 +228,7 @@ async function verifyAnswerGrounding(
         content: `Question:\n${question}\n\nAnswer under review:\n${output.answer}\n\nContext:\n${formatSectionContext(sections)}`
       }
     ],
+    responseFormat: "json",
     signal
   });
 
@@ -246,6 +268,7 @@ async function assess(
   const response = await model.complete({
     system,
     messages: [{ role: "user", content: `Question:\n${question}\n\nContext:\n${context}${directive}` }],
+    responseFormat: "json",
     signal
   });
   return response.content;

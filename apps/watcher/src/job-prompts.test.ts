@@ -6,8 +6,10 @@ import {
   applyGroundingVerdict,
   buildAnswerOutput,
   buildPrompt,
+  forcedSearchQueries,
   parseGroundingVerdict,
-  parseJobOutput
+  parseJobOutput,
+  UNPARSEABLE_ANSWER_FALLBACK
 } from "./job-prompts.js";
 
 function job(type: JobView["type"], input: unknown): JobView {
@@ -171,11 +173,22 @@ describe("buildAnswerOutput", () => {
     assert.equal(output.confidence, "low");
   });
 
-  it("downgrades unparseable model output to low confidence", () => {
+  it("downgrades unparseable prose output to low confidence but keeps the prose", () => {
     const output = buildAnswerOutput("Deploy by running the script.", SECTIONS, "How do I deploy?", "flow-1");
     assert.equal(output.answer, "Deploy by running the script.");
     assert.equal(output.confidence, "low", "output that broke the JSON contract ships at low, not a quiet medium");
     assert.equal(output.citations.length, 1, "the retrieved pool still attributes the raw answer");
+  });
+
+  it("never leaks a broken JSON envelope as the answer", () => {
+    // A model that embeds an unescaped quote produces invalid JSON that opens with
+    // "{" — the reader must see a safe fallback, not the raw {"action":...} envelope.
+    const brokenEnvelope =
+      '{"action":"answer","answer":"They said "hi" to me","confidence":"low","isKnowledgeGap":true}';
+    const output = buildAnswerOutput(brokenEnvelope, SECTIONS, "What did they say?", "flow-1");
+    assert.equal(output.answer, UNPARSEABLE_ANSWER_FALLBACK, "the broken envelope is replaced, not surfaced");
+    assert.doesNotMatch(output.answer, /"action"/, "no raw JSON leaks into the answer");
+    assert.equal(output.confidence, "low", "an unparseable structured attempt ships distrusted");
   });
 
   it("emits a followup gap on a confident answer when a search came back empty", () => {
@@ -215,6 +228,56 @@ describe("buildAnswerOutput", () => {
       new Set() // no search came back empty
     );
     assert.equal(output.gaps, undefined, "no grounded followup gaps ⇒ no gaps emitted");
+  });
+});
+
+describe("forcedSearchQueries", () => {
+  it("returns the declared gaps when the model gives up low before searching", () => {
+    const queries = forcedSearchQueries(
+      JSON.stringify({
+        action: "answer",
+        answer: "Not covered.",
+        confidence: "low",
+        isKnowledgeGap: true,
+        gaps: ["security certifications", "compliance status"]
+      })
+    );
+    assert.deepEqual(queries, ["security certifications", "compliance status"]);
+  });
+
+  it("caps the number of forced queries", () => {
+    const queries = forcedSearchQueries(
+      JSON.stringify({ answer: "x", confidence: "low", isKnowledgeGap: true, gaps: ["a", "b", "c", "d", "e"] }),
+      2
+    );
+    assert.deepEqual(queries, ["a", "b"]);
+  });
+
+  it("does not force a search for a confident answer", () => {
+    assert.deepEqual(
+      forcedSearchQueries(JSON.stringify({ answer: "Yes.", confidence: "high", isKnowledgeGap: false, gaps: [] })),
+      []
+    );
+  });
+
+  it("does not force a search for an off-topic question", () => {
+    assert.deepEqual(
+      forcedSearchQueries(
+        JSON.stringify({ answer: "Off topic.", confidence: "low", isKnowledgeGap: true, outOfScope: true, gaps: ["cats"] })
+      ),
+      []
+    );
+  });
+
+  it("returns nothing when a low answer names no gaps to search for", () => {
+    assert.deepEqual(
+      forcedSearchQueries(JSON.stringify({ answer: "Maybe.", confidence: "low", isKnowledgeGap: false, gaps: [] })),
+      []
+    );
+  });
+
+  it("returns nothing for an unparseable reply", () => {
+    assert.deepEqual(forcedSearchQueries("not json"), []);
   });
 });
 

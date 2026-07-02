@@ -60,7 +60,8 @@ export async function routeQuestionToFlow(
             2
           )}`
         }
-      ]
+      ],
+      responseFormat: "json"
     });
     content = response.content;
   } catch (error) {

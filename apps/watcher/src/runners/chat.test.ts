@@ -214,6 +214,62 @@ describe("ChatRunner", () => {
     assert.equal(output.trace.verification.status, "grounded");
   });
 
+  it("forces a gap-derived search when the model gives up low on the first round", async () => {
+    // Reproduces the reported failure: the model answers low / flags a knowledge gap
+    // immediately, without ever choosing action:"search". The guard must force one
+    // search from the model's own declared gaps before accepting the answer.
+    const queries: string[] = [];
+    const api = fakeApi({
+      retrieve: async (question) => {
+        queries.push(question);
+        return SECTIONS;
+      }
+    });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("route a user question")) {
+        return JSON.stringify({ flowId: "flow-b", confidence: "high" });
+      }
+      // Every assess round the model tries to give up with the same low-confidence
+      // knowledge-gap answer. Round 0 is intercepted and a search is forced; round 1
+      // (a search has now run) is accepted, so the loop converges.
+      return JSON.stringify({
+        action: "answer",
+        answer: "The knowledge base does not specify Magpie's security certifications.",
+        confidence: "low",
+        isKnowledgeGap: true,
+        gaps: ["specific security certifications held by Magpie"],
+        usedSectionIds: []
+      });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "What security certifications does Magpie have?",
+        flows: [{ id: "flow-b", name: "Beta" }],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as {
+      confidence: string;
+      gaps?: Array<{ source: string; summary: string }>;
+      trace?: { searches: Array<{ query: string; resultCount: number; round: number }> };
+    };
+
+    assert.ok(
+      queries.includes("specific security certifications held by Magpie"),
+      "the model's declared gap is searched for even though it only ever asked to answer"
+    );
+    assert.ok(output.trace, "the answer carries a trace");
+    assert.deepEqual(
+      output.trace.searches,
+      [{ query: "specific security certifications held by Magpie", resultCount: 1, round: 1 }],
+      "the forced search is recorded in the trace"
+    );
+    assert.equal(output.confidence, "low", "the answer still ships low once the search did not close the gap");
+    assert.ok(output.gaps && output.gaps.some((gap) => gap.source === "auto"), "the knowledge gap is still emitted");
+  });
+
   it("passes the abort signal through to retrieval", async () => {
     const controller = new AbortController();
     const signals: Array<AbortSignal | undefined> = [];
@@ -374,7 +430,10 @@ describe("ChatRunner", () => {
     )) as { confidence: string; trace?: { verification: { status: string; skipReason?: string } } };
 
     assert.equal(output.confidence, "low");
-    assert.equal(chat.requests.length, 1, "a gap answer already ships distrusted — no verify call");
+    assert.ok(
+      !chat.requests.some((request) => request.system.includes("You verify a drafted")),
+      "a gap answer already ships distrusted — no verify call"
+    );
     assert.equal(output.trace?.verification.status, "skipped");
     assert.equal(output.trace?.verification.skipReason, "low_confidence");
   });

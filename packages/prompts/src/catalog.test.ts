@@ -73,6 +73,11 @@ test("answer-question carries the grounding contract and confidence rubric", () 
     "a tempting unsupported fact is searched for, and an empty search becomes a followup gap"
   );
   assert.match(instructions, /use "high" ONLY when every claim is directly supported/);
+  assert.match(
+    instructions,
+    /Prefer searching to answering/,
+    "the model is nudged to search rather than settle for a low-confidence first-round answer"
+  );
 });
 
 test("withPersona appends the persona followed by the grounding guard", () => {

@@ -51,5 +51,18 @@ embedding endpoint.
 CODEX_CLI_PATH=codex npm run dev:watcher   # or CLAUDE_CLI_PATH=claude
 ```
 
+## JSON responses
+
+The `answer_question` flow's model calls (routing, the assess/answer step, and the
+grounding verification) set `ChatRequest.responseFormat = "json"`. The
+`openai-compatible` and `azure-openai` providers translate that to
+`response_format: { type: "json_object" }`, so the endpoint returns syntactically
+valid JSON — this closes the failure where a model embeds an unescaped quote in a
+JSON string and the whole reply fails to parse. The endpoint must support
+`response_format` (standard on OpenAI and virtually all compatible servers). CLI
+providers (`codex`, `claude`) cannot enforce it and rely on the prompt (which always
+demands JSON); as a final safety net the watcher never surfaces an unparsed,
+JSON-shaped reply as an answer.
+
 See [ai-jobs.md](ai-jobs.md) for the full job contract and capability model, and
 `.env.example` for every supported variable.

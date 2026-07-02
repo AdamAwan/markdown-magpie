@@ -480,6 +480,12 @@ export interface ChatRequest {
   // Optional caller-supplied cancellation. When the watcher aborts in-flight work
   // (job cancelled or shutdown) the underlying fetch is torn down, not abandoned.
   signal?: AbortSignal;
+  // When "json", the caller expects a JSON reply and API-backed providers ask the
+  // model to emit syntactically valid JSON (OpenAI/Azure response_format json_object).
+  // This closes the class of failures where a model embeds an unescaped quote in a
+  // JSON string and the whole reply fails to parse. CLI providers cannot enforce it
+  // and rely on the prompt (which already demands JSON) instead.
+  responseFormat?: "json";
 }
 
 export interface ChatResponse {
