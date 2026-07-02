@@ -68,6 +68,32 @@ const flowSelectionRequiredSchema = z.object({
 const outOfScopeSchema = z.object({
   reason: z.string().optional()
 });
+// The watcher's audit trail for an answer (routing, searches with hit counts,
+// grounding-verification outcome). Must be declared here or the broker strips it
+// from the completed output before it reaches the question log.
+const answerTraceSchema = z.object({
+  routing: z.object({
+    mode: z.enum(["requested", "routed", "unscoped", "unknown"]),
+    flowId: z.string().optional(),
+    confidence: confidenceSchema.optional()
+  }),
+  seedSectionCount: z.number().int().nonnegative(),
+  searches: z.array(
+    z.object({
+      query: z.string(),
+      resultCount: z.number().int().nonnegative(),
+      round: z.number().int().positive()
+    })
+  ),
+  poolSectionCount: z.number().int().nonnegative(),
+  answerForced: z.boolean(),
+  answerContract: z.enum(["structured", "unstructured"]).optional(),
+  verification: z.object({
+    status: z.enum(["grounded", "claims_stripped", "verdict_unparseable", "skipped"]),
+    skipReason: z.enum(["low_confidence", "no_sections", "flow_selection_required", "out_of_scope"]).optional(),
+    unsupportedClaims: z.array(z.string()).optional()
+  })
+});
 export const answerQuestionInputSchema = z.object({
   provider: providerSchema,
   questionLogId: z.string().optional(),
@@ -87,7 +113,8 @@ export const answerQuestionOutputSchema = z.object({
   gaps: z.array(gapSchema).optional(),
   flowId: z.string().optional(),
   flowSelectionRequired: flowSelectionRequiredSchema.optional(),
-  outOfScope: outOfScopeSchema.optional()
+  outOfScope: outOfScopeSchema.optional(),
+  trace: answerTraceSchema.optional()
 }) satisfies z.ZodType<AnswerQuestionJobOutput>;
 
 export const summarizeGapInputSchema = z.object({

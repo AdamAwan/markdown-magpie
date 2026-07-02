@@ -1,6 +1,85 @@
 import { FormEvent } from "react";
-import { AnswerResult, AskResponse, Feedback, QuestionLog } from "../lib/types";
+import { AnswerResult, AnswerTrace, AskResponse, Feedback, QuestionLog } from "../lib/types";
 import { CitationRow, FlowTag } from "./common";
+
+// Human labels for the trace's routing modes and verification outcomes. The raw
+// values are wire-contract enums; the console spells out what each means.
+const ROUTING_LABELS: Record<AnswerTrace["routing"]["mode"], string> = {
+  requested: "flow pinned by the caller",
+  routed: "routed by the model",
+  unscoped: "unscoped — routing was unavailable",
+  unknown: "no flow matched; flow selection requested"
+};
+
+const SKIP_REASON_LABELS: Record<NonNullable<AnswerTrace["verification"]["skipReason"]>, string> = {
+  low_confidence: "answer already ships at low confidence",
+  no_sections: "nothing was retrieved to verify against",
+  flow_selection_required: "no answer was drafted",
+  out_of_scope: "question judged off-topic"
+};
+
+function verificationLabel(verification: AnswerTrace["verification"]): string {
+  switch (verification.status) {
+    case "grounded":
+      return "ran — every claim supported by the retrieved context";
+    case "claims_stripped":
+      return `ran — ${verification.unsupportedClaims?.length ?? 0} unsupported claim(s) stripped, confidence downgraded`;
+    case "verdict_unparseable":
+      return "ran — verifier reply was unusable, drafted answer kept (fail open)";
+    case "skipped":
+      return `skipped${verification.skipReason ? ` — ${SKIP_REASON_LABELS[verification.skipReason]}` : ""}`;
+  }
+}
+
+// The per-answer audit trail: how routing went, every follow-up search with its
+// hit count (an empty search is what grounds a followup gap — so "why was no gap
+// raised?" is answerable here), and the grounding-verification outcome.
+function AnswerTraceBlock({ trace }: { trace: AnswerTrace }) {
+  const emptySearches = trace.searches.filter((search) => search.resultCount === 0).length;
+  return (
+    <details className="answerTrace">
+      <summary>How this was answered</summary>
+      <ul className="answerTraceList">
+        <li>
+          Routing: {ROUTING_LABELS[trace.routing.mode]}
+          {trace.routing.mode === "routed" && trace.routing.confidence ? ` (${trace.routing.confidence} confidence)` : ""}
+        </li>
+        <li>
+          Retrieval: {trace.seedSectionCount} seed section(s), {trace.poolSectionCount} in the final pool
+          {trace.answerForced ? " — search budget exhausted, final answer forced" : ""}
+        </li>
+        {trace.searches.length > 0 ? (
+          <li>
+            Follow-up searches ({trace.searches.length}, {emptySearches} empty):
+            <ul>
+              {trace.searches.map((search, index) => (
+                <li className={search.resultCount === 0 ? "answerTraceEmptySearch" : undefined} key={`search-${index}`}>
+                  “{search.query}” → {search.resultCount === 0 ? "nothing found (grounds a followup gap)" : `${search.resultCount} section(s)`}
+                </li>
+              ))}
+            </ul>
+          </li>
+        ) : (
+          <li>Follow-up searches: none requested — gaps can only be grounded by an empty search</li>
+        )}
+        {trace.answerContract === "unstructured" ? (
+          <li>Answer contract: model reply did not parse — shipped as raw text at low confidence</li>
+        ) : null}
+        <li>Grounding verification: {verificationLabel(trace.verification)}</li>
+        {trace.verification.unsupportedClaims?.length ? (
+          <li>
+            Stripped claims:
+            <ul>
+              {trace.verification.unsupportedClaims.map((claim, index) => (
+                <li key={`claim-${index}`}>{claim}</li>
+              ))}
+            </ul>
+          </li>
+        ) : null}
+      </ul>
+    </details>
+  );
+}
 
 // Shown when "auto" routing could not place a question: the answer was withheld
 // and the user picks one of the offered flows to re-ask, pinned to that flow.
@@ -153,6 +232,7 @@ export function AskPanel({
               ))}
             </div>
           ) : null}
+          {answerResult?.trace ? <AnswerTraceBlock trace={answerResult.trace} /> : null}
         </div>
       ) : null}
 
@@ -246,6 +326,7 @@ export function AskPanel({
                     ))}
                   </div>
                 ) : null}
+                {item.answer?.trace ? <AnswerTraceBlock trace={item.answer.trace} /> : null}
               </article>
             );
           })}

@@ -181,7 +181,17 @@ describe("ChatRunner", () => {
         expectedOutput: "answer_result"
       }),
       new AbortController().signal
-    )) as { citations: unknown[]; gaps?: Array<{ source: string; summary: string }> };
+    )) as {
+      citations: unknown[];
+      gaps?: Array<{ source: string; summary: string }>;
+      trace?: {
+        routing: { mode: string; flowId?: string };
+        seedSectionCount: number;
+        searches: Array<{ query: string; resultCount: number; round: number }>;
+        answerContract?: string;
+        verification: { status: string };
+      };
+    };
 
     assert.ok(queries.some((q) => q.includes("example")), "should run the model's follow-up search");
     assert.ok(
@@ -192,6 +202,16 @@ describe("ChatRunner", () => {
     assert.ok(output.gaps && output.gaps.length === 1);
     assert.equal(output.gaps[0].source, "followup");
     assert.equal(output.gaps[0].summary, "no concrete deploy example");
+
+    // The trace explains the run: routed flow, one empty follow-up search (the
+    // thing that grounded the followup gap), and a grounded verification.
+    assert.ok(output.trace, "the answer carries a trace");
+    assert.equal(output.trace.routing.mode, "routed");
+    assert.equal(output.trace.routing.flowId, "flow-b");
+    assert.equal(output.trace.seedSectionCount, 1);
+    assert.deepEqual(output.trace.searches, [{ query: "deploy example", resultCount: 0, round: 1 }]);
+    assert.equal(output.trace.answerContract, "structured");
+    assert.equal(output.trace.verification.status, "grounded");
   });
 
   it("passes the abort signal through to retrieval", async () => {
@@ -297,13 +317,21 @@ describe("ChatRunner", () => {
         expectedOutput: "answer_result"
       }),
       new AbortController().signal
-    )) as { answer: string; confidence: string; gaps?: Array<{ summary: string; source: string }> };
+    )) as {
+      answer: string;
+      confidence: string;
+      gaps?: Array<{ summary: string; source: string }>;
+      trace?: { routing: { mode: string }; verification: { status: string; unsupportedClaims?: string[] } };
+    };
 
     assert.equal(output.answer, "Run the deploy script.", "the fabricated claim is stripped from the answer");
     assert.equal(output.confidence, "low", "a fabricating answer ships distrusted, not HIGH");
     assert.ok(output.gaps && output.gaps.length === 1, "the stripped claim is recorded as a gap");
     assert.equal(output.gaps[0].summary, "SOC 2 compliance status");
     assert.equal(output.gaps[0].source, "auto");
+    assert.equal(output.trace?.routing.mode, "requested", "caller-pinned flow is traced as requested");
+    assert.equal(output.trace?.verification.status, "claims_stripped");
+    assert.deepEqual(output.trace?.verification.unsupportedClaims, ["SOC 2 compliance status"]);
   });
 
   it("keeps the drafted answer when the grounding verdict is unparseable (fails open)", async () => {
@@ -343,10 +371,12 @@ describe("ChatRunner", () => {
         expectedOutput: "answer_result"
       }),
       new AbortController().signal
-    )) as { confidence: string };
+    )) as { confidence: string; trace?: { verification: { status: string; skipReason?: string } } };
 
     assert.equal(output.confidence, "low");
     assert.equal(chat.requests.length, 1, "a gap answer already ships distrusted — no verify call");
+    assert.equal(output.trace?.verification.status, "skipped");
+    assert.equal(output.trace?.verification.skipReason, "low_confidence");
   });
 
   it("withholds the answer and requests flow selection when routing is unknown", async () => {
@@ -375,7 +405,11 @@ describe("ChatRunner", () => {
         expectedOutput: "answer_result"
       }),
       new AbortController().signal
-    )) as { confidence: string; flowSelectionRequired?: { availableFlows: Array<{ id: string }> } };
+    )) as {
+      confidence: string;
+      flowSelectionRequired?: { availableFlows: Array<{ id: string }> };
+      trace?: { routing: { mode: string }; verification: { status: string; skipReason?: string } };
+    };
 
     assert.equal(retrieveCalled, false, "should not retrieve when routing is unknown");
     assert.equal(output.confidence, "unknown");
@@ -383,6 +417,8 @@ describe("ChatRunner", () => {
       output.flowSelectionRequired?.availableFlows.map((flow) => flow.id),
       ["flow-a", "flow-b"]
     );
+    assert.equal(output.trace?.routing.mode, "unknown", "the abstained routing is traced");
+    assert.equal(output.trace?.verification.skipReason, "flow_selection_required");
   });
 
   it("runs buildPrompt -> chat -> parseJobOutput for non-answer jobs", async () => {

@@ -3,6 +3,7 @@
 // shapes. Only genuinely web-only types are declared locally below.
 export type {
   AnswerResult,
+  AnswerTrace,
   ChangeIntentTrace,
   Citation,
   Confidence,

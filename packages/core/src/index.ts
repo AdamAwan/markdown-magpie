@@ -104,6 +104,53 @@ export interface AnswerResult {
   // Present (with confidence "unknown", no gaps) when the picked flow judged the
   // question off-topic for its knowledge area and declined to answer.
   outOfScope?: OutOfScope;
+  // How the watcher produced this answer — recorded so the console can explain an
+  // answer (searches run, verification outcome) the way Schedules explains a run.
+  trace?: AnswerTrace;
+}
+
+// One follow-up search the model requested during the agentic answer loop. An
+// empty search (resultCount 0) is what grounds a followup gap, so the trace makes
+// "why was no gap raised?" answerable: either no search ran, or every search hit.
+export interface AnswerTraceSearch {
+  query: string;
+  resultCount: number;
+  // 1-based search round the query ran in (several queries can share a round).
+  round: number;
+}
+
+// The audit trail of one answer_question run, assembled by the watcher and stored
+// with the question log. Every field reflects what actually happened in the loop —
+// nothing here is model-self-reported except the routing confidence.
+export interface AnswerTrace {
+  routing: {
+    // "requested" = caller pinned the flow; "routed" = the model picked it;
+    // "unscoped" = routing infrastructure failed and the answer ran unscoped;
+    // "unknown" = routing abstained and flow selection was requested instead.
+    mode: "requested" | "routed" | "unscoped" | "unknown";
+    flowId?: string;
+    confidence?: Confidence;
+  };
+  // Sections the seed retrieval (the question itself) returned.
+  seedSectionCount: number;
+  searches: AnswerTraceSearch[];
+  // Deduped size of the context pool the final answer drew from.
+  poolSectionCount: number;
+  // True when the loop hit its round/pool cap and forced a final answer.
+  answerForced: boolean;
+  // Whether the model's final reply honoured the structured-answer JSON contract.
+  // "unstructured" means the raw text shipped and confidence was forced low.
+  // Absent when no answer was drafted at all (flow selection was requested).
+  answerContract?: "structured" | "unstructured";
+  verification: {
+    // "grounded" = every claim checked out; "claims_stripped" = unsupported claims
+    // were removed and the answer downgraded; "verdict_unparseable" = the verifier
+    // reply was unusable and the drafted answer shipped as-is (fail open);
+    // "skipped" = the check did not run (see skipReason).
+    status: "grounded" | "claims_stripped" | "verdict_unparseable" | "skipped";
+    skipReason?: "low_confidence" | "no_sections" | "flow_selection_required" | "out_of_scope";
+    unsupportedClaims?: string[];
+  };
 }
 
 export interface KnowledgeGapSignal {
@@ -479,6 +526,9 @@ export interface AnswerQuestionJobOutput {
   // Present (confidence "unknown", no gaps) when the picked flow judged the
   // question off-topic for its knowledge area. No gap is raised for it.
   outOfScope?: OutOfScope;
+  // The watcher's audit trail for this answer (routing, searches, verification).
+  // Persisted with the question log so the console can explain the answer.
+  trace?: AnswerTrace;
 }
 
 export interface SummarizeGapJobInput {

@@ -1,4 +1,11 @@
-import type { Citation, Confidence, FlowSelectionRequired, KnowledgeGapSignal, OutOfScope } from "@magpie/core";
+import type {
+  AnswerTrace,
+  Citation,
+  Confidence,
+  FlowSelectionRequired,
+  KnowledgeGapSignal,
+  OutOfScope
+} from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { jobDefinition } from "@magpie/jobs";
 import type { z } from "zod";
@@ -28,13 +35,20 @@ export interface AnswerOutput {
   flowId?: string;
   flowSelectionRequired?: FlowSelectionRequired;
   outOfScope?: OutOfScope;
+  trace?: AnswerTrace;
 }
+
+// The loop-level portion of the trace the answer runner assembles as it goes
+// (routing, searches, pool). buildAnswerOutput completes it with the answer
+// contract, and the grounding check fills in the verification outcome.
+export type AnswerLoopTrace = Omit<AnswerTrace, "answerContract" | "verification">;
 
 // The answer "auto" routing produces when it cannot determine a flow: no answer,
 // confidence "unknown", and the list of flows the caller should choose between
 // before re-asking. The UI and MCP key off `flowSelectionRequired`, not the prose.
 export function buildFlowSelectionRequiredOutput(
-  flows: Array<{ id: string; name: string }>
+  flows: Array<{ id: string; name: string }>,
+  loopTrace?: AnswerLoopTrace
 ): AnswerOutput {
   return {
     answer:
@@ -44,7 +58,12 @@ export function buildFlowSelectionRequiredOutput(
     citations: [],
     flowSelectionRequired: {
       availableFlows: flows.map((flow) => ({ id: flow.id, name: flow.name }))
-    }
+    },
+    // No answer was drafted, so there is no contract to report; the trace still
+    // explains that routing abstained and nothing was retrieved or verified.
+    ...(loopTrace
+      ? { trace: { ...loopTrace, verification: { status: "skipped", skipReason: "flow_selection_required" } } }
+      : {})
   };
 }
 
@@ -105,13 +124,23 @@ export function buildAnswerOutput(
   sections: RetrievedSection[],
   question: string,
   flowId: string | undefined,
-  unsatisfiedSearches: Set<string> = new Set()
+  unsatisfiedSearches: Set<string> = new Set(),
+  loopTrace?: AnswerLoopTrace
 ): AnswerOutput {
   const structured = parseStructuredAnswer(modelContent);
   const answer = structured?.answer ?? modelContent.trim();
   const { citations, attributionFailed } = selectCitations(sections, structured?.usedSectionIds ?? []);
   const citedSectionIds = citations.map((citation) => citation.sectionId);
   const followupGaps = groundedFollowupGaps(structured, question, citedSectionIds, unsatisfiedSearches);
+  // The verification outcome is a placeholder here; the grounding check in the
+  // answer runner overwrites it with what actually happened (ran/skipped and why).
+  const trace: AnswerTrace | undefined = loopTrace
+    ? {
+        ...loopTrace,
+        answerContract: structured ? "structured" : "unstructured",
+        verification: { status: "skipped" }
+      }
+    : undefined;
 
   // Off-topic for this flow's knowledge area: the flow declines to answer and — the
   // point of the whole check — emits NO gaps, so an unrelated question (e.g. "cats"
@@ -124,7 +153,8 @@ export function buildAnswerOutput(
       confidence: "unknown",
       citations: [],
       outOfScope: answer ? { reason: answer } : {},
-      ...(flowId ? { flowId } : {})
+      ...(flowId ? { flowId } : {}),
+      ...(trace ? { trace } : {})
     };
   }
 
@@ -139,7 +169,8 @@ export function buildAnswerOutput(
       confidence: "low",
       citations,
       gaps: [...autoGaps, ...followupGaps],
-      ...(flowId ? { flowId } : {})
+      ...(flowId ? { flowId } : {}),
+      ...(trace ? { trace } : {})
     };
   }
 
@@ -153,8 +184,15 @@ export function buildAnswerOutput(
     confidence,
     citations,
     ...(followupGaps.length > 0 ? { gaps: followupGaps } : {}),
-    ...(flowId ? { flowId } : {})
+    ...(flowId ? { flowId } : {}),
+    ...(trace ? { trace } : {})
   };
+}
+
+// Records what the grounding check actually did on the output's trace. A no-op
+// for outputs built without a loop trace (unit tests, legacy callers).
+export function withVerification(output: AnswerOutput, verification: AnswerTrace["verification"]): AnswerOutput {
+  return output.trace ? { ...output, trace: { ...output.trace, verification } } : output;
 }
 
 // Narrows the accumulated pool to the sections the model actually used, ordered
