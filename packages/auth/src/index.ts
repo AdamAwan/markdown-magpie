@@ -7,6 +7,14 @@ import {
 } from "jose";
 
 export { createApiTokenProvider, type ApiTokenProvider, type ApiTokenProviderConfig } from "./api-token.js";
+export {
+  ON_BEHALF_OF_SCOPE,
+  ON_BEHALF_OF_SUBJECT_HEADER,
+  ON_BEHALF_OF_ROLES_HEADER,
+  serializeOnBehalfRoles,
+  parseOnBehalfRoles,
+  resolveEffectivePrincipal
+} from "./on-behalf-of.js";
 
 export interface AuthSettings {
   required: boolean;

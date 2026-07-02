@@ -5,6 +5,9 @@ import {
   createRemoteAuthVerifier,
   hasScopes,
   parseBearerToken,
+  resolveEffectivePrincipal,
+  ON_BEHALF_OF_ROLES_HEADER,
+  ON_BEHALF_OF_SUBJECT_HEADER,
   type AuthSettings,
   type Principal
 } from "@magpie/auth";
@@ -43,7 +46,14 @@ export function requireAuth(options: ApiAuthOptions): MiddlewareHandler {
     c.set("authRequired", true);
     try {
       const principal = await verifier.verify(parseBearerToken(c.req.header("authorization")));
-      c.set("principal", principal);
+      // Apply on-behalf-of delegation: when a trusted gateway (the MCP service,
+      // holding act:on-behalf-of) forwards a verified user identity, authorize as
+      // that user. A no-op for every other caller — see resolveEffectivePrincipal.
+      const effective = resolveEffectivePrincipal(principal, {
+        subject: c.req.header(ON_BEHALF_OF_SUBJECT_HEADER),
+        roles: c.req.header(ON_BEHALF_OF_ROLES_HEADER)
+      });
+      c.set("principal", effective);
       await next();
     } catch (error) {
       if (error instanceof AuthError) {
