@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import http, { type Server } from "node:http";
-import { AddressInfo } from "node:net";
-import type { Express } from "express";
+import request from "supertest";
 import { exportJWK, generateKeyPair, SignJWT, type JSONWebKeySet } from "jose";
 import { createHttpMcpApp, mcpAuthSettingsFromEnv, type HttpMcpOptions } from "./http.js";
 
@@ -10,96 +8,10 @@ const authIssuer = "https://example.auth0.com/";
 const authAudience = "https://markdown-magpie.local/api";
 const resourceUrl = "https://mcp-magpie.wastedcake.com/mcp";
 
-interface HttpResponse {
-  status: number;
-  header: Record<string, string>;
-  body: unknown;
-  text: string;
-}
-
-// Minimal supertest-style helper over node:http so the suite has no extra
-// runtime dependency. Boots the Express app on an ephemeral port per request
-// chain and tears it down afterwards.
-function request(app: Express) {
-  function send(method: string, path: string, payload?: unknown, extraHeaders?: Record<string, string>): Promise<HttpResponse> {
-    return new Promise((resolve, reject) => {
-      const server: Server = app.listen(0, "127.0.0.1", () => {
-        const { port } = server.address() as AddressInfo;
-        const body = payload === undefined ? undefined : JSON.stringify(payload);
-        const headers: Record<string, string> = { host: "127.0.0.1" };
-        if (body !== undefined) {
-          headers["content-type"] = "application/json";
-        }
-        if (extraHeaders) {
-          Object.assign(headers, extraHeaders);
-        }
-
-        const req = createRequest(port, method, path, headers, (res) => {
-          server.close();
-          resolve(res);
-        }, (err) => {
-          server.close();
-          reject(err);
-        });
-
-        if (body !== undefined) {
-          req.write(body);
-        }
-        req.end();
-      });
-    });
-  }
-
-  return {
-    get: (path: string, authorization?: string) =>
-      send("GET", path, undefined, authorization === undefined ? undefined : { authorization }),
-    post: (path: string) => {
-      const extraHeaders: Record<string, string> = {};
-      const chain = {
-        set(name: string, value: string) {
-          // Existing tests call .set("authorization", ...); generalising to any
-          // header lets newer tests add the Accept header the transport needs.
-          extraHeaders[name] = value;
-          return chain;
-        },
-        send(payload: unknown) {
-          return send("POST", path, payload, extraHeaders);
-        }
-      };
-      return chain;
-    }
-  };
-}
-
-function createRequest(
-  port: number,
-  method: string,
-  path: string,
-  headers: Record<string, string>,
-  onResponse: (res: HttpResponse) => void,
-  onError: (err: Error) => void
-) {
-  const req = http.request({ host: "127.0.0.1", port, method, path, headers }, (res) => {
-    const chunks: Buffer[] = [];
-    res.on("data", (chunk: Buffer) => chunks.push(chunk));
-    res.on("end", () => {
-      const text = Buffer.concat(chunks).toString("utf8");
-      const header: Record<string, string> = {};
-      for (const [key, value] of Object.entries(res.headers)) {
-        header[key] = Array.isArray(value) ? value.join(", ") : (value ?? "");
-      }
-      let body: unknown;
-      try {
-        body = text ? JSON.parse(text) : undefined;
-      } catch {
-        body = undefined;
-      }
-      onResponse({ status: res.statusCode ?? 0, header, body, text });
-    });
-  });
-  req.on("error", onError);
-  return req;
-}
+// The suite drives the Express app in-process via supertest. supertest binds an
+// ephemeral loopback server per request and connects without a DNS lookup, so the
+// tests never depend on the host's name resolution (a hand-rolled node:http helper
+// used to hang here when a sandbox's loopback getaddrinfo stalled).
 
 async function makeTestAuth(): Promise<{
   jwks: () => Promise<JSONWebKeySet>;
