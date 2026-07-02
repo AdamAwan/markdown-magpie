@@ -1,5 +1,6 @@
 import { FormEvent } from "react";
 import { AnswerResult, AnswerTrace, AskResponse, Feedback, QuestionLog } from "../lib/types";
+import { AnswerProse } from "./AnswerProse";
 import { CitationRow, FlowTag } from "./common";
 
 // Human labels for the trace's routing modes and verification outcomes. The raw
@@ -211,7 +212,11 @@ export function AskPanel({
             </div>
             <code>{answer.questionId}</code>
           </div>
-          <p>{answerResult?.answer ?? `Queued as ${answer.job.type} (${answer.job.state})`}</p>
+          {answerResult?.answer ? (
+            <AnswerProse text={answerResult.answer} />
+          ) : (
+            <p>{`Queued as ${answer.job.type} (${answer.job.state})`}</p>
+          )}
           {answerResult?.flowSelectionRequired && answeredQuestion ? (
             <FlowSelectionPrompt
               disabled={loading}
@@ -264,7 +269,11 @@ export function AskPanel({
                     </span>
                   </div>
                 </div>
-                <p>{item.answer?.answer ?? "Waiting for an answer."}</p>
+                {item.answer?.answer ? (
+                  <AnswerProse text={item.answer.answer} />
+                ) : (
+                  <p>Waiting for an answer.</p>
+                )}
                 {item.answer?.flowSelectionRequired ? (
                   <FlowSelectionPrompt
                     disabled={loading}
