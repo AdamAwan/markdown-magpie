@@ -7,6 +7,7 @@ import {
 } from "jose";
 
 export { createApiTokenProvider, type ApiTokenProvider, type ApiTokenProviderConfig } from "./api-token.js";
+export { createTokenExchanger, type TokenExchanger, type TokenExchangeConfig } from "./token-exchange.js";
 
 export interface AuthSettings {
   required: boolean;
