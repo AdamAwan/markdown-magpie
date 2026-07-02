@@ -491,6 +491,15 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     // Group by (summary, flow_id) so the same gap raised under two flows yields
     // two candidates, each clustering and drafting within its own flow. flow_id
     // is coalesced to '' so NULL (un-routed) gaps still group with each other.
+    //
+    // Every unresolved, undismissed gap row is a candidate — candidacy keys on
+    // the gap rows, NOT on the question's confidence. Gap rows are only written
+    // when something was verifiably missing ('auto' rows only on the forced
+    // low-confidence branch, 'followup' rows only when a search observably came
+    // back empty, 'manual' rows only when an admin flags), so a question-level
+    // confidence filter adds nothing for those — and it wrongly hid 'followup'
+    // gaps raised alongside confident answers (e.g. "searched for SOC 2 docs,
+    // found none"), which are exactly the gaps that should cluster and draft.
     const result = await this.pool.query<GapCandidateRow>(
       `
         SELECT
@@ -503,7 +512,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           SELECT DISTINCT qg.summary, coalesce(q.flow_id, '') AS flow_id, q.id AS question_id, q.asked_at
           FROM question_gaps qg
           JOIN questions q ON q.id = qg.question_id
-          WHERE qg.resolved_at IS NULL AND qg.dismissed_at IS NULL AND (q.confidence = 'low' OR q.manual_gap = true)
+          WHERE qg.resolved_at IS NULL AND qg.dismissed_at IS NULL
         ) AS distinct_gaps
         GROUP BY summary, flow_id
         ORDER BY count DESC, latest_asked_at DESC

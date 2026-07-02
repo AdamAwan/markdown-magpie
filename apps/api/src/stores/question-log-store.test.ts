@@ -113,6 +113,29 @@ test("listGapCandidates includes a manually flagged high-confidence question", a
   assert.deepEqual(candidates[0].questionIds, [log.id]);
 });
 
+test("listGapCandidates includes a followup gap raised on a confident answer", async () => {
+  // The "do we have SOC 2?" scenario: the answer itself is confident and well
+  // cited, but a search for supporting material verifiably found nothing. That
+  // followup gap must still cluster — candidacy keys on gap rows, not on the
+  // question's confidence.
+  const store = new InMemoryQuestionLogStore();
+  const confident: AnswerResult = {
+    answer: "Deploy with the script.",
+    confidence: "high",
+    citations: [],
+    gaps: [
+      { summary: "SOC 2 compliance status", question: "How do I sell this as secure?", confidence: "high", citedSectionIds: [], source: "followup" }
+    ]
+  };
+  const log = await store.record({ question: "How do I sell this as secure?", chatProvider: "codex", answer: confident, retrievedSectionIds: [] });
+
+  const candidates = await store.listGapCandidates(50);
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].summary, "SOC 2 compliance status");
+  assert.deepEqual(candidates[0].questionIds, [log.id]);
+});
+
 test("listGapCandidates still includes auto-detected low-confidence gaps", async () => {
   const store = new InMemoryQuestionLogStore();
   await store.record({ question: "vaccines?", chatProvider: "codex", answer: lowGapAnswer, retrievedSectionIds: [] });

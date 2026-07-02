@@ -115,7 +115,9 @@ describe("CliRunner", () => {
     });
     const script = [
       "const prompt = process.argv.at(-1) || '';",
-      "if (prompt.includes('Context:')) {",
+      "if (prompt.includes('Answer under review:')) {",
+      "  process.stdout.write(JSON.stringify({ grounded: true, unsupportedClaims: [] }));",
+      "} else if (prompt.includes('Context:')) {",
       "  process.stdout.write(JSON.stringify({ answer: 'Run the deploy script.', confidence: 'high', isKnowledgeGap: false }));",
       "} else {",
       "  process.stdout.write(JSON.stringify({ flowId: 'flow-b', confidence: 'high' }));",

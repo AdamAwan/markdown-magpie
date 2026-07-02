@@ -110,9 +110,13 @@ describe("ChatRunner", () => {
       }
     });
     const chat = new FakeChatProvider((request) => {
-      // The routing call asks for a flow id; the answer call asks the question.
-      if (request.system.includes("flow")) {
+      // The routing call asks for a flow id; the grounding check reviews the
+      // drafted answer; the answer call asks the question.
+      if (request.system.includes("route a user question")) {
         return JSON.stringify({ flowId: "flow-b", confidence: "high" });
+      }
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
       }
       return JSON.stringify({ answer: "Run the deploy script.", confidence: "high", isKnowledgeGap: false });
     });
@@ -150,6 +154,9 @@ describe("ChatRunner", () => {
     const chat = new FakeChatProvider((request) => {
       if (request.system.includes("route a user question")) {
         return JSON.stringify({ flowId: "flow-b", confidence: "high" });
+      }
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
       }
       // Ask to search for an example first; once that search has run, answer and
       // report the missing example as a followup gap.
@@ -222,10 +229,12 @@ describe("ChatRunner", () => {
         return SECTIONS;
       }
     });
-    // Always answer; if routing ran it would be a second (earlier) request.
-    const chat = new FakeChatProvider(() =>
-      JSON.stringify({ answer: "Run the deploy script.", confidence: "high", isKnowledgeGap: false })
-    );
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      return JSON.stringify({ answer: "Run the deploy script.", confidence: "high", isKnowledgeGap: false });
+    });
     const runner = new ChatRunner("openai-compatible", chat, api);
     const output = (await runner.run(
       job("answer_question", {
@@ -243,7 +252,101 @@ describe("ChatRunner", () => {
 
     assert.equal(retrievedFlow, "flow-a", "should retrieve with the caller-specified flow");
     assert.equal(output.flowId, "flow-a");
-    assert.equal(chat.requests.length, 1, "should not make a routing call");
+    assert.equal(chat.requests.length, 2, "answer + grounding check only — no routing call");
+    assert.ok(
+      chat.requests.every((request) => !request.system.includes("route a user question")),
+      "should not make a routing call"
+    );
+  });
+
+  it("strips fabricated claims, downgrades to low, and records them as gaps when the grounding check fails", async () => {
+    // The fabrication scenario: retrieval returned real material, but the model
+    // "sold" the answer with compliance claims (SOC 2) the context never states.
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("You verify a drafted")) {
+        assert.match(
+          request.messages[0]?.content ?? "",
+          /SOC 2 certified/,
+          "the verifier reviews the drafted answer"
+        );
+        assert.match(
+          request.messages[0]?.content ?? "",
+          /\[section doc-1#deploy\]/,
+          "the verifier sees the retrieved context the answer was drafted from"
+        );
+        return JSON.stringify({
+          grounded: false,
+          unsupportedClaims: ["SOC 2 compliance status"],
+          revisedAnswer: "Run the deploy script."
+        });
+      }
+      return JSON.stringify({
+        answer: "Run the deploy script. We are SOC 2 certified.",
+        confidence: "high",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"]
+      });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I sell this as secure?",
+        flows: [{ id: "flow-a", name: "Alpha" }],
+        requestedFlowId: "flow-a",
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { answer: string; confidence: string; gaps?: Array<{ summary: string; source: string }> };
+
+    assert.equal(output.answer, "Run the deploy script.", "the fabricated claim is stripped from the answer");
+    assert.equal(output.confidence, "low", "a fabricating answer ships distrusted, not HIGH");
+    assert.ok(output.gaps && output.gaps.length === 1, "the stripped claim is recorded as a gap");
+    assert.equal(output.gaps[0].summary, "SOC 2 compliance status");
+    assert.equal(output.gaps[0].source, "auto");
+  });
+
+  it("keeps the drafted answer when the grounding verdict is unparseable (fails open)", async () => {
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("You verify a drafted")) {
+        return "not a verdict at all";
+      }
+      return JSON.stringify({ answer: "Run the deploy script.", confidence: "high", isKnowledgeGap: false });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-a", name: "Alpha" }],
+        requestedFlowId: "flow-a",
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { answer: string; confidence: string };
+
+    assert.equal(output.answer, "Run the deploy script.");
+    assert.equal(output.confidence, "high", "a flaky verifier must not downgrade every answer");
+  });
+
+  it("skips the grounding check for knowledge-gap answers", async () => {
+    const chat = new FakeChatProvider(() =>
+      JSON.stringify({ answer: "Not covered.", confidence: "low", isKnowledgeGap: true, gaps: ["rollback docs"] })
+    );
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I roll back?",
+        flows: [{ id: "flow-a", name: "Alpha" }],
+        requestedFlowId: "flow-a",
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { confidence: string };
+
+    assert.equal(output.confidence, "low");
+    assert.equal(chat.requests.length, 1, "a gap answer already ships distrusted — no verify call");
   });
 
   it("withholds the answer and requests flow selection when routing is unknown", async () => {

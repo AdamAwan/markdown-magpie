@@ -43,6 +43,41 @@ Gap candidates are grouped by gap summary, across the individual gaps of every q
 
 The answer is produced by an **agentic retrieval loop** (see [ai-jobs.md](./ai-jobs.md)): after an initial retrieval the model may run bounded follow-up searches within the routed flow to pull in closely related material before answering, and it cites only the sections it actually used. When one of those follow-up searches for supporting material (e.g. "a concrete example of X") comes back empty, the model can record a `followup` gap **even on a confident, well-cited answer**. These are grounded — kept only when the loop actually observed a search return nothing — so they point at a specific missing artifact rather than a whole-question failure. `followup` gaps join the same candidate-clustering and proposal workflow as `auto` gaps.
 
+## Answer Grounding
+
+Answers must be grounded in retrieved context — the system must say "the knowledge
+base does not cover X" rather than fabricate. Several layers enforce this:
+
+- **Prompt contract.** The `answer-question` prompt makes the retrieved sections the
+  model's only permitted source of facts: no certifications, compliance claims,
+  figures, or capabilities the context does not state, even for persuasive or
+  sales-flavoured questions — missing selling points are knowledge gaps, not licence
+  to invent. Confidence is defined against context support ("high" only when every
+  claim is directly supported by the cited sections), and a fixed guard appended
+  after every flow persona states that a persona shapes tone only and never adds
+  facts.
+- **Untrusted output ships distrusted.** Model output that breaks the structured
+  answer contract (unparseable JSON, or an answer attributed only to invented
+  section ids) is downgraded to `low` confidence instead of defaulting to a quiet
+  `medium`.
+- **Search before asserting.** During the agentic retrieval loop the prompt directs
+  the model to treat a tempting-but-absent supporting fact ("do we have SOC 2?") as
+  a search, not an assertion. When that search comes back empty, the missing topic
+  is recorded as a `followup` gap alongside the (still confident) answer instead of
+  appearing in it. Gap candidacy keys on gap rows — not question confidence — so
+  these followup gaps cluster and draft proposals even though the answer itself was
+  strong.
+- **Grounding verification.** Before a `medium`/`high` answer is returned, the
+  watcher runs a second model call (the `verify-answer` prompt) reviewing the
+  drafted answer against the full retrieved pool. Unsupported claims are stripped
+  via the verifier's revised answer, the answer drops to `low` confidence, and each
+  stripped claim is recorded as an `auto` gap — so a question that tempted the model
+  to fabricate (e.g. "are we SOC 2 compliant?") feeds gap clustering and can become
+  a real documentation proposal. An unparseable verdict fails open (the drafted
+  answer is kept) so a flaky verifier cannot downgrade every answer; gap,
+  out-of-scope, and already-`low` answers skip the extra call because they already
+  ship distrusted.
+
 The model can also mark an answer **out of scope**: when the question is unrelated to the picked flow's subject area — e.g. a question about cats asked of a product flow — it sets `outOfScope`, and the answer is returned at `unknown` confidence with **no gaps at all**. This is distinct from `isKnowledgeGap` ("this flow *should* cover the topic but the docs don't"): an off-topic question is not a gap, so it never clusters or drafts a proposal. The out-of-scope signal rides on the answer result (`outOfScope`) so the console and MCP can surface it distinctly from a low-confidence answer. This is the picked flow's counterpart to the router's `flowSelectionRequired` abstain, which fires earlier when no flow can be chosen at all.
 
 Gaps can also be flagged manually — via the **Knowledge gap** chip in the console, or the MCP `kb.feedback` tool — when the system fails to detect one automatically. A manual flag is separate from helpful/unhelpful feedback (an answer can be helpful and still expose a gap), and a manually-flagged question joins the same gap-candidate clustering and proposal workflow regardless of its answer confidence. Manual flagging adds a `manual` gap (its summary falls back to the question text) alongside any auto-detected gaps; clearing the flag removes only the manual gap and leaves auto-detected gaps intact.
@@ -52,5 +87,6 @@ Gaps can also be flagged manually — via the **Knowledge gap** chip in the cons
 Every answer runs through the queue. When a question is asked, the API logs it
 immediately with unknown confidence and enqueues an `answer_question` job
 carrying the question log ID. A watcher routes the question to a flow, retrieves
-context, synthesises the answer, and completes the job; completion updates the
-log with the answer, confidence, chosen flow, and any detected gaps.
+context, synthesises the answer, verifies it against the retrieved context (see
+**Answer Grounding** above), and completes the job; completion updates the log
+with the answer, confidence, chosen flow, and any detected gaps.

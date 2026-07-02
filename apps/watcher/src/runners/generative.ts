@@ -7,17 +7,27 @@ import {
   reconcileGapClustersInputSchema,
   reconcileGapClustersOutputSchema
 } from "@magpie/jobs";
-import { ANSWER_QUESTION, GAP_RECONCILE_CRITIC, GAP_RECONCILE_PROPOSE, JOB_RUNNER_SYSTEM, withPersona } from "@magpie/prompts";
+import {
+  ANSWER_QUESTION,
+  GAP_RECONCILE_CRITIC,
+  GAP_RECONCILE_PROPOSE,
+  JOB_RUNNER_SYSTEM,
+  VERIFY_ANSWER,
+  withPersona
+} from "@magpie/prompts";
 import { routeQuestionToFlow, type FlowRoute, type RoutableFlow } from "@magpie/retrieval";
 import type { z } from "zod";
 import type { RetrievedSection, WatcherApi } from "../http-client.js";
 import { logger } from "../logger.js";
 import {
+  applyGroundingVerdict,
   buildAnswerOutput,
   buildFlowSelectionRequiredOutput,
   buildPrompt,
   extractJson,
-  parseJobOutput
+  parseGroundingVerdict,
+  parseJobOutput,
+  type AnswerOutput
 } from "../job-prompts.js";
 
 export interface GenerativeJobOptions {
@@ -106,7 +116,8 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
     const assessment = parseAssessment(content);
     if (assessment.action === "answer") {
       logger.debug({ jobId: job.id, round, sectionCount: pool.size }, `answer_question[${job.id}]: answered after ${round} search round(s)`);
-      return buildAnswerOutput(content, [...pool.values()], input.question, flowId, unsatisfiedSearches);
+      const output = buildAnswerOutput(content, [...pool.values()], input.question, flowId, unsatisfiedSearches);
+      return verifyAnswerGrounding(model, output, [...pool.values()], input.question, signal, job.id);
     }
 
     logger.debug({ jobId: job.id, round, queries: assessment.queries }, `answer_question[${job.id}]: running ${assessment.queries.length} follow-up search(es)`);
@@ -126,7 +137,54 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
   // whatever has accumulated (no further searching allowed).
   logger.debug({ jobId: job.id, sectionCount: pool.size }, `answer_question[${job.id}]: forcing final answer from ${pool.size} section(s)`);
   const finalContent = await assess(model, system, input.question, [...pool.values()], true, signal);
-  return buildAnswerOutput(finalContent, [...pool.values()], input.question, flowId, unsatisfiedSearches);
+  const output = buildAnswerOutput(finalContent, [...pool.values()], input.question, flowId, unsatisfiedSearches);
+  return verifyAnswerGrounding(model, output, [...pool.values()], input.question, signal, job.id);
+}
+
+// Post-answer grounding check: a second model call reviews the drafted answer
+// against the whole retrieved pool (not just the cited subset, so a claim backed
+// by an uncited-but-retrieved section is not falsely flagged) and every
+// unsupported claim is stripped, the answer downgraded to low, and the claims
+// recorded as gaps. Only medium/high answers are checked — gap, out-of-scope, and
+// already-low answers ship distrusted anyway. An unparseable verdict fails open
+// (keeps the drafted answer) so a flaky verifier cannot downgrade every answer.
+async function verifyAnswerGrounding(
+  model: ChatProvider,
+  output: AnswerOutput,
+  sections: RetrievedSection[],
+  question: string,
+  signal: AbortSignal,
+  jobId: string
+): Promise<AnswerOutput> {
+  if ((output.confidence !== "high" && output.confidence !== "medium") || sections.length === 0) {
+    return output;
+  }
+
+  logger.debug({ jobId }, `answer_question[${jobId}]: verifying answer grounding against ${sections.length} section(s)`);
+  const response = await model.complete({
+    system: VERIFY_ANSWER.instructions,
+    messages: [
+      {
+        role: "user",
+        content: `Question:\n${question}\n\nAnswer under review:\n${output.answer}\n\nContext:\n${formatSectionContext(sections)}`
+      }
+    ],
+    signal
+  });
+
+  const verdict = parseGroundingVerdict(response.content);
+  if (!verdict) {
+    logger.warn({ jobId }, `answer_question[${jobId}]: grounding verdict was unparseable; keeping the drafted answer`);
+    return output;
+  }
+  if (verdict.grounded) {
+    return output;
+  }
+  logger.info(
+    { jobId, unsupportedClaimCount: verdict.unsupportedClaims.length, revised: Boolean(verdict.revisedAnswer) },
+    `answer_question[${jobId}]: answer contained ${verdict.unsupportedClaims.length} unsupported claim(s); downgrading to low confidence`
+  );
+  return applyGroundingVerdict(output, verdict, question);
 }
 
 // One assess/answer turn. `forceAnswer` tells the model it has gathered enough and
@@ -140,10 +198,7 @@ async function assess(
   forceAnswer: boolean,
   signal: AbortSignal
 ): Promise<string> {
-  const context =
-    sections.length > 0
-      ? sections.map((section) => `[section ${section.sectionId}] # ${section.heading}\n${section.content}`).join("\n\n")
-      : "(no context retrieved yet)";
+  const context = sections.length > 0 ? formatSectionContext(sections) : "(no context retrieved yet)";
   const directive = forceAnswer
     ? "\n\nYou have gathered enough context. Answer now using only the context above; do not request more searches."
     : "";
@@ -174,6 +229,12 @@ function parseAssessment(content: string): { action: "search"; queries: string[]
     ? raw.filter((query): query is string => typeof query === "string" && query.trim().length > 0).map((query) => query.trim())
     : [];
   return queries.length > 0 ? { action: "search", queries } : { action: "answer" };
+}
+
+// The "[section <id>]" labelling shared by the answer and verify prompts, so the
+// verifier reads the exact context representation the answer was drafted from.
+function formatSectionContext(sections: RetrievedSection[]): string {
+  return sections.map((section) => `[section ${section.sectionId}] # ${section.heading}\n${section.content}`).join("\n\n");
 }
 
 function mergeSections(pool: Map<string, RetrievedSection>, sections: RetrievedSection[]): void {

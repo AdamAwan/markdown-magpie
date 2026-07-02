@@ -1,12 +1,16 @@
 import { ConfiguredKnowledgeFlow, PromptSummary } from "../lib/types";
 
 // Mirrors withPersona() in @magpie/prompts: the base instructions, then a fixed
-// "Persona" header, then the flow's persona text — sent as the system prompt.
+// "Persona" header, then the flow's persona text, then a grounding guard reminding
+// the model that a persona never licenses facts the context does not contain —
+// sent together as the system prompt.
 const ASSEMBLY_EXAMPLE = [
   "<base answer prompt>",
   "",
   "Persona (how to look and respond):",
-  "<this flow's persona>"
+  "<this flow's persona>",
+  "",
+  "<grounding guard: the persona changes tone only, never adds facts>"
 ].join("\n");
 
 // The prompts ordered as the "direction of travel" of a question through the
@@ -19,8 +23,9 @@ const STAGES: { id: string; step: string; title: string; blurb: string; promptId
     id: "answer",
     step: "1",
     title: "Answer a question",
-    blurb: "A question is routed to the best-matching flow, then answered from retrieved Markdown with citations.",
-    promptIds: ["route-question-to-flow", "answer-question"]
+    blurb:
+      "A question is routed to the best-matching flow, answered from retrieved Markdown with citations, then the drafted answer is verified against that context before it is returned.",
+    promptIds: ["route-question-to-flow", "answer-question", "verify-answer"]
   },
   {
     id: "gaps",
@@ -168,8 +173,9 @@ function FlowPersonasCard({ flows }: { flows: ConfiguredKnowledgeFlow[] }) {
         <span className="personaAssemblyLabel">How the prompt is assembled</span>
         <pre className="promptInstructions">{ASSEMBLY_EXAMPLE}</pre>
         <p className="promptOutput">
-          The persona is appended verbatim by <code>withPersona()</code> — no other text changes — so the same
-          base instructions are reused for every flow.
+          The persona is appended verbatim by <code>withPersona()</code>, followed by a fixed grounding guard
+          (a persona shapes tone and framing only — it never adds facts the context does not contain) — so the
+          same base instructions are reused for every flow.
         </p>
       </div>
       <div className="flowPersonaList">

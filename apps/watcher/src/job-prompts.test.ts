@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { JobView } from "@magpie/jobs";
 import type { RetrievedSection } from "./http-client.js";
-import { buildAnswerOutput, buildPrompt, parseJobOutput } from "./job-prompts.js";
+import {
+  applyGroundingVerdict,
+  buildAnswerOutput,
+  buildPrompt,
+  parseGroundingVerdict,
+  parseJobOutput
+} from "./job-prompts.js";
 
 function job(type: JobView["type"], input: unknown): JobView {
   return {
@@ -160,6 +166,16 @@ describe("buildAnswerOutput", () => {
       output.citations.map((citation) => citation.sectionId),
       ["s2", "s1"]
     );
+    // An answer attributed only to invented section ids cannot be trusted as
+    // grounded: the self-reported "high" is downgraded to low.
+    assert.equal(output.confidence, "low");
+  });
+
+  it("downgrades unparseable model output to low confidence", () => {
+    const output = buildAnswerOutput("Deploy by running the script.", SECTIONS, "How do I deploy?", "flow-1");
+    assert.equal(output.answer, "Deploy by running the script.");
+    assert.equal(output.confidence, "low", "output that broke the JSON contract ships at low, not a quiet medium");
+    assert.equal(output.citations.length, 1, "the retrieved pool still attributes the raw answer");
   });
 
   it("emits a followup gap on a confident answer when a search came back empty", () => {
@@ -199,6 +215,71 @@ describe("buildAnswerOutput", () => {
       new Set() // no search came back empty
     );
     assert.equal(output.gaps, undefined, "no grounded followup gaps ⇒ no gaps emitted");
+  });
+});
+
+describe("parseGroundingVerdict", () => {
+  it("parses a failed verdict with claims and a revised answer", () => {
+    const verdict = parseGroundingVerdict(
+      JSON.stringify({ grounded: false, unsupportedClaims: ["SOC 2 status"], revisedAnswer: " Grounded answer. " })
+    );
+    assert.deepEqual(verdict, {
+      grounded: false,
+      unsupportedClaims: ["SOC 2 status"],
+      revisedAnswer: "Grounded answer."
+    });
+  });
+
+  it("returns undefined when the reply carries no boolean grounded flag", () => {
+    assert.equal(parseGroundingVerdict("not json"), undefined);
+    assert.equal(parseGroundingVerdict(JSON.stringify({ answer: "an answer, not a verdict" })), undefined);
+  });
+});
+
+describe("applyGroundingVerdict", () => {
+  const output = buildAnswerOutput(
+    JSON.stringify({
+      answer: "Deploy the script. We are SOC 2 certified.",
+      confidence: "high",
+      isKnowledgeGap: false,
+      usedSectionIds: ["doc-1#deploy"],
+      followupGaps: ["no staging example"]
+    }),
+    SECTIONS,
+    "How do I deploy securely?",
+    "flow-1",
+    new Set(["staging example"])
+  );
+
+  it("returns the output unchanged for a grounded verdict", () => {
+    assert.deepEqual(
+      applyGroundingVerdict(output, { grounded: true, unsupportedClaims: [] }, "How do I deploy securely?"),
+      output
+    );
+  });
+
+  it("replaces the answer, downgrades to low, and appends the claims as auto gaps", () => {
+    const applied = applyGroundingVerdict(
+      output,
+      { grounded: false, unsupportedClaims: ["SOC 2 compliance status"], revisedAnswer: "Deploy the script." },
+      "How do I deploy securely?"
+    );
+    assert.equal(applied.answer, "Deploy the script.");
+    assert.equal(applied.confidence, "low");
+    assert.deepEqual(applied.citations, output.citations, "citations still attribute the grounded remainder");
+    const summaries = (applied.gaps ?? []).map((gap) => `${gap.source}:${gap.summary}`);
+    assert.deepEqual(summaries, ["followup:no staging example", "auto:SOC 2 compliance status"]);
+    assert.deepEqual(applied.gaps?.[1].citedSectionIds, ["doc-1#deploy"]);
+  });
+
+  it("keeps the drafted answer when the verdict has no revision, but still downgrades", () => {
+    const applied = applyGroundingVerdict(
+      output,
+      { grounded: false, unsupportedClaims: ["SOC 2 compliance status"] },
+      "How do I deploy securely?"
+    );
+    assert.equal(applied.answer, "Deploy the script. We are SOC 2 certified.");
+    assert.equal(applied.confidence, "low", "no revision still means the answer ships distrusted");
   });
 });
 
