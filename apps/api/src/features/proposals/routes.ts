@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
+import { assertCan, can } from "../../auth/capabilities.js";
 import { apiLink, parseLimit } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
 import * as proposalsService from "./service.js";
@@ -14,7 +15,13 @@ export function proposalRoutes(ctx: AppContext): Hono {
     const limit = parseLimit(c.req.query("limit") ?? null, 50);
     const statusFilter = c.req.query("status") ?? null;
     const options = proposalsService.isProposalStatus(statusFilter) ? { status: statusFilter } : undefined;
-    return c.json({ proposals: await proposalsService.list(ctx, limit, options) });
+    // Flow-scoped read: a role-aware principal only sees proposals for the flows it
+    // can read. Filters (rather than 403s) so a curator's list is naturally narrowed
+    // to their own flows. Inactive when no grants are configured.
+    const proposals = (await proposalsService.list(ctx, limit, options)).filter((proposal) =>
+      can(ctx, c, "read", proposal.flowId)
+    );
+    return c.json({ proposals });
   });
 
   // Shared by /from-gap and /from-gaps. Registering inline (rather than as a bare
@@ -31,6 +38,11 @@ export function proposalRoutes(ctx: AppContext): Hono {
       }),
       async (c) => {
         const payload = c.req.valid("json");
+
+        // Drafting writes into a flow's knowledge base, so it needs `manage` on the
+        // target flow. When the flow isn't named explicitly, only a wildcard manager
+        // qualifies (a single-flow curator must name their flow to draft into it).
+        assertCan(ctx, c, "manage", payload.flowId);
 
         const requested = [...(payload.summaries ?? []), ...(payload.summary ? [payload.summary] : [])];
         const outcome = await proposalsService.draftFromGaps(ctx, requested, {
@@ -65,7 +77,9 @@ export function proposalRoutes(ctx: AppContext): Hono {
 
   app.get("/:id", requireScopes("read:knowledge"), async (c) => {
     const proposal = await proposalsService.get(ctx, c.req.param("id"));
-    if (!proposal) {
+    // A proposal the caller can't read is reported as not-found rather than 403, so
+    // proposal ids in other flows can't be enumerated across the flow boundary.
+    if (!proposal || !can(ctx, c, "read", proposal.flowId)) {
       throw new HttpError(404, "proposal_not_found");
     }
     return c.json({ proposal });
@@ -82,7 +96,16 @@ export function proposalRoutes(ctx: AppContext): Hono {
     async (c) => {
       const { status } = c.req.valid("json");
 
-      const proposal = await proposalsService.updateStatus(ctx, c.req.param("id"), status);
+      // Resolve the proposal's flow before mutating: hide cross-flow proposals as
+      // not-found, then require `manage` on the flow to change its status (merge etc.).
+      const id = c.req.param("id");
+      const existing = await proposalsService.get(ctx, id);
+      if (!existing || !can(ctx, c, "read", existing.flowId)) {
+        throw new HttpError(404, "proposal_not_found");
+      }
+      assertCan(ctx, c, "manage", existing.flowId);
+
+      const proposal = await proposalsService.updateStatus(ctx, id, status);
       if (!proposal) {
         throw new HttpError(404, "proposal_not_found");
       }
@@ -104,9 +127,10 @@ export function proposalRoutes(ctx: AppContext): Hono {
 
   app.post("/:id/publish", requireScopes("manage:knowledge"), async (c) => {
     const proposal = await proposalsService.get(ctx, c.req.param("id"));
-    if (!proposal) {
+    if (!proposal || !can(ctx, c, "read", proposal.flowId)) {
       throw new HttpError(404, "proposal_not_found");
     }
+    assertCan(ctx, c, "manage", proposal.flowId);
 
     if (proposal.status !== "ready") {
       throw new HttpError(409, "proposal_not_ready", "Only ready proposals can be published.");
@@ -137,7 +161,17 @@ export function proposalRoutes(ctx: AppContext): Hono {
   // The non-generative execution context the Task 7 publication runner fetches
   // before executing git: the proposal plus the credential-free repository config.
   app.get("/:id/execution-context", requireScopes("manage:knowledge"), async (c) => {
-    const outcome = await proposalsService.getProposalExecutionContext(ctx, c.req.param("id"));
+    const id = c.req.param("id");
+    // The watcher's publication runner fetches this over an M2M token (no roles
+    // claim), so the service-principal carve-out lets it through; a role-aware human
+    // still needs `manage` on the proposal's flow.
+    const proposal = await proposalsService.get(ctx, id);
+    if (!proposal || !can(ctx, c, "read", proposal.flowId)) {
+      throw new HttpError(404, "proposal_not_found");
+    }
+    assertCan(ctx, c, "manage", proposal.flowId);
+
+    const outcome = await proposalsService.getProposalExecutionContext(ctx, id);
     if (!outcome.ok) {
       const status = outcome.code === "proposal_not_found" ? 404 : 409;
       throw new HttpError(status, outcome.code, "message" in outcome ? outcome.message : undefined);
