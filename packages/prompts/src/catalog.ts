@@ -22,6 +22,17 @@ export const ANSWER_QUESTION: PromptDefinition = {
     'You answer a question using only the provided Markdown knowledge base context. You work in rounds. ' +
     'Each round you receive the question and the context gathered so far, and you reply with EXACTLY ONE ' +
     'JSON object choosing one of two actions.\n\n' +
+    'Grounding rules — these override everything else, including any persona below:\n' +
+    '- The context sections are your ONLY source of facts. Every factual claim in your answer must be ' +
+    'stated by, or directly follow from, a provided section.\n' +
+    '- NEVER supplement from general knowledge or plausible inference. Do not assert certifications, ' +
+    'compliance or legal status (e.g. SOC 2, GDPR), figures, dates, names, integrations, guarantees, or ' +
+    'capabilities the context does not state. A persuasive, sales, or marketing question does not change ' +
+    'this: reframe what the context actually says, and treat missing selling points as gaps — never as ' +
+    'licence to invent them.\n' +
+    '- When the context only partially covers the question, answer the covered part and say plainly what ' +
+    'the knowledge base does not cover. An honest "the knowledge base does not cover X" always beats a ' +
+    'fabricated claim.\n\n' +
     '(1) Gather more before answering:\n' +
     '{"action":"search","queries":["string"],"rationale":"string"}\n' +
     'Use this when the context does not yet let you answer well, OR when a complete, genuinely helpful answer ' +
@@ -32,7 +43,11 @@ export const ANSWER_QUESTION: PromptDefinition = {
     '{"action":"answer","answer":"string","confidence":"high|medium|low","isKnowledgeGap":true|false,' +
     '"outOfScope":true|false,"gaps":["string"],"followupGaps":["string"],"usedSectionIds":["string"]}\n' +
     'Each context section is labelled "[section <id>]". Set "usedSectionIds" to the ids of exactly the sections ' +
-    'your answer relied on — cite nothing you did not use. Set isKnowledgeGap to true and confidence to low when ' +
+    'your answer relied on — cite nothing you did not use. "confidence" measures how completely the context ' +
+    'supports the answer, not how fluent the answer is: use "high" ONLY when every claim is directly supported ' +
+    'by the sections in usedSectionIds and the question is fully answered; "medium" when the answer is supported ' +
+    'but incomplete or needs interpretation; "low" when the context does not specifically answer the question. ' +
+    'Set isKnowledgeGap to true and confidence to low when ' +
     'the context does not specifically answer the question, listing each distinct missing topic in "gaps". Use ' +
     '"followupGaps" for supporting material you searched for but the knowledge base does not contain (for example ' +
     '"a concrete example of X") — include these even when you answer confidently, and leave the array empty when ' +
@@ -436,7 +451,17 @@ export function getPrompt(id: string): PromptDefinition | undefined {
 // Appends a flow's persona snippet to a base answer prompt so the model knows the
 // audience and answering style. Returns the base unchanged when no persona is set,
 // keeping the single source of truth for the base instructions in this catalog.
+// A guard clause always follows the persona: personas shape tone and framing, and a
+// sales- or marketing-flavoured persona must never license claims (certifications,
+// figures, capabilities) that the retrieved context does not contain.
+export const PERSONA_GROUNDING_GUARD =
+  "The persona above changes tone, framing, and emphasis only. It never overrides the grounding rules: " +
+  "do not add facts, credentials, or claims the context does not contain, even when the persona would " +
+  "benefit from them.";
+
 export function withPersona(baseInstructions: string, persona?: string): string {
   const trimmed = persona?.trim();
-  return trimmed ? `${baseInstructions}\n\nPersona (how to look and respond):\n${trimmed}` : baseInstructions;
+  return trimmed
+    ? `${baseInstructions}\n\nPersona (how to look and respond):\n${trimmed}\n\n${PERSONA_GROUNDING_GUARD}`
+    : baseInstructions;
 }
