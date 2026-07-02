@@ -29,7 +29,9 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
     destinations: [],
     flows: [],
     repositories: [],
-    checkoutRoot: ".magpie/checkouts"
+    roleGrants: {},
+    checkoutRoot: ".magpie/checkouts",
+    ...overrides.knowledgeConfig
   };
   const settings = loadConfig({
     DATABASE_URL: "postgres://postgres:postgres@localhost:5432/markdown_magpie",
@@ -88,5 +90,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
     }
   };
 
-  return { ...base, ...overrides };
+  // knowledgeConfig is merged with defaults above and shared with repositoryDeps, so
+  // force the merged value to win over the raw (possibly partial) override.
+  return { ...base, ...overrides, knowledgeConfig };
 }

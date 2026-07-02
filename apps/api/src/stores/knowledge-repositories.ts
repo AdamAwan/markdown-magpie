@@ -26,6 +26,77 @@ export interface KnowledgeRepositorySelection {
   repository: ConfiguredKnowledgeRepository;
 }
 
+// Flow-scoped capabilities a role can be granted. `read`/`manage`/`ask` are
+// evaluated per flow; `admin` is a deployment-wide capability (gating destructive
+// actions like data reset) and is only ever granted on the "*" flow.
+// Module-local: the capability set is exposed to the rest of the app through the
+// KnowledgeCapability type (below), not the array itself.
+const KNOWLEDGE_CAPABILITIES = ["read", "manage", "ask", "admin"] as const;
+export type KnowledgeCapability = (typeof KNOWLEDGE_CAPABILITIES)[number];
+
+// role name -> flow id (or "*" for all flows) -> granted capabilities. This is the
+// product-owned half of the authorization model: the IdP supplies opaque role names
+// on the token, and this map (deployment config, colocated with the flows) says what
+// each role may do to which flow. See docs/authorization.md.
+export type KnowledgeRoleGrants = Record<string, Record<string, KnowledgeCapability[]>>;
+
+function isKnowledgeCapability(value: string): value is KnowledgeCapability {
+  return (KNOWLEDGE_CAPABILITIES as readonly string[]).includes(value);
+}
+
+// Parses KNOWLEDGE_ROLE_GRANTS into a normalized grants map. Defensive by design
+// (mirrors the flow/repository parsers): malformed entries and unknown capabilities
+// are dropped rather than throwing, and an unset/blank value yields an empty map —
+// which deliberately leaves flow-scoped authorization INACTIVE (legacy scope-only
+// behavior) until an operator opts in by configuring grants.
+export function getConfiguredRoleGrants(env: EnvLike = process.env): KnowledgeRoleGrants {
+  const raw = env.KNOWLEDGE_ROLE_GRANTS?.trim();
+  if (!raw) {
+    return {};
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {};
+  }
+
+  const grants: KnowledgeRoleGrants = {};
+  for (const [roleName, perFlow] of Object.entries(parsed as Record<string, unknown>)) {
+    const role = roleName.trim();
+    if (!role || !perFlow || typeof perFlow !== "object" || Array.isArray(perFlow)) {
+      continue;
+    }
+
+    const normalizedPerFlow: Record<string, KnowledgeCapability[]> = {};
+    for (const [flowId, capabilities] of Object.entries(perFlow as Record<string, unknown>)) {
+      const flow = flowId.trim();
+      if (!flow || !Array.isArray(capabilities)) {
+        continue;
+      }
+      const normalized = capabilities
+        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+        .filter(isKnowledgeCapability);
+      // De-duplicate while preserving the declared order.
+      const unique = [...new Set(normalized)];
+      if (unique.length > 0) {
+        normalizedPerFlow[flow] = unique;
+      }
+    }
+
+    if (Object.keys(normalizedPerFlow).length > 0) {
+      grants[role] = normalizedPerFlow;
+    }
+  }
+
+  return grants;
+}
+
 export function getConfiguredKnowledgeRepositories(
   env: EnvLike = process.env
 ): ConfiguredKnowledgeRepository[] {

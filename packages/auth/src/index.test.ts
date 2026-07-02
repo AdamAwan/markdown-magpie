@@ -5,9 +5,11 @@ import type { JSONWebKeySet } from "jose";
 import {
   authSettingsFromEnv,
   createRemoteAuthVerifier,
+  DEFAULT_ROLES_CLAIM,
   hasScopes,
   isAuthRequired,
-  parseBearerToken
+  parseBearerToken,
+  rolesFromPayload
 } from "./index.js";
 
 const issuer = "https://example.auth0.com/";
@@ -87,6 +89,54 @@ test("createRemoteAuthVerifier accepts a valid scoped RS256 token", async () => 
   assert.deepEqual(principal.scopes, ["read:knowledge", "ask:knowledge"]);
   assert.equal(hasScopes(principal, ["ask:knowledge"]), true);
   assert.equal(hasScopes(principal, ["manage:admin"]), false);
+});
+
+test("verifier reads the roles claim into the principal, defaulting the claim key", async () => {
+  const { token, jwks } = await signedToken("read:knowledge", {
+    claims: { [DEFAULT_ROLES_CLAIM]: ["kb-hr-curators", "kb-ops"] }
+  });
+  const verifier = createRemoteAuthVerifier({ required: true, issuer, audience, jwks: async () => jwks });
+
+  const principal = await verifier.verify(token);
+
+  assert.deepEqual(principal.roles, ["kb-hr-curators", "kb-ops"]);
+});
+
+test("verifier honours a custom rolesClaim key", async () => {
+  const claim = "https://example.test/roles";
+  const { token, jwks } = await signedToken("read:knowledge", { claims: { [claim]: ["admin"] } });
+  const verifier = createRemoteAuthVerifier({
+    required: true,
+    issuer,
+    audience,
+    rolesClaim: claim,
+    jwks: async () => jwks
+  });
+
+  const principal = await verifier.verify(token);
+
+  assert.deepEqual(principal.roles, ["admin"]);
+});
+
+test("principal.roles is undefined when the token carries no roles claim (service/M2M path)", async () => {
+  const { token, jwks } = await signedToken("read:knowledge");
+  const verifier = createRemoteAuthVerifier({ required: true, issuer, audience, jwks: async () => jwks });
+
+  const principal = await verifier.verify(token);
+
+  assert.equal(principal.roles, undefined);
+});
+
+test("rolesFromPayload distinguishes absent, empty, and populated claims and drops non-strings", () => {
+  const claim = DEFAULT_ROLES_CLAIM;
+  // Absent claim -> undefined (service/legacy principal).
+  assert.equal(rolesFromPayload({}, claim), undefined);
+  // A non-array value is treated as absent rather than coerced.
+  assert.equal(rolesFromPayload({ [claim]: "admin" }, claim), undefined);
+  // An explicit empty array stays an empty array (role-aware principal, no roles).
+  assert.deepEqual(rolesFromPayload({ [claim]: [] }, claim), []);
+  // Non-string entries are filtered out.
+  assert.deepEqual(rolesFromPayload({ [claim]: ["a", 1, null, "b"] }, claim), ["a", "b"]);
 });
 
 test("createRemoteAuthVerifier rejects the wrong audience", async () => {

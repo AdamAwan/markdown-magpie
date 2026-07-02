@@ -1,4 +1,5 @@
 import { argv } from "node:process";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpExpressApp } from "@modelcontextprotocol/express";
@@ -67,6 +68,12 @@ export interface HttpMcpOptions {
   apiAudience?: string;
 }
 
+// Carries the current request's verified user principal into the MCP tool handlers
+// (which run deep inside transport.handleRequest and can't otherwise see the HTTP
+// request), so the downstream API client can forward the user's identity for
+// on-behalf-of delegation. Set per request in `handle`.
+const requestContext = new AsyncLocalStorage<{ principal?: Principal }>();
+
 // ── App factory ──────────────────────────────────────────────────────────────
 
 const logger = createMcpLogger("http");
@@ -82,7 +89,17 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     tokenUrl: options.apiTokenUrl,
     audience: options.apiAudience
   });
-  const kbOptions: KbClientOptions = { token: apiTokenProvider };
+  // The downstream API is called with the MCP's own service token; when the
+  // request carries a verified user, forward that user's identity so the API
+  // authorizes as the user (on-behalf-of delegation). Falls back to plain service
+  // identity when there is no user (auth disabled / non-user context).
+  const kbOptions: KbClientOptions = {
+    token: apiTokenProvider,
+    onBehalfOf: () => {
+      const principal = requestContext.getStore()?.principal;
+      return principal ? { subject: principal.subject, roles: principal.roles ?? [] } : undefined;
+    }
+  };
 
   const server = new McpServer({
     name: "markdown-magpie",
@@ -243,11 +260,15 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
   }
 
   // Validates the inbound token (when auth is required) and, for tools/call,
-  // enforces the per-tool scope. Returns true when the request may proceed to
-  // the transport; otherwise it has already written the response.
-  async function authorize(req: Request, res: Response): Promise<boolean> {
+  // enforces the per-tool scope. On success returns the verified principal (or
+  // undefined when auth is disabled) so the caller can forward the user identity
+  // downstream; on failure it has already written the response.
+  async function authorize(
+    req: Request,
+    res: Response
+  ): Promise<{ ok: true; principal?: Principal } | { ok: false }> {
     if (!verifier) {
-      return true;
+      return { ok: true, principal: undefined };
     }
 
     let principal: Principal;
@@ -256,7 +277,7 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     } catch (error) {
       if (error instanceof AuthError) {
         challenge(res);
-        return false;
+        return { ok: false };
       }
       throw error;
     }
@@ -264,21 +285,26 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     const requiredScope = requiredToolScope(req);
     if (requiredScope && !hasScopes(principal, [requiredScope])) {
       res.status(403).json({ error: "forbidden" });
-      return false;
+      return { ok: false };
     }
 
-    return true;
+    return { ok: true, principal };
   }
 
   const handle = async (req: Request, res: Response, body?: unknown): Promise<void> => {
     const startMs = Date.now();
     try {
-      if (!(await authorize(req, res))) {
+      const authorized = await authorize(req, res);
+      if (!authorized.ok) {
         logger.info({ method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - startMs }, "request completed");
         return;
       }
       await connected;
-      await transport.handleRequest(req, res, body);
+      // Make the verified user available to the tool handlers so downstream API
+      // calls can be made on behalf of this user.
+      await requestContext.run({ principal: authorized.principal }, () =>
+        transport.handleRequest(req, res, body)
+      );
       logger.info({ method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - startMs }, "request completed");
     } catch (err) {
       if (!res.headersSent) {

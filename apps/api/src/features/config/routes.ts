@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
+import { assertCan } from "../../auth/capabilities.js";
 import { normalizeAiProvider } from "../../config-holder.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
@@ -41,6 +42,12 @@ export function adminRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
   app.post("/reset", requireScopes("manage:admin"), async (c) => {
+    // Reset is the single destructive, deployment-wide action (it wipes all data).
+    // Beyond the manage:admin scope it also requires the `admin` capability, so a
+    // routine admin can't be handed the power to erase everyone's knowledge base by
+    // scope alone. `admin` is only ever granted on the "*" flow (a super-admin
+    // role). Inactive — and thus scope-only, as before — until grants are configured.
+    assertCan(ctx, c, "admin", undefined);
     const { reindexed, failures, stats } = await configService.resetData(ctx);
     return c.json({ ok: true, reindexed, failures, stats });
   });

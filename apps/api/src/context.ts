@@ -25,7 +25,8 @@ import { InMemoryKnowledgeIndex } from "./stores/knowledge-index.js";
 import { PostgresKnowledgeStore } from "./stores/postgres-knowledge-store.js";
 import {
   type ConfiguredKnowledgeFlow,
-  type ConfiguredKnowledgeRepository
+  type ConfiguredKnowledgeRepository,
+  type KnowledgeRoleGrants
 } from "./stores/knowledge-repositories.js";
 import { checkoutRoot, syncConfiguredGitCheckouts, type RepositoryDeps } from "./platform/repositories.js";
 import type { JobBroker } from "./jobs/broker.js";
@@ -70,6 +71,9 @@ export interface AppContext {
     destinations: ConfiguredKnowledgeRepository[];
     flows: ConfiguredKnowledgeFlow[];
     repositories: ConfiguredKnowledgeRepository[];
+    // Flow-scoped authorization grants (role -> flow -> capabilities), read from
+    // KNOWLEDGE_ROLE_GRANTS. Empty leaves flow-scoping inactive.
+    roleGrants: KnowledgeRoleGrants;
     checkoutRoot: string;
   };
   embedder: BackgroundEmbedder;
@@ -102,6 +106,7 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
     destinations: config.knowledge.destinations,
     repositories: config.knowledge.repositories,
     flows: config.knowledge.flows,
+    roleGrants: config.knowledge.roleGrants,
     checkoutRoot: checkoutRoot(config)
   };
 

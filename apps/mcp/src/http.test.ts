@@ -103,7 +103,7 @@ function createRequest(
 
 async function makeTestAuth(): Promise<{
   jwks: () => Promise<JSONWebKeySet>;
-  token: (scopes?: string[], audience?: string) => Promise<string>;
+  token: (scopes?: string[], audience?: string, roles?: string[]) => Promise<string>;
 }> {
   const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
   const publicJwk = await exportJWK(publicKey);
@@ -114,8 +114,13 @@ async function makeTestAuth(): Promise<{
 
   return {
     jwks: async () => jwks,
-    token: async (scopes = [], audience = authAudience) => {
-      const jwt = await new SignJWT({ scope: scopes.join(" ") })
+    token: async (scopes = [], audience = authAudience, roles) => {
+      const claims: Record<string, unknown> = { scope: scopes.join(" ") };
+      if (roles) {
+        // The default roles claim the verifier reads (packages/auth DEFAULT_ROLES_CLAIM).
+        claims["https://magpie.wastedcake.com/roles"] = roles;
+      }
+      const jwt = await new SignJWT(claims)
         .setProtectedHeader({ alg: "RS256", kid })
         .setSubject("test-user")
         .setIssuer(authIssuer)
@@ -285,6 +290,51 @@ test("a valid scoped tools/call dispatches and calls the API with the service to
       captured.authorization !== null && !captured.authorization.includes(userJwt),
       "inbound user token must not be forwarded downstream"
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("downstream calls forward the verified user's on-behalf-of headers (subject + roles)", async () => {
+  const auth = await makeTestAuth();
+  const userToken = await auth.token(["read:knowledge"], authAudience, ["kb-hr-curators"]);
+
+  const originalFetch = globalThis.fetch;
+  let captured: { authorization: string | null; subject: string | null; roles: string | null } | undefined;
+  const fetchStub: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    captured = {
+      authorization: headers.get("authorization"),
+      subject: headers.get("x-on-behalf-of-subject"),
+      roles: headers.get("x-on-behalf-of-roles")
+    };
+    return new Response(JSON.stringify({ results: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+  globalThis.fetch = fetchStub;
+
+  try {
+    const app = createHttpMcpApp(
+      testOptions({
+        auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks },
+        apiToken: "service-token"
+      })
+    );
+    const res = await request(app)
+      .post("/mcp")
+      .set("authorization", userToken)
+      .set("accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb.search", arguments: { query: "hi" } } });
+
+    assert.equal(res.status, 200);
+    assert.ok(captured, "expected the tool to call the downstream API");
+    // Service token remains the transport identity...
+    assert.equal(captured.authorization, "Bearer service-token");
+    // ...and the verified user's identity is forwarded for on-behalf-of delegation.
+    assert.equal(captured.subject, "test-user");
+    assert.equal(captured.roles, JSON.stringify(["kb-hr-curators"]));
   } finally {
     globalThis.fetch = originalFetch;
   }
