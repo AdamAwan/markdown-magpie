@@ -1,31 +1,6 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import pino from "pino";
 
 export type Logger = pino.Logger;
-
-// Exported so consumers can annotate the store they hold (the composition-root
-// singletons that import createCorrelationStore reference it by name, which is
-// also what keeps knip's STRICT unused-export check satisfied).
-export interface CorrelationStore {
-  /** Runs `fn` with `correlationId` bound as the ambient value for its async subtree. */
-  run<T>(correlationId: string, fn: () => T): T;
-  /** The correlation id bound by the nearest enclosing run(), or undefined outside one. */
-  current(): string | undefined;
-}
-
-// A request-scoped correlation id carried implicitly through async work via
-// AsyncLocalStorage, so an id set at the edge (an HTTP request, a claimed job)
-// reaches deep callees — the job broker, an outbound HTTP client — without being
-// threaded through every function signature. Each process creates one store at
-// its composition root and shares that single instance; the ambient value maps
-// cleanly onto a future OpenTelemetry trace/span context if that is ever adopted.
-export function createCorrelationStore(): CorrelationStore {
-  const storage = new AsyncLocalStorage<string>();
-  return {
-    run: (correlationId, fn) => storage.run(correlationId, fn),
-    current: () => storage.getStore()
-  };
-}
 
 // Internal — not exported. Consumers pass an object literal (structurally typed);
 // exporting a type used only here would trip knip's STRICT unused-export check.
@@ -38,14 +13,19 @@ interface LoggerOptions {
   base?: Record<string, unknown>;
   /** Explicit sink (a writable stream, or an fd such as 2 for stderr). Forces raw JSON output. */
   destination?: number | NodeJS.WritableStream;
+  /**
+   * Called per log line; its return value is merged onto that line. Used to stamp
+   * dynamic context (e.g. the active trace id) without binding it per-logger.
+   */
+  mixin?: () => Record<string, unknown>;
 }
 
 // A thin wrapper over pino. Configuration is passed in by the caller (apps read
 // env at their composition root) so this package never touches process.env.
 export function createLogger(opts: LoggerOptions = {}): Logger {
-  const { level = "info", pretty = false, base, destination } = opts;
+  const { level = "info", pretty = false, base, destination, mixin } = opts;
   // Omit `base` when unset so pino keeps its default base (pid, hostname).
-  const options: pino.LoggerOptions = { level, base };
+  const options: pino.LoggerOptions = { level, base, mixin };
 
   if (destination !== undefined) {
     // Explicit sink: raw JSON, no transport. Used by tests and the stdio MCP

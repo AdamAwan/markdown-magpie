@@ -165,23 +165,30 @@ members as defence-in-depth.
   structured context (service, `err`, stack) and the process exits non-zero, so the
   orchestrator's restart policy takes over — instead of a bare Node stderr trace with
   no captured context.
-- **Correlation id.** A single id threads a whole cross-service chain: **API request →
-  enqueued job → watcher execution → API callback**. The API's request middleware
-  reuses an inbound `x-correlation-id` header or mints one, binds it as `correlationId`
-  on the request logger, echoes it on the response, and carries it through the request
-  via `AsyncLocalStorage`. The job broker stamps the in-scope id onto every job it
-  enqueues (`JobView.correlationId`); the watcher binds that id while executing a job
-  (minting one for jobs enqueued outside a request, e.g. scheduled fires) and sends it
-  back on the `x-correlation-id` header of every API callback, so the API reuses it
-  rather than starting a fresh chain. Grep one `correlationId` to follow a unit of work
-  across both services. The ambient-id design maps onto an OpenTelemetry trace context
-  if distributed tracing is adopted later.
+- **OpenTelemetry (traces + metrics + error recording).** Vendor-neutral, wired in
+  `@magpie/telemetry` and **off by default** — the app emits through the lightweight OTel
+  *API* (a no-op until the SDK starts). `initTelemetry` starts the SDK (OTLP trace + metric
+  exporters, HTTP/undici/pg auto-instrumentation) only when `OTEL_EXPORTER_OTLP_ENDPOINT`
+  is set (`MAGPIE_TELEMETRY_ENABLED=false` force-disables). Export is OTLP, which any
+  backend ingests — Grafana/Tempo/Mimir, Datadog, Honeycomb, Sentry, or an OTel Collector
+  that fans out (including to a Prometheus scrape endpoint), so no vendor is baked in.
+- **Correlation via trace context.** With telemetry on, one **trace** threads the whole
+  cross-service chain — **API request → enqueued job → watcher execution → API callback**.
+  HTTP hops propagate W3C `traceparent` automatically (auto-instrumentation); the queue
+  boundary is bridged manually — the broker injects the trace context onto the job envelope
+  (`JobView.traceContext`) and the watcher runs the job inside a span extracted from it.
+  Every log line carries `trace_id`/`span_id` (a pino mixin), so logs join traces. With
+  telemetry **off** (the default) there is no cross-service correlation — only per-request
+  `requestId` logging.
+- **Metrics.** `magpie.jobs.finished` (counter by type/outcome) and `magpie.jobs.duration`
+  (histogram) are recorded by the watcher; HTTP server latency/status metrics come from
+  auto-instrumentation. All export over OTLP; there is no bespoke `/metrics` endpoint (run
+  an OTel Collector with a Prometheus exporter if a scrape endpoint is wanted).
+- **Error tracking.** Unhandled API 500s and job failures call `recordException`, attaching
+  the error to the active span so it reaches the backend with full trace context. Fatal
+  crashes are still handled by the crash handlers above.
 - **Health/liveness.** The watcher exposes `/health` (is the poll loop ticking?) and
   `/ready` (does it advertise a runnable capability?) — see `apps/watcher/src/health-server.ts`.
-- **Not yet implemented.** Aggregatable **metrics** (queue depth, job throughput/latency,
-  HTTP status counts — e.g. a Prometheus `/metrics` endpoint) and **error tracking**
-  (Sentry or similar) are deferred; job latency is currently logged (`durationMs`) but
-  not exposed as metrics.
 
 ## Implementation Status
 

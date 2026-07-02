@@ -1,7 +1,6 @@
-import { randomUUID } from "node:crypto";
 import type { Logger } from "@magpie/logger";
 import type { JobCapability, JobError, JobView } from "@magpie/jobs";
-import { correlation } from "./correlation.js";
+import { recordException, recordJobDuration, recordJobFinished, runJobSpan } from "@magpie/telemetry";
 import type { WatcherApiClient } from "./http-client.js";
 import type { JobRunner } from "./runners/types.js";
 
@@ -82,24 +81,28 @@ export class WorkerLoop {
   }
 
   private async execute(job: JobView): Promise<void> {
-    // Continue the enqueueing request's chain when the job carries a correlation
-    // id; mint one for jobs that originated outside a request (e.g. scheduled
-    // fires) so this execution and the API callbacks it makes still share an id.
-    // Binding it in the store lets the HTTP client forward it on every callback
-    // without threading it through each runner.
-    const correlationId = job.correlationId ?? randomUUID();
-    await correlation.run(correlationId, () => this.runInScope(job, correlationId));
+    // Run the job inside a span parented on the enqueueing request's trace context
+    // (carried across the queue on job.traceContext), so this execution and the API
+    // callbacks it makes join that trace. A no-op when telemetry is disabled.
+    await runJobSpan("job.execute", { "job.id": job.id, "job.type": job.type }, job.traceContext, () =>
+      this.runInScope(job)
+    );
   }
 
-  private async runInScope(job: JobView, correlationId: string): Promise<void> {
+  private async runInScope(job: JobView): Promise<void> {
     const startedAt = Date.now();
-    const log = this.logger.child({ jobId: job.id, jobType: job.type, correlationId });
+    // trace_id/span_id are stamped onto every line by the logger's mixin (this runs
+    // inside the job span), so only the job identity is bound here.
+    const log = this.logger.child({ jobId: job.id, jobType: job.type });
     log.info("job claimed");
 
     const runner = this.runners.find((candidate) => candidate.supports(job.type));
     if (!runner) {
       log.error("no runner supports job type; failing job");
-      await this.api.fail(job.id, this.toJobError(job, new Error(`No runner supports job type ${job.type}`)));
+      const error = new Error(`No runner supports job type ${job.type}`);
+      recordException(error);
+      await this.api.fail(job.id, this.toJobError(job, error));
+      this.recordOutcome(job, "failed", Date.now() - startedAt);
       return;
     }
 
@@ -109,27 +112,40 @@ export class WorkerLoop {
 
     try {
       const output = await runner.run(job, controller.signal);
+      const durationMs = Date.now() - startedAt;
       // A cancellation reaches a terminal state server-side; don't try to
       // complete a job the server already moved out from under us.
       if (controller.signal.aborted) {
-        log.info({ durationMs: Date.now() - startedAt, outcome: "cancelled" }, "job cancelled");
+        log.info({ durationMs, outcome: "cancelled" }, "job cancelled");
+        this.recordOutcome(job, "cancelled", durationMs);
         return;
       }
       await this.api.complete(job.id, output);
-      log.info({ durationMs: Date.now() - startedAt, outcome: "completed" }, "job done");
+      log.info({ durationMs, outcome: "completed" }, "job done");
+      this.recordOutcome(job, "completed", durationMs);
     } catch (error) {
+      const durationMs = Date.now() - startedAt;
       if (controller.signal.aborted) {
         // Aborted by cancellation or shutdown — the job is (or will be) terminal
         // server-side, so do not record a redundant failure.
-        log.info({ durationMs: Date.now() - startedAt, outcome: "cancelled" }, "job cancelled");
+        log.info({ durationMs, outcome: "cancelled" }, "job cancelled");
+        this.recordOutcome(job, "cancelled", durationMs);
         return;
       }
-      log.error({ durationMs: Date.now() - startedAt, outcome: "failed", err: error }, "job failed");
+      log.error({ durationMs, outcome: "failed", err: error }, "job failed");
+      recordException(error);
+      this.recordOutcome(job, "failed", durationMs);
       await this.api.fail(job.id, this.toJobError(job, error));
     } finally {
       heartbeat.stop();
       this.activeController = undefined;
     }
+  }
+
+  // Records the job's terminal outcome as metrics (a no-op when telemetry is off).
+  private recordOutcome(job: JobView, outcome: "completed" | "failed" | "cancelled", durationMs: number): void {
+    recordJobFinished(job.type, outcome);
+    recordJobDuration(job.type, outcome, durationMs);
   }
 
   // Polls the server heartbeat on a cadence of half the job's heartbeat window.

@@ -257,28 +257,15 @@ describe("WorkerLoop", () => {
     assert.equal(typeof done["durationMs"], "number");
   });
 
-  it("binds the job's correlation id onto its execution logs", async () => {
-    const api = new FakeApiClient({ jobs: [fakeJob({ correlationId: "chain-7" })] });
+  it("runs a job carrying trace context without error (span parenting is a no-op when telemetry is off)", async () => {
+    // With telemetry disabled the tracer is a no-op; a job whose envelope carries a
+    // traceparent must still run and complete normally.
+    const api = new FakeApiClient({ jobs: [fakeJob({ traceContext: { traceparent: "00-abc-def-01" } })] });
     const runner = new FakeRunner(async () => ({ answer: "ok" }));
-    const cap = captureLogger();
-    const loop = new WorkerLoop(api, [runner], CAPS, "w1", cap.logger, { pollIntervalMs: 1 });
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", silentLogger, { pollIntervalMs: 1 });
     await loop.tick();
 
-    const done = cap.lines().find((l) => l["outcome"] === "completed");
-    assert.ok(done, "expected a completion log");
-    assert.equal(done["correlationId"], "chain-7");
-  });
-
-  it("mints a correlation id for a job that carries none", async () => {
-    const api = new FakeApiClient({ jobs: [fakeJob({ correlationId: undefined })] });
-    const runner = new FakeRunner(async () => ({ answer: "ok" }));
-    const cap = captureLogger();
-    const loop = new WorkerLoop(api, [runner], CAPS, "w1", cap.logger, { pollIntervalMs: 1 });
-    await loop.tick();
-
-    const done = cap.lines().find((l) => l["outcome"] === "completed");
-    assert.ok(done, "expected a completion log");
-    assert.equal(typeof done["correlationId"], "string");
-    assert.ok((done["correlationId"] as string).length > 0);
+    assert.equal(api.completed.length, 1);
+    assert.equal(api.failed.length, 0);
   });
 });

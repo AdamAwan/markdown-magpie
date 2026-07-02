@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createApiTokenProvider } from "@magpie/auth";
 import { installCrashHandlers } from "@magpie/logger";
+import { initTelemetry, type TelemetryHandle } from "@magpie/telemetry";
 import type { JobCapability } from "@magpie/jobs";
 import {
   CAPABILITY_GATES,
@@ -30,6 +31,10 @@ installCrashHandlers(logger);
 // so a misconfigured watcher fails fast with an aggregated error instead of
 // silently falling back to localhost defaults or 401ing every claim.
 const config = loadWatcherConfig(process.env);
+
+// Start telemetry before the first API call so undici auto-instrumentation can
+// patch fetch. A no-op (and never throws) when telemetry is disabled.
+const telemetry: TelemetryHandle = await initTelemetry(config.telemetry, logger);
 
 const apiBaseUrl = config.apiBaseUrl;
 // Append a per-process uuid to the operator-set label so every running watcher —
@@ -111,6 +116,8 @@ logger.info({ host: healthConfig.host, port: healthConfig.port }, "health server
 
 await loop.run();
 await healthServer.stop();
+// Flush and stop telemetry last so any span/metric from the final iteration is exported.
+await telemetry.shutdown();
 logger.info({ watcherName }, `Markdown Magpie watcher '${watcherName}' stopped`);
 
 // Logs, per capability, whether each required env var is set or MISSING — never

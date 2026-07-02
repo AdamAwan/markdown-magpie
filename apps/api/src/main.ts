@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { installCrashHandlers } from "@magpie/logger";
+import { initTelemetry, type TelemetryHandle } from "@magpie/telemetry";
 import { createAppContext } from "./context.js";
 import { loadConfig } from "./platform/config.js";
 import { buildApp } from "./app.js";
@@ -17,6 +18,9 @@ async function start(): Promise<void> {
   // here (caught below) before the broker connects or the server listens.
   const config = loadConfig();
   const port = config.port;
+  // Start telemetry before any HTTP/pg client is created so the auto-instrumentation
+  // can patch them. A no-op (and never throws) when telemetry is disabled.
+  const telemetry: TelemetryHandle = await initTelemetry(config.telemetry, logger);
   const ctx = await createAppContext(config);
   try {
     await ctx.jobs.start();
@@ -27,6 +31,7 @@ async function start(): Promise<void> {
   } catch (error) {
     logger.error({ err: error instanceof Error ? error.message : "Unknown error" }, "API startup failed");
     await ctx.jobs.stop().catch(() => undefined);
+    await telemetry.shutdown().catch(() => undefined);
     process.exitCode = 1;
     return;
   }
@@ -55,6 +60,8 @@ async function start(): Promise<void> {
       // Close the shared store pool after the broker so no store query is mid-flight
       // when its connections are torn down. Best-effort: shutdown exits regardless.
       .then(() => ctx.pool?.end())
+      // Flush and stop telemetry last so any span/metric from the drain is exported.
+      .then(() => telemetry.shutdown())
       .catch((error) =>
         logger.warn(
           { err: error instanceof Error ? error.message : "Unknown error" },

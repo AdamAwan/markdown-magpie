@@ -1,3 +1,4 @@
+import { recordException } from "@magpie/telemetry";
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -33,7 +34,10 @@ export function onError(error: Error, c: Context): Response {
   }
 
   // Log the raw error server-side for diagnostics, but never leak internal
-  // details to clients — return a generic body for non-HttpError 500s.
+  // details to clients — return a generic body for non-HttpError 500s. Also
+  // record it on the active trace span (a no-op when telemetry is off) so it
+  // surfaces in the error backend with full trace context.
+  recordException(error);
   c.get("logger").error({ err: error }, "unhandled error");
   return c.json({ error: "internal_error" }, 500);
 }

@@ -10,18 +10,18 @@ import {
   type QueueDefinition
 } from "@magpie/jobs";
 import { CronExpressionParser } from "cron-parser";
+import { injectTraceContext, type TraceCarrier } from "@magpie/telemetry";
 import { PgBoss, type ConstructorOptions, type JobWithMetadata, type UpdateQueueOptions } from "pg-boss";
 import type { DesiredSchedule, JobBroker, JobListFilters, ScheduleView } from "./broker.js";
 import { logger } from "../logger.js";
-import { correlation } from "../platform/correlation.js";
 
 interface JobEnvelope {
   type: JobType;
   input: unknown;
-  // The correlation id of the request that enqueued this job, when one was in
-  // scope. Optional so scheduled fires (no request) and pre-existing jobs remain
-  // valid envelopes.
-  correlationId?: string;
+  // The W3C trace context of the request that enqueued this job, when telemetry
+  // is enabled. Optional so scheduled fires, a disabled build, and pre-existing
+  // jobs all remain valid envelopes. The watcher extracts it to continue the trace.
+  traceContext?: TraceCarrier;
 }
 
 export interface PgBossJobBrokerOptions {
@@ -135,10 +135,12 @@ export class PgBossJobBroker implements JobBroker {
     }
 
     const queueName = queueNameForJob(type, parsed.data);
-    // Stamp the enqueueing request's correlation id (when one is in scope) so the
-    // chain follows the job out to the watcher and back through its callbacks.
-    const correlationId = correlation.current();
-    const id = await this.boss.send(queueName, { type, input: parsed.data, correlationId } satisfies JobEnvelope);
+    // Capture the active trace context (empty when telemetry is disabled) so the
+    // watcher can continue the same trace across the queue boundary. Stored only
+    // when non-empty to keep envelopes clean in the default build.
+    const carrier = injectTraceContext();
+    const traceContext = Object.keys(carrier).length > 0 ? carrier : undefined;
+    const id = await this.boss.send(queueName, { type, input: parsed.data, traceContext } satisfies JobEnvelope);
     if (!id) {
       throw new Error(`pg-boss did not create job type "${type}"`);
     }
@@ -401,7 +403,7 @@ function toJobView(queueName: string, job: JobWithMetadata<JobEnvelope>): JobVie
     deadLetter: queue.deadLetter,
     state,
     input: job.data.input,
-    correlationId: job.data.correlationId,
+    traceContext: job.data.traceContext,
     output: state === "completed" ? output : undefined,
     error,
     retryCount: job.retryCount,

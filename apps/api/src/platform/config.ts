@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AI_PROVIDERS, isAiProviderName, type AiProviderName } from "@magpie/jobs";
 import { authSettingsFromEnv, isAuthRequired } from "@magpie/auth";
+import { resolveTelemetryConfig, type TelemetryConfig } from "@magpie/telemetry";
 import {
   getConfiguredKnowledgeDestinations,
   getConfiguredKnowledgeFlows,
@@ -134,6 +135,11 @@ export interface AppConfig {
     githubToken?: string;
     azureDevopsPat?: string;
   };
+  // OpenTelemetry export. Off unless an OTLP endpoint is configured; the SDK reads
+  // the rest of its OTEL_* env itself, so only the resolved on/off + service name
+  // live here (resolved like `knowledge` below, via a helper rather than the zod
+  // schema, because OTel's env surface is large and standardised).
+  telemetry: TelemetryConfig;
 }
 
 // An unset var and an explicitly-empty one (a blank `FOO=` line, common in .env
@@ -393,6 +399,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       provider: parsed.GIT_PROVIDER ?? "local",
       githubToken: parsed.GITHUB_TOKEN,
       azureDevopsPat: parsed.AZURE_DEVOPS_PAT
-    }
+    },
+    telemetry: resolveTelemetryConfig(env, "api")
   };
 }
