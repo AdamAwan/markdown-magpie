@@ -1,4 +1,5 @@
 import { argv } from "node:process";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpExpressApp } from "@modelcontextprotocol/express";
@@ -9,11 +10,13 @@ import {
   authSettingsFromEnv,
   createApiTokenProvider,
   createRemoteAuthVerifier,
+  createTokenExchanger,
   hasScopes,
   parseBearerToken,
   type ApiTokenProvider,
   type AuthSettings,
-  type Principal
+  type Principal,
+  type TokenExchanger
 } from "@magpie/auth";
 import type { JSONWebKeySet } from "jose";
 import { z } from "zod/v4";
@@ -65,7 +68,19 @@ export interface HttpMcpOptions {
   apiClientSecret?: string;
   apiTokenUrl?: string;
   apiAudience?: string;
+  // When true, downstream API calls are made AS the end user: the verified inbound
+  // token is exchanged (RFC 8693) for an API-audience token that preserves the
+  // user's identity + roles, so the API's flow-scoped authorization applies per
+  // user rather than collapsing everyone to the M2M service identity. Requires the
+  // client-credentials fields above (used to authenticate the exchange). When off,
+  // the M2M service token is used for every call (the prior behavior).
+  userTokenExchange?: boolean;
 }
+
+// Carries the current request's verified subject token into the MCP tool handlers,
+// which run deep inside transport.handleRequest and can't otherwise see the HTTP
+// request. Set per request in `handle`; read by the downstream token provider.
+const requestContext = new AsyncLocalStorage<{ subjectToken?: string }>();
 
 // ── App factory ──────────────────────────────────────────────────────────────
 
@@ -82,7 +97,31 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     tokenUrl: options.apiTokenUrl,
     audience: options.apiAudience
   });
-  const kbOptions: KbClientOptions = { token: apiTokenProvider };
+
+  // Optional per-user token exchange. Built only when explicitly enabled and the
+  // client-credentials needed to authenticate the exchange are present.
+  const exchanger: TokenExchanger | undefined =
+    options.userTokenExchange && options.apiClientId && options.apiClientSecret && options.apiTokenUrl && options.apiAudience
+      ? createTokenExchanger({
+          clientId: options.apiClientId,
+          clientSecret: options.apiClientSecret,
+          tokenUrl: options.apiTokenUrl,
+          audience: options.apiAudience
+        })
+      : undefined;
+
+  // Resolves the token for a downstream API call. When exchange is enabled and the
+  // request carries a verified user token, call the API AS that user (exchanged
+  // token); otherwise fall back to the M2M service token (exchange disabled, or a
+  // context-less/tokenless call such as local dev with auth disabled).
+  const downstreamToken = async (): Promise<string | undefined> => {
+    const subjectToken = requestContext.getStore()?.subjectToken;
+    if (exchanger && subjectToken) {
+      return exchanger(subjectToken);
+    }
+    return apiTokenProvider();
+  };
+  const kbOptions: KbClientOptions = { token: downstreamToken };
 
   const server = new McpServer({
     name: "markdown-magpie",
@@ -278,7 +317,10 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
         return;
       }
       await connected;
-      await transport.handleRequest(req, res, body);
+      // Make the verified user token available to the tool handlers (via the
+      // downstream token provider) so per-user token exchange can act as this user.
+      const subjectToken = parseBearerToken(req.header("authorization"));
+      await requestContext.run({ subjectToken }, () => transport.handleRequest(req, res, body));
       logger.info({ method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - startMs }, "request completed");
     } catch (err) {
       if (!res.headersSent) {
@@ -350,6 +392,10 @@ async function main(): Promise<void> {
   const apiAudience = authSettingsFromEnv().audience;
   const apiTokenUrl = `${auth.issuer}oauth/token`;
   const hasClientCredentials = Boolean(apiClientId && apiClientSecret);
+  // Opt-in: call the API as the end user (token exchange) so its flow-scoped
+  // authorization applies per user. Off by default (M2M service identity), which
+  // matches the API's grants-inactive default.
+  const userTokenExchange = process.env.MCP_USER_TOKEN_EXCHANGE === "true";
 
   // When auth is required this server acts as an OAuth protected resource and
   // must authenticate to the API with its own service credential. Accept either
@@ -365,6 +411,17 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Token exchange authenticates itself with the client-credentials pair and only
+  // makes sense when inbound user tokens are being verified. Fail fast on a
+  // misconfiguration rather than silently ignoring the flag and leaking to M2M.
+  if (userTokenExchange && (!auth.required || !hasClientCredentials)) {
+    logger.error(
+      "MCP_USER_TOKEN_EXCHANGE=true requires AUTH_REQUIRED=true and MCP_API_CLIENT_ID + MCP_API_CLIENT_SECRET " +
+        "(used to authenticate the RFC 8693 token exchange)."
+    );
+    process.exit(1);
+  }
+
   const host = process.env.MCP_HTTP_HOST ?? "127.0.0.1";
 
   const app = createHttpMcpApp({
@@ -374,7 +431,8 @@ async function main(): Promise<void> {
     apiClientId,
     apiClientSecret,
     apiTokenUrl,
-    apiAudience
+    apiAudience,
+    userTokenExchange
   });
 
   app.listen(port, host, () => {
