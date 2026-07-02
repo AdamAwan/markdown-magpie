@@ -525,7 +525,16 @@ test("answer completion persists the routed flowId and retrieved section ids on 
         excerpt: "Set the X flag.",
         relevance: 0.9
       }
-    ]
+    ],
+    trace: {
+      routing: { mode: "routed", flowId: "support", confidence: "high" },
+      seedSectionCount: 1,
+      searches: [{ query: "SOC 2", resultCount: 0, round: 1 }],
+      poolSectionCount: 1,
+      answerForced: false,
+      answerContract: "structured",
+      verification: { status: "grounded" }
+    }
   };
 
   assert.equal((await completeJob(ctx, job.id, output)).ok, true);
@@ -534,6 +543,9 @@ test("answer completion persists the routed flowId and retrieved section ids on 
   assert.ok(updated);
   assert.equal(updated.flowId, "support");
   assert.deepEqual(updated.retrievedSectionIds, ["support-kb:configure.md:0"]);
+  // Guards the whole trace pipeline: completion validation must not strip the
+  // trace (zod drops undeclared keys), and the store must persist it verbatim.
+  assert.deepEqual(updated.answer?.trace, output.trace);
 });
 
 test("completeJob with an unknown job id returns the job_not_found sentinel", async () => {

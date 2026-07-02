@@ -288,6 +288,37 @@ test("answer_question output may record the routed flowId", () => {
   assert.ok(withoutFlow.success, "flowId is optional on output");
 });
 
+test("answer_question output may carry the watcher's answer trace", () => {
+  const withTrace = answerQuestionOutputSchema.safeParse({
+    answer: "A",
+    confidence: "low",
+    citations: [],
+    trace: {
+      routing: { mode: "routed", flowId: "flow-1", confidence: "high" },
+      seedSectionCount: 3,
+      searches: [{ query: "SOC 2", resultCount: 0, round: 1 }],
+      poolSectionCount: 3,
+      answerForced: false,
+      answerContract: "structured",
+      verification: { status: "claims_stripped", unsupportedClaims: ["SOC 2 compliance status"] }
+    }
+  });
+  assert.ok(withTrace.success, "a full trace should be accepted on output");
+  // zod strips undeclared keys, so acceptance here is what keeps the trace
+  // alive through completion validation all the way to the question log.
+  assert.ok(
+    withTrace.success && withTrace.data.trace?.searches[0]?.resultCount === 0,
+    "the trace survives parsing intact"
+  );
+
+  const withoutTrace = answerQuestionOutputSchema.safeParse({
+    answer: "A",
+    confidence: "high",
+    citations: []
+  });
+  assert.ok(withoutTrace.success, "trace is optional on output");
+});
+
 test("queue naming rejects a missing or invalid AI provider", () => {
   assert.throws(() => queueNameForJob("answer_question", {}), /provider/i);
   assert.throws(

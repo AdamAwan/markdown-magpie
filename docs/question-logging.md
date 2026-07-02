@@ -26,6 +26,13 @@ Each question log records:
   or `manual` (flagged by an admin).
 - Helpful or unhelpful feedback, when submitted.
 - Manual knowledge-gap flag, when set.
+- Answer trace — the watcher's audit trail of how the answer was produced: the
+  routing decision, every follow-up search the model requested with its hit count
+  (empty searches are what ground `followup` gaps), whether the final answer was
+  forced by the search budget, whether the model honoured the structured-answer
+  contract, and the grounding-verification outcome (ran/skipped and why, with any
+  stripped claims). Rendered in the console under **"How this was answered"** on
+  each answered question — the Ask page's counterpart to the Schedules view.
 - Timestamp.
 
 ## Endpoints

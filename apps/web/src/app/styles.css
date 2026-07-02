@@ -702,6 +702,34 @@ select:focus {
   margin: 2px 0;
 }
 
+.answerTrace {
+  font-size: 12px;
+  color: #65716b;
+}
+
+.answerTrace summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.answerTraceList {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.answerTraceList li {
+  margin: 2px 0;
+}
+
+.answerTraceList ul {
+  margin: 2px 0 0;
+  padding-left: 16px;
+}
+
+.answerTraceEmptySearch {
+  color: #8a5a1f;
+}
+
 .hint {
   margin: 0 0 8px;
   font-size: 12px;

@@ -27,8 +27,11 @@ import {
   extractJson,
   parseGroundingVerdict,
   parseJobOutput,
+  withVerification,
+  type AnswerLoopTrace,
   type AnswerOutput
 } from "../job-prompts.js";
+import type { AnswerTrace } from "@magpie/core";
 
 export interface GenerativeJobOptions {
   job: JobView;
@@ -92,11 +95,29 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
 
   const route = await resolveFlow(input.requestedFlowId, input.question, flows, model, job.id);
 
+  // The audit trail of this run, persisted with the question log so the console
+  // can explain the answer: how routing went, what was searched (and what came
+  // back empty), and — filled in later — whether grounding verification ran.
+  const routing: AnswerTrace["routing"] = {
+    mode:
+      input.requestedFlowId ? "requested"
+      : route.status === "routed" ? "routed"
+      : route.status === "unroutable" ? "unscoped"
+      : "unknown",
+    ...(route.status === "routed" ? { flowId: route.flowId, confidence: route.confidence } : {})
+  };
+
   // "auto" routing could not pick a flow: withhold the answer and ask the caller
   // to choose one of the configured flows and re-ask.
   if (route.status === "unknown") {
     logger.debug({ jobId: job.id }, `answer_question[${job.id}]: routing unknown; requesting flow selection`);
-    return buildFlowSelectionRequiredOutput(flows);
+    return buildFlowSelectionRequiredOutput(flows, {
+      routing,
+      seedSectionCount: 0,
+      searches: [],
+      poolSectionCount: 0,
+      answerForced: false
+    });
   }
 
   const flowId = route.status === "routed" ? route.flowId : undefined;
@@ -109,20 +130,31 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
   const unsatisfiedSearches = new Set<string>();
 
   logger.debug({ jobId: job.id, flowId: flowId ?? null }, `answer_question[${job.id}]: seeding retrieval for flow ${flowId ?? "(unscoped)"}`);
-  mergeSections(pool, await api.retrieve(input.question, flowId, undefined, signal));
+  const seed = await api.retrieve(input.question, flowId, undefined, signal);
+  mergeSections(pool, seed);
+
+  const searches: AnswerTrace["searches"] = [];
+  const loopTrace = (answerForced: boolean): AnswerLoopTrace => ({
+    routing,
+    seedSectionCount: seed.length,
+    searches: [...searches],
+    poolSectionCount: pool.size,
+    answerForced
+  });
 
   for (let round = 0; round < MAX_SEARCH_ROUNDS && pool.size < MAX_POOL_SECTIONS; round += 1) {
     const content = await assess(model, system, input.question, [...pool.values()], false, signal);
     const assessment = parseAssessment(content);
     if (assessment.action === "answer") {
       logger.debug({ jobId: job.id, round, sectionCount: pool.size }, `answer_question[${job.id}]: answered after ${round} search round(s)`);
-      const output = buildAnswerOutput(content, [...pool.values()], input.question, flowId, unsatisfiedSearches);
+      const output = buildAnswerOutput(content, [...pool.values()], input.question, flowId, unsatisfiedSearches, loopTrace(false));
       return verifyAnswerGrounding(model, output, [...pool.values()], input.question, signal, job.id);
     }
 
     logger.debug({ jobId: job.id, round, queries: assessment.queries }, `answer_question[${job.id}]: running ${assessment.queries.length} follow-up search(es)`);
     for (const query of assessment.queries) {
       const results = await api.retrieve(query, flowId, undefined, signal);
+      searches.push({ query, resultCount: results.length, round: round + 1 });
       if (results.length === 0) {
         unsatisfiedSearches.add(normalizeQuery(query));
       }
@@ -137,7 +169,7 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
   // whatever has accumulated (no further searching allowed).
   logger.debug({ jobId: job.id, sectionCount: pool.size }, `answer_question[${job.id}]: forcing final answer from ${pool.size} section(s)`);
   const finalContent = await assess(model, system, input.question, [...pool.values()], true, signal);
-  const output = buildAnswerOutput(finalContent, [...pool.values()], input.question, flowId, unsatisfiedSearches);
+  const output = buildAnswerOutput(finalContent, [...pool.values()], input.question, flowId, unsatisfiedSearches, loopTrace(true));
   return verifyAnswerGrounding(model, output, [...pool.values()], input.question, signal, job.id);
 }
 
@@ -156,8 +188,14 @@ async function verifyAnswerGrounding(
   signal: AbortSignal,
   jobId: string
 ): Promise<AnswerOutput> {
-  if ((output.confidence !== "high" && output.confidence !== "medium") || sections.length === 0) {
-    return output;
+  if (output.outOfScope) {
+    return withVerification(output, { status: "skipped", skipReason: "out_of_scope" });
+  }
+  if (sections.length === 0) {
+    return withVerification(output, { status: "skipped", skipReason: "no_sections" });
+  }
+  if (output.confidence !== "high" && output.confidence !== "medium") {
+    return withVerification(output, { status: "skipped", skipReason: "low_confidence" });
   }
 
   logger.debug({ jobId }, `answer_question[${jobId}]: verifying answer grounding against ${sections.length} section(s)`);
@@ -175,16 +213,19 @@ async function verifyAnswerGrounding(
   const verdict = parseGroundingVerdict(response.content);
   if (!verdict) {
     logger.warn({ jobId }, `answer_question[${jobId}]: grounding verdict was unparseable; keeping the drafted answer`);
-    return output;
+    return withVerification(output, { status: "verdict_unparseable" });
   }
   if (verdict.grounded) {
-    return output;
+    return withVerification(output, { status: "grounded" });
   }
   logger.info(
     { jobId, unsupportedClaimCount: verdict.unsupportedClaims.length, revised: Boolean(verdict.revisedAnswer) },
     `answer_question[${jobId}]: answer contained ${verdict.unsupportedClaims.length} unsupported claim(s); downgrading to low confidence`
   );
-  return applyGroundingVerdict(output, verdict, question);
+  return withVerification(applyGroundingVerdict(output, verdict, question), {
+    status: "claims_stripped",
+    unsupportedClaims: verdict.unsupportedClaims
+  });
 }
 
 // One assess/answer turn. `forceAnswer` tells the model it has gathered enough and
