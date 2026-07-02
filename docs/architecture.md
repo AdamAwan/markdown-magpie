@@ -154,6 +154,35 @@ members as defence-in-depth.
 > The former whole-knowledge-base **Crunch** pass has been retired; its
 > consolidate/split responsibilities now live in the patrols and the gap reconciler.
 
+## Observability
+
+- **Structured logging.** Both services log JSON via pino (`@magpie/logger`), each
+  bound to a `service` field (`api` / `watcher`). The API's request middleware binds a
+  per-request child logger; the watcher binds `jobId`/`jobType` per claimed job.
+- **Crash handlers.** Each entrypoint registers process-level `uncaughtException` and
+  `unhandledRejection` handlers (`installCrashHandlers` in `@magpie/logger`) at its
+  composition root. A throw outside a handled path is logged **fatally** with
+  structured context (service, `err`, stack) and the process exits non-zero, so the
+  orchestrator's restart policy takes over — instead of a bare Node stderr trace with
+  no captured context.
+- **Correlation id.** A single id threads a whole cross-service chain: **API request →
+  enqueued job → watcher execution → API callback**. The API's request middleware
+  reuses an inbound `x-correlation-id` header or mints one, binds it as `correlationId`
+  on the request logger, echoes it on the response, and carries it through the request
+  via `AsyncLocalStorage`. The job broker stamps the in-scope id onto every job it
+  enqueues (`JobView.correlationId`); the watcher binds that id while executing a job
+  (minting one for jobs enqueued outside a request, e.g. scheduled fires) and sends it
+  back on the `x-correlation-id` header of every API callback, so the API reuses it
+  rather than starting a fresh chain. Grep one `correlationId` to follow a unit of work
+  across both services. The ambient-id design maps onto an OpenTelemetry trace context
+  if distributed tracing is adopted later.
+- **Health/liveness.** The watcher exposes `/health` (is the poll loop ticking?) and
+  `/ready` (does it advertise a runnable capability?) — see `apps/watcher/src/health-server.ts`.
+- **Not yet implemented.** Aggregatable **metrics** (queue depth, job throughput/latency,
+  HTTP status counts — e.g. a Prometheus `/metrics` endpoint) and **error tracking**
+  (Sentry or similar) are deferred; job latency is currently logged (`durationMs`) but
+  not exposed as metrics.
+
 ## Implementation Status
 
 The pipeline runs end to end, including raising pull requests on a hosted provider and

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Writable } from "node:stream";
-import { createFatalHandler, createLogger, installCrashHandlers } from "./index.js";
+import { createCorrelationStore, createFatalHandler, createLogger, installCrashHandlers } from "./index.js";
 
 // Collects each JSON log line written to the logger's destination.
 function captureSink(): { stream: Writable; lines: () => Record<string, unknown>[] } {
@@ -59,6 +59,35 @@ test("child loggers bind fields onto every line", () => {
   const lines = sink.lines();
   assert.equal(lines.length, 2);
   assert.ok(lines.every((line) => line.requestId === "req-1"));
+});
+
+test("correlation store returns undefined outside any run scope", () => {
+  const store = createCorrelationStore();
+  assert.equal(store.current(), undefined);
+});
+
+test("correlation store exposes the bound id to async callees within run", async () => {
+  const store = createCorrelationStore();
+  const seen = await store.run("corr-1", async () => {
+    await Promise.resolve();
+    return store.current();
+  });
+  assert.equal(seen, "corr-1");
+  // The binding does not leak past the scope.
+  assert.equal(store.current(), undefined);
+});
+
+test("correlation store isolates concurrent run scopes", async () => {
+  const store = createCorrelationStore();
+  const [a, b] = await Promise.all([
+    store.run("a", async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return store.current();
+    }),
+    store.run("b", async () => store.current())
+  ]);
+  assert.equal(a, "a");
+  assert.equal(b, "b");
 });
 
 test("installCrashHandlers registers a handler for both fatal process events", () => {
