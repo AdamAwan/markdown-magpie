@@ -1,6 +1,5 @@
 import type { ApiTokenProvider } from "@magpie/auth";
 import type { JobCapability, JobError, JobView } from "@magpie/jobs";
-import { CORRELATION_HEADER, correlation } from "./correlation.js";
 
 // Everything the worker loop needs from the API's durable job lifecycle. Kept as
 // an interface so the loop and runners can be tested against a fake without
@@ -211,13 +210,9 @@ export class HttpWatcherApi implements WatcherApi {
     if (token) {
       headers.authorization = `Bearer ${token}`;
     }
-    // Forward the executing job's correlation id (bound by the worker loop) so the
-    // API's request logging reuses it — joining this callback to the request → job
-    // → watcher chain instead of minting a fresh id at the boundary.
-    const correlationId = correlation.current();
-    if (correlationId) {
-      headers[CORRELATION_HEADER] = correlationId;
-    }
+    // The W3C traceparent that continues the job's trace onto this callback is
+    // injected by OpenTelemetry's undici auto-instrumentation when telemetry is
+    // enabled, so no correlation header is set by hand here.
     // Abort on the request timeout, or sooner if the caller's signal (a job
     // cancellation / watcher shutdown) fires first.
     const timeout = AbortSignal.timeout(this.timeoutMs);

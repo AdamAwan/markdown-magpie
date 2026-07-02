@@ -49,11 +49,11 @@ export interface JobView<TInput = unknown, TOutput = unknown> {
   deadLetter: boolean;
   state: JobState;
   input: TInput;
-  // The observability correlation id stamped by the API when the job was
-  // enqueued (from the enqueueing request's chain), when one was in scope. Absent
-  // for jobs enqueued outside a request (e.g. scheduled fires). The watcher binds
-  // it while executing so its logs and API callbacks join the same chain.
-  correlationId?: string;
+  // The W3C trace context (traceparent/tracestate) captured by the API when the
+  // job was enqueued, when telemetry is enabled. Absent for jobs enqueued outside
+  // a trace (e.g. scheduled fires) or in a build with telemetry off. The watcher
+  // extracts it to run the job's span within the enqueueing request's trace.
+  traceContext?: Record<string, string>;
   output?: TOutput;
   error?: JobError;
   retryCount: number;

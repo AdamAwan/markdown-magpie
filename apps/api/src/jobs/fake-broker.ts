@@ -9,8 +9,8 @@ import {
   type JobView
 } from "@magpie/jobs";
 import { CronExpressionParser } from "cron-parser";
+import { injectTraceContext } from "@magpie/telemetry";
 import type { DesiredSchedule, JobBroker, JobListFilters, ScheduleView } from "./broker.js";
-import { correlation } from "../platform/correlation.js";
 
 // Test-only in-memory implementation of JobBroker. Backed by an insertion-ordered
 // Map. Does NOT read environment variables.
@@ -51,9 +51,9 @@ export class FakeJobBroker implements JobBroker {
       deadLetter: false,
       state: "created",
       input: parseResult.data,
-      // Mirror the real broker: stamp the enqueueing request's correlation id
-      // (when one is in scope) so end-to-end correlation is exercised under test.
-      correlationId: correlation.current(),
+      // Mirror the real broker: capture the active trace context (empty and thus
+      // omitted when telemetry is disabled) so propagation is exercised under test.
+      traceContext: emptyToUndefined(injectTraceContext()),
       retryCount: 0,
       retryLimit: definition.policy.retryLimit,
       expireInSeconds: definition.policy.expireInSeconds,
@@ -236,6 +236,12 @@ export class FakeJobBroker implements JobBroker {
     }
     return job;
   }
+}
+
+// A trace carrier is empty when telemetry is disabled; drop it so JobView.traceContext
+// stays absent rather than an empty object, matching the real broker.
+function emptyToUndefined(carrier: Record<string, string>): Record<string, string> | undefined {
+  return Object.keys(carrier).length > 0 ? carrier : undefined;
 }
 
 // The next fire time for a cron in UTC, as an ISO string, or undefined when the

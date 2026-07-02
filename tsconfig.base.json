@@ -19,7 +19,8 @@
       "@magpie/logger": ["packages/logger/src/index.ts"],
       "@magpie/markdown": ["packages/markdown/src/index.ts"],
       "@magpie/prompts": ["packages/prompts/src/index.ts"],
-      "@magpie/retrieval": ["packages/retrieval/src/index.ts"]
+      "@magpie/retrieval": ["packages/retrieval/src/index.ts"],
+      "@magpie/telemetry": ["packages/telemetry/src/index.ts"]
     }
   }
 }

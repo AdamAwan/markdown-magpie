@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { authSettingsFromEnv, isAuthRequired } from "@magpie/auth";
+import { resolveTelemetryConfig, type TelemetryConfig } from "@magpie/telemetry";
 
 // The validated, env-derived static configuration for the watcher. Read and
 // checked once at startup (see loadWatcherConfig); the composition root consumes
@@ -35,6 +36,9 @@ export interface WatcherConfig {
     tokenUrl: string;
     audience: string;
   };
+  // OpenTelemetry export. Off unless an OTLP endpoint is configured; resolved via
+  // a helper (not the zod schema) because the SDK reads the rest of its own OTEL_* env.
+  telemetry: TelemetryConfig;
 }
 
 // The committed placeholder audience from .env.example. Real deployments must
@@ -178,6 +182,7 @@ export function loadWatcherConfig(env: NodeJS.ProcessEnv = process.env): Watcher
       clientSecret: parsed.WATCHER_API_CLIENT_SECRET,
       tokenUrl: `${authSettings.issuer}oauth/token`,
       audience: authSettings.audience
-    }
+    },
+    telemetry: resolveTelemetryConfig(env, "watcher")
   };
 }
