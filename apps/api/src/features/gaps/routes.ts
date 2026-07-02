@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
+import { assertCan, can } from "../../auth/capabilities.js";
 import { HttpError } from "../../http/errors.js";
 import { parseLimit } from "../../platform/paths.js";
 import * as gapsService from "./service.js";
@@ -12,12 +13,20 @@ export function gapRoutes(ctx: AppContext): Hono {
 
   app.get("/candidates", requireScopes("read:knowledge"), async (c) => {
     const limit = parseLimit(c.req.query("limit") ?? null, 50);
-    return c.json({ gaps: await gapsService.listCandidates(ctx, limit) });
+    // Gap candidates carry the flow whose questions surfaced them; a role-aware
+    // principal only sees candidates for flows it can read.
+    const gaps = (await gapsService.listCandidates(ctx, limit)).filter((gap) =>
+      can(ctx, c, "read", gap.flowId)
+    );
+    return c.json({ gaps });
   });
 
   app.get("/clusters", requireScopes("read:knowledge"), async (c) => {
     const limit = parseLimit(c.req.query("limit") ?? null, 50);
-    return c.json({ clusters: await gapsService.listClusters(ctx, limit) });
+    const clusters = (await gapsService.listClusters(ctx, limit)).filter((cluster) =>
+      can(ctx, c, "read", cluster.flowId)
+    );
+    return c.json({ clusters });
   });
 
   // Run the full gap→PR reconciliation for one configured flow. This is the thin
@@ -38,6 +47,8 @@ export function gapRoutes(ctx: AppContext): Hono {
       if (!ctx.knowledgeConfig.flows.some((flow) => flow.id === flowId)) {
         throw new HttpError(404, "flow_not_found");
       }
+      // Reconciliation drafts and enqueues publications into this flow's KB.
+      assertCan(ctx, c, "manage", flowId);
       await gapsService.reconcileFlow(ctx, flowId);
       return c.json({ ok: true });
     }
@@ -56,6 +67,16 @@ export function gapRoutes(ctx: AppContext): Hono {
     async (c) => {
       const id = c.req.param("id");
       const { targetPath, destinationId } = c.req.valid("json");
+
+      // A cluster the caller can't read is reported as not-found (its own service
+      // code) so clusters in other flows aren't enumerable; drafting from it then
+      // requires `manage` on the cluster's flow.
+      const cluster = await ctx.stores.gapClusters.getCluster(id);
+      if (!cluster || cluster.status !== "active" || !can(ctx, c, "read", cluster.flowId)) {
+        return c.json({ error: "cluster_not_found" }, 404);
+      }
+      assertCan(ctx, c, "manage", cluster.flowId);
+
       const outcome = await gapsService.draftFromCluster(ctx, id, { targetPath, destinationId });
       if (!outcome.ok) {
         return c.json({ error: outcome.code }, 404);
