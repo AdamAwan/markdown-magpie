@@ -256,4 +256,29 @@ describe("WorkerLoop", () => {
     assert.equal(typeof done["jobId"], "string");
     assert.equal(typeof done["durationMs"], "number");
   });
+
+  it("binds the job's correlation id onto its execution logs", async () => {
+    const api = new FakeApiClient({ jobs: [fakeJob({ correlationId: "chain-7" })] });
+    const runner = new FakeRunner(async () => ({ answer: "ok" }));
+    const cap = captureLogger();
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", cap.logger, { pollIntervalMs: 1 });
+    await loop.tick();
+
+    const done = cap.lines().find((l) => l["outcome"] === "completed");
+    assert.ok(done, "expected a completion log");
+    assert.equal(done["correlationId"], "chain-7");
+  });
+
+  it("mints a correlation id for a job that carries none", async () => {
+    const api = new FakeApiClient({ jobs: [fakeJob({ correlationId: undefined })] });
+    const runner = new FakeRunner(async () => ({ answer: "ok" }));
+    const cap = captureLogger();
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", cap.logger, { pollIntervalMs: 1 });
+    await loop.tick();
+
+    const done = cap.lines().find((l) => l["outcome"] === "completed");
+    assert.ok(done, "expected a completion log");
+    assert.equal(typeof done["correlationId"], "string");
+    assert.ok((done["correlationId"] as string).length > 0);
+  });
 });

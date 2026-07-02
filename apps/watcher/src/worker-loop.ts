@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type { Logger } from "@magpie/logger";
 import type { JobCapability, JobError, JobView } from "@magpie/jobs";
+import { correlation } from "./correlation.js";
 import type { WatcherApiClient } from "./http-client.js";
 import type { JobRunner } from "./runners/types.js";
 
@@ -80,8 +82,18 @@ export class WorkerLoop {
   }
 
   private async execute(job: JobView): Promise<void> {
+    // Continue the enqueueing request's chain when the job carries a correlation
+    // id; mint one for jobs that originated outside a request (e.g. scheduled
+    // fires) so this execution and the API callbacks it makes still share an id.
+    // Binding it in the store lets the HTTP client forward it on every callback
+    // without threading it through each runner.
+    const correlationId = job.correlationId ?? randomUUID();
+    await correlation.run(correlationId, () => this.runInScope(job, correlationId));
+  }
+
+  private async runInScope(job: JobView, correlationId: string): Promise<void> {
     const startedAt = Date.now();
-    const log = this.logger.child({ jobId: job.id, jobType: job.type });
+    const log = this.logger.child({ jobId: job.id, jobType: job.type, correlationId });
     log.info("job claimed");
 
     const runner = this.runners.find((candidate) => candidate.supports(job.type));

@@ -10,6 +10,7 @@ import {
 } from "@magpie/jobs";
 import { CronExpressionParser } from "cron-parser";
 import type { DesiredSchedule, JobBroker, JobListFilters, ScheduleView } from "./broker.js";
+import { correlation } from "../platform/correlation.js";
 
 // Test-only in-memory implementation of JobBroker. Backed by an insertion-ordered
 // Map. Does NOT read environment variables.
@@ -50,6 +51,9 @@ export class FakeJobBroker implements JobBroker {
       deadLetter: false,
       state: "created",
       input: parseResult.data,
+      // Mirror the real broker: stamp the enqueueing request's correlation id
+      // (when one is in scope) so end-to-end correlation is exercised under test.
+      correlationId: correlation.current(),
       retryCount: 0,
       retryLimit: definition.policy.retryLimit,
       expireInSeconds: definition.policy.expireInSeconds,
