@@ -6,8 +6,10 @@ import {
   getConfiguredKnowledgeFlows,
   getConfiguredKnowledgeRepositories,
   getConfiguredKnowledgeSources,
+  getConfiguredRoleGrants,
   type ConfiguredKnowledgeFlow,
-  type ConfiguredKnowledgeRepository
+  type ConfiguredKnowledgeRepository,
+  type KnowledgeRoleGrants
 } from "../stores/knowledge-repositories.js";
 
 type StoreBackend = "memory" | "postgres";
@@ -85,6 +87,9 @@ export interface AppConfig {
     destinations: ConfiguredKnowledgeRepository[];
     repositories: ConfiguredKnowledgeRepository[];
     flows: ConfiguredKnowledgeFlow[];
+    // role name -> flow id (or "*") -> capabilities. Empty when unset, which leaves
+    // flow-scoped authorization inactive (see getConfiguredRoleGrants).
+    roleGrants: KnowledgeRoleGrants;
     repositoryPath?: string;
   };
   paths: {
@@ -355,6 +360,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       destinations,
       repositories: getConfiguredKnowledgeRepositories(env),
       flows: getConfiguredKnowledgeFlows(env, sources, destinations),
+      roleGrants: getConfiguredRoleGrants(env),
       repositoryPath: parsed.KNOWLEDGE_REPO_PATH
     },
     paths: {

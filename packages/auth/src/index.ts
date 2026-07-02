@@ -13,11 +13,30 @@ export interface AuthSettings {
   issuer: string;
   audience: string;
   jwksUri?: string;
+  // The full JWT claim key that carries the principal's role names, emitted by the
+  // Auth0 post-login Action (a namespaced custom claim, e.g.
+  // "https://magpie.wastedcake.com/roles"). Auth0 requires custom claims to be
+  // namespaced with a URL, so this is the whole key, not just the namespace.
+  // Optional so existing settings literals need not change; the verifier falls back
+  // to DEFAULT_ROLES_CLAIM when unset.
+  rolesClaim?: string;
 }
+
+// The default roles claim key. Kept in sync with the Auth0 post-login Action that
+// emits it; overridable via AUTH_ROLES_CLAIM for other deployments/namespaces.
+export const DEFAULT_ROLES_CLAIM = "https://magpie.wastedcake.com/roles";
 
 export interface Principal {
   subject: string;
   scopes: string[];
+  // Role names carried by the token, or absent/`undefined` when the token has no
+  // roles claim at all. The distinction is load-bearing: interactive user logins run
+  // the Auth0 Action and always carry the claim (possibly an empty array), whereas
+  // machine-to-machine (client-credentials) tokens never do. Downstream flow-scoped
+  // authorization treats an ABSENT claim as a service/legacy principal (scope-only,
+  // no flow restriction) and a PRESENT claim as a role-aware principal whose flow
+  // access is fully determined by these roles.
+  roles?: string[];
   payload: JWTPayload;
 }
 
@@ -50,7 +69,8 @@ export function authSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): AuthS
     required: isAuthRequired(env.AUTH_REQUIRED),
     issuer,
     audience: env.AUTH0_AUDIENCE ?? "https://markdown-magpie.local/api",
-    jwksUri: env.AUTH0_JWKS_URI
+    jwksUri: env.AUTH0_JWKS_URI,
+    rolesClaim: env.AUTH_ROLES_CLAIM?.trim() || DEFAULT_ROLES_CLAIM
   };
 }
 
@@ -61,6 +81,17 @@ export function parseBearerToken(header: string | null | undefined): string | un
 
 export function hasScopes(principal: Principal, requiredScopes: readonly string[]): boolean {
   return requiredScopes.every((scope) => principal.scopes.includes(scope));
+}
+
+// Reads the role names from a verified token payload. Returns `undefined` when the
+// claim is absent (or not an array) — see Principal.roles for why that case is
+// distinct from an empty array. String entries only; anything non-string is dropped.
+export function rolesFromPayload(payload: JWTPayload, rolesClaim: string): string[] | undefined {
+  const claim = payload[rolesClaim];
+  if (!Array.isArray(claim)) {
+    return undefined;
+  }
+  return claim.filter((entry): entry is string => typeof entry === "string");
 }
 
 export function createRemoteAuthVerifier(options: AuthSettings & { jwks?: () => Promise<JSONWebKeySet> }) {
@@ -89,6 +120,7 @@ export function createRemoteAuthVerifier(options: AuthSettings & { jwks?: () => 
         return {
           subject: payload.sub ?? "",
           scopes: typeof payload.scope === "string" ? payload.scope.split(/\s+/).filter(Boolean) : [],
+          roles: rolesFromPayload(payload, options.rolesClaim ?? DEFAULT_ROLES_CLAIM),
           payload
         };
       } catch (error) {

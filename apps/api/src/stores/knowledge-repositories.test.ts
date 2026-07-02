@@ -5,6 +5,7 @@ import {
   getConfiguredKnowledgeDestinations,
   getConfiguredKnowledgeRepositories,
   getConfiguredKnowledgeSources,
+  getConfiguredRoleGrants,
   resolveConfiguredRepositorySelection,
   resolveKnowledgeRepositorySelection
 } from "./knowledge-repositories.js";
@@ -228,6 +229,42 @@ describe("knowledge repository configuration", () => {
       localPath: "knowledge-bases/product",
       repositoryId: "docs",
       name: "Product Docs"
+    });
+  });
+
+  describe("getConfiguredRoleGrants", () => {
+    it("returns an empty map when unset or blank (flow-scoping stays inactive)", () => {
+      assert.deepEqual(getConfiguredRoleGrants({}), {});
+      assert.deepEqual(getConfiguredRoleGrants({ KNOWLEDGE_ROLE_GRANTS: "   " }), {});
+    });
+
+    it("parses a role -> flow -> capabilities map", () => {
+      const grants = getConfiguredRoleGrants({
+        KNOWLEDGE_ROLE_GRANTS: JSON.stringify({
+          "kb-hr-curators": { hr: ["read", "manage"] },
+          "kb-askers-all": { "*": ["ask"] }
+        })
+      });
+      assert.deepEqual(grants, {
+        "kb-hr-curators": { hr: ["read", "manage"] },
+        "kb-askers-all": { "*": ["ask"] }
+      });
+    });
+
+    it("drops unknown capabilities, de-duplicates, and prunes empty entries", () => {
+      const grants = getConfiguredRoleGrants({
+        KNOWLEDGE_ROLE_GRANTS: JSON.stringify({
+          "kb-hr": { hr: ["read", "read", "bogus", "manage"] },
+          "kb-empty": { hr: ["nope"] },
+          "kb-nonarray": { hr: "read" }
+        })
+      });
+      assert.deepEqual(grants, { "kb-hr": { hr: ["read", "manage"] } });
+    });
+
+    it("returns an empty map for malformed JSON rather than throwing", () => {
+      assert.deepEqual(getConfiguredRoleGrants({ KNOWLEDGE_ROLE_GRANTS: "{not json" }), {});
+      assert.deepEqual(getConfiguredRoleGrants({ KNOWLEDGE_ROLE_GRANTS: "[1,2,3]" }), {});
     });
   });
 });

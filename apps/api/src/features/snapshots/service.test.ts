@@ -118,6 +118,7 @@ describe("recordSnapshotsFromPullRequestResults", () => {
         destinations: [],
         flows: [{ id: "alpha", name: "Alpha flow", sourceIds: [], destinationId: "d" }],
         repositories: [],
+        roleGrants: {},
         checkoutRoot: ".magpie/checkouts"
       }
     });
@@ -143,6 +144,7 @@ describe("reading snapshots for the UI", () => {
         destinations: [],
         flows: [{ id: "alpha", name: "Alpha flow", sourceIds: [], destinationId: "d" }],
         repositories: [],
+        roleGrants: {},
         checkoutRoot: ".magpie/checkouts"
       }
     });
