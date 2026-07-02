@@ -29,7 +29,9 @@ export interface KnowledgeRepositorySelection {
 // Flow-scoped capabilities a role can be granted. `read`/`manage`/`ask` are
 // evaluated per flow; `admin` is a deployment-wide capability (gating destructive
 // actions like data reset) and is only ever granted on the "*" flow.
-export const KNOWLEDGE_CAPABILITIES = ["read", "manage", "ask", "admin"] as const;
+// Module-local: the capability set is exposed to the rest of the app through the
+// KnowledgeCapability type (below), not the array itself.
+const KNOWLEDGE_CAPABILITIES = ["read", "manage", "ask", "admin"] as const;
 export type KnowledgeCapability = (typeof KNOWLEDGE_CAPABILITIES)[number];
 
 // role name -> flow id (or "*" for all flows) -> granted capabilities. This is the
