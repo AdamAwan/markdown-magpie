@@ -160,6 +160,16 @@ describe("buildAnswerOutput", () => {
       output.citations.map((citation) => citation.sectionId),
       ["s2", "s1"]
     );
+    // An answer attributed only to invented section ids cannot be trusted as
+    // grounded: the self-reported "high" is downgraded to low.
+    assert.equal(output.confidence, "low");
+  });
+
+  it("downgrades unparseable model output to low confidence", () => {
+    const output = buildAnswerOutput("Deploy by running the script.", SECTIONS, "How do I deploy?", "flow-1");
+    assert.equal(output.answer, "Deploy by running the script.");
+    assert.equal(output.confidence, "low", "output that broke the JSON contract ships at low, not a quiet medium");
+    assert.equal(output.citations.length, 1, "the retrieved pool still attributes the raw answer");
   });
 
   it("emits a followup gap on a confident answer when a search came back empty", () => {

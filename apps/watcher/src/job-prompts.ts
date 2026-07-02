@@ -109,7 +109,7 @@ export function buildAnswerOutput(
 ): AnswerOutput {
   const structured = parseStructuredAnswer(modelContent);
   const answer = structured?.answer ?? modelContent.trim();
-  const citations = selectCitations(sections, structured?.usedSectionIds ?? []);
+  const { citations, attributionFailed } = selectCitations(sections, structured?.usedSectionIds ?? []);
   const citedSectionIds = citations.map((citation) => citation.sectionId);
   const followupGaps = groundedFollowupGaps(structured, question, citedSectionIds, unsatisfiedSearches);
 
@@ -143,9 +143,14 @@ export function buildAnswerOutput(
     };
   }
 
+  // Confidence is only honoured when the model held up its side of the contract.
+  // Output that did not parse as the structured answer, or that attributed the
+  // answer to invented section ids, cannot be trusted as grounded — it ships at
+  // "low" so the UI signals distrust instead of defaulting to quiet credibility.
+  const confidence: Confidence = !structured || attributionFailed ? "low" : structured.confidence;
   return {
     answer,
-    confidence: structured?.confidence ?? "medium",
+    confidence,
     citations,
     ...(followupGaps.length > 0 ? { gaps: followupGaps } : {}),
     ...(flowId ? { flowId } : {})
@@ -154,15 +159,22 @@ export function buildAnswerOutput(
 
 // Narrows the accumulated pool to the sections the model actually used, ordered
 // strongest-first. Falls back to the whole pool when the model named no valid ids
-// (or none that were retrieved) so a real answer never loses its attribution.
-function selectCitations(sections: RetrievedSection[], usedSectionIds: string[]): Citation[] {
+// (or none that were retrieved) so a real answer never loses its attribution —
+// but naming ONLY ids that were never retrieved is a broken attribution
+// (`attributionFailed`), which the caller treats as untrustworthy and downgrades.
+function selectCitations(
+  sections: RetrievedSection[],
+  usedSectionIds: string[]
+): { citations: Citation[]; attributionFailed: boolean } {
   const all = sections.map(toCitation).sort((left, right) => right.relevance - left.relevance);
   if (usedSectionIds.length === 0) {
-    return all;
+    return { citations: all, attributionFailed: false };
   }
   const used = new Set(usedSectionIds);
   const grounded = all.filter((citation) => used.has(citation.sectionId));
-  return grounded.length > 0 ? grounded : all;
+  return grounded.length > 0
+    ? { citations: grounded, attributionFailed: false }
+    : { citations: all, attributionFailed: true };
 }
 
 // Turns the model's followupGaps into gap signals, but only when the loop saw at
