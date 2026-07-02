@@ -207,6 +207,7 @@ async function verifyAnswerGrounding(
         content: `Question:\n${question}\n\nAnswer under review:\n${output.answer}\n\nContext:\n${formatSectionContext(sections)}`
       }
     ],
+    responseFormat: "json",
     signal
   });
 
@@ -246,6 +247,7 @@ async function assess(
   const response = await model.complete({
     system,
     messages: [{ role: "user", content: `Question:\n${question}\n\nContext:\n${context}${directive}` }],
+    responseFormat: "json",
     signal
   });
   return response.content;

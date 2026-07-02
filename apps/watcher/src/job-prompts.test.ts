@@ -7,7 +7,8 @@ import {
   buildAnswerOutput,
   buildPrompt,
   parseGroundingVerdict,
-  parseJobOutput
+  parseJobOutput,
+  UNPARSEABLE_ANSWER_FALLBACK
 } from "./job-prompts.js";
 
 function job(type: JobView["type"], input: unknown): JobView {
@@ -171,11 +172,22 @@ describe("buildAnswerOutput", () => {
     assert.equal(output.confidence, "low");
   });
 
-  it("downgrades unparseable model output to low confidence", () => {
+  it("downgrades unparseable prose output to low confidence but keeps the prose", () => {
     const output = buildAnswerOutput("Deploy by running the script.", SECTIONS, "How do I deploy?", "flow-1");
     assert.equal(output.answer, "Deploy by running the script.");
     assert.equal(output.confidence, "low", "output that broke the JSON contract ships at low, not a quiet medium");
     assert.equal(output.citations.length, 1, "the retrieved pool still attributes the raw answer");
+  });
+
+  it("never leaks a broken JSON envelope as the answer", () => {
+    // A model that embeds an unescaped quote produces invalid JSON that opens with
+    // "{" — the reader must see a safe fallback, not the raw {"action":...} envelope.
+    const brokenEnvelope =
+      '{"action":"answer","answer":"They said "hi" to me","confidence":"low","isKnowledgeGap":true}';
+    const output = buildAnswerOutput(brokenEnvelope, SECTIONS, "What did they say?", "flow-1");
+    assert.equal(output.answer, UNPARSEABLE_ANSWER_FALLBACK, "the broken envelope is replaced, not surfaced");
+    assert.doesNotMatch(output.answer, /"action"/, "no raw JSON leaks into the answer");
+    assert.equal(output.confidence, "low", "an unparseable structured attempt ships distrusted");
   });
 
   it("emits a followup gap on a confident answer when a search came back empty", () => {

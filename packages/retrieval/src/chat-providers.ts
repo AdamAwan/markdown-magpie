@@ -35,7 +35,8 @@ export class OpenAICompatibleChatProvider implements ChatProvider {
             { role: "system", content: request.system },
             ...request.messages
           ],
-          temperature: 0.2
+          temperature: 0.2,
+          ...(request.responseFormat === "json" ? { response_format: { type: "json_object" } } : {})
         })
       },
       this.timeoutMs,
@@ -72,7 +73,8 @@ export class AzureOpenAIChatProvider implements ChatProvider {
             { role: "system", content: request.system },
             ...request.messages
           ],
-          temperature: 0.2
+          temperature: 0.2,
+          ...(request.responseFormat === "json" ? { response_format: { type: "json_object" } } : {})
         })
       },
       this.timeoutMs,

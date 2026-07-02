@@ -119,6 +119,13 @@ export function parseJobOutput(job: JobView, stdout: string): unknown {
 // searched for and did not find — are emitted even for a confident answer, but
 // only when the loop actually observed a search return nothing (grounding them to
 // real empty searches rather than model hunches).
+// Shown instead of the raw model reply when the model was asked for a structured
+// answer but produced something we could not parse. Never surface the unparsed
+// text: a broken JSON envelope (e.g. an unescaped quote inside a string) would
+// otherwise leak `{"action":"answer",...}` to the reader as if it were the answer.
+export const UNPARSEABLE_ANSWER_FALLBACK =
+  "I could not produce a reliable answer to this question from the current knowledge base.";
+
 export function buildAnswerOutput(
   modelContent: string,
   sections: RetrievedSection[],
@@ -128,7 +135,13 @@ export function buildAnswerOutput(
   loopTrace?: AnswerLoopTrace
 ): AnswerOutput {
   const structured = parseStructuredAnswer(modelContent);
-  const answer = structured?.answer ?? modelContent.trim();
+  // A reply that opened as a JSON object but failed to parse was a broken attempt at
+  // the structured contract, not a plain-prose answer — surface a safe fallback
+  // rather than the raw envelope. Genuine prose (does not start with "{") is still
+  // kept verbatim so a model that ignores the contract can still be understood.
+  const answer =
+    structured?.answer ??
+    (modelContent.trim().startsWith("{") ? UNPARSEABLE_ANSWER_FALLBACK : modelContent.trim());
   const { citations, attributionFailed } = selectCitations(sections, structured?.usedSectionIds ?? []);
   const citedSectionIds = citations.map((citation) => citation.sectionId);
   const followupGaps = groundedFollowupGaps(structured, question, citedSectionIds, unsatisfiedSearches);
