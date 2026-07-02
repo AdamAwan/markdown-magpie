@@ -471,6 +471,84 @@ select:focus {
   margin: 0;
 }
 
+/* Model answers arrive as Markdown; AnswerProse renders it to real elements.
+   These rules keep the block tight (no runaway heading sizes or list margins)
+   so a formatted answer reads cleanly inside a row. */
+.answerProse {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.answerProse > :first-child {
+  margin-top: 0;
+}
+
+.answerProse > :last-child {
+  margin-bottom: 0;
+}
+
+.answerProse p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.answerProse ul,
+.answerProse ol {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
+}
+
+.answerProse li {
+  line-height: 1.45;
+}
+
+.answerProse h1,
+.answerProse h2,
+.answerProse h3,
+.answerProse h4,
+.answerProse h5,
+.answerProse h6 {
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.answerProse strong {
+  font-weight: 800;
+}
+
+.answerProse code {
+  background: #eef2ee;
+  border: 1px solid #dbe2db;
+  padding: 1px 4px;
+  font-size: 0.9em;
+}
+
+.answerProse pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: #f4f6f3;
+  border: 1px solid #dbe2db;
+  overflow-x: auto;
+}
+
+.answerProse pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.answerProse blockquote {
+  margin: 0;
+  padding-left: 12px;
+  border-left: 3px solid #cdd5d0;
+  color: #41504b;
+}
+
 .rowTop,
 .resultHeader,
 .citationTop {
