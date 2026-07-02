@@ -3,6 +3,12 @@
 // the API plumbing avoids the apiUrl/postJson/getJson/askQuestion drift that
 // comes from copy-pasting it per transport.
 
+import {
+  ON_BEHALF_OF_ROLES_HEADER,
+  ON_BEHALF_OF_SUBJECT_HEADER,
+  serializeOnBehalfRoles
+} from "@magpie/auth";
+
 const apiBaseUrl = trimTrailingSlash(
   (process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/api$/, "")
 );
@@ -54,11 +60,30 @@ type FeedbackKind = "helpful" | "unhelpful" | "knowledge_gap";
 // resolved on every call so an expired token is transparently refreshed.
 export interface KbClientOptions {
   token?: string | (() => Promise<string | undefined>);
+  // The verified end user this call is made on behalf of. When present, the client
+  // forwards the user's subject + roles alongside the (service) bearer token, so the
+  // API can authorize as the user (trusted on-behalf-of delegation). Resolved per
+  // call so it reflects the current request's user (HTTP transport); undefined for
+  // stdio, which has no per-request user context.
+  onBehalfOf?: () => { subject?: string; roles?: string[] } | undefined;
 }
 
 async function authHeaders(options: KbClientOptions | undefined): Promise<Record<string, string>> {
   const token = typeof options?.token === "function" ? await options.token() : options?.token;
-  return token ? { authorization: `Bearer ${token}` } : {};
+  const headers: Record<string, string> = token ? { authorization: `Bearer ${token}` } : {};
+
+  const actor = options?.onBehalfOf?.();
+  if (actor) {
+    if (actor.subject) {
+      headers[ON_BEHALF_OF_SUBJECT_HEADER] = actor.subject;
+    }
+    // Always send the roles header when delegating — its presence is what activates
+    // delegation on the API. A user with no roles yields "[]" (fail-closed: no flow
+    // access) rather than silently falling back to the service identity's bypass.
+    headers[ON_BEHALF_OF_ROLES_HEADER] = serializeOnBehalfRoles(actor.roles ?? []);
+  }
+
+  return headers;
 }
 
 function trimTrailingSlash(value: string): string {
