@@ -139,11 +139,33 @@ capability layer rather than a risky scope rename.
 as flow-less, so only a **wildcard** asker (`"*": ["ask"]`) can let the watcher
 auto-route; a single-flow asker must name their flow.
 
-**Known limitation.** Whether per-user `ask` scoping is enforced for MCP clients
-depends on whether the MCP server forwards the end user's token or calls the API
-with its own service token. A service token hits carve-out (3) and bypasses
-flow-scoping. Enforcing per-user `ask` restrictions *through* MCP is a follow-up
-(it requires propagating user identity at the MCP boundary).
+### MCP: acting as the end user (token exchange)
+
+The HTTP MCP server verifies the end user's token at its own edge but, by default,
+calls the downstream API with its **own M2M service token** — which hits carve-out
+(3) above and bypasses flow-scoping. So per-user `ask` scoping is only enforced for
+MCP clients when the MCP server calls the API **as the user**.
+
+Set `MCP_USER_TOKEN_EXCHANGE=true` to enable that. The MCP server then performs an
+**RFC 8693 token exchange**: it swaps each verified inbound user token for an
+API-audience token that preserves the user's identity + roles, and uses *that* for
+the downstream call, so the API's per-flow checks apply per user
+(`apps/mcp/src/http.ts`, `packages/auth/src/token-exchange.ts`). The exchange is
+authenticated with the MCP's own client credentials (`MCP_API_CLIENT_ID/SECRET`)
+and results are cached per user token.
+
+> **Auth0 dependency.** Token exchange must be enabled and configured on the IdP.
+> On Auth0 this means a token-exchange profile/grant (e.g. Custom Token Exchange)
+> that (a) accepts the user's MCP-audience access token as the subject token, and
+> (b) mints an `AUTH0_AUDIENCE` token that **still carries the roles claim and the
+> API scopes** the user holds — otherwise the exchanged token would authenticate
+> but resolve to no flow access. Verify this in your tenant before turning the flag
+> on. The subject-token type is configurable in `createTokenExchanger` if your
+> profile expects a non-default `subject_token_type`.
+
+When the flag is off, MCP behaves exactly as before (M2M service identity), which
+is consistent with the API's grants-inactive default — so both sides are safe to
+leave off until you deliberately turn the model on.
 
 ## Considered and rejected
 

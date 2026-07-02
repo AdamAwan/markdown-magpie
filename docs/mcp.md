@@ -82,6 +82,8 @@ Input:
 | `MCP_HTTP_HOST` | `127.0.0.1` | Host interface to bind to (set `0.0.0.0` to expose on all interfaces). |
 | `MCP_RESOURCE_URL` | `http://localhost:<port>/mcp` | Public URL of the `/mcp` endpoint, advertised in the OAuth protected-resource metadata. |
 | `MCP_API_AUTH_TOKEN` | — | Service token used for downstream API calls. Required when `AUTH_REQUIRED=true` (the server fails fast at startup otherwise). |
+| `MCP_API_CLIENT_ID` / `MCP_API_CLIENT_SECRET` | — | Preferred alternative to `MCP_API_AUTH_TOKEN`: client-credentials for the MCP's own M2M identity, fetched and refreshed at runtime. Also used to authenticate token exchange. |
+| `MCP_USER_TOKEN_EXCHANGE` | `false` | When `true`, call the API **as the end user** via RFC 8693 token exchange so the API's per-flow authorization applies per user (not the M2M identity). Requires `AUTH_REQUIRED=true` + the client-credentials pair, and Auth0 configured to honor the exchange. See [authorization.md](authorization.md). |
 
 ### Auth variables (both transports)
 
