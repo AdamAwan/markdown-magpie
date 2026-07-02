@@ -30,13 +30,19 @@ export const ANSWER_QUESTION: PromptDefinition = {
     'only when it will improve the answer; do not search more than necessary.\n\n' +
     '(2) Answer:\n' +
     '{"action":"answer","answer":"string","confidence":"high|medium|low","isKnowledgeGap":true|false,' +
-    '"gaps":["string"],"followupGaps":["string"],"usedSectionIds":["string"]}\n' +
+    '"outOfScope":true|false,"gaps":["string"],"followupGaps":["string"],"usedSectionIds":["string"]}\n' +
     'Each context section is labelled "[section <id>]". Set "usedSectionIds" to the ids of exactly the sections ' +
     'your answer relied on — cite nothing you did not use. Set isKnowledgeGap to true and confidence to low when ' +
     'the context does not specifically answer the question, listing each distinct missing topic in "gaps". Use ' +
     '"followupGaps" for supporting material you searched for but the knowledge base does not contain (for example ' +
     '"a concrete example of X") — include these even when you answer confidently, and leave the array empty when ' +
-    'nothing was missing.'
+    'nothing was missing.\n\n' +
+    'Set "outOfScope" to true ONLY when the question is unrelated to this knowledge base\'s subject area — for ' +
+    'example a question about cats asked of a product knowledge base. When outOfScope is true, set confidence to ' +
+    'low, leave "gaps" empty (an off-topic question is NOT a knowledge gap and must never be recorded as one), ' +
+    'and put a one-sentence explanation of why the question is off-topic in "answer". Leave outOfScope false ' +
+    'whenever the question genuinely belongs to this knowledge base\'s subject area, even if the knowledge base ' +
+    'currently lacks the answer — that is a knowledge gap (isKnowledgeGap), not off-topic.'
 };
 
 export const SUMMARIZE_GAP: PromptDefinition = {
@@ -337,18 +343,27 @@ export const GAP_RECONCILE_PROPOSE: PromptDefinition = {
   usedBy: ["watcher · gap reconciler"],
   outputShape: "{ merges[], splits[] }",
   instructions:
-    "You are reorganising knowledge-gap clusters. Propose a MERGE only when one " +
-    "document could fully cover both clusters; propose a SPLIT only when members " +
-    "are independently addressable topics. Return JSON only with this shape: " +
+    "You are reorganising knowledge-gap clusters for a knowledge base. Each cluster has a " +
+    'title and, where available, a "scope" object describing the knowledge base: a persona, ' +
+    "the best retrieval relevance found for the cluster's topic (topRelevance — 0 means nothing " +
+    "in the knowledge base matched the topic), and snippets of the closest matching content. " +
+    "Propose a MERGE only when one document could fully cover both clusters; propose a SPLIT " +
+    "only when members are independently addressable topics; propose a DISMISSAL when a cluster " +
+    "is off-topic for this knowledge base — its subject is unrelated to the persona and the " +
+    "snippets (typically with topRelevance near 0), for example a cluster about cats in a product " +
+    "knowledge base. Do NOT dismiss a cluster that is on-topic but merely uncovered (low relevance " +
+    "because the answer is genuinely missing) — that is a real gap to keep. Return JSON only with " +
+    "this shape: " +
     '{"merges":[{"clusterIds":["string"],"rationale":"string"}],' +
-    '"splits":[{"clusterId":"string","children":[{"gapIds":["string"]}],"rationale":"string"}]}. ' +
-    'If nothing materially changes, return {"merges":[],"splits":[]}.'
+    '"splits":[{"clusterId":"string","children":[{"gapIds":["string"]}],"rationale":"string"}],' +
+    '"dismissals":[{"clusterId":"string","rationale":"string"}]}. ' +
+    'If nothing materially changes, return {"merges":[],"splits":[],"dismissals":[]}.'
 };
 
 export const GAP_RECONCILE_CRITIC: PromptDefinition = {
   id: "gap-reconcile-critic",
   title: "Critique a proposed gap-cluster reshape",
-  description: "Strict reviewer that confirms or rejects a single proposed merge or split.",
+  description: "Strict reviewer that confirms or rejects a single proposed merge, split, or dismissal.",
   usedBy: ["watcher · gap reconciler"],
   outputShape: "{ confirmed, rationale }",
   instructions:

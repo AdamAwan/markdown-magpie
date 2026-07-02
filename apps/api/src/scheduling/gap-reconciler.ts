@@ -6,6 +6,7 @@ import type { AppContext } from "../context.js";
 import * as gapsService from "../features/gaps/service.js";
 import { runJobToCompletion } from "../features/jobs/service.js";
 import * as proposalsService from "../features/proposals/service.js";
+import { describeFlowScope } from "../features/retrieve/service.js";
 import type { GapClusterRecord, PublicationActionRecord } from "../stores/gap-cluster-store.js";
 import { pairKey } from "../stores/pr-crosslink-store.js";
 import { gapSummaryKey } from "../stores/question-log-store.js";
@@ -34,6 +35,10 @@ interface ProposedSplit {
   children: Array<{ gapIds: string[] }>;
   rationale: string;
 }
+interface ProposedDismissal {
+  clusterId: string;
+  rationale: string;
+}
 
 interface GapReconcileRunDetails extends Record<string, unknown> {
   catalogRevision: number;
@@ -45,6 +50,7 @@ interface GapReconcileRunDetails extends Record<string, unknown> {
   clustersCreated: number;
   mergeDecisions: number;
   splitDecisions: number;
+  dismissDecisions: number;
   decisionsApplied: number;
   proposalsDrafted: number;
   publicationActionsDrained: number;
@@ -114,6 +120,7 @@ async function reconcileGapsInner(
     clustersCreated: 0,
     mergeDecisions: 0,
     splitDecisions: 0,
+    dismissDecisions: 0,
     decisionsApplied: 0,
     proposalsDrafted: 0,
     publicationActionsDrained: 0,
@@ -147,6 +154,7 @@ async function reconcileGapsInner(
     details.clustersCreated = clustering.clustersCreated;
     details.mergeDecisions = clustering.mergeDecisions;
     details.splitDecisions = clustering.splitDecisions;
+    details.dismissDecisions = clustering.dismissDecisions;
     details.decisionsApplied = clustering.decisionsApplied;
     details.proposalsDrafted = clustering.proposalsDrafted;
     await ctx.stores.gapClusters.setProcessedRevision(flowId, catalogRevision, new Date().toISOString());
@@ -261,7 +269,7 @@ async function freezeClusterForProposal(ctx: AppContext, proposal: Proposal): Pr
 async function reconcileClusters(ctx: AppContext, flowId: string | undefined): Promise<
   Pick<
     GapReconcileRunDetails,
-    "clustersCreated" | "mergeDecisions" | "splitDecisions" | "decisionsApplied" | "proposalsDrafted"
+    "clustersCreated" | "mergeDecisions" | "splitDecisions" | "dismissDecisions" | "decisionsApplied" | "proposalsDrafted"
   >
 > {
   const flowLabel = flowId ?? "default";
@@ -269,6 +277,7 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
     clustersCreated: 0,
     mergeDecisions: 0,
     splitDecisions: 0,
+    dismissDecisions: 0,
     decisionsApplied: 0,
     proposalsDrafted: 0
   };
@@ -327,13 +336,13 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
 
   // 2) Reshape this flow's active clusters. The propose→critic generative step now
   // runs as a reconcile_gap_clusters AI job in the watcher; the API enqueues it and
-  // bounded-waits for the critic-confirmed verdicts. A single cluster has nothing
-  // to merge, so this is gated (not an early return) — drafting below must still
-  // run for the single-cluster case. Reshape is best-effort: when no chat watcher
-  // is available (timeout) or the job fails, we log and skip, leaving the rest of
-  // reconcileGaps to run.
+  // bounded-waits for the critic-confirmed verdicts. Runs whenever there is at least
+  // one active cluster: a single cluster has nothing to merge/split, but it can still
+  // be dismissed as off-topic (a lone "cats" cluster in a product flow). Reshape is
+  // best-effort: when no chat watcher is available (timeout) or the job fails, we log
+  // and skip, leaving the rest of reconcileGaps to run.
   const active = await ctx.stores.gapClusters.listActiveClustersForFlow(flowId);
-  if (active.length >= 2) {
+  if (active.length >= 1) {
     const reshape = await requestReshape(ctx, active, flowId, flowLabel);
     if (reshape) {
       // 3) Apply only the critic-confirmed changes, recording every decision
@@ -379,6 +388,27 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
         details.decisionsApplied += 1;
         logger.info({ flowLabel, clusterId: split.clusterId, childCount: split.children.length }, "gap reconciler: critic confirmed split of cluster");
         await applySplit(ctx, { clusterId: split.clusterId, children: split.children, rationale: split.rationale }, flowId);
+      }
+      // Dismissals run before drafting (step 4) so an off-topic cluster never becomes
+      // a pull request. A confirmed dismissal drops the cluster and dismisses its
+      // member gaps permanently, so it neither drafts nor re-clusters next run.
+      for (const dismissal of reshape.dismissals) {
+        details.dismissDecisions += 1;
+        await ctx.stores.reconciliations.record({
+          flowId,
+          kind: "dismiss",
+          rationale: dismissal.rationale,
+          confirmed: dismissal.confirmed,
+          applied: dismissal.confirmed,
+          clusterIds: [dismissal.clusterId]
+        });
+        if (!dismissal.confirmed) {
+          logger.info({ flowLabel, clusterId: dismissal.clusterId }, "gap reconciler: critic rejected proposed dismissal");
+          continue;
+        }
+        details.decisionsApplied += 1;
+        logger.info({ flowLabel, clusterId: dismissal.clusterId }, "gap reconciler: critic confirmed dismissal of off-topic cluster");
+        await applyDismissal(ctx, { clusterId: dismissal.clusterId, rationale: dismissal.rationale }, flowId);
       }
     }
   }
@@ -458,8 +488,23 @@ async function requestReshape(
   flowId: string | undefined,
   flowLabel: string
 ): Promise<Reshape | undefined> {
+  // Attach scope grounding per cluster (persona + best retrieval relevance + closest
+  // snippets, via inline retrieval against the flow's destination) so the model can
+  // tell an off-topic cluster from an on-topic-but-uncovered one. The cluster title
+  // is the gap summary, which is a good enough retrieval query for this judgement.
+  const clusters = await Promise.all(
+    active.map(async (c) => {
+      const scope = await describeFlowScope(ctx, c.flowId ?? flowId, c.title);
+      return {
+        id: c.id,
+        ...(c.flowId ? { flowId: c.flowId } : {}),
+        title: c.title,
+        ...(scope ? { scope } : {})
+      };
+    })
+  );
   const input = {
-    clusters: active.map((c) => ({ id: c.id, ...(c.flowId ? { flowId: c.flowId } : {}), title: c.title })),
+    clusters,
     ...(flowId ? { flowId } : {}),
     provider: ctx.config.get().aiProvider
   };
@@ -552,6 +597,23 @@ async function applySplit(ctx: AppContext, split: ProposedSplit, flowId: string 
   if (retainedProposal) {
     await ctx.stores.gapClusters.enqueuePublicationAction(retainedProposal.id, "publish");
   }
+}
+
+// Permanently drops an off-topic cluster: dismiss its underlying gaps (so they never
+// resurface as candidates or re-cluster) then dismiss the cluster itself (so it
+// leaves the active set and never drafts). Defence-in-depth: only a still-active
+// cluster of this flow is dismissed, matching applyMerge/applySplit.
+async function applyDismissal(ctx: AppContext, dismissal: ProposedDismissal, flowId: string | undefined): Promise<void> {
+  const cluster = await ctx.stores.gapClusters.getCluster(dismissal.clusterId);
+  if (!cluster || cluster.status !== "active" || !sameFlow(cluster.flowId, flowId)) {
+    return;
+  }
+  const members = await ctx.stores.gapClusters.listMembershipsForCluster(cluster.id);
+  const gapIds = members.map((member) => member.gapId);
+  if (gapIds.length > 0) {
+    await ctx.stores.questionLogs.dismissGaps(gapIds, dismissal.rationale);
+  }
+  await ctx.stores.gapClusters.dismissCluster(cluster.id, dismissal.rationale);
 }
 
 function isOpenProposal(proposal: Proposal): boolean {

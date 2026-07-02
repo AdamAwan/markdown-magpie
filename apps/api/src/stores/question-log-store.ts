@@ -35,6 +35,10 @@ export interface QuestionLogStore {
   // retained for audit but stop surfacing as candidates. Returns how many gaps
   // were newly resolved.
   resolveGaps(questionIds: string[], summaries: string[], proposalId: string): Promise<number>;
+  // Permanently dismisses the given gap rows (by gap id) as off-topic for the
+  // knowledge base. Dismissed rows are retained for audit but never surface as
+  // candidates or cluster again. Returns how many gaps were newly dismissed.
+  dismissGaps(gapIds: string[], reason: string): Promise<number>;
   get(id: string): Promise<QuestionLog | undefined>;
   list(limit: number): Promise<QuestionLog[]>;
   listGapCandidates(limit: number): Promise<GapCandidate[]>;
@@ -87,7 +91,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
         continue;
       }
       for (const gap of log.gaps ?? []) {
-        if (gap.resolvedAt || gap.summary !== summary) {
+        if (gap.resolvedAt || gap.dismissedAt || gap.summary !== summary) {
           continue;
         }
         // Synthetic, stable id: the gap row has no surrogate key in memory, so we
@@ -135,7 +139,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       const logId = id.slice(0, sep);
       const summary = id.slice(sep + 2);
       const gap = this.logs.get(logId)?.gaps?.find((candidate) => candidate.summary === summary);
-      if (gap && !gap.resolvedAt) {
+      if (gap && !gap.resolvedAt && !gap.dismissedAt) {
         unresolved.push(id);
       }
     }
@@ -293,6 +297,43 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     return resolved;
   }
 
+  async dismissGaps(gapIds: string[], reason: string): Promise<number> {
+    const dismissedAt = new Date().toISOString();
+    const trimmedReason = reason.trim();
+    let dismissed = 0;
+    const dismissedFlows = new Set<string>();
+    for (const id of gapIds) {
+      const sep = id.indexOf("::");
+      if (sep === -1) {
+        continue;
+      }
+      const logId = id.slice(0, sep);
+      const summary = id.slice(sep + 2);
+      const log = this.logs.get(logId);
+      if (!log?.gaps) {
+        continue;
+      }
+      let dismissedHere = 0;
+      const gaps = log.gaps.map((gap) => {
+        if (gap.summary !== summary || gap.resolvedAt || gap.dismissedAt) {
+          return gap;
+        }
+        dismissed += 1;
+        dismissedHere += 1;
+        return { ...gap, dismissedAt, ...(trimmedReason ? { dismissedReason: trimmedReason } : {}) };
+      });
+      if (dismissedHere > 0) {
+        this.logs.set(logId, { ...log, gaps });
+        dismissedFlows.add(log.flowId ?? "");
+      }
+    }
+
+    for (const flow of dismissedFlows) {
+      this.bumpCatalog(flow);
+    }
+    return dismissed;
+  }
+
   async list(limit: number): Promise<QuestionLog[]> {
     return [...this.logs.values()]
       .sort((left, right) => right.askedAt.localeCompare(left.askedAt))
@@ -315,7 +356,9 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
         continue;
       }
 
-      const summaries = new Set((log.gaps ?? []).filter((gap) => !gap.resolvedAt).map((gap) => gap.summary));
+      const summaries = new Set(
+        (log.gaps ?? []).filter((gap) => !gap.resolvedAt && !gap.dismissedAt).map((gap) => gap.summary)
+      );
       for (const summary of summaries) {
         const key = `${log.flowId ?? ""} ${summary}`;
         const group = groups.get(key) ?? { summary, flowId: log.flowId, logs: [] };

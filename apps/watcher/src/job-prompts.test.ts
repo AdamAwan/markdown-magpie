@@ -96,6 +96,39 @@ describe("buildAnswerOutput", () => {
     assert.equal(output.flowId, undefined);
   });
 
+  it("rejects an off-topic question with no gaps when the model flags outOfScope", () => {
+    const output = buildAnswerOutput(
+      JSON.stringify({
+        answer: "This question is about cats, which is unrelated to this product knowledge base.",
+        confidence: "low",
+        isKnowledgeGap: false,
+        outOfScope: true,
+        gaps: []
+      }),
+      [],
+      "Tell me about cats",
+      "product-flow"
+    );
+    assert.equal(output.confidence, "unknown", "an off-topic answer is withheld at unknown confidence");
+    assert.equal(output.gaps, undefined, "an off-topic question raises NO gaps");
+    assert.deepEqual(output.citations, [], "an off-topic answer cites nothing");
+    assert.ok(output.outOfScope, "the structured out-of-scope signal is set");
+    assert.match(output.outOfScope.reason ?? "", /cats/i, "the reason carries the model's explanation");
+    assert.equal(output.flowId, "product-flow", "the picked flow is still recorded");
+  });
+
+  it("does not fall through to an auto gap for an off-topic question with empty retrieval", () => {
+    // Empty retrieval would normally force an auto gap; outOfScope must pre-empt it.
+    const output = buildAnswerOutput(
+      JSON.stringify({ answer: "Off topic.", confidence: "low", isKnowledgeGap: true, outOfScope: true, gaps: ["cats"] }),
+      [],
+      "Do cats purr?",
+      undefined
+    );
+    assert.equal(output.gaps, undefined, "outOfScope wins over isKnowledgeGap/empty retrieval");
+    assert.ok(output.outOfScope);
+  });
+
   const TWO_SECTIONS: RetrievedSection[] = [
     { sectionId: "s1", documentId: "d1", anchor: "a1", path: "a.md", heading: "A", content: "Alpha.", relevance: 0.4 },
     { sectionId: "s2", documentId: "d2", anchor: "a2", path: "b.md", heading: "B", content: "Beta.", relevance: 0.9 }

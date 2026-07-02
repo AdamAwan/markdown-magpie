@@ -18,7 +18,7 @@ interface ClusterRow {
   flow_id: string | null;
   title: string;
   rationale: string | null;
-  status: "active" | "frozen";
+  status: "active" | "frozen" | "dismissed";
   parent_cluster_id: string | null;
   reconciliation_revision: string;
   created_at: Date;
@@ -104,6 +104,13 @@ export class PostgresGapClusterStore implements GapClusterStore {
 
   async freezeCluster(id: string): Promise<void> {
     await this.pool.query("UPDATE gap_clusters SET status = 'frozen', updated_at = now() WHERE id = $1", [id]);
+  }
+
+  async dismissCluster(id: string, rationale?: string): Promise<void> {
+    await this.pool.query(
+      "UPDATE gap_clusters SET status = 'dismissed', rationale = coalesce($2, rationale), updated_at = now() WHERE id = $1",
+      [id, rationale ?? null]
+    );
   }
 
   async listActiveMemberships(): Promise<GapClusterMembershipRecord[]> {

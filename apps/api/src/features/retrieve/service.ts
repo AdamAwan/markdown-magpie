@@ -61,6 +61,42 @@ export async function retrieve(ctx: AppContext, request: RetrieveRequest): Promi
   };
 }
 
+// Scope grounding for judging whether a gap cluster is off-topic: what the flow's
+// knowledge base covers, relative to a query. Runs the same inline hybrid search
+// retrieval uses (embeddings are computed in the API), but WITHOUT the relevance
+// floor so the model always sees the closest content even when weak — the point is
+// to show how (un)related the query is. `topRelevance` is 0 when nothing matched.
+export interface FlowScopeContext {
+  persona?: string;
+  topRelevance: number;
+  snippets: string[];
+}
+
+const SCOPE_SNIPPET_LIMIT = 3;
+const SCOPE_SNIPPET_CHARS = 200;
+
+export async function describeFlowScope(
+  ctx: AppContext,
+  flowId: string | undefined,
+  query: string
+): Promise<FlowScopeContext | undefined> {
+  const scope = resolveRepositoryScope(ctx, flowId);
+  if (!scope.ok) {
+    return undefined;
+  }
+  const flow = flowId ? selectFlow(ctx.repositoryDeps(), flowId) : undefined;
+  const ranked = await ctx.stores.knowledgeIndex.search(query, SCOPE_SNIPPET_LIMIT, scope.repositoryIds);
+  const topRelevance = ranked.length > 0 ? Math.max(...ranked.map(({ relevance }) => relevance)) : 0;
+  const snippets = ranked
+    .slice(0, SCOPE_SNIPPET_LIMIT)
+    .map(({ section }) => section.content.slice(0, SCOPE_SNIPPET_CHARS));
+  return {
+    ...(flow?.persona ? { persona: flow.persona } : {}),
+    topRelevance,
+    snippets
+  };
+}
+
 // Maps a flowId to the repository scope its destination defines, mirroring how
 // the old ask() routing scoped retrieval. An absent flowId is the deliberate
 // unscoped case; a flowId that names no configured flow is a caller error

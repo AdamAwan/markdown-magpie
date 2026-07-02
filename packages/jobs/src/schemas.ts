@@ -65,6 +65,9 @@ export const jobErrorSchema = z.object({
 const flowSelectionRequiredSchema = z.object({
   availableFlows: z.array(z.object({ id: z.string(), name: z.string() }))
 });
+const outOfScopeSchema = z.object({
+  reason: z.string().optional()
+});
 export const answerQuestionInputSchema = z.object({
   provider: providerSchema,
   questionLogId: z.string().optional(),
@@ -83,7 +86,8 @@ export const answerQuestionOutputSchema = z.object({
   citations: z.array(citationSchema),
   gaps: z.array(gapSchema).optional(),
   flowId: z.string().optional(),
-  flowSelectionRequired: flowSelectionRequiredSchema.optional()
+  flowSelectionRequired: flowSelectionRequiredSchema.optional(),
+  outOfScope: outOfScopeSchema.optional()
 }) satisfies z.ZodType<AnswerQuestionJobOutput>;
 
 export const summarizeGapInputSchema = z.object({
@@ -196,7 +200,17 @@ export const reconcileGapClustersInputSchema = z.object({
   clusters: z.array(z.object({
     id: z.string(),
     flowId: z.string().optional(),
-    title: z.string()
+    title: z.string(),
+    // Scope grounding attached by the API (via inline retrieval against the flow's
+    // destination) so the model can judge whether a cluster is off-topic for the
+    // knowledge base. `topRelevance` is the best retrieval relevance found for the
+    // cluster's topic (0 when nothing matched); `snippets` are short excerpts of the
+    // best matches. Absent when the flow has no destination content to retrieve from.
+    scope: z.object({
+      persona: z.string().optional(),
+      topRelevance: z.number(),
+      snippets: z.array(z.string())
+    }).optional()
   })),
   flowId: z.string().optional(),
   provider: providerSchema
@@ -210,6 +224,14 @@ export const reconcileGapClustersOutputSchema = z.object({
   splits: z.array(z.object({
     clusterId: z.string(),
     children: z.array(z.object({ gapIds: z.array(z.string()) })),
+    rationale: z.string(),
+    confirmed: z.boolean()
+  })),
+  // Clusters the model judged off-topic for the knowledge base (unrelated to the
+  // source knowledge). Each is critic-confirmed; the reconciler dismisses confirmed
+  // ones permanently so they never draft a proposal.
+  dismissals: z.array(z.object({
+    clusterId: z.string(),
     rationale: z.string(),
     confirmed: z.boolean()
   }))

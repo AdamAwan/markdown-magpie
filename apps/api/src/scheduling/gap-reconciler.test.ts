@@ -108,7 +108,8 @@ describe("reconcileGaps clustering", () => {
     });
     await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
 
-    // A single new cluster has nothing to merge, so no reshape job is requested.
+    // The plain broker never completes the reshape job, so the bounded-wait falls
+    // back and the reconciler skips reshape — the single new cluster stands.
     await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
 
     const clusters = await ctx.stores.gapClusters.listActiveClusters();
@@ -123,7 +124,7 @@ describe("reconcileGaps clustering", () => {
     // unconfirmed (critic rejected it), so nothing is applied.
     const jobs = new ReshapingJobBroker((input) => {
       const clusterIds = (input as { clusters: Array<{ id: string }> }).clusters.map((c) => c.id);
-      return { merges: [{ clusterIds, rationale: "x", confirmed: false }], splits: [] };
+      return { merges: [{ clusterIds, rationale: "x", confirmed: false }], splits: [], dismissals: [] };
     });
     const ctx = makeTestContext({
       jobs,
@@ -149,7 +150,7 @@ describe("reconcileGaps clustering", () => {
   it("applies a critic-confirmed merge, keeping every gap exactly once", async () => {
     const jobs = new ReshapingJobBroker((input) => {
       const clusterIds = (input as { clusters: Array<{ id: string }> }).clusters.map((c) => c.id);
-      return { merges: [{ clusterIds, rationale: "x", confirmed: true }], splits: [] };
+      return { merges: [{ clusterIds, rationale: "x", confirmed: true }], splits: [], dismissals: [] };
     });
     const ctx = makeTestContext({
       jobs,
@@ -242,7 +243,8 @@ describe("reconcileGaps autonomous drafting", () => {
     });
     await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
 
-    // A single cluster has nothing to merge, so no reshape job is requested.
+    // The plain broker never completes the reshape job, so the scope check is
+    // skipped and the on-topic single cluster proceeds to drafting.
     await reconcileGaps(ctx, undefined, {
       fetchPullRequestStatus: async () => undefined,
       publishProposal: async () => {},
@@ -256,8 +258,96 @@ describe("reconcileGaps autonomous drafting", () => {
     assert.equal(jobs.length, 1, "a draft job was enqueued for the new cluster");
   });
 
+  it("dismisses an off-topic single cluster and drafts nothing when the critic confirms", async () => {
+    const jobs = new ReshapingJobBroker((input) => {
+      const clusterIds = (input as { clusters: Array<{ id: string }> }).clusters.map((c) => c.id);
+      return {
+        merges: [],
+        splits: [],
+        dismissals: clusterIds.map((clusterId) => ({
+          clusterId,
+          rationale: "unrelated to this knowledge base",
+          confirmed: true
+        }))
+      };
+    });
+    const ctx = makeTestContext({
+      jobs,
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
+    });
+    const log = await ctx.stores.questionLogs.record({
+      question: "Do cats purr?",
+      chatProvider: "openai-compatible",
+      retrievedSectionIds: []
+    });
+    await ctx.stores.questionLogs.recordManualGap(log.id, "Cats");
+
+    await reconcileGaps(ctx, undefined, {
+      fetchPullRequestStatus: async () => undefined,
+      publishProposal: async () => {},
+      supersedeProposal: async () => {}
+    });
+
+    assert.equal(
+      (await ctx.stores.gapClusters.listActiveClusters()).length,
+      0,
+      "the off-topic cluster was dismissed and left the active set"
+    );
+    assert.equal(
+      (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length,
+      0,
+      "no proposal is drafted for an off-topic cluster"
+    );
+    assert.equal(
+      (await ctx.stores.questionLogs.listGapCandidates(50)).length,
+      0,
+      "the dismissed gap no longer surfaces as a candidate, so it never re-clusters"
+    );
+
+    const dismissal = (await ctx.stores.reconciliations.list(50)).find((d) => d.kind === "dismiss");
+    assert.ok(dismissal, "the dismissal was recorded as a decision");
+    assert.equal(dismissal.confirmed, true);
+    assert.equal(dismissal.applied, true);
+  });
+
+  it("keeps an off-topic cluster when the critic rejects the dismissal", async () => {
+    const jobs = new ReshapingJobBroker((input) => {
+      const clusterIds = (input as { clusters: Array<{ id: string }> }).clusters.map((c) => c.id);
+      return {
+        merges: [],
+        splits: [],
+        dismissals: clusterIds.map((clusterId) => ({ clusterId, rationale: "maybe off-topic", confirmed: false }))
+      };
+    });
+    const ctx = makeTestContext({
+      jobs,
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
+    });
+    const log = await ctx.stores.questionLogs.record({
+      question: "Do cats purr?",
+      chatProvider: "openai-compatible",
+      retrievedSectionIds: []
+    });
+    await ctx.stores.questionLogs.recordManualGap(log.id, "Cats");
+
+    await reconcileGaps(ctx, undefined, {
+      fetchPullRequestStatus: async () => undefined,
+      publishProposal: async () => {},
+      supersedeProposal: async () => {}
+    });
+
+    assert.equal(
+      (await ctx.stores.gapClusters.listActiveClusters()).length,
+      1,
+      "a rejected dismissal leaves the cluster active"
+    );
+    const dismissal = (await ctx.stores.reconciliations.list(50)).find((d) => d.kind === "dismiss");
+    assert.ok(dismissal, "the rejected dismissal is still recorded for audit");
+    assert.equal(dismissal.applied, false, "a rejected dismissal is not applied");
+  });
+
   it("enqueues only the uncovered cluster on a later run, never duplicating", async () => {
-    const jobs = new ReshapingJobBroker(() => ({ merges: [], splits: [] }));
+    const jobs = new ReshapingJobBroker(() => ({ merges: [], splits: [], dismissals: [] }));
     const ctx = makeTestContext({
       jobs,
       config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
@@ -503,6 +593,7 @@ describe("reconcileGaps audit", () => {
       clustersCreated: 0,
       mergeDecisions: 0,
       splitDecisions: 0,
+      dismissDecisions: 0,
       decisionsApplied: 0,
       proposalsDrafted: 0,
       publicationActionsDrained: 0,
