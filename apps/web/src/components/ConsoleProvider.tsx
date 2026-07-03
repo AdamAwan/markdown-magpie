@@ -582,6 +582,29 @@ function useConsoleController() {
     }
   }
 
+  async function mergeProposal(proposalId: string) {
+    setLoading(true);
+    clearMessage();
+    try {
+      const result = await apiPost<{ proposal: Proposal; cascadeScheduled?: boolean }>(
+        `/proposals/${proposalId}/merge`,
+        {}
+      );
+      setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
+      setSelectedProposalId(result.proposal.id);
+      showMessage(
+        "Proposal merged into the local repository — resolving gaps and re-indexing in the background.",
+        "success"
+      );
+      // Merged proposals drop out of the active list; pull fresh proposal/gap state.
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function publishProposal(proposalId: string) {
     setLoading(true);
     clearMessage();
@@ -723,6 +746,7 @@ function useConsoleController() {
     draftProposal,
     draftCluster,
     updateProposalStatus,
+    mergeProposal,
     publishProposal,
     saveScheduledTask,
     runScheduledTask,

@@ -8,7 +8,8 @@ export function ProposalPanel({
   proposals,
   selectedProposal,
   setSelectedProposalId,
-  updateProposalStatus
+  updateProposalStatus,
+  mergeProposal
 }: {
   loading: boolean;
   publishProposal: (proposalId: string) => Promise<void>;
@@ -16,6 +17,7 @@ export function ProposalPanel({
   selectedProposal?: Proposal;
   setSelectedProposalId: (id: string) => void;
   updateProposalStatus: (proposalId: string, status: Proposal["status"]) => Promise<void>;
+  mergeProposal: (proposalId: string) => Promise<void>;
 }) {
   return (
     <section className="surface">
@@ -110,15 +112,27 @@ export function ProposalPanel({
                   >
                     Publish Branch
                   </button>
-                  <button
-                    className="chip selected"
-                    disabled={loading || (selectedProposal.status !== "branch-pushed" && selectedProposal.status !== "pr-opened")}
-                    onClick={() => void updateProposalStatus(selectedProposal.id, "merged")}
-                    title="Mark the published PR as merged: resolves its gaps and re-indexes the knowledge base"
-                    type="button"
-                  >
-                    Mark Merged
-                  </button>
+                  {selectedProposal.localGitDestination ? (
+                    <button
+                      className="chip selected"
+                      disabled={loading || selectedProposal.status !== "branch-pushed"}
+                      onClick={() => void mergeProposal(selectedProposal.id)}
+                      title="Merge this proposal's branch into the local repository's default branch, then resolve its gaps and re-index"
+                      type="button"
+                    >
+                      Merge
+                    </button>
+                  ) : (
+                    <button
+                      className="chip selected"
+                      disabled={loading || (selectedProposal.status !== "branch-pushed" && selectedProposal.status !== "pr-opened")}
+                      onClick={() => void updateProposalStatus(selectedProposal.id, "merged")}
+                      title="Mark the published PR as merged: resolves its gaps and re-indexes the knowledge base"
+                      type="button"
+                    >
+                      Mark Merged
+                    </button>
+                  )}
                   <button
                     className="chip"
                     disabled={loading || selectedProposal.status !== "draft"}
