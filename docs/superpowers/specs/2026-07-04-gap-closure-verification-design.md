@@ -52,14 +52,21 @@ separately in GitHub issue #146, the insights/trends dashboard).
 - **No verification for clusterless proposals.** Seed/direct-authoring proposals have
   no triggering questions; they are skipped.
 
-## Approach (chosen: A — reuse `answer_question`, orchestrated by a new job)
+## Approach (chosen: A — reuse `answer_question`, orchestrated via a maintenance endpoint)
 
-On merge + re-index, the API enqueues one `verify_gap_closure` job per merged
-proposal. The **maintenance watcher** claims it (it is a non-provider orchestrator,
-like the existing maintenance runner), re-enqueues a normal `answer_question` per
-triggering question, bounded-waits for them, then POSTs the results to a new API
-callback. The API performs the **deterministic** closure evaluation inline and
-updates gap/proposal state.
+This mirrors the existing maintenance-orchestrator pattern exactly (`reconcileGaps`,
+the patrols): the **watcher's maintenance runner is only a trigger** — it claims the
+queued job and POSTs to an API endpoint. **The API holds the orchestration**: for each
+triggering question it re-asks via `runJobToCompletion("answer_question", …)` (which
+enqueues the answer job and bounded-waits for a provider watcher to complete it), then
+runs the **deterministic** closure evaluation and updates gap/proposal state. The API
+never calls a provider inline — the re-asks are still `answer_question` jobs claimed by
+a provider watcher, so the queue-only rule holds.
+
+Concretely: on merge + re-index the API enqueues one `verify_gap_closure` job per merged
+proposal. The maintenance watcher claims it and POSTs `POST /api/proposals/:id/verify-closure`.
+That endpoint does the re-asks, the closure test, and the state writes, and returns counts —
+the same shape as `POST /api/gaps/reconcile`.
 
 Rejected alternatives:
 
@@ -100,15 +107,16 @@ New job type **`verify_gap_closure`** (`packages/jobs/src/types.ts`,
    `verify_gap_closure { proposalId }`, **only if the proposal has ≥1
    `triggeringQuestionId`**. This hooks into the existing post-merge re-index
    cascade so verification runs once the merged content is indexed.
-3. The maintenance watcher claims the job and, for each triggering question,
-   re-enqueues an **`answer_question`** job **with the proposal's flow passed
-   explicitly** (so routing cannot abstain), then bounded-waits for completions —
-   the same bounded-wait pattern the maintenance runner already uses for tier-2
-   work.
-4. The watcher POSTs `{ proposalId, results: [{ questionId, reaskedQuestionId }] }`
-   to a new API callback **`POST /api/proposals/:id/closure`**.
-5. The API runs the **deterministic closure test** per question and writes the
-   outcome (below). No provider call happens in this step.
+3. The maintenance watcher claims the job and POSTs
+   **`POST /api/proposals/:id/verify-closure`** (with the maintenance request
+   timeout), exactly as it POSTs `reconcileGaps`/patrol endpoints today.
+4. The API endpoint, for each triggering question, re-asks via
+   `runJobToCompletion("answer_question", …)` with the proposal's flow pinned via
+   **`requestedFlowId`** (so watcher routing cannot abstain). This enqueues a normal
+   `answer_question` job that a provider watcher claims; the API bounded-waits for it.
+5. The API runs the **deterministic closure test** per completed answer and writes the
+   outcome (below). No provider call happens in the API process — only the deterministic
+   evaluation and DB writes.
 
 ## Closure evaluation & outcomes
 
@@ -119,18 +127,31 @@ For each re-asked question, `verdict = closed` iff:
   documents (match on the proposal's target doc identity — file path / document id;
   the resolver must handle both path- and id-based citations).
 
+**Important behavior change this gates.** Today `runMergeCascade` calls
+`resolveGapsForMergedProposal` **unconditionally** on merge — it *assumes* the merge
+closed the gap and marks the triggering questions' gaps resolved
+(`questionLogs.resolveGaps`). This feature makes that resolution **evidence-based**:
+the cascade re-indexes and enqueues `verify_gap_closure` instead of blindly resolving,
+and resolution happens only when verification confirms it.
+
 Aggregate per proposal (all-or-nothing — a partial fix still leaves a real gap):
 
 - **All triggering questions `closed`** → proposal `closure_status =
-  verified_closed`; the gap cluster is marked **resolved**.
-- **Any question `still_open`** → proposal `closure_status = reopened`: the gap
-  cluster returns to an actionable state **with a new evidence item**
-  (`kind: "prior_attempt_verification"`) carrying what was merged, the re-asked
-  answer, and why it is still weak — so the next `draft_markdown_proposal` sees why
-  it is being resubmitted.
-- **Loop guard:** an attempt counter on the gap cluster increments on each failed
-  closure verification. After **2** failures the cluster becomes
-  `needs_attention` (a human flag) instead of auto-reopening — preventing an
+  verified_closed`; call the existing `resolveGaps(questionIds, summaries, proposalId)`
+  to mark the triggering questions' gaps resolved.
+- **Any question `still_open`** → proposal `closure_status = reopened`: **do not**
+  resolve the gaps (they stay open, so they naturally re-cluster and re-draft on the
+  next reconcile tick). Record the failed verification so the next
+  `draft_markdown_proposal` sees why it is being resubmitted — as a
+  `QuestionGap` on the still-open triggering question with `source: "verification"`
+  and a `note` carrying what was merged, the re-asked answer, and why it is still weak.
+  The full detail also lands in `gap_closure_verification` (below).
+- **Inconclusive** (a re-ask timed out / no provider watcher answered) → treated as
+  `still_open` for safety — never claim a closure that could not be verified.
+- **Loop guard:** count prior `still_open` `gap_closure_verification` rows for the
+  triggering question. After **2** failed verifications, mark the proposal
+  `closure_status = needs_attention` and record the still-open gap with
+  `source: "needs_attention"` instead of leaving it to auto-redraft — preventing an
   infinite draft → merge → fail → draft loop.
 
 ## Data model
@@ -154,8 +175,12 @@ Schema additions:
 
 - Proposal gains **`closure_status`**: `verified_closed | reopened |
   needs_attention` (null until verified).
-- Gap cluster gains a **`closure_attempts`** counter (for the loop guard) and can
-  hold `prior_attempt_verification` evidence items.
+- The **loop-guard counter is derived**, not a new column: count prior `still_open`
+  rows in `gap_closure_verification` for the triggering question. (Gap clusters carry
+  no evidence/counters — gaps live on question logs — so nothing is added there.)
+- `QuestionGap.source` gains two values — **`verification`** and
+  **`needs_attention`** — and `QuestionGap` carries an optional **`note`** for the
+  verification detail. (Existing values: `auto`, `followup`, `manual`.)
 
 All schema changes go through the custom SQL migrator (`packages/db/migrations`,
 `NNNN_` naming, append-only) per the **write-a-migration** skill.
