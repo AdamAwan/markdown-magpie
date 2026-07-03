@@ -211,7 +211,7 @@ export function jobTypesForCapability(capability: JobCapability): JobType[] {
 // for a running watcher fleet. A type counts as covered if ANY of its capabilities
 // is available (so publish_proposal is covered by github OR local-git). Drives the
 // "no watcher can run these jobs" console banner.
-export function jobTypesWithoutCapabilities(available: Iterable<JobCapability>): JobType[] {
+export function jobTypesWithoutCapabilities(available: Iterable<string>): JobType[] {
   const accepted = new Set(available);
   return JOB_TYPES.filter((type) => !jobDefinition(type).capabilities.some((capability) => accepted.has(capability)));
 }
