@@ -2738,3 +2738,27 @@ pre {
   color: #45513f;
   font-size: 0.9rem;
 }
+
+/* Seed / add-an-area form: a stacked topic form, then an editable list of the
+   documents the outline job proposed (each a titled block of fields). */
+.seedPanel {
+  display: grid;
+  gap: 24px;
+}
+
+.seedForm {
+  max-width: 640px;
+}
+
+.seedOutline {
+  display: grid;
+  gap: 16px;
+}
+
+.seedItem {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d9e0d6;
+  border-radius: 10px;
+  padding: 16px;
+}

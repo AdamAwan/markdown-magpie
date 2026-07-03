@@ -58,6 +58,7 @@ export type ConsoleSection =
   | "ask"
   | "knowledge"
   | "gaps"
+  | "seed"
   | "jobs"
   | "proposals"
   | "activity"

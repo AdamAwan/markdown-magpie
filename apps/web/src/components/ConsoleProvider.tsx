@@ -41,6 +41,7 @@ import {
   WatcherView,
   WorkersResponse
 } from "../lib/types";
+import type { SeedItem } from "@magpie/core";
 import { apiDelete, apiGet, apiPost, errorMessage } from "../lib/api";
 import { knowledgeFlows } from "../lib/config";
 import { buildAttentionNotices, formatJobType, isActiveJob, jobTransitionMessages } from "../lib/console";
@@ -689,6 +690,65 @@ function useConsoleController() {
     }
   }
 
+  // Generate a seed outline: enqueue outline_flow_seed and poll it to completion,
+  // then hand the proposed items back for the human to edit. The bounded
+  // /jobs/:id/wait can return a still-active job when its deadline elapses, so loop
+  // until terminal. Returns undefined (and surfaces the error) when generation fails,
+  // so the caller can reset its own generating state.
+  async function generateOutline(
+    targetFlowId: string,
+    topic: string,
+    notes: string
+  ): Promise<SeedItem[] | undefined> {
+    clearMessage();
+    try {
+      const trimmedNotes = notes.trim();
+      const { jobId } = await apiPost<{ ok: boolean; jobId: string }>(
+        `/flows/${encodeURIComponent(targetFlowId)}/outline`,
+        { topic: topic.trim(), notes: trimmedNotes ? trimmedNotes : undefined }
+      );
+      let job = await waitForJob({ id: jobId });
+      while (
+        job.state === "created" ||
+        job.state === "retry" ||
+        job.state === "active" ||
+        job.state === "blocked"
+      ) {
+        job = await waitForJob({ id: jobId });
+      }
+      if (job.state !== "completed") {
+        throw new Error(job.error?.message ?? "Outline generation did not complete.");
+      }
+      await refresh({ silent: true });
+      return (job.output as { items?: SeedItem[] } | undefined)?.items ?? [];
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
+  // Seed a flow with the reviewed items: POST the v1 endpoint, which drafts one
+  // document per item into the proposal → PR pipeline. Returns the enqueued job ids
+  // (undefined on failure, with the error surfaced).
+  async function seedFlow(targetFlowId: string, items: SeedItem[]): Promise<string[] | undefined> {
+    clearMessage();
+    try {
+      const { jobIds } = await apiPost<{ ok: boolean; jobIds: string[] }>(
+        `/flows/${encodeURIComponent(targetFlowId)}/seed`,
+        { items }
+      );
+      showMessage(
+        `Seeding ${jobIds.length} document${jobIds.length === 1 ? "" : "s"} into the flow — drafts will appear as proposals.`,
+        "success"
+      );
+      await refresh({ preserveMessage: true });
+      return jobIds;
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
   return {
     health,
     stats,
@@ -753,7 +813,9 @@ function useConsoleController() {
     publishProposal,
     saveScheduledTask,
     runScheduledTask,
-    indexRepository
+    indexRepository,
+    generateOutline,
+    seedFlow
   };
 }
 

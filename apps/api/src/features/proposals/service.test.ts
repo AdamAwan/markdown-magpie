@@ -144,51 +144,6 @@ test("draftFromGaps passes the configured provider through unchanged", async () 
   assert.equal(input.provider, "codex");
 });
 
-test("seedFlow enqueues one draft_seed_document per item, carrying flowId + coverage, honouring targetPath", async () => {
-  const ctx = makeTestContext({
-    knowledgeConfig: {
-      sources: [],
-      destinations: [{ id: "docs", name: "Docs", kind: "local", path: "docs" }],
-      flows: [{ id: "billing", name: "Billing", sourceIds: [], destinationId: "docs" }],
-      repositories: [],
-      roleGrants: {},
-      checkoutRoot: ".magpie/checkouts"
-    }
-  });
-
-  const result = await proposals.seedFlow(ctx, "billing", [
-    { title: "Overview", targetPath: "overview.md", coverage: ["what it is", "why"] },
-    { coverage: ["config options"] }
-  ]);
-  assert.ok(result.ok);
-  if (!result.ok) throw new Error("unreachable");
-  assert.equal(result.jobIds.length, 2);
-
-  const { jobs } = await ctx.jobs.list({ type: "draft_seed_document" });
-  assert.equal(jobs.length, 2);
-  for (const job of jobs) {
-    const parsed = jobDefinition("draft_seed_document").inputSchema.safeParse(job.input);
-    assert.ok(parsed.success, "enqueued input should match the draft_seed_document contract");
-  }
-  const first = jobs.find((job) => (job.input as { title?: string }).title === "Overview");
-  assert.ok(first);
-  const input = first?.input as { flowId?: string; targetPath?: string; coverage?: string[]; provider?: string };
-  assert.equal(input.flowId, "billing");
-  assert.equal(input.targetPath, "overview.md");
-  assert.deepEqual(input.coverage, ["what it is", "why"]);
-  assert.equal(input.provider, "codex");
-
-  // Seeding never mints gap candidates.
-  assert.deepEqual(await ctx.stores.questionLogs.listGapCandidates(200), []);
-});
-
-test("seedFlow rejects an unknown flow", async () => {
-  const ctx = makeTestContext();
-  const result = await proposals.seedFlow(ctx, "no-such-flow", [{ coverage: ["x"] }]);
-  assert.equal(result.ok, false);
-  assert.deepEqual((await ctx.jobs.list({})).jobs, []);
-});
-
 test("collectOpenPullRequestContext returns [] when the flow has no snapshot yet", async () => {
   const ctx = makeTestContext();
   assert.deepEqual(await proposals.collectOpenPullRequestContext(ctx, undefined), []);

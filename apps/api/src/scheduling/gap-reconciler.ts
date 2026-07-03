@@ -6,6 +6,7 @@ import type { AppContext } from "../context.js";
 import * as gapsService from "../features/gaps/service.js";
 import { runJobToCompletion } from "../features/jobs/service.js";
 import * as proposalsService from "../features/proposals/service.js";
+import { type SourceContextCache } from "../platform/source-context.js";
 import { describeFlowScope } from "../features/retrieve/service.js";
 import type { GapClusterRecord, PublicationActionRecord } from "../stores/gap-cluster-store.js";
 import { pairKey } from "../stores/pr-crosslink-store.js";
@@ -436,7 +437,7 @@ async function draftProposalsForUncoveredClusters(ctx: AppContext, flowId: strin
   // Collect each source set's context once for the whole run; clusters sharing a
   // flow (and so the same sources) reuse the bytes instead of re-walking the
   // checkout per draft.
-  const sourceContextCache: proposalsService.SourceContextCache = new Map();
+  const sourceContextCache: SourceContextCache = new Map();
 
   let drafted = 0;
   for (const cluster of active) {

@@ -7,7 +7,6 @@ import type {
   DraftMarkdownProposalJobOutput,
   DraftSeedDocumentJobInput,
   GapCandidate,
-  SeedItem,
   OpenPullRequestContext,
   Proposal,
   RepositoryRef,
@@ -30,7 +29,7 @@ import {
   selectDestinationForProposal,
   selectFlow
 } from "../../platform/repositories.js";
-import { collectSourceContext } from "../../platform/source-context.js";
+import { collectSourceContextCached, type SourceContextCache } from "../../platform/source-context.js";
 import { type AiProviderName } from "../../platform/providers.js";
 import { logger } from "../../logger.js";
 
@@ -303,13 +302,8 @@ export async function getProposalExecutionContext(
 // Core of "draft one proposal from a confirmed cluster of gap summaries",
 // independent of HTTP so the scheduled gap-to-PR task can reuse it. Enqueues a
 // draft_markdown_proposal job; the proposal lands later via the job completion
-// machinery (createProposalFromCompletedJob).
-// A per-run memo of collected source context, keyed by the resolved source-id
-// set. Collecting a source walks its checkout and reads up to 24 files, and that
-// material is identical for every proposal drawn from the same sources — so a
-// reconcile run drafting dozens of proposals would otherwise re-collect the same
-// bytes dozens of times. Callers that draft in a loop pass one cache through.
-export type SourceContextCache = Map<string, SourceDataContext[]>;
+// machinery (createProposalFromCompletedJob). Callers that draft in a loop pass one
+// SourceContextCache (see platform/source-context) through so the sources are read once.
 
 // In-flight statuses whose proposals a new draft should be aware of: an open PR
 // (pr-opened) plus the earlier stages that have no PR yet but are still work the
@@ -469,84 +463,6 @@ export async function draftFromGaps(
 
   logger.info({ jobId: job.id, label }, "enqueued draft_markdown_proposal job");
   return { ok: true as const, job };
-}
-
-// Enqueue a draft_seed_document for one seed item. Reuses the flow/source/
-// destination resolution draftFromGaps uses, but skips the gap-candidate matching
-// draftFromGaps requires — seed coverage is authored intent, not a logged gap.
-// Enqueue-only: the proposal lands later via createSeedProposalFromCompletedJob.
-async function draftSeedItem(
-  ctx: AppContext,
-  flowId: string,
-  item: SeedItem,
-  cache: SourceContextCache
-): Promise<string> {
-  const deps = ctx.repositoryDeps();
-  const flow = selectFlow(deps, flowId);
-  const sourceIds = flow?.sourceIds;
-  const destinationId = flow?.destinationId || defaultDestinationId(deps);
-  const sourceContext = await collectSourceContextCached(deps, sourceIds, cache);
-  const input: DraftSeedDocumentJobInput & { provider: AiProviderName } = {
-    flowId,
-    title: item.title?.trim() || undefined,
-    targetPath: item.targetPath?.trim() || undefined,
-    coverage: [...new Set(item.coverage.map((point) => point.trim()).filter((point) => point.length > 0))],
-    questions: item.questions?.length ? item.questions : undefined,
-    sourceContext,
-    destinationId,
-    provider: ctx.config.get().aiProvider
-  };
-  const job = await ctx.jobs.create("draft_seed_document", input);
-  logger.info({ jobId: job.id, flowId, targetPath: input.targetPath ?? "auto" }, "enqueued draft_seed_document job");
-  return job.id;
-}
-
-// Seed a flow: draft each item straight into a proposal, bypassing gap clustering
-// and the intent gate. Source context is collected once and memoised across the
-// items in one call.
-export async function seedFlow(
-  ctx: AppContext,
-  flowId: string,
-  items: SeedItem[]
-): Promise<{ ok: true; jobIds: string[] } | { ok: false; code: string }> {
-  const flow = selectFlow(ctx.repositoryDeps(), flowId);
-  if (!flow) {
-    return { ok: false as const, code: "flow_not_found" };
-  }
-  const usable = items.filter((item) => item.coverage.some((point) => point.trim().length > 0));
-  if (usable.length === 0) {
-    return { ok: false as const, code: "coverage_required" };
-  }
-  const cache: SourceContextCache = new Map();
-  const jobIds: string[] = [];
-  for (const item of usable) {
-    jobIds.push(await draftSeedItem(ctx, flowId, item, cache));
-  }
-  logger.info({ flowId, count: jobIds.length }, "seeded flow: enqueued draft_seed_document jobs");
-  return { ok: true as const, jobIds };
-}
-
-// Wraps collectSourceContext with the optional per-run memo. The key is the
-// resolved source-id set (sorted, so order can't fragment it); an undefined set
-// means "the configured default sources", which collectSourceContext resolves
-// deterministically, so it caches safely under a stable sentinel key.
-async function collectSourceContextCached(
-  deps: ReturnType<AppContext["repositoryDeps"]>,
-  sourceIds: string[] | undefined,
-  cache: SourceContextCache | undefined
-): Promise<SourceDataContext[]> {
-  if (!cache) {
-    return collectSourceContext(deps, sourceIds);
-  }
-  const key = sourceIds ? [...sourceIds].sort().join("\0") : "\0default";
-  const cached = cache.get(key);
-  if (cached) {
-    logger.debug({ sourceIds: sourceIds?.join(", ") ?? "default", count: cached.length }, "reusing cached source context");
-    return cached;
-  }
-  const collected = await collectSourceContext(deps, sourceIds);
-  cache.set(key, collected);
-  return collected;
 }
 
 // The flow a set of matched gap candidates agree on, or undefined when they span

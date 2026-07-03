@@ -131,7 +131,11 @@ AI job per requested doc, bypassing the demand-inference half (gap clustering + 
 intent gate) since the caller supplies the intent. The resulting clusterless proposals
 still converge on the same reconcile gate and `publish_proposal` path, so seeding a new
 flow — or adding a new area to an existing one — ends at a reviewable PR like everything
-else. See [`ai-jobs.md`](./ai-jobs.md) (§ Seeding a flow).
+else. The item list can be authored by hand or proposed by the `outline_flow_seed` AI job
+(`POST /api/flows/:id/outline`), which is grounded in the flow's existing docs via inline
+retrieval and only *proposes* — its `SeedItem[]` output feeds the seed endpoint after a human
+edits it. The console's **Seed / add an area** page drives topic → outline → edit → seed. See
+[`ai-jobs.md`](./ai-jobs.md) (§ Seeding a flow).
 
 Orchestration detail: a maintenance watcher claims a `process_gaps_to_pull_requests`
 job and POSTs the API's `/api/gaps/reconcile` endpoint, where the orchestration
