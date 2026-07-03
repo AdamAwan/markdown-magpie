@@ -20,6 +20,7 @@ const EXPIRATION_SECONDS = {
   answer_question: 5 * 60,
   summarize_gap: 10 * 60,
   draft_markdown_proposal: 15 * 60,
+  draft_seed_document: 15 * 60,
   detect_contradiction: 10 * 60,
   suggest_consolidation: 10 * 60,
   reconcile_gap_clusters: 5 * 60,
@@ -169,6 +170,14 @@ test("correct_document routes by provider like other AI work", () => {
   assert.equal(queueNameForJob("correct_document", { provider: "codex" }), "correct_document__codex");
   assert.ok(queueNamesForCapabilities(["codex"]).includes("correct_document__codex"));
   assert.ok(!queueNamesForCapabilities(["github"]).includes("correct_document__codex"));
+});
+
+test("draft_seed_document routes by provider like other AI work", () => {
+  const definition = jobDefinition("draft_seed_document");
+  assert.equal(definition.requiredCapability({ provider: "codex" }), "codex");
+  assert.equal(queueNameForJob("draft_seed_document", { provider: "codex" }), "draft_seed_document__codex");
+  assert.ok(queueNamesForCapabilities(["codex"]).includes("draft_seed_document__codex"));
+  assert.ok(!queueNamesForCapabilities(["github"]).includes("draft_seed_document__codex"));
 });
 
 test("dedupe_documents routes by provider like other AI work", () => {

@@ -703,6 +703,38 @@ export interface DraftMarkdownProposalJobOutput {
   rationale: string;
 }
 
+// One unit of flow seeding: a document to author, described by what it should
+// cover. `coverage` plays the role gap summaries play on the demand path;
+// everything else is optional shaping. Shared by the seed executor and (v2) the
+// outline generator.
+export interface SeedItem {
+  title?: string;
+  targetPath?: string;
+  coverage: string[];
+  questions?: string[];
+}
+
+// Input to the draft_seed_document AI job: author a NEW document covering
+// `coverage`, grounded in `sourceContext`, bypassing the demand-driven gap
+// pipeline. `provider` is added at enqueue (see @magpie/jobs).
+export interface DraftSeedDocumentJobInput {
+  flowId: string;
+  title?: string;
+  targetPath?: string;
+  coverage: string[];
+  questions?: string[];
+  sourceContext: SourceDataContext[];
+  destinationId?: string;
+}
+
+// Output of draft_seed_document: the authored document plus a short rationale.
+export interface DraftSeedDocumentJobOutput {
+  title: string;
+  targetPath: string;
+  markdown: string;
+  rationale: string;
+}
+
 export interface FoldMarkdownProposalJobInput {
   // The open proposal the rival is folded into; its markdown is updated in place.
   survivorProposalId: string;

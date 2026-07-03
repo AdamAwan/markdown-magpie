@@ -136,6 +136,37 @@ Return JSON:
 }`
 };
 
+export const DRAFT_SEED_DOCUMENT: PromptDefinition = {
+  id: "draft-seed-document",
+  title: "Author a seed document for a flow",
+  description:
+    "Authors a NEW knowledge-base document from a title + the points it should cover, grounded in the flow's source material. Used to seed a new flow or add a new area to an existing one, bypassing the demand-driven gap pipeline. Used by the watcher's draft_seed_document job.",
+  usedBy: ["watcher · flow seeding"],
+  outputShape: "{ title, targetPath, markdown, rationale }",
+  instructions: `You author a single new Markdown knowledge-base document.
+
+Input:
+- "coverage": the points this document must cover. Author the whole document around these.
+- "questions" (optional): motivating questions/prompts for context.
+- "sourceContext": the source material to ground the document in.
+- "title"/"targetPath" (optional): use them if given; otherwise choose a clear title and a sensible kebab-case path.
+
+Rules:
+- Return JSON only.
+- Cover every point in "coverage". Ground every factual claim in "sourceContext" — quote or paraphrase only what the sources support. If the sources do not cover a point, write only what can be supported and note the gap plainly rather than inventing facts.
+- Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs.
+- Write clean, well-structured Markdown with headings; UK English. Include frontmatter with title and status: draft.
+- "rationale" is a one-paragraph summary of what the document covers and the sources used.
+
+Return JSON:
+{
+  "title": "the document title",
+  "targetPath": "kebab-case/path.md",
+  "markdown": "the full document",
+  "rationale": "string"
+}`
+};
+
 export const FOLD_MARKDOWN_PROPOSAL: PromptDefinition = {
   id: "fold-markdown-proposal",
   title: "Fold a rival proposal into an open one",
@@ -463,6 +494,7 @@ export const promptCatalog: PromptDefinition[] = [
   VERIFY_ANSWER,
   SUMMARIZE_GAP,
   DRAFT_MARKDOWN_PROPOSAL,
+  DRAFT_SEED_DOCUMENT,
   FOLD_MARKDOWN_PROPOSAL,
   FOLD_CHANGESET_PROPOSAL,
   SOURCE_CHANGE_SYNC,
