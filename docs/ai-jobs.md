@@ -183,10 +183,17 @@ rides on the job record (read it back via `GET /api/jobs/:id/wait`), so there is
 side-effect and no new stored entity. The endpoint requires the `manage:jobs` scope (and
 `manage` on the target flow) and returns the enqueued job id.
 
+The same operation is exposed over MCP as the `kb_outline` tool: it enqueues the job, waits for
+it, and returns `{ jobId, items, rationale }` so an MCP client can bootstrap the `items` instead
+of writing coverage points by hand. Like the console flow, it **only proposes** — the caller
+reviews/edits the returned items and then calls `kb_seed` to draft them, keeping a human (or the
+calling agent) in the loop between the two steps.
+
 The full path is: **topic → `outline_flow_seed` (retrieval-grounded) → human edits/approves the
 proposed `items` → `POST /flows/:id/seed`** (the direct authoring path above). This is what the
 console's **Seed / add an area** page drives — pick a flow, enter a topic, *Generate outline*,
-edit the proposed documents, then *Seed*. The generated PRs flow into the normal review queue.
+edit the proposed documents, then *Seed*. Over MCP the same two steps are `kb_outline` →
+`kb_seed`. The generated PRs flow into the normal review queue.
 
 ## Watcher Model
 
