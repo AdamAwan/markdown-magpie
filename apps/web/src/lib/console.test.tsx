@@ -221,6 +221,7 @@ test("section copy is defined for every section with a distinct default", () => 
     "ask",
     "knowledge",
     "gaps",
+    "seed",
     "jobs",
     "proposals",
     "activity",
