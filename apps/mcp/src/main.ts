@@ -1,7 +1,7 @@
 import { argv, stdin, stdout } from "node:process";
 import { fileURLToPath } from "node:url";
 import { isAuthRequired } from "@magpie/auth";
-import { askQuestion, getJson, listFlows, optionalStringArgument, seedFlow, stringArgument, submitFeedback } from "./kb-client.js";
+import { askQuestion, generateOutline, getJson, listFlows, optionalStringArgument, seedFlow, stringArgument, submitFeedback } from "./kb-client.js";
 import { createMcpLogger } from "./logger.js";
 
 type JsonRpcId = string | number | null;
@@ -130,11 +130,39 @@ const tools = [
     } satisfies JsonSchema
   },
   {
+    name: "kb_outline",
+    description:
+      "Generate a proposed seed outline for a topic: a list of documents to author (each a title plus the points it should " +
+      "cover), auto-drafted and grounded in the flow's existing docs and persona — so you don't have to write the coverage " +
+      "points by hand. This does NOT seed anything: it returns the proposed items for you to review and edit, then pass to " +
+      "kb_seed. Use it to bootstrap the items for kb_seed. Discover flow ids with kb_flows.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        flow: {
+          type: "string",
+          description: "The flow id to outline for (from kb_flows)."
+        },
+        topic: {
+          type: "string",
+          description: "The area/subject to outline documents for, e.g. 'the product's prompt library'."
+        },
+        notes: {
+          type: "string",
+          description: "Optional extra guidance to steer the outline (scope, angle, what to include or leave out)."
+        }
+      },
+      required: ["flow", "topic"],
+      additionalProperties: false
+    } satisfies JsonSchema
+  },
+  {
     name: "kb_seed",
     description:
       "Seed a flow with initial content: submit a list of documents to author, each a title plus the points it should cover. " +
       "Each is drafted straight into a proposal → pull request, skipping the gap-clustering pipeline. " +
-      "Use for a brand-new flow or to add a new area of knowledge (e.g. a new feature) to an existing one. Discover flow ids with kb_flows.",
+      "Use for a brand-new flow or to add a new area of knowledge (e.g. a new feature) to an existing one. " +
+      "Tip: use kb_outline first to auto-generate the items instead of writing coverage points by hand. Discover flow ids with kb_flows.",
     inputSchema: {
       type: "object",
       properties: {
@@ -308,6 +336,11 @@ async function callTool(params: ToolCallParams): Promise<unknown> {
 
   if (params.name === "kb_feedback") {
     const result = await submitFeedback(params.arguments, { token: stdioAuthToken });
+    return textResult(result);
+  }
+
+  if (params.name === "kb_outline") {
+    const result = await generateOutline(params.arguments, { token: stdioAuthToken });
     return textResult(result);
   }
 

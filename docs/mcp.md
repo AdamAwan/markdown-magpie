@@ -64,6 +64,22 @@ Input:
 
 `helpful` / `unhelpful` record answer-quality feedback. `knowledge_gap` flags the question as a knowledge gap the system missed (the optional `gapSummary` describes the missing knowledge); this is independent of helpful/unhelpful and feeds the same gap-candidate clustering as automatic detection.
 
+### `kb_outline`
+
+Generates a proposed seed outline for a topic so you don't have to write the coverage points by hand. It enqueues an `outline_flow_seed` job (grounded in the flow's existing docs and persona), waits for it, and returns the proposed documents. It **only proposes** — nothing is drafted or seeded; the caller reviews/edits the returned `items` and then passes them to `kb_seed`.
+
+Input: `{ "flow": string, "topic": string, "notes"?: string }`
+
+Returns `{ "jobId": string, "items": SeedItem[], "rationale"?: string }`, where each `SeedItem` is `{ title?, targetPath?, coverage: string[], questions?: string[] }` — the same item shape `kb_seed` consumes. On `failed`/`cancelled`, or if the timeout is exceeded, `kb_outline` raises an error naming the job id and state (no payload data is echoed).
+
+### `kb_seed`
+
+Seeds a flow with initial content: submit a list of documents to author (each a title plus the points it should cover). Each item is drafted straight into a proposal → pull request, skipping the gap-clustering pipeline. Use `kb_outline` first to auto-generate the `items`, or supply them directly.
+
+Input: `{ "flow": string, "items": SeedItem[] }` where each `SeedItem` is `{ title?, targetPath?, coverage: string[] (≥1), questions?: string[] }`.
+
+Returns `{ "ok": true, "jobIds": string[] }` — one enqueued `draft_seed_document` job per item. See [ai-jobs.md](ai-jobs.md#seeding-a-flow) for the full seeding flow.
+
 ## Configuration
 
 ### Common (all transports)
@@ -73,6 +89,8 @@ Input:
 | `API_BASE_URL` | `http://localhost:4000` | Base URL of the Markdown Magpie API. |
 | `ANSWER_POLL_INTERVAL_MS` | `1000` | How often `kb_ask` polls the answer job's detail endpoint after a non-terminal wait. |
 | `ANSWER_TIMEOUT_MS` | `120000` | How long `kb_ask` waits for a queued answer before failing. |
+| `OUTLINE_POLL_INTERVAL_MS` | `1500` | How often `kb_outline` polls the outline job's detail endpoint after a non-terminal wait. |
+| `OUTLINE_TIMEOUT_MS` | `180000` | How long `kb_outline` waits for a queued outline before failing. |
 
 ### Streamable HTTP only
 
@@ -115,6 +133,8 @@ Per-tool scopes:
 | `kb_search` | `read:knowledge` |
 | `kb_ask` | `ask:knowledge` |
 | `kb_feedback` | `feedback:questions` |
+| `kb_outline` | `manage:jobs` |
+| `kb_seed` | `manage:jobs` |
 
 The inbound user token is validated locally and **never forwarded** to the API. The HTTP server calls the API with its own separate service token, `MCP_API_AUTH_TOKEN` (a machine-to-machine credential). Startup fails fast if `AUTH_REQUIRED=true` and this token is missing.
 
@@ -127,7 +147,7 @@ The stdio transport presents a single bearer token to the API on every call, sup
 ## Requirements
 
 - The API must be running and reachable at `API_BASE_URL`.
-- A watcher must be running to process `answer_question` jobs; otherwise `kb_ask` will time out.
+- A watcher must be running to process AI jobs; otherwise `kb_ask` (`answer_question`) and `kb_outline` (`outline_flow_seed`) will time out, and `kb_seed`'s (`draft_seed_document`) jobs stay queued.
 
 ## Running
 

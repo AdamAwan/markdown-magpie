@@ -18,7 +18,7 @@ import {
 } from "@magpie/auth";
 import type { JSONWebKeySet } from "jose";
 import { z } from "zod/v4";
-import { askQuestion, getJson, listFlows, seedFlow, submitFeedback, type KbClientOptions } from "./kb-client.js";
+import { askQuestion, generateOutline, getJson, listFlows, seedFlow, submitFeedback, type KbClientOptions } from "./kb-client.js";
 import { createMcpLogger } from "./logger.js";
 
 // ── Configuration ──────────────────────────────────────────────────────────
@@ -34,6 +34,7 @@ const TOOL_SCOPES: Record<string, string> = {
   "kb_flows": "read:knowledge",
   "kb_ask": "ask:knowledge",
   "kb_feedback": "feedback:questions",
+  "kb_outline": "manage:jobs",
   "kb_seed": "manage:jobs"
 };
 
@@ -200,13 +201,39 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
   );
 
   server.registerTool(
+    "kb_outline",
+    {
+      description:
+        "Generate a proposed seed outline for a topic: a list of documents to author (each a title plus the " +
+        "points it should cover), auto-drafted and grounded in the flow's existing docs and persona — so you " +
+        "don't have to write the coverage points by hand. This does NOT seed anything: it returns the proposed " +
+        "items for you to review and edit, then pass to kb_seed. Discover flow ids with kb_flows.",
+      inputSchema: z.object({
+        flow: z.string().describe("The flow id to outline for (from kb_flows)."),
+        topic: z
+          .string()
+          .describe("The area/subject to outline documents for, e.g. \"the product's prompt library\"."),
+        notes: z
+          .string()
+          .optional()
+          .describe("Optional extra guidance to steer the outline (scope, angle, what to include or leave out).")
+      })
+    },
+    async (args) => {
+      const result = await generateOutline(args, kbOptions);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.registerTool(
     "kb_seed",
     {
       description:
         "Seed a flow with initial content: submit a list of documents to author, each a title plus the " +
         "points it should cover. Each is drafted straight into a proposal → pull request, skipping the " +
         "gap-clustering pipeline. Use for a brand-new flow or to add a new area of knowledge to an " +
-        "existing one. Discover flow ids with kb_flows.",
+        "existing one. Tip: use kb_outline first to auto-generate the items instead of writing coverage " +
+        "points by hand. Discover flow ids with kb_flows.",
       inputSchema: z.object({
         flow: z.string().describe("The flow id to seed (from kb_flows)."),
         items: z

@@ -398,3 +398,119 @@ export async function seedFlow(
   const items = args?.items;
   return asObject(await postJson(`/flows/${encodeURIComponent(flow)}/seed`, { items }, options));
 }
+
+// ── seed outline ──────────────────────────────────────────────────────────────
+
+// Outline generation queues an outline_flow_seed job (a single grounded model
+// call) with a generous expiry; wait a few minutes rather than the answer path's
+// 2-minute budget. Both are overridable for slow providers / test harnesses.
+const outlinePollIntervalMs = parsePositiveInt(process.env.OUTLINE_POLL_INTERVAL_MS, 1500);
+const outlineTimeoutMs = parsePositiveInt(process.env.OUTLINE_TIMEOUT_MS, 180000);
+
+export interface OutlineResult {
+  jobId: string;
+  // The proposed documents: each a title plus the points it should cover. This is
+  // exactly the item shape kb_seed consumes. `coverage` may be empty in raw model
+  // output (the caller reviews and fills it in before seeding), so it is not
+  // required here. Typed inline so this public return type carries the shape
+  // without a separately-exported element alias for the dead-code check to flag.
+  items: {
+    title?: string;
+    targetPath?: string;
+    coverage: string[];
+    questions?: string[];
+  }[];
+  rationale?: string;
+}
+
+// Internal element alias for the outline item shape, derived from the public
+// return type so the two never drift. Not exported (nothing outside names it), so
+// it is invisible to the dead-code check.
+type OutlineItem = OutlineResult["items"][number];
+
+// Generates a seed outline for a topic WITHOUT seeding anything: POST
+// /flows/:id/outline enqueues an outline_flow_seed job (grounded in the flow's
+// existing docs and persona) and returns { ok, jobId }. We wait on the job — its
+// server-side long-poll wait link first, then detail polling — until it reaches a
+// terminal state, unwrap the { result, executor } envelope, and return the
+// proposed items + rationale. The caller reviews/edits the items and passes them
+// to kb_seed; this function deliberately never seeds on its own.
+export async function generateOutline(
+  args: Record<string, unknown> | undefined,
+  options?: KbClientOptions
+): Promise<OutlineResult> {
+  const flow = stringArgument(args, "flow");
+  const topic = stringArgument(args, "topic");
+  const notes = optionalStringArgument(args, "notes");
+  const body = notes ? { topic, notes } : { topic };
+
+  const created = asObject(await postJson(`/flows/${encodeURIComponent(flow)}/outline`, body, options));
+  const jobId = created.jobId;
+  if (typeof jobId !== "string" || jobId.length === 0) {
+    throw new Error("Outline response did not include a job id");
+  }
+
+  const deadline = Date.now() + outlineTimeoutMs;
+  const job = await waitForOutlineJob(jobId, deadline, options);
+  return { jobId, ...readOutline(job) };
+}
+
+// Waits for an outline job to reach a terminal state. Mirrors askQuestion's
+// strategy: hit the job's server-side long-poll wait endpoint once, then fall
+// back to detail polling. Turns failed/cancelled or a deadline overrun into a
+// clear error that names the job id and state but never echoes payload data.
+async function waitForOutlineJob(
+  jobId: string,
+  deadline: number,
+  options?: KbClientOptions
+): Promise<JobView> {
+  const encoded = encodeURIComponent(jobId);
+  let job = readJob(await getJson(`/jobs/${encoded}/wait`, options));
+
+  for (;;) {
+    switch (job.state) {
+      case "completed":
+        return job;
+      case "failed":
+      case "cancelled":
+        throw new Error(`Outline job ${job.id} ${job.state}`);
+      // created | retry | active | blocked are non-terminal; keep polling.
+      default:
+        break;
+    }
+
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for outline job ${job.id} (state ${job.state})`);
+    }
+
+    await delay(outlinePollIntervalMs);
+    job = readJob(await getJson(`/jobs/${encoded}`, options));
+  }
+}
+
+// Unwraps a completed outline job's { result, executor } envelope into the
+// proposed items + rationale. Tolerates a missing rationale but requires the
+// result to carry an items array — that array is the whole point of the outline.
+function readOutline(job: JobView): { items: OutlineItem[]; rationale?: string } {
+  if (job.output === undefined) {
+    throw new Error(`Outline job ${job.id} completed without producing an outline`);
+  }
+
+  const result = asObject(asObject(job.output).result);
+  if (!Array.isArray(result.items)) {
+    throw new Error(`Outline job ${job.id} completed without an items array`);
+  }
+
+  const items = result.items.filter(isOutlineItem);
+  const rationale = typeof result.rationale === "string" ? result.rationale : undefined;
+  return rationale ? { items, rationale } : { items };
+}
+
+function isOutlineItem(value: unknown): value is OutlineItem {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const coverage = (value as { coverage?: unknown }).coverage;
+  return Array.isArray(coverage) && coverage.every((point) => typeof point === "string");
+}

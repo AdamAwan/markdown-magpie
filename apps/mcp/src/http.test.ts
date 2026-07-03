@@ -132,6 +132,16 @@ test("tools/call kb_feedback requires feedback:questions scope", async () => {
   assert.equal(res.status, 403);
 });
 
+test("tools/call kb_outline requires manage:jobs scope", async () => {
+  const auth = await makeTestAuth();
+  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const res = await request(app)
+    .post("/mcp")
+    .set("authorization", await auth.token(["read:knowledge"]))
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_outline", arguments: { flow: "f", topic: "prompt library" } } });
+  assert.equal(res.status, 403);
+});
+
 test("tools/call kb_seed requires manage:jobs scope", async () => {
   const auth = await makeTestAuth();
   const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
