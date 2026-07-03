@@ -8,9 +8,15 @@ import {
   sectionSubtitle,
   sectionTitle
 } from "./console";
-import type { ConsoleSection, Health, JobView, KnowledgeStats } from "./types";
+import type { ConsoleSection, Health, JobType, JobView, KnowledgeStats, WatcherView } from "./types";
 
 const now = "2026-06-30T12:00:00.000Z";
+
+// A single fully-capable watcher, so tests that aren't about coverage don't trip
+// the "no watchers"/"uncovered jobs" banners.
+const readyFleet: WatcherView[] = [
+  { name: "w1", status: "idle", capabilities: ["codex", "github", "local-git", "maintenance"], lastSeenAt: now }
+];
 
 function job(overrides: Partial<JobView> & Pick<JobView, "id">): JobView {
   const { id, ...rest } = overrides;
@@ -38,12 +44,16 @@ function notices(input: {
   jobs?: JobView[];
   stats?: KnowledgeStats;
   openSection?: (section: ConsoleSection) => void;
+  workers?: WatcherView[];
+  uncoveredJobTypes?: JobType[];
 }) {
   return buildAttentionNotices({
     health: input.health,
     jobs: input.jobs ?? [],
     stats: input.stats ?? fullStats,
-    openSection: input.openSection ?? (() => undefined)
+    openSection: input.openSection ?? (() => undefined),
+    workers: input.workers ?? readyFleet,
+    uncoveredJobTypes: input.uncoveredJobTypes ?? []
   });
 }
 
@@ -102,6 +112,54 @@ test("buildAttentionNotices preserves a stable notice order", () => {
   assert.deepEqual(
     result.map((notice) => notice.id),
     ["api-offline", "empty-knowledge", "queue-waiting", "failed-jobs"]
+  );
+});
+
+test("buildAttentionNotices shows a concise notice when no watchers are connected", () => {
+  const opened: ConsoleSection[] = [];
+  const result = notices({
+    health: { ok: true, service: "api" },
+    workers: [],
+    // With no watchers the API reports every type uncovered; the banner must NOT
+    // dump the list — it collapses to a single "no watchers" notice.
+    uncoveredJobTypes: ["answer_question", "publish_proposal"],
+    openSection: (section) => opened.push(section)
+  });
+  const ids = result.map((n) => n.id);
+  assert.deepEqual(ids, ["no-watchers"]);
+  assert.equal(result[0].tone, "warning");
+  result[0].action?.();
+  assert.deepEqual(opened, ["jobs"]);
+});
+
+test("buildAttentionNotices lists uncovered job types when watchers run but miss a capability", () => {
+  const result = notices({
+    health: { ok: true, service: "api" },
+    workers: readyFleet,
+    uncoveredJobTypes: ["publish_proposal", "crosslink_pull_requests"]
+  });
+  const notice = result.find((n) => n.id === "uncovered-job-types");
+  assert.ok(notice, "expected an uncovered-job-types notice");
+  assert.equal(notice.tone, "danger");
+  assert.match(notice.body, /Publish Proposal, Crosslink Pull Requests/);
+});
+
+test("buildAttentionNotices shows no coverage notice when the fleet covers everything", () => {
+  const result = notices({ health: { ok: true, service: "api" }, workers: readyFleet, uncoveredJobTypes: [] });
+  assert.equal(result.length, 0);
+});
+
+test("buildAttentionNotices appends the coverage notice after failed jobs", () => {
+  const result = notices({
+    health: { ok: false, service: "api" },
+    stats: { repositoryCount: 0, documentCount: 0, sectionCount: 0 },
+    jobs: [job({ id: "a", state: "created" }), job({ id: "f", state: "failed" })],
+    workers: readyFleet,
+    uncoveredJobTypes: ["publish_proposal"]
+  });
+  assert.deepEqual(
+    result.map((notice) => notice.id),
+    ["api-offline", "empty-knowledge", "queue-waiting", "failed-jobs", "uncovered-job-types"]
   );
 });
 

@@ -176,8 +176,12 @@ export interface JobsResponse {
 
 // `/workers` returns the watchers currently connected (seen within the API's
 // active window), busy or idle. Drives the Jobs screen's Workers panel.
+// `uncoveredJobTypes` is the fleet's capability gap — job types no active watcher
+// can run — computed by the API (so the browser needs no job catalog) and surfaced
+// as the "no watcher can run these jobs" console banner.
 export interface WorkersResponse {
   workers: WatcherView[];
+  uncoveredJobTypes: JobType[];
 }
 
 // `/knowledge/documents` and `/knowledge/repositories` are paginated the same
