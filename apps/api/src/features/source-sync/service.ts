@@ -155,7 +155,16 @@ async function syncGitSource(
   // silently lost), and the (possibly truncated) subset we actually materialize and
   // hand downstream to retrieval + the plan job.
   const totalChangedFileCount = diff.totalCount;
-  const changes = diff.changes;
+  // Strip NUL bytes (0x00) out of every changed-file patch before the content is used
+  // anywhere downstream. This matters most for the plan-job input, which pg-boss stores
+  // as JSONB: Postgres rejects any json/jsonb string containing a NUL with "unsupported
+  // Unicode escape sequence", so the INSERT fails at job creation — before the baseline
+  // advances — and the next tick re-diffs the same commit and fails identically, an
+  // unbounded wedge (issue #131). A NUL legitimately reaches a *text* diff because git's
+  // binary heuristic only scans a file's first ~8 KB, so a NUL past that offset is not
+  // detected as binary. It is control garbage with no value to retrieval or the model,
+  // so dropping it is loss-free and keeps one poisoned file from wedging the whole source.
+  const changes = sanitizeChangeDiffs(diff.changes, { sourceId: source.id, flowId });
   if (totalChangedFileCount === 0) {
     // Commits landed but nothing inside the watched subpath changed.
     await store.setState(flowId, source.id, headSha);
@@ -381,7 +390,10 @@ export function selectCandidateDocuments(
       continue;
     }
     seen.add(document.id);
-    candidates.push({ path: document.path, content: document.content });
+    // Sanitize the document content too: it is the other file-derived string that lands
+    // in the JSONB plan-job input, so a NUL byte here (a KB doc that somehow carries one)
+    // would wedge job creation exactly as a poisoned diff would. See stripNulBytes.
+    candidates.push({ path: document.path, content: stripNulBytes(document.content) });
     if (candidates.length >= limit) {
       break;
     }
@@ -422,4 +434,39 @@ export function changesetFromPlan(plan: MaintenancePlan): ChangesetChange[] {
 
 function toSourceChangeFile(change: SourceFileChange): SourceChangeFile {
   return { path: change.path, status: change.status, diff: change.diff };
+}
+
+// A single NUL byte (0x00), built via char code to keep this source file plain ASCII.
+const NUL = String.fromCharCode(0);
+
+// Removes NUL bytes (0x00) from a string. Postgres json/jsonb forbids them, so any
+// file-derived text that reaches a JSONB-backed job input must pass through here first.
+// Returns the input unchanged (no allocation) when there is nothing to strip.
+export function stripNulBytes(text: string): string {
+  return text.includes(NUL) ? text.split(NUL).join("") : text;
+}
+
+// Strips NUL bytes out of each change's patch text so the content is safe to embed in
+// the retrieval query and, critically, to persist in the JSONB plan-job input. Warns,
+// naming the affected paths, so a near-binary file that slipped past git's text
+// detection is operator-visible rather than silently mangled. See stripNulBytes / #131.
+function sanitizeChangeDiffs(
+  changes: SourceFileChange[],
+  context: { sourceId: string; flowId: string | undefined }
+): SourceFileChange[] {
+  const strippedPaths: string[] = [];
+  const sanitized = changes.map((change) => {
+    if (!change.diff.includes(NUL)) {
+      return change;
+    }
+    strippedPaths.push(change.path);
+    return { ...change, diff: stripNulBytes(change.diff) };
+  });
+  if (strippedPaths.length > 0) {
+    logger.warn(
+      { sourceId: context.sourceId, flowId: context.flowId ?? "default", paths: strippedPaths },
+      "source-change sync: stripped NUL bytes from changed-file patches (near-binary content)"
+    );
+  }
+  return sanitized;
 }

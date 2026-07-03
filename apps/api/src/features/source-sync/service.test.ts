@@ -7,8 +7,12 @@ import {
   changesetFromPlan,
   constrainToCandidates,
   selectCandidateDocuments,
+  stripNulBytes,
   triggerSourceSyncRun
 } from "./service.js";
+
+// A single NUL byte (0x00), built via char code so the source stays plain ASCII.
+const NUL = String.fromCharCode(0);
 
 test("changesetFromPlan applies deletes then writes with last-write-wins per path", () => {
   const plan: MaintenancePlan = {
@@ -92,6 +96,27 @@ test("constrainToCandidates drops deletes and paths outside the candidate set", 
   assert.equal(constrained.length, 1);
   assert.equal(constrained[0].path, "a.md");
   assert.equal(constrained[0].content, "updated");
+});
+
+test("stripNulBytes removes NUL bytes and leaves clean text untouched", () => {
+  assert.equal(stripNulBytes(`a${NUL}b${NUL}c`), "abc");
+  const clean = "no nulls here";
+  assert.equal(stripNulBytes(clean), clean, "returns the same string when there is nothing to strip");
+  assert.equal(stripNulBytes(""), "");
+});
+
+test("selectCandidateDocuments strips NUL bytes from document content (JSONB-safe)", () => {
+  const doc: KnowledgeDocument = {
+    id: "d1",
+    repositoryId: "dest",
+    path: "a.md",
+    metadata: { title: "a.md", status: "active", tags: [], relatedDocs: [] },
+    content: `# A${NUL}\ncontent`
+  };
+  const candidates = selectCandidateDocuments(ranked([section("s1", "d1")]), [doc], 5);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].content.includes(NUL), false, "no NUL byte survives into the candidate content");
+  assert.equal(candidates[0].content, "# A\ncontent");
 });
 
 test("buildRetrievalQuery includes paths and diffs and is bounded", async () => {
