@@ -47,12 +47,12 @@ COPY --from=build /app/packages packages
 COPY --from=build /app/scripts scripts
 COPY --from=build /app/tsconfig.base.json ./tsconfig.base.json
 
-# Run as a non-root user. Create the checkout root owned by that user so a fresh
-# named volume mounted there inherits writable ownership (Docker seeds an empty
-# volume from the image mountpoint's ownership on first use).
+# Run as a non-root user. Create the checkout and snapshot roots owned by that user
+# so fresh named volumes mounted there inherit writable ownership (Docker seeds an
+# empty volume from the image mountpoint's ownership on first use).
 RUN groupadd --system --gid 1001 magpie \
   && useradd --system --uid 1001 --gid magpie --no-create-home magpie \
-  && mkdir -p /data/checkouts \
+  && mkdir -p /data/checkouts /data/snapshots \
   && chown -R magpie:magpie /data
 USER magpie
 

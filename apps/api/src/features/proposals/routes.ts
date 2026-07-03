@@ -105,6 +105,24 @@ export function proposalRoutes(ctx: AppContext): Hono {
       }
       assertCan(ctx, c, "manage", existing.flowId);
 
+      // The pr-opened → merged transition is owned by the PR-poll path
+      // (refresh_flow_snapshot + applyPullRequestTransition): it flips a proposal
+      // to merged only once its real pull request has merged in git. A proposal
+      // with a live pull request must not be hand-asserted merged here, or a user
+      // could claim a merge that never happened. The manual action stays available
+      // as the no-PR fallback — a branch pushed without a pull request to poll
+      // (e.g. a deployment with no GITHUB_TOKEN, or a local-git destination),
+      // which nothing auto-transitions. A pollable PR is exactly a recorded
+      // pullRequestUrl (⇔ status pr-opened), so keying on it keeps the
+      // GitHub-with-PR and no-PR cases cleanly separated.
+      if (status === "merged" && existing.publication?.pullRequestUrl) {
+        throw new HttpError(
+          409,
+          "proposal_merge_tracked_by_pull_request",
+          "This proposal has an open pull request; it is marked merged automatically when that PR merges."
+        );
+      }
+
       const proposal = await proposalsService.updateStatus(ctx, id, status);
       if (!proposal) {
         throw new HttpError(404, "proposal_not_found");

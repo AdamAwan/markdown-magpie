@@ -393,4 +393,100 @@ test("a commit under SOURCE_SYNC_MAX_CHANGED_FILES is not truncated", async () =
   }
 });
 
+// A single NUL byte (0x00), built via char code so this source file stays plain ASCII.
+const NUL = String.fromCharCode(0);
+
+// Seeds a KB (so a candidate exists) and a source whose watched file is large enough
+// (> 8 KB of clean text, past git's binary-detection window) that a NUL byte in its
+// final, changed line lands in a *text* diff rather than being suppressed as "Binary
+// files differ". That NUL, unsanitized, poisons the JSONB plan-job input — see #131.
+// Re-baselines so the next triggerSourceSyncRun reacts to the NUL-bearing commit.
+async function seedNulCommit(broker: FakeJobBroker): Promise<Seeded & { repoPath: string }> {
+  const root = await mkdtemp(path.join(tmpdir(), "magpie-srcsync-nul-"));
+  const run = (cwd: string, args: string[]) => execFileAsync("git", args, { cwd });
+
+  const destRemote = path.join(root, "dest.git");
+  const destClone = path.join(root, "dest");
+  await mkdir(destRemote, { recursive: true });
+  await run(destRemote, ["init", "--bare", "--initial-branch=main"]);
+  await execFileAsync("git", ["clone", destRemote, destClone]);
+  await run(destClone, ["config", "user.name", "Seed"]);
+  await run(destClone, ["config", "user.email", "seed@example.com"]);
+  await writeFile(path.join(destClone, "guide.md"), "# Guide\nThe limit is 2024.\n", "utf8");
+  await run(destClone, ["add", "-A"]);
+  await run(destClone, ["commit", "-m", "seed"]);
+  await run(destClone, ["push", "-u", "origin", "main"]);
+
+  const sourceRemote = path.join(root, "source.git");
+  const sourceClone = path.join(root, "source");
+  await mkdir(sourceRemote, { recursive: true });
+  await run(sourceRemote, ["init", "--bare", "--initial-branch=main"]);
+  await execFileAsync("git", ["clone", sourceRemote, sourceClone]);
+  await run(sourceClone, ["config", "user.name", "Seed"]);
+  await run(sourceClone, ["config", "user.email", "seed@example.com"]);
+  // ~900 clean lines (> 8 KB) so git's binary heuristic (first 8 KB) sees no NUL, then a
+  // trailing line whose NUL byte therefore survives into a text diff when it changes.
+  const filler = Array.from({ length: 900 }, (_, i) => `line ${String(i).padStart(4, "0")} the limit`).join("\n");
+  await writeFile(path.join(sourceClone, "rules.ts"), `${filler}\nlimit marker${NUL}OLD\n`, "utf8");
+  await run(sourceClone, ["add", "-A"]);
+  await run(sourceClone, ["commit", "-m", "first"]);
+  await writeFile(path.join(sourceClone, "rules.ts"), `${filler}\nlimit marker${NUL}NEW\n`, "utf8");
+  await run(sourceClone, ["add", "-A"]);
+  await run(sourceClone, ["commit", "-m", "bump"]);
+  await run(sourceClone, ["push", "-u", "origin", "main"]);
+
+  const checkoutRoot = path.join(root, "checkouts");
+  const ctx = makeTestContext({ jobs: broker });
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
+  ctx.knowledgeConfig.checkoutRoot = checkoutRoot;
+  ctx.knowledgeConfig.sources = [{ id: "src-1", name: "Rules repo", kind: "git", url: sourceRemote }];
+  await ctx.stores.knowledgeIndex.indexLocalRepository({ localPath: destClone, repositoryId: "dest", name: "dest" });
+
+  await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
+  const repoPath = path.join(checkoutRoot, "src-1");
+  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD~1"], { cwd: repoPath });
+  await ctx.stores.sourceSync.setState(undefined, "src-1", stdout.trim());
+
+  return { ctx, checkoutRoot, repoPath, cleanup: async () => { await rm(root, { recursive: true, force: true }); } };
+}
+
+test("a changed file whose diff contains a NUL byte is sanitized so the JSONB job input is safe and the baseline advances", async () => {
+  const broker = new FakeJobBroker();
+  const { ctx, repoPath, cleanup } = await seedNulCommit(broker);
+  try {
+    // Sanity-check the fixture: the raw git diff really does carry a NUL byte, so this
+    // test would fail without sanitization (and proves the scenario is real, not a
+    // "binary files differ" no-op).
+    const { stdout: rawDiff } = await execFileAsync("git", ["diff", "HEAD~1..HEAD", "--", "rules.ts"], { cwd: repoPath });
+    assert.ok(rawDiff.includes(NUL), "fixture precondition: git emits a text diff containing a NUL byte");
+
+    const runs = await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
+    assert.equal(runs.length, 1, "the poisoned commit still produces a run rather than throwing");
+    const run = runs[0];
+    assert.equal(run.status, "running");
+    assert.ok(run.jobId, "run linked to a plan job");
+
+    // The enqueued plan-job input — which Postgres would store as JSONB — carries no
+    // NUL byte in any changed-file patch, so the INSERT that previously failed with
+    // "unsupported Unicode escape sequence" now succeeds. (Assert on the raw field
+    // value, not JSON.stringify(input): JSON serialization escapes a real 0x00 into an
+    // ASCII escape sequence, which no longer contains a raw NUL and would mask the bug.)
+    const planJob = (await ctx.jobs.list({})).jobs.find((job) => job.type === "sync_source_changes_generate_plan");
+    assert.ok(planJob, "plan job enqueued");
+    const input = planJob.input as { changes: Array<{ diff: string }> };
+    assert.equal(
+      input.changes.some((change) => change.diff.includes(NUL)),
+      false,
+      "no NUL byte survives in any changed-file patch in the job input"
+    );
+
+    // The baseline advanced to HEAD, so the next tick won't re-diff the poisoned commit
+    // — the wedge is broken.
+    const { stdout: head } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repoPath });
+    assert.equal((await ctx.stores.sourceSync.getState(undefined, "src-1"))?.lastSha, head.trim());
+  } finally {
+    await cleanup();
+  }
+});
+
 
