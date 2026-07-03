@@ -69,7 +69,7 @@ export async function reconcileDraftedProposal(ctx: AppContext, rival: Proposal)
 // its own PR; only a touchable overlap on the same path folds. `lens` is cosmetic
 // for the gate (only `targets` drive decideReconciliation) but is threaded for the
 // intent audit trail. Best-effort — the caller (completeJob) guards throws.
-export async function reconcileClusterlessProposal(
+async function reconcileClusterlessProposal(
   ctx: AppContext,
   proposal: Proposal,
   lens: MaintenanceLens

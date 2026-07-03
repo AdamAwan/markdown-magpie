@@ -2,7 +2,7 @@ import { z } from "zod";
 
 // One document to author when seeding a flow. `coverage` is the substantive field
 // (the points the doc must cover); everything else is optional shaping.
-export const seedItemSchema = z.object({
+const seedItemSchema = z.object({
   title: z.string().optional(),
   targetPath: z.string().optional(),
   coverage: z.array(z.string().min(1)).min(1),
