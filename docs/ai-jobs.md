@@ -134,6 +134,36 @@ PR to open) and the console's Merge action completes the publish. It reports the
 completion — which records the branch, commit SHA, and (for GitHub) PR URL on the proposal. Invalid
 publishes fail fast with the same `404`/`409` codes before any job is created.
 
+## Seeding a flow
+
+The demand-driven pipeline above (question → gap → cluster → proposal) is how knowledge
+*evolves* from real usage. To **bootstrap** a new flow — or add a whole new area of knowledge
+(e.g. a new feature) to an existing one — there is a direct authoring path that skips the
+gap-clustering and intent-inference half entirely:
+
+```json
+POST /api/flows/:flowId/seed
+{
+  "items": [
+    { "title": "Billing overview", "coverage": ["what billing is", "the plans"] },
+    { "coverage": ["refund policy", "how to request a refund"] }
+  ]
+}
+```
+
+Each *item* (a title plus the points it should cover) is drafted directly into a
+`draft_seed_document` AI job, grounded in the flow's source material. On completion the API
+creates a clusterless proposal carrying the flow's id first-class and reconciles it through the
+shared gate: a seed doc that overlaps an open PR on the same path folds into it, otherwise it
+self-publishes as its own PR. So seeding still ends at a reviewable pull request — the same
+human gate as everything else — but without the `reconcile_gap_clusters` job, the intent gate,
+or the maintenance-cron wait. The endpoint requires the `manage:jobs` scope (and `manage` on
+the target flow) and returns the enqueued job ids.
+
+The same operation is exposed over MCP as the `kb.seed` tool, so an interviewer LLM can submit
+a finished outline in one shot rather than streaming questions into `kb.ask` and waiting for
+the gap pipeline.
+
 ## Watcher Model
 
 The watcher has no direct database access. It talks to the API only:

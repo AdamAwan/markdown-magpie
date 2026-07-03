@@ -125,6 +125,14 @@ through the **reconcile gate** (`open-new` / `fold` / `defer`) before a
 schedules converge on one mechanism. The **Scheduled Jobs → Job Types** diagram on
 the `/dataflow` page draws the full fan-out.
 
+Not every producer is scheduled. **Flow seeding** is an on-demand producer:
+`POST /api/flows/:id/seed` (and the `kb.seed` MCP tool) enqueue a `draft_seed_document`
+AI job per requested doc, bypassing the demand-inference half (gap clustering + the
+intent gate) since the caller supplies the intent. The resulting clusterless proposals
+still converge on the same reconcile gate and `publish_proposal` path, so seeding a new
+flow — or adding a new area to an existing one — ends at a reviewable PR like everything
+else. See [`ai-jobs.md`](./ai-jobs.md) (§ Seeding a flow).
+
 Orchestration detail: a maintenance watcher claims a `process_gaps_to_pull_requests`
 job and POSTs the API's `/api/gaps/reconcile` endpoint, where the orchestration
 lives. The reconciler's only generative step — the cluster reshape (propose
