@@ -4,6 +4,7 @@ export const JOB_TYPES = [
   "answer_question",
   "summarize_gap",
   "draft_markdown_proposal",
+  "draft_seed_document",
   "fold_markdown_proposal",
   "detect_contradiction",
   "suggest_consolidation",

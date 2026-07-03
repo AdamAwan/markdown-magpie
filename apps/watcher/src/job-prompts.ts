@@ -13,6 +13,7 @@ import {
   CORRECT_DOCUMENT,
   DEDUPE_DOCUMENTS,
   DRAFT_MARKDOWN_PROPOSAL,
+  DRAFT_SEED_DOCUMENT,
   FOLD_CHANGESET_PROPOSAL,
   FOLD_MARKDOWN_PROPOSAL,
   GENERIC_JOB,
@@ -76,6 +77,8 @@ export function buildPrompt(job: JobView): string {
       return `${SUMMARIZE_GAP.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "draft_markdown_proposal":
       return `${DRAFT_MARKDOWN_PROPOSAL.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
+    case "draft_seed_document":
+      return `${DRAFT_SEED_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "fold_markdown_proposal":
       return `${FOLD_MARKDOWN_PROPOSAL.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "fold_changeset_proposal":

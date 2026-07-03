@@ -6,6 +6,8 @@ import type {
   MaintenancePlan,
   DraftMarkdownProposalJobInput as CoreDraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
+  DraftSeedDocumentJobInput as CoreDraftSeedDocumentJobInput,
+  DraftSeedDocumentJobOutput,
   FoldMarkdownProposalJobInput as CoreFoldMarkdownProposalJobInput,
   FoldMarkdownProposalJobOutput,
   FoldChangesetProposalJobInput as CoreFoldChangesetProposalJobInput,
@@ -168,6 +170,23 @@ export const draftMarkdownProposalOutputSchema = z.object({
   markdown: z.string(),
   rationale: z.string()
 }) satisfies z.ZodType<DraftMarkdownProposalJobOutput>;
+
+export const draftSeedDocumentInputSchema = z.object({
+  provider: providerSchema,
+  flowId: z.string(),
+  title: z.string().optional(),
+  targetPath: z.string().optional(),
+  coverage: z.array(z.string()),
+  questions: z.array(z.string()).optional(),
+  sourceContext: z.array(sourceDataContextSchema),
+  destinationId: z.string().optional()
+}) satisfies z.ZodType<ProviderInput<CoreDraftSeedDocumentJobInput>>;
+export const draftSeedDocumentOutputSchema = z.object({
+  title: z.string(),
+  targetPath: z.string(),
+  markdown: z.string(),
+  rationale: z.string()
+}) satisfies z.ZodType<DraftSeedDocumentJobOutput>;
 
 export const foldMarkdownProposalInputSchema = z.object({
   provider: providerSchema,

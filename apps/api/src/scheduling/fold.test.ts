@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { makeTestContext } from "../test-support/context.js";
-import { reconcileDraftedProposal, reconcileCorrectiveProposal, reconcileDedupeProposal, reconcileSplitProposal, reconcileImproveProposal, reconcileSourceSyncProposal, applyFoldFromCompletedJob, applyChangesetFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
+import { reconcileDraftedProposal, reconcileCorrectiveProposal, reconcileSeedProposal, reconcileDedupeProposal, reconcileSplitProposal, reconcileImproveProposal, reconcileSourceSyncProposal, applyFoldFromCompletedJob, applyChangesetFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
 import type { AppContext } from "../context.js";
 
 async function clusterWithGap(ctx: AppContext, flowId: string | undefined, summary: string): Promise<string> {
@@ -126,6 +126,56 @@ describe("reconcileCorrectiveProposal", () => {
       flowId: "billing"
     });
     await reconcileCorrectiveProposal(ctx, rival);
+    assert.equal((await ctx.jobs.list({ type: "fold_markdown_proposal" })).jobs.length, 1);
+    assert.deepEqual(await ctx.stores.gapClusters.listPendingPublicationActions(), []);
+  });
+});
+
+describe("reconcileSeedProposal", () => {
+  it("open-new (no overlap) enqueues a publish action", async () => {
+    const ctx = makeTestContext();
+    const proposal = await ctx.stores.proposals.create({
+      title: "Billing overview",
+      targetPath: "billing/overview.md",
+      markdown: "# Billing",
+      rationale: "seed",
+      evidence: [],
+      flowId: "billing"
+    });
+    await reconcileSeedProposal(ctx, proposal);
+    const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
+    assert.deepEqual(
+      actions.map((a) => ({ proposalId: a.proposalId, kind: a.kind })),
+      [{ proposalId: proposal.id, kind: "publish" }]
+    );
+  });
+
+  it("fold (overlapping touchable PR on the same path) enqueues a fold job, no publish", async () => {
+    const ctx = makeTestContext();
+    const survivor = await ctx.stores.proposals.create({
+      title: "Existing billing doc",
+      targetPath: "billing/overview.md",
+      markdown: "# survivor",
+      rationale: "r",
+      evidence: [],
+      flowId: "billing"
+    });
+    await ctx.stores.proposals.recordPublication(survivor.id, {
+      provider: "local-git",
+      branchName: "b",
+      commitSha: "c",
+      pullRequestUrl: "https://github.com/o/r/pull/1",
+      publishedAt: new Date().toISOString()
+    });
+    const rival = await ctx.stores.proposals.create({
+      title: "Billing overview",
+      targetPath: "billing/overview.md",
+      markdown: "# rival",
+      rationale: "seed",
+      evidence: [],
+      flowId: "billing"
+    });
+    await reconcileSeedProposal(ctx, rival);
     assert.equal((await ctx.jobs.list({ type: "fold_markdown_proposal" })).jobs.length, 1);
     assert.deepEqual(await ctx.stores.gapClusters.listPendingPublicationActions(), []);
   });

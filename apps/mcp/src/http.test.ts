@@ -72,7 +72,7 @@ test("protected-resource metadata is also served under /mcp suffix", async () =>
   assert.equal(res.status, 200);
   const body = res.body as { resource: string; scopes_supported: string[] };
   assert.equal(body.resource, resourceUrl);
-  assert.deepEqual(body.scopes_supported, ["read:knowledge", "ask:knowledge", "feedback:questions"]);
+  assert.deepEqual(body.scopes_supported, ["read:knowledge", "ask:knowledge", "feedback:questions", "manage:jobs"]);
 });
 
 test("/mcp without a bearer token returns a discovery challenge", async () => {
@@ -129,6 +129,16 @@ test("tools/call kb.feedback requires feedback:questions scope", async () => {
     .post("/mcp")
     .set("authorization", await auth.token(["read:knowledge"]))
     .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb.feedback", arguments: { questionId: "q", kind: "helpful" } } });
+  assert.equal(res.status, 403);
+});
+
+test("tools/call kb.seed requires manage:jobs scope", async () => {
+  const auth = await makeTestAuth();
+  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const res = await request(app)
+    .post("/mcp")
+    .set("authorization", await auth.token(["read:knowledge"]))
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb.seed", arguments: { flow: "f", items: [{ coverage: ["x"] }] } } });
   assert.equal(res.status, 403);
 });
 

@@ -5,7 +5,9 @@ import type {
   DraftContext,
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
+  DraftSeedDocumentJobInput,
   GapCandidate,
+  SeedItem,
   OpenPullRequestContext,
   Proposal,
   RepositoryRef,
@@ -16,7 +18,7 @@ import type { JobView } from "@magpie/jobs";
 import { fileURLToPath } from "node:url";
 import { mergeLocalProposalBranch } from "@magpie/git";
 import { z } from "zod";
-import { correctDocumentOutputSchema, dedupeDocumentsOutputSchema, improveDocumentOutputSchema, publishProposalOutputSchema, splitDocumentOutputSchema } from "@magpie/jobs";
+import { correctDocumentOutputSchema, dedupeDocumentsOutputSchema, draftSeedDocumentOutputSchema, improveDocumentOutputSchema, publishProposalOutputSchema, splitDocumentOutputSchema } from "@magpie/jobs";
 import { PROPOSAL_STATUSES, resolveProposalTargetPath } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import type { ProposalListOptions } from "../../stores/proposal-store.js";
@@ -469,6 +471,61 @@ export async function draftFromGaps(
   return { ok: true as const, job };
 }
 
+// Enqueue a draft_seed_document for one seed item. Reuses the flow/source/
+// destination resolution draftFromGaps uses, but skips the gap-candidate matching
+// draftFromGaps requires — seed coverage is authored intent, not a logged gap.
+// Enqueue-only: the proposal lands later via createSeedProposalFromCompletedJob.
+async function draftSeedItem(
+  ctx: AppContext,
+  flowId: string,
+  item: SeedItem,
+  cache: SourceContextCache
+): Promise<string> {
+  const deps = ctx.repositoryDeps();
+  const flow = selectFlow(deps, flowId);
+  const sourceIds = flow?.sourceIds;
+  const destinationId = flow?.destinationId || defaultDestinationId(deps);
+  const sourceContext = await collectSourceContextCached(deps, sourceIds, cache);
+  const input: DraftSeedDocumentJobInput & { provider: AiProviderName } = {
+    flowId,
+    title: item.title?.trim() || undefined,
+    targetPath: item.targetPath?.trim() || undefined,
+    coverage: [...new Set(item.coverage.map((point) => point.trim()).filter((point) => point.length > 0))],
+    questions: item.questions?.length ? item.questions : undefined,
+    sourceContext,
+    destinationId,
+    provider: ctx.config.get().aiProvider
+  };
+  const job = await ctx.jobs.create("draft_seed_document", input);
+  logger.info({ jobId: job.id, flowId, targetPath: input.targetPath ?? "auto" }, "enqueued draft_seed_document job");
+  return job.id;
+}
+
+// Seed a flow: draft each item straight into a proposal, bypassing gap clustering
+// and the intent gate. Source context is collected once and memoised across the
+// items in one call.
+export async function seedFlow(
+  ctx: AppContext,
+  flowId: string,
+  items: SeedItem[]
+): Promise<{ ok: true; jobIds: string[] } | { ok: false; code: string }> {
+  const flow = selectFlow(ctx.repositoryDeps(), flowId);
+  if (!flow) {
+    return { ok: false as const, code: "flow_not_found" };
+  }
+  const usable = items.filter((item) => item.coverage.some((point) => point.trim().length > 0));
+  if (usable.length === 0) {
+    return { ok: false as const, code: "coverage_required" };
+  }
+  const cache: SourceContextCache = new Map();
+  const jobIds: string[] = [];
+  for (const item of usable) {
+    jobIds.push(await draftSeedItem(ctx, flowId, item, cache));
+  }
+  logger.info({ flowId, count: jobIds.length }, "seeded flow: enqueued draft_seed_document jobs");
+  return { ok: true as const, jobIds };
+}
+
 // Wraps collectSourceContext with the optional per-run memo. The key is the
 // resolved source-id set (sorted, so order can't fragment it); an undefined set
 // means "the configured default sources", which collectSourceContext resolves
@@ -583,6 +640,42 @@ export async function createCorrectiveProposalFromCompletedJob(
   return ctx.stores.proposals.create({
     title: `Verify: correct unprovable claims in ${input.path}`,
     targetPath: input.path,
+    markdown: parsed.data.markdown,
+    rationale: parsed.data.rationale,
+    evidence: [],
+    flowId: input.flowId,
+    destinationId: input.destinationId,
+    jobId: job.id
+  });
+}
+
+// Completion handler for draft_seed_document jobs: a seed draft landed, so create a
+// clusterless draft Proposal carrying flowId first-class (so the gate and the per-flow
+// outbox treat it as same-flow). The model chooses the title/targetPath; the path is
+// resolved under the destination subpath like a gap draft. De-duped by jobId, so a
+// re-delivered completion returns the same proposal rather than drafting a duplicate.
+export async function createSeedProposalFromCompletedJob(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<Proposal | undefined> {
+  if (!job || job.type !== "draft_seed_document") {
+    return undefined;
+  }
+  const parsed = draftSeedDocumentOutputSchema.safeParse(output);
+  if (!parsed.success) {
+    return undefined;
+  }
+  const input = job.input as Partial<DraftSeedDocumentJobInput>;
+  if (!input.flowId) {
+    return undefined;
+  }
+  return ctx.stores.proposals.create({
+    title: parsed.data.title,
+    targetPath: resolveProposalTargetPath(
+      destinationSubpath(ctx.repositoryDeps(), input.destinationId),
+      parsed.data.targetPath || parsed.data.title
+    ),
     markdown: parsed.data.markdown,
     rationale: parsed.data.rationale,
     evidence: [],

@@ -1,7 +1,7 @@
 import { argv, stdin, stdout } from "node:process";
 import { fileURLToPath } from "node:url";
 import { isAuthRequired } from "@magpie/auth";
-import { askQuestion, getJson, listFlows, optionalStringArgument, stringArgument, submitFeedback } from "./kb-client.js";
+import { askQuestion, getJson, listFlows, optionalStringArgument, seedFlow, stringArgument, submitFeedback } from "./kb-client.js";
 import { createMcpLogger } from "./logger.js";
 
 type JsonRpcId = string | number | null;
@@ -126,6 +126,47 @@ const tools = [
         }
       },
       required: ["questionId", "kind"],
+      additionalProperties: false
+    } satisfies JsonSchema
+  },
+  {
+    name: "kb.seed",
+    description:
+      "Seed a flow with initial content: submit a list of documents to author, each a title plus the points it should cover. " +
+      "Each is drafted straight into a proposal → pull request, skipping the gap-clustering pipeline. " +
+      "Use for a brand-new flow or to add a new area of knowledge (e.g. a new feature) to an existing one. Discover flow ids with kb.flows.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        flow: {
+          type: "string",
+          description: "The flow id to seed (from kb.flows)."
+        },
+        items: {
+          type: "array",
+          description: "One entry per document to author.",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string", description: "Optional document title." },
+              targetPath: { type: "string", description: "Optional destination-relative path." },
+              coverage: {
+                type: "array",
+                items: { type: "string" },
+                description: "The points this document must cover. At least one."
+              },
+              questions: {
+                type: "array",
+                items: { type: "string" },
+                description: "Optional motivating questions/prompts for context."
+              }
+            },
+            required: ["coverage"],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ["flow", "items"],
       additionalProperties: false
     } satisfies JsonSchema
   }
@@ -267,6 +308,11 @@ async function callTool(params: ToolCallParams): Promise<unknown> {
 
   if (params.name === "kb.feedback") {
     const result = await submitFeedback(params.arguments, { token: stdioAuthToken });
+    return textResult(result);
+  }
+
+  if (params.name === "kb.seed") {
+    const result = await seedFlow(params.arguments, { token: stdioAuthToken });
     return textResult(result);
   }
 

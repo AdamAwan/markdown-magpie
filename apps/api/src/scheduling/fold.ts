@@ -1,4 +1,4 @@
-import type { Proposal } from "@magpie/core";
+import type { MaintenanceLens, Proposal } from "@magpie/core";
 import { logger } from "../logger.js";
 import type { JobView } from "@magpie/jobs";
 import { foldChangesetProposalOutputSchema, foldMarkdownProposalOutputSchema } from "@magpie/jobs";
@@ -63,18 +63,24 @@ export async function reconcileDraftedProposal(ctx: AppContext, rival: Proposal)
   logger.info({ rivalId: rival.id, survivorId: survivor.id, targetPath: rival.targetPath }, "fold: enqueued fold_markdown_proposal");
 }
 
-// Gate + publish a corrective (verify-lens) proposal. Unlike the gap at-draft hook,
-// this OWNS publication: a clusterless patrol proposal is not published by the gap
-// cluster reconciler, so open-new and defer both publish it as its own PR; only a
-// touchable overlap folds. Best-effort — the caller (completeJob) guards throws.
-export async function reconcileCorrectiveProposal(ctx: AppContext, proposal: Proposal): Promise<void> {
+// Gate + publish a clusterless proposal (verify corrective, flow seed, …). Unlike
+// the gap at-draft hook, this OWNS publication: a clusterless proposal is not
+// published by the gap cluster reconciler, so open-new and defer both publish it as
+// its own PR; only a touchable overlap on the same path folds. `lens` is cosmetic
+// for the gate (only `targets` drive decideReconciliation) but is threaded for the
+// intent audit trail. Best-effort — the caller (completeJob) guards throws.
+async function reconcileClusterlessProposal(
+  ctx: AppContext,
+  proposal: Proposal,
+  lens: MaintenanceLens
+): Promise<void> {
   if (proposal.status !== "draft" || !proposal.targetPath) {
     return;
   }
   const flowId = await proposalFlowId(ctx, proposal);
   const candidates = await sameFlowOpenProposals(ctx, flowId, proposal.id);
   const intent: ChangeIntent = {
-    lens: "verify",
+    lens,
     flowId,
     targets: [proposal.targetPath],
     evidence: proposal.evidence.map((citation) => citation.path),
@@ -96,7 +102,7 @@ export async function reconcileCorrectiveProposal(ctx: AppContext, proposal: Pro
         rivalEvidence: proposal.evidence,
         expectedOutput: "folded_markdown"
       });
-      logger.info({ proposalId: proposal.id, survivorId: survivor.id, targetPath: proposal.targetPath }, "verify fold: enqueued fold of corrective proposal");
+      logger.info({ proposalId: proposal.id, survivorId: survivor.id, targetPath: proposal.targetPath, lens }, "clusterless fold: enqueued fold of proposal");
       return;
     }
     // Survivor vanished between gate and fetch — fall through to self-publish.
@@ -104,7 +110,17 @@ export async function reconcileCorrectiveProposal(ctx: AppContext, proposal: Pro
 
   // open-new, defer, or a fold whose survivor disappeared: publish as its own PR.
   await ctx.stores.gapClusters.enqueuePublicationAction(proposal.id, "publish");
-  logger.info({ proposalId: proposal.id, decision: decision.kind, targetPath: proposal.targetPath }, "verify corrective: enqueued to publish");
+  logger.info({ proposalId: proposal.id, decision: decision.kind, targetPath: proposal.targetPath, lens }, "clusterless proposal: enqueued to publish");
+}
+
+// The verify lens's corrective proposal — a repair of an existing doc.
+export async function reconcileCorrectiveProposal(ctx: AppContext, proposal: Proposal): Promise<void> {
+  return reconcileClusterlessProposal(ctx, proposal, "verify");
+}
+
+// A flow-seed proposal — a freshly authored doc from the seeding path.
+export async function reconcileSeedProposal(ctx: AppContext, proposal: Proposal): Promise<void> {
+  return reconcileClusterlessProposal(ctx, proposal, "gap");
 }
 
 // Gate + publish a dedupe proposal — the multi-file analogue of

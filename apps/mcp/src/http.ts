@@ -18,14 +18,14 @@ import {
 } from "@magpie/auth";
 import type { JSONWebKeySet } from "jose";
 import { z } from "zod/v4";
-import { askQuestion, getJson, listFlows, submitFeedback, type KbClientOptions } from "./kb-client.js";
+import { askQuestion, getJson, listFlows, seedFlow, submitFeedback, type KbClientOptions } from "./kb-client.js";
 import { createMcpLogger } from "./logger.js";
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
 const port = parseInt(process.env.MCP_HTTP_PORT ?? "4001", 10);
 
-const SCOPES_SUPPORTED = ["read:knowledge", "ask:knowledge", "feedback:questions"] as const;
+const SCOPES_SUPPORTED = ["read:knowledge", "ask:knowledge", "feedback:questions", "manage:jobs"] as const;
 
 // Per-tool scope requirements enforced at the MCP boundary, mirroring the API
 // route scopes. tools/list and other methods need only a valid token.
@@ -33,7 +33,8 @@ const TOOL_SCOPES: Record<string, string> = {
   "kb.search": "read:knowledge",
   "kb.flows": "read:knowledge",
   "kb.ask": "ask:knowledge",
-  "kb.feedback": "feedback:questions"
+  "kb.feedback": "feedback:questions",
+  "kb.seed": "manage:jobs"
 };
 
 // Resolves the auth settings the HTTP MCP server validates inbound tokens with.
@@ -194,6 +195,37 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     },
     async (args) => {
       const result = await submitFeedback(args, kbOptions);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.registerTool(
+    "kb.seed",
+    {
+      description:
+        "Seed a flow with initial content: submit a list of documents to author, each a title plus the " +
+        "points it should cover. Each is drafted straight into a proposal → pull request, skipping the " +
+        "gap-clustering pipeline. Use for a brand-new flow or to add a new area of knowledge to an " +
+        "existing one. Discover flow ids with kb.flows.",
+      inputSchema: z.object({
+        flow: z.string().describe("The flow id to seed (from kb.flows)."),
+        items: z
+          .array(
+            z.object({
+              title: z.string().optional().describe("Optional document title."),
+              targetPath: z.string().optional().describe("Optional destination-relative path."),
+              coverage: z.array(z.string()).describe("The points this document must cover. At least one."),
+              questions: z
+                .array(z.string())
+                .optional()
+                .describe("Optional motivating questions/prompts for context.")
+            })
+          )
+          .describe("One entry per document to author.")
+      })
+    },
+    async (args) => {
+      const result = await seedFlow(args, kbOptions);
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
     }
   );

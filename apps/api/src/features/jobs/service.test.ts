@@ -658,3 +658,27 @@ test("completeJob on a correct_document job creates a corrective proposal and en
   const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
   assert.ok(actions.some((a) => a.proposalId === proposal?.id && a.kind === "publish"));
 });
+
+test("completeJob on a draft_seed_document job creates a seed proposal and enqueues its publication", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_seed_document", {
+    flowId: "billing",
+    coverage: ["overview"],
+    sourceContext: [],
+    provider: "codex"
+  });
+  const result = await completeJob(ctx, job.id, {
+    title: "Billing",
+    targetPath: "billing.md",
+    markdown: "# Billing",
+    rationale: "seed"
+  });
+  assert.equal(result.ok, true);
+
+  const proposal = (await ctx.stores.proposals.list(50)).find((p) => p.flowId === "billing");
+  assert.ok(proposal);
+  assert.equal(proposal?.gapClusterId, undefined);
+
+  const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
+  assert.ok(actions.some((a) => a.proposalId === proposal?.id && a.kind === "publish"));
+});

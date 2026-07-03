@@ -385,3 +385,16 @@ export async function submitFeedback(
   );
   return { questionId, kind, question: response.question };
 }
+
+// Seeds a flow with initial content in one shot: `items` (each a title + the points
+// it should cover) are drafted straight into proposals → PRs, bypassing the gap
+// pipeline. The item shape is validated server-side by the seed endpoint; we pass it
+// through so the tool stays a thin surface over POST /flows/:id/seed.
+export async function seedFlow(
+  args: Record<string, unknown> | undefined,
+  options?: KbClientOptions
+): Promise<unknown> {
+  const flow = stringArgument(args, "flow");
+  const items = args?.items;
+  return asObject(await postJson(`/flows/${encodeURIComponent(flow)}/seed`, { items }, options));
+}
