@@ -135,6 +135,9 @@ steps — each is grounded in the real files and lists the gotchas:
   (`RUN_PG_INTEGRATION` + the throwaway-container harness), and the queue e2e/eval scripts.
 - **magpie-local-troubleshooting** — diagnosing a broken local run (Docker, auth, config
   parsing, watcher `ECONNREFUSED`, CLI spawn errors).
+- **propose-a-skill** — end-of-work retrospective: decide whether what you just did is worth
+  capturing as a reusable skill, and draft one for approval. A Stop hook nudges you toward it
+  once per session after substantial change.
 
 ### Planning notes
 
