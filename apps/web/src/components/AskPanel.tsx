@@ -1,7 +1,24 @@
 import { FormEvent } from "react";
+import styled from "@emotion/styled";
 import { AnswerResult, AnswerTrace, AskResponse, Feedback, QuestionLog } from "../lib/types";
 import { AnswerProse } from "./AnswerProse";
 import { CitationRow, FlowTag } from "./common";
+import {
+  Actions,
+  Badge,
+  Button,
+  Chip,
+  EmptyState,
+  Field,
+  ListRow,
+  Row,
+  ScrollList,
+  Select,
+  Stack,
+  Textarea,
+  statusTone,
+  Input
+} from "./ui";
 
 // Human labels for the trace's routing modes and verification outcomes. The raw
 // values are wire-contract enums; the console spells out what each means.
@@ -18,6 +35,46 @@ const SKIP_REASON_LABELS: Record<NonNullable<AnswerTrace["verification"]["skipRe
   flow_selection_required: "no answer was drafted",
   out_of_scope: "question judged off-topic"
 };
+
+const QuestionForm = styled.form(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) auto",
+  alignItems: "end",
+  gap: theme.space.lg
+}));
+
+const Block = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.lg,
+  borderTop: `1px solid ${theme.color.border}`,
+  paddingTop: theme.space.xl
+}));
+
+const IdCode = styled.code(({ theme }) => ({
+  color: theme.color.textMuted,
+  fontFamily: theme.font.mono,
+  fontSize: theme.font.size.xs
+}));
+
+const TraceDetails = styled.details(({ theme }) => ({
+  fontSize: theme.font.size.sm,
+  color: theme.color.textMuted,
+  "& summary": { cursor: "pointer", userSelect: "none" },
+  "& ul": { margin: `${theme.space.sm} 0 0`, paddingLeft: "18px" },
+  "& li": { margin: "2px 0" }
+}));
+
+const EmptySearch = styled.li(({ theme }) => ({ color: theme.color.status.running.fg }));
+
+const GapList = styled.ul(({ theme }) => ({
+  margin: 0,
+  paddingLeft: "18px",
+  color: theme.color.status.running.fg,
+  fontSize: theme.font.size.md,
+  "& li": { margin: "2px 0" }
+}));
+
+const OutOfScopeNote = styled.p(({ theme }) => ({ color: theme.color.status.running.fg }));
 
 function verificationLabel(verification: AnswerTrace["verification"]): string {
   switch (verification.status) {
@@ -38,9 +95,9 @@ function verificationLabel(verification: AnswerTrace["verification"]): string {
 function AnswerTraceBlock({ trace }: { trace: AnswerTrace }) {
   const emptySearches = trace.searches.filter((search) => search.resultCount === 0).length;
   return (
-    <details className="answerTrace">
+    <TraceDetails>
       <summary>How this was answered</summary>
-      <ul className="answerTraceList">
+      <ul>
         <li>
           Routing: {ROUTING_LABELS[trace.routing.mode]}
           {trace.routing.mode === "routed" && trace.routing.confidence ? ` (${trace.routing.confidence} confidence)` : ""}
@@ -53,11 +110,17 @@ function AnswerTraceBlock({ trace }: { trace: AnswerTrace }) {
           <li>
             Follow-up searches ({trace.searches.length}, {emptySearches} empty):
             <ul>
-              {trace.searches.map((search, index) => (
-                <li className={search.resultCount === 0 ? "answerTraceEmptySearch" : undefined} key={`search-${index}`}>
-                  “{search.query}” → {search.resultCount === 0 ? "nothing found (grounds a followup gap)" : `${search.resultCount} section(s)`}
-                </li>
-              ))}
+              {trace.searches.map((search, index) =>
+                search.resultCount === 0 ? (
+                  <EmptySearch key={`search-${index}`}>
+                    “{search.query}” → nothing found (grounds a followup gap)
+                  </EmptySearch>
+                ) : (
+                  <li key={`search-${index}`}>
+                    “{search.query}” → {search.resultCount} section(s)
+                  </li>
+                )
+              )}
             </ul>
           </li>
         ) : (
@@ -78,7 +141,7 @@ function AnswerTraceBlock({ trace }: { trace: AnswerTrace }) {
           </li>
         ) : null}
       </ul>
-    </details>
+    </TraceDetails>
   );
 }
 
@@ -96,22 +159,16 @@ function FlowSelectionPrompt({
   onReAsk: (question: string, flow: string) => Promise<void>;
 }) {
   return (
-    <div className="flowSelectPrompt">
+    <Stack gap="md">
       <p>Pick a flow to answer this question:</p>
-      <div className="rowActions">
+      <Actions>
         {selection.availableFlows.map((flow) => (
-          <button
-            className="chip"
-            disabled={disabled}
-            key={flow.id}
-            onClick={() => void onReAsk(question, flow.id)}
-            type="button"
-          >
+          <Chip disabled={disabled} key={flow.id} onClick={() => void onReAsk(question, flow.id)}>
             {flow.name}
-          </button>
+          </Chip>
         ))}
-      </div>
-    </div>
+      </Actions>
+    </Stack>
   );
 }
 
@@ -171,47 +228,46 @@ export function AskPanel({
 
   return (
     <>
-      <form className="questionForm" onSubmit={onAsk}>
-        <label className="field">
-          <span>Question</span>
-          <textarea
+      <QuestionForm onSubmit={onAsk}>
+        <Field label="Question">
+          <Textarea
             onChange={(event) => setQuestion(event.target.value)}
             placeholder="What are urgent cat warning signs?"
             rows={4}
             value={question}
           />
-        </label>
+        </Field>
         {flows.length > 0 ? (
-          <label className="field">
-            <span>Flow</span>
-            <select onChange={(event) => setAskFlow(event.target.value)} value={askFlow}>
+          <Field label="Flow">
+            <Select onChange={(event) => setAskFlow(event.target.value)} value={askFlow}>
               <option value="auto">Auto (let Magpie decide)</option>
               {flows.map((flow) => (
                 <option key={flow.id} value={flow.id}>
                   {flow.name}
                 </option>
               ))}
-            </select>
-          </label>
+            </Select>
+          </Field>
         ) : null}
-        <button className="button" disabled={loading || !question.trim()} type="submit">
+        <Button variant="primary" disabled={loading || !question.trim()} type="submit">
           Ask
-        </button>
-      </form>
+        </Button>
+      </QuestionForm>
       {answer ? (
-        <div className="answerBlock">
-          <div className="resultHeader">
-            <div className="rowMeta">
-              <span
-                className={`status ${answerResult?.confidence ?? (jobActive ? "pending" : "unknown")}`}
+        <Block>
+          <Row justify="between" gap="lg">
+            <Row gap="md">
+              <Badge
+                tone={statusTone(answerResult?.confidence ?? (jobActive ? "pending" : "unknown"))}
+                dot
                 title={answerResult ? `Answer confidence: ${answerResult.confidence}` : "Answer is queued"}
               >
                 {answerResult?.confidence ?? (jobActive ? "queued" : answer.job.state)}
-              </span>
+              </Badge>
               <FlowTag flowId={answerFlowId} flowLabels={flowLabels} />
-            </div>
-            <code>{answer.questionId}</code>
-          </div>
+            </Row>
+            <IdCode>{answer.questionId}</IdCode>
+          </Row>
           {answerResult?.answer ? (
             <AnswerProse text={answerResult.answer} />
           ) : (
@@ -226,54 +282,50 @@ export function AskPanel({
             />
           ) : null}
           {answerResult?.outOfScope ? (
-            <p className="outOfScopeNote" title="This question was judged off-topic for the selected flow, so no knowledge gap was raised.">
+            <OutOfScopeNote title="This question was judged off-topic for the selected flow, so no knowledge gap was raised.">
               Off-topic for this flow — no knowledge gap raised.
-            </p>
+            </OutOfScopeNote>
           ) : null}
           {answerResult?.citations.length ? (
-            <div className="citationStack">
+            <Stack gap="md">
               {answerResult.citations.map((citation) => (
                 <CitationRow citation={citation} key={citation.sectionId} />
               ))}
-            </div>
+            </Stack>
           ) : null}
           {answerResult?.trace ? <AnswerTraceBlock trace={answerResult.trace} /> : null}
-        </div>
+        </Block>
       ) : null}
 
-      <div className="answeredBlock">
-        <div className="resultHeader">
+      <Block>
+        <Row justify="between" gap="lg">
           <h3>Answered questions</h3>
-          <form className="inlineForm" onSubmit={(event) => event.preventDefault()}>
-            <input
+          <form onSubmit={(event) => event.preventDefault()} style={{ minWidth: "min(280px, 50vw)" }}>
+            <Input
               onChange={(event) => setAnsweredSearch(event.target.value)}
               placeholder="Search answered questions..."
               type="search"
               value={answeredSearch}
             />
           </form>
-        </div>
-        <div className="list scrollList">
+        </Row>
+        <ScrollList>
           {filteredQuestions.map((item) => {
             const citations = item.answer?.citations ?? [];
             const isExpanded = expandedQuestionIds.includes(item.id);
 
             return (
-              <article className="row" key={item.id}>
-                <div className="rowTop">
-                  <h3>{item.question}</h3>
-                  <div className="rowMeta">
+              <ListRow key={item.id}>
+                <Row justify="between" gap="lg">
+                  <h3 style={{ flex: 1, minWidth: 0 }}>{item.question}</h3>
+                  <Row gap="md">
                     <FlowTag flowId={item.flowId} flowLabels={flowLabels} />
-                    <span className={`status ${item.confidence}`} title={`Answer confidence: ${item.confidence}`}>
+                    <Badge tone={statusTone(item.confidence)} dot title={`Answer confidence: ${item.confidence}`}>
                       {item.confidence}
-                    </span>
-                  </div>
-                </div>
-                {item.answer?.answer ? (
-                  <AnswerProse text={item.answer.answer} />
-                ) : (
-                  <p>Waiting for an answer.</p>
-                )}
+                    </Badge>
+                  </Row>
+                </Row>
+                {item.answer?.answer ? <AnswerProse text={item.answer.answer} /> : <p>Waiting for an answer.</p>}
                 {item.answer?.flowSelectionRequired ? (
                   <FlowSelectionPrompt
                     disabled={loading}
@@ -283,67 +335,58 @@ export function AskPanel({
                   />
                 ) : null}
                 {item.answer?.outOfScope ? (
-                  <p className="outOfScopeNote" title="This question was judged off-topic for the selected flow, so no knowledge gap was raised.">
+                  <OutOfScopeNote title="This question was judged off-topic for the selected flow, so no knowledge gap was raised.">
                     Off-topic for this flow — no knowledge gap raised.
-                  </p>
+                  </OutOfScopeNote>
                 ) : null}
                 {item.answer?.gaps && item.answer.gaps.length > 0 ? (
-                  <ul className="gapList" title="Distinct knowledge gaps detected for this question">
+                  <GapList title="Distinct knowledge gaps detected for this question">
                     {item.answer.gaps.map((gap, index) => (
                       <li key={`${item.id}-gap-${index}`}>{gap.summary}</li>
                     ))}
-                  </ul>
+                  </GapList>
                 ) : null}
-                <div className="rowActions">
+                <Actions>
                   <span>{new Date(item.askedAt).toLocaleString()}</span>
                   {citations.length > 0 ? (
-                    <button className="chip" onClick={() => toggleCitations(item.id)} title="Show or hide the answer source sections" type="button">
+                    <Chip onClick={() => toggleCitations(item.id)} title="Show or hide the answer source sections">
                       {isExpanded ? "Hide" : "Show"} {citations.length} citations
-                    </button>
+                    </Chip>
                   ) : (
-                    <span className="pill" title="No source sections were cited">
+                    <Badge tone="neutral" title="No source sections were cited">
                       0 citations
-                    </span>
+                    </Badge>
                   )}
-                  <button
-                    className={item.feedback === "helpful" ? "chip selected" : "chip"}
-                    onClick={() => void onFeedback(item.id, "helpful")}
-                    type="button"
-                  >
+                  <Chip selected={item.feedback === "helpful"} onClick={() => void onFeedback(item.id, "helpful")}>
                     Helpful
-                  </button>
-                  <button
-                    className={item.feedback === "unhelpful" ? "chip selected" : "chip"}
-                    onClick={() => void onFeedback(item.id, "unhelpful")}
-                    type="button"
-                  >
+                  </Chip>
+                  <Chip selected={item.feedback === "unhelpful"} onClick={() => void onFeedback(item.id, "unhelpful")}>
                     Unhelpful
-                  </button>
-                  <button
-                    className={item.manualGap ? "chip selected" : "chip"}
+                  </Chip>
+                  <Chip
+                    selected={item.manualGap}
                     onClick={() => void onToggleGap(item.id, !item.manualGap)}
                     title="Flag this answer as a knowledge gap the system missed"
-                    type="button"
                   >
                     Knowledge gap
-                  </button>
-                </div>
+                  </Chip>
+                </Actions>
                 {isExpanded && citations.length > 0 ? (
-                  <div className="citationStack">
+                  <Stack gap="md">
                     {citations.map((citation) => (
                       <CitationRow citation={citation} key={citation.sectionId} />
                     ))}
-                  </div>
+                  </Stack>
                 ) : null}
                 {item.answer?.trace ? <AnswerTraceBlock trace={item.answer.trace} /> : null}
-              </article>
+              </ListRow>
             );
           })}
           {filteredQuestions.length === 0 ? (
-            <p className="empty">{query ? "No matching questions." : "No questions logged yet."}</p>
+            <EmptyState>{query ? "No matching questions." : "No questions logged yet."}</EmptyState>
           ) : null}
-        </div>
-      </div>
+        </ScrollList>
+      </Block>
     </>
   );
 }

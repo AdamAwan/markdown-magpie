@@ -52,3 +52,37 @@ export const Row = styled.div<RowProps>(
     minWidth: 0
   })
 );
+
+/** Scrollable grid list — the standard capped-height feed used across panels. */
+export const ScrollList = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.md,
+  maxHeight: "560px",
+  overflow: "auto"
+}));
+
+/** A single record in a feed: divider-topped grid block. */
+export const ListRow = styled.article(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.md,
+  borderTop: `1px solid ${theme.color.border}`,
+  padding: `${theme.space.lg} 0`,
+  minWidth: 0
+}));
+
+/** Wrapping action/metadata cluster with muted caption styling. */
+export const Actions = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: theme.space.md,
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.sm
+}));
+
+/** Empty-state line shown when a feed has no rows. */
+export const EmptyState = styled.p(({ theme }) => ({
+  borderTop: `1px solid ${theme.color.border}`,
+  paddingTop: theme.space.lg,
+  color: theme.color.textMuted
+}));
