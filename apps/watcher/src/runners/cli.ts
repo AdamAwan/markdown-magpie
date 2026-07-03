@@ -15,6 +15,9 @@ export interface CliRunnerOptions {
   command: string;
   args: string[];
   promptMode: PromptMode;
+  // Optional model name. When set, `--model <model>` is appended to the CLI args
+  // (the flag `claude` and `codex` share) so the agent runs on a specific model.
+  model?: string;
   api?: WatcherApi;
   timeoutMs?: number;
   // How long to wait after SIGTERM before SIGKILL when aborting.
@@ -31,6 +34,7 @@ export class CliRunner {
   private readonly command: string;
   private readonly args: string[];
   private readonly promptMode: PromptMode;
+  private readonly model?: string;
   private readonly api?: WatcherApi;
   private readonly timeoutMs: number;
   private readonly cancelGraceMs: number;
@@ -41,6 +45,7 @@ export class CliRunner {
     this.command = options.command;
     this.args = options.args;
     this.promptMode = options.promptMode;
+    this.model = options.model;
     this.api = options.api;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.cancelGraceMs = options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
@@ -81,7 +86,8 @@ export class CliRunner {
         return;
       }
 
-      const args = this.promptMode === "arg" ? [...this.args, prompt] : this.args;
+      const baseArgs = this.model ? [...this.args, "--model", this.model] : this.args;
+      const args = this.promptMode === "arg" ? [...baseArgs, prompt] : baseArgs;
       const child = spawn(this.command, args, { stdio: ["pipe", "pipe", "pipe"] });
 
       const stdoutChunks: Buffer[] = [];

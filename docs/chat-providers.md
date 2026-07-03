@@ -51,6 +51,19 @@ embedding endpoint.
 CODEX_CLI_PATH=codex npm run dev:watcher   # or CLAUDE_CLI_PATH=claude
 ```
 
+Each CLI provider also accepts:
+
+- `CODEX_CLI_ARGS` / `CLAUDE_CLI_ARGS` — base args (default `exec` / `-p`).
+- `CODEX_CLI_MODEL` / `CLAUDE_CLI_MODEL` — when set, `--model <value>` is appended
+  to the args (the flag both CLIs share); leave unset to use the CLI's own default.
+- `CODEX_CLI_PROMPT_MODE` / `CLAUDE_CLI_PROMPT_MODE` — `arg` (default) passes the
+  prompt as a CLI argument; `stdin` pipes it in. **Use `stdin` on Windows**, where
+  retrieval-augmented prompts exceed the ~32 KB command-line limit and otherwise
+  fail with `spawn ENAMETOOLONG`.
+
+On Windows, set `*_CLI_PATH` to a directly-spawnable executable (e.g. `claude.exe`);
+a `.cmd`/`.ps1` PATH shim cannot be spawned without a shell.
+
 ## JSON responses
 
 The `answer_question` flow's model calls (routing, the assess/answer step, and the

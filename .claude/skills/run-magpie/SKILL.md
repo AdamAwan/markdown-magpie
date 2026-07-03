@@ -103,6 +103,11 @@ Knowledge / Proposals / Crunch.
 
 ## Gotchas
 
+> Hitting a specific failure (Docker won't start, blank web UI, watcher `ECONNREFUSED`,
+> CLI `spawn ENAMETOOLONG`, silent knowledge-config parsing, Windows/PowerShell syntax)?
+> See the **`magpie-local-troubleshooting`** skill.
+
+
 - **`POST /api/ask` returns 202 and the job never completes** → no watcher running, or
   it advertises no `provider` capability. Start `dev:watcher` and check its startup log
   shows `Capability provider — ready`.
