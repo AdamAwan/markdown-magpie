@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import Script from "next/script";
 import "./styles.css";
+import { EmotionRegistry } from "../theme/EmotionRegistry";
 import { ConsoleProvider } from "../components/ConsoleProvider";
 import { AppShell } from "../components/AppShell";
 import { AuthProvider } from "../components/AuthProvider";
@@ -40,11 +41,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             __html: `window.__MAGPIE_CONFIG__=${JSON.stringify(runtimeConfig)};`
           }}
         />
-        <AuthProvider config={runtimeConfig.auth}>
-          <ConsoleProvider>
-            <AppShell>{children}</AppShell>
-          </ConsoleProvider>
-        </AuthProvider>
+        <EmotionRegistry>
+          <AuthProvider config={runtimeConfig.auth}>
+            <ConsoleProvider>
+              <AppShell>{children}</AppShell>
+            </ConsoleProvider>
+          </AuthProvider>
+        </EmotionRegistry>
       </body>
     </html>
   );
