@@ -125,6 +125,31 @@ export function proposalRoutes(ctx: AppContext): Hono {
     }
   );
 
+  app.post("/:id/merge", requireScopes("manage:knowledge"), async (c) => {
+    const id = c.req.param("id");
+    const existing = await proposalsService.get(ctx, id);
+    if (!existing || !can(ctx, c, "read", existing.flowId)) {
+      throw new HttpError(404, "proposal_not_found");
+    }
+    assertCan(ctx, c, "manage", existing.flowId);
+
+    const outcome = await proposalsService.mergeLocalProposal(ctx, existing);
+    if (!outcome.ok) {
+      // All three failures are client/state errors (bad status, wrong destination
+      // type, or an unresolvable merge) — 409 Conflict with the specific code.
+      throw new HttpError(409, outcome.code, outcome.message);
+    }
+
+    // Merge is recorded synchronously; the slow cascade (resolve gaps + re-index,
+    // which fetches/fast-forwards the checkout) runs off the request thread,
+    // mirroring the /:id/status merged path.
+    const proposal = outcome.proposal;
+    ctx.background.run(`merge-cascade ${proposal.id}`, async () => {
+      await proposalsService.runMergeCascade(ctx, proposal);
+    });
+    return c.json({ proposal, cascadeScheduled: true });
+  });
+
   app.post("/:id/publish", requireScopes("manage:knowledge"), async (c) => {
     const proposal = await proposalsService.get(ctx, c.req.param("id"));
     if (!proposal || !can(ctx, c, "read", proposal.flowId)) {

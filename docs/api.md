@@ -352,6 +352,22 @@ Sets the proposal status directly. Valid values: `draft`, `ready`, `branch-pushe
 - `404 proposal_not_found`.
 - `200` — `{ "proposal": Proposal }`.
 
+### `POST /api/proposals/:id/merge`
+
+**Demo/local only.** Merges a `branch-pushed` proposal whose destination is a local-git
+(`file://`) repository: runs `git merge` of the pushed `magpie/proposal-*` branch into the
+destination's default branch (directly in that repository's working tree), marks the proposal
+`merged`, and schedules the re-index cascade in the background. Hosted (GitHub) destinations do
+not use this route — their PR merge is detected by the `refresh_flow_snapshot` poller.
+
+- Request body: none.
+- `404 proposal_not_found`.
+- `409 proposal_not_mergeable` — not `branch-pushed`, or no published branch recorded.
+- `409 not_local_git_destination` — the destination is not a `file://` repository.
+- `409 merge_conflict` — the merge could not be applied; the proposal stays `branch-pushed` and
+  the git message is returned.
+- `200` — `{ "proposal": Proposal, "cascadeScheduled": true }`.
+
 ### `POST /api/proposals/:id/publish`
 
 Publication is **enqueue-only**: the route validates the repository pre-flight (the same checks the
