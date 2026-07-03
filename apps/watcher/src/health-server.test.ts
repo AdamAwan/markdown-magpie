@@ -3,7 +3,11 @@ import { describe, it } from "node:test";
 import { createHealthServer, loadHealthConfig, TickTracker, type HealthServerConfig } from "./health-server.js";
 
 function testConfig(overrides: Partial<HealthServerConfig> = {}): HealthServerConfig {
-  return { port: 0, host: "127.0.0.1", staleAfterMs: 1000, ...overrides };
+  // Bind every interface ("0.0.0.0") rather than the literal loopback address:
+  // binding a host string routes through dns.lookup(), which hangs forever in a
+  // sandbox whose loopback getaddrinfo stalls. All-interfaces binds skip the
+  // lookup, and the loopback client below is still reachable on the bound port.
+  return { port: 0, host: "0.0.0.0", staleAfterMs: 1000, ...overrides };
 }
 
 async function getJson(baseUrl: string, path: string): Promise<{ status: number; body: Record<string, unknown> }> {

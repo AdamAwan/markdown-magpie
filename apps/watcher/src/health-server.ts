@@ -30,6 +30,15 @@ const DEFAULT_PORT = 4002;
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_STALE_AFTER_MS = 120_000;
 
+// "0.0.0.0" / "::" (and an unset host) all mean "bind every interface". node:http
+// binds every interface natively when no host is passed — crucially, without the
+// dns.lookup() that any host string forces. That lookup hangs forever in sandboxes
+// whose loopback getaddrinfo stalls (the same failure mode that wedged the mcp test
+// suite), so recognising the all-interfaces hosts lets us skip it by construction.
+function isAllInterfaces(host: string): boolean {
+  return host === "" || host === "0.0.0.0" || host === "::";
+}
+
 // Reads and validates the health-server configuration from the environment.
 // Fails fast (throws) on a malformed override rather than silently falling
 // back, so a typo'd env var surfaces at startup instead of as a confusing
@@ -128,10 +137,19 @@ export function createHealthServer(options: HealthServerOptions): HealthServer {
     start(): Promise<void> {
       return new Promise((resolve, reject) => {
         server.once("error", reject);
-        server.listen(config.port, config.host, () => {
+        const onListening = () => {
           server.removeListener("error", reject);
           resolve();
-        });
+        };
+        // Passing a host string routes the bind through node:net's dns.lookup(),
+        // even for a literal IP like "127.0.0.1" — which stalls forever in a
+        // sandbox whose loopback getaddrinfo hangs. An all-interfaces bind needs
+        // no resolution, so omit the host in that case and skip the lookup.
+        if (isAllInterfaces(config.host)) {
+          server.listen(config.port, onListening);
+        } else {
+          server.listen(config.port, config.host, onListening);
+        }
       });
     },
     stop(): Promise<void> {
