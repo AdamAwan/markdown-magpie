@@ -2,7 +2,7 @@ import { AI_PROVIDERS, JOB_TYPES } from "@magpie/jobs";
 import { z } from "zod";
 
 const jobTypeSchema = z.enum(JOB_TYPES);
-const capabilitySchema = z.enum([...AI_PROVIDERS, "github", "maintenance"]);
+const capabilitySchema = z.enum([...AI_PROVIDERS, "github", "local-git", "maintenance"]);
 const jobStateSchema = z.enum(["created", "retry", "active", "completed", "cancelled", "failed", "blocked"]);
 
 export const createJobBodySchema = z.object({ type: jobTypeSchema, input: z.unknown().optional() });
