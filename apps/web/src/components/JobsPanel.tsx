@@ -14,14 +14,25 @@ const PAGE_SIZE = 20;
 // exposes at /jobs/:id/cancel and /jobs/:id/retry.
 const CANCELLABLE: ReadonlySet<JobState> = new Set<JobState>(["created", "retry", "active"]);
 
+// The client-side capability→job-type map for the Workers panel pills. The browser
+// deliberately does not bundle @magpie/jobs (zod + the job catalog), so this mirrors
+// the catalog's AI_JOB_TYPES / capability routing by hand — keep it in sync with
+// packages/jobs/src/catalog.ts. publish_proposal is served by github OR local-git.
 const PROVIDER_JOB_TYPES = [
   "answer_question",
   "summarize_gap",
   "draft_markdown_proposal",
+  "fold_markdown_proposal",
   "detect_contradiction",
   "suggest_consolidation",
   "reconcile_gap_clusters",
-  "sync_source_changes_generate_plan"
+  "sync_source_changes_generate_plan",
+  "verify_document",
+  "correct_document",
+  "dedupe_documents",
+  "split_document",
+  "improve_document",
+  "fold_changeset_proposal"
 ] as const satisfies readonly JobType[];
 
 const CAPABILITY_JOB_TYPES = {
@@ -30,6 +41,7 @@ const CAPABILITY_JOB_TYPES = {
   codex: PROVIDER_JOB_TYPES,
   claude: PROVIDER_JOB_TYPES,
   github: ["refresh_flow_snapshot", "publish_proposal", "crosslink_pull_requests", "comment_pull_request"],
+  "local-git": ["publish_proposal"],
   maintenance: ["process_gaps_to_pull_requests", "source_change_sync", "correctness_patrol", "editorial_patrol"]
 } as const satisfies Record<JobCapability, readonly JobType[]>;
 

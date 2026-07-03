@@ -3,7 +3,7 @@ import { logger } from "../logger.js";
 import type { JobView } from "@magpie/jobs";
 import { foldChangesetProposalOutputSchema, foldMarkdownProposalOutputSchema } from "@magpie/jobs";
 import type { AppContext } from "../context.js";
-import { splitGapSummaries } from "../features/proposals/service.js";
+import { enqueuePublishProposal, splitGapSummaries } from "../features/proposals/service.js";
 import type { ChangeIntent } from "./intent.js";
 import { decideReconciliation, openPullRequestSummaries, sharedTargets } from "./reconcile-gate.js";
 import { proposalFlowId, sameFlowOpenProposals } from "./flow.js";
@@ -228,7 +228,7 @@ export async function reconcileSourceSyncProposal(ctx: AppContext, proposal: Pro
     }
   }
 
-  await ctx.jobs.create("publish_proposal", { proposalId: proposal.id });
+  await enqueuePublishProposal(ctx, proposal);
   logger.info({ proposalId: proposal.id, decision: decision.kind, targets }, "source-sync: enqueued to publish");
 }
 

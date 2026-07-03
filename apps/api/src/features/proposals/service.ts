@@ -249,9 +249,20 @@ export async function requestProposalPublication(
     return resolved;
   }
 
-  const job = await ctx.jobs.create("publish_proposal", { proposalId: proposal.id });
-  logger.info({ jobId: job.id, proposalId: proposal.id }, "enqueued publish_proposal job");
+  const job = await enqueuePublishProposal(ctx, proposal);
   return { ok: true, job };
+}
+
+// The single place the publish destination is decided: a file:// destination
+// routes to the local-git publish queue (push only, no PR — a token-less watcher
+// can serve it), anything else to github. Shared by the manual/scheduled publish
+// path here and the source-sync fold in scheduling/fold.ts, so both route
+// identically. isLocalGitDestination is config-only (no git/network).
+export async function enqueuePublishProposal(ctx: AppContext, proposal: Proposal): Promise<JobView> {
+  const destination = isLocalGitDestination(ctx, proposal) ? "local-git" : "github";
+  const job = await ctx.jobs.create("publish_proposal", { proposalId: proposal.id, destination });
+  logger.info({ jobId: job.id, proposalId: proposal.id, destination }, "enqueued publish_proposal job");
+  return job;
 }
 
 type ExecutionContextRepository = Pick<RepositoryRef, "id" | "localPath" | "remoteUrl" | "defaultBranch" | "git">;

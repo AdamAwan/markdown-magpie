@@ -1,4 +1,4 @@
-import { ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, JobView, KnowledgeStats } from "./types";
+import { ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, JobType, JobView, KnowledgeStats, WatcherView } from "./types";
 
 export function sectionTitle(section: ConsoleSection): string {
   if (section === "knowledge") {
@@ -74,12 +74,16 @@ export function buildAttentionNotices({
   health,
   jobs,
   openSection,
-  stats
+  stats,
+  workers,
+  uncoveredJobTypes
 }: {
   health?: Health;
   jobs: JobView[];
   openSection: (section: ConsoleSection) => void;
   stats: KnowledgeStats;
+  workers: WatcherView[];
+  uncoveredJobTypes: JobType[];
 }): ConsoleNotice[] {
   const notices: ConsoleNotice[] = [];
   const pendingJobs = jobs.filter(isActiveJob);
@@ -121,6 +125,31 @@ export function buildAttentionNotices({
       id: "failed-jobs",
       title: `${failedJobs.length} AI job${failedJobs.length === 1 ? "" : "s"} failed`,
       body: "Open the job list to inspect provider or watcher errors before retrying the workflow.",
+      tone: "danger",
+      actionLabel: "Open Jobs",
+      action: () => openSection("jobs")
+    });
+  }
+
+  // Whether the running watcher fleet can execute every kind of job. With no
+  // watchers, everything is uncovered — say that concisely rather than listing
+  // every type. With some watchers but a capability gap, name exactly the job
+  // types that will otherwise sit queued forever.
+  if (workers.length === 0) {
+    notices.push({
+      id: "no-watchers",
+      title: "No watchers are connected",
+      body: "Background jobs run on watcher processes, and none are connected. Start a watcher to answer questions, draft proposals, and publish.",
+      tone: "warning",
+      actionLabel: "Open Jobs",
+      action: () => openSection("jobs")
+    });
+  } else if (uncoveredJobTypes.length > 0) {
+    const labels = uncoveredJobTypes.map(formatJobType).join(", ");
+    notices.push({
+      id: "uncovered-job-types",
+      title: "No watcher can run these jobs",
+      body: `The connected watchers can't run: ${labels}. Start a watcher with the matching capability, or these jobs will stay queued.`,
       tone: "danger",
       actionLabel: "Open Jobs",
       action: () => openSection("jobs")

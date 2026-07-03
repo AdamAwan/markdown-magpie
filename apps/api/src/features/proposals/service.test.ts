@@ -254,7 +254,8 @@ test("requestProposalPublication enqueues a publish_proposal job after validatio
   assert.equal(job.type, "publish_proposal");
   assert.equal(job.id, outcome.job.id);
   assert.equal(job.state, "created");
-  assert.deepEqual(job.input, { proposalId: proposal.id });
+  // A non-local (github) destination routes to the github publish queue.
+  assert.deepEqual(job.input, { proposalId: proposal.id, destination: "github" });
 
   const parsed = jobDefinition("publish_proposal").inputSchema.safeParse(job.input);
   assert.ok(parsed.success, "enqueued input should match the publish_proposal contract");
@@ -264,6 +265,31 @@ test("requestProposalPublication enqueues a publish_proposal job after validatio
   const after = await ctx.stores.proposals.get(proposal.id);
   assert.equal(after?.status, "ready");
   assert.equal(after?.publication, undefined);
+});
+
+test("enqueuePublishProposal routes a file:// destination to the local-git publish queue", async () => {
+  const ctx = makeTestContext({
+    knowledgeConfig: {
+      sources: [],
+      destinations: [{ id: "demo", name: "Demo", url: "file:///tmp/demo-repo", kind: "git" }],
+      flows: [],
+      repositories: [],
+      roleGrants: {},
+      checkoutRoot: ".magpie/checkouts"
+    }
+  });
+  const proposal = await ctx.stores.proposals.create({
+    title: "Configure X",
+    targetPath: "configure-x.md",
+    markdown: "# X\n",
+    rationale: "r",
+    evidence: [],
+    destinationId: "demo"
+  });
+
+  const job = await proposals.enqueuePublishProposal(ctx, proposal);
+  assert.deepEqual(job.input, { proposalId: proposal.id, destination: "local-git" });
+  assert.equal(job.queueName, "publish_proposal__local_git");
 });
 
 test("requestProposalPublication fails fast without enqueuing when no git repository matches", async () => {

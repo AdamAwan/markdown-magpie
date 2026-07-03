@@ -22,6 +22,7 @@ import {
   Health,
   IndexRepositoryResponse,
   JobsResponse,
+  JobType,
   JobView,
   KnowledgeDocument,
   KnowledgeDocumentsResponse,
@@ -79,6 +80,7 @@ function useConsoleController() {
   const [jobs, setJobs] = useState<JobView[]>([]);
   const [jobSchedules, setJobSchedules] = useState<ScheduleView[]>([]);
   const [workers, setWorkers] = useState<WatcherView[]>([]);
+  const [uncoveredJobTypes, setUncoveredJobTypes] = useState<JobType[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string | undefined>();
   const [selectedJob, setSelectedJob] = useState<JobView | undefined>();
   const [proposals, setProposals] = useState<Proposal[]>([]);
@@ -127,8 +129,8 @@ function useConsoleController() {
     [jobs]
   );
   const attentionNotices = useMemo(
-    () => buildAttentionNotices({ health, jobs, openSection, stats }),
-    [health, jobs, openSection, stats]
+    () => buildAttentionNotices({ health, jobs, openSection, stats, workers, uncoveredJobTypes }),
+    [health, jobs, openSection, stats, workers, uncoveredJobTypes]
   );
   const selectedProposal = proposals.find((proposal) => proposal.id === selectedProposalId) ?? proposals[0];
 
@@ -331,6 +333,7 @@ function useConsoleController() {
       applyJobs(jobsResult.jobs, jobsRef.current.length > 0);
       setJobSchedules(schedulesResult.schedules);
       setWorkers(workersResult.workers);
+      setUncoveredJobTypes(workersResult.uncoveredJobTypes);
       setProposals(proposalsResult.proposals);
       setScheduledTasks(scheduledTasksResult.tasks);
       setMaintenanceRuns(maintenanceRunsResult.runs);

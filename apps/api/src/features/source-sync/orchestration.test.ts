@@ -174,7 +174,7 @@ test("completing the plan job creates a source-sync proposal and enqueues propos
 
     const publishProposal = (await ctx.jobs.list({})).jobs.find((job) => job.type === "publish_proposal");
     assert.ok(publishProposal, "proposal publication enqueued");
-    assert.deepEqual(publishProposal.input, { proposalId: proposal.id });
+    assert.deepEqual(publishProposal.input, { proposalId: proposal.id, destination: "github" });
     assert.equal((await ctx.jobs.list({})).jobs.some((job) => job.type === "publish_source_sync" as never), false);
   } finally {
     await cleanup();
@@ -263,7 +263,7 @@ test("a source-sync change that overlaps an approved PR self-publishes as a prop
     assert.ok(proposal, "source-sync proposal created");
     const publish = (await ctx.jobs.list({})).jobs.find((job) => job.type === "publish_proposal");
     assert.ok(publish, "approved overlap self-publishes as proposal");
-    assert.deepEqual(publish.input, { proposalId: proposal.id });
+    assert.deepEqual(publish.input, { proposalId: proposal.id, destination: "github" });
   } finally {
     await cleanup();
   }

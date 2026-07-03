@@ -128,9 +128,11 @@ POST /api/proposals/:id/publish
 Publication is enqueue-only. The API validates the repository pre-flight and enqueues a
 `publish_proposal` job, returning `202` with the queued job. The watcher publication runner fetches
 `GET /api/proposals/:id/execution-context` (the proposal plus a credential-free repository config),
-commits the Markdown to a new `magpie/proposal-*` branch, pushes it, and opens a pull request, then
-reports the result back via job completion — which records the branch, commit SHA, and PR URL on the
-proposal. Invalid publishes fail fast with the same `404`/`409` codes before any job is created.
+commits the Markdown to a new `magpie/proposal-*` branch and pushes it. For a GitHub destination it
+then opens a pull request; for a local-git (`file://`) destination it stops at the pushed branch (no
+PR to open) and the console's Merge action completes the publish. It reports the result back via job
+completion — which records the branch, commit SHA, and (for GitHub) PR URL on the proposal. Invalid
+publishes fail fast with the same `404`/`409` codes before any job is created.
 
 ## Watcher Model
 
@@ -157,8 +159,15 @@ running. Capability → required env:
 | `azure-openai` | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_CHAT_DEPLOYMENT` |
 | `codex` | `CODEX_CLI_PATH` (defaults to `codex` on `PATH`) |
 | `claude` | `CLAUDE_CLI_PATH` (defaults to `claude` on `PATH`) |
+| `local-git` | `MAGPIE_GIT_AUTHOR_NAME`, `MAGPIE_GIT_AUTHOR_EMAIL` (git on `PATH`; **no** token) |
 | `github` | `GITHUB_TOKEN`, `MAGPIE_GIT_AUTHOR_NAME`, `MAGPIE_GIT_AUTHOR_EMAIL` |
 | `maintenance` | (none) |
+
+`publish_proposal` fans out over `{github, local-git}` by destination: a `file://`
+destination routes to `publish_proposal__local_git` (branch push only — a token-less
+watcher can serve it, and the console's Merge action takes over from there), anything
+else to `publish_proposal__github` (push **and** open a PR). A `github`-credentialed
+watcher also satisfies `local-git` (it has git + author), so it publishes to both.
 
 ## AI Providers
 

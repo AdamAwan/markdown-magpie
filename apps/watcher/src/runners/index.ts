@@ -89,8 +89,15 @@ export function createConfiguredRunners(
     );
   }
 
-  if (ready("github")) {
+  // The publication runner serves both github and local-git publish work. A
+  // local-git-only watcher advertises neither github nor its crosslink/comment
+  // queues, so it only ever claims publish_proposal__local_git — the runner's
+  // github-only job types stay dormant. Registered once when either is ready.
+  if (ready("github") || ready("local-git")) {
     runners.push(new PublicationRunner(api, createGitPublicationDeps()));
+  }
+
+  if (ready("github")) {
     // refresh_flow_snapshot is a github-capability job: it polls open PRs with the
     // watcher's GitHub credentials and reports state back for the API to apply.
     runners.push(new RefreshFlowSnapshotRunner(api));

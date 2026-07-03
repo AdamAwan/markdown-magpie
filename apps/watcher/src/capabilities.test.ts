@@ -81,4 +81,35 @@ describe("deriveCapabilities", () => {
 
     assert.ok(!deriveCapabilities(env, { gitAvailable: () => false }).includes("github"));
   });
+
+  it("advertises local-git with a git author identity and git, but no token", () => {
+    const runtime = { gitAvailable: () => true };
+    const env = { MAGPIE_GIT_AUTHOR_NAME: "Magpie", MAGPIE_GIT_AUTHOR_EMAIL: "magpie@example.com" };
+    const capabilities = deriveCapabilities(env, runtime);
+    assert.ok(capabilities.includes("local-git"));
+    // No token, so it is NOT a github watcher.
+    assert.ok(!capabilities.includes("github"));
+  });
+
+  it("does not advertise local-git without a full author identity or without git", () => {
+    const runtime = { gitAvailable: () => true };
+    assert.ok(!deriveCapabilities({ MAGPIE_GIT_AUTHOR_NAME: "Magpie" }, runtime).includes("local-git"));
+    assert.ok(!deriveCapabilities(
+      { MAGPIE_GIT_AUTHOR_NAME: "Magpie", MAGPIE_GIT_AUTHOR_EMAIL: "magpie@example.com" },
+      { gitAvailable: () => false }
+    ).includes("local-git"));
+  });
+
+  it("a github watcher also advertises local-git so it can publish both destination kinds", () => {
+    const capabilities = deriveCapabilities(
+      {
+        GITHUB_TOKEN: "tok",
+        MAGPIE_GIT_AUTHOR_NAME: "Magpie",
+        MAGPIE_GIT_AUTHOR_EMAIL: "magpie@example.com"
+      },
+      { gitAvailable: () => true }
+    );
+    assert.ok(capabilities.includes("github"));
+    assert.ok(capabilities.includes("local-git"));
+  });
 });
