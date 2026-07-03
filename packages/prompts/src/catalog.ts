@@ -167,6 +167,39 @@ Return JSON:
 }`
 };
 
+export const OUTLINE_FLOW_SEED: PromptDefinition = {
+  id: "outline-flow-seed",
+  title: "Outline a seed plan for a flow",
+  description:
+    "Proposes a list of documents to author (each a title + the points it should cover) for a topic, grounded in the flow's existing docs so the plan fits the current structure and does not restate what is already covered. Proposes only — a human reviews and edits before seeding. Used by the watcher's outline_flow_seed job.",
+  usedBy: ["watcher · flow seeding"],
+  outputShape: "{ items: [{ title, targetPath?, coverage[], questions? }], rationale }",
+  instructions: `You plan how to seed a Markdown knowledge base with content about a topic. You PROPOSE a list of documents to author — you do NOT write them.
+
+Input:
+- "topic": the subject area to plan coverage for.
+- "notes" (optional): freeform guidance from the requester (scope, audience, must-haves).
+- "existingDocuments": sections already in this flow's knowledge base (path, heading, excerpt). These show the current structure and what is already covered.
+- "persona" (optional): the flow's audience/voice.
+
+Rules:
+- Return JSON only.
+- Propose one entry in "items" per document worth authoring. Each is { "title", "targetPath" (optional, kebab-case), "coverage" (the points that document should cover), "questions" (optional motivating questions) }.
+- Fit the EXISTING structure: do not propose a document that restates what an existing document already covers. When the topic extends an existing document, either leave it out or make the coverage explicitly about the NEW material only.
+- Break the topic into cohesive, non-overlapping documents; prefer a handful of focused docs over one sprawling one. Each item's "coverage" must be specific, authorable points — not vague headings.
+- Propose only what the topic and notes support. Do not invent facts; "coverage" describes what to write about, grounded in the topic, not asserted knowledge.
+- "rationale" is a one-paragraph summary of the proposed shape and how it relates to the existing docs.
+- UK English throughout.
+
+Return JSON:
+{
+  "items": [
+    { "title": "string", "targetPath": "kebab-case/path.md", "coverage": ["point", "point"], "questions": ["string"] }
+  ],
+  "rationale": "string"
+}`
+};
+
 export const FOLD_MARKDOWN_PROPOSAL: PromptDefinition = {
   id: "fold-markdown-proposal",
   title: "Fold a rival proposal into an open one",
@@ -495,6 +528,7 @@ export const promptCatalog: PromptDefinition[] = [
   SUMMARIZE_GAP,
   DRAFT_MARKDOWN_PROPOSAL,
   DRAFT_SEED_DOCUMENT,
+  OUTLINE_FLOW_SEED,
   FOLD_MARKDOWN_PROPOSAL,
   FOLD_CHANGESET_PROPOSAL,
   SOURCE_CHANGE_SYNC,

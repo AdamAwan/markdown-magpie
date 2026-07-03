@@ -18,6 +18,7 @@ import {
   FOLD_MARKDOWN_PROPOSAL,
   GENERIC_JOB,
   IMPROVE_DOCUMENT,
+  OUTLINE_FLOW_SEED,
   SOURCE_CHANGE_SYNC,
   SPLIT_DOCUMENT,
   SUMMARIZE_GAP,
@@ -79,6 +80,8 @@ export function buildPrompt(job: JobView): string {
       return `${DRAFT_MARKDOWN_PROPOSAL.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "draft_seed_document":
       return `${DRAFT_SEED_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
+    case "outline_flow_seed":
+      return `${OUTLINE_FLOW_SEED.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "fold_markdown_proposal":
       return `${FOLD_MARKDOWN_PROPOSAL.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
     case "fold_changeset_proposal":

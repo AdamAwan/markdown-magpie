@@ -8,6 +8,9 @@ import type {
   DraftMarkdownProposalJobOutput,
   DraftSeedDocumentJobInput as CoreDraftSeedDocumentJobInput,
   DraftSeedDocumentJobOutput,
+  OutlineFlowSeedJobInput as CoreOutlineFlowSeedJobInput,
+  OutlineFlowSeedJobOutput,
+  SeedItem,
   FoldMarkdownProposalJobInput as CoreFoldMarkdownProposalJobInput,
   FoldMarkdownProposalJobOutput,
   FoldChangesetProposalJobInput as CoreFoldChangesetProposalJobInput,
@@ -187,6 +190,32 @@ export const draftSeedDocumentOutputSchema = z.object({
   markdown: z.string(),
   rationale: z.string()
 }) satisfies z.ZodType<DraftSeedDocumentJobOutput>;
+
+const existingDocumentContextSchema = z.object({
+  path: z.string(),
+  heading: z.string(),
+  excerpt: z.string()
+});
+// The seed item shape as the model RETURNS it: coverage may be empty in raw model
+// output (a human edits before seeding, and the v1 seed endpoint enforces min(1)).
+const seedItemSchema = z.object({
+  title: z.string().optional(),
+  targetPath: z.string().optional(),
+  coverage: z.array(z.string()),
+  questions: z.array(z.string()).optional()
+}) satisfies z.ZodType<SeedItem>;
+export const outlineFlowSeedInputSchema = z.object({
+  provider: providerSchema,
+  flowId: z.string(),
+  topic: z.string(),
+  notes: z.string().optional(),
+  existingDocuments: z.array(existingDocumentContextSchema),
+  persona: z.string().optional()
+}) satisfies z.ZodType<ProviderInput<CoreOutlineFlowSeedJobInput>>;
+export const outlineFlowSeedOutputSchema = z.object({
+  items: z.array(seedItemSchema),
+  rationale: z.string()
+}) satisfies z.ZodType<OutlineFlowSeedJobOutput>;
 
 export const foldMarkdownProposalInputSchema = z.object({
   provider: providerSchema,

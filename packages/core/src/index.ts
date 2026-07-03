@@ -735,6 +735,34 @@ export interface DraftSeedDocumentJobOutput {
   rationale: string;
 }
 
+// A section of an existing flow document, surfaced to the outline generator as
+// retrieval grounding so it proposes docs that fit the current structure and do
+// not restate what the knowledge base already covers.
+export interface ExistingDocumentContext {
+  path: string;
+  heading: string;
+  excerpt: string;
+}
+
+// Input to the outline_flow_seed AI job: propose a SeedItem[] (a doc list, titles +
+// coverage) for `topic`, grounded in the flow's existing docs. It only PROPOSES —
+// its output feeds the v1 seed endpoint after human review. `provider` is added at
+// enqueue (see @magpie/jobs).
+export interface OutlineFlowSeedJobInput {
+  flowId: string;
+  topic: string;
+  notes?: string;
+  existingDocuments: ExistingDocumentContext[];
+  persona?: string;
+}
+
+// Output of outline_flow_seed: the proposed seed items plus a short rationale for
+// the overall shape. The items are edited by a human before being seeded.
+export interface OutlineFlowSeedJobOutput {
+  items: SeedItem[];
+  rationale: string;
+}
+
 export interface FoldMarkdownProposalJobInput {
   // The open proposal the rival is folded into; its markdown is updated in place.
   survivorProposalId: string;
