@@ -12,3 +12,11 @@ const seedItemSchema = z.object({
 export const seedBodySchema = z.object({
   items: z.array(seedItemSchema).min(1)
 });
+
+// Body for generating a seed outline: a topic to plan coverage for, plus optional
+// freeform notes. The outline job proposes the SeedItem[]; a human reviews before
+// seeding.
+export const outlineBodySchema = z.object({
+  topic: z.string().min(1),
+  notes: z.string().optional()
+});

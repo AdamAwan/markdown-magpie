@@ -59,3 +59,44 @@ test("POST /api/flows/:flowId/seed returns 400 when an item has no coverage", as
   assert.equal(res.status, 400);
   assert.deepEqual(await res.json(), { error: "invalid_seed_body" });
 });
+
+function outlineRequest(app: ReturnType<typeof buildApp>, flowId: string, body: unknown) {
+  return app.request(`/api/flows/${flowId}/outline`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+}
+
+test("POST /api/flows/:flowId/outline enqueues an outline job and returns its id", async () => {
+  const ctx = makeTestContext();
+  ctx.knowledgeConfig.flows = [{ id: "flow-x", name: "Flow X", sourceIds: [], destinationId: "kb" }];
+  const app = buildApp(ctx);
+  const res = await outlineRequest(app, "flow-x", { topic: "Refunds", notes: "partial refunds" });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { ok: boolean; jobId: string };
+  assert.equal(body.ok, true);
+  assert.equal(typeof body.jobId, "string");
+
+  const { jobs } = await ctx.jobs.list({ type: "outline_flow_seed" });
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].id, body.jobId);
+});
+
+test("POST /api/flows/:flowId/outline returns 404 for an unknown flow", async () => {
+  const ctx = makeTestContext();
+  ctx.knowledgeConfig.flows = [{ id: "flow-x", name: "Flow X", sourceIds: [], destinationId: "kb" }];
+  const app = buildApp(ctx);
+  const res = await outlineRequest(app, "missing", { topic: "x" });
+  assert.equal(res.status, 404);
+  assert.deepEqual(await res.json(), { error: "flow_not_found" });
+});
+
+test("POST /api/flows/:flowId/outline returns 400 for an empty topic", async () => {
+  const ctx = makeTestContext();
+  ctx.knowledgeConfig.flows = [{ id: "flow-x", name: "Flow X", sourceIds: [], destinationId: "kb" }];
+  const app = buildApp(ctx);
+  const res = await outlineRequest(app, "flow-x", { topic: "" });
+  assert.equal(res.status, 400);
+  assert.deepEqual(await res.json(), { error: "invalid_outline_body" });
+});

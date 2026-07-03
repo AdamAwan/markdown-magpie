@@ -4,8 +4,8 @@ import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
 import { assertCan } from "../../auth/capabilities.js";
 import { HttpError } from "../../http/errors.js";
-import { seedFlow } from "../proposals/service.js";
-import { seedBodySchema } from "./schema.js";
+import { outlineFlowSeed, seedFlow } from "../proposals/service.js";
+import { outlineBodySchema, seedBodySchema } from "./schema.js";
 
 // Seed a flow with initial content: draft one document per item straight into a
 // proposal → PR, bypassing the demand-driven gap pipeline. Same admin scope as the
@@ -34,6 +34,33 @@ export function seedRoutes(ctx: AppContext): Hono {
         throw new HttpError(outcome.code === "flow_not_found" ? 404 : 400, outcome.code);
       }
       return c.json({ ok: true, jobIds: outcome.jobIds });
+    }
+  );
+
+  // Generate a seed outline (a proposed SeedItem[]) for a topic, grounded in the
+  // flow's existing docs. Enqueue-only: returns the job id; the caller waits on the
+  // job and reads its output, edits the items, then POSTs them to /seed above.
+  app.post(
+    "/:flowId/outline",
+    requireScopes("manage:jobs"),
+    zValidator("json", outlineBodySchema, (result, c) => {
+      if (!result.success) {
+        return c.json({ error: "invalid_outline_body" }, 400);
+      }
+    }),
+    async (c) => {
+      const flowId = c.req.param("flowId");
+      if (!ctx.knowledgeConfig.flows.some((flow) => flow.id === flowId)) {
+        throw new HttpError(404, "flow_not_found");
+      }
+      // Outlining reads the flow's KB and enqueues a job scoped to it.
+      assertCan(ctx, c, "manage", flowId);
+      const { topic, notes } = c.req.valid("json");
+      const outcome = await outlineFlowSeed(ctx, flowId, { topic, notes });
+      if (!outcome.ok) {
+        throw new HttpError(outcome.code === "flow_not_found" ? 404 : 400, outcome.code);
+      }
+      return c.json({ ok: true, jobId: outcome.jobId });
     }
   );
 
