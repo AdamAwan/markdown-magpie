@@ -407,22 +407,26 @@ export async function seedFlow(
 const outlinePollIntervalMs = parsePositiveInt(process.env.OUTLINE_POLL_INTERVAL_MS, 1500);
 const outlineTimeoutMs = parsePositiveInt(process.env.OUTLINE_TIMEOUT_MS, 180000);
 
-// A proposed seed document as the outline model returns it: a title plus the
-// points it should cover. Mirrors the API's SeedItem — this is exactly the item
-// shape kb_seed consumes. `coverage` may be empty in raw model output (the caller
-// reviews and fills it in before seeding), so it is not required here.
-export interface OutlineItem {
-  title?: string;
-  targetPath?: string;
-  coverage: string[];
-  questions?: string[];
-}
-
 export interface OutlineResult {
   jobId: string;
-  items: OutlineItem[];
+  // The proposed documents: each a title plus the points it should cover. This is
+  // exactly the item shape kb_seed consumes. `coverage` may be empty in raw model
+  // output (the caller reviews and fills it in before seeding), so it is not
+  // required here. Typed inline so this public return type carries the shape
+  // without a separately-exported element alias for the dead-code check to flag.
+  items: {
+    title?: string;
+    targetPath?: string;
+    coverage: string[];
+    questions?: string[];
+  }[];
   rationale?: string;
 }
+
+// Internal element alias for the outline item shape, derived from the public
+// return type so the two never drift. Not exported (nothing outside names it), so
+// it is invisible to the dead-code check.
+type OutlineItem = OutlineResult["items"][number];
 
 // Generates a seed outline for a topic WITHOUT seeding anything: POST
 // /flows/:id/outline enqueues an outline_flow_seed job (grounded in the flow's
