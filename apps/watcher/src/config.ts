@@ -23,6 +23,13 @@ export interface WatcherConfig {
   // appended in the composition root). Safe dev default.
   watcherName: string;
   pollIntervalMs: number;
+  // Abort deadline (ms) for the maintenance orchestration callbacks
+  // (reconcile-gaps, source-sync, fix-patrol, improve-patrol). Those API
+  // endpoints bounded-wait on a batch of AI jobs and legitimately run for
+  // minutes, so they need a far longer deadline than the hot-path request
+  // timeout. Defaults to 15 minutes; raise it toward the maintenance job's
+  // 1-hour budget for very large patrol batches.
+  maintenanceTimeoutMs: number;
   auth: {
     required: boolean;
     // Legacy static token; used as a fallback when the client-credentials quad
@@ -70,6 +77,7 @@ const schema = z
     API_BASE_URL: optionalUrl,
     WATCHER_NAME: optionalString,
     WATCHER_POLL_INTERVAL_MS: optionalPositiveInt,
+    WATCHER_MAINTENANCE_TIMEOUT_MS: optionalPositiveInt,
 
     API_TOKEN: optionalString,
     WATCHER_API_CLIENT_ID: optionalString,
@@ -175,6 +183,7 @@ export function loadWatcherConfig(env: NodeJS.ProcessEnv = process.env): Watcher
     apiBaseUrl: parsed.API_BASE_URL ?? "http://localhost:4000",
     watcherName: parsed.WATCHER_NAME ?? "local-dev-watcher",
     pollIntervalMs: parsed.WATCHER_POLL_INTERVAL_MS ?? 2000,
+    maintenanceTimeoutMs: parsed.WATCHER_MAINTENANCE_TIMEOUT_MS ?? 15 * 60_000,
     auth: {
       required: authSettings.required,
       staticToken: parsed.API_TOKEN,
