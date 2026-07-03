@@ -9,8 +9,12 @@ import * as workersService from "./service.js";
 export function workerRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
-  app.get("/", requireScopes("read:knowledge"), async (c) =>
-    c.json({ workers: await workersService.listWatchers(ctx) }));
+  app.get("/", requireScopes("read:knowledge"), async (c) => {
+    const workers = await workersService.listWatchers(ctx);
+    // `uncoveredJobTypes` is the fleet's capability gap, computed here so the
+    // console can surface it without shipping the job catalog to the browser.
+    return c.json({ workers, uncoveredJobTypes: workersService.uncoveredJobTypes(workers) });
+  });
 
   return app;
 }
