@@ -160,8 +160,8 @@ human gate as everything else — but without the `reconcile_gap_clusters` job, 
 or the maintenance-cron wait. The endpoint requires the `manage:jobs` scope (and `manage` on
 the target flow) and returns the enqueued job ids.
 
-The same operation is exposed over MCP as the `kb.seed` tool, so an interviewer LLM can submit
-a finished outline in one shot rather than streaming questions into `kb.ask` and waiting for
+The same operation is exposed over MCP as the `kb_seed` tool, so an interviewer LLM can submit
+a finished outline in one shot rather than streaming questions into `kb_ask` and waiting for
 the gap pipeline.
 
 ### Generating the outline (`outline_flow_seed`)

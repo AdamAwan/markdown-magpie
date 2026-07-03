@@ -72,7 +72,7 @@ apps/
              src/runners/ (chat, generative, maintenance, publication, cli, ...);
              capability advertisement in src/capabilities.ts.
   web/       Next.js review + admin console (Schedules, /dataflow, proposals review).
-  mcp/       MCP server — a client surface over the API (kb.ask, kb.search, kb.feedback).
+  mcp/       MCP server — a client surface over the API (kb_ask, kb_search, kb_feedback).
              Only needed for MCP clients; skip for a normal run.
 packages/
   core/       Shared domain types + provider interfaces.

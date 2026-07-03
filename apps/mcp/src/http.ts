@@ -30,11 +30,11 @@ const SCOPES_SUPPORTED = ["read:knowledge", "ask:knowledge", "feedback:questions
 // Per-tool scope requirements enforced at the MCP boundary, mirroring the API
 // route scopes. tools/list and other methods need only a valid token.
 const TOOL_SCOPES: Record<string, string> = {
-  "kb.search": "read:knowledge",
-  "kb.flows": "read:knowledge",
-  "kb.ask": "ask:knowledge",
-  "kb.feedback": "feedback:questions",
-  "kb.seed": "manage:jobs"
+  "kb_search": "read:knowledge",
+  "kb_flows": "read:knowledge",
+  "kb_ask": "ask:knowledge",
+  "kb_feedback": "feedback:questions",
+  "kb_seed": "manage:jobs"
 };
 
 // Resolves the auth settings the HTTP MCP server validates inbound tokens with.
@@ -108,13 +108,13 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
   });
 
   server.registerTool(
-    "kb.ask",
+    "kb_ask",
     {
       description:
         "Ask a question against the indexed Markdown knowledge base and return a cited answer. " +
         "By default (flow 'auto') the question is routed to the best-matching knowledge flow. " +
         "If routing cannot determine a flow, the result has flowSelectionRequired with the " +
-        "available flows — call kb.ask again with `flow` set to one of those ids. Use kb.flows " +
+        "available flows — call kb_ask again with `flow` set to one of those ids. Use kb_flows " +
         "to discover flows up front.",
       inputSchema: z.object({
         question: z.string().describe(
@@ -125,7 +125,7 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
           .optional()
           .describe(
             "Flow to answer within. Defaults to 'auto' (let the router decide). " +
-              "Otherwise must be a flow id from kb.flows."
+              "Otherwise must be a flow id from kb_flows."
           )
       })
     },
@@ -136,11 +136,11 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
   );
 
   server.registerTool(
-    "kb.flows",
+    "kb_flows",
     {
       description:
         "List the knowledge flows a question can be routed to. Use the returned ids as the " +
-        "`flow` argument to kb.ask.",
+        "`flow` argument to kb_ask.",
       inputSchema: z.object({})
     },
     async () => {
@@ -150,7 +150,7 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
   );
 
   server.registerTool(
-    "kb.search",
+    "kb_search",
     {
       description: "Search indexed Markdown sections by keyword query.",
       inputSchema: z.object({
@@ -174,14 +174,14 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
   );
 
   server.registerTool(
-    "kb.feedback",
+    "kb_feedback",
     {
       description:
-        "Report feedback on a previously asked question using the questionId returned by kb.ask. " +
+        "Report feedback on a previously asked question using the questionId returned by kb_ask. " +
         "kind is 'helpful', 'unhelpful', or 'knowledge_gap'. For 'knowledge_gap', optionally pass " +
         "gapSummary describing the missing knowledge.",
       inputSchema: z.object({
-        questionId: z.string().describe("The questionId returned by kb.ask."),
+        questionId: z.string().describe("The questionId returned by kb_ask."),
         kind: z
           .enum(["helpful", "unhelpful", "knowledge_gap"])
           .describe("The kind of feedback to record."),
@@ -200,15 +200,15 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
   );
 
   server.registerTool(
-    "kb.seed",
+    "kb_seed",
     {
       description:
         "Seed a flow with initial content: submit a list of documents to author, each a title plus the " +
         "points it should cover. Each is drafted straight into a proposal → pull request, skipping the " +
         "gap-clustering pipeline. Use for a brand-new flow or to add a new area of knowledge to an " +
-        "existing one. Discover flow ids with kb.flows.",
+        "existing one. Discover flow ids with kb_flows.",
       inputSchema: z.object({
-        flow: z.string().describe("The flow id to seed (from kb.flows)."),
+        flow: z.string().describe("The flow id to seed (from kb_flows)."),
         items: z
           .array(
             z.object({

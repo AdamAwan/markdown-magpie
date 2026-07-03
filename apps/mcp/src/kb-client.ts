@@ -14,7 +14,7 @@ const apiBaseUrl = trimTrailingSlash(
 );
 
 // The API always answers questions asynchronously: POST /ask enqueues an
-// answer_question job and returns 202 with { questionId, job, links }. kb.ask
+// answer_question job and returns 202 with { questionId, job, links }. kb_ask
 // waits on the job's wait link (which long-polls server-side, returning 200 for
 // a terminal job or 202 for the current projection when the wait limit expires)
 // and falls back to detail polling until the job reaches a terminal state.
@@ -37,7 +37,7 @@ export interface AskResult {
   gaps?: unknown[];
   questionId?: string;
   // Present when "auto" routing could not determine a flow: the answer is a stock
-  // note (confidence "unknown") and the caller should re-ask kb.ask with `flow`
+  // note (confidence "unknown") and the caller should re-ask kb_ask with `flow`
   // set to one of these ids.
   flowSelectionRequired?: { availableFlows: Flow[] };
   // Present when the picked flow judged the question off-topic for its knowledge
@@ -311,7 +311,7 @@ function isFlow(value: unknown): value is Flow {
 }
 
 // Lists the flows a caller can pin a question to (GET /knowledge/flows), so an
-// MCP agent can specify `flow` on the first kb.ask rather than waiting to be asked.
+// MCP agent can specify `flow` on the first kb_ask rather than waiting to be asked.
 export async function listFlows(options?: KbClientOptions): Promise<{ flows: Flow[] }> {
   const response = asObject(await getJson("/knowledge/flows", options));
   const flows = Array.isArray(response.flows) ? response.flows.filter(isFlow) : [];
