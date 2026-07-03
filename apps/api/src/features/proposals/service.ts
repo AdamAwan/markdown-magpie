@@ -7,6 +7,7 @@ import type {
   DraftMarkdownProposalJobOutput,
   DraftSeedDocumentJobInput,
   GapCandidate,
+  OutlineFlowSeedJobInput,
   SeedItem,
   OpenPullRequestContext,
   Proposal,
@@ -31,6 +32,7 @@ import {
   selectFlow
 } from "../../platform/repositories.js";
 import { collectSourceContext } from "../../platform/source-context.js";
+import { describeExistingDocuments } from "../retrieve/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
 import { logger } from "../../logger.js";
 
@@ -524,6 +526,39 @@ export async function seedFlow(
   }
   logger.info({ flowId, count: jobIds.length }, "seeded flow: enqueued draft_seed_document jobs");
   return { ok: true as const, jobIds };
+}
+
+// Propose a seed outline for a topic: enqueue an outline_flow_seed job grounded in the
+// flow's existing docs (retrieved inline for the topic) so the model proposes a doc list
+// that fits the current structure. Enqueue-only — the proposed SeedItem[] lands as the
+// job's output; a human reviews/edits it in the console, then the v1 seed path executes
+// it. Like the rest of seeding it bypasses the gap pipeline entirely, and (unlike
+// draftSeedItem) it authors nothing: it only plans.
+export async function outlineFlowSeed(
+  ctx: AppContext,
+  flowId: string,
+  request: { topic: string; notes?: string }
+): Promise<{ ok: true; jobId: string } | { ok: false; code: string }> {
+  const flow = selectFlow(ctx.repositoryDeps(), flowId);
+  if (!flow) {
+    return { ok: false as const, code: "flow_not_found" };
+  }
+  const topic = request.topic.trim();
+  if (topic.length === 0) {
+    return { ok: false as const, code: "topic_required" };
+  }
+  const existingDocuments = await describeExistingDocuments(ctx, flowId, topic);
+  const input: OutlineFlowSeedJobInput & { provider: AiProviderName } = {
+    flowId,
+    topic,
+    notes: request.notes?.trim() || undefined,
+    existingDocuments,
+    ...(flow.persona ? { persona: flow.persona } : {}),
+    provider: ctx.config.get().aiProvider
+  };
+  const job = await ctx.jobs.create("outline_flow_seed", input);
+  logger.info({ jobId: job.id, flowId, existingDocs: existingDocuments.length }, "enqueued outline_flow_seed job");
+  return { ok: true as const, jobId: job.id };
 }
 
 // Wraps collectSourceContext with the optional per-run memo. The key is the

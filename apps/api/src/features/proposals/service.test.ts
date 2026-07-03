@@ -189,6 +189,60 @@ test("seedFlow rejects an unknown flow", async () => {
   assert.deepEqual((await ctx.jobs.list({})).jobs, []);
 });
 
+function billingFlowContext(): ReturnType<typeof makeTestContext> {
+  return makeTestContext({
+    knowledgeConfig: {
+      sources: [],
+      destinations: [{ id: "docs", name: "Docs", kind: "local", path: "docs" }],
+      flows: [{ id: "billing", name: "Billing", sourceIds: [], destinationId: "docs", persona: "Support agent" }],
+      repositories: [],
+      roleGrants: {},
+      checkoutRoot: ".magpie/checkouts"
+    }
+  });
+}
+
+test("outlineFlowSeed enqueues an outline_flow_seed job carrying flowId + topic + persona", async () => {
+  const ctx = billingFlowContext();
+  const result = await proposals.outlineFlowSeed(ctx, "billing", { topic: "Refunds", notes: "focus on partial refunds" });
+  assert.ok(result.ok);
+  if (!result.ok) throw new Error("unreachable");
+
+  const { jobs } = await ctx.jobs.list({ type: "outline_flow_seed" });
+  assert.equal(jobs.length, 1);
+  const parsed = jobDefinition("outline_flow_seed").inputSchema.safeParse(jobs[0].input);
+  assert.ok(parsed.success, "enqueued input should match the outline_flow_seed contract");
+  const input = jobs[0].input as {
+    flowId?: string;
+    topic?: string;
+    notes?: string;
+    persona?: string;
+    existingDocuments?: unknown[];
+    provider?: string;
+  };
+  assert.equal(input.flowId, "billing");
+  assert.equal(input.topic, "Refunds");
+  assert.equal(input.notes, "focus on partial refunds");
+  assert.equal(input.persona, "Support agent");
+  assert.ok(Array.isArray(input.existingDocuments));
+  assert.equal(input.provider, "codex");
+  assert.equal(result.jobId, jobs[0].id);
+});
+
+test("outlineFlowSeed rejects an unknown flow", async () => {
+  const ctx = makeTestContext();
+  const result = await proposals.outlineFlowSeed(ctx, "no-such-flow", { topic: "x" });
+  assert.equal(result.ok, false);
+  assert.deepEqual((await ctx.jobs.list({})).jobs, []);
+});
+
+test("outlineFlowSeed rejects an empty topic", async () => {
+  const ctx = billingFlowContext();
+  const result = await proposals.outlineFlowSeed(ctx, "billing", { topic: "   " });
+  assert.equal(result.ok, false);
+  assert.deepEqual((await ctx.jobs.list({})).jobs, []);
+});
+
 test("collectOpenPullRequestContext returns [] when the flow has no snapshot yet", async () => {
   const ctx = makeTestContext();
   assert.deepEqual(await proposals.collectOpenPullRequestContext(ctx, undefined), []);
