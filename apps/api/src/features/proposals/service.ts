@@ -5,7 +5,9 @@ import type {
   DraftContext,
   DraftMarkdownProposalJobInput,
   DraftMarkdownProposalJobOutput,
+  DraftSeedDocumentJobInput,
   GapCandidate,
+  SeedItem,
   OpenPullRequestContext,
   Proposal,
   RepositoryRef,
@@ -467,6 +469,61 @@ export async function draftFromGaps(
 
   logger.info({ jobId: job.id, label }, "enqueued draft_markdown_proposal job");
   return { ok: true as const, job };
+}
+
+// Enqueue a draft_seed_document for one seed item. Reuses the flow/source/
+// destination resolution draftFromGaps uses, but skips the gap-candidate matching
+// draftFromGaps requires — seed coverage is authored intent, not a logged gap.
+// Enqueue-only: the proposal lands later via createSeedProposalFromCompletedJob.
+async function draftSeedItem(
+  ctx: AppContext,
+  flowId: string,
+  item: SeedItem,
+  cache: SourceContextCache
+): Promise<string> {
+  const deps = ctx.repositoryDeps();
+  const flow = selectFlow(deps, flowId);
+  const sourceIds = flow?.sourceIds;
+  const destinationId = flow?.destinationId || defaultDestinationId(deps);
+  const sourceContext = await collectSourceContextCached(deps, sourceIds, cache);
+  const input: DraftSeedDocumentJobInput & { provider: AiProviderName } = {
+    flowId,
+    title: item.title?.trim() || undefined,
+    targetPath: item.targetPath?.trim() || undefined,
+    coverage: [...new Set(item.coverage.map((point) => point.trim()).filter((point) => point.length > 0))],
+    questions: item.questions?.length ? item.questions : undefined,
+    sourceContext,
+    destinationId,
+    provider: ctx.config.get().aiProvider
+  };
+  const job = await ctx.jobs.create("draft_seed_document", input);
+  logger.info({ jobId: job.id, flowId, targetPath: input.targetPath ?? "auto" }, "enqueued draft_seed_document job");
+  return job.id;
+}
+
+// Seed a flow: draft each item straight into a proposal, bypassing gap clustering
+// and the intent gate. Source context is collected once and memoised across the
+// items in one call.
+export async function seedFlow(
+  ctx: AppContext,
+  flowId: string,
+  items: SeedItem[]
+): Promise<{ ok: true; jobIds: string[] } | { ok: false; code: string }> {
+  const flow = selectFlow(ctx.repositoryDeps(), flowId);
+  if (!flow) {
+    return { ok: false as const, code: "flow_not_found" };
+  }
+  const usable = items.filter((item) => item.coverage.some((point) => point.trim().length > 0));
+  if (usable.length === 0) {
+    return { ok: false as const, code: "coverage_required" };
+  }
+  const cache: SourceContextCache = new Map();
+  const jobIds: string[] = [];
+  for (const item of usable) {
+    jobIds.push(await draftSeedItem(ctx, flowId, item, cache));
+  }
+  logger.info({ flowId, count: jobIds.length }, "seeded flow: enqueued draft_seed_document jobs");
+  return { ok: true as const, jobIds };
 }
 
 // Wraps collectSourceContext with the optional per-run memo. The key is the
