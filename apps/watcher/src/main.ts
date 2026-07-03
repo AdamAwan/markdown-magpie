@@ -62,7 +62,8 @@ const tokenProvider = createApiTokenProvider({
 const api = new HttpWatcherApi({
   apiBaseUrl,
   workerName: watcherName,
-  token: tokenProvider
+  token: tokenProvider,
+  maintenanceTimeoutMs: config.maintenanceTimeoutMs
 });
 
 const capabilityRuntime = DEFAULT_CAPABILITY_RUNTIME;

@@ -84,10 +84,20 @@ export interface HttpClientOptions {
   // transparently before it expires; returns undefined when auth is disabled
   // (no Authorization header is then sent).
   token?: ApiTokenProvider;
+  // Per-request abort deadline for the hot-path calls (claim/heartbeat/
+  // complete/fail/retrieve/…). Kept short so a wedged API can't stall the loop.
   requestTimeoutMs?: number;
+  // Per-request abort deadline for the maintenance *orchestration* calls
+  // (reconcileGaps/runSourceSync/runFixPatrol/runImprovePatrol). Those endpoints
+  // bounded-wait inside the API on a batch of AI jobs and legitimately run for
+  // minutes — the maintenance job that drives them has a 1-hour budget and is
+  // heartbeated throughout — so they need a far longer deadline than the hot-path
+  // default (a 30s cap here silently aborts the call and fails the patrol tick).
+  maintenanceTimeoutMs?: number;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_MAINTENANCE_TIMEOUT_MS = 15 * 60_000;
 
 // The watcher's only conduit to the API. It owns the URL shapes and the worker
 // identity that the API records on terminal transitions (so a failed/completed
@@ -97,12 +107,14 @@ export class HttpWatcherApi implements WatcherApi {
   private readonly workerName: string;
   private readonly token?: ApiTokenProvider;
   private readonly timeoutMs: number;
+  private readonly maintenanceTimeoutMs: number;
 
   constructor(options: HttpClientOptions) {
     this.base = trimTrailingSlash(options.apiBaseUrl).replace(/\/api$/, "");
     this.workerName = options.workerName;
     this.token = options.token;
     this.timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.maintenanceTimeoutMs = options.maintenanceTimeoutMs ?? DEFAULT_MAINTENANCE_TIMEOUT_MS;
   }
 
   async claim(workerName: string, capabilities: JobCapability[]): Promise<JobView | undefined> {
@@ -147,7 +159,7 @@ export class HttpWatcherApi implements WatcherApi {
   }
 
   async reconcileGaps(flowId: string | undefined, signal?: AbortSignal): Promise<{ ok: true }> {
-    await this.post("/api/gaps/reconcile", { ...(flowId ? { flowId } : {}) }, signal);
+    await this.post("/api/gaps/reconcile", { ...(flowId ? { flowId } : {}) }, signal, this.maintenanceTimeoutMs);
     return { ok: true };
   }
 
@@ -155,7 +167,8 @@ export class HttpWatcherApi implements WatcherApi {
     const { runIds } = await this.post<{ runIds: string[] }>(
       "/api/source-sync/run",
       { ...(flowId ? { flowId } : {}) },
-      signal
+      signal,
+      this.maintenanceTimeoutMs
     );
     return { runIds };
   }
@@ -167,7 +180,8 @@ export class HttpWatcherApi implements WatcherApi {
     return this.post<{ runId: string; selectedCount: number; findingCount: number }>(
       "/api/fix-patrol/run",
       { ...(flowId ? { flowId } : {}) },
-      signal
+      signal,
+      this.maintenanceTimeoutMs
     );
   }
 
@@ -178,7 +192,8 @@ export class HttpWatcherApi implements WatcherApi {
     return this.post<{ runId: string; selectedCount: number; enqueuedCount: number }>(
       "/api/fix-patrol/improve/run",
       { ...(flowId ? { flowId } : {}) },
-      signal
+      signal,
+      this.maintenanceTimeoutMs
     );
   }
 
@@ -196,15 +211,25 @@ export class HttpWatcherApi implements WatcherApi {
     return this.get<ProposalExecutionContext>(`/api/proposals/${proposalId}/execution-context`);
   }
 
-  private async post<TResponse>(path: string, body: unknown, signal?: AbortSignal): Promise<TResponse> {
-    return this.request<TResponse>(path, { method: "POST", body: JSON.stringify(body) }, signal);
+  private async post<TResponse>(
+    path: string,
+    body: unknown,
+    signal?: AbortSignal,
+    timeoutMs?: number
+  ): Promise<TResponse> {
+    return this.request<TResponse>(path, { method: "POST", body: JSON.stringify(body) }, signal, timeoutMs);
   }
 
   private async get<TResponse>(path: string, signal?: AbortSignal): Promise<TResponse> {
     return this.request<TResponse>(path, { method: "GET" }, signal);
   }
 
-  private async request<TResponse>(path: string, init: RequestInit, signal?: AbortSignal): Promise<TResponse> {
+  private async request<TResponse>(
+    path: string,
+    init: RequestInit,
+    signal?: AbortSignal,
+    timeoutMs?: number
+  ): Promise<TResponse> {
     const headers: Record<string, string> = { "content-type": "application/json" };
     const token = this.token ? await this.token() : undefined;
     if (token) {
@@ -214,8 +239,10 @@ export class HttpWatcherApi implements WatcherApi {
     // injected by OpenTelemetry's undici auto-instrumentation when telemetry is
     // enabled, so no correlation header is set by hand here.
     // Abort on the request timeout, or sooner if the caller's signal (a job
-    // cancellation / watcher shutdown) fires first.
-    const timeout = AbortSignal.timeout(this.timeoutMs);
+    // cancellation / watcher shutdown) fires first. Long-running orchestration
+    // calls pass a larger deadline; everything else uses the hot-path default.
+    const effectiveTimeoutMs = timeoutMs ?? this.timeoutMs;
+    const timeout = AbortSignal.timeout(effectiveTimeoutMs);
     const combined = signal ? AbortSignal.any([timeout, signal]) : timeout;
     let response: Response;
     try {
@@ -226,7 +253,7 @@ export class HttpWatcherApi implements WatcherApi {
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === "TimeoutError") {
-        throw new Error(`${init.method ?? "GET"} ${path} timed out after ${this.timeoutMs}ms`, {
+        throw new Error(`${init.method ?? "GET"} ${path} timed out after ${effectiveTimeoutMs}ms`, {
           cause: error
         });
       }

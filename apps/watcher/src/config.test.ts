@@ -48,6 +48,16 @@ describe("loadWatcherConfig — dev (auth disabled)", () => {
     assert.equal(config.apiBaseUrl, "http://localhost:4000");
     assert.equal(config.watcherName, "local-dev-watcher");
   });
+
+  it("defaults the maintenance orchestration timeout to 15 minutes", () => {
+    const config = loadWatcherConfig({ AUTH_REQUIRED: "false" });
+    assert.equal(config.maintenanceTimeoutMs, 15 * 60_000);
+  });
+
+  it("parses WATCHER_MAINTENANCE_TIMEOUT_MS", () => {
+    const config = loadWatcherConfig({ AUTH_REQUIRED: "false", WATCHER_MAINTENANCE_TIMEOUT_MS: "600000" });
+    assert.equal(config.maintenanceTimeoutMs, 600000);
+  });
 });
 
 describe("loadWatcherConfig — field validation", () => {

@@ -130,7 +130,16 @@ job and POSTs the API's `/api/gaps/reconcile` endpoint, where the orchestration
 lives. The reconciler's only generative step — the cluster reshape (propose
 merge/split/**dismiss**, then critic-confirm) — is itself a provider-partitioned
 `reconcile_gap_clusters` AI job the API enqueues and bounded-waits on, so no
-generative work runs in the API process. To let the model judge scope, the API
+generative work runs in the API process.
+
+Because the API bounded-waits on a batch of AI jobs inside these callbacks, a
+maintenance orchestration request (`/api/gaps/reconcile`, `/api/source-sync/run`,
+`/api/fix-patrol/run`, `/api/fix-patrol/improve/run`) legitimately stays open for
+minutes — the maintenance job that drives it has a 1-hour budget and is heartbeated
+throughout. The watcher's HTTP client therefore applies a dedicated, longer deadline
+to these four calls (`WATCHER_MAINTENANCE_TIMEOUT_MS`, default 15 min) rather than the
+short hot-path request timeout it uses for claim/heartbeat/complete/retrieve; a
+too-short deadline here silently aborts the call and fails the patrol tick. To let the model judge scope, the API
 attaches per-cluster grounding to that job (the flow's persona plus the best
 retrieval relevance and closest snippets for the cluster's topic, via inline
 retrieval against the flow's destination). A **dismissal** is how an off-topic
