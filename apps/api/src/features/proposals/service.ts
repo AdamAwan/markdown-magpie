@@ -18,7 +18,7 @@ import type { JobView } from "@magpie/jobs";
 import { fileURLToPath } from "node:url";
 import { mergeLocalProposalBranch } from "@magpie/git";
 import { z } from "zod";
-import { correctDocumentOutputSchema, dedupeDocumentsOutputSchema, improveDocumentOutputSchema, publishProposalOutputSchema, splitDocumentOutputSchema } from "@magpie/jobs";
+import { correctDocumentOutputSchema, dedupeDocumentsOutputSchema, draftSeedDocumentOutputSchema, improveDocumentOutputSchema, publishProposalOutputSchema, splitDocumentOutputSchema } from "@magpie/jobs";
 import { PROPOSAL_STATUSES, resolveProposalTargetPath } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import type { ProposalListOptions } from "../../stores/proposal-store.js";
@@ -640,6 +640,42 @@ export async function createCorrectiveProposalFromCompletedJob(
   return ctx.stores.proposals.create({
     title: `Verify: correct unprovable claims in ${input.path}`,
     targetPath: input.path,
+    markdown: parsed.data.markdown,
+    rationale: parsed.data.rationale,
+    evidence: [],
+    flowId: input.flowId,
+    destinationId: input.destinationId,
+    jobId: job.id
+  });
+}
+
+// Completion handler for draft_seed_document jobs: a seed draft landed, so create a
+// clusterless draft Proposal carrying flowId first-class (so the gate and the per-flow
+// outbox treat it as same-flow). The model chooses the title/targetPath; the path is
+// resolved under the destination subpath like a gap draft. De-duped by jobId, so a
+// re-delivered completion returns the same proposal rather than drafting a duplicate.
+export async function createSeedProposalFromCompletedJob(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<Proposal | undefined> {
+  if (!job || job.type !== "draft_seed_document") {
+    return undefined;
+  }
+  const parsed = draftSeedDocumentOutputSchema.safeParse(output);
+  if (!parsed.success) {
+    return undefined;
+  }
+  const input = job.input as Partial<DraftSeedDocumentJobInput>;
+  if (!input.flowId) {
+    return undefined;
+  }
+  return ctx.stores.proposals.create({
+    title: parsed.data.title,
+    targetPath: resolveProposalTargetPath(
+      destinationSubpath(ctx.repositoryDeps(), input.destinationId),
+      parsed.data.targetPath || parsed.data.title
+    ),
     markdown: parsed.data.markdown,
     rationale: parsed.data.rationale,
     evidence: [],

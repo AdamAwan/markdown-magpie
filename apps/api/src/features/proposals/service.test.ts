@@ -465,6 +465,28 @@ test("createCorrectiveProposalFromCompletedJob creates a labelled draft carrying
   assert.equal((await proposals.list(ctx, 50)).length, 1);
 });
 
+test("createSeedProposalFromCompletedJob creates a clusterless draft carrying the flowId, idempotent on jobId", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_seed_document", {
+    flowId: "billing",
+    coverage: ["what billing is"],
+    sourceContext: [],
+    provider: "codex"
+  });
+  const output = { title: "Billing overview", targetPath: "billing.md", markdown: "# Billing", rationale: "seed" };
+
+  const first = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
+  assert.ok(first);
+  assert.equal(first?.flowId, "billing");
+  assert.equal(first?.markdown, "# Billing");
+  assert.equal(first?.gapClusterId, undefined);
+
+  // Re-delivery: same jobId -> same proposal, no duplicate.
+  const second = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
+  assert.equal(second?.id, first?.id);
+  assert.equal((await proposals.list(ctx, 50)).length, 1);
+});
+
 async function dedupeJob(ctx: ReturnType<typeof makeTestContext>) {
   return ctx.jobs.create("dedupe_documents", {
     path: "kb/refunds.md",

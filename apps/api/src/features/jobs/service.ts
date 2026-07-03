@@ -177,6 +177,16 @@ export async function completeJob(
         logger.warn({ proposalId: correctiveProposal.id, err: error instanceof Error ? error.message : String(error) }, "corrective reconcile for proposal failed");
       }
     }
+    const seedProposal = await proposalsService.createSeedProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    if (seedProposal) {
+      // Seed reconcile is best-effort, like the other completion-side hooks: it gates
+      // the freshly-authored doc and either self-publishes or folds; never fail completion.
+      try {
+        await foldService.reconcileSeedProposal(ctx, seedProposal);
+      } catch (error) {
+        logger.warn({ proposalId: seedProposal.id, err: error instanceof Error ? error.message : String(error) }, "seed reconcile for proposal failed");
+      }
+    }
     const dedupeProposal = await proposalsService.createDedupeProposalFromCompletedJob(ctx, existingJob, parsed.data);
     if (dedupeProposal) {
       // Dedupe reconcile is best-effort too — it gates the multi-file change and either
