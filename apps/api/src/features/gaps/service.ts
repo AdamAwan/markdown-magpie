@@ -1,6 +1,7 @@
 import type { GapCandidate, PersistedGapCluster } from "@magpie/core";
 import type { AppContext } from "../../context.js";
-import { collectOpenPullRequestContext, draftFromGaps, type SourceContextCache } from "../proposals/service.js";
+import { collectOpenPullRequestContext, draftFromGaps } from "../proposals/service.js";
+import { type SourceContextCache } from "../../platform/source-context.js";
 import { reconcileGaps as runReconcileGaps } from "../../scheduling/gap-reconciler.js";
 
 export async function listCandidates(ctx: AppContext, limit: number): Promise<GapCandidate[]> {

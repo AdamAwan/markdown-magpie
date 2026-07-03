@@ -4,7 +4,7 @@ import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
 import { assertCan } from "../../auth/capabilities.js";
 import { HttpError } from "../../http/errors.js";
-import { outlineFlowSeed, seedFlow } from "../proposals/service.js";
+import { outlineFlowSeed, seedFlow } from "./service.js";
 import { outlineBodySchema, seedBodySchema } from "./schema.js";
 
 // Seed a flow with initial content: draft one document per item straight into a
