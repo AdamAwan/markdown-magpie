@@ -165,7 +165,7 @@ export class PublicationRunner {
   }
 
   private async publishProposal(job: JobView): Promise<unknown> {
-    const { proposalId } = publishProposalInputSchema.parse(job.input);
+    const { proposalId, destination } = publishProposalInputSchema.parse(job.input);
     logger.info({ jobId: job.id, proposalId }, `publish_proposal[${job.id}]: fetching execution context for proposal ${proposalId}`);
     const context = await this.api.proposalExecutionContext(proposalId);
     const { proposal, repository } = parseProposalContext(context);
@@ -200,27 +200,36 @@ export class PublicationRunner {
     }
     logger.info({ jobId: job.id, branchName: publication.branchName, commitSha: publication.commitSha.slice(0, 8) }, `publish_proposal[${job.id}]: pushed ${publication.branchName} at ${publication.commitSha.slice(0, 8)}`);
 
-    // The branch is pushed; try to open a PR. A PR failure must not lose the
-    // branch, so degrade to a branch-only publish.
+    // The branch is pushed. For a github destination, try to open a PR — a PR
+    // failure must not lose the branch, so degrade to a branch-only publish. A
+    // local-git (file://) destination has no GitHub PR to open, and the console's
+    // Merge action takes over from branch-pushed, so skip the PR step entirely.
     let pullRequestUrl: string | undefined;
-    try {
-      const baseBranch = repository.defaultBranch || repository.git?.defaultBranch || "main";
-      const raised = await this.deps.raisePullRequest({
-        remoteUrl: publication.remoteUrl,
-        headBranch: publication.branchName,
-        baseBranch,
-        title: `docs: ${proposal.title}`,
-        body: buildPullRequestBody(proposal)
-      });
-      pullRequestUrl = raised?.url;
-      if (pullRequestUrl) {
-        logger.info({ jobId: job.id, pullRequestUrl }, `publish_proposal[${job.id}]: opened pull request ${pullRequestUrl}`);
-      }
-    } catch (error) {
-      logger.warn(
-        { jobId: job.id, branchName: publication.branchName, err: error },
-        `Branch ${publication.branchName} pushed, but PR creation failed: ${error instanceof Error ? error.message : "unknown error"}`
+    if (destination === "local-git") {
+      logger.info(
+        { jobId: job.id, branchName: publication.branchName },
+        `publish_proposal[${job.id}]: local-git destination — branch pushed, skipping pull request`
       );
+    } else {
+      try {
+        const baseBranch = repository.defaultBranch || repository.git?.defaultBranch || "main";
+        const raised = await this.deps.raisePullRequest({
+          remoteUrl: publication.remoteUrl,
+          headBranch: publication.branchName,
+          baseBranch,
+          title: `docs: ${proposal.title}`,
+          body: buildPullRequestBody(proposal)
+        });
+        pullRequestUrl = raised?.url;
+        if (pullRequestUrl) {
+          logger.info({ jobId: job.id, pullRequestUrl }, `publish_proposal[${job.id}]: opened pull request ${pullRequestUrl}`);
+        }
+      } catch (error) {
+        logger.warn(
+          { jobId: job.id, branchName: publication.branchName, err: error },
+          `Branch ${publication.branchName} pushed, but PR creation failed: ${error instanceof Error ? error.message : "unknown error"}`
+        );
+      }
     }
 
     // Validate against the contract before returning, symmetric with publishSourceSync.

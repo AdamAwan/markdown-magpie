@@ -53,6 +53,16 @@ export const CAPABILITY_GATES: readonly CapabilityGate[] = [
     ready: (env) => allSet(env, ["CLAUDE_CLI_PATH"])
   },
   {
+    // Publishes a proposal branch to a file:// destination: needs a git commit
+    // identity and the git binary, but NO GitHub token. A github-credentialed
+    // watcher satisfies this too (it has git + author), so it advertises local-git
+    // as well and can publish to both remote and local destinations.
+    capability: "local-git",
+    requiredEnv: ["MAGPIE_GIT_AUTHOR_NAME", "MAGPIE_GIT_AUTHOR_EMAIL"],
+    ready: (env, runtime) =>
+      allSet(env, ["MAGPIE_GIT_AUTHOR_NAME", "MAGPIE_GIT_AUTHOR_EMAIL"]) && runtime.gitAvailable()
+  },
+  {
     capability: "github",
     requiredEnv: ["GITHUB_TOKEN", "MAGPIE_GIT_AUTHOR_NAME", "MAGPIE_GIT_AUTHOR_EMAIL"],
     ready: (env, runtime) =>

@@ -156,6 +156,30 @@ describe("PublicationRunner", () => {
     assert.equal(parsed.commitSha, "abc123");
   });
 
+  it("skips PR raising for a local-git destination and returns a branch-only publish", async () => {
+    let prRaised = false;
+    const runner = new PublicationRunner(fakeApi(), {
+      prepareRepository: async (repository) => repository,
+      publishProposal: async (request) => ({ branchName: request.branchName, commitSha: "abc123", remoteUrl: "file:///tmp/local-repo" }),
+      publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
+      raisePullRequest: async () => {
+        prRaised = true;
+        return undefined;
+      },
+      commentOnPullRequest: async () => undefined
+    });
+
+    const output = await runner.run(
+      job("publish_proposal", { proposalId: "prop-12345678", destination: "local-git" }),
+      new AbortController().signal
+    );
+    const parsed = publishProposalOutputSchema.parse(output);
+    assert.equal(prRaised, false, "local-git publish must not attempt to raise a PR");
+    assert.equal(parsed.pullRequestUrl, undefined);
+    assert.equal(parsed.branchName, "magpie/proposal-prop-123-deploy-guide");
+    assert.equal(parsed.commitSha, "abc123");
+  });
+
   it("prepares a watcher-local checkout before every publication flow", async () => {
     const preparedPaths: string[] = [];
     const publishedPaths: string[] = [];
