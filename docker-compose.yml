@@ -15,6 +15,11 @@ services:
     environment:
       PORT: 4000
       MAGPIE_CHECKOUT_ROOT: /data/checkouts
+      # The API writes per-flow snapshots here. Without this override it falls back
+      # to a relative `.magpie/snapshots` under the read-only `/app` workdir, so
+      # every refresh_flow_snapshot run fails with EACCES (issue #130). Point it at
+      # a writable, mounted volume like the checkout root.
+      MAGPIE_SNAPSHOT_ROOT: /data/snapshots
       # A real provider is mandatory; fail fast if it is unset. Exposing it as an
       # explicit override (rather than only via env_file) lets E2E pick a fixture
       # without editing files. Must match the watcher's AI_PROVIDER.
@@ -24,6 +29,9 @@ services:
       # reset the same repos; sharing one working tree let their git operations race
       # on `.git` (FETCH_HEAD/index.lock), intermittently failing publication.
       - magpie-api-checkouts:/data/checkouts
+      # Snapshots are API-only (the watcher has no snapshot store), so this volume
+      # lives on the api service alone.
+      - magpie-api-snapshots:/data/snapshots
     ports:
       - "4000:4000"
     profiles:
@@ -237,6 +245,7 @@ services:
 volumes:
   postgres-data:
   magpie-api-checkouts:
+  magpie-api-snapshots:
   magpie-watcher-checkouts:
   loki-data:
   grafana-data:

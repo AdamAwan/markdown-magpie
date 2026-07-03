@@ -6,6 +6,8 @@ import { loadConfig } from "./platform/config.js";
 import { buildApp } from "./app.js";
 import * as configService from "./features/config/service.js";
 import { reconcileSchedules } from "./jobs/schedule-reconciler.js";
+import { preflightDataPaths } from "./platform/preflight.js";
+import { checkoutRoot, snapshotRoot } from "./platform/repositories.js";
 import { logger } from "./logger.js";
 
 // Capture crashes outside handled paths (uncaught throws, unhandled rejections)
@@ -35,6 +37,17 @@ async function start(): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  // Non-fatal: warn loudly if a configured data directory is not writable, so an
+  // unmounted/misowned path surfaces as one boot warning rather than a silent
+  // per-run failure (issue #130). Resolved to absolute paths the same way the
+  // stores do, so the message names exactly the directory the app will use.
+  await preflightDataPaths(
+    [
+      { label: "Snapshot directory", envVar: "MAGPIE_SNAPSHOT_ROOT", dir: snapshotRoot(config) },
+      { label: "Checkout directory", envVar: "MAGPIE_CHECKOUT_ROOT", dir: checkoutRoot(config) }
+    ],
+    logger
+  );
   const app = buildApp(ctx);
   const server = serve({ fetch: app.fetch, port }, () => {
     logger.info({ port }, "Markdown Magpie API listening");

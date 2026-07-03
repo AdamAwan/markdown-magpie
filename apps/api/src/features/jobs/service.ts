@@ -11,6 +11,7 @@ import * as sourceSyncService from "../source-sync/service.js";
 import * as snapshotsService from "../snapshots/service.js";
 import { applyPullRequestTransition } from "../../scheduling/gap-reconciler.js";
 import * as foldService from "../../scheduling/fold.js";
+import { snapshotRoot } from "../../platform/repositories.js";
 
 export async function createJob(ctx: AppContext, type: JobType, input: unknown): Promise<JobView> {
   return ctx.jobs.create(type, input ?? {});
@@ -290,7 +291,15 @@ async function handleRefreshFlowSnapshotCompletion(
     await snapshotsService.recordSnapshotsFromPullRequestResults(ctx, parsed.data.results);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logger.warn({ err: message }, "refresh_flow_snapshot: snapshot recording failed after PR transitions were applied");
+    // Name the resolved snapshot root and the env var to set: the common cause is an
+    // unwritable default path (relative `.magpie/snapshots` under a read-only workdir),
+    // and PR transitions above already succeeded, so only the write needs fixing (#130).
+    const snapshotDir = snapshotRoot(ctx.settings);
+    logger.warn(
+      { err: message, snapshotRoot: snapshotDir },
+      `refresh_flow_snapshot: snapshot recording failed after PR transitions were applied ` +
+        `(snapshot root ${snapshotDir}). Set MAGPIE_SNAPSHOT_ROOT to a writable, mounted path.`
+    );
   }
 }
 
