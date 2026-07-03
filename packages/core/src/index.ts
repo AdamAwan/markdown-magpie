@@ -348,6 +348,10 @@ export interface Proposal {
   // Stamped when the proposal is marked merged. Marking merged also resolves the
   // gaps it closed so they stop surfacing as candidates.
   mergedAt?: string;
+  // Computed by the API when serving proposals to the console (NOT persisted):
+  // true when this proposal's destination is a local-git (file://) repository, so
+  // the UI offers a real "Merge" instead of the hosted "Mark Merged".
+  localGitDestination?: boolean;
 }
 
 // The inputs handed to the drafter, kept alongside the proposal so the context

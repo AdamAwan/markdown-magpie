@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { jobDefinition } from "@magpie/jobs";
 import { RuntimeConfigHolder } from "../../config-holder.js";
 import { makeTestContext } from "../../test-support/context.js";
@@ -577,4 +578,114 @@ test("isProposalStatus accepts every lifecycle status, including superseded, and
   for (const notAStatus of ["", "archived", "SUPERSEDED", undefined, null, 7]) {
     assert.equal(proposals.isProposalStatus(notAStatus), false, `${String(notAStatus)} should be rejected`);
   }
+});
+
+// --- local-git merge -------------------------------------------------------
+
+function ctxWithDestination(url: string): ReturnType<typeof makeTestContext> {
+  return makeTestContext({
+    knowledgeConfig: {
+      sources: [],
+      destinations: [{ id: "demo", name: "Demo", url, kind: "git" }],
+      flows: [],
+      repositories: [],
+      roleGrants: {},
+      checkoutRoot: ".magpie/checkouts"
+    }
+  });
+}
+
+async function branchPushedProposal(
+  ctx: ReturnType<typeof makeTestContext>,
+  remoteUrl: string
+): Promise<string> {
+  const created = await ctx.stores.proposals.create({
+    title: "Configure X",
+    targetPath: "configure-x.md",
+    markdown: "# Configure X\n",
+    rationale: "r",
+    evidence: [],
+    destinationId: "demo"
+  });
+  await ctx.stores.proposals.recordPublication(created.id, {
+    provider: "local-git",
+    branchName: "magpie/proposal-abc",
+    commitSha: "deadbeef",
+    remoteUrl,
+    publishedAt: new Date().toISOString()
+  });
+  return created.id;
+}
+
+test("isLocalGitDestination is true only for file:// destinations", async () => {
+  const proposal = { targetPath: "configure-x.md", destinationId: "demo" } as never;
+  assert.equal(proposals.isLocalGitDestination(ctxWithDestination("file:///tmp/demo"), proposal), true);
+  assert.equal(proposals.isLocalGitDestination(ctxWithDestination("https://github.com/o/r.git"), proposal), false);
+  assert.equal(proposals.isLocalGitDestination(makeTestContext(), proposal), false);
+});
+
+test("mergeLocalProposal merges, marks merged, and targets the destination repo", async () => {
+  const url = pathToFileURL(path.join(tmpdir(), "demo-kb")).href;
+  const ctx = ctxWithDestination(url);
+  const id = await branchPushedProposal(ctx, url);
+  const proposal = await ctx.stores.proposals.get(id);
+  assert.ok(proposal);
+
+  const calls: Array<{ repoPath: string; branchName: string; defaultBranch: string }> = [];
+  const fakeMerge = async (req: { repoPath: string; branchName: string; defaultBranch: string }) => {
+    calls.push(req);
+    return { mergeCommitSha: "merge-sha" };
+  };
+
+  const result = await proposals.mergeLocalProposal(ctx, proposal, fakeMerge);
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].repoPath, fileURLToPath(url));
+  assert.equal(calls[0].branchName, "magpie/proposal-abc");
+  assert.equal(calls[0].defaultBranch, "main");
+  assert.equal((await ctx.stores.proposals.get(id))?.status, "merged");
+});
+
+test("mergeLocalProposal rejects a hosted destination", async () => {
+  const ctx = ctxWithDestination("https://github.com/o/r.git");
+  const id = await branchPushedProposal(ctx, "https://github.com/o/r.git");
+  const proposal = await ctx.stores.proposals.get(id);
+  assert.ok(proposal);
+  const result = await proposals.mergeLocalProposal(ctx, proposal, async () => ({ mergeCommitSha: "x" }));
+  assert.equal(result.ok, false);
+  assert.equal(result.ok === false && result.code, "not_local_git_destination");
+});
+
+test("mergeLocalProposal rejects a proposal that is not branch-pushed", async () => {
+  const url = "file:///tmp/demo-kb";
+  const ctx = ctxWithDestination(url);
+  const created = await ctx.stores.proposals.create({
+    title: "Draft", targetPath: "d.md", markdown: "# d\n", rationale: "r", evidence: [], destinationId: "demo"
+  });
+  const proposal = await ctx.stores.proposals.get(created.id);
+  assert.ok(proposal);
+  const result = await proposals.mergeLocalProposal(ctx, proposal, async () => ({ mergeCommitSha: "x" }));
+  assert.equal(result.ok === false && result.code, "proposal_not_mergeable");
+});
+
+test("mergeLocalProposal keeps status on a merge conflict", async () => {
+  const url = pathToFileURL(path.join(tmpdir(), "demo-kb")).href;
+  const ctx = ctxWithDestination(url);
+  const id = await branchPushedProposal(ctx, url);
+  const proposal = await ctx.stores.proposals.get(id);
+  assert.ok(proposal);
+  const result = await proposals.mergeLocalProposal(ctx, proposal, async () => {
+    throw new Error("Could not merge magpie/proposal-abc into main: CONFLICT");
+  });
+  assert.equal(result.ok === false && result.code, "merge_conflict");
+  assert.equal((await ctx.stores.proposals.get(id))?.status, "branch-pushed");
+});
+
+test("list attaches localGitDestination", async () => {
+  const url = "file:///tmp/demo-kb";
+  const ctx = ctxWithDestination(url);
+  await branchPushedProposal(ctx, url);
+  const [listed] = await proposals.list(ctx, 10);
+  assert.equal(listed.localGitDestination, true);
 });

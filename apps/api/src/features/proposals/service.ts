@@ -13,6 +13,8 @@ import type {
   SplitDocumentJobInput
 } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
+import { fileURLToPath } from "node:url";
+import { mergeLocalProposalBranch } from "@magpie/git";
 import { z } from "zod";
 import { correctDocumentOutputSchema, dedupeDocumentsOutputSchema, improveDocumentOutputSchema, publishProposalOutputSchema, splitDocumentOutputSchema } from "@magpie/jobs";
 import { PROPOSAL_STATUSES, resolveProposalTargetPath } from "@magpie/core";
@@ -33,11 +35,13 @@ import { logger } from "../../logger.js";
 type PublishProposalJobOutput = z.infer<typeof publishProposalOutputSchema>;
 
 export async function list(ctx: AppContext, limit: number, options?: ProposalListOptions): Promise<Proposal[]> {
-  return ctx.stores.proposals.list(limit, options);
+  const proposals = await ctx.stores.proposals.list(limit, options);
+  return proposals.map((proposal) => ({ ...proposal, localGitDestination: isLocalGitDestination(ctx, proposal) }));
 }
 
 export async function get(ctx: AppContext, id: string): Promise<Proposal | undefined> {
-  return ctx.stores.proposals.get(id);
+  const proposal = await ctx.stores.proposals.get(id);
+  return proposal ? { ...proposal, localGitDestination: isLocalGitDestination(ctx, proposal) } : undefined;
 }
 
 export async function updateStatus(
@@ -117,6 +121,83 @@ async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal
     logger.warn({ proposalId: proposal.id, err: message }, "re-index after merging proposal failed");
     return false;
   }
+}
+
+function isFileUrl(url: string | undefined): url is string {
+  if (!url) {
+    return false;
+  }
+  try {
+    return new URL(url).protocol === "file:";
+  } catch {
+    return false;
+  }
+}
+
+// True when the proposal's configured destination is a local-git (file://)
+// repository — the case where the console offers a real Merge instead of the
+// hosted "Mark Merged". Config-only (no git/network), cheap enough per list item.
+export function isLocalGitDestination(ctx: AppContext, proposal: Proposal): boolean {
+  if (ctx.knowledgeConfig.destinations.length === 0) {
+    return false;
+  }
+  const destination = selectDestinationForProposal(ctx.repositoryDeps(), proposal);
+  return isFileUrl(destination?.url);
+}
+
+export type MergeLocalProposalResult =
+  | { ok: true; proposal: Proposal }
+  | {
+      ok: false;
+      code: "proposal_not_mergeable" | "not_local_git_destination" | "merge_conflict";
+      message: string;
+    };
+
+// Merges a branch-pushed local-git proposal into its destination's default
+// branch, then marks it merged. The git merge is injected so tests exercise the
+// orchestration without shelling out. On merge failure the proposal is left at
+// branch-pushed so git state and magpie state never disagree; the caller runs
+// the (slow) re-index cascade after this returns ok.
+export async function mergeLocalProposal(
+  ctx: AppContext,
+  proposal: Proposal,
+  merge: typeof mergeLocalProposalBranch = mergeLocalProposalBranch
+): Promise<MergeLocalProposalResult> {
+  if (proposal.status !== "branch-pushed" || !proposal.publication?.branchName) {
+    return {
+      ok: false,
+      code: "proposal_not_mergeable",
+      message: "Only a branch-pushed proposal with a published branch can be merged locally."
+    };
+  }
+
+  const destination = selectDestinationForProposal(ctx.repositoryDeps(), proposal);
+  if (!destination || !isFileUrl(destination.url)) {
+    return {
+      ok: false,
+      code: "not_local_git_destination",
+      message: "This proposal's destination is not a local-git (file://) repository."
+    };
+  }
+
+  const repoPath = fileURLToPath(destination.url);
+  const defaultBranch = destination.branch?.trim() || "main";
+
+  try {
+    await merge({ repoPath, branchName: proposal.publication.branchName, defaultBranch });
+  } catch (error) {
+    return {
+      ok: false,
+      code: "merge_conflict",
+      message: error instanceof Error ? error.message : "git merge failed"
+    };
+  }
+
+  const merged = await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+  if (!merged) {
+    return { ok: false, code: "proposal_not_mergeable", message: "Proposal not found." };
+  }
+  return { ok: true, proposal: merged };
 }
 
 type PublishValidationError = {
