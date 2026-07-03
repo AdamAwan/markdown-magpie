@@ -348,9 +348,20 @@ Sets the proposal status directly. Valid values: `draft`, `ready`, `branch-pushe
 { "status": "ready" }
 ```
 
+The `pr-opened → merged` transition is **owned by the PR poller** (the
+`refresh_flow_snapshot` job feeds `applyPullRequestTransition`), which marks a proposal
+merged only once its real pull request has merged in git — running the merge cascade and
+freezing its cluster. Hand-asserting `merged` on a proposal that has an open pull request
+is therefore rejected. Manually setting `merged` remains available only as the no-PR
+fallback: a proposal `branch-pushed` without a pull request to poll (e.g. a deployment
+with no `GITHUB_TOKEN`, or a local-git destination), which nothing auto-transitions.
+
 - `400 valid_proposal_status_required`.
 - `404 proposal_not_found`.
-- `200` — `{ "proposal": Proposal }`.
+- `409 proposal_merge_tracked_by_pull_request` — the proposal has an open pull request; it
+  will be marked merged automatically when that PR merges.
+- `200` — `{ "proposal": Proposal }` (plus `"cascadeScheduled": true` when the new status is
+  `merged`).
 
 ### `POST /api/proposals/:id/publish`
 
