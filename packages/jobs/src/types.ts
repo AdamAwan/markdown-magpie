@@ -30,7 +30,10 @@ export type JobType = (typeof JOB_TYPES)[number];
 export const AI_PROVIDERS = ["openai-compatible", "azure-openai", "codex", "claude"] as const;
 
 export type AiProviderName = (typeof AI_PROVIDERS)[number];
-export type JobCapability = AiProviderName | "github" | "maintenance";
+// `local-git` publishes a proposal branch to a file:// destination: it needs git
+// and a commit identity but NO GitHub token, so a token-less watcher can do it.
+// `github` additionally opens pull requests (and does crosslink/comment work).
+export type JobCapability = AiProviderName | "github" | "maintenance" | "local-git";
 export type JobState = "created" | "retry" | "active" | "completed" | "cancelled" | "failed" | "blocked";
 
 export interface JobError {
@@ -88,6 +91,11 @@ export interface JobDefinition<TInput = unknown, TOutput = unknown> {
   readonly inputSchema: ZodType<TInput>;
   readonly outputSchema: ZodType<TOutput>;
   readonly policy: Readonly<JobPolicy>;
+  // Every concrete capability this type can route to: one entry for a statically
+  // scoped job, the four AI providers for provider-routed work, or the fan-out set
+  // (e.g. [github, local-git] for publish_proposal). Drives queue provisioning and
+  // the console's capability→job-type coverage map.
+  readonly capabilities: readonly JobCapability[];
   readonly requiredCapability: (input: TInput) => JobCapability;
   readonly queueName: (input: TInput) => string;
 }

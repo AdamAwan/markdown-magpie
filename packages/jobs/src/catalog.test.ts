@@ -8,6 +8,8 @@ import {
   answerQuestionOutputSchema,
   crosslinkPullRequestsInputSchema,
   jobDefinition,
+  jobTypesForCapability,
+  jobTypesWithoutCapabilities,
   queueNameForJob,
   queueNamesForCapabilities
 } from "./index.js";
@@ -86,10 +88,41 @@ test("codex capability can only claim codex-partitioned AI work", () => {
 test("github capability yields only GitHub work queues", () => {
   assert.deepEqual(queueNamesForCapabilities(["github"]), [
     "refresh_flow_snapshot",
-    "publish_proposal",
+    "publish_proposal__github",
     "crosslink_pull_requests",
     "comment_pull_request"
   ]);
+});
+
+test("local-git capability yields only the local-git publish queue", () => {
+  assert.deepEqual(queueNamesForCapabilities(["local-git"]), ["publish_proposal__local_git"]);
+});
+
+test("publish_proposal routes by destination and defaults to github", () => {
+  const definition = jobDefinition("publish_proposal");
+  assert.deepEqual([...definition.capabilities], ["github", "local-git"]);
+  assert.equal(definition.requiredCapability({ proposalId: "p", destination: "local-git" }), "local-git");
+  assert.equal(definition.requiredCapability({ proposalId: "p", destination: "github" }), "github");
+  // Legacy enqueues that omit destination fall back to github.
+  assert.equal(definition.requiredCapability({ proposalId: "p" }), "github");
+  assert.equal(queueNameForJob("publish_proposal", { proposalId: "p", destination: "local-git" }), "publish_proposal__local_git");
+  assert.equal(queueNameForJob("publish_proposal", { proposalId: "p" }), "publish_proposal__github");
+  // An unknown destination is rejected rather than silently defaulted.
+  assert.throws(() => queueNameForJob("publish_proposal", { proposalId: "p", destination: "gitlab" as never }), /destination/i);
+});
+
+test("jobTypesForCapability and jobTypesWithoutCapabilities reflect the catalog", () => {
+  assert.ok(jobTypesForCapability("local-git").includes("publish_proposal"));
+  assert.ok(jobTypesForCapability("github").includes("publish_proposal"));
+  assert.ok(jobTypesForCapability("maintenance").includes("source_change_sync"));
+
+  // publish_proposal is covered by github OR local-git; a fleet with neither leaves it uncovered.
+  assert.ok(!jobTypesWithoutCapabilities(["local-git", "maintenance", "codex"]).includes("publish_proposal"));
+  assert.ok(jobTypesWithoutCapabilities(["maintenance"]).includes("publish_proposal"));
+  // A full fleet covers everything.
+  assert.deepEqual(jobTypesWithoutCapabilities([...AI_PROVIDERS, "github", "local-git", "maintenance"]), []);
+  // An empty fleet covers nothing.
+  assert.equal(jobTypesWithoutCapabilities([]).length, JOB_TYPES.length);
 });
 
 test("maintenance capability yields only orchestration work queues", () => {

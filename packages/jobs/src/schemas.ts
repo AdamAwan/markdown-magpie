@@ -397,7 +397,13 @@ export const processGapsToPullRequestsOutputSchema = z.object({
   published: z.number().int()
 });
 
-export const publishProposalInputSchema = z.object({ proposalId: z.string() });
+// `destination` selects the publish queue/capability: a file:// destination routes
+// to `local-git` (push only, no PR); anything else to `github`. Defaults to github
+// so enqueues predating the field (and legacy jobs) keep the original behaviour.
+export const publishProposalInputSchema = z.object({
+  proposalId: z.string(),
+  destination: z.enum(["github", "local-git"]).default("github")
+});
 export const publishProposalOutputSchema = z.object({
   proposalId: z.string(),
   branchName: z.string(),

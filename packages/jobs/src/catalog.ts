@@ -3,14 +3,26 @@ import * as schemas from "./schemas.js";
 import {
   AI_PROVIDERS,
   JOB_TYPES,
-  isAiProviderName,
-  type AiProviderName,
   type JobCapability,
   type JobDefinition,
   type JobPolicy,
   type JobType,
   type QueueDefinition
 } from "./types.js";
+
+// How a job type maps onto capabilities/queues:
+//  - a bare JobCapability: statically scoped, one queue named by the type;
+//  - "provider": fans out over the four AI providers, keyed off input.provider;
+//  - a fan-out spec: fans out over `capabilities`, keyed off input[field], with an
+//    optional `default` used when the field is absent (backward-compatible enqueues).
+type FanOutSpec = { field: string; capabilities: readonly JobCapability[]; default?: JobCapability };
+type CapabilitySpec = JobCapability | "provider" | FanOutSpec;
+
+// The one place the partitioned queue-name shape is defined: bare `type` for a
+// single-capability job, `type__capability` (dashes → underscores) when it fans out.
+function partitionedQueueName(type: JobType, capability: JobCapability, multi: boolean): string {
+  return multi ? `${type}__${capability.replaceAll("-", "_")}` : type;
+}
 
 const DAY = 24 * 60 * 60;
 const BASE_POLICY = {
@@ -32,31 +44,47 @@ function policy(providerWork: boolean, expireInSeconds: number): Readonly<JobPol
 
 function define(
   type: JobType,
-  capability: JobCapability | "provider",
+  spec: CapabilitySpec,
   inputSchema: ZodType,
   outputSchema: ZodType,
   expireInSeconds: number
 ): JobDefinition {
-  const providerWork = capability === "provider";
+  const providerWork = spec === "provider";
+  const fanOut = typeof spec === "object";
+  const capabilities: readonly JobCapability[] = providerWork
+    ? AI_PROVIDERS
+    : fanOut
+      ? spec.capabilities
+      : [spec];
+  // The input field that selects the capability, and a fallback when it is absent.
+  const field = providerWork ? "provider" : fanOut ? spec.field : undefined;
+  const fallback = fanOut ? spec.default : undefined;
+  const multi = capabilities.length > 1;
+
   const requiredCapability = (input: unknown): JobCapability => {
-    if (!providerWork) {
-      return capability;
+    if (field === undefined) {
+      return capabilities[0];
     }
-    const provider = (input as { provider?: unknown } | null)?.provider;
-    if (!isAiProviderName(provider)) {
-      throw new TypeError(`AI job ${type} requires a valid provider`);
+    const value = (input as Record<string, unknown> | null | undefined)?.[field];
+    if (value === undefined || value === null) {
+      if (fallback) {
+        return fallback;
+      }
+      throw new TypeError(`Job ${type} requires input.${field} to be one of: ${capabilities.join(", ")}`);
     }
-    return provider;
+    if (typeof value !== "string" || !(capabilities as readonly string[]).includes(value)) {
+      throw new TypeError(`Job ${type} requires input.${field} to be one of: ${capabilities.join(", ")}`);
+    }
+    return value as JobCapability;
   };
-  const queueName = (input: unknown): string => {
-    const required = requiredCapability(input);
-    return providerWork ? `${type}__${required.replaceAll("-", "_")}` : type;
-  };
+  const queueName = (input: unknown): string => partitionedQueueName(type, requiredCapability(input), multi);
+
   return Object.freeze({
     type,
     inputSchema,
     outputSchema,
     policy: policy(providerWork, expireInSeconds),
+    capabilities,
     requiredCapability,
     queueName
   });
@@ -82,7 +110,16 @@ const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
   source_change_sync: define("source_change_sync", "maintenance", schemas.sourceChangeSyncInputSchema, schemas.sourceChangeSyncOutputSchema, 60 * 60),
   correctness_patrol: define("correctness_patrol", "maintenance", schemas.correctnessPatrolInputSchema, schemas.correctnessPatrolOutputSchema, 60 * 60),
   editorial_patrol: define("editorial_patrol", "maintenance", schemas.editorialPatrolInputSchema, schemas.editorialPatrolOutputSchema, 60 * 60),
-  publish_proposal: define("publish_proposal", "github", schemas.publishProposalInputSchema, schemas.publishProposalOutputSchema, 15 * 60),
+  // Publishing a branch to a file:// destination needs no GitHub token, so it fans
+  // out over {github, local-git} keyed off input.destination. Enqueues that omit it
+  // (legacy jobs) default to github, matching the pre-local-git behaviour.
+  publish_proposal: define(
+    "publish_proposal",
+    { field: "destination", capabilities: ["github", "local-git"], default: "github" },
+    schemas.publishProposalInputSchema,
+    schemas.publishProposalOutputSchema,
+    15 * 60
+  ),
   crosslink_pull_requests: define("crosslink_pull_requests", "github", schemas.crosslinkPullRequestsInputSchema, schemas.crosslinkPullRequestsOutputSchema, 10 * 60),
   comment_pull_request: define("comment_pull_request", "github", schemas.commentPullRequestInputSchema, schemas.commentPullRequestOutputSchema, 10 * 60)
 });
@@ -126,16 +163,12 @@ export function isAiJobType(type: JobType): boolean {
 function concreteWorkQueues(): QueueDefinition[] {
   return JOB_TYPES.flatMap((type) => {
     const definition = jobDefinition(type);
-    if (aiJobTypes.has(type)) {
-      return AI_PROVIDERS.map((provider) => concreteQueue(definition, provider));
-    }
-    return [concreteQueue(definition, definition.requiredCapability({}))];
+    return definition.capabilities.map((capability) => concreteQueue(definition, capability));
   });
 }
 
 function concreteQueue(definition: JobDefinition, capability: JobCapability): QueueDefinition {
-  const input = aiJobTypes.has(definition.type) ? { provider: capability as AiProviderName } : {};
-  const name = definition.queueName(input);
+  const name = partitionedQueueName(definition.type, capability, definition.capabilities.length > 1);
   const deadLetter = `${name}__dead_letter`;
   return Object.freeze({
     name,
@@ -164,4 +197,21 @@ export function allQueueDefinitions(): QueueDefinition[] {
 export function queueNamesForCapabilities(capabilities: readonly JobCapability[]): string[] {
   const accepted = new Set(capabilities);
   return workQueues.filter((queue) => accepted.has(queue.capability!)).map((queue) => queue.name);
+}
+
+// The job types a single capability can execute (a type is included if that
+// capability is among the ones it routes to). The console renders one worker's
+// reach from this, so it can never drift from the catalog the way a hand-kept map
+// would.
+export function jobTypesForCapability(capability: JobCapability): JobType[] {
+  return JOB_TYPES.filter((type) => jobDefinition(type).capabilities.includes(capability));
+}
+
+// The job types no capability in `available` can execute — i.e. the coverage gap
+// for a running watcher fleet. A type counts as covered if ANY of its capabilities
+// is available (so publish_proposal is covered by github OR local-git). Drives the
+// "no watcher can run these jobs" console banner.
+export function jobTypesWithoutCapabilities(available: Iterable<JobCapability>): JobType[] {
+  const accepted = new Set(available);
+  return JOB_TYPES.filter((type) => !jobDefinition(type).capabilities.some((capability) => accepted.has(capability)));
 }
