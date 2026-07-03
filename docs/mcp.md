@@ -16,7 +16,7 @@ Uses the MCP **Streamable HTTP transport** (spec version 2025-03-26+). Runs as a
 
 ## Tools
 
-### `kb.ask`
+### `kb_ask`
 
 Input: `{ "question": string }`
 
@@ -28,7 +28,7 @@ Returns the final answer only:
   "confidence": "high | medium | low",
   "citations": [ { "documentId": "...", "sectionId": "...", "path": "...", "heading": "...", "anchor": "...", "excerpt": "..." } ],
   "gaps": [ { ... } ],   // present only when the answer exposes knowledge gaps; one entry per missing topic
-  "questionId": "string" // identifier for reporting feedback via kb.feedback
+  "questionId": "string" // identifier for reporting feedback via kb_feedback
 }
 ```
 
@@ -38,19 +38,19 @@ Answers are always produced asynchronously by a durable job:
 2. The server waits on the job via `GET /api/jobs/:id/wait`. The wait endpoint long-polls server-side and returns **200** with the terminal job, or **202** with the current projection when its wait limit expires.
 3. If the wait returns a non-terminal job (state `created`, `retry`, or `active`), the server falls back to polling the detail endpoint `GET /api/jobs/:id` every `ANSWER_POLL_INTERVAL_MS` until the job reaches a terminal state or `ANSWER_TIMEOUT_MS` elapses.
 
-Job states are `created | retry | active` (non-terminal) and `completed | cancelled | failed` (terminal). On `completed`, the terminal job `output` is the envelope `{ result, executor }`; the answer fields live in `result`. On `failed`/`cancelled`, or if the timeout is exceeded, `kb.ask` raises an error naming the job id and state (no payload data is echoed).
+Job states are `created | retry | active` (non-terminal) and `completed | cancelled | failed` (terminal). On `completed`, the terminal job `output` is the envelope `{ result, executor }`; the answer fields live in `result`. On `failed`/`cancelled`, or if the timeout is exceeded, `kb_ask` raises an error naming the job id and state (no payload data is echoed).
 
 The client receives only the answer payload above plus the `questionId`. Internal details — job identifiers, retrieval context, provider names, and status links — are not exposed to the client.
 
-### `kb.search`
+### `kb_search`
 
 Input: `{ "query": string, "limit"?: number }`
 
 Returns indexed Markdown sections matching the keyword query.
 
-### `kb.feedback`
+### `kb_feedback`
 
-Reports feedback on a previously asked question, using the `questionId` returned by `kb.ask`.
+Reports feedback on a previously asked question, using the `questionId` returned by `kb_ask`.
 
 Input:
 
@@ -71,8 +71,8 @@ Input:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `API_BASE_URL` | `http://localhost:4000` | Base URL of the Markdown Magpie API. |
-| `ANSWER_POLL_INTERVAL_MS` | `1000` | How often `kb.ask` polls the answer job's detail endpoint after a non-terminal wait. |
-| `ANSWER_TIMEOUT_MS` | `120000` | How long `kb.ask` waits for a queued answer before failing. |
+| `ANSWER_POLL_INTERVAL_MS` | `1000` | How often `kb_ask` polls the answer job's detail endpoint after a non-terminal wait. |
+| `ANSWER_TIMEOUT_MS` | `120000` | How long `kb_ask` waits for a queued answer before failing. |
 
 ### Streamable HTTP only
 
@@ -112,9 +112,9 @@ Per-tool scopes:
 
 | Tool | Required scope |
 | --- | --- |
-| `kb.search` | `read:knowledge` |
-| `kb.ask` | `ask:knowledge` |
-| `kb.feedback` | `feedback:questions` |
+| `kb_search` | `read:knowledge` |
+| `kb_ask` | `ask:knowledge` |
+| `kb_feedback` | `feedback:questions` |
 
 The inbound user token is validated locally and **never forwarded** to the API. The HTTP server calls the API with its own separate service token, `MCP_API_AUTH_TOKEN` (a machine-to-machine credential). Startup fails fast if `AUTH_REQUIRED=true` and this token is missing.
 
@@ -127,7 +127,7 @@ The stdio transport presents a single bearer token to the API on every call, sup
 ## Requirements
 
 - The API must be running and reachable at `API_BASE_URL`.
-- A watcher must be running to process `answer_question` jobs; otherwise `kb.ask` will time out.
+- A watcher must be running to process `answer_question` jobs; otherwise `kb_ask` will time out.
 
 ## Running
 

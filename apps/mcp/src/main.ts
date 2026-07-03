@@ -50,12 +50,12 @@ interface JsonSchema {
 
 const tools = [
   {
-    name: "kb.ask",
+    name: "kb_ask",
     description:
       "Ask a question against the indexed Markdown knowledge base and return a cited answer. " +
       "By default (flow 'auto') the question is routed to the best-matching knowledge flow. " +
       "If routing cannot determine a flow, the result has flowSelectionRequired with the available " +
-      "flows — call kb.ask again with `flow` set to one of those ids. Use kb.flows to discover flows up front.",
+      "flows — call kb_ask again with `flow` set to one of those ids. Use kb_flows to discover flows up front.",
     inputSchema: {
       type: "object",
       properties: {
@@ -66,7 +66,7 @@ const tools = [
         flow: {
           type: "string",
           description:
-            "Flow to answer within. Defaults to 'auto' (let the router decide). Otherwise must be a flow id from kb.flows."
+            "Flow to answer within. Defaults to 'auto' (let the router decide). Otherwise must be a flow id from kb_flows."
         }
       },
       required: ["question"],
@@ -74,9 +74,9 @@ const tools = [
     } satisfies JsonSchema
   },
   {
-    name: "kb.flows",
+    name: "kb_flows",
     description:
-      "List the knowledge flows a question can be routed to. Use the returned ids as the `flow` argument to kb.ask.",
+      "List the knowledge flows a question can be routed to. Use the returned ids as the `flow` argument to kb_ask.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -84,7 +84,7 @@ const tools = [
     } satisfies JsonSchema
   },
   {
-    name: "kb.search",
+    name: "kb_search",
     description: "Search indexed Markdown sections by keyword query.",
     inputSchema: {
       type: "object",
@@ -103,9 +103,9 @@ const tools = [
     } satisfies JsonSchema
   },
   {
-    name: "kb.feedback",
+    name: "kb_feedback",
     description:
-      "Report feedback on a previously asked question using the questionId returned by kb.ask. " +
+      "Report feedback on a previously asked question using the questionId returned by kb_ask. " +
       "kind is 'helpful', 'unhelpful', or 'knowledge_gap'. For 'knowledge_gap', optionally pass " +
       "gapSummary describing the missing knowledge.",
     inputSchema: {
@@ -113,7 +113,7 @@ const tools = [
       properties: {
         questionId: {
           type: "string",
-          description: "The questionId returned by kb.ask."
+          description: "The questionId returned by kb_ask."
         },
         kind: {
           type: "string",
@@ -130,17 +130,17 @@ const tools = [
     } satisfies JsonSchema
   },
   {
-    name: "kb.seed",
+    name: "kb_seed",
     description:
       "Seed a flow with initial content: submit a list of documents to author, each a title plus the points it should cover. " +
       "Each is drafted straight into a proposal → pull request, skipping the gap-clustering pipeline. " +
-      "Use for a brand-new flow or to add a new area of knowledge (e.g. a new feature) to an existing one. Discover flow ids with kb.flows.",
+      "Use for a brand-new flow or to add a new area of knowledge (e.g. a new feature) to an existing one. Discover flow ids with kb_flows.",
     inputSchema: {
       type: "object",
       properties: {
         flow: {
           type: "string",
-          description: "The flow id to seed (from kb.flows)."
+          description: "The flow id to seed (from kb_flows)."
         },
         items: {
           type: "array",
@@ -286,19 +286,19 @@ async function dispatch(message: JsonRpcRequest): Promise<unknown> {
 }
 
 async function callTool(params: ToolCallParams): Promise<unknown> {
-  if (params.name === "kb.ask") {
+  if (params.name === "kb_ask") {
     const question = stringArgument(params.arguments, "question");
     const flow = optionalStringArgument(params.arguments, "flow");
     const answer = await askQuestion(question, { token: stdioAuthToken }, flow);
     return textResult(answer);
   }
 
-  if (params.name === "kb.flows") {
+  if (params.name === "kb_flows") {
     const result = await listFlows({ token: stdioAuthToken });
     return textResult(result);
   }
 
-  if (params.name === "kb.search") {
+  if (params.name === "kb_search") {
     const query = stringArgument(params.arguments, "query");
     const limit = numberArgument(params.arguments, "limit");
     const path = limit === undefined ? `/knowledge/search?q=${encodeURIComponent(query)}` : `/knowledge/search?q=${encodeURIComponent(query)}&limit=${limit}`;
@@ -306,12 +306,12 @@ async function callTool(params: ToolCallParams): Promise<unknown> {
     return textResult(result);
   }
 
-  if (params.name === "kb.feedback") {
+  if (params.name === "kb_feedback") {
     const result = await submitFeedback(params.arguments, { token: stdioAuthToken });
     return textResult(result);
   }
 
-  if (params.name === "kb.seed") {
+  if (params.name === "kb_seed") {
     const result = await seedFlow(params.arguments, { token: stdioAuthToken });
     return textResult(result);
   }

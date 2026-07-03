@@ -182,7 +182,7 @@ Use `docker compose down -v` only when you want to delete the local Postgres vol
 
 ## MCP
 
-The MCP server lets agent clients call the indexed knowledge base through tools such as `kb.ask`, `kb.search`, and `kb.feedback`.
+The MCP server lets agent clients call the indexed knowledge base through tools such as `kb_ask`, `kb_search`, and `kb_feedback`.
 
 Build it and run the stdio server:
 
@@ -191,7 +191,7 @@ npm run build -w @magpie/mcp
 API_BASE_URL=http://localhost:4000 node apps/mcp/dist/main.js
 ```
 
-A project-scoped `.mcp.json` is included for local clients. The API and a watcher must be running before `kb.ask` can complete.
+A project-scoped `.mcp.json` is included for local clients. The API and a watcher must be running before `kb_ask` can complete.
 
 See [docs/mcp.md](docs/mcp.md) for stdio, Streamable HTTP, auth, and client setup.
 

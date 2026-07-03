@@ -126,7 +126,7 @@ schedules converge on one mechanism. The **Scheduled Jobs → Job Types** diagra
 the `/dataflow` page draws the full fan-out.
 
 Not every producer is scheduled. **Flow seeding** is an on-demand producer:
-`POST /api/flows/:id/seed` (and the `kb.seed` MCP tool) enqueue a `draft_seed_document`
+`POST /api/flows/:id/seed` (and the `kb_seed` MCP tool) enqueue a `draft_seed_document`
 AI job per requested doc, bypassing the demand-inference half (gap clustering + the
 intent gate) since the caller supplies the intent. The resulting clusterless proposals
 still converge on the same reconcile gate and `publish_proposal` path, so seeding a new

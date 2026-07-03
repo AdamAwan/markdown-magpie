@@ -102,43 +102,43 @@ test("/mcp with an invalid bearer token returns a discovery challenge", async ()
   assert.match(res.header["www-authenticate"], /resource_metadata=/);
 });
 
-test("tools/call kb.search requires read:knowledge scope", async () => {
+test("tools/call kb_search requires read:knowledge scope", async () => {
   const auth = await makeTestAuth();
   const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
   const res = await request(app)
     .post("/mcp")
     .set("authorization", await auth.token(["ask:knowledge"]))
-    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb.search", arguments: { query: "hi" } } });
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_search", arguments: { query: "hi" } } });
   assert.equal(res.status, 403);
 });
 
-test("tools/call kb.ask requires ask:knowledge scope", async () => {
+test("tools/call kb_ask requires ask:knowledge scope", async () => {
   const auth = await makeTestAuth();
   const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
   const res = await request(app)
     .post("/mcp")
     .set("authorization", await auth.token(["read:knowledge"]))
-    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb.ask", arguments: { question: "hi" } } });
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_ask", arguments: { question: "hi" } } });
   assert.equal(res.status, 403);
 });
 
-test("tools/call kb.feedback requires feedback:questions scope", async () => {
+test("tools/call kb_feedback requires feedback:questions scope", async () => {
   const auth = await makeTestAuth();
   const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
   const res = await request(app)
     .post("/mcp")
     .set("authorization", await auth.token(["read:knowledge"]))
-    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb.feedback", arguments: { questionId: "q", kind: "helpful" } } });
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_feedback", arguments: { questionId: "q", kind: "helpful" } } });
   assert.equal(res.status, 403);
 });
 
-test("tools/call kb.seed requires manage:jobs scope", async () => {
+test("tools/call kb_seed requires manage:jobs scope", async () => {
   const auth = await makeTestAuth();
   const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
   const res = await request(app)
     .post("/mcp")
     .set("authorization", await auth.token(["read:knowledge"]))
-    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb.seed", arguments: { flow: "f", items: [{ coverage: ["x"] }] } } });
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_seed", arguments: { flow: "f", items: [{ coverage: ["x"] }] } } });
   assert.equal(res.status, 403);
 });
 
@@ -163,7 +163,7 @@ test("a valid scoped tools/call dispatches and calls the API with the service to
   const serviceToken = "service-token-distinct-from-user";
 
   // Capture the outbound API request and return a minimal valid search payload
-  // so the kb.search tool dispatches end-to-end through the transport. kb.search
+  // so the kb_search tool dispatches end-to-end through the transport. kb_search
   // is the simplest tool: a single GET via getJson, no answer-polling loop.
   const originalFetch = globalThis.fetch;
   let captured: { url: string; authorization: string | null } | undefined;
@@ -191,7 +191,7 @@ test("a valid scoped tools/call dispatches and calls the API with the service to
       // The Streamable HTTP transport requires the client to accept both content
       // types on POST; without this it rejects with 406 before dispatching.
       .set("accept", "application/json, text/event-stream")
-      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb.search", arguments: { query: "hi" } } });
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_search", arguments: { query: "hi" } } });
 
     // The tool passed auth/scope and was dispatched (not gated).
     assert.notEqual(res.status, 401);
@@ -199,7 +199,7 @@ test("a valid scoped tools/call dispatches and calls the API with the service to
     assert.equal(res.status, 200);
 
     // The tool actually ran: the stubbed downstream fetch was invoked.
-    assert.ok(captured, "expected the kb.search tool to call the downstream API");
+    assert.ok(captured, "expected the kb_search tool to call the downstream API");
     assert.match(captured.url, /\/api\/knowledge\/search\?q=hi/);
 
     // The downstream call carries the configured service token, never the
@@ -248,7 +248,7 @@ test("downstream calls forward the verified user's on-behalf-of headers (subject
       .post("/mcp")
       .set("authorization", userToken)
       .set("accept", "application/json, text/event-stream")
-      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb.search", arguments: { query: "hi" } } });
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_search", arguments: { query: "hi" } } });
 
     assert.equal(res.status, 200);
     assert.ok(captured, "expected the tool to call the downstream API");
