@@ -4,6 +4,7 @@ import {
   buildAttentionNotices,
   formatJobType,
   isActiveJob,
+  jobResult,
   jobTransitionMessages,
   sectionSubtitle,
   sectionTitle
@@ -238,4 +239,25 @@ test("section copy is defined for every section with a distinct default", () => 
   // "ask" is the default branch in both helpers.
   assert.equal(sectionTitle("ask"), "Ask and inspect cited answers");
   assert.equal(sectionTitle("knowledge"), "Manage knowledge flows");
+});
+
+// Regression: the outline path read job.output.items, but a completed job's output
+// is the envelope { result, executor } — the payload lives under `result`. Reading
+// the wrong level silently returned undefined, so seed outlines never showed docs.
+test("jobResult unwraps the { result, executor } envelope, not job.output directly", () => {
+  const items = [{ title: "Aggregation Types", coverage: ["sum", "count"] }];
+  const completed = job({
+    id: "j1",
+    type: "outline_flow_seed",
+    output: { result: { items, rationale: "why" }, executor: "watcher-1" }
+  });
+  const payload = jobResult<{ items?: typeof items }>(completed);
+  assert.deepEqual(payload?.items, items, "items must come from output.result, not output");
+
+  // The pre-fix bug: reading the top level yields nothing.
+  assert.equal((completed.output as { items?: unknown }).items, undefined);
+});
+
+test("jobResult returns undefined when the job has no output yet", () => {
+  assert.equal(jobResult(job({ id: "j2", state: "active", output: undefined })), undefined);
 });
