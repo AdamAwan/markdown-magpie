@@ -164,6 +164,30 @@ The same operation is exposed over MCP as the `kb.seed` tool, so an interviewer 
 a finished outline in one shot rather than streaming questions into `kb.ask` and waiting for
 the gap pipeline.
 
+### Generating the outline (`outline_flow_seed`)
+
+Writing the `items` list by hand (or via an external interviewer LLM) is not the only way to
+produce it. The `outline_flow_seed` AI job **proposes** the list from a topic:
+
+```json
+POST /api/flows/:flowId/outline
+{ "topic": "Refund handling", "notes": "focus on partial refunds" }
+```
+
+The API grounds the job in the flow's *existing* docs — it retrieves the closest destination
+sections for the topic (inline embeddings, the same mechanism the gap reconciler uses for scope
+grounding) and passes them as context along with the flow persona — so the model proposes
+documents that fit the current structure and don't restate what's already covered. The job
+returns `{ items: SeedItem[], rationale }`; it **only proposes** and drafts nothing. Its output
+rides on the job record (read it back via `GET /api/jobs/:id/wait`), so there is no completion
+side-effect and no new stored entity. The endpoint requires the `manage:jobs` scope (and
+`manage` on the target flow) and returns the enqueued job id.
+
+The full path is: **topic → `outline_flow_seed` (retrieval-grounded) → human edits/approves the
+proposed `items` → `POST /flows/:id/seed`** (the direct authoring path above). This is what the
+console's **Seed / add an area** page drives — pick a flow, enter a topic, *Generate outline*,
+edit the proposed documents, then *Seed*. The generated PRs flow into the normal review queue.
+
 ## Watcher Model
 
 The watcher has no direct database access. It talks to the API only:

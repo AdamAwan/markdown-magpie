@@ -82,7 +82,7 @@ test passes.
 - schemas `outlineFlowSeedInputSchema` / `outlineFlowSeedOutputSchema`; job type
   `"outline_flow_seed"`; prompt `OUTLINE_FLOW_SEED`.
 
-- [ ] **Step 1: Add the routing test (failing).** In `packages/jobs/src/catalog.test.ts`, add
+- [x] **Step 1: Add the routing test (failing).** In `packages/jobs/src/catalog.test.ts`, add
   `outline_flow_seed: 10 * 60,` to `EXPIRATION_SECONDS` (after the `draft_seed_document` line).
   Then, after the `draft_seed_document routes…` test:
 
@@ -96,10 +96,10 @@ test passes.
   });
   ```
 
-- [ ] **Step 2: Run it — verify it fails.** `npm test -w @magpie/jobs` → FAIL (not a `JobType`;
+- [x] **Step 2: Run it — verify it fails.** `npm test -w @magpie/jobs` → FAIL (not a `JobType`;
   `EXPIRATION_SECONDS` lookup missing).
 
-- [ ] **Step 3: Add core types.** In `packages/core/src/index.ts`, after the
+- [x] **Step 3: Add core types.** In `packages/core/src/index.ts`, after the
   `DraftSeedDocumentJobOutput` interface:
 
   ```ts
@@ -132,7 +132,7 @@ test passes.
   }
   ```
 
-- [ ] **Step 4: Add jobs schemas.** In `packages/jobs/src/schemas.ts`, add to the `@magpie/core`
+- [x] **Step 4: Add jobs schemas.** In `packages/jobs/src/schemas.ts`, add to the `@magpie/core`
   import block: `OutlineFlowSeedJobInput as CoreOutlineFlowSeedJobInput, OutlineFlowSeedJobOutput,
   SeedItem`. After `draftSeedDocumentOutputSchema`:
 
@@ -164,7 +164,7 @@ test passes.
   }) satisfies z.ZodType<OutlineFlowSeedJobOutput>;
   ```
 
-- [ ] **Step 5: Register the job type + definition + AI set.** `packages/jobs/src/types.ts` — add
+- [x] **Step 5: Register the job type + definition + AI set.** `packages/jobs/src/types.ts` — add
   `"outline_flow_seed",` to `JOB_TYPES` immediately after `"draft_seed_document",`.
   `packages/jobs/src/catalog.ts` — in `definitions`, after the `draft_seed_document` line:
 
@@ -174,14 +174,14 @@ test passes.
 
   …and add `"outline_flow_seed",` to the `AI_JOB_TYPES` array after `"draft_seed_document"`.
 
-- [ ] **Step 6: Run jobs tests.** `npm test -w @magpie/jobs` → PASS.
+- [x] **Step 6: Run jobs tests.** `npm test -w @magpie/jobs` → PASS.
 
-- [ ] **Step 7: Add the prompt (failing prompt tests first).** In
+- [x] **Step 7: Add the prompt (failing prompt tests first).** In
   `packages/prompts/src/catalog.test.ts`, change `promptCatalog.length` `18` → `19` (both the
   test title and the assertion), and insert `"outline-flow-seed",` into the order array
   immediately after `"draft-seed-document"`. Run `npm test -w @magpie/prompts` → FAIL.
 
-- [ ] **Step 8: Define the prompt.** `packages/prompts/src/catalog.ts` — after
+- [x] **Step 8: Define the prompt.** `packages/prompts/src/catalog.ts` — after
   `DRAFT_SEED_DOCUMENT`:
 
   ```ts
@@ -221,7 +221,7 @@ Return JSON:
 
   …and add `OUTLINE_FLOW_SEED,` to `promptCatalog` immediately after `DRAFT_SEED_DOCUMENT`.
 
-- [ ] **Step 9: Wire the watcher prompt + bump the API prompt count.**
+- [x] **Step 9: Wire the watcher prompt + bump the API prompt count.**
   `apps/watcher/src/job-prompts.ts` — add `OUTLINE_FLOW_SEED` to the `@magpie/prompts` import and a
   case in `buildPrompt` after the `draft_seed_document` case:
 
@@ -232,10 +232,10 @@ Return JSON:
 
   `apps/api/src/app.test.ts` — change the `/api/prompts` count assertion `18` → `19`.
 
-- [ ] **Step 10: Run all touched package tests.**
+- [x] **Step 10: Run all touched package tests.**
   `npm test -w @magpie/prompts && npm test -w @magpie/jobs && npm test -w @magpie/core` → PASS.
 
-- [ ] **Step 11: Commit.**
+- [x] **Step 11: Commit.**
   `git commit -m "feat(jobs): add outline_flow_seed AI job contract + prompt"`
 
 ---
@@ -256,7 +256,7 @@ inline retrieval. Enqueue-only; the outline lands as the job's output.
   `outlineFlowSeed(ctx, flowId, { topic, notes }): Promise<{ ok: true; jobId: string } | { ok: false; code: string }>`.
 - Consumes: `ctx.stores.knowledgeIndex.search`, `selectFlow`, `ctx.jobs.create("outline_flow_seed", …)`.
 
-- [ ] **Step 1: `describeExistingDocuments`.** In `apps/api/src/features/retrieve/service.ts`,
+- [x] **Step 1: `describeExistingDocuments`.** In `apps/api/src/features/retrieve/service.ts`,
   mirror `describeFlowScope` (same `resolveRepositoryScope`, no relevance floor so the model always
   sees the closest structure). Map ranked sections to `{ path, heading, excerpt }` (excerpt capped,
   reuse the `SCOPE_SNIPPET_CHARS` idea). Return `[]` (via a guard) for an unknown flow rather than
@@ -273,7 +273,7 @@ inline retrieval. Enqueue-only; the outline lands as the job's output.
 
   Import `ExistingDocumentContext` from `@magpie/core`.
 
-- [ ] **Step 2: Failing test for `outlineFlowSeed`.** Append to
+- [x] **Step 2: Failing test for `outlineFlowSeed`.** Append to
   `apps/api/src/features/proposals/service.test.ts` (match its imports / `makeTestContext` and the
   configured test flow id used by the seed tests):
 
@@ -306,10 +306,10 @@ inline retrieval. Enqueue-only; the outline lands as the job's output.
   });
   ```
 
-- [ ] **Step 3: Run it — verify it fails.**
+- [x] **Step 3: Run it — verify it fails.**
   `npm test -w @magpie/api -- --test-name-pattern="outlineFlowSeed"` → FAIL (not exported).
 
-- [ ] **Step 4: Implement `outlineFlowSeed`.** In `apps/api/src/features/proposals/service.ts`, add
+- [x] **Step 4: Implement `outlineFlowSeed`.** In `apps/api/src/features/proposals/service.ts`, add
   `OutlineFlowSeedJobInput` to the `@magpie/core` import and import `describeExistingDocuments` from
   `../retrieve/service.js`, then:
 
@@ -351,10 +351,10 @@ inline retrieval. Enqueue-only; the outline lands as the job's output.
   assignment is fine — omit the key when absent to keep the payload clean, matching how the codebase
   spreads optional fields.)
 
-- [ ] **Step 5: Run it — verify it passes.**
+- [x] **Step 5: Run it — verify it passes.**
   `npm test -w @magpie/api -- --test-name-pattern="outlineFlowSeed"` → PASS.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
   `git commit -m "feat(seeding): outlineFlowSeed enqueues a retrieval-grounded outline job"`
 
 ---
@@ -374,7 +374,7 @@ as `POST /flows/:flowId/seed`.
   `zValidator`.
 - Produces: `POST /api/flows/:flowId/outline` → `{ ok: true, jobId }`.
 
-- [ ] **Step 1: Body schema.** In `apps/api/src/features/seed/schema.ts`:
+- [x] **Step 1: Body schema.** In `apps/api/src/features/seed/schema.ts`:
 
   ```ts
   export const outlineBodySchema = z.object({
@@ -383,14 +383,14 @@ as `POST /flows/:flowId/seed`.
   });
   ```
 
-- [ ] **Step 2: Failing route test.** In `apps/api/src/features/seed/routes.test.ts` (mirror the
+- [x] **Step 2: Failing route test.** In `apps/api/src/features/seed/routes.test.ts` (mirror the
   seed route tests): a valid POST returns `{ ok: true, jobId }`; an unknown/unauthorised `:flowId`
   → 404; an empty `topic` → 400.
 
-- [ ] **Step 3: Run it — verify it fails.**
+- [x] **Step 3: Run it — verify it fails.**
   `npm test -w @magpie/api -- --test-name-pattern="outline"` → FAIL.
 
-- [ ] **Step 4: Implement the route.** In `apps/api/src/features/seed/routes.ts`, import
+- [x] **Step 4: Implement the route.** In `apps/api/src/features/seed/routes.ts`, import
   `outlineFlowSeed` and `outlineBodySchema`, then add before `return app;`:
 
   ```ts
@@ -418,10 +418,10 @@ as `POST /flows/:flowId/seed`.
   );
   ```
 
-- [ ] **Step 5: Run it — verify it passes.**
+- [x] **Step 5: Run it — verify it passes.**
   `npm test -w @magpie/api -- --test-name-pattern="outline|seed route"` → PASS.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
   `git commit -m "feat(seeding): POST /flows/:id/outline endpoint"`
 
 ---
@@ -451,11 +451,11 @@ Follows the ConsoleProvider-owns-handlers / presentational-panel pattern.
 - `SeedPanel` props: `flows`, `loading`, `onGenerate`, `onSeed` (+ whatever local editing state
   it owns internally).
 
-- [ ] **Step 1: Types + nav.** Add `"seed"` to `ConsoleSection` in `lib/types.ts`. Add to
+- [x] **Step 1: Types + nav.** Add `"seed"` to `ConsoleSection` in `lib/types.ts`. Add to
   `SECTION_NAV` in `lib/sections.ts` (group 1, near proposals):
   `{ section: "seed", path: "/seed", glyph: "Se", label: "Seed", group: 1 }`.
 
-- [ ] **Step 2: Provider handlers.** In `ConsoleProvider.tsx`, add `generateOutline` and `seedFlow`
+- [x] **Step 2: Provider handlers.** In `ConsoleProvider.tsx`, add `generateOutline` and `seedFlow`
   following the `indexRepository` / `submitQuestion` shape (set loading, clearMessage, try/catch →
   showMessage + refresh). `generateOutline` must **loop `waitForJob` until terminal** (the bounded
   `/jobs/:id/wait` can return a still-active job when its deadline elapses) and then read
@@ -479,7 +479,7 @@ Follows the ConsoleProvider-owns-handlers / presentational-panel pattern.
   (Keep the message/refresh bookkeeping in the panel or provider consistent with the other
   handlers; the panel calls these and renders the returned items into an editable list.)
 
-- [ ] **Step 3: `SeedPanel` + page.** Build `SeedPanel.tsx`: a flow `<select>` (from `flows`), a
+- [x] **Step 3: `SeedPanel` + page.** Build `SeedPanel.tsx`: a flow `<select>` (from `flows`), a
   topic `<input>` + notes `<textarea>`, a **Generate outline** button (disabled while generating or
   when topic empty). On success it renders the returned items as an editable list — each row: title
   input, targetPath input, coverage (one point per line in a textarea, or add/remove rows),
@@ -487,38 +487,38 @@ Follows the ConsoleProvider-owns-handlers / presentational-panel pattern.
   item has ≥1 non-empty coverage point) calls `onSeed(flowId, items)` and shows the returned job
   count. `app/seed/page.tsx` is the thin `"use client"` wrapper reading from `useConsole()`.
 
-- [ ] **Step 4: Test.** `SeedPanel.test.tsx` — `renderToStaticMarkup` with stub `flows` +
+- [x] **Step 4: Test.** `SeedPanel.test.tsx` — `renderToStaticMarkup` with stub `flows` +
   `onGenerate`/`onSeed`; assert the heading, the flow options, the topic field, and the disabled
   Generate button render. (Static markup can't exercise the async edit flow; keep it to structure,
   matching `SchedulesPanel.test.tsx`.)
 
-- [ ] **Step 5: Run web tests + build.**
+- [x] **Step 5: Run web tests + build.**
   `npm test -w @magpie/web && npm run build -w @magpie/web` → PASS.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
   `git commit -m "feat(web): Seed / add an area console form (generate outline → edit → seed)"`
 
 ---
 
 ### Task 5: Docs + full-suite gates + branch finish
 
-- [ ] **Step 1: Document the job + the outline path.** Add `outline_flow_seed` to
+- [x] **Step 1: Document the job + the outline path.** Add `outline_flow_seed` to
   [`docs/ai-jobs.md`](../../ai-jobs.md) (job list + one-line description). Extend the "Seeding a
   flow" section (added in v1) with the v2 outline step: topic → `outline_flow_seed` (retrieval-
   grounded, proposes `SeedItem[]`) → human review in the console → v1 `POST /flows/:id/seed`. Note
   the console "Seed" page. Cross-link this plan and §8 of the design spec.
 
-- [ ] **Step 2: Full API + web suites.** `npm test -w @magpie/api && npm test -w @magpie/web` →
+- [x] **Step 2: Full API + web suites.** `npm test -w @magpie/api && npm test -w @magpie/web` →
   PASS. (Known unrelated local-only failures — a Windows path-separator watcher test; a web
   test-glob quirk — pass on CI Linux; investigate any OTHER failure.)
 
-- [ ] **Step 3: Typecheck + deadcode + lint + whole-repo tests.**
+- [x] **Step 3: Typecheck + deadcode + lint + whole-repo tests.**
   `npm run typecheck && npm run deadcode && npm run lint && npm test` → PASS. If knip flags a new
   export as unused, confirm it is consumed (`outlineFlowSeed` by the route; `describeExistingDocuments`
   by `outlineFlowSeed`; `outlineFlowSeedOutputSchema` by the catalog); if genuinely unused,
   de-export — never relax the knip config.
 
-- [ ] **Step 4: Finish the branch.** Push to `claude/flow-seeding-v2-outline-ui`. Do not open a PR
+- [x] **Step 4: Finish the branch.** Push to `claude/flow-seeding-v2-outline-ui`. Do not open a PR
   unless asked. Both this plan and any doc updates ship on the branch.
 
 ---
