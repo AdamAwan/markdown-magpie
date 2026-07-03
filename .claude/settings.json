@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/propose-skill-reminder.sh\"",
+            "timeout": 10,
+            "statusMessage": "Checking whether this session is worth a skill"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -122,6 +122,23 @@ To actually **launch and drive the running stack** (Postgres → migrate → API
 Web, with the local `.env` overrides needed because the committed `.env` is the prod
 config), use the **run-magpie** skill — don't re-derive the launch recipe here.
 
+### Task skills
+
+For the common cross-cutting changes, invoke the matching skill instead of re-deriving the
+steps — each is grounded in the real files and lists the gotchas:
+
+- **add-a-job-type** — introduce/change a queued job: the `@magpie/jobs` contract, watcher
+  runner, capability gate, enqueue, and output consumption.
+- **write-a-migration** — the custom SQL migrator's `NNNN_` naming rule, prefix-uniqueness
+  guard, append-only/no-rollback model, and how to apply + test a migration.
+- **writing-magpie-tests** — `node:test` conventions, unit vs. Postgres-backed integration
+  (`RUN_PG_INTEGRATION` + the throwaway-container harness), and the queue e2e/eval scripts.
+- **magpie-local-troubleshooting** — diagnosing a broken local run (Docker, auth, config
+  parsing, watcher `ECONNREFUSED`, CLI spawn errors).
+- **propose-a-skill** — end-of-work retrospective: decide whether what you just did is worth
+  capturing as a reusable skill, and draft one for approval. A Stop hook nudges you toward it
+  once per session after substantial change.
+
 ### Planning notes
 
 This repo is developed by AI agents under human review. Specs, plans, and task reports
