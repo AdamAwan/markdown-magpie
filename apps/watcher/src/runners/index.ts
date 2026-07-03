@@ -66,6 +66,7 @@ export function createConfiguredRunners(
         command: env.CODEX_CLI_PATH ?? "codex",
         args: splitArgs(env.CODEX_CLI_ARGS ?? "exec"),
         promptMode: normalizePromptMode(env.CODEX_CLI_PROMPT_MODE),
+        ...optionalModel(env.CODEX_CLI_MODEL),
         api,
         timeoutMs: positiveInt(env.AGENT_CLI_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS),
         ...(env.CLI_CANCEL_GRACE_MS ? { cancelGraceMs: positiveInt(env.CLI_CANCEL_GRACE_MS, 5_000) } : {})
@@ -80,6 +81,7 @@ export function createConfiguredRunners(
         command: env.CLAUDE_CLI_PATH ?? "claude",
         args: splitArgs(env.CLAUDE_CLI_ARGS ?? "-p"),
         promptMode: normalizePromptMode(env.CLAUDE_CLI_PROMPT_MODE),
+        ...optionalModel(env.CLAUDE_CLI_MODEL),
         api,
         timeoutMs: positiveInt(env.AGENT_CLI_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS),
         ...(env.CLI_CANCEL_GRACE_MS ? { cancelGraceMs: positiveInt(env.CLI_CANCEL_GRACE_MS, 5_000) } : {})
@@ -113,6 +115,13 @@ function splitArgs(value: string): string[] {
 
 function normalizePromptMode(value: string | undefined): PromptMode {
   return value === "stdin" ? "stdin" : "arg";
+}
+
+// Only pass `model` when a non-blank value is configured, so an unset/blank env
+// var leaves the CLI on its own default model rather than passing `--model ""`.
+function optionalModel(value: string | undefined): { model: string } | Record<string, never> {
+  const trimmed = value?.trim();
+  return trimmed ? { model: trimmed } : {};
 }
 
 function positiveInt(value: string | undefined, fallback: number): number {

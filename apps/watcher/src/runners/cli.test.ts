@@ -90,6 +90,41 @@ describe("CliRunner", () => {
     assert.deepEqual(output, { summary: "s", priority: 1, rationale: "r" });
   });
 
+  it("injects --model before the prompt in arg mode when a model is configured", async () => {
+    // The script asserts the runner placed `--model <value>` ahead of the prompt.
+    const runner = new CliRunner({
+      capability: "claude",
+      command: "node",
+      args: [
+        "-e",
+        "const a = process.argv.slice(1); const i = a.indexOf('--model'); if (i < 0 || a[i + 1] !== 'my-model') process.exit(4); if (!a.at(-1).includes('\\\"summary\\\":\\\"s\\\"')) process.exit(5); process.stdout.write(JSON.stringify({ summary: 's', priority: 1, rationale: 'r' }));",
+        "--"
+      ],
+      promptMode: "arg",
+      model: "my-model",
+      buildPromptOverride: () => RESULT_JSON
+    });
+    const output = await runner.run(SUMMARIZE, new AbortController().signal);
+    assert.deepEqual(output, { summary: "s", priority: 1, rationale: "r" });
+  });
+
+  it("passes --model on the command line in stdin mode (prompt still over stdin)", async () => {
+    const runner = new CliRunner({
+      capability: "claude",
+      command: "node",
+      args: [
+        "-e",
+        "const a = process.argv.slice(1); const i = a.indexOf('--model'); if (i < 0 || a[i + 1] !== 'my-model') process.exit(4); let prompt = ''; process.stdin.on('data', c => prompt += c); process.stdin.on('end', () => { if (!prompt.includes('\\\"summary\\\":\\\"s\\\"')) process.exit(5); process.stdout.write(JSON.stringify({ summary: 's', priority: 1, rationale: 'r' })); });",
+        "--"
+      ],
+      promptMode: "stdin",
+      model: "my-model",
+      buildPromptOverride: () => RESULT_JSON
+    });
+    const output = await runner.run(SUMMARIZE, new AbortController().signal);
+    assert.deepEqual(output, { summary: "s", priority: 1, rationale: "r" });
+  });
+
   it("feeds the prompt over stdin in stdin mode", async () => {
     const runner = new CliRunner({
       capability: "claude",
