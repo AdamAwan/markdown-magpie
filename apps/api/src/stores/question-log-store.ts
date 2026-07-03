@@ -31,6 +31,14 @@ export interface QuestionLogStore {
   recordFeedback(id: string, feedback: QuestionFeedback): Promise<QuestionLog | undefined>;
   recordManualGap(id: string, summary?: string): Promise<QuestionLog | undefined>;
   clearManualGap(id: string): Promise<QuestionLog | undefined>;
+  // Reopens a gap on a triggering question after a merged proposal failed
+  // gap-closure verification. Replaces any prior verification gap on the
+  // question with the latest one, carrying the note (what merged, the re-asked
+  // answer, why it is still weak) so a re-draft sees why it is being resubmitted.
+  recordVerificationGap(
+    id: string,
+    gap: { summary: string; source: "verification" | "needs_attention"; note: string }
+  ): Promise<QuestionLog | undefined>;
   // Soft-resolves the gaps closed by a merged proposal: the matching rows are
   // retained for audit but stop surfacing as candidates. Returns how many gaps
   // were newly resolved.
@@ -259,6 +267,30 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     return updated;
   }
 
+  async recordVerificationGap(
+    id: string,
+    gap: { summary: string; source: "verification" | "needs_attention"; note: string }
+  ): Promise<QuestionLog | undefined> {
+    const existing = this.logs.get(id);
+    if (!existing) {
+      return undefined;
+    }
+
+    const verificationGap: QuestionGap = { summary: gap.summary, source: gap.source, note: gap.note };
+    const updated: QuestionLog = {
+      ...existing,
+      // Replace any prior verification gap; auto/manual/followup gaps are left untouched.
+      gaps: [
+        ...(existing.gaps ?? []).filter((g) => g.source !== "verification" && g.source !== "needs_attention"),
+        verificationGap
+      ]
+    };
+
+    this.logs.set(id, updated);
+    this.bumpCatalog(existing.flowId);
+    return updated;
+  }
+
   async resolveGaps(questionIds: string[], summaries: string[], proposalId: string): Promise<number> {
     const questionSet = new Set(questionIds);
     const summarySet = new Set(summaries.map((summary) => summary.trim()).filter((summary) => summary.length > 0));
@@ -356,7 +388,11 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     const groups = new Map<string, { summary: string; flowId?: string; logs: QuestionLog[] }>();
     for (const log of this.logs.values()) {
       const summaries = new Set(
-        (log.gaps ?? []).filter((gap) => !gap.resolvedAt && !gap.dismissedAt).map((gap) => gap.summary)
+        (log.gaps ?? [])
+          // 'needs_attention' gaps hit the verification retry cap; they await a
+          // human and must NOT auto-recluster/redraft.
+          .filter((gap) => !gap.resolvedAt && !gap.dismissedAt && gap.source !== "needs_attention")
+          .map((gap) => gap.summary)
       );
       for (const summary of summaries) {
         const key = `${log.flowId ?? ""} ${summary}`;

@@ -254,6 +254,51 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.equal(resolvedGap?.resolvedByProposalId, proposalId);
   });
 
+  it("records a verification gap with a note and surfaces it as a candidate", async () => {
+    const uniqueId = randomUUID();
+    const recorded = await store.record({
+      question: `test-verify-${uniqueId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+
+    const summary = `still weak ${uniqueId}`;
+    const updated = await store.recordVerificationGap(recorded.id, {
+      summary,
+      source: "verification",
+      note: "merged docs/guide.md; re-ask still low; missing concrete example"
+    });
+    const vGap = (updated?.gaps ?? []).find((gap) => gap.summary === summary);
+    assert.equal(vGap?.source, "verification");
+    assert.equal(vGap?.note, "merged docs/guide.md; re-ask still low; missing concrete example");
+
+    // A verification gap is unresolved, so it re-clusters as a candidate.
+    const candidates = await store.listGapCandidates(1000);
+    assert.ok(candidates.some((candidate) => candidate.summary === summary), "verification gap surfaces as a candidate");
+  });
+
+  it("a needs_attention gap is retained but excluded from candidates", async () => {
+    const uniqueId = randomUUID();
+    const recorded = await store.record({
+      question: `test-needs-attention-${uniqueId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+
+    const summary = `capped ${uniqueId}`;
+    await store.recordVerificationGap(recorded.id, {
+      summary,
+      source: "needs_attention",
+      note: "two failed verifications; awaiting a human"
+    });
+
+    const fetched = await store.get(recorded.id);
+    assert.ok((fetched?.gaps ?? []).some((gap) => gap.summary === summary && gap.source === "needs_attention"), "retained for audit");
+
+    const candidates = await store.listGapCandidates(1000);
+    assert.ok(!candidates.some((candidate) => candidate.summary === summary), "needs_attention gap does not auto-redraft");
+  });
+
   it("listGapCandidates includes low-confidence auto-detected gaps", async () => {
     const uniqueId = randomUUID();
     await store.record({

@@ -164,11 +164,20 @@ export interface KnowledgeGapSignal {
   source: QuestionGapSource;
 }
 
-export type QuestionGapSource = "auto" | "manual" | "followup";
+// "auto"/"manual"/"followup" are the sources a live answer can raise (the model
+// or an admin). "verification"/"needs_attention" are raised server-side after a
+// merged proposal fails gap-closure verification: the triggering question was
+// re-asked and the merged doc still did not answer it. These never come from a
+// provider — the answer_question output schema stays narrow to the first three.
+export type QuestionGapSource = "auto" | "manual" | "followup" | "verification" | "needs_attention";
 
 export interface QuestionGap {
   summary: string;
   source: QuestionGapSource;
+  // Verification detail carried when a failed gap-closure check reopens this gap:
+  // what merged, the re-asked answer, and why it is still weak — so a re-drafted
+  // proposal can see why it is being resubmitted. Only set for verification gaps.
+  note?: string;
   // Set when a merged proposal closes this gap. A resolved gap is retained for
   // audit but no longer surfaces as a candidate.
   resolvedAt?: string;

@@ -297,6 +297,42 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     return this.get(id);
   }
 
+  async recordVerificationGap(
+    id: string,
+    gap: { summary: string; source: "verification" | "needs_attention"; note: string }
+  ): Promise<QuestionLog | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<{ flow_id: string | null }>(
+        "SELECT flow_id FROM questions WHERE id = $1",
+        [id]
+      );
+
+      if (result.rowCount !== 1) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+
+      // Replace any prior verification gap with the latest reopen note; auto,
+      // manual and followup gaps are left untouched.
+      await client.query(
+        "DELETE FROM question_gaps WHERE question_id = $1 AND source IN ('verification', 'needs_attention')",
+        [id]
+      );
+      await insertGapRows(client, id, [{ summary: gap.summary, source: gap.source, note: gap.note }]);
+      await bumpGapCatalog(client, result.rows[0].flow_id);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return this.get(id);
+  }
+
   async clearManualGap(id: string): Promise<QuestionLog | undefined> {
     const client = await this.pool.connect();
     try {
@@ -353,13 +389,14 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       question_id: string;
       summary: string;
       source: QuestionGapSource;
+      note: string | null;
       resolved_at: Date | null;
       resolved_by_proposal_id: string | null;
       dismissed_at: Date | null;
       dismissed_reason: string | null;
     }>(
       `
-        SELECT question_id, summary, source, resolved_at, resolved_by_proposal_id, dismissed_at, dismissed_reason
+        SELECT question_id, summary, source, note, resolved_at, resolved_by_proposal_id, dismissed_at, dismissed_reason
         FROM question_gaps
         WHERE question_id = ANY($1)
         ORDER BY created_at ASC, id ASC
@@ -372,6 +409,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       existing.push({
         summary: row.summary,
         source: row.source,
+        note: row.note ?? undefined,
         resolvedAt: row.resolved_at?.toISOString(),
         resolvedByProposalId: row.resolved_by_proposal_id ?? undefined,
         dismissedAt: row.dismissed_at?.toISOString(),
@@ -513,6 +551,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           FROM question_gaps qg
           JOIN questions q ON q.id = qg.question_id
           WHERE qg.resolved_at IS NULL AND qg.dismissed_at IS NULL
+            -- 'needs_attention' gaps hit the verification retry cap; they await a
+            -- human and must NOT auto-recluster/redraft, so exclude them here.
+            AND qg.source <> 'needs_attention'
         ) AS distinct_gaps
         GROUP BY summary, flow_id
         ORDER BY count DESC, latest_asked_at DESC
@@ -539,7 +580,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
 async function insertGapRows(
   client: pg.PoolClient,
   questionId: string,
-  gaps: Array<{ summary: string; source: QuestionGapSource }>
+  gaps: Array<{ summary: string; source: QuestionGapSource; note?: string }>
 ): Promise<void> {
   if (gaps.length === 0) {
     return;
@@ -547,10 +588,10 @@ async function insertGapRows(
 
   await client.query(
     `
-      INSERT INTO question_gaps (question_id, summary, source)
-      VALUES ${valuesClause(gaps.length, 3)}
+      INSERT INTO question_gaps (question_id, summary, source, note)
+      VALUES ${valuesClause(gaps.length, 4)}
     `,
-    gaps.flatMap((gap) => [questionId, gap.summary, gap.source])
+    gaps.flatMap((gap) => [questionId, gap.summary, gap.source, gap.note ?? null])
   );
 }
 
