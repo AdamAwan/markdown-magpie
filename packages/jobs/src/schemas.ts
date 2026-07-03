@@ -485,6 +485,19 @@ export const editorialPatrolOutputSchema = z.object({
   enqueuedCount: z.number().int()
 });
 
+export const verifyGapClosureInputSchema = z.object({ proposalId: z.string() });
+export const verifyGapClosureOutputSchema = z.object({
+  proposalId: z.string(),
+  closureStatus: z.enum(["verified_closed", "reopened", "needs_attention"]),
+  perQuestion: z.array(
+    z.object({
+      questionId: z.string(),
+      reaskedQuestionId: z.string().nullable(),
+      verdict: z.enum(["closed", "still_open"])
+    })
+  )
+});
+
 export const crosslinkPullRequestsInputSchema = z.object({
   flowId: z.string().optional(),
   targets: z.array(z.string()),

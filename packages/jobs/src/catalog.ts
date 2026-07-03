@@ -112,6 +112,7 @@ const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
   source_change_sync: define("source_change_sync", "maintenance", schemas.sourceChangeSyncInputSchema, schemas.sourceChangeSyncOutputSchema, 60 * 60),
   correctness_patrol: define("correctness_patrol", "maintenance", schemas.correctnessPatrolInputSchema, schemas.correctnessPatrolOutputSchema, 60 * 60),
   editorial_patrol: define("editorial_patrol", "maintenance", schemas.editorialPatrolInputSchema, schemas.editorialPatrolOutputSchema, 60 * 60),
+  verify_gap_closure: define("verify_gap_closure", "maintenance", schemas.verifyGapClosureInputSchema, schemas.verifyGapClosureOutputSchema, 60 * 60),
   // Publishing a branch to a file:// destination needs no GitHub token, so it fans
   // out over {github, local-git} keyed off input.destination. Enqueues that omit it
   // (legacy jobs) default to github, matching the pre-local-git behaviour.

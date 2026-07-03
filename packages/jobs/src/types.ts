@@ -22,6 +22,7 @@ export const JOB_TYPES = [
   "source_change_sync",
   "correctness_patrol",
   "editorial_patrol",
+  "verify_gap_closure",
   "publish_proposal",
   "crosslink_pull_requests",
   "comment_pull_request"
