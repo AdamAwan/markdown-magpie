@@ -44,7 +44,7 @@ import {
 import type { SeedItem } from "@magpie/core";
 import { apiDelete, apiGet, apiPost, errorMessage } from "../lib/api";
 import { knowledgeFlows } from "../lib/config";
-import { buildAttentionNotices, formatJobType, isActiveJob, jobTransitionMessages } from "../lib/console";
+import { buildAttentionNotices, formatJobType, isActiveJob, jobResult, jobTransitionMessages } from "../lib/console";
 import { sectionPath } from "../lib/sections";
 import { OTHER_DOCUMENTS_ID } from "./KnowledgePanel";
 
@@ -720,7 +720,11 @@ function useConsoleController() {
         throw new Error(job.error?.message ?? "Outline generation did not complete.");
       }
       await refresh({ silent: true });
-      return (job.output as { items?: SeedItem[] } | undefined)?.items ?? [];
+      // The completed job's output is the queue envelope { result, executor }; the
+      // outline_flow_seed payload (its items) lives under `result`. Reading
+      // job.output.items directly always yields undefined, so the panel would show
+      // no proposed documents.
+      return jobResult<{ items?: SeedItem[] }>(job)?.items ?? [];
     } catch (error) {
       showMessage(errorMessage(error), "danger");
       return undefined;

@@ -203,3 +203,12 @@ export function formatJobType(type: string): string {
       .join(" ")
   );
 }
+
+// A completed job's output is the queue envelope { result, executor }: the job's
+// validated payload lives under `result`, exactly as the MCP kb-client unwraps it.
+// Reading job.output directly (e.g. job.output.items) always misses the payload and
+// silently yields undefined — the bug that made seed outlines never show documents.
+// Returns undefined when the job has no output yet.
+export function jobResult<T>(job: Pick<JobView, "output">): T | undefined {
+  return (job.output as { result?: T } | undefined)?.result;
+}
