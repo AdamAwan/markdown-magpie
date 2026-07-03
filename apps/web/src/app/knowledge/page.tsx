@@ -2,6 +2,7 @@
 
 import { useConsole } from "../../components/ConsoleProvider";
 import { FlowsPanel, RepositoryContextPanel } from "../../components/KnowledgePanel";
+import { Badge, Surface, Workbench } from "../../components/ui";
 import { knowledgeFlows } from "../../lib/config";
 
 export default function KnowledgePage() {
@@ -18,15 +19,15 @@ export default function KnowledgePage() {
   } = useConsole();
 
   return (
-    <section className="knowledgePage">
-      <div className="surface">
-        <div className="surfaceHeader">
+    <Workbench>
+      <Surface>
+        <Surface.Header>
           <h2>Knowledge Flows</h2>
-          <span className="pill" title="Configured knowledge flows">
+          <Badge tone="neutral" title="Configured knowledge flows">
             {knowledgeFlows(config).length} flows
-          </span>
-        </div>
-        <div className="surfaceBody">
+          </Badge>
+        </Surface.Header>
+        <Surface.Body>
           <FlowsPanel
             destinations={config?.knowledge.destinations ?? config?.knowledge.repositories ?? []}
             documents={documents}
@@ -39,9 +40,9 @@ export default function KnowledgePage() {
             setSelectedFlowId={setFlowId}
             sources={config?.knowledge.sources ?? []}
           />
-        </div>
-      </div>
+        </Surface.Body>
+      </Surface>
       <RepositoryContextPanel repositories={repositories} />
-    </section>
+    </Workbench>
   );
 }

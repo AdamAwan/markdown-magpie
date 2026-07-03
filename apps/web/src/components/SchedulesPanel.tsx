@@ -1,11 +1,198 @@
 import { Fragment, useEffect, useState } from "react";
+import styled from "@emotion/styled";
 import { isValidCron } from "@magpie/core";
 import { ConfiguredKnowledgeFlow, ScheduledTask } from "../lib/types";
+import { Actions, Badge, Button, Chip, Field, Input, Surface } from "./ui";
 
 // How the schedules table is grouped: by the flow-free task type (so a shared
 // description is shown once per type, not repeated per flow) or by flow (so each
 // flow's full set of scheduled work sits together).
 type GroupBy = "type" | "flow";
+
+const SCHEDULE_COLUMNS =
+  "minmax(200px, 1.6fr) minmax(120px, 0.9fr) minmax(150px, 1fr) 64px minmax(170px, auto)";
+
+const Hint = styled.p(({ theme }) => ({
+  margin: `0 0 ${theme.space.md}`,
+  fontSize: theme.font.size.sm,
+  color: theme.color.status.running.fg
+}));
+
+const Section = styled.section({
+  "&:not(:last-child)": { marginBottom: "28px" }
+});
+
+// Schedules header: subhead on the left, group-by toggle on the right.
+const SectionHead = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: theme.space.lg,
+  marginBottom: theme.space.md
+}));
+
+const Subhead = styled.h3(({ theme }) => ({
+  margin: 0,
+  fontSize: theme.font.size.md,
+  fontWeight: theme.font.weight.semibold,
+  color: theme.color.textMuted
+}));
+
+const GroupBySwitch = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  gap: theme.space.md
+}));
+
+const GroupByLabel = styled.span(({ theme }) => ({
+  fontSize: theme.font.size.xs,
+  fontWeight: theme.font.weight.semibold,
+  color: theme.color.textMuted
+}));
+
+const JobTable = styled.div({ display: "grid" });
+
+const TableHead = styled.div(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: SCHEDULE_COLUMNS,
+  gap: theme.space.lg,
+  alignItems: "center",
+  borderTop: `1px solid ${theme.color.border}`,
+  padding: `10px 0`,
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.xs,
+  fontWeight: theme.font.weight.semibold
+}));
+
+const TableRow = styled.div(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: SCHEDULE_COLUMNS,
+  gap: theme.space.lg,
+  alignItems: "center",
+  borderTop: `1px solid ${theme.color.border}`,
+  padding: `10px 0`,
+  fontSize: theme.font.size.md
+}));
+
+// Group separator inside the schedules table. A full-width child of the
+// single-column JobTable grid (like the inline editor), it names the shared axis
+// once so per-row repetition of the type/flow and its description falls away.
+const GroupRow = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  gap: theme.space.md,
+  borderTop: `1px solid ${theme.color.borderStrong}`,
+  padding: `${theme.space.lg} 0 ${theme.space.sm}`
+}));
+
+const GroupLabel = styled.span(({ theme }) => ({
+  fontWeight: theme.font.weight.semibold,
+  fontSize: theme.font.size.sm,
+  color: theme.color.text
+}));
+
+const GroupCount = styled.span(({ theme }) => ({
+  fontSize: theme.font.size.xs,
+  fontWeight: theme.font.weight.medium,
+  color: theme.color.textSubtle
+}));
+
+const ScheduleName = styled.span(({ theme }) => ({
+  display: "inline-flex",
+  flexDirection: "column",
+  gap: "2px",
+  lineHeight: 1.3,
+  minWidth: 0,
+  color: theme.color.textMuted
+}));
+
+const ScheduleTitle = styled.span(({ theme }) => ({
+  display: "inline-flex",
+  alignItems: "center",
+  color: theme.color.text,
+  fontWeight: theme.font.weight.semibold
+}));
+
+const RowActions = styled.span(({ theme }) => ({
+  display: "flex",
+  gap: theme.space.md,
+  justifyContent: "flex-end"
+}));
+
+// The "i" info affordance carrying a description in its tooltip.
+const Info = styled.span(({ theme }) => ({
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "15px",
+  height: "15px",
+  marginLeft: theme.space.sm,
+  border: `1px solid ${theme.color.borderStrong}`,
+  borderRadius: "50%",
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.xs,
+  fontWeight: theme.font.weight.semibold,
+  fontStyle: "italic",
+  lineHeight: 1,
+  cursor: "help",
+  verticalAlign: "middle",
+  "&:hover, &:focus-visible": {
+    borderColor: theme.color.textSubtle,
+    color: theme.color.text,
+    outline: "none"
+  }
+}));
+
+// Inline editor revealed under the row being edited. Full-width because it is a
+// plain block sibling inside the single-column JobTable grid.
+const ScheduleEditorRoot = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.lg,
+  borderTop: `1px solid ${theme.color.border}`,
+  borderLeft: `3px solid ${theme.color.borderStrong}`,
+  background: theme.color.surfaceMuted,
+  padding: `${theme.space.lg} ${theme.space.xl} ${theme.space.xl}`
+}));
+
+const ScheduleControls = styled.div(({ theme }) => ({
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "flex-end",
+  gap: theme.space.xl
+}));
+
+const Toggle = styled.label(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  gap: theme.space.md,
+  fontSize: theme.font.size.base,
+  fontWeight: theme.font.weight.medium
+}));
+
+const CronField = styled(Field)({ maxWidth: "280px" });
+
+const CronInput = styled(Input)(({ theme }) => ({
+  fontFamily: theme.font.mono,
+  '&[aria-invalid="true"]': { borderColor: theme.color.dangerBorder }
+}));
+
+const Presets = styled.div(({ theme }) => ({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: theme.space.md,
+  marginTop: theme.space.xs
+}));
+
+const ErrorText = styled.p(({ theme }) => ({
+  color: theme.color.dangerText,
+  fontWeight: theme.font.weight.semibold
+}));
+
+const EmptyLine = styled.p(({ theme }) => ({
+  borderTop: `1px solid ${theme.color.border}`,
+  paddingTop: theme.space.lg,
+  color: theme.color.textMuted
+}));
 
 export function SchedulesPanel({
   flows,
@@ -41,67 +228,59 @@ export function SchedulesPanel({
   const groups = groupEntries(entries, groupBy);
 
   return (
-    <section className="surface">
-      <div className="surfaceHeader">
+    <Surface>
+      <Surface.Header>
         <h2>Schedules</h2>
-        <span className="pill" title="Scheduled background tasks">
+        <Badge title="Scheduled background tasks">
           {entries.length} task{entries.length === 1 ? "" : "s"}
-        </span>
-      </div>
-      <div className="surfaceBody">
-        <p className="hint">
+        </Badge>
+      </Surface.Header>
+      <Surface.Body>
+        <Hint>
           Background tasks run on the watcher on a cron schedule: gap reconciliation, source-change sync, and the fix
           and improve patrols that keep the knowledge base correct and tidy. Enable, disable, or run each on demand.
-        </p>
+        </Hint>
 
-        <section className="crunchSection">
-          <div className="crunchSectionHead">
-            <h3 className="crunchSubhead">Schedules</h3>
-            <div className="crunchGroupBy" role="group" aria-label="Group schedules by">
-              <span className="crunchGroupByLabel">Group by</span>
-              <button
-                className={groupBy === "type" ? "chip selected" : "chip"}
-                onClick={() => setGroupBy("type")}
-                type="button"
-              >
+        <Section>
+          <SectionHead>
+            <Subhead>Schedules</Subhead>
+            <GroupBySwitch role="group" aria-label="Group schedules by">
+              <GroupByLabel>Group by</GroupByLabel>
+              <Chip selected={groupBy === "type"} onClick={() => setGroupBy("type")}>
                 Job type
-              </button>
-              <button
-                className={groupBy === "flow" ? "chip selected" : "chip"}
-                onClick={() => setGroupBy("flow")}
-                type="button"
-              >
+              </Chip>
+              <Chip selected={groupBy === "flow"} onClick={() => setGroupBy("flow")}>
                 Flow
-              </button>
-            </div>
-          </div>
-          <div className="jobTable">
-            <div className="tableHead crunchScheduleHead">
+              </Chip>
+            </GroupBySwitch>
+          </SectionHead>
+          <JobTable>
+            <TableHead>
               <span>{groupBy === "type" ? "Flow" : "Job type"}</span>
               <span>Cron</span>
               <span>Next run</span>
               <span>Status</span>
               <span />
-            </div>
+            </TableHead>
             {groups.map((group) => (
               <Fragment key={group.key}>
-                <div className="crunchGroupRow">
-                  <span className="crunchGroupLabel">{group.label}</span>
+                <GroupRow>
+                  <GroupLabel>{group.label}</GroupLabel>
                   {group.description ? <InfoDot label={group.label} text={group.description} /> : null}
-                  <span className="crunchGroupCount">
+                  <GroupCount>
                     {group.entries.length} schedule{group.entries.length === 1 ? "" : "s"}
-                  </span>
-                </div>
+                  </GroupCount>
+                </GroupRow>
                 {group.entries.map((entry) => (
                   <ScheduleRow entry={entry} groupBy={groupBy} key={entry.id} loading={loading} />
                 ))}
               </Fragment>
             ))}
-            {entries.length === 0 ? <p className="empty">No scheduled tasks are configured.</p> : null}
-          </div>
-        </section>
-      </div>
-    </section>
+            {entries.length === 0 ? <EmptyLine>No scheduled tasks are configured.</EmptyLine> : null}
+          </JobTable>
+        </Section>
+      </Surface.Body>
+    </Surface>
   );
 }
 
@@ -164,9 +343,9 @@ function groupEntries(entries: ScheduleEntry[], by: GroupBy): ScheduleGroup[] {
 // being repeated inline under every schedule.
 function InfoDot({ label, text }: { label: string; text: string }) {
   return (
-    <span aria-label={`About ${label}: ${text}`} className="crunchInfo" role="img" tabIndex={0} title={text}>
+    <Info aria-label={`About ${label}: ${text}`} role="img" tabIndex={0} title={text}>
       i
-    </span>
+    </Info>
   );
 }
 
@@ -182,33 +361,27 @@ function ScheduleRow({ entry, groupBy, loading }: { entry: ScheduleEntry; groupB
 
   return (
     <>
-      <div className="tableRow crunchScheduleRow">
-        <span className="crunchScheduleName">
-          <span className="crunchScheduleTitle">
+      <TableRow>
+        <ScheduleName>
+          <ScheduleTitle>
             {namesType ? entry.typeLabel : entry.flowName}
             {namesType && entry.typeDescription ? <InfoDot label={entry.typeLabel} text={entry.typeDescription} /> : null}
-          </span>
-        </span>
+          </ScheduleTitle>
+        </ScheduleName>
         <span>{setting.enabled ? <code>{setting.cron}</code> : "—"}</span>
         <span>{setting.enabled && setting.nextRunAt ? new Date(setting.nextRunAt).toLocaleString() : "—"}</span>
-        <span className={`status ${setting.enabled ? "completed" : "pending"}`} title="Schedule status">
+        <Badge tone={setting.enabled ? "completed" : "pending"} title="Schedule status">
           {setting.enabled ? "On" : "Off"}
-        </span>
-        <span className="crunchRowActions">
-          <button
-            className="button secondary"
-            disabled={loading}
-            onClick={() => void entry.onRun()}
-            title="Run this now"
-            type="button"
-          >
+        </Badge>
+        <RowActions>
+          <Button size="sm" disabled={loading} onClick={() => void entry.onRun()} title="Run this now">
             Run now
-          </button>
-          <button aria-expanded={editing} className="button" onClick={() => setEditing((value) => !value)} type="button">
+          </Button>
+          <Button size="sm" aria-expanded={editing} onClick={() => setEditing((value) => !value)}>
             {editing ? "Close" : "Edit"}
-          </button>
-        </span>
-      </div>
+          </Button>
+        </RowActions>
+      </TableRow>
       {editing ? (
         <ScheduleEditor loading={loading} onSave={entry.onSave} placeholder={entry.placeholder} setting={setting} />
       ) : null}
@@ -252,9 +425,9 @@ function ScheduleEditor({
   }
 
   return (
-    <div className="crunchScheduleEditor">
-      <div className="crunchScheduleControls">
-        <label className="crunchToggle">
+    <ScheduleEditorRoot>
+      <ScheduleControls>
+        <Toggle>
           <input
             checked={enabled}
             onChange={(event) => {
@@ -264,10 +437,9 @@ function ScheduleEditor({
             type="checkbox"
           />
           <span>Run on a schedule</span>
-        </label>
-        <label className="field crunchCronField">
-          <span>Cron (min hour day month weekday)</span>
-          <input
+        </Toggle>
+        <CronField label="Cron (min hour day month weekday)">
+          <CronInput
             aria-invalid={!cronValid}
             onChange={(event) => {
               setDirty(true);
@@ -277,35 +449,33 @@ function ScheduleEditor({
             spellCheck={false}
             value={cron}
           />
-        </label>
-        <div className="rowActions">
-          <button
-            className="button secondary"
+        </CronField>
+        <Actions>
+          <Button
+            size="sm"
             disabled={loading || !cronValid}
             onClick={() => void save()}
             title={cronValid ? "Save this schedule" : "Enter a valid 5-field cron expression"}
-            type="button"
           >
             Save schedule
-          </button>
-        </div>
-      </div>
-      <div className="crunchPresets">
+          </Button>
+        </Actions>
+      </ScheduleControls>
+      <Presets>
         {CRON_PRESETS.map((preset) => (
-          <button
-            className={cron.trim() === preset.cron ? "chip selected" : "chip"}
+          <Chip
+            selected={cron.trim() === preset.cron}
             key={preset.cron}
             onClick={() => {
               setDirty(true);
               setCron(preset.cron);
             }}
-            type="button"
           >
             {preset.label}
-          </button>
+          </Chip>
         ))}
-      </div>
-      {!cronValid ? <p className="crunchError">Not a valid 5-field cron expression.</p> : null}
-    </div>
+      </Presets>
+      {!cronValid ? <ErrorText>Not a valid 5-field cron expression.</ErrorText> : null}
+    </ScheduleEditorRoot>
   );
 }

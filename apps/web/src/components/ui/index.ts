@@ -11,5 +11,5 @@ export { Field, Input, Textarea, Select } from "./Field";
 export type { FieldProps, InputProps, TextareaProps, SelectProps } from "./Field";
 export { Tabs } from "./Tabs";
 export type { TabsProps, TabItem } from "./Tabs";
-export { Stack, Row, ScrollList, ListRow, Actions, EmptyState } from "./layout";
+export { Stack, Row, ScrollList, ListRow, Actions, EmptyState, Workbench } from "./layout";
 export type { StackProps, RowProps } from "./layout";

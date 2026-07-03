@@ -1,9 +1,121 @@
 import { useEffect, useMemo, useState } from "react";
+import styled from "@emotion/styled";
 import { GapCandidate, SuggestedGapCluster } from "../lib/types";
 import { formatQuestionCount } from "../lib/format";
 import { FlowTag } from "./common";
+import { Badge, Chip, Row, ScrollList, Surface } from "./ui";
 
 const NEW_CLUSTER = "__new__";
+
+// A drafting hint shown when the reviewer has regrouped the clusters locally.
+const Hint = styled.p(({ theme }) => ({
+  margin: `0 0 ${theme.space.md}`,
+  fontSize: theme.font.size.sm,
+  color: theme.color.status.running.fg
+}));
+
+// A single editable cluster: a soft card that groups its gaps, distinct from the
+// border-separated gap-candidate rows.
+const ClusterCard = styled.article(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.md,
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.card,
+  background: theme.color.surfaceMuted,
+  boxShadow: theme.shadow.card,
+  padding: `${theme.space.xl} ${theme.space.xl}`
+}));
+
+const ClusterTitleInput = styled.input(({ theme }) => ({
+  flex: 1,
+  minWidth: 0,
+  font: "inherit",
+  fontSize: theme.font.size.lg,
+  fontWeight: theme.font.weight.semibold,
+  border: "1px solid transparent",
+  borderRadius: theme.radius.sm,
+  padding: `${theme.space.xs} ${theme.space.sm}`,
+  background: "transparent",
+  color: "inherit",
+  "&:hover, &:focus": {
+    borderColor: theme.color.border,
+    background: theme.color.surface,
+    outline: "none"
+  }
+}));
+
+const ClusterRationale = styled.p(({ theme }) => ({
+  margin: 0,
+  fontSize: theme.font.size.md,
+  lineHeight: 1.45,
+  color: theme.color.textMuted
+}));
+
+const ClusterGaps = styled.ul(({ theme }) => ({
+  margin: 0,
+  padding: 0,
+  listStyle: "none",
+  display: "grid",
+  gap: theme.space.sm,
+  "& li": {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.space.lg,
+    padding: `${theme.space.sm} ${theme.space.lg}`,
+    border: `1px solid ${theme.color.border}`,
+    borderRadius: theme.radius.md,
+    background: theme.color.surface,
+    fontSize: theme.font.size.md
+  },
+  "& li > span": {
+    flex: 1,
+    minWidth: 0
+  }
+}));
+
+const MoveSelect = styled.select(({ theme }) => ({
+  flex: "0 0 auto",
+  width: "130px",
+  fontSize: theme.font.size.sm,
+  padding: `3px ${theme.space.sm}`,
+  border: `1px solid ${theme.color.borderStrong}`,
+  borderRadius: theme.radius.sm,
+  background: theme.color.surface,
+  color: theme.color.text
+}));
+
+const ClusterActions = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: theme.space.md
+}));
+
+// A single gap candidate: a divider-topped record block.
+const GapRow = styled.article(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.md,
+  borderTop: `1px solid ${theme.color.border}`,
+  padding: `${theme.space.lg} 0`,
+  minWidth: 0,
+  "&:first-of-type": { borderTop: 0 }
+}));
+
+const RowActions = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: theme.space.md,
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.sm
+}));
+
+const EmptyLine = styled.p(({ theme }) => ({
+  borderTop: `1px solid ${theme.color.border}`,
+  paddingTop: theme.space.lg,
+  color: theme.color.textMuted
+}));
 
 interface EditableCluster {
   id: string;
@@ -117,47 +229,46 @@ export function GapClusterPanel({
   }
 
   return (
-    <section className="surface">
-      <div className="surfaceHeader">
+    <Surface>
+      <Surface.Header>
         <h2>Suggested Clusters</h2>
-        <span className="pill" title="Gap clusters — one proposal each">
+        <Badge tone="neutral" title="Gap clusters — one proposal each">
           {groups.length}
-        </span>
-      </div>
-      <div className="surfaceBody">
+        </Badge>
+      </Surface.Header>
+      <Surface.Body>
         {edited ? (
-          <p className="hint" title="Your groupings override the original suggestion">
+          <Hint title="Your groupings override the original suggestion">
             Edited — drafting uses your groupings.
-          </p>
+          </Hint>
         ) : null}
-        <div className="list scrollList">
+        <ScrollList>
           {groups.map((group) => (
-            <article className="clusterCard" key={group.id}>
-              <div className="rowTop">
-                <input
-                  className="clusterTitle"
+            <ClusterCard key={group.id}>
+              <Row gap="md">
+                <ClusterTitleInput
                   value={group.title}
                   onChange={(event) => renameGroup(group.id, event.target.value)}
                   aria-label="Cluster title"
                 />
                 <FlowTag flowId={group.flowId} flowLabels={flowLabels} />
-                <span
-                  className="pill countPill"
+                <Badge
+                  tone="neutral"
                   title={`${questionCount(group.summaries, group.flowId)} question(s) across ${group.summaries.length} gap(s)`}
                 >
                   {group.summaries.length} gap{group.summaries.length === 1 ? "" : "s"}
-                </span>
-              </div>
+                </Badge>
+              </Row>
               {group.rationale ? (
-                <p className="clusterRationale" title="Why these gaps were grouped">
+                <ClusterRationale title="Why these gaps were grouped">
                   {group.rationale}
-                </p>
+                </ClusterRationale>
               ) : null}
-              <ul className="clusterGaps">
+              <ClusterGaps>
                 {group.summaries.map((summary) => (
                   <li key={summary}>
                     <span>{summary}</span>
-                    <select
+                    <MoveSelect
                       value=""
                       disabled={loading}
                       aria-label="Move gap to another cluster"
@@ -176,27 +287,26 @@ export function GapClusterPanel({
                           </option>
                         ))}
                       <option value={NEW_CLUSTER}>New cluster</option>
-                    </select>
+                    </MoveSelect>
                   </li>
                 ))}
-              </ul>
-              <div className="rowActions">
-                <button
-                  className="chip"
+              </ClusterGaps>
+              <ClusterActions>
+                <Chip
                   disabled={loading}
                   onClick={() => void draftCluster(group.summaries, group.flowId)}
                   title="Draft one proposal covering every gap in this cluster"
                   type="button"
                 >
                   Draft Proposal
-                </button>
-              </div>
-            </article>
+                </Chip>
+              </ClusterActions>
+            </ClusterCard>
           ))}
-          {groups.length === 0 ? <p className="empty">No gap clusters yet.</p> : null}
-        </div>
-      </div>
-    </section>
+          {groups.length === 0 ? <EmptyLine>No gap clusters yet.</EmptyLine> : null}
+        </ScrollList>
+      </Surface.Body>
+    </Surface>
   );
 }
 
@@ -212,44 +322,45 @@ export function GapPanel({
   flowLabels: Record<string, string>;
 }) {
   return (
-    <section className="surface">
-      <div className="surfaceHeader">
+    <Surface>
+      <Surface.Header>
         <h2>Gap Candidates</h2>
-        <span className="pill" title="Number of open gap candidates">
+        <Badge tone="neutral" title="Number of open gap candidates">
           {gaps.length}
-        </span>
-      </div>
-      <div className="surfaceBody">
-        <div className="list scrollList">
+        </Badge>
+      </Surface.Header>
+      <Surface.Body>
+        <ScrollList>
           {gaps.map((gap) => (
             // The same summary can surface under two flows, so the flow is part
             // of the key to keep candidates distinct.
-            <article className="row" key={`${gap.flowId ?? ""} ${gap.summary}`}>
-              <div className="rowTop">
-                <h3>{gap.summary}</h3>
-                <FlowTag flowId={gap.flowId} flowLabels={flowLabels} />
-                <span className="pill countPill" title={`${gap.count} question${gap.count === 1 ? "" : "s"} grouped into this gap`}>
-                  {formatQuestionCount(gap.count)}
-                </span>
-              </div>
+            <GapRow key={`${gap.flowId ?? ""} ${gap.summary}`}>
+              <Row justify="between" gap="lg">
+                <h3 style={{ flex: 1, minWidth: 0 }}>{gap.summary}</h3>
+                <Row gap="md">
+                  <FlowTag flowId={gap.flowId} flowLabels={flowLabels} />
+                  <Badge tone="neutral" title={`${gap.count} question${gap.count === 1 ? "" : "s"} grouped into this gap`}>
+                    {formatQuestionCount(gap.count)}
+                  </Badge>
+                </Row>
+              </Row>
               <p title="Question IDs grouped into this gap">{gap.questionIds.join(", ")}</p>
-              <div className="rowActions">
+              <RowActions>
                 <span title="Most recent matching question">{new Date(gap.latestAskedAt).toLocaleString()}</span>
-                <button
-                  className="chip"
+                <Chip
                   disabled={loading}
                   onClick={() => void draftProposal(gap)}
                   title="Queue a job to draft Markdown for this knowledge gap"
                   type="button"
                 >
                   Draft Proposal
-                </button>
-              </div>
-            </article>
+                </Chip>
+              </RowActions>
+            </GapRow>
           ))}
-          {gaps.length === 0 ? <p className="empty">No gap candidates yet.</p> : null}
-        </div>
-      </div>
-    </section>
+          {gaps.length === 0 ? <EmptyLine>No gap candidates yet.</EmptyLine> : null}
+        </ScrollList>
+      </Surface.Body>
+    </Surface>
   );
 }

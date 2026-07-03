@@ -1,6 +1,113 @@
+import styled from "@emotion/styled";
 import { Proposal } from "../lib/types";
 import { shortSha } from "../lib/format";
 import { ContextValue } from "./common";
+import { Badge, Chip, EmptyState, ScrollList, Surface, statusTone } from "./ui";
+
+const ProposalGrid = styled.div(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: "minmax(220px, 0.42fr) minmax(0, 1fr)",
+  gap: theme.space.xl,
+  "@media (max-width: 1050px)": { gridTemplateColumns: "1fr" }
+}));
+
+const ProposalItem = styled.button<{ $selected: boolean }>(({ theme, $selected }) => ({
+  display: "grid",
+  gap: theme.space.xs,
+  width: "100%",
+  border: 0,
+  borderTop: `1px solid ${theme.color.border}`,
+  background: theme.color.surface,
+  color: $selected ? theme.color.accent : theme.color.text,
+  padding: `${theme.space.lg} 0`,
+  textAlign: "left",
+  cursor: "pointer",
+  "&:first-of-type": { borderTop: 0 },
+  "& > span": { fontWeight: theme.font.weight.semibold }
+}));
+
+const ProposalPreview = styled.div(({ theme }) => ({
+  display: "grid",
+  alignContent: "start",
+  gap: theme.space.lg,
+  minWidth: 0,
+  borderTop: `1px solid ${theme.color.border}`,
+  paddingTop: theme.space.lg
+}));
+
+const RowTop = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: theme.space.lg
+}));
+
+const Path = styled.small(({ theme }) => ({
+  color: theme.color.textMuted,
+  fontFamily: theme.font.mono,
+  fontSize: theme.font.size.sm
+}));
+
+const PathLine = Path.withComponent("p");
+
+const DraftContext = styled.details(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.lg,
+  fontSize: theme.font.size.md,
+  color: theme.color.textMuted,
+  "& summary": { cursor: "pointer", userSelect: "none" }
+}));
+
+const PublicationSummary = styled.div(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+  gap: theme.space.md,
+  "@media (max-width: 1050px)": { gridTemplateColumns: "1fr" }
+}));
+
+const ClusterGaps = styled.ul(({ theme }) => ({
+  margin: 0,
+  padding: 0,
+  listStyle: "none",
+  display: "grid",
+  gap: theme.space.sm,
+  "& li": {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.space.lg,
+    padding: `${theme.space.sm} ${theme.space.lg}`,
+    border: `1px solid ${theme.color.border}`,
+    borderRadius: theme.radius.md,
+    background: theme.color.surface,
+    fontSize: theme.font.size.md
+  },
+  "& li > span": { flex: 1, minWidth: 0 }
+}));
+
+const Actions = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: theme.space.md,
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.sm
+}));
+
+const Preview = styled.pre(({ theme }) => ({
+  maxHeight: "460px",
+  margin: 0,
+  overflow: "auto",
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.md,
+  background: theme.color.surfaceMuted,
+  padding: theme.space.xl,
+  color: theme.color.text,
+  fontFamily: theme.font.mono,
+  fontSize: theme.font.size.md,
+  lineHeight: 1.5,
+  whiteSpace: "pre-wrap"
+}));
 
 export function ProposalPanel({
   loading,
@@ -20,62 +127,62 @@ export function ProposalPanel({
   mergeProposal: (proposalId: string) => Promise<void>;
 }) {
   return (
-    <section className="surface">
-      <div className="surfaceHeader">
+    <Surface>
+      <Surface.Header>
         <h2>Proposals</h2>
-        <span className="pill" title="Number of generated proposals">
+        <Badge tone="neutral" title="Number of generated proposals">
           {proposals.length}
-        </span>
-      </div>
-      <div className="surfaceBody">
-        <div className="proposalGrid">
-          <div className="list scrollList">
+        </Badge>
+      </Surface.Header>
+      <Surface.Body>
+        <ProposalGrid>
+          <ScrollList>
             {proposals.map((proposal) => (
-              <button
-                className={selectedProposal?.id === proposal.id ? "proposalItem selected" : "proposalItem"}
+              <ProposalItem
+                $selected={selectedProposal?.id === proposal.id}
                 key={proposal.id}
                 onClick={() => setSelectedProposalId(proposal.id)}
                 type="button"
               >
                 <span>{proposal.title}</span>
-                <small className="path">{proposal.targetPath}</small>
-              </button>
+                <Path>{proposal.targetPath}</Path>
+              </ProposalItem>
             ))}
-            {proposals.length === 0 ? <p className="empty">No proposals generated yet.</p> : null}
-          </div>
-          <div className="proposalPreview">
+            {proposals.length === 0 ? <EmptyState>No proposals generated yet.</EmptyState> : null}
+          </ScrollList>
+          <ProposalPreview>
             {selectedProposal ? (
               <>
-                <div className="rowTop">
+                <RowTop>
                   <div>
                     <h3>{selectedProposal.title}</h3>
-                    <p className="path">{selectedProposal.targetPath}</p>
+                    <PathLine>{selectedProposal.targetPath}</PathLine>
                   </div>
-                  <span className={`status ${selectedProposal.status}`} title={`Proposal status: ${selectedProposal.status}`}>
+                  <Badge tone={statusTone(selectedProposal.status)} dot title={`Proposal status: ${selectedProposal.status}`}>
                     {selectedProposal.status}
-                  </span>
-                </div>
+                  </Badge>
+                </RowTop>
                 {selectedProposal.rationale ? <p>{selectedProposal.rationale}</p> : null}
                 {selectedProposal.draftContext ? (
-                  <details className="draftContext">
+                  <DraftContext>
                     <summary>Draft context — what the model was given</summary>
-                    <div className="publicationSummary">
+                    <PublicationSummary>
                       <ContextValue label="Gaps addressed" value={String(selectedProposal.draftContext.gapSummaries.length)} />
                       <ContextValue label="Source files" value={String(selectedProposal.draftContext.sourceFiles.length)} />
                       <ContextValue label="Evidence citations" value={String(selectedProposal.draftContext.evidenceCount)} />
                       <ContextValue label="Open PRs shown" value={String(selectedProposal.draftContext.openPullRequests.length)} />
-                    </div>
+                    </PublicationSummary>
                     {selectedProposal.draftContext.gapSummaries.length > 0 ? (
-                      <ul className="clusterGaps">
+                      <ClusterGaps>
                         {selectedProposal.draftContext.gapSummaries.map((summary) => (
                           <li key={summary}>{summary}</li>
                         ))}
-                      </ul>
+                      </ClusterGaps>
                     ) : null}
                     {selectedProposal.draftContext.openPullRequests.length > 0 ? (
                       <>
-                        <p className="path">In-flight pull requests the draft was aware of:</p>
-                        <ul className="clusterGaps">
+                        <PathLine>In-flight pull requests the draft was aware of:</PathLine>
+                        <ClusterGaps>
                           {selectedProposal.draftContext.openPullRequests.map((pr, index) => (
                             <li key={pr.url ?? `${pr.title}-${index}`}>
                               {pr.url ? (
@@ -85,90 +192,84 @@ export function ProposalPanel({
                               ) : (
                                 pr.title
                               )}
-                              {pr.targetPath ? <small className="path"> — {pr.targetPath}</small> : null}
+                              {pr.targetPath ? <Path> — {pr.targetPath}</Path> : null}
                             </li>
                           ))}
-                        </ul>
+                        </ClusterGaps>
                       </>
                     ) : null}
-                  </details>
+                  </DraftContext>
                 ) : null}
-                <div className="rowActions">
-                  <button
-                    className="chip selected"
+                <Actions>
+                  <Chip
+                    selected
                     disabled={loading || selectedProposal.status !== "draft"}
                     onClick={() => void updateProposalStatus(selectedProposal.id, "ready")}
                     title="Mark this draft as ready for the future PR workflow"
-                    type="button"
                   >
                     Mark Ready
-                  </button>
-                  <button
-                    className="chip selected"
+                  </Chip>
+                  <Chip
+                    selected
                     disabled={loading || selectedProposal.status !== "ready"}
                     onClick={() => void publishProposal(selectedProposal.id)}
                     title="Create and push a Git branch for this ready proposal"
-                    type="button"
                   >
                     Publish Branch
-                  </button>
+                  </Chip>
                   {selectedProposal.localGitDestination ? (
-                    <button
-                      className="chip selected"
+                    <Chip
+                      selected
                       disabled={loading || selectedProposal.status !== "branch-pushed"}
                       onClick={() => void mergeProposal(selectedProposal.id)}
                       title="Merge this proposal's branch into the local repository's default branch, then resolve its gaps and re-index"
-                      type="button"
                     >
                       Merge
-                    </button>
+                    </Chip>
                   ) : (
-                    <button
-                      className="chip selected"
+                    <Chip
+                      selected
                       disabled={loading || selectedProposal.status !== "branch-pushed"}
                       onClick={() => void updateProposalStatus(selectedProposal.id, "merged")}
                       title="Mark a branch-only proposal as merged (for a destination with no pull request to poll): resolves its gaps and re-indexes the knowledge base. A proposal with an open PR is marked merged automatically when the PR merges."
-                      type="button"
                     >
                       Mark Merged
-                    </button>
+                    </Chip>
                   )}
-                  <button
-                    className="chip"
+                  <Chip
                     disabled={loading || selectedProposal.status !== "draft"}
                     onClick={() => void updateProposalStatus(selectedProposal.id, "rejected")}
                     title="Reject this generated proposal"
-                    type="button"
                   >
                     Reject
-                  </button>
+                  </Chip>
                   {selectedProposal.publication ? (
-                    <span className="pill" title={`Published commit ${selectedProposal.publication.commitSha}`}>
+                    <Badge tone="neutral" mono title={`Published commit ${selectedProposal.publication.commitSha}`}>
                       {selectedProposal.publication.branchName}
-                    </span>
+                    </Badge>
                   ) : (
-                    <span className="pill" title="Ready proposals can be published as Git branches">
+                    <Badge tone="neutral" title="Ready proposals can be published as Git branches">
                       Branch publish available
-                    </span>
+                    </Badge>
                   )}
-                </div>
+                </Actions>
                 {selectedProposal.publication ? (
-                  <div className="publicationSummary">
+                  <PublicationSummary>
                     <ContextValue label="Branch" value={selectedProposal.publication.branchName} />
                     <ContextValue label="Commit" value={shortSha(selectedProposal.publication.commitSha)} />
                     <ContextValue label="Remote" value={selectedProposal.publication.remoteUrl ?? "Not recorded"} />
                     <ContextValue label="Pull request" value={selectedProposal.publication.pullRequestUrl ?? "Not raised"} />
                     <ContextValue label="Published" value={new Date(selectedProposal.publication.publishedAt).toLocaleString()} />
-                  </div>
+                  </PublicationSummary>
                 ) : null}
-                <pre>{selectedProposal.markdown}</pre>
+                <Preview>{selectedProposal.markdown}</Preview>
               </>
             ) : (
-              <p className="empty">Select a generated proposal to review its Markdown.</p>
+              <EmptyState>Select a generated proposal to review its Markdown.</EmptyState>
             )}
-          </div>
-        </div>
-      </div>
-    </section>
+          </ProposalPreview>
+        </ProposalGrid>
+      </Surface.Body>
+    </Surface>
   );
 }

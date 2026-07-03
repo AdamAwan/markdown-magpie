@@ -86,3 +86,11 @@ export const EmptyState = styled.p(({ theme }) => ({
   paddingTop: theme.space.lg,
   color: theme.color.textMuted
 }));
+
+/** The route-level content column each page mounts its Surface(s) into. */
+export const Workbench = styled.section(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr)",
+  gap: theme.space.lg,
+  alignItems: "start"
+}));

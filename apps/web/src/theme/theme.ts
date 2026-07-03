@@ -26,6 +26,7 @@ export interface AppTheme {
     accent: string;
     accentBg: string;
     accentBorder: string;
+    brandAccent: string;
     primary: string;
     primaryHover: string;
     primaryText: string;
@@ -86,6 +87,7 @@ export const theme: AppTheme = {
     accent: "#285f74",
     accentBg: "#e5f1f4",
     accentBorder: "#b7d0d8",
+    brandAccent: "#62702f",
     primary: "#20322b",
     primaryHover: "#2a4137",
     primaryText: "#ffffff",

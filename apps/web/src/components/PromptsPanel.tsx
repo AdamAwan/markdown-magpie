@@ -1,4 +1,6 @@
+import styled from "@emotion/styled";
 import { ConfiguredKnowledgeFlow, PromptSummary } from "../lib/types";
+import { Badge, Row } from "./ui";
 
 // Mirrors withPersona() in @magpie/prompts: the base instructions, then a fixed
 // "Persona" header, then the flow's persona text, then a grounding guard reminding
@@ -57,6 +59,158 @@ const STAGES: { id: string; step: string; title: string; blurb: string; promptId
   }
 ];
 
+const PromptFlow = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.xxl
+}));
+
+// Each stage is a step in the question's journey. A connector line runs down the
+// left edge from one step badge to the next so the pipeline reads top-to-bottom.
+const PromptStage = styled.section(({ theme }) => ({
+  position: "relative",
+  display: "grid",
+  gap: theme.space.lg,
+  "&:not(:last-child)::before": {
+    content: '""',
+    position: "absolute",
+    left: "15px",
+    top: "34px",
+    bottom: `calc(-1 * ${theme.space.xxl})`,
+    width: "2px",
+    background: `linear-gradient(${theme.color.status.completed.border}, ${theme.color.border})`
+  }
+}));
+
+const PromptStageHead = styled.header(({ theme }) => ({
+  display: "flex",
+  alignItems: "flex-start",
+  gap: theme.space.lg
+}));
+
+const PromptStageStep = styled.span(({ theme }) => ({
+  position: "relative",
+  zIndex: 1,
+  flex: "0 0 auto",
+  width: "32px",
+  height: "32px",
+  borderRadius: "50%",
+  display: "grid",
+  placeItems: "center",
+  background: theme.color.status.completed.fg,
+  color: theme.color.page,
+  fontWeight: theme.font.weight.semibold,
+  fontSize: theme.font.size.base
+}));
+
+const PromptStageTitle = styled.h2(({ theme }) => ({
+  margin: 0,
+  fontSize: theme.font.size.xl,
+  fontWeight: theme.font.weight.semibold
+}));
+
+const PromptStageBlurb = styled.p(({ theme }) => ({
+  margin: `${theme.space.xs} 0 0`,
+  maxWidth: "60ch",
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.md,
+  lineHeight: 1.45
+}));
+
+const PromptList = styled.div<{ $indented?: boolean }>(({ theme, $indented = false }) => ({
+  display: "grid",
+  gap: theme.space.xl,
+  marginLeft: $indented ? "46px" : undefined
+}));
+
+const PromptCardRoot = styled.article(({ theme }) => ({
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.card,
+  padding: theme.space.xl,
+  background: theme.color.surface,
+  display: "grid",
+  gap: theme.space.lg
+}));
+
+const PromptCardHead = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "baseline",
+  justifyContent: "space-between",
+  gap: theme.space.lg,
+  "& h3": {
+    margin: 0,
+    fontSize: theme.font.size.lg,
+    fontWeight: theme.font.weight.semibold
+  },
+  "& code": {
+    color: theme.color.textMuted,
+    fontFamily: theme.font.mono,
+    fontSize: theme.font.size.xs
+  }
+}));
+
+const PromptDescription = styled.p(({ theme }) => ({
+  margin: 0,
+  color: theme.color.textMuted
+}));
+
+const PromptOutput = styled.p(({ theme }) => ({
+  margin: 0,
+  fontSize: theme.font.size.md,
+  color: theme.color.textMuted
+}));
+
+const PromptInstructions = styled.pre(({ theme }) => ({
+  margin: 0,
+  padding: theme.space.lg,
+  background: theme.color.text,
+  color: theme.color.page,
+  borderRadius: theme.radius.md,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+  fontSize: theme.font.size.sm,
+  lineHeight: 1.45,
+  overflowX: "auto"
+}));
+
+const PromptEmpty = styled.p(({ theme }) => ({
+  color: theme.color.textMuted
+}));
+
+const PersonaAssembly = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.md,
+  padding: theme.space.lg,
+  border: `1px dashed ${theme.color.borderStrong}`,
+  borderRadius: theme.radius.md,
+  background: theme.color.surfaceMuted
+}));
+
+const PersonaAssemblyLabel = styled.span(({ theme }) => ({
+  fontSize: theme.font.size.xs,
+  letterSpacing: "0.02em",
+  color: theme.color.textMuted,
+  fontWeight: theme.font.weight.semibold
+}));
+
+const FlowPersonaList = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.lg
+}));
+
+const FlowPersona = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.md,
+  padding: theme.space.lg,
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.md,
+  background: theme.color.surfaceMuted,
+  "& h3": {
+    margin: 0,
+    fontSize: theme.font.size.base,
+    fontWeight: theme.font.weight.semibold
+  }
+}));
+
 // Read-only catalog view: renders the exact instruction text and usage of every
 // AI prompt served by GET /api/prompts, so the wording sent to the model is
 // inspectable from the console without reading the source. Prompts are grouped
@@ -71,7 +225,7 @@ export function PromptsPanel({
   flows: ConfiguredKnowledgeFlow[];
 }) {
   if (prompts.length === 0) {
-    return <p className="promptEmpty">No prompts are registered.</p>;
+    return <PromptEmpty>No prompts are registered.</PromptEmpty>;
   }
 
   const byId = new Map(prompts.map((prompt) => [prompt.id, prompt]));
@@ -79,7 +233,7 @@ export function PromptsPanel({
   const leftovers = prompts.filter((prompt) => !stagedIds.has(prompt.id));
 
   return (
-    <div className="promptFlow">
+    <PromptFlow>
       {STAGES.map((stage) => {
         const stagePrompts = stage.promptIds
           .map((id) => byId.get(id))
@@ -89,68 +243,64 @@ export function PromptsPanel({
         }
 
         return (
-          <section className="promptStage" key={stage.id}>
-            <header className="promptStageHead">
-              <span className="promptStageStep" aria-hidden>
-                {stage.step}
-              </span>
+          <PromptStage key={stage.id}>
+            <PromptStageHead>
+              <PromptStageStep aria-hidden>{stage.step}</PromptStageStep>
               <div>
-                <h2 className="promptStageTitle">{stage.title}</h2>
-                <p className="promptStageBlurb">{stage.blurb}</p>
+                <PromptStageTitle>{stage.title}</PromptStageTitle>
+                <PromptStageBlurb>{stage.blurb}</PromptStageBlurb>
               </div>
-            </header>
-            <div className="promptList">
+            </PromptStageHead>
+            <PromptList $indented>
               {stage.id === "answer" ? <FlowPersonasCard flows={flows} /> : null}
               {stagePrompts.map((prompt) => (
                 <PromptCard prompt={prompt} key={prompt.id} />
               ))}
-            </div>
-          </section>
+            </PromptList>
+          </PromptStage>
         );
       })}
 
       {leftovers.length > 0 ? (
-        <section className="promptStage">
-          <header className="promptStageHead">
-            <span className="promptStageStep" aria-hidden>
-              +
-            </span>
+        <PromptStage>
+          <PromptStageHead>
+            <PromptStageStep aria-hidden>+</PromptStageStep>
             <div>
-              <h2 className="promptStageTitle">Other prompts</h2>
-              <p className="promptStageBlurb">Registered in the catalog but not yet placed in the pipeline view.</p>
+              <PromptStageTitle>Other prompts</PromptStageTitle>
+              <PromptStageBlurb>Registered in the catalog but not yet placed in the pipeline view.</PromptStageBlurb>
             </div>
-          </header>
-          <div className="promptList">
+          </PromptStageHead>
+          <PromptList $indented>
             {leftovers.map((prompt) => (
               <PromptCard prompt={prompt} key={prompt.id} />
             ))}
-          </div>
-        </section>
+          </PromptList>
+        </PromptStage>
       ) : null}
-    </div>
+    </PromptFlow>
   );
 }
 
 function PromptCard({ prompt }: { prompt: PromptSummary }) {
   return (
-    <article className="promptCard">
-      <div className="promptCardHead">
+    <PromptCardRoot>
+      <PromptCardHead>
         <h3>{prompt.title}</h3>
         <code>{prompt.id}</code>
-      </div>
-      <p className="promptDescription">{prompt.description}</p>
-      <div className="promptChips">
+      </PromptCardHead>
+      <PromptDescription>{prompt.description}</PromptDescription>
+      <Row gap="sm" wrap>
         {prompt.usedBy.map((usage) => (
-          <span className="chip" key={usage}>
+          <Badge tone="neutral" key={usage}>
             {usage}
-          </span>
+          </Badge>
         ))}
-      </div>
-      <p className="promptOutput">
+      </Row>
+      <PromptOutput>
         <strong>Output:</strong> {prompt.outputShape}
-      </p>
-      <pre className="promptInstructions">{prompt.instructions}</pre>
-    </article>
+      </PromptOutput>
+      <PromptInstructions>{prompt.instructions}</PromptInstructions>
+    </PromptCardRoot>
   );
 }
 
@@ -160,39 +310,39 @@ function FlowPersonasCard({ flows }: { flows: ConfiguredKnowledgeFlow[] }) {
   }
 
   return (
-    <article className="promptCard">
-      <div className="promptCardHead">
+    <PromptCardRoot>
+      <PromptCardHead>
         <h3>Flow personas</h3>
         <code>KNOWLEDGE_FLOWS</code>
-      </div>
-      <p className="promptDescription">
+      </PromptCardHead>
+      <PromptDescription>
         Routing scopes retrieval to one flow&apos;s knowledge and appends that flow&apos;s persona to the base{" "}
         <code>answer-question</code> prompt below.
-      </p>
-      <div className="personaAssembly">
-        <span className="personaAssemblyLabel">How the prompt is assembled</span>
-        <pre className="promptInstructions">{ASSEMBLY_EXAMPLE}</pre>
-        <p className="promptOutput">
+      </PromptDescription>
+      <PersonaAssembly>
+        <PersonaAssemblyLabel>How the prompt is assembled</PersonaAssemblyLabel>
+        <PromptInstructions>{ASSEMBLY_EXAMPLE}</PromptInstructions>
+        <PromptOutput>
           The persona is appended verbatim by <code>withPersona()</code>, followed by a fixed grounding guard
           (a persona shapes tone and framing only — it never adds facts the context does not contain) — so the
           same base instructions are reused for every flow.
-        </p>
-      </div>
-      <div className="flowPersonaList">
+        </PromptOutput>
+      </PersonaAssembly>
+      <FlowPersonaList>
         {flows.map((flow) => (
-          <div className="flowPersona" key={flow.id}>
-            <div className="promptCardHead">
+          <FlowPersona key={flow.id}>
+            <PromptCardHead>
               <h3>{flow.name}</h3>
               <code>{flow.id}</code>
-            </div>
+            </PromptCardHead>
             {flow.persona ? (
-              <pre className="promptInstructions">{flow.persona}</pre>
+              <PromptInstructions>{flow.persona}</PromptInstructions>
             ) : (
-              <p className="promptOutput">No persona — uses the base prompt unchanged.</p>
+              <PromptOutput>No persona — uses the base prompt unchanged.</PromptOutput>
             )}
-          </div>
+          </FlowPersona>
         ))}
-      </div>
-    </article>
+      </FlowPersonaList>
+    </PromptCardRoot>
   );
 }

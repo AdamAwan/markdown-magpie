@@ -2,9 +2,10 @@
 
 import { Fragment, ReactNode, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import styled from "@emotion/styled";
 import { usePathname } from "next/navigation";
 import { useAuth0 } from "@auth0/auth0-react";
-import { ConsoleSection } from "../lib/types";
+import { ConsoleSection, UiMessage } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
 import { sectionSubtitle, sectionTitle } from "../lib/console";
 import { SECTION_NAV, sectionFromPath } from "../lib/sections";
@@ -12,6 +13,230 @@ import { AttentionPanel, NavButton } from "./common";
 import { BuildStatus } from "./BuildStatus";
 import { useConsole } from "./ConsoleProvider";
 import { authConfiguredFromWindow } from "./AuthProvider";
+import { Button } from "./ui";
+import type { StatusTone } from "../theme/theme";
+
+const MOBILE = "@media (max-width: 1050px)";
+const NARROW = "@media (max-width: 700px)";
+
+const Shell = styled.div({
+  display: "grid",
+  minHeight: "100vh",
+  gridTemplateColumns: "236px minmax(0, 1fr)",
+  [MOBILE]: { gridTemplateColumns: "1fr" }
+});
+
+const Sidebar = styled.aside(({ theme }) => ({
+  position: "sticky",
+  top: 0,
+  height: "100vh",
+  borderRight: `1px solid ${theme.color.border}`,
+  background: theme.color.surfaceMuted,
+  padding: "18px 14px",
+  [MOBILE]: {
+    position: "static",
+    height: "auto",
+    borderRight: 0,
+    borderBottom: `1px solid ${theme.color.border}`,
+    padding: "10px 14px"
+  }
+}));
+
+const SidebarHeader = styled.div({
+  display: "contents",
+  [MOBILE]: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px" }
+});
+
+const Brand = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  gap: theme.space.md,
+  padding: "8px 8px 20px",
+  [MOBILE]: { padding: "4px 0" }
+}));
+
+const BrandLogo = styled(Image)(({ theme }) => ({
+  width: "40px",
+  height: "40px",
+  flexShrink: 0,
+  borderRadius: theme.radius.md,
+  objectFit: "cover",
+  background: theme.color.surface,
+  border: `1px solid ${theme.color.border}`,
+  [MOBILE]: { width: "36px", height: "36px" }
+}));
+
+const BrandText = styled.div({ minWidth: 0, [NARROW]: { "& > span": { display: "none" } } });
+
+const BrandEyebrow = styled.span(({ theme }) => ({
+  display: "block",
+  color: theme.color.brandAccent,
+  fontSize: theme.font.size.sm,
+  fontWeight: theme.font.weight.semibold,
+  textTransform: "uppercase"
+}));
+
+const BrandName = styled.strong(({ theme }) => ({
+  display: "block",
+  marginTop: "5px",
+  fontSize: theme.font.size.xxl,
+  lineHeight: 1.1,
+  [MOBILE]: { marginTop: "2px", fontSize: theme.font.size.lg }
+}));
+
+const MenuToggle = styled.button(({ theme }) => ({
+  display: "none",
+  [MOBILE]: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: theme.space.md,
+    minHeight: "40px",
+    border: `1px solid ${theme.color.border}`,
+    borderRadius: theme.radius.sm,
+    background: theme.color.surface,
+    padding: `8px ${theme.space.lg}`,
+    color: theme.color.text,
+    fontSize: theme.font.size.base,
+    fontWeight: theme.font.weight.semibold,
+    cursor: "pointer"
+  },
+  "&:hover": { borderColor: theme.color.borderStrong, background: theme.color.page },
+  "&:focus-visible": { outline: `3px solid ${theme.color.accentBg}`, outlineOffset: "2px" }
+}));
+
+const MenuToggleIcon = styled.span({
+  display: "grid",
+  gap: "3px",
+  width: "16px",
+  "& span": { display: "block", height: "2px", borderRadius: "2px", background: "currentColor" }
+});
+
+const SideNav = styled.nav<{ $open: boolean }>(({ theme, $open }) => ({
+  display: "grid",
+  gap: theme.space.xs,
+  [MOBILE]: $open
+    ? {
+        display: "grid",
+        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+        marginTop: theme.space.lg,
+        borderTop: `1px solid ${theme.color.border}`,
+        paddingTop: theme.space.lg
+      }
+    : { display: "none" },
+  [NARROW]: $open ? { gridTemplateColumns: "1fr" } : {}
+}));
+
+const NavDivider = styled.div(({ theme }) => ({
+  gridColumn: "1 / -1",
+  height: "1px",
+  margin: `${theme.space.sm} ${theme.space.md}`,
+  background: theme.color.border
+}));
+
+const SideStatus = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.xl,
+  marginTop: "22px",
+  borderTop: `1px solid ${theme.color.border}`,
+  padding: "16px 8px 0",
+  [MOBILE]: { display: "none" }
+}));
+
+const StatusGroup = styled.div(({ theme }) => ({ display: "grid", gap: theme.space.md }));
+
+const StatusGroupTitle = styled.p(({ theme }) => ({
+  margin: 0,
+  color: theme.color.textSubtle,
+  fontSize: "10px",
+  fontWeight: theme.font.weight.semibold,
+  letterSpacing: "0.06em",
+  textTransform: "uppercase"
+}));
+
+const StatusLine = styled.div(({ theme }) => ({
+  display: "flex",
+  flexDirection: "column",
+  gap: theme.space.xs,
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.sm,
+  fontWeight: theme.font.weight.medium,
+  "& > span:first-of-type": {
+    color: theme.color.textMuted,
+    fontSize: "10px",
+    fontWeight: theme.font.weight.semibold,
+    textTransform: "uppercase"
+  },
+  "& > span:last-of-type": {
+    display: "flex",
+    alignItems: "center",
+    gap: theme.space.sm,
+    color: theme.color.text,
+    fontWeight: theme.font.weight.medium
+  }
+}));
+
+const Dot = styled.span<{ $offline?: boolean }>(({ theme, $offline }) => ({
+  display: "inline-block",
+  width: "9px",
+  height: "9px",
+  marginRight: "5px",
+  borderRadius: "999px",
+  background: $offline ? theme.color.status.failed.dot : theme.color.status.completed.dot
+}));
+
+const MainArea = styled.main(({ theme }) => ({
+  minWidth: 0,
+  padding: "22px 24px 34px",
+  [NARROW]: { padding: `${theme.space.xl} ${theme.space.lg} 28px` }
+}));
+
+const Topbar = styled.header(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: theme.space.xxl,
+  marginBottom: theme.space.lg,
+  "& p": { marginTop: theme.space.sm },
+  [NARROW]: { display: "grid", gridTemplateColumns: "1fr" }
+}));
+
+const Eyebrow = styled.p(({ theme }) => ({
+  display: "block",
+  color: theme.color.brandAccent,
+  fontSize: theme.font.size.sm,
+  fontWeight: theme.font.weight.semibold,
+  textTransform: "uppercase"
+}));
+
+const TopActions = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  gap: theme.space.md,
+  [NARROW]: { alignItems: "stretch", flexDirection: "column" }
+}));
+
+const RefreshTime = styled.span(({ theme }) => ({
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.sm,
+  fontWeight: theme.font.weight.medium
+}));
+
+const alertTone: Record<UiMessage["tone"], StatusTone> = {
+  info: "pending",
+  success: "completed",
+  danger: "failed"
+};
+
+const Alert = styled.div<{ $tone: StatusTone }>(({ theme, $tone }) => ({
+  marginBottom: theme.space.lg,
+  border: `1px solid ${theme.color.status[$tone].border}`,
+  borderRadius: theme.radius.md,
+  background: theme.color.status[$tone].bg,
+  color: theme.color.status[$tone].fg,
+  padding: `${theme.space.lg} ${theme.space.xl}`,
+  fontSize: theme.font.size.base,
+  fontWeight: theme.font.weight.medium
+}));
 
 // Login/logout controls. This is only rendered when Auth0 is configured, since
 // useAuth0 throws without an Auth0Provider ancestor (AuthProvider omits the
@@ -19,25 +244,21 @@ import { authConfiguredFromWindow } from "./AuthProvider";
 function AuthActions() {
   const { isAuthenticated, isLoading, user, loginWithRedirect, logout } = useAuth0();
   if (isLoading) {
-    return <span className="refreshTime">Checking session</span>;
+    return <RefreshTime>Checking session</RefreshTime>;
   }
   if (!isAuthenticated) {
     return (
-      <button className="button secondary" onClick={() => void loginWithRedirect()} type="button">
+      <Button variant="secondary" onClick={() => void loginWithRedirect()}>
         Log in
-      </button>
+      </Button>
     );
   }
   return (
     <>
-      <span className="refreshTime">{user?.email ?? user?.name ?? "Signed in"}</span>
-      <button
-        className="button secondary"
-        onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}
-        type="button"
-      >
+      <RefreshTime>{user?.email ?? user?.name ?? "Signed in"}</RefreshTime>
+      <Button variant="secondary" onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}>
         Log out
-      </button>
+      </Button>
     </>
   );
 }
@@ -94,33 +315,32 @@ export function AppShell({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div className="appShell">
-      <aside className={mobileMenuOpen ? "sidebar menuOpen" : "sidebar"}>
-        <div className="sidebarHeader">
-          <div className="brand">
-            <Image className="brandLogo" src="/magpie.jpeg" alt="" aria-hidden="true" width={40} height={40} />
-            <div className="brandText">
-              <span>Markdown Magpie</span>
-              <strong>Knowledge Console</strong>
-            </div>
-          </div>
-          <button
-            className="menuToggle"
+    <Shell>
+      <Sidebar>
+        <SidebarHeader>
+          <Brand>
+            <BrandLogo src="/magpie.jpeg" alt="" aria-hidden="true" width={40} height={40} />
+            <BrandText>
+              <BrandEyebrow>Markdown Magpie</BrandEyebrow>
+              <BrandName>Knowledge Console</BrandName>
+            </BrandText>
+          </Brand>
+          <MenuToggle
             type="button"
             aria-controls="console-navigation"
             aria-expanded={mobileMenuOpen}
             onClick={() => setMobileMenuOpen((open) => !open)}
           >
-            <span className="menuToggleIcon" aria-hidden="true">
+            <MenuToggleIcon aria-hidden="true">
               <span />
               <span />
               <span />
-            </span>
+            </MenuToggleIcon>
             <span>{mobileMenuOpen ? "Close" : "Menu"}</span>
-          </button>
-        </div>
-        <nav
-          className="sideNav"
+          </MenuToggle>
+        </SidebarHeader>
+        <SideNav
+          $open={mobileMenuOpen}
           id="console-navigation"
           aria-label="Console sections"
           onClick={() => setMobileMenuOpen(false)}
@@ -128,7 +348,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           {SECTION_NAV.map((entry, index) => (
             <Fragment key={entry.section}>
               {index > 0 && entry.group !== SECTION_NAV[index - 1].group ? (
-                <div className="navDivider" role="presentation" />
+                <NavDivider role="presentation" />
               ) : null}
               <NavButton
                 active={activeSection === entry.section}
@@ -139,105 +359,105 @@ export function AppShell({ children }: { children: ReactNode }) {
               />
             </Fragment>
           ))}
-        </nav>
-        <div className="sideStatus">
-          <div className="statusGroup">
-            <p className="statusGroupTitle">System</p>
-            <div className="statusLine">
+        </SideNav>
+        <SideStatus>
+          <StatusGroup>
+            <StatusGroupTitle>System</StatusGroupTitle>
+            <StatusLine>
               <span>API</span>
               <span>
-                <span className={health?.ok ? "dot" : "dot offline"} />
+                <Dot $offline={!health?.ok} />
                 {health?.ok ? "Online" : "Offline"}
               </span>
-            </div>
-            <div className="statusLine">
+            </StatusLine>
+            <StatusLine>
               <span>Documents</span>
               <span>{stats.documentCount}</span>
-            </div>
-            <div className="statusLine">
+            </StatusLine>
+            <StatusLine>
               <span>Sections</span>
               <span>{stats.sectionCount}</span>
-            </div>
-            <div className="statusLine">
+            </StatusLine>
+            <StatusLine>
               <span>Latest Job</span>
               <span>
-                {latestJob ? <span className={latestJob.state === "failed" ? "dot offline" : "dot"} /> : null}
+                {latestJob ? <Dot $offline={latestJob.state === "failed"} /> : null}
                 {latestJob ? latestJob.state : "None"}
               </span>
-            </div>
-          </div>
+            </StatusLine>
+          </StatusGroup>
 
-          <div className="statusGroup">
-            <p className="statusGroupTitle">Model</p>
-            <div className="statusLine">
+          <StatusGroup>
+            <StatusGroupTitle>Model</StatusGroupTitle>
+            <StatusLine>
               <span>Provider</span>
               <span>{config?.aiRuntime.provider ?? "not set"}</span>
-            </div>
+            </StatusLine>
             {modelInfo.chatModel && (
-              <div className="statusLine">
+              <StatusLine>
                 <span>Chat</span>
                 <span title={modelInfo.chatHost || undefined}>
                   {modelInfo.chatModel}
                   {modelInfo.chatHost && ` (${modelInfo.chatHost})`}
                 </span>
-              </div>
+              </StatusLine>
             )}
             {modelInfo.embeddingModel && (
-              <div className="statusLine">
+              <StatusLine>
                 <span>Embedding</span>
                 <span title={modelInfo.embeddingHost || undefined}>
                   {modelInfo.embeddingModel}
                   {modelInfo.embeddingHost && ` (${modelInfo.embeddingHost})`}
                 </span>
-              </div>
+              </StatusLine>
             )}
-            <div className="statusLine">
+            <StatusLine>
               <span>Retrieval</span>
               <span title={config?.retrieval.reason}>
                 {config?.retrieval.mode === "hybrid" ? "Hybrid (semantic + keyword)" : "Keyword only"}
               </span>
-            </div>
-          </div>
+            </StatusLine>
+          </StatusGroup>
 
-          <div className="statusGroup">
-            <p className="statusGroupTitle">Session</p>
-            <div className="statusLine">
+          <StatusGroup>
+            <StatusGroupTitle>Session</StatusGroupTitle>
+            <StatusLine>
               <span>Updated</span>
               <span>{lastRefreshedAt ? new Date(lastRefreshedAt).toLocaleTimeString() : "Never"}</span>
-            </div>
-          </div>
+            </StatusLine>
+          </StatusGroup>
 
           <BuildStatus />
-        </div>
-      </aside>
+        </SideStatus>
+      </Sidebar>
 
-      <main className="main">
-        <header className="topbar">
+      <MainArea>
+        <Topbar>
           <div>
-            <p className="eyebrow">Markdown Magpie</p>
+            <Eyebrow>Markdown Magpie</Eyebrow>
             <h1>{sectionTitle(activeSection)}</h1>
             <p>{sectionSubtitle(activeSection)}</p>
           </div>
-          <div className="topActions">
-            <span className="refreshTime" aria-live="polite">
+          <TopActions>
+            <RefreshTime aria-live="polite">
               {lastRefreshedAt ? `Updated ${new Date(lastRefreshedAt).toLocaleTimeString()}` : "Not refreshed yet"}
-            </span>
-            <button className="button secondary" disabled={refreshing} onClick={() => void refresh()} type="button">
+            </RefreshTime>
+            <Button variant="secondary" disabled={refreshing} onClick={() => void refresh()}>
               {refreshing ? "Refreshing" : "Refresh"}
-            </button>
+            </Button>
             {authEnabled ? <AuthActions /> : null}
-          </div>
-        </header>
+          </TopActions>
+        </Topbar>
 
         {message ? (
-          <div className={`alert ${message.tone}`} role="status" aria-live="polite">
+          <Alert $tone={alertTone[message.tone]} role="status" aria-live="polite">
             {message.text}
-          </div>
+          </Alert>
         ) : null}
         {attentionNotices.length ? <AttentionPanel notices={attentionNotices} /> : null}
 
         {children}
-      </main>
-    </div>
+      </MainArea>
+    </Shell>
   );
 }

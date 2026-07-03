@@ -2,14 +2,15 @@
 
 import { ActivityPanel } from "../../components/ActivityPanel";
 import { useConsole } from "../../components/ConsoleProvider";
+import { Workbench } from "../../components/ui";
 import { knowledgeFlows } from "../../lib/config";
 
 export default function ActivityPage() {
   const { config, maintenanceRuns } = useConsole();
 
   return (
-    <section className="workbench singlePane">
+    <Workbench>
       <ActivityPanel flows={knowledgeFlows(config)} runs={maintenanceRuns} />
-    </section>
+    </Workbench>
   );
 }

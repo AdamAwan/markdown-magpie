@@ -1,7 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import styled from "@emotion/styled";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { JobCapability, JobState, JobType, JobView, ScheduleView, WatcherStatus, WatcherView } from "../lib/types";
 import { formatJobType, isActiveJob } from "../lib/console";
+import {
+  Actions,
+  Badge,
+  Button,
+  EmptyState,
+  Field,
+  IconButton,
+  Select,
+  Surface,
+  statusTone
+} from "./ui";
 
 const JOB_STATES: JobState[] = ["created", "retry", "active", "completed", "cancelled", "failed", "blocked"];
 
@@ -44,6 +56,327 @@ const CAPABILITY_JOB_TYPES = {
   "local-git": ["publish_proposal"],
   maintenance: ["process_gaps_to_pull_requests", "source_change_sync", "correctness_patrol", "editorial_patrol"]
 } as const satisfies Record<JobCapability, readonly JobType[]>;
+
+const JobsPage = styled.section(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr)",
+  gap: theme.space.lg
+}));
+
+const JobsLayout = styled(Surface.Body)({
+  gap: "20px"
+});
+
+const JobFilters = styled.div(({ theme }) => ({
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "flex-end",
+  gap: theme.space.lg,
+  paddingBottom: theme.space.lg,
+  "& > label": { minWidth: "180px" }
+}));
+
+const JobsWorkspace = styled.div(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: "minmax(220px, 0.28fr) minmax(0, 1fr)",
+  gap: theme.space.xl,
+  minHeight: "560px",
+  "@media (max-width: 960px)": { gridTemplateColumns: "1fr" }
+}));
+
+const JobsMaster = styled.div({
+  display: "grid",
+  alignContent: "start",
+  minWidth: 0
+});
+
+const JobList = styled.nav(({ theme }) => ({
+  display: "grid",
+  alignContent: "start",
+  minWidth: 0,
+  gap: theme.space.md,
+  maxHeight: "640px",
+  overflow: "auto",
+  borderRight: `1px solid ${theme.color.border}`,
+  paddingRight: theme.space.lg,
+  "@media (max-width: 960px)": {
+    borderRight: 0,
+    borderBottom: `1px solid ${theme.color.border}`,
+    paddingRight: 0,
+    paddingBottom: theme.space.lg
+  }
+}));
+
+const JobListItem = styled.button<{ $selected: boolean }>(({ theme, $selected }) => ({
+  display: "grid",
+  gap: theme.space.sm,
+  width: "100%",
+  border: `1px solid ${$selected ? theme.color.accentBorder : theme.color.border}`,
+  borderRadius: theme.radius.md,
+  background: $selected ? theme.color.accentBg : theme.color.surface,
+  color: theme.color.text,
+  padding: `${theme.space.md} ${theme.space.lg}`,
+  textAlign: "left",
+  cursor: "pointer",
+  font: "inherit",
+  transition: "background 120ms ease, border-color 120ms ease",
+  "&:hover": { background: $selected ? theme.color.accentBg : theme.color.surfaceMuted }
+}));
+
+const JobListTop = styled.span(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: theme.space.md,
+  "& strong": {
+    minWidth: 0,
+    overflow: "hidden",
+    fontSize: theme.font.size.md,
+    fontWeight: theme.font.weight.semibold,
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap"
+  }
+}));
+
+const JobListMeta = styled.span(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-start",
+  flexWrap: "wrap",
+  gap: theme.space.md,
+  color: theme.color.textMuted,
+  fontFamily: theme.font.mono,
+  fontSize: theme.font.size.xs
+}));
+
+const JobListPager = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: theme.space.sm,
+  borderTop: `1px solid ${theme.color.border}`,
+  paddingTop: theme.space.lg,
+  marginRight: theme.space.lg,
+  "@media (max-width: 960px)": { marginRight: 0 }
+}));
+
+const PagerStatus = styled.span(({ theme }) => ({
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.sm
+}));
+
+const JobDetailPanel = styled.aside({
+  display: "grid",
+  alignContent: "start",
+  minWidth: 0
+});
+
+const JobDetailRoot = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.lg
+}));
+
+const DetailTop = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: theme.space.lg
+}));
+
+const PathLine = styled.p(({ theme }) => ({
+  color: theme.color.textMuted,
+  fontFamily: theme.font.mono,
+  fontSize: theme.font.size.sm
+}));
+
+const JobTimings = styled.dl(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+  gap: `${theme.space.sm} 18px`,
+  margin: 0
+}));
+
+const ConfigRow = styled.div(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: "minmax(130px, 0.42fr) minmax(0, 1fr)",
+  gap: theme.space.md,
+  alignItems: "start",
+  borderTop: `1px solid ${theme.color.border}`,
+  paddingTop: theme.space.md,
+  "&:first-of-type": { borderTop: 0, paddingTop: 0 },
+  "& dt": {
+    color: theme.color.textMuted,
+    fontSize: theme.font.size.sm,
+    fontWeight: theme.font.weight.semibold
+  },
+  "& dd": {
+    minWidth: 0,
+    margin: 0,
+    overflowWrap: "anywhere",
+    color: theme.color.text,
+    fontFamily: theme.font.mono,
+    fontSize: theme.font.size.sm
+  }
+}));
+
+const JobError = styled.div({ margin: 0 });
+
+const CrunchError = styled.p(({ theme }) => ({
+  color: theme.color.dangerText,
+  fontWeight: theme.font.weight.semibold
+}));
+
+const JobJson = styled.div(({ theme }) => ({
+  "& pre": {
+    margin: 0,
+    overflowX: "auto",
+    maxHeight: "280px",
+    padding: `${theme.space.md} ${theme.space.lg}`,
+    border: `1px solid ${theme.color.border}`,
+    borderRadius: theme.radius.sm,
+    background: theme.color.surface,
+    fontSize: theme.font.size.sm
+  }
+}));
+
+// Grid-based data table shared by the workers and schedules panels. Each variant
+// sets its own column template via the classes on the head/row rows below.
+const JobTable = styled.div({ display: "grid" });
+
+const rowGrid = {
+  display: "grid",
+  gap: "12px",
+  alignItems: "center"
+} as const;
+
+const TableHead = styled.div(({ theme }) => ({
+  ...rowGrid,
+  borderTop: `1px solid ${theme.color.border}`,
+  padding: "10px 0",
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.xs,
+  fontWeight: theme.font.weight.semibold
+}));
+
+const TableRow = styled.div(({ theme }) => ({
+  ...rowGrid,
+  borderTop: `1px solid ${theme.color.border}`,
+  padding: "10px 0",
+  fontSize: theme.font.size.md
+}));
+
+const WorkerHead = styled(TableHead)({
+  gridTemplateColumns:
+    "minmax(180px, 1.2fr) 80px minmax(150px, 0.9fr) minmax(320px, 2fr) minmax(100px, 0.7fr) minmax(100px, 0.7fr)"
+});
+
+const WorkerRow = styled(TableRow)({
+  gridTemplateColumns:
+    "minmax(180px, 1.2fr) 80px minmax(150px, 0.9fr) minmax(320px, 2fr) minmax(100px, 0.7fr) minmax(100px, 0.7fr)",
+  alignItems: "start"
+});
+
+const ScheduleHead = styled(TableHead)({
+  gridTemplateColumns: "minmax(160px, 1.2fr) minmax(140px, 1fr) minmax(120px, 0.8fr) minmax(160px, 1fr)"
+});
+
+const ScheduleRow = styled(TableRow)({
+  gridTemplateColumns: "minmax(160px, 1.2fr) minmax(140px, 1fr) minmax(120px, 0.8fr) minmax(160px, 1fr)"
+});
+
+const WorkerName = styled.span(({ theme }) => ({
+  display: "inline-flex",
+  flexDirection: "column",
+  lineHeight: 1.3,
+  "& .workerId": {
+    color: theme.color.textSubtle,
+    fontSize: theme.font.size.xs,
+    fontFamily: theme.font.mono
+  }
+}));
+
+const WorkerPills = styled.span(({ theme }) => ({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: theme.space.sm,
+  alignItems: "flex-start"
+}));
+
+const WorkerPillsEmpty = styled.span(({ theme }) => ({
+  color: theme.color.textSubtle
+}));
+
+// Non-interactive tag rendered inside a Tooltip.Trigger. A host `<span>` (not the
+// Badge component) so Radix's `asChild` can attach its ref natively. `capability`
+// reuses the pending/blue status palette, `jobType` the completed/green one.
+const WorkerPill = styled.span<{ $variant: "capability" | "jobType" }>(({ theme, $variant }) => {
+  const palette = $variant === "capability" ? theme.color.status.pending : theme.color.status.completed;
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    minHeight: "24px",
+    padding: `3px ${theme.space.md}`,
+    border: `1px solid ${palette.border}`,
+    borderRadius: theme.radius.sm,
+    background: palette.bg,
+    color: palette.fg,
+    fontFamily: $variant === "jobType" ? theme.font.mono : theme.font.sans,
+    fontSize: theme.font.size.sm,
+    fontWeight: theme.font.weight.semibold,
+    whiteSpace: "nowrap",
+    cursor: "default"
+  };
+});
+
+const WorkerJob = styled.button(({ theme }) => ({
+  border: 0,
+  padding: 0,
+  background: "none",
+  color: theme.color.accent,
+  font: "inherit",
+  fontFamily: theme.font.mono,
+  fontSize: theme.font.size.sm,
+  textAlign: "left",
+  cursor: "pointer",
+  "&:hover": { textDecoration: "underline" }
+}));
+
+const WorkerTooltipContent = styled(Tooltip.Content)(({ theme }) => ({
+  zIndex: 60,
+  display: "grid",
+  gap: theme.space.sm,
+  maxWidth: "320px",
+  border: `1px solid ${theme.color.primary}`,
+  borderRadius: theme.radius.sm,
+  background: theme.color.text,
+  color: "#f3f6f1",
+  padding: `${theme.space.md} ${theme.space.lg}`,
+  fontSize: theme.font.size.sm,
+  boxShadow: "0 8px 24px rgba(23, 33, 29, 0.28)"
+}));
+
+const WorkerTooltipName = styled.strong(({ theme }) => ({
+  fontSize: theme.font.size.md,
+  fontWeight: theme.font.weight.semibold
+}));
+
+const WorkerTooltipLead = styled.span({
+  color: "#9fb1a7"
+});
+
+const WorkerTooltipList = styled.span({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "4px 8px"
+});
+
+const WorkerTooltipItem = styled.span(({ theme }) => ({
+  fontFamily: theme.font.mono
+}));
+
+const WorkerTooltipArrow = styled(Tooltip.Arrow)(({ theme }) => ({
+  fill: theme.color.text
+}));
 
 export function JobsPanel({
   jobs,
@@ -119,76 +452,71 @@ export function JobsPanel({
   }, [selectedJobId]);
 
   return (
-    <section className="jobsPage">
-      <section className="surface">
-        <div className="surfaceHeader">
+    <JobsPage>
+      <Surface>
+        <Surface.Header>
           <h2>Jobs</h2>
-          <span className="pill" title="Jobs loaded (most recent page)">
+          <Badge tone="neutral" title="Jobs loaded (most recent page)">
             {jobs.length}
-          </span>
+          </Badge>
           {activeCount > 0 ? (
-            <span className="pill" title="Jobs still in flight">
+            <Badge tone="neutral" title="Jobs still in flight">
               {activeCount} active
-            </span>
+            </Badge>
           ) : null}
           {failedCount > 0 ? (
-            <span className="status failed" title="Failed jobs">
+            <Badge tone="failed" title="Failed jobs">
               {failedCount} failed
-            </span>
+            </Badge>
           ) : null}
-        </div>
-        <div className="surfaceBody jobsLayout">
-          <div className="jobFilters">
-            <label className="field">
-              <span>State</span>
-              <select onChange={(event) => setStateFilter(event.target.value as JobState | "all")} value={stateFilter}>
+        </Surface.Header>
+        <JobsLayout>
+          <JobFilters>
+            <Field label="State">
+              <Select onChange={(event) => setStateFilter(event.target.value as JobState | "all")} value={stateFilter}>
                 <option value="all">All states</option>
                 {JOB_STATES.map((state) => (
                   <option key={state} value={state}>
                     {state}
                   </option>
                 ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Type</span>
-              <select onChange={(event) => setTypeFilter(event.target.value)} value={typeFilter}>
+              </Select>
+            </Field>
+            <Field label="Type">
+              <Select onChange={(event) => setTypeFilter(event.target.value)} value={typeFilter}>
                 <option value="all">All types</option>
                 {jobTypes.map((type) => (
                   <option key={type} value={type}>
                     {formatJobType(type)}
                   </option>
                 ))}
-              </select>
-            </label>
-            <span className="pill" title="Jobs matching the current filters">
+              </Select>
+            </Field>
+            <Badge tone="neutral" title="Jobs matching the current filters">
               {filtered.length} matched
-            </span>
+            </Badge>
             {failedCount > 0 ? (
-              <button
-                className="button secondary"
-                onClick={() => void onAccept(failedJobs.map((job) => job.id))}
-                type="button"
-              >
+              <Button variant="secondary" onClick={() => void onAccept(failedJobs.map((job) => job.id))}>
                 Accept all failures
-              </button>
+              </Button>
             ) : null}
-          </div>
+          </JobFilters>
 
-          <div className="jobsWorkspace">
-            <div className="jobsMaster">
-              <nav className="jobList" aria-label="Jobs">
+          <JobsWorkspace>
+            <JobsMaster>
+              <JobList aria-label="Jobs">
                 {visibleJobs.map((job) => (
-                  <button
-                    className={displayedJob?.id === job.id ? "jobListItem selected" : "jobListItem"}
+                  <JobListItem
+                    $selected={displayedJob?.id === job.id}
+                    data-selected={displayedJob?.id === job.id ? "true" : undefined}
                     key={job.id}
                     onClick={() => onSelect(job.id)}
-                    type="button"
                   >
-                    <span className="jobListTop">
+                    <JobListTop>
                       <strong title={job.type}>{formatJobType(job.type)}</strong>
-                      <span
-                        className={"status " + (job.acceptedAt ? "ready" : job.state)}
+                      <Badge
+                        tone={job.acceptedAt ? "completed" : statusTone(job.state)}
+                        dot
                         title={
                           job.acceptedAt
                             ? "Failure accepted " + new Date(job.acceptedAt).toLocaleString()
@@ -196,50 +524,50 @@ export function JobsPanel({
                         }
                       >
                         {job.acceptedAt ? "accepted" : job.state}
-                      </span>
-                    </span>
-                    <span className="jobListMeta">
+                      </Badge>
+                    </JobListTop>
+                    <JobListMeta>
                       <span title={`Retry ${job.retryCount} of ${job.retryLimit}`}>
                         {job.retryCount}/{job.retryLimit} attempts
                       </span>
                       <span title={new Date(job.createdAt).toLocaleString()}>{relativeAge(job.createdAt)} ago</span>
                       <span title={`Updated ${new Date(job.updatedAt).toLocaleString()}`}>updated</span>
-                    </span>
-                  </button>
+                    </JobListMeta>
+                  </JobListItem>
                 ))}
                 {filtered.length === 0 ? (
-                  <p className="empty">
+                  <EmptyState>
                     {jobs.length === 0 ? "No jobs queued." : "No jobs match the current filters."}
-                  </p>
+                  </EmptyState>
                 ) : null}
-              </nav>
+              </JobList>
 
               {filtered.length > PAGE_SIZE ? (
-                <div className="tablePager jobListPager">
-                  <button
-                    className="button secondary"
+                <JobListPager>
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     disabled={currentPage === 0}
                     onClick={() => setPage(currentPage - 1)}
-                    type="button"
                   >
                     Previous
-                  </button>
-                  <span className="pagerStatus" aria-live="polite">
+                  </Button>
+                  <PagerStatus aria-live="polite">
                     {currentPage + 1}/{pageCount}
-                  </span>
-                  <button
-                    className="button secondary"
+                  </PagerStatus>
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     disabled={currentPage >= pageCount - 1}
                     onClick={() => setPage(currentPage + 1)}
-                    type="button"
                   >
                     Next
-                  </button>
-                </div>
+                  </Button>
+                </JobListPager>
               ) : null}
-            </div>
+            </JobsMaster>
 
-            <aside className="jobDetailPanel" ref={detailRef}>
+            <JobDetailPanel ref={detailRef}>
               {displayedJob ? (
                 <JobDetail
                   job={displayedJob}
@@ -249,38 +577,38 @@ export function JobsPanel({
                   onAccept={onAccept}
                 />
               ) : (
-                <p className="empty">Select a job to view its details.</p>
+                <EmptyState>Select a job to view its details.</EmptyState>
               )}
-            </aside>
-          </div>
-        </div>
-      </section>
+            </JobDetailPanel>
+          </JobsWorkspace>
+        </JobsLayout>
+      </Surface>
 
-      <section className="surface">
-        <div className="surfaceHeader">
+      <Surface>
+        <Surface.Header>
           <h2>Connected workers</h2>
-          <span className="pill" title="Watchers connected (seen recently)">
+          <Badge tone="neutral" title="Watchers connected (seen recently)">
             {workers.length} worker{workers.length === 1 ? "" : "s"}
-          </span>
-          {busyWorkerCount > 0 ? <span className="pill">{busyWorkerCount} busy</span> : null}
-        </div>
-        <div className="surfaceBody">
+          </Badge>
+          {busyWorkerCount > 0 ? <Badge tone="neutral">{busyWorkerCount} busy</Badge> : null}
+        </Surface.Header>
+        <Surface.Body>
           <WorkersTable workers={workers} onSelect={onSelect} />
-        </div>
-      </section>
+        </Surface.Body>
+      </Surface>
 
-      <section className="surface">
-        <div className="surfaceHeader">
+      <Surface>
+        <Surface.Header>
           <h2>Active schedules</h2>
-          <span className="pill" title="Enabled schedules">
+          <Badge tone="neutral" title="Enabled schedules">
             {activeScheduleCount} active
-          </span>
-        </div>
-        <div className="surfaceBody">
+          </Badge>
+        </Surface.Header>
+        <Surface.Body>
           <SchedulesTable schedules={schedules} />
-        </div>
-      </section>
-    </section>
+        </Surface.Body>
+      </Surface>
+    </JobsPage>
   );
 }
 
@@ -298,39 +626,39 @@ function JobDetail({
   onAccept: (jobIds: string[]) => Promise<void>;
 }) {
   return (
-    <div className="jobDetail">
-      <div className="rowTop">
+    <JobDetailRoot>
+      <DetailTop>
         <div>
           <h3>{formatJobType(job.type)}</h3>
-          <p className="path">
+          <PathLine>
             <code>{job.id}</code> · {job.queueName}
-          </p>
+          </PathLine>
         </div>
-        <div className="rowActions">
+        <Actions>
           {CANCELLABLE.has(job.state) ? (
-            <button className="button secondary" onClick={() => void onCancel(job.id)} type="button">
+            <Button variant="secondary" onClick={() => void onCancel(job.id)}>
               Cancel
-            </button>
+            </Button>
           ) : null}
           {job.state === "failed" ? (
-            <button className="button" onClick={() => void onRetry(job.id)} type="button">
+            <Button variant="primary" onClick={() => void onRetry(job.id)}>
               Retry
-            </button>
+            </Button>
           ) : null}
           {job.state === "failed" && !job.acceptedAt ? (
-            <button className="button secondary" onClick={() => void onAccept([job.id])} type="button">
+            <Button variant="secondary" onClick={() => void onAccept([job.id])}>
               Accept failure
-            </button>
+            </Button>
           ) : null}
           {onClose ? (
-            <button aria-label="Close details" className="jobDetailClose" onClick={onClose} title="Close" type="button">
+            <IconButton label="Close details" size="sm" onClick={onClose}>
               ✕
-            </button>
+            </IconButton>
           ) : null}
-        </div>
-      </div>
+        </Actions>
+      </DetailTop>
 
-      <dl className="jobTimings">
+      <JobTimings>
         <Timing label="State" value={job.state} />
         <Timing label="Attempts" value={`${job.retryCount}/${job.retryLimit}`} />
         <Timing label="Created" value={fmt(job.createdAt)} />
@@ -340,20 +668,20 @@ function JobDetail({
         <Timing label="Accepted" value={fmt(job.acceptedAt)} />
         <Timing label="Cancelled" value={fmt(job.cancelledAt)} />
         <Timing label="Retry at" value={fmt(job.retryAt)} />
-      </dl>
+      </JobTimings>
 
       {job.error ? (
-        <div className="jobError">
+        <JobError>
           <h4>Error</h4>
-          <p className="crunchError">
+          <CrunchError>
             [{job.error.category}] {job.error.code}: {job.error.message}
-          </p>
-        </div>
+          </CrunchError>
+        </JobError>
       ) : null}
 
       <JsonBlock title="Input" value={job.input} />
       {job.output !== undefined ? <JsonBlock title="Output" value={job.output} /> : null}
-    </div>
+    </JobDetailRoot>
   );
 }
 
@@ -365,50 +693,51 @@ function WorkersTable({ workers, onSelect }: { workers: WatcherView[]; onSelect:
 
   return (
     <Tooltip.Provider delayDuration={150}>
-      <div className="jobTable">
-        <div className="tableHead workerHead">
+      <JobTable>
+        <WorkerHead>
           <span>Worker</span>
           <span>Status</span>
           <span>Capabilities</span>
           <span>Job types</span>
           <span>Current job</span>
           <span>Last seen</span>
-        </div>
+        </WorkerHead>
         {sorted.map((worker) => {
           const { label, shortId } = splitWorkerName(worker.name);
           return (
-            <div className="tableRow workerRow" key={worker.name}>
-              <span className="workerName" title={worker.name}>
+            <WorkerRow key={worker.name}>
+              <WorkerName title={worker.name}>
                 <span>{label}</span>
                 {shortId ? <span className="workerId">{shortId}</span> : null}
-              </span>
-              <span className={`status ${workerStatusClass(worker.status)}`} title={`Worker ${worker.status}`}>
-                {worker.status}
+              </WorkerName>
+              <span>
+                <Badge tone={workerStatusTone(worker.status)} dot title={`Worker ${worker.status}`}>
+                  {worker.status}
+                </Badge>
               </span>
               <WorkerCapabilityPills capabilities={worker.capabilities} />
               <WorkerJobTypePills capabilities={worker.capabilities} />
               <span>
                 {worker.currentJobId ? (
-                  <button
-                    className="workerJob"
+                  <WorkerJob
+                    type="button"
                     onClick={() => onSelect(worker.currentJobId as string)}
                     title={worker.currentJobId}
-                    type="button"
                   >
                     {worker.currentJobId.slice(0, 8)}
-                  </button>
+                  </WorkerJob>
                 ) : (
                   "—"
                 )}
               </span>
               <span title={new Date(worker.lastSeenAt).toLocaleString()}>{relativeAge(worker.lastSeenAt)} ago</span>
-            </div>
+            </WorkerRow>
           );
         })}
         {sorted.length === 0 ? (
-          <p className="empty">No workers connected. Start a watcher to process queued jobs.</p>
+          <EmptyState>No workers connected. Start a watcher to process queued jobs.</EmptyState>
         ) : null}
-      </div>
+      </JobTable>
     </Tooltip.Provider>
   );
 }
@@ -417,44 +746,42 @@ function WorkersTable({ workers, onSelect }: { workers: WatcherView[]; onSelect:
 // worker run — the forward link ("what it can now do").
 function WorkerCapabilityPills({ capabilities }: { capabilities: string[] }) {
   if (capabilities.length === 0) {
-    return <span className="workerPillsEmpty">—</span>;
+    return <WorkerPillsEmpty>—</WorkerPillsEmpty>;
   }
 
   return (
-    <span className="workerPills">
+    <WorkerPills>
       {capabilities.map((capability) => {
         const jobTypes = isJobCapability(capability) ? CAPABILITY_JOB_TYPES[capability] : [];
         return (
           <Tooltip.Root key={capability}>
             <Tooltip.Trigger asChild>
-              <span className="pill workerPill capabilityPill">{capability}</span>
+              <WorkerPill $variant="capability">{capability}</WorkerPill>
             </Tooltip.Trigger>
             <Tooltip.Portal>
-              <Tooltip.Content className="workerTooltip" sideOffset={6} collisionPadding={12}>
-                <strong className="workerTooltipName">{capability}</strong>
+              <WorkerTooltipContent sideOffset={6} collisionPadding={12}>
+                <WorkerTooltipName>{capability}</WorkerTooltipName>
                 {jobTypes.length > 0 ? (
                   <>
-                    <span className="workerTooltipLead">
+                    <WorkerTooltipLead>
                       Runs {jobTypes.length} job type{jobTypes.length === 1 ? "" : "s"}:
-                    </span>
-                    <span className="workerTooltipList">
+                    </WorkerTooltipLead>
+                    <WorkerTooltipList>
                       {jobTypes.map((type) => (
-                        <span className="workerTooltipItem" key={type}>
-                          {formatJobType(type)}
-                        </span>
+                        <WorkerTooltipItem key={type}>{formatJobType(type)}</WorkerTooltipItem>
                       ))}
-                    </span>
+                    </WorkerTooltipList>
                   </>
                 ) : (
-                  <span className="workerTooltipLead">Unknown capability — no job types mapped.</span>
+                  <WorkerTooltipLead>Unknown capability — no job types mapped.</WorkerTooltipLead>
                 )}
-                <Tooltip.Arrow className="workerTooltipArrow" />
-              </Tooltip.Content>
+                <WorkerTooltipArrow />
+              </WorkerTooltipContent>
             </Tooltip.Portal>
           </Tooltip.Root>
         );
       })}
-    </span>
+    </WorkerPills>
   );
 }
 
@@ -464,33 +791,33 @@ function WorkerCapabilityPills({ capabilities }: { capabilities: string[] }) {
 function WorkerJobTypePills({ capabilities }: { capabilities: string[] }) {
   const jobTypes = workerJobTypes(capabilities);
   if (jobTypes.length === 0) {
-    return <span className="workerPillsEmpty">—</span>;
+    return <WorkerPillsEmpty>—</WorkerPillsEmpty>;
   }
 
   return (
-    <span className="workerPills">
+    <WorkerPills>
       {jobTypes.map((type) => {
         const providers = providersOf(type, capabilities);
         return (
           <Tooltip.Root key={type}>
             <Tooltip.Trigger asChild>
-              <span className="pill workerPill jobTypePill">{formatJobType(type)}</span>
+              <WorkerPill $variant="jobType">{formatJobType(type)}</WorkerPill>
             </Tooltip.Trigger>
             <Tooltip.Portal>
-              <Tooltip.Content className="workerTooltip" sideOffset={6} collisionPadding={12}>
-                <strong className="workerTooltipName">{formatJobType(type)}</strong>
-                <span className="workerTooltipLead">
+              <WorkerTooltipContent sideOffset={6} collisionPadding={12}>
+                <WorkerTooltipName>{formatJobType(type)}</WorkerTooltipName>
+                <WorkerTooltipLead>
                   {providers.length > 0
                     ? `Handled via the ${providers.join(", ")} capabilit${providers.length === 1 ? "y" : "ies"}.`
                     : "No matching capability."}
-                </span>
-                <Tooltip.Arrow className="workerTooltipArrow" />
-              </Tooltip.Content>
+                </WorkerTooltipLead>
+                <WorkerTooltipArrow />
+              </WorkerTooltipContent>
             </Tooltip.Portal>
           </Tooltip.Root>
         );
       })}
-    </span>
+    </WorkerPills>
   );
 }
 
@@ -526,10 +853,10 @@ function providersOf(jobType: JobType, capabilities: string[]): string[] {
       isJobCapability(capability) && (CAPABILITY_JOB_TYPES[capability] as readonly JobType[]).includes(jobType)
   );
 }
-// Maps the worker status to an existing status-pill colour: busy reuses the amber
+// Maps the worker status to an existing status badge tone: busy reuses the amber
 // "running" look, idle the green "available" look.
-function workerStatusClass(status: WatcherStatus): string {
-  return status === "busy" ? "running" : "ready";
+function workerStatusTone(status: WatcherStatus): "running" | "completed" {
+  return status === "busy" ? "running" : "completed";
 }
 
 // Splits a watcher's unique name (`<label>-<uuid>`) into the operator-set label
@@ -549,25 +876,25 @@ function SchedulesTable({ schedules }: { schedules: ScheduleView[] }) {
   const active = schedules.filter((schedule) => schedule.enabled);
 
   return (
-    <div className="jobTable">
-      <div className="tableHead scheduleHead">
+    <JobTable>
+      <ScheduleHead>
         <span>Key</span>
         <span>Type</span>
         <span>Cron</span>
         <span>Next run</span>
-      </div>
+      </ScheduleHead>
       {active.map((schedule) => (
-        <div className="tableRow scheduleRow" key={schedule.key}>
+        <ScheduleRow key={schedule.key}>
           <span title={schedule.key}>{schedule.key}</span>
           <span title={schedule.type}>{formatJobType(schedule.type)}</span>
           <span>
             <code>{schedule.cron}</code>
           </span>
           <span>{schedule.nextRunAt ? new Date(schedule.nextRunAt).toLocaleString() : "—"}</span>
-        </div>
+        </ScheduleRow>
       ))}
-      {active.length === 0 ? <p className="empty">No active schedules.</p> : null}
-    </div>
+      {active.length === 0 ? <EmptyState>No active schedules.</EmptyState> : null}
+    </JobTable>
   );
 }
 
@@ -576,19 +903,19 @@ function Timing({ label, value }: { label: string; value?: string }) {
     return null;
   }
   return (
-    <div className="configRow">
+    <ConfigRow>
       <dt>{label}</dt>
       <dd>{value}</dd>
-    </div>
+    </ConfigRow>
   );
 }
 
 function JsonBlock({ title, value }: { title: string; value: unknown }) {
   return (
-    <div className="jobJson">
+    <JobJson>
       <h4>{title}</h4>
       <pre>{JSON.stringify(value ?? null, null, 2)}</pre>
-    </div>
+    </JobJson>
   );
 }
 

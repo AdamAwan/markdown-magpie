@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import styled from "@emotion/styled";
 import { AI_PROVIDERS, AiProviderName, RuntimeConfig, UiMessage } from "../lib/types";
 import { apiGet, apiPost, errorMessage } from "../lib/api";
+import { Badge, Button, EmptyState, Field, Select, Surface } from "./ui";
 
 // Static provider labels. In the queue-only world the API never runs AI inline
 // and watchers hold the provider credentials, so all four providers are always
@@ -11,6 +13,78 @@ const PROVIDER_LABELS: Record<AiProviderName, string> = {
   codex: "Codex",
   claude: "Claude"
 };
+
+// The runtime AI editor: provider picker plus its apply action, laid out as a
+// responsive grid so the control and button sit on one row on wide screens.
+const RuntimeEditor = styled.div(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: "minmax(180px, 0.8fr) minmax(220px, 1fr) auto",
+  gap: theme.space.lg,
+  alignItems: "end",
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.md,
+  background: theme.color.surfaceMuted,
+  padding: theme.space.lg
+}));
+
+const ConfigStack = styled.div(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: "1fr",
+  gap: theme.space.lg
+}));
+
+const ConfigGroupCard = styled.section(({ theme }) => ({
+  minWidth: 0,
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.md,
+  background: theme.color.surfaceMuted,
+  padding: theme.space.lg,
+  "& > dl": {
+    display: "grid",
+    gap: theme.space.md,
+    margin: `${theme.space.lg} 0 0`
+  }
+}));
+
+const ConfigRow = styled.div(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: "minmax(130px, 0.42fr) minmax(0, 1fr)",
+  gap: theme.space.md,
+  alignItems: "start",
+  borderTop: `1px solid ${theme.color.border}`,
+  paddingTop: theme.space.md,
+  "&:first-of-type": {
+    borderTop: 0,
+    paddingTop: 0
+  },
+  "& > dt": {
+    color: theme.color.textMuted,
+    fontSize: theme.font.size.sm,
+    fontWeight: theme.font.weight.semibold
+  },
+  "& > dd": {
+    minWidth: 0,
+    margin: 0,
+    overflowWrap: "anywhere",
+    color: theme.color.text,
+    fontFamily: theme.font.mono,
+    fontSize: theme.font.size.sm
+  }
+}));
+
+const ResetControl = styled.div(({ theme }) => ({
+  display: "flex",
+  flexDirection: "column",
+  gap: theme.space.md,
+  marginTop: theme.space.xl
+}));
+
+const ResetConfirm = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  gap: theme.space.md,
+  flexWrap: "wrap"
+}));
 
 export function ConfigPanel({
   apiBaseUrl,
@@ -42,14 +116,14 @@ export function ConfigPanel({
 
   if (!config) {
     return (
-      <section className="surface">
-        <div className="surfaceHeader">
+      <Surface>
+        <Surface.Header>
           <h2>Runtime Config</h2>
-        </div>
-        <div className="surfaceBody">
-          <p className="empty">Config has not loaded yet.</p>
-        </div>
-      </section>
+        </Surface.Header>
+        <Surface.Body>
+          <EmptyState>Config has not loaded yet.</EmptyState>
+        </Surface.Body>
+      </Surface>
     );
   }
 
@@ -99,18 +173,17 @@ export function ConfigPanel({
   }
 
   return (
-    <section className="surface">
-      <div className="surfaceHeader">
+    <Surface>
+      <Surface.Header>
         <h2>Runtime Config</h2>
-        <span className="pill" title="Browser-facing API base URL">
+        <Badge tone="neutral" mono title="Browser-facing API base URL">
           {apiBaseUrl}
-        </span>
-      </div>
-      <div className="surfaceBody">
-        <div className="runtimeEditor">
-          <label className="configControl">
-            <span>Provider</span>
-            <select
+        </Badge>
+      </Surface.Header>
+      <Surface.Body>
+        <RuntimeEditor>
+          <Field label="Provider">
+            <Select
               onChange={(event) => {
                 setDirty(true);
                 setProvider(event.target.value as AiProviderName);
@@ -122,18 +195,17 @@ export function ConfigPanel({
                   {PROVIDER_LABELS[name]}
                 </option>
               ))}
-            </select>
-          </label>
-          <button
-            className="button"
+            </Select>
+          </Field>
+          <Button
             disabled={saving || resetting || provider === config.aiRuntime.provider}
             onClick={() => void saveRuntimeConfig()}
             type="button"
           >
             {saving ? "Saving" : "Apply"}
-          </button>
-        </div>
-        <div className="configStack">
+          </Button>
+        </RuntimeEditor>
+        <ConfigStack>
           <ConfigGroup title="API" value={{ ...config.api, browserApiBaseUrl: apiBaseUrl }} />
           <ConfigGroup title="Stores" value={config.stores} />
           <ConfigGroup title="Knowledge" value={config.knowledge} />
@@ -144,47 +216,47 @@ export function ConfigPanel({
           }} />
           <ConfigGroup title="Providers" value={config.providers} />
           <ConfigGroup title="Watcher" value={config.watcher} />
-        </div>
-        <div className="resetControl">
+        </ConfigStack>
+        <ResetControl>
           <h3>Demo controls</h3>
-          <p className="empty">
+          <EmptyState>
             Deletes all questions, proposals, gaps and jobs, resets AI config, and re-indexes the
             knowledge bases from configuration.
-          </p>
+          </EmptyState>
           {confirmingReset ? (
-            <div className="resetConfirm">
+            <ResetConfirm>
               <span>This permanently deletes all app data. Continue?</span>
-              <button className="button danger" disabled={resetting} onClick={() => void resetData()} type="button">
+              <Button variant="danger" disabled={resetting} onClick={() => void resetData()} type="button">
                 {resetting ? "Resetting" : "Confirm reset"}
-              </button>
-              <button className="button" disabled={resetting} onClick={() => setConfirmingReset(false)} type="button">
+              </Button>
+              <Button disabled={resetting} onClick={() => setConfirmingReset(false)} type="button">
                 Cancel
-              </button>
-            </div>
+              </Button>
+            </ResetConfirm>
           ) : (
-            <button className="button danger" disabled={resetting} onClick={() => setConfirmingReset(true)} type="button">
+            <Button variant="danger" disabled={resetting} onClick={() => setConfirmingReset(true)} type="button">
               Reset data
-            </button>
+            </Button>
           )}
-        </div>
-      </div>
-    </section>
+        </ResetControl>
+      </Surface.Body>
+    </Surface>
   );
 }
 
 function ConfigGroup({ title, value }: { title: string; value: Record<string, unknown> }) {
   return (
-    <section className="configGroup">
+    <ConfigGroupCard>
       <h3>{title}</h3>
       <dl>
         {Object.entries(flattenConfig(value)).map(([key, itemValue]) => (
-          <div className="configRow" key={key}>
+          <ConfigRow key={key}>
             <dt>{key}</dt>
             <dd>{String(itemValue ?? "not set")}</dd>
-          </div>
+          </ConfigRow>
         ))}
       </dl>
-    </section>
+    </ConfigGroupCard>
   );
 }
 

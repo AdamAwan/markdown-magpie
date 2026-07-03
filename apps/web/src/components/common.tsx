@@ -46,7 +46,7 @@ export function AttentionPanel({ notices }: { notices: ConsoleNotice[] }) {
   );
 }
 
-const NavLink = styled(Link)<{ $active: boolean }>(({ theme, $active }) => ({
+const NavLink = styled(Link, { shouldForwardProp: (prop) => prop !== "$active" })<{ $active: boolean }>(({ theme, $active }) => ({
   display: "grid",
   gridTemplateColumns: "24px minmax(0, 1fr) auto",
   alignItems: "center",
