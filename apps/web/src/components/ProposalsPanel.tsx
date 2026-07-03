@@ -112,9 +112,9 @@ export function ProposalPanel({
                   </button>
                   <button
                     className="chip selected"
-                    disabled={loading || (selectedProposal.status !== "branch-pushed" && selectedProposal.status !== "pr-opened")}
+                    disabled={loading || selectedProposal.status !== "branch-pushed"}
                     onClick={() => void updateProposalStatus(selectedProposal.id, "merged")}
-                    title="Mark the published PR as merged: resolves its gaps and re-indexes the knowledge base"
+                    title="Mark a branch-only proposal as merged (for a destination with no pull request to poll): resolves its gaps and re-indexes the knowledge base. A proposal with an open PR is marked merged automatically when the PR merges."
                     type="button"
                   >
                     Mark Merged
