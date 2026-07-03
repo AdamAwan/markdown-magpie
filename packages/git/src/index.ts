@@ -1003,6 +1003,59 @@ export class LocalGitProposalPublisher {
   }
 }
 
+export interface MergeLocalProposalBranchRequest {
+  // The destination repo's own working tree (the folder the user browses).
+  // The proposal branch was already pushed here, so it exists as a local ref.
+  repoPath: string;
+  branchName: string;
+  defaultBranch: string;
+}
+
+export interface MergeLocalProposalBranchResult {
+  mergeCommitSha: string;
+}
+
+// Merges an already-pushed proposal branch into the destination's default branch,
+// directly in the destination working tree, then deletes the branch. Always makes
+// a merge commit (`--no-ff`) so the merge is explicit and needs the configured
+// committer identity. On ANY failure (conflict, dirty tree, missing branch) it
+// runs `git merge --abort` and throws, leaving the default branch exactly as it
+// was — the caller must not advance the proposal on a throw.
+export async function mergeLocalProposalBranch(
+  request: MergeLocalProposalBranchRequest
+): Promise<MergeLocalProposalBranchResult> {
+  const { repoPath, branchName, defaultBranch } = request;
+  return withCheckoutLock(repoPath, async () => {
+    await git(repoPath, ["checkout", defaultBranch]);
+
+    const { name, email } = resolveCommitterIdentity();
+    try {
+      await git(repoPath, [
+        "-c",
+        `user.name=${name}`,
+        "-c",
+        `user.email=${email}`,
+        "merge",
+        "--no-ff",
+        "--no-edit",
+        branchName
+      ]);
+    } catch (error) {
+      // Undo a half-applied/conflicted merge so the working tree returns to the
+      // default branch tip; best-effort so the original cause still surfaces.
+      await tryGit(repoPath, ["merge", "--abort"]);
+      const message = error instanceof Error ? error.message : "git merge failed";
+      throw new Error(`Could not merge ${branchName} into ${defaultBranch}: ${message}`, { cause: error });
+    }
+
+    const mergeCommitSha = (await git(repoPath, ["rev-parse", "HEAD"])).trim();
+    // The branch is fully merged now; delete it so the demo repo stays tidy.
+    // A failed delete must not fail the merge.
+    await tryGit(repoPath, ["branch", "-D", branchName]);
+    return { mergeCommitSha };
+  });
+}
+
 function resolveTargetPath(repository: RepositoryRef, targetPath: string): string {
   const normalizedTargetPath = toPosixPath(targetPath).replace(/^\/+/, "");
   const relativePathFromRoot = repository.git?.relativePathFromRoot;
