@@ -59,6 +59,9 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     complete: async () => undefined,
     fail: async () => undefined,
     retrieve: async () => SECTIONS,
+    // Default: the embedding router abstains, so routing falls back to the chat
+    // router the existing tests mock. Tests that exercise embedding routing override.
+    routeByEmbedding: async () => ({ status: "abstain" }),
     proposalExecutionContext: async () => ({ proposal: {}, repository: {} }),
     reconcileGaps: async () => ({ ok: true }),
     verifyClosure: async () => ({ proposalId: "p", closureStatus: "verified_closed", perQuestion: [] }),
@@ -139,6 +142,85 @@ describe("ChatRunner", () => {
     assert.equal(retrievedFlow, "flow-b", "should retrieve with the routed flow id");
     assert.equal(output.flowId, "flow-b");
     assert.equal(output.citations.length, 1);
+  });
+
+  it("routes via the embedding router without billing a chat routing call", async () => {
+    let retrievedFlow: string | undefined = "unset";
+    const api = fakeApi({
+      routeByEmbedding: async () => ({ status: "routed", flowId: "flow-b", confidence: "high", margin: 0.4 }),
+      retrieve: async (_question, flowId) => {
+        retrievedFlow = flowId;
+        return SECTIONS;
+      }
+    });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      return JSON.stringify({ answer: "Run the deploy script.", confidence: "high", isKnowledgeGap: false });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [
+          { id: "flow-a", name: "Alpha" },
+          { id: "flow-b", name: "Beta" }
+        ],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { flowId?: string; trace?: { routing: { mode: string; flowId?: string; method?: string } } };
+
+    assert.equal(retrievedFlow, "flow-b", "retrieves with the embedding-routed flow");
+    assert.equal(output.flowId, "flow-b");
+    assert.ok(
+      !chat.requests.some((request) => request.system.includes("route a user question")),
+      "no chat routing call when the embedding router is confident"
+    );
+    assert.equal(output.trace?.routing.mode, "routed");
+    assert.equal(output.trace?.routing.method, "embedding", "the trace records the embedding router decided");
+  });
+
+  it("falls back to the chat router when the embedding router abstains", async () => {
+    let embeddingTried = false;
+    const api = fakeApi({
+      routeByEmbedding: async () => {
+        embeddingTried = true;
+        return { status: "abstain" };
+      }
+    });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("route a user question")) {
+        return JSON.stringify({ flowId: "flow-a", confidence: "high" });
+      }
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      return JSON.stringify({ answer: "Run the deploy script.", confidence: "high", isKnowledgeGap: false });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [
+          { id: "flow-a", name: "Alpha" },
+          { id: "flow-b", name: "Beta" }
+        ],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { flowId?: string; trace?: { routing: { method?: string } } };
+
+    assert.ok(embeddingTried, "the embedding router is tried first");
+    assert.ok(
+      chat.requests.some((request) => request.system.includes("route a user question")),
+      "the chat router runs on abstention"
+    );
+    assert.equal(output.flowId, "flow-a");
+    assert.equal(output.trace?.routing.method, "chat", "the trace records the chat router decided");
   });
 
   it("runs a follow-up search then answers, grounding a followup gap on an empty search", async () => {

@@ -2,6 +2,7 @@ import type { ApiTokenProvider } from "@magpie/auth";
 import type { SourceDataContext } from "@magpie/core";
 import type { JobCapability, JobError, JobView } from "@magpie/jobs";
 import type { Logger } from "@magpie/logger";
+import type { EmbeddingRoute, RoutableFlow } from "@magpie/retrieval";
 
 // Everything the worker loop needs from the API's durable job lifecycle. Kept as
 // an interface so the loop and runners can be tested against a fake without
@@ -48,6 +49,11 @@ export interface WatcherApi extends WatcherApiClient {
     limit: number | undefined,
     signal?: AbortSignal
   ): Promise<RetrievedSection[]>;
+  // Cheap embedding-similarity flow routing (POST /api/route). Returns a confident
+  // flow or an abstention; a transport/parse failure also resolves to `abstain`, so
+  // the caller can uniformly fall back to the chat router. Never throws — routing
+  // must never fail the ask.
+  routeByEmbedding(question: string, flows: RoutableFlow[], signal?: AbortSignal): Promise<EmbeddingRoute>;
   proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext>;
   // Drives a flow's gap→PR reconciliation in the API (clustering, the reshape AI
   // job the API bounded-waits on, drafting and publication enqueue). An absent
@@ -246,6 +252,20 @@ export class HttpWatcherApi implements WatcherApi {
       signal
     );
     return sections;
+  }
+
+  async routeByEmbedding(question: string, flows: RoutableFlow[], signal?: AbortSignal): Promise<EmbeddingRoute> {
+    try {
+      return await this.post<EmbeddingRoute>("/api/route", { question, flows }, signal);
+    } catch (error) {
+      // Routing must never fail the ask: on a transport/parse error, abstain so the
+      // caller falls back to the chat router (the pre-existing behaviour).
+      this.logger?.warn(
+        { err: error instanceof Error ? error.message : String(error) },
+        "embedding route call failed; abstaining to the chat router"
+      );
+      return { status: "abstain" };
+    }
   }
 
   async reconcileGaps(flowId: string | undefined, signal?: AbortSignal): Promise<{ ok: true }> {

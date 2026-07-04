@@ -89,6 +89,13 @@ The watcher drives a job through these; operators rarely call them directly:
 }
 ```
 
+- `POST /api/retrieve` / `POST /api/route` — answer-path callbacks the watcher makes
+  while running an `answer_question` job: `retrieve` returns scoped context for a flow,
+  and `route` cheaply picks the flow by embedding similarity (the API embeds the
+  question + flow texts inline), abstaining on a low-margin score so the watcher falls
+  back to the chat router. Both keep embeddings/retrieval inside the API — the watcher
+  is HTTP-only. See [question-logging.md](./question-logging.md) → Queued Answers.
+
 ## Completion is never re-billed (#161)
 
 A provider generation is the expensive part of a job; everything after it (question

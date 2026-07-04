@@ -193,3 +193,22 @@ carrying the question log ID. A watcher routes the question to a flow, retrieves
 context, synthesises the answer, verifies it against the retrieved context (see
 **Answer Grounding** above), and completes the job; completion updates the log
 with the answer, confidence, chosen flow, and any detected gaps.
+
+**Flow routing is embedding-first.** A caller-pinned flow (or a single configured
+flow) skips routing entirely. Otherwise the watcher first calls the API's cheap
+embedding-similarity router (`POST /api/route`): the API embeds the question and each
+flow's text — its **name**, its admin-authored **routing summary** (a description of
+the flow's topical scope, the strongest routing signal), and its **persona** — and
+picks the closest flow, but only when it clears a score floor and beats the runner-up
+by a margin (the abstain-biased `FLOW_ROUTER_MIN_SCORE` / `FLOW_ROUTER_MIN_MARGIN`
+env). The routing summary (`routingSummary`/`summary` on a flow in `KNOWLEDGE_FLOWS`)
+is distinct from `persona`: persona shapes the answer's *voice*, the routing summary
+sharpens *routing* without touching the answer. It is resolved server-side from the
+current config, so a flow only needs a good summary to route well — the name alone is
+often too thin a signal. When the scores are too close
+to call — or no embedding provider is configured, or the call fails — the router
+abstains and the watcher falls back to the chat-completion router
+(`ROUTE_QUESTION_TO_FLOW`). Abstaining is always safe: it only reproduces the
+pre-embedding behaviour, so a mis-tuned threshold can cost savings but never routing
+correctness. The answer trace records which router decided (`routing.method` =
+`embedding` | `chat`).

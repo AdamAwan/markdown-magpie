@@ -27,6 +27,7 @@ function fakeApi(open: OpenPullRequestRef[]): WatcherApi {
     complete: async () => undefined,
     fail: async () => undefined,
     retrieve: async () => [],
+    routeByEmbedding: async () => ({ status: "abstain" }),
     proposalExecutionContext: async () => ({ proposal: {}, repository: {} }),
     reconcileGaps: async () => ({ ok: true }),
     verifyClosure: async () => ({ proposalId: "p", closureStatus: "verified_closed", perQuestion: [] }),

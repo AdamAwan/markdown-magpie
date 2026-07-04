@@ -124,12 +124,16 @@ export interface AnswerTraceSearch {
 // nothing here is model-self-reported except the routing confidence.
 export interface AnswerTrace {
   routing: {
-    // "requested" = caller pinned the flow; "routed" = the model picked it;
+    // "requested" = caller pinned the flow; "routed" = a router picked it;
     // "unscoped" = routing infrastructure failed and the answer ran unscoped;
     // "unknown" = routing abstained and flow selection was requested instead.
     mode: "requested" | "routed" | "unscoped" | "unknown";
     flowId?: string;
     confidence?: Confidence;
+    // Which router decided a "routed" outcome: "embedding" = the cheap cosine
+    // similarity router; "chat" = the fallback chat completion. Absent for the
+    // other modes (no router "decided" a flow).
+    method?: "embedding" | "chat";
   };
   // Sections the seed retrieval (the question itself) returned.
   seedSectionCount: number;

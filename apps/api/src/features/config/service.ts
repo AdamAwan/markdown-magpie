@@ -112,6 +112,10 @@ export function logStartupConfig(ctx: AppContext): void {
   add("embedding base url", cfg.providers.openAiCompatible.embeddingBaseUrl ?? "falls back to chat");
   add("embedding model", cfg.providers.openAiCompatible.embeddingModel ?? "not set");
   add("embedding api key", cfg.providers.openAiCompatible.embeddingApiKey);
+  add(
+    "flow router thresholds",
+    `minScore=${ctx.settings.flowRouter.minTopScore}, minMargin=${ctx.settings.flowRouter.minMargin}`
+  );
 
   section("Azure OpenAI");
   add("endpoint", cfg.providers.azureOpenAi.endpoint ?? "not set");
