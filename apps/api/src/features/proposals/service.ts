@@ -215,9 +215,9 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
     let answer: Pick<AnswerQuestionJobOutput, "confidence" | "citations"> | undefined;
     try {
       const completed = await runJobToCompletion(ctx, "answer_question", input);
-      const parsed = answerQuestionOutputSchema.safeParse(completed.output);
-      if (parsed.success) {
-        answer = { confidence: parsed.data.confidence, citations: parsed.data.citations };
+      const parsed = parseAnswerQuestionJobOutput(completed.output);
+      if (parsed) {
+        answer = { confidence: parsed.confidence, citations: parsed.citations };
       }
     } catch (error) {
       // A timeout / no provider watcher means we could not verify — treat as
@@ -384,6 +384,29 @@ function verificationLineageResetSince(original: {
     (value): value is string => Boolean(value)
   );
   return resetTimestamps.length > 0 ? resetTimestamps.sort().at(-1) : undefined;
+}
+
+// The persisted output of a job completed through the API's completion
+// dispatcher: completeJob wraps the watcher's validated result in a
+// { result, executor } envelope (see ctx.jobs.complete in features/jobs/
+// service.ts), and nothing on the read path unwraps it.
+const completedJobOutputEnvelopeSchema = z.object({ result: z.unknown() });
+
+// Extracts a validated answer_question output from a completed job's output.
+// Production outputs arrive in the { result, executor } envelope above, so try
+// the envelope's `result` first; fall back to parsing the output directly for
+// brokers that complete with the raw shape (e.g. test fakes). Returns undefined
+// when neither shape validates — the caller treats that as "could not verify".
+function parseAnswerQuestionJobOutput(output: unknown): AnswerQuestionJobOutput | undefined {
+  const envelope = completedJobOutputEnvelopeSchema.safeParse(output);
+  if (envelope.success) {
+    const fromEnvelope = answerQuestionOutputSchema.safeParse(envelope.data.result);
+    if (fromEnvelope.success) {
+      return fromEnvelope.data;
+    }
+  }
+  const raw = answerQuestionOutputSchema.safeParse(output);
+  return raw.success ? raw.data : undefined;
 }
 
 // A compact, human-readable note for a failed closure: what merged and how the

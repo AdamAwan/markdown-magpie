@@ -203,6 +203,48 @@ test("verifyGapClosure marks verified_closed and resolves the gap when the re-as
   );
 });
 
+// Like AnsweringJobBroker, but completes with the { result, executor } envelope
+// completeJob actually persists in production (see features/jobs/service.ts) —
+// NOT the raw answer shape. Exercises the envelope-unwrapping read path that
+// the raw-completing fixture above bypasses (the issue-#154 trap).
+class EnvelopedAnsweringJobBroker extends FakeJobBroker {
+  constructor(
+    private readonly ctx: ReturnType<typeof makeTestContext>,
+    private readonly answerFor: (questionLogId: string) => AnswerResult
+  ) {
+    super();
+  }
+
+  override async create(type: JobType, input: unknown): Promise<JobView> {
+    const job = await super.create(type, input);
+    if (type === "answer_question") {
+      const questionLogId = (input as { questionLogId: string }).questionLogId;
+      const answer = this.answerFor(questionLogId);
+      await this.ctx.stores.questionLogs.updateAnswer(questionLogId, { answer, chatProvider: "codex" });
+      return super.complete(job.id, { result: answer, executor: "watcher" });
+    }
+    return job;
+  }
+}
+
+test("verifyGapClosure reads the answer from the production { result, executor } completion envelope", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  ctx.jobs = new EnvelopedAnsweringJobBroker(ctx, () => ({
+    answer: "Set the config flag.",
+    confidence: "high",
+    citations: [citation("configure-x.md")]
+  }));
+
+  const result = await proposals.verifyGapClosure(ctx, merged);
+
+  // Before the envelope unwrap, this scored still_open in production: the raw
+  // safeParse failed on the envelope, answer stayed undefined, and every
+  // verification re-ask falsely reopened its gap.
+  assert.equal(result.closureStatus, "verified_closed");
+  assert.equal(result.perQuestion[0]?.verdict, "closed");
+});
+
 test("verifyGapClosure reopens with a note when the re-ask does not close the gap", async () => {
   const ctx = makeTestContext();
   const { log, merged } = await mergedProposalWithGap(ctx);
