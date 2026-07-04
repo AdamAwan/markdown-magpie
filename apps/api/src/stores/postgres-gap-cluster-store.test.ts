@@ -94,6 +94,27 @@ describe("PostgresGapClusterStore", { skip: databaseUrl ? false : "DATABASE_URL 
     assert.equal(await store.getProcessedRevision(), 12, "the default flow is unaffected");
   });
 
+  it("persists the reshape composition hash per flow, independent of the processed revision", async () => {
+    const flow = `hash-${randomUUID()}`;
+    // Unset until the first reshape.
+    assert.equal(await store.getReshapeCompositionHash(flow), undefined);
+
+    // setReshapeCompositionHash can seed the flow's row before setProcessedRevision.
+    await store.setReshapeCompositionHash(flow, "hash-1");
+    assert.equal(await store.getReshapeCompositionHash(flow), "hash-1");
+    assert.equal(await store.getProcessedRevision(flow), 0, "seeding the hash leaves the revision at its default");
+
+    // A later processed-revision write must not clobber the hash.
+    await store.setProcessedRevision(flow, 7, new Date(3000).toISOString());
+    assert.equal(await store.getReshapeCompositionHash(flow), "hash-1", "the hash survives a processed-revision write");
+    assert.equal(await store.getProcessedRevision(flow), 7);
+
+    // And updating the hash must not disturb the revision.
+    await store.setReshapeCompositionHash(flow, "hash-2");
+    assert.equal(await store.getReshapeCompositionHash(flow), "hash-2");
+    assert.equal(await store.getProcessedRevision(flow), 7, "updating the hash leaves the revision alone");
+  });
+
   it("queues and retries publication actions", async () => {
     const proposalId = await insertProposal(databaseUrl as string);
     const action = await store.enqueuePublicationAction(proposalId, "publish");

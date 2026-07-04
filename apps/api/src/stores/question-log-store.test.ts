@@ -426,3 +426,65 @@ test("recordVerificationGap retains a dismissed gap and inserts a fresh row for 
   const liveGaps = (updated?.gaps ?? []).filter((gap) => !gap.resolvedAt && !gap.dismissedAt);
   assert.equal(liveGaps.length, 1, "exactly one fresh live gap was inserted");
 });
+
+// Issue #168: updateAnswer used to bump the gap-catalog revision unconditionally,
+// so an identical re-answer forced the reconciler to re-run its metered reshape on
+// an unchanged candidate set. It now bumps only when the answer-derived gaps (or
+// their flow) actually changed.
+
+test("updateAnswer does not bump the catalog revision when the re-answer's gaps are identical", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({
+    question: "vaccines?",
+    chatProvider: "codex",
+    answer: lowGapAnswer,
+    retrievedSectionIds: []
+  });
+  const before = await store.getGapCatalogRevision();
+
+  // Re-answer with the SAME gap (a different provider run reaching the same
+  // conclusion): nothing about the candidate set changed.
+  await store.updateAnswer(log.id, { answer: lowGapAnswer, chatProvider: "openai-compatible" });
+
+  assert.equal(await store.getGapCatalogRevision(), before, "an identical re-answer does not bump the revision");
+  // The answer text/provider still updated even though the gaps were untouched.
+  const stored = await store.get(log.id);
+  assert.equal(stored?.chatProvider, "openai-compatible");
+});
+
+test("updateAnswer bumps the catalog revision when the re-answer changes the gaps", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({
+    question: "react + export?",
+    chatProvider: "codex",
+    answer: lowGapAnswer,
+    retrievedSectionIds: []
+  });
+  const before = await store.getGapCatalogRevision();
+
+  // A genuinely different set of gaps must still advance the revision.
+  await store.updateAnswer(log.id, { answer: multiGapAnswer });
+
+  assert.ok(await store.getGapCatalogRevision() > before, "a changed gap set advances the revision");
+});
+
+test("updateAnswer bumps the catalog revision when the gaps move to a newly-decided flow", async () => {
+  const store = new InMemoryQuestionLogStore();
+  // Recorded before the watcher decided a flow (default/un-routed).
+  const log = await store.record({
+    question: "vaccines?",
+    chatProvider: "codex",
+    answer: lowGapAnswer,
+    retrievedSectionIds: []
+  });
+  const beforeF1 = await store.getGapCatalogRevision("f1");
+
+  // Same gaps, but the completion now assigns a flow — the gaps leave the default
+  // flow's candidate set and join f1's, so f1's reconciler must notice.
+  await store.updateAnswer(log.id, { answer: lowGapAnswer, flowId: "f1" });
+
+  assert.ok(
+    (await store.getGapCatalogRevision("f1")) > beforeF1,
+    "moving gaps to a new flow advances that flow's revision"
+  );
+});

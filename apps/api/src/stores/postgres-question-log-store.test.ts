@@ -163,6 +163,58 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.ok((updated?.gaps ?? []).some((gap) => gap.summary === "New auto gap" && gap.source === "auto"));
   });
 
+  it("updateAnswer with identical gaps preserves gap ids and does not bump the revision (#168)", async () => {
+    const uniqueId = randomUUID();
+    const answer = lowConfidenceAnswer();
+    const recorded = await store.record({
+      question: `test-noop-reanswer-${uniqueId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      answer,
+      flowId: `flow-${uniqueId}`
+    });
+    const gapIdsBefore = await store.gapIdsForSummary("No source material available", `flow-${uniqueId}`);
+    assert.equal(gapIdsBefore.length, 1, "the recorded auto gap exists");
+    const revBefore = await store.getGapCatalogRevision(`flow-${uniqueId}`);
+
+    // Re-answer with the SAME gaps and flow — a no-op for the candidate set.
+    await store.updateAnswer(recorded.id, { answer, chatProvider: "openai-compatible", flowId: `flow-${uniqueId}` });
+
+    assert.equal(
+      await store.getGapCatalogRevision(`flow-${uniqueId}`),
+      revBefore,
+      "an identical re-answer does not bump the revision"
+    );
+    const gapIdsAfter = await store.gapIdsForSummary("No source material available", `flow-${uniqueId}`);
+    assert.deepEqual(
+      gapIdsAfter,
+      gapIdsBefore,
+      "the gap row keeps its id (so any cluster membership keyed off it survives)"
+    );
+    assert.equal((await store.get(recorded.id))?.chatProvider, "openai-compatible", "the answer itself still updated");
+  });
+
+  it("updateAnswer with changed gaps replaces them and bumps the revision (#168)", async () => {
+    const uniqueId = randomUUID();
+    const recorded = await store.record({
+      question: `test-changed-reanswer-${uniqueId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      answer: lowConfidenceAnswer(),
+      flowId: `flow-${uniqueId}`
+    });
+    const revBefore = await store.getGapCatalogRevision(`flow-${uniqueId}`);
+
+    await store.updateAnswer(recorded.id, { answer: multiGapAnswer(), flowId: `flow-${uniqueId}` });
+
+    assert.ok(
+      (await store.getGapCatalogRevision(`flow-${uniqueId}`)) > revBefore,
+      "a changed gap set bumps the revision"
+    );
+    const summaries = ((await store.get(recorded.id))?.gaps ?? []).map((gap) => gap.summary).sort();
+    assert.deepEqual(summaries, ["First gap summary", "Second gap summary"], "the gaps were replaced");
+  });
+
   it("persists a followup-sourced gap from a confident answer", async () => {
     const uniqueId = randomUUID();
     const answer: AnswerResult = {
