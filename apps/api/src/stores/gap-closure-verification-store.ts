@@ -15,7 +15,11 @@ export interface GapClosureVerificationInput {
   detail?: string;
 }
 
-export interface GapClosureVerificationStore {
+// Local to this file: both the in-memory and Postgres implementations live here
+// and the context types the store via the factory's return union (like the other
+// stores), so nothing imports this contract by name — keeping it unexported keeps
+// the dead-code check (knip) green while still constraining both classes.
+interface GapClosureVerificationStore {
   record(input: GapClosureVerificationInput): Promise<void>;
   // How many prior re-asks of this triggering question came back 'still_open'.
   // Drives the retry cap: past the threshold, the gap is flagged for a human
