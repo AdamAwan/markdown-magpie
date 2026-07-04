@@ -48,8 +48,12 @@ toward abstaining.
 
 - `POST /api/route`, body `{ question: string, flows: [{ id, name, persona? }] }`.
 - Service:
-  - Flow embedding text = `name` + `persona` (the persona already absorbs a flow's
-    `description` at config load).
+  - Flow embedding text = `name` + `routingSummary` + `persona`. The **routing summary**
+    (`routingSummary`/`summary` on a flow in `KNOWLEDGE_FLOWS`) is an admin-authored
+    description of the flow's *topical scope* — the strongest routing signal, distinct
+    from `persona` (answering voice). It is resolved server-side from the current config
+    by flow id, not trusted from the request, so routing always reflects live config.
+    A flow with only a name is a thin signal that abstains readily to the chat router.
   - Embeds `[question, ...flowTexts]` in **one** `embed()` call. Flow vectors are memoized
     by a content hash (flows are static per API process), so steady state is one embedding
     per distinct flow text ever + one for the question per request.

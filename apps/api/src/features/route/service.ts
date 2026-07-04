@@ -32,10 +32,12 @@ function cacheFor(ctx: AppContext): Map<string, number[]> {
   return cache;
 }
 
-// The text a flow is embedded from: its name plus persona (the persona already
-// absorbs a flow's optional description at config load).
-function flowText(flow: RouteFlow): string {
-  return flow.persona ? `${flow.name}\n${flow.persona}` : flow.name;
+// The text a flow is embedded from: its name, its admin-authored routing summary
+// (topical scope — the strongest routing signal, resolved from config by id), and
+// its persona. Any of the three may be absent. The summary is looked up server-side
+// rather than trusted from the request so routing always reflects the current config.
+function flowText(flow: RouteFlow, routingSummary: string | undefined): string {
+  return [flow.name, routingSummary, flow.persona].filter((part) => part && part.trim().length > 0).join("\n");
 }
 
 /**
@@ -51,9 +53,13 @@ export async function route(ctx: AppContext, request: RouteRequest): Promise<Rou
     return { status: "abstain" };
   }
 
+  // The routing summary is the topical scope signal, resolved from the current config
+  // by flow id (not trusted from the request), so routing reflects the live config.
+  const summaryById = new Map(ctx.knowledgeConfig.flows.map((flow) => [flow.id, flow.routingSummary]));
+  const textFor = (flow: RouteFlow): string => flowText(flow, summaryById.get(flow.id));
+
   const cache = cacheFor(ctx);
-  const missing = request.flows.map(flowText).filter((text) => !cache.has(text));
-  const uniqueMissing = [...new Set(missing)];
+  const uniqueMissing = [...new Set(request.flows.map(textFor).filter((text) => !cache.has(text)))];
 
   try {
     // One batched embedding call: the question first, then any uncached flow texts.
@@ -65,7 +71,7 @@ export async function route(ctx: AppContext, request: RouteRequest): Promise<Rou
 
     const flows: EmbeddedFlow[] = request.flows.map((flow) => ({
       id: flow.id,
-      vector: cache.get(flowText(flow)) ?? []
+      vector: cache.get(textFor(flow)) ?? []
     }));
     return routeByEmbeddingSimilarity(questionVector, flows, ctx.settings.flowRouter);
   } catch (error) {

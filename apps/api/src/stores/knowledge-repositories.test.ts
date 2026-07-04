@@ -124,6 +124,35 @@ describe("knowledge repository configuration", () => {
     assert.equal(flows.find((flow) => flow.id === "dev-flow")?.persona, "Factual, with code.");
   });
 
+  it("parses a flow routing summary from the routingSummary or summary field, separately from persona", () => {
+    const sources = [{ id: "agent", name: "Agent Knowledge", kind: "agent" as const }];
+    const destinations = [
+      { id: "sec", name: "Security KB", url: "https://github.com/example/sec.git", kind: "git" as const },
+      { id: "dev", name: "Dev KB", url: "https://github.com/example/dev.git", kind: "git" as const }
+    ];
+    const flows = getConfiguredKnowledgeFlows(
+      {
+        KNOWLEDGE_FLOWS: JSON.stringify([
+          {
+            id: "sec-flow",
+            sourceIds: ["agent"],
+            destinationId: "sec",
+            persona: "Formal, high-level.",
+            routingSummary: "Security, compliance, and access control."
+          },
+          { id: "dev-flow", sourceIds: ["agent"], destinationId: "dev", summary: "Deployments, CI, and rollbacks." }
+        ])
+      },
+      sources,
+      destinations
+    );
+
+    const sec = flows.find((flow) => flow.id === "sec-flow");
+    assert.equal(sec?.routingSummary, "Security, compliance, and access control.");
+    assert.equal(sec?.persona, "Formal, high-level.", "routing summary does not overwrite persona");
+    assert.equal(flows.find((flow) => flow.id === "dev-flow")?.routingSummary, "Deployments, CI, and rollbacks.");
+  });
+
   it("infers one flow per destination when flows are not configured", () => {
     const flows = getConfiguredKnowledgeFlows(
       {},

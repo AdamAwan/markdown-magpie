@@ -54,6 +54,36 @@ test("embeds question + flows in one batched call, then reuses cached flow vecto
   assert.deepEqual(provider.calls[1], ["deploy question two"], "flow vectors are cached — only the question is re-embedded");
 });
 
+test("routes using each flow's config routing summary, resolved server-side by id", async () => {
+  // Names alone are neutral ([0.5,0.5]); only the summaries carry the topical signal.
+  const provider = new FakeEmbeddingProvider((text) =>
+    /rollback|deploy/i.test(text) ? [1, 0] : /billing|invoice/i.test(text) ? [0, 1] : [0.5, 0.5]
+  );
+  const ctx = makeTestContext({ providers: { embedding: provider } });
+  ctx.knowledgeConfig.flows = [
+    { id: "a", name: "Team A", sourceIds: ["s"], destinationId: "kb-a", routingSummary: "deployments and rollbacks" },
+    { id: "b", name: "Team B", sourceIds: ["s"], destinationId: "kb-b", routingSummary: "billing and invoices" }
+  ];
+
+  const result = await route(ctx, {
+    question: "how do I roll back a deploy",
+    // The watcher sends only id + name; the summary is looked up from config, not trusted here.
+    flows: [
+      { id: "a", name: "Team A" },
+      { id: "b", name: "Team B" }
+    ]
+  });
+
+  assert.equal(result.status, "routed");
+  if (result.status === "routed") {
+    assert.equal(result.flowId, "a");
+  }
+  assert.ok(
+    provider.calls[0].includes("Team A\ndeployments and rollbacks"),
+    "the flow's config routing summary is folded into the embedded text"
+  );
+});
+
 test("abstains on a near-tie (all flows equally similar)", async () => {
   const ctx = makeTestContext({ providers: { embedding: new FakeEmbeddingProvider(() => [1, 1]) } });
   const result = await route(ctx, { question: "ambiguous", flows: [{ id: "a", name: "A" }, { id: "b", name: "B" }] });

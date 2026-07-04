@@ -20,6 +20,11 @@ export interface ConfiguredKnowledgeFlow {
   // Optional admin-authored snippet describing this flow's audience and answering
   // style. Appended to the base answer prompt when this flow answers a question.
   persona?: string;
+  // Optional admin-authored summary of WHAT this flow covers (its topical scope),
+  // used only to route questions to it via embedding similarity (POST /api/route).
+  // Distinct from `persona` (which is answering *voice* and is injected into the
+  // answer prompt): a routing summary sharpens routing without changing the answer.
+  routingSummary?: string;
 }
 
 export interface KnowledgeRepositorySelection {
@@ -206,12 +211,14 @@ function normalizeFlowEntry(value: unknown): ConfiguredKnowledgeFlow | undefined
 
   const id = stringValue(candidate.id) ?? `${sourceIds.join("-")}-to-${destinationId}`;
   const persona = stringValue(candidate.persona) ?? stringValue(candidate.description);
+  const routingSummary = stringValue(candidate.routingSummary) ?? stringValue(candidate.summary);
   return {
     id,
     name: stringValue(candidate.name) ?? id,
     sourceIds,
     destinationId,
-    ...(persona ? { persona } : {})
+    ...(persona ? { persona } : {}),
+    ...(routingSummary ? { routingSummary } : {})
   };
 }
 
