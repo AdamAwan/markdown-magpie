@@ -9,6 +9,7 @@ import { parseMarkdownDocument, splitIntoSections } from "@magpie/markdown";
 import { isAncestor, listChangedMarkdown, type ChangedMarkdownFile } from "@magpie/git";
 import { fuseRankings } from "@magpie/retrieval";
 import { logger } from "../logger.js";
+import { LruCache } from "./lru-cache.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -112,6 +113,13 @@ const READ_CONCURRENCY = 12;
 const MAX_MARKDOWN_FILE_BYTES = 5 * 1024 * 1024;
 // Match the vector side's over-fetch when sourcing keyword candidates for fusion.
 const KEYWORD_CANDIDATES = 20;
+// How many distinct query embeddings to memoize per index instance. A gap
+// question's lifecycle re-asks byte-identical text many times (retrieval, gap
+// clustering, closure verification), and both embedding providers are raw HTTP
+// with no caching — so an unbounded stream of repeat questions would otherwise
+// re-embed the same text on every call. A few hundred entries covers the working
+// set of live questions cheaply (each vector is 1536 floats ≈ 12 KB).
+const QUERY_EMBEDDING_CACHE_SIZE = 500;
 
 export interface HybridSearchOptions {
   embeddingProvider?: EmbeddingProvider;
@@ -130,6 +138,12 @@ export class InMemoryKnowledgeIndex {
   // RepositoryRef (a shared core type) so incremental reindexing has the prior
   // SHA in memory after a restart. Undefined ⇒ no prior SHA ⇒ full reindex.
   private readonly indexedShaByRepository = new Map<string, string>();
+  // Memoizes query-text → embedding so the same question isn't re-embedded on
+  // every retrieval. Scoped to this instance, whose embedding provider is fixed,
+  // so the normalized query text alone is a sufficient cache key. Cleared with
+  // the index on reset(). Query embeddings depend only on the question, not the
+  // corpus, so re-indexing never has to invalidate this.
+  private readonly queryEmbeddingCache = new LruCache<string, number[]>(QUERY_EMBEDDING_CACHE_SIZE);
 
   constructor(
     private readonly persistence?: KnowledgePersistence,
@@ -570,7 +584,7 @@ export class InMemoryKnowledgeIndex {
 
     let vectorHits: Array<{ id: string; similarity: number }>;
     try {
-      const [queryVector] = await embeddingProvider.embed([question]);
+      const queryVector = await this.embedQuery(question, embeddingProvider);
       vectorHits = await vectorSearch.searchByEmbedding(queryVector, Math.max(limit, VECTOR_CANDIDATES), repositoryIds);
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
@@ -602,6 +616,25 @@ export class InMemoryKnowledgeIndex {
       // the scope (e.g. a test stub) still cannot leak sections from other flows.
       .filter((result) => this.sectionInRepositories(result.section, repositoryFilter))
       .slice(0, limit);
+  }
+
+  // Embeds a query, memoizing the result so byte-identical questions (after
+  // whitespace normalization) don't hit the provider more than once. The provider
+  // still receives the original question text; only the cache key is normalized.
+  // A miss populates the cache; a provider failure is not cached (it propagates so
+  // search() can fall back to keyword-only retrieval).
+  private async embedQuery(question: string, provider: EmbeddingProvider): Promise<number[]> {
+    const key = normalizeQueryText(question);
+    const cached = this.queryEmbeddingCache.get(key);
+    if (cached) {
+      return cached;
+    }
+    const [vector] = await provider.embed([question]);
+    if (!vector) {
+      throw new Error("Embedding provider returned no vector for the query");
+    }
+    this.queryEmbeddingCache.set(key, vector);
+    return vector;
   }
 
   private async keywordRank(question: string, limit: number, repositoryIds?: string[]): Promise<RankedSection[]> {
@@ -738,7 +771,16 @@ export class InMemoryKnowledgeIndex {
     this.sections.clear();
     this.repositories.clear();
     this.indexedShaByRepository.clear();
+    this.queryEmbeddingCache.clear();
   }
+}
+
+// Cache key for a query embedding. The embedding is a function of the exact text
+// sent to the provider, so we only collapse insignificant whitespace differences
+// (leading/trailing and internal runs) — not case, which the provider treats as
+// meaningful. Two questions that differ only by such whitespace re-use one vector.
+function normalizeQueryText(question: string): string {
+  return question.trim().replace(/\s+/g, " ");
 }
 
 // The indexed subtree's path relative to the git work-tree root, normalised to a

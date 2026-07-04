@@ -202,6 +202,59 @@ describe("InMemoryKnowledgeIndex.search", () => {
     assert.match(ranked[0].section.heading, /Rollback/);
     assert.ok(notices.some((n) => /fall(ing)? back to keyword/i.test(n)));
   });
+
+  it("embeds a repeated query only once, serving the rest from the cache", async () => {
+    const embedded: string[][] = [];
+    const embeddingProvider: EmbeddingProvider = {
+      async embed(texts) {
+        embedded.push(texts);
+        return texts.map(() => [1, 0, 0]);
+      }
+    };
+    const vectorSearch: SectionVectorSearch = {
+      async searchByEmbedding() {
+        return [{ id: "repo:felines.md:0", similarity: 0.82 }];
+      }
+    };
+    const index = new InMemoryKnowledgeIndex(undefined, { embeddingProvider, vectorSearch });
+    await seed(index);
+
+    await index.search("gum stuck in fur", 5);
+    // Byte-identical and whitespace-variant repeats must not re-embed.
+    await index.search("gum stuck in fur", 5);
+    await index.search("  gum   stuck in fur  ", 5);
+
+    assert.equal(embedded.length, 1, "only the first distinct query hits the provider");
+    assert.deepEqual(embedded[0], ["gum stuck in fur"]);
+  });
+
+  it("does not cache a failed embedding, retrying the provider on the next search", async () => {
+    let calls = 0;
+    const embeddingProvider: EmbeddingProvider = {
+      async embed(texts) {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error("transient embeddings outage");
+        }
+        return texts.map(() => [1, 0, 0]);
+      }
+    };
+    const vectorSearch: SectionVectorSearch = {
+      async searchByEmbedding() {
+        return [{ id: "repo:felines.md:0", similarity: 0.82 }];
+      }
+    };
+    const index = new InMemoryKnowledgeIndex(undefined, { embeddingProvider, vectorSearch });
+    await seed(index);
+
+    // First call fails inside embed -> falls back to keyword, nothing cached.
+    await index.search("gum stuck in fur", 5);
+    // Second call must reach the provider again (a cached failure would skip it).
+    const ranked = await index.search("gum stuck in fur", 5);
+
+    assert.equal(calls, 2);
+    assert.ok(ranked.some((r) => r.section.id === "repo:felines.md:0"));
+  });
 });
 
 describe("InMemoryKnowledgeIndex.indexLocalRepository", () => {

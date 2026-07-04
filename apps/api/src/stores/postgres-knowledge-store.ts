@@ -60,12 +60,6 @@ export class PostgresKnowledgeStore
 
       await this.upsertDocuments(client, documents, summary.commitSha);
 
-      // Clear existing sections for the (re)indexed documents in one statement so
-      // they can be re-inserted fresh below.
-      await client.query("DELETE FROM document_sections WHERE document_id = ANY($1::text[])", [
-        documents.map((document) => document.id)
-      ]);
-
       // Prune documents (cascading to their sections) for source files that no
       // longer exist in the repository, so a re-index doesn't leave stale docs
       // behind. The incoming set is authoritative for this repository.
@@ -74,7 +68,14 @@ export class PostgresKnowledgeStore
         [summary.repository.id, documents.map((document) => document.path)]
       );
 
-      await this.insertSections(client, sections);
+      // Replace the surviving documents' sections via an upsert that carries each
+      // unchanged section's embedding forward, so a full re-index no longer wipes
+      // (and forces re-computation of) vectors for text that didn't change.
+      await this.replaceSections(
+        client,
+        documents.map((document) => document.id),
+        sections
+      );
 
       await client.query("COMMIT");
     } catch (error) {
@@ -87,9 +88,10 @@ export class PostgresKnowledgeStore
 
   // Persists a single incremental reindex in one transaction: removes the deleted
   // documents (their sections cascade via the FK), and for each upserted document
-  // clears its old sections, upserts the document row, and inserts its fresh
-  // sections — then advances the repository's indexed_commit_sha. Unchanged rows
-  // are never touched (unlike saveIndexedRepository's whole-repository rewrite).
+  // upserts the document row and replaces its sections via replaceSections (which
+  // carries unchanged sections' embeddings forward) — then advances the
+  // repository's indexed_commit_sha. Unchanged rows are never touched (unlike
+  // saveIndexedRepository's whole-repository rewrite).
   async applyIncrementalIndex(input: IncrementalIndexInput): Promise<void> {
     const client = await this.pool.connect();
     try {
@@ -107,12 +109,14 @@ export class PostgresKnowledgeStore
       if (input.upsertedDocuments.length > 0) {
         await this.upsertDocuments(client, input.upsertedDocuments, input.commitSha);
 
-        // Replace each upserted document's sections: drop the old ones, then
-        // insert the freshly split set.
-        await client.query("DELETE FROM document_sections WHERE document_id = ANY($1::text[])", [
-          input.upsertedDocuments.map((document) => document.id)
-        ]);
-        await this.insertSections(client, input.upsertedSections);
+        // Replace each upserted document's sections, carrying unchanged sections'
+        // embeddings forward. A 1-line edit in a many-section doc now only resets
+        // (and re-embeds) the sections that actually changed, not the whole doc.
+        await this.replaceSections(
+          client,
+          input.upsertedDocuments.map((document) => document.id),
+          input.upsertedSections
+        );
       }
 
       await client.query("UPDATE repositories SET indexed_commit_sha = $2 WHERE id = $1", [
@@ -174,10 +178,48 @@ export class PostgresKnowledgeStore
     }
   }
 
-  // Inserts sections in batched multi-row INSERTs. Callers are responsible for
-  // clearing the affected documents' existing sections first. Shared by the full
-  // and incremental save paths; runs on the caller's transaction client.
-  private async insertSections(client: pg.PoolClient, sections: DocumentSection[]): Promise<void> {
+  // Replaces the sections of the given documents with `sections`, preserving the
+  // embeddings of sections whose content and heading are unchanged. Section ids are
+  // deterministic (`${documentId}:${ordinal}`), so an unchanged section keeps its
+  // id across re-indexes and its already-computed vector is carried forward rather
+  // than wiped and re-embedded. Sections no longer present in the incoming set
+  // (removed, or ids shifted by an upstream heading change) are deleted so nothing
+  // stale survives. Runs on the caller's transaction client. `documentIds` is the
+  // authoritative set of documents whose sections this call owns — a document that
+  // now has zero sections still has its stale rows pruned.
+  private async replaceSections(
+    client: pg.PoolClient,
+    documentIds: string[],
+    sections: DocumentSection[]
+  ): Promise<void> {
+    if (documentIds.length === 0) {
+      return;
+    }
+
+    await this.upsertSections(client, sections);
+
+    // Delete rows for these documents that are absent from the new id set. An
+    // anti-join against unnest($2) is a hash anti-join in Postgres, unlike
+    // `id <> ALL($2)` which rescans the whole array for every candidate row.
+    await client.query(
+      `
+        DELETE FROM document_sections s
+        WHERE s.document_id = ANY($1::text[])
+          AND NOT EXISTS (
+            SELECT 1 FROM unnest($2::text[]) AS keep(id) WHERE keep.id = s.id
+          )
+      `,
+      [documentIds, sections.map((section) => section.id)]
+    );
+  }
+
+  // Upserts sections in batched multi-row INSERTs keyed on the section id. On
+  // conflict the row's columns are refreshed, but the embedding is kept only when
+  // both content and heading are byte-identical to the stored row — otherwise it
+  // resets to NULL so the background embedder (which targets embedding IS NULL)
+  // recomputes exactly the changed sections. Shared by the full and incremental
+  // save paths; runs on the caller's transaction client.
+  private async upsertSections(client: pg.PoolClient, sections: DocumentSection[]): Promise<void> {
     for (const batch of chunk(sections, SECTION_INSERT_CHUNK)) {
       await client.query(
         `
@@ -185,6 +227,20 @@ export class PostgresKnowledgeStore
             id, document_id, path, heading, heading_path, anchor, ordinal, content
           )
           VALUES ${valuesClause(batch.length, 8)}
+          ON CONFLICT (id) DO UPDATE
+          SET document_id = EXCLUDED.document_id,
+              path = EXCLUDED.path,
+              heading = EXCLUDED.heading,
+              heading_path = EXCLUDED.heading_path,
+              anchor = EXCLUDED.anchor,
+              ordinal = EXCLUDED.ordinal,
+              content = EXCLUDED.content,
+              embedding = CASE
+                WHEN document_sections.content = EXCLUDED.content
+                  AND document_sections.heading = EXCLUDED.heading
+                THEN document_sections.embedding
+                ELSE NULL
+              END
         `,
         batch.flatMap((section) => [
           section.id,
