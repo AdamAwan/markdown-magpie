@@ -116,7 +116,7 @@ const DEFAULT_MAINTENANCE_TIMEOUT_MS = 15 * 60_000;
 // A non-2xx HTTP response, carrying the status so callers can tell a transient
 // server failure (5xx) or a network/timeout error (no status at all — see below)
 // apart from a deterministic contract failure (4xx) that retrying can never fix.
-export class HttpRequestStatusError extends Error {
+class HttpRequestStatusError extends Error {
   constructor(
     message: string,
     readonly status: number
