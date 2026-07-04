@@ -1,5 +1,4 @@
 import type {
-  SourceDataContext,
   UnprovableClaim,
   VerifyDocumentJobInput,
   VerifyDocumentJobOutput,
@@ -34,7 +33,9 @@ export function verifyIntent(flowId: string | undefined, path: string, claims: U
 }
 
 // Runs the verify lens over the selected documents: check each against the shared
-// source material, and for every "unprovable" verdict emit a verify intent through
+// source material (referenced by `sourcesRef` — the watcher resolves the corpus
+// once and reuses it across the batch), and for every "unprovable" verdict emit a
+// verify intent through
 // the reconcile gate (same-flow open PRs only) and record a finding. Healthy docs
 // are silent. A per-doc failure is logged and skipped — one bad doc never aborts
 // the tick.
@@ -54,7 +55,7 @@ export async function runVerifyLens(
   input: {
     flowId: string | undefined;
     documents: Array<{ path: string; content: string }>;
-    sources: SourceDataContext[];
+    sourcesRef: string;
     verifyDocument: VerifyDocumentFn;
   }
 ): Promise<VerifyLensResult> {
@@ -68,7 +69,7 @@ export async function runVerifyLens(
       verdict = await input.verifyDocument(ctx, {
         path: document.path,
         content: document.content,
-        sources: input.sources,
+        sourcesRef: input.sourcesRef,
         flowId: input.flowId
       });
     } catch (error) {
