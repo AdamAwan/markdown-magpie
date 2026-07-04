@@ -12,6 +12,8 @@ import type {
 import { verifyDocumentOutputSchema } from "@magpie/jobs";
 import { selectFlow } from "../../platform/repositories.js";
 import { selectPatrolBatch } from "../../scheduling/patrol-cursor.js";
+import { hashDocumentContent, hashSourceCorpus } from "../../scheduling/patrol-hash.js";
+import type { PatrolStamp } from "../../stores/patrol-store.js";
 import { flowCoveredPaths } from "../../scheduling/flow.js";
 import { runVerifyLens, type VerifyDocumentFn } from "../../scheduling/verify-lens.js";
 import { runDedupeLens, type DedupeDocumentFn } from "../../scheduling/dedupe-lens.js";
@@ -192,6 +194,25 @@ function verifyFindingIntentTraces(findings: VerifyFinding[], flowId: string | u
   }));
 }
 
+// Builds the cursor stamps for a patrol tick. Every selected doc is stamped so it
+// rotates in the staleness cursor, but a fresh content/source hash is recorded only
+// for the docs actually checked this tick — a checked doc's current hash becomes its
+// new verified state, while every other doc (gated as unchanged, covered by an open
+// PR, or one whose check failed) gets a bare stamp that advances its timestamp and
+// preserves whatever hash it already held. This keeps a doc whose check did not
+// complete re-checkable rather than gating it on a state it was never verified at.
+function buildPatrolStamps(
+  selected: string[],
+  checkedPaths: Set<string>,
+  contentHashByPath: Map<string, string>,
+  sourcesHash: string
+): PatrolStamp[] {
+  return selected.map((path) => {
+    const contentHash = contentHashByPath.get(path);
+    return checkedPaths.has(path) && contentHash ? { docPath: path, contentHash, sourcesHash } : path;
+  });
+}
+
 export async function runFixPatrol(
   ctx: AppContext,
   options: { flowId?: string; trigger: MaintenanceRun["trigger"] },
@@ -218,6 +239,7 @@ export async function runFixPatrol(
 
   const cursor = await ctx.stores.patrol.listCursor(options.flowId);
   const checkedAt = new Map(cursor.map((entry) => [entry.docPath, entry.lastCheckedAt]));
+  const priorByPath = new Map(cursor.map((entry) => [entry.docPath, entry]));
 
   const selected = selectPatrolBatch(universe, checkedAt, {
     batchSize: PATROL_BATCH_SIZE,
@@ -233,15 +255,33 @@ export async function runFixPatrol(
   const actionable = selected.filter((path) => !covered.has(path));
   const skipped = selected.length - actionable.length;
 
-  // Run the verify lens over the actionable documents. The source material is the
-  // same for every document in the flow, so collect it once per tick — and only
-  // when there is at least one document to check.
-  const selectedSet = new Set(actionable);
-  const selectedDocuments = documents
-    .filter((doc) => selectedSet.has(doc.path))
-    .map((doc) => ({ path: doc.path, content: doc.content }));
-  const sources = selectedDocuments.length > 0 ? await collectSourceContext(ctx.repositoryDeps(), scope.sourceIds) : [];
-  const findings = await runVerifyLens(ctx, {
+  // The source material is the same for every document in the flow, so collect it
+  // once per tick — and only when there is at least one document to consider. It's
+  // needed up front (before any lens runs) so the change gate below can hash it.
+  const actionableSet = new Set(actionable);
+  const actionableDocuments = documents.filter((doc) => actionableSet.has(doc.path));
+  const sources =
+    actionableDocuments.length > 0 ? await collectSourceContext(ctx.repositoryDeps(), scope.sourceIds) : [];
+  const sourcesHash = hashSourceCorpus(sources);
+
+  // Change gate (#163): skip the (provider-billed) lenses for any document whose body
+  // AND the source corpus are byte-identical to the last time it was checked — the
+  // verdict cannot have changed, so re-running verify/dedupe/split would burn calls to
+  // re-learn a known result. A never-checked doc (no recorded hash) and any hash
+  // mismatch fall through to a full check. On an idle KB this drops the tick to ~zero
+  // provider/embedding calls while the cursor still rotates (all selected docs are
+  // stamped below, unchanged ones with their existing hash preserved).
+  const contentHashByPath = new Map(actionableDocuments.map((doc) => [doc.path, hashDocumentContent(doc.content)]));
+  const toCheck = actionableDocuments.filter((doc) => {
+    const prior = priorByPath.get(doc.path);
+    return !(prior?.contentHash === contentHashByPath.get(doc.path) && prior?.sourcesHash === sourcesHash);
+  });
+  const gated = actionableDocuments.length - toCheck.length;
+
+  // Run the verify lens over the documents that actually need checking this tick.
+  const selectedSet = new Set(toCheck.map((doc) => doc.path));
+  const selectedDocuments = toCheck.map((doc) => ({ path: doc.path, content: doc.content }));
+  const { findings, checkedPaths } = await runVerifyLens(ctx, {
     flowId: options.flowId,
     documents: selectedDocuments,
     sources,
@@ -290,7 +330,15 @@ export async function runFixPatrol(
     splitDocument
   });
 
-  await ctx.stores.patrol.stampChecked(options.flowId, selected);
+  // Stamp the whole selection so the cursor rotates, but record a fresh
+  // content/source hash ONLY for docs the verify lens actually checked this tick —
+  // so a doc whose verify failed (or was gated/covered) keeps its prior verified
+  // hash (or none) and stays re-checkable rather than being gated on an unverified
+  // state. See buildPatrolStamps.
+  await ctx.stores.patrol.stampChecked(
+    options.flowId,
+    buildPatrolStamps(selected, new Set(checkedPaths), contentHashByPath, sourcesHash)
+  );
 
   const run = await ctx.stores.maintenanceRuns.record({
     taskType: "correctness_patrol",
@@ -298,20 +346,22 @@ export async function runFixPatrol(
     trigger: options.trigger,
     status: "completed",
     summary:
-      `checked ${selected.length}/${universe.length} doc${selected.length === 1 ? "" : "s"} · ` +
+      `checked ${checkedPaths.length}/${universe.length} doc${checkedPaths.length === 1 ? "" : "s"} · ` +
       `${findings.length} finding${findings.length === 1 ? "" : "s"}` +
+      (gated > 0 ? ` · ${gated} unchanged` : "") +
       (skipped > 0 ? ` · ${skipped} covered by open PRs` : ""),
     details: {
       universeCount: universe.length,
       selectedCount: selected.length,
       selected,
       skipped,
+      gated,
       findings,
       intentTraces: verifyFindingIntentTraces(findings, options.flowId)
     }
   });
   logger.info(
-    { trigger: options.trigger, flowId: options.flowId ?? "(default)", checked: selected.length, universe: universe.length, findings: findings.length, dedupeScans, splitScans, skipped, runId: run.id },
+    { trigger: options.trigger, flowId: options.flowId ?? "(default)", selected: selected.length, checked: checkedPaths.length, gated, universe: universe.length, findings: findings.length, dedupeScans, splitScans, skipped, runId: run.id },
     "fix-patrol completed"
   );
   return {
@@ -342,6 +392,7 @@ export async function runImprovePatrol(
 
   const cursor = await ctx.stores.patrol.listCursor(options.flowId, "improve");
   const checkedAt = new Map(cursor.map((entry) => [entry.docPath, entry.lastCheckedAt]));
+  const priorByPath = new Map(cursor.map((entry) => [entry.docPath, entry]));
   const selected = selectPatrolBatch(universe, checkedAt, {
     batchSize: IMPROVE_PATROL_BATCH_SIZE,
     randomCount: IMPROVE_PATROL_RANDOM_COUNT
@@ -354,14 +405,25 @@ export async function runImprovePatrol(
   const actionable = selected.filter((path) => !covered.has(path));
   const skipped = selected.length - actionable.length;
 
-  const selectedSet = new Set(actionable);
-  const selectedDocuments = documents
-    .filter((doc) => selectedSet.has(doc.path))
-    .map((doc) => ({ path: doc.path, content: doc.content, repositoryId: doc.repositoryId }));
-  const sources = selectedDocuments.length > 0 ? await collectSourceContext(ctx.repositoryDeps(), scope.sourceIds) : [];
+  const actionableSet = new Set(actionable);
+  const actionableDocuments = documents.filter((doc) => actionableSet.has(doc.path));
+  const sources =
+    actionableDocuments.length > 0 ? await collectSourceContext(ctx.repositoryDeps(), scope.sourceIds) : [];
+  const sourcesHash = hashSourceCorpus(sources);
 
+  // Change gate (#163): an improve scan of a doc that is byte-identical against a
+  // byte-identical source corpus would re-propose the same edit, so skip enqueueing
+  // it. Never-checked docs and any hash mismatch fall through and are scanned.
+  const contentHashByPath = new Map(actionableDocuments.map((doc) => [doc.path, hashDocumentContent(doc.content)]));
+  const toCheck = actionableDocuments.filter((doc) => {
+    const prior = priorByPath.get(doc.path);
+    return !(prior?.contentHash === contentHashByPath.get(doc.path) && prior?.sourcesHash === sourcesHash);
+  });
+  const gated = actionableDocuments.length - toCheck.length;
+
+  const checkedPaths = new Set<string>();
   let enqueuedCount = 0;
-  for (const document of selectedDocuments) {
+  for (const document of toCheck) {
     try {
       await improveDocument(ctx, {
         path: document.path,
@@ -370,6 +432,10 @@ export async function runImprovePatrol(
         destinationId: document.repositoryId,
         flowId: options.flowId
       });
+      // The scan was enqueued, so this doc was processed this tick: record its hash so
+      // an unchanged doc is gated next time. A failed enqueue leaves it unrecorded and
+      // thus re-checkable.
+      checkedPaths.add(document.path);
       enqueuedCount += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : "improve failed";
@@ -377,20 +443,25 @@ export async function runImprovePatrol(
     }
   }
 
-  await ctx.stores.patrol.stampChecked(options.flowId, selected, "improve");
+  await ctx.stores.patrol.stampChecked(
+    options.flowId,
+    buildPatrolStamps(selected, checkedPaths, contentHashByPath, sourcesHash),
+    "improve"
+  );
   const run = await ctx.stores.maintenanceRuns.record({
     taskType: "editorial_patrol",
     flowId: options.flowId,
     trigger: options.trigger,
     status: "completed",
     summary:
-      `checked ${selected.length}/${universe.length} doc${selected.length === 1 ? "" : "s"} · ` +
+      `checked ${enqueuedCount}/${universe.length} doc${enqueuedCount === 1 ? "" : "s"} · ` +
       `${enqueuedCount} improve scan${enqueuedCount === 1 ? "" : "s"}` +
+      (gated > 0 ? ` · ${gated} unchanged` : "") +
       (skipped > 0 ? ` · ${skipped} covered by open PRs` : ""),
-    details: { universeCount: universe.length, selectedCount: selected.length, selected, skipped, enqueuedCount }
+    details: { universeCount: universe.length, selectedCount: selected.length, selected, skipped, gated, enqueuedCount }
   });
   logger.info(
-    { trigger: options.trigger, flowId: options.flowId ?? "(default)", checked: selected.length, universe: universe.length, enqueued: enqueuedCount, skipped, runId: run.id },
+    { trigger: options.trigger, flowId: options.flowId ?? "(default)", selected: selected.length, universe: universe.length, enqueued: enqueuedCount, gated, skipped, runId: run.id },
     "improve-patrol completed"
   );
   return {

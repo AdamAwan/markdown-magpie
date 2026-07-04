@@ -148,6 +148,21 @@ Not "all docs daily". A **rolling cursor**: each tick, pick the *N* least-recent
 files (or files past a staleness threshold) and run the lenses on them. This rotates through
 the whole KB over days with bounded cost per tick, and naturally re-visits files as they age.
 
+**Change gate (skip unchanged docs).** Re-checking a file whose body *and* source corpus are
+byte-identical to the last check re-derives a verdict the model already gave — pure token
+waste on an idle KB. So the cursor stores, per entry, a hash of the document content and of
+the flow's source corpus at the moment it was last **actually** checked (`patrol_cursor.content_hash`
+/ `sources_hash`, added in migration `0040`). Before running the provider-billed lenses, a
+tick drops any selected doc whose current content hash and current source-corpus hash both
+match what's recorded — an idle knowledge base then costs ~zero provider/embedding calls per
+tick while the cursor still rotates every selected doc (so nothing starves). The hash is
+recorded **only for docs whose check completed** (`runVerifyLens` reports `checkedPaths`; the
+improve patrol records only successfully-enqueued scans), so a doc whose verify never ran —
+e.g. no provider watcher — keeps no hash and stays re-checkable rather than being suppressed
+forever. A source edit re-arms every doc's gate (the corpus hash changes for all of them).
+The run's `details.gated` count records how many docs were skipped this way. See
+`apps/api/src/scheduling/patrol-hash.ts` and `features/patrol/service.ts`.
+
 ---
 
 ## 5. The reconcile gate in detail

@@ -41,3 +41,30 @@ test("reset clears the cursor", async () => {
   await store.reset();
   assert.deepEqual(await store.listCursor(undefined), []);
 });
+
+test("a stamp with hashes records them; the cursor reads them back", async () => {
+  const store = new InMemoryPatrolStore();
+  await store.stampChecked(undefined, [{ docPath: "a.md", contentHash: "c1", sourcesHash: "s1" }]);
+  const entry = (await store.listCursor(undefined)).find((e) => e.docPath === "a.md")!;
+  assert.equal(entry.contentHash, "c1");
+  assert.equal(entry.sourcesHash, "s1");
+});
+
+test("a bare-path stamp preserves the previously recorded hashes (only advances the timestamp)", async () => {
+  const store = new InMemoryPatrolStore();
+  await store.stampChecked(undefined, [{ docPath: "a.md", contentHash: "c1", sourcesHash: "s1" }]);
+  // Re-stamp with no hash (e.g. a rotate-only stamp for a covered doc): the hashes stay.
+  await store.stampChecked(undefined, ["a.md"]);
+  const entry = (await store.listCursor(undefined)).find((e) => e.docPath === "a.md")!;
+  assert.equal(entry.contentHash, "c1");
+  assert.equal(entry.sourcesHash, "s1");
+});
+
+test("a stamp with a new hash overwrites the prior one", async () => {
+  const store = new InMemoryPatrolStore();
+  await store.stampChecked(undefined, [{ docPath: "a.md", contentHash: "c1", sourcesHash: "s1" }]);
+  await store.stampChecked(undefined, [{ docPath: "a.md", contentHash: "c2", sourcesHash: "s2" }]);
+  const entry = (await store.listCursor(undefined)).find((e) => e.docPath === "a.md")!;
+  assert.equal(entry.contentHash, "c2");
+  assert.equal(entry.sourcesHash, "s2");
+});
