@@ -118,10 +118,26 @@ export async function runMergeCascade(
   ctx: AppContext,
   proposal: Proposal
 ): Promise<{ reindexed: boolean; verificationEnqueued: boolean }> {
-  const reindexed = await reindexDestinationForProposal(ctx, proposal);
+  const reindexOutcome = await reindexDestinationForProposal(ctx, proposal);
+  const reindexed = reindexOutcome === "reindexed";
   // Seed / clusterless proposals have no triggering questions to re-ask, so there
   // is nothing to verify (and nothing was ever resolved for them).
   const hasTriggers = (proposal.triggeringQuestionIds ?? []).length > 0;
+  // A failed re-index is an infrastructure problem, not a content verdict: verifying
+  // against an index that lacks the merged doc would deterministically score
+  // still_open and burn a CLOSURE_RETRY_CAP strike. Skip verification and leave
+  // closureStatus unset so the proposal reads as "unverified" rather than "reopened".
+  // (A "skipped" re-index — no destination/repository matched — keeps the old
+  // behavior: the index was never going to change, so verification still runs.)
+  if (reindexOutcome === "failed") {
+    if (hasTriggers && !proposal.closureStatus) {
+      logger.warn(
+        { proposalId: proposal.id },
+        "skipping gap-closure verification: destination reindex failed"
+      );
+    }
+    return { reindexed, verificationEnqueued: false };
+  }
   if (!hasTriggers || proposal.closureStatus || (await isVerifyGapClosureInFlight(ctx, proposal.id))) {
     return { reindexed, verificationEnqueued: false };
   }
@@ -441,13 +457,18 @@ async function resolveGapsForMergedProposal(ctx: AppContext, proposal: Proposal)
 // Pulls the destination's default branch (where the PR merged) and re-indexes it
 // so the merged document is immediately searchable. Best-effort: a failure here
 // must not undo the merge, so it is logged and reported rather than thrown.
-async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal): Promise<boolean> {
+// "skipped" (nothing matched, so nothing to re-index) is distinct from "failed"
+// (the re-index was attempted and errored): runMergeCascade withholds gap-closure
+// verification only for the latter.
+type ReindexOutcome = "reindexed" | "skipped" | "failed";
+
+async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal): Promise<ReindexOutcome> {
   try {
     if (ctx.knowledgeConfig.destinations.length > 0) {
       const destination = selectDestinationForProposal(ctx.repositoryDeps(), proposal);
       if (!destination) {
         logger.warn({ proposalId: proposal.id }, "no destination matched merged proposal; skipping re-index");
-        return false;
+        return "skipped";
       }
 
       // For a git destination this also fetches and fast-forwards the checkout,
@@ -462,7 +483,7 @@ async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal
       const repository = await findRepositoryForProposal(ctx.repositoryDeps(), proposal);
       if (!repository) {
         logger.warn({ proposalId: proposal.id }, "no repository matched merged proposal; skipping re-index");
-        return false;
+        return "skipped";
       }
 
       await ctx.stores.knowledgeIndex.indexLocalRepository({
@@ -473,12 +494,15 @@ async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal
     }
 
     logger.info({ proposalId: proposal.id }, "re-indexed destination after merging proposal");
-    void ctx.embedder.trigger();
-    return true;
+    // Await the embedding pass so the verification re-asks retrieve with the vector
+    // leg, not just keywords. trigger() logs and swallows embed failures, so a failed
+    // embed degrades retrieval without failing the cascade.
+    await ctx.embedder.trigger();
+    return "reindexed";
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
     logger.warn({ proposalId: proposal.id, err: message }, "re-index after merging proposal failed");
-    return false;
+    return "failed";
   }
 }
 

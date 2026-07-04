@@ -180,6 +180,29 @@ test("runMergeCascade does not enqueue a second verify_gap_closure job while one
   assert.equal(enqueued.jobs.length, 1, "the pre-existing job is not duplicated");
 });
 
+test("runMergeCascade skips verification when reindexing fails", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  // A repository must match for the re-index to be attempted at all; make the
+  // attempt itself fail so this exercises "failed", not the benign "skipped".
+  ctx.stores.knowledgeIndex.listRepositories = () => [
+    { id: "docs", name: "Docs", defaultBranch: "main", localPath: "/tmp/docs", provider: "local" }
+  ];
+  ctx.stores.knowledgeIndex.indexLocalRepository = async () => {
+    throw new Error("simulated reindex failure");
+  };
+
+  const result = await proposals.runMergeCascade(ctx, merged);
+
+  assert.equal(result.reindexed, false, "reindex failure is reported");
+  assert.equal(result.verificationEnqueued, false, "verification is not enqueued when reindex fails");
+  const enqueued = await ctx.jobs.list({ type: "verify_gap_closure" });
+  assert.equal(enqueued.jobs.length, 0, "no verify_gap_closure job is enqueued when reindex fails");
+  // closureStatus stays unset: an infrastructure failure must not become a content verdict.
+  const reloaded = await ctx.stores.proposals.get(merged.id);
+  assert.equal(reloaded?.closureStatus, undefined, "closureStatus remains unset after reindex failure");
+});
+
 test("verifyGapClosure marks verified_closed and resolves the gap when the re-ask cites the merged doc", async () => {
   const ctx = makeTestContext();
   const { merged } = await mergedProposalWithGap(ctx);
