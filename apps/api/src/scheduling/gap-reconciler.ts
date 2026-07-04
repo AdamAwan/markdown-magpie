@@ -573,7 +573,9 @@ async function requestReshape(
 
   let terminal;
   try {
-    terminal = await runJobToCompletion(ctx, "reconcile_gap_clusters", input);
+    terminal = await runJobToCompletion(ctx, "reconcile_gap_clusters", input, {
+      reuseKey: reconcileGapClustersReuseKey
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "reshape job failed";
     logger.warn({ flowLabel, err: message }, "gap reconciler: reshape job could not be enqueued; skipping reshape");
@@ -591,6 +593,20 @@ async function requestReshape(
     return undefined;
   }
   return parsed.data;
+}
+
+// Dedupe key for reuseKey (#162): a reshape already in flight for this flow (and
+// routed to the same provider) is the same piece of work a concurrent caller or
+// the next cron tick would otherwise duplicate, so wait on it instead of
+// enqueueing another. The default flow's undefined flowId is normalized to a
+// stable sentinel so repeated default-flow reshapes still dedupe against each
+// other rather than each producing a distinct "undefined" key.
+function reconcileGapClustersReuseKey(input: unknown): string {
+  if (!input || typeof input !== "object") return "unknown";
+  const candidate = input as { flowId?: unknown; provider?: unknown };
+  const flowId = typeof candidate.flowId === "string" ? candidate.flowId : "__default__";
+  const provider = typeof candidate.provider === "string" ? candidate.provider : "__unknown__";
+  return `${provider}:${flowId}`;
 }
 
 async function applyMerge(ctx: AppContext, merge: ProposedMerge, flowId: string | undefined): Promise<void> {

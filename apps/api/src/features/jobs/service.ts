@@ -94,6 +94,11 @@ export async function waitForJob(
   }
 }
 
+// Job states that are not yet terminal — a job in one of these is either still
+// queued, executing, or waiting out a blocked dependency. Mirrors the overlap
+// guard in features/scheduled-tasks/service.ts.
+const IN_FLIGHT_JOB_STATES: ReadonlySet<JobView["state"]> = new Set(["created", "retry", "active", "blocked"]);
+
 // Creates a job and bounded-waits for it to reach a terminal state, returning the
 // terminal JobView (or the last view seen if the deadline elapses first — check
 // `.state` for whether it actually completed). Used by API flows that need an AI
@@ -101,20 +106,85 @@ export async function waitForJob(
 // stays in the API, but the only generative step is an enqueued job we wait on.
 // The default deadline is tied to the job's own expiry; pass `deadlineMs` (or set
 // JOB_RUN_TO_COMPLETION_TIMEOUT_MS) to shorten it, e.g. in tests.
+//
+// `reuseKey`, when supplied, lets a caller reuse an already in-flight job of the
+// same type instead of enqueueing a duplicate: existing in-flight jobs of `type`
+// are scanned and the first whose input maps to the same key (via `reuseKey`) is
+// waited on instead of creating a new one. This is the cheapest fix for the
+// "queue backlog" half of #162: a bounded wait that timed out on a busy queue
+// left its job queued (not cancelled — see below) for exactly the scenario where
+// the very next caller (e.g. the next cron tick, or a concurrent request for the
+// same flow/document) would otherwise pile a duplicate job on top of it.
+//
+// On timeout (the deadline elapses before the job reaches a terminal state), the
+// job is cancelled rather than left to run unread — see cancelOrphanedJob for why
+// that is safe even when a watcher has already claimed it.
 export async function runJobToCompletion(
   ctx: AppContext,
   type: JobType,
   input: unknown,
-  options: { deadlineMs?: number; pollMs?: number } = {}
+  options: { deadlineMs?: number; pollMs?: number; reuseKey?: (input: unknown) => string } = {}
 ): Promise<JobView> {
-  const job = await createJob(ctx, type, input);
+  const job = await acquireJob(ctx, type, input, options.reuseKey);
   const deadlineMs =
     options.deadlineMs ??
     ctx.settings.jobs.runToCompletionTimeoutMs ??
     jobDefinition(type).policy.expireInSeconds * 1000;
   const pollMs = options.pollMs ?? ctx.settings.jobs.waitPollMs;
-  const { job: terminal } = await waitForJob(ctx, job.id, { timeoutMs: deadlineMs, pollMs });
-  return terminal;
+  const { terminal, job: view } = await waitForJob(ctx, job.id, { timeoutMs: deadlineMs, pollMs });
+  return terminal ? view : cancelOrphanedJob(ctx, job.id, view);
+}
+
+// Finds an in-flight job of `type` whose input maps to the same `reuseKey` as the
+// requested `input`, or creates a fresh job when none exists (or no `reuseKey` was
+// given). Scoped to `type` the same way isTaskRunning is in scheduled-tasks, just
+// returning the match instead of a boolean.
+async function acquireJob(
+  ctx: AppContext,
+  type: JobType,
+  input: unknown,
+  reuseKey?: (input: unknown) => string
+): Promise<JobView> {
+  if (reuseKey) {
+    const key = reuseKey(input);
+    const { jobs } = await ctx.jobs.list({ type, limit: 200 });
+    const existing = jobs.find(
+      (candidate) => IN_FLIGHT_JOB_STATES.has(candidate.state) && reuseKey(candidate.input) === key
+    );
+    if (existing) return existing;
+  }
+  return createJob(ctx, type, input);
+}
+
+// The bounded wait gave up before the job reached a terminal state: the caller is
+// about to treat this attempt as "skip this run", so nothing will ever read this
+// job's output once it does complete. Cancelling closes both halves of #162's
+// waste: a job still sitting in the queue is never claimed by a late watcher that
+// would otherwise run the full (paid-for) generation for an answer nobody reads,
+// and a job a watcher already claimed and is mid-flight gets its eventual
+// completeJob() call rejected via the existing `job_cancelled` guard rather than
+// having its output silently discarded after paying for the generation.
+//
+// This is race-safe against a concurrent completion/failure without any special
+// handling: pg-boss's cancel only updates rows still in a non-terminal state
+// (`state < 'completed'`), so if the job finished between our timeout and this
+// call, cancel is a no-op and the refetch inside cancelJob returns the job's real
+// terminal state instead. Cancelling a job a watcher already claimed (`active`)
+// is deliberate, not a bug: pg-boss has no way to interrupt a watcher mid-flight,
+// so the goal here is only to make sure the eventual output is never acted upon.
+async function cancelOrphanedJob(ctx: AppContext, jobId: string, lastSeen: JobView): Promise<JobView> {
+  try {
+    return await cancelJob(ctx, jobId);
+  } catch (error) {
+    // Cancellation failing (e.g. the job vanished) must not throw out of
+    // runJobToCompletion — callers already treat a non-"completed" view as "skip
+    // this run"; fall back to the last view we saw and just log it.
+    logger.warn(
+      { jobId, err: error instanceof Error ? error.message : String(error) },
+      "runJobToCompletion: failed to cancel orphaned job after bounded-wait timeout"
+    );
+    return lastSeen;
+  }
 }
 
 // THE COMPLETION DISPATCHER. Replicates the original handleCompleteJob logic:

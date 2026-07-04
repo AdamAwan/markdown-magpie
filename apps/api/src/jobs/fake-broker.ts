@@ -12,6 +12,10 @@ import { CronExpressionParser } from "cron-parser";
 import { injectTraceContext } from "@magpie/telemetry";
 import type { DesiredSchedule, JobBroker, JobListFilters, ScheduleView } from "./broker.js";
 
+// Job states pg-boss treats as finished (`state >= 'completed'` in its own enum
+// ordering) — see cancel()'s comment for why this matters.
+const TERMINAL_JOB_STATES: ReadonlySet<JobView["state"]> = new Set(["completed", "cancelled", "failed"]);
+
 // Test-only in-memory implementation of JobBroker. Backed by an insertion-ordered
 // Map. Does NOT read environment variables.
 export class FakeJobBroker implements JobBroker {
@@ -142,6 +146,14 @@ export class FakeJobBroker implements JobBroker {
 
   async cancel(id: string): Promise<JobView> {
     const job = this.getExisting(id);
+    // Mirrors pg-boss's cancelJobs SQL (`WHERE state < 'completed'`): cancelling a
+    // job that has already reached a terminal state is a no-op, not an overwrite.
+    // This matters for the runJobToCompletion timeout-cancel path (#162): a job
+    // that completes/fails in the gap between the bounded wait's timeout and the
+    // cancel call must keep its real terminal state, not flip to "cancelled".
+    if (TERMINAL_JOB_STATES.has(job.state)) {
+      return job;
+    }
     const now = new Date().toISOString();
     const cancelled: JobView = {
       ...job,

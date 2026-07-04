@@ -18,6 +18,7 @@ import {
   listJobs,
   projectJob,
   retryJob,
+  runJobToCompletion,
   waitForJob
 } from "./service.js";
 
@@ -128,6 +129,91 @@ test("wait returns current jobs on timeout and terminal jobs immediately", async
   const terminal = await waitForJob(ctx, created.id, { timeoutMs: 10, pollMs: 1 });
   assert.equal(terminal.terminal, true);
   assert.equal(terminal.job.state, "cancelled");
+});
+
+test("runJobToCompletion cancels a still-queued job once the bounded wait times out (#162)", async () => {
+  const ctx = makeTestContext();
+  // makeTestContext sets JOB_RUN_TO_COMPLETION_TIMEOUT_MS=100 / JOB_WAIT_POLL_MS=5,
+  // and nothing ever claims this job, so the wait must give up and the orphaned
+  // job must be cancelled rather than left queued for a late watcher to run.
+  const result = await runJobToCompletion(ctx, "answer_question", answerInput());
+  assert.equal(result.state, "cancelled");
+  assert.equal((await getJob(ctx, result.id))?.state, "cancelled");
+});
+
+test("runJobToCompletion cancels a job a watcher already claimed once the bounded wait times out (#162)", async () => {
+  const ctx = makeTestContext();
+  const preexisting = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+  assert.equal((await getJob(ctx, preexisting.id))?.state, "active");
+
+  // reuseKey pins runJobToCompletion onto the pre-claimed job so the test can
+  // observe a watcher mid-flight past the deadline, exactly the "late watcher"
+  // scenario #162 describes: cancelling an active job cannot stop the watcher,
+  // but it does mean the eventual completeJob() call is rejected (job_cancelled)
+  // instead of quietly applying an unread result.
+  const result = await runJobToCompletion(ctx, "answer_question", answerInput(), { reuseKey: () => "shared" });
+  assert.equal(result.id, preexisting.id);
+  assert.equal(result.state, "cancelled");
+  assert.equal((await getJob(ctx, preexisting.id))?.state, "cancelled");
+
+  const output: AnswerQuestionJobOutput = { answer: "too late", confidence: "high", citations: [] };
+  assert.deepEqual(await completeJob(ctx, preexisting.id, output, "worker"), { ok: false, code: "job_cancelled" });
+});
+
+test("runJobToCompletion's timeout-cancel is race-safe against a job completing first (#162)", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+  const output: AnswerQuestionJobOutput = { answer: "just in time", confidence: "high", citations: [] };
+
+  // Simulate the exact race the timeout-cancel path has to survive: the watcher's
+  // completeJob call lands in the instant between the bounded wait giving up and
+  // the cancel actually reaching the broker.
+  const realCancel = ctx.jobs.cancel.bind(ctx.jobs);
+  ctx.jobs.cancel = async (id: string) => {
+    await completeJob(ctx, id, output, "worker");
+    return realCancel(id);
+  };
+
+  const result = await runJobToCompletion(ctx, "answer_question", answerInput(), { reuseKey: () => "shared" });
+  assert.equal(result.id, job.id);
+  assert.equal(result.state, "completed");
+});
+
+// reuseKey only matches jobs still in flight (created/retry/active/blocked), not
+// completed ones — an already-completed job isn't "in flight" work to wait on,
+// it is a finished result, which is a different (and out of scope) kind of
+// caching. This test reuses a job that is still active when runJobToCompletion
+// starts waiting on it, and only completes concurrently with that wait.
+test("runJobToCompletion reuses a matching in-flight job instead of enqueueing a duplicate (#162)", async () => {
+  const ctx = makeTestContext();
+  const preexisting = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+
+  const resultPromise = runJobToCompletion(ctx, "answer_question", answerInput(), { reuseKey: () => "shared" });
+  const output: AnswerQuestionJobOutput = { answer: "already done", confidence: "high", citations: [] };
+  await completeJob(ctx, preexisting.id, output, "worker");
+
+  const result = await resultPromise;
+  assert.equal(result.id, preexisting.id);
+  assert.equal(result.state, "completed");
+
+  // No second job was enqueued for this reuseKey.
+  assert.equal((await listJobs(ctx, { type: "answer_question" })).total, 1);
+});
+
+test("runJobToCompletion creates a new job when no in-flight job matches reuseKey", async () => {
+  const ctx = makeTestContext();
+  await ctx.jobs.create("answer_question", answerInput("codex"));
+
+  await runJobToCompletion(ctx, "answer_question", answerInput("openai-compatible"), {
+    reuseKey: (input) => JSON.stringify(input)
+  });
+
+  // The two requests hash to different reuseKeys (different provider), so the
+  // second call must not reuse the first job — it enqueues its own.
+  assert.equal((await listJobs(ctx, { type: "answer_question" })).total, 2);
 });
 
 test("display projection recursively redacts secrets without mutating stored input", () => {
