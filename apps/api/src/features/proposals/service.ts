@@ -15,7 +15,7 @@ import type {
   SourceDataContext,
   SplitDocumentJobInput
 } from "@magpie/core";
-import type { JobView, verifyGapClosureOutputSchema } from "@magpie/jobs";
+import type { JobState, JobView, verifyGapClosureOutputSchema } from "@magpie/jobs";
 import { runJobToCompletion } from "../jobs/service.js";
 import { citesMergedDoc, evaluateClosure, proposalTargetPaths } from "./closure-eval.js";
 import { fileURLToPath } from "node:url";
@@ -63,12 +63,57 @@ const CLOSURE_RETRY_CAP = 2;
 
 type VerifyGapClosureOutput = z.infer<typeof verifyGapClosureOutputSchema>;
 
+// Non-terminal job states that mean a verify_gap_closure job hasn't finished
+// executing yet — mirrors IN_FLIGHT_JOB_STATES in features/scheduled-tasks/
+// service.ts.
+const VERIFY_GAP_CLOSURE_IN_FLIGHT_STATES: ReadonlySet<JobState> = new Set<JobState>([
+  "created",
+  "active",
+  "retry",
+  "blocked"
+]);
+
+// The proposalId a verify_gap_closure job's input carries (its whole input
+// shape is `{ proposalId }` — see verifyGapClosureInputSchema).
+function jobProposalId(input: unknown): string | undefined {
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
+  const candidate = (input as { proposalId?: unknown }).proposalId;
+  return typeof candidate === "string" ? candidate : undefined;
+}
+
+// True when a verify_gap_closure job for this proposal is already queued or
+// running. The JobBroker interface's create() takes no dedup option (pg-boss's
+// own singletonKey only dedups under its non-"standard" queue policies, which
+// this catalog does not opt this queue into), so overlap protection is a scan
+// by type + matching proposalId, the same broker-agnostic pattern
+// isTaskRunning uses in features/scheduled-tasks/service.ts. This is
+// belt-and-braces against a race between two concurrent merge cascades; the
+// primary defence is the transition guard in routes.ts (only a genuine
+// draft/branch-pushed/pr-opened → merged transition schedules a cascade at
+// all).
+async function isVerifyGapClosureInFlight(ctx: AppContext, proposalId: string): Promise<boolean> {
+  const { jobs } = await ctx.jobs.list({ type: "verify_gap_closure", limit: 200 });
+  return jobs.some(
+    (job) => VERIFY_GAP_CLOSURE_IN_FLIGHT_STATES.has(job.state) && jobProposalId(job.input) === proposalId
+  );
+}
+
 // The work that must happen once a proposal is merged, shared by the manual
 // "Mark merged" endpoint and the pull-request poller: re-index the destination
 // knowledge base, then verify (rather than assume) that the merge closed its
 // gaps. Gap resolution is no longer blind — it is gated on re-asking the
 // triggering questions (see verifyGapClosure), enqueued here as a job so the
 // re-asks run through the normal queue-only answer path.
+//
+// Enqueueing verification is idempotent per proposal: a proposal whose closure
+// was already verified (closureStatus set) or whose verification is already
+// queued/running is not re-enqueued, so a merge cascade that somehow runs
+// twice for the same proposal (a race between callers, rather than the
+// ordinary retried-POST case routes.ts already guards against) cannot
+// double-enqueue the job and double-count a still-open verdict against
+// CLOSURE_RETRY_CAP.
 export async function runMergeCascade(
   ctx: AppContext,
   proposal: Proposal
@@ -77,11 +122,12 @@ export async function runMergeCascade(
   // Seed / clusterless proposals have no triggering questions to re-ask, so there
   // is nothing to verify (and nothing was ever resolved for them).
   const hasTriggers = (proposal.triggeringQuestionIds ?? []).length > 0;
-  if (hasTriggers) {
-    await ctx.jobs.create("verify_gap_closure", { proposalId: proposal.id });
-    logger.info({ proposalId: proposal.id }, "enqueued gap-closure verification for merged proposal");
+  if (!hasTriggers || proposal.closureStatus || (await isVerifyGapClosureInFlight(ctx, proposal.id))) {
+    return { reindexed, verificationEnqueued: false };
   }
-  return { reindexed, verificationEnqueued: hasTriggers };
+  await ctx.jobs.create("verify_gap_closure", { proposalId: proposal.id });
+  logger.info({ proposalId: proposal.id }, "enqueued gap-closure verification for merged proposal");
+  return { reindexed, verificationEnqueued: true };
 }
 
 // Re-asks each triggering question of a merged proposal and checks whether the
@@ -92,6 +138,22 @@ export async function runMergeCascade(
 // flagged for a human. The re-asks go through runJobToCompletion, so the only
 // generative step is an enqueued answer_question job a provider watcher claims.
 export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Promise<VerifyGapClosureOutput> {
+  // Entry guard: a proposal already carries a closureStatus once one run has
+  // recorded a verdict for it. Re-running would re-ask every triggering
+  // question (duplicate LLM spend) and, worse, record a second "still_open" row
+  // per question into the unscoped counter countPriorStillOpen sums for
+  // CLOSURE_RETRY_CAP — so a single transient failure would count twice toward
+  // the cap. This is the last line of defence: even if two verify_gap_closure
+  // jobs land for the same proposal (racing enqueues, a duplicate /verify-closure
+  // callback, etc.), only the first to reach here does the work.
+  if (proposal.closureStatus) {
+    logger.info(
+      { proposalId: proposal.id, closureStatus: proposal.closureStatus },
+      "gap-closure verification already recorded for this proposal; skipping re-verification"
+    );
+    return { proposalId: proposal.id, closureStatus: proposal.closureStatus, perQuestion: [] };
+  }
+
   const questionIds = proposal.triggeringQuestionIds ?? [];
   // Compare in ONE path space: citations carry indexed-subtree-relative paths
   // (subpath stripped), so strip the destination's subpath off the proposal's
