@@ -29,3 +29,22 @@ test("fake broker supports create, claim, heartbeat, complete, cancel, and retry
   await broker.cancel(created.id);
   assert.equal((await broker.get(created.id))?.state, "cancelled");
 });
+
+// Mirrors pg-boss's cancelJobs SQL (`WHERE state < 'completed'`): cancelling a job
+// that already reached a terminal state must be a no-op, not an overwrite. This
+// is what makes runJobToCompletion's timeout-cancel (#162) race-safe against a
+// job that completes in the gap between the bounded wait giving up and the
+// cancel call actually reaching the broker.
+test("cancel is a no-op once a job has already completed", async () => {
+  const broker = new FakeJobBroker();
+  const created = await broker.create("answer_question", validAnswerInput);
+  await broker.claim("worker-1", ["codex"]);
+  const output = { answer: "done", confidence: "high" as const, citations: [] };
+  const completed = await broker.complete(created.id, output);
+  assert.equal(completed.state, "completed");
+
+  const cancelled = await broker.cancel(created.id);
+  assert.equal(cancelled.state, "completed");
+  assert.deepEqual(cancelled.output, output);
+  assert.equal((await broker.get(created.id))?.state, "completed");
+});

@@ -68,6 +68,17 @@ function resolveScope(
   };
 }
 
+// Dedupe key for reuseKey (#162): a verify already in flight for this document
+// (routed to the same provider) is the same piece of work a concurrent patrol
+// tick would otherwise duplicate, so wait on it instead of enqueueing another.
+function verifyDocumentReuseKey(input: unknown): string {
+  if (!input || typeof input !== "object") return "unknown";
+  const candidate = input as { path?: unknown; provider?: unknown };
+  const path = typeof candidate.path === "string" ? candidate.path : "__unknown__";
+  const provider = typeof candidate.provider === "string" ? candidate.provider : "__unknown__";
+  return `${provider}:${path}`;
+}
+
 // Default verify: enqueue a verify_document AI job and bounded-wait for the watcher
 // to complete it (mirrors gap-reconciler's reshape job). Returns undefined on any
 // non-completion so the lens skips that document rather than failing the tick.
@@ -80,7 +91,7 @@ const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sou
   } satisfies VerifyDocumentJobInput & { provider: AiProviderName };
   let terminal;
   try {
-    terminal = await runJobToCompletion(ctx, "verify_document", input);
+    terminal = await runJobToCompletion(ctx, "verify_document", input, { reuseKey: verifyDocumentReuseKey });
   } catch (error) {
     const message = error instanceof Error ? error.message : "verify job failed";
     logger.warn({ path, err: message }, "verify lens: verify_document could not run");

@@ -169,7 +169,13 @@ only ≥2), and a critic-confirmed dismissal moves the cluster to a terminal
 `dismissed` state and stamps its member gaps dismissed, so it never drafts a proposal
 and never re-clusters. Reshape is best-effort: if no chat watcher is available within
 the deadline, the reconciler logs and skips it, still running clustering, drafting,
-publication, and the PR-state pass.
+publication, and the PR-state pass. Both this reshape job and the fix-patrol verify
+lens's `verify_document` job go through `runJobToCompletion`, which now closes an
+orphaned-job leak: if the deadline elapses before the job reaches a terminal state,
+the job is cancelled (safe even if a watcher has already claimed it — a late
+`completeJob()` on a cancelled job is rejected rather than silently discarded after
+paying for the generation), and a request for the same flow/document reuses an
+already in-flight job instead of enqueueing a duplicate on top of it.
 
 ### Merge cascade and gap-closure verification
 
