@@ -630,12 +630,15 @@ export interface UnprovableClaim {
   reason: string;
 }
 
-// Input to the verify_document AI job: one knowledge-base document plus the source
-// material to check it against. `provider` is added at enqueue (see @magpie/jobs).
+// Input to the verify_document AI job: one knowledge-base document plus a reference
+// to the source material to check it against. The corpus itself is stored once per
+// patrol tick (content-addressed by its hash) and fetched by the watcher via that
+// ref, rather than copied by value into every job in the batch (#163 Part 2).
+// `provider` is added at enqueue (see @magpie/jobs).
 export interface VerifyDocumentJobInput {
   path: string;
   content: string;
-  sources: SourceDataContext[];
+  sourcesRef: string;
 }
 
 // The verify lens's verdict for one document: "healthy" (claims empty) or
@@ -652,7 +655,9 @@ export interface CorrectDocumentJobInput {
   path: string;
   content: string;
   claims: UnprovableClaim[];
-  sources: SourceDataContext[];
+  // Reference to the shared source corpus (see VerifyDocumentJobInput). The watcher
+  // resolves it to ground every correction; not copied by value into the job (#163).
+  sourcesRef: string;
   destinationId?: string;
   flowId?: string;
 }
@@ -706,7 +711,9 @@ export interface SplitDocumentJobOutput {
 export interface ImproveDocumentJobInput {
   path: string;
   content: string;
-  sources: SourceDataContext[];
+  // Reference to the shared source corpus (see VerifyDocumentJobInput). The watcher
+  // resolves it to ground the expansion; not copied by value into the job (#163).
+  sourcesRef: string;
   destinationId?: string;
   flowId?: string;
 }
