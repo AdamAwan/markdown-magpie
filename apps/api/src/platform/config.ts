@@ -152,7 +152,7 @@ export interface AppConfig {
 // Abstain-biased cosine cut-offs for the embedding flow router. Conservative
 // starting points: the top flow must clear `minTopScore` and beat the runner-up by
 // `minMargin`, else the router abstains and the watcher falls back to the chat call.
-export interface FlowRouterConfig {
+interface FlowRouterConfig {
   minTopScore: number;
   minMargin: number;
 }

@@ -2,7 +2,7 @@ import { routeByEmbeddingSimilarity, type EmbeddedFlow, type EmbeddingRoute } fr
 import { logger } from "../../logger.js";
 import type { AppContext } from "../../context.js";
 
-export interface RouteFlow {
+interface RouteFlow {
   id: string;
   name: string;
   persona?: string;
