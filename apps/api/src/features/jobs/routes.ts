@@ -87,7 +87,15 @@ export function jobRoutes(ctx: AppContext): Hono {
           const status = outcome.code === "job_not_found" ? 404 : outcome.code === "job_cancelled" ? 409 : 400;
           throw new HttpError(status, outcome.code);
         }
-        return c.json({ job: outcome.job });
+        // The job's output is durably persisted whenever ok is true, even if a
+        // side effect (proposal creation, fold reconcile, ...) failed — see
+        // completeJob's docstring. Report that failure on the response (200, not
+        // 500: the watcher must not treat this as a reason to fall back to
+        // fail()/retry, which would needlessly re-run the paid-for generation)
+        // so operators can see it without it looking like a completion failure.
+        return c.json(
+          outcome.sideEffectsError ? { job: outcome.job, sideEffectsError: outcome.sideEffectsError } : { job: outcome.job }
+        );
       } catch (error) {
         if (error instanceof HttpError) throw error;
         throw new HttpError(500, "job_completion_failed");

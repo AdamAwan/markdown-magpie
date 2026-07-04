@@ -273,6 +273,58 @@ test("proposal completion is idempotent when delivered twice", async () => {
   assert.equal(created[0].jobId, job.id);
 });
 
+test("#161: a side-effect failure completes the job (no regeneration) and reports sideEffectsError instead of failing it", async () => {
+  const ctx = makeTestContext();
+
+  const validInput: DraftMarkdownProposalJobInput & { provider: "codex" } = {
+    provider: "codex",
+    gapSummaries: ["How to configure X"],
+    triggeringQuestions: ["How do I configure X?"],
+    evidence: [],
+    expectedOutput: "markdown_proposal"
+  };
+  const job = await ctx.jobs.create("draft_markdown_proposal", validInput);
+
+  const output: DraftMarkdownProposalJobOutput = {
+    title: "Configure X",
+    targetPath: "configure-x.md",
+    markdown: "# Configure X\nbody",
+    rationale: "r"
+  };
+
+  // Simulate a transient side-effect failure (e.g. a DB blip while drafting the
+  // proposal) by making the store throw once.
+  const originalCreate = ctx.stores.proposals.create.bind(ctx.stores.proposals);
+  ctx.stores.proposals.create = async () => {
+    throw new Error("transient db error");
+  };
+
+  const result = await completeJob(ctx, job.id, output, "w-1");
+  assert.equal(result.ok, true);
+  assert.match((result.ok && result.sideEffectsError) || "", /transient db error/);
+
+  // The job itself must have reached its terminal "completed" state — pg-boss
+  // will never redo the (paid-for) generation regardless of the side-effect
+  // failure above, and the retry budget must be untouched.
+  const afterFailure = await getJob(ctx, job.id);
+  assert.equal(afterFailure?.state, "completed");
+  assert.equal(afterFailure?.retryCount, 0);
+  assert.equal((await ctx.stores.proposals.list(50)).length, 0, "no proposal was drafted yet");
+
+  // Fix the transient failure and re-POST the same completion: the side effects
+  // should replay from the persisted output (no output body needed this time)
+  // without re-running the generation.
+  ctx.stores.proposals.create = originalCreate;
+  const retried = await completeJob(ctx, job.id, undefined, "w-1");
+  assert.equal(retried.ok, true);
+  assert.equal(retried.ok && retried.sideEffectsError, undefined);
+
+  const proposals = await ctx.stores.proposals.list(50);
+  assert.equal(proposals.length, 1);
+  assert.equal(proposals[0].jobId, job.id);
+  assert.equal(proposals[0].title, "Configure X");
+});
+
 test("dedupe_documents completion drafts a file-set proposal and gates it (open-new → publish)", async () => {
   const ctx = makeTestContext();
   const job = await ctx.jobs.create("dedupe_documents", {

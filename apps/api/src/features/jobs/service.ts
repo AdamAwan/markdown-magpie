@@ -187,12 +187,29 @@ async function cancelOrphanedJob(ctx: AppContext, jobId: string, lastSeen: JobVi
   }
 }
 
-// THE COMPLETION DISPATCHER. Replicates the original handleCompleteJob logic:
-// look up the existing job (404 if missing), persist completion, then fan out to
-// the side-effect handlers in a fixed order — question log update, proposal
-// creation, proposal publication, source-sync plan attachment, then source-sync
-// publication. Returns a discriminated outcome so the handler maps job_not_found
-// to 404 while keeping its own try/catch for the 500 job_completion_failed path.
+// THE COMPLETION DISPATCHER. Looks up the existing job (404 if missing),
+// validates and PERSISTS the output first, then fans out to the side-effect
+// handlers in a fixed order — question log update, proposal creation, proposal
+// publication, source-sync plan attachment, then source-sync publication.
+//
+// Ordering rationale (#161): persisting completion before running any side
+// effect means pg-boss has already moved the job to its terminal `completed`
+// state before the fan-out below runs a single line. pg-boss only ever retries
+// (and the watcher only ever re-invokes the provider for) a job that has NOT
+// reached `completed` — see `failJobsById`'s `state < 'completed'` guard in
+// pg-boss, and `complete()`'s `state = 'active'` guard, which makes a repeat
+// completion call a safe no-op. So once `ctx.jobs.complete()` below returns, the
+// paid-for generation can never be redone by anything in this process, no matter
+// what happens next. A side-effect failure must therefore never re-fail the job
+// (besides being semantically wrong — the job DID complete — pg-boss would
+// silently ignore a fail() on an already-completed row anyway): it is reported
+// (logged loudly, and surfaced on the response as `sideEffectsError`) and left
+// retryable *without regeneration* by simply calling this endpoint again. Every
+// handler below is idempotent on jobId (each store call de-dupes proposals by
+// jobId), so a replay is safe. To make that replay possible even though the
+// original `output` argument may not be resent, a job already in `completed`
+// state reuses its own persisted `{ result, executor }` envelope instead of
+// re-validating (and requiring) a fresh `output` body.
 export async function completeJob(
   ctx: AppContext,
   jobId: string,
@@ -202,7 +219,7 @@ export async function completeJob(
   | { ok: false; code: "job_not_found" }
   | { ok: false; code: "invalid_output" }
   | { ok: false; code: "job_cancelled" }
-  | { ok: true; job: JobView | undefined }
+  | { ok: true; job: JobView | undefined; sideEffectsError?: string }
 > {
   const existingJob = await ctx.jobs.get(jobId);
   if (!existingJob) {
@@ -210,21 +227,48 @@ export async function completeJob(
   }
   if (existingJob.state === "cancelled") return { ok: false, code: "job_cancelled" };
 
-  const parsed = jobDefinition(existingJob.type).outputSchema.safeParse(output);
-  if (!parsed.success) {
-    await ctx.jobs.fail(jobId, {
-      code: "invalid_output",
-      message: "Watcher output did not match the job contract",
-      category: "validation"
-    });
-    // No-ops unless this is a fold job (single-file or multi-file).
-    await foldService.enqueueFoldFallback(ctx, existingJob);
-    return { ok: false, code: "invalid_output" };
+  let resultData: unknown;
+  if (existingJob.state === "completed") {
+    // Replay: the generation and its output are already durably persisted (this
+    // is either the watcher retrying a complete() call whose response was lost,
+    // or an operator re-driving side effects after a prior failure) — reuse the
+    // persisted result rather than re-validating (and requiring) `output`.
+    resultData = completedJobResult(existingJob);
+    if (resultData === undefined) {
+      logger.warn({ jobId, jobType: existingJob.type }, "completed job has no persisted result to replay side effects from");
+      return { ok: true, job: existingJob };
+    }
+  } else {
+    const parsed = jobDefinition(existingJob.type).outputSchema.safeParse(output);
+    if (!parsed.success) {
+      // A schema-invalid output still spends the job's normal retry budget
+      // (#161's leg (b)). A deterministic prompt/schema mismatch reproduces on
+      // retry and so wastes 2 more paid generations, but there is no low-risk way
+      // to make pg-boss skip straight to a terminal `failed` here: `fail()`'s
+      // public API always decides retry-vs-terminal from `retryCount`/`retryLimit`
+      // (see `failJobsById` in pg-boss's plans.js), and forcing "terminal now"
+      // would mean reaching into pg-boss internals not exposed by `JobBroker`
+      // (or double-calling fail() to burn the budget, which is not meaningfully
+      // safer). A cheap "repair reprompt" would fix this properly but is out of
+      // scope for this change.
+      await ctx.jobs.fail(jobId, {
+        code: "invalid_output",
+        message: "Watcher output did not match the job contract",
+        category: "validation"
+      });
+      // No-ops unless this is a fold job (single-file or multi-file).
+      await foldService.enqueueFoldFallback(ctx, existingJob);
+      return { ok: false, code: "invalid_output" };
+    }
+    resultData = parsed.data;
+    // Persist completion BEFORE the side-effect fan-out below — see the
+    // ordering rationale in this function's docstring.
+    await ctx.jobs.complete(jobId, { result: resultData, executor });
   }
 
   try {
-    await updateQuestionLogFromCompletedJob(ctx, existingJob, parsed.data);
-    const draftedProposal = await proposalsService.createProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    await updateQuestionLogFromCompletedJob(ctx, existingJob, resultData);
+    const draftedProposal = await proposalsService.createProposalFromCompletedJob(ctx, existingJob, resultData);
     if (draftedProposal) {
       // At-draft fold: best-effort, must never fail the draft completion itself.
       try {
@@ -236,7 +280,7 @@ export async function completeJob(
     const correctiveProposal = await proposalsService.createCorrectiveProposalFromCompletedJob(
       ctx,
       existingJob,
-      parsed.data
+      resultData
     );
     if (correctiveProposal) {
       // Corrective reconcile is best-effort, like the at-draft fold hook: it must
@@ -247,7 +291,7 @@ export async function completeJob(
         logger.warn({ proposalId: correctiveProposal.id, err: error instanceof Error ? error.message : String(error) }, "corrective reconcile for proposal failed");
       }
     }
-    const seedProposal = await proposalsService.createSeedProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    const seedProposal = await proposalsService.createSeedProposalFromCompletedJob(ctx, existingJob, resultData);
     if (seedProposal) {
       // Seed reconcile is best-effort, like the other completion-side hooks: it gates
       // the freshly-authored doc and either self-publishes or folds; never fail completion.
@@ -257,7 +301,7 @@ export async function completeJob(
         logger.warn({ proposalId: seedProposal.id, err: error instanceof Error ? error.message : String(error) }, "seed reconcile for proposal failed");
       }
     }
-    const dedupeProposal = await proposalsService.createDedupeProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    const dedupeProposal = await proposalsService.createDedupeProposalFromCompletedJob(ctx, existingJob, resultData);
     if (dedupeProposal) {
       // Dedupe reconcile is best-effort too — it gates the multi-file change and either
       // self-publishes or enqueues the multi-file fold; it must never fail completion.
@@ -267,7 +311,7 @@ export async function completeJob(
         logger.warn({ proposalId: dedupeProposal.id, err: error instanceof Error ? error.message : String(error) }, "dedupe reconcile for proposal failed");
       }
     }
-    const improveProposal = await proposalsService.createImproveProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    const improveProposal = await proposalsService.createImproveProposalFromCompletedJob(ctx, existingJob, resultData);
     if (improveProposal) {
       try {
         await foldService.reconcileImproveProposal(ctx, improveProposal);
@@ -275,7 +319,7 @@ export async function completeJob(
         logger.warn({ proposalId: improveProposal.id, err: error instanceof Error ? error.message : String(error) }, "improve reconcile for proposal failed");
       }
     }
-    const splitProposal = await proposalsService.createSplitProposalFromCompletedJob(ctx, existingJob, parsed.data);
+    const splitProposal = await proposalsService.createSplitProposalFromCompletedJob(ctx, existingJob, resultData);
     if (splitProposal) {
       // Split reconcile follows the same multi-file, clusterless ownership as dedupe.
       try {
@@ -284,26 +328,35 @@ export async function completeJob(
         logger.warn({ proposalId: splitProposal.id, err: error instanceof Error ? error.message : String(error) }, "split reconcile for proposal failed");
       }
     }
-    await foldService.applyFoldFromCompletedJob(ctx, existingJob, parsed.data);
-    await foldService.applyChangesetFoldFromCompletedJob(ctx, existingJob, parsed.data);
-    await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, parsed.data);
-    await sourceSyncService.attachSourceSyncPlanFromCompletedJob(ctx, existingJob, parsed.data);
-    await handleRefreshFlowSnapshotCompletion(ctx, existingJob, parsed.data);
-    await ctx.jobs.complete(jobId, { result: parsed.data, executor });
+    await foldService.applyFoldFromCompletedJob(ctx, existingJob, resultData);
+    await foldService.applyChangesetFoldFromCompletedJob(ctx, existingJob, resultData);
+    await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, resultData);
+    await sourceSyncService.attachSourceSyncPlanFromCompletedJob(ctx, existingJob, resultData);
+    await handleRefreshFlowSnapshotCompletion(ctx, existingJob, resultData);
     // The watcher is free again the moment it completes a job; reflect that
     // immediately rather than waiting for its next idle claim poll.
     await touchWatcher(ctx, { name: executor, status: "idle" });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logger.error({ jobId, jobType: existingJob.type, err: message }, "completing job failed");
-    await ctx.jobs.fail(jobId, {
-      code: "completion_failed",
-      message: "Job completion side effects failed",
-      category: "internal"
-    });
-    throw error;
+    // The job's output is already durably persisted (above), so pg-boss will
+    // never redo the generation regardless of what we do here — do NOT fail the
+    // job (see this function's docstring). Log loudly and report the failure on
+    // the response; re-POSTing this same completion later safely replays only
+    // the side effects, using the persisted result.
+    logger.error({ jobId, jobType: existingJob.type, err: message }, "job completed but its side effects failed; safe to retry by re-completing the job");
+    return { ok: true, job: await ctx.jobs.get(jobId), sideEffectsError: message };
   }
   return { ok: true, job: await ctx.jobs.get(jobId) };
+}
+
+// Unwraps a completed job's `{ result, executor }` output envelope (see
+// `ctx.jobs.complete()` above), returning the validated payload the side-effect
+// handlers expect — mirrors the same unwrap the web console and MCP client do
+// for a job's `output` field. Returns undefined if the job has no such envelope.
+function completedJobResult(job: JobView): unknown {
+  const output = job.output;
+  if (!output || typeof output !== "object" || !("result" in output)) return undefined;
+  return (output as { result: unknown }).result;
 }
 
 async function updateQuestionLogFromCompletedJob(
