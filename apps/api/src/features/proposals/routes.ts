@@ -123,12 +123,22 @@ export function proposalRoutes(ctx: AppContext): Hono {
         );
       }
 
+      // updateStatus is an unconditional write (it doesn't no-op on a repeated
+      // status), so the cascade must be gated on the TRANSITION into merged, not
+      // on the resulting status: compare against the status read above. Without
+      // this, a retried or double-clicked "mark merged" POST (the request already
+      // succeeded once, resulting proposal.status is still "merged") would
+      // re-enqueue verify_gap_closure, running its re-asks a second time and
+      // double-counting any still-open verdict against CLOSURE_RETRY_CAP. See
+      // mergeLocalProposal, which is retry-safe the same way (guards on the prior
+      // status before writing).
+      const wasAlreadyMerged = existing.status === "merged";
       const proposal = await proposalsService.updateStatus(ctx, id, status);
       if (!proposal) {
         throw new HttpError(404, "proposal_not_found");
       }
 
-      if (proposal.status === "merged") {
+      if (proposal.status === "merged" && !wasAlreadyMerged) {
         // The merge is recorded synchronously above. The cascade (resolving gaps
         // and re-indexing the destination, which fetches/fast-forwards a git
         // checkout) can be slow, so run it off the request thread and report that

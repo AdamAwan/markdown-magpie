@@ -123,6 +123,14 @@ triggering questions, so nothing is verified for them (and nothing was ever reso
 The verification job and endpoint are documented in [ai-jobs.md](./ai-jobs.md); the
 console surfaces the per-proposal outcome as a closure badge on the Proposals page.
 
+The cascade — and therefore the `verify_gap_closure` enqueue — is idempotent per
+proposal: `POST /proposals/:id/status` only schedules it on the actual transition into
+`merged` (a repeated or retried request that finds the proposal already merged is a
+no-op), and `verifyGapClosure` itself short-circuits once a proposal already carries a
+`closureStatus`. Otherwise a duplicated request could re-run the LLM re-asks and record a
+second `still_open` row for the same failure, double-counting it against
+`CLOSURE_RETRY_CAP`.
+
 ## Queued Answers
 
 Every answer runs through the queue. When a question is asked, the API logs it

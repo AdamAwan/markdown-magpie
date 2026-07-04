@@ -125,6 +125,37 @@ test("runMergeCascade skips verification for a proposal with no triggering quest
   assert.equal((await ctx.jobs.list({ type: "verify_gap_closure" })).jobs.length, 0);
 });
 
+test("runMergeCascade does not re-enqueue verification once the proposal's closure was already recorded", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  await ctx.stores.proposals.setClosureStatus(merged.id, "verified_closed");
+  const alreadyVerified = await ctx.stores.proposals.get(merged.id);
+  assert.ok(alreadyVerified);
+
+  // Simulates a merged→merged re-POST (or any other caller re-running the
+  // cascade for a proposal whose gap-closure verdict is already settled): the
+  // cascade must not enqueue a second verify_gap_closure job.
+  const result = await proposals.runMergeCascade(ctx, alreadyVerified!);
+
+  assert.equal(result.verificationEnqueued, false);
+  const enqueued = await ctx.jobs.list({ type: "verify_gap_closure" });
+  assert.equal(enqueued.jobs.length, 0, "no verify_gap_closure job is enqueued once closure is already recorded");
+});
+
+test("runMergeCascade does not enqueue a second verify_gap_closure job while one is already in flight", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  // Pre-seed an in-flight job as if an earlier cascade run (e.g. a concurrent
+  // request) already enqueued verification for this exact proposal.
+  await ctx.jobs.create("verify_gap_closure", { proposalId: merged.id });
+
+  const result = await proposals.runMergeCascade(ctx, merged);
+
+  assert.equal(result.verificationEnqueued, false);
+  const enqueued = await ctx.jobs.list({ type: "verify_gap_closure" });
+  assert.equal(enqueued.jobs.length, 1, "the pre-existing job is not duplicated");
+});
+
 test("verifyGapClosure marks verified_closed and resolves the gap when the re-ask cites the merged doc", async () => {
   const ctx = makeTestContext();
   const { merged } = await mergedProposalWithGap(ctx);
@@ -204,6 +235,35 @@ test("verifyGapClosure flags needs_attention after the retry cap and stops re-dr
     false,
     "a needs_attention gap awaits a human and does not auto-redraft"
   );
+});
+
+test("verifyGapClosure short-circuits without re-asking when closureStatus is already recorded", async () => {
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  // A first, already-completed run recorded still_open right at the retry cap
+  // boundary — one more still_open would flip this to needs_attention.
+  await ctx.stores.gapClosureVerifications.record({
+    proposalId: merged.id,
+    questionId: log.id,
+    verdict: "still_open",
+    confidence: "low",
+    citedMergedDoc: false
+  });
+  await ctx.stores.proposals.setClosureStatus(merged.id, "reopened");
+  const reopened = await ctx.stores.proposals.get(merged.id);
+  assert.ok(reopened);
+  // A broker that fails the test if verifyGapClosure re-asks any question.
+  ctx.jobs = new AnsweringJobBroker(ctx, () => {
+    throw new Error("verifyGapClosure must not re-ask once closureStatus is already set");
+  });
+
+  const result = await proposals.verifyGapClosure(ctx, reopened!);
+
+  assert.equal(result.closureStatus, "reopened");
+  assert.deepEqual(result.perQuestion, []);
+  // No new verification row was recorded — the prior still_open stays the only one,
+  // so a duplicate call can never push a question over CLOSURE_RETRY_CAP by itself.
+  assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id), 1);
 });
 
 test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job", async () => {
