@@ -10,6 +10,7 @@ import type {
   GapCandidate,
   OpenPullRequestContext,
   Proposal,
+  QuestionLog,
   RepositoryRef,
   SourceDataContext,
   SplitDocumentJobInput
@@ -136,7 +137,7 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
       chatProvider: provider,
       retrievedSectionIds: []
     });
-    const requestedFlowId = proposal.flowId ?? original.flowId;
+    const requestedFlowId = resolveVerificationFlowId(ctx, proposal, original);
     const input: AnswerQuestionJobInput & { provider: typeof provider } = {
       questionLogId: reasked.id,
       question: original.question,
@@ -215,6 +216,36 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
     "gap-closure verification complete"
   );
   return { proposalId: proposal.id, closureStatus, perQuestion };
+}
+
+// Resolves the flow to pin the gap-closure re-ask to. The candidate (the
+// proposal's recorded flowId, falling back to the original question's) may
+// name a flow that has since been deleted or renamed from the (user-editable)
+// knowledge config — unlike the ask path, which rejects an unknown flow with a
+// 400 before ever enqueueing (see resolveRequestedFlow in features/ask/service.ts),
+// there is no caller here to reject, so a stale id is silently dropped instead.
+// Pinning retrieval to a flow that no longer exists would otherwise make
+// resolveRepositoryScope fail the re-ask with unknown_flow, which reads as a
+// false still_open verdict and can wrongly park a gap needs_attention even
+// though the merged doc fully answers it. Dropping the id falls back to
+// auto-routing across the currently configured flows instead.
+function resolveVerificationFlowId(
+  ctx: AppContext,
+  proposal: Proposal,
+  original: QuestionLog
+): string | undefined {
+  const candidate = proposal.flowId ?? original.flowId;
+  if (!candidate) {
+    return undefined;
+  }
+  if (!ctx.knowledgeConfig.flows.some((flow) => flow.id === candidate)) {
+    logger.warn(
+      { proposalId: proposal.id, flowId: candidate },
+      "dropping stale requestedFlowId for gap-closure re-ask; falling back to auto-routing"
+    );
+    return undefined;
+  }
+  return candidate;
 }
 
 // The gap summary a reopened verification gap is filed under. Prefer the

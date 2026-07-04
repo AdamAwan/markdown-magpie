@@ -66,7 +66,7 @@ function citation(path: string): AnswerResult["citations"][number] {
   return { documentId: "d", sectionId: "s", path, heading: "h", anchor: "a", excerpt: "e", relevance: 0.9 };
 }
 
-async function mergedProposalWithGap(ctx: ReturnType<typeof makeTestContext>) {
+async function mergedProposalWithGap(ctx: ReturnType<typeof makeTestContext>, flowId?: string) {
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
     chatProvider: "codex",
@@ -80,7 +80,8 @@ async function mergedProposalWithGap(ctx: ReturnType<typeof makeTestContext>) {
     rationale: "r",
     evidence: [],
     gapSummary: "How to configure X",
-    triggeringQuestionIds: [log.id]
+    triggeringQuestionIds: [log.id],
+    ...(flowId ? { flowId } : {})
   });
   await ctx.stores.proposals.updateStatus(proposal.id, "merged");
   const merged = await ctx.stores.proposals.get(proposal.id);
@@ -204,6 +205,55 @@ test("verifyGapClosure flags needs_attention after the retry cap and stops re-dr
     after.some((candidate) => candidate.summary === "How to configure X"),
     false,
     "a needs_attention gap awaits a human and does not auto-redraft"
+  );
+});
+
+test("verifyGapClosure drops a stale requestedFlowId and falls back to auto-routing", async () => {
+  // The proposal's flowId names a flow that no longer exists in the knowledge
+  // config (deleted/renamed between drafting and this post-merge re-ask).
+  // Regression test for #157: the re-ask must not pin retrieval to it — doing
+  // so makes resolveRepositoryScope fail with unknown_flow, which reads as a
+  // false still_open verdict and can wrongly park the gap needs_attention even
+  // though the merged doc fully answers the question.
+  const ctx = makeTestContext();
+  ctx.knowledgeConfig.flows = [{ id: "support", name: "Support", sourceIds: ["s"], destinationId: "kb" }];
+  const { merged } = await mergedProposalWithGap(ctx, "deleted-flow");
+  ctx.jobs = new AnsweringJobBroker(ctx, () => ({
+    answer: "Set the config flag.",
+    confidence: "high",
+    citations: [citation("configure-x.md")]
+  }));
+
+  const result = await proposals.verifyGapClosure(ctx, merged);
+
+  assert.equal(result.closureStatus, "verified_closed");
+  const answerJobs = (await ctx.jobs.list({ type: "answer_question" })).jobs;
+  assert.equal(answerJobs.length, 1);
+  assert.equal(
+    (answerJobs[0]?.input as { requestedFlowId?: string }).requestedFlowId,
+    undefined,
+    "a flowId absent from the knowledge config is dropped, not passed through to the job"
+  );
+});
+
+test("verifyGapClosure keeps a requestedFlowId that still names a configured flow", async () => {
+  const ctx = makeTestContext();
+  ctx.knowledgeConfig.flows = [{ id: "billing", name: "Billing", sourceIds: ["s"], destinationId: "kb" }];
+  const { merged } = await mergedProposalWithGap(ctx, "billing");
+  ctx.jobs = new AnsweringJobBroker(ctx, () => ({
+    answer: "Set the config flag.",
+    confidence: "high",
+    citations: [citation("configure-x.md")]
+  }));
+
+  await proposals.verifyGapClosure(ctx, merged);
+
+  const answerJobs = (await ctx.jobs.list({ type: "answer_question" })).jobs;
+  assert.equal(answerJobs.length, 1);
+  assert.equal(
+    (answerJobs[0]?.input as { requestedFlowId?: string }).requestedFlowId,
+    "billing",
+    "a flowId still present in the knowledge config is passed through unchanged"
   );
 });
 
