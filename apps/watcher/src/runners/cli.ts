@@ -152,6 +152,9 @@ const missingApi: WatcherApi = {
   retrieve: async () => {
     throw new Error("CLI runner requires a WatcherApi to run answer_question");
   },
+  // Routing must never fail the ask, so even the no-op fallback abstains (deferring
+  // to the chat router) rather than throwing.
+  routeByEmbedding: async () => ({ status: "abstain" }),
   proposalExecutionContext: async () => {
     throw new Error("CLI runner requires a WatcherApi to fetch proposal execution context");
   },

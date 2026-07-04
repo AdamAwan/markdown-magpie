@@ -114,18 +114,20 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
     ...(flow.persona ? { persona: flow.persona } : {})
   }));
 
-  const route = await resolveFlow(input.requestedFlowId, input.question, flows, model, job.id);
+  const { route, method } = await resolveFlow(input.requestedFlowId, input.question, flows, model, api, job.id, signal);
 
   // The audit trail of this run, persisted with the question log so the console
-  // can explain the answer: how routing went, what was searched (and what came
-  // back empty), and — filled in later — whether grounding verification ran.
+  // can explain the answer: how routing went (and which router decided), what was
+  // searched (and what came back empty), and — filled in later — whether grounding
+  // verification ran.
   const routing: AnswerTrace["routing"] = {
     mode:
       input.requestedFlowId ? "requested"
       : route.status === "routed" ? "routed"
       : route.status === "unroutable" ? "unscoped"
       : "unknown",
-    ...(route.status === "routed" ? { flowId: route.flowId, confidence: route.confidence } : {})
+    ...(route.status === "routed" ? { flowId: route.flowId, confidence: route.confidence } : {}),
+    ...(method ? { method } : {})
   };
 
   // "auto" routing could not pick a flow: withhold the answer and ask the caller
@@ -365,29 +367,49 @@ function normalizeQuery(query: string): string {
   return query.trim().toLowerCase();
 }
 
+// A routing outcome plus which router produced it, for the answer trace.
+interface FlowResolution {
+  route: FlowRoute;
+  method?: "embedding" | "chat";
+}
+
 // Resolves which flow answers the question. A caller-pinned flow
-// (`requestedFlowId`) skips routing entirely; otherwise the model routes
-// across the configured flows. Every API caller that can set requestedFlowId
-// validates it against the configured flows before enqueueing — the ask path
-// rejects an unknown flow with a 400 (features/ask/service.ts), and the
-// gap-closure re-ask drops a stale flowId rather than pinning to a flow that
-// may have been deleted/renamed since the proposal was drafted
-// (features/proposals/service.ts) — so a value that reaches here is trusted
-// as-is.
+// (`requestedFlowId`) skips routing entirely. Otherwise the cheap API-side
+// embedding-similarity router runs first (POST /api/route); only when it abstains
+// (scores too close, no embedding provider, or an error — all resolve to `abstain`)
+// does the more expensive chat router run. Every API caller that can set
+// requestedFlowId validates it against the configured flows before enqueueing — the
+// ask path rejects an unknown flow with a 400 (features/ask/service.ts), and the
+// gap-closure re-ask drops a stale flowId rather than pinning to a flow that may have
+// been deleted/renamed since the proposal was drafted (features/proposals/service.ts)
+// — so a value that reaches here is trusted as-is.
 async function resolveFlow(
   requestedFlowId: string | undefined,
   question: string,
   flows: RoutableFlow[],
   model: ChatProvider,
-  jobId: string
-): Promise<FlowRoute> {
+  api: WatcherApi,
+  jobId: string,
+  signal: AbortSignal
+): Promise<FlowResolution> {
   if (requestedFlowId) {
     logger.debug({ jobId, flowId: requestedFlowId }, `answer_question[${jobId}]: using caller-specified flow ${requestedFlowId}`);
-    return { status: "routed", flowId: requestedFlowId, confidence: "high" };
+    return { route: { status: "routed", flowId: requestedFlowId, confidence: "high" } };
   }
 
   logger.debug({ jobId, flowCount: flows.length }, `answer_question[${jobId}]: routing question across ${flows.length} flow(s)`);
-  return routeQuestionToFlow(question, flows, model, logger);
+  const embedded = await api.routeByEmbedding(question, flows, signal);
+  if (embedded.status === "routed") {
+    logger.debug(
+      { jobId, flowId: embedded.flowId, margin: embedded.margin },
+      `answer_question[${jobId}]: routed to ${embedded.flowId} by embedding similarity (margin ${embedded.margin.toFixed(3)})`
+    );
+    return { route: { status: "routed", flowId: embedded.flowId, confidence: embedded.confidence }, method: "embedding" };
+  }
+
+  logger.debug({ jobId }, `answer_question[${jobId}]: embedding router abstained; falling back to the chat router`);
+  const chat = await routeQuestionToFlow(question, flows, model, logger);
+  return { route: chat, ...(chat.status === "routed" ? { method: "chat" as const } : {}) };
 }
 
 async function reconcileGapClusters({ job, model, signal }: GenerativeJobOptions): Promise<ReconcileOutput> {

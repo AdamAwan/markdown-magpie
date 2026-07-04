@@ -52,6 +52,7 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     complete: async () => undefined,
     fail: async () => undefined,
     retrieve: async () => [],
+    routeByEmbedding: async () => ({ status: "abstain" }),
     proposalExecutionContext: async () => PROPOSAL_CONTEXT,
     reconcileGaps: async () => ({ ok: true }),
     verifyClosure: async () => ({ proposalId: "p", closureStatus: "verified_closed", perQuestion: [] }),

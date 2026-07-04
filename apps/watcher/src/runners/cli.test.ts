@@ -51,6 +51,8 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     complete: async () => undefined,
     fail: async () => undefined,
     retrieve: async () => SECTIONS,
+    // The embedding router abstains, so CLI routing falls back to the chat router.
+    routeByEmbedding: async () => ({ status: "abstain" }),
     proposalExecutionContext: async () => ({ proposal: {}, repository: {} }),
     reconcileGaps: async () => ({ ok: true }),
     verifyClosure: async () => ({ proposalId: "p", closureStatus: "verified_closed", perQuestion: [] }),
