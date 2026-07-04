@@ -55,6 +55,27 @@ The API:
 7. Persists documents and sections to Postgres when `KNOWLEDGE_STORE=postgres`.
 8. Kicks off background embedding of any sections whose embedding is `NULL` (when an embeddings provider is configured).
 
+### Embedding carry-forward on re-index
+
+Section ids are deterministic (`<documentId>:<ordinal>`, where the document id is
+`<repositoryId>:<path>`), so the same section keeps its id across re-indexes as long as
+its position in the document is unchanged. Both the full-repository re-index
+(`saveIndexedRepository`) and the incremental re-index (`applyIncrementalIndex`) persist
+sections with an **upsert keyed on the section id** rather than deleting and re-inserting:
+
+- A section whose `content` **and** `heading` are byte-identical to the stored row keeps its
+  existing embedding — the vector the background embedder already paid for is carried forward,
+  so an unchanged section is never re-embedded.
+- A section whose content or heading changed has its embedding reset to `NULL`, so the
+  background embedder (which targets `embedding IS NULL`) recomputes exactly the changed
+  sections — a one-line edit in a many-section document re-embeds only the sections it touched.
+- Sections absent from the new set (removed by an edit, or ids shifted by an added/removed
+  heading upstream) are deleted, so nothing stale survives.
+
+The upshot: re-indexing a corpus that hasn't changed (a common trigger — every merge cascade,
+publish pre-flight, dirty checkout, or plain-directory destination forces a full re-index)
+costs **zero** embedding calls instead of re-embedding the whole corpus.
+
 ## Search
 
 ```bash
@@ -69,7 +90,7 @@ The active retrieval mode is reported by `GET /api/config` under `retrieval.mode
 
 After an index or upload request returns, the API spawns a background task that embeds any sections whose embedding is `NULL`. This is idempotent — only un-embedded sections are processed. There is no separate watcher or scheduled job for embedding; the work runs inside the API process.
 
-Query-time embedding (embedding the user's question) is synchronous in the API request. This keeps latency predictable and avoids coordination between the API and any external agent.
+Query-time embedding (embedding the user's question) is synchronous in the API request. This keeps latency predictable and avoids coordination between the API and any external agent. Query embeddings are memoized in a small bounded in-memory LRU (per index instance, keyed on the whitespace-normalized question text) so a question re-asked during its lifecycle — retrieval, gap clustering, closure verification — is embedded once rather than on every call. The cache holds vectors only, has no TTL, and never needs invalidating on re-index because a query embedding depends only on the question text, not the corpus.
 
 Embeddings must come from an admin-configured endpoint. A CLI agent (Claude, Codex) cannot produce embeddings for this purpose.
 
