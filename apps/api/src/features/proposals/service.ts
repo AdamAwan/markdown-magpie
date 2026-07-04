@@ -92,7 +92,13 @@ export async function runMergeCascade(
 // generative step is an enqueued answer_question job a provider watcher claims.
 export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Promise<VerifyGapClosureOutput> {
   const questionIds = proposal.triggeringQuestionIds ?? [];
-  const targetPaths = proposalTargetPaths(proposal);
+  // Compare in ONE path space: citations carry indexed-subtree-relative paths
+  // (subpath stripped), so strip the destination's subpath off the proposal's
+  // target paths too. Resolve the destination with the same helper the publisher
+  // uses, so both handle an explicit destinationId and the inferred single/subpath
+  // match identically.
+  const subpath = selectDestinationForProposal(ctx.repositoryDeps(), proposal)?.subpath;
+  const targetPaths = proposalTargetPaths(proposal, subpath);
   const provider = ctx.config.get().aiProvider;
   const flows = ctx.knowledgeConfig.flows.map((flow) => ({
     id: flow.id,
@@ -155,7 +161,7 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
       : undefined;
     const verdict = evaluateClosure(answer, targetPaths);
     const cited = answer ? citesMergedDoc(answer.citations, targetPaths) : false;
-    const detail = buildVerificationDetail(proposal, answer);
+    const detail = buildVerificationDetail(proposal, answer, targetPaths);
 
     await ctx.stores.gapClosureVerifications.record({
       proposalId: proposal.id,
@@ -219,9 +225,12 @@ function reopenSummaryFor(original: { question: string; gaps?: Array<{ summary: 
 // re-ask fell short. Stored on the reopened gap so a re-draft sees why.
 function buildVerificationDetail(
   proposal: Proposal,
-  answer: { confidence: string; citations: Array<{ path: string }> } | undefined
+  answer: { confidence: string; citations: Array<{ path: string }> } | undefined,
+  targetPaths: Set<string>
 ): string {
-  const paths = [...proposalTargetPaths(proposal)];
+  // targetPaths is already in citation (indexed-subtree) space, so the
+  // citedMerged check below compares like-for-like.
+  const paths = [...targetPaths];
   const merged = paths.length > 0 ? paths.join(", ") : proposal.targetPath;
   if (!answer) {
     return `Merged ${merged}, but the re-asked question did not complete (no answer to verify).`;

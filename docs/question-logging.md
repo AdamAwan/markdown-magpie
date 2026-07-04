@@ -103,6 +103,11 @@ through the normal queued `answer_question` path against the freshly re-indexed 
 base, and applies a deterministic closure test: the question is *closed* only when the
 re-ask comes back with a confident answer (`high`/`medium`) that **cites one of the merged
 proposal's target documents** (a confident answer citing unrelated docs does not count).
+The path match is done in a single path space: a proposal's target path is destination-
+root-relative and includes the destination's configured `subpath`, whereas citations are
+indexed-subtree-relative with that `subpath` stripped, so the verifier strips the subpath
+off the target paths before comparing. (Without this, no citation could ever match on a
+subpath-configured destination and every merge would falsely reopen.)
 
 - If every triggering question closes, the gaps are resolved — this is the only path that
   now resolves a gap (`proposals.closure_status = verified_closed`).
