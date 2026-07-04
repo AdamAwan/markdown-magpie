@@ -140,12 +140,13 @@ export async function runMergeCascade(
 export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Promise<VerifyGapClosureOutput> {
   // Entry guard: a proposal already carries a closureStatus once one run has
   // recorded a verdict for it. Re-running would re-ask every triggering
-  // question (duplicate LLM spend) and, worse, record a second "still_open" row
-  // per question into the unscoped counter countPriorStillOpen sums for
-  // CLOSURE_RETRY_CAP — so a single transient failure would count twice toward
-  // the cap. This is the last line of defence: even if two verify_gap_closure
-  // jobs land for the same proposal (racing enqueues, a duplicate /verify-closure
-  // callback, etc.), only the first to reach here does the work.
+  // question (duplicate LLM spend and duplicate re-ask question logs) and record
+  // redundant verdict rows. (countPriorStillOpen dedupes by proposal, so a
+  // duplicate run can no longer burn the retry cap by itself — this guard stops
+  // the wasted work before it starts.) This is the last line of defence: even if
+  // two verify_gap_closure jobs land for the same proposal (racing enqueues, a
+  // duplicate /verify-closure callback, etc.), only the first to reach here does
+  // the work.
   if (proposal.closureStatus) {
     logger.info(
       { proposalId: proposal.id, closureStatus: proposal.closureStatus },
