@@ -55,6 +55,21 @@ describe("loadConfig — valid configs", () => {
     assert.equal(config.paths.snapshotRoot, ".magpie/snapshots");
     // CORS defaults to allow-any-origin when unset.
     assert.equal(config.cors.allowedOrigins, "*");
+    // Abstain-biased flow-router defaults.
+    assert.equal(config.flowRouter.minTopScore, 0.25);
+    assert.equal(config.flowRouter.minMargin, 0.05);
+  });
+
+  it("honours FLOW_ROUTER_* overrides and falls back to defaults on invalid/out-of-range values", () => {
+    const overridden = loadConfig({ ...minimalEnv, FLOW_ROUTER_MIN_SCORE: "0.4", FLOW_ROUTER_MIN_MARGIN: "0.1" });
+    assert.equal(overridden.flowRouter.minTopScore, 0.4);
+    assert.equal(overridden.flowRouter.minMargin, 0.1);
+
+    // Out of [0,1], non-numeric, and blank all fall back rather than failing boot —
+    // a bad threshold must never take the ask path down.
+    const invalid = loadConfig({ ...minimalEnv, FLOW_ROUTER_MIN_SCORE: "1.5", FLOW_ROUTER_MIN_MARGIN: "abc" });
+    assert.equal(invalid.flowRouter.minTopScore, 0.25);
+    assert.equal(invalid.flowRouter.minMargin, 0.05);
   });
 
   it("parses CORS_ALLOWED_ORIGINS into a trimmed allow-list", () => {
