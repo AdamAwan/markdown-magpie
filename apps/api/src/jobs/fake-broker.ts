@@ -119,6 +119,15 @@ export class FakeJobBroker implements JobBroker {
 
   async fail(id: string, error: JobError): Promise<JobView> {
     const job = this.getExisting(id);
+    // Mirrors pg-boss's failJobsById SQL (`WHERE state < 'completed'`): failing a
+    // job that already reached a terminal state is a no-op, not an overwrite.
+    // This matters for #161's side-effect replay: completion is persisted before
+    // the side-effect fan-out, so when the watcher exhausts its complete() retries
+    // on side_effects_failed and falls back to fail(), the completed row (and its
+    // paid-for output) must survive untouched.
+    if (TERMINAL_JOB_STATES.has(job.state)) {
+      return job;
+    }
     const now = new Date().toISOString();
 
     let updated: JobView;

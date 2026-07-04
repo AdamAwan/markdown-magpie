@@ -63,7 +63,8 @@ const api = new HttpWatcherApi({
   apiBaseUrl,
   workerName: watcherName,
   token: tokenProvider,
-  maintenanceTimeoutMs: config.maintenanceTimeoutMs
+  maintenanceTimeoutMs: config.maintenanceTimeoutMs,
+  logger
 });
 
 const capabilityRuntime = DEFAULT_CAPABILITY_RUNTIME;

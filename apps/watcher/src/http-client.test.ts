@@ -2,6 +2,29 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { HttpWatcherApi } from "./http-client.js";
 
+// A fake global fetch that resolves/rejects according to a scripted sequence of
+// responses, one per call — used to exercise complete()'s retry loop against a
+// mix of network errors, 5xx, and a final success (or a terminal 4xx).
+type ScriptedResponse = { status: number; body?: unknown } | { networkError: true };
+
+function installScriptedFetch(script: ScriptedResponse[]): { calls: number } {
+  const state = { calls: 0 };
+  const queue = [...script];
+  globalThis.fetch = (async (_url: string | URL | Request, _init?: RequestInit) => {
+    state.calls += 1;
+    const next = queue.shift();
+    if (!next) throw new Error("scripted fetch exhausted");
+    if ("networkError" in next) {
+      throw new TypeError("fetch failed");
+    }
+    return new Response(JSON.stringify(next.body ?? {}), {
+      status: next.status,
+      headers: { "content-type": "application/json" }
+    });
+  }) as typeof fetch;
+  return state;
+}
+
 // A fake global fetch that resolves with `body` after `delayMs`, but rejects
 // with the request's abort reason if its signal fires first — exactly how undici
 // surfaces an AbortSignal.timeout (a DOMException named "TimeoutError"). This lets
@@ -62,5 +85,68 @@ describe("HttpWatcherApi request timeouts", () => {
 
     const result = await api.runFixPatrol(undefined);
     assert.deepEqual(result, { runId: "run-1", selectedCount: 3, findingCount: 1 });
+  });
+});
+
+describe("HttpWatcherApi complete() retry", () => {
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it("retries a completion POST after a transient 5xx and succeeds without falling back", async () => {
+    const state = installScriptedFetch([
+      { status: 503, body: "service unavailable" },
+      { status: 200, body: { job: { id: "job-1" } } }
+    ]);
+    const api = new HttpWatcherApi({
+      apiBaseUrl: "http://api.test",
+      workerName: "test-worker",
+      completeRetryBaseDelayMs: 1
+    });
+
+    await api.complete("job-1", { answer: "ok" });
+    assert.equal(state.calls, 2, "expected one retry after the 503");
+  });
+
+  it("retries a completion POST after a network error and succeeds", async () => {
+    const state = installScriptedFetch([{ networkError: true }, { status: 200, body: {} }]);
+    const api = new HttpWatcherApi({
+      apiBaseUrl: "http://api.test",
+      workerName: "test-worker",
+      completeRetryBaseDelayMs: 1
+    });
+
+    await api.complete("job-1", { answer: "ok" });
+    assert.equal(state.calls, 2);
+  });
+
+  it("gives up after exhausting retries on a persistent 5xx", async () => {
+    const state = installScriptedFetch([
+      { status: 502 },
+      { status: 502 },
+      { status: 502 },
+      { status: 502 }
+    ]);
+    const api = new HttpWatcherApi({
+      apiBaseUrl: "http://api.test",
+      workerName: "test-worker",
+      completeRetryBaseDelayMs: 1
+    });
+
+    await assert.rejects(api.complete("job-1", { answer: "ok" }), /502/);
+    // One initial attempt + 3 retries = 4 calls total, then it gives up.
+    assert.equal(state.calls, 4);
+  });
+
+  it("does not retry a deterministic 4xx contract failure (e.g. invalid_output)", async () => {
+    const state = installScriptedFetch([{ status: 400, body: { error: "invalid_output" } }]);
+    const api = new HttpWatcherApi({
+      apiBaseUrl: "http://api.test",
+      workerName: "test-worker",
+      completeRetryBaseDelayMs: 1
+    });
+
+    await assert.rejects(api.complete("job-1", { answer: "ok" }), /400/);
+    assert.equal(state.calls, 1, "a 4xx must fail immediately, not retry");
   });
 });

@@ -89,6 +89,64 @@ The watcher drives a job through these; operators rarely call them directly:
 }
 ```
 
+## Completion is never re-billed (#161)
+
+A provider generation is the expensive part of a job; everything after it (question
+log updates, drafting a `Proposal` row, fold reconciliation, source-sync plan
+attachment, ...) is cheap, idempotent bookkeeping keyed on the job's id. Two failure
+points used to throw a finished, paid-for generation away and force pg-boss to redo
+the *entire* job:
+
+- **API-side.** `completeJob` (`apps/api/src/features/jobs/service.ts`) used to run
+  every side-effect handler *before* persisting the job's output. A side effect
+  throwing (e.g. a transient DB error while drafting the proposal) landed in the
+  catch-all, which called `ctx.jobs.fail(..., "completion_failed")` — since the job
+  had never reached pg-boss's terminal `completed` state, that queued a full retry
+  (`retryLimit: 3`, see `packages/jobs/src/catalog.ts`), redoing the provider call
+  for output that already existed in memory.
+- **Watcher-side.** `WorkerLoop.execute` (`apps/watcher/src/worker-loop.ts`) ran the
+  provider call, then POSTed the result via `api.complete()`. If that single POST
+  failed (a network blip, the API mid-restart), the catch fell straight through to
+  `api.fail(..., "runner_failed")`, discarding the in-memory output the same way.
+
+Both are fixed by making sure the job reaches `completed` (pg-boss's retry-proof
+terminal state) as early and as reliably as possible, and by never treating a
+failure *after* that point as a reason to redo the generation:
+
+- **`completeJob` now persists first, fans out second.** The validated output is
+  saved via `ctx.jobs.complete()` *before* any side effect runs. pg-boss's `fail()`
+  only ever retries a job that hasn't reached `completed` (`state < 'completed'`),
+  and its `complete()` is a no-op on a job that already has — so once persistence
+  succeeds, nothing downstream can trigger a regeneration, no matter what fails
+  next. A side-effect failure is logged (`logger.error`) and the endpoint replies
+  **`500` with code `side_effects_failed`** — but the job is **not** failed: it did
+  complete. Because every side-effect handler is idempotent on jobId, retrying the
+  bookkeeping is just POSTing the same completion again — `completeJob` detects the
+  job is already `completed` and replays the fan-out from the persisted
+  `{ result, executor }` output instead of requiring (or re-validating) a fresh
+  body. Crucially, that 500 cannot re-bill the generation: a retried POST hits the
+  replay path, never the provider.
+- **The watcher retries the `complete()` POST itself.** `HttpWatcherApi.complete()`
+  (`apps/watcher/src/http-client.ts`) retries a failed completion POST a few times
+  with backoff before giving up, but only for a network error or a `5xx` — a `4xx`
+  (e.g. `invalid_output`, `job_not_found`) is a deterministic contract failure no
+  amount of retrying fixes, so those still fall straight through to `api.fail()`.
+  This is safe because `POST /:id/complete` is idempotent on the API side (above).
+  The two mechanisms compose into **self-healing side effects**: a transient
+  side-effect failure surfaces as a retryable `500 side_effects_failed`, the
+  watcher re-POSTs with backoff, and the replay branch re-runs only the side
+  effects. If the retries exhaust, the watcher's `api.fail()` fallback is a
+  harmless no-op on the completed row (pg-boss's `state < 'completed'` guard), so
+  the terminal state is still a completed job whose output survives — the
+  side-effect failure stays in the logs and a later manual re-POST of `/complete`
+  can still replay the bookkeeping.
+- **Schema-invalid output** (`invalid_output`) is unchanged: it still fails the job
+  through the normal retry budget. There is no cheap, low-risk way to force pg-boss
+  to skip straight to a terminal `failed` state for this one failure category
+  without reaching into pg-boss internals the public `fail()`/`cancel()` API
+  doesn't expose (see the code comment in `completeJob`) — a from-scratch "repair
+  reprompt" would fix this properly but is out of scope here.
+
 ## Proposal Review
 
 Gap candidates can be turned into proposal jobs:

@@ -1,5 +1,6 @@
 import type { ApiTokenProvider } from "@magpie/auth";
 import type { JobCapability, JobError, JobView } from "@magpie/jobs";
+import type { Logger } from "@magpie/logger";
 
 // Everything the worker loop needs from the API's durable job lifecycle. Kept as
 // an interface so the loop and runners can be tested against a fake without
@@ -100,10 +101,53 @@ export interface HttpClientOptions {
   // heartbeated throughout — so they need a far longer deadline than the hot-path
   // default (a 30s cap here silently aborts the call and fails the patrol tick).
   maintenanceTimeoutMs?: number;
+  // Logs retried complete() attempts (see COMPLETE_RETRY_ATTEMPTS below).
+  // Defaults to a no-op so tests and callers that don't care can omit it.
+  logger?: Logger;
+  // Overrides the base backoff delay between complete() retries. Defaults to
+  // COMPLETE_RETRY_BASE_DELAY_MS; exposed so tests aren't stuck waiting out the
+  // real production backoff.
+  completeRetryBaseDelayMs?: number;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_MAINTENANCE_TIMEOUT_MS = 15 * 60_000;
+
+// A non-2xx HTTP response, carrying the status so callers can tell a transient
+// server failure (5xx) or a network/timeout error (no status at all — see below)
+// apart from a deterministic contract failure (4xx) that retrying can never fix.
+class HttpRequestStatusError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = "HttpRequestStatusError";
+  }
+}
+
+// The finished provider output is only ever sitting in the runner's memory once —
+// if the complete() POST itself fails on a network blip or a transient 5xx (the
+// API mid-restart, a load balancer hiccup), the caller's only recourse used to be
+// falling back to fail(), which discards that output and forces pg-boss to redo
+// the entire (paid-for) generation. complete() is idempotent on the API side (see
+// completeJob in apps/api/src/features/jobs/service.ts), so retrying it locally a
+// few times is safe and far cheaper than a full regeneration. This retry also
+// doubles as the automatic recovery path for the API's `500 side_effects_failed`
+// response: the API persists the job's output BEFORE its side-effect fan-out, so
+// a re-POST on that 5xx replays only the side effects — never the generation. A
+// 4xx (invalid output, job not found, job cancelled) is a deterministic contract
+// failure no amount of retrying fixes, so those are not retried here.
+const COMPLETE_RETRY_ATTEMPTS = 3;
+const COMPLETE_RETRY_BASE_DELAY_MS = 250;
+
+function isRetryableCompleteError(error: unknown): boolean {
+  return !(error instanceof HttpRequestStatusError) || error.status >= 500;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // The watcher's only conduit to the API. It owns the URL shapes and the worker
 // identity that the API records on terminal transitions (so a failed/completed
@@ -114,6 +158,8 @@ export class HttpWatcherApi implements WatcherApi {
   private readonly token?: ApiTokenProvider;
   private readonly timeoutMs: number;
   private readonly maintenanceTimeoutMs: number;
+  private readonly logger?: Logger;
+  private readonly completeRetryBaseDelayMs: number;
 
   constructor(options: HttpClientOptions) {
     this.base = trimTrailingSlash(options.apiBaseUrl).replace(/\/api$/, "");
@@ -121,6 +167,8 @@ export class HttpWatcherApi implements WatcherApi {
     this.token = options.token;
     this.timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.maintenanceTimeoutMs = options.maintenanceTimeoutMs ?? DEFAULT_MAINTENANCE_TIMEOUT_MS;
+    this.logger = options.logger;
+    this.completeRetryBaseDelayMs = options.completeRetryBaseDelayMs ?? COMPLETE_RETRY_BASE_DELAY_MS;
   }
 
   async claim(workerName: string, capabilities: JobCapability[]): Promise<JobView | undefined> {
@@ -138,7 +186,28 @@ export class HttpWatcherApi implements WatcherApi {
   }
 
   async complete(jobId: string, output: unknown): Promise<void> {
-    await this.post(`/api/jobs/${jobId}/complete`, { output, executor: this.workerName });
+    // The output is only ever held in the runner's memory, so a dropped response
+    // here must not fall straight through to worker-loop's fail() fallback (which
+    // would discard it and force a full paid-for regeneration) when the failure
+    // is transient. Retry locally first; see COMPLETE_RETRY_ATTEMPTS above.
+    let attempt = 0;
+    for (;;) {
+      try {
+        await this.post(`/api/jobs/${jobId}/complete`, { output, executor: this.workerName });
+        return;
+      } catch (error) {
+        if (attempt >= COMPLETE_RETRY_ATTEMPTS || !isRetryableCompleteError(error)) {
+          throw error;
+        }
+        attempt += 1;
+        const delayMs = this.completeRetryBaseDelayMs * 2 ** (attempt - 1);
+        this.logger?.warn(
+          { jobId, attempt, delayMs, err: error instanceof Error ? error.message : String(error) },
+          "job completion POST failed; retrying before falling back to failing the job"
+        );
+        await sleep(delayMs);
+      }
+    }
   }
 
   async fail(jobId: string, error: JobError): Promise<void> {
@@ -270,7 +339,10 @@ export class HttpWatcherApi implements WatcherApi {
       throw error;
     }
     if (!response.ok) {
-      throw new Error(`${init.method ?? "GET"} ${path} failed with ${response.status}: ${await response.text()}`);
+      throw new HttpRequestStatusError(
+        `${init.method ?? "GET"} ${path} failed with ${response.status}: ${await response.text()}`,
+        response.status
+      );
     }
     return (await response.json()) as TResponse;
   }

@@ -273,6 +273,89 @@ test("proposal completion is idempotent when delivered twice", async () => {
   assert.equal(created[0].jobId, job.id);
 });
 
+test("#161: a transient side-effect failure returns side_effects_failed, and the retried completion replays only the side effects", async () => {
+  const ctx = makeTestContext();
+
+  const validInput: DraftMarkdownProposalJobInput & { provider: "codex" } = {
+    provider: "codex",
+    gapSummaries: ["How to configure X"],
+    triggeringQuestions: ["How do I configure X?"],
+    evidence: [],
+    expectedOutput: "markdown_proposal"
+  };
+  const job = await ctx.jobs.create("draft_markdown_proposal", validInput);
+
+  const output: DraftMarkdownProposalJobOutput = {
+    title: "Configure X",
+    targetPath: "configure-x.md",
+    markdown: "# Configure X\nbody",
+    rationale: "r"
+  };
+
+  // Simulate a transient side-effect failure (e.g. a DB blip while drafting the
+  // proposal) by making the store throw on the first attempt only.
+  const originalCreate = ctx.stores.proposals.create.bind(ctx.stores.proposals);
+  let createCalls = 0;
+  ctx.stores.proposals.create = async (input) => {
+    createCalls += 1;
+    if (createCalls === 1) throw new Error("transient db error");
+    return originalCreate(input);
+  };
+
+  // First attempt: the side effect fails, so the outcome is side_effects_failed
+  // (the route maps this to a 500 the watcher's complete() retry loop re-POSTs on).
+  const first = await completeJob(ctx, job.id, output, "w-1");
+  assert.deepEqual(first, { ok: false, code: "side_effects_failed" });
+
+  // The job itself must already be in its terminal "completed" state — pg-boss
+  // will never redo the (paid-for) generation regardless of the side-effect
+  // failure above, and the retry budget must be untouched.
+  const afterFailure = await getJob(ctx, job.id);
+  assert.equal(afterFailure?.state, "completed");
+  assert.equal(afterFailure?.retryCount, 0);
+  assert.equal((await ctx.stores.proposals.list(50)).length, 0, "no proposal was drafted yet");
+
+  // Second attempt — exactly what the watcher's retry loop does (same POST):
+  // the replay branch re-runs only the side effects from the persisted output,
+  // and this time the store works.
+  const retried = await completeJob(ctx, job.id, output, "w-1");
+  assert.equal(retried.ok, true);
+
+  const proposals = await ctx.stores.proposals.list(50);
+  assert.equal(proposals.length, 1);
+  assert.equal(proposals[0].jobId, job.id);
+  assert.equal(proposals[0].title, "Configure X");
+
+  // A replay also works with no output body at all (an operator re-driving the
+  // side effects manually) — the persisted { result } envelope is reused.
+  const manualReplay = await completeJob(ctx, job.id, undefined, "w-1");
+  assert.equal(manualReplay.ok, true);
+  assert.equal((await ctx.stores.proposals.list(50)).length, 1, "replay is idempotent");
+});
+
+test("#161: failing a completed job (the watcher's exhausted-retry fallback) is a no-op that preserves the output", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "w-1", ["codex"]);
+  const output = { answer: "a", confidence: "high" as const, citations: [] };
+  assert.equal((await completeJob(ctx, job.id, output, "w-1")).ok, true);
+
+  // If the watcher exhausts its complete() retries on side_effects_failed it
+  // falls back to api.fail(runner_failed). pg-boss no-ops a fail on a row that
+  // already reached `completed` (state < 'completed' guard), so the job — and
+  // its persisted, paid-for output — must survive untouched.
+  const failed = await failJob(ctx, job.id, {
+    code: "runner_failed",
+    message: "complete retries exhausted",
+    category: "internal"
+  });
+  assert.equal(failed?.state, "completed");
+  const after = await getJob(ctx, job.id);
+  assert.equal(after?.state, "completed");
+  assert.equal(after?.retryCount, 0);
+  assert.deepEqual((after?.output as { result?: unknown } | undefined)?.result, output);
+});
+
 test("dedupe_documents completion drafts a file-set proposal and gates it (open-new → publish)", async () => {
   const ctx = makeTestContext();
   const job = await ctx.jobs.create("dedupe_documents", {
