@@ -152,6 +152,26 @@ merge/split/**dismiss**, then critic-confirm) — is itself a provider-partition
 `reconcile_gap_clusters` AI job the API enqueues and bounded-waits on, so no
 generative work runs in the API process.
 
+**Overlap is serialized per flow, in the API.** pg-boss dedupes the reconciler
+*enqueue* per cron slot (the timekeeper sends with a `singletonKey`/
+`singletonSeconds`), but it does **not** serialize *execution*: because the
+maintenance queues are standard-policy, a reconcile that legitimately outlasts its
+~10-minute cadence (the reshape alone bounded-waits up to 5 min, then drafts per
+cluster) can still be active when the next slot's job is claimed by a second
+watcher. Two reconciles for the same flow would then run concurrently and double
+every metered reshape + draft generation. So `reconcileGaps` takes a **Postgres
+session-level advisory lock keyed on `(taskType, flowId)`** for the whole run
+(`apps/api/src/scheduling/run-lock.ts`): an overlapping run for the same flow is
+refused the lock and skips quietly (only the holder records a `MaintenanceRun`),
+while a *different* flow still reconciles in parallel. The lock lives at the single
+execution site both the cron path and the manual "Run now" path funnel through, and
+being held in Postgres it serializes across API replicas, not just within one
+process. As a second layer, `draftProposalsForUncoveredClusters` treats a
+queued/active `draft_markdown_proposal` job for a cluster as already **covering**
+it — drafting is enqueue-only, so the proposal row exists only once the draft job
+completes, and without this a run whose draft is still in flight (or an overlap that
+slips through) would enqueue a duplicate full generation for the same cluster.
+
 Because the API bounded-waits on a batch of AI jobs inside these callbacks, a
 maintenance orchestration request (`/api/gaps/reconcile`, `/api/source-sync/run`,
 `/api/fix-patrol/run`, `/api/fix-patrol/improve/run`) legitimately stays open for
