@@ -135,6 +135,16 @@ subpath-configured destination and every merge would falsely reopen.)
   retry budget instead of permanently carrying the old count (see `countPriorStillOpen` in
   `apps/api/src/stores/gap-closure-verification-store.ts`).
 
+- If a triggering question's gap was **already resolved or dismissed** before verification
+  runs (a sibling proposal's cross-proposal resolve, a reconciler critic dismissal, or a
+  human), there is no open work left to verify. The re-ask is skipped — a deterministic gap
+  read replaces a full `answer_question` chat call — and a `closed` audit row is recorded
+  without re-asking. Crucially, this also stops a needless still-open verdict from re-filing
+  a fresh open `verification` gap over a **dismissed** one (which would resurrect a gap a
+  human deliberately dismissed back into candidacy). Relatedly, `resolveGaps` never flips an
+  already-**dismissed** gap to resolved — a dismissal is a deliberate settlement a merge must
+  not override.
+
 - If a triggering question's log itself cannot be found (e.g. it was deleted), there is
   nothing to re-ask, so that question is recorded `still_open` with no re-ask and — because
   none of the usual `recordVerificationGap`/retry-cap bookkeeping applies to a question with

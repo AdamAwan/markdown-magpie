@@ -78,8 +78,9 @@ export interface QuestionLogStore {
     gap: { summary: string; source: "verification" | "needs_attention"; note: string }
   ): Promise<QuestionLog | undefined>;
   // Soft-resolves the gaps closed by a merged proposal: the matching rows are
-  // retained for audit but stop surfacing as candidates. Returns how many gaps
-  // were newly resolved.
+  // retained for audit but stop surfacing as candidates. Already-dismissed rows
+  // are left untouched — a dismissal is a deliberate settlement a merge must not
+  // override. Returns how many gaps were newly resolved.
   resolveGaps(questionIds: string[], summaries: string[], proposalId: string): Promise<number>;
   // Permanently dismisses the given gap rows (by gap id) as off-topic for the
   // knowledge base. Dismissed rows are retained for audit but never surface as
@@ -382,7 +383,9 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
 
       let resolvedHere = 0;
       const gaps = log.gaps.map((gap) => {
-        if (gap.resolvedAt || !summarySet.has(gap.summary)) {
+        // A dismissed gap is intentionally settled — a proposal merge must never
+        // flip it back to resolved (mirrors the Postgres store's dismissed_at guard).
+        if (gap.resolvedAt || gap.dismissedAt || !summarySet.has(gap.summary)) {
           return gap;
         }
         resolved += 1;
