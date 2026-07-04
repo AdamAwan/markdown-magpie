@@ -314,8 +314,14 @@ function normalizeQuery(query: string): string {
 }
 
 // Resolves which flow answers the question. A caller-pinned flow
-// (`requestedFlowId`, already validated at the API) skips routing entirely;
-// otherwise the model routes across the configured flows.
+// (`requestedFlowId`) skips routing entirely; otherwise the model routes
+// across the configured flows. Every API caller that can set requestedFlowId
+// validates it against the configured flows before enqueueing — the ask path
+// rejects an unknown flow with a 400 (features/ask/service.ts), and the
+// gap-closure re-ask drops a stale flowId rather than pinning to a flow that
+// may have been deleted/renamed since the proposal was drafted
+// (features/proposals/service.ts) — so a value that reaches here is trusted
+// as-is.
 async function resolveFlow(
   requestedFlowId: string | undefined,
   question: string,
