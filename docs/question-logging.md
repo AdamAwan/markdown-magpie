@@ -113,9 +113,14 @@ subpath-configured destination and every merge would falsely reopen.)
   now resolves a gap (`proposals.closure_status = verified_closed`).
 - If any question is still open, its gap stays open and gains a **`verification`** row
   whose `note` records why the merged doc still fell short, so the reconciler re-drafts it
-  (`reopened`). Because the reopen summary reuses the question's own still-open gap
-  summary, it dedups with the existing gap in candidate clustering rather than forking a
-  new one. When that gap is re-drafted, its `note` is passed to the drafter as
+  (`reopened`). The reopen is filed under the summary the proposal actually addressed **for
+  that specific question**, resolved from the proposal's persisted cluster (the membership
+  rows carry each gap's `(question_id, summary)`); if there is no cluster association it
+  falls back to intersecting the question's own still-open gap summaries with the proposal's
+  recorded summaries, and finally the question text. This dedups with the existing gap in
+  candidate clustering rather than forking a new one, and — crucially on a multi-gap
+  question or a multi-question cluster — avoids misfiling the reopen under the question's
+  oldest unrelated gap or another question's gap. When that gap is re-drafted, its `note` is passed to the drafter as
   `resubmissionNotes`, so the model sees why its previous attempt did not close the gap and
   can address the specific shortfall (see [ai-jobs.md](./ai-jobs.md)).
 - After two failed verifications for the same question (`CLOSURE_RETRY_CAP`), its gap is

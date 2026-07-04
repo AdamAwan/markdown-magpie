@@ -224,7 +224,7 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
       : undefined;
     const verdict = evaluateClosure(answer, targetPaths);
     const cited = answer ? citesMergedDoc(answer.citations, targetPaths) : false;
-    const detail = buildVerificationDetail(proposal, answer, targetPaths);
+    const detail = buildVerificationDetail(answer, targetPaths);
 
     await ctx.stores.gapClosureVerifications.record({
       proposalId: proposal.id,
@@ -257,7 +257,7 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
       if (capped) {
         needsAttention = true;
       }
-      const summary = reopenSummaryFor(original, proposal);
+      const summary = await reopenSummaryFor(ctx, original, proposal, questionId);
       await ctx.stores.questionLogs.recordVerificationGap(questionId, {
         summary,
         source: capped ? "needs_attention" : "verification",
@@ -315,13 +315,46 @@ function resolveVerificationFlowId(
   return candidate;
 }
 
-// The gap summary a reopened verification gap is filed under. Prefer the
-// question's own still-open gap summary (so it dedups with the existing gap row
-// in candidate clustering); fall back to the proposal's recorded summary, then
-// the question text.
-function reopenSummaryFor(original: { question: string; gaps?: Array<{ summary: string; source: string; resolvedAt?: string; dismissedAt?: string }> }, proposal: Proposal): string {
-  const openGap = (original.gaps ?? []).find((gap) => !gap.resolvedAt && !gap.dismissedAt && gap.source !== "needs_attention");
-  return openGap?.summary ?? splitGapSummaries(proposal.gapSummary)[0] ?? original.question;
+// The gap summary a reopened verification gap is filed under, for the specific
+// triggering question that failed. It must be the summary of the gap the proposal
+// actually addressed FOR THIS QUESTION — not merely the question's oldest open gap
+// (which may be an unrelated older gap that loads first) nor element [0] of the
+// proposal's newline-joined display blob (which belongs to whichever gap sorted
+// first, not necessarily this question's). Filing it correctly is what lets the
+// reopened gap dedup with its existing row and be resolved by a later same-scope
+// proposal, and keeps an unrelated draft from inheriting this failure note.
+//
+// Primary: the proposal's persisted cluster carries the structured
+// question→summary association (membership rows → each gap's (questionId,
+// summary)), so resolve THIS question's summary from there. Fallback (no cluster,
+// or the cluster no longer holds a gap for this question): intersect this
+// question's own open-gap summaries with the proposal's recorded summaries, so we
+// pick the open gap the proposal set out to close rather than the oldest. Final
+// fallback: the question text.
+async function reopenSummaryFor(
+  ctx: AppContext,
+  original: { question: string; gaps?: Array<{ summary: string; source: string; resolvedAt?: string; dismissedAt?: string }> },
+  proposal: Proposal,
+  questionId: string
+): Promise<string> {
+  if (proposal.gapClusterId) {
+    const memberships = await ctx.stores.gapClusters.listMembershipsForCluster(proposal.gapClusterId);
+    const pairs = await ctx.stores.questionLogs.gapPairsForIds(memberships.map((membership) => membership.gapId));
+    const clusterGap = pairs.find((pair) => pair.questionId === questionId);
+    if (clusterGap) {
+      return clusterGap.summary;
+    }
+  }
+
+  const proposalSummaries = new Set(splitGapSummaries(proposal.gapSummary));
+  const addressedGap = (original.gaps ?? []).find(
+    (gap) =>
+      !gap.resolvedAt &&
+      !gap.dismissedAt &&
+      gap.source !== "needs_attention" &&
+      proposalSummaries.has(gap.summary)
+  );
+  return addressedGap?.summary ?? original.question;
 }
 
 // The retry-cap reset boundary for this question, if any: recordVerificationGap
@@ -352,14 +385,14 @@ function verificationLineageResetSince(original: {
 // A compact, human-readable note for a failed closure: what merged and how the
 // re-ask fell short. Stored on the reopened gap so a re-draft sees why.
 function buildVerificationDetail(
-  proposal: Proposal,
   answer: { confidence: string; citations: Array<{ path: string }> } | undefined,
   targetPaths: Set<string>
 ): string {
   // targetPaths is already in citation (indexed-subtree) space, so the
-  // citedMerged check below compares like-for-like.
+  // citedMerged check below compares like-for-like. proposalTargetPaths always
+  // includes the (required, truthy) targetPath, so this set is non-empty.
   const paths = [...targetPaths];
-  const merged = paths.length > 0 ? paths.join(", ") : proposal.targetPath;
+  const merged = paths.join(", ");
   if (!answer) {
     return `Merged ${merged}, but the re-asked question did not complete (no answer to verify).`;
   }
