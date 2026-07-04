@@ -370,30 +370,34 @@ async function reconcileGapClusters({ job, model, signal }: GenerativeJobOptions
   });
   const proposal = parseReshape(proposeResponse.content);
 
+  const opCount = proposal.merges.length + proposal.splits.length + proposal.dismissals.length;
   logger.debug(
     { jobId: job.id, mergeCount: proposal.merges.length, splitCount: proposal.splits.length, dismissalCount: proposal.dismissals.length },
     `reconcile_gap_clusters[${job.id}]: critic-confirming ${proposal.merges.length} merge(s), ${proposal.splits.length} split(s), ${proposal.dismissals.length} dismissal(s)`
   );
-  const merges: ReconcileOutput["merges"] = [];
-  for (const merge of proposal.merges) {
-    const confirmed = await criticConfirm(model, "merge", merge.rationale, signal);
-    merges.push({ clusterIds: merge.clusterIds, rationale: merge.rationale, confirmed });
-  }
-  const splits: ReconcileOutput["splits"] = [];
-  for (const split of proposal.splits) {
-    const confirmed = await criticConfirm(model, "split", split.rationale, signal);
-    splits.push({ clusterId: split.clusterId, children: split.children, rationale: split.rationale, confirmed });
-  }
-  // Dismissals are permanent, so the critic sees the same scope grounding the
-  // proposer did (persona, top relevance, snippets) and must independently confirm
-  // the cluster is off-topic — not merely uncovered — before we drop it.
-  const dismissals: ReconcileOutput["dismissals"] = [];
-  for (const dismissal of proposal.dismissals) {
-    const cluster = input.clusters.find((entry) => entry.id === dismissal.clusterId);
-    const context = cluster ? clusterSummaryLine(cluster) : undefined;
-    const confirmed = await criticConfirm(model, "dismissal", dismissal.rationale, signal, context);
-    dismissals.push({ clusterId: dismissal.clusterId, rationale: dismissal.rationale, confirmed });
-  }
+
+  // One batched critic pass over every proposed operation (was one provider call per
+  // op). Skip entirely when nothing was proposed. Each op is confirmed only when the
+  // critic returns confirmed=true for its exact id; a missing, malformed, reordered, or
+  // unparseable verdict leaves that op unconfirmed — the conservative default.
+  const verdicts = opCount === 0 ? new Map<string, boolean>() : await criticConfirmBatch(model, proposal, input.clusters, signal);
+
+  const merges: ReconcileOutput["merges"] = proposal.merges.map((merge, index) => ({
+    clusterIds: merge.clusterIds,
+    rationale: merge.rationale,
+    confirmed: verdicts.get(`merge-${index}`) === true
+  }));
+  const splits: ReconcileOutput["splits"] = proposal.splits.map((split, index) => ({
+    clusterId: split.clusterId,
+    children: split.children,
+    rationale: split.rationale,
+    confirmed: verdicts.get(`split-${index}`) === true
+  }));
+  const dismissals: ReconcileOutput["dismissals"] = proposal.dismissals.map((dismissal, index) => ({
+    clusterId: dismissal.clusterId,
+    rationale: dismissal.rationale,
+    confirmed: verdicts.get(`dismissal-${index}`) === true
+  }));
 
   return reconcileGapClustersOutputSchema.parse({ merges, splits, dismissals });
 }
@@ -413,27 +417,73 @@ function clusterSummaryLine(cluster: ReconcileInput["clusters"][number]): string
   return `${base} [scope: persona=${persona}; topRelevance=${cluster.scope.topRelevance.toFixed(2)}; closest content=${snippets}]`;
 }
 
-async function criticConfirm(
+// One batched critic pass over every proposed operation. Each op is listed with a
+// stable id (`merge-0`, `split-1`, `dismissal-0`) and its rationale; a dismissal also
+// carries the cluster summary line so the critic sees the same scope grounding the
+// proposer did (persona, top relevance, snippets) before we drop a cluster for good.
+// Returns a map of op id -> confirmed; ids the critic omits or malforms are simply
+// absent, and the caller treats an absent id as not confirmed.
+async function criticConfirmBatch(
   model: ChatProvider,
-  kind: "merge" | "split" | "dismissal",
-  rationale: string,
-  signal: AbortSignal,
-  context?: string
-): Promise<boolean> {
-  const content = context
-    ? `Proposed ${kind}. Rationale: ${rationale}\n\nCluster under review: ${context}`
-    : `Proposed ${kind}. Rationale: ${rationale}`;
+  proposal: { merges: ProposedMerge[]; splits: ProposedSplit[]; dismissals: ProposedDismissal[] },
+  clusters: ReconcileInput["clusters"],
+  signal: AbortSignal
+): Promise<Map<string, boolean>> {
+  const lines: string[] = [];
+  proposal.merges.forEach((merge, index) => {
+    lines.push(`merge-${index}: merge clusters ${merge.clusterIds.join(", ")}. Rationale: ${merge.rationale}`);
+  });
+  proposal.splits.forEach((split, index) => {
+    lines.push(`split-${index}: split cluster ${split.clusterId}. Rationale: ${split.rationale}`);
+  });
+  proposal.dismissals.forEach((dismissal, index) => {
+    const cluster = clusters.find((entry) => entry.id === dismissal.clusterId);
+    const context = cluster ? `\n  Cluster under review: ${clusterSummaryLine(cluster)}` : "";
+    lines.push(`dismissal-${index}: dismiss cluster ${dismissal.clusterId}. Rationale: ${dismissal.rationale}${context}`);
+  });
+
   const response = await model.complete({
     system: GAP_RECONCILE_CRITIC.instructions,
-    messages: [{ role: "user", content }],
+    messages: [
+      {
+        role: "user",
+        content: `Proposed gap-cluster changes. Confirm or reject each independently.\n\n${lines.join("\n")}`
+      }
+    ],
+    responseFormat: "json",
     signal
   });
+  return parseCriticVerdicts(response.content);
+}
+
+// Parses the batched critic reply into a map of op id -> confirmed. Anything that is
+// not exactly `confirmed: true` for a string id is dropped, so an unparseable reply, a
+// missing `verdicts` array, or a malformed entry yields no confirmation for that op.
+function parseCriticVerdicts(content: string): Map<string, boolean> {
+  const verdicts = new Map<string, boolean>();
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(response.content) as { confirmed?: unknown };
-    return parsed.confirmed === true;
+    parsed = JSON.parse(content);
   } catch {
-    return false;
+    return verdicts;
   }
+  if (!parsed || typeof parsed !== "object") {
+    return verdicts;
+  }
+  const raw = (parsed as { verdicts?: unknown }).verdicts;
+  if (!Array.isArray(raw)) {
+    return verdicts;
+  }
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const id = (entry as { id?: unknown }).id;
+    if (typeof id === "string") {
+      verdicts.set(id, (entry as { confirmed?: unknown }).confirmed === true);
+    }
+  }
+  return verdicts;
 }
 
 function parseReshape(content: string): { merges: ProposedMerge[]; splits: ProposedSplit[]; dismissals: ProposedDismissal[] } {

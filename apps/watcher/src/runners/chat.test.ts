@@ -497,21 +497,27 @@ describe("ChatRunner", () => {
     assert.equal(chat.requests.at(-1)?.signal, controller.signal);
   });
 
-  it("derives reconcile_gap_clusters confirmed flags from the critic, not from propose", async () => {
-    // The propose call returns one merge and one split (both unconfirmed in the
-    // propose payload). The critic then confirms the merge but rejects the split.
+  it("derives reconcile_gap_clusters confirmed flags from one batched critic call, keyed by op id", async () => {
+    // The propose call returns one merge, one split, and one dismissal (all unconfirmed
+    // in the propose payload). A SINGLE batched critic call then confirms the merge and
+    // the dismissal but rejects the split, keyed by the per-op ids.
+    let criticMessage = "";
     const chat = new FakeChatProvider((request) => {
       if (request.system.includes("strict reviewer")) {
-        // Per-proposal critic call. Confirm a merge, reject a split.
-        const content = request.messages.at(-1)?.content ?? "";
-        return content.startsWith("Proposed merge")
-          ? JSON.stringify({ confirmed: true, rationale: "one doc covers both" })
-          : JSON.stringify({ confirmed: false, rationale: "independent topics" });
+        criticMessage = request.messages.at(-1)?.content ?? "";
+        return JSON.stringify({
+          verdicts: [
+            { id: "merge-0", confirmed: true },
+            { id: "split-0", confirmed: false },
+            { id: "dismissal-0", confirmed: true }
+          ]
+        });
       }
       // Propose call.
       return JSON.stringify({
         merges: [{ clusterIds: ["c1", "c2"], rationale: "merge them" }],
-        splits: [{ clusterId: "c3", children: [{ gapIds: ["g1"] }, { gapIds: ["g2"] }], rationale: "split it" }]
+        splits: [{ clusterId: "c3", children: [{ gapIds: ["g1"] }, { gapIds: ["g2"] }], rationale: "split it" }],
+        dismissals: [{ clusterId: "c4", rationale: "off-topic" }]
       });
     });
     const runner = new ChatRunner("openai-compatible", chat, fakeApi());
@@ -522,25 +528,53 @@ describe("ChatRunner", () => {
         clusters: [
           { id: "c1", title: "Alpha" },
           { id: "c2", title: "Beta" },
-          { id: "c3", title: "Gamma" }
+          { id: "c3", title: "Gamma" },
+          { id: "c4", title: "Cats" }
         ]
       }),
       controller.signal
     )) as {
       merges: Array<{ clusterIds: string[]; rationale: string; confirmed: boolean }>;
       splits: Array<{ clusterId: string; children: Array<{ gapIds: string[] }>; rationale: string; confirmed: boolean }>;
+      dismissals: Array<{ clusterId: string; rationale: string; confirmed: boolean }>;
     };
 
-    assert.equal(output.merges.length, 1);
     assert.equal(output.merges[0].confirmed, true, "the critic confirmed the merge");
     assert.deepEqual(output.merges[0].clusterIds, ["c1", "c2"]);
-    assert.equal(output.splits.length, 1);
     assert.equal(output.splits[0].confirmed, false, "the critic rejected the split");
+    assert.equal(output.dismissals[0].confirmed, true, "the critic confirmed the dismissal");
+
+    // Exactly one critic call for the whole reshape (propose + one batched critique).
+    const criticCalls = chat.requests.filter((r) => r.system.includes("strict reviewer"));
+    assert.equal(criticCalls.length, 1, "one batched critic call, not one per op");
+    assert.equal(chat.requests.length, 2, "propose + one batched critic call");
+    // The dismissal carries the cluster's scope so the critic can judge off-topic vs uncovered.
+    assert.match(criticMessage, /dismissal-0: dismiss cluster c4/, "the dismissal op is listed with its id");
+    assert.match(criticMessage, /Cluster under review: cluster c4/, "the critic sees the dismissed cluster's scope");
     // Every chat call honoured the abort signal.
     assert.ok(chat.requests.every((r) => r.signal === controller.signal));
   });
 
-  it("treats an unparseable critic verdict as not confirmed for reconcile_gap_clusters", async () => {
+  it("skips the critic call entirely when the reshape proposes nothing", async () => {
+    const chat = new FakeChatProvider(() => JSON.stringify({ merges: [], splits: [], dismissals: [] }));
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const output = (await runner.run(
+      job("reconcile_gap_clusters", {
+        provider: "openai-compatible",
+        clusters: [{ id: "c1", title: "Alpha" }]
+      }),
+      new AbortController().signal
+    )) as { merges: unknown[]; splits: unknown[]; dismissals: unknown[] };
+
+    assert.deepEqual(output, { merges: [], splits: [], dismissals: [] });
+    assert.equal(chat.requests.length, 1, "an empty reshape makes the propose call only — no critic call");
+    assert.ok(
+      !chat.requests.some((r) => r.system.includes("strict reviewer")),
+      "no critic call when nothing was proposed"
+    );
+  });
+
+  it("treats an unparseable batched critic verdict as not confirmed for reconcile_gap_clusters", async () => {
     const chat = new FakeChatProvider((request) => {
       if (request.system.includes("strict reviewer")) {
         return "not json at all";

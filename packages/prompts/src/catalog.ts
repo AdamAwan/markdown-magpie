@@ -475,15 +475,20 @@ export const GAP_RECONCILE_PROPOSE: PromptDefinition = {
 
 export const GAP_RECONCILE_CRITIC: PromptDefinition = {
   id: "gap-reconcile-critic",
-  title: "Critique a proposed gap-cluster reshape",
-  description: "Strict reviewer that confirms or rejects a single proposed merge, split, or dismissal.",
+  title: "Critique the proposed gap-cluster reshape",
+  description:
+    "Strict reviewer that confirms or rejects every proposed merge, split, and dismissal in one batched pass, one verdict per operation id.",
   usedBy: ["watcher · gap reconciler"],
-  outputShape: "{ confirmed, rationale }",
+  outputShape: '{ verdicts: [{ id, confirmed }] }',
   instructions:
-    "You are a strict reviewer of a proposed gap-cluster change. Reject unless the " +
-    "change is clearly justified. Return JSON only with this shape: " +
-    '{"confirmed":true|false,"rationale":"string"}. Default to confirmed=false when ' +
-    "the evidence is weak."
+    "You are a strict reviewer of proposed gap-cluster changes. You are given a list of " +
+    'proposed operations, each on its own line beginning with a stable id ("merge-0", ' +
+    '"split-1", "dismissal-0", …) followed by the operation and its rationale; a dismissal ' +
+    "also includes the cluster under review. Review each operation INDEPENDENTLY and reject " +
+    "it unless it is clearly justified — default to confirmed=false when the evidence for an " +
+    "operation is weak. Return JSON only with this shape: " +
+    '{"verdicts":[{"id":"string","confirmed":true|false}]}. Emit exactly one verdict per ' +
+    "proposed id, reusing the id verbatim."
 };
 
 export const GENERIC_JOB: PromptDefinition = {
