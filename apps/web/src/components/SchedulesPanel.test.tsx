@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { renderToStaticMarkup } from "react-dom/server";
 import type { ConfiguredKnowledgeFlow, ScheduledTask } from "../lib/types";
+import { renderMarkup } from "../test/render";
 import { SchedulesPanel } from "./SchedulesPanel";
 
 const flows: ConfiguredKnowledgeFlow[] = [
@@ -19,7 +19,7 @@ const scheduledTask: ScheduledTask = {
 };
 
 test("renders the schedules table grouped by job type", () => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     <SchedulesPanel
       flows={flows}
       loading={false}
@@ -35,7 +35,7 @@ test("renders the schedules table grouped by job type", () => {
 });
 
 test("no longer renders a recent runs audit — that lives on the Activity page", () => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     <SchedulesPanel
       flows={flows}
       loading={false}

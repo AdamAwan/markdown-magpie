@@ -2,6 +2,7 @@
 
 import { Auth0Provider, useAuth0 } from "@auth0/auth0-react";
 import { ReactNode, useEffect, useRef, useState } from "react";
+import styled from "@emotion/styled";
 import { setAccessTokenProvider } from "../lib/api";
 import { Landing } from "./Landing";
 
@@ -79,22 +80,18 @@ export function AuthProvider({ children, config }: { children: ReactNode; config
   );
 }
 
+const SplashScreen = styled.div(({ theme }) => ({
+  minHeight: "100vh",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: theme.color.page,
+  color: theme.color.textMuted,
+  fontWeight: theme.font.weight.semibold
+}));
+
 function Splash() {
-  return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "#f5f7f2",
-        color: "#65716b",
-        fontWeight: 750
-      }}
-    >
-      Loading…
-    </div>
-  );
+  return <SplashScreen>Loading…</SplashScreen>;
 }
 
 // Gates the data-fetching console behind authentication. The app subtree (which

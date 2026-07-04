@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import styled from "@emotion/styled";
+import { Surface } from "./ui";
 
 // The public endpoint of the deployed MCP server, resolved from runtime config
 // (window.__MAGPIE_CONFIG__.mcpUrl, injected by the root layout) with a
@@ -12,6 +14,91 @@ function resolveMcpUrl(): string {
   }
   return process.env.NEXT_PUBLIC_MCP_URL || "http://localhost:4001/mcp";
 }
+
+const Intro = styled.p(({ theme }) => ({
+  margin: 0,
+  maxWidth: "70ch",
+  color: theme.color.textMuted,
+  lineHeight: 1.55
+}));
+
+const Endpoint = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.sm
+}));
+
+const EndpointLabel = styled.span(({ theme }) => ({
+  fontSize: theme.font.size.xs,
+  letterSpacing: "0.02em",
+  color: theme.color.textSubtle
+}));
+
+const ChooseHint = styled.p(({ theme }) => ({
+  margin: `${theme.space.xs} 0 0`,
+  fontWeight: theme.font.weight.semibold,
+  color: theme.color.text
+}));
+
+// The two clients are alternatives, not ordered steps — lay them out as peer
+// cards rather than a numbered pipeline.
+const Clients = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.xl
+}));
+
+const ClientCard = styled.article(({ theme }) => ({
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.card,
+  padding: theme.space.xl,
+  background: theme.color.surface,
+  display: "grid",
+  gap: theme.space.lg
+}));
+
+const ClientCardHead = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "baseline",
+  justifyContent: "space-between",
+  gap: theme.space.lg,
+  "& h3": { margin: 0, fontSize: theme.font.size.lg }
+}));
+
+const Output = styled.p(({ theme }) => ({
+  margin: 0,
+  fontSize: theme.font.size.base,
+  color: theme.color.textMuted
+}));
+
+const Tools = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.lg,
+  padding: theme.space.xl,
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.card,
+  background: theme.color.surfaceMuted
+}));
+
+const ToolsTitle = styled.h3(({ theme }) => ({
+  margin: 0,
+  fontSize: theme.font.size.lg
+}));
+
+const ToolList = styled.ul(({ theme }) => ({
+  margin: 0,
+  padding: 0,
+  listStyle: "none",
+  display: "grid",
+  gap: theme.space.md
+}));
+
+const ToolItem = styled.li(({ theme }) => ({
+  display: "flex",
+  alignItems: "baseline",
+  gap: theme.space.lg,
+  flexWrap: "wrap",
+  "& code": { flex: "0 0 auto" },
+  "& > span": { color: theme.color.textMuted, fontSize: theme.font.size.base }
+}));
 
 // The tools the server exposes once a client is connected — kept in sync with the
 // kb_* tools registered by the MCP server.
@@ -36,69 +123,106 @@ export function McpPanel() {
 }`;
 
   return (
-    <div className="surface">
-      <div className="surfaceHeader">
+    <Surface>
+      <Surface.Header>
         <h2>Connect over MCP</h2>
-      </div>
-      <div className="surfaceBody">
-        <p className="mcpIntro">
+      </Surface.Header>
+      <Surface.Body>
+        <Intro>
           The Markdown Magpie MCP server lets your AI tools query this knowledge base directly — search sections,
           ask cited questions, and report gaps without leaving your editor. Point any MCP client at the endpoint
           below, then sign in through the browser when prompted.
-        </p>
+        </Intro>
 
-        <div className="mcpEndpoint">
-          <span className="mcpEndpointLabel">Server endpoint</span>
+        <Endpoint>
+          <EndpointLabel>Server endpoint</EndpointLabel>
           <CopyBlock code={mcpUrl} oneLine />
-        </div>
+        </Endpoint>
 
-        <p className="mcpChooseHint">Use whichever applies to your client:</p>
+        <ChooseHint>Use whichever applies to your client:</ChooseHint>
 
-        <div className="mcpClients">
-          <article className="promptCard">
-            <div className="promptCardHead">
+        <Clients>
+          <ClientCard>
+            <ClientCardHead>
               <h3>Claude Code</h3>
-            </div>
-            <p className="promptOutput">Add the server with one command, then run in your terminal:</p>
+            </ClientCardHead>
+            <Output>Add the server with one command, then run in your terminal:</Output>
             <CopyBlock code={cliCommand} />
-            <p className="promptOutput">
+            <Output>
               Then run <code>/mcp</code> inside Claude Code to trigger the browser OAuth login.
-            </p>
-          </article>
+            </Output>
+          </ClientCard>
 
-          <article className="promptCard">
-            <div className="promptCardHead">
+          <ClientCard>
+            <ClientCardHead>
               <h3>Claude Desktop, VS Code, Cursor &amp; Continue</h3>
-            </div>
-            <p className="promptOutput">Add the server to the client&apos;s MCP configuration:</p>
+            </ClientCardHead>
+            <Output>Add the server to the client&apos;s MCP configuration:</Output>
             <CopyBlock code={jsonConfig} />
-            <p className="promptOutput">
+            <Output>
               The first request prompts you to sign in through the browser; the client remembers the session
               afterwards.
-            </p>
-          </article>
-        </div>
+            </Output>
+          </ClientCard>
+        </Clients>
 
-        <div className="mcpTools">
-          <h3 className="mcpToolsTitle">Once connected</h3>
-          <p className="promptOutput">Your client gains these tools:</p>
-          <ul className="mcpToolList">
+        <Tools>
+          <ToolsTitle>Once connected</ToolsTitle>
+          <Output>Your client gains these tools:</Output>
+          <ToolList>
             {TOOLS.map((tool) => (
-              <li className="mcpTool" key={tool.name}>
+              <ToolItem key={tool.name}>
                 <code>{tool.name}</code>
                 <span>{tool.blurb}</span>
-              </li>
+              </ToolItem>
             ))}
-          </ul>
-        </div>
-      </div>
-    </div>
+          </ToolList>
+        </Tools>
+      </Surface.Body>
+    </Surface>
   );
 }
 
 // A dark code block with a copy button. Copies the raw text to the clipboard and
 // shows a brief "Copied" confirmation. oneLine renders short single-line values
 // (like the endpoint URL) without wrapping.
+const CodeWrap = styled.div({
+  // The wrapper is the positioning context for the copy button.
+  position: "relative"
+});
+
+const CodeBlock = styled.pre<{ $oneLine: boolean }>(({ theme, $oneLine }) => ({
+  margin: 0,
+  padding: theme.space.lg,
+  // Leave room for the copy button so long lines never sit under it.
+  paddingRight: "72px",
+  background: theme.color.text,
+  color: theme.color.page,
+  borderRadius: theme.radius.md,
+  whiteSpace: $oneLine ? "nowrap" : "pre-wrap",
+  wordBreak: "break-word",
+  fontFamily: theme.font.mono,
+  fontSize: theme.font.size.sm,
+  lineHeight: 1.45,
+  overflowX: "auto"
+}));
+
+const CopyButton = styled.button(({ theme }) => ({
+  position: "absolute",
+  top: theme.space.md,
+  right: theme.space.md,
+  minHeight: "28px",
+  border: `1px solid ${theme.color.textMuted}`,
+  borderRadius: theme.radius.sm,
+  background: theme.color.primaryHover,
+  color: theme.color.page,
+  padding: `${theme.space.xs} ${theme.space.lg}`,
+  fontSize: theme.font.size.sm,
+  fontWeight: theme.font.weight.semibold,
+  cursor: "pointer",
+  "&:hover": { background: theme.color.primary }
+}));
+
 function CopyBlock({ code, oneLine = false }: { code: string; oneLine?: boolean }) {
   const [copied, setCopied] = useState(false);
 
@@ -115,11 +239,11 @@ function CopyBlock({ code, oneLine = false }: { code: string; oneLine?: boolean 
   };
 
   return (
-    <div className="mcpCode">
-      <pre className={oneLine ? "promptInstructions mcpCodeInline" : "promptInstructions"}>{code}</pre>
-      <button className="mcpCodeCopy" onClick={copy} type="button" aria-label="Copy to clipboard">
+    <CodeWrap>
+      <CodeBlock $oneLine={oneLine}>{code}</CodeBlock>
+      <CopyButton onClick={copy} type="button" aria-label="Copy to clipboard">
         {copied ? "Copied" : "Copy"}
-      </button>
-    </div>
+      </CopyButton>
+    </CodeWrap>
   );
 }

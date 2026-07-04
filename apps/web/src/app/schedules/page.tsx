@@ -2,13 +2,14 @@
 
 import { useConsole } from "../../components/ConsoleProvider";
 import { SchedulesPanel } from "../../components/SchedulesPanel";
+import { Workbench } from "../../components/ui";
 import { knowledgeFlows } from "../../lib/config";
 
 export default function SchedulesPage() {
   const { config, loading, runScheduledTask, saveScheduledTask, scheduledTasks } = useConsole();
 
   return (
-    <section className="fullWorkbench">
+    <Workbench>
       <SchedulesPanel
         flows={knowledgeFlows(config)}
         loading={loading}
@@ -16,6 +17,6 @@ export default function SchedulesPage() {
         onSaveTask={saveScheduledTask}
         scheduledTasks={scheduledTasks}
       />
-    </section>
+    </Workbench>
   );
 }

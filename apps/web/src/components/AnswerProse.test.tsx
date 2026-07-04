@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderMarkup } from "../test/render";
 import { AnswerProse } from "./AnswerProse";
 
 test("renders Markdown emphasis and lists as real elements, not raw markers", () => {
-  const markup = renderToStaticMarkup(
+  const markup = renderMarkup(
     <AnswerProse text={"**Highlight these key points:**\n\n* **Your data stays on your infrastructure.** Runs locally.\n* **Encryption end to end.**"} />
   );
 
@@ -18,14 +18,15 @@ test("renders Markdown emphasis and lists as real elements, not raw markers", ()
   assert.doesNotMatch(markup, /\*\*/);
 });
 
-test("wraps output in the answerProse scope so styles can target it", () => {
-  const markup = renderToStaticMarkup(<AnswerProse text="Plain answer." />);
-  assert.match(markup, /class="answerProse"/);
-  assert.match(markup, /<p>Plain answer\.<\/p>/);
+test("wraps output in a prose scope so styles can target it", () => {
+  const markup = renderMarkup(<AnswerProse text="Plain answer." />);
+  // The prose wrapper renders as a div carrying an Emotion-generated class, and
+  // the paragraph survives inside it.
+  assert.match(markup, /<div class="css-[^"]*"><p>Plain answer\.<\/p><\/div>/);
 });
 
 test("renders link text without an active anchor and drops images", () => {
-  const markup = renderToStaticMarkup(
+  const markup = renderMarkup(
     <AnswerProse text={"See [the docs](https://example.com) and ![logo](https://example.com/logo.png)."} />
   );
 

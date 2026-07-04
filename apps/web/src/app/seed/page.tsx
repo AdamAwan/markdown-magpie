@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { SeedPanel } from "../../components/SeedPanel";
 import { useConsole } from "../../components/ConsoleProvider";
+import { Surface, Workbench } from "../../components/ui";
 import { knowledgeFlows } from "../../lib/config";
 
 export default function SeedPage() {
@@ -14,15 +15,15 @@ export default function SeedPage() {
   );
 
   return (
-    <section className="workbench singlePane">
-      <div className="surface">
-        <div className="surfaceHeader">
+    <Workbench>
+      <Surface>
+        <Surface.Header>
           <h2>Seed / add an area</h2>
-        </div>
-        <div className="surfaceBody">
+        </Surface.Header>
+        <Surface.Body>
           <SeedPanel flows={flows} loading={loading} onGenerate={generateOutline} onSeed={seedFlow} />
-        </div>
-      </div>
-    </section>
+        </Surface.Body>
+      </Surface>
+    </Workbench>
   );
 }

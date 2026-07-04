@@ -1,55 +1,70 @@
+import styled from "@emotion/styled";
 import { ReconciliationDecision } from "../lib/types";
+import { Badge, EmptyState, ListRow, Row, ScrollList, Surface, statusTone } from "./ui";
+
+const Hint = styled.p(({ theme }) => ({
+  margin: `0 0 ${theme.space.md}`,
+  fontSize: theme.font.size.sm,
+  color: theme.color.status.running.fg
+}));
+
+const Path = styled.p(({ theme }) => ({
+  color: theme.color.textMuted,
+  fontFamily: theme.font.mono,
+  fontSize: theme.font.size.sm
+}));
 
 // Read-only history of the reconciler's clustering decisions: the proposing
 // model's rationale for each merge/split and whether the critic confirmed and the
 // reconciler applied it. Surfaces reasoning that previously lived only in logs.
 export function ReconciliationsPanel({ decisions }: { decisions: ReconciliationDecision[] }) {
   return (
-    <section className="surface">
-      <div className="surfaceHeader">
+    <Surface>
+      <Surface.Header>
         <h2>Reconciliations</h2>
-        <span className="pill" title="Recent clustering decisions">
+        <Badge tone="neutral" title="Recent clustering decisions">
           {decisions.length}
-        </span>
-      </div>
-      <div className="surfaceBody">
-        <p className="hint">
+        </Badge>
+      </Surface.Header>
+      <Surface.Body>
+        <Hint>
           How the reconciler reshapes each flow&apos;s gap clusters: the model&apos;s rationale for a merge or
           split and whether the critic confirmed it. Only confirmed decisions are applied.
-        </p>
-        <div className="list scrollList">
+        </Hint>
+        <ScrollList>
           {decisions.map((decision) => (
-            <article className="row" key={decision.id}>
-              <div className="rowTop">
-                <h3>
+            <ListRow key={decision.id}>
+              <Row justify="between" gap="lg">
+                <h3 style={{ flex: 1, minWidth: 0 }}>
                   {decision.kind === "merge" ? "Merge" : "Split"} · {decision.flowId ?? "default"}
                 </h3>
-                <span className="rowMeta">
-                  <span
-                    className={`status ${decision.confirmed ? "ready" : "rejected"}`}
+                <Row gap="md">
+                  <Badge
+                    tone={statusTone(decision.confirmed ? "ready" : "rejected")}
+                    dot
                     title="Critic verdict"
                   >
                     {decision.confirmed ? "confirmed" : "rejected"}
-                  </span>
+                  </Badge>
                   {decision.applied ? (
-                    <span className="status merged" title="Applied to the flow's clusters">
+                    <Badge tone="completed" dot title="Applied to the flow's clusters">
                       applied
-                    </span>
+                    </Badge>
                   ) : null}
-                </span>
-              </div>
+                </Row>
+              </Row>
               <p>{decision.rationale}</p>
-              <p className="path">
+              <Path>
                 {decision.clusterIds.length} cluster{decision.clusterIds.length === 1 ? "" : "s"} ·{" "}
                 {new Date(decision.createdAt).toLocaleString()}
-              </p>
-            </article>
+              </Path>
+            </ListRow>
           ))}
           {decisions.length === 0 ? (
-            <p className="empty">No reconciliation decisions recorded yet.</p>
+            <EmptyState>No reconciliation decisions recorded yet.</EmptyState>
           ) : null}
-        </div>
-      </div>
-    </section>
+        </ScrollList>
+      </Surface.Body>
+    </Surface>
   );
 }

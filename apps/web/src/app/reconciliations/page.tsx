@@ -2,13 +2,14 @@
 
 import { ReconciliationsPanel } from "../../components/ReconciliationsPanel";
 import { useConsole } from "../../components/ConsoleProvider";
+import { Workbench } from "../../components/ui";
 
 export default function ReconciliationsPage() {
   const { reconciliationDecisions } = useConsole();
 
   return (
-    <section className="workbench singlePane">
+    <Workbench>
       <ReconciliationsPanel decisions={reconciliationDecisions} />
-    </section>
+    </Workbench>
   );
 }
