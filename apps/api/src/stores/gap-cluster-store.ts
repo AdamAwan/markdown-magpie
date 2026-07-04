@@ -87,6 +87,15 @@ export interface GapClusterStore {
   getProcessedRevision(flowId?: string): Promise<number>;
   setProcessedRevision(flowId: string | undefined, revision: number, lastRunAt: string): Promise<void>;
 
+  // Composition hash of the active cluster set last sent to the reshape critic for
+  // this flow, or undefined if this flow has never been reshaped. The reconciler
+  // skips the metered propose→critic reshape when the current active composition
+  // hashes to the same value — a revision bump that leaves the cluster set
+  // unchanged no longer re-judges an identical set (issue #168). Only recorded
+  // after a completed reshape, so a failed/timed-out one never wedges the gate.
+  getReshapeCompositionHash(flowId?: string): Promise<string | undefined>;
+  setReshapeCompositionHash(flowId: string | undefined, hash: string): Promise<void>;
+
   enqueuePublicationAction(proposalId: string, kind: "publish" | "supersede"): Promise<PublicationActionRecord>;
   listPendingPublicationActions(): Promise<PublicationActionRecord[]>;
   markPublicationActionDone(id: string): Promise<void>;
@@ -102,6 +111,8 @@ export class InMemoryGapClusterStore implements GapClusterStore {
   // Processed revision per flow ('' is the un-routed/default flow).
   private processedRevision = new Map<string, number>();
   private processedRunAt = new Map<string, string>();
+  // Composition hash of the last reshaped active set per flow ('' is default).
+  private reshapeCompositionHash = new Map<string, string>();
   private seq = 0;
 
   private nextId(prefix: string): string {
@@ -249,6 +260,14 @@ export class InMemoryGapClusterStore implements GapClusterStore {
     this.processedRunAt.set(flowId ?? "", lastRunAt);
   }
 
+  async getReshapeCompositionHash(flowId?: string): Promise<string | undefined> {
+    return this.reshapeCompositionHash.get(flowId ?? "");
+  }
+
+  async setReshapeCompositionHash(flowId: string | undefined, hash: string): Promise<void> {
+    this.reshapeCompositionHash.set(flowId ?? "", hash);
+  }
+
   async enqueuePublicationAction(proposalId: string, kind: "publish" | "supersede"): Promise<PublicationActionRecord> {
     const id = this.nextId("action");
     const now = this.now();
@@ -297,6 +316,7 @@ export class InMemoryGapClusterStore implements GapClusterStore {
     this.actions.clear();
     this.processedRevision.clear();
     this.processedRunAt.clear();
+    this.reshapeCompositionHash.clear();
     this.seq = 0;
   }
 }

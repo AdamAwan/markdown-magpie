@@ -4,6 +4,7 @@ import type {
   GapCandidate,
   QuestionFeedback,
   QuestionGap,
+  QuestionGapSource,
   QuestionLog,
   QuestionLogInput,
   QuestionLogUpdateInput
@@ -23,6 +24,38 @@ function gapsFromAnswer(answer: AnswerResult | undefined): QuestionGap[] {
 export function gapSummaryKey(summary: string, flowId?: string): string {
   const flow = flowId ?? "";
   return `${flow.length}:${flow}:${summary}`;
+}
+
+// Canonical dedupe key for a stored gap row, capturing every field a re-answer's
+// delete+reinsert would rewrite: source, trimmed summary, note, and whether it is
+// resolved/dismissed. A freshly reinserted answer gap is always unresolved,
+// undismissed, and note-less, so a resolved/dismissed row can never key-match a
+// fresh one — replacing it would genuinely change the candidate set.
+function gapDedupeKey(source: string, summary: string, note: string, resolved: boolean, dismissed: boolean): string {
+  return JSON.stringify([source, summary.trim(), note, resolved, dismissed]);
+}
+
+// True when re-answering a question would replace its answer-derived (auto +
+// followup) gaps with a byte-identical set — same (source, summary) multiset, none
+// resolved/dismissed, no stale note. When so, the replace is a no-op: the caller
+// skips the delete+reinsert (which would otherwise mint new gap ids and orphan
+// cluster memberships) and skips the catalog bump, so a re-answer that changed
+// nothing about the candidate gaps no longer forces the reconciler to re-run its
+// metered reshape (issue #168). Manual/verification/needs_attention gaps are not
+// replaced by the re-answer, so they are excluded from the comparison.
+export function answerGapsUnchanged(
+  existing: readonly QuestionGap[],
+  next: readonly { summary: string; source: QuestionGapSource }[]
+): boolean {
+  const existingKeys = existing
+    .filter((gap) => gap.source === "auto" || gap.source === "followup")
+    .map((gap) => gapDedupeKey(gap.source, gap.summary, gap.note ?? "", Boolean(gap.resolvedAt), Boolean(gap.dismissedAt)))
+    .sort();
+  const nextKeys = next.map((gap) => gapDedupeKey(gap.source, gap.summary, "", false, false)).sort();
+  if (existingKeys.length !== nextKeys.length) {
+    return false;
+  }
+  return existingKeys.every((key, index) => key === nextKeys[index]);
 }
 
 export interface QuestionLogStore {
@@ -211,6 +244,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     // The flow is decided by the watcher after the log is recorded, so a
     // completion can supply it now; fall back to any flow already on the log.
     const flowId = input.flowId ?? existing.flowId;
+    const nextAnswerGaps = gapsFromAnswer(input.answer);
     const updated: QuestionLog = {
       ...existing,
       chatProvider: input.chatProvider ?? existing.chatProvider,
@@ -220,14 +254,21 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       // Re-answering replaces auto-detected and followup gaps but preserves any manual flag.
       gaps: [
         ...(existing.gaps ?? []).filter((gap) => gap.source === "manual"),
-        ...gapsFromAnswer(input.answer)
+        ...nextAnswerGaps
       ],
       ...(flowId ? { flowId } : {})
     };
 
     this.logs.set(id, updated);
-    // Re-answering replaces the auto-detected gaps, changing the candidate set.
-    this.bumpCatalog(flowId);
+    // Re-answering replaces the auto-detected gaps, changing the candidate set —
+    // but only bump when it ACTUALLY changed. An identical re-answer (same gaps,
+    // same flow) leaves the candidate set untouched, so bumping would only make the
+    // reconciler re-run its metered reshape on an unchanged cluster set (#168).
+    const gapsChanged = !answerGapsUnchanged(existing.gaps ?? [], nextAnswerGaps);
+    const flowChanged = (existing.flowId ?? "") !== (flowId ?? "");
+    if (gapsChanged || flowChanged) {
+      this.bumpCatalog(flowId);
+    }
     return updated;
   }
 

@@ -666,7 +666,8 @@ describe("reconcileGaps audit", () => {
       decisionsApplied: 0,
       proposalsDrafted: 0,
       publicationActionsDrained: 0,
-      skippedModelWork: true
+      skippedModelWork: true,
+      reshapeSkipped: false
     });
   });
 

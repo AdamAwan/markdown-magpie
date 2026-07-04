@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Proposal } from "@magpie/core";
 import { fetchPullRequestStatus as defaultFetchPullRequestStatus } from "@magpie/git";
 import { logger } from "../logger.js";
@@ -9,7 +10,11 @@ import { runJobToCompletion } from "../features/jobs/service.js";
 import * as proposalsService from "../features/proposals/service.js";
 import { type SourceContextCache } from "../platform/source-context.js";
 import { describeFlowScope } from "../features/retrieve/service.js";
-import type { GapClusterRecord, PublicationActionRecord } from "../stores/gap-cluster-store.js";
+import type {
+  GapClusterMembershipRecord,
+  GapClusterRecord,
+  PublicationActionRecord
+} from "../stores/gap-cluster-store.js";
 import { pairKey } from "../stores/pr-crosslink-store.js";
 import { gapSummaryKey } from "../stores/question-log-store.js";
 import { selectRetainingChildOnSplit, selectSurvivingClusterOnMerge } from "./gap-reconciler-lineage.js";
@@ -57,6 +62,11 @@ interface GapReconcileRunDetails extends Record<string, unknown> {
   proposalsDrafted: number;
   publicationActionsDrained: number;
   skippedModelWork: boolean;
+  // True when clustering ran but the metered propose→critic reshape was skipped
+  // because the active cluster composition was byte-identical to the set already
+  // judged at the last reshape (issue #168). Distinct from skippedModelWork, which
+  // covers the whole clustering step being gated out by an unchanged revision.
+  reshapeSkipped: boolean;
 }
 
 // Resolved cluster->flow lookups, reused across a single run so each cluster's
@@ -140,7 +150,8 @@ async function reconcileGapsInner(
     decisionsApplied: 0,
     proposalsDrafted: 0,
     publicationActionsDrained: 0,
-    skippedModelWork: false
+    skippedModelWork: false,
+    reshapeSkipped: false
   };
 
   // (b) PR-state pass — only the open pull requests raised from this flow's proposals.
@@ -173,6 +184,7 @@ async function reconcileGapsInner(
     details.dismissDecisions = clustering.dismissDecisions;
     details.decisionsApplied = clustering.decisionsApplied;
     details.proposalsDrafted = clustering.proposalsDrafted;
+    details.reshapeSkipped = clustering.reshapeSkipped;
     await ctx.stores.gapClusters.setProcessedRevision(flowId, catalogRevision, new Date().toISOString());
   } else {
     details.skippedModelWork = true;
@@ -285,7 +297,13 @@ async function freezeClusterForProposal(ctx: AppContext, proposal: Proposal): Pr
 async function reconcileClusters(ctx: AppContext, flowId: string | undefined): Promise<
   Pick<
     GapReconcileRunDetails,
-    "clustersCreated" | "mergeDecisions" | "splitDecisions" | "dismissDecisions" | "decisionsApplied" | "proposalsDrafted"
+    | "clustersCreated"
+    | "mergeDecisions"
+    | "splitDecisions"
+    | "dismissDecisions"
+    | "decisionsApplied"
+    | "proposalsDrafted"
+    | "reshapeSkipped"
   >
 > {
   const flowLabel = flowId ?? "default";
@@ -295,7 +313,8 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
     splitDecisions: 0,
     dismissDecisions: 0,
     decisionsApplied: 0,
-    proposalsDrafted: 0
+    proposalsDrafted: 0,
+    reshapeSkipped: false
   };
 
   // 0) Evict resolved gaps from whatever active cluster still holds them. A gap
@@ -359,7 +378,25 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
   // and skip, leaving the rest of reconcileGaps to run.
   const active = await ctx.stores.gapClusters.listActiveClustersForFlow(flowId);
   if (active.length >= 1) {
-    const reshape = await requestReshape(ctx, active, flowId, flowLabel);
+    // (#168) Short-circuit the metered propose→critic reshape when the active
+    // cluster composition is byte-identical to the set already judged at the last
+    // reshape. The revision gate only tells us SOME gap changed this cycle; a bump
+    // that leaves the active cluster set (its ids + each cluster's membership gap
+    // ids) unchanged — an identical-gap re-answer, a change elsewhere in the flow —
+    // would otherwise re-run the full generation just to re-conclude "no merges,
+    // splits, or dismissals". Any genuine change (a new/removed cluster, a gap
+    // moving between clusters) changes the hash, so real work is never skipped.
+    const memberships = await ctx.stores.gapClusters.listActiveMembershipsForFlow(flowId);
+    const compositionHash = reshapeCompositionHash(active, memberships);
+    const lastReshapeHash = await ctx.stores.gapClusters.getReshapeCompositionHash(flowId);
+    if (compositionHash === lastReshapeHash) {
+      details.reshapeSkipped = true;
+      logger.info(
+        { flowLabel, compositionHash, activeClusters: active.length },
+        "gap reconciler: active cluster composition unchanged since last reshape; skipping propose→critic"
+      );
+    }
+    const reshape = details.reshapeSkipped ? undefined : await requestReshape(ctx, active, flowId, flowLabel);
     if (reshape) {
       // 3) Apply only the critic-confirmed changes, recording every decision
       // (confirmed or not) so it's inspectable in the UI, not just in the logs.
@@ -426,6 +463,13 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
         logger.info({ flowLabel, clusterId: dismissal.clusterId }, "gap reconciler: critic confirmed dismissal of off-topic cluster");
         await applyDismissal(ctx, { clusterId: dismissal.clusterId, rationale: dismissal.rationale }, flowId);
       }
+      // Record the composition we just judged, so a later tick whose active set is
+      // identical skips the reshape. Recorded ONLY here — inside the `reshape`
+      // branch — so a skipped, timed-out, failed, or malformed reshape (all of
+      // which leave `reshape` undefined) never marks an unjudged set as done and
+      // wedges the gate. If a merge/split/dismissal was applied, the active set now
+      // differs from this hash, so the next tick re-judges the new composition once.
+      await ctx.stores.gapClusters.setReshapeCompositionHash(flowId, compositionHash);
     }
   }
 
@@ -535,6 +579,36 @@ async function pruneResolvedMemberships(ctx: AppContext): Promise<void> {
   if (resolved.length > 0) {
     await ctx.stores.gapClusters.deactivateMembershipsForGaps(resolved);
   }
+}
+
+// Deterministic hash of a flow's active cluster composition: the sorted cluster
+// ids, each paired with its sorted active-membership gap ids. Two calls hash to
+// the same value exactly when the same clusters hold the same gaps, regardless of
+// row order — so the reconciler can tell "the set the critic already judged" from
+// "a genuinely changed set" (issue #168). Sorting is lexical, which is enough for
+// determinism; the ids only need to compare equal across ticks, not by magnitude.
+export function reshapeCompositionHash(
+  clusters: GapClusterRecord[],
+  memberships: GapClusterMembershipRecord[]
+): string {
+  const gapIdsByCluster = new Map<string, string[]>();
+  for (const membership of memberships) {
+    const bucket = gapIdsByCluster.get(membership.clusterId);
+    if (bucket) {
+      bucket.push(membership.gapId);
+    } else {
+      gapIdsByCluster.set(membership.clusterId, [membership.gapId]);
+    }
+  }
+  const canonical = clusters
+    .map((cluster) => cluster.id)
+    .sort()
+    .map((clusterId) => {
+      const gapIds = [...(gapIdsByCluster.get(clusterId) ?? [])].sort();
+      return `${clusterId}:[${gapIds.join(",")}]`;
+    })
+    .join(";");
+  return createHash("sha256").update(canonical).digest("hex");
 }
 
 type Reshape = ReturnType<typeof reconcileGapClustersOutputSchema.parse>;

@@ -12,7 +12,7 @@ import type {
   QuestionLogInput,
   QuestionLogUpdateInput
 } from "@magpie/core";
-import { gapSummaryKey, type QuestionLogStore } from "./question-log-store.js";
+import { answerGapsUnchanged, gapSummaryKey, type QuestionLogStore } from "./question-log-store.js";
 import { valuesClause } from "./sql-bulk.js";
 
 export class PostgresQuestionLogStore implements QuestionLogStore {
@@ -205,6 +205,16 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     // The flow is decided by the watcher after the log is recorded, so a
     // completion can supply it now; fall back to any flow already on the row.
     const flowId = input.flowId ?? existing.flowId ?? null;
+    const nextGapRows = answerGapRows(input.answer);
+    // Only the answer-derived gaps changing (or the gaps moving to another flow)
+    // actually changes the candidate set. An identical re-answer would otherwise
+    // delete+reinsert byte-identical rows — minting new gap ids that orphan cluster
+    // memberships (ON DELETE CASCADE) — and bump the revision, forcing the
+    // reconciler to re-run its metered reshape on an unchanged cluster set (#168).
+    // When nothing changed, leave the gap rows (and their memberships) untouched.
+    const gapsChanged = !answerGapsUnchanged(existing.gaps ?? [], nextGapRows);
+    const flowChanged = (existing.flowId ?? "") !== (flowId ?? "");
+    const replaceGaps = gapsChanged || flowChanged;
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -227,15 +237,17 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           flowId
         ]
       );
-      // Re-answering replaces the answer-derived gaps (auto + followup) but
-      // preserves any manual flag.
-      await client.query(
-        "DELETE FROM question_gaps WHERE question_id = $1 AND source IN ('auto', 'followup')",
-        [id]
-      );
-      await insertGapRows(client, id, answerGapRows(input.answer));
-      // Re-answering replaces the answer-derived gaps, changing the candidate set.
-      await bumpGapCatalog(client, flowId);
+      if (replaceGaps) {
+        // Re-answering replaces the answer-derived gaps (auto + followup) but
+        // preserves any manual flag.
+        await client.query(
+          "DELETE FROM question_gaps WHERE question_id = $1 AND source IN ('auto', 'followup')",
+          [id]
+        );
+        await insertGapRows(client, id, nextGapRows);
+        // The candidate set changed, so advance the revision for the reconciler.
+        await bumpGapCatalog(client, flowId);
+      }
       await client.query("DELETE FROM answer_citations WHERE question_id = $1", [id]);
 
       await insertCitationRows(client, id, input.answer.citations, { onConflictUpdate: false });
