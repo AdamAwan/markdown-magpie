@@ -116,10 +116,20 @@ proposal's target documents** (a confident answer citing unrelated docs does not
 - After two failed verifications for the same question (`CLOSURE_RETRY_CAP`), its gap is
   filed under **`needs_attention`** instead. That source parks the *whole question* from
   gap candidacy, so it stops auto-redrafting and waits for a human (`needs_attention`).
+  The cap counts **distinct proposals** whose re-ask came back `still_open`, not raw rows,
+  so a `verify_gap_closure` job retry re-recording the same proposal's outcome (the job has
+  no idempotency guard) costs 1 toward the cap however many times it retries. The count is
+  also bounded to *since the question's verification lineage last reset* — the
+  resolved/dismissed timestamp of its prior `verification`/`needs_attention` gap row, if
+  any — so a question parked once and later fixed or dismissed by a human gets a fresh
+  retry budget instead of permanently carrying the old count (see `countPriorStillOpen` in
+  `apps/api/src/stores/gap-closure-verification-store.ts`).
 
 Every re-ask is recorded in the `gap_closure_verification` table (verdict, confidence,
-whether it cited a merged doc, and the detail). Seed / clusterless proposals have no
-triggering questions, so nothing is verified for them (and nothing was ever resolved).
+whether it cited a merged doc, and the detail) — an append-only audit trail; the retry cap
+above is *derived* from it (scoped by distinct proposal + a reset boundary), not a raw tally
+of this table's rows. Seed / clusterless proposals have no triggering questions, so nothing
+is verified for them (and nothing was ever resolved).
 The verification job and endpoint are documented in [ai-jobs.md](./ai-jobs.md); the
 console surfaces the per-proposal outcome as a closure badge on the Proposals page.
 

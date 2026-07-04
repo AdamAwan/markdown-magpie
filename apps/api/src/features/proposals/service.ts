@@ -171,9 +171,14 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
 
     if (verdict === "still_open") {
       anyStillOpen = true;
-      // countPriorStillOpen includes the row just recorded, so the Nth failure
-      // reads as N. At the cap the gap goes to a human instead of re-drafting.
-      const failures = await ctx.stores.gapClosureVerifications.countPriorStillOpen(questionId);
+      // countPriorStillOpen includes the row just recorded, so the Nth *distinct
+      // proposal* to fail reads as N. Bound it to since the question's prior
+      // verification-lineage gap (if any) was resolved/dismissed, so a question
+      // fixed or dismissed by a human starts a fresh retry budget instead of
+      // carrying an old, permanently-burned count forward (see
+      // countPriorStillOpen's doc comment for the full rationale).
+      const sinceReset = verificationLineageResetSince(original);
+      const failures = await ctx.stores.gapClosureVerifications.countPriorStillOpen(questionId, sinceReset);
       const capped = failures >= CLOSURE_RETRY_CAP;
       if (capped) {
         needsAttention = true;
@@ -213,6 +218,28 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
 function reopenSummaryFor(original: { question: string; gaps?: Array<{ summary: string; source: string; resolvedAt?: string; dismissedAt?: string }> }, proposal: Proposal): string {
   const openGap = (original.gaps ?? []).find((gap) => !gap.resolvedAt && !gap.dismissedAt && gap.source !== "needs_attention");
   return openGap?.summary ?? splitGapSummaries(proposal.gapSummary)[0] ?? original.question;
+}
+
+// The retry-cap reset boundary for this question, if any: recordVerificationGap
+// keeps at most one live 'verification'/'needs_attention' gap row per question,
+// hard-deleting and replacing it on every reopen — so a resolved or dismissed row
+// still present on `original` (fetched before this reopen) is exactly the prior
+// closure-retry lineage having ended (a later proposal verified closure, or a
+// human dismissed it) before a new gap arose on the same question. Its
+// resolved/dismissed timestamp bounds countPriorStillOpen so that old lineage's
+// failures don't count against this new one. Returns undefined when there is no
+// such row (first-ever failure) or it is still open (an ongoing streak, whose
+// full history should still count).
+function verificationLineageResetSince(original: {
+  gaps?: Array<{ source: string; resolvedAt?: string; dismissedAt?: string }>;
+}): string | undefined {
+  const lineageGap = (original.gaps ?? []).find(
+    (gap) => gap.source === "verification" || gap.source === "needs_attention"
+  );
+  const resetTimestamps = [lineageGap?.resolvedAt, lineageGap?.dismissedAt].filter(
+    (value): value is string => Boolean(value)
+  );
+  return resetTimestamps.length > 0 ? resetTimestamps.sort().at(-1) : undefined;
 }
 
 // A compact, human-readable note for a failed closure: what merged and how the
