@@ -23,7 +23,11 @@ Each question log records:
   distinct unanswered topic is its own gap, tagged `auto` (a whole-question miss
   detected during answer synthesis), `followup` (supporting material a confident
   answer searched for during retrieval but the knowledge base did not contain),
-  or `manual` (flagged by an admin).
+  `manual` (flagged by an admin), `verification` (a merged proposal failed to close
+  this gap — see [Gap-closure verification](#gap-closure-verification)), or
+  `needs_attention` (verification failed repeatedly and the question is parked from
+  auto-redrafting). A `verification`/`needs_attention` gap may carry a `note` — the
+  detail of why the merged document still did not answer the question.
 - Helpful or unhelpful feedback, when submitted.
 - Manual knowledge-gap flag, when set.
 - Answer trace — the watcher's audit trail of how the answer was produced: the
@@ -88,6 +92,34 @@ base does not cover X" rather than fabricate. Several layers enforce this:
 The model can also mark an answer **out of scope**: when the question is unrelated to the picked flow's subject area — e.g. a question about cats asked of a product flow — it sets `outOfScope`, and the answer is returned at `unknown` confidence with **no gaps at all**. This is distinct from `isKnowledgeGap` ("this flow *should* cover the topic but the docs don't"): an off-topic question is not a gap, so it never clusters or drafts a proposal. The out-of-scope signal rides on the answer result (`outOfScope`) so the console and MCP can surface it distinctly from a low-confidence answer. This is the picked flow's counterpart to the router's `flowSelectionRequired` abstain, which fires earlier when no flow can be chosen at all.
 
 Gaps can also be flagged manually — via the **Knowledge gap** chip in the console, or the MCP `kb_feedback` tool — when the system fails to detect one automatically. A manual flag is separate from helpful/unhelpful feedback (an answer can be helpful and still expose a gap), and a manually-flagged question joins the same gap-candidate clustering and proposal workflow regardless of its answer confidence. Manual flagging adds a `manual` gap (its summary falls back to the question text) alongside any auto-detected gaps; clearing the flag removes only the manual gap and leaves auto-detected gaps intact.
+
+## Gap-closure verification
+
+Merging a proposal used to *assume* it closed its gaps. It no longer does: a merge is
+**verified before it resolves anything**. When a proposal is marked `merged`, the merge
+cascade re-indexes the destination and — for any proposal with triggering questions —
+enqueues a `verify_gap_closure` job. The API then **re-asks each triggering question**
+through the normal queued `answer_question` path against the freshly re-indexed knowledge
+base, and applies a deterministic closure test: the question is *closed* only when the
+re-ask comes back with a confident answer (`high`/`medium`) that **cites one of the merged
+proposal's target documents** (a confident answer citing unrelated docs does not count).
+
+- If every triggering question closes, the gaps are resolved — this is the only path that
+  now resolves a gap (`proposals.closure_status = verified_closed`).
+- If any question is still open, its gap stays open and gains a **`verification`** row
+  whose `note` records why the merged doc still fell short, so the reconciler re-drafts it
+  (`reopened`). Because the reopen summary reuses the question's own still-open gap
+  summary, it dedups with the existing gap in candidate clustering rather than forking a
+  new one.
+- After two failed verifications for the same question (`CLOSURE_RETRY_CAP`), its gap is
+  filed under **`needs_attention`** instead. That source parks the *whole question* from
+  gap candidacy, so it stops auto-redrafting and waits for a human (`needs_attention`).
+
+Every re-ask is recorded in the `gap_closure_verification` table (verdict, confidence,
+whether it cited a merged doc, and the detail). Seed / clusterless proposals have no
+triggering questions, so nothing is verified for them (and nothing was ever resolved).
+The verification job and endpoint are documented in [ai-jobs.md](./ai-jobs.md); the
+console surfaces the per-proposal outcome as a closure badge on the Proposals page.
 
 ## Queued Answers
 
