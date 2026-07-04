@@ -109,6 +109,40 @@ const Preview = styled.pre(({ theme }) => ({
   whiteSpace: "pre-wrap"
 }));
 
+// Post-merge gap-closure outcome badges. A merged proposal no longer blindly
+// resolves its gaps — the API re-asks the triggering questions and records
+// whether the merged doc actually answered them (see docs/question-logging.md).
+const CLOSURE_BADGES: Record<NonNullable<Proposal["closureStatus"]>, { label: string; title: string }> = {
+  verified_closed: {
+    label: "Verified closed",
+    title: "Re-asking the triggering questions confirmed the merged document answers them; the gaps were resolved."
+  },
+  reopened: {
+    label: "Reopened",
+    title: "Re-asking the triggering questions still failed to find a confident, cited answer; the gaps stay open for another draft."
+  },
+  needs_attention: {
+    label: "Needs attention",
+    title: "Verification failed repeatedly; the questions are parked from auto-redrafting and need a human look."
+  }
+};
+
+// Closure outcome → Badge tone: verified (green), reopened (amber), needs
+// attention (red) — reusing the shared status tones so it reads as one system.
+const CLOSURE_TONE = {
+  verified_closed: "completed",
+  reopened: "running",
+  needs_attention: "failed"
+} as const satisfies Record<NonNullable<Proposal["closureStatus"]>, string>;
+
+// Stacks the proposal status and its post-merge closure badge at the row's end.
+const StatusStack = styled.div(({ theme }) => ({
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-end",
+  gap: theme.space.xs
+}));
+
 export function ProposalPanel({
   loading,
   publishProposal,
@@ -158,9 +192,20 @@ export function ProposalPanel({
                     <h3>{selectedProposal.title}</h3>
                     <PathLine>{selectedProposal.targetPath}</PathLine>
                   </div>
-                  <Badge tone={statusTone(selectedProposal.status)} dot title={`Proposal status: ${selectedProposal.status}`}>
-                    {selectedProposal.status}
-                  </Badge>
+                  <StatusStack>
+                    <Badge tone={statusTone(selectedProposal.status)} dot title={`Proposal status: ${selectedProposal.status}`}>
+                      {selectedProposal.status}
+                    </Badge>
+                    {selectedProposal.closureStatus ? (
+                      <Badge
+                        tone={CLOSURE_TONE[selectedProposal.closureStatus]}
+                        dot
+                        title={CLOSURE_BADGES[selectedProposal.closureStatus].title}
+                      >
+                        {CLOSURE_BADGES[selectedProposal.closureStatus].label}
+                      </Badge>
+                    ) : null}
+                  </StatusStack>
                 </RowTop>
                 {selectedProposal.rationale ? <p>{selectedProposal.rationale}</p> : null}
                 {selectedProposal.draftContext ? (

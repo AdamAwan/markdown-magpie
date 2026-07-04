@@ -118,6 +118,37 @@ POST /api/proposals/:id/status
 { "status": "ready" }
 ```
 
+### Gap-closure verification (`verify_gap_closure`)
+
+A merge no longer *blindly* resolves the gaps a proposal was drafted to close. When a
+proposal is marked `merged` (the PR poller for a hosted destination, or the console's
+Merge action for a local-git one), the merge cascade re-indexes the destination and, if
+the proposal had triggering questions, enqueues a **`verify_gap_closure`** maintenance job
+`{ proposalId }`. A maintenance watcher claims it and POSTs
+`POST /api/proposals/:id/verify-closure`; the orchestration lives in the API because it
+needs DB access.
+
+For each triggering question the API **re-asks it** — recording a fresh question log and
+running it through the normal queue-only `answer_question` path (flow pinned via
+`requestedFlowId`) against the now-updated index — then applies a deterministic closure
+test: the question is **closed** only when the re-ask returns a confident answer
+(`high`/`medium`) that **cites one of the merged proposal's target docs**. Outcomes, per
+proposal (`proposals.closure_status`):
+
+- **`verified_closed`** — every triggering question closed; the gaps are now resolved.
+- **`reopened`** — at least one question is still open; those gaps stay open and gain a
+  `verification`-source row carrying the failure detail as a `note`, so they re-draft. That
+  note is fed to the next `draft_markdown_proposal` as `resubmissionNotes`, so the drafter
+  sees why the previous merge fell short and addresses the specific shortfall.
+- **`needs_attention`** — a question has failed verification twice (`CLOSURE_RETRY_CAP`);
+  its gap is filed under the `needs_attention` source, which parks the whole question from
+  auto-redrafting so a human can look.
+
+Every re-ask is recorded in `gap_closure_verification` (verdict, confidence, whether it
+cited a merged doc, detail). Clusterless / seed proposals have no triggering questions and
+skip verification. The only generative step is the enqueued `answer_question` re-ask, so
+queue-only holds. See [question-logging.md](question-logging.md) for the gap sources.
+
 Once a proposal is `ready` and its target path maps to an indexed Git checkout, it can be
 published:
 

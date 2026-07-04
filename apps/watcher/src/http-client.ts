@@ -51,6 +51,12 @@ export interface WatcherApi extends WatcherApiClient {
   // job the API bounded-waits on, drafting and publication enqueue). An absent
   // flowId reconciles the default flow.
   reconcileGaps(flowId: string | undefined, signal?: AbortSignal): Promise<{ ok: true }>;
+  // Drives post-merge gap-closure verification in the API for a merged proposal:
+  // re-asks the triggering questions (enqueued answer_question jobs the API
+  // bounded-waits on), runs the deterministic closure test, and resolves or
+  // reopens the gaps. Returns the API's closure result; the runner passes it
+  // through unchanged (schema-validated).
+  verifyClosure(proposalId: string, signal?: AbortSignal): Promise<unknown>;
   // Drives source-change sync in the API (checkout/diff/candidate gather + the
   // generative plan job the API bounded-waits on + publication enqueue), returning
   // the run ids created. An absent flowId watches every configured git source.
@@ -161,6 +167,10 @@ export class HttpWatcherApi implements WatcherApi {
   async reconcileGaps(flowId: string | undefined, signal?: AbortSignal): Promise<{ ok: true }> {
     await this.post("/api/gaps/reconcile", { ...(flowId ? { flowId } : {}) }, signal, this.maintenanceTimeoutMs);
     return { ok: true };
+  }
+
+  async verifyClosure(proposalId: string, signal?: AbortSignal): Promise<unknown> {
+    return this.post(`/api/proposals/${proposalId}/verify-closure`, {}, signal, this.maintenanceTimeoutMs);
   }
 
   async runSourceSync(flowId: string | undefined, signal?: AbortSignal): Promise<{ runIds: string[] }> {

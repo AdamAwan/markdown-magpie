@@ -48,7 +48,10 @@ Implications you must design around:
   non-provider jobs, but **provider (AI) jobs fan out per provider** —
   `` `${type}__${provider}` `` (e.g. `answer_question__openai_compatible`), see
   `packages/jobs/src/catalog.ts`. Maintenance jobs are *orchestrators* that fan out into
-  AI + GitHub jobs (see `docs/architecture.md` for the tier-1/tier-2 table).
+  AI + GitHub jobs (see `docs/architecture.md` for the tier-1/tier-2 table). Most are
+  scheduled on a cron, but **`verify_gap_closure`** is a maintenance job enqueued *on
+  merge*: a merge no longer blindly resolves gaps — it re-asks the triggering questions and
+  resolves only if the merged doc actually answers them (see `docs/question-logging.md`).
 
 **Embeddings are the exception to "queue-only".** The API computes embeddings **inline**
 (it holds an embedding provider) for both indexing (`apps/api/src/stores/embed-sections.ts`)

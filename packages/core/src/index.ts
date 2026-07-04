@@ -164,11 +164,20 @@ export interface KnowledgeGapSignal {
   source: QuestionGapSource;
 }
 
-export type QuestionGapSource = "auto" | "manual" | "followup";
+// "auto"/"manual"/"followup" are the sources a live answer can raise (the model
+// or an admin). "verification"/"needs_attention" are raised server-side after a
+// merged proposal fails gap-closure verification: the triggering question was
+// re-asked and the merged doc still did not answer it. These never come from a
+// provider — the answer_question output schema stays narrow to the first three.
+export type QuestionGapSource = "auto" | "manual" | "followup" | "verification" | "needs_attention";
 
 export interface QuestionGap {
   summary: string;
   source: QuestionGapSource;
+  // Verification detail carried when a failed gap-closure check reopens this gap:
+  // what merged, the re-asked answer, and why it is still weak — so a re-drafted
+  // proposal can see why it is being resubmitted. Only set for verification gaps.
+  note?: string;
   // Set when a merged proposal closes this gap. A resolved gap is retained for
   // audit but no longer surfaces as a candidate.
   resolvedAt?: string;
@@ -352,6 +361,12 @@ export interface Proposal {
   // true when this proposal's destination is a local-git (file://) repository, so
   // the UI offers a real "Merge" instead of the hosted "Mark Merged".
   localGitDestination?: boolean;
+  // The outcome of gap-closure verification, set after the proposal merged and its
+  // triggering questions were re-asked. Absent until a verification has run.
+  // 'verified_closed' = the merged doc now answers every triggering question;
+  // 'reopened' = at least one is still weak (its gap was left open to re-draft);
+  // 'needs_attention' = repeated verification failures, flagged for a human.
+  closureStatus?: "verified_closed" | "reopened" | "needs_attention";
 }
 
 // The inputs handed to the drafter, kept alongside the proposal so the context
@@ -560,6 +575,12 @@ export interface DraftMarkdownProposalJobInput {
   gapSummaries: string[];
   triggeringQuestions: string[];
   evidence: Citation[];
+  // Verification detail for gaps being re-drafted after a previous proposal
+  // merged but failed its gap-closure check (the `note` on a verification /
+  // needs_attention gap): what merged, the re-asked answer, and why it was still
+  // weak. Present only on a resubmission, so the drafter can see why its earlier
+  // attempt did not close the gap and address the specific shortfall this time.
+  resubmissionNotes?: string[];
   sourceContext?: SourceDataContext[];
   // The flow's already in-flight proposals and currently open pull requests, so
   // the drafter is aware of work it should build on or avoid duplicating rather

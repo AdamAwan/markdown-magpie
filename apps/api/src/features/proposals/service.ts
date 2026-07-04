@@ -1,4 +1,5 @@
 import type {
+  AnswerQuestionJobInput,
   CorrectDocumentJobInput,
   DedupeDocumentsJobInput,
   ImproveDocumentJobInput,
@@ -13,7 +14,9 @@ import type {
   SourceDataContext,
   SplitDocumentJobInput
 } from "@magpie/core";
-import type { JobView } from "@magpie/jobs";
+import type { JobView, verifyGapClosureOutputSchema } from "@magpie/jobs";
+import { runJobToCompletion } from "../jobs/service.js";
+import { citesMergedDoc, evaluateClosure, proposalTargetPaths } from "./closure-eval.js";
 import { fileURLToPath } from "node:url";
 import { mergeLocalProposalBranch } from "@magpie/git";
 import { z } from "zod";
@@ -53,16 +56,183 @@ export async function updateStatus(
   return ctx.stores.proposals.updateStatus(id, status);
 }
 
+// The number of failed closure verifications a triggering question tolerates
+// before its gap is flagged for a human instead of auto-redrafting.
+const CLOSURE_RETRY_CAP = 2;
+
+type VerifyGapClosureOutput = z.infer<typeof verifyGapClosureOutputSchema>;
+
 // The work that must happen once a proposal is merged, shared by the manual
-// "Mark merged" endpoint and the pull-request poller: resolve its gaps and
-// re-index the destination knowledge base.
+// "Mark merged" endpoint and the pull-request poller: re-index the destination
+// knowledge base, then verify (rather than assume) that the merge closed its
+// gaps. Gap resolution is no longer blind — it is gated on re-asking the
+// triggering questions (see verifyGapClosure), enqueued here as a job so the
+// re-asks run through the normal queue-only answer path.
 export async function runMergeCascade(
   ctx: AppContext,
   proposal: Proposal
-): Promise<{ resolvedGapCount: number; reindexed: boolean }> {
-  const resolvedGapCount = await resolveGapsForMergedProposal(ctx, proposal);
+): Promise<{ reindexed: boolean; verificationEnqueued: boolean }> {
   const reindexed = await reindexDestinationForProposal(ctx, proposal);
-  return { resolvedGapCount, reindexed };
+  // Seed / clusterless proposals have no triggering questions to re-ask, so there
+  // is nothing to verify (and nothing was ever resolved for them).
+  const hasTriggers = (proposal.triggeringQuestionIds ?? []).length > 0;
+  if (hasTriggers) {
+    await ctx.jobs.create("verify_gap_closure", { proposalId: proposal.id });
+    logger.info({ proposalId: proposal.id }, "enqueued gap-closure verification for merged proposal");
+  }
+  return { reindexed, verificationEnqueued: hasTriggers };
+}
+
+// Re-asks each triggering question of a merged proposal and checks whether the
+// merged document now answers it (deterministically: a confident answer that
+// cites one of the proposal's target docs). All triggering questions must close
+// for the gap to resolve; any still-open question reopens the gap (carrying the
+// verification detail) so it re-drafts — until the retry cap, past which it is
+// flagged for a human. The re-asks go through runJobToCompletion, so the only
+// generative step is an enqueued answer_question job a provider watcher claims.
+export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Promise<VerifyGapClosureOutput> {
+  const questionIds = proposal.triggeringQuestionIds ?? [];
+  const targetPaths = proposalTargetPaths(proposal);
+  const provider = ctx.config.get().aiProvider;
+  const flows = ctx.knowledgeConfig.flows.map((flow) => ({
+    id: flow.id,
+    name: flow.name,
+    ...(flow.persona ? { persona: flow.persona } : {})
+  }));
+
+  const perQuestion: VerifyGapClosureOutput["perQuestion"] = [];
+  let anyStillOpen = false;
+  let needsAttention = false;
+
+  for (const questionId of questionIds) {
+    const original = await ctx.stores.questionLogs.get(questionId);
+    if (!original) {
+      // The triggering question is gone; we cannot re-ask it, so we cannot claim
+      // closure. Record it as still-open (no re-ask) and move on.
+      await ctx.stores.gapClosureVerifications.record({
+        proposalId: proposal.id,
+        gapClusterId: proposal.gapClusterId,
+        questionId,
+        verdict: "still_open",
+        confidence: "unknown",
+        citedMergedDoc: false,
+        detail: "triggering question log not found; could not re-ask"
+      });
+      perQuestion.push({ questionId, reaskedQuestionId: null, verdict: "still_open" });
+      anyStillOpen = true;
+      continue;
+    }
+
+    // A fresh question log for the re-ask; answer_question completion fills in its
+    // answer, confidence and citations against the now-updated index.
+    const reasked = await ctx.stores.questionLogs.record({
+      question: original.question,
+      chatProvider: provider,
+      retrievedSectionIds: []
+    });
+    const requestedFlowId = proposal.flowId ?? original.flowId;
+    const input: AnswerQuestionJobInput & { provider: typeof provider } = {
+      questionLogId: reasked.id,
+      question: original.question,
+      flows,
+      ...(requestedFlowId ? { requestedFlowId } : {}),
+      provider,
+      expectedOutput: "answer_result"
+    };
+
+    try {
+      await runJobToCompletion(ctx, "answer_question", input);
+    } catch (error) {
+      // A timeout / no provider watcher means we could not verify — treat as
+      // still-open below rather than claiming a closure we did not observe.
+      const message = error instanceof Error ? error.message : "unknown error";
+      logger.warn({ proposalId: proposal.id, questionId, err: message }, "gap-closure re-ask did not complete");
+    }
+
+    const answered = await ctx.stores.questionLogs.get(reasked.id);
+    const answer = answered?.answer
+      ? { confidence: answered.answer.confidence, citations: answered.answer.citations }
+      : undefined;
+    const verdict = evaluateClosure(answer, targetPaths);
+    const cited = answer ? citesMergedDoc(answer.citations, targetPaths) : false;
+    const detail = buildVerificationDetail(proposal, answer);
+
+    await ctx.stores.gapClosureVerifications.record({
+      proposalId: proposal.id,
+      gapClusterId: proposal.gapClusterId,
+      questionId,
+      reaskedQuestionId: reasked.id,
+      verdict,
+      confidence: answer?.confidence ?? "unknown",
+      citedMergedDoc: cited,
+      detail
+    });
+    perQuestion.push({ questionId, reaskedQuestionId: reasked.id, verdict });
+
+    if (verdict === "still_open") {
+      anyStillOpen = true;
+      // countPriorStillOpen includes the row just recorded, so the Nth failure
+      // reads as N. At the cap the gap goes to a human instead of re-drafting.
+      const failures = await ctx.stores.gapClosureVerifications.countPriorStillOpen(questionId);
+      const capped = failures >= CLOSURE_RETRY_CAP;
+      if (capped) {
+        needsAttention = true;
+      }
+      const summary = reopenSummaryFor(original, proposal);
+      await ctx.stores.questionLogs.recordVerificationGap(questionId, {
+        summary,
+        source: capped ? "needs_attention" : "verification",
+        note: detail
+      });
+    }
+  }
+
+  const closureStatus: VerifyGapClosureOutput["closureStatus"] = anyStillOpen
+    ? needsAttention
+      ? "needs_attention"
+      : "reopened"
+    : "verified_closed";
+
+  if (closureStatus === "verified_closed") {
+    // Verified: now (and only now) resolve the gaps the proposal set out to close.
+    await resolveGapsForMergedProposal(ctx, proposal);
+  }
+
+  await ctx.stores.proposals.setClosureStatus(proposal.id, closureStatus);
+  logger.info(
+    { proposalId: proposal.id, closureStatus, questions: perQuestion.length },
+    "gap-closure verification complete"
+  );
+  return { proposalId: proposal.id, closureStatus, perQuestion };
+}
+
+// The gap summary a reopened verification gap is filed under. Prefer the
+// question's own still-open gap summary (so it dedups with the existing gap row
+// in candidate clustering); fall back to the proposal's recorded summary, then
+// the question text.
+function reopenSummaryFor(original: { question: string; gaps?: Array<{ summary: string; source: string; resolvedAt?: string; dismissedAt?: string }> }, proposal: Proposal): string {
+  const openGap = (original.gaps ?? []).find((gap) => !gap.resolvedAt && !gap.dismissedAt && gap.source !== "needs_attention");
+  return openGap?.summary ?? splitGapSummaries(proposal.gapSummary)[0] ?? original.question;
+}
+
+// A compact, human-readable note for a failed closure: what merged and how the
+// re-ask fell short. Stored on the reopened gap so a re-draft sees why.
+function buildVerificationDetail(
+  proposal: Proposal,
+  answer: { confidence: string; citations: Array<{ path: string }> } | undefined
+): string {
+  const paths = [...proposalTargetPaths(proposal)];
+  const merged = paths.length > 0 ? paths.join(", ") : proposal.targetPath;
+  if (!answer) {
+    return `Merged ${merged}, but the re-asked question did not complete (no answer to verify).`;
+  }
+  const citedPaths = answer.citations.map((citation) => citation.path);
+  const citedMerged = citedPaths.some((path) => paths.includes(path));
+  return (
+    `Merged ${merged}. Re-asking still returned confidence "${answer.confidence}"` +
+    (citedMerged ? " and did cite the merged doc" : ` and did not cite the merged doc (cited: ${citedPaths.join(", ") || "nothing"})`) +
+    "; the gap is not yet closed."
+  );
 }
 
 // Resolves the gaps a merged proposal closed: precisely the rows whose question
@@ -422,6 +592,27 @@ export async function draftFromGaps(
     (log): log is NonNullable<typeof log> => Boolean(log)
   );
   const evidence = dedupeCitations(logs.flatMap((log) => log.answer?.citations ?? []));
+  // When this is a re-draft after a failed gap-closure verification, the reopened
+  // gaps carry a `note` explaining why the last merge did not answer the question.
+  // Surface those (for the gaps actually being drafted, still open) so the drafter
+  // sees why it is being resubmitted and can address the specific shortfall.
+  const gapSummarySet = new Set(gapSummaries);
+  const resubmissionNotes = [
+    ...new Set(
+      logs.flatMap((log) =>
+        (log.gaps ?? [])
+          .filter(
+            (gap) =>
+              gap.note &&
+              !gap.resolvedAt &&
+              !gap.dismissedAt &&
+              (gap.source === "verification" || gap.source === "needs_attention") &&
+              gapSummarySet.has(gap.summary)
+          )
+          .map((gap) => gap.note as string)
+      )
+    )
+  ];
   const deps = ctx.repositoryDeps();
   // Prefer an explicit override; otherwise inherit the flow the matched gaps came
   // from. Candidates within a cluster share a flow (clustering is per-flow), so
@@ -445,6 +636,9 @@ export async function draftFromGaps(
     gapSummaries,
     triggeringQuestions: logs.map((log) => log.question),
     evidence,
+    // Omit entirely when this is not a resubmission, so a first-time draft's
+    // prompt input carries no empty noise.
+    resubmissionNotes: resubmissionNotes.length ? resubmissionNotes : undefined,
     sourceContext,
     // Omit the key entirely when there's nothing in flight, so the serialised
     // prompt input carries no empty noise.

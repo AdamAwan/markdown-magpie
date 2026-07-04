@@ -9,6 +9,10 @@ import { PostgresPatrolStore } from "../stores/postgres-patrol-store.js";
 import { PostgresSourceSyncStore } from "../stores/postgres-source-sync-store.js";
 import { PostgresWatcherRegistryStore } from "../stores/postgres-watcher-registry-store.js";
 import { InMemoryProposalStore } from "../stores/proposal-store.js";
+import {
+  InMemoryGapClosureVerificationStore,
+  PostgresGapClosureVerificationStore
+} from "../stores/gap-closure-verification-store.js";
 import { InMemoryPrCrosslinkStore } from "../stores/pr-crosslink-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
 import { InMemoryReconciliationDecisionStore } from "../stores/reconciliation-decision-store.js";
@@ -61,6 +65,19 @@ export function createProposalStore(config: AppConfig, pool: pg.Pool): InMemoryP
     "PROPOSAL_STORE",
     (pool) => new PostgresProposalStore(pool),
     () => new InMemoryProposalStore()
+  );
+}
+
+export function createGapClosureVerificationStore(
+  config: AppConfig,
+  pool: pg.Pool
+): InMemoryGapClosureVerificationStore | PostgresGapClosureVerificationStore {
+  return createStore<InMemoryGapClosureVerificationStore | PostgresGapClosureVerificationStore>(
+    config,
+    pool,
+    "GAP_CLOSURE_VERIFICATION_STORE",
+    (pool) => new PostgresGapClosureVerificationStore(pool),
+    () => new InMemoryGapClosureVerificationStore()
   );
 }
 

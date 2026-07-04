@@ -7,7 +7,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { jobDefinition } from "@magpie/jobs";
+import type { JobType, JobView } from "@magpie/jobs";
+import type { AnswerResult } from "@magpie/core";
 import { RuntimeConfigHolder } from "../../config-holder.js";
+import { FakeJobBroker } from "../../jobs/fake-broker.js";
 import { makeTestContext } from "../../test-support/context.js";
 import * as proposals from "./service.js";
 
@@ -34,26 +37,42 @@ async function seedGitRepository(ctx: ReturnType<typeof makeTestContext>): Promi
   await ctx.stores.knowledgeIndex.indexLocalRepository({ localPath: clonePath, repositoryId: "test-repo", name: "test-repo" });
 }
 
-test("runMergeCascade resolves the gaps the merged proposal recorded", async () => {
-  const ctx = makeTestContext();
+// A fake broker that synchronously completes every answer_question job by
+// writing a caller-controlled answer onto the re-asked question log — so
+// runJobToCompletion returns at once and verifyGapClosure reads a real answer,
+// no watcher required. Mirrors the ReshapingJobBroker pattern used by the
+// reconciler tests.
+class AnsweringJobBroker extends FakeJobBroker {
+  constructor(
+    private readonly ctx: ReturnType<typeof makeTestContext>,
+    private readonly answerFor: (questionLogId: string) => AnswerResult
+  ) {
+    super();
+  }
 
-  // Record a question and flag a manual gap on it. Manual-gap logs surface as
-  // gap candidates regardless of confidence.
+  override async create(type: JobType, input: unknown): Promise<JobView> {
+    const job = await super.create(type, input);
+    if (type === "answer_question") {
+      const questionLogId = (input as { questionLogId: string }).questionLogId;
+      const answer = this.answerFor(questionLogId);
+      await this.ctx.stores.questionLogs.updateAnswer(questionLogId, { answer, chatProvider: "codex" });
+      return super.complete(job.id, answer);
+    }
+    return job;
+  }
+}
+
+function citation(path: string): AnswerResult["citations"][number] {
+  return { documentId: "d", sectionId: "s", path, heading: "h", anchor: "a", excerpt: "e", relevance: 0.9 };
+}
+
+async function mergedProposalWithGap(ctx: ReturnType<typeof makeTestContext>) {
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
     chatProvider: "codex",
     retrievedSectionIds: []
   });
   await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
-
-  const before = await ctx.stores.questionLogs.listGapCandidates(50);
-  assert.equal(
-    before.some((candidate) => candidate.summary === "How to configure X"),
-    true,
-    "gap should be a candidate before the proposal merges"
-  );
-
-  // A merged proposal that closes exactly that gap.
   const proposal = await ctx.stores.proposals.create({
     title: "Configure X",
     targetPath: "configure-x.md",
@@ -66,16 +85,124 @@ test("runMergeCascade resolves the gaps the merged proposal recorded", async () 
   await ctx.stores.proposals.updateStatus(proposal.id, "merged");
   const merged = await ctx.stores.proposals.get(proposal.id);
   assert.ok(merged);
+  return { log, merged };
+}
+
+test("runMergeCascade enqueues verification instead of resolving gaps blindly", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
 
   const result = await proposals.runMergeCascade(ctx, merged);
 
-  assert.equal(result.resolvedGapCount, 1);
+  assert.equal(result.verificationEnqueued, true);
+  const enqueued = await ctx.jobs.list({ type: "verify_gap_closure" });
+  assert.equal(enqueued.jobs.length, 1, "a verify_gap_closure job was enqueued");
 
+  // The gap is NOT resolved yet — resolution is now gated on verification.
+  const after = await ctx.stores.questionLogs.listGapCandidates(50);
+  assert.equal(
+    after.some((candidate) => candidate.summary === "How to configure X"),
+    true,
+    "gap stays a candidate until verification confirms closure"
+  );
+});
+
+test("runMergeCascade skips verification for a proposal with no triggering questions", async () => {
+  const ctx = makeTestContext();
+  const proposal = await ctx.stores.proposals.create({
+    title: "Seeded doc",
+    targetPath: "seed.md",
+    markdown: "# Seed",
+    rationale: "r",
+    evidence: []
+  });
+  await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+  const merged = await ctx.stores.proposals.get(proposal.id);
+  assert.ok(merged);
+
+  const result = await proposals.runMergeCascade(ctx, merged);
+  assert.equal(result.verificationEnqueued, false);
+  assert.equal((await ctx.jobs.list({ type: "verify_gap_closure" })).jobs.length, 0);
+});
+
+test("verifyGapClosure marks verified_closed and resolves the gap when the re-ask cites the merged doc", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  ctx.jobs = new AnsweringJobBroker(ctx, () => ({
+    answer: "Set the config flag.",
+    confidence: "high",
+    citations: [citation("configure-x.md")]
+  }));
+
+  const result = await proposals.verifyGapClosure(ctx, merged);
+
+  assert.equal(result.closureStatus, "verified_closed");
+  assert.equal(result.perQuestion[0]?.verdict, "closed");
+  const proposal = await ctx.stores.proposals.get(merged.id);
+  assert.equal(proposal?.closureStatus, "verified_closed");
   const after = await ctx.stores.questionLogs.listGapCandidates(50);
   assert.equal(
     after.some((candidate) => candidate.summary === "How to configure X"),
     false,
-    "resolved gap should no longer be a candidate"
+    "a verified-closed gap is resolved and no longer a candidate"
+  );
+});
+
+test("verifyGapClosure reopens with a note when the re-ask does not close the gap", async () => {
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  ctx.jobs = new AnsweringJobBroker(ctx, () => ({
+    answer: "I am not sure.",
+    confidence: "low",
+    citations: []
+  }));
+
+  const result = await proposals.verifyGapClosure(ctx, merged);
+
+  assert.equal(result.closureStatus, "reopened");
+  assert.equal(result.perQuestion[0]?.verdict, "still_open");
+  const proposal = await ctx.stores.proposals.get(merged.id);
+  assert.equal(proposal?.closureStatus, "reopened");
+  // The gap stays open and carries a verification note for the re-draft.
+  const reloaded = await ctx.stores.questionLogs.get(log.id);
+  const vGap = (reloaded?.gaps ?? []).find((gap) => gap.source === "verification");
+  assert.ok(vGap, "a verification gap was recorded");
+  assert.match(vGap?.note ?? "", /configure-x\.md/);
+  const after = await ctx.stores.questionLogs.listGapCandidates(50);
+  assert.equal(
+    after.some((candidate) => candidate.summary === "How to configure X"),
+    true,
+    "a reopened gap remains a candidate for re-drafting"
+  );
+});
+
+test("verifyGapClosure flags needs_attention after the retry cap and stops re-drafting", async () => {
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  // Seed one prior failed verification so this run is the second failure (the cap).
+  await ctx.stores.gapClosureVerifications.record({
+    proposalId: merged.id,
+    questionId: log.id,
+    verdict: "still_open",
+    confidence: "low",
+    citedMergedDoc: false
+  });
+  ctx.jobs = new AnsweringJobBroker(ctx, () => ({
+    answer: "Still unsure.",
+    confidence: "low",
+    citations: []
+  }));
+
+  const result = await proposals.verifyGapClosure(ctx, merged);
+
+  assert.equal(result.closureStatus, "needs_attention");
+  const reloaded = await ctx.stores.questionLogs.get(log.id);
+  assert.ok((reloaded?.gaps ?? []).some((gap) => gap.source === "needs_attention"), "gap flagged needs_attention");
+  const after = await ctx.stores.questionLogs.listGapCandidates(50);
+  assert.equal(
+    after.some((candidate) => candidate.summary === "How to configure X"),
+    false,
+    "a needs_attention gap awaits a human and does not auto-redraft"
   );
 });
 
@@ -124,6 +251,53 @@ test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job"
   // triggering questions and the drafter sees the in-flight PR it should not duplicate.
   assert.ok(input.triggeringQuestionIds?.includes(log.id), "triggeringQuestionIds survives enqueue");
   assert.equal(input.openPullRequests?.[0]?.status, "pr-opened");
+});
+
+test("draftFromGaps threads a reopened gap's verification note into resubmissionNotes", async () => {
+  const ctx = makeTestContext();
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
+  const log = await ctx.stores.questionLogs.record({
+    question: "How do I configure X?",
+    chatProvider: "openai-compatible",
+    retrievedSectionIds: []
+  });
+  // A prior proposal merged but failed its gap-closure check, reopening the gap
+  // with the detail of why the merged doc still did not answer the question.
+  await ctx.stores.questionLogs.recordVerificationGap(log.id, {
+    summary: "How to configure X",
+    source: "verification",
+    note: "merged configure-x.md; re-ask still low; no worked example of the toggle"
+  });
+
+  const outcome = await proposals.draftFromGaps(ctx, ["How to configure X"]);
+  if (!outcome.ok) {
+    throw new Error("expected a queued draft");
+  }
+
+  const parsed = jobDefinition("draft_markdown_proposal").inputSchema.safeParse(outcome.job.input);
+  assert.ok(parsed.success, "resubmissionNotes must survive the draft contract");
+  const input = outcome.job.input as { resubmissionNotes?: string[] };
+  assert.deepEqual(input.resubmissionNotes, [
+    "merged configure-x.md; re-ask still low; no worked example of the toggle"
+  ]);
+});
+
+test("draftFromGaps omits resubmissionNotes for a first-time draft", async () => {
+  const ctx = makeTestContext();
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
+  const log = await ctx.stores.questionLogs.record({
+    question: "How do I configure X?",
+    chatProvider: "openai-compatible",
+    retrievedSectionIds: []
+  });
+  await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
+
+  const outcome = await proposals.draftFromGaps(ctx, ["How to configure X"]);
+  if (!outcome.ok) {
+    throw new Error("expected a queued draft");
+  }
+  const input = outcome.job.input as { resubmissionNotes?: string[] };
+  assert.equal(input.resubmissionNotes, undefined, "no note noise on a first draft");
 });
 
 test("draftFromGaps passes the configured provider through unchanged", async () => {

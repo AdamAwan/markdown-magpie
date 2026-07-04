@@ -146,6 +146,8 @@ export function logStartupConfig(ctx: AppContext): void {
 // clean (empty) but recoverable state.
 export async function resetData(ctx: AppContext) {
   await ctx.stores.questionLogs.reset();
+  // Before proposals: gap_closure_verification rows reference proposals(id).
+  await ctx.stores.gapClosureVerifications.reset();
   await ctx.stores.proposals.reset();
   await ctx.stores.scheduledTasks.reset();
   await ctx.stores.sourceSync.reset();

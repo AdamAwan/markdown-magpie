@@ -83,7 +83,9 @@ Git Markdown repo
   -> cluster weak answers into knowledge gaps
   -> generate Markdown proposals
   -> publish proposals to a branch and raise a pull request
-  -> on merge: resolve the closed gaps and re-index the knowledge base
+  -> on merge: re-index the knowledge base, then verify closure by re-asking the
+     triggering questions — resolve the gaps only if the merged doc actually
+     answers them, otherwise reopen them for another draft
 ```
 
 Proposal generation runs along two paths:
@@ -118,6 +120,12 @@ queue.
 | Snapshot refresh | `refresh_flow_snapshot` | ~5 min | github | — *(leaf: writes the flow snapshot of gaps, proposals, and PR state the reconciler reads)* |
 | Correctness patrol | `correctness_patrol` | hourly | maintenance | `verify_document` → `correct_document`, `dedupe_documents`, `split_document` |
 | Editorial patrol | `editorial_patrol` | hourly | maintenance | `improve_document` |
+
+One more maintenance job — `verify_gap_closure` — is **not** scheduled on a cron; it is
+enqueued *on merge* (the merge cascade below) for any proposal that had triggering
+questions. A maintenance watcher claims it and POSTs `/api/proposals/:id/verify-closure`,
+where the API re-asks each triggering question as an `answer_question` job it bounded-waits
+on (tier 2), so it fans out into AI work exactly like the scheduled orchestrators.
 
 Every tier-2 producer that writes a document expresses a `ChangeIntent` and passes
 through the **reconcile gate** (`open-new` / `fold` / `defer`) before a
@@ -163,14 +171,33 @@ and never re-clusters. Reshape is best-effort: if no chat watcher is available w
 the deadline, the reconciler logs and skips it, still running clustering, drafting,
 publication, and the PR-state pass.
 
+### Merge cascade and gap-closure verification
+
+A merge no longer *blindly* resolves the gaps a proposal set out to close. The merge
+cascade (shared by the local-git Merge action and the PR poller) re-indexes the
+destination, then — for any proposal that had triggering questions — enqueues a
+`verify_gap_closure` job instead of marking the gaps resolved. When a maintenance watcher
+drives that job, the API **re-asks each triggering question** through the normal
+queue-only `answer_question` path (against the now-updated index) and applies a
+deterministic closure test: a question is *closed* only when the re-ask returns a
+confident answer (`high`/`medium`) that **cites one of the merged proposal's target
+docs**. If every triggering question closes, the gaps are resolved (`closure_status =
+verified_closed`); if any stays open, the gaps are **reopened** with the verification
+detail as a `note` so they re-draft (`reopened`). After two failed verifications for the
+same question its gap is filed under the `needs_attention` source, which parks the whole
+question from auto-redrafting (`needs_attention`) so a human can look. Clusterless / seed
+proposals have no triggering questions and skip verification entirely. See
+[question-logging.md](question-logging.md) for the gap sources and
+[ai-jobs.md](ai-jobs.md) for the job.
+
 Before clustering, the reconciler also **prunes resolved gaps**: a gap is resolved by
-`(question, summary)` when its proposal merges, but a prior reshape may have moved that
-gap into a cluster other than the one the merge freezes. So each tick deactivates the
-cluster membership of any gap now resolved, and freezes any active cluster left with no
-still-open members — keeping "active membership" to mean "this gap belongs to this
-cluster *and* is still open", so a covered gap never re-surfaces as a cluster member or
-gets re-drafted. The draft and cluster-read paths also scope to a cluster's unresolved
-members as defence-in-depth.
+`(question, summary)` — now only once the merge's closure verification passes (above) —
+but a prior reshape may have moved that gap into a cluster other than the one the merge
+freezes. So each tick deactivates the cluster membership of any gap now resolved, and
+freezes any active cluster left with no still-open members — keeping "active membership"
+to mean "this gap belongs to this cluster *and* is still open", so a covered gap never
+re-surfaces as a cluster member or gets re-drafted. The draft and cluster-read paths also
+scope to a cluster's unresolved members as defence-in-depth.
 
 > The former whole-knowledge-base **Crunch** pass has been retired; its
 > consolidate/split responsibilities now live in the patrols and the gap reconciler.

@@ -168,6 +168,20 @@ export function proposalRoutes(ctx: AppContext): Hono {
     return c.json({ proposal, cascadeScheduled: true });
   });
 
+  // Maintenance callback: the watcher claims a verify_gap_closure job and POSTs
+  // here (mirroring the reconcile/patrol endpoints). The API holds the
+  // orchestration — re-asking the triggering questions and running the
+  // deterministic closure test — because it needs DB access; the only generative
+  // step is the enqueued answer_question re-asks.
+  app.post("/:id/verify-closure", requireScopes("manage:jobs"), async (c) => {
+    const proposal = await proposalsService.get(ctx, c.req.param("id"));
+    if (!proposal) {
+      throw new HttpError(404, "proposal_not_found");
+    }
+    const result = await proposalsService.verifyGapClosure(ctx, proposal);
+    return c.json(result);
+  });
+
   app.post("/:id/publish", requireScopes("manage:knowledge"), async (c) => {
     const proposal = await proposalsService.get(ctx, c.req.param("id"));
     if (!proposal || !can(ctx, c, "read", proposal.flowId)) {

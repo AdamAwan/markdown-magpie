@@ -155,6 +155,10 @@ export const draftMarkdownProposalInputSchema = z.object({
   gapSummaries: z.array(z.string()),
   triggeringQuestions: z.array(z.string()),
   evidence: z.array(citationSchema),
+  // Why a prior merged proposal failed to close these gaps, carried on a
+  // resubmission so the drafter can address the specific shortfall (see the
+  // gap `note` set by verify_gap_closure).
+  resubmissionNotes: z.array(z.string()).optional(),
   sourceContext: z.array(sourceDataContextSchema).optional(),
   // The drafter's awareness of the flow's in-flight work, so it can avoid
   // duplicating a doc already being drafted or in an open PR.
@@ -483,6 +487,19 @@ export const editorialPatrolOutputSchema = z.object({
   runId: z.string(),
   selectedCount: z.number().int(),
   enqueuedCount: z.number().int()
+});
+
+export const verifyGapClosureInputSchema = z.object({ proposalId: z.string() });
+export const verifyGapClosureOutputSchema = z.object({
+  proposalId: z.string(),
+  closureStatus: z.enum(["verified_closed", "reopened", "needs_attention"]),
+  perQuestion: z.array(
+    z.object({
+      questionId: z.string(),
+      reaskedQuestionId: z.string().nullable(),
+      verdict: z.enum(["closed", "still_open"])
+    })
+  )
 });
 
 export const crosslinkPullRequestsInputSchema = z.object({

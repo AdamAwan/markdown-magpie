@@ -4,6 +4,7 @@ import { logger } from "./logger.js";
 import { BackgroundEmbedder } from "./platform/background-embedder.js";
 import { BackgroundRunner } from "./platform/background-runner.js";
 import {
+  createGapClosureVerificationStore,
   createGapClusterStore,
   createPrCrosslinkStore,
   createProposalStore,
@@ -43,6 +44,7 @@ export interface AppContext {
     knowledgeIndex: InMemoryKnowledgeIndex;
     questionLogs: ReturnType<typeof createQuestionLogStore>;
     proposals: ReturnType<typeof createProposalStore>;
+    gapClosureVerifications: ReturnType<typeof createGapClosureVerificationStore>;
     scheduledTasks: ReturnType<typeof createScheduledTaskStore>;
     sourceSync: ReturnType<typeof createSourceSyncStore>;
     patrol: ReturnType<typeof createPatrolStore>;
@@ -124,6 +126,7 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
       knowledgeIndex,
       questionLogs: createQuestionLogStore(config, pool),
       proposals: createProposalStore(config, pool),
+      gapClosureVerifications: createGapClosureVerificationStore(config, pool),
       scheduledTasks: createScheduledTaskStore(config, pool),
       sourceSync: createSourceSyncStore(config, pool),
       patrol: createPatrolStore(config, pool),

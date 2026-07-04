@@ -350,7 +350,8 @@ Sets the proposal status directly. Valid values: `draft`, `ready`, `branch-pushe
 
 The `pr-opened → merged` transition is **owned by the PR poller** (the
 `refresh_flow_snapshot` job feeds `applyPullRequestTransition`), which marks a proposal
-merged only once its real pull request has merged in git — running the merge cascade and
+merged only once its real pull request has merged in git — running the merge cascade
+(re-index, then enqueue gap-closure verification — see `verify-closure` below) and
 freezing its cluster. Hand-asserting `merged` on a proposal that has an open pull request
 is therefore rejected. Manually setting `merged` remains available only as the no-PR
 fallback: a proposal `branch-pushed` without a pull request to poll (e.g. a deployment
@@ -378,6 +379,23 @@ not use this route — their PR merge is detected by the `refresh_flow_snapshot`
 - `409 merge_conflict` — the merge could not be applied; the proposal stays `branch-pushed` and
   the git message is returned.
 - `200` — `{ "proposal": Proposal, "cascadeScheduled": true }`.
+
+### `POST /api/proposals/:id/verify-closure`
+
+**Watcher callback** (scope `manage:jobs`). The maintenance runner POSTs here when it claims
+a `verify_gap_closure` job (enqueued by the merge cascade for any merged proposal that had
+triggering questions). The API re-asks each triggering question through the queued
+`answer_question` path against the freshly re-indexed knowledge base and applies the
+deterministic closure test — a confident (`high`/`medium`) answer that cites one of the
+proposal's target docs. Gaps are resolved only when **every** triggering question closes;
+otherwise they are reopened (with the verification detail as a `note`), or flagged
+`needs_attention` after repeated failures. The outcome is persisted to
+`proposals.closure_status` and each re-ask to `gap_closure_verification`. See
+[ai-jobs.md](ai-jobs.md) and [question-logging.md](question-logging.md).
+
+- Request body: none.
+- `404 proposal_not_found`.
+- `200` — `{ "proposalId": string, "closureStatus": "verified_closed" | "reopened" | "needs_attention", "perQuestion": [ { "questionId": string, "reaskedQuestionId": string | null, "verdict": "closed" | "still_open" } ] }`.
 
 ### `POST /api/proposals/:id/publish`
 

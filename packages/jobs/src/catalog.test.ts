@@ -37,6 +37,7 @@ const EXPIRATION_SECONDS = {
   source_change_sync: 60 * 60,
   correctness_patrol: 60 * 60,
   editorial_patrol: 60 * 60,
+  verify_gap_closure: 60 * 60,
   publish_proposal: 15 * 60,
   crosslink_pull_requests: 10 * 60,
   fold_markdown_proposal: 15 * 60,
@@ -132,8 +133,18 @@ test("maintenance capability yields only orchestration work queues", () => {
     "process_gaps_to_pull_requests",
     "source_change_sync",
     "correctness_patrol",
-    "editorial_patrol"
+    "editorial_patrol",
+    "verify_gap_closure"
   ]);
+});
+
+test("verify_gap_closure is a maintenance job with an unpartitioned queue name", () => {
+  const definition = jobDefinition("verify_gap_closure");
+  assert.deepEqual([...definition.capabilities], ["maintenance"]);
+  assert.equal(definition.requiredCapability({ proposalId: "p1" }), "maintenance");
+  assert.equal(definition.queueName({ proposalId: "p1" }), "verify_gap_closure");
+  assert.deepEqual(definition.inputSchema.parse({ proposalId: "p1" }), { proposalId: "p1" });
+  assert.equal(definition.policy.retryLimit, 2);
 });
 
 test("reconcile_gap_clusters routes by provider like other AI work", () => {
