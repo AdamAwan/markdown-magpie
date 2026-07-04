@@ -238,7 +238,12 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
     });
     perQuestion.push({ questionId, reaskedQuestionId: reasked.id, verdict });
 
-    if (verdict === "still_open") {
+    if (verdict === "closed") {
+      // This question's re-ask confirmed closure: resolve its matching gaps
+      // immediately, regardless of siblings' outcomes. This allows per-question
+      // resolution even if a sibling is still_open.
+      await resolveGapsForClosedQuestion(ctx, questionId, proposal);
+    } else if (verdict === "still_open") {
       anyStillOpen = true;
       // countPriorStillOpen includes the row just recorded, so the Nth *distinct
       // proposal* to fail reads as N. Bound it to since the question's prior
@@ -362,6 +367,24 @@ function buildVerificationDetail(
     (citedMerged ? " and did cite the merged doc" : ` and did not cite the merged doc (cited: ${citedPaths.join(", ") || "nothing"})`) +
     "; the gap is not yet closed."
   );
+}
+
+// Resolves the gaps for a single question whose verdict is closed: precisely the
+// rows whose question and summary match the proposal's recorded gap summaries, so
+// unrelated gaps on a multi-topic question are left untouched. Returns the number
+// of gaps newly resolved.
+async function resolveGapsForClosedQuestion(
+  ctx: AppContext,
+  questionId: string,
+  proposal: Proposal
+): Promise<number> {
+  const summaries = splitGapSummaries(proposal.gapSummary);
+  if (summaries.length === 0) {
+    return 0;
+  }
+
+  const resolved = await ctx.stores.questionLogs.resolveGaps([questionId], summaries, proposal.id);
+  return resolved;
 }
 
 // Resolves the gaps a merged proposal closed: precisely the rows whose question
