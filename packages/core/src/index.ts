@@ -575,6 +575,12 @@ export interface DraftMarkdownProposalJobInput {
   gapSummaries: string[];
   triggeringQuestions: string[];
   evidence: Citation[];
+  // Verification detail for gaps being re-drafted after a previous proposal
+  // merged but failed its gap-closure check (the `note` on a verification /
+  // needs_attention gap): what merged, the re-asked answer, and why it was still
+  // weak. Present only on a resubmission, so the drafter can see why its earlier
+  // attempt did not close the gap and address the specific shortfall this time.
+  resubmissionNotes?: string[];
   sourceContext?: SourceDataContext[];
   // The flow's already in-flight proposals and currently open pull requests, so
   // the drafter is aware of work it should build on or avoid duplicating rather

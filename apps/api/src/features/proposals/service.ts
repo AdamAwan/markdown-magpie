@@ -592,6 +592,27 @@ export async function draftFromGaps(
     (log): log is NonNullable<typeof log> => Boolean(log)
   );
   const evidence = dedupeCitations(logs.flatMap((log) => log.answer?.citations ?? []));
+  // When this is a re-draft after a failed gap-closure verification, the reopened
+  // gaps carry a `note` explaining why the last merge did not answer the question.
+  // Surface those (for the gaps actually being drafted, still open) so the drafter
+  // sees why it is being resubmitted and can address the specific shortfall.
+  const gapSummarySet = new Set(gapSummaries);
+  const resubmissionNotes = [
+    ...new Set(
+      logs.flatMap((log) =>
+        (log.gaps ?? [])
+          .filter(
+            (gap) =>
+              gap.note &&
+              !gap.resolvedAt &&
+              !gap.dismissedAt &&
+              (gap.source === "verification" || gap.source === "needs_attention") &&
+              gapSummarySet.has(gap.summary)
+          )
+          .map((gap) => gap.note as string)
+      )
+    )
+  ];
   const deps = ctx.repositoryDeps();
   // Prefer an explicit override; otherwise inherit the flow the matched gaps came
   // from. Candidates within a cluster share a flow (clustering is per-flow), so
@@ -615,6 +636,9 @@ export async function draftFromGaps(
     gapSummaries,
     triggeringQuestions: logs.map((log) => log.question),
     evidence,
+    // Omit entirely when this is not a resubmission, so a first-time draft's
+    // prompt input carries no empty noise.
+    resubmissionNotes: resubmissionNotes.length ? resubmissionNotes : undefined,
     sourceContext,
     // Omit the key entirely when there's nothing in flight, so the serialised
     // prompt input carries no empty noise.

@@ -110,7 +110,9 @@ proposal's target documents** (a confident answer citing unrelated docs does not
   whose `note` records why the merged doc still fell short, so the reconciler re-drafts it
   (`reopened`). Because the reopen summary reuses the question's own still-open gap
   summary, it dedups with the existing gap in candidate clustering rather than forking a
-  new one.
+  new one. When that gap is re-drafted, its `note` is passed to the drafter as
+  `resubmissionNotes`, so the model sees why its previous attempt did not close the gap and
+  can address the specific shortfall (see [ai-jobs.md](./ai-jobs.md)).
 - After two failed verifications for the same question (`CLOSURE_RETRY_CAP`), its gap is
   filed under **`needs_attention`** instead. That source parks the *whole question* from
   gap candidacy, so it stops auto-redrafting and waits for a human (`needs_attention`).

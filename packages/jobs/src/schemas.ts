@@ -155,6 +155,10 @@ export const draftMarkdownProposalInputSchema = z.object({
   gapSummaries: z.array(z.string()),
   triggeringQuestions: z.array(z.string()),
   evidence: z.array(citationSchema),
+  // Why a prior merged proposal failed to close these gaps, carried on a
+  // resubmission so the drafter can address the specific shortfall (see the
+  // gap `note` set by verify_gap_closure).
+  resubmissionNotes: z.array(z.string()).optional(),
   sourceContext: z.array(sourceDataContextSchema).optional(),
   // The drafter's awareness of the flow's in-flight work, so it can avoid
   // duplicating a doc already being drafted or in an open PR.

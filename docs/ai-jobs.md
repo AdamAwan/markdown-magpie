@@ -137,7 +137,9 @@ proposal (`proposals.closure_status`):
 
 - **`verified_closed`** — every triggering question closed; the gaps are now resolved.
 - **`reopened`** — at least one question is still open; those gaps stay open and gain a
-  `verification`-source row carrying the failure detail as a `note`, so they re-draft.
+  `verification`-source row carrying the failure detail as a `note`, so they re-draft. That
+  note is fed to the next `draft_markdown_proposal` as `resubmissionNotes`, so the drafter
+  sees why the previous merge fell short and addresses the specific shortfall.
 - **`needs_attention`** — a question has failed verification twice (`CLOSURE_RETRY_CAP`);
   its gap is filed under the `needs_attention` source, which parks the whole question from
   auto-redrafting so a human can look.

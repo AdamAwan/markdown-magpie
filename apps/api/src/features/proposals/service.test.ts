@@ -253,6 +253,53 @@ test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job"
   assert.equal(input.openPullRequests?.[0]?.status, "pr-opened");
 });
 
+test("draftFromGaps threads a reopened gap's verification note into resubmissionNotes", async () => {
+  const ctx = makeTestContext();
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
+  const log = await ctx.stores.questionLogs.record({
+    question: "How do I configure X?",
+    chatProvider: "openai-compatible",
+    retrievedSectionIds: []
+  });
+  // A prior proposal merged but failed its gap-closure check, reopening the gap
+  // with the detail of why the merged doc still did not answer the question.
+  await ctx.stores.questionLogs.recordVerificationGap(log.id, {
+    summary: "How to configure X",
+    source: "verification",
+    note: "merged configure-x.md; re-ask still low; no worked example of the toggle"
+  });
+
+  const outcome = await proposals.draftFromGaps(ctx, ["How to configure X"]);
+  if (!outcome.ok) {
+    throw new Error("expected a queued draft");
+  }
+
+  const parsed = jobDefinition("draft_markdown_proposal").inputSchema.safeParse(outcome.job.input);
+  assert.ok(parsed.success, "resubmissionNotes must survive the draft contract");
+  const input = outcome.job.input as { resubmissionNotes?: string[] };
+  assert.deepEqual(input.resubmissionNotes, [
+    "merged configure-x.md; re-ask still low; no worked example of the toggle"
+  ]);
+});
+
+test("draftFromGaps omits resubmissionNotes for a first-time draft", async () => {
+  const ctx = makeTestContext();
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
+  const log = await ctx.stores.questionLogs.record({
+    question: "How do I configure X?",
+    chatProvider: "openai-compatible",
+    retrievedSectionIds: []
+  });
+  await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
+
+  const outcome = await proposals.draftFromGaps(ctx, ["How to configure X"]);
+  if (!outcome.ok) {
+    throw new Error("expected a queued draft");
+  }
+  const input = outcome.job.input as { resubmissionNotes?: string[] };
+  assert.equal(input.resubmissionNotes, undefined, "no note noise on a first draft");
+});
+
 test("draftFromGaps passes the configured provider through unchanged", async () => {
   const ctx = makeTestContext();
   ctx.config = new RuntimeConfigHolder({ aiProvider: "codex" });

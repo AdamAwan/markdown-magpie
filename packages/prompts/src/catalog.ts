@@ -121,6 +121,7 @@ export const DRAFT_MARKDOWN_PROPOSAL: PromptDefinition = {
 Rules:
 - Return JSON only.
 - gapSummaries may contain several related gaps; write ONE cohesive article that covers all of them rather than separate sections that repeat each other.
+- The input may include resubmissionNotes: this is a re-draft because a previous proposal merged but still did NOT answer the triggering questions. Each note explains what was already published and why it fell short. Treat these as the most important guidance — directly address the specific shortfall each note calls out (add the missing specifics, examples, or coverage) rather than restating what the earlier attempt already contained.
 - Markdown must be reviewable and conservative.
 - Use sourceContext when present as raw material for improving the destination knowledge base.
 - The input may include openPullRequests: the flow's already in-flight proposals and currently open pull requests, each with a title, an optional url, and a target path. Do NOT draft something that duplicates one of these. If your article overlaps an open pull request, build on it and reference it (by title and url) in the rationale instead of restating its content; draft only what those in-flight changes leave uncovered.
