@@ -1,4 +1,5 @@
 import type { ApiTokenProvider } from "@magpie/auth";
+import type { SourceDataContext } from "@magpie/core";
 import type { JobCapability, JobError, JobView } from "@magpie/jobs";
 import type { Logger } from "@magpie/logger";
 
@@ -81,6 +82,11 @@ export interface WatcherApi extends WatcherApiClient {
   // github-capability refresh runner, which holds the GitHub credentials the API
   // no longer does.
   listOpenPullRequests(signal?: AbortSignal): Promise<OpenPullRequestRef[]>;
+  // Resolves the shared source corpus a patrol job checks against, by the content
+  // hash carried in the job's `sourcesRef` (#163 Part 2). The corpus is identical
+  // across every verify/correct/improve job in a tick, so the client caches it by
+  // hash and fetches each distinct corpus over the wire at most once.
+  getSourceCorpus(hash: string, signal?: AbortSignal): Promise<SourceDataContext[]>;
 }
 
 export interface HttpClientOptions {
@@ -141,6 +147,12 @@ class HttpRequestStatusError extends Error {
 const COMPLETE_RETRY_ATTEMPTS = 3;
 const COMPLETE_RETRY_BASE_DELAY_MS = 250;
 
+// How many distinct source-corpus snapshots the client keeps cached at once.
+// Content-addressed, so a cached corpus is never stale; the cap only bounds memory
+// on a long-lived watcher. A handful covers the corpus versions in flight across
+// concurrent flows/ticks; the oldest is evicted past this.
+const SOURCE_CORPUS_CACHE_MAX = 16;
+
 function isRetryableCompleteError(error: unknown): boolean {
   return !(error instanceof HttpRequestStatusError) || error.status >= 500;
 }
@@ -160,6 +172,9 @@ export class HttpWatcherApi implements WatcherApi {
   private readonly maintenanceTimeoutMs: number;
   private readonly logger?: Logger;
   private readonly completeRetryBaseDelayMs: number;
+  // Per-hash cache of resolved source corpora (see getSourceCorpus). Map iteration
+  // order is insertion order, so the first key is the oldest for FIFO eviction.
+  private readonly sourceCorpusCache = new Map<string, SourceDataContext[]>();
 
   constructor(options: HttpClientOptions) {
     this.base = trimTrailingSlash(options.apiBaseUrl).replace(/\/api$/, "");
@@ -288,6 +303,22 @@ export class HttpWatcherApi implements WatcherApi {
 
   async proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext> {
     return this.get<ProposalExecutionContext>(`/api/proposals/${proposalId}/execution-context`);
+  }
+
+  async getSourceCorpus(hash: string, signal?: AbortSignal): Promise<SourceDataContext[]> {
+    const cached = this.sourceCorpusCache.get(hash);
+    if (cached) {
+      return cached;
+    }
+    const { corpus } = await this.get<{ corpus: SourceDataContext[] }>(`/api/source-corpus/${hash}`, signal);
+    this.sourceCorpusCache.set(hash, corpus);
+    if (this.sourceCorpusCache.size > SOURCE_CORPUS_CACHE_MAX) {
+      const oldest = this.sourceCorpusCache.keys().next().value;
+      if (oldest !== undefined) {
+        this.sourceCorpusCache.delete(oldest);
+      }
+    }
+    return corpus;
   }
 
   private async post<TResponse>(

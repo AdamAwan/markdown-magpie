@@ -84,11 +84,11 @@ function verifyDocumentReuseKey(input: unknown): string {
 // Default verify: enqueue a verify_document AI job and bounded-wait for the watcher
 // to complete it (mirrors gap-reconciler's reshape job). Returns undefined on any
 // non-completion so the lens skips that document rather than failing the tick.
-const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sources }) => {
+const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sourcesRef }) => {
   const input = {
     path,
     content,
-    sources,
+    sourcesRef,
     provider: ctx.config.get().aiProvider
   } satisfies VerifyDocumentJobInput & { provider: AiProviderName };
   let terminal;
@@ -115,7 +115,7 @@ const defaultCorrectDocument: CorrectDocumentFn = async (ctx, input) => {
     path: input.path,
     content: input.content,
     claims: input.claims,
-    sources: input.sources,
+    sourcesRef: input.sourcesRef,
     destinationId: input.destinationId,
     flowId: input.flowId,
     provider: ctx.config.get().aiProvider
@@ -154,7 +154,7 @@ const defaultImproveDocument: ImproveDocumentFn = async (ctx, input) => {
   await ctx.jobs.create("improve_document", {
     path: input.path,
     content: input.content,
-    sources: input.sources,
+    sourcesRef: input.sourcesRef,
     destinationId: input.destinationId,
     flowId: input.flowId,
     provider: ctx.config.get().aiProvider
@@ -278,13 +278,21 @@ export async function runFixPatrol(
   });
   const gated = actionableDocuments.length - toCheck.length;
 
+  // Persist the corpus ONCE per tick, content-addressed by its hash, so the
+  // verify/correct jobs below carry only that ref instead of a by-value copy of
+  // the whole corpus each (#163 Part 2). Saved only when at least one doc will be
+  // checked (i.e. a job that references it will be enqueued).
+  if (toCheck.length > 0) {
+    await ctx.stores.sourceCorpus.save(sourcesHash, sources);
+  }
+
   // Run the verify lens over the documents that actually need checking this tick.
   const selectedSet = new Set(toCheck.map((doc) => doc.path));
   const selectedDocuments = toCheck.map((doc) => ({ path: doc.path, content: doc.content }));
   const { findings, checkedPaths } = await runVerifyLens(ctx, {
     flowId: options.flowId,
     documents: selectedDocuments,
-    sources,
+    sourcesRef: sourcesHash,
     verifyDocument
   });
 
@@ -300,7 +308,7 @@ export async function runFixPatrol(
       path: finding.path,
       content: document.content,
       claims: finding.claims,
-      sources,
+      sourcesRef: sourcesHash,
       destinationId: document.repositoryId,
       flowId: options.flowId
     });
@@ -421,6 +429,12 @@ export async function runImprovePatrol(
   });
   const gated = actionableDocuments.length - toCheck.length;
 
+  // Persist the corpus once per tick (see runFixPatrol) so each improve scan carries
+  // only a ref to it rather than a by-value copy (#163 Part 2).
+  if (toCheck.length > 0) {
+    await ctx.stores.sourceCorpus.save(sourcesHash, sources);
+  }
+
   const checkedPaths = new Set<string>();
   let enqueuedCount = 0;
   for (const document of toCheck) {
@@ -428,7 +442,7 @@ export async function runImprovePatrol(
       await improveDocument(ctx, {
         path: document.path,
         content: document.content,
-        sources,
+        sourcesRef: sourcesHash,
         destinationId: document.repositoryId,
         flowId: options.flowId
       });

@@ -6,7 +6,8 @@ import type {
   KnowledgeGapSignal,
   OutOfScope
 } from "@magpie/core";
-import type { JobView } from "@magpie/jobs";
+import type { SourceDataContext } from "@magpie/core";
+import type { JobType, JobView } from "@magpie/jobs";
 import { jobDefinition } from "@magpie/jobs";
 import type { z } from "zod";
 import {
@@ -69,38 +70,54 @@ export function buildFlowSelectionRequiredOutput(
   };
 }
 
-// Per-job prompt for the generic chat path (everything except answer_question,
-// which the answer runner assembles itself with its retrieved context). The
-// job's input is embedded as JSON after the task instructions.
-export function buildPrompt(job: JobView): string {
-  switch (job.type) {
-    case "summarize_gap":
-      return `${SUMMARIZE_GAP.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
-    case "draft_markdown_proposal":
-      return `${DRAFT_MARKDOWN_PROPOSAL.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
-    case "draft_seed_document":
-      return `${DRAFT_SEED_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
-    case "outline_flow_seed":
-      return `${OUTLINE_FLOW_SEED.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
-    case "fold_markdown_proposal":
-      return `${FOLD_MARKDOWN_PROPOSAL.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
-    case "fold_changeset_proposal":
-      return `${FOLD_CHANGESET_PROPOSAL.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
-    case "sync_source_changes_generate_plan":
-      return `${SOURCE_CHANGE_SYNC.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
-    case "verify_document":
-      return `${VERIFY_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
-    case "correct_document":
-      return `${CORRECT_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
-    case "dedupe_documents":
-      return `${DEDUPE_DOCUMENTS.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
-    case "split_document":
-      return `${SPLIT_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
-    case "improve_document":
-      return `${IMPROVE_DOCUMENT.instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
-    default:
-      return `${GENERIC_JOB.instructions}\n\nJob:\n${JSON.stringify({ type: job.type, input: job.input }, null, 2)}`;
+// The task instructions for each generic chat job type (everything except
+// answer_question, which the answer runner assembles itself with its retrieved
+// context). A type with no entry falls back to the generic job envelope.
+const JOB_INSTRUCTIONS: Partial<Record<JobType, string>> = {
+  summarize_gap: SUMMARIZE_GAP.instructions,
+  draft_markdown_proposal: DRAFT_MARKDOWN_PROPOSAL.instructions,
+  draft_seed_document: DRAFT_SEED_DOCUMENT.instructions,
+  outline_flow_seed: OUTLINE_FLOW_SEED.instructions,
+  fold_markdown_proposal: FOLD_MARKDOWN_PROPOSAL.instructions,
+  fold_changeset_proposal: FOLD_CHANGESET_PROPOSAL.instructions,
+  sync_source_changes_generate_plan: SOURCE_CHANGE_SYNC.instructions,
+  verify_document: VERIFY_DOCUMENT.instructions,
+  correct_document: CORRECT_DOCUMENT.instructions,
+  dedupe_documents: DEDUPE_DOCUMENTS.instructions,
+  split_document: SPLIT_DOCUMENT.instructions,
+  improve_document: IMPROVE_DOCUMENT.instructions
+};
+
+// Label for the shared source-corpus block (see buildPrompt).
+const SOURCE_MATERIAL_HEADER = "Source material (shared across this batch):";
+
+// Per-job prompt for the generic chat path. The job's input is embedded as JSON
+// after the task instructions. When a patrol job references the shared source
+// corpus by `sourcesRef`, the runner resolves that corpus and passes it here; the
+// corpus is then rendered as an identical FIRST block across every job in the tick
+// that shares it, so the provider's prefix prompt caching can reuse it instead of
+// re-billing the whole corpus per job (#163 Part 2). The per-document input — the
+// only part that varies — comes last so the cacheable prefix is as long as possible.
+export function buildPrompt(job: JobView, sources?: SourceDataContext[]): string {
+  const instructions = JOB_INSTRUCTIONS[job.type];
+  if (!instructions) {
+    return `${GENERIC_JOB.instructions}\n\nJob:\n${JSON.stringify({ type: job.type, input: job.input }, null, 2)}`;
   }
+  if (sources) {
+    const input = omitSourcesRef(job.input);
+    return `${SOURCE_MATERIAL_HEADER}\n${JSON.stringify(sources, null, 2)}\n\n${instructions}\n\nInput:\n${JSON.stringify(input, null, 2)}`;
+  }
+  return `${instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
+}
+
+// A shallow copy of a job input without its `sourcesRef`. The corpus that ref
+// points to is rendered separately (above), so the bare hash would just be noise
+// in the serialized input.
+function omitSourcesRef(input: unknown): unknown {
+  if (typeof input !== "object" || input === null) {
+    return input;
+  }
+  return Object.fromEntries(Object.entries(input).filter(([key]) => key !== "sourcesRef"));
 }
 
 // Parses and validates a model's JSON against the job's output contract from

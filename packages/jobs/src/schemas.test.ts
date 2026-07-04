@@ -21,14 +21,23 @@ test("process_gaps_to_pull_requests input requires and preserves flowId", () => 
   assert.deepEqual(parsed, { flowId: "magpie-support" });
 });
 
-test("verify_document input round-trips path/content/sources with a provider", () => {
+test("verify_document input round-trips path/content/sourcesRef with a provider", () => {
   const ok = verifyDocumentInputSchema.safeParse({
     provider: "codex",
     path: "kb/refunds.md",
     content: "Refunds take 5 days.",
-    sources: [{ sourceId: "s1", sourceName: "Billing", kind: "git", path: "refunds.ts", content: "const days = 7;" }]
+    sourcesRef: "corpus-hash"
   });
   assert.equal(ok.success, true);
+});
+
+test("verify_document input requires a sourcesRef", () => {
+  const missing = verifyDocumentInputSchema.safeParse({
+    provider: "codex",
+    path: "kb/refunds.md",
+    content: "Refunds take 5 days."
+  });
+  assert.equal(missing.success, false);
 });
 
 test("verify_document output rejects an unknown verdict and accepts healthy/unprovable", () => {
@@ -149,7 +158,7 @@ test("improve_document schemas round-trip explicit improve and no-op outputs", (
       provider: "codex",
       path: "kb/refunds.md",
       content: "# Refunds",
-      sources: [{ sourceId: "s1", sourceName: "Billing", kind: "git", path: "refunds.ts", content: "partial refunds are supported" }],
+      sourcesRef: "corpus-hash",
       destinationId: "docs",
       flowId: "billing"
     }).success

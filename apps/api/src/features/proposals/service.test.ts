@@ -1248,7 +1248,7 @@ test("createCorrectiveProposalFromCompletedJob creates a labelled draft carrying
     path: "a.md",
     content: "# a",
     claims: [{ claim: "stale", reason: "x" }],
-    sources: [],
+    sourcesRef: "test-corpus",
     destinationId: "docs",
     flowId: "billing",
     provider: "codex"
@@ -1418,7 +1418,7 @@ async function improveJob(ctx: ReturnType<typeof makeTestContext>, content = "# 
   return ctx.jobs.create("improve_document", {
     path: "kb/refunds.md",
     content,
-    sources: [{ sourceId: "s1", sourceName: "Billing", kind: "git", path: "refunds.ts", content: "partial refunds are supported" }],
+    sourcesRef: "test-corpus",
     destinationId: "docs",
     flowId: "billing",
     provider: "codex"
