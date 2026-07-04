@@ -49,6 +49,56 @@ describe("proposalTargetPaths", () => {
     assert.ok(!result.has("docs/removed.md"));
     assert.ok(!result.has("docs/noop.md"));
   });
+
+  it("leaves paths untouched when no subpath is configured", () => {
+    const proposal = { targetPath: "docs/guide.md" } as Proposal;
+    assert.deepEqual([...proposalTargetPaths(proposal, undefined)], ["docs/guide.md"]);
+    assert.deepEqual([...proposalTargetPaths(proposal, "")], ["docs/guide.md"]);
+  });
+
+  it("strips a configured destination subpath from targetPath and changeset writes", () => {
+    // The proposal's targetPath/changeset are destination-root-relative and
+    // INCLUDE the subpath (resolveProposalTargetPath prefixes it); citations of
+    // the merged file are indexed-subtree-relative with the subpath stripped.
+    const proposal = {
+      targetPath: "kb/configure-x.md",
+      changeset: [
+        { path: "kb/added.md", content: "x" },
+        { path: "kb/removed.md", delete: true }
+      ]
+    } as Proposal;
+    const result = proposalTargetPaths(proposal, "kb");
+    assert.ok(result.has("configure-x.md"));
+    assert.ok(result.has("added.md"));
+    assert.ok(!result.has("kb/configure-x.md"));
+    assert.ok(!result.has("removed.md"));
+  });
+
+  it("normalizes a subpath with surrounding slashes and handles nesting", () => {
+    const proposal = { targetPath: "kb/nested/configure-x.md" } as Proposal;
+    assert.deepEqual([...proposalTargetPaths(proposal, "/kb/nested/")], ["configure-x.md"]);
+    assert.deepEqual([...proposalTargetPaths(proposal, "kb")], ["nested/configure-x.md"]);
+  });
+
+  it("leaves a path that does not sit under the subpath unstripped", () => {
+    const proposal = { targetPath: "other/guide.md" } as Proposal;
+    assert.deepEqual([...proposalTargetPaths(proposal, "kb")], ["other/guide.md"]);
+  });
+});
+
+describe("evaluateClosure with a subpath destination", () => {
+  it("closes when a subtree-relative citation matches the subpath-stripped target path", () => {
+    const proposal = { targetPath: "kb/configure-x.md" } as Proposal;
+    const targetPaths = proposalTargetPaths(proposal, "kb");
+    // The re-ask cites the merged file the way retrieval sees it: subpath stripped.
+    assert.equal(
+      evaluateClosure({ confidence: "high", citations: [cite("configure-x.md")] }, targetPaths),
+      "closed"
+    );
+    // Regression guard: before the fix, targetPaths held "kb/configure-x.md",
+    // which no citation could ever match, so verification returned still_open forever.
+    assert.equal(citesMergedDoc([cite("configure-x.md")], targetPaths), true);
+  });
 });
 
 describe("citesMergedDoc", () => {

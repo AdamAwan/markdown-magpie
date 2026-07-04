@@ -210,9 +210,10 @@ test("verifyGapClosure reopens with a note when the re-ask does not close the ga
 test("verifyGapClosure flags needs_attention after the retry cap and stops re-drafting", async () => {
   const ctx = makeTestContext();
   const { log, merged } = await mergedProposalWithGap(ctx);
-  // Seed one prior failed verification so this run is the second failure (the cap).
+  // Seed one prior failed verification from an earlier, DISTINCT redraft cycle
+  // (its own proposal id) so this run is the second *distinct* failure — the cap.
   await ctx.stores.gapClosureVerifications.record({
-    proposalId: merged.id,
+    proposalId: "earlier-redraft-proposal",
     questionId: log.id,
     verdict: "still_open",
     confidence: "low",
@@ -264,6 +265,84 @@ test("verifyGapClosure short-circuits without re-asking when closureStatus is al
   // No new verification row was recorded — the prior still_open stays the only one,
   // so a duplicate call can never push a question over CLOSURE_RETRY_CAP by itself.
   assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id), 1);
+});
+
+test("verifyGapClosure does not let a same-proposal retry inflate the retry cap", async () => {
+  // Regression for issue #152(a): verify_gap_closure has no idempotency guard, so
+  // a retried job re-runs the whole re-ask loop for the SAME proposal, recording
+  // a second 'still_open' row for it. That must cost 1 toward the cap, not 2 —
+  // otherwise a single logical failure that happens to retry burns the whole
+  // budget before any real redraft attempt occurs.
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  ctx.jobs = new AnsweringJobBroker(ctx, () => ({
+    answer: "Still unsure.",
+    confidence: "low",
+    citations: []
+  }));
+
+  const first = await proposals.verifyGapClosure(ctx, merged);
+  assert.equal(first.closureStatus, "reopened", "first attempt just reopens the gap");
+
+  // Simulate pg-boss retrying the verify_gap_closure job: the same proposal is
+  // re-verified from scratch, recording a second still_open row for it.
+  const retried = await proposals.verifyGapClosure(ctx, merged);
+
+  assert.equal(retried.closureStatus, "reopened", "a retry of the same proposal must not trip the cap by itself");
+  const reloaded = await ctx.stores.questionLogs.get(log.id);
+  assert.equal(
+    (reloaded?.gaps ?? []).some((gap) => gap.source === "needs_attention"),
+    false,
+    "the gap is not parked after only one distinct failing proposal"
+  );
+});
+
+test("verifyGapClosure resets the retry budget once the parked gap is resolved", async () => {
+  // Regression for issue #152(b): resolveGaps/dismissGaps only ever touched
+  // question_gaps, never gap_closure_verification, so a question parked once
+  // then fixed permanently carried its old failure count forever. A genuinely
+  // new gap on the same question must start with a fresh budget.
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  ctx.jobs = new AnsweringJobBroker(ctx, () => ({
+    answer: "Still unsure.",
+    confidence: "low",
+    citations: []
+  }));
+
+  const first = await proposals.verifyGapClosure(ctx, merged);
+  assert.equal(first.closureStatus, "reopened");
+
+  // A human (or a later successful redraft) resolves the reopened gap.
+  const resolvedCount = await ctx.stores.questionLogs.resolveGaps([log.id], ["How to configure X"], "resolver-proposal");
+  assert.ok(resolvedCount > 0, "the reopened gap was resolved");
+
+  // A brand-new proposal later closes a fresh gap on the SAME question, and its
+  // own verification also fails. On the old all-time count this would be the
+  // second failure ever recorded for the question and would hit the cap
+  // immediately; it must instead read as the first failure of a fresh budget.
+  const secondProposal = await ctx.stores.proposals.create({
+    title: "Configure X again",
+    targetPath: "configure-x-2.md",
+    markdown: "# Configure X\nbody",
+    rationale: "r",
+    evidence: [],
+    gapSummary: "How to configure X, part 2",
+    triggeringQuestionIds: [log.id]
+  });
+  await ctx.stores.proposals.updateStatus(secondProposal.id, "merged");
+  const mergedSecond = await ctx.stores.proposals.get(secondProposal.id);
+  assert.ok(mergedSecond);
+
+  const second = await proposals.verifyGapClosure(ctx, mergedSecond);
+
+  assert.equal(second.closureStatus, "reopened", "the fresh gap gets a new retry budget instead of instant needs_attention");
+  const reloaded = await ctx.stores.questionLogs.get(log.id);
+  assert.equal(
+    (reloaded?.gaps ?? []).some((gap) => gap.source === "needs_attention"),
+    false,
+    "the question is not permanently parked after its earlier gap was resolved"
+  );
 });
 
 test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job", async () => {
