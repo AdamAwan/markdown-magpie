@@ -110,6 +110,17 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     return { summaries: [...summaries], questionIds: [...questionIds] };
   }
 
+  async gapPairsForIds(gapIds: string[]): Promise<Array<{ questionId: string; summary: string }>> {
+    if (gapIds.length === 0) {
+      return [];
+    }
+    const result = await this.pool.query<{ summary: string; question_id: string }>(
+      "SELECT summary, question_id FROM question_gaps WHERE id = ANY($1::bigint[])",
+      [gapIds]
+    );
+    return result.rows.map((row) => ({ questionId: row.question_id, summary: row.summary }));
+  }
+
   async listUnresolvedGapIds(gapIds: string[]): Promise<string[]> {
     if (gapIds.length === 0) {
       return [];

@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { jobDefinition } from "@magpie/jobs";
 import type { JobType, JobView } from "@magpie/jobs";
-import type { AnswerResult } from "@magpie/core";
+import type { AnswerResult, KnowledgeGapSignal } from "@magpie/core";
 import { RuntimeConfigHolder } from "../../config-holder.js";
 import { FakeJobBroker } from "../../jobs/fake-broker.js";
 import { makeTestContext } from "../../test-support/context.js";
@@ -55,6 +55,29 @@ class AnsweringJobBroker extends FakeJobBroker {
     if (type === "answer_question") {
       const questionLogId = (input as { questionLogId: string }).questionLogId;
       const answer = this.answerFor(questionLogId);
+      await this.ctx.stores.questionLogs.updateAnswer(questionLogId, { answer, chatProvider: "codex" });
+      return super.complete(job.id, answer);
+    }
+    return job;
+  }
+}
+
+// Like AnsweringJobBroker but branches on the re-asked question TEXT (carried on
+// the job input), so a multi-question verification can close some re-asks and fail
+// others deterministically without knowing the generated re-ask log ids up front.
+class QuestionRoutingBroker extends FakeJobBroker {
+  constructor(
+    private readonly ctx: ReturnType<typeof makeTestContext>,
+    private readonly answerForQuestion: (question: string) => AnswerResult
+  ) {
+    super();
+  }
+
+  override async create(type: JobType, input: unknown): Promise<JobView> {
+    const job = await super.create(type, input);
+    if (type === "answer_question") {
+      const { questionLogId, question } = input as { questionLogId: string; question: string };
+      const answer = this.answerForQuestion(question);
       await this.ctx.stores.questionLogs.updateAnswer(questionLogId, { answer, chatProvider: "codex" });
       return super.complete(job.id, answer);
     }
@@ -206,6 +229,131 @@ test("verifyGapClosure reopens with a note when the re-ask does not close the ga
     true,
     "a reopened gap remains a candidate for re-drafting"
   );
+});
+
+test("verifyGapClosure files a reopen under the proposal-addressed gap, not the question's oldest open gap", async () => {
+  const ctx = makeTestContext();
+  // The question carries two open gaps: an older, unrelated one that loads first,
+  // and the one the proposal actually addressed. The old primary pick took the
+  // question's first open gap (the oldest) regardless of the proposal's scope, so
+  // it would misfile the reopen under the unrelated gap — polluting an unrelated
+  // draft and leaving the reopened gap un-resolvable by a later in-scope proposal.
+  const gapSignal = (summary: string): KnowledgeGapSignal => ({
+    summary,
+    question: "How do I configure X?",
+    confidence: "low",
+    citedSectionIds: [],
+    source: "auto"
+  });
+  const log = await ctx.stores.questionLogs.record({
+    question: "How do I configure X?",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    answer: {
+      answer: "Partial.",
+      confidence: "low",
+      citations: [],
+      // Older unrelated gap first (loads oldest-first), proposal-addressed gap second.
+      gaps: [gapSignal("Older unrelated topic"), gapSignal("How to configure X")]
+    }
+  });
+  const proposal = await ctx.stores.proposals.create({
+    title: "Configure X",
+    targetPath: "configure-x.md",
+    markdown: "# Configure X\nbody",
+    rationale: "r",
+    evidence: [],
+    gapSummary: "How to configure X",
+    triggeringQuestionIds: [log.id]
+  });
+  await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+  const merged = await ctx.stores.proposals.get(proposal.id);
+  assert.ok(merged);
+  ctx.jobs = new AnsweringJobBroker(ctx, () => ({
+    answer: "Still unsure.",
+    confidence: "low",
+    citations: []
+  }));
+
+  const result = await proposals.verifyGapClosure(ctx, merged!);
+
+  assert.equal(result.closureStatus, "reopened");
+  const reloaded = await ctx.stores.questionLogs.get(log.id);
+  const vGap = (reloaded?.gaps ?? []).find((gap) => gap.source === "verification");
+  assert.ok(vGap, "a verification gap was recorded");
+  assert.equal(
+    vGap?.summary,
+    "How to configure X",
+    "the reopen is filed under the proposal-addressed gap, not the older unrelated one"
+  );
+  assert.notEqual(vGap?.summary, "Older unrelated topic");
+});
+
+test("verifyGapClosure files a multi-question cluster reopen under the failing question's own gap, not gap-1's", async () => {
+  const ctx = makeTestContext();
+  // A cluster proposal spans two questions: Q1's gap S1 (which sorts first in the
+  // proposal's newline-joined gapSummary blob) and Q2's gap S2. Q1 verifies closed
+  // but Q2 stays open. Q2's own live gap row has since been superseded, so the old
+  // code fell through to element [0] of the display blob (S1 — Q1's gap) instead
+  // of Q2's gap. The persisted cluster membership still records the per-question
+  // association, so the reopen must be filed under Q2's own summary (S2).
+  const q1 = await ctx.stores.questionLogs.record({
+    question: "How do I configure X?",
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
+  await ctx.stores.questionLogs.recordManualGap(q1.id, "How to configure X");
+  const q2 = await ctx.stores.questionLogs.record({
+    question: "How do I configure Y?",
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
+  await ctx.stores.questionLogs.recordManualGap(q2.id, "How to configure Y");
+
+  const cluster = await ctx.stores.gapClusters.createCluster({ title: "Configure X and Y", revision: 1 });
+  const [gapS1] = await ctx.stores.questionLogs.gapIdsForSummary("How to configure X");
+  const [gapS2] = await ctx.stores.questionLogs.gapIdsForSummary("How to configure Y");
+  assert.ok(gapS1 && gapS2, "both cluster gaps have stable ids");
+  await ctx.stores.gapClusters.assignGapToCluster(cluster.id, gapS1);
+  await ctx.stores.gapClusters.assignGapToCluster(cluster.id, gapS2);
+  // Q2's live gap row is superseded (e.g. a re-answer replaced it) — only the
+  // structured cluster membership still records that this proposal addressed S2
+  // for Q2, exactly the case the element-[0] fallback misfiled.
+  await ctx.stores.questionLogs.clearManualGap(q2.id);
+
+  const proposal = await ctx.stores.proposals.create({
+    title: "Configure X and Y",
+    targetPath: "configure-x.md",
+    markdown: "# Configure X and Y\nbody",
+    rationale: "r",
+    evidence: [],
+    // Newline-joined display blob; S1 (Q1's gap) sorts first.
+    gapSummary: "How to configure X\nHow to configure Y",
+    triggeringQuestionIds: [q1.id, q2.id],
+    gapClusterId: cluster.id
+  });
+  await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+  const merged = await ctx.stores.proposals.get(proposal.id);
+  assert.ok(merged);
+  // Q1's re-ask closes (confident + cites the merged doc); Q2's stays open.
+  ctx.jobs = new QuestionRoutingBroker(ctx, (question) =>
+    question === "How do I configure X?"
+      ? { answer: "Set the X flag.", confidence: "high", citations: [citation("configure-x.md")] }
+      : { answer: "Still unsure.", confidence: "low", citations: [] }
+  );
+
+  const result = await proposals.verifyGapClosure(ctx, merged!);
+
+  assert.equal(result.closureStatus, "reopened");
+  const q2Reloaded = await ctx.stores.questionLogs.get(q2.id);
+  const vGap = (q2Reloaded?.gaps ?? []).find((gap) => gap.source === "verification");
+  assert.ok(vGap, "Q2's failed re-ask reopened a verification gap");
+  assert.equal(
+    vGap?.summary,
+    "How to configure Y",
+    "the reopen is filed under the failing question's own gap (S2), not gap-1 (S1)"
+  );
+  assert.notEqual(vGap?.summary, "How to configure X");
 });
 
 test("verifyGapClosure flags needs_attention after the retry cap and stops re-drafting", async () => {
