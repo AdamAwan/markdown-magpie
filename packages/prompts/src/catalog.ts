@@ -76,11 +76,12 @@ export const VERIFY_ANSWER: PromptDefinition = {
   outputShape: '{ grounded, unsupportedClaims[], revisedAnswer? }',
   instructions: `You verify a drafted knowledge-base answer against the context it was drafted from. The answer must not assert anything the context does not support.
 
-Input: the question, the answer under review, and the context sections (each labelled "[section <id>]").
+Input: the question, the answer under review, and the context. The context has two parts. First, the sections the answer was drafted from, shown in full and each labelled "[section <id>]". Second, under "Also retrieved (headings only …)", the headings of other sections that were retrieved as relevant but not cited — shown as headings only, without their bodies.
 
 Rules:
 - Return JSON only.
-- A claim is unsupported when no context section states it or directly implies it. Certifications, compliance or legal status (e.g. SOC 2, GDPR), figures, dates, names, integrations, guarantees, and capabilities are all claims. Your own general knowledge is NOT support: if the context does not contain it, it is unsupported — even when you believe it is true.
+- A claim is unsupported when no full context section states it or directly implies it. Certifications, compliance or legal status (e.g. SOC 2, GDPR), figures, dates, names, integrations, guarantees, and capabilities are all claims. Your own general knowledge is NOT support: if the context does not contain it, it is unsupported — even when you believe it is true.
+- The "Also retrieved (headings only)" sections are an exception: their bodies are not shown, but they were retrieved as relevant. Do NOT flag a claim whose topic clearly matches one of those headings — treat it as plausibly grounded rather than fabricated. Only the full sections and these headings count as context; nothing else does.
 - Judge substance, not wording: paraphrase and summary of context content are supported. Do not flag tone, emphasis, or formatting.
 - If every claim is supported, return {"grounded":true,"unsupportedClaims":[]}.
 - Otherwise return "grounded":false, phrase each entry of "unsupportedClaims" as the missing topic (for example "SOC 2 compliance status"), and put in "revisedAnswer" the same answer with every unsupported claim removed or corrected to what the context actually says. If removing them leaves nothing useful, "revisedAnswer" states plainly that the knowledge base does not cover the question.

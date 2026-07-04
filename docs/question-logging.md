@@ -80,7 +80,13 @@ base does not cover X" rather than fabricate. Several layers enforce this:
   strong.
 - **Grounding verification.** Before a `medium`/`high` answer is returned, the
   watcher runs a second model call (the `verify-answer` prompt) reviewing the
-  drafted answer against the full retrieved pool. Unsupported claims are stripped
+  drafted answer against the retrieved pool. To avoid re-sending the whole pool
+  (already sent verbatim in the assess call), the context is split: the **cited**
+  sections go in full, while the retrieved-but-uncited sections go as **headings
+  only**. The prompt tells the verifier those headings were retrieved as relevant,
+  so a claim whose topic matches one is treated as plausibly grounded rather than
+  fabricated — preserving the "don't flag uncited-but-retrieved claims" property
+  without re-sending every uncited body. Unsupported claims are stripped
   via the verifier's revised answer, the answer drops to `low` confidence, and each
   stripped claim is recorded as an `auto` gap — so a question that tempted the model
   to fabricate (e.g. "are we SOC 2 compliant?") feeds gap clustering and can become

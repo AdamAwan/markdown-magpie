@@ -392,6 +392,59 @@ describe("ChatRunner", () => {
     assert.deepEqual(output.trace?.verification.unsupportedClaims, ["SOC 2 compliance status"]);
   });
 
+  it("sends cited sections in full but uncited retrieved sections as headings only to the verifier", async () => {
+    // The pool holds a cited section and a retrieved-but-uncited section. The verifier
+    // must see the cited body in full, the uncited section's heading only (its body
+    // withheld to save tokens), and the label that keeps an uncited-topic claim from
+    // being flagged as fabricated (#169 Part 1).
+    const pool: RetrievedSection[] = [
+      SECTIONS[0],
+      {
+        sectionId: "doc-2#extra",
+        documentId: "doc-2",
+        anchor: "extra",
+        path: "ops/extra.md",
+        heading: "Extra context",
+        content: "Uncited body that must not be re-sent.",
+        relevance: 0.8
+      }
+    ];
+    let verifyMessage = "";
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("You verify a drafted")) {
+        verifyMessage = request.messages[0]?.content ?? "";
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      // Answer cites only the first section, so the second stays uncited-but-retrieved.
+      return JSON.stringify({
+        answer: "Run the deploy script.",
+        confidence: "high",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"]
+      });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi({ retrieve: async () => pool }));
+    await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-a", name: "Alpha" }],
+        requestedFlowId: "flow-a",
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    );
+
+    assert.match(
+      verifyMessage,
+      /\[section doc-1#deploy\] # Deploy\nRun the deploy script\./,
+      "the cited section is shown in full"
+    );
+    assert.match(verifyMessage, /\[section doc-2#extra\] # Extra context/, "the uncited section's heading is shown");
+    assert.doesNotMatch(verifyMessage, /Uncited body that must not be re-sent\./, "the uncited section's body is withheld");
+    assert.match(verifyMessage, /Also retrieved \(headings only/, "uncited sections are grouped under the headings-only label");
+  });
+
   it("keeps the drafted answer when the grounding verdict is unparseable (fails open)", async () => {
     const chat = new FakeChatProvider((request) => {
       if (request.system.includes("You verify a drafted")) {

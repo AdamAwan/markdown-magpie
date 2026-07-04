@@ -215,12 +215,18 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
 }
 
 // Post-answer grounding check: a second model call reviews the drafted answer
-// against the whole retrieved pool (not just the cited subset, so a claim backed
-// by an uncited-but-retrieved section is not falsely flagged) and every
-// unsupported claim is stripped, the answer downgraded to low, and the claims
-// recorded as gaps. Only medium/high answers are checked — gap, out-of-scope, and
-// already-low answers ship distrusted anyway. An unparseable verdict fails open
-// (keeps the drafted answer) so a flaky verifier cannot downgrade every answer.
+// against the retrieved pool and every unsupported claim is stripped, the answer
+// downgraded to low, and the claims recorded as gaps. Only medium/high answers are
+// checked — gap, out-of-scope, and already-low answers ship distrusted anyway. An
+// unparseable verdict fails open (keeps the drafted answer) so a flaky verifier
+// cannot downgrade every answer.
+//
+// To avoid re-sending the whole pool (already sent verbatim in the assess call), the
+// context is split: the *cited* sections go in full, while the retrieved-but-uncited
+// sections go as headings only. The prompt tells the verifier those headings were
+// retrieved as relevant, so a claim matching one is treated as plausibly grounded
+// rather than fabricated — preserving the "don't flag uncited-but-retrieved claims"
+// property without re-sending every uncited body (#169 Part 1).
 async function verifyAnswerGrounding(
   model: ChatProvider,
   output: AnswerOutput,
@@ -239,13 +245,20 @@ async function verifyAnswerGrounding(
     return withVerification(output, { status: "skipped", skipReason: "low_confidence" });
   }
 
-  logger.debug({ jobId }, `answer_question[${jobId}]: verifying answer grounding against ${sections.length} section(s)`);
+  const citedIds = new Set(output.citations.map((citation) => citation.sectionId));
+  const cited = sections.filter((section) => citedIds.has(section.sectionId));
+  const uncited = sections.filter((section) => !citedIds.has(section.sectionId));
+
+  logger.debug(
+    { jobId, citedCount: cited.length, uncitedCount: uncited.length },
+    `answer_question[${jobId}]: verifying answer grounding against ${cited.length} cited section(s) + ${uncited.length} heading(s)`
+  );
   const response = await model.complete({
     system: VERIFY_ANSWER.instructions,
     messages: [
       {
         role: "user",
-        content: `Question:\n${question}\n\nAnswer under review:\n${output.answer}\n\nContext:\n${formatSectionContext(sections)}`
+        content: `Question:\n${question}\n\nAnswer under review:\n${output.answer}\n\nContext:\n${buildVerificationContext(cited, uncited)}`
       }
     ],
     responseFormat: "json",
@@ -319,6 +332,25 @@ function parseAssessment(content: string): { action: "search"; queries: string[]
 // verifier reads the exact context representation the answer was drafted from.
 function formatSectionContext(sections: RetrievedSection[]): string {
   return sections.map((section) => `[section ${section.sectionId}] # ${section.heading}\n${section.content}`).join("\n\n");
+}
+
+// The same "[section <id>]" labelling but heading only (no body), for the
+// retrieved-but-uncited sections shown to the grounding verifier.
+function formatSectionHeadings(sections: RetrievedSection[]): string {
+  return sections.map((section) => `[section ${section.sectionId}] # ${section.heading}`).join("\n");
+}
+
+// The grounding verifier's context: cited sections in full, then (if any) the
+// uncited retrieved sections as headings only under a label that tells the verifier
+// they were retrieved as relevant, so a claim matching one is plausibly grounded.
+function buildVerificationContext(cited: RetrievedSection[], uncited: RetrievedSection[]): string {
+  const parts = [formatSectionContext(cited)];
+  if (uncited.length > 0) {
+    parts.push(
+      `Also retrieved (headings only — these sections were retrieved as relevant but the answer did not cite them; treat a claim whose topic matches one of these headings as plausibly grounded, not fabricated):\n${formatSectionHeadings(uncited)}`
+    );
+  }
+  return parts.filter((part) => part.length > 0).join("\n\n");
 }
 
 function mergeSections(pool: Map<string, RetrievedSection>, sections: RetrievedSection[]): void {
