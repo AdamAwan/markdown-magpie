@@ -150,3 +150,23 @@ describe("HttpWatcherApi complete() retry", () => {
     assert.equal(state.calls, 1, "a 4xx must fail immediately, not retry");
   });
 });
+
+describe("HttpWatcherApi getSourceCorpus", () => {
+  it("fetches a corpus once per hash and serves repeat requests from cache", async () => {
+    const corpus = [{ sourceId: "s1", sourceName: "S", kind: "git", content: "material" }];
+    const state = installScriptedFetch([
+      { status: 200, body: { corpus } },
+      { status: 200, body: { corpus: [{ sourceId: "s2", sourceName: "S2", kind: "git", content: "other" }] } }
+    ]);
+    const api = new HttpWatcherApi({ apiBaseUrl: "http://api.test", workerName: "test-worker" });
+
+    assert.deepEqual(await api.getSourceCorpus("hash-a"), corpus);
+    assert.deepEqual(await api.getSourceCorpus("hash-a"), corpus);
+    assert.equal(state.calls, 1, "the second request for the same hash is served from cache");
+
+    // A different hash still goes over the wire (the second scripted response).
+    const other = await api.getSourceCorpus("hash-b");
+    assert.equal(other[0]?.content, "other");
+    assert.equal(state.calls, 2);
+  });
+});

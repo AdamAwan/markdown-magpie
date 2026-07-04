@@ -27,7 +27,7 @@ test("a healthy verdict produces no finding but still counts as checked", async 
   const { findings, checkedPaths } = await runVerifyLens(ctx, {
     flowId: undefined,
     documents: [{ path: "a.md", content: "x" }],
-    sources: [],
+    sourcesRef: "test-corpus",
     verifyDocument: fixedVerifier({})
   });
   assert.deepEqual(findings, []);
@@ -39,7 +39,7 @@ test("an unprovable verdict with no overlapping PR yields an open-new finding", 
   const { findings, checkedPaths } = await runVerifyLens(ctx, {
     flowId: undefined,
     documents: [{ path: "a.md", content: "x" }],
-    sources: [],
+    sourcesRef: "test-corpus",
     verifyDocument: fixedVerifier({ "a.md": UNPROVABLE })
   });
   assert.equal(findings.length, 1);
@@ -64,7 +64,7 @@ test("an unprovable verdict overlapping a touchable open PR folds into it", asyn
   const { findings } = await runVerifyLens(ctx, {
     flowId: undefined,
     documents: [{ path: "a.md", content: "x" }],
-    sources: [],
+    sourcesRef: "test-corpus",
     verifyDocument: fixedVerifier({ "a.md": UNPROVABLE })
   });
   assert.equal(findings[0].decision, "fold");
@@ -83,7 +83,7 @@ test("a verifier that throws for one doc skips it and still processes the rest",
       { path: "bad.md", content: "x" },
       { path: "good.md", content: "y" }
     ],
-    sources: [],
+    sourcesRef: "test-corpus",
     verifyDocument
   });
   assert.deepEqual(
@@ -99,7 +99,7 @@ test("a verifier that returns undefined does not count the doc as checked", asyn
   const { findings, checkedPaths } = await runVerifyLens(ctx, {
     flowId: undefined,
     documents: [{ path: "a.md", content: "x" }],
-    sources: [],
+    sourcesRef: "test-corpus",
     verifyDocument
   });
   assert.deepEqual(findings, []);

@@ -140,6 +140,34 @@ test("runFixPatrol enqueues a correction for each unprovable finding, none for h
   assert.deepEqual(corrected, [{ path: "a.md", claims: 1 }]);
 });
 
+test("runFixPatrol stores the corpus once and threads one resolvable sourcesRef to verify and correct (#163 Part 2)", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  const verifyRefs: string[] = [];
+  const correctRefs: string[] = [];
+  const verifyDocument: VerifyDocumentFn = async (_ctx, input) => {
+    verifyRefs.push(input.sourcesRef);
+    return { verdict: "unprovable", claims: [{ claim: "stale", reason: "no source" }] };
+  };
+  const correctDocument: CorrectDocumentFn = async (_ctx, input) => {
+    correctRefs.push(input.sourcesRef);
+  };
+
+  const outcome = await patrol.runFixPatrol(
+    ctx,
+    { trigger: "scheduled" },
+    { verifyDocument, correctDocument, dedupeDocument: async () => {} }
+  );
+  assert.ok(outcome.ok);
+  // Every job in the tick carries the SAME ref — the corpus is not copied per job.
+  const refs = [...verifyRefs, ...correctRefs];
+  assert.ok(refs.length >= 2);
+  assert.equal(new Set(refs).size, 1, "verify and correct share one corpus ref");
+  // ...and that ref resolves to the corpus the API stored once for the tick.
+  const stored = await ctx.stores.sourceCorpus.get(refs[0]);
+  assert.ok(stored !== undefined, "the referenced corpus snapshot was persisted");
+});
+
 test("runFixPatrol runs the dedupe lens over the batch, enqueuing a scan per doc with a near-duplicate", async () => {
   const ctx = makeTestContext();
   // Two documents that share a heading — the keyword index ranks each as a strong
