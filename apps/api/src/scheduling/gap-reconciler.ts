@@ -1,8 +1,9 @@
 import type { Proposal } from "@magpie/core";
 import { fetchPullRequestStatus as defaultFetchPullRequestStatus } from "@magpie/git";
 import { logger } from "../logger.js";
-import { reconcileGapClustersOutputSchema } from "@magpie/jobs";
+import { reconcileGapClustersOutputSchema, type JobState } from "@magpie/jobs";
 import type { AppContext } from "../context.js";
+import { withFlowRunLock } from "./run-lock.js";
 import * as gapsService from "../features/gaps/service.js";
 import { runJobToCompletion } from "../features/jobs/service.js";
 import * as proposalsService from "../features/proposals/service.js";
@@ -79,29 +80,43 @@ export async function reconcileGaps(
   flowId: string | undefined,
   deps: ReconcilerDeps = DEFAULT_DEPS
 ): Promise<void> {
-  let details: GapReconcileRunDetails | undefined;
-  try {
-    details = await reconcileGapsInner(ctx, flowId, deps);
-  } catch (error) {
+  // Serialize this flow's reconcile across every API instance (issue #167): pg-boss
+  // dedupes the cron *enqueue* per slot but not *execution*, so a run outlasting its
+  // cadence can overlap the next slot's run on a second watcher and double every
+  // metered reshape + draft. The advisory lock covers both the cron path and the
+  // manual "Run now" path, since both funnel through here. Only the run that holds
+  // the lock records a MaintenanceRun; a skipped overlapping run did no work.
+  const result = await withFlowRunLock(ctx.pool, "process_gaps_to_pull_requests", flowId, async () => {
+    let details: GapReconcileRunDetails | undefined;
+    try {
+      details = await reconcileGapsInner(ctx, flowId, deps);
+    } catch (error) {
+      await ctx.stores.maintenanceRuns.record({
+        taskType: "process_gaps_to_pull_requests",
+        flowId,
+        trigger: "scheduled",
+        status: "failed",
+        summary: `reconcile failed for flow ${flowId ?? "(default)"}`,
+        error: error instanceof Error ? error.message : String(error),
+        details: details ?? {}
+      });
+      throw error;
+    }
     await ctx.stores.maintenanceRuns.record({
       taskType: "process_gaps_to_pull_requests",
       flowId,
       trigger: "scheduled",
-      status: "failed",
-      summary: `reconcile failed for flow ${flowId ?? "(default)"}`,
-      error: error instanceof Error ? error.message : String(error),
+      status: "completed",
+      summary: `reconciled flow ${flowId ?? "(default)"}`,
       details: details ?? {}
     });
-    throw error;
-  }
-  await ctx.stores.maintenanceRuns.record({
-    taskType: "process_gaps_to_pull_requests",
-    flowId,
-    trigger: "scheduled",
-    status: "completed",
-    summary: `reconciled flow ${flowId ?? "(default)"}`,
-    details: details ?? {}
   });
+  if (!result.acquired) {
+    logger.info(
+      { flowLabel: flowId ?? "default" },
+      "gap reconciler: another reconcile for this flow is already running; skipped this overlapping run (issue #167)"
+    );
+  }
 }
 
 async function reconcileGapsInner(
@@ -433,6 +448,16 @@ async function draftProposalsForUncoveredClusters(ctx: AppContext, flowId: strin
   const coveredClusterIds = new Set(
     proposals.map((p) => p.gapClusterId).filter((id): id is string => Boolean(id))
   );
+  // Drafting is enqueue-only: a proposal row appears only when the
+  // draft_markdown_proposal job completes (the gaps job-completion path links it to
+  // its cluster). A draft still queued/active for a cluster therefore ALREADY covers
+  // it even though no proposal exists yet. Counting those in-flight jobs — a
+  // deterministic read of the job store — stops an overlapping reconcile (issue #167)
+  // or a draft that outlives its tick from enqueueing a second full generation for
+  // the same cluster.
+  for (const clusterId of await inFlightDraftClusterIds(ctx)) {
+    coveredClusterIds.add(clusterId);
+  }
 
   // Collect each source set's context once for the whole run; clusters sharing a
   // flow (and so the same sources) reuse the bytes instead of re-walking the
@@ -459,6 +484,42 @@ async function draftProposalsForUncoveredClusters(ctx: AppContext, flowId: strin
   }
   logger.info({ flowId: flowId ?? "default", drafted }, "gap reconciler: drafted new proposals for uncovered clusters");
   return drafted;
+}
+
+// The non-terminal job states in which a draft is still "in flight" and so counts
+// as covering its cluster. Matches the in-flight set the manual-run guard uses in
+// scheduled-tasks/service.ts.
+const IN_FLIGHT_DRAFT_STATES: ReadonlySet<JobState> = new Set<JobState>(["created", "active", "retry", "blocked"]);
+
+// Cluster ids that already have a queued/active draft_markdown_proposal job. Read
+// from the job store rather than the proposal store, so a cluster is treated as
+// covered during the window between enqueue and the job completing (when no
+// proposal row exists yet). Newest-first ordering keeps freshly enqueued in-flight
+// jobs within the scanned page even when many completed drafts are retained.
+async function inFlightDraftClusterIds(ctx: AppContext): Promise<Set<string>> {
+  const { jobs } = await ctx.jobs.list({ type: "draft_markdown_proposal", limit: 200 });
+  const clusterIds = new Set<string>();
+  for (const job of jobs) {
+    if (!IN_FLIGHT_DRAFT_STATES.has(job.state)) {
+      continue;
+    }
+    const clusterId = draftJobClusterId(job.input);
+    if (clusterId) {
+      clusterIds.add(clusterId);
+    }
+  }
+  return clusterIds;
+}
+
+// The gapClusterId carried on a draft_markdown_proposal job input, read defensively
+// from the untyped stored envelope (the same shape-narrowing pattern inputFlowId
+// uses in scheduled-tasks/service.ts).
+function draftJobClusterId(input: unknown): string | undefined {
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
+  const clusterId = (input as { gapClusterId?: unknown }).gapClusterId;
+  return typeof clusterId === "string" ? clusterId : undefined;
 }
 
 // Deactivates the membership of every active-cluster gap that has since been

@@ -394,6 +394,75 @@ describe("reconcileGaps autonomous drafting", () => {
   });
 });
 
+describe("reconcileGaps in-flight draft coverage", () => {
+  // Drafting is enqueue-only: the proposal row lands only when the
+  // draft_markdown_proposal job completes. Between enqueue and completion no
+  // proposal exists, so two overlapping reconciles (issue #167) — or a draft that
+  // outlives its 10-minute tick — would each see the cluster "uncovered" and
+  // enqueue a second full draft generation for the same cluster. Treating a
+  // queued/active draft job as covering its cluster closes that window.
+  async function seedOneClusterWithOpenGap(ctx: AppContext): Promise<string> {
+    const log = await ctx.stores.questionLogs.record({
+      question: "How do I configure X?",
+      chatProvider: "openai-compatible",
+      retrievedSectionIds: []
+    });
+    // Recording the gap advances the catalog past the processed revision, so the
+    // reconcile gate opens and drafting is reached.
+    await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
+    const cluster = await ctx.stores.gapClusters.createCluster({ title: "How to configure X", revision: 1 });
+    const [gapId] = await ctx.stores.questionLogs.gapIdsForSummary("How to configure X");
+    await ctx.stores.gapClusters.assignGapToCluster(cluster.id, gapId);
+    return cluster.id;
+  }
+
+  const draftInputFor = (clusterId: string) => ({
+    provider: "openai-compatible" as const,
+    gapSummaries: ["How to configure X"],
+    triggeringQuestions: [],
+    evidence: [],
+    destinationId: "dest",
+    expectedOutput: "markdown_proposal" as const,
+    gapClusterId: clusterId
+  });
+
+  it("does not draft when a queued draft job already covers the cluster", async () => {
+    const ctx = makeTestContext({ config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" }) });
+    const clusterId = await seedOneClusterWithOpenGap(ctx);
+    // A draft is already enqueued for this cluster but not yet completed, so no
+    // proposal row exists — exactly the window issue #167 doubles in.
+    await ctx.jobs.create("draft_markdown_proposal", draftInputFor(clusterId));
+
+    await reconcileGaps(ctx, undefined, {
+      fetchPullRequestStatus: async () => undefined,
+      publishProposal: async () => {},
+      supersedeProposal: async () => {}
+    });
+
+    const drafts = (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs;
+    assert.equal(drafts.length, 1, "the in-flight draft covers the cluster; reconcile enqueued no duplicate");
+  });
+
+  it("still drafts the same cluster when its only draft job has already completed", async () => {
+    // Control for the case above: a completed (terminal) draft no longer covers the
+    // cluster on its own — coverage then comes from the proposal row the completion
+    // creates. With neither present, the cluster is genuinely uncovered and drafts.
+    const ctx = makeTestContext({ config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" }) });
+    const clusterId = await seedOneClusterWithOpenGap(ctx);
+    const job = await ctx.jobs.create("draft_markdown_proposal", draftInputFor(clusterId));
+    await ctx.jobs.complete(job.id, { title: "t", targetPath: "t.md", markdown: "#", rationale: "r" });
+
+    await reconcileGaps(ctx, undefined, {
+      fetchPullRequestStatus: async () => undefined,
+      publishProposal: async () => {},
+      supersedeProposal: async () => {}
+    });
+
+    const drafts = (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs;
+    assert.equal(drafts.length, 2, "a terminal draft does not cover the cluster; the uncovered cluster drafts");
+  });
+});
+
 describe("reconcileGaps resolution pruning", () => {
   // A reshape can move a gap into a cluster other than the one whose proposal
   // later resolves it (resolution matches on (question, summary); freezing only
