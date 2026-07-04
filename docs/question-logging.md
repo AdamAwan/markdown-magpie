@@ -135,6 +135,13 @@ subpath-configured destination and every merge would falsely reopen.)
   retry budget instead of permanently carrying the old count (see `countPriorStillOpen` in
   `apps/api/src/stores/gap-closure-verification-store.ts`).
 
+- If a triggering question's log itself cannot be found (e.g. it was deleted), there is
+  nothing to re-ask, so that question is recorded `still_open` with no re-ask and — because
+  none of the usual `recordVerificationGap`/retry-cap bookkeeping applies to a question with
+  no log to attach it to — the whole verification escalates straight to `needs_attention`
+  (with a loud warning log) rather than leaving the proposal silently parked at `reopened`
+  forever with no gap filed and no signal for a human to act on.
+
 Every re-ask is recorded in the `gap_closure_verification` table (verdict, confidence,
 whether it cited a merged doc, and the detail) — an append-only audit trail; the retry cap
 above is *derived* from it (scoped by distinct proposal + a reset boundary), not a raw tally
