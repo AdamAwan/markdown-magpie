@@ -395,6 +395,90 @@ test("verifyGapClosure resets the retry budget once the parked gap is resolved",
   );
 });
 
+test("verifyGapClosure resolves gaps for a closed question even when a sibling is still_open", async () => {
+  // Regression test for issue #155: when a proposal triggers multiple questions
+  // and one closes but a sibling is still_open, the closed question's gaps must
+  // be resolved immediately, not stranded forever.
+  const ctx = makeTestContext();
+
+  // Create two triggering questions with manual gaps
+  const log1 = await ctx.stores.questionLogs.record({
+    question: "How do I configure X?",
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
+  await ctx.stores.questionLogs.recordManualGap(log1.id, "How to configure X");
+
+  const log2 = await ctx.stores.questionLogs.record({
+    question: "How do I deploy Y?",
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
+  await ctx.stores.questionLogs.recordManualGap(log2.id, "How to deploy Y");
+
+  // Create a proposal triggered by both questions
+  const proposal = await ctx.stores.proposals.create({
+    title: "Configure X and Deploy Y",
+    targetPath: "setup.md",
+    markdown: "# Setup\nbody",
+    rationale: "r",
+    evidence: [],
+    gapSummary: "How to configure X\nHow to deploy Y",
+    triggeringQuestionIds: [log1.id, log2.id]
+  });
+  await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+  const merged = await ctx.stores.proposals.get(proposal.id);
+  assert.ok(merged);
+
+  // Custom broker that determines answers based on the stored question text
+  class MixedAnswerBroker extends FakeJobBroker {
+    override async create(type: JobType, input: unknown): Promise<JobView> {
+      const job = await super.create(type, input);
+      if (type === "answer_question") {
+        const questionLogId = (input as { questionLogId: string }).questionLogId;
+        const log = await ctx.stores.questionLogs.get(questionLogId);
+        const answer: AnswerResult =
+          log?.question === "How do I configure X?"
+            ? {
+                answer: "Set the config flag.",
+                confidence: "high",
+                citations: [citation("setup.md")]
+              }
+            : {
+                answer: "I am not sure.",
+                confidence: "low",
+                citations: []
+              };
+        await ctx.stores.questionLogs.updateAnswer(questionLogId, { answer, chatProvider: "codex" });
+        return super.complete(job.id, answer);
+      }
+      return job;
+    }
+  }
+  ctx.jobs = new MixedAnswerBroker();
+
+  const result = await proposals.verifyGapClosure(ctx, merged);
+
+  // The overall closure should be "reopened" because Q2 is still_open
+  assert.equal(result.closureStatus, "reopened");
+  assert.equal(result.perQuestion.length, 2);
+  assert.equal(result.perQuestion[0]?.verdict, "closed", "Q1's verdict is closed");
+  assert.equal(result.perQuestion[1]?.verdict, "still_open", "Q2's verdict is still_open");
+
+  // BUT Q1's gap should be resolved despite the sibling being still_open
+  const after = await ctx.stores.questionLogs.listGapCandidates(50);
+  const q1GapResolved = !after.some(
+    (candidate) => candidate.summary === "How to configure X" && candidate.questionIds.includes(log1.id)
+  );
+  assert.ok(q1GapResolved, "Q1's gap is resolved even though Q2 is still_open");
+
+  // And Q2's gap should still be a candidate for re-drafting
+  const q2GapStillOpen = after.some(
+    (candidate) => candidate.summary === "How to deploy Y" && candidate.questionIds.includes(log2.id)
+  );
+  assert.ok(q2GapStillOpen, "Q2's gap remains a candidate for re-drafting");
+});
+
 test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job", async () => {
   const ctx = makeTestContext();
   ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
