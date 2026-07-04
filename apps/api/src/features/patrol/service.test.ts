@@ -288,6 +288,106 @@ test("runImprovePatrol skips a document already covered by an open same-flow pro
   assert.equal(outcome.enqueuedCount, 1);
 });
 
+// A verify spy that records which docs it was actually asked to check, so the
+// change gate's effect (which docs re-verify on a later tick) is observable.
+function recordingDeps(verified: string[], verdict: "healthy" | "undefined" = "healthy") {
+  return {
+    verifyDocument: (async (_ctx, { path }) => {
+      verified.push(path);
+      return verdict === "undefined" ? undefined : { verdict: "healthy" as const, claims: [] };
+    }) as VerifyDocumentFn,
+    dedupeDocument: (async () => {}) as DedupeDocumentFn,
+    splitDocument: (async () => {}) as SplitDocumentFn
+  };
+}
+
+test("the change gate skips re-verifying an unchanged doc on the next tick (idle KB → zero calls)", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md", "b.md"]);
+  const verified: string[] = [];
+
+  const first = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified));
+  assert.ok(first.ok);
+  assert.deepEqual(verified.sort(), ["a.md", "b.md"], "first tick verifies both — no hash recorded yet");
+  const firstStamp = (await ctx.stores.patrol.listCursor(undefined)).find((e) => e.docPath === "a.md")!.lastCheckedAt;
+
+  verified.length = 0;
+  const second = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified));
+  assert.ok(second.ok);
+  if (!second.ok) return;
+  assert.deepEqual(verified, [], "unchanged docs against an unchanged corpus are gated — no provider calls");
+  assert.equal((second.selected as string[]).length, 2, "the cursor still selected both docs");
+
+  // The cursor still rotates: last_checked_at advances even for a gated doc.
+  const secondStamp = (await ctx.stores.patrol.listCursor(undefined)).find((e) => e.docPath === "a.md")!.lastCheckedAt;
+  assert.ok(secondStamp >= firstStamp);
+  // The run reports the gated count for the audit.
+  const run = await ctx.stores.maintenanceRuns.get(second.runId);
+  assert.equal((run?.details as { gated?: number }).gated, 2);
+});
+
+test("the change gate re-verifies a doc whose content changed, and only that doc", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md", "b.md"]);
+  const verified: string[] = [];
+  await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified));
+
+  // Edit a.md; b.md is byte-identical.
+  await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
+    repositoryId: "docs",
+    documents: [
+      { path: "a.md", content: "# a.md edited" },
+      { path: "b.md", content: "# b.md" }
+    ]
+  });
+
+  verified.length = 0;
+  const second = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified));
+  assert.ok(second.ok);
+  assert.deepEqual(verified, ["a.md"], "only the changed doc is re-verified; the unchanged one stays gated");
+});
+
+test("the change gate keeps a doc whose verify did not complete re-checkable next tick", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  const verified: string[] = [];
+
+  // Verify never completes (e.g. no provider watcher) — returns undefined.
+  const first = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified, "undefined"));
+  assert.ok(first.ok);
+  assert.deepEqual(verified, ["a.md"]);
+
+  // No hash was recorded (the check never completed), so the next tick re-verifies it
+  // rather than gating on a state it was never verified at.
+  verified.length = 0;
+  const second = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified, "undefined"));
+  assert.ok(second.ok);
+  assert.deepEqual(verified, ["a.md"], "an unverified doc is never gated");
+});
+
+test("runImprovePatrol gates an unchanged doc on the next tick", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md", "b.md"]);
+  const improved: string[] = [];
+  const deps = {
+    improveDocument: async (_ctx: unknown, input: ImproveDocumentJobInput) => {
+      improved.push(input.path);
+    }
+  };
+
+  const first = await patrol.runImprovePatrol(ctx, { trigger: "scheduled" }, deps);
+  assert.ok(first.ok);
+  const firstEnqueued = [...improved];
+  assert.ok(firstEnqueued.length > 0);
+
+  improved.length = 0;
+  const second = await patrol.runImprovePatrol(ctx, { trigger: "scheduled" }, deps);
+  assert.ok(second.ok);
+  if (!second.ok) return;
+  assert.deepEqual(improved, [], "unchanged docs are gated — no improve scans enqueued");
+  assert.equal(second.enqueuedCount, 0);
+});
+
 test("runFixPatrol skips a document already covered by an open same-flow proposal", async () => {
   const ctx = makeTestContext();
   await indexDocs(ctx, ["covered.md", "free.md"]);

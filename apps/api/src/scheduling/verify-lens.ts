@@ -38,6 +38,17 @@ export function verifyIntent(flowId: string | undefined, path: string, claims: U
 // the reconcile gate (same-flow open PRs only) and record a finding. Healthy docs
 // are silent. A per-doc failure is logged and skipped — one bad doc never aborts
 // the tick.
+//
+// Returns the findings plus `checkedPaths`: the documents that yielded a real
+// verdict (healthy or not) this tick. A doc whose verify threw, timed out, or
+// returned nothing is NOT in checkedPaths — so the caller's change gate never
+// records a "verified" hash for a doc it did not actually verify, which would
+// otherwise suppress it forever after a transient provider outage (#163).
+export interface VerifyLensResult {
+  findings: VerifyFinding[];
+  checkedPaths: string[];
+}
+
 export async function runVerifyLens(
   ctx: AppContext,
   input: {
@@ -46,9 +57,10 @@ export async function runVerifyLens(
     sources: SourceDataContext[];
     verifyDocument: VerifyDocumentFn;
   }
-): Promise<VerifyFinding[]> {
+): Promise<VerifyLensResult> {
   const openPrs = openPullRequestSummaries(await sameFlowOpenProposals(ctx, input.flowId));
   const findings: VerifyFinding[] = [];
+  const checkedPaths: string[] = [];
 
   for (const document of input.documents) {
     let verdict: VerifyDocumentJobOutput | undefined;
@@ -65,7 +77,13 @@ export async function runVerifyLens(
       continue;
     }
 
-    if (!verdict || verdict.verdict === "healthy" || verdict.claims.length === 0) {
+    if (!verdict) {
+      continue;
+    }
+    // A real verdict came back (healthy or unprovable), so this doc was genuinely checked.
+    checkedPaths.push(document.path);
+
+    if (verdict.verdict === "healthy" || verdict.claims.length === 0) {
       continue;
     }
 
@@ -78,5 +96,5 @@ export async function runVerifyLens(
     });
   }
 
-  return findings;
+  return { findings, checkedPaths };
 }
