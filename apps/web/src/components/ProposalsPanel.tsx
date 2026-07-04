@@ -2,7 +2,8 @@ import styled from "@emotion/styled";
 import { Proposal } from "../lib/types";
 import { shortSha } from "../lib/format";
 import { ContextValue } from "./common";
-import { Badge, Chip, EmptyState, ScrollList, Surface, statusTone } from "./ui";
+import type { StatusTone } from "../theme/theme";
+import { Badge, Chip, EmptyState, ScrollList, Stack, Surface, statusTone } from "./ui";
 
 const ProposalGrid = styled.div(({ theme }) => ({
   display: "grid",
@@ -112,36 +113,25 @@ const Preview = styled.pre(({ theme }) => ({
 // Post-merge gap-closure outcome badges. A merged proposal no longer blindly
 // resolves its gaps — the API re-asks the triggering questions and records
 // whether the merged doc actually answered them (see docs/question-logging.md).
-const CLOSURE_BADGES: Record<NonNullable<Proposal["closureStatus"]>, { label: string; title: string }> = {
+// tone reuses the shared status tones so it reads as one system: verified
+// (green), reopened (amber), needs attention (red).
+const CLOSURE_BADGES: Record<NonNullable<Proposal["closureStatus"]>, { label: string; title: string; tone: StatusTone }> = {
   verified_closed: {
     label: "Verified closed",
-    title: "Re-asking the triggering questions confirmed the merged document answers them; the gaps were resolved."
+    title: "Re-asking the triggering questions confirmed the merged document answers them; the gaps were resolved.",
+    tone: "completed"
   },
   reopened: {
     label: "Reopened",
-    title: "Re-asking the triggering questions still failed to find a confident, cited answer; the gaps stay open for another draft."
+    title: "Re-asking the triggering questions still failed to find a confident, cited answer; the gaps stay open for another draft.",
+    tone: "running"
   },
   needs_attention: {
     label: "Needs attention",
-    title: "Verification failed repeatedly; the questions are parked from auto-redrafting and need a human look."
+    title: "Verification failed repeatedly; the questions are parked from auto-redrafting and need a human look.",
+    tone: "failed"
   }
 };
-
-// Closure outcome → Badge tone: verified (green), reopened (amber), needs
-// attention (red) — reusing the shared status tones so it reads as one system.
-const CLOSURE_TONE = {
-  verified_closed: "completed",
-  reopened: "running",
-  needs_attention: "failed"
-} as const satisfies Record<NonNullable<Proposal["closureStatus"]>, string>;
-
-// Stacks the proposal status and its post-merge closure badge at the row's end.
-const StatusStack = styled.div(({ theme }) => ({
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "flex-end",
-  gap: theme.space.xs
-}));
 
 export function ProposalPanel({
   loading,
@@ -192,20 +182,20 @@ export function ProposalPanel({
                     <h3>{selectedProposal.title}</h3>
                     <PathLine>{selectedProposal.targetPath}</PathLine>
                   </div>
-                  <StatusStack>
+                  <Stack gap="xs" align="end">
                     <Badge tone={statusTone(selectedProposal.status)} dot title={`Proposal status: ${selectedProposal.status}`}>
                       {selectedProposal.status}
                     </Badge>
                     {selectedProposal.closureStatus ? (
                       <Badge
-                        tone={CLOSURE_TONE[selectedProposal.closureStatus]}
+                        tone={CLOSURE_BADGES[selectedProposal.closureStatus].tone}
                         dot
                         title={CLOSURE_BADGES[selectedProposal.closureStatus].title}
                       >
                         {CLOSURE_BADGES[selectedProposal.closureStatus].label}
                       </Badge>
                     ) : null}
-                  </StatusStack>
+                  </Stack>
                 </RowTop>
                 {selectedProposal.rationale ? <p>{selectedProposal.rationale}</p> : null}
                 {selectedProposal.draftContext ? (
