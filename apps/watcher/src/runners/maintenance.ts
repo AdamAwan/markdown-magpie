@@ -4,6 +4,7 @@ import {
   editorialPatrolOutputSchema,
   processGapsToPullRequestsOutputSchema,
   sourceChangeSyncOutputSchema,
+  verifyGapClosureInputSchema,
   verifyGapClosureOutputSchema
 } from "@magpie/jobs";
 import type { WatcherApi } from "../http-client.js";
@@ -50,10 +51,7 @@ export class MaintenanceRunner {
   }
 
   private async verifyGapClosure(job: JobView, signal: AbortSignal): Promise<unknown> {
-    const proposalId = readProposalId(job.input);
-    if (!proposalId) {
-      throw new Error("verify_gap_closure requires proposalId");
-    }
+    const { proposalId } = verifyGapClosureInputSchema.parse(job.input);
     logger.info({ jobId: job.id, proposalId }, `verify_gap_closure[${job.id}]: verifying gap closure for proposal ${proposalId}`);
     const result = await this.api.verifyClosure(proposalId, signal);
     // The API endpoint returns the verify_gap_closure output shape; validate it
@@ -119,13 +117,5 @@ function readFlowId(input: unknown): string | undefined {
     return undefined;
   }
   const candidate = (input as { flowId?: unknown }).flowId;
-  return typeof candidate === "string" ? candidate : undefined;
-}
-
-function readProposalId(input: unknown): string | undefined {
-  if (!input || typeof input !== "object") {
-    return undefined;
-  }
-  const candidate = (input as { proposalId?: unknown }).proposalId;
   return typeof candidate === "string" ? candidate : undefined;
 }
