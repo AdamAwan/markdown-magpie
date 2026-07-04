@@ -1,7 +1,7 @@
 # Web UI component library + visual refresh — design
 
 Date: 2026-07-03
-Status: approved, in implementation
+Status: implemented (PR #147)
 Area: `apps/web`
 
 ## Problem
