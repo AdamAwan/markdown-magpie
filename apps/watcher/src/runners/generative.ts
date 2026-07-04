@@ -32,7 +32,7 @@ import {
   type AnswerLoopTrace,
   type AnswerOutput
 } from "../job-prompts.js";
-import type { AnswerTrace } from "@magpie/core";
+import type { AnswerTrace, SourceDataContext } from "@magpie/core";
 
 export interface GenerativeJobOptions {
   job: JobView;
@@ -67,13 +67,33 @@ export async function runGenerativeJob(options: GenerativeJobOptions): Promise<u
     return reconcileGapClusters(options);
   }
 
-  const prompt = options.buildPromptOverride ? options.buildPromptOverride(job) : buildPrompt(job);
+  const prompt = options.buildPromptOverride
+    ? options.buildPromptOverride(job)
+    : buildPrompt(job, await resolveSourceCorpus(options));
   const response = await options.model.complete({
     system: JOB_RUNNER_SYSTEM.instructions,
     messages: [{ role: "user", content: prompt }],
     signal: options.signal
   });
   return parseJobOutput(job, response.content);
+}
+
+// Resolves the shared source corpus a patrol job checks against when its input
+// carries a `sourcesRef` (verify/correct/improve). The API stores the corpus once
+// per tick and the client caches it by hash, so this is at most one fetch per
+// distinct corpus across the whole batch (#163 Part 2). Jobs without a ref (every
+// other generic job) resolve to undefined and buildPrompt renders them unchanged.
+async function resolveSourceCorpus(options: GenerativeJobOptions): Promise<SourceDataContext[] | undefined> {
+  const ref = sourcesRefOf(options.job.input);
+  return ref === undefined ? undefined : options.api.getSourceCorpus(ref, options.signal);
+}
+
+// The `sourcesRef` string on a job input, or undefined when the input has none.
+function sourcesRefOf(input: unknown): string | undefined {
+  if (typeof input !== "object" || input === null || !("sourcesRef" in input)) {
+    return undefined;
+  }
+  return typeof input.sourcesRef === "string" ? input.sourcesRef : undefined;
 }
 
 // The agentic answer loop. After routing + a seed retrieval the model assesses
