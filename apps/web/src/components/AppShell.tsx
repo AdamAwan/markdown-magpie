@@ -303,16 +303,25 @@ export function AppShell({ children }: { children: ReactNode }) {
     setAuthEnabled(authConfiguredFromWindow());
   }, []);
 
-  const counts: Partial<Record<ConsoleSection, number>> = {
-    ask: questions.length,
-    knowledge: stats.sectionCount,
-    gaps: gaps.length,
-    jobs: jobs.length,
-    proposals: proposals.length,
-    activity: maintenanceRuns.length,
-    schedules: scheduledTasks.length,
-    prompts: prompts.length
-  };
+  // Every count and attention notice is derived from the single `refresh()` that
+  // populates the whole console, so until it first completes the defaults (empty
+  // arrays, sectionCount 0) are placeholders, not facts. `lastRefreshedAt` stays
+  // undefined until that first load lands, so gate on it to avoid flashing "0"
+  // badges and false "nothing is set up" warnings before the data arrives.
+  const hasLoaded = lastRefreshedAt !== undefined;
+
+  const counts: Partial<Record<ConsoleSection, number>> = hasLoaded
+    ? {
+        ask: questions.length,
+        knowledge: stats.sectionCount,
+        gaps: gaps.length,
+        jobs: jobs.length,
+        proposals: proposals.length,
+        activity: maintenanceRuns.length,
+        schedules: scheduledTasks.length,
+        prompts: prompts.length
+      }
+    : {};
 
   return (
     <Shell>
@@ -454,7 +463,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             {message.text}
           </Alert>
         ) : null}
-        {attentionNotices.length ? <AttentionPanel notices={attentionNotices} /> : null}
+        {hasLoaded && attentionNotices.length ? <AttentionPanel notices={attentionNotices} /> : null}
 
         {children}
       </MainArea>
