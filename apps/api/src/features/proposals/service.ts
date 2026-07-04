@@ -188,10 +188,35 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
   const subpath = selectDestinationForProposal(ctx.repositoryDeps(), proposal)?.subpath;
   const targetPaths = proposalTargetPaths(proposal, subpath);
 
+  // Prior-round short-circuit: verify_gap_closure has no idempotency guard, so a
+  // job that recorded `closed` verdicts for some questions and then died mid-loop
+  // (before setClosureStatus persisted the status the entry guard above keys on)
+  // is retried from the top. Re-asking a question this proposal already verified
+  // closed would burn a fresh answer_question chat call to re-learn a settled
+  // verdict — so read the proposal's already-closed questions once and skip their
+  // re-asks. Reduces the re-ask cost of a retried verification from O(N × rounds)
+  // to O(N + failing × rounds).
+  const alreadyClosed = await ctx.stores.gapClosureVerifications.questionsWithClosedVerdict(proposal.id);
+
   const perQuestion: VerifyGapClosureOutput["perQuestion"] = [];
   let needsAttention = false;
 
   for (const questionId of questionIds) {
+    if (alreadyClosed.has(questionId)) {
+      // A prior (crashed) round of THIS verification already recorded a `closed`
+      // verdict for this question. Don't re-ask or record a duplicate row; just
+      // re-drive the idempotent gap resolution (in case the earlier round died
+      // between recording the verdict and resolving the gaps) and carry the
+      // closed verdict into the aggregation below.
+      logger.info(
+        { proposalId: proposal.id, questionId },
+        "gap-closure verification: question already verified closed in a prior round; skipping re-ask"
+      );
+      await resolveGapsForClosedQuestion(ctx, questionId, proposal);
+      perQuestion.push({ questionId, reaskedQuestionId: null, verdict: "closed" });
+      continue;
+    }
+
     const original = await ctx.stores.questionLogs.get(questionId);
     if (!original) {
       // The triggering question is gone; we cannot re-ask it, so we cannot claim

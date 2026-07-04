@@ -570,6 +570,105 @@ test("verifyGapClosure short-circuits without re-asking when closureStatus is al
   assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id), 1);
 });
 
+test("verifyGapClosure skips re-asking a question already verified closed in a prior (crashed) round", async () => {
+  // Issue #165 leg (c): verify_gap_closure has no idempotency guard, so a job that
+  // records `closed` for some questions and then dies mid-loop — before
+  // setClosureStatus persists the status the entry guard keys on — is retried from
+  // the top. Re-asking a question this proposal already verified closed spends a
+  // full answer_question chat call to re-learn a settled verdict. The prior `closed`
+  // verdict must be read and its re-ask skipped, so the retry only re-asks the
+  // still-failing questions.
+  const ctx = makeTestContext();
+  const q1 = await ctx.stores.questionLogs.record({
+    question: "How do I configure X?",
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
+  await ctx.stores.questionLogs.recordManualGap(q1.id, "How to configure X");
+  const q2 = await ctx.stores.questionLogs.record({
+    question: "How do I configure Y?",
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
+  await ctx.stores.questionLogs.recordManualGap(q2.id, "How to configure Y");
+  const proposal = await ctx.stores.proposals.create({
+    title: "Configure X and Y",
+    targetPath: "configure-x.md",
+    markdown: "# Configure X and Y\nbody",
+    rationale: "r",
+    evidence: [],
+    gapSummary: "How to configure X\nHow to configure Y",
+    triggeringQuestionIds: [q1.id, q2.id]
+  });
+  await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+  const merged = await ctx.stores.proposals.get(proposal.id);
+  assert.ok(merged);
+
+  // The prior, crashed round of THIS proposal's verification already recorded Q1
+  // closed (but never reached setClosureStatus, so the entry guard doesn't fire).
+  await ctx.stores.gapClosureVerifications.record({
+    proposalId: merged.id,
+    questionId: q1.id,
+    verdict: "closed",
+    confidence: "high",
+    citedMergedDoc: true
+  });
+
+  // The broker fails the test if Q1 is re-asked; Q2's re-ask closes.
+  ctx.jobs = new QuestionRoutingBroker(ctx, (question) => {
+    if (question === "How do I configure X?") {
+      throw new Error("verifyGapClosure must not re-ask a question already verified closed in a prior round");
+    }
+    return { answer: "Set the Y flag.", confidence: "high", citations: [citation("configure-x.md")] };
+  });
+
+  const result = await proposals.verifyGapClosure(ctx, merged);
+
+  assert.equal(result.closureStatus, "verified_closed");
+  const q1Result = result.perQuestion.find((entry) => entry.questionId === q1.id);
+  assert.equal(q1Result?.verdict, "closed");
+  assert.equal(q1Result?.reaskedQuestionId, null, "the already-closed question was not re-asked");
+  const q2Result = result.perQuestion.find((entry) => entry.questionId === q2.id);
+  assert.equal(q2Result?.verdict, "closed");
+  assert.ok(q2Result?.reaskedQuestionId, "the still-open question was re-asked");
+  // The skip records no duplicate row: Q1 still has exactly its one prior closed verdict.
+  const closedForProposal = await ctx.stores.gapClosureVerifications.questionsWithClosedVerdict(merged.id);
+  assert.ok(closedForProposal.has(q1.id));
+  // Neither gap remains a candidate: Q1 resolved on the skip, Q2 on its re-ask.
+  const after = await ctx.stores.questionLogs.listGapCandidates(50);
+  assert.equal(
+    after.some((candidate) => candidate.summary === "How to configure X" || candidate.summary === "How to configure Y"),
+    false,
+    "both gaps resolved once the whole proposal verifies closed"
+  );
+});
+
+test("verifyGapClosure only skips prior-closed questions scoped to the same proposal", async () => {
+  // The prior-closed short-circuit must key on (proposal, question): a `closed`
+  // verdict recorded under a DIFFERENT proposal must not suppress this proposal's
+  // re-ask, or an unrelated proposal's success would silently claim closure here.
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  await ctx.stores.gapClosureVerifications.record({
+    proposalId: "some-other-proposal",
+    questionId: log.id,
+    verdict: "closed",
+    confidence: "high",
+    citedMergedDoc: true
+  });
+  let reasked = false;
+  ctx.jobs = new AnsweringJobBroker(ctx, () => {
+    reasked = true;
+    return { answer: "Set the X flag.", confidence: "high", citations: [citation("configure-x.md")] };
+  });
+
+  const result = await proposals.verifyGapClosure(ctx, merged);
+
+  assert.equal(reasked, true, "a closed verdict on a different proposal does not skip this proposal's re-ask");
+  assert.equal(result.closureStatus, "verified_closed");
+  assert.ok(result.perQuestion[0]?.reaskedQuestionId, "the question was genuinely re-asked");
+});
+
 test("verifyGapClosure drops a stale requestedFlowId and falls back to auto-routing", async () => {
   // The proposal's flowId names a flow that no longer exists in the knowledge
   // config (deleted/renamed between drafting and this post-merge re-ask).

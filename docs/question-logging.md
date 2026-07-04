@@ -145,6 +145,17 @@ subpath-configured destination and every merge would falsely reopen.)
   already-**dismissed** gap to resolved — a dismissal is a deliberate settlement a merge must
   not override.
 
+- If an earlier run of *this same proposal's* verification already recorded a **`closed`**
+  verdict for a question, the re-ask is skipped. The `verify_gap_closure` job has no
+  idempotency guard, so a job that closes some questions and then dies mid-loop — before
+  `closureStatus` is persisted (the short-circuit below only fires once a full round
+  completes) — is retried from the top; without this check every question would be re-asked
+  again. `questionsWithClosedVerdict(proposalId)` reads the proposal's prior `closed` verdicts
+  once up front, and each already-closed question is carried forward as `closed` (its
+  idempotent gap resolution re-driven, no duplicate audit row recorded) instead of spending a
+  fresh `answer_question` chat call. This turns a retried verification's re-ask cost from
+  O(N × rounds) into O(N + failing × rounds).
+
 - If a triggering question's log itself cannot be found (e.g. it was deleted), there is
   nothing to re-ask, so that question is recorded `still_open` with no re-ask and — because
   none of the usual `recordVerificationGap`/retry-cap bookkeeping applies to a question with

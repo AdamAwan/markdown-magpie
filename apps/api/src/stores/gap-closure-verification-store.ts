@@ -39,6 +39,15 @@ interface GapClosureVerificationStore {
   // still-open streak was fixed or dismissed by a human starts a fresh budget
   // rather than carrying the old count forever.
   countPriorStillOpen(questionId: string, since?: string): Promise<number>;
+  // The triggering questions this proposal has already recorded a `closed`
+  // verdict for. verify_gap_closure has no idempotency guard, so a job that
+  // records `closed` for some questions and then dies mid-loop (before the
+  // proposal's closure_status is persisted — the entry guard that would
+  // otherwise short-circuit re-verification) is retried from the top and would
+  // re-ask every question again. Reading the prior `closed` verdicts lets the
+  // retry skip those re-asks (a deterministic DB read replacing an LLM call),
+  // turning an O(N × rounds) re-ask cost into O(N + failing × rounds).
+  questionsWithClosedVerdict(proposalId: string): Promise<Set<string>>;
   reset(): Promise<void>;
 }
 
@@ -61,6 +70,14 @@ export class InMemoryGapClosureVerificationStore implements GapClosureVerificati
         .map((row) => row.proposalId)
     );
     return proposalIds.size;
+  }
+
+  async questionsWithClosedVerdict(proposalId: string): Promise<Set<string>> {
+    return new Set(
+      this.rows
+        .filter((row) => row.proposalId === proposalId && row.verdict === "closed")
+        .map((row) => row.questionId)
+    );
   }
 
   async reset(): Promise<void> {
@@ -104,6 +121,19 @@ export class PostgresGapClosureVerificationStore implements GapClosureVerificati
       [questionId, since ?? null]
     );
     return result.rows[0]?.n ?? 0;
+  }
+
+  async questionsWithClosedVerdict(proposalId: string): Promise<Set<string>> {
+    const result = await this.pool.query<{ question_id: string }>(
+      `
+        SELECT DISTINCT question_id
+        FROM gap_closure_verification
+        WHERE proposal_id = $1
+          AND verdict = 'closed'
+      `,
+      [proposalId]
+    );
+    return new Set(result.rows.map((row) => row.question_id));
   }
 
   async reset(): Promise<void> {
