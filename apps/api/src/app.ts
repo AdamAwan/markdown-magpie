@@ -7,6 +7,7 @@ import { onError } from "./http/errors.js";
 import { configRoutes, adminRoutes } from "./features/config/routes.js";
 import { askRoutes } from "./features/ask/routes.js";
 import { retrieveRoutes } from "./features/retrieve/routes.js";
+import { routeRoutes } from "./features/route/routes.js";
 import { knowledgeRoutes } from "./features/knowledge/routes.js";
 import { questionRoutes } from "./features/questions/routes.js";
 import { gapRoutes } from "./features/gaps/routes.js";
@@ -105,6 +106,7 @@ export function buildApp(ctx: AppContext, options?: ApiAuthOptions): Hono {
   api.route("/admin", adminRoutes(ctx));
   api.route("/ask", askRoutes(ctx));
   api.route("/retrieve", retrieveRoutes(ctx));
+  api.route("/route", routeRoutes(ctx));
   api.route("/knowledge", knowledgeRoutes(ctx));
   api.route("/questions", questionRoutes(ctx));
   api.route("/gaps", gapRoutes(ctx));

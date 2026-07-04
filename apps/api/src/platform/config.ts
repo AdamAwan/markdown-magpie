@@ -126,6 +126,11 @@ export interface AppConfig {
     // rejected at enqueue with 429 once this many are already in flight.
     aiMaxInflightJobs: number;
   };
+  // Abstain-biased cosine cut-offs for the embedding-based flow router (POST
+  // /api/route). A mis-tune only makes the router abstain more often — the watcher
+  // then does the chat routing call it would have done anyway — so these degrade
+  // safely and never affect routing correctness. See docs/question-logging.md.
+  flowRouter: FlowRouterConfig;
   watcher: {
     name?: string;
     pollIntervalMs?: number;
@@ -142,6 +147,37 @@ export interface AppConfig {
   // live here (resolved like `knowledge` below, via a helper rather than the zod
   // schema, because OTel's env surface is large and standardised).
   telemetry: TelemetryConfig;
+}
+
+// Abstain-biased cosine cut-offs for the embedding flow router. Conservative
+// starting points: the top flow must clear `minTopScore` and beat the runner-up by
+// `minMargin`, else the router abstains and the watcher falls back to the chat call.
+export interface FlowRouterConfig {
+  minTopScore: number;
+  minMargin: number;
+}
+
+const FLOW_ROUTER_DEFAULT_MIN_SCORE = 0.25;
+const FLOW_ROUTER_DEFAULT_MIN_MARGIN = 0.05;
+
+// Resolved via a helper (like telemetry) rather than the main schema. A blank or
+// out-of-range value falls back to the default rather than failing boot: these are
+// safety-neutral tuning knobs, and a bad one must never take the ask path down —
+// the router just abstains to the chat fallback. A value must be a finite number in
+// [0,1] (cosine range for non-negative similarity) to be honoured.
+function resolveFlowRouterConfig(env: NodeJS.ProcessEnv): FlowRouterConfig {
+  return {
+    minTopScore: parseUnitFloat(env.FLOW_ROUTER_MIN_SCORE, FLOW_ROUTER_DEFAULT_MIN_SCORE),
+    minMargin: parseUnitFloat(env.FLOW_ROUTER_MIN_MARGIN, FLOW_ROUTER_DEFAULT_MIN_MARGIN)
+  };
+}
+
+function parseUnitFloat(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+  const value = Number.parseFloat(raw);
+  return Number.isFinite(value) && value >= 0 && value <= 1 ? value : fallback;
 }
 
 // An unset var and an explicitly-empty one (a blank `FOO=` line, common in .env
@@ -391,6 +427,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       triggerPerWindow: parsed.RATE_LIMIT_TRIGGER_PER_WINDOW ?? 5,
       aiMaxInflightJobs: parsed.AI_MAX_INFLIGHT_JOBS ?? 20
     },
+    flowRouter: resolveFlowRouterConfig(env),
     watcher: {
       name: parsed.WATCHER_NAME,
       pollIntervalMs: parsed.WATCHER_POLL_INTERVAL_MS,
