@@ -231,6 +231,31 @@ export class PostgresGapClusterStore implements GapClusterStore {
     );
   }
 
+  async getReshapeCompositionHash(flowId?: string): Promise<string | undefined> {
+    const result = await this.pool.query<{ last_reshape_composition_hash: string | null }>(
+      "SELECT last_reshape_composition_hash FROM gap_reconciler_state WHERE flow_id = $1",
+      [flowId ?? ""]
+    );
+    return result.rows[0]?.last_reshape_composition_hash ?? undefined;
+  }
+
+  async setReshapeCompositionHash(flowId: string | undefined, hash: string): Promise<void> {
+    // Upsert only the hash: this can run before setProcessedRevision has created
+    // the flow's row (the reshape happens inside reconcileClusters, the processed
+    // revision is committed afterwards), so seed a row here and leave
+    // processed_revision at its default. A later setProcessedRevision updates the
+    // revision without clobbering this hash.
+    await this.pool.query(
+      `
+        INSERT INTO gap_reconciler_state (flow_id, last_reshape_composition_hash)
+        VALUES ($1, $2)
+        ON CONFLICT (flow_id) DO UPDATE
+          SET last_reshape_composition_hash = EXCLUDED.last_reshape_composition_hash
+      `,
+      [flowId ?? "", hash]
+    );
+  }
+
   async enqueuePublicationAction(
     proposalId: string,
     kind: "publish" | "supersede"

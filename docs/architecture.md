@@ -197,6 +197,26 @@ the job is cancelled (safe even if a watcher has already claimed it — a late
 paying for the generation), and a request for the same flow/document reuses an
 already in-flight job instead of enqueueing a duplicate on top of it.
 
+**Composition short-circuit (the reshape's second gate).** The per-flow catalog
+revision advances on *every* gap event (each auto gap, manual flag, verification
+reopen, resolve, dismiss), so the revision gate alone reopens the reshape far more
+often than the active cluster set actually changes — re-running the metered
+propose→critic generation just to re-conclude "no merges, splits, or dismissals". So
+before enqueuing the reshape, the reconciler hashes the active cluster composition
+(the sorted cluster ids, each paired with its sorted membership gap ids) and compares
+it to the hash recorded at this flow's last reshape (a `last_reshape_composition_hash`
+column on `gap_reconciler_state`, alongside the processed revision). An identical hash
+means the critic already judged this exact set, so the reshape is skipped (recorded as
+`reshapeSkipped` on the run). The hash is written **only after a completed reshape**, so
+a skipped, timed-out, failed, or malformed reshape never records an unjudged set and
+wedges the gate — the next tick retries. Any genuine change (a new or removed cluster,
+a gap moving between clusters) changes the hash, so real work is never skipped; a
+critic-confirmed merge/split/dismissal changes the set, so the next tick re-judges the
+new composition once. Complementing this, `updateAnswer` no longer bumps the revision
+(or deletes+reinserts the answer-derived gaps) when a re-answer's gaps are identical to
+the ones it would replace — which also stops the delete+reinsert from minting new gap
+ids that would orphan cluster memberships via `ON DELETE CASCADE` (issue #168).
+
 ### Merge cascade and gap-closure verification
 
 A merge no longer *blindly* resolves the gaps a proposal set out to close. The merge

@@ -7,7 +7,42 @@ import type { AppContext } from "../context.js";
 import { RuntimeConfigHolder } from "../config-holder.js";
 import { FakeJobBroker } from "../jobs/fake-broker.js";
 import { makeTestContext } from "../test-support/context.js";
-import { reconcileGaps } from "./gap-reconciler.js";
+import type { GapClusterMembershipRecord, GapClusterRecord } from "../stores/gap-cluster-store.js";
+import { reconcileGaps, reshapeCompositionHash } from "./gap-reconciler.js";
+
+function cluster(id: string): GapClusterRecord {
+  return { id, title: id, status: "active", reconciliationRevision: 1, createdAt: "t", updatedAt: "t" };
+}
+function membership(clusterId: string, gapId: string): GapClusterMembershipRecord {
+  return { id: `${clusterId}-${gapId}`, clusterId, gapId, active: true, createdAt: "t" };
+}
+
+describe("reshapeCompositionHash", () => {
+  it("is independent of cluster and membership ordering", () => {
+    const a = reshapeCompositionHash(
+      [cluster("1"), cluster("2")],
+      [membership("1", "10"), membership("1", "11"), membership("2", "20")]
+    );
+    const b = reshapeCompositionHash(
+      [cluster("2"), cluster("1")],
+      [membership("2", "20"), membership("1", "11"), membership("1", "10")]
+    );
+    assert.equal(a, b, "same clusters holding the same gaps hash equal regardless of order");
+  });
+
+  it("changes when a cluster gains, loses, or moves a gap", () => {
+    const base = reshapeCompositionHash([cluster("1"), cluster("2")], [membership("1", "10"), membership("2", "20")]);
+    const gained = reshapeCompositionHash(
+      [cluster("1"), cluster("2")],
+      [membership("1", "10"), membership("1", "11"), membership("2", "20")]
+    );
+    const moved = reshapeCompositionHash([cluster("1"), cluster("2")], [membership("2", "10"), membership("2", "20")]);
+    const droppedCluster = reshapeCompositionHash([cluster("1")], [membership("1", "10")]);
+    assert.notEqual(base, gained, "adding a gap changes the hash");
+    assert.notEqual(base, moved, "moving a gap to another cluster changes the hash");
+    assert.notEqual(base, droppedCluster, "removing a cluster changes the hash");
+  });
+});
 
 type ReconcileOutput = z.infer<typeof reconcileGapClustersOutputSchema>;
 
@@ -222,6 +257,91 @@ describe("reconcileGaps clustering", () => {
       (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length,
       before.length,
       "reconcile continued past the skipped reshape and drafted the uncovered clusters"
+    );
+  });
+});
+
+describe("reconcileGaps reshape composition short-circuit (#168)", () => {
+  const deps = {
+    fetchPullRequestStatus: async () => undefined,
+    publishProposal: async () => {},
+    supersedeProposal: async () => {}
+  };
+
+  it("skips the reshape when the active cluster composition is unchanged since the last reshape", async () => {
+    const jobs = new ReshapingJobBroker(() => ({ merges: [], splits: [], dismissals: [] }));
+    const ctx = makeTestContext({ jobs, config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" }) });
+    await seedTwoClustersWithGaps(ctx);
+
+    await reconcileGaps(ctx, undefined, deps);
+    assert.equal(
+      (await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length,
+      1,
+      "the first tick judges the composition"
+    );
+    assert.ok(
+      await ctx.stores.gapClusters.getReshapeCompositionHash(undefined),
+      "a completed reshape records the composition it judged"
+    );
+
+    // A later revision bump that left the active cluster set identical: reopen the
+    // reconcile gate by rewinding the processed revision while the clusters and
+    // their memberships stay exactly as the last reshape judged them.
+    await ctx.stores.gapClusters.setProcessedRevision(undefined, 0, new Date().toISOString());
+    await reconcileGaps(ctx, undefined, deps);
+
+    assert.equal(
+      (await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length,
+      1,
+      "the second tick skipped the reshape — the composition was byte-identical"
+    );
+  });
+
+  it("re-runs the reshape when the composition genuinely changes", async () => {
+    const jobs = new ReshapingJobBroker(() => ({ merges: [], splits: [], dismissals: [] }));
+    const ctx = makeTestContext({ jobs, config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" }) });
+    await seedTwoClustersWithGaps(ctx);
+
+    await reconcileGaps(ctx, undefined, deps);
+    assert.equal((await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length, 1);
+
+    // A brand-new gap forms a third cluster, so the composition — and its hash —
+    // changes; the reshape must run again to judge the new set.
+    const log = await ctx.stores.questionLogs.record({ question: "q3?", chatProvider: "codex", retrievedSectionIds: [] });
+    await ctx.stores.questionLogs.recordManualGap(log.id, "Dogs");
+    await reconcileGaps(ctx, undefined, deps);
+
+    assert.equal(
+      (await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length,
+      2,
+      "a changed composition re-runs the reshape"
+    );
+  });
+
+  it("does not record the composition hash when the reshape fails, so the next tick retries", async () => {
+    // A plain FakeJobBroker never completes the reshape job, so the bounded wait
+    // times out and requestReshape returns undefined. A failed reshape must NOT
+    // record the hash, or the gate would wedge on an unjudged composition.
+    const ctx = makeTestContext({ config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" }) });
+    ctx.settings.jobs.runToCompletionTimeoutMs = 20;
+    await seedTwoClustersWithGaps(ctx);
+
+    await reconcileGaps(ctx, undefined, deps);
+    assert.equal((await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length, 1);
+    assert.equal(
+      await ctx.stores.gapClusters.getReshapeCompositionHash(undefined),
+      undefined,
+      "a failed reshape records no composition hash"
+    );
+
+    // Reopen the gate on an unchanged composition; because no hash was recorded the
+    // reshape is retried rather than skipped.
+    await ctx.stores.gapClusters.setProcessedRevision(undefined, 0, new Date().toISOString());
+    await reconcileGaps(ctx, undefined, deps);
+    assert.equal(
+      (await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length,
+      2,
+      "the reshape retried because the failed run recorded no hash"
     );
   });
 });
@@ -666,7 +786,8 @@ describe("reconcileGaps audit", () => {
       decisionsApplied: 0,
       proposalsDrafted: 0,
       publicationActionsDrained: 0,
-      skippedModelWork: true
+      skippedModelWork: true,
+      reshapeSkipped: false
     });
   });
 
