@@ -299,6 +299,115 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.ok(!candidates.some((candidate) => candidate.summary === summary), "needs_attention gap does not auto-redraft");
   });
 
+  // Regression tests for issue #151: recordVerificationGap used to
+  // unconditionally DELETE any prior verification/needs_attention row before
+  // inserting the reopened one, destroying resolved/dismissed audit history
+  // and reassigning a fresh row id (orphaning any cluster membership keyed off
+  // the old id). It must instead update the live row in place — preserving its
+  // id — and leave resolved/dismissed rows untouched, inserting a fresh row
+  // only when no live row exists.
+
+  it("recordVerificationGap updates the live gap in place, preserving its id, on a repeat reopen", async () => {
+    const uniqueId = randomUUID();
+    const recorded = await store.record({
+      question: `test-verify-inplace-${uniqueId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+
+    const summary = `still weak ${uniqueId}`;
+    await store.recordVerificationGap(recorded.id, {
+      summary,
+      source: "verification",
+      note: "first failure"
+    });
+    const idsBefore = await store.gapIdsForSummary(summary);
+    assert.equal(idsBefore.length, 1);
+
+    // A second failure on the same still-open lineage escalates to
+    // needs_attention (matching the real retry-cap flow) but keeps the same
+    // summary, so the gap row's id must be preserved rather than replaced.
+    const updated = await store.recordVerificationGap(recorded.id, {
+      summary,
+      source: "needs_attention",
+      note: "second failure; retry cap hit"
+    });
+
+    const idsAfter = await store.gapIdsForSummary(summary);
+    assert.deepEqual(idsAfter, idsBefore, "the gap row keeps the same id across the in-place update");
+    const gaps = (updated?.gaps ?? []).filter((gap) => gap.summary === summary);
+    assert.equal(gaps.length, 1);
+    assert.equal(gaps[0]?.source, "needs_attention");
+    assert.equal(gaps[0]?.note, "second failure; retry cap hit");
+  });
+
+  it("recordVerificationGap retains a resolved gap and inserts a fresh row for a later failure", async () => {
+    const uniqueId = randomUUID();
+    const recorded = await store.record({
+      question: `test-verify-resolved-${uniqueId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+
+    const firstSummary = `first gap ${uniqueId}`;
+    const secondSummary = `second gap ${uniqueId}`;
+    await store.recordVerificationGap(recorded.id, {
+      summary: firstSummary,
+      source: "verification",
+      note: "first failure"
+    });
+    const resolved = await store.resolveGaps([recorded.id], [firstSummary], randomUUID());
+    assert.equal(resolved, 1);
+
+    // A brand-new proposal later fails verification on the same question.
+    const updated = await store.recordVerificationGap(recorded.id, {
+      summary: secondSummary,
+      source: "verification",
+      note: "second failure"
+    });
+
+    assert.equal((updated?.gaps ?? []).length, 2, "the resolved gap is retained alongside the fresh one");
+    const oldGap = updated?.gaps?.find((gap) => gap.summary === firstSummary);
+    assert.ok(oldGap?.resolvedAt, "the resolved gap keeps its resolution");
+    const freshGap = updated?.gaps?.find((gap) => gap.summary === secondSummary);
+    assert.equal(freshGap?.resolvedAt, undefined);
+    assert.equal(freshGap?.source, "verification");
+  });
+
+  it("recordVerificationGap retains a dismissed gap and inserts a fresh row for a later failure", async () => {
+    const uniqueId = randomUUID();
+    const recorded = await store.record({
+      question: `test-verify-dismissed-${uniqueId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+
+    const summary = `flaky gap ${uniqueId}`;
+    await store.recordVerificationGap(recorded.id, {
+      summary,
+      source: "verification",
+      note: "first failure"
+    });
+    const gapIds = await store.gapIdsForSummary(summary);
+    const dismissed = await store.dismissGaps(gapIds, "unrelated to the knowledge base");
+    assert.equal(dismissed, 1);
+
+    // A new failure raised on the same question must not resurrect the
+    // dismissed row.
+    const updated = await store.recordVerificationGap(recorded.id, {
+      summary,
+      source: "verification",
+      note: "second failure"
+    });
+
+    assert.equal((updated?.gaps ?? []).length, 2, "the dismissed gap is retained alongside the fresh one");
+    const dismissedGaps = (updated?.gaps ?? []).filter((gap) => gap.dismissedAt);
+    assert.equal(dismissedGaps.length, 1, "exactly one dismissed gap remains, untouched");
+    assert.equal(dismissedGaps[0]?.dismissedReason, "unrelated to the knowledge base");
+    const liveGaps = (updated?.gaps ?? []).filter((gap) => !gap.resolvedAt && !gap.dismissedAt);
+    assert.equal(liveGaps.length, 1, "exactly one fresh live gap was inserted");
+  });
+
   it("listGapCandidates includes low-confidence auto-detected gaps", async () => {
     const uniqueId = randomUUID();
     await store.record({

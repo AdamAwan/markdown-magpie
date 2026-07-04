@@ -32,9 +32,14 @@ export interface QuestionLogStore {
   recordManualGap(id: string, summary?: string): Promise<QuestionLog | undefined>;
   clearManualGap(id: string): Promise<QuestionLog | undefined>;
   // Reopens a gap on a triggering question after a merged proposal failed
-  // gap-closure verification. Replaces any prior verification gap on the
-  // question with the latest one, carrying the note (what merged, the re-asked
-  // answer, why it is still weak) so a re-draft sees why it is being resubmitted.
+  // gap-closure verification. Updates the question's live (unresolved,
+  // undismissed) verification/needs_attention gap in place with the latest
+  // reopen note (what merged, the re-asked answer, why it is still weak) so a
+  // re-draft sees why it is being resubmitted — preserving that gap's id (and
+  // any cluster membership keyed off it). Resolved and dismissed rows are
+  // never touched or replaced: they stay retained for audit, and a fresh gap
+  // is inserted alongside them only when no live one exists (first-ever
+  // failure, or the prior lineage was resolved/dismissed).
   recordVerificationGap(
     id: string,
     gap: { summary: string; source: "verification" | "needs_attention"; note: string }
@@ -276,15 +281,24 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       return undefined;
     }
 
+    const gaps = existing.gaps ?? [];
+    const liveIndex = gaps.findIndex(
+      (g) => (g.source === "verification" || g.source === "needs_attention") && !g.resolvedAt && !g.dismissedAt
+    );
+
     const verificationGap: QuestionGap = { summary: gap.summary, source: gap.source, note: gap.note };
-    const updated: QuestionLog = {
-      ...existing,
-      // Replace any prior verification gap; auto/manual/followup gaps are left untouched.
-      gaps: [
-        ...(existing.gaps ?? []).filter((g) => g.source !== "verification" && g.source !== "needs_attention"),
-        verificationGap
-      ]
-    };
+    // Update the live verification/needs_attention gap in place (if one
+    // exists) with the latest reopen note; auto/manual/followup gaps are left
+    // untouched. Resolved and dismissed rows are never touched: they stay
+    // retained for audit and are never resurrected. Only when no live gap
+    // exists (none has ever been raised, or the prior one was
+    // resolved/dismissed) is a fresh gap appended alongside that history.
+    const updatedGaps =
+      liveIndex === -1
+        ? [...gaps, verificationGap]
+        : gaps.map((g, index) => (index === liveIndex ? verificationGap : g));
+
+    const updated: QuestionLog = { ...existing, gaps: updatedGaps };
 
     this.logs.set(id, updated);
     this.bumpCatalog(existing.flowId);

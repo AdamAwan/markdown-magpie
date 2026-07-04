@@ -320,21 +320,24 @@ function reopenSummaryFor(original: { question: string; gaps?: Array<{ summary: 
 }
 
 // The retry-cap reset boundary for this question, if any: recordVerificationGap
-// keeps at most one live 'verification'/'needs_attention' gap row per question,
-// hard-deleting and replacing it on every reopen — so a resolved or dismissed row
-// still present on `original` (fetched before this reopen) is exactly the prior
+// keeps at most one LIVE 'verification'/'needs_attention' gap row per question,
+// updating it in place on every reopen — but resolved/dismissed rows are
+// retained (never deleted), so a question can carry several such rows over its
+// lifetime, one per past lineage. The most recent one (gaps are ordered
+// chronologically, so the last match) reflects this question's current state:
+// if it is still live, this is an ongoing streak (no reset — full history still
+// counts); if it is resolved or dismissed, that is exactly the prior
 // closure-retry lineage having ended (a later proposal verified closure, or a
-// human dismissed it) before a new gap arose on the same question. Its
-// resolved/dismissed timestamp bounds countPriorStillOpen so that old lineage's
-// failures don't count against this new one. Returns undefined when there is no
-// such row (first-ever failure) or it is still open (an ongoing streak, whose
-// full history should still count).
+// human dismissed it) before a new gap arose on the same question, and its
+// timestamp bounds countPriorStillOpen so that old lineage's failures don't
+// count against this new one. Returns undefined when there is no such row
+// (first-ever failure) or the most recent one is still open.
 function verificationLineageResetSince(original: {
   gaps?: Array<{ source: string; resolvedAt?: string; dismissedAt?: string }>;
 }): string | undefined {
-  const lineageGap = (original.gaps ?? []).find(
-    (gap) => gap.source === "verification" || gap.source === "needs_attention"
-  );
+  const lineageGap = [...(original.gaps ?? [])]
+    .reverse()
+    .find((gap) => gap.source === "verification" || gap.source === "needs_attention");
   const resetTimestamps = [lineageGap?.resolvedAt, lineageGap?.dismissedAt].filter(
     (value): value is string => Boolean(value)
   );

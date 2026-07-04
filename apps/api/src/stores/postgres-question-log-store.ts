@@ -314,13 +314,28 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         return undefined;
       }
 
-      // Replace any prior verification gap with the latest reopen note; auto,
-      // manual and followup gaps are left untouched.
-      await client.query(
-        "DELETE FROM question_gaps WHERE question_id = $1 AND source IN ('verification', 'needs_attention')",
-        [id]
+      // Update the live verification/needs_attention row in place (if one
+      // exists) with the latest reopen note, so its gap id — and any cluster
+      // membership keyed off that id — survives. auto, manual and followup
+      // gaps are left untouched. Resolved and dismissed rows are never
+      // touched here: they stay retained for audit and are never resurrected.
+      // Only when no live row exists (no verification gap has ever been raised
+      // on this question, or the prior one was resolved/dismissed) is a fresh
+      // row inserted alongside that retained history.
+      const updatedRow = await client.query(
+        `
+          UPDATE question_gaps
+          SET summary = $2, source = $3, note = $4
+          WHERE question_id = $1
+            AND source IN ('verification', 'needs_attention')
+            AND resolved_at IS NULL
+            AND dismissed_at IS NULL
+        `,
+        [id, gap.summary, gap.source, gap.note]
       );
-      await insertGapRows(client, id, [{ summary: gap.summary, source: gap.source, note: gap.note }]);
+      if ((updatedRow.rowCount ?? 0) === 0) {
+        await insertGapRows(client, id, [{ summary: gap.summary, source: gap.source, note: gap.note }]);
+      }
       await bumpGapCatalog(client, result.rows[0].flow_id);
       await client.query("COMMIT");
     } catch (error) {
