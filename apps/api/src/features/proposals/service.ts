@@ -218,6 +218,34 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
       continue;
     }
 
+    // Settled-gap short-circuit: the gap(s) this proposal set out to close for
+    // this question may already be resolved or dismissed by the time verification
+    // runs — a sibling proposal's cross-proposal resolveGaps, a reconciler critic
+    // dismissal, or a human. Re-asking then costs a full answer_question chat call
+    // to learn nothing (and a still_open verdict would re-file an OPEN verification
+    // gap over the settled one — resurrecting a deliberately dismissed gap into
+    // candidacy). A deterministic DB read replaces that LLM call: record a `closed`
+    // audit row and move on without re-asking or re-filing. Left as an unmatched
+    // fall-through when the proposal's summaries don't name any of this question's
+    // gaps (nothing to reason about), preserving the original re-ask behaviour.
+    if (addressedGapsAllSettled(original, proposal)) {
+      logger.info(
+        { proposalId: proposal.id, questionId },
+        "gap-closure verification: addressed gap already resolved/dismissed; skipping re-ask"
+      );
+      await ctx.stores.gapClosureVerifications.record({
+        proposalId: proposal.id,
+        gapClusterId: proposal.gapClusterId,
+        questionId,
+        verdict: "closed",
+        confidence: "unknown",
+        citedMergedDoc: false,
+        detail: "addressed gap already resolved or dismissed before verification ran; re-ask skipped"
+      });
+      perQuestion.push({ questionId, reaskedQuestionId: null, verdict: "closed" });
+      continue;
+    }
+
     // A fresh question log for the re-ask; answer_question completion fills in its
     // answer, confidence and citations against the now-updated index.
     const reasked = await recordAnswerQuestionLog(ctx, original.question);
@@ -333,6 +361,27 @@ function resolveVerificationFlowId(
     return undefined;
   }
   return candidate;
+}
+
+// True when every gap this proposal set out to close FOR THIS QUESTION is already
+// resolved or dismissed — i.e. there is no open work left to verify. Keys on the
+// proposal's recorded summaries (splitGapSummaries) the same way reopenSummaryFor's
+// fallback does, and ignores the `needs_attention` pseudo-source (a parked
+// escalation, not a gap the merge was meant to close). Returns false when the
+// proposal's summaries match none of this question's gaps: there is nothing to
+// reason about, so the caller re-asks as before rather than silently claiming
+// closure. Lets verifyGapClosure skip a wasted re-ask (and avoid re-filing an open
+// gap over a settled/dismissed one) when the gap has already been settled by
+// another proposal, a reconciler dismissal, or a human.
+function addressedGapsAllSettled(
+  original: { gaps?: Array<{ summary: string; source: string; resolvedAt?: string; dismissedAt?: string }> },
+  proposal: Proposal
+): boolean {
+  const proposalSummaries = new Set(splitGapSummaries(proposal.gapSummary));
+  const addressed = (original.gaps ?? []).filter(
+    (gap) => gap.source !== "needs_attention" && proposalSummaries.has(gap.summary)
+  );
+  return addressed.length > 0 && addressed.every((gap) => gap.resolvedAt || gap.dismissedAt);
 }
 
 // The gap summary a reopened verification gap is filed under, for the specific

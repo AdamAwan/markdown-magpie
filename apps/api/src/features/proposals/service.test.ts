@@ -333,6 +333,58 @@ test("verifyGapClosure escalates to needs_attention (rather than silently reopen
   assert.equal(reloaded?.closureStatus, "needs_attention");
 });
 
+test("verifyGapClosure skips the re-ask when the addressed gap was already resolved before verification ran", async () => {
+  // Issue #165 leg (a): a gap can be settled between merge and the verification
+  // run (a sibling proposal's cross-proposal resolveGaps, a reconciler dismissal,
+  // or a human). Re-asking then spends a full answer_question chat call to learn
+  // nothing. It must skip the re-ask and record closure deterministically instead.
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  // Another proposal resolved this exact gap in the window before verification runs.
+  const resolved = await ctx.stores.questionLogs.resolveGaps([log.id], ["How to configure X"], "sibling-proposal");
+  assert.equal(resolved, 1);
+  // A broker that fails the test if verifyGapClosure re-asks anything.
+  ctx.jobs = new AnsweringJobBroker(ctx, () => {
+    throw new Error("verifyGapClosure must not re-ask a question whose addressed gap is already settled");
+  });
+
+  const result = await proposals.verifyGapClosure(ctx, merged);
+
+  assert.equal(result.closureStatus, "verified_closed");
+  assert.equal(result.perQuestion[0]?.verdict, "closed");
+  assert.equal(result.perQuestion[0]?.reaskedQuestionId, null, "no re-ask question log was created");
+});
+
+test("verifyGapClosure does not resurrect or resolve a dismissed gap, and skips its re-ask", async () => {
+  // Issue #165 leg (a), correctness half: re-asking a dismissed gap and scoring it
+  // still_open used to re-file a fresh OPEN verification gap — resurrecting a gap a
+  // human deliberately dismissed back into candidacy. The re-ask must be skipped and
+  // the dismissed row left settled (neither re-filed nor flipped to resolved).
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  const gapIds = await ctx.stores.questionLogs.gapIdsForSummary("How to configure X");
+  const dismissed = await ctx.stores.questionLogs.dismissGaps(gapIds, "off-topic for the knowledge base");
+  assert.equal(dismissed, 1);
+  ctx.jobs = new AnsweringJobBroker(ctx, () => {
+    throw new Error("verifyGapClosure must not re-ask a question whose gap was dismissed");
+  });
+
+  const result = await proposals.verifyGapClosure(ctx, merged);
+
+  assert.equal(result.perQuestion[0]?.verdict, "closed");
+  const reloaded = await ctx.stores.questionLogs.get(log.id);
+  const gaps = reloaded?.gaps ?? [];
+  assert.equal(gaps.length, 1, "no fresh verification gap was inserted alongside the dismissed one");
+  assert.ok(gaps[0]?.dismissedAt, "the gap stays dismissed");
+  assert.equal(gaps[0]?.resolvedAt, undefined, "a dismissed gap is never flipped to resolved by a merge");
+  const candidates = await ctx.stores.questionLogs.listGapCandidates(50);
+  assert.equal(
+    candidates.some((candidate) => candidate.summary === "How to configure X"),
+    false,
+    "a dismissed gap never surfaces as a candidate again"
+  );
+});
+
 test("verifyGapClosure files a reopen under the proposal-addressed gap, not the question's oldest open gap", async () => {
   const ctx = makeTestContext();
   // The question carries two open gaps: an older, unrelated one that loads first,

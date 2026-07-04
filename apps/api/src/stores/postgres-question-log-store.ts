@@ -475,6 +475,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           WHERE question_id = ANY($1)
             AND summary = ANY($2)
             AND resolved_at IS NULL
+            AND dismissed_at IS NULL
           RETURNING question_id
         `,
         [questionIds, trimmedSummaries, proposalId]
