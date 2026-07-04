@@ -1,7 +1,7 @@
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import styled from "@emotion/styled";
 
-export interface ChipProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+interface ChipProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** Whether the chip is currently active/toggled on. */
   selected?: boolean;
   children: ReactNode;

@@ -12,7 +12,7 @@ const alignMap: Record<Align, string> = {
   baseline: "baseline"
 };
 
-export interface StackProps {
+interface StackProps {
   gap?: SpaceKey;
   align?: Align;
 }
@@ -26,7 +26,7 @@ export const Stack = styled.div<StackProps>(({ theme, gap = "md", align = "stret
   minWidth: 0
 }));
 
-export interface RowProps {
+interface RowProps {
   gap?: SpaceKey;
   align?: Align;
   justify?: "start" | "center" | "end" | "between";

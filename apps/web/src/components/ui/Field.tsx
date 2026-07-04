@@ -1,4 +1,4 @@
-import type { InputHTMLAttributes, LabelHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
+import type { LabelHTMLAttributes, ReactNode } from "react";
 import styled from "@emotion/styled";
 import type { CSSObject } from "@emotion/react";
 import type { AppTheme } from "../../theme/theme";
@@ -45,7 +45,7 @@ const FieldLabel = styled.span(({ theme }) => ({
   fontWeight: theme.font.weight.semibold
 }));
 
-export interface FieldProps extends LabelHTMLAttributes<HTMLLabelElement> {
+interface FieldProps extends LabelHTMLAttributes<HTMLLabelElement> {
   label: ReactNode;
   children: ReactNode;
 }
@@ -59,7 +59,3 @@ export function Field({ label, children, ...rest }: FieldProps) {
     </FieldRoot>
   );
 }
-
-export type InputProps = InputHTMLAttributes<HTMLInputElement>;
-export type TextareaProps = TextareaHTMLAttributes<HTMLTextAreaElement>;
-export type SelectProps = SelectHTMLAttributes<HTMLSelectElement>;

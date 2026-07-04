@@ -1,9 +1,9 @@
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import styled from "@emotion/styled";
 
-export type IconButtonSize = "sm" | "md";
+type IconButtonSize = "sm" | "md";
 
-export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** Accessible name — required because the button has no visible text. */
   label: string;
   size?: IconButtonSize;

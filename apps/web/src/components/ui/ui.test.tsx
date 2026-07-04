@@ -5,7 +5,6 @@ import { Badge, statusTone } from "./Badge";
 import { Button } from "./Button";
 import { Chip } from "./Chip";
 import { IconButton } from "./IconButton";
-import { Tabs } from "./Tabs";
 
 test("Button defaults to type=button and forwards disabled", () => {
   const html = renderMarkup(<Button disabled>Save</Button>);
@@ -41,22 +40,6 @@ test("Chip reflects selected state via aria-pressed", () => {
 
   const off = renderMarkup(<Chip>Ready</Chip>);
   assert.match(off, /aria-pressed="false"/);
-});
-
-test("Tabs marks the active tab with aria-selected", () => {
-  const html = renderMarkup(
-    <Tabs
-      value="b"
-      onChange={() => undefined}
-      items={[
-        { value: "a", label: "First" },
-        { value: "b", label: "Second" }
-      ]}
-    />
-  );
-  assert.match(html, /role="tablist"/);
-  assert.match(html, /aria-selected="false"[^>]*>First</);
-  assert.match(html, /aria-selected="true"[^>]*>Second</);
 });
 
 test("statusTone maps backend status strings onto the four semantic tones", () => {

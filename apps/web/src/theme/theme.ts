@@ -4,7 +4,7 @@
 // through Emotion's themed `styled`/`css` (the theme is augmented in ./emotion.d.ts so
 // `p => p.theme.color.text` is fully typed).
 
-export interface StatusColors {
+interface StatusColors {
   fg: string;
   bg: string;
   border: string;

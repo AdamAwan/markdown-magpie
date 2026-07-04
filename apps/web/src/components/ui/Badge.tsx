@@ -2,9 +2,9 @@ import type { HTMLAttributes, ReactNode } from "react";
 import styled from "@emotion/styled";
 import type { StatusTone } from "../../theme/theme";
 
-export type BadgeTone = StatusTone | "accent";
+type BadgeTone = StatusTone | "accent";
 
-export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
+interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
   tone?: BadgeTone;
   /** Show a leading status dot in the tone colour. */
   dot?: boolean;
