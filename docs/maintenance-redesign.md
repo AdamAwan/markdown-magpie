@@ -163,6 +163,21 @@ forever. A source edit re-arms every doc's gate (the corpus hash changes for all
 The run's `details.gated` count records how many docs were skipped this way. See
 `apps/api/src/scheduling/patrol-hash.ts` and `features/patrol/service.ts`.
 
+**Shared source corpus (one copy per tick, not per job).** The source corpus a tick checks
+its docs against is identical for every doc in the flow, but it used to be copied *by value*
+into every `verify_document` / `correct_document` / `improve_document` job in the batch —
+persisted per job row in pg-boss and re-shipped to the watcher (and the provider) each time.
+A tick now collects the corpus once, stores it once content-addressed by the same
+`sources_hash` the change gate computes (`source_corpus_snapshot`, migration `0041`), and each
+job carries only that hash as `sourcesRef`. The watcher resolves the corpus via
+`GET /api/source-corpus/:hash` and caches it by hash, so each distinct corpus crosses the wire
+at most once per batch. The runner then renders the corpus as an identical **leading block**
+in every prompt that shares it (`buildPrompt`), so an OpenAI-compatible provider's prefix
+prompt caching can reuse it instead of re-billing the whole corpus per job. Snapshots are
+prunable — jobs are short-lived, so the store reaps rows untouched past a retention window.
+See `apps/api/src/stores/source-corpus-store.ts`, `features/source-corpus/routes.ts`, and the
+watcher's `getSourceCorpus` / `job-prompts.ts` (`#163` Part 2).
+
 ---
 
 ## 5. The reconcile gate in detail
