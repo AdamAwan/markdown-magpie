@@ -34,6 +34,8 @@ export interface ProposalStore {
   // recent is returned, matching the old list(...).find() scan over created_at DESC.
   getByClusterId(gapClusterId: string): Promise<Proposal | undefined>;
   updateStatus(id: string, status: Proposal["status"]): Promise<Proposal | undefined>;
+  // Records the gap-closure verification outcome for a merged proposal.
+  setClosureStatus(id: string, closureStatus: NonNullable<Proposal["closureStatus"]>): Promise<Proposal | undefined>;
   recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined>;
   linkCluster(id: string, gapClusterId: string): Promise<Proposal | undefined>;
   updateMarkdown(id: string, markdown: string): Promise<Proposal | undefined>;
@@ -117,6 +119,19 @@ export class InMemoryProposalStore implements ProposalStore {
       status,
       mergedAt: status === "merged" ? existing.mergedAt ?? new Date().toISOString() : existing.mergedAt
     };
+    this.proposals.set(id, updated);
+    return updated;
+  }
+
+  async setClosureStatus(
+    id: string,
+    closureStatus: NonNullable<Proposal["closureStatus"]>
+  ): Promise<Proposal | undefined> {
+    const existing = this.proposals.get(id);
+    if (!existing) {
+      return undefined;
+    }
+    const updated: Proposal = { ...existing, closureStatus };
     this.proposals.set(id, updated);
     return updated;
   }

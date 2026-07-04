@@ -96,6 +96,17 @@ export class PostgresProposalStore implements ProposalStore {
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
+  async setClosureStatus(
+    id: string,
+    closureStatus: NonNullable<Proposal["closureStatus"]>
+  ): Promise<Proposal | undefined> {
+    const result = await this.pool.query<ProposalRow>(
+      "UPDATE proposals SET closure_status = $2 WHERE id = $1 RETURNING *",
+      [id, closureStatus]
+    );
+    return result.rows[0] ? mapRow(result.rows[0]) : undefined;
+  }
+
   async recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined> {
     const status = publication.pullRequestUrl ? "pr-opened" : "branch-pushed";
     const result = await this.pool.query<ProposalRow>(
@@ -176,6 +187,7 @@ interface ProposalRow {
   draft_context: DraftContext | null;
   created_at: Date;
   merged_at: Date | null;
+  closure_status: Proposal["closureStatus"] | null;
 }
 
 function mapRow(row: ProposalRow): Proposal {
@@ -198,6 +210,7 @@ function mapRow(row: ProposalRow): Proposal {
     reviewDecision: (row.review_decision as ReviewDecision | null) ?? undefined,
     draftContext: row.draft_context ?? undefined,
     createdAt: row.created_at.toISOString(),
-    mergedAt: row.merged_at?.toISOString()
+    mergedAt: row.merged_at?.toISOString(),
+    closureStatus: row.closure_status ?? undefined
   };
 }

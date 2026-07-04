@@ -387,13 +387,15 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     // gap on a confident answer (an observed empty search) must still cluster.
     const groups = new Map<string, { summary: string; flowId?: string; logs: QuestionLog[] }>();
     for (const log of this.logs.values()) {
-      const summaries = new Set(
-        (log.gaps ?? [])
-          // 'needs_attention' gaps hit the verification retry cap; they await a
-          // human and must NOT auto-recluster/redraft.
-          .filter((gap) => !gap.resolvedAt && !gap.dismissedAt && gap.source !== "needs_attention")
-          .map((gap) => gap.summary)
-      );
+      const active = (log.gaps ?? []).filter((gap) => !gap.resolvedAt && !gap.dismissedAt);
+      // A question flagged 'needs_attention' hit the verification retry cap: it
+      // awaits a human, so park the WHOLE question (including its sibling
+      // auto/manual gap) out of the candidate set. Gaps on OTHER questions
+      // sharing the summary are unaffected.
+      if (active.some((gap) => gap.source === "needs_attention")) {
+        continue;
+      }
+      const summaries = new Set(active.map((gap) => gap.summary));
       for (const summary of summaries) {
         const key = `${log.flowId ?? ""} ${summary}`;
         const group = groups.get(key) ?? { summary, flowId: log.flowId, logs: [] };

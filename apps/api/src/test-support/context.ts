@@ -6,6 +6,7 @@ import { BackgroundRunner } from "../platform/background-runner.js";
 import { InMemoryGapClusterStore } from "../stores/gap-cluster-store.js";
 import { InMemoryKnowledgeIndex } from "../stores/knowledge-index.js";
 import { InMemoryProposalStore } from "../stores/proposal-store.js";
+import { InMemoryGapClosureVerificationStore } from "../stores/gap-closure-verification-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
 import { InMemoryPrCrosslinkStore } from "../stores/pr-crosslink-store.js";
 import { InMemoryReconciliationDecisionStore } from "../stores/reconciliation-decision-store.js";
@@ -54,6 +55,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
       knowledgeIndex,
       questionLogs: new InMemoryQuestionLogStore(),
       proposals: new InMemoryProposalStore(),
+      gapClosureVerifications: new InMemoryGapClosureVerificationStore(),
       scheduledTasks: new InMemoryScheduledTaskStore(),
       sourceSync: new InMemorySourceSyncStore(),
       patrol: new InMemoryPatrolStore(),

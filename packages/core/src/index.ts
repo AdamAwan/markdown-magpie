@@ -361,6 +361,12 @@ export interface Proposal {
   // true when this proposal's destination is a local-git (file://) repository, so
   // the UI offers a real "Merge" instead of the hosted "Mark Merged".
   localGitDestination?: boolean;
+  // The outcome of gap-closure verification, set after the proposal merged and its
+  // triggering questions were re-asked. Absent until a verification has run.
+  // 'verified_closed' = the merged doc now answers every triggering question;
+  // 'reopened' = at least one is still weak (its gap was left open to re-draft);
+  // 'needs_attention' = repeated verification failures, flagged for a human.
+  closureStatus?: "verified_closed" | "reopened" | "needs_attention";
 }
 
 // The inputs handed to the drafter, kept alongside the proposal so the context

@@ -551,9 +551,15 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           FROM question_gaps qg
           JOIN questions q ON q.id = qg.question_id
           WHERE qg.resolved_at IS NULL AND qg.dismissed_at IS NULL
-            -- 'needs_attention' gaps hit the verification retry cap; they await a
-            -- human and must NOT auto-recluster/redraft, so exclude them here.
-            AND qg.source <> 'needs_attention'
+            -- A question flagged 'needs_attention' hit the verification retry cap:
+            -- it awaits a human, so park the WHOLE question (all its gap rows,
+            -- including the sibling auto/manual gap) out of the candidate set so
+            -- it does not auto-recluster/redraft. Gaps on OTHER questions sharing
+            -- the summary are unaffected.
+            AND qg.question_id NOT IN (
+              SELECT question_id FROM question_gaps
+              WHERE source = 'needs_attention' AND resolved_at IS NULL AND dismissed_at IS NULL
+            )
         ) AS distinct_gaps
         GROUP BY summary, flow_id
         ORDER BY count DESC, latest_asked_at DESC
