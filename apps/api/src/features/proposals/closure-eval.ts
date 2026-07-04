@@ -61,6 +61,15 @@ export function citesMergedDoc(citations: Citation[], targetPaths: Set<string>):
   return citations.some((citation) => targetPaths.has(citation.path));
 }
 
+export interface ClosureEvaluation {
+  verdict: "closed" | "still_open";
+  // Whether the answer cited the merged document — computed once here (via
+  // citesMergedDoc) so callers that also need this fact (e.g. to build a
+  // human-readable verification detail) read it off the result instead of
+  // recomputing it and risking drift from the verdict itself.
+  cited: boolean;
+}
+
 // The deterministic closure test: a re-asked answer closes its gap iff it is
 // confident AND cites the merged document. A missing answer (the re-ask timed
 // out / no provider watcher answered) is treated as still-open — we never claim
@@ -68,11 +77,10 @@ export function citesMergedDoc(citations: Citation[], targetPaths: Set<string>):
 export function evaluateClosure(
   answer: { confidence: Confidence; citations: Citation[] } | undefined,
   targetPaths: Set<string>
-): "closed" | "still_open" {
+): ClosureEvaluation {
   if (!answer) {
-    return "still_open";
+    return { verdict: "still_open", cited: false };
   }
-  return CONFIDENT.has(answer.confidence) && citesMergedDoc(answer.citations, targetPaths)
-    ? "closed"
-    : "still_open";
+  const cited = citesMergedDoc(answer.citations, targetPaths);
+  return { verdict: CONFIDENT.has(answer.confidence) && cited ? "closed" : "still_open", cited };
 }

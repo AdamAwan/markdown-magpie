@@ -1,5 +1,5 @@
 import type {
-  AnswerQuestionJobInput,
+  AnswerQuestionJobOutput,
   CorrectDocumentJobInput,
   DedupeDocumentsJobInput,
   ImproveDocumentJobInput,
@@ -17,11 +17,19 @@ import type {
 } from "@magpie/core";
 import type { JobState, JobView, verifyGapClosureOutputSchema } from "@magpie/jobs";
 import { runJobToCompletion } from "../jobs/service.js";
-import { citesMergedDoc, evaluateClosure, proposalTargetPaths } from "./closure-eval.js";
+import { evaluateClosure, proposalTargetPaths } from "./closure-eval.js";
 import { fileURLToPath } from "node:url";
 import { mergeLocalProposalBranch } from "@magpie/git";
 import { z } from "zod";
-import { correctDocumentOutputSchema, dedupeDocumentsOutputSchema, draftSeedDocumentOutputSchema, improveDocumentOutputSchema, publishProposalOutputSchema, splitDocumentOutputSchema } from "@magpie/jobs";
+import {
+  answerQuestionOutputSchema,
+  correctDocumentOutputSchema,
+  dedupeDocumentsOutputSchema,
+  draftSeedDocumentOutputSchema,
+  improveDocumentOutputSchema,
+  publishProposalOutputSchema,
+  splitDocumentOutputSchema
+} from "@magpie/jobs";
 import { PROPOSAL_STATUSES, resolveProposalTargetPath } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import type { ProposalListOptions } from "../../stores/proposal-store.js";
@@ -35,6 +43,7 @@ import {
 } from "../../platform/repositories.js";
 import { collectSourceContextCached, type SourceContextCache } from "../../platform/source-context.js";
 import { type AiProviderName } from "../../platform/providers.js";
+import { buildAnswerQuestionInput, recordAnswerQuestionLog } from "../../platform/answer-question.js";
 import { logger } from "../../logger.js";
 
 type PublishProposalJobOutput = z.infer<typeof publishProposalOutputSchema>;
@@ -162,22 +171,23 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
   // match identically.
   const subpath = selectDestinationForProposal(ctx.repositoryDeps(), proposal)?.subpath;
   const targetPaths = proposalTargetPaths(proposal, subpath);
-  const provider = ctx.config.get().aiProvider;
-  const flows = ctx.knowledgeConfig.flows.map((flow) => ({
-    id: flow.id,
-    name: flow.name,
-    ...(flow.persona ? { persona: flow.persona } : {})
-  }));
 
   const perQuestion: VerifyGapClosureOutput["perQuestion"] = [];
-  let anyStillOpen = false;
   let needsAttention = false;
 
   for (const questionId of questionIds) {
     const original = await ctx.stores.questionLogs.get(questionId);
     if (!original) {
       // The triggering question is gone; we cannot re-ask it, so we cannot claim
-      // closure. Record it as still-open (no re-ask) and move on.
+      // closure. Record it as still-open (no re-ask) and escalate — leaving this
+      // silent would freeze the proposal at "reopened" with no gap filed and no
+      // signal for a human to act on, since none of the still_open bookkeeping
+      // below (recordVerificationGap, the retry cap) runs for a question with no
+      // log to attach it to.
+      logger.warn(
+        { proposalId: proposal.id, questionId },
+        "gap-closure verification: triggering question log not found; escalating to needs_attention"
+      );
       await ctx.stores.gapClosureVerifications.record({
         proposalId: proposal.id,
         gapClusterId: proposal.gapClusterId,
@@ -188,29 +198,27 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
         detail: "triggering question log not found; could not re-ask"
       });
       perQuestion.push({ questionId, reaskedQuestionId: null, verdict: "still_open" });
-      anyStillOpen = true;
+      needsAttention = true;
       continue;
     }
 
     // A fresh question log for the re-ask; answer_question completion fills in its
     // answer, confidence and citations against the now-updated index.
-    const reasked = await ctx.stores.questionLogs.record({
-      question: original.question,
-      chatProvider: provider,
-      retrievedSectionIds: []
-    });
+    const reasked = await recordAnswerQuestionLog(ctx, original.question);
     const requestedFlowId = resolveVerificationFlowId(ctx, proposal, original);
-    const input: AnswerQuestionJobInput & { provider: typeof provider } = {
+    const input = buildAnswerQuestionInput(ctx, {
       questionLogId: reasked.id,
       question: original.question,
-      flows,
-      ...(requestedFlowId ? { requestedFlowId } : {}),
-      provider,
-      expectedOutput: "answer_result"
-    };
+      requestedFlowId
+    });
 
+    let answer: Pick<AnswerQuestionJobOutput, "confidence" | "citations"> | undefined;
     try {
-      await runJobToCompletion(ctx, "answer_question", input);
+      const completed = await runJobToCompletion(ctx, "answer_question", input);
+      const parsed = answerQuestionOutputSchema.safeParse(completed.output);
+      if (parsed.success) {
+        answer = { confidence: parsed.data.confidence, citations: parsed.data.citations };
+      }
     } catch (error) {
       // A timeout / no provider watcher means we could not verify — treat as
       // still-open below rather than claiming a closure we did not observe.
@@ -218,13 +226,8 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
       logger.warn({ proposalId: proposal.id, questionId, err: message }, "gap-closure re-ask did not complete");
     }
 
-    const answered = await ctx.stores.questionLogs.get(reasked.id);
-    const answer = answered?.answer
-      ? { confidence: answered.answer.confidence, citations: answered.answer.citations }
-      : undefined;
-    const verdict = evaluateClosure(answer, targetPaths);
-    const cited = answer ? citesMergedDoc(answer.citations, targetPaths) : false;
-    const detail = buildVerificationDetail(answer, targetPaths);
+    const { verdict, cited } = evaluateClosure(answer, targetPaths);
+    const detail = buildVerificationDetail(answer, targetPaths, cited);
 
     await ctx.stores.gapClosureVerifications.record({
       proposalId: proposal.id,
@@ -243,8 +246,7 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
       // immediately, regardless of siblings' outcomes. This allows per-question
       // resolution even if a sibling is still_open.
       await resolveGapsForClosedQuestion(ctx, questionId, proposal);
-    } else if (verdict === "still_open") {
-      anyStillOpen = true;
+    } else {
       // countPriorStillOpen includes the row just recorded, so the Nth *distinct
       // proposal* to fail reads as N. Bound it to since the question's prior
       // verification-lineage gap (if any) was resolved/dismissed, so a question
@@ -266,7 +268,9 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
     }
   }
 
-  const closureStatus: VerifyGapClosureOutput["closureStatus"] = anyStillOpen
+  const closureStatus: VerifyGapClosureOutput["closureStatus"] = perQuestion.some(
+    (question) => question.verdict === "still_open"
+  )
     ? needsAttention
       ? "needs_attention"
       : "reopened"
@@ -383,24 +387,24 @@ function verificationLineageResetSince(original: {
 }
 
 // A compact, human-readable note for a failed closure: what merged and how the
-// re-ask fell short. Stored on the reopened gap so a re-draft sees why.
+// re-ask fell short. Stored on the reopened gap so a re-draft sees why. `cited`
+// is the caller's already-computed citesMergedDoc result (via evaluateClosure),
+// so this never recomputes it and can't drift from the actual verdict.
 function buildVerificationDetail(
   answer: { confidence: string; citations: Array<{ path: string }> } | undefined,
-  targetPaths: Set<string>
+  targetPaths: Set<string>,
+  cited: boolean
 ): string {
-  // targetPaths is already in citation (indexed-subtree) space, so the
-  // citedMerged check below compares like-for-like. proposalTargetPaths always
-  // includes the (required, truthy) targetPath, so this set is non-empty.
-  const paths = [...targetPaths];
-  const merged = paths.join(", ");
+  // proposalTargetPaths always includes the (required, truthy) targetPath, so
+  // this set is non-empty.
+  const merged = [...targetPaths].join(", ");
   if (!answer) {
     return `Merged ${merged}, but the re-asked question did not complete (no answer to verify).`;
   }
   const citedPaths = answer.citations.map((citation) => citation.path);
-  const citedMerged = citedPaths.some((path) => paths.includes(path));
   return (
     `Merged ${merged}. Re-asking still returned confidence "${answer.confidence}"` +
-    (citedMerged ? " and did cite the merged doc" : ` and did not cite the merged doc (cited: ${citedPaths.join(", ") || "nothing"})`) +
+    (cited ? " and did cite the merged doc" : ` and did not cite the merged doc (cited: ${citedPaths.join(", ") || "nothing"})`) +
     "; the gap is not yet closed."
   );
 }
