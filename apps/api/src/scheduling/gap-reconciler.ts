@@ -6,7 +6,7 @@ import { reconcileGapClustersOutputSchema, type JobState } from "@magpie/jobs";
 import type { AppContext } from "../context.js";
 import { withFlowRunLock } from "./run-lock.js";
 import * as gapsService from "../features/gaps/service.js";
-import { runJobToCompletion } from "../features/jobs/service.js";
+import { parseCompletedJobOutput, runJobToCompletion } from "../features/jobs/service.js";
 import * as proposalsService from "../features/proposals/service.js";
 import { type SourceContextCache } from "../platform/source-context.js";
 import { describeFlowScope } from "../features/retrieve/service.js";
@@ -661,12 +661,12 @@ async function requestReshape(
     return undefined;
   }
 
-  const parsed = reconcileGapClustersOutputSchema.safeParse(terminal.output);
-  if (!parsed.success) {
+  const parsed = parseCompletedJobOutput(reconcileGapClustersOutputSchema, terminal.output);
+  if (!parsed) {
     logger.warn({ flowLabel, jobId: terminal.id }, "gap reconciler: reshape job returned malformed output; skipping reshape");
     return undefined;
   }
-  return parsed.data;
+  return parsed;
 }
 
 // Dedupe key for reuseKey (#162): a reshape already in flight for this flow (and

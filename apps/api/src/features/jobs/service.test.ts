@@ -6,6 +6,7 @@ import type {
   DraftMarkdownProposalJobOutput
 } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
+import { answerQuestionOutputSchema } from "@magpie/jobs";
 import { makeTestContext } from "../../test-support/context.js";
 import {
   acceptFailedJob,
@@ -16,6 +17,7 @@ import {
   getJob,
   heartbeatJob,
   listJobs,
+  parseCompletedJobOutput,
   projectJob,
   retryJob,
   runJobToCompletion,
@@ -850,4 +852,24 @@ test("completeJob on a draft_seed_document job creates a seed proposal and enque
 
   const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
   assert.ok(actions.some((a) => a.proposalId === proposal?.id && a.kind === "publish"));
+});
+
+// parseCompletedJobOutput (#184): API-side consumers of runJobToCompletion read
+// JobView.output, which in production is the { result, executor } envelope
+// completeJob persists — the raw shape only ever comes from test fakes.
+test("parseCompletedJobOutput unwraps the production { result, executor } envelope", () => {
+  const output = { answer: "a", confidence: "high", citations: [] };
+  const parsed = parseCompletedJobOutput(answerQuestionOutputSchema, { result: output, executor: "watcher" });
+  assert.deepEqual(parsed, output);
+});
+
+test("parseCompletedJobOutput falls back to the raw output shape", () => {
+  const output = { answer: "a", confidence: "high", citations: [] };
+  assert.deepEqual(parseCompletedJobOutput(answerQuestionOutputSchema, output), output);
+});
+
+test("parseCompletedJobOutput returns undefined when neither shape validates", () => {
+  assert.equal(parseCompletedJobOutput(answerQuestionOutputSchema, { result: { nope: true } }), undefined);
+  assert.equal(parseCompletedJobOutput(answerQuestionOutputSchema, { nope: true }), undefined);
+  assert.equal(parseCompletedJobOutput(answerQuestionOutputSchema, undefined), undefined);
 });
