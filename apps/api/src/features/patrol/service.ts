@@ -17,7 +17,7 @@ import { runVerifyLens, type VerifyDocumentFn } from "../../scheduling/verify-le
 import { runDedupeLens, type DedupeDocumentFn } from "../../scheduling/dedupe-lens.js";
 import { runSplitLens, type SplitDocumentFn } from "../../scheduling/split-lens.js";
 import { collectSourceContext } from "../../platform/source-context.js";
-import { runJobToCompletion } from "../jobs/service.js";
+import { parseCompletedJobOutput, runJobToCompletion } from "../jobs/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
 import { logger } from "../../logger.js";
 
@@ -100,8 +100,7 @@ const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sou
   if (terminal.state !== "completed") {
     return undefined;
   }
-  const parsed = verifyDocumentOutputSchema.safeParse(terminal.output);
-  return parsed.success ? parsed.data : undefined;
+  return parseCompletedJobOutput(verifyDocumentOutputSchema, terminal.output);
 };
 
 // Runs the corrective repair for one document. The default enqueues a

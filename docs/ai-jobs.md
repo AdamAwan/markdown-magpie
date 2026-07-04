@@ -126,6 +126,14 @@ failure *after* that point as a reason to redo the generation:
   `{ result, executor }` output instead of requiring (or re-validating) a fresh
   body. Crucially, that 500 cannot re-bill the generation: a retried POST hits the
   replay path, never the provider.
+- **Reading a completed job's output back (#184).** Because the persisted output
+  is the `{ result, executor }` envelope, any API-side consumer of
+  `runJobToCompletion` must parse it through `parseCompletedJobOutput(schema,
+  job.output)` (`apps/api/src/features/jobs/service.ts`) rather than running the
+  raw output schema against `JobView.output` directly — the raw parse only ever
+  succeeds against test fakes that complete without the envelope, and silently
+  discards real watcher results. The gap reshape, the patrol verify lens, and
+  gap-closure re-asks all read through this helper.
 - **The watcher retries the `complete()` POST itself.** `HttpWatcherApi.complete()`
   (`apps/watcher/src/http-client.ts`) retries a failed completion POST a few times
   with backoff before giving up, but only for a network error or a `5xx` — a `4xx`

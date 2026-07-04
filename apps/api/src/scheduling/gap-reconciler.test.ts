@@ -64,6 +64,23 @@ class ReshapingJobBroker extends FakeJobBroker {
   }
 }
 
+// Like ReshapingJobBroker, but completes with the { result, executor } envelope
+// completeJob persists in production (#184) — the shape requestReshape actually
+// reads back, as opposed to the raw shape the fixture above short-circuits with.
+class EnvelopedReshapingJobBroker extends FakeJobBroker {
+  constructor(private readonly buildOutput: (input: unknown) => ReconcileOutput) {
+    super();
+  }
+
+  override async create(type: JobType, input: unknown): Promise<JobView> {
+    const job = await super.create(type, input);
+    if (type === "reconcile_gap_clusters") {
+      return super.complete(job.id, { result: this.buildOutput(job.input), executor: "watcher" });
+    }
+    return job;
+  }
+}
+
 // A broker that enqueues the reconcile job normally but then throws when the
 // bounded-wait polls it (runJobToCompletion -> waitForJob -> get). This mirrors a
 // broker dying mid-poll: requestReshape's try/catch must swallow it and skip the
@@ -208,6 +225,29 @@ describe("reconcileGaps clustering", () => {
     assert.equal(merge.confirmed, true);
     assert.equal(merge.applied, true, "a confirmed merge is applied");
     assert.equal(merge.rationale, "x");
+  });
+
+  it("applies a reshape completed with the production { result, executor } envelope (#184)", async () => {
+    // Regression: requestReshape used to parse the raw output schema against the
+    // envelope completeJob persists, so every real watcher reshape was billed and
+    // then discarded as "malformed". The enveloped broker exercises that shape.
+    const jobs = new EnvelopedReshapingJobBroker((input) => {
+      const clusterIds = (input as { clusters: Array<{ id: string }> }).clusters.map((c) => c.id);
+      return { merges: [{ clusterIds, rationale: "x", confirmed: true }], splits: [], dismissals: [] };
+    });
+    const ctx = makeTestContext({
+      jobs,
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
+    });
+    await seedTwoClustersWithGaps(ctx);
+
+    await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
+
+    const after = await ctx.stores.gapClusters.listActiveClusters();
+    assert.equal(after.length, 1, "the enveloped reshape's confirmed merge was applied");
+    const merge = (await ctx.stores.reconciliations.list(50)).find((d) => d.kind === "merge");
+    assert.ok(merge, "the confirmed merge was recorded");
+    assert.equal(merge.applied, true, "a confirmed merge from an enveloped output is applied");
   });
 
   it("skips reshape (without throwing) when the reshape job never reaches a watcher", async () => {

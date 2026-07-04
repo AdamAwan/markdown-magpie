@@ -1,4 +1,5 @@
 import type { AnswerQuestionJobInput, AnswerQuestionJobOutput } from "@magpie/core";
+import { z } from "zod";
 import { logger } from "../../logger.js";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
 import { jobDefinition } from "@magpie/jobs";
@@ -357,14 +358,38 @@ export async function completeJob(
   return { ok: true, job: await ctx.jobs.get(jobId) };
 }
 
-// Unwraps a completed job's `{ result, executor }` output envelope (see
-// `ctx.jobs.complete()` above), returning the validated payload the side-effect
-// handlers expect — mirrors the same unwrap the web console and MCP client do
-// for a job's `output` field. Returns undefined if the job has no such envelope.
+// The persisted output of a job completed through this dispatcher: completeJob
+// wraps the watcher's validated result in a { result, executor } envelope (see
+// ctx.jobs.complete above), and nothing on the JobView read path unwraps it.
+const completedJobOutputEnvelopeSchema = z.object({ result: z.unknown() });
+
+// Unwraps a completed job's `{ result, executor }` output envelope, returning
+// the validated payload the side-effect handlers expect — mirrors the same
+// unwrap the web console and MCP client do for a job's `output` field. Returns
+// undefined if the job has no such envelope.
 function completedJobResult(job: JobView): unknown {
-  const output = job.output;
-  if (!output || typeof output !== "object" || !("result" in output)) return undefined;
-  return (output as { result: unknown }).result;
+  const envelope = completedJobOutputEnvelopeSchema.safeParse(job.output);
+  return envelope.success ? envelope.data.result : undefined;
+}
+
+// Parses a completed job's output against `schema` for API-side consumers of
+// runJobToCompletion (the gap reshape, the patrol verify lens, gap-closure
+// re-asks). Production outputs arrive in the { result, executor } envelope
+// above, so the envelope's `result` is tried first; the raw shape is a fallback
+// for brokers that complete without the envelope (e.g. test fakes). Returns
+// undefined when neither shape validates. Parsing the raw JobView.output
+// directly with an output schema is a bug (#184): it only ever worked against
+// raw-completing test fixtures and silently discarded real watcher results.
+export function parseCompletedJobOutput<T>(schema: z.ZodType<T>, output: unknown): T | undefined {
+  const envelope = completedJobOutputEnvelopeSchema.safeParse(output);
+  if (envelope.success) {
+    const fromEnvelope = schema.safeParse(envelope.data.result);
+    if (fromEnvelope.success) {
+      return fromEnvelope.data;
+    }
+  }
+  const raw = schema.safeParse(output);
+  return raw.success ? raw.data : undefined;
 }
 
 async function updateQuestionLogFromCompletedJob(
