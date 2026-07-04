@@ -1,65 +1,93 @@
+import styled from "@emotion/styled";
 import { FlowSnapshot } from "../lib/types";
+import { Badge, EmptyState, ScrollList, ListRow, Row, Surface, statusTone } from "./ui";
+
+const Hint = styled.p(({ theme }) => ({
+  margin: `0 0 ${theme.space.md}`,
+  fontSize: theme.font.size.sm,
+  color: theme.color.status.running.fg
+}));
+
+const Path = styled.p(({ theme }) => ({
+  color: theme.color.textMuted,
+  fontFamily: theme.font.mono,
+  fontSize: theme.font.size.sm
+}));
+
+const ProposalPath = styled.small(({ theme }) => ({
+  color: theme.color.textMuted,
+  fontFamily: theme.font.mono,
+  fontSize: theme.font.size.sm
+}));
+
+const ProposalList = styled.ul(({ theme }) => ({
+  margin: 0,
+  padding: 0,
+  listStyle: "none",
+  display: "grid",
+  gap: theme.space.sm
+}));
 
 // Read-only view of each flow's downloaded snapshot: the gaps, in-flight
 // proposals, and polled pull-request state the fetch job assembled and the
 // reconciler reads instead of polling the host live.
 export function SnapshotsPanel({ snapshots }: { snapshots: FlowSnapshot[] }) {
   return (
-    <section className="surface">
-      <div className="surfaceHeader">
+    <Surface>
+      <Surface.Header>
         <h2>Snapshots</h2>
-        <span className="pill" title="Flows with a downloaded snapshot">
+        <Badge tone="neutral" title="Flows with a downloaded snapshot">
           {snapshots.length}
-        </span>
-      </div>
-      <div className="surfaceBody">
-        <p className="hint">
+        </Badge>
+      </Surface.Header>
+      <Surface.Body>
+        <Hint>
           Per-flow data the fetch job downloads — gaps, in-flight proposals, and polled pull-request state.
           The reconciler reads this instead of calling the host during reconciliation.
-        </p>
-        <div className="list scrollList">
+        </Hint>
+        <ScrollList>
           {snapshots.map((snapshot) => (
-            <article className="row" key={snapshot.flowId ?? "default"}>
-              <div className="rowTop">
-                <h3>{snapshot.flowName}</h3>
-                <span className="rowMeta">
-                  <span className="pill" title="Gaps captured">{snapshot.gaps.length} gaps</span>
-                  <span className="pill" title="In-flight proposals">{snapshot.proposals.length} proposals</span>
-                  <span className="pill" title="Open pull requests polled">{snapshot.pullRequests.length} PRs</span>
-                </span>
-              </div>
-              <p className="path">
+            <ListRow key={snapshot.flowId ?? "default"}>
+              <Row justify="between" gap="lg">
+                <h3 style={{ flex: 1, minWidth: 0 }}>{snapshot.flowName}</h3>
+                <Row gap="md">
+                  <Badge tone="neutral" title="Gaps captured">{snapshot.gaps.length} gaps</Badge>
+                  <Badge tone="neutral" title="In-flight proposals">{snapshot.proposals.length} proposals</Badge>
+                  <Badge tone="neutral" title="Open pull requests polled">{snapshot.pullRequests.length} PRs</Badge>
+                </Row>
+              </Row>
+              <Path>
                 Taken {new Date(snapshot.takenAt).toLocaleString()} · catalog revision {snapshot.catalogRevision}
-              </p>
+              </Path>
               {snapshot.proposals.length > 0 ? (
-                <ul className="clusterGaps">
+                <ProposalList>
                   {snapshot.proposals.map((proposal) => {
                     const pr = snapshot.pullRequests.find((entry) => entry.proposalId === proposal.id);
                     return (
                       <li key={proposal.id}>
-                        <span className={`status ${proposal.status}`} title={`Proposal status: ${proposal.status}`}>
+                        <Badge tone={statusTone(proposal.status)} dot title={`Proposal status: ${proposal.status}`}>
                           {proposal.status}
-                        </span>{" "}
+                        </Badge>{" "}
                         {proposal.title ?? proposal.id}
                         {pr ? (
-                          <small className="path">
+                          <ProposalPath>
                             {" "}
                             — PR {pr.state}
                             {pr.merged ? " (merged)" : ""}
-                          </small>
+                          </ProposalPath>
                         ) : null}
                       </li>
                     );
                   })}
-                </ul>
+                </ProposalList>
               ) : null}
-            </article>
+            </ListRow>
           ))}
           {snapshots.length === 0 ? (
-            <p className="empty">No snapshots yet. They appear once a flow&apos;s fetch job has run.</p>
+            <EmptyState>No snapshots yet. They appear once a flow&apos;s fetch job has run.</EmptyState>
           ) : null}
-        </div>
-      </div>
-    </section>
+        </ScrollList>
+      </Surface.Body>
+    </Surface>
   );
 }

@@ -1,5 +1,7 @@
 import type { SeedItem } from "@magpie/core";
 import { useState } from "react";
+import styled from "@emotion/styled";
+import { Actions, Button, Chip, EmptyState, Field, Input, Row, Select, Textarea } from "./ui";
 
 // The seed workflow is two steps in one form:
 //   1. pick a flow + describe a topic, hit "Generate outline" → the outline_flow_seed
@@ -8,6 +10,42 @@ import { useState } from "react";
 //      into the proposal → PR pipeline.
 // Coverage/questions are edited as one point per line; blank lines are tolerated while
 // typing and dropped on submit.
+
+const SeedPanelRoot = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.xxl
+}));
+
+const SeedForm = styled.form(({ theme }) => ({
+  display: "flex",
+  flexDirection: "column",
+  gap: theme.space.lg,
+  maxWidth: "640px"
+}));
+
+const SeedOutline = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.xl
+}));
+
+const OutlineList = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.md
+}));
+
+const SeedItemCard = styled.article(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.md,
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.card,
+  padding: theme.space.xl
+}));
+
+const Hint = styled.p(({ theme }) => ({
+  margin: `0 0 ${theme.space.md}`,
+  color: theme.color.status.running.fg,
+  fontSize: theme.font.size.sm
+}));
 
 function linesToArray(value: string): string[] {
   return value
@@ -115,118 +153,111 @@ export function SeedPanel({
   }
 
   return (
-    <div className="seedPanel">
-      <form className="stack seedForm" onSubmit={(event) => event.preventDefault()}>
-        <label className="field">
-          <span>Flow</span>
-          <select onChange={(event) => setFlowId(event.target.value)} value={flowId}>
+    <SeedPanelRoot>
+      <SeedForm onSubmit={(event) => event.preventDefault()}>
+        <Field label="Flow">
+          <Select onChange={(event) => setFlowId(event.target.value)} value={flowId}>
             <option value="">Select a flow…</option>
             {flows.map((flow) => (
               <option key={flow.id} value={flow.id}>
                 {flow.name}
               </option>
             ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Topic</span>
-          <input
+          </Select>
+        </Field>
+        <Field label="Topic">
+          <Input
             onChange={(event) => setTopic(event.target.value)}
             placeholder="e.g. Refund handling"
             type="text"
             value={topic}
           />
-        </label>
-        <label className="field">
-          <span>Notes (optional)</span>
-          <textarea
+        </Field>
+        <Field label="Notes (optional)">
+          <Textarea
             onChange={(event) => setNotes(event.target.value)}
             placeholder="Scope, audience, must-haves — anything to steer the outline."
             rows={3}
             value={notes}
           />
-        </label>
-        <button className="button" disabled={loading || !canGenerate} onClick={() => void generate()} type="button">
+        </Field>
+        <Button variant="primary" disabled={loading || !canGenerate} onClick={() => void generate()} type="button">
           {generating ? "Generating outline…" : "Generate outline"}
-        </button>
-        <p className="hint">
+        </Button>
+        <Hint>
           Generating grounds the plan in this flow&rsquo;s existing docs, then proposes a list of documents to author.
           Edit the list below before seeding.
-        </p>
-      </form>
+        </Hint>
+      </SeedForm>
 
       {items.length > 0 ? (
-        <div className="seedOutline">
-          <div className="resultHeader">
+        <SeedOutline>
+          <Row justify="between" gap="lg">
             <h3>Proposed documents</h3>
-            <button className="chip" onClick={addItem} type="button">
+            <Chip onClick={addItem} type="button">
               Add document
-            </button>
-          </div>
-          <div className="list">
+            </Chip>
+          </Row>
+          <OutlineList>
             {items.map((item, index) => (
-              <article className="row seedItem" key={index}>
-                <label className="field">
-                  <span>Title</span>
-                  <input
+              <SeedItemCard key={index}>
+                <Field label="Title">
+                  <Input
                     onChange={(event) => updateItem(index, { title: event.target.value })}
                     placeholder="Document title (optional — derived if blank)"
                     type="text"
                     value={item.title}
                   />
-                </label>
-                <label className="field">
-                  <span>Target path (optional)</span>
-                  <input
+                </Field>
+                <Field label="Target path (optional)">
+                  <Input
                     onChange={(event) => updateItem(index, { targetPath: event.target.value })}
                     placeholder="kebab-case/path.md"
                     type="text"
                     value={item.targetPath}
                   />
-                </label>
-                <label className="field">
-                  <span>Coverage — one point per line</span>
-                  <textarea
+                </Field>
+                <Field label="Coverage — one point per line">
+                  <Textarea
                     onChange={(event) => updateItem(index, { coverage: event.target.value })}
                     placeholder="What this document should cover…"
                     rows={4}
                     value={item.coverage}
                   />
-                </label>
-                <label className="field">
-                  <span>Motivating questions (optional) — one per line</span>
-                  <textarea
+                </Field>
+                <Field label="Motivating questions (optional) — one per line">
+                  <Textarea
                     onChange={(event) => updateItem(index, { questions: event.target.value })}
                     rows={2}
                     value={item.questions}
                   />
-                </label>
-                <div className="rowActions">
-                  <button className="chip" onClick={() => removeItem(index)} type="button">
+                </Field>
+                <Actions>
+                  <Chip onClick={() => removeItem(index)} type="button">
                     Remove document
-                  </button>
-                </div>
-              </article>
+                  </Chip>
+                </Actions>
+              </SeedItemCard>
             ))}
-          </div>
-          <button className="button" disabled={loading || !canSeed} onClick={() => void seed()} type="button">
+          </OutlineList>
+          <Button variant="primary" disabled={loading || !canSeed} onClick={() => void seed()} type="button">
             {seeding ? "Seeding…" : `Seed ${seedItems.length} document${seedItems.length === 1 ? "" : "s"}`}
-          </button>
+          </Button>
           {seededCount !== undefined ? (
-            <p className="hint">
+            <Hint>
               Enqueued {seededCount} draft job{seededCount === 1 ? "" : "s"}. Drafts will land in the Proposals queue as
               pull requests to review.
-            </p>
+            </Hint>
           ) : null}
-        </div>
+        </SeedOutline>
       ) : (
-        <div className="seedOutline">
-          <p className="empty">Generate an outline to propose documents, or add one manually.</p>
-          <button className="button secondary" onClick={addItem} type="button">
+        <SeedOutline>
+          <EmptyState>Generate an outline to propose documents, or add one manually.</EmptyState>
+          <Button variant="secondary" onClick={addItem} type="button">
             Add document manually
-          </button>
-        </div>
+          </Button>
+        </SeedOutline>
       )}
-    </div>
+    </SeedPanelRoot>
   );
 }

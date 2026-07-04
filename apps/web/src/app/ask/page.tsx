@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { AskPanel } from "../../components/AskPanel";
 import { useConsole } from "../../components/ConsoleProvider";
+import { Surface, Workbench } from "../../components/ui";
 import { knowledgeFlowLabels, knowledgeFlows } from "../../lib/config";
 
 export default function AskPage() {
@@ -32,12 +33,12 @@ export default function AskPage() {
   );
 
   return (
-    <section className="workbench singlePane">
-      <div className="surface">
-        <div className="surfaceHeader">
+    <Workbench>
+      <Surface>
+        <Surface.Header>
           <h2>Ask a Question</h2>
-        </div>
-        <div className="surfaceBody">
+        </Surface.Header>
+        <Surface.Body>
           <AskPanel
             answer={answer}
             answeredSearch={answeredSearch}
@@ -57,8 +58,8 @@ export default function AskPage() {
             setQuestion={setQuestion}
             toggleCitations={toggleCitations}
           />
-        </div>
-      </div>
-    </section>
+        </Surface.Body>
+      </Surface>
+    </Workbench>
   );
 }

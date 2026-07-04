@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { renderToStaticMarkup } from "react-dom/server";
 import type { MaintenanceRun } from "../lib/types";
+import { renderMarkup } from "../test/render";
 import { ActivityPanel, MaintenanceRunDetailsModal } from "./ActivityPanel";
 
 test("renders maintenance runs as the activity audit surface", () => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     <ActivityPanel
       flows={[{ id: "alpha", name: "Alpha", sourceIds: [], destinationId: "docs" }]}
       runs={[
@@ -35,7 +35,7 @@ test("renders maintenance runs as the activity audit surface", () => {
 });
 
 test("renders change intent trace chips and debug details", () => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     <ActivityPanel
       flows={[]}
       runs={[
@@ -87,7 +87,7 @@ test("renders change intent trace chips and debug details", () => {
 });
 
 test("each run card exposes a details action", () => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     <ActivityPanel flows={[]} runs={[run({ id: "run-1", taskType: "correctness_patrol" })]} />
   );
 
@@ -95,7 +95,7 @@ test("each run card exposes a details action", () => {
 });
 
 test("maintenance run details modal renders formatted JSON details", () => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     <MaintenanceRunDetailsModal
       onClose={() => undefined}
       run={run({
@@ -114,11 +114,14 @@ test("maintenance run details modal renders formatted JSON details", () => {
 });
 
 test("maintenance run details modal renders an empty object when details are absent", () => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     <MaintenanceRunDetailsModal onClose={() => undefined} run={run({ id: "run-1", taskType: "correctness_patrol", details: {} })} />
   );
 
-  assert.match(html, /<pre class="docModalBody jsonBlock">{}<\/pre>/);
+  // Emotion replaces the old `docModalBody jsonBlock` class with a hashed class,
+  // so assert on the dialog role plus the empty-object JSON body text instead.
+  assert.match(html, /role="dialog"/);
+  assert.match(html, />{}<\/pre>/);
 });
 
 function run(overrides: Partial<MaintenanceRun> & Pick<MaintenanceRun, "id" | "taskType">): MaintenanceRun {

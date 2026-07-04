@@ -1,34 +1,88 @@
 "use client";
 
 import Image from "next/image";
+import styled from "@emotion/styled";
+import { Button } from "./ui";
+
+const Page = styled.div(({ theme }) => ({
+  minHeight: "100vh",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: theme.space.xxl,
+  background: theme.color.page
+}));
+
+const Card = styled.div(({ theme }) => ({
+  width: "100%",
+  maxWidth: 420,
+  background: theme.color.surface,
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.card,
+  padding: theme.space.xxl,
+  boxShadow: theme.shadow.card,
+  textAlign: "center"
+}));
+
+const Eyebrow = styled.p(({ theme }) => ({
+  margin: `${theme.space.xl} 0 ${theme.space.xs}`,
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.sm,
+  fontWeight: theme.font.weight.semibold,
+  letterSpacing: "0.08em"
+}));
+
+// The "View presentation" control is a link, not a button, so it can't be the
+// Button primitive (which renders a <button>). Mirror the secondary Button's
+// look on an anchor instead.
+const PresentationLink = styled.a(({ theme }) => ({
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "100%",
+  minHeight: "36px",
+  marginTop: theme.space.md,
+  padding: `${theme.space.md} ${theme.space.lg}`,
+  border: `1px solid ${theme.color.borderStrong}`,
+  borderRadius: theme.radius.sm,
+  background: theme.color.surface,
+  color: theme.color.text,
+  fontFamily: theme.font.sans,
+  fontSize: theme.font.size.md,
+  fontWeight: theme.font.weight.semibold,
+  textDecoration: "none",
+  transition: "background 120ms ease, border-color 120ms ease",
+  "&:hover": { background: theme.color.surfaceMuted }
+}));
+
+const DemoBox = styled.div(({ theme }) => ({
+  marginTop: theme.space.xxl,
+  padding: `${theme.space.lg} ${theme.space.xl}`,
+  background: theme.color.page,
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.card,
+  textAlign: "left"
+}));
+
+const DemoTitle = styled.p(({ theme }) => ({
+  margin: 0,
+  color: theme.color.text,
+  fontSize: theme.font.size.md,
+  fontWeight: theme.font.weight.semibold
+}));
+
+const DemoBody = styled.p(({ theme }) => ({
+  margin: `${theme.space.md} 0 0`,
+  fontSize: theme.font.size.md
+}));
 
 // Unauthenticated landing page. Rendered by the auth gate whenever there is no
 // authenticated session, so the data-fetching console never mounts (and never
 // fires token-less API requests) until the user has signed in.
 export function Landing({ onLogin }: { onLogin: () => void }) {
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "24px",
-        background: "#f5f7f2"
-      }}
-    >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: 420,
-          background: "#ffffff",
-          border: "1px solid #d8e0d8",
-          borderRadius: 16,
-          padding: "32px",
-          boxShadow: "0 12px 40px rgba(23, 33, 29, 0.08)",
-          textAlign: "center"
-        }}
-      >
+    <Page>
+      <Card>
         <Image
           src="/magpie.jpeg"
           alt=""
@@ -37,61 +91,21 @@ export function Landing({ onLogin }: { onLogin: () => void }) {
           height={64}
           style={{ borderRadius: 12, margin: "0 auto" }}
         />
-        <p
-          style={{
-            margin: "16px 0 4px",
-            color: "#65716b",
-            fontSize: 12,
-            fontWeight: 750,
-            letterSpacing: "0.08em",
-            textTransform: "uppercase"
-          }}
-        >
-          Markdown Magpie
-        </p>
+        <Eyebrow>Markdown Magpie</Eyebrow>
         <h1 style={{ marginBottom: 8 }}>Knowledge Console</h1>
         <p style={{ marginBottom: 24 }}>Sign in to search, ask, and manage your Markdown knowledge base.</p>
 
-        <button
-          className="button"
-          type="button"
-          onClick={onLogin}
-          style={{ width: "100%", justifyContent: "center", borderRadius: 10 }}
-        >
+        <Button variant="primary" type="button" onClick={onLogin} style={{ width: "100%" }}>
           Log in
-        </button>
+        </Button>
 
-        <a
-          className="button secondary"
-          href="/presentation/index.html"
-          style={{
-            display: "inline-flex",
-            width: "100%",
-            justifyContent: "center",
-            marginTop: 10,
-            borderRadius: 10,
-            textDecoration: "none"
-          }}
-        >
-          View presentation
-        </a>
+        <PresentationLink href="/presentation/index.html">View presentation</PresentationLink>
 
-        <div
-          style={{
-            marginTop: 24,
-            padding: "14px 16px",
-            background: "#f5f7f2",
-            border: "1px solid #e1e7e1",
-            borderRadius: 12,
-            textAlign: "left"
-          }}
-        >
-          <p style={{ margin: 0, fontWeight: 800, color: "#17211d", fontSize: 13 }}>Demo access</p>
-          <p style={{ margin: "8px 0 0", fontSize: 13 }}>
-            Contact the admin for demo credentials.
-          </p>
-        </div>
-      </div>
-    </div>
+        <DemoBox>
+          <DemoTitle>Demo access</DemoTitle>
+          <DemoBody>Contact the admin for demo credentials.</DemoBody>
+        </DemoBox>
+      </Card>
+    </Page>
   );
 }

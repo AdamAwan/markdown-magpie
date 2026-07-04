@@ -24,6 +24,9 @@ const securityHeaders = [
 const nextConfig = {
   distDir,
   outputFileTracingRoot: workspaceRoot,
+  // Enable SWC's Emotion transform: readable class labels in dev + source maps, and
+  // `css` prop support. Replaces the need for a Babel plugin.
+  compiler: { emotion: true },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

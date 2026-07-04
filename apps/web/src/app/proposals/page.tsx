@@ -2,6 +2,7 @@
 
 import { useConsole } from "../../components/ConsoleProvider";
 import { ProposalPanel } from "../../components/ProposalsPanel";
+import { Workbench } from "../../components/ui";
 
 export default function ProposalsPage() {
   const {
@@ -15,7 +16,7 @@ export default function ProposalsPage() {
   } = useConsole();
 
   return (
-    <section className="fullWorkbench">
+    <Workbench>
       <ProposalPanel
         loading={loading}
         publishProposal={publishProposal}
@@ -25,6 +26,6 @@ export default function ProposalsPage() {
         updateProposalStatus={updateProposalStatus}
         mergeProposal={mergeProposal}
       />
-    </section>
+    </Workbench>
   );
 }

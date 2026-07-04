@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import styled from "@emotion/styled";
 import {
   Background,
   Controls,
@@ -20,6 +21,7 @@ import { FLOW_GROUPS, buildFlowGraph, type FlowKey } from "./dataflow/flows";
 import { layoutGraph } from "./dataflow/layout";
 import { DATAFLOW_FIT_VIEW_OPTIONS, DATAFLOW_MAX_ZOOM, DATAFLOW_MIN_ZOOM } from "./dataflow/viewport";
 import { FlowNode, GroupNode } from "./dataflow/FlowNode";
+import { Surface } from "./ui";
 
 const nodeTypes: NodeTypes = {
   flowNode: FlowNode,
@@ -30,6 +32,100 @@ const nodeTypes: NodeTypes = {
 // feedback/relationship link, matching the muted palette used elsewhere.
 const SOLID_STROKE = "#5b6962";
 const DASHED_STROKE = "#9aa69e";
+
+const PanelBody = styled.div(({ theme }) => ({
+  display: "flex",
+  flexDirection: "column",
+  gap: theme.space.xxl,
+  padding: theme.space.xl
+}));
+
+const FlowTabs = styled.div(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: "minmax(160px, 0.75fr) repeat(2, minmax(220px, 1fr))",
+  gap: theme.space.lg,
+  alignItems: "start",
+  borderBottom: `1px solid ${theme.color.border}`,
+  paddingBottom: theme.space.lg,
+  "@media (max-width: 900px)": {
+    gridTemplateColumns: "1fr"
+  }
+}));
+
+const FlowTabGroup = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.md,
+  alignContent: "start"
+}));
+
+const FlowTabGroupTitle = styled.div(({ theme }) => ({
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.sm,
+  fontWeight: theme.font.weight.semibold,
+  textTransform: "uppercase"
+}));
+
+const FlowTabGroupItems = styled.div(({ theme }) => ({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: theme.space.md
+}));
+
+const FlowTab = styled.button<{ $active: boolean }>(({ theme, $active }) => ({
+  padding: `${theme.space.md} ${theme.space.xl}`,
+  background: "transparent",
+  border: "none",
+  borderBottom: `2px solid ${$active ? theme.color.accent : "transparent"}`,
+  color: $active ? theme.color.accent : theme.color.textMuted,
+  fontWeight: theme.font.weight.semibold,
+  fontSize: theme.font.size.base,
+  cursor: "pointer",
+  transition: "color 120ms ease, border-color 120ms ease",
+  "&:hover": {
+    color: theme.color.text
+  }
+}));
+
+const FlowCanvas = styled.div(({ theme }) => ({
+  height: "clamp(560px, 72vh, 720px)",
+  background: "linear-gradient(135deg, #fafbf9 0%, #f5f7f2 100%)",
+  borderRadius: theme.radius.md,
+  border: `1px solid ${theme.color.border}`,
+  overflow: "hidden"
+}));
+
+const FlowLegend = styled.div(({ theme }) => ({
+  background: theme.color.surfaceMuted,
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.sm,
+  padding: theme.space.xxl,
+  "& h3": {
+    marginBottom: theme.space.xl,
+    color: theme.color.text,
+    fontSize: theme.font.size.lg
+  }
+}));
+
+const LegendItems = styled.div(({ theme }) => ({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: theme.space.xxl
+}));
+
+const LegendItem = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  gap: theme.space.lg,
+  fontSize: theme.font.size.md,
+  color: theme.color.textMuted
+}));
+
+const LegendBox = styled.span({
+  width: "24px",
+  height: "24px",
+  borderRadius: "4px",
+  flexShrink: 0
+});
 
 export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
   const [activeFlow, setActiveFlow] = useState<FlowKey>("overview");
@@ -104,32 +200,32 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
   }, [built, setNodes, setEdges]);
 
   return (
-    <div className="surface">
-      <div className="surfaceHeader">
-        <h2>Data Flow Architecture</h2>
-      </div>
-      <div className="surfaceBody dataFlowPanel">
-        <div className="flowTabs" aria-label="Data flow diagrams">
+    <Surface>
+      <Surface.Header>
+        <h2>Data flow architecture</h2>
+      </Surface.Header>
+      <PanelBody>
+        <FlowTabs aria-label="Data flow diagrams">
           {FLOW_GROUPS.map((group) => (
-            <div className="flowTabGroup" key={group.title}>
-              <div className="flowTabGroupTitle">{group.title}</div>
-              <div className="flowTabGroupItems">
+            <FlowTabGroup key={group.title}>
+              <FlowTabGroupTitle>{group.title}</FlowTabGroupTitle>
+              <FlowTabGroupItems>
                 {group.flows.map((flow) => (
-                  <button
+                  <FlowTab
                     key={flow.key}
-                    className={activeFlow === flow.key ? "flowTab active" : "flowTab"}
+                    $active={activeFlow === flow.key}
                     onClick={() => setActiveFlow(flow.key)}
                     type="button"
                   >
                     {flow.title}
-                  </button>
+                  </FlowTab>
                 ))}
-              </div>
-            </div>
+              </FlowTabGroupItems>
+            </FlowTabGroup>
           ))}
-        </div>
+        </FlowTabs>
 
-        <div className="flowCanvas">
+        <FlowCanvas>
           <ReactFlow
             // Remount per flow so fitView re-frames each diagram; the change
             // handlers above are what let nodes initialise in the first place.
@@ -151,38 +247,38 @@ export function DataFlowPanel({ config }: { config?: RuntimeConfig }) {
             <MiniMap pannable zoomable nodeStrokeWidth={2} />
             <Controls showInteractive={false} />
           </ReactFlow>
-        </div>
+        </FlowCanvas>
 
-        <div className="flowLegend">
-          <h3>System Components</h3>
-          <div className="legendItems">
-            <div className="legendItem">
-              <div className="legendBox" style={{ background: "#fbfcfa", border: "2px solid #285f74" }}></div>
+        <FlowLegend>
+          <h3>System components</h3>
+          <LegendItems>
+            <LegendItem>
+              <LegendBox style={{ background: "#fbfcfa", border: "2px solid #285f74" }} />
               <span>Source (Git)</span>
-            </div>
-            <div className="legendItem">
-              <div className="legendBox" style={{ background: "#e8f1f7", border: "2px solid #4a7c93" }}></div>
+            </LegendItem>
+            <LegendItem>
+              <LegendBox style={{ background: "#e8f1f7", border: "2px solid #4a7c93" }} />
               <span>Processing</span>
-            </div>
-            <div className="legendItem">
-              <div className="legendBox" style={{ background: "#f0f4f0", border: "2px solid #3d6b43" }}></div>
+            </LegendItem>
+            <LegendItem>
+              <LegendBox style={{ background: "#f0f4f0", border: "2px solid #3d6b43" }} />
               <span>Storage (Postgres)</span>
-            </div>
-            <div className="legendItem">
-              <div className="legendBox" style={{ background: "#fef9f0", border: "2px solid #8b5a00" }}></div>
+            </LegendItem>
+            <LegendItem>
+              <LegendBox style={{ background: "#fef9f0", border: "2px solid #8b5a00" }} />
               <span>AI Provider</span>
-            </div>
-            <div className="legendItem">
-              <div className="legendBox" style={{ background: "#f5f7f2", border: "2px solid #b8c0b4" }}></div>
+            </LegendItem>
+            <LegendItem>
+              <LegendBox style={{ background: "#f5f7f2", border: "2px solid #b8c0b4" }} />
               <span>User / API</span>
-            </div>
-            <div className="legendItem">
-              <div className="legendBox" style={{ background: "#fff3e6", border: "2px solid #c2541f" }}></div>
+            </LegendItem>
+            <LegendItem>
+              <LegendBox style={{ background: "#fff3e6", border: "2px solid #c2541f" }} />
               <span>Reconcile gate</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+            </LegendItem>
+          </LegendItems>
+        </FlowLegend>
+      </PanelBody>
+    </Surface>
   );
 }

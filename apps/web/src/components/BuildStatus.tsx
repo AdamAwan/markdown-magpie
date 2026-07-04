@@ -1,9 +1,44 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import styled from "@emotion/styled";
 import { apiGet } from "../lib/api";
 import { shortSha } from "../lib/format";
 import { BuildInfo } from "../lib/types";
+
+const StatusGroup = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.md
+}));
+
+const StatusGroupTitle = styled.p(({ theme }) => ({
+  margin: 0,
+  color: theme.color.textSubtle,
+  fontSize: theme.font.size.xs,
+  fontWeight: theme.font.weight.semibold,
+  letterSpacing: "0.06em"
+}));
+
+const StatusLine = styled.div(({ theme }) => ({
+  display: "flex",
+  flexDirection: "column",
+  gap: theme.space.xs,
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.sm,
+  fontWeight: theme.font.weight.medium,
+  "& span:first-of-type": {
+    color: theme.color.textMuted,
+    fontSize: theme.font.size.xs,
+    fontWeight: theme.font.weight.semibold
+  },
+  "& span:last-of-type": {
+    display: "flex",
+    alignItems: "center",
+    gap: theme.space.sm,
+    color: theme.color.text,
+    fontWeight: theme.font.weight.medium
+  }
+}));
 
 // Sidebar "Build" group showing which commit is live. The build identity is
 // static for the life of the process, so it's fetched once on mount rather than
@@ -30,25 +65,25 @@ export function BuildStatus() {
   const committedValid = committed && !Number.isNaN(committed.getTime());
 
   return (
-    <div className="statusGroup">
-      <p className="statusGroupTitle">Build</p>
+    <StatusGroup>
+      <StatusGroupTitle>Build</StatusGroupTitle>
       {build.sha ? (
         <>
-          <div className="statusLine">
+          <StatusLine>
             <span>Commit</span>
             <span title={build.commitMessage ?? undefined}>{shortSha(build.sha)}</span>
-          </div>
-          <div className="statusLine">
+          </StatusLine>
+          <StatusLine>
             <span>Deployed</span>
             <span>{committedValid ? committed.toLocaleString() : "Unknown"}</span>
-          </div>
+          </StatusLine>
         </>
       ) : (
-        <div className="statusLine">
+        <StatusLine>
           <span>Version</span>
           <span>Development</span>
-        </div>
+        </StatusLine>
       )}
-    </div>
+    </StatusGroup>
   );
 }

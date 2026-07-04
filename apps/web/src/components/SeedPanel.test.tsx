@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderMarkup } from "../test/render";
 import { SeedPanel } from "./SeedPanel";
 
 const flows = [
@@ -9,7 +9,7 @@ const flows = [
 ];
 
 test("renders the flow picker, topic field and a disabled Generate button", () => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     <SeedPanel flows={flows} loading={false} onGenerate={async () => undefined} onSeed={async () => undefined} />
   );
 
@@ -23,7 +23,7 @@ test("renders the flow picker, topic field and a disabled Generate button", () =
 });
 
 test("shows the empty-outline prompt with a manual add before any generation", () => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     <SeedPanel flows={flows} loading={false} onGenerate={async () => undefined} onSeed={async () => undefined} />
   );
 

@@ -75,6 +75,10 @@ apps/
              src/runners/ (chat, generative, maintenance, publication, cli, ...);
              capability advertisement in src/capabilities.ts.
   web/       Next.js review + admin console (Schedules, /dataflow, proposals review).
+             UI is Emotion CSS-in-JS with a typed design-token theme (src/theme/) and a
+             primitive library (src/components/ui/: Button, Badge, Chip, Surface, Field,
+             Tabs, Stack/Row, …). There is NO global stylesheet — style with those
+             primitives + colocated `styled` reading `p => p.theme.*`; never add a .css file.
   mcp/       MCP server — a client surface over the API (kb_ask, kb_search, kb_feedback).
              Only needed for MCP clients; skip for a normal run.
 packages/

@@ -2,6 +2,7 @@
 
 import { useConsole } from "../../components/ConsoleProvider";
 import { JobsPanel } from "../../components/JobsPanel";
+import { Workbench } from "../../components/ui";
 
 export default function JobsPage() {
   const {
@@ -17,7 +18,7 @@ export default function JobsPage() {
   } = useConsole();
 
   return (
-    <section className="fullWorkbench">
+    <Workbench>
       <JobsPanel
         jobs={jobs}
         schedules={jobSchedules}
@@ -29,6 +30,6 @@ export default function JobsPage() {
         onRetry={retryJob}
         onAccept={acceptFailedJobs}
       />
-    </section>
+    </Workbench>
   );
 }

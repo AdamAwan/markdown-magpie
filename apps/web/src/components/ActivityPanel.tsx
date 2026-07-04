@@ -1,5 +1,105 @@
 import { useEffect, useState } from "react";
+import styled from "@emotion/styled";
 import { ChangeIntentTrace, ConfiguredKnowledgeFlow, MaintenanceRun } from "../lib/types";
+import { Badge, Button, EmptyState, ListRow, Row, ScrollList, Surface, statusTone } from "./ui";
+
+// Muted caption line for run timestamps, ids and target paths — the monospace
+// "path" treatment the stylesheet used across audit surfaces.
+const Path = styled.p(({ theme }) => ({
+  color: theme.color.textMuted,
+  fontFamily: theme.font.mono,
+  fontSize: theme.font.size.sm
+}));
+
+// Introductory blurb above the run feed.
+const Hint = styled.p(({ theme }) => ({
+  margin: `0 0 ${theme.space.md}`,
+  fontSize: theme.font.size.sm,
+  color: theme.color.textMuted
+}));
+
+// Trailing metadata cluster (status + trigger + details action) kept together so
+// the row header stays a two-item space-between layout.
+const RowMeta = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  gap: theme.space.md,
+  flexShrink: 0
+}));
+
+// Chip cluster below a card body: wraps the derived count/decision badges.
+const ChipRow = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: theme.space.md
+}));
+
+// Bordered list of selected paths / cluster candidates.
+const PathList = styled.ul(({ theme }) => ({
+  margin: 0,
+  padding: 0,
+  listStyle: "none",
+  display: "grid",
+  gap: theme.space.sm,
+  "& li": {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.space.lg,
+    padding: `${theme.space.sm} ${theme.space.lg}`,
+    border: `1px solid ${theme.color.border}`,
+    borderRadius: theme.radius.md,
+    background: theme.color.surface,
+    fontSize: theme.font.size.md
+  }
+}));
+
+// The collapsible change-intent trace, plus its nested cards and raw-JSON block.
+const IntentTrace = styled.details(({ theme }) => ({
+  fontSize: theme.font.size.sm,
+  color: theme.color.textMuted,
+  "& > summary": { cursor: "pointer", userSelect: "none" }
+}));
+
+const TraceList = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.lg,
+  marginTop: theme.space.md
+}));
+
+const TraceCard = styled.article(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.sm,
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.card,
+  background: theme.color.surfaceMuted,
+  padding: `${theme.space.lg} ${theme.space.xl}`,
+  "& h4": { margin: 0, fontWeight: theme.font.weight.semibold }
+}));
+
+const TraceRowTop = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: theme.space.lg
+}));
+
+const RawTrace = styled.details(({ theme }) => ({
+  "& > summary": { cursor: "pointer", userSelect: "none" },
+  "& pre": {
+    margin: `${theme.space.sm} 0 0`,
+    border: `1px solid ${theme.color.border}`,
+    borderRadius: theme.radius.md,
+    background: theme.color.surface,
+    padding: theme.space.lg,
+    overflow: "auto",
+    color: theme.color.text,
+    fontFamily: theme.font.mono,
+    fontSize: theme.font.size.sm,
+    lineHeight: 1.55
+  }
+}));
 
 function taskTypeLabel(taskType: MaintenanceRun["taskType"]): string {
   if (taskType === "process_gaps_to_pull_requests") {
@@ -116,27 +216,25 @@ function TraceDetails({ traces }: { traces: ChangeIntentTrace[] }) {
   }
 
   return (
-    <details className="intentTrace">
+    <IntentTrace>
       <summary>View trace</summary>
-      <div className="traceList">
+      <TraceList>
         {traces.map((trace, index) => {
           const decision = traceDecisionKind(trace);
           return (
-            <article className="traceCard" key={`${trace.createdAt}-${index}`}>
-              <div className="rowTop">
+            <TraceCard key={`${trace.createdAt}-${index}`}>
+              <TraceRowTop>
                 <h4>
                   {trace.intent.lens} · {traceDecisionLabel(decision)}
                 </h4>
-                <span className={`status ${decision === "defer" || decision === "drop" ? "rejected" : "ready"}`}>
-                  {decision}
-                </span>
-              </div>
+                <Badge tone={decision === "defer" || decision === "drop" ? "failed" : "completed"}>{decision}</Badge>
+              </TraceRowTop>
               <p>{trace.intent.rationale || trace.outcome?.reason || "No rationale recorded."}</p>
-              <p className="path">
+              <Path>
                 Targets: {trace.intent.targets.length > 0 ? trace.intent.targets.join(", ") : "unknown target"}
-              </p>
+              </Path>
               {trace.outcome ? (
-                <p className="path">
+                <Path>
                   Outcome:{" "}
                   {[
                     trace.outcome.proposalTitle,
@@ -148,10 +246,10 @@ function TraceDetails({ traces }: { traces: ChangeIntentTrace[] }) {
                     .join(" · ") ||
                     trace.outcome.reason ||
                     "recorded"}
-                </p>
+                </Path>
               ) : null}
               {trace.candidatePullRequests.length > 0 ? (
-                <ul className="clusterGaps">
+                <PathList>
                   {trace.candidatePullRequests.map((candidate) => (
                     <li key={candidate.proposalId}>
                       {candidate.proposalId} {candidate.touchable ? "touchable" : "locked"}
@@ -160,17 +258,17 @@ function TraceDetails({ traces }: { traces: ChangeIntentTrace[] }) {
                         : " · no overlap"}
                     </li>
                   ))}
-                </ul>
+                </PathList>
               ) : null}
-              <details className="rawTrace">
+              <RawTrace>
                 <summary>Raw JSON</summary>
                 <pre>{JSON.stringify(trace, null, 2)}</pre>
-              </details>
-            </article>
+              </RawTrace>
+            </TraceCard>
           );
         })}
-      </div>
-    </details>
+      </TraceList>
+    </IntentTrace>
   );
 }
 
@@ -178,79 +276,125 @@ export function ActivityPanel({ flows, runs }: { flows: ConfiguredKnowledgeFlow[
   const [selectedRun, setSelectedRun] = useState<MaintenanceRun | undefined>();
 
   return (
-    <section className="surface">
-      <div className="surfaceHeader">
+    <Surface>
+      <Surface.Header>
         <h2>Activity</h2>
-        <span className="pill" title="Recent maintenance runs">
+        <Badge tone="neutral" title="Recent maintenance runs">
           {runs.length}
-        </span>
-      </div>
-      <div className="surfaceBody">
-        <p className="hint">
+        </Badge>
+      </Surface.Header>
+      <Surface.Body>
+        <Hint>
           Durable audit of scheduled and manual maintenance work: what ran, which flow it touched, how it ended, and the
           task-specific counts that explain the result.
-        </p>
-        <div className="list scrollList">
+        </Hint>
+        <ScrollList>
           {runs.map((run) => {
             const paths = selectedPaths(run.details);
             const traces = intentTraces(run.details);
             return (
-              <article className="row" key={run.id}>
-                <div className="rowTop">
-                  <h3>
+              <ListRow key={run.id}>
+                <Row justify="between" gap="lg">
+                  <h3 style={{ flex: 1, minWidth: 0 }}>
                     {taskTypeLabel(run.taskType)} · {flowName(flows, run.flowId)}
                   </h3>
-                  <span className="rowMeta">
-                    <span
-                      className={`status ${run.status === "failed" ? "failed" : "completed"}`}
+                  <RowMeta>
+                    <Badge
+                      tone={statusTone(run.status === "failed" ? "failed" : "completed")}
+                      dot
                       title={run.error ?? "Run status"}
                     >
                       {run.status}
-                    </span>
-                    <span className="pill" title="Run trigger">
+                    </Badge>
+                    <Badge tone="neutral" title="Run trigger">
                       {run.trigger}
-                    </span>
-                    <button
+                    </Badge>
+                    <Button
                       aria-label={`View details for ${taskTypeLabel(run.taskType)} run`}
-                      className="button secondary"
                       onClick={() => setSelectedRun(run)}
-                      type="button"
                     >
                       Details
-                    </button>
-                  </span>
-                </div>
+                    </Button>
+                  </RowMeta>
+                </Row>
                 <p>{run.error ?? run.summary}</p>
-                <p className="path">
+                <Path>
                   {new Date(run.startedAt).toLocaleString()}
                   {run.completedAt ? ` · completed ${new Date(run.completedAt).toLocaleTimeString()}` : ""}
-                </p>
-                <div className="rowMeta">
+                </Path>
+                <ChipRow>
                   {detailChips(run).map((chip) => (
-                    <span className="pill" key={chip}>
+                    <Badge tone="neutral" key={chip}>
                       {chip}
-                    </span>
+                    </Badge>
                   ))}
-                </div>
+                </ChipRow>
                 {paths.length > 0 ? (
-                  <ul className="clusterGaps">
+                  <PathList>
                     {paths.slice(0, 6).map((path) => (
                       <li key={path}>{path}</li>
                     ))}
                     {paths.length > 6 ? <li>{paths.length - 6} more</li> : null}
-                  </ul>
+                  </PathList>
                 ) : null}
                 <TraceDetails traces={traces} />
-              </article>
+              </ListRow>
             );
           })}
-          {runs.length === 0 ? <p className="empty">No activity recorded yet.</p> : null}
-        </div>
-      </div>
+          {runs.length === 0 ? <EmptyState>No activity recorded yet.</EmptyState> : null}
+        </ScrollList>
+      </Surface.Body>
       {selectedRun ? <MaintenanceRunDetailsModal onClose={() => setSelectedRun(undefined)} run={selectedRun} /> : null}
-    </section>
+    </Surface>
   );
 }
+
+const ModalBackdrop = styled.div(({ theme }) => ({
+  position: "fixed",
+  inset: 0,
+  zIndex: 50,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: "rgba(23, 33, 29, 0.55)",
+  padding: theme.space.xxl
+}));
+
+const Modal = styled.div(({ theme }) => ({
+  display: "grid",
+  gridTemplateRows: "auto minmax(0, 1fr)",
+  width: "min(900px, 100%)",
+  maxHeight: "85vh",
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.card,
+  background: theme.color.surface,
+  boxShadow: theme.shadow.card,
+  overflow: "hidden"
+}));
+
+const ModalHead = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: theme.space.lg,
+  borderBottom: `1px solid ${theme.color.border}`,
+  padding: theme.space.xl,
+  "& h3": { margin: `0 0 ${theme.space.sm}` }
+}));
+
+const ModalBody = styled.pre(({ theme }) => ({
+  maxHeight: "none",
+  margin: theme.space.xl,
+  overflow: "auto",
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.md,
+  background: theme.color.surfaceMuted,
+  padding: theme.space.lg,
+  color: theme.color.text,
+  fontFamily: theme.font.mono,
+  fontSize: theme.font.size.sm,
+  lineHeight: 1.55
+}));
 
 // The raw maintenance-run record, pretty-printed. The activity cards already
 // summarise each run; this modal is the drill-down for the full `details` JSON
@@ -270,28 +414,25 @@ export function MaintenanceRunDetailsModal({ onClose, run }: { onClose: () => vo
   const formattedDetails = JSON.stringify(run.details ?? {}, null, 2);
 
   return (
-    <div className="docModalBackdrop" onClick={onClose} role="presentation">
-      <div
+    <ModalBackdrop onClick={onClose} role="presentation">
+      <Modal
         aria-label={`${taskTypeLabel(run.taskType)} run details`}
         aria-modal="true"
-        className="docModal"
         onClick={(event) => event.stopPropagation()}
         role="dialog"
       >
-        <div className="docModalHead">
+        <ModalHead>
           <div>
             <h3>{taskTypeLabel(run.taskType)} · details</h3>
-            <p className="path">
+            <Path>
               {run.id}
               {run.completedAt ? ` · Completed ${new Date(run.completedAt).toLocaleString()}` : ""}
-            </p>
+            </Path>
           </div>
-          <button className="button secondary" onClick={onClose} type="button">
-            Close
-          </button>
-        </div>
-        <pre className="docModalBody jsonBlock">{formattedDetails}</pre>
-      </div>
-    </div>
+          <Button onClick={onClose}>Close</Button>
+        </ModalHead>
+        <ModalBody>{formattedDetails}</ModalBody>
+      </Modal>
+    </ModalBackdrop>
   );
 }
