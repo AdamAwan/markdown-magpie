@@ -121,6 +121,51 @@ describe("PostgresGapClosureVerificationStore", { skip: databaseUrl ? false : "D
     assert.equal(await store.countPriorStillOpen(questionId, "2020-12-01T00:00:00Z"), 0);
   });
 
+  it("returns the questions a proposal has recorded a 'closed' verdict for, scoped to that proposal", async () => {
+    const proposal = await proposals.create(draft(`closed-scope-${randomUUID()}`));
+    const other = await proposals.create(draft(`closed-other-${randomUUID()}`));
+    const closedQuestion = randomUUID();
+    const stillOpenQuestion = randomUUID();
+    const otherProposalQuestion = randomUUID();
+
+    await store.record({
+      proposalId: proposal.id,
+      questionId: closedQuestion,
+      verdict: "closed",
+      confidence: "high",
+      citedMergedDoc: true
+    });
+    // A retry re-recording the same closed verdict must not duplicate the entry.
+    await store.record({
+      proposalId: proposal.id,
+      questionId: closedQuestion,
+      verdict: "closed",
+      confidence: "high",
+      citedMergedDoc: true
+    });
+    // A still_open verdict on the same proposal is not a closed one.
+    await store.record({
+      proposalId: proposal.id,
+      questionId: stillOpenQuestion,
+      verdict: "still_open",
+      confidence: "low",
+      citedMergedDoc: false
+    });
+    // A closed verdict under a DIFFERENT proposal must not leak into this one.
+    await store.record({
+      proposalId: other.id,
+      questionId: otherProposalQuestion,
+      verdict: "closed",
+      confidence: "high",
+      citedMergedDoc: true
+    });
+
+    const closed = await store.questionsWithClosedVerdict(proposal.id);
+    assert.deepEqual([...closed].sort(), [closedQuestion].sort());
+    assert.equal(closed.has(stillOpenQuestion), false);
+    assert.equal(closed.has(otherProposalQuestion), false);
+  });
+
   it("does not count 'closed' verdicts toward the cap", async () => {
     const proposal = await proposals.create(draft(`closed-${randomUUID()}`));
     const questionId = randomUUID();
