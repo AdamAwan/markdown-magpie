@@ -118,19 +118,28 @@ failure *after* that point as a reason to redo the generation:
   only ever retries a job that hasn't reached `completed` (`state < 'completed'`),
   and its `complete()` is a no-op on a job that already has — so once persistence
   succeeds, nothing downstream can trigger a regeneration, no matter what fails
-  next. A side-effect failure is logged (`logger.error`) and reported on the
-  response as `sideEffectsError`, but the endpoint still replies `200` (not `500`)
-  and the job is **not** failed: it did complete. Because every side-effect handler
-  is idempotent on jobId, the safe way to retry just the bookkeeping is to POST the
-  same completion again — `completeJob` detects the job is already `completed` and
-  replays the fan-out from the persisted `{ result, executor }` output instead of
-  requiring (or re-validating) a fresh body.
+  next. A side-effect failure is logged (`logger.error`) and the endpoint replies
+  **`500` with code `side_effects_failed`** — but the job is **not** failed: it did
+  complete. Because every side-effect handler is idempotent on jobId, retrying the
+  bookkeeping is just POSTing the same completion again — `completeJob` detects the
+  job is already `completed` and replays the fan-out from the persisted
+  `{ result, executor }` output instead of requiring (or re-validating) a fresh
+  body. Crucially, that 500 cannot re-bill the generation: a retried POST hits the
+  replay path, never the provider.
 - **The watcher retries the `complete()` POST itself.** `HttpWatcherApi.complete()`
   (`apps/watcher/src/http-client.ts`) retries a failed completion POST a few times
   with backoff before giving up, but only for a network error or a `5xx` — a `4xx`
   (e.g. `invalid_output`, `job_not_found`) is a deterministic contract failure no
   amount of retrying fixes, so those still fall straight through to `api.fail()`.
   This is safe because `POST /:id/complete` is idempotent on the API side (above).
+  The two mechanisms compose into **self-healing side effects**: a transient
+  side-effect failure surfaces as a retryable `500 side_effects_failed`, the
+  watcher re-POSTs with backoff, and the replay branch re-runs only the side
+  effects. If the retries exhaust, the watcher's `api.fail()` fallback is a
+  harmless no-op on the completed row (pg-boss's `state < 'completed'` guard), so
+  the terminal state is still a completed job whose output survives — the
+  side-effect failure stays in the logs and a later manual re-POST of `/complete`
+  can still replay the bookkeeping.
 - **Schema-invalid output** (`invalid_output`) is unchanged: it still fails the job
   through the normal retry budget. There is no cheap, low-risk way to force pg-boss
   to skip straight to a terminal `failed` state for this one failure category

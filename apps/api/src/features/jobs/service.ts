@@ -201,15 +201,21 @@ async function cancelOrphanedJob(ctx: AppContext, jobId: string, lastSeen: JobVi
 // completion call a safe no-op. So once `ctx.jobs.complete()` below returns, the
 // paid-for generation can never be redone by anything in this process, no matter
 // what happens next. A side-effect failure must therefore never re-fail the job
-// (besides being semantically wrong — the job DID complete — pg-boss would
-// silently ignore a fail() on an already-completed row anyway): it is reported
-// (logged loudly, and surfaced on the response as `sideEffectsError`) and left
-// retryable *without regeneration* by simply calling this endpoint again. Every
-// handler below is idempotent on jobId (each store call de-dupes proposals by
-// jobId), so a replay is safe. To make that replay possible even though the
-// original `output` argument may not be resent, a job already in `completed`
-// state reuses its own persisted `{ result, executor }` envelope instead of
-// re-validating (and requiring) a fresh `output` body.
+// (besides being semantically wrong — the job DID complete — pg-boss silently
+// ignores a fail() on an already-completed row anyway): it is logged loudly and
+// returned as the `side_effects_failed` outcome, which the route maps to a 500.
+// That 500 is what makes transient side-effect failures SELF-HEALING: the
+// watcher's complete() retry loop treats a 5xx as retryable and re-POSTs the
+// same completion, which lands in the replay branch below and re-runs ONLY the
+// side effects — never the generation. Every handler below is idempotent on
+// jobId (each store call de-dupes proposals by jobId), so a replay is safe. To
+// make that replay possible even though the original `output` argument may not
+// be resent, a job already in `completed` state reuses its own persisted
+// `{ result, executor }` envelope instead of re-validating (and requiring) a
+// fresh `output` body. If the watcher exhausts its retries and falls back to
+// fail(), that fail() is a no-op on the completed row — the terminal state is
+// still a completed job with the side-effect failure logged, and a later manual
+// re-POST can still replay the side effects.
 export async function completeJob(
   ctx: AppContext,
   jobId: string,
@@ -219,7 +225,8 @@ export async function completeJob(
   | { ok: false; code: "job_not_found" }
   | { ok: false; code: "invalid_output" }
   | { ok: false; code: "job_cancelled" }
-  | { ok: true; job: JobView | undefined; sideEffectsError?: string }
+  | { ok: false; code: "side_effects_failed" }
+  | { ok: true; job: JobView | undefined }
 > {
   const existingJob = await ctx.jobs.get(jobId);
   if (!existingJob) {
@@ -340,11 +347,12 @@ export async function completeJob(
     const message = error instanceof Error ? error.message : String(error);
     // The job's output is already durably persisted (above), so pg-boss will
     // never redo the generation regardless of what we do here — do NOT fail the
-    // job (see this function's docstring). Log loudly and report the failure on
-    // the response; re-POSTing this same completion later safely replays only
-    // the side effects, using the persisted result.
-    logger.error({ jobId, jobType: existingJob.type, err: message }, "job completed but its side effects failed; safe to retry by re-completing the job");
-    return { ok: true, job: await ctx.jobs.get(jobId), sideEffectsError: message };
+    // job (see this function's docstring). Log loudly and return the distinct
+    // side_effects_failed outcome: the route maps it to a 500, the watcher's
+    // complete() retry re-POSTs, and the replay branch above re-runs only the
+    // side effects from the persisted result.
+    logger.error({ jobId, jobType: existingJob.type, err: message }, "job completed but its side effects failed; a retried completion replays only the side effects");
+    return { ok: false, code: "side_effects_failed" };
   }
   return { ok: true, job: await ctx.jobs.get(jobId) };
 }

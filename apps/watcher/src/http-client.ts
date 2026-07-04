@@ -132,9 +132,12 @@ export class HttpRequestStatusError extends Error {
 // falling back to fail(), which discards that output and forces pg-boss to redo
 // the entire (paid-for) generation. complete() is idempotent on the API side (see
 // completeJob in apps/api/src/features/jobs/service.ts), so retrying it locally a
-// few times is safe and far cheaper than a full regeneration. A 4xx (invalid
-// output, job not found, job cancelled) is a deterministic contract failure no
-// amount of retrying fixes, so those are not retried here.
+// few times is safe and far cheaper than a full regeneration. This retry also
+// doubles as the automatic recovery path for the API's `500 side_effects_failed`
+// response: the API persists the job's output BEFORE its side-effect fan-out, so
+// a re-POST on that 5xx replays only the side effects — never the generation. A
+// 4xx (invalid output, job not found, job cancelled) is a deterministic contract
+// failure no amount of retrying fixes, so those are not retried here.
 const COMPLETE_RETRY_ATTEMPTS = 3;
 const COMPLETE_RETRY_BASE_DELAY_MS = 250;
 

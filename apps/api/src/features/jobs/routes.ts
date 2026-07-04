@@ -84,18 +84,22 @@ export function jobRoutes(ctx: AppContext): Hono {
       try {
         const outcome = await jobsService.completeJob(ctx, c.req.param("id"), output, executor);
         if (!outcome.ok) {
-          const status = outcome.code === "job_not_found" ? 404 : outcome.code === "job_cancelled" ? 409 : 400;
+          // side_effects_failed is a 500 ON PURPOSE: the job's output is already
+          // durably persisted (completeJob persists before the side-effect
+          // fan-out), so the watcher's complete() retry loop re-POSTing on this
+          // 5xx cannot re-run the generation — the retry hits completeJob's
+          // replay branch and re-runs only the side effects. That makes a
+          // transient side-effect failure self-healing. If retries exhaust and
+          // the watcher falls back to fail(), pg-boss no-ops the fail on the
+          // completed row, so the output still survives.
+          const status =
+            outcome.code === "job_not_found" ? 404
+            : outcome.code === "job_cancelled" ? 409
+            : outcome.code === "side_effects_failed" ? 500
+            : 400;
           throw new HttpError(status, outcome.code);
         }
-        // The job's output is durably persisted whenever ok is true, even if a
-        // side effect (proposal creation, fold reconcile, ...) failed — see
-        // completeJob's docstring. Report that failure on the response (200, not
-        // 500: the watcher must not treat this as a reason to fall back to
-        // fail()/retry, which would needlessly re-run the paid-for generation)
-        // so operators can see it without it looking like a completion failure.
-        return c.json(
-          outcome.sideEffectsError ? { job: outcome.job, sideEffectsError: outcome.sideEffectsError } : { job: outcome.job }
-        );
+        return c.json({ job: outcome.job });
       } catch (error) {
         if (error instanceof HttpError) throw error;
         throw new HttpError(500, "job_completion_failed");
