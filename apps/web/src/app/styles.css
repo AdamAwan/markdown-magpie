@@ -621,6 +621,34 @@ select:focus {
   color: #9a3a2d;
 }
 
+/* Stacks the proposal status and its post-merge closure badge in the row header. */
+.statusStack {
+  display: inline-flex;
+  gap: 4px;
+  align-items: flex-end;
+  flex-direction: column;
+}
+
+/* Post-merge gap-closure outcome badges: verified (positive), reopened
+   (warning), needs-attention (danger). */
+.status.closure-verified_closed {
+  border-color: #9dbb9f;
+  background: #f0f8ee;
+  color: #3d6b43;
+}
+
+.status.closure-reopened {
+  border-color: #c9b07a;
+  background: #fbf6ea;
+  color: #7a5d24;
+}
+
+.status.closure-needs_attention {
+  border-color: #d48d7a;
+  background: #fff4ef;
+  color: #9a3a2d;
+}
+
 .status.unknown,
 .status.pending,
 .status.claimed {

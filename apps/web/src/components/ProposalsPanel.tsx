@@ -2,6 +2,24 @@ import { Proposal } from "../lib/types";
 import { shortSha } from "../lib/format";
 import { ContextValue } from "./common";
 
+// Post-merge gap-closure outcome badges. A merged proposal no longer blindly
+// resolves its gaps — the API re-asks the triggering questions and records
+// whether the merged doc actually answered them (see docs/question-logging.md).
+const CLOSURE_BADGES: Record<NonNullable<Proposal["closureStatus"]>, { label: string; title: string }> = {
+  verified_closed: {
+    label: "Verified closed",
+    title: "Re-asking the triggering questions confirmed the merged document answers them; the gaps were resolved."
+  },
+  reopened: {
+    label: "Reopened",
+    title: "Re-asking the triggering questions still failed to find a confident, cited answer; the gaps stay open for another draft."
+  },
+  needs_attention: {
+    label: "Needs attention",
+    title: "Verification failed repeatedly; the questions are parked from auto-redrafting and need a human look."
+  }
+};
+
 export function ProposalPanel({
   loading,
   publishProposal,
@@ -51,9 +69,19 @@ export function ProposalPanel({
                     <h3>{selectedProposal.title}</h3>
                     <p className="path">{selectedProposal.targetPath}</p>
                   </div>
-                  <span className={`status ${selectedProposal.status}`} title={`Proposal status: ${selectedProposal.status}`}>
-                    {selectedProposal.status}
-                  </span>
+                  <div className="statusStack">
+                    <span className={`status ${selectedProposal.status}`} title={`Proposal status: ${selectedProposal.status}`}>
+                      {selectedProposal.status}
+                    </span>
+                    {selectedProposal.closureStatus ? (
+                      <span
+                        className={`status closure-${selectedProposal.closureStatus}`}
+                        title={CLOSURE_BADGES[selectedProposal.closureStatus].title}
+                      >
+                        {CLOSURE_BADGES[selectedProposal.closureStatus].label}
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
                 {selectedProposal.rationale ? <p>{selectedProposal.rationale}</p> : null}
                 {selectedProposal.draftContext ? (
