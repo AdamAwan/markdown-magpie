@@ -215,12 +215,18 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
 }
 
 // Post-answer grounding check: a second model call reviews the drafted answer
-// against the whole retrieved pool (not just the cited subset, so a claim backed
-// by an uncited-but-retrieved section is not falsely flagged) and every
-// unsupported claim is stripped, the answer downgraded to low, and the claims
-// recorded as gaps. Only medium/high answers are checked — gap, out-of-scope, and
-// already-low answers ship distrusted anyway. An unparseable verdict fails open
-// (keeps the drafted answer) so a flaky verifier cannot downgrade every answer.
+// against the retrieved pool and every unsupported claim is stripped, the answer
+// downgraded to low, and the claims recorded as gaps. Only medium/high answers are
+// checked — gap, out-of-scope, and already-low answers ship distrusted anyway. An
+// unparseable verdict fails open (keeps the drafted answer) so a flaky verifier
+// cannot downgrade every answer.
+//
+// To avoid re-sending the whole pool (already sent verbatim in the assess call), the
+// context is split: the *cited* sections go in full, while the retrieved-but-uncited
+// sections go as headings only. The prompt tells the verifier those headings were
+// retrieved as relevant, so a claim matching one is treated as plausibly grounded
+// rather than fabricated — preserving the "don't flag uncited-but-retrieved claims"
+// property without re-sending every uncited body (#169 Part 1).
 async function verifyAnswerGrounding(
   model: ChatProvider,
   output: AnswerOutput,
@@ -239,13 +245,20 @@ async function verifyAnswerGrounding(
     return withVerification(output, { status: "skipped", skipReason: "low_confidence" });
   }
 
-  logger.debug({ jobId }, `answer_question[${jobId}]: verifying answer grounding against ${sections.length} section(s)`);
+  const citedIds = new Set(output.citations.map((citation) => citation.sectionId));
+  const cited = sections.filter((section) => citedIds.has(section.sectionId));
+  const uncited = sections.filter((section) => !citedIds.has(section.sectionId));
+
+  logger.debug(
+    { jobId, citedCount: cited.length, uncitedCount: uncited.length },
+    `answer_question[${jobId}]: verifying answer grounding against ${cited.length} cited section(s) + ${uncited.length} heading(s)`
+  );
   const response = await model.complete({
     system: VERIFY_ANSWER.instructions,
     messages: [
       {
         role: "user",
-        content: `Question:\n${question}\n\nAnswer under review:\n${output.answer}\n\nContext:\n${formatSectionContext(sections)}`
+        content: `Question:\n${question}\n\nAnswer under review:\n${output.answer}\n\nContext:\n${buildVerificationContext(cited, uncited)}`
       }
     ],
     responseFormat: "json",
@@ -321,6 +334,25 @@ function formatSectionContext(sections: RetrievedSection[]): string {
   return sections.map((section) => `[section ${section.sectionId}] # ${section.heading}\n${section.content}`).join("\n\n");
 }
 
+// The same "[section <id>]" labelling but heading only (no body), for the
+// retrieved-but-uncited sections shown to the grounding verifier.
+function formatSectionHeadings(sections: RetrievedSection[]): string {
+  return sections.map((section) => `[section ${section.sectionId}] # ${section.heading}`).join("\n");
+}
+
+// The grounding verifier's context: cited sections in full, then (if any) the
+// uncited retrieved sections as headings only under a label that tells the verifier
+// they were retrieved as relevant, so a claim matching one is plausibly grounded.
+function buildVerificationContext(cited: RetrievedSection[], uncited: RetrievedSection[]): string {
+  const parts = [formatSectionContext(cited)];
+  if (uncited.length > 0) {
+    parts.push(
+      `Also retrieved (headings only — these sections were retrieved as relevant but the answer did not cite them; treat a claim whose topic matches one of these headings as plausibly grounded, not fabricated):\n${formatSectionHeadings(uncited)}`
+    );
+  }
+  return parts.filter((part) => part.length > 0).join("\n\n");
+}
+
 function mergeSections(pool: Map<string, RetrievedSection>, sections: RetrievedSection[]): void {
   for (const section of sections) {
     if (!pool.has(section.sectionId)) {
@@ -370,30 +402,34 @@ async function reconcileGapClusters({ job, model, signal }: GenerativeJobOptions
   });
   const proposal = parseReshape(proposeResponse.content);
 
+  const opCount = proposal.merges.length + proposal.splits.length + proposal.dismissals.length;
   logger.debug(
     { jobId: job.id, mergeCount: proposal.merges.length, splitCount: proposal.splits.length, dismissalCount: proposal.dismissals.length },
     `reconcile_gap_clusters[${job.id}]: critic-confirming ${proposal.merges.length} merge(s), ${proposal.splits.length} split(s), ${proposal.dismissals.length} dismissal(s)`
   );
-  const merges: ReconcileOutput["merges"] = [];
-  for (const merge of proposal.merges) {
-    const confirmed = await criticConfirm(model, "merge", merge.rationale, signal);
-    merges.push({ clusterIds: merge.clusterIds, rationale: merge.rationale, confirmed });
-  }
-  const splits: ReconcileOutput["splits"] = [];
-  for (const split of proposal.splits) {
-    const confirmed = await criticConfirm(model, "split", split.rationale, signal);
-    splits.push({ clusterId: split.clusterId, children: split.children, rationale: split.rationale, confirmed });
-  }
-  // Dismissals are permanent, so the critic sees the same scope grounding the
-  // proposer did (persona, top relevance, snippets) and must independently confirm
-  // the cluster is off-topic — not merely uncovered — before we drop it.
-  const dismissals: ReconcileOutput["dismissals"] = [];
-  for (const dismissal of proposal.dismissals) {
-    const cluster = input.clusters.find((entry) => entry.id === dismissal.clusterId);
-    const context = cluster ? clusterSummaryLine(cluster) : undefined;
-    const confirmed = await criticConfirm(model, "dismissal", dismissal.rationale, signal, context);
-    dismissals.push({ clusterId: dismissal.clusterId, rationale: dismissal.rationale, confirmed });
-  }
+
+  // One batched critic pass over every proposed operation (was one provider call per
+  // op). Skip entirely when nothing was proposed. Each op is confirmed only when the
+  // critic returns confirmed=true for its exact id; a missing, malformed, reordered, or
+  // unparseable verdict leaves that op unconfirmed — the conservative default.
+  const verdicts = opCount === 0 ? new Map<string, boolean>() : await criticConfirmBatch(model, proposal, input.clusters, signal);
+
+  const merges: ReconcileOutput["merges"] = proposal.merges.map((merge, index) => ({
+    clusterIds: merge.clusterIds,
+    rationale: merge.rationale,
+    confirmed: verdicts.get(`merge-${index}`) === true
+  }));
+  const splits: ReconcileOutput["splits"] = proposal.splits.map((split, index) => ({
+    clusterId: split.clusterId,
+    children: split.children,
+    rationale: split.rationale,
+    confirmed: verdicts.get(`split-${index}`) === true
+  }));
+  const dismissals: ReconcileOutput["dismissals"] = proposal.dismissals.map((dismissal, index) => ({
+    clusterId: dismissal.clusterId,
+    rationale: dismissal.rationale,
+    confirmed: verdicts.get(`dismissal-${index}`) === true
+  }));
 
   return reconcileGapClustersOutputSchema.parse({ merges, splits, dismissals });
 }
@@ -413,27 +449,73 @@ function clusterSummaryLine(cluster: ReconcileInput["clusters"][number]): string
   return `${base} [scope: persona=${persona}; topRelevance=${cluster.scope.topRelevance.toFixed(2)}; closest content=${snippets}]`;
 }
 
-async function criticConfirm(
+// One batched critic pass over every proposed operation. Each op is listed with a
+// stable id (`merge-0`, `split-1`, `dismissal-0`) and its rationale; a dismissal also
+// carries the cluster summary line so the critic sees the same scope grounding the
+// proposer did (persona, top relevance, snippets) before we drop a cluster for good.
+// Returns a map of op id -> confirmed; ids the critic omits or malforms are simply
+// absent, and the caller treats an absent id as not confirmed.
+async function criticConfirmBatch(
   model: ChatProvider,
-  kind: "merge" | "split" | "dismissal",
-  rationale: string,
-  signal: AbortSignal,
-  context?: string
-): Promise<boolean> {
-  const content = context
-    ? `Proposed ${kind}. Rationale: ${rationale}\n\nCluster under review: ${context}`
-    : `Proposed ${kind}. Rationale: ${rationale}`;
+  proposal: { merges: ProposedMerge[]; splits: ProposedSplit[]; dismissals: ProposedDismissal[] },
+  clusters: ReconcileInput["clusters"],
+  signal: AbortSignal
+): Promise<Map<string, boolean>> {
+  const lines: string[] = [];
+  proposal.merges.forEach((merge, index) => {
+    lines.push(`merge-${index}: merge clusters ${merge.clusterIds.join(", ")}. Rationale: ${merge.rationale}`);
+  });
+  proposal.splits.forEach((split, index) => {
+    lines.push(`split-${index}: split cluster ${split.clusterId}. Rationale: ${split.rationale}`);
+  });
+  proposal.dismissals.forEach((dismissal, index) => {
+    const cluster = clusters.find((entry) => entry.id === dismissal.clusterId);
+    const context = cluster ? `\n  Cluster under review: ${clusterSummaryLine(cluster)}` : "";
+    lines.push(`dismissal-${index}: dismiss cluster ${dismissal.clusterId}. Rationale: ${dismissal.rationale}${context}`);
+  });
+
   const response = await model.complete({
     system: GAP_RECONCILE_CRITIC.instructions,
-    messages: [{ role: "user", content }],
+    messages: [
+      {
+        role: "user",
+        content: `Proposed gap-cluster changes. Confirm or reject each independently.\n\n${lines.join("\n")}`
+      }
+    ],
+    responseFormat: "json",
     signal
   });
+  return parseCriticVerdicts(response.content);
+}
+
+// Parses the batched critic reply into a map of op id -> confirmed. Anything that is
+// not exactly `confirmed: true` for a string id is dropped, so an unparseable reply, a
+// missing `verdicts` array, or a malformed entry yields no confirmation for that op.
+function parseCriticVerdicts(content: string): Map<string, boolean> {
+  const verdicts = new Map<string, boolean>();
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(response.content) as { confirmed?: unknown };
-    return parsed.confirmed === true;
+    parsed = JSON.parse(content);
   } catch {
-    return false;
+    return verdicts;
   }
+  if (!parsed || typeof parsed !== "object") {
+    return verdicts;
+  }
+  const raw = (parsed as { verdicts?: unknown }).verdicts;
+  if (!Array.isArray(raw)) {
+    return verdicts;
+  }
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const id = (entry as { id?: unknown }).id;
+    if (typeof id === "string") {
+      verdicts.set(id, (entry as { confirmed?: unknown }).confirmed === true);
+    }
+  }
+  return verdicts;
 }
 
 function parseReshape(content: string): { merges: ProposedMerge[]; splits: ProposedSplit[]; dismissals: ProposedDismissal[] } {

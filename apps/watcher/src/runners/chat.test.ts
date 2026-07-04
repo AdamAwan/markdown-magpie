@@ -392,6 +392,59 @@ describe("ChatRunner", () => {
     assert.deepEqual(output.trace?.verification.unsupportedClaims, ["SOC 2 compliance status"]);
   });
 
+  it("sends cited sections in full but uncited retrieved sections as headings only to the verifier", async () => {
+    // The pool holds a cited section and a retrieved-but-uncited section. The verifier
+    // must see the cited body in full, the uncited section's heading only (its body
+    // withheld to save tokens), and the label that keeps an uncited-topic claim from
+    // being flagged as fabricated (#169 Part 1).
+    const pool: RetrievedSection[] = [
+      SECTIONS[0],
+      {
+        sectionId: "doc-2#extra",
+        documentId: "doc-2",
+        anchor: "extra",
+        path: "ops/extra.md",
+        heading: "Extra context",
+        content: "Uncited body that must not be re-sent.",
+        relevance: 0.8
+      }
+    ];
+    let verifyMessage = "";
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("You verify a drafted")) {
+        verifyMessage = request.messages[0]?.content ?? "";
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      // Answer cites only the first section, so the second stays uncited-but-retrieved.
+      return JSON.stringify({
+        answer: "Run the deploy script.",
+        confidence: "high",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"]
+      });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi({ retrieve: async () => pool }));
+    await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-a", name: "Alpha" }],
+        requestedFlowId: "flow-a",
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    );
+
+    assert.match(
+      verifyMessage,
+      /\[section doc-1#deploy\] # Deploy\nRun the deploy script\./,
+      "the cited section is shown in full"
+    );
+    assert.match(verifyMessage, /\[section doc-2#extra\] # Extra context/, "the uncited section's heading is shown");
+    assert.doesNotMatch(verifyMessage, /Uncited body that must not be re-sent\./, "the uncited section's body is withheld");
+    assert.match(verifyMessage, /Also retrieved \(headings only/, "uncited sections are grouped under the headings-only label");
+  });
+
   it("keeps the drafted answer when the grounding verdict is unparseable (fails open)", async () => {
     const chat = new FakeChatProvider((request) => {
       if (request.system.includes("You verify a drafted")) {
@@ -497,21 +550,27 @@ describe("ChatRunner", () => {
     assert.equal(chat.requests.at(-1)?.signal, controller.signal);
   });
 
-  it("derives reconcile_gap_clusters confirmed flags from the critic, not from propose", async () => {
-    // The propose call returns one merge and one split (both unconfirmed in the
-    // propose payload). The critic then confirms the merge but rejects the split.
+  it("derives reconcile_gap_clusters confirmed flags from one batched critic call, keyed by op id", async () => {
+    // The propose call returns one merge, one split, and one dismissal (all unconfirmed
+    // in the propose payload). A SINGLE batched critic call then confirms the merge and
+    // the dismissal but rejects the split, keyed by the per-op ids.
+    let criticMessage = "";
     const chat = new FakeChatProvider((request) => {
       if (request.system.includes("strict reviewer")) {
-        // Per-proposal critic call. Confirm a merge, reject a split.
-        const content = request.messages.at(-1)?.content ?? "";
-        return content.startsWith("Proposed merge")
-          ? JSON.stringify({ confirmed: true, rationale: "one doc covers both" })
-          : JSON.stringify({ confirmed: false, rationale: "independent topics" });
+        criticMessage = request.messages.at(-1)?.content ?? "";
+        return JSON.stringify({
+          verdicts: [
+            { id: "merge-0", confirmed: true },
+            { id: "split-0", confirmed: false },
+            { id: "dismissal-0", confirmed: true }
+          ]
+        });
       }
       // Propose call.
       return JSON.stringify({
         merges: [{ clusterIds: ["c1", "c2"], rationale: "merge them" }],
-        splits: [{ clusterId: "c3", children: [{ gapIds: ["g1"] }, { gapIds: ["g2"] }], rationale: "split it" }]
+        splits: [{ clusterId: "c3", children: [{ gapIds: ["g1"] }, { gapIds: ["g2"] }], rationale: "split it" }],
+        dismissals: [{ clusterId: "c4", rationale: "off-topic" }]
       });
     });
     const runner = new ChatRunner("openai-compatible", chat, fakeApi());
@@ -522,25 +581,53 @@ describe("ChatRunner", () => {
         clusters: [
           { id: "c1", title: "Alpha" },
           { id: "c2", title: "Beta" },
-          { id: "c3", title: "Gamma" }
+          { id: "c3", title: "Gamma" },
+          { id: "c4", title: "Cats" }
         ]
       }),
       controller.signal
     )) as {
       merges: Array<{ clusterIds: string[]; rationale: string; confirmed: boolean }>;
       splits: Array<{ clusterId: string; children: Array<{ gapIds: string[] }>; rationale: string; confirmed: boolean }>;
+      dismissals: Array<{ clusterId: string; rationale: string; confirmed: boolean }>;
     };
 
-    assert.equal(output.merges.length, 1);
     assert.equal(output.merges[0].confirmed, true, "the critic confirmed the merge");
     assert.deepEqual(output.merges[0].clusterIds, ["c1", "c2"]);
-    assert.equal(output.splits.length, 1);
     assert.equal(output.splits[0].confirmed, false, "the critic rejected the split");
+    assert.equal(output.dismissals[0].confirmed, true, "the critic confirmed the dismissal");
+
+    // Exactly one critic call for the whole reshape (propose + one batched critique).
+    const criticCalls = chat.requests.filter((r) => r.system.includes("strict reviewer"));
+    assert.equal(criticCalls.length, 1, "one batched critic call, not one per op");
+    assert.equal(chat.requests.length, 2, "propose + one batched critic call");
+    // The dismissal carries the cluster's scope so the critic can judge off-topic vs uncovered.
+    assert.match(criticMessage, /dismissal-0: dismiss cluster c4/, "the dismissal op is listed with its id");
+    assert.match(criticMessage, /Cluster under review: cluster c4/, "the critic sees the dismissed cluster's scope");
     // Every chat call honoured the abort signal.
     assert.ok(chat.requests.every((r) => r.signal === controller.signal));
   });
 
-  it("treats an unparseable critic verdict as not confirmed for reconcile_gap_clusters", async () => {
+  it("skips the critic call entirely when the reshape proposes nothing", async () => {
+    const chat = new FakeChatProvider(() => JSON.stringify({ merges: [], splits: [], dismissals: [] }));
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const output = (await runner.run(
+      job("reconcile_gap_clusters", {
+        provider: "openai-compatible",
+        clusters: [{ id: "c1", title: "Alpha" }]
+      }),
+      new AbortController().signal
+    )) as { merges: unknown[]; splits: unknown[]; dismissals: unknown[] };
+
+    assert.deepEqual(output, { merges: [], splits: [], dismissals: [] });
+    assert.equal(chat.requests.length, 1, "an empty reshape makes the propose call only — no critic call");
+    assert.ok(
+      !chat.requests.some((r) => r.system.includes("strict reviewer")),
+      "no critic call when nothing was proposed"
+    );
+  });
+
+  it("treats an unparseable batched critic verdict as not confirmed for reconcile_gap_clusters", async () => {
     const chat = new FakeChatProvider((request) => {
       if (request.system.includes("strict reviewer")) {
         return "not json at all";

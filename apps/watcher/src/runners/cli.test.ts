@@ -185,13 +185,15 @@ describe("CliRunner", () => {
     assert.equal(output.citations.length, 1);
   });
 
-  it("derives reconcile_gap_clusters confirmed flags from Claude CLI critic calls", async () => {
+  it("derives reconcile_gap_clusters confirmed flags from one batched Claude CLI critic call", async () => {
+    // The batched critic prompt lists every op by id; the CLI returns one verdict per id.
     const script = [
       "const prompt = process.argv.at(-1) || '';",
-      "if (prompt.includes('Proposed merge')) {",
-      "  process.stdout.write(JSON.stringify({ confirmed: true, rationale: 'one doc covers both' }));",
-      "} else if (prompt.includes('Proposed split')) {",
-      "  process.stdout.write(JSON.stringify({ confirmed: false, rationale: 'independent topics' }));",
+      "if (prompt.includes('Confirm or reject each independently')) {",
+      "  process.stdout.write(JSON.stringify({ verdicts: [",
+      "    { id: 'merge-0', confirmed: true },",
+      "    { id: 'split-0', confirmed: false }",
+      "  ] }));",
       "} else {",
       "  process.stdout.write(JSON.stringify({",
       "    merges: [{ clusterIds: ['c1', 'c2'], rationale: 'merge them' }],",

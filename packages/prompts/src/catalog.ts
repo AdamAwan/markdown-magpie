@@ -76,11 +76,12 @@ export const VERIFY_ANSWER: PromptDefinition = {
   outputShape: '{ grounded, unsupportedClaims[], revisedAnswer? }',
   instructions: `You verify a drafted knowledge-base answer against the context it was drafted from. The answer must not assert anything the context does not support.
 
-Input: the question, the answer under review, and the context sections (each labelled "[section <id>]").
+Input: the question, the answer under review, and the context. The context has two parts. First, the sections the answer was drafted from, shown in full and each labelled "[section <id>]". Second, under "Also retrieved (headings only …)", the headings of other sections that were retrieved as relevant but not cited — shown as headings only, without their bodies.
 
 Rules:
 - Return JSON only.
-- A claim is unsupported when no context section states it or directly implies it. Certifications, compliance or legal status (e.g. SOC 2, GDPR), figures, dates, names, integrations, guarantees, and capabilities are all claims. Your own general knowledge is NOT support: if the context does not contain it, it is unsupported — even when you believe it is true.
+- A claim is unsupported when no full context section states it or directly implies it. Certifications, compliance or legal status (e.g. SOC 2, GDPR), figures, dates, names, integrations, guarantees, and capabilities are all claims. Your own general knowledge is NOT support: if the context does not contain it, it is unsupported — even when you believe it is true.
+- The "Also retrieved (headings only)" sections are an exception: their bodies are not shown, but they were retrieved as relevant. Do NOT flag a claim whose topic clearly matches one of those headings — treat it as plausibly grounded rather than fabricated. Only the full sections and these headings count as context; nothing else does.
 - Judge substance, not wording: paraphrase and summary of context content are supported. Do not flag tone, emphasis, or formatting.
 - If every claim is supported, return {"grounded":true,"unsupportedClaims":[]}.
 - Otherwise return "grounded":false, phrase each entry of "unsupportedClaims" as the missing topic (for example "SOC 2 compliance status"), and put in "revisedAnswer" the same answer with every unsupported claim removed or corrected to what the context actually says. If removing them leaves nothing useful, "revisedAnswer" states plainly that the knowledge base does not cover the question.
@@ -475,15 +476,20 @@ export const GAP_RECONCILE_PROPOSE: PromptDefinition = {
 
 export const GAP_RECONCILE_CRITIC: PromptDefinition = {
   id: "gap-reconcile-critic",
-  title: "Critique a proposed gap-cluster reshape",
-  description: "Strict reviewer that confirms or rejects a single proposed merge, split, or dismissal.",
+  title: "Critique the proposed gap-cluster reshape",
+  description:
+    "Strict reviewer that confirms or rejects every proposed merge, split, and dismissal in one batched pass, one verdict per operation id.",
   usedBy: ["watcher · gap reconciler"],
-  outputShape: "{ confirmed, rationale }",
+  outputShape: '{ verdicts: [{ id, confirmed }] }',
   instructions:
-    "You are a strict reviewer of a proposed gap-cluster change. Reject unless the " +
-    "change is clearly justified. Return JSON only with this shape: " +
-    '{"confirmed":true|false,"rationale":"string"}. Default to confirmed=false when ' +
-    "the evidence is weak."
+    "You are a strict reviewer of proposed gap-cluster changes. You are given a list of " +
+    'proposed operations, each on its own line beginning with a stable id ("merge-0", ' +
+    '"split-1", "dismissal-0", …) followed by the operation and its rationale; a dismissal ' +
+    "also includes the cluster under review. Review each operation INDEPENDENTLY and reject " +
+    "it unless it is clearly justified — default to confirmed=false when the evidence for an " +
+    "operation is weak. Return JSON only with this shape: " +
+    '{"verdicts":[{"id":"string","confirmed":true|false}]}. Emit exactly one verdict per ' +
+    "proposed id, reusing the id verbatim."
 };
 
 export const GENERIC_JOB: PromptDefinition = {
