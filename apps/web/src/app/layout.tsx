@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import Script from "next/script";
-import "./styles.css";
 import { EmotionRegistry } from "../theme/EmotionRegistry";
 import { ConsoleProvider } from "../components/ConsoleProvider";
 import { AppShell } from "../components/AppShell";
