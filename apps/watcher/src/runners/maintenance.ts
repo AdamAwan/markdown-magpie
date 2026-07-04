@@ -3,7 +3,8 @@ import {
   correctnessPatrolOutputSchema,
   editorialPatrolOutputSchema,
   processGapsToPullRequestsOutputSchema,
-  sourceChangeSyncOutputSchema
+  sourceChangeSyncOutputSchema,
+  verifyGapClosureOutputSchema
 } from "@magpie/jobs";
 import type { WatcherApi } from "../http-client.js";
 import { logger } from "../logger.js";
@@ -12,7 +13,8 @@ const MAINTENANCE_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "process_gaps_to_pull_requests",
   "source_change_sync",
   "correctness_patrol",
-  "editorial_patrol"
+  "editorial_patrol",
+  "verify_gap_closure"
 ]);
 
 // Runs the scheduled maintenance jobs by POSTing a thin API endpoint, keeping the
@@ -41,7 +43,28 @@ export class MaintenanceRunner {
     if (job.type === "editorial_patrol") {
       return this.runImprovePatrol(job, signal);
     }
+    if (job.type === "verify_gap_closure") {
+      return this.verifyGapClosure(job, signal);
+    }
     throw new Error(`MaintenanceRunner cannot handle ${job.type}`);
+  }
+
+  private async verifyGapClosure(job: JobView, signal: AbortSignal): Promise<unknown> {
+    const proposalId = readProposalId(job.input);
+    if (!proposalId) {
+      throw new Error("verify_gap_closure requires proposalId");
+    }
+    logger.info({ jobId: job.id, proposalId }, `verify_gap_closure[${job.id}]: verifying gap closure for proposal ${proposalId}`);
+    const result = await this.api.verifyClosure(proposalId, signal);
+    // The API endpoint returns the verify_gap_closure output shape; validate it
+    // here so a contract drift surfaces as a job failure rather than a silent
+    // pass-through of the wrong payload.
+    const output = verifyGapClosureOutputSchema.parse(result);
+    logger.info(
+      { jobId: job.id, proposalId, closureStatus: output.closureStatus, questions: output.perQuestion.length },
+      `verify_gap_closure[${job.id}]: ${output.closureStatus} (${output.perQuestion.length} question(s))`
+    );
+    return output;
   }
 
   private async processGapsToPullRequests(job: JobView, signal: AbortSignal): Promise<unknown> {
@@ -96,5 +119,13 @@ function readFlowId(input: unknown): string | undefined {
     return undefined;
   }
   const candidate = (input as { flowId?: unknown }).flowId;
+  return typeof candidate === "string" ? candidate : undefined;
+}
+
+function readProposalId(input: unknown): string | undefined {
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
+  const candidate = (input as { proposalId?: unknown }).proposalId;
   return typeof candidate === "string" ? candidate : undefined;
 }

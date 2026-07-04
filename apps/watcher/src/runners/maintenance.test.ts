@@ -29,6 +29,7 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     retrieve: async () => [],
     proposalExecutionContext: async () => ({ proposal: {}, repository: {} }),
     reconcileGaps: async () => ({ ok: true }),
+    verifyClosure: async () => ({ proposalId: "p", closureStatus: "verified_closed", perQuestion: [] }),
     runSourceSync: async () => ({ runIds: [] }),
     runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
     runImprovePatrol: async () => ({ runId: "run-1", selectedCount: 0, enqueuedCount: 0 }),
@@ -45,6 +46,7 @@ describe("MaintenanceRunner", () => {
     assert.ok(runner.supports("source_change_sync"));
     assert.ok(runner.supports("correctness_patrol"));
     assert.ok(runner.supports("editorial_patrol"));
+    assert.ok(runner.supports("verify_gap_closure"));
     assert.ok(!runner.supports("answer_question"));
     // refresh_flow_snapshot is a github-capability job, not maintenance.
     assert.ok(!runner.supports("refresh_flow_snapshot"));
@@ -181,6 +183,42 @@ describe("MaintenanceRunner", () => {
     assert.equal(called, "flow-x");
     assert.equal(output.drafted, 0);
     assert.equal(output.published, 0);
+  });
+
+  it("POSTs the verify-closure endpoint with the proposalId and returns schema-valid output", async () => {
+    const calls: string[] = [];
+    const api = fakeApi({
+      verifyClosure: async (proposalId) => {
+        calls.push(proposalId);
+        return {
+          proposalId,
+          closureStatus: "reopened",
+          perQuestion: [{ questionId: "q1", reaskedQuestionId: "q2", verdict: "still_open" }]
+        };
+      }
+    });
+    const runner = new MaintenanceRunner(api);
+    const output = (await runner.run(
+      job("verify_gap_closure", { proposalId: "prop-7" }),
+      new AbortController().signal
+    )) as { proposalId: string; closureStatus: string; perQuestion: unknown[] };
+    assert.deepEqual(calls, ["prop-7"]);
+    assert.equal(output.proposalId, "prop-7");
+    assert.equal(output.closureStatus, "reopened");
+    assert.equal(output.perQuestion.length, 1);
+  });
+
+  it("rejects verify_gap_closure jobs without a proposalId", async () => {
+    const api = fakeApi({
+      verifyClosure: async () => {
+        throw new Error("should not call verifyClosure without a proposalId");
+      }
+    });
+    const runner = new MaintenanceRunner(api);
+    await assert.rejects(
+      () => runner.run(job("verify_gap_closure", {}), new AbortController().signal),
+      /requires proposalId/
+    );
   });
 
   it("rejects job types it does not handle", async () => {

@@ -156,6 +156,7 @@ const missingApi: WatcherApi = {
     throw new Error("CLI runner requires a WatcherApi to fetch proposal execution context");
   },
   reconcileGaps: async () => ({ ok: true }),
+  verifyClosure: async () => ({ proposalId: "p", closureStatus: "verified_closed", perQuestion: [] }),
   runSourceSync: async () => ({ runIds: [] }),
   runFixPatrol: async () => ({ runId: "", selectedCount: 0, findingCount: 0 }),
   runImprovePatrol: async () => ({ runId: "", selectedCount: 0, enqueuedCount: 0 }),
