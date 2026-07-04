@@ -226,6 +226,48 @@ test("verifyGapClosure marks verified_closed and resolves the gap when the re-as
   );
 });
 
+// Like AnsweringJobBroker, but completes with the { result, executor } envelope
+// completeJob actually persists in production (see features/jobs/service.ts) —
+// NOT the raw answer shape. Exercises the envelope-unwrapping read path that
+// the raw-completing fixture above bypasses (the issue-#154 trap).
+class EnvelopedAnsweringJobBroker extends FakeJobBroker {
+  constructor(
+    private readonly ctx: ReturnType<typeof makeTestContext>,
+    private readonly answerFor: (questionLogId: string) => AnswerResult
+  ) {
+    super();
+  }
+
+  override async create(type: JobType, input: unknown): Promise<JobView> {
+    const job = await super.create(type, input);
+    if (type === "answer_question") {
+      const questionLogId = (input as { questionLogId: string }).questionLogId;
+      const answer = this.answerFor(questionLogId);
+      await this.ctx.stores.questionLogs.updateAnswer(questionLogId, { answer, chatProvider: "codex" });
+      return super.complete(job.id, { result: answer, executor: "watcher" });
+    }
+    return job;
+  }
+}
+
+test("verifyGapClosure reads the answer from the production { result, executor } completion envelope", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  ctx.jobs = new EnvelopedAnsweringJobBroker(ctx, () => ({
+    answer: "Set the config flag.",
+    confidence: "high",
+    citations: [citation("configure-x.md")]
+  }));
+
+  const result = await proposals.verifyGapClosure(ctx, merged);
+
+  // Before the envelope unwrap, this scored still_open in production: the raw
+  // safeParse failed on the envelope, answer stayed undefined, and every
+  // verification re-ask falsely reopened its gap.
+  assert.equal(result.closureStatus, "verified_closed");
+  assert.equal(result.perQuestion[0]?.verdict, "closed");
+});
+
 test("verifyGapClosure reopens with a note when the re-ask does not close the gap", async () => {
   const ctx = makeTestContext();
   const { log, merged } = await mergedProposalWithGap(ctx);
@@ -252,6 +294,43 @@ test("verifyGapClosure reopens with a note when the re-ask does not close the ga
     true,
     "a reopened gap remains a candidate for re-drafting"
   );
+});
+
+test("verifyGapClosure escalates to needs_attention (rather than silently reopening) when a triggering question log cannot be found", async () => {
+  // Regression for issue #160 item 8: a triggering question log gone missing
+  // used to record a single still_open verification row and otherwise skip
+  // recordVerificationGap, the retry cap, and needs_attention — freezing the
+  // proposal at closureStatus "reopened" with no gap filed and no escalation
+  // for a human to notice. It must now escalate instead.
+  const ctx = makeTestContext();
+  const proposal = await ctx.stores.proposals.create({
+    title: "Configure X",
+    targetPath: "configure-x.md",
+    markdown: "# Configure X\nbody",
+    rationale: "r",
+    evidence: [],
+    gapSummary: "How to configure X",
+    triggeringQuestionIds: ["missing-question-log-id"]
+  });
+  await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+  const merged = await ctx.stores.proposals.get(proposal.id);
+  assert.ok(merged);
+  // A broker that fails the test if verifyGapClosure tries to re-ask anything —
+  // there is nothing to re-ask when the triggering log itself is missing.
+  ctx.jobs = new AnsweringJobBroker(ctx, () => {
+    throw new Error("verifyGapClosure must not re-ask a question whose log cannot be found");
+  });
+
+  const result = await proposals.verifyGapClosure(ctx, merged!);
+
+  assert.equal(result.perQuestion[0]?.verdict, "still_open");
+  assert.equal(
+    result.closureStatus,
+    "needs_attention",
+    "a missing triggering question log escalates instead of leaving the proposal silently reopened"
+  );
+  const reloaded = await ctx.stores.proposals.get(merged!.id);
+  assert.equal(reloaded?.closureStatus, "needs_attention");
 });
 
 test("verifyGapClosure files a reopen under the proposal-addressed gap, not the question's oldest open gap", async () => {

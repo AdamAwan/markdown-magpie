@@ -1,9 +1,8 @@
-import type { AnswerQuestionJobInput } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { HttpError } from "../../http/errors.js";
 import { assertAiCapacity } from "../../platform/ai-capacity.js";
-import type { AiProviderName } from "../../platform/providers.js";
+import { buildAnswerQuestionInput, recordAnswerQuestionLog } from "../../platform/answer-question.js";
 
 interface AskResult {
   questionId: string;
@@ -28,29 +27,8 @@ export async function ask(ctx: AppContext, question: string, flow?: string): Pro
   // Enforce the global in-flight AI-job ceiling BEFORE recording the question log
   // below, so a rejection at capacity never leaves an orphaned log with no job.
   await assertAiCapacity(ctx);
-  // Flow and retrieved sections are unknown at enqueue time (the watcher decides
-  // them), so the log is recorded without them; completion fills them in.
-  const log = await ctx.stores.questionLogs.record({
-    question,
-    chatProvider: ctx.config.get().aiProvider,
-    retrievedSectionIds: []
-  });
-
-  const flows = ctx.knowledgeConfig.flows.map((flow) => ({
-    id: flow.id,
-    name: flow.name,
-    ...(flow.persona ? { persona: flow.persona } : {})
-  }));
-
-  const input: AnswerQuestionJobInput & { provider: AiProviderName } = {
-    questionLogId: log.id,
-    question,
-    flows,
-    ...(requestedFlowId ? { requestedFlowId } : {}),
-    provider: ctx.config.get().aiProvider,
-    expectedOutput: "answer_result"
-  };
-
+  const log = await recordAnswerQuestionLog(ctx, question);
+  const input = buildAnswerQuestionInput(ctx, { questionLogId: log.id, question, requestedFlowId });
   const job = await ctx.jobs.create("answer_question", input);
   return { questionId: log.id, job };
 }

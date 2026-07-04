@@ -215,9 +215,12 @@ describe("MaintenanceRunner", () => {
       }
     });
     const runner = new MaintenanceRunner(api);
+    // Input parsing now goes through verifyGapClosureInputSchema.parse, so a
+    // missing proposalId rejects with a ZodError naming the offending field
+    // rather than a hand-rolled message.
     await assert.rejects(
       () => runner.run(job("verify_gap_closure", {}), new AbortController().signal),
-      /requires proposalId/
+      /proposalId/
     );
   });
 
