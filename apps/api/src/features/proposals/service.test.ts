@@ -532,12 +532,12 @@ test("verifyGapClosure flags needs_attention after the retry cap and stops re-dr
 
   assert.equal(result.closureStatus, "needs_attention");
   const reloaded = await ctx.stores.questionLogs.get(log.id);
-  assert.ok((reloaded?.gaps ?? []).some((gap) => gap.source === "needs_attention"), "gap flagged needs_attention");
+  assert.ok((reloaded?.gaps ?? []).some((gap) => gap.parkedAt), "gap is parked");
   const after = await ctx.stores.questionLogs.listGapCandidates(50);
   assert.equal(
     after.some((candidate) => candidate.summary === "How to configure X"),
     false,
-    "a needs_attention gap awaits a human and does not auto-redraft"
+    "a parked gap awaits a human and does not auto-redraft"
   );
 });
 
@@ -742,7 +742,7 @@ test("verifyGapClosure does not let a same-proposal retry inflate the retry cap"
   assert.equal(retried.closureStatus, "reopened", "a retry of the same proposal must not trip the cap by itself");
   const reloaded = await ctx.stores.questionLogs.get(log.id);
   assert.equal(
-    (reloaded?.gaps ?? []).some((gap) => gap.source === "needs_attention"),
+    (reloaded?.gaps ?? []).some((gap) => gap.parkedAt),
     false,
     "the gap is not parked after only one distinct failing proposal"
   );
@@ -787,10 +787,10 @@ test("verifyGapClosure resets the retry budget once the parked gap is resolved",
 
   const second = await proposals.verifyGapClosure(ctx, mergedSecond);
 
-  assert.equal(second.closureStatus, "reopened", "the fresh gap gets a new retry budget instead of instant needs_attention");
+  assert.equal(second.closureStatus, "reopened", "the fresh gap gets a new retry budget instead of instant parking");
   const reloaded = await ctx.stores.questionLogs.get(log.id);
   assert.equal(
-    (reloaded?.gaps ?? []).some((gap) => gap.source === "needs_attention"),
+    (reloaded?.gaps ?? []).some((gap) => gap.parkedAt),
     false,
     "the question is not permanently parked after its earlier gap was resolved"
   );
@@ -906,7 +906,7 @@ test("verifyGapClosure throws (not still_open) when a re-ask never completes, re
   assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id), 0, "no still_open verdict is recorded");
   const q = await ctx.stores.questionLogs.get(log.id);
   assert.equal(
-    (q?.gaps ?? []).some((gap) => gap.source === "verification" || gap.source === "needs_attention"),
+    (q?.gaps ?? []).some((gap) => gap.source === "verification"),
     false,
     "no verification gap is filed for an infrastructure failure"
   );
@@ -1021,8 +1021,8 @@ test("draftFromGaps threads a reopened gap's verification note into resubmission
   // with the detail of why the merged doc still did not answer the question.
   await ctx.stores.questionLogs.recordVerificationGap(log.id, {
     summary: "How to configure X",
-    source: "verification",
-    note: "merged configure-x.md; re-ask still low; no worked example of the toggle"
+    note: "merged configure-x.md; re-ask still low; no worked example of the toggle",
+    parked: false
   });
 
   const outcome = await proposals.draftFromGaps(ctx, ["How to configure X"]);

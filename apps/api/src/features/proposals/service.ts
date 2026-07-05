@@ -363,8 +363,8 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
       const summary = await reopenSummaryFor(ctx, outcome.original, proposal, questionId);
       await ctx.stores.questionLogs.recordVerificationGap(questionId, {
         summary,
-        source: capped ? "needs_attention" : "verification",
-        note: outcome.detail
+        note: outcome.detail,
+        parked: capped
       });
     }
   }
@@ -523,20 +523,20 @@ function resolveVerificationFlowId(
 // True when every gap this proposal set out to close FOR THIS QUESTION is already
 // resolved or dismissed — i.e. there is no open work left to verify. Keys on the
 // proposal's recorded summaries (splitGapSummaries) the same way reopenSummaryFor's
-// fallback does, and ignores the `needs_attention` pseudo-source (a parked
-// escalation, not a gap the merge was meant to close). Returns false when the
-// proposal's summaries match none of this question's gaps: there is nothing to
-// reason about, so the caller re-asks as before rather than silently claiming
-// closure. Lets verifyGapClosure skip a wasted re-ask (and avoid re-filing an open
-// gap over a settled/dismissed one) when the gap has already been settled by
-// another proposal, a reconciler dismissal, or a human.
+// fallback does, and ignores a parked gap (an escalation awaiting a human, not a
+// gap the merge was meant to close). Returns false when the proposal's summaries
+// match none of this question's gaps: there is nothing to reason about, so the
+// caller re-asks as before rather than silently claiming closure. Lets
+// verifyGapClosure skip a wasted re-ask (and avoid re-filing an open gap over a
+// settled/dismissed one) when the gap has already been settled by another
+// proposal, a reconciler dismissal, or a human.
 function addressedGapsAllSettled(
-  original: { gaps?: Array<{ summary: string; source: string; resolvedAt?: string; dismissedAt?: string }> },
+  original: { gaps?: Array<{ summary: string; parkedAt?: string; resolvedAt?: string; dismissedAt?: string }> },
   proposal: Proposal
 ): boolean {
   const proposalSummaries = new Set(splitGapSummaries(proposal.gapSummary));
   const addressed = (original.gaps ?? []).filter(
-    (gap) => gap.source !== "needs_attention" && proposalSummaries.has(gap.summary)
+    (gap) => !gap.parkedAt && proposalSummaries.has(gap.summary)
   );
   return addressed.length > 0 && addressed.every((gap) => gap.resolvedAt || gap.dismissedAt);
 }
@@ -559,7 +559,7 @@ function addressedGapsAllSettled(
 // fallback: the question text.
 async function reopenSummaryFor(
   ctx: AppContext,
-  original: { question: string; gaps?: Array<{ summary: string; source: string; resolvedAt?: string; dismissedAt?: string }> },
+  original: { question: string; gaps?: Array<{ summary: string; parkedAt?: string; resolvedAt?: string; dismissedAt?: string }> },
   proposal: Proposal,
   questionId: string
 ): Promise<string> {
@@ -577,31 +577,32 @@ async function reopenSummaryFor(
     (gap) =>
       !gap.resolvedAt &&
       !gap.dismissedAt &&
-      gap.source !== "needs_attention" &&
+      !gap.parkedAt &&
       proposalSummaries.has(gap.summary)
   );
   return addressedGap?.summary ?? original.question;
 }
 
 // The retry-cap reset boundary for this question, if any: recordVerificationGap
-// keeps at most one LIVE 'verification'/'needs_attention' gap row per question,
-// updating it in place on every reopen — but resolved/dismissed rows are
-// retained (never deleted), so a question can carry several such rows over its
-// lifetime, one per past lineage. The most recent one (gaps are ordered
-// chronologically, so the last match) reflects this question's current state:
-// if it is still live, this is an ongoing streak (no reset — full history still
-// counts); if it is resolved or dismissed, that is exactly the prior
-// closure-retry lineage having ended (a later proposal verified closure, or a
-// human dismissed it) before a new gap arose on the same question, and its
-// timestamp bounds countPriorStillOpen so that old lineage's failures don't
-// count against this new one. Returns undefined when there is no such row
-// (first-ever failure) or the most recent one is still open.
+// keeps at most one LIVE 'verification' gap row per question, updating it in place
+// on every reopen — but resolved/dismissed rows are retained (never deleted), so a
+// question can carry several such rows over its lifetime, one per past lineage.
+//
+// Key on the most recent *settled* (resolved OR dismissed) verification row, NOT
+// merely on "is the most recent row settled". A human retry settles the parked row
+// AND re-files a fresh live one (retryParkedGap, #158), so right after a retry the
+// most-recent row is live again — keying on "most recent row settled" would then
+// return undefined and let countPriorStillOpen sum the whole all-time history,
+// insta-re-parking on the next failure. Because at most one live row exists per
+// lineage, the most recent SETTLED row is always the previous lineage's end, so its
+// timestamp correctly bounds countPriorStillOpen to the current lineage. Returns
+// undefined only when no settled verification row exists (first-ever lineage).
 function verificationLineageResetSince(original: {
   gaps?: Array<{ source: string; resolvedAt?: string; dismissedAt?: string }>;
 }): string | undefined {
   const lineageGap = [...(original.gaps ?? [])]
     .reverse()
-    .find((gap) => gap.source === "verification" || gap.source === "needs_attention");
+    .find((gap) => gap.source === "verification" && (gap.resolvedAt || gap.dismissedAt));
   const resetTimestamps = [lineageGap?.resolvedAt, lineageGap?.dismissedAt].filter(
     (value): value is string => Boolean(value)
   );
@@ -1028,7 +1029,7 @@ export async function draftFromGaps(
               gap.note &&
               !gap.resolvedAt &&
               !gap.dismissedAt &&
-              (gap.source === "verification" || gap.source === "needs_attention") &&
+              gap.source === "verification" &&
               gapSummarySet.has(gap.summary)
           )
           .map((gap) => gap.note as string)

@@ -75,7 +75,7 @@ export interface QuestionLogStore {
   // failure, or the prior lineage was resolved/dismissed).
   recordVerificationGap(
     id: string,
-    gap: { summary: string; source: "verification" | "needs_attention"; note: string }
+    gap: { summary: string; note: string; parked: boolean }
   ): Promise<QuestionLog | undefined>;
   // Soft-resolves the gaps closed by a merged proposal: the matching rows are
   // retained for audit but stop surfacing as candidates. Already-dismissed rows
@@ -144,6 +144,13 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       }
       // Verification re-ask logs (#154) are synthetic — their gap rows never cluster.
       if (log.purpose === "verification") {
+        continue;
+      }
+      // Exclude EVERY gap of a parked question (question-level, matching candidacy)
+      // so a parked escalation — or its sibling auto row — is never swept into a
+      // cluster where an AI dismissal could discharge it (#158).
+      const parked = (log.gaps ?? []).some((gap) => gap.parkedAt && !gap.resolvedAt && !gap.dismissedAt);
+      if (parked) {
         continue;
       }
       for (const gap of log.gaps ?? []) {
@@ -344,7 +351,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
 
   async recordVerificationGap(
     id: string,
-    gap: { summary: string; source: "verification" | "needs_attention"; note: string }
+    gap: { summary: string; note: string; parked: boolean }
   ): Promise<QuestionLog | undefined> {
     const existing = this.logs.get(id);
     if (!existing) {
@@ -353,16 +360,25 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
 
     const gaps = existing.gaps ?? [];
     const liveIndex = gaps.findIndex(
-      (g) => (g.source === "verification" || g.source === "needs_attention") && !g.resolvedAt && !g.dismissedAt
+      (g) => g.source === "verification" && !g.resolvedAt && !g.dismissedAt
     );
 
-    const verificationGap: QuestionGap = { summary: gap.summary, source: gap.source, note: gap.note };
-    // Update the live verification/needs_attention gap in place (if one
-    // exists) with the latest reopen note; auto/manual/followup gaps are left
-    // untouched. Resolved and dismissed rows are never touched: they stay
-    // retained for audit and are never resurrected. Only when no live gap
-    // exists (none has ever been raised, or the prior one was
-    // resolved/dismissed) is a fresh gap appended alongside that history.
+    // When `parked` (retry cap hit) stamp parkedAt; otherwise preserve any parked
+    // state already on the live row (mirrors the Postgres CASE-preserving update).
+    const prior = liveIndex === -1 ? undefined : gaps[liveIndex];
+    const parkedAt = gap.parked ? new Date().toISOString() : prior?.parkedAt;
+    const parkedReason = gap.parked ? "verification retry cap" : prior?.parkedReason;
+    const verificationGap: QuestionGap = {
+      summary: gap.summary,
+      source: "verification",
+      note: gap.note,
+      ...(parkedAt ? { parkedAt, ...(parkedReason ? { parkedReason } : {}) } : {})
+    };
+    // Update the live 'verification' gap in place (if one exists) with the latest
+    // reopen note; auto/manual/followup gaps are left untouched. Resolved and
+    // dismissed rows are never touched: they stay retained for audit and are never
+    // resurrected. Only when no live gap exists (none has ever been raised, or the
+    // prior one was resolved/dismissed) is a fresh gap appended alongside history.
     const updatedGaps =
       liveIndex === -1
         ? [...gaps, verificationGap]
@@ -433,7 +449,11 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       }
       let dismissedHere = 0;
       const gaps = log.gaps.map((gap) => {
-        if (gap.summary !== summary || gap.resolvedAt || gap.dismissedAt) {
+        // In-memory gap ids are `${logId}::${summary}`, so a parked row and its
+        // sibling auto row share an id — never let a reconciler-reachable dismissal
+        // discharge a parked escalation; a human settles those via dismissParkedGap
+        // (#158). (The Postgres store guards the same with `AND parked_at IS NULL`.)
+        if (gap.summary !== summary || gap.resolvedAt || gap.dismissedAt || gap.parkedAt) {
           return gap;
         }
         dismissed += 1;
@@ -481,11 +501,11 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
         continue;
       }
       const active = (log.gaps ?? []).filter((gap) => !gap.resolvedAt && !gap.dismissedAt);
-      // A question flagged 'needs_attention' hit the verification retry cap: it
+      // A question with a live PARKED gap hit the verification retry cap: it
       // awaits a human, so park the WHOLE question (including its sibling
       // auto/manual gap) out of the candidate set. Gaps on OTHER questions
       // sharing the summary are unaffected.
-      if (active.some((gap) => gap.source === "needs_attention")) {
+      if (active.some((gap) => gap.parkedAt)) {
         continue;
       }
       const summaries = new Set(active.map((gap) => gap.summary));

@@ -35,6 +35,13 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         WHERE qg.resolved_at IS NULL
           AND qg.dismissed_at IS NULL
           AND q.purpose = 'live'
+          -- Exclude EVERY gap of a parked question (question-level, matching
+          -- candidacy) so a parked escalation — or its sibling auto row — can
+          -- never be swept into a cluster where an AI dismissal discharges it (#158).
+          AND qg.question_id NOT IN (
+            SELECT question_id FROM question_gaps
+            WHERE parked_at IS NOT NULL AND resolved_at IS NULL AND dismissed_at IS NULL
+          )
           AND qg.summary = $1
           AND coalesce(q.flow_id, '') = coalesce($2, '')
         ORDER BY qg.id ASC
@@ -80,6 +87,11 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         FROM pairs p
         JOIN question_gaps qg ON qg.summary = p.summary AND qg.resolved_at IS NULL AND qg.dismissed_at IS NULL
         JOIN questions q ON q.id = qg.question_id AND coalesce(q.flow_id, '') = p.flow AND q.purpose = 'live'
+        -- Exclude every gap of a parked question, matching gapIdsForSummary/candidacy (#158).
+        WHERE qg.question_id NOT IN (
+          SELECT question_id FROM question_gaps
+          WHERE parked_at IS NOT NULL AND resolved_at IS NULL AND dismissed_at IS NULL
+        )
         ORDER BY qg.id ASC
       `,
       [summaries, flows]
@@ -328,7 +340,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
 
   async recordVerificationGap(
     id: string,
-    gap: { summary: string; source: "verification" | "needs_attention"; note: string }
+    gap: { summary: string; note: string; parked: boolean }
   ): Promise<QuestionLog | undefined> {
     const client = await this.pool.connect();
     try {
@@ -343,27 +355,38 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         return undefined;
       }
 
-      // Update the live verification/needs_attention row in place (if one
-      // exists) with the latest reopen note, so its gap id — and any cluster
-      // membership keyed off that id — survives. auto, manual and followup
-      // gaps are left untouched. Resolved and dismissed rows are never
-      // touched here: they stay retained for audit and are never resurrected.
-      // Only when no live row exists (no verification gap has ever been raised
-      // on this question, or the prior one was resolved/dismissed) is a fresh
-      // row inserted alongside that retained history.
+      // Update the live 'verification' row in place (if one exists) with the
+      // latest reopen note, so its gap id — and any cluster membership keyed off
+      // that id — survives. When `parked` (the retry cap was hit) the row is also
+      // stamped parked_at, escalating the whole question to "awaiting a human"
+      // WITHOUT changing its source. auto, manual and followup gaps are left
+      // untouched. Resolved and dismissed rows are never touched here: they stay
+      // retained for audit and are never resurrected. Only when no live row
+      // exists (no verification gap yet, or the prior one was resolved/dismissed)
+      // is a fresh row inserted alongside that retained history.
       const updatedRow = await client.query(
         `
           UPDATE question_gaps
-          SET summary = $2, source = $3, note = $4
+          SET summary = $2, source = 'verification', note = $3,
+              parked_at = CASE WHEN $4 THEN now() ELSE parked_at END,
+              parked_reason = CASE WHEN $4 THEN 'verification retry cap' ELSE parked_reason END
           WHERE question_id = $1
-            AND source IN ('verification', 'needs_attention')
+            AND source = 'verification'
             AND resolved_at IS NULL
             AND dismissed_at IS NULL
         `,
-        [id, gap.summary, gap.source, gap.note]
+        [id, gap.summary, gap.note, gap.parked]
       );
       if ((updatedRow.rowCount ?? 0) === 0) {
-        await insertGapRows(client, id, [{ summary: gap.summary, source: gap.source, note: gap.note }]);
+        await client.query(
+          `
+            INSERT INTO question_gaps (question_id, summary, source, note, parked_at, parked_reason)
+            VALUES ($1, $2, 'verification', $3,
+                    CASE WHEN $4 THEN now() END,
+                    CASE WHEN $4 THEN 'verification retry cap' END)
+          `,
+          [id, gap.summary, gap.note, gap.parked]
+        );
       }
       await bumpGapCatalog(client, result.rows[0].flow_id);
       await client.query("COMMIT");
@@ -440,9 +463,12 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       resolved_by_proposal_id: string | null;
       dismissed_at: Date | null;
       dismissed_reason: string | null;
+      parked_at: Date | null;
+      parked_reason: string | null;
     }>(
       `
-        SELECT question_id, summary, source, note, resolved_at, resolved_by_proposal_id, dismissed_at, dismissed_reason
+        SELECT question_id, summary, source, note, resolved_at, resolved_by_proposal_id,
+               dismissed_at, dismissed_reason, parked_at, parked_reason
         FROM question_gaps
         WHERE question_id = ANY($1)
         ORDER BY created_at ASC, id ASC
@@ -459,7 +485,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         resolvedAt: row.resolved_at?.toISOString(),
         resolvedByProposalId: row.resolved_by_proposal_id ?? undefined,
         dismissedAt: row.dismissed_at?.toISOString(),
-        dismissedReason: row.dismissed_reason ?? undefined
+        dismissedReason: row.dismissed_reason ?? undefined,
+        parkedAt: row.parked_at?.toISOString(),
+        parkedReason: row.parked_reason ?? undefined
       });
       grouped.set(row.question_id, existing);
     }
@@ -526,6 +554,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           WHERE id = ANY($1::bigint[])
             AND resolved_at IS NULL
             AND dismissed_at IS NULL
+            -- Never let a reconciler-reachable dismissal discharge a parked
+            -- escalation; a human settles those via dismissParkedGap (#158).
+            AND parked_at IS NULL
           RETURNING question_id
         `,
         [gapIds, trimmedReason || null]
@@ -601,14 +632,14 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
             -- Verification re-ask logs (#154) are synthetic; their gap signals are
             -- the merged doc's shortfall, never a fresh candidate.
             AND q.purpose = 'live'
-            -- A question flagged 'needs_attention' hit the verification retry cap:
-            -- it awaits a human, so park the WHOLE question (all its gap rows,
+            -- A question with a live PARKED gap hit the verification retry cap: it
+            -- awaits a human, so park the WHOLE question (all its gap rows,
             -- including the sibling auto/manual gap) out of the candidate set so
             -- it does not auto-recluster/redraft. Gaps on OTHER questions sharing
             -- the summary are unaffected.
             AND qg.question_id NOT IN (
               SELECT question_id FROM question_gaps
-              WHERE source = 'needs_attention' AND resolved_at IS NULL AND dismissed_at IS NULL
+              WHERE parked_at IS NOT NULL AND resolved_at IS NULL AND dismissed_at IS NULL
             )
         ) AS distinct_gaps
         GROUP BY summary, flow_id

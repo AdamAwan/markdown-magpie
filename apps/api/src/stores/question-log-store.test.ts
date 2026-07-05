@@ -349,11 +349,11 @@ test("resolveGaps is idempotent and only counts newly resolved gaps", async () =
 });
 
 // Regression tests for issue #151: recordVerificationGap used to unconditionally
-// replace any prior verification/needs_attention gap, destroying resolved and
-// dismissed rows (and their audit trail) and reassigning a fresh identity to the
-// reopened gap. It must now update the live row in place (preserving its
-// identity) and leave resolved/dismissed rows untouched, inserting a fresh row
-// only when no live row exists.
+// replace any prior verification gap, destroying resolved and dismissed rows (and
+// their audit trail) and reassigning a fresh identity to the reopened gap. It must
+// now update the live row in place (preserving its identity) and leave
+// resolved/dismissed rows untouched, inserting a fresh row only when no live row
+// exists. Parking (retry cap hit) is the `parked` flag (issue #158), not a source.
 
 test("recordVerificationGap inserts a fresh gap when none has been raised yet", async () => {
   const store = new InMemoryQuestionLogStore();
@@ -361,8 +361,8 @@ test("recordVerificationGap inserts a fresh gap when none has been raised yet", 
 
   const updated = await store.recordVerificationGap(log.id, {
     summary: "How to configure X",
-    source: "verification",
-    note: "merged docs/x.md; re-ask still low"
+    note: "merged docs/x.md; re-ask still low",
+    parked: false
   });
 
   assert.deepEqual(updated?.gaps, [
@@ -376,26 +376,47 @@ test("recordVerificationGap updates the live gap in place, preserving its id, on
 
   await store.recordVerificationGap(log.id, {
     summary: "How to configure X",
-    source: "verification",
-    note: "first failure"
+    note: "first failure",
+    parked: false
   });
   const idsBefore = await store.gapIdsForSummary("How to configure X");
   assert.equal(idsBefore.length, 1);
 
-  // A second failure on the same still-open lineage escalates to needs_attention
-  // (matching the real retry-cap flow) but keeps the same summary, so the gap's
-  // identity must be preserved rather than replaced.
+  // A second failure on the same still-open lineage (before the cap) keeps the
+  // same summary, so the gap's identity must be preserved rather than replaced.
   const updated = await store.recordVerificationGap(log.id, {
     summary: "How to configure X",
-    source: "needs_attention",
-    note: "second failure; retry cap hit"
+    note: "second failure",
+    parked: false
   });
 
   const idsAfter = await store.gapIdsForSummary("How to configure X");
   assert.deepEqual(idsAfter, idsBefore, "the gap keeps the same id across the in-place update");
+  assert.equal(updated?.gaps?.length, 1, "updated in place, not appended");
   assert.deepEqual(updated?.gaps, [
-    { summary: "How to configure X", source: "needs_attention", note: "second failure; retry cap hit" }
+    { summary: "How to configure X", source: "verification", note: "second failure" }
   ]);
+});
+
+test("recordVerificationGap parks the whole question in place when the retry cap is hit", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({ question: "How do I configure X?", chatProvider: "codex", retrievedSectionIds: [] });
+
+  await store.recordVerificationGap(log.id, { summary: "How to configure X", note: "first failure", parked: false });
+  assert.equal((await store.gapIdsForSummary("How to configure X")).length, 1, "a candidate before the cap");
+
+  const parked = await store.recordVerificationGap(log.id, {
+    summary: "How to configure X",
+    note: "retry cap hit",
+    parked: true
+  });
+
+  const gap = parked?.gaps?.[0];
+  assert.equal(parked?.gaps?.length, 1, "parked in place, not appended");
+  assert.equal(gap?.source, "verification", "parking is a state, not a source change");
+  assert.ok(gap?.parkedAt, "parkedAt is stamped");
+  assert.equal((await store.gapIdsForSummary("How to configure X")).length, 0, "a parked question is excluded from clustering");
+  assert.equal((await store.listGapCandidates(50)).length, 0, "and from candidacy");
 });
 
 test("recordVerificationGap retains a resolved gap and inserts a fresh row for a later failure", async () => {
@@ -404,8 +425,8 @@ test("recordVerificationGap retains a resolved gap and inserts a fresh row for a
 
   await store.recordVerificationGap(log.id, {
     summary: "How to configure X",
-    source: "verification",
-    note: "first failure"
+    note: "first failure",
+    parked: false
   });
   const resolved = await store.resolveGaps([log.id], ["How to configure X"], "proposal-1");
   assert.equal(resolved, 1);
@@ -413,8 +434,8 @@ test("recordVerificationGap retains a resolved gap and inserts a fresh row for a
   // A brand-new proposal later fails verification on the same question.
   const updated = await store.recordVerificationGap(log.id, {
     summary: "How to configure X, part 2",
-    source: "verification",
-    note: "second failure"
+    note: "second failure",
+    parked: false
   });
 
   assert.equal(updated?.gaps?.length, 2, "the resolved gap is retained alongside the fresh one");
@@ -432,8 +453,8 @@ test("recordVerificationGap retains a dismissed gap and inserts a fresh row for 
 
   await store.recordVerificationGap(log.id, {
     summary: "How to configure X",
-    source: "verification",
-    note: "first failure"
+    note: "first failure",
+    parked: false
   });
   const gapIds = await store.gapIdsForSummary("How to configure X");
   const dismissed = await store.dismissGaps(gapIds, "unrelated to the knowledge base");
@@ -442,8 +463,8 @@ test("recordVerificationGap retains a dismissed gap and inserts a fresh row for 
   // A new failure on the same question must not resurrect the dismissed gap.
   const updated = await store.recordVerificationGap(log.id, {
     summary: "How to configure X",
-    source: "verification",
-    note: "second failure"
+    note: "second failure",
+    parked: false
   });
 
   assert.equal(updated?.gaps?.length, 2, "the dismissed gap is retained alongside the fresh one");

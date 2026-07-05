@@ -169,11 +169,13 @@ export interface KnowledgeGapSignal {
 }
 
 // "auto"/"manual"/"followup" are the sources a live answer can raise (the model
-// or an admin). "verification"/"needs_attention" are raised server-side after a
-// merged proposal fails gap-closure verification: the triggering question was
-// re-asked and the merged doc still did not answer it. These never come from a
-// provider — the answer_question output schema stays narrow to the first three.
-export type QuestionGapSource = "auto" | "manual" | "followup" | "verification" | "needs_attention";
+// or an admin). "verification" is raised server-side after a merged proposal
+// fails gap-closure verification: the triggering question was re-asked and the
+// merged doc still did not answer it. It never comes from a provider — the
+// answer_question output schema stays narrow to the first three. "Parked,
+// awaiting a human" (repeated verification failures past the retry cap) is NOT a
+// source — it is the `parkedAt` state on a verification gap (see QuestionGap).
+export type QuestionGapSource = "auto" | "manual" | "followup" | "verification";
 
 export interface QuestionGap {
   summary: string;
@@ -191,6 +193,13 @@ export interface QuestionGap {
   // gap is retained for audit but never surfaces as a candidate or clusters again.
   dismissedAt?: string;
   dismissedReason?: string;
+  // Set when a verification gap fails gap-closure past the retry cap: the whole
+  // question is "parked", awaiting a human. First-class escalation STATE (not a
+  // source): while a live parked row exists (parkedAt set, not resolved/dismissed)
+  // the whole question is excluded from gap candidacy and clustering. A human
+  // retry/dismiss settles it (see the parked-gap human workflow, issue #158).
+  parkedAt?: string;
+  parkedReason?: string;
 }
 
 export interface QuestionLog {

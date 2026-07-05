@@ -346,8 +346,8 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const summary = `still weak ${uniqueId}`;
     const updated = await store.recordVerificationGap(recorded.id, {
       summary,
-      source: "verification",
-      note: "merged docs/guide.md; re-ask still low; missing concrete example"
+      note: "merged docs/guide.md; re-ask still low; missing concrete example",
+      parked: false
     });
     const vGap = (updated?.gaps ?? []).find((gap) => gap.summary === summary);
     assert.equal(vGap?.source, "verification");
@@ -358,10 +358,10 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.ok(candidates.some((candidate) => candidate.summary === summary), "verification gap surfaces as a candidate");
   });
 
-  it("a needs_attention gap is retained but excluded from candidates", async () => {
+  it("a parked gap (#158) is retained with parkedAt but excludes its whole question from candidates", async () => {
     const uniqueId = randomUUID();
     const recorded = await store.record({
-      question: `test-needs-attention-${uniqueId}`,
+      question: `test-parked-${uniqueId}`,
       chatProvider: "codex",
       retrievedSectionIds: []
     });
@@ -369,24 +369,29 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const summary = `capped ${uniqueId}`;
     await store.recordVerificationGap(recorded.id, {
       summary,
-      source: "needs_attention",
-      note: "two failed verifications; awaiting a human"
+      note: "two failed verifications; awaiting a human",
+      parked: true
     });
 
     const fetched = await store.get(recorded.id);
-    assert.ok((fetched?.gaps ?? []).some((gap) => gap.summary === summary && gap.source === "needs_attention"), "retained for audit");
+    const parkedGaps = (fetched?.gaps ?? []).filter((gap) => gap.summary === summary);
+    assert.equal(parkedGaps.length, 1, "parked in place, a single row");
+    assert.equal(parkedGaps[0]?.source, "verification", "parking is a state, not a source change");
+    assert.ok(parkedGaps[0]?.parkedAt, "parkedAt is stamped");
 
     const candidates = await store.listGapCandidates(1000);
-    assert.ok(!candidates.some((candidate) => candidate.summary === summary), "needs_attention gap does not auto-redraft");
+    assert.ok(!candidates.some((candidate) => candidate.summary === summary), "a parked gap does not auto-redraft");
+    // Clustering also excludes the parked question.
+    assert.equal((await store.gapIdsForSummary(summary)).length, 0, "excluded from clustering");
   });
 
   // Regression tests for issue #151: recordVerificationGap used to
-  // unconditionally DELETE any prior verification/needs_attention row before
-  // inserting the reopened one, destroying resolved/dismissed audit history
-  // and reassigning a fresh row id (orphaning any cluster membership keyed off
-  // the old id). It must instead update the live row in place — preserving its
-  // id — and leave resolved/dismissed rows untouched, inserting a fresh row
-  // only when no live row exists.
+  // unconditionally DELETE any prior verification row before inserting the
+  // reopened one, destroying resolved/dismissed audit history and reassigning a
+  // fresh row id (orphaning any cluster membership keyed off the old id). It must
+  // instead update the live row in place — preserving its id — and leave
+  // resolved/dismissed rows untouched, inserting a fresh row only when no live
+  // row exists.
 
   it("recordVerificationGap updates the live gap in place, preserving its id, on a repeat reopen", async () => {
     const uniqueId = randomUUID();
@@ -399,27 +404,26 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const summary = `still weak ${uniqueId}`;
     await store.recordVerificationGap(recorded.id, {
       summary,
-      source: "verification",
-      note: "first failure"
+      note: "first failure",
+      parked: false
     });
     const idsBefore = await store.gapIdsForSummary(summary);
     assert.equal(idsBefore.length, 1);
 
-    // A second failure on the same still-open lineage escalates to
-    // needs_attention (matching the real retry-cap flow) but keeps the same
-    // summary, so the gap row's id must be preserved rather than replaced.
+    // A second failure on the same still-open lineage (before the cap) keeps the
+    // same summary, so the gap row's id must be preserved rather than replaced.
     const updated = await store.recordVerificationGap(recorded.id, {
       summary,
-      source: "needs_attention",
-      note: "second failure; retry cap hit"
+      note: "second failure",
+      parked: false
     });
 
     const idsAfter = await store.gapIdsForSummary(summary);
     assert.deepEqual(idsAfter, idsBefore, "the gap row keeps the same id across the in-place update");
     const gaps = (updated?.gaps ?? []).filter((gap) => gap.summary === summary);
     assert.equal(gaps.length, 1);
-    assert.equal(gaps[0]?.source, "needs_attention");
-    assert.equal(gaps[0]?.note, "second failure; retry cap hit");
+    assert.equal(gaps[0]?.source, "verification");
+    assert.equal(gaps[0]?.note, "second failure");
   });
 
   it("recordVerificationGap retains a resolved gap and inserts a fresh row for a later failure", async () => {
@@ -434,8 +438,8 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const secondSummary = `second gap ${uniqueId}`;
     await store.recordVerificationGap(recorded.id, {
       summary: firstSummary,
-      source: "verification",
-      note: "first failure"
+      note: "first failure",
+      parked: false
     });
     const resolved = await store.resolveGaps([recorded.id], [firstSummary], randomUUID());
     assert.equal(resolved, 1);
@@ -443,8 +447,8 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     // A brand-new proposal later fails verification on the same question.
     const updated = await store.recordVerificationGap(recorded.id, {
       summary: secondSummary,
-      source: "verification",
-      note: "second failure"
+      note: "second failure",
+      parked: false
     });
 
     assert.equal((updated?.gaps ?? []).length, 2, "the resolved gap is retained alongside the fresh one");
@@ -466,8 +470,8 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const summary = `flaky gap ${uniqueId}`;
     await store.recordVerificationGap(recorded.id, {
       summary,
-      source: "verification",
-      note: "first failure"
+      note: "first failure",
+      parked: false
     });
     const gapIds = await store.gapIdsForSummary(summary);
     const dismissed = await store.dismissGaps(gapIds, "unrelated to the knowledge base");
@@ -477,8 +481,8 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     // dismissed row.
     const updated = await store.recordVerificationGap(recorded.id, {
       summary,
-      source: "verification",
-      note: "second failure"
+      note: "second failure",
+      parked: false
     });
 
     assert.equal((updated?.gaps ?? []).length, 2, "the dismissed gap is retained alongside the fresh one");
