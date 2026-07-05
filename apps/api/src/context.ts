@@ -14,11 +14,13 @@ import {
   createPatrolStore,
   createSourceCorpusStore,
   createScheduledTaskStore,
+  createInsightsStore,
   createSnapshotStore,
   createSourceSyncStore,
   createWatcherRegistryStore,
   storeBackend
 } from "./platform/stores.js";
+import type { InsightsStore } from "./stores/insights-store.js";
 import { createConfiguredEmbeddingProvider } from "./platform/providers.js";
 import { createDbPool } from "./platform/db-pool.js";
 import type { AppConfig } from "./platform/config.js";
@@ -56,6 +58,7 @@ export interface AppContext {
     prCrosslinks: ReturnType<typeof createPrCrosslinkStore>;
     snapshots: ReturnType<typeof createSnapshotStore>;
     watchers: ReturnType<typeof createWatcherRegistryStore>;
+    insights: InsightsStore;
     jobAcceptances: JobAcceptanceStore;
     rateLimit: RateLimitStore;
   };
@@ -139,6 +142,7 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
       prCrosslinks: createPrCrosslinkStore(config, pool),
       snapshots: createSnapshotStore(config),
       watchers: createWatcherRegistryStore(config, pool),
+      insights: createInsightsStore(pool),
       jobAcceptances: new PostgresJobAcceptanceStore(pool),
       rateLimit: new PostgresRateLimitStore(pool)
     },

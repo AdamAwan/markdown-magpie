@@ -1277,3 +1277,43 @@ export interface PublishChangesetRequest {
   title: string;
   changes: ChangesetChange[];
 }
+
+// ---------------------------------------------------------------------------
+// Insights / charts
+//
+// Response shapes for the /insights/* aggregation endpoints, consumed by the
+// web console's Insights page. See docs/insights-charts.md for the per-chart
+// operator questions and source tables.
+// ---------------------------------------------------------------------------
+
+// The time-bucket granularity for a time-series insight. Maps 1:1 to Postgres
+// date_trunc units.
+export type InsightsBucketUnit = "day" | "week" | "month";
+
+// One time bucket of the open-gap backlog trend. `openTotal` is the cumulative
+// number of gaps still open at the end of the bucket; the other counts are the
+// transitions that happened within the bucket.
+export interface GapBacklogBucket {
+  bucketStart: string; // ISO timestamp of the bucket's start
+  opened: number;
+  resolved: number;
+  dismissed: number;
+  parked: number;
+  openTotal: number;
+}
+
+// One time bucket of job throughput, split by terminal/active state.
+export interface JobThroughputBucket {
+  bucketStart: string;
+  completed: number;
+  failed: number;
+  active: number;
+  retry: number;
+}
+
+// One stage of the gap-to-merge funnel, in pipeline order.
+export interface FunnelStage {
+  key: "questions" | "gaps" | "clustered" | "proposals" | "prs" | "merged" | "verified";
+  label: string;
+  count: number;
+}
