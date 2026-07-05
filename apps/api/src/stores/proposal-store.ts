@@ -26,6 +26,10 @@ export interface ProposalListOptions {
 export interface ProposalStore {
   create(input: ProposalInput): Promise<Proposal>;
   list(limit: number, options?: ProposalListOptions): Promise<Proposal[]>;
+  // Proposals with a given closure status, most recent first. Used by the parked
+  // surface to find `needs_attention` proposals whose triggering question log was
+  // deleted (the missing-log escalation, which files no parked gap row).
+  listByClosureStatus(closureStatus: NonNullable<Proposal["closureStatus"]>, limit: number): Promise<Proposal[]>;
   get(id: string): Promise<Proposal | undefined>;
   getByJobId(jobId: string): Promise<Proposal | undefined>;
   // The proposal linked to a gap cluster, if any. Lets the reconciler look up one
@@ -85,6 +89,16 @@ export class InMemoryProposalStore implements ProposalStore {
           ? proposal.status === options.status
           : !TERMINAL_PROPOSAL_STATUSES.includes(proposal.status)
       )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, limit);
+  }
+
+  async listByClosureStatus(
+    closureStatus: NonNullable<Proposal["closureStatus"]>,
+    limit: number
+  ): Promise<Proposal[]> {
+    return [...this.proposals.values()]
+      .filter((proposal) => proposal.closureStatus === closureStatus)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, limit);
   }

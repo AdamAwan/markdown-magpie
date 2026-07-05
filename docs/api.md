@@ -197,6 +197,29 @@ Lists question logs (newest first). `limit` defaults to `50`.
 { "questions": [ QuestionLog, ... ] }
 ```
 
+### `GET /api/questions/parked?limit=<n>`
+
+Lists questions **parked awaiting a human** — their gap-closure verification failed
+past the retry cap, so they are frozen from auto-redrafting (see
+[question-logging.md](./question-logging.md)). `limit` defaults to `50`. Registered
+before `/:id`, so `parked` is never read as a question id.
+
+```json
+{
+  "questions": [
+    { "questionId": "...", "question": "...", "flowId": "...", "summary": "...", "note": "why the merge still fell short", "parkedAt": "..." }
+  ],
+  "proposals": [
+    { "proposalId": "...", "title": "...", "reason": "triggering_question_deleted" }
+  ]
+}
+```
+
+`questions` are the parked questions an operator can act on (retry / dismiss below).
+`proposals` are the edge case where a merged proposal parked (`closure_status =
+needs_attention`) but its triggering question log was deleted, so there is no parked
+question to act on — surfaced read-only so the escalation is not invisible.
+
 ### `GET /api/questions/:id`
 
 - `404 question_not_found`.
@@ -230,6 +253,23 @@ Manually flags a question as a knowledge gap the automatic detection missed. The
 ### `DELETE /api/questions/:id/gap`
 
 Clears the manual knowledge-gap flag. Any automatically-detected `gap_summary` is left intact, so un-flagging never removes a gap the system found on its own.
+
+- `404 question_not_found`.
+- `200` — `{ "question": QuestionLog }`.
+
+### `POST /api/questions/:id/gap/retry`
+
+Human **retry** on a parked question: re-admits it to the draft pipeline with a fresh
+retry budget (ends the failed verification lineage; re-files the gap with its note when
+the underlying gap is gone). No-op (still `200`) if the question exists but is not parked.
+
+- `404 question_not_found`.
+- `200` — `{ "question": QuestionLog }`.
+
+### `POST /api/questions/:id/gap/dismiss`
+
+Human **dismiss** on a parked question: abandons the topic by dismissing every live gap
+for the question. No-op (still `200`) if the question exists but is not parked.
 
 - `404 question_not_found`.
 - `200` — `{ "question": QuestionLog }`.

@@ -40,6 +40,38 @@ export async function dismissParkedGap(ctx: AppContext, questionId: string): Pro
   return ctx.stores.questionLogs.dismissParkedGap(questionId);
 }
 
-export async function listParkedQuestions(ctx: AppContext, limit: number): Promise<ParkedQuestion[]> {
-  return ctx.stores.questionLogs.listParkedQuestions(limit);
+// A proposal parked with `closure_status = needs_attention` but no parked gap
+// row: its triggering question log was deleted before verification, so the
+// escalation would otherwise be invisible (#158 M1). Read-only on the surface.
+export interface ParkedProposal {
+  proposalId: string;
+  title: string;
+  reason: "triggering_question_deleted";
+}
+
+export interface ParkedView {
+  questions: ParkedQuestion[];
+  proposals: ParkedProposal[];
+}
+
+export async function listParked(ctx: AppContext, limit: number): Promise<ParkedView> {
+  const questions = await ctx.stores.questionLogs.listParkedQuestions(limit);
+  // The missing-log escalation: a needs_attention proposal whose triggering
+  // question logs are ALL gone files no parked gap, so surface it here (with a
+  // distinct reason) rather than leaving the badge deep-link empty. A proposal
+  // whose triggering questions still exist produced (or produced-then-settled) a
+  // real parked question and is not re-surfaced at the proposal level.
+  const needsAttention = await ctx.stores.proposals.listByClosureStatus("needs_attention", limit);
+  const proposals: ParkedProposal[] = [];
+  for (const proposal of needsAttention) {
+    const triggeringIds = proposal.triggeringQuestionIds ?? [];
+    if (triggeringIds.length === 0) {
+      continue;
+    }
+    const logs = await Promise.all(triggeringIds.map((id) => ctx.stores.questionLogs.get(id)));
+    if (logs.every((log) => !log)) {
+      proposals.push({ proposalId: proposal.id, title: proposal.title, reason: "triggering_question_deleted" });
+    }
+  }
+  return { questions, proposals };
 }
