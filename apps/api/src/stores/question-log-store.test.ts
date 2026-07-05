@@ -62,6 +62,33 @@ test("record stores one gap per detected gap for a multi-topic question", async 
   assert.equal(log.manualGap, false);
 });
 
+test("a verification re-ask log (#154) keeps its answer but ingests no gaps and never becomes a candidate", async () => {
+  const store = new InMemoryQuestionLogStore();
+  // A live question with the same gap, so there IS a real candidate to compare against.
+  const live = await store.record({ question: "vaccines?", chatProvider: "codex", answer: lowGapAnswer, retrievedSectionIds: [] });
+  // The synthetic re-ask log: recorded with no answer, purpose 'verification'.
+  const reask = await store.record({ question: "vaccines?", chatProvider: "codex", retrievedSectionIds: [], purpose: "verification" });
+
+  // Completion feeds it exactly the answer a still_open verdict produces — a forced
+  // low-confidence answer WITH gap signals. Those must not be ingested.
+  const completed = await store.updateAnswer(reask.id, { answer: lowGapAnswer });
+
+  assert.equal(completed?.purpose, "verification");
+  assert.deepEqual(completed?.gaps, [], "verification re-ask ingests no gap rows");
+  assert.equal(completed?.answer?.answer, lowGapAnswer.answer, "but its answer is still recorded");
+
+  const candidates = await store.listGapCandidates(50);
+  assert.equal(candidates.length, 1, "only the live question's gap is a candidate");
+  assert.deepEqual(candidates[0]?.questionIds, [live.id], "the re-ask log is not in the candidate");
+
+  const gapIds = await store.gapIdsForSummary(lowGapAnswer.gaps![0]!.summary);
+  assert.equal(gapIds.length, 1, "clustering sees only the live gap, not the re-ask");
+
+  const listed = await store.list(50);
+  assert.ok(!listed.some((log) => log.id === reask.id), "the re-ask log is absent from the questions list");
+  assert.ok(listed.some((log) => log.id === live.id), "the live question is present");
+});
+
 test("recordManualGap preserves auto-detected gaps and adds a manual one", async () => {
   const store = new InMemoryQuestionLogStore();
   const log = await store.record({

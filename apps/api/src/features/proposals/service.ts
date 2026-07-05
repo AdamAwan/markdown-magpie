@@ -439,7 +439,7 @@ async function planQuestion(
 
   // A fresh question log for the re-ask; answer_question completion fills in its
   // answer, confidence and citations against the now-updated index.
-  const reasked = await recordAnswerQuestionLog(ctx, original.question);
+  const reasked = await recordAnswerQuestionLog(ctx, original.question, "verification");
   const requestedFlowId = resolveVerificationFlowId(ctx, proposal, original);
   const input = buildAnswerQuestionInput(ctx, {
     questionLogId: reasked.id,

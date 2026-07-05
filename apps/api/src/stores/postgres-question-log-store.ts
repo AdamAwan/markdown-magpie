@@ -34,6 +34,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         JOIN questions q ON q.id = qg.question_id
         WHERE qg.resolved_at IS NULL
           AND qg.dismissed_at IS NULL
+          AND q.purpose = 'live'
           AND qg.summary = $1
           AND coalesce(q.flow_id, '') = coalesce($2, '')
         ORDER BY qg.id ASC
@@ -78,7 +79,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         SELECT p.summary AS summary, p.flow AS flow, qg.id::text AS id
         FROM pairs p
         JOIN question_gaps qg ON qg.summary = p.summary AND qg.resolved_at IS NULL AND qg.dismissed_at IS NULL
-        JOIN questions q ON q.id = qg.question_id AND coalesce(q.flow_id, '') = p.flow
+        JOIN questions q ON q.id = qg.question_id AND coalesce(q.flow_id, '') = p.flow AND q.purpose = 'live'
         ORDER BY qg.id ASC
       `,
       [summaries, flows]
@@ -140,9 +141,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       await client.query(
         `
           INSERT INTO questions (
-            id, question, confidence, answer, chat_provider, flow_id, metadata
+            id, question, confidence, answer, chat_provider, flow_id, metadata, purpose
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         `,
         [
           id,
@@ -154,7 +155,8 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           JSON.stringify({
             answer: input.answer ?? null,
             retrievedSectionIds: input.retrievedSectionIds
-          })
+          }),
+          input.purpose ?? "live"
         ]
       );
 
@@ -212,9 +214,13 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     // memberships (ON DELETE CASCADE) — and bump the revision, forcing the
     // reconciler to re-run its metered reshape on an unchanged cluster set (#168).
     // When nothing changed, leave the gap rows (and their memberships) untouched.
+    // A verification re-ask log (#154) records its answer + citations for audit,
+    // but its gap signals are the merged doc's shortfall, not a fresh gap — never
+    // ingest them, or they re-enter candidacy under this synthetic question id and
+    // auto-redraft the parked gap.
     const gapsChanged = !answerGapsUnchanged(existing.gaps ?? [], nextGapRows);
     const flowChanged = (existing.flowId ?? "") !== (flowId ?? "");
-    const replaceGaps = gapsChanged || flowChanged;
+    const replaceGaps = existing.purpose !== "verification" && (gapsChanged || flowChanged);
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -408,8 +414,10 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
   }
 
   async list(limit: number): Promise<QuestionLog[]> {
+    // Only live questions surface in the console list; verification re-asks (#154)
+    // are synthetic audit records, not questions a human asked.
     const result = await this.pool.query<QuestionRow>(
-      "SELECT * FROM questions ORDER BY asked_at DESC LIMIT $1",
+      "SELECT * FROM questions WHERE purpose = 'live' ORDER BY asked_at DESC LIMIT $1",
       [limit]
     );
     const gapsByQuestion = await this.loadGaps(result.rows.map((row) => row.id));
@@ -590,6 +598,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           FROM question_gaps qg
           JOIN questions q ON q.id = qg.question_id
           WHERE qg.resolved_at IS NULL AND qg.dismissed_at IS NULL
+            -- Verification re-ask logs (#154) are synthetic; their gap signals are
+            -- the merged doc's shortfall, never a fresh candidate.
+            AND q.purpose = 'live'
             -- A question flagged 'needs_attention' hit the verification retry cap:
             -- it awaits a human, so park the WHOLE question (all its gap rows,
             -- including the sibling auto/manual gap) out of the candidate set so
@@ -726,6 +737,7 @@ interface QuestionRow {
   manual_gap: boolean;
   manual_gap_at: Date | null;
   asked_at: Date;
+  purpose: "live" | "verification";
 }
 
 interface GapCandidateRow {
@@ -751,6 +763,7 @@ function mapQuestionRow(row: QuestionRow, gaps: QuestionGap[]): QuestionLog {
     feedbackAt: row.feedback_at?.toISOString(),
     gaps,
     manualGap: row.manual_gap,
-    manualGapAt: row.manual_gap_at?.toISOString()
+    manualGapAt: row.manual_gap_at?.toISOString(),
+    purpose: row.purpose
   };
 }

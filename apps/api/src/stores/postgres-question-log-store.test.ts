@@ -58,6 +58,35 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.equal(fetched?.confidence, "low");
   });
 
+  it("a verification re-ask log (#154) keeps its answer but ingests no gaps and is excluded from candidates/list/clustering", async () => {
+    const summary = `verification-parity-${randomUUID()}`;
+    const gapAnswer: AnswerResult = {
+      answer: "still not covered",
+      confidence: "low",
+      citations: [],
+      gaps: [{ summary, question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }]
+    };
+    const live = await store.record({ question: `live-${summary}`, chatProvider: "codex", retrievedSectionIds: [], answer: gapAnswer });
+    const reask = await store.record({ question: `reask-${summary}`, chatProvider: "codex", retrievedSectionIds: [], purpose: "verification" });
+
+    const completed = await store.updateAnswer(reask.id, { answer: gapAnswer });
+    assert.equal(completed?.purpose, "verification");
+    assert.deepEqual(completed?.gaps ?? [], [], "verification re-ask ingests no gap rows");
+    assert.equal(completed?.answer?.answer, "still not covered", "but its answer is recorded");
+
+    const candidates = await store.listGapCandidates(500);
+    const candidate = candidates.find((c) => c.summary === summary);
+    assert.ok(candidate, "the live question's gap is a candidate");
+    assert.deepEqual(candidate?.questionIds, [live.id], "the re-ask log is not in the candidate");
+
+    const gapIds = await store.gapIdsForSummary(summary);
+    assert.equal(gapIds.length, 1, "clustering sees only the live gap");
+
+    const listed = await store.list(500);
+    assert.ok(!listed.some((log) => log.id === reask.id), "the re-ask log is absent from the questions list");
+    assert.ok(listed.some((log) => log.id === live.id), "the live question is present");
+  });
+
   it("stores auto-detected gaps when recording with an answer", async () => {
     const uniqueId = randomUUID();
     const recorded = await store.record({

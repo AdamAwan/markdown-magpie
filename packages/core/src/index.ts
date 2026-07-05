@@ -210,6 +210,13 @@ export interface QuestionLog {
   gaps?: QuestionGap[];
   manualGap?: boolean;
   manualGapAt?: string;
+  // Why this question log exists. "live" (default) is a real user/admin question.
+  // "verification" is a gap-closure re-ask synthesised by verifyGapClosure: it
+  // must NOT re-enter gap candidacy, the questions list, or gap clustering — its
+  // answer's gap signals are the merged doc's shortfall, not a fresh gap, and
+  // treating it as live would auto-redraft the very gap that was just parked
+  // (see docs/question-logging.md, issue #154).
+  purpose?: "live" | "verification";
 }
 
 export interface QuestionLogInput {
@@ -218,6 +225,7 @@ export interface QuestionLogInput {
   answer?: AnswerResult;
   retrievedSectionIds: string[];
   flowId?: string;
+  purpose?: "live" | "verification";
 }
 
 export interface QuestionLogUpdateInput {

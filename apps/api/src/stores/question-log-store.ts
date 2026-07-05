@@ -142,6 +142,10 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       if ((log.flowId ?? "") !== (flowId ?? "")) {
         continue;
       }
+      // Verification re-ask logs (#154) are synthetic — their gap rows never cluster.
+      if (log.purpose === "verification") {
+        continue;
+      }
       for (const gap of log.gaps ?? []) {
         if (gap.resolvedAt || gap.dismissedAt || gap.summary !== summary) {
           continue;
@@ -222,6 +226,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       // Match the Postgres column default (manual_gap boolean NOT NULL DEFAULT false).
       manualGap: false,
       askedAt: new Date().toISOString(),
+      purpose: input.purpose ?? "live",
       ...(input.flowId ? { flowId: input.flowId } : {})
     };
 
@@ -245,18 +250,24 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     // The flow is decided by the watcher after the log is recorded, so a
     // completion can supply it now; fall back to any flow already on the log.
     const flowId = input.flowId ?? existing.flowId;
-    const nextAnswerGaps = gapsFromAnswer(input.answer);
+    // A verification re-ask log (#154) keeps its answer + citations for audit, but
+    // its gap signals are the merged doc's shortfall, not a fresh gap — never
+    // ingest them, or they re-enter candidacy under this synthetic id and
+    // auto-redraft the parked gap.
+    const isVerification = existing.purpose === "verification";
+    const nextAnswerGaps = isVerification ? [] : gapsFromAnswer(input.answer);
     const updated: QuestionLog = {
       ...existing,
       chatProvider: input.chatProvider ?? existing.chatProvider,
       confidence: input.answer.confidence,
       retrievedSectionIds: input.answer.citations.map((citation) => citation.sectionId),
       answer: input.answer,
-      // Re-answering replaces auto-detected and followup gaps but preserves any manual flag.
-      gaps: [
-        ...(existing.gaps ?? []).filter((gap) => gap.source === "manual"),
-        ...nextAnswerGaps
-      ],
+      // Re-answering replaces auto-detected and followup gaps but preserves any
+      // manual flag. A verification log ingests no gaps, so its existing gaps
+      // (there are none) are left as-is.
+      gaps: isVerification
+        ? existing.gaps ?? []
+        : [...(existing.gaps ?? []).filter((gap) => gap.source === "manual"), ...nextAnswerGaps],
       ...(flowId ? { flowId } : {})
     };
 
@@ -265,7 +276,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     // but only bump when it ACTUALLY changed. An identical re-answer (same gaps,
     // same flow) leaves the candidate set untouched, so bumping would only make the
     // reconciler re-run its metered reshape on an unchanged cluster set (#168).
-    const gapsChanged = !answerGapsUnchanged(existing.gaps ?? [], nextAnswerGaps);
+    const gapsChanged = !isVerification && !answerGapsUnchanged(existing.gaps ?? [], nextAnswerGaps);
     const flowChanged = (existing.flowId ?? "") !== (flowId ?? "");
     if (gapsChanged || flowChanged) {
       this.bumpCatalog(flowId);
@@ -442,7 +453,10 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
   }
 
   async list(limit: number): Promise<QuestionLog[]> {
+    // Only live questions surface in the console list; verification re-asks (#154)
+    // are synthetic audit records, not questions a human asked.
     return [...this.logs.values()]
+      .filter((log) => log.purpose !== "verification")
       .sort((left, right) => right.askedAt.localeCompare(left.askedAt))
       .slice(0, limit);
   }
@@ -462,6 +476,10 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     // gap on a confident answer (an observed empty search) must still cluster.
     const groups = new Map<string, { summary: string; flowId?: string; logs: QuestionLog[] }>();
     for (const log of this.logs.values()) {
+      // Verification re-ask logs (#154) are synthetic and never candidates.
+      if (log.purpose === "verification") {
+        continue;
+      }
       const active = (log.gaps ?? []).filter((gap) => !gap.resolvedAt && !gap.dismissedAt);
       // A question flagged 'needs_attention' hit the verification retry cap: it
       // awaits a human, so park the WHOLE question (including its sibling
