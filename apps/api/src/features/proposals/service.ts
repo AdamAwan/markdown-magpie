@@ -114,6 +114,23 @@ export class VerificationIncompleteError extends Error {
   }
 }
 
+// Thrown when the verify-closure request is aborted mid-run — the maintenance
+// watcher's POST hit its own timeout and pg-boss will retry the
+// verify_gap_closure job. verifyGapClosure checks for this BEFORE committing any
+// verdict, so an aborted run writes nothing and simply unwinds, letting the retry
+// do the real work. Without this, the original API-side run kept executing after
+// the abort and overlapped its own retry — duplicate re-asks and duplicate
+// gap_closure_verification audit rows (#195). Like VerificationIncompleteError
+// this is an infrastructure outcome, not a content verdict.
+export class VerificationAbortedError extends Error {
+  constructor(readonly proposalId: string) {
+    super(
+      `gap-closure verification for proposal ${proposalId} was aborted before recording a verdict; the retry will re-run it.`
+    );
+    this.name = "VerificationAbortedError";
+  }
+}
+
 // Non-terminal job states that mean a verify_gap_closure job hasn't finished
 // executing yet — mirrors IN_FLIGHT_JOB_STATES in features/scheduled-tasks/
 // service.ts.
@@ -201,7 +218,11 @@ export async function runMergeCascade(
 // verification detail) so it re-drafts — until the retry cap, past which it is
 // flagged for a human. The re-asks go through runJobToCompletion, so the only
 // generative step is an enqueued answer_question job a provider watcher claims.
-export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Promise<VerifyGapClosureOutput> {
+export async function verifyGapClosure(
+  ctx: AppContext,
+  proposal: Proposal,
+  signal?: AbortSignal
+): Promise<VerifyGapClosureOutput> {
   // Entry guard: a proposal already carries a closureStatus once one run has
   // recorded a verdict for it. Re-running would re-ask every triggering
   // question (duplicate LLM spend) and, worse, record a second "still_open" row
@@ -243,8 +264,23 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
   // /verify-closure POST can exceed its own timeout (#150). Nothing is written here —
   // Phase 1 only reads, enqueues the re-asks, and awaits their answers.
   const outcomes = await Promise.all(
-    questionIds.map((questionId) => planQuestion(ctx, proposal, questionId, targetPaths, alreadyClosed))
+    questionIds.map((questionId) => planQuestion(ctx, proposal, questionId, targetPaths, alreadyClosed, signal))
   );
+
+  // PHASE 1a — if the request was aborted (the maintenance watcher's POST hit its
+  // timeout, so pg-boss will retry this job), unwind BEFORE writing anything. This
+  // is the last barrier that keeps the original run — which has been racing its
+  // own retry ever since the abort — from committing a duplicate set of
+  // gap_closure_verification rows: the signal-aware bounded waits above already
+  // stopped and cancelled the orphaned re-asks, and now Phase 2 never runs, so the
+  // retry is the only run that records a verdict (#195).
+  if (signal?.aborted) {
+    logger.info(
+      { proposalId: proposal.id },
+      "gap-closure verification aborted before recording a verdict; unwinding so the retry run owns it"
+    );
+    throw new VerificationAbortedError(proposal.id);
+  }
 
   // PHASE 1b — an infrastructure failure must never become a content verdict. A
   // re-ask that produced no answer (no provider watcher was free before the deadline
@@ -398,7 +434,8 @@ async function planQuestion(
   proposal: Proposal,
   questionId: string,
   targetPaths: Set<string>,
-  alreadyClosed: Set<string>
+  alreadyClosed: Set<string>,
+  signal?: AbortSignal
 ): Promise<QuestionOutcome> {
   if (alreadyClosed.has(questionId)) {
     logger.info(
@@ -447,7 +484,7 @@ async function planQuestion(
   let completed = false;
   let answer: Pick<AnswerQuestionJobOutput, "confidence" | "citations"> | undefined;
   try {
-    const job = await runJobToCompletion(ctx, "answer_question", input);
+    const job = await runJobToCompletion(ctx, "answer_question", input, { signal });
     // Only a job that actually reached `completed` is a content answer. A
     // cancelled/failed job is the timeout / no-provider-watcher case (#150) — an
     // infrastructure failure, reported as `incomplete` below, never as still_open.

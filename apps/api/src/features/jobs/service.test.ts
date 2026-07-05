@@ -133,6 +133,25 @@ test("wait returns current jobs on timeout and terminal jobs immediately", async
   assert.equal(terminal.job.state, "cancelled");
 });
 
+test("waitForJob ends the wait as non-terminal when the caller's signal is aborted (#195)", async () => {
+  const ctx = makeTestContext();
+  const created = await ctx.jobs.create("answer_question", answerInput());
+  // A long timeout that would otherwise keep polling; the aborted signal is what
+  // ends the wait, standing in for a verify-closure POST the watcher gave up on.
+  const result = await waitForJob(ctx, created.id, { timeoutMs: 10_000, pollMs: 1, signal: AbortSignal.abort() });
+  assert.equal(result.terminal, false, "an aborted wait returns non-terminal, like a deadline timeout");
+  assert.equal(result.job.state, "created");
+});
+
+test("runJobToCompletion cancels the orphaned job when the caller's signal is aborted (#195)", async () => {
+  const ctx = makeTestContext();
+  // Nothing claims the job; the aborted signal (not the deadline) ends the wait,
+  // and the orphaned job is cancelled so no late watcher runs it unread.
+  const result = await runJobToCompletion(ctx, "answer_question", answerInput(), { signal: AbortSignal.abort() });
+  assert.equal(result.state, "cancelled");
+  assert.equal((await getJob(ctx, result.id))?.state, "cancelled");
+});
+
 test("runJobToCompletion cancels a still-queued job once the bounded wait times out (#162)", async () => {
   const ctx = makeTestContext();
   // makeTestContext sets JOB_RUN_TO_COMPLETION_TIMEOUT_MS=100 / JOB_WAIT_POLL_MS=5,
