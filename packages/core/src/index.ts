@@ -344,11 +344,7 @@ type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 // history is never lost. Derived here once so the proposal stores don't each
 // hand-maintain the literal list and drift (which once left superseded proposals
 // stuck visible in the UI with no action).
-export const TERMINAL_PROPOSAL_STATUSES: ReadonlyArray<ProposalStatus> = [
-  "merged",
-  "rejected",
-  "superseded"
-];
+export const TERMINAL_PROPOSAL_STATUSES: ReadonlyArray<ProposalStatus> = ["merged", "rejected", "superseded"];
 
 export interface Proposal {
   id: string;

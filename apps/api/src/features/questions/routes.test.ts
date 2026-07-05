@@ -61,7 +61,10 @@ test("POST /api/questions/:id/gap/retry re-admits a parked question to candidacy
   const res = await app.request(`/api/questions/${log.id}/gap/retry`, { method: "POST" });
   assert.equal(res.status, 200);
   const candidates = await ctx.stores.questionLogs.listGapCandidates(50);
-  assert.ok(candidates.some((c) => c.summary === "How to configure X"), "re-admitted after retry");
+  assert.ok(
+    candidates.some((c) => c.summary === "How to configure X"),
+    "re-admitted after retry"
+  );
   assert.ok(!(await ctx.stores.questionLogs.listParkedQuestions(50)).some((p) => p.questionId === log.id));
 });
 

@@ -34,7 +34,11 @@ async function seedGitRepository(ctx: ReturnType<typeof makeTestContext>): Promi
   await run(clonePath, ["commit", "-m", "seed"]);
   await run(clonePath, ["push", "-u", "origin", "main"]);
   await run(clonePath, ["fetch", "origin"]);
-  await ctx.stores.knowledgeIndex.indexLocalRepository({ localPath: clonePath, repositoryId: "test-repo", name: "test-repo" });
+  await ctx.stores.knowledgeIndex.indexLocalRepository({
+    localPath: clonePath,
+    repositoryId: "test-repo",
+    name: "test-repo"
+  });
 }
 
 // A fake broker that synchronously completes every answer_question job by
@@ -532,7 +536,10 @@ test("verifyGapClosure flags needs_attention after the retry cap and stops re-dr
 
   assert.equal(result.closureStatus, "needs_attention");
   const reloaded = await ctx.stores.questionLogs.get(log.id);
-  assert.ok((reloaded?.gaps ?? []).some((gap) => gap.parkedAt), "gap is parked");
+  assert.ok(
+    (reloaded?.gaps ?? []).some((gap) => gap.parkedAt),
+    "gap is parked"
+  );
   const after = await ctx.stores.questionLogs.listGapCandidates(50);
   assert.equal(
     after.some((candidate) => candidate.summary === "How to configure X"),
@@ -559,7 +566,11 @@ test("a human retry resets the retry budget so the SECOND post-retry failure re-
     confidence: "low",
     citedMergedDoc: false
   });
-  assert.equal((await proposals.verifyGapClosure(ctx, merged)).closureStatus, "needs_attention", "parked after the cap");
+  assert.equal(
+    (await proposals.verifyGapClosure(ctx, merged)).closureStatus,
+    "needs_attention",
+    "parked after the cap"
+  );
 
   // Human retry re-admits it with a fresh budget (dismisses the parked row; the
   // surviving underlying auto gap re-drafts, so no verification row is re-filed).
@@ -832,7 +843,11 @@ test("verifyGapClosure resets the retry budget once the parked gap is resolved",
   assert.equal(first.closureStatus, "reopened");
 
   // A human (or a later successful redraft) resolves the reopened gap.
-  const resolvedCount = await ctx.stores.questionLogs.resolveGaps([log.id], ["How to configure X"], "resolver-proposal");
+  const resolvedCount = await ctx.stores.questionLogs.resolveGaps(
+    [log.id],
+    ["How to configure X"],
+    "resolver-proposal"
+  );
   assert.ok(resolvedCount > 0, "the reopened gap was resolved");
 
   // A brand-new proposal later closes a fresh gap on the SAME question, and its
@@ -969,8 +984,16 @@ test("verifyGapClosure throws (not still_open) when a re-ask never completes, re
   // reopened, and the retry cap is untouched — so a retry (once a watcher is free)
   // starts clean.
   const reloaded = await ctx.stores.proposals.get(merged.id);
-  assert.equal(reloaded?.closureStatus, undefined, "an infrastructure failure leaves the proposal unverified, not reopened");
-  assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id), 0, "no still_open verdict is recorded");
+  assert.equal(
+    reloaded?.closureStatus,
+    undefined,
+    "an infrastructure failure leaves the proposal unverified, not reopened"
+  );
+  assert.equal(
+    await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id),
+    0,
+    "no still_open verdict is recorded"
+  );
   const q = await ctx.stores.questionLogs.get(log.id);
   assert.equal(
     (q?.gaps ?? []).some((gap) => gap.source === "verification"),
@@ -984,9 +1007,17 @@ test("verifyGapClosure aborts the whole run when only some re-asks complete, com
   // run must abort (throw) without committing the completed question's verdict, so a
   // retry re-evaluates the whole proposal cleanly rather than half-recording it.
   const ctx = makeTestContext();
-  const q1 = await ctx.stores.questionLogs.record({ question: "How do I configure X?", chatProvider: "codex", retrievedSectionIds: [] });
+  const q1 = await ctx.stores.questionLogs.record({
+    question: "How do I configure X?",
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
   await ctx.stores.questionLogs.recordManualGap(q1.id, "How to configure X");
-  const q2 = await ctx.stores.questionLogs.record({ question: "How do I configure Y?", chatProvider: "codex", retrievedSectionIds: [] });
+  const q2 = await ctx.stores.questionLogs.record({
+    question: "How do I configure Y?",
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
   await ctx.stores.questionLogs.recordManualGap(q2.id, "How to configure Y");
   const proposal = await ctx.stores.proposals.create({
     title: "Configure X and Y",
@@ -1007,7 +1038,11 @@ test("verifyGapClosure aborts the whole run when only some re-asks complete, com
       const job = await super.create(type, input);
       if (type === "answer_question" && (input as { question: string }).question === "How do I configure X?") {
         const { questionLogId } = input as { questionLogId: string };
-        const answer: AnswerResult = { answer: "Set the X flag.", confidence: "high", citations: [citation("configure-x.md")] };
+        const answer: AnswerResult = {
+          answer: "Set the X flag.",
+          confidence: "high",
+          citations: [citation("configure-x.md")]
+        };
         await ctx.stores.questionLogs.updateAnswer(questionLogId, { answer, chatProvider: "codex" });
         return super.complete(job.id, answer);
       }
@@ -1034,7 +1069,7 @@ test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job"
   ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
-    
+
     chatProvider: "openai-compatible",
     retrievedSectionIds: []
   });
@@ -1172,7 +1207,13 @@ test("collectOpenPullRequestContext maps the snapshot's in-flight proposals to d
       { id: draft.id, title: "Cheese pairing", status: "draft" }
     ],
     pullRequests: [
-      { proposalId: opened.id, url: "https://github.com/o/r/pull/7", merged: false, state: "open", checkedAt: new Date().toISOString() }
+      {
+        proposalId: opened.id,
+        url: "https://github.com/o/r/pull/7",
+        merged: false,
+        state: "open",
+        checkedAt: new Date().toISOString()
+      }
     ]
   });
 
@@ -1213,12 +1254,24 @@ test("collectOpenPullRequestContext excludes the named cluster's own proposal an
     catalogRevision: 0,
     gaps: [],
     proposals: [
-      { id: own.id, title: "Own", status: "pr-opened", gapClusterId: "cluster-1", pullRequestUrl: "https://github.com/o/r/pull/1" },
+      {
+        id: own.id,
+        title: "Own",
+        status: "pr-opened",
+        gapClusterId: "cluster-1",
+        pullRequestUrl: "https://github.com/o/r/pull/1"
+      },
       { id: merged.id, title: "Merged", status: "pr-opened", pullRequestUrl: "https://github.com/o/r/pull/2" }
     ],
     // The fetch job recorded pull/2 as already merged — it's no longer open.
     pullRequests: [
-      { proposalId: merged.id, url: "https://github.com/o/r/pull/2", merged: true, state: "closed", checkedAt: new Date().toISOString() }
+      {
+        proposalId: merged.id,
+        url: "https://github.com/o/r/pull/2",
+        merged: true,
+        state: "closed",
+        checkedAt: new Date().toISOString()
+      }
     ]
   });
 
@@ -1317,7 +1370,11 @@ test("requestProposalPublication fails fast with proposal_repository_not_git for
   // RepositoryRef whose git scope is "not-git" — the second validation branch.
   const root = await mkdtemp(path.join(tmpdir(), "magpie-proposal-nongit-"));
   await writeFile(path.join(root, "README.md"), "# plain\n", "utf8");
-  await ctx.stores.knowledgeIndex.indexLocalRepository({ localPath: root, repositoryId: "plain-repo", name: "plain-repo" });
+  await ctx.stores.knowledgeIndex.indexLocalRepository({
+    localPath: root,
+    repositoryId: "plain-repo",
+    name: "plain-repo"
+  });
 
   const proposal = await ctx.stores.proposals.create({
     title: "Configure X",
@@ -1495,7 +1552,6 @@ test("createDedupeProposalFromCompletedJob skips a changeset whose primaryPath h
   assert.equal(result, undefined);
 });
 
-
 async function splitJob(ctx: ReturnType<typeof makeTestContext>) {
   await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
     repositoryId: "docs",
@@ -1601,7 +1657,10 @@ test("createImproveProposalFromCompletedJob is silent for no-op or unchanged imp
   const job = await improveJob(ctx, "# Refunds");
 
   assert.equal(
-    await proposals.createImproveProposalFromCompletedJob(ctx, job, { improved: false, rationale: "Already complete." }),
+    await proposals.createImproveProposalFromCompletedJob(ctx, job, {
+      improved: false,
+      rationale: "Already complete."
+    }),
     undefined
   );
   assert.equal(
@@ -1640,10 +1699,7 @@ function ctxWithDestination(url: string): ReturnType<typeof makeTestContext> {
   });
 }
 
-async function branchPushedProposal(
-  ctx: ReturnType<typeof makeTestContext>,
-  remoteUrl: string
-): Promise<string> {
+async function branchPushedProposal(ctx: ReturnType<typeof makeTestContext>, remoteUrl: string): Promise<string> {
   const created = await ctx.stores.proposals.create({
     title: "Configure X",
     targetPath: "configure-x.md",
@@ -1706,7 +1762,12 @@ test("mergeLocalProposal rejects a proposal that is not branch-pushed", async ()
   const url = "file:///tmp/demo-kb";
   const ctx = ctxWithDestination(url);
   const created = await ctx.stores.proposals.create({
-    title: "Draft", targetPath: "d.md", markdown: "# d\n", rationale: "r", evidence: [], destinationId: "demo"
+    title: "Draft",
+    targetPath: "d.md",
+    markdown: "# d\n",
+    rationale: "r",
+    evidence: [],
+    destinationId: "demo"
   });
   const proposal = await ctx.stores.proposals.get(created.id);
   assert.ok(proposal);

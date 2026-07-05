@@ -115,7 +115,10 @@ const Preview = styled.pre(({ theme }) => ({
 // whether the merged doc actually answered them (see docs/question-logging.md).
 // tone reuses the shared status tones so it reads as one system: verified
 // (green), reopened (amber), needs attention (red).
-const CLOSURE_BADGES: Record<NonNullable<Proposal["closureStatus"]>, { label: string; title: string; tone: StatusTone }> = {
+const CLOSURE_BADGES: Record<
+  NonNullable<Proposal["closureStatus"]>,
+  { label: string; title: string; tone: StatusTone }
+> = {
   verified_closed: {
     label: "Verified closed",
     title: "Re-asking the triggering questions confirmed the merged document answers them; the gaps were resolved.",
@@ -123,7 +126,8 @@ const CLOSURE_BADGES: Record<NonNullable<Proposal["closureStatus"]>, { label: st
   },
   reopened: {
     label: "Reopened",
-    title: "Re-asking the triggering questions still failed to find a confident, cited answer; the gaps stay open for another draft.",
+    title:
+      "Re-asking the triggering questions still failed to find a confident, cited answer; the gaps stay open for another draft.",
     tone: "running"
   },
   needs_attention: {
@@ -191,7 +195,11 @@ export function ProposalPanel({
                     <PathLine>{selectedProposal.targetPath}</PathLine>
                   </div>
                   <Stack gap="xs" align="end">
-                    <Badge tone={statusTone(selectedProposal.status)} dot title={`Proposal status: ${selectedProposal.status}`}>
+                    <Badge
+                      tone={statusTone(selectedProposal.status)}
+                      dot
+                      title={`Proposal status: ${selectedProposal.status}`}
+                    >
                       {selectedProposal.status}
                     </Badge>
                     {selectedProposal.closureStatus ? (
@@ -224,10 +232,22 @@ export function ProposalPanel({
                   <DraftContext>
                     <summary>Draft context — what the model was given</summary>
                     <PublicationSummary>
-                      <ContextValue label="Gaps addressed" value={String(selectedProposal.draftContext.gapSummaries.length)} />
-                      <ContextValue label="Source files" value={String(selectedProposal.draftContext.sourceFiles.length)} />
-                      <ContextValue label="Evidence citations" value={String(selectedProposal.draftContext.evidenceCount)} />
-                      <ContextValue label="Open PRs shown" value={String(selectedProposal.draftContext.openPullRequests.length)} />
+                      <ContextValue
+                        label="Gaps addressed"
+                        value={String(selectedProposal.draftContext.gapSummaries.length)}
+                      />
+                      <ContextValue
+                        label="Source files"
+                        value={String(selectedProposal.draftContext.sourceFiles.length)}
+                      />
+                      <ContextValue
+                        label="Evidence citations"
+                        value={String(selectedProposal.draftContext.evidenceCount)}
+                      />
+                      <ContextValue
+                        label="Open PRs shown"
+                        value={String(selectedProposal.draftContext.openPullRequests.length)}
+                      />
                     </PublicationSummary>
                     {selectedProposal.draftContext.gapSummaries.length > 0 ? (
                       <ClusterGaps>
@@ -315,8 +335,14 @@ export function ProposalPanel({
                     <ContextValue label="Branch" value={selectedProposal.publication.branchName} />
                     <ContextValue label="Commit" value={shortSha(selectedProposal.publication.commitSha)} />
                     <ContextValue label="Remote" value={selectedProposal.publication.remoteUrl ?? "Not recorded"} />
-                    <ContextValue label="Pull request" value={selectedProposal.publication.pullRequestUrl ?? "Not raised"} />
-                    <ContextValue label="Published" value={new Date(selectedProposal.publication.publishedAt).toLocaleString()} />
+                    <ContextValue
+                      label="Pull request"
+                      value={selectedProposal.publication.pullRequestUrl ?? "Not raised"}
+                    />
+                    <ContextValue
+                      label="Published"
+                      value={new Date(selectedProposal.publication.publishedAt).toLocaleString()}
+                    />
                   </PublicationSummary>
                 ) : null}
                 <Preview>{selectedProposal.markdown}</Preview>

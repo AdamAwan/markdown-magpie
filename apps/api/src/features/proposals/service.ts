@@ -182,10 +182,7 @@ export async function runMergeCascade(
   // behavior: the index was never going to change, so verification still runs.)
   if (reindexOutcome === "failed") {
     if (hasTriggers && !proposal.closureStatus) {
-      logger.warn(
-        { proposalId: proposal.id },
-        "skipping gap-closure verification: destination reindex failed"
-      );
+      logger.warn({ proposalId: proposal.id }, "skipping gap-closure verification: destination reindex failed");
     }
     return { reindexed, verificationEnqueued: false };
   }
@@ -501,11 +498,7 @@ async function planQuestion(
 // false still_open verdict and can wrongly park a gap needs_attention even
 // though the merged doc fully answers it. Dropping the id falls back to
 // auto-routing across the currently configured flows instead.
-function resolveVerificationFlowId(
-  ctx: AppContext,
-  proposal: Proposal,
-  original: QuestionLog
-): string | undefined {
+function resolveVerificationFlowId(ctx: AppContext, proposal: Proposal, original: QuestionLog): string | undefined {
   const candidate = proposal.flowId ?? original.flowId;
   if (!candidate) {
     return undefined;
@@ -535,9 +528,7 @@ function addressedGapsAllSettled(
   proposal: Proposal
 ): boolean {
   const proposalSummaries = new Set(splitGapSummaries(proposal.gapSummary));
-  const addressed = (original.gaps ?? []).filter(
-    (gap) => !gap.parkedAt && proposalSummaries.has(gap.summary)
-  );
+  const addressed = (original.gaps ?? []).filter((gap) => !gap.parkedAt && proposalSummaries.has(gap.summary));
   return addressed.length > 0 && addressed.every((gap) => gap.resolvedAt || gap.dismissedAt);
 }
 
@@ -559,7 +550,10 @@ function addressedGapsAllSettled(
 // fallback: the question text.
 async function reopenSummaryFor(
   ctx: AppContext,
-  original: { question: string; gaps?: Array<{ summary: string; parkedAt?: string; resolvedAt?: string; dismissedAt?: string }> },
+  original: {
+    question: string;
+    gaps?: Array<{ summary: string; parkedAt?: string; resolvedAt?: string; dismissedAt?: string }>;
+  },
   proposal: Proposal,
   questionId: string
 ): Promise<string> {
@@ -574,11 +568,7 @@ async function reopenSummaryFor(
 
   const proposalSummaries = new Set(splitGapSummaries(proposal.gapSummary));
   const addressedGap = (original.gaps ?? []).find(
-    (gap) =>
-      !gap.resolvedAt &&
-      !gap.dismissedAt &&
-      !gap.parkedAt &&
-      proposalSummaries.has(gap.summary)
+    (gap) => !gap.resolvedAt && !gap.dismissedAt && !gap.parkedAt && proposalSummaries.has(gap.summary)
   );
   return addressedGap?.summary ?? original.question;
 }
@@ -603,8 +593,8 @@ function verificationLineageResetSince(original: {
   const lineageGap = [...(original.gaps ?? [])]
     .reverse()
     .find((gap) => gap.source === "verification" && (gap.resolvedAt || gap.dismissedAt));
-  const resetTimestamps = [lineageGap?.resolvedAt, lineageGap?.dismissedAt].filter(
-    (value): value is string => Boolean(value)
+  const resetTimestamps = [lineageGap?.resolvedAt, lineageGap?.dismissedAt].filter((value): value is string =>
+    Boolean(value)
   );
   return resetTimestamps.length > 0 ? resetTimestamps.sort().at(-1) : undefined;
 }
@@ -627,7 +617,9 @@ function buildVerificationDetail(
   const citedPaths = answer.citations.map((citation) => citation.path);
   return (
     `Merged ${merged}. Re-asking still returned confidence "${answer.confidence}"` +
-    (cited ? " and did cite the merged doc" : ` and did not cite the merged doc (cited: ${citedPaths.join(", ") || "nothing"})`) +
+    (cited
+      ? " and did cite the merged doc"
+      : ` and did not cite the merged doc (cited: ${citedPaths.join(", ") || "nothing"})`) +
     "; the gap is not yet closed."
   );
 }
@@ -636,11 +628,7 @@ function buildVerificationDetail(
 // rows whose question and summary match the proposal's recorded gap summaries, so
 // unrelated gaps on a multi-topic question are left untouched. Returns the number
 // of gaps newly resolved.
-async function resolveGapsForClosedQuestion(
-  ctx: AppContext,
-  questionId: string,
-  proposal: Proposal
-): Promise<number> {
+async function resolveGapsForClosedQuestion(ctx: AppContext, questionId: string, proposal: Proposal): Promise<number> {
   const summaries = splitGapSummaries(proposal.gapSummary);
   if (summaries.length === 0) {
     return 0;
@@ -902,12 +890,7 @@ export async function getProposalExecutionContext(
 // (pr-opened) plus the earlier stages that have no PR yet but are still work the
 // drafter shouldn't duplicate. Terminal statuses (merged/rejected/superseded)
 // are excluded — that work is settled.
-const IN_FLIGHT_PROPOSAL_STATUSES: ReadonlyArray<Proposal["status"]> = [
-  "draft",
-  "ready",
-  "branch-pushed",
-  "pr-opened"
-];
+const IN_FLIGHT_PROPOSAL_STATUSES: ReadonlyArray<Proposal["status"]> = ["draft", "ready", "branch-pushed", "pr-opened"];
 
 // Reads the flow's on-disk snapshot and returns its in-flight proposals / open
 // pull requests as drafting context. Deliberately off the network — it uses only
@@ -1044,11 +1027,24 @@ export async function draftFromGaps(
   const flow = selectFlow(deps, overrides.flowId ?? derivedFlowId(matched));
   const sourceIds = overrides.sourceIds ?? flow?.sourceIds;
   const destinationId = overrides.destinationId?.trim() || flow?.destinationId || defaultDestinationId(deps);
-  logger.info({ label, flowId: flow?.id ?? "none", destinationId: destinationId ?? "none", provider: ctx.config.get().aiProvider }, "drafting proposal");
+  logger.info(
+    {
+      label,
+      flowId: flow?.id ?? "none",
+      destinationId: destinationId ?? "none",
+      provider: ctx.config.get().aiProvider
+    },
+    "drafting proposal"
+  );
   const sourceContext = await collectSourceContextCached(deps, sourceIds, overrides.sourceContextCache);
-  const materialFiles = sourceContext.filter((context) => context.path && context.content !== "Source path does not exist.");
+  const materialFiles = sourceContext.filter(
+    (context) => context.path && context.content !== "Source path does not exist."
+  );
   if (materialFiles.length === 0) {
-    logger.warn({ label }, "drafting proposal with no real source files attached — model will likely produce a placeholder; check source configuration and subpaths");
+    logger.warn(
+      { label },
+      "drafting proposal with no real source files attached — model will likely produce a placeholder; check source configuration and subpaths"
+    );
   } else {
     logger.debug({ materialFileCount: materialFiles.length }, "proposal draft source files ready");
   }

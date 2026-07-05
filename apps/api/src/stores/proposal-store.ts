@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { TERMINAL_PROPOSAL_STATUSES } from "@magpie/core";
-import type { ChangesetChange, DraftContext, DraftMarkdownProposalJobOutput, Proposal, ReviewDecision } from "@magpie/core";
+import type {
+  ChangesetChange,
+  DraftContext,
+  DraftMarkdownProposalJobOutput,
+  Proposal,
+  ReviewDecision
+} from "@magpie/core";
 
 export interface ProposalInput extends DraftMarkdownProposalJobOutput {
   evidence: Proposal["evidence"];
@@ -85,18 +91,13 @@ export class InMemoryProposalStore implements ProposalStore {
   async list(limit: number, options?: ProposalListOptions): Promise<Proposal[]> {
     return [...this.proposals.values()]
       .filter((proposal) =>
-        options?.status
-          ? proposal.status === options.status
-          : !TERMINAL_PROPOSAL_STATUSES.includes(proposal.status)
+        options?.status ? proposal.status === options.status : !TERMINAL_PROPOSAL_STATUSES.includes(proposal.status)
       )
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, limit);
   }
 
-  async listByClosureStatus(
-    closureStatus: NonNullable<Proposal["closureStatus"]>,
-    limit: number
-  ): Promise<Proposal[]> {
+  async listByClosureStatus(closureStatus: NonNullable<Proposal["closureStatus"]>, limit: number): Promise<Proposal[]> {
     return [...this.proposals.values()]
       .filter((proposal) => proposal.closureStatus === closureStatus)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
@@ -116,8 +117,7 @@ export class InMemoryProposalStore implements ProposalStore {
     // cluster whose only proposal is settled resolves to undefined here too.
     return [...this.proposals.values()]
       .filter(
-        (proposal) =>
-          proposal.gapClusterId === gapClusterId && !TERMINAL_PROPOSAL_STATUSES.includes(proposal.status)
+        (proposal) => proposal.gapClusterId === gapClusterId && !TERMINAL_PROPOSAL_STATUSES.includes(proposal.status)
       )
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
   }
@@ -131,7 +131,7 @@ export class InMemoryProposalStore implements ProposalStore {
     const updated: Proposal = {
       ...existing,
       status,
-      mergedAt: status === "merged" ? existing.mergedAt ?? new Date().toISOString() : existing.mergedAt
+      mergedAt: status === "merged" ? (existing.mergedAt ?? new Date().toISOString()) : existing.mergedAt
     };
     this.proposals.set(id, updated);
     return updated;
@@ -150,7 +150,10 @@ export class InMemoryProposalStore implements ProposalStore {
     return updated;
   }
 
-  async recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined> {
+  async recordPublication(
+    id: string,
+    publication: NonNullable<Proposal["publication"]>
+  ): Promise<Proposal | undefined> {
     const existing = this.proposals.get(id);
     if (!existing) {
       return undefined;

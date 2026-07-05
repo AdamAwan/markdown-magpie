@@ -7,7 +7,15 @@ const lowGapAnswer: AnswerResult = {
   answer: "I could not find reliable source material.",
   confidence: "low",
   citations: [],
-  gaps: [{ summary: "No source material for: vaccines", question: "vaccines?", confidence: "low", citedSectionIds: [], source: "auto" }]
+  gaps: [
+    {
+      summary: "No source material for: vaccines",
+      question: "vaccines?",
+      confidence: "low",
+      citedSectionIds: [],
+      source: "auto"
+    }
+  ]
 };
 
 const multiGapAnswer: AnswerResult = {
@@ -15,8 +23,20 @@ const multiGapAnswer: AnswerResult = {
   confidence: "low",
   citations: [],
   gaps: [
-    { summary: "No React integration guidance", question: "react + export?", confidence: "low", citedSectionIds: [], source: "auto" },
-    { summary: "Dashboard export is undocumented", question: "react + export?", confidence: "low", citedSectionIds: [], source: "auto" }
+    {
+      summary: "No React integration guidance",
+      question: "react + export?",
+      confidence: "low",
+      citedSectionIds: [],
+      source: "auto"
+    },
+    {
+      summary: "Dashboard export is undocumented",
+      question: "react + export?",
+      confidence: "low",
+      citedSectionIds: [],
+      source: "auto"
+    }
   ]
 };
 
@@ -65,9 +85,19 @@ test("record stores one gap per detected gap for a multi-topic question", async 
 test("a verification re-ask log (#154) keeps its answer but ingests no gaps and never becomes a candidate", async () => {
   const store = new InMemoryQuestionLogStore();
   // A live question with the same gap, so there IS a real candidate to compare against.
-  const live = await store.record({ question: "vaccines?", chatProvider: "codex", answer: lowGapAnswer, retrievedSectionIds: [] });
+  const live = await store.record({
+    question: "vaccines?",
+    chatProvider: "codex",
+    answer: lowGapAnswer,
+    retrievedSectionIds: []
+  });
   // The synthetic re-ask log: recorded with no answer, purpose 'verification'.
-  const reask = await store.record({ question: "vaccines?", chatProvider: "codex", retrievedSectionIds: [], purpose: "verification" });
+  const reask = await store.record({
+    question: "vaccines?",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    purpose: "verification"
+  });
 
   // Completion feeds it exactly the answer a still_open verdict produces — a forced
   // low-confidence answer WITH gap signals. Those must not be ingested.
@@ -86,7 +116,10 @@ test("a verification re-ask log (#154) keeps its answer but ingests no gaps and 
 
   const listed = await store.list(50);
   assert.ok(!listed.some((log) => log.id === reask.id), "the re-ask log is absent from the questions list");
-  assert.ok(listed.some((log) => log.id === live.id), "the live question is present");
+  assert.ok(
+    listed.some((log) => log.id === live.id),
+    "the live question is present"
+  );
 });
 
 test("recordManualGap preserves auto-detected gaps and adds a manual one", async () => {
@@ -130,7 +163,12 @@ test("clearManualGap removes the manual gap but keeps auto-detected gaps", async
 test("listGapCandidates includes a manually flagged high-confidence question", async () => {
   const store = new InMemoryQuestionLogStore();
   const helpful: AnswerResult = { answer: "Yes.", confidence: "high", citations: [] };
-  const log = await store.record({ question: "Partial answer?", chatProvider: "codex", answer: helpful, retrievedSectionIds: [] });
+  const log = await store.record({
+    question: "Partial answer?",
+    chatProvider: "codex",
+    answer: helpful,
+    retrievedSectionIds: []
+  });
   await store.recordManualGap(log.id, "Needs a full guide");
 
   const candidates = await store.listGapCandidates(50);
@@ -151,10 +189,21 @@ test("listGapCandidates includes a followup gap raised on a confident answer", a
     confidence: "high",
     citations: [],
     gaps: [
-      { summary: "SOC 2 compliance status", question: "How do I sell this as secure?", confidence: "high", citedSectionIds: [], source: "followup" }
+      {
+        summary: "SOC 2 compliance status",
+        question: "How do I sell this as secure?",
+        confidence: "high",
+        citedSectionIds: [],
+        source: "followup"
+      }
     ]
   };
-  const log = await store.record({ question: "How do I sell this as secure?", chatProvider: "codex", answer: confident, retrievedSectionIds: [] });
+  const log = await store.record({
+    question: "How do I sell this as secure?",
+    chatProvider: "codex",
+    answer: confident,
+    retrievedSectionIds: []
+  });
 
   const candidates = await store.listGapCandidates(50);
 
@@ -189,7 +238,15 @@ test("listGapCandidates lists each gap of a multi-topic question separately and 
       answer: "Not documented.",
       confidence: "low",
       citations: [],
-      gaps: [{ summary: "Dashboard export is undocumented", question: "export?", confidence: "low", citedSectionIds: [], source: "auto" }]
+      gaps: [
+        {
+          summary: "Dashboard export is undocumented",
+          question: "export?",
+          confidence: "low",
+          citedSectionIds: [],
+          source: "auto"
+        }
+      ]
     },
     retrievedSectionIds: []
   });
@@ -210,7 +267,9 @@ test("listGapCandidates groups the same gap separately per flow and tags each ca
     answer: "Not documented.",
     confidence: "low",
     citations: [],
-    gaps: [{ summary: "Pricing is undocumented", question: "price?", confidence: "low", citedSectionIds: [], source: "auto" }]
+    gaps: [
+      { summary: "Pricing is undocumented", question: "price?", confidence: "low", citedSectionIds: [], source: "auto" }
+    ]
   };
   const sales = await store.record({
     question: "price?",
@@ -239,7 +298,12 @@ test("listGapCandidates groups the same gap separately per flow and tags each ca
 test("listGapCandidates excludes a question whose manual gap was cleared", async () => {
   const store = new InMemoryQuestionLogStore();
   const helpful: AnswerResult = { answer: "Yes.", confidence: "high", citations: [] };
-  const log = await store.record({ question: "Partial answer?", chatProvider: "codex", answer: helpful, retrievedSectionIds: [] });
+  const log = await store.record({
+    question: "Partial answer?",
+    chatProvider: "codex",
+    answer: helpful,
+    retrievedSectionIds: []
+  });
   await store.recordManualGap(log.id, "Needs a full guide");
   await store.clearManualGap(log.id);
 
@@ -324,10 +388,7 @@ test("gapIdsForSummaries batches many pairs and matches gapIdsForSummary per pai
   ]);
 
   // Each pair resolves to exactly what the single-summary variant returns.
-  assert.deepEqual(
-    result.get(gapSummaryKey("X"))?.sort(),
-    (await store.gapIdsForSummary("X")).sort()
-  );
+  assert.deepEqual(result.get(gapSummaryKey("X"))?.sort(), (await store.gapIdsForSummary("X")).sort());
   assert.deepEqual(result.get(gapSummaryKey("Y", "f1")), await store.gapIdsForSummary("Y", "f1"));
   // A pair with no matching gaps is present with an empty array.
   assert.deepEqual(result.get(gapSummaryKey("X", "f1")), []);
@@ -393,9 +454,7 @@ test("recordVerificationGap updates the live gap in place, preserving its id, on
   const idsAfter = await store.gapIdsForSummary("How to configure X");
   assert.deepEqual(idsAfter, idsBefore, "the gap keeps the same id across the in-place update");
   assert.equal(updated?.gaps?.length, 1, "updated in place, not appended");
-  assert.deepEqual(updated?.gaps, [
-    { summary: "How to configure X", source: "verification", note: "second failure" }
-  ]);
+  assert.deepEqual(updated?.gaps, [{ summary: "How to configure X", source: "verification", note: "second failure" }]);
 });
 
 test("recordVerificationGap parks the whole question in place when the retry cap is hit", async () => {
@@ -415,7 +474,11 @@ test("recordVerificationGap parks the whole question in place when the retry cap
   assert.equal(parked?.gaps?.length, 1, "parked in place, not appended");
   assert.equal(gap?.source, "verification", "parking is a state, not a source change");
   assert.ok(gap?.parkedAt, "parkedAt is stamped");
-  assert.equal((await store.gapIdsForSummary("How to configure X")).length, 0, "a parked question is excluded from clustering");
+  assert.equal(
+    (await store.gapIdsForSummary("How to configure X")).length,
+    0,
+    "a parked question is excluded from clustering"
+  );
   assert.equal((await store.listGapCandidates(50)).length, 0, "and from candidacy");
 });
 
@@ -495,7 +558,10 @@ test("retryParkedGap re-admits a parked question, re-filing a live gap when the 
   assert.equal(live[0]?.source, "verification");
   assert.equal(live[0]?.note, "retry cap hit", "the note is carried into the re-draft");
   const candidates = await store.listGapCandidates(50);
-  assert.ok(candidates.some((c) => c.summary === "How to configure X"), "re-admitted to candidacy");
+  assert.ok(
+    candidates.some((c) => c.summary === "How to configure X"),
+    "re-admitted to candidacy"
+  );
 });
 
 test("retryParkedGap leaves a still-live underlying gap and does not re-file a duplicate", async () => {
@@ -519,7 +585,12 @@ test("retryParkedGap leaves a still-live underlying gap and does not re-file a d
 
 test("retryParkedGap is a no-op on a question that is not parked", async () => {
   const store = new InMemoryQuestionLogStore();
-  const log = await store.record({ question: "vaccines?", chatProvider: "codex", answer: lowGapAnswer, retrievedSectionIds: [] });
+  const log = await store.record({
+    question: "vaccines?",
+    chatProvider: "codex",
+    answer: lowGapAnswer,
+    retrievedSectionIds: []
+  });
   const before = await store.get(log.id);
   const after = await store.retryParkedGap(log.id);
   assert.deepEqual(after?.gaps, before?.gaps, "unchanged");
@@ -527,7 +598,12 @@ test("retryParkedGap is a no-op on a question that is not parked", async () => {
 
 test("dismissParkedGap abandons the topic: every live gap is dismissed and never re-clusters", async () => {
   const store = new InMemoryQuestionLogStore();
-  const log = await store.record({ question: "vaccines?", chatProvider: "codex", answer: lowGapAnswer, retrievedSectionIds: [] });
+  const log = await store.record({
+    question: "vaccines?",
+    chatProvider: "codex",
+    answer: lowGapAnswer,
+    retrievedSectionIds: []
+  });
   const summary = lowGapAnswer.gaps![0]!.summary;
   await store.recordVerificationGap(log.id, { summary, note: "retry cap hit", parked: true });
 
@@ -535,14 +611,25 @@ test("dismissParkedGap abandons the topic: every live gap is dismissed and never
 
   const live = (dismissed?.gaps ?? []).filter((gap) => !gap.resolvedAt && !gap.dismissedAt);
   assert.equal(live.length, 0, "no live gaps remain");
-  assert.ok((dismissed?.gaps ?? []).every((gap) => gap.dismissedReason === "human_dismiss" || gap.resolvedAt), "dismissed by the human");
+  assert.ok(
+    (dismissed?.gaps ?? []).every((gap) => gap.dismissedReason === "human_dismiss" || gap.resolvedAt),
+    "dismissed by the human"
+  );
   assert.equal((await store.listGapCandidates(50)).length, 0, "never re-clusters");
 });
 
 test("listParkedQuestions returns parked questions with their note, excluding retried/dismissed ones", async () => {
   const store = new InMemoryQuestionLogStore();
-  const parkedLog = await store.record({ question: "How do I configure X?", chatProvider: "codex", retrievedSectionIds: [] });
-  await store.recordVerificationGap(parkedLog.id, { summary: "How to configure X", note: "awaiting a human", parked: true });
+  const parkedLog = await store.record({
+    question: "How do I configure X?",
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
+  await store.recordVerificationGap(parkedLog.id, {
+    summary: "How to configure X",
+    note: "awaiting a human",
+    parked: true
+  });
   const retriedLog = await store.record({ question: "other?", chatProvider: "codex", retrievedSectionIds: [] });
   await store.recordVerificationGap(retriedLog.id, { summary: "other", note: "n", parked: true });
   await store.retryParkedGap(retriedLog.id);
@@ -593,7 +680,7 @@ test("updateAnswer bumps the catalog revision when the re-answer changes the gap
   // A genuinely different set of gaps must still advance the revision.
   await store.updateAnswer(log.id, { answer: multiGapAnswer });
 
-  assert.ok(await store.getGapCatalogRevision() > before, "a changed gap set advances the revision");
+  assert.ok((await store.getGapCatalogRevision()) > before, "a changed gap set advances the revision");
 });
 
 test("updateAnswer bumps the catalog revision when the gaps move to a newly-decided flow", async () => {

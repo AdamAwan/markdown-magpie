@@ -20,10 +20,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
   constructor(private readonly pool: pg.Pool) {}
 
   async getGapCatalogRevision(flowId?: string): Promise<number> {
-    const result = await this.pool.query<{ revision: string }>(
-      "SELECT revision FROM gap_catalog WHERE flow_id = $1",
-      [flowId ?? ""]
-    );
+    const result = await this.pool.query<{ revision: string }>("SELECT revision FROM gap_catalog WHERE flow_id = $1", [
+      flowId ?? ""
+    ]);
     return result.rows[0] ? Number(result.rows[0].revision) : 0;
   }
 
@@ -52,9 +51,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     return result.rows.map((row) => row.id);
   }
 
-  async gapIdsForSummaries(
-    pairs: Array<{ summary: string; flowId?: string }>
-  ): Promise<Map<string, string[]>> {
+  async gapIdsForSummaries(pairs: Array<{ summary: string; flowId?: string }>): Promise<Map<string, string[]>> {
     // Pre-seed every requested pair so the caller gets an entry (possibly empty)
     // for each, matching the in-memory store. Dedupe so a repeated pair binds once.
     const result = new Map<string, string[]>();
@@ -259,10 +256,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       if (replaceGaps) {
         // Re-answering replaces the answer-derived gaps (auto + followup) but
         // preserves any manual flag.
-        await client.query(
-          "DELETE FROM question_gaps WHERE question_id = $1 AND source IN ('auto', 'followup')",
-          [id]
-        );
+        await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source IN ('auto', 'followup')", [id]);
         await insertGapRows(client, id, nextGapRows);
         // The candidate set changed, so advance the revision for the reconciler.
         await bumpGapCatalog(client, flowId);
@@ -346,10 +340,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      const result = await client.query<{ flow_id: string | null }>(
-        "SELECT flow_id FROM questions WHERE id = $1",
-        [id]
-      );
+      const result = await client.query<{ flow_id: string | null }>("SELECT flow_id FROM questions WHERE id = $1", [
+        id
+      ]);
 
       if (result.rowCount !== 1) {
         await client.query("ROLLBACK");
@@ -556,7 +549,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       }
 
       // Drop the manual flag's gap; any auto-detected gaps remain candidates.
-      const deleted = await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'manual'", [id]);
+      const deleted = await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source = 'manual'", [
+        id
+      ]);
       if ((deleted.rowCount ?? 0) > 0) {
         await bumpGapCatalog(client, result.rows[0].flow_id);
       }
@@ -631,7 +626,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
   }
 
   async resolveGaps(questionIds: string[], summaries: string[], proposalId: string): Promise<number> {
-    const trimmedSummaries = [...new Set(summaries.map((summary) => summary.trim()).filter((summary) => summary.length > 0))];
+    const trimmedSummaries = [
+      ...new Set(summaries.map((summary) => summary.trim()).filter((summary) => summary.length > 0))
+    ];
     if (questionIds.length === 0 || trimmedSummaries.length === 0) {
       return 0;
     }

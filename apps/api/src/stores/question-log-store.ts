@@ -50,7 +50,9 @@ export function answerGapsUnchanged(
 ): boolean {
   const existingKeys = existing
     .filter((gap) => gap.source === "auto" || gap.source === "followup")
-    .map((gap) => gapDedupeKey(gap.source, gap.summary, gap.note ?? "", Boolean(gap.resolvedAt), Boolean(gap.dismissedAt)))
+    .map((gap) =>
+      gapDedupeKey(gap.source, gap.summary, gap.note ?? "", Boolean(gap.resolvedAt), Boolean(gap.dismissedAt))
+    )
     .sort();
   const nextKeys = next.map((gap) => gapDedupeKey(gap.source, gap.summary, "", false, false)).sort();
   if (existingKeys.length !== nextKeys.length) {
@@ -180,9 +182,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     return ids;
   }
 
-  async gapIdsForSummaries(
-    pairs: Array<{ summary: string; flowId?: string }>
-  ): Promise<Map<string, string[]>> {
+  async gapIdsForSummaries(pairs: Array<{ summary: string; flowId?: string }>): Promise<Map<string, string[]>> {
     const result = new Map<string, string[]>();
     for (const { summary, flowId } of pairs) {
       const key = gapSummaryKey(summary, flowId);
@@ -288,7 +288,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       // manual flag. A verification log ingests no gaps, so its existing gaps
       // (there are none) are left as-is.
       gaps: isVerification
-        ? existing.gaps ?? []
+        ? (existing.gaps ?? [])
         : [...(existing.gaps ?? []).filter((gap) => gap.source === "manual"), ...nextAnswerGaps],
       ...(flowId ? { flowId } : {})
     };
@@ -374,9 +374,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     }
 
     const gaps = existing.gaps ?? [];
-    const liveIndex = gaps.findIndex(
-      (g) => g.source === "verification" && !g.resolvedAt && !g.dismissedAt
-    );
+    const liveIndex = gaps.findIndex((g) => g.source === "verification" && !g.resolvedAt && !g.dismissedAt);
 
     // When `parked` (retry cap hit) stamp parkedAt; otherwise preserve any parked
     // state already on the live row (mirrors the Postgres CASE-preserving update).
@@ -426,9 +424,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     // If nothing live still carries the parked summary, re-file a fresh live
     // 'verification' row with the note so the topic re-drafts and the drafter sees
     // why it is being resubmitted (C1).
-    const stillLive = nextGaps.some(
-      (gap) => gap.summary === parked.summary && !gap.resolvedAt && !gap.dismissedAt
-    );
+    const stillLive = nextGaps.some((gap) => gap.summary === parked.summary && !gap.resolvedAt && !gap.dismissedAt);
     if (!stillLive) {
       nextGaps.push({
         summary: parked.summary,
@@ -613,7 +609,11 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
         summary,
         questionIds: logs.map((log) => log.id),
         count: logs.length,
-        latestAskedAt: logs.map((log) => log.askedAt).sort().at(-1) ?? new Date(0).toISOString(),
+        latestAskedAt:
+          logs
+            .map((log) => log.askedAt)
+            .sort()
+            .at(-1) ?? new Date(0).toISOString(),
         confidence: "low" as const,
         ...(flowId ? { flowId } : {})
       }))

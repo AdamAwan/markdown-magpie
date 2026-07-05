@@ -18,7 +18,15 @@ function lowConfidenceAnswer(): AnswerResult {
     answer: "I could not find reliable source material.",
     confidence: "low",
     citations: [],
-    gaps: [{ summary: "No source material available", question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }]
+    gaps: [
+      {
+        summary: "No source material available",
+        question: "test?",
+        confidence: "low",
+        citedSectionIds: [],
+        source: "auto"
+      }
+    ]
   };
 }
 
@@ -66,8 +74,18 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
       citations: [],
       gaps: [{ summary, question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }]
     };
-    const live = await store.record({ question: `live-${summary}`, chatProvider: "codex", retrievedSectionIds: [], answer: gapAnswer });
-    const reask = await store.record({ question: `reask-${summary}`, chatProvider: "codex", retrievedSectionIds: [], purpose: "verification" });
+    const live = await store.record({
+      question: `live-${summary}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      answer: gapAnswer
+    });
+    const reask = await store.record({
+      question: `reask-${summary}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      purpose: "verification"
+    });
 
     const completed = await store.updateAnswer(reask.id, { answer: gapAnswer });
     assert.equal(completed?.purpose, "verification");
@@ -84,7 +102,10 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
 
     const listed = await store.list(500);
     assert.ok(!listed.some((log) => log.id === reask.id), "the re-ask log is absent from the questions list");
-    assert.ok(listed.some((log) => log.id === live.id), "the live question is present");
+    assert.ok(
+      listed.some((log) => log.id === live.id),
+      "the live question is present"
+    );
   });
 
   it("stores auto-detected gaps when recording with an answer", async () => {
@@ -128,7 +149,9 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const updated = await store.recordManualGap(recorded.id, "Manual gap summary for testing");
     assert.equal(updated?.manualGap, true);
     assert.ok(updated?.manualGapAt);
-    assert.ok((updated?.gaps ?? []).some((gap) => gap.summary === "Manual gap summary for testing" && gap.source === "manual"));
+    assert.ok(
+      (updated?.gaps ?? []).some((gap) => gap.summary === "Manual gap summary for testing" && gap.source === "manual")
+    );
   });
 
   it("records a manual gap defaulting to the question text when no summary provided", async () => {
@@ -271,7 +294,9 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const reloaded = await store.get(recorded.id);
     assert.equal(reloaded?.confidence, "high", "a followup gap does not force the answer low");
     assert.ok(
-      (reloaded?.gaps ?? []).some((gap) => gap.summary === `missing deploy example ${uniqueId}` && gap.source === "followup"),
+      (reloaded?.gaps ?? []).some(
+        (gap) => gap.summary === `missing deploy example ${uniqueId}` && gap.source === "followup"
+      ),
       "the followup gap is persisted with its source"
     );
   });
@@ -355,7 +380,10 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
 
     // A verification gap is unresolved, so it re-clusters as a candidate.
     const candidates = await store.listGapCandidates(1000);
-    assert.ok(candidates.some((candidate) => candidate.summary === summary), "verification gap surfaces as a candidate");
+    assert.ok(
+      candidates.some((candidate) => candidate.summary === summary),
+      "verification gap surfaces as a candidate"
+    );
   });
 
   it("a parked gap (#158) is retained with parkedAt but excludes its whole question from candidates", async () => {
@@ -508,7 +536,10 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
 
     const retried = await store.retryParkedGap(recorded.id);
     const gaps = retried?.gaps ?? [];
-    assert.ok(gaps.some((g) => g.dismissedAt && g.dismissedReason === "human_retry"), "parked row dismissed as boundary");
+    assert.ok(
+      gaps.some((g) => g.dismissedAt && g.dismissedReason === "human_retry"),
+      "parked row dismissed as boundary"
+    );
     const live = gaps.filter((g) => !g.resolvedAt && !g.dismissedAt);
     assert.equal(live.length, 1, "a fresh live verification row was re-filed");
     assert.equal(live[0]?.source, "verification");
@@ -526,7 +557,12 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
       citations: [],
       gaps: [{ summary, question: "q?", confidence: "low", citedSectionIds: [], source: "auto" }]
     };
-    const recorded = await store.record({ question: `q-${summary}`, chatProvider: "codex", retrievedSectionIds: [], answer });
+    const recorded = await store.record({
+      question: `q-${summary}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      answer
+    });
     await store.recordVerificationGap(recorded.id, { summary, note: "cap hit", parked: true });
 
     const retried = await store.retryParkedGap(recorded.id);
@@ -543,7 +579,12 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
       citations: [],
       gaps: [{ summary, question: "q?", confidence: "low", citedSectionIds: [], source: "auto" }]
     };
-    const recorded = await store.record({ question: `q-${summary}`, chatProvider: "codex", retrievedSectionIds: [], answer });
+    const recorded = await store.record({
+      question: `q-${summary}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      answer
+    });
     await store.recordVerificationGap(recorded.id, { summary, note: "cap hit", parked: true });
 
     const dismissed = await store.dismissParkedGap(recorded.id);
@@ -555,7 +596,11 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
   });
 
   it("retryParkedGap / dismissParkedGap are no-ops on a question that is not parked", async () => {
-    const recorded = await store.record({ question: `not-parked-${randomUUID()}`, chatProvider: "codex", retrievedSectionIds: [] });
+    const recorded = await store.record({
+      question: `not-parked-${randomUUID()}`,
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
     const afterRetry = await store.retryParkedGap(recorded.id);
     assert.deepEqual(afterRetry?.gaps ?? [], [], "retry no-op");
     const afterDismiss = await store.dismissParkedGap(recorded.id);
@@ -591,7 +636,9 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
         answer: "Deploy with the script.",
         confidence: "high",
         citations: [],
-        gaps: [{ summary: followupSummary, question: "secure?", confidence: "high", citedSectionIds: [], source: "followup" }]
+        gaps: [
+          { summary: followupSummary, question: "secure?", confidence: "high", citedSectionIds: [], source: "followup" }
+        ]
       }
     });
 
@@ -672,9 +719,25 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
       gaps: [{ summary, question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }]
     });
 
-    await store.record({ question: `bx1-${uniqueId}`, chatProvider: "codex", retrievedSectionIds: [], answer: lowGap(summaryX) });
-    await store.record({ question: `bx2-${uniqueId}`, chatProvider: "codex", retrievedSectionIds: [], answer: lowGap(summaryX) });
-    await store.record({ question: `by1-${uniqueId}`, chatProvider: "codex", retrievedSectionIds: [], answer: lowGap(summaryY), flowId: `flow-${uniqueId}` });
+    await store.record({
+      question: `bx1-${uniqueId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      answer: lowGap(summaryX)
+    });
+    await store.record({
+      question: `bx2-${uniqueId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      answer: lowGap(summaryX)
+    });
+    await store.record({
+      question: `by1-${uniqueId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      answer: lowGap(summaryY),
+      flowId: `flow-${uniqueId}`
+    });
 
     const batched = await store.gapIdsForSummaries([
       { summary: summaryX },
@@ -683,10 +746,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     ]);
 
     // Each pair matches the single-summary variant exactly.
-    assert.deepEqual(
-      batched.get(gapSummaryKey(summaryX))?.sort(),
-      (await store.gapIdsForSummary(summaryX)).sort()
-    );
+    assert.deepEqual(batched.get(gapSummaryKey(summaryX))?.sort(), (await store.gapIdsForSummary(summaryX)).sort());
     assert.deepEqual(
       batched.get(gapSummaryKey(summaryY, `flow-${uniqueId}`)),
       await store.gapIdsForSummary(summaryY, `flow-${uniqueId}`)

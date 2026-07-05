@@ -121,8 +121,8 @@ export function ParkedQuestionsPanel({ flowLabels }: { flowLabels: Record<string
                   <Badge tone="failed">Triggering question deleted</Badge>
                 </Row>
                 <Note>
-                  This merged proposal was parked, but its triggering question was deleted — there is nothing
-                  to retry. Review the proposal directly on the Proposals page.
+                  This merged proposal was parked, but its triggering question was deleted — there is nothing to retry.
+                  Review the proposal directly on the Proposals page.
                 </Note>
               </ListRow>
             ))}

@@ -27,7 +27,14 @@ export type {
   WatcherView
 } from "@magpie/core";
 
-import type { KnowledgeDocument, ParkedQuestion, QuestionFeedback, RepositoryRef, ScheduledTaskSettings, WatcherView } from "@magpie/core";
+import type {
+  KnowledgeDocument,
+  ParkedQuestion,
+  QuestionFeedback,
+  RepositoryRef,
+  ScheduledTaskSettings,
+  WatcherView
+} from "@magpie/core";
 
 // Queue/job domain types live in @magpie/jobs (the pg-boss contract). The web
 // re-exports the TYPES so the console's job/schedule views never drift from the
