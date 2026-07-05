@@ -36,6 +36,14 @@ Implications you must design around:
 - **The watcher is required** for any AI work. Without a running watcher, `POST /api/ask`
   returns a 202 job that never completes. There is **no "direct mode"** — the old
   `AI_EXECUTION_MODE` was removed in the queue-only migration.
+- **Maintenance orchestrators need ≥2 watchers.** A maintenance job (`verify_gap_closure`,
+  the patrols, the reconciler) claims a watcher, then *blocks* in an API callback while the
+  API bounded-waits on the follow-up AI jobs it enqueues. A watcher runs one job at a time,
+  so those follow-ups can only be answered by a **second** watcher — with one watcher the
+  orchestration self-starves and times out. `verify_gap_closure` handles that timeout
+  safely (an incomplete re-ask is an infra failure that retries, never a false `still_open`
+  — #150), and the console warns when only one watcher is connected. Run two locally (see
+  the **run-magpie** skill).
 - **The watcher has no database access.** API and watcher share only (a) the HTTP API
   and (b) the managed-checkout volume. The watcher gets a tightly scoped payload and
   posts results back; it does not read/write Postgres directly.

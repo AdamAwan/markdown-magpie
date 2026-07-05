@@ -185,6 +185,25 @@ no-op), and `verifyGapClosure` itself short-circuits once a proposal already car
 second `still_open` row for the same failure, double-counting it against
 `CLOSURE_RETRY_CAP`.
 
+### Operational requirement: run at least two watchers
+
+Gap-closure verification is a *maintenance orchestrator*: the watcher that claims the
+`verify_gap_closure` job blocks inside the `POST /api/proposals/:id/verify-closure`
+callback while the API re-asks the triggering questions as ordinary `answer_question`
+jobs. Because a watcher runs **one job at a time**, those re-asks can only be answered by
+a *second* watcher. On a single-watcher deployment the lone watcher is busy in the
+callback and can never claim its own re-asks, so they time out.
+
+An infrastructure timeout is **not** a content verdict. A re-ask that never returns an
+answer is treated as an *incomplete* verification (not `still_open`): `verifyGapClosure`
+throws, the endpoint returns `503`, and the `verify_gap_closure` job simply retries
+rather than the API recording a false `still_open` that would wrongly reopen — and
+eventually park (`needs_attention`) — a correctly-merged doc. The proposal reads honestly
+as *unverified* (no `closure_status`) until a re-ask actually completes. So **run at least
+two watchers** for verification to make progress; the console shows a warning when only
+one is connected. (The scheduled patrols and the gap reconciler share this
+orchestrator shape and the same two-watcher requirement.)
+
 ## Queued Answers
 
 Every answer runs through the queue. When a question is asked, the API logs it

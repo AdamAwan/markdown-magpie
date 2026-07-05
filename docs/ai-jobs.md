@@ -217,6 +217,16 @@ proposal (`proposals.closure_status`):
   its gap is filed under the `needs_attention` source, which parks the whole question from
   auto-redrafting so a human can look.
 
+The re-asks run **concurrently** and — critically — an incomplete re-ask is not a verdict.
+A re-ask that never reaches a `completed` answer (no provider watcher was free before its
+deadline) makes `verifyGapClosure` throw; the endpoint returns `503` and the
+`verify_gap_closure` job retries, rather than the API recording a false `still_open` that
+would wrongly reopen/park a correctly-merged doc. Because the claiming watcher blocks in
+this callback while it waits on the re-asks, **verification needs a second watcher free to
+answer them** — on a single-watcher deployment it never completes and the proposal reads
+honestly as *unverified* (see [question-logging.md](question-logging.md)); the console
+warns when only one watcher is connected.
+
 Every re-ask is recorded in `gap_closure_verification` (verdict, confidence, whether it
 cited a merged doc, detail). Clusterless / seed proposals have no triggering questions and
 skip verification. The only generative step is the enqueued `answer_question` re-ask, so

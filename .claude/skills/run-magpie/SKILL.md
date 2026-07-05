@@ -64,6 +64,17 @@ AUTH_REQUIRED=false MAGPIE_CHECKOUT_ROOT="$PWD/.magpie/checkouts" npm run dev:ap
 AUTH_REQUIRED=false WATCHER_API_CLIENT_ID= WATCHER_API_CLIENT_SECRET= \
   MAGPIE_CHECKOUT_ROOT="$PWD/.magpie/checkouts" npm run dev:watcher                 # background
 
+# 4b. Run a SECOND watcher for the maintenance orchestrators (gap-closure
+#     verification and the patrols). Those jobs claim a watcher, then block in an
+#     API callback while it waits on follow-up answer_question jobs — which a
+#     watcher can only pick up if it isn't the one blocking. One watcher self-
+#     starves and the work times out; with verify_gap_closure that means a merged
+#     doc never verifies (it stays honestly "unverified" — the fix in #150 keeps it
+#     from being falsely reopened). Each process gets a unique registry id, so the
+#     same command is fine; the console warns while only one is connected.
+AUTH_REQUIRED=false WATCHER_API_CLIENT_ID= WATCHER_API_CLIENT_SECRET= \
+  MAGPIE_CHECKOUT_ROOT="$PWD/.magpie/checkouts" npm run dev:watcher                 # background
+
 # 5. Web on :3000. Set MAGPIE_DEV_API_PROXY so the browser reaches the API
 #    same-origin (next.config rewrites /api/* → this URL; inert when unset).
 MAGPIE_DEV_API_PROXY="http://localhost:4000" npm run dev:web                        # background
