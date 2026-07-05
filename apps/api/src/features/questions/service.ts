@@ -43,7 +43,7 @@ export async function dismissParkedGap(ctx: AppContext, questionId: string): Pro
 // A proposal parked with `closure_status = needs_attention` but no parked gap
 // row: its triggering question log was deleted before verification, so the
 // escalation would otherwise be invisible (#158 M1). Read-only on the surface.
-export interface ParkedProposal {
+interface ParkedProposal {
   proposalId: string;
   title: string;
   reason: "triggering_question_deleted";
