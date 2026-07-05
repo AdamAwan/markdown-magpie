@@ -493,6 +493,75 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.equal(liveGaps.length, 1, "exactly one fresh live gap was inserted");
   });
 
+  it("retryParkedGap re-files a live verification row when the parked gap is the only one, and lists/unlists via listParkedQuestions", async () => {
+    const summary = `parked-retry-${randomUUID()}`;
+    const recorded = await store.record({ question: `q-${summary}`, chatProvider: "codex", retrievedSectionIds: [] });
+    await store.recordVerificationGap(recorded.id, { summary, note: "awaiting a human", parked: true });
+
+    const parkedList = await store.listParkedQuestions(1000);
+    const entry = parkedList.find((p) => p.questionId === recorded.id);
+    assert.ok(entry, "the parked question is listed");
+    assert.equal(entry?.summary, summary);
+    assert.equal(entry?.note, "awaiting a human");
+    assert.ok(entry?.parkedAt);
+    assert.equal((await store.gapIdsForSummary(summary)).length, 0, "parked → excluded from clustering");
+
+    const retried = await store.retryParkedGap(recorded.id);
+    const gaps = retried?.gaps ?? [];
+    assert.ok(gaps.some((g) => g.dismissedAt && g.dismissedReason === "human_retry"), "parked row dismissed as boundary");
+    const live = gaps.filter((g) => !g.resolvedAt && !g.dismissedAt);
+    assert.equal(live.length, 1, "a fresh live verification row was re-filed");
+    assert.equal(live[0]?.source, "verification");
+    assert.equal(live[0]?.note, "awaiting a human");
+    assert.ok(!live[0]?.parkedAt, "the re-filed row is not parked");
+    assert.ok(!(await store.listParkedQuestions(1000)).some((p) => p.questionId === recorded.id), "no longer parked");
+    assert.equal((await store.gapIdsForSummary(summary)).length, 1, "re-admitted to clustering");
+  });
+
+  it("retryParkedGap keeps a still-live sibling gap without re-filing a duplicate", async () => {
+    const summary = `parked-sibling-${randomUUID()}`;
+    const answer: AnswerResult = {
+      answer: "weak",
+      confidence: "low",
+      citations: [],
+      gaps: [{ summary, question: "q?", confidence: "low", citedSectionIds: [], source: "auto" }]
+    };
+    const recorded = await store.record({ question: `q-${summary}`, chatProvider: "codex", retrievedSectionIds: [], answer });
+    await store.recordVerificationGap(recorded.id, { summary, note: "cap hit", parked: true });
+
+    const retried = await store.retryParkedGap(recorded.id);
+    const live = (retried?.gaps ?? []).filter((g) => g.summary === summary && !g.resolvedAt && !g.dismissedAt);
+    assert.equal(live.length, 1, "the surviving auto gap re-drafts; no duplicate verification row");
+    assert.equal(live[0]?.source, "auto");
+  });
+
+  it("dismissParkedGap dismisses every live gap for the question and it never re-clusters", async () => {
+    const summary = `parked-dismiss-${randomUUID()}`;
+    const answer: AnswerResult = {
+      answer: "weak",
+      confidence: "low",
+      citations: [],
+      gaps: [{ summary, question: "q?", confidence: "low", citedSectionIds: [], source: "auto" }]
+    };
+    const recorded = await store.record({ question: `q-${summary}`, chatProvider: "codex", retrievedSectionIds: [], answer });
+    await store.recordVerificationGap(recorded.id, { summary, note: "cap hit", parked: true });
+
+    const dismissed = await store.dismissParkedGap(recorded.id);
+    const live = (dismissed?.gaps ?? []).filter((g) => !g.resolvedAt && !g.dismissedAt);
+    assert.equal(live.length, 0, "no live gaps remain");
+    assert.ok((dismissed?.gaps ?? []).some((g) => g.dismissedReason === "human_dismiss"));
+    assert.equal((await store.gapIdsForSummary(summary)).length, 0, "never re-clusters");
+    assert.ok(!(await store.listParkedQuestions(1000)).some((p) => p.questionId === recorded.id), "no longer parked");
+  });
+
+  it("retryParkedGap / dismissParkedGap are no-ops on a question that is not parked", async () => {
+    const recorded = await store.record({ question: `not-parked-${randomUUID()}`, chatProvider: "codex", retrievedSectionIds: [] });
+    const afterRetry = await store.retryParkedGap(recorded.id);
+    assert.deepEqual(afterRetry?.gaps ?? [], [], "retry no-op");
+    const afterDismiss = await store.dismissParkedGap(recorded.id);
+    assert.deepEqual(afterDismiss?.gaps ?? [], [], "dismiss no-op");
+  });
+
   it("listGapCandidates includes low-confidence auto-detected gaps", async () => {
     const uniqueId = randomUUID();
     await store.record({

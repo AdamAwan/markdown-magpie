@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AnswerResult,
   GapCandidate,
+  ParkedQuestion,
   QuestionFeedback,
   QuestionGap,
   QuestionGapSource,
@@ -66,17 +67,31 @@ export interface QuestionLogStore {
   clearManualGap(id: string): Promise<QuestionLog | undefined>;
   // Reopens a gap on a triggering question after a merged proposal failed
   // gap-closure verification. Updates the question's live (unresolved,
-  // undismissed) verification/needs_attention gap in place with the latest
-  // reopen note (what merged, the re-asked answer, why it is still weak) so a
-  // re-draft sees why it is being resubmitted — preserving that gap's id (and
-  // any cluster membership keyed off it). Resolved and dismissed rows are
-  // never touched or replaced: they stay retained for audit, and a fresh gap
-  // is inserted alongside them only when no live one exists (first-ever
-  // failure, or the prior lineage was resolved/dismissed).
+  // undismissed) 'verification' gap in place with the latest reopen note (what
+  // merged, the re-asked answer, why it is still weak) so a re-draft sees why it
+  // is being resubmitted — preserving that gap's id (and any cluster membership
+  // keyed off it). When `parked` (retry cap hit) the row is stamped parked_at,
+  // escalating the whole question to "awaiting a human" without changing its
+  // source. Resolved and dismissed rows are never touched or replaced: they stay
+  // retained for audit, and a fresh gap is inserted alongside them only when no
+  // live one exists (first-ever failure, or the prior lineage was resolved/dismissed).
   recordVerificationGap(
     id: string,
     gap: { summary: string; note: string; parked: boolean }
   ): Promise<QuestionLog | undefined>;
+  // Human "retry" on a parked question: re-admits it to the pipeline. Dismisses
+  // the live parked row (reason 'human_retry') — which ends the failed lineage so
+  // the retry budget resets (verificationLineageResetSince) — and, if no live gap
+  // row still carries the parked summary (the underlying auto gap may have been
+  // resolved/dismissed), re-files a fresh live 'verification' row with the note so
+  // the re-draft sees why. No-op if the question is not parked.
+  retryParkedGap(id: string): Promise<QuestionLog | undefined>;
+  // Human "dismiss" on a parked question: abandons the topic by dismissing every
+  // live gap row for the question (reason 'human_dismiss'). No-op if not parked.
+  dismissParkedGap(id: string): Promise<QuestionLog | undefined>;
+  // Questions currently parked (a live parked 'verification' gap), most-recently
+  // parked first, for the parked-questions listing surface.
+  listParkedQuestions(limit: number): Promise<ParkedQuestion[]>;
   // Soft-resolves the gaps closed by a merged proposal: the matching rows are
   // retained for audit but stop surfacing as candidates. Already-dismissed rows
   // are left untouched — a dismissal is a deliberate settlement a merge must not
@@ -389,6 +404,82 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     this.logs.set(id, updated);
     this.bumpCatalog(existing.flowId);
     return updated;
+  }
+
+  async retryParkedGap(id: string): Promise<QuestionLog | undefined> {
+    const existing = this.logs.get(id);
+    if (!existing) {
+      return undefined;
+    }
+    const gaps = existing.gaps ?? [];
+    const parkedIndex = gaps.findIndex((gap) => gap.parkedAt && !gap.resolvedAt && !gap.dismissedAt);
+    if (parkedIndex === -1) {
+      // Not parked (or already retried) — no-op, race-safe.
+      return existing;
+    }
+    const parked = gaps[parkedIndex]!;
+    const dismissedAt = new Date().toISOString();
+    // Dismiss the parked row (ends the lineage → fresh retry budget).
+    const nextGaps = gaps.map((gap, index) =>
+      index === parkedIndex ? { ...gap, dismissedAt, dismissedReason: "human_retry" } : gap
+    );
+    // If nothing live still carries the parked summary, re-file a fresh live
+    // 'verification' row with the note so the topic re-drafts and the drafter sees
+    // why it is being resubmitted (C1).
+    const stillLive = nextGaps.some(
+      (gap) => gap.summary === parked.summary && !gap.resolvedAt && !gap.dismissedAt
+    );
+    if (!stillLive) {
+      nextGaps.push({
+        summary: parked.summary,
+        source: "verification",
+        ...(parked.note ? { note: parked.note } : {})
+      });
+    }
+    const updated: QuestionLog = { ...existing, gaps: nextGaps };
+    this.logs.set(id, updated);
+    this.bumpCatalog(existing.flowId);
+    return updated;
+  }
+
+  async dismissParkedGap(id: string): Promise<QuestionLog | undefined> {
+    const existing = this.logs.get(id);
+    if (!existing) {
+      return undefined;
+    }
+    const gaps = existing.gaps ?? [];
+    if (!gaps.some((gap) => gap.parkedAt && !gap.resolvedAt && !gap.dismissedAt)) {
+      // Not parked — no-op, race-safe.
+      return existing;
+    }
+    const dismissedAt = new Date().toISOString();
+    // Abandon the topic: dismiss every live gap row for the question.
+    const nextGaps = gaps.map((gap) =>
+      gap.resolvedAt || gap.dismissedAt ? gap : { ...gap, dismissedAt, dismissedReason: "human_dismiss" }
+    );
+    const updated: QuestionLog = { ...existing, gaps: nextGaps };
+    this.logs.set(id, updated);
+    this.bumpCatalog(existing.flowId);
+    return updated;
+  }
+
+  async listParkedQuestions(limit: number): Promise<ParkedQuestion[]> {
+    const parked: ParkedQuestion[] = [];
+    for (const log of this.logs.values()) {
+      const gap = (log.gaps ?? []).find((g) => g.parkedAt && !g.resolvedAt && !g.dismissedAt);
+      if (!gap?.parkedAt) {
+        continue;
+      }
+      parked.push({
+        questionId: log.id,
+        question: log.question,
+        summary: gap.summary,
+        parkedAt: gap.parkedAt,
+        ...(log.flowId ? { flowId: log.flowId } : {}),
+        ...(gap.note ? { note: gap.note } : {})
+      });
+    }
+    return parked.sort((a, b) => b.parkedAt.localeCompare(a.parkedAt)).slice(0, limit);
   }
 
   async resolveGaps(questionIds: string[], summaries: string[], proposalId: string): Promise<number> {

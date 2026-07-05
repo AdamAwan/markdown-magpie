@@ -475,6 +475,86 @@ test("recordVerificationGap retains a dismissed gap and inserts a fresh row for 
   assert.equal(liveGaps.length, 1, "exactly one fresh live gap was inserted");
 });
 
+// Parked-gap human workflow (issue #158): retry / dismiss / listing.
+
+test("retryParkedGap re-admits a parked question, re-filing a live gap when the underlying one is gone", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({ question: "How do I configure X?", chatProvider: "codex", retrievedSectionIds: [] });
+  // Park it: a verification gap that hit the retry cap. It is the question's only gap.
+  await store.recordVerificationGap(log.id, { summary: "How to configure X", note: "retry cap hit", parked: true });
+  assert.equal((await store.listGapCandidates(50)).length, 0, "parked → excluded from candidacy");
+
+  const retried = await store.retryParkedGap(log.id);
+
+  const parkedNow = (retried?.gaps ?? []).filter((gap) => gap.parkedAt && !gap.dismissedAt);
+  assert.equal(parkedNow.length, 0, "no live parked row remains");
+  const dismissed = (retried?.gaps ?? []).find((gap) => gap.dismissedAt);
+  assert.equal(dismissed?.dismissedReason, "human_retry", "the parked row is dismissed as the lineage boundary");
+  const live = (retried?.gaps ?? []).filter((gap) => !gap.resolvedAt && !gap.dismissedAt);
+  assert.equal(live.length, 1, "a fresh live verification row was re-filed");
+  assert.equal(live[0]?.source, "verification");
+  assert.equal(live[0]?.note, "retry cap hit", "the note is carried into the re-draft");
+  const candidates = await store.listGapCandidates(50);
+  assert.ok(candidates.some((c) => c.summary === "How to configure X"), "re-admitted to candidacy");
+});
+
+test("retryParkedGap leaves a still-live underlying gap and does not re-file a duplicate", async () => {
+  const store = new InMemoryQuestionLogStore();
+  // A live auto gap AND a parked verification gap share the summary.
+  const log = await store.record({
+    question: "vaccines?",
+    chatProvider: "codex",
+    answer: lowGapAnswer,
+    retrievedSectionIds: []
+  });
+  const summary = lowGapAnswer.gaps![0]!.summary;
+  await store.recordVerificationGap(log.id, { summary, note: "retry cap hit", parked: true });
+
+  const retried = await store.retryParkedGap(log.id);
+
+  const live = (retried?.gaps ?? []).filter((gap) => gap.summary === summary && !gap.resolvedAt && !gap.dismissedAt);
+  assert.equal(live.length, 1, "the surviving auto gap re-drafts; no duplicate verification row is re-filed");
+  assert.equal(live[0]?.source, "auto");
+});
+
+test("retryParkedGap is a no-op on a question that is not parked", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({ question: "vaccines?", chatProvider: "codex", answer: lowGapAnswer, retrievedSectionIds: [] });
+  const before = await store.get(log.id);
+  const after = await store.retryParkedGap(log.id);
+  assert.deepEqual(after?.gaps, before?.gaps, "unchanged");
+});
+
+test("dismissParkedGap abandons the topic: every live gap is dismissed and never re-clusters", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({ question: "vaccines?", chatProvider: "codex", answer: lowGapAnswer, retrievedSectionIds: [] });
+  const summary = lowGapAnswer.gaps![0]!.summary;
+  await store.recordVerificationGap(log.id, { summary, note: "retry cap hit", parked: true });
+
+  const dismissed = await store.dismissParkedGap(log.id);
+
+  const live = (dismissed?.gaps ?? []).filter((gap) => !gap.resolvedAt && !gap.dismissedAt);
+  assert.equal(live.length, 0, "no live gaps remain");
+  assert.ok((dismissed?.gaps ?? []).every((gap) => gap.dismissedReason === "human_dismiss" || gap.resolvedAt), "dismissed by the human");
+  assert.equal((await store.listGapCandidates(50)).length, 0, "never re-clusters");
+});
+
+test("listParkedQuestions returns parked questions with their note, excluding retried/dismissed ones", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const parkedLog = await store.record({ question: "How do I configure X?", chatProvider: "codex", retrievedSectionIds: [] });
+  await store.recordVerificationGap(parkedLog.id, { summary: "How to configure X", note: "awaiting a human", parked: true });
+  const retriedLog = await store.record({ question: "other?", chatProvider: "codex", retrievedSectionIds: [] });
+  await store.recordVerificationGap(retriedLog.id, { summary: "other", note: "n", parked: true });
+  await store.retryParkedGap(retriedLog.id);
+
+  const parked = await store.listParkedQuestions(50);
+  assert.equal(parked.length, 1, "only the still-parked question is listed");
+  assert.equal(parked[0]?.questionId, parkedLog.id);
+  assert.equal(parked[0]?.summary, "How to configure X");
+  assert.equal(parked[0]?.note, "awaiting a human");
+  assert.ok(parked[0]?.parkedAt);
+});
+
 // Issue #168: updateAnswer used to bump the gap-catalog revision unconditionally,
 // so an identical re-answer forced the reconciler to re-run its metered reshape on
 // an unchanged candidate set. It now bumps only when the answer-derived gaps (or

@@ -268,6 +268,19 @@ export interface GapCluster {
   status: "open" | "proposed" | "dismissed" | "resolved";
 }
 
+// A question parked awaiting a human (its verification gap failed closure past
+// the retry cap). Surfaced by the parked-questions listing so an operator can see
+// the diagnostic note and act — retry (re-admit to the pipeline) or dismiss
+// (abandon the topic). See the parked-gap human workflow (issue #158).
+export interface ParkedQuestion {
+  questionId: string;
+  question: string;
+  flowId?: string;
+  summary: string;
+  note?: string;
+  parkedAt: string;
+}
+
 // A semantic grouping of gap candidates that could be addressed by a single
 // knowledge-base article (e.g. "do cats like cheese?", "is cheese bad for
 // cats?", "what if a cat eats a lot of cheese?" are one cluster). Clusters are

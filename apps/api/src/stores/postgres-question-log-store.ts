@@ -5,6 +5,7 @@ import type {
   Citation,
   Confidence,
   GapCandidate,
+  ParkedQuestion,
   QuestionFeedback,
   QuestionGap,
   QuestionGapSource,
@@ -398,6 +399,140 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     }
 
     return this.get(id);
+  }
+
+  async retryParkedGap(id: string): Promise<QuestionLog | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Dismiss the live parked row (ends the failed lineage → fresh retry budget),
+      // returning its summary + note so we can re-file if nothing live remains.
+      const dismissed = await client.query<{ summary: string; note: string | null; flow_id: string | null }>(
+        `
+          UPDATE question_gaps qg
+          SET dismissed_at = now(), dismissed_reason = 'human_retry'
+          FROM questions q
+          WHERE qg.question_id = q.id
+            AND qg.question_id = $1
+            AND qg.parked_at IS NOT NULL
+            AND qg.resolved_at IS NULL
+            AND qg.dismissed_at IS NULL
+          RETURNING qg.summary AS summary, qg.note AS note, q.flow_id AS flow_id
+        `,
+        [id]
+      );
+      if ((dismissed.rowCount ?? 0) === 0) {
+        // Not parked (or already retried) — no-op, race-safe.
+        await client.query("ROLLBACK");
+        return this.get(id);
+      }
+      const { summary, note, flow_id } = dismissed.rows[0]!;
+      // Re-file a fresh live 'verification' row only if nothing live still carries
+      // the parked summary (the underlying auto gap may have been resolved/dismissed),
+      // so the topic re-drafts and the drafter sees the note (C1).
+      const live = await client.query(
+        `
+          SELECT 1 FROM question_gaps
+          WHERE question_id = $1 AND summary = $2
+            AND resolved_at IS NULL AND dismissed_at IS NULL
+          LIMIT 1
+        `,
+        [id, summary]
+      );
+      if ((live.rowCount ?? 0) === 0) {
+        await client.query(
+          `
+            INSERT INTO question_gaps (question_id, summary, source, note)
+            VALUES ($1, $2, 'verification', $3)
+          `,
+          [id, summary, note]
+        );
+      }
+      await bumpGapCatalog(client, flow_id);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return this.get(id);
+  }
+
+  async dismissParkedGap(id: string): Promise<QuestionLog | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Only act when the question is actually parked; then abandon the topic by
+      // dismissing every live gap row for it.
+      const parked = await client.query(
+        `
+          SELECT 1 FROM question_gaps
+          WHERE question_id = $1 AND parked_at IS NOT NULL
+            AND resolved_at IS NULL AND dismissed_at IS NULL
+          LIMIT 1
+        `,
+        [id]
+      );
+      if ((parked.rowCount ?? 0) === 0) {
+        await client.query("ROLLBACK");
+        return this.get(id);
+      }
+      const dismissed = await client.query<{ flow_id: string | null }>(
+        `
+          UPDATE question_gaps qg
+          SET dismissed_at = now(), dismissed_reason = 'human_dismiss'
+          FROM questions q
+          WHERE qg.question_id = q.id
+            AND qg.question_id = $1
+            AND qg.resolved_at IS NULL
+            AND qg.dismissed_at IS NULL
+          RETURNING q.flow_id AS flow_id
+        `,
+        [id]
+      );
+      if ((dismissed.rowCount ?? 0) > 0) {
+        await bumpGapCatalog(client, dismissed.rows[0]!.flow_id);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return this.get(id);
+  }
+
+  async listParkedQuestions(limit: number): Promise<ParkedQuestion[]> {
+    const result = await this.pool.query<{
+      question_id: string;
+      question: string;
+      flow_id: string | null;
+      summary: string;
+      note: string | null;
+      parked_at: Date;
+    }>(
+      `
+        SELECT q.id AS question_id, q.question, q.flow_id, qg.summary, qg.note, qg.parked_at
+        FROM question_gaps qg
+        JOIN questions q ON q.id = qg.question_id
+        WHERE qg.parked_at IS NOT NULL AND qg.resolved_at IS NULL AND qg.dismissed_at IS NULL
+        ORDER BY qg.parked_at DESC
+        LIMIT $1
+      `,
+      [limit]
+    );
+    return result.rows.map((row) => ({
+      questionId: row.question_id,
+      question: row.question,
+      summary: row.summary,
+      parkedAt: row.parked_at.toISOString(),
+      ...(row.flow_id ? { flowId: row.flow_id } : {}),
+      ...(row.note ? { note: row.note } : {})
+    }));
   }
 
   async clearManualGap(id: string): Promise<QuestionLog | undefined> {

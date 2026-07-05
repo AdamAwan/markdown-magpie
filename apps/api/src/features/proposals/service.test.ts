@@ -541,6 +541,73 @@ test("verifyGapClosure flags needs_attention after the retry cap and stops re-dr
   );
 });
 
+test("a human retry resets the retry budget so the SECOND post-retry failure re-parks, not the first (C2)", async () => {
+  // Regression for C2: verificationLineageResetSince keyed on "most recent row
+  // settled" was only correct at cap 2 because a human retry re-files a fresh LIVE
+  // verification row (retryParkedGap) — leaving the most recent row live and the
+  // budget summing all-time history, insta-re-parking on the first post-retry
+  // failure. Keying on the most recent SETTLED verification row fixes it.
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  ctx.jobs = new AnsweringJobBroker(ctx, () => ({ answer: "Still unsure.", confidence: "low", citations: [] }));
+
+  // Reach the cap: one prior distinct failure + this run = 2nd distinct → parked.
+  await ctx.stores.gapClosureVerifications.record({
+    proposalId: "earlier-redraft-proposal",
+    questionId: log.id,
+    verdict: "still_open",
+    confidence: "low",
+    citedMergedDoc: false
+  });
+  assert.equal((await proposals.verifyGapClosure(ctx, merged)).closureStatus, "needs_attention", "parked after the cap");
+
+  // Human retry re-admits it with a fresh budget (dismisses the parked row; the
+  // surviving underlying auto gap re-drafts, so no verification row is re-filed).
+  const retried = await ctx.stores.questionLogs.retryParkedGap(log.id);
+  assert.equal(
+    (retried?.gaps ?? []).some((g) => g.parkedAt && !g.dismissedAt && !g.resolvedAt),
+    false,
+    "no live parked row remains after retry"
+  );
+  assert.ok(
+    (await ctx.stores.questionLogs.listGapCandidates(50)).some((c) => c.summary === "How to configure X"),
+    "the question is re-admitted to candidacy after retry"
+  );
+  // The in-memory audit store stamps rows at millisecond resolution; force the
+  // clock past the retry's dismissal boundary so the post-retry failures sort
+  // strictly after it (in production these are minutes apart at µs resolution).
+  await new Promise((resolve) => setTimeout(resolve, 5));
+
+  const mergeAnotherFailingProposal = async (summary: string, path: string) => {
+    const proposal = await ctx.stores.proposals.create({
+      title: summary,
+      targetPath: path,
+      markdown: "# body",
+      rationale: "r",
+      evidence: [],
+      gapSummary: summary,
+      triggeringQuestionIds: [log.id]
+    });
+    await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+    const m = await ctx.stores.proposals.get(proposal.id);
+    assert.ok(m);
+    return proposals.verifyGapClosure(ctx, m);
+  };
+
+  // First post-retry failure: within the fresh budget → reopened, not parked.
+  const first = await mergeAnotherFailingProposal("post-retry attempt 1", "retry-1.md");
+  assert.equal(first.closureStatus, "reopened", "the first post-retry failure is within the fresh budget");
+  assert.equal(
+    (await ctx.stores.questionLogs.get(log.id))?.gaps?.some((g) => g.parkedAt && !g.dismissedAt),
+    false,
+    "not re-parked after only one post-retry failure"
+  );
+
+  // Second post-retry failure: the fresh budget is now exhausted → re-parked.
+  const second = await mergeAnotherFailingProposal("post-retry attempt 2", "retry-2.md");
+  assert.equal(second.closureStatus, "needs_attention", "the SECOND post-retry failure re-parks");
+});
+
 test("verifyGapClosure short-circuits without re-asking when closureStatus is already recorded", async () => {
   const ctx = makeTestContext();
   const { log, merged } = await mergedProposalWithGap(ctx);
