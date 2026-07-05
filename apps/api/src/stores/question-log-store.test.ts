@@ -564,9 +564,9 @@ test("retryParkedGap re-admits a parked question, re-filing a live gap when the 
   );
 });
 
-test("retryParkedGap leaves a still-live underlying gap and does not re-file a duplicate", async () => {
+test("retryParkedGap preserves the note (re-files a live verification row) even when the auto gap survives, without forking a duplicate candidate", async () => {
   const store = new InMemoryQuestionLogStore();
-  // A live auto gap AND a parked verification gap share the summary.
+  // A live auto gap AND a parked verification gap share the summary (the common case).
   const log = await store.record({
     question: "vaccines?",
     chatProvider: "codex",
@@ -578,9 +578,19 @@ test("retryParkedGap leaves a still-live underlying gap and does not re-file a d
 
   const retried = await store.retryParkedGap(log.id);
 
-  const live = (retried?.gaps ?? []).filter((gap) => gap.summary === summary && !gap.resolvedAt && !gap.dismissedAt);
-  assert.equal(live.length, 1, "the surviving auto gap re-drafts; no duplicate verification row is re-filed");
-  assert.equal(live[0]?.source, "auto");
+  const live = (retried?.gaps ?? []).filter((gap) => !gap.resolvedAt && !gap.dismissedAt);
+  // auto(summary) + a re-filed verification(summary) carrying the note — the normal
+  // reopened shape, so the redraft still sees why the merge fell short (#158 review #1).
+  const verification = live.find((gap) => gap.source === "verification");
+  assert.ok(verification, "a live verification row carries the note forward");
+  assert.equal(verification?.note, "retry cap hit");
+  assert.ok(
+    live.some((gap) => gap.source === "auto"),
+    "the surviving auto gap is untouched"
+  );
+  // Both share the summary, so candidacy dedups them into a single candidate — no duplicate.
+  const candidates = await store.listGapCandidates(50);
+  assert.equal(candidates.filter((c) => c.summary === summary).length, 1, "a single candidate, not a duplicate");
 });
 
 test("retryParkedGap is a no-op on a question that is not parked", async () => {
@@ -596,7 +606,7 @@ test("retryParkedGap is a no-op on a question that is not parked", async () => {
   assert.deepEqual(after?.gaps, before?.gaps, "unchanged");
 });
 
-test("dismissParkedGap abandons the topic: every live gap is dismissed and never re-clusters", async () => {
+test("dismissParkedGap abandons only the parked topic and never re-clusters it", async () => {
   const store = new InMemoryQuestionLogStore();
   const log = await store.record({
     question: "vaccines?",
@@ -609,13 +619,41 @@ test("dismissParkedGap abandons the topic: every live gap is dismissed and never
 
   const dismissed = await store.dismissParkedGap(log.id);
 
-  const live = (dismissed?.gaps ?? []).filter((gap) => !gap.resolvedAt && !gap.dismissedAt);
-  assert.equal(live.length, 0, "no live gaps remain");
+  const live = (dismissed?.gaps ?? []).filter((gap) => !gap.resolvedAt && !gap.dismissedAt && gap.summary === summary);
+  assert.equal(live.length, 0, "no live gaps remain for the parked topic");
   assert.ok(
-    (dismissed?.gaps ?? []).every((gap) => gap.dismissedReason === "human_dismiss" || gap.resolvedAt),
-    "dismissed by the human"
+    (dismissed?.gaps ?? [])
+      .filter((gap) => gap.summary === summary)
+      .every((gap) => gap.dismissedReason === "human_dismiss"),
+    "the parked topic's gaps were dismissed by the human"
   );
-  assert.equal((await store.listGapCandidates(50)).length, 0, "never re-clusters");
+  assert.equal(
+    (await store.listGapCandidates(50)).filter((c) => c.summary === summary).length,
+    0,
+    "the parked topic never re-clusters"
+  );
+});
+
+test("dismissParkedGap does NOT collaterally dismiss an unrelated topic on a multi-topic question (#158 review #2)", async () => {
+  const store = new InMemoryQuestionLogStore();
+  // One question exposing two topics: S1 (parked) and S2 (a live manual gap).
+  const log = await store.record({ question: "multi?", chatProvider: "codex", retrievedSectionIds: [] });
+  await store.recordManualGap(log.id, "S2 unrelated topic");
+  await store.recordVerificationGap(log.id, { summary: "S1 parked topic", note: "cap hit", parked: true });
+
+  const dismissed = await store.dismissParkedGap(log.id);
+
+  const s2 = (dismissed?.gaps ?? []).find((gap) => gap.summary === "S2 unrelated topic");
+  assert.ok(s2 && !s2.dismissedAt && !s2.resolvedAt, "the unrelated S2 gap survives the dismissal");
+  const s1Live = (dismissed?.gaps ?? []).some(
+    (gap) => gap.summary === "S1 parked topic" && !gap.dismissedAt && !gap.resolvedAt
+  );
+  assert.equal(s1Live, false, "the parked S1 topic is dismissed");
+  // With S1 unparked and S2 never parked, S2 re-enters candidacy.
+  assert.ok(
+    (await store.listGapCandidates(50)).some((c) => c.summary === "S2 unrelated topic"),
+    "S2 re-enters candidacy once the question is no longer parked"
+  );
 });
 
 test("listParkedQuestions returns parked questions with their note, excluding retried/dismissed ones", async () => {

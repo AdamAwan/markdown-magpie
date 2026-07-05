@@ -62,10 +62,15 @@ export async function listParked(ctx: AppContext, limit: number): Promise<Parked
   // whose triggering questions still exist produced (or produced-then-settled) a
   // real parked question and is not re-surfaced at the proposal level.
   const needsAttention = await ctx.stores.proposals.listByClosureStatus("needs_attention", limit);
+  // A proposal whose triggering question is currently parked already appears under
+  // `questions`; skip it without a lookup (the bulk of needs_attention proposals),
+  // so we only fetch logs for the candidates that could be a missing-log case
+  // (#158 review #5).
+  const parkedIds = new Set(questions.map((q) => q.questionId));
   const proposals: ParkedProposal[] = [];
   for (const proposal of needsAttention) {
     const triggeringIds = proposal.triggeringQuestionIds ?? [];
-    if (triggeringIds.length === 0) {
+    if (triggeringIds.length === 0 || triggeringIds.some((qid) => parkedIds.has(qid))) {
       continue;
     }
     const logs = await Promise.all(triggeringIds.map((id) => ctx.stores.questionLogs.get(id)));

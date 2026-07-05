@@ -240,12 +240,16 @@ POST /api/questions/:id/gap/dismiss
 
 - **Retry** re-admits the question to the draft pipeline with a **fresh retry budget**. It
   dismisses the live parked row (which becomes the lineage-reset boundary, so
-  `countPriorStillOpen` restarts) and — only when no live gap still carries the parked
-  summary (the underlying `auto` gap may have been resolved or dismissed meanwhile) —
-  re-files a fresh live `verification` row carrying the note, so the re-draft still sees why
-  the previous attempt fell short. It is never a silent no-op.
-- **Dismiss** abandons the topic: every live gap on the question is dismissed
-  (`human_dismiss`) and never re-clusters.
+  `countPriorStillOpen` restarts) and re-files a fresh live `verification` row **carrying the
+  note**, so the re-draft still sees why the previous attempt fell short — the note lives only
+  on the (now-dismissed) verification row, so it would otherwise be lost even though the
+  sibling `auto` gap re-drafts. The re-filed row is filed under the surviving live gap's
+  summary when exactly one remains, so it dedups into a single candidate rather than forking
+  a duplicate. It is never a silent no-op.
+- **Dismiss** abandons the **parked topic**: the live gaps sharing the parked summary (the
+  verification row + its sibling `auto` gap) are dismissed (`human_dismiss`) and never
+  re-cluster. Unrelated topics on a multi-topic question — only hidden by question-level
+  parking, never escalated — survive and re-enter candidacy.
 - Both are no-ops (returning the current log) on a question that is not parked.
 
 `GET /api/questions/parked` also returns the **missing-log** escalations: a proposal whose

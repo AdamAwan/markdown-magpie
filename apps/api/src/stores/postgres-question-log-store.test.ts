@@ -549,7 +549,7 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.equal((await store.gapIdsForSummary(summary)).length, 1, "re-admitted to clustering");
   });
 
-  it("retryParkedGap keeps a still-live sibling gap without re-filing a duplicate", async () => {
+  it("retryParkedGap preserves the note (re-files a live verification row) alongside the surviving auto gap, deduped to one candidate", async () => {
     const summary = `parked-sibling-${randomUUID()}`;
     const answer: AnswerResult = {
       answer: "weak",
@@ -567,31 +567,43 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
 
     const retried = await store.retryParkedGap(recorded.id);
     const live = (retried?.gaps ?? []).filter((g) => g.summary === summary && !g.resolvedAt && !g.dismissedAt);
-    assert.equal(live.length, 1, "the surviving auto gap re-drafts; no duplicate verification row");
-    assert.equal(live[0]?.source, "auto");
+    const verification = live.find((g) => g.source === "verification");
+    assert.ok(verification, "a live verification row carries the note forward (#158 review #1)");
+    assert.equal(verification?.note, "cap hit");
+    assert.ok(
+      live.some((g) => g.source === "auto"),
+      "the surviving auto gap is untouched"
+    );
+    const candidates = await store.listGapCandidates(1000);
+    assert.equal(candidates.filter((c) => c.summary === summary).length, 1, "deduped to a single candidate");
   });
 
-  it("dismissParkedGap dismisses every live gap for the question and it never re-clusters", async () => {
-    const summary = `parked-dismiss-${randomUUID()}`;
+  it("dismissParkedGap abandons only the parked topic, leaving an unrelated gap on the same question (#158 review #2)", async () => {
+    const parkedSummary = `parked-topic-${randomUUID()}`;
+    const otherSummary = `other-topic-${randomUUID()}`;
     const answer: AnswerResult = {
       answer: "weak",
       confidence: "low",
       citations: [],
-      gaps: [{ summary, question: "q?", confidence: "low", citedSectionIds: [], source: "auto" }]
+      gaps: [{ summary: otherSummary, question: "q?", confidence: "low", citedSectionIds: [], source: "auto" }]
     };
     const recorded = await store.record({
-      question: `q-${summary}`,
+      question: `q-multi-${parkedSummary}`,
       chatProvider: "codex",
       retrievedSectionIds: [],
       answer
     });
-    await store.recordVerificationGap(recorded.id, { summary, note: "cap hit", parked: true });
+    await store.recordVerificationGap(recorded.id, { summary: parkedSummary, note: "cap hit", parked: true });
 
     const dismissed = await store.dismissParkedGap(recorded.id);
-    const live = (dismissed?.gaps ?? []).filter((g) => !g.resolvedAt && !g.dismissedAt);
-    assert.equal(live.length, 0, "no live gaps remain");
-    assert.ok((dismissed?.gaps ?? []).some((g) => g.dismissedReason === "human_dismiss"));
-    assert.equal((await store.gapIdsForSummary(summary)).length, 0, "never re-clusters");
+    const parkedLive = (dismissed?.gaps ?? []).some(
+      (g) => g.summary === parkedSummary && !g.resolvedAt && !g.dismissedAt
+    );
+    assert.equal(parkedLive, false, "the parked topic is dismissed");
+    const other = (dismissed?.gaps ?? []).find((g) => g.summary === otherSummary);
+    assert.ok(other && !other.dismissedAt && !other.resolvedAt, "the unrelated topic survives");
+    assert.equal((await store.gapIdsForSummary(parkedSummary)).length, 0, "parked topic never re-clusters");
+    assert.equal((await store.gapIdsForSummary(otherSummary)).length, 1, "unrelated topic re-enters candidacy");
     assert.ok(!(await store.listParkedQuestions(1000)).some((p) => p.questionId === recorded.id), "no longer parked");
   });
 

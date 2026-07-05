@@ -421,13 +421,19 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     const nextGaps = gaps.map((gap, index) =>
       index === parkedIndex ? { ...gap, dismissedAt, dismissedReason: "human_retry" } : gap
     );
-    // If nothing live still carries the parked summary, re-file a fresh live
-    // 'verification' row with the note so the topic re-drafts and the drafter sees
-    // why it is being resubmitted (C1).
-    const stillLive = nextGaps.some((gap) => gap.summary === parked.summary && !gap.resolvedAt && !gap.dismissedAt);
-    if (!stillLive) {
+    // Re-file a fresh LIVE 'verification' row carrying the note, so the redraft
+    // still sees why the last merge fell short (draftFromGaps reads resubmission
+    // notes only off live verification gaps). The dismissed parked row's note would
+    // otherwise be lost even though its sibling auto gap re-drafts (C1). File it
+    // under the surviving live gap's summary when exactly one remains — the common
+    // case, and the summary-fallback case — so it dedups with that gap into a
+    // single candidate instead of forking a duplicate (#158 review #4). Skip the
+    // re-file only when there is no note to preserve AND a live gap already remains.
+    const survivingLive = nextGaps.filter((gap) => !gap.resolvedAt && !gap.dismissedAt);
+    if (parked.note || survivingLive.length === 0) {
+      const targetSummary = survivingLive.length === 1 ? survivingLive[0]!.summary : parked.summary;
       nextGaps.push({
-        summary: parked.summary,
+        summary: targetSummary,
         source: "verification",
         ...(parked.note ? { note: parked.note } : {})
       });
@@ -444,14 +450,20 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       return undefined;
     }
     const gaps = existing.gaps ?? [];
-    if (!gaps.some((gap) => gap.parkedAt && !gap.resolvedAt && !gap.dismissedAt)) {
+    const parked = gaps.find((gap) => gap.parkedAt && !gap.resolvedAt && !gap.dismissedAt);
+    if (!parked) {
       // Not parked — no-op, race-safe.
       return existing;
     }
     const dismissedAt = new Date().toISOString();
-    // Abandon the topic: dismiss every live gap row for the question.
+    // Abandon the PARKED topic: dismiss the live gaps sharing the parked summary
+    // (the verification row + its sibling auto gap). Unrelated topics on a
+    // multi-topic question — only hidden by question-level parking, never escalated
+    // — survive and re-enter candidacy (#158 review #2).
     const nextGaps = gaps.map((gap) =>
-      gap.resolvedAt || gap.dismissedAt ? gap : { ...gap, dismissedAt, dismissedReason: "human_dismiss" }
+      !gap.resolvedAt && !gap.dismissedAt && gap.summary === parked.summary
+        ? { ...gap, dismissedAt, dismissedReason: "human_dismiss" }
+        : gap
     );
     const updated: QuestionLog = { ...existing, gaps: nextGaps };
     this.logs.set(id, updated);

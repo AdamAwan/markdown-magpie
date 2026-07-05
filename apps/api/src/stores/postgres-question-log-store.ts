@@ -420,25 +420,30 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         return this.get(id);
       }
       const { summary, note, flow_id } = dismissed.rows[0]!;
-      // Re-file a fresh live 'verification' row only if nothing live still carries
-      // the parked summary (the underlying auto gap may have been resolved/dismissed),
-      // so the topic re-drafts and the drafter sees the note (C1).
-      const live = await client.query(
+      // Re-file a fresh LIVE 'verification' row carrying the note, so the redraft
+      // still sees why the last merge fell short (draftFromGaps reads resubmission
+      // notes only off live verification gaps). The dismissed parked row's note
+      // would otherwise be lost even though its sibling auto gap re-drafts (C1).
+      // File it under the surviving live gap's summary when exactly one remains —
+      // the common case, and the summary-fallback case — so it dedups with that gap
+      // into a single candidate rather than forking a duplicate (#158 review #4).
+      // Skip only when there is no note to preserve AND a live gap already remains.
+      const survivors = await client.query<{ summary: string }>(
         `
-          SELECT 1 FROM question_gaps
-          WHERE question_id = $1 AND summary = $2
-            AND resolved_at IS NULL AND dismissed_at IS NULL
-          LIMIT 1
+          SELECT summary FROM question_gaps
+          WHERE question_id = $1 AND resolved_at IS NULL AND dismissed_at IS NULL
         `,
-        [id, summary]
+        [id]
       );
-      if ((live.rowCount ?? 0) === 0) {
+      const survivingSummaries = survivors.rows.map((row) => row.summary);
+      if (note !== null || survivingSummaries.length === 0) {
+        const targetSummary = survivingSummaries.length === 1 ? survivingSummaries[0]! : summary;
         await client.query(
           `
             INSERT INTO question_gaps (question_id, summary, source, note)
             VALUES ($1, $2, 'verification', $3)
           `,
-          [id, summary, note]
+          [id, targetSummary, note]
         );
       }
       await bumpGapCatalog(client, flow_id);
@@ -457,11 +462,13 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      // Only act when the question is actually parked; then abandon the topic by
-      // dismissing every live gap row for it.
-      const parked = await client.query(
+      // Only act when the question is actually parked; then abandon the PARKED
+      // TOPIC by dismissing the live gaps sharing the parked summary. Unrelated
+      // topics on a multi-topic question — only hidden by question-level parking,
+      // never escalated — survive and re-enter candidacy (#158 review #2).
+      const parked = await client.query<{ summary: string }>(
         `
-          SELECT 1 FROM question_gaps
+          SELECT summary FROM question_gaps
           WHERE question_id = $1 AND parked_at IS NOT NULL
             AND resolved_at IS NULL AND dismissed_at IS NULL
           LIMIT 1
@@ -472,6 +479,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         await client.query("ROLLBACK");
         return this.get(id);
       }
+      const parkedSummary = parked.rows[0]!.summary;
       const dismissed = await client.query<{ flow_id: string | null }>(
         `
           UPDATE question_gaps qg
@@ -479,11 +487,12 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           FROM questions q
           WHERE qg.question_id = q.id
             AND qg.question_id = $1
+            AND qg.summary = $2
             AND qg.resolved_at IS NULL
             AND qg.dismissed_at IS NULL
           RETURNING q.flow_id AS flow_id
         `,
-        [id]
+        [id, parkedSummary]
       );
       if ((dismissed.rowCount ?? 0) > 0) {
         await bumpGapCatalog(client, dismissed.rows[0]!.flow_id);

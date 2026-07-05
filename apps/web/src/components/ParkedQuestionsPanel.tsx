@@ -83,7 +83,11 @@ export function ParkedQuestionsPanel({ flowLabels }: { flowLabels: Record<string
         {loading ? (
           <EmptyState>Loading…</EmptyState>
         ) : total === 0 ? (
-          <EmptyState>No questions are parked — every escalation has been handled.</EmptyState>
+          // Only claim "all clear" when we actually loaded — a failed fetch keeps
+          // view null, which must not read as "nothing is parked" (#158 review #3).
+          error ? null : (
+            <EmptyState>No questions are parked — every escalation has been handled.</EmptyState>
+          )
         ) : (
           <ScrollList>
             {questions.map((q) => (
