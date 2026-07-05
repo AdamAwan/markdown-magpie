@@ -162,6 +162,24 @@ export function buildAttentionNotices({
     });
   }
 
+  // A single connected watcher can run ordinary jobs, but it cannot serve the
+  // maintenance-orchestrator pattern: gap-closure verification and the patrols claim
+  // a job, then block calling back into the API while it waits on freshly-enqueued
+  // answer_question jobs — which only ANOTHER watcher can pick up (a watcher runs one
+  // job at a time). With just one watcher those follow-ups are never claimed, so the
+  // orchestration times out; for gap-closure verification that wrongly reopens a
+  // correctly-merged doc (#150). Warn so operators run at least two watchers.
+  if (workers.length === 1) {
+    notices.push({
+      id: "single-watcher",
+      title: "Only one watcher is connected",
+      body: "Gap-closure verification and the maintenance patrols claim a job and then wait on follow-up AI jobs that a second watcher must run. With a single watcher those follow-ups can't be claimed and the work times out. Run at least two watchers.",
+      tone: "warning",
+      actionLabel: "Open Jobs",
+      action: () => openSection("jobs")
+    });
+  }
+
   return notices;
 }
 

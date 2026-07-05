@@ -146,8 +146,17 @@ Aggregate per proposal (all-or-nothing — a partial fix still leaves a real gap
   `QuestionGap` on the still-open triggering question with `source: "verification"`
   and a `note` carrying what was merged, the re-asked answer, and why it is still weak.
   The full detail also lands in `gap_closure_verification` (below).
-- **Inconclusive** (a re-ask timed out / no provider watcher answered) → treated as
-  `still_open` for safety — never claim a closure that could not be verified.
+- **Inconclusive** (a re-ask timed out / no provider watcher answered) → **not** a content
+  verdict. *(Amended post-implementation — issue #150.)* Because this orchestrator blocks
+  the claiming watcher inside the `/verify-closure` callback while it waits on the re-asks,
+  a **single-watcher** deployment self-starves: the lone watcher can never claim its own
+  re-asks, so they always time out. Treating that timeout as `still_open` (the original
+  design) silently converted an infrastructure outage into a content verdict that wrongly
+  reopened — and after two cycles parked — a correctly-merged doc. An incomplete re-ask now
+  makes verification **throw** (endpoint returns `503`), so the `verify_gap_closure` job
+  retries rather than recording a verdict; the proposal reads honestly as *unverified* until
+  a re-ask completes. **Verification therefore requires ≥2 watchers** (the console warns at
+  one). The re-asks also now run concurrently.
 - **Loop guard:** count prior `still_open` `gap_closure_verification` rows for the
   triggering question. After **2** failed verifications, mark the proposal
   `closure_status = needs_attention` and record the still-open gap with

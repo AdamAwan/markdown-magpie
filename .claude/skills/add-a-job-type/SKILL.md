@@ -118,3 +118,20 @@ Postgres-backed broker integration test and `scripts/e2e-jobs.ts`).
   run time. The API's ask service picks the configured provider before enqueuing.
 - New docs: if the job is user-visible or changes the model, update `docs/ai-jobs.md` /
   `docs/architecture.md` alongside the code.
+- **A maintenance *orchestrator* self-starves a single watcher.** The maintenance pattern is:
+  the watcher claims the job and POSTs a thin API endpoint, and the API `runJobToCompletion`s
+  the real generative work as *enqueued* AI jobs (`verify_gap_closure`, the patrols, the gap
+  reconciler all do this). The claiming watcher **blocks inside that POST** for the whole
+  orchestration, and a watcher runs **one job at a time** — so the inner AI jobs can only be
+  claimed by a *second* watcher. With one watcher they never get claimed and time out. If you
+  add or touch such a job, it **requires ≥2 watchers** (say so in docs; `run-magpie` starts
+  two, and the console warns at one). This is a real trap — it bit `verify_gap_closure` (#150).
+- **An orchestrator timeout is not a result.** `runJobToCompletion` does **not** throw when its
+  bounded wait elapses — it cancels the job and returns a non-`completed` `JobView` (state
+  `cancelled`/`failed`). Check `job.state === "completed"` before reading `job.output`; treating
+  a timed-out/empty output as a *content* verdict silently converts an infrastructure outage
+  (no watcher free) into a wrong answer. Fail/retry the orchestrator instead so its own retry
+  budget absorbs the outage (see `verifyGapClosure` throwing `VerificationIncompleteError` →
+  `503`). To exercise this in a test, a plain `FakeJobBroker` leaves the enqueued job in
+  `created` so the bounded wait (`JOB_RUN_TO_COMPLETION_TIMEOUT_MS`, 100ms in the test context)
+  times out and cancels it.

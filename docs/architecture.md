@@ -152,6 +152,15 @@ merge/split/**dismiss**, then critic-confirm) — is itself a provider-partition
 `reconcile_gap_clusters` AI job the API enqueues and bounded-waits on, so no
 generative work runs in the API process.
 
+**Maintenance orchestrators need at least two watchers.** The claiming watcher blocks
+inside the orchestration POST while the API bounded-waits on the tier-2 AI jobs it
+enqueues, and a watcher runs one job at a time — so those tier-2 jobs can only be claimed
+by a *second* watcher. On a single-watcher deployment the orchestration's inner AI jobs
+never get claimed and time out. For `verify_gap_closure` this is handled safely: an
+incomplete re-ask is reported as an infrastructure failure (the endpoint returns `503` and
+the job retries), never recorded as a `still_open` content verdict that would wrongly
+reopen a correctly-merged doc (#150). The console warns when only one watcher is connected.
+
 **Overlap is serialized per flow, in the API.** pg-boss dedupes the reconciler
 *enqueue* per cron slot (the timekeeper sends with a `singletonKey`/
 `singletonSeconds`), but it does **not** serialize *execution*: because the

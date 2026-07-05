@@ -188,8 +188,20 @@ export function proposalRoutes(ctx: AppContext): Hono {
     if (!proposal) {
       throw new HttpError(404, "proposal_not_found");
     }
-    const result = await proposalsService.verifyGapClosure(ctx, proposal);
-    return c.json(result);
+    try {
+      const result = await proposalsService.verifyGapClosure(ctx, proposal);
+      return c.json(result);
+    } catch (error) {
+      // A re-ask that never completed is an infrastructure failure (no provider
+      // watcher was free — the single-watcher self-starve of #150), NOT a content
+      // verdict. Return 503 so the watcher's verify_gap_closure job retries and its
+      // own retry budget absorbs the outage, instead of the API recording a false
+      // still_open that would wrongly reopen or park a correctly-merged doc.
+      if (error instanceof proposalsService.VerificationIncompleteError) {
+        throw new HttpError(503, "gap_closure_verification_incomplete", error.message);
+      }
+      throw error;
+    }
   });
 
   app.post("/:id/publish", requireScopes("manage:knowledge"), async (c) => {

@@ -880,6 +880,88 @@ test("verifyGapClosure resolves gaps for a closed question even when a sibling i
   assert.ok(q2GapStillOpen, "Q2's gap remains a candidate for re-drafting");
 });
 
+test("verifyGapClosure throws (not still_open) when a re-ask never completes, recording no verdict", async () => {
+  // Regression for issue #150: on a single-watcher deployment the maintenance
+  // watcher blocks in the /verify-closure callback and no watcher is free to answer
+  // the re-ask, so runJobToCompletion times out. That is an infrastructure failure,
+  // not evidence the merged doc is inadequate — it must NOT be turned into a
+  // still_open content verdict that reopens/parks a correctly-merged doc.
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  // A plain broker never completes the answer_question job, so the bounded wait
+  // times out (JOB_RUN_TO_COMPLETION_TIMEOUT_MS is 100ms in tests) and the job is
+  // cancelled — exactly the single-watcher self-starve.
+  ctx.jobs = new FakeJobBroker();
+
+  await assert.rejects(
+    () => proposals.verifyGapClosure(ctx, merged),
+    (error: unknown) => error instanceof proposals.VerificationIncompleteError
+  );
+
+  // Nothing was committed: no closure status, no verification row, the gap is not
+  // reopened, and the retry cap is untouched — so a retry (once a watcher is free)
+  // starts clean.
+  const reloaded = await ctx.stores.proposals.get(merged.id);
+  assert.equal(reloaded?.closureStatus, undefined, "an infrastructure failure leaves the proposal unverified, not reopened");
+  assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id), 0, "no still_open verdict is recorded");
+  const q = await ctx.stores.questionLogs.get(log.id);
+  assert.equal(
+    (q?.gaps ?? []).some((gap) => gap.source === "verification" || gap.source === "needs_attention"),
+    false,
+    "no verification gap is filed for an infrastructure failure"
+  );
+});
+
+test("verifyGapClosure aborts the whole run when only some re-asks complete, committing nothing", async () => {
+  // A multi-question proposal where one re-ask completes and a sibling starves. The
+  // run must abort (throw) without committing the completed question's verdict, so a
+  // retry re-evaluates the whole proposal cleanly rather than half-recording it.
+  const ctx = makeTestContext();
+  const q1 = await ctx.stores.questionLogs.record({ question: "How do I configure X?", chatProvider: "codex", retrievedSectionIds: [] });
+  await ctx.stores.questionLogs.recordManualGap(q1.id, "How to configure X");
+  const q2 = await ctx.stores.questionLogs.record({ question: "How do I configure Y?", chatProvider: "codex", retrievedSectionIds: [] });
+  await ctx.stores.questionLogs.recordManualGap(q2.id, "How to configure Y");
+  const proposal = await ctx.stores.proposals.create({
+    title: "Configure X and Y",
+    targetPath: "configure-x.md",
+    markdown: "# body",
+    rationale: "r",
+    evidence: [],
+    gapSummary: "How to configure X\nHow to configure Y",
+    triggeringQuestionIds: [q1.id, q2.id]
+  });
+  await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+  const merged = await ctx.stores.proposals.get(proposal.id);
+  assert.ok(merged);
+
+  // Completes Q1's re-ask (confident, cites the doc) but leaves Q2's uncompleted.
+  class PartialBroker extends FakeJobBroker {
+    override async create(type: JobType, input: unknown): Promise<JobView> {
+      const job = await super.create(type, input);
+      if (type === "answer_question" && (input as { question: string }).question === "How do I configure X?") {
+        const { questionLogId } = input as { questionLogId: string };
+        const answer: AnswerResult = { answer: "Set the X flag.", confidence: "high", citations: [citation("configure-x.md")] };
+        await ctx.stores.questionLogs.updateAnswer(questionLogId, { answer, chatProvider: "codex" });
+        return super.complete(job.id, answer);
+      }
+      return job; // Q2 stays created → times out → cancelled → incomplete
+    }
+  }
+  ctx.jobs = new PartialBroker();
+
+  await assert.rejects(
+    () => proposals.verifyGapClosure(ctx, merged!),
+    (error: unknown) => error instanceof proposals.VerificationIncompleteError
+  );
+
+  const reloaded = await ctx.stores.proposals.get(merged!.id);
+  assert.equal(reloaded?.closureStatus, undefined);
+  // Q1 completed closed, but because the whole run aborted its verdict is NOT
+  // committed — questionsWithClosedVerdict is empty, so a retry re-asks it too.
+  const closed = await ctx.stores.gapClosureVerifications.questionsWithClosedVerdict(merged!.id);
+  assert.equal(closed.size, 0, "no partial verdict is recorded when the run aborts");
+});
+
 test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job", async () => {
   const ctx = makeTestContext();
   ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
