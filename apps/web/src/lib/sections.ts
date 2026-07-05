@@ -21,6 +21,7 @@ export const SECTION_NAV: SectionNav[] = [
   { section: "proposals", path: "/proposals", glyph: "P", label: "Proposals", group: 1 },
   { section: "jobs", path: "/jobs", glyph: "J", label: "Jobs", group: 2 },
   { section: "activity", path: "/activity", glyph: "A", label: "Activity", group: 2 },
+  { section: "insights", path: "/insights", glyph: "I", label: "Insights", group: 2 },
   { section: "schedules", path: "/schedules", glyph: "Sc", label: "Schedules", group: 2 },
   { section: "config", path: "/config", glyph: "C", label: "Config", group: 2 },
   { section: "dataflow", path: "/dataflow", glyph: "D", label: "Data Flow", group: 3 },

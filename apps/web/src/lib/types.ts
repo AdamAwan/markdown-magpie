@@ -82,6 +82,7 @@ export type ConsoleSection =
   | "jobs"
   | "proposals"
   | "activity"
+  | "insights"
   | "schedules"
   | "prompts"
   | "config"
@@ -270,3 +271,7 @@ export type {
   FlowSnapshotView as FlowSnapshot,
   ReconciliationDecisionRecord as ReconciliationDecision
 } from "@magpie/core";
+
+// Insights chart response shapes, defined once in @magpie/core and consumed by
+// the Insights page and its chart components.
+export type { GapBacklogBucket, JobThroughputBucket, FunnelStage, InsightsBucketUnit } from "@magpie/core";

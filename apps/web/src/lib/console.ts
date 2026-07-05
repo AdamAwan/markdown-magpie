@@ -16,6 +16,9 @@ export function sectionTitle(section: ConsoleSection): string {
   if (section === "activity") {
     return "Audit background activity";
   }
+  if (section === "insights") {
+    return "See how the pipeline is performing";
+  }
   if (section === "proposals") {
     return "Review generated Markdown proposals";
   }
@@ -53,6 +56,9 @@ export function sectionSubtitle(section: ConsoleSection): string {
   }
   if (section === "activity") {
     return "Review the durable maintenance-run audit for scheduled and manual background work.";
+  }
+  if (section === "insights") {
+    return "Track the knowledge-maintenance pipeline over the last 30 days: gap backlog, throughput, and conversion.";
   }
   if (section === "proposals") {
     return "Select a proposal and review its target path, rationale, and Markdown.";
