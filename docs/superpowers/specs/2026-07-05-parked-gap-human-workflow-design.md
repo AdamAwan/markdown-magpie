@@ -88,19 +88,19 @@ actually hold. It is sequenced **first** (Task 0). It is separable enough to lan
 PR if preferred for reviewability, but parking genuinely depends on it, so it must precede the
 rest.
 
-**Already resolved, do not fold in:** #152 (retry counter only grows) is **already closed**
-(2026-07-04) via `verificationLineageResetSince`. #158's own "`countPriorStillOpen` only grows
-(#152), so once capped, always capped" is stale. #150 (single-watcher self-starvation /
-non-idempotent retries) has its **correctness** sub-claims implemented — Phase 1b `incomplete`
-handling + `VerificationIncompleteError` (`service.ts:79-115,248-266`), concurrent re-asks
-(`Promise.all`, :248), `questionsWithClosedVerdict` resumability (:241) + entry guard
-(:216-222). One residue remains: **no abort threading** — a watcher-POST timeout retries
-`verify_gap_closure` while the first API-side run keeps executing (the entry guard can't stop
-the overlap because `closureStatus` is unset until the first run finishes), so duplicate
-re-asks / LLM spend and duplicate audit rows are still possible (retry-cap safety holds via
-`count(DISTINCT proposal_id)`). Recommend closing #152; close #150 **with the abort residue
-noted**, or spin a small follow-up — do not claim it is 100% done. This design's C2 fix
-(below) also hardens #152's reset generally.
+**Already resolved, not folded in (both now closed):** #152 (retry counter only grows) was
+**already closed** (2026-07-04) via `verificationLineageResetSince`; #158's own
+"`countPriorStillOpen` only grows (#152), so once capped, always capped" is stale. #150
+(single-watcher self-starvation / non-idempotent retries) had its **correctness** sub-claims
+implemented — Phase 1b `incomplete` handling + `VerificationIncompleteError`
+(`service.ts:79-115,248-266`), concurrent re-asks (`Promise.all`, :248),
+`questionsWithClosedVerdict` resumability (:241) + entry guard (:216-222) — so it was
+**closed as completed** on review. One non-correctness residue was split into **#195**: no
+abort threading — a watcher-POST timeout retries `verify_gap_closure` while the first
+API-side run keeps executing (the entry guard can't stop the overlap because `closureStatus`
+is unset until the first run finishes), so duplicate re-asks / LLM spend and duplicate audit
+rows are still possible (retry-cap safety holds via `count(DISTINCT proposal_id)`; not a
+blocker for #158). This design's C2 fix (below) also hardens #152's reset generally.
 
 ## Model
 
