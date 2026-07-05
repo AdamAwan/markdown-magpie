@@ -133,6 +133,14 @@ const CLOSURE_BADGES: Record<NonNullable<Proposal["closureStatus"]>, { label: st
   }
 };
 
+// The needs-attention closure badge is a link to the parked-questions surface, so
+// the escalation is actionable rather than a dead tooltip (#158).
+const ClosureLink = styled.a({
+  display: "inline-flex",
+  textDecoration: "none",
+  cursor: "pointer"
+});
+
 export function ProposalPanel({
   loading,
   publishProposal,
@@ -187,13 +195,27 @@ export function ProposalPanel({
                       {selectedProposal.status}
                     </Badge>
                     {selectedProposal.closureStatus ? (
-                      <Badge
-                        tone={CLOSURE_BADGES[selectedProposal.closureStatus].tone}
-                        dot
-                        title={CLOSURE_BADGES[selectedProposal.closureStatus].title}
-                      >
-                        {CLOSURE_BADGES[selectedProposal.closureStatus].label}
-                      </Badge>
+                      selectedProposal.closureStatus === "needs_attention" ? (
+                        // Parked past the retry cap — link to the parked-questions
+                        // surface where a human can retry or dismiss (#158).
+                        <ClosureLink href="/gaps#parked-questions">
+                          <Badge
+                            tone={CLOSURE_BADGES[selectedProposal.closureStatus].tone}
+                            dot
+                            title={`${CLOSURE_BADGES[selectedProposal.closureStatus].title} Open the parked-questions surface.`}
+                          >
+                            {CLOSURE_BADGES[selectedProposal.closureStatus].label} →
+                          </Badge>
+                        </ClosureLink>
+                      ) : (
+                        <Badge
+                          tone={CLOSURE_BADGES[selectedProposal.closureStatus].tone}
+                          dot
+                          title={CLOSURE_BADGES[selectedProposal.closureStatus].title}
+                        >
+                          {CLOSURE_BADGES[selectedProposal.closureStatus].label}
+                        </Badge>
+                      )
                     ) : null}
                   </Stack>
                 </RowTop>
