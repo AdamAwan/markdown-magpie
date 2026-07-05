@@ -214,8 +214,9 @@ proposal (`proposals.closure_status`):
   note is fed to the next `draft_markdown_proposal` as `resubmissionNotes`, so the drafter
   sees why the previous merge fell short and addresses the specific shortfall.
 - **`needs_attention`** — a question has failed verification twice (`CLOSURE_RETRY_CAP`);
-  its gap is filed under the `needs_attention` source, which parks the whole question from
-  auto-redrafting so a human can look.
+  its `verification` gap is stamped `parkedAt`, a first-class "awaiting a human" state (not
+  a source) that parks the whole question from auto-redrafting. A human retries or dismisses
+  it from the console's Parked questions panel (see [question-logging.md](question-logging.md)).
 
 The re-asks run **concurrently** and — critically — an incomplete re-ask is not a verdict.
 A re-ask that never reaches a `completed` answer (no provider watcher was free before its

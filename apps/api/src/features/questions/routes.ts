@@ -16,6 +16,12 @@ export function questionRoutes(ctx: AppContext): Hono {
     return c.json({ questions: await questionsService.listQuestions(ctx, limit) });
   });
 
+  // Registered BEFORE "/:id" so "parked" is not captured as a question id.
+  app.get("/parked", requireScopes("read:knowledge"), async (c) => {
+    const limit = parseLimit(c.req.query("limit") ?? null, 50);
+    return c.json(await questionsService.listParked(ctx, limit));
+  });
+
   app.get("/:id", requireScopes("read:knowledge"), async (c) => {
     const log = await questionsService.getQuestion(ctx, c.req.param("id"));
     if (!log) {
@@ -56,6 +62,25 @@ export function questionRoutes(ctx: AppContext): Hono {
 
   app.delete("/:id/gap", requireScopes("feedback:questions"), async (c) => {
     const question = await questionsService.clearManualGap(ctx, c.req.param("id"));
+    if (!question) {
+      throw new HttpError(404, "question_not_found");
+    }
+    return c.json({ question });
+  });
+
+  // Human "retry" on a parked question — re-admit it to the pipeline. No-op (but
+  // 200) if the question exists and is not parked; 404 only if there is no log.
+  app.post("/:id/gap/retry", requireScopes("feedback:questions"), async (c) => {
+    const question = await questionsService.retryParkedGap(ctx, c.req.param("id"));
+    if (!question) {
+      throw new HttpError(404, "question_not_found");
+    }
+    return c.json({ question });
+  });
+
+  // Human "dismiss" on a parked question — abandon the topic.
+  app.post("/:id/gap/dismiss", requireScopes("feedback:questions"), async (c) => {
+    const question = await questionsService.dismissParkedGap(ctx, c.req.param("id"));
     if (!question) {
       throw new HttpError(404, "question_not_found");
     }

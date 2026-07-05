@@ -67,6 +67,14 @@ export class PostgresProposalStore implements ProposalStore {
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
+  async listByClosureStatus(closureStatus: NonNullable<Proposal["closureStatus"]>, limit: number): Promise<Proposal[]> {
+    const result = await this.pool.query<ProposalRow>(
+      "SELECT * FROM proposals WHERE closure_status = $2 ORDER BY created_at DESC LIMIT $1",
+      [limit, closureStatus]
+    );
+    return result.rows.map(mapRow);
+  }
+
   async getByClusterId(gapClusterId: string): Promise<Proposal | undefined> {
     // Mirror the old list(500).find(): exclude terminal statuses (so a cluster
     // whose only proposal is settled resolves to undefined), newest first.
@@ -107,7 +115,10 @@ export class PostgresProposalStore implements ProposalStore {
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
-  async recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined> {
+  async recordPublication(
+    id: string,
+    publication: NonNullable<Proposal["publication"]>
+  ): Promise<Proposal | undefined> {
     const status = publication.pullRequestUrl ? "pr-opened" : "branch-pushed";
     const result = await this.pool.query<ProposalRow>(
       "UPDATE proposals SET status = $3, publication = $2 WHERE id = $1 RETURNING *",
@@ -125,10 +136,10 @@ export class PostgresProposalStore implements ProposalStore {
   }
 
   async updateMarkdown(id: string, markdown: string): Promise<Proposal | undefined> {
-    const result = await this.pool.query<ProposalRow>(
-      "UPDATE proposals SET markdown = $2 WHERE id = $1 RETURNING *",
-      [id, markdown]
-    );
+    const result = await this.pool.query<ProposalRow>("UPDATE proposals SET markdown = $2 WHERE id = $1 RETURNING *", [
+      id,
+      markdown
+    ]);
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 

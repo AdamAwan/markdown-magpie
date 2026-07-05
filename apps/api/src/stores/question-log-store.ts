@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AnswerResult,
   GapCandidate,
+  ParkedQuestion,
   QuestionFeedback,
   QuestionGap,
   QuestionGapSource,
@@ -49,7 +50,9 @@ export function answerGapsUnchanged(
 ): boolean {
   const existingKeys = existing
     .filter((gap) => gap.source === "auto" || gap.source === "followup")
-    .map((gap) => gapDedupeKey(gap.source, gap.summary, gap.note ?? "", Boolean(gap.resolvedAt), Boolean(gap.dismissedAt)))
+    .map((gap) =>
+      gapDedupeKey(gap.source, gap.summary, gap.note ?? "", Boolean(gap.resolvedAt), Boolean(gap.dismissedAt))
+    )
     .sort();
   const nextKeys = next.map((gap) => gapDedupeKey(gap.source, gap.summary, "", false, false)).sort();
   if (existingKeys.length !== nextKeys.length) {
@@ -66,17 +69,31 @@ export interface QuestionLogStore {
   clearManualGap(id: string): Promise<QuestionLog | undefined>;
   // Reopens a gap on a triggering question after a merged proposal failed
   // gap-closure verification. Updates the question's live (unresolved,
-  // undismissed) verification/needs_attention gap in place with the latest
-  // reopen note (what merged, the re-asked answer, why it is still weak) so a
-  // re-draft sees why it is being resubmitted — preserving that gap's id (and
-  // any cluster membership keyed off it). Resolved and dismissed rows are
-  // never touched or replaced: they stay retained for audit, and a fresh gap
-  // is inserted alongside them only when no live one exists (first-ever
-  // failure, or the prior lineage was resolved/dismissed).
+  // undismissed) 'verification' gap in place with the latest reopen note (what
+  // merged, the re-asked answer, why it is still weak) so a re-draft sees why it
+  // is being resubmitted — preserving that gap's id (and any cluster membership
+  // keyed off it). When `parked` (retry cap hit) the row is stamped parked_at,
+  // escalating the whole question to "awaiting a human" without changing its
+  // source. Resolved and dismissed rows are never touched or replaced: they stay
+  // retained for audit, and a fresh gap is inserted alongside them only when no
+  // live one exists (first-ever failure, or the prior lineage was resolved/dismissed).
   recordVerificationGap(
     id: string,
-    gap: { summary: string; source: "verification" | "needs_attention"; note: string }
+    gap: { summary: string; note: string; parked: boolean }
   ): Promise<QuestionLog | undefined>;
+  // Human "retry" on a parked question: re-admits it to the pipeline. Dismisses
+  // the live parked row (reason 'human_retry') — which ends the failed lineage so
+  // the retry budget resets (verificationLineageResetSince) — and, if no live gap
+  // row still carries the parked summary (the underlying auto gap may have been
+  // resolved/dismissed), re-files a fresh live 'verification' row with the note so
+  // the re-draft sees why. No-op if the question is not parked.
+  retryParkedGap(id: string): Promise<QuestionLog | undefined>;
+  // Human "dismiss" on a parked question: abandons the topic by dismissing every
+  // live gap row for the question (reason 'human_dismiss'). No-op if not parked.
+  dismissParkedGap(id: string): Promise<QuestionLog | undefined>;
+  // Questions currently parked (a live parked 'verification' gap), most-recently
+  // parked first, for the parked-questions listing surface.
+  listParkedQuestions(limit: number): Promise<ParkedQuestion[]>;
   // Soft-resolves the gaps closed by a merged proposal: the matching rows are
   // retained for audit but stop surfacing as candidates. Already-dismissed rows
   // are left untouched — a dismissal is a deliberate settlement a merge must not
@@ -142,6 +159,17 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       if ((log.flowId ?? "") !== (flowId ?? "")) {
         continue;
       }
+      // Verification re-ask logs (#154) are synthetic — their gap rows never cluster.
+      if (log.purpose === "verification") {
+        continue;
+      }
+      // Exclude EVERY gap of a parked question (question-level, matching candidacy)
+      // so a parked escalation — or its sibling auto row — is never swept into a
+      // cluster where an AI dismissal could discharge it (#158).
+      const parked = (log.gaps ?? []).some((gap) => gap.parkedAt && !gap.resolvedAt && !gap.dismissedAt);
+      if (parked) {
+        continue;
+      }
       for (const gap of log.gaps ?? []) {
         if (gap.resolvedAt || gap.dismissedAt || gap.summary !== summary) {
           continue;
@@ -154,9 +182,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     return ids;
   }
 
-  async gapIdsForSummaries(
-    pairs: Array<{ summary: string; flowId?: string }>
-  ): Promise<Map<string, string[]>> {
+  async gapIdsForSummaries(pairs: Array<{ summary: string; flowId?: string }>): Promise<Map<string, string[]>> {
     const result = new Map<string, string[]>();
     for (const { summary, flowId } of pairs) {
       const key = gapSummaryKey(summary, flowId);
@@ -222,6 +248,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       // Match the Postgres column default (manual_gap boolean NOT NULL DEFAULT false).
       manualGap: false,
       askedAt: new Date().toISOString(),
+      purpose: input.purpose ?? "live",
       ...(input.flowId ? { flowId: input.flowId } : {})
     };
 
@@ -245,18 +272,24 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     // The flow is decided by the watcher after the log is recorded, so a
     // completion can supply it now; fall back to any flow already on the log.
     const flowId = input.flowId ?? existing.flowId;
-    const nextAnswerGaps = gapsFromAnswer(input.answer);
+    // A verification re-ask log (#154) keeps its answer + citations for audit, but
+    // its gap signals are the merged doc's shortfall, not a fresh gap — never
+    // ingest them, or they re-enter candidacy under this synthetic id and
+    // auto-redraft the parked gap.
+    const isVerification = existing.purpose === "verification";
+    const nextAnswerGaps = isVerification ? [] : gapsFromAnswer(input.answer);
     const updated: QuestionLog = {
       ...existing,
       chatProvider: input.chatProvider ?? existing.chatProvider,
       confidence: input.answer.confidence,
       retrievedSectionIds: input.answer.citations.map((citation) => citation.sectionId),
       answer: input.answer,
-      // Re-answering replaces auto-detected and followup gaps but preserves any manual flag.
-      gaps: [
-        ...(existing.gaps ?? []).filter((gap) => gap.source === "manual"),
-        ...nextAnswerGaps
-      ],
+      // Re-answering replaces auto-detected and followup gaps but preserves any
+      // manual flag. A verification log ingests no gaps, so its existing gaps
+      // (there are none) are left as-is.
+      gaps: isVerification
+        ? (existing.gaps ?? [])
+        : [...(existing.gaps ?? []).filter((gap) => gap.source === "manual"), ...nextAnswerGaps],
       ...(flowId ? { flowId } : {})
     };
 
@@ -265,7 +298,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     // but only bump when it ACTUALLY changed. An identical re-answer (same gaps,
     // same flow) leaves the candidate set untouched, so bumping would only make the
     // reconciler re-run its metered reshape on an unchanged cluster set (#168).
-    const gapsChanged = !answerGapsUnchanged(existing.gaps ?? [], nextAnswerGaps);
+    const gapsChanged = !isVerification && !answerGapsUnchanged(existing.gaps ?? [], nextAnswerGaps);
     const flowChanged = (existing.flowId ?? "") !== (flowId ?? "");
     if (gapsChanged || flowChanged) {
       this.bumpCatalog(flowId);
@@ -333,7 +366,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
 
   async recordVerificationGap(
     id: string,
-    gap: { summary: string; source: "verification" | "needs_attention"; note: string }
+    gap: { summary: string; note: string; parked: boolean }
   ): Promise<QuestionLog | undefined> {
     const existing = this.logs.get(id);
     if (!existing) {
@@ -341,17 +374,24 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     }
 
     const gaps = existing.gaps ?? [];
-    const liveIndex = gaps.findIndex(
-      (g) => (g.source === "verification" || g.source === "needs_attention") && !g.resolvedAt && !g.dismissedAt
-    );
+    const liveIndex = gaps.findIndex((g) => g.source === "verification" && !g.resolvedAt && !g.dismissedAt);
 
-    const verificationGap: QuestionGap = { summary: gap.summary, source: gap.source, note: gap.note };
-    // Update the live verification/needs_attention gap in place (if one
-    // exists) with the latest reopen note; auto/manual/followup gaps are left
-    // untouched. Resolved and dismissed rows are never touched: they stay
-    // retained for audit and are never resurrected. Only when no live gap
-    // exists (none has ever been raised, or the prior one was
-    // resolved/dismissed) is a fresh gap appended alongside that history.
+    // When `parked` (retry cap hit) stamp parkedAt; otherwise preserve any parked
+    // state already on the live row (mirrors the Postgres CASE-preserving update).
+    const prior = liveIndex === -1 ? undefined : gaps[liveIndex];
+    const parkedAt = gap.parked ? new Date().toISOString() : prior?.parkedAt;
+    const parkedReason = gap.parked ? "verification retry cap" : prior?.parkedReason;
+    const verificationGap: QuestionGap = {
+      summary: gap.summary,
+      source: "verification",
+      note: gap.note,
+      ...(parkedAt ? { parkedAt, ...(parkedReason ? { parkedReason } : {}) } : {})
+    };
+    // Update the live 'verification' gap in place (if one exists) with the latest
+    // reopen note; auto/manual/followup gaps are left untouched. Resolved and
+    // dismissed rows are never touched: they stay retained for audit and are never
+    // resurrected. Only when no live gap exists (none has ever been raised, or the
+    // prior one was resolved/dismissed) is a fresh gap appended alongside history.
     const updatedGaps =
       liveIndex === -1
         ? [...gaps, verificationGap]
@@ -362,6 +402,92 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     this.logs.set(id, updated);
     this.bumpCatalog(existing.flowId);
     return updated;
+  }
+
+  async retryParkedGap(id: string): Promise<QuestionLog | undefined> {
+    const existing = this.logs.get(id);
+    if (!existing) {
+      return undefined;
+    }
+    const gaps = existing.gaps ?? [];
+    const parkedIndex = gaps.findIndex((gap) => gap.parkedAt && !gap.resolvedAt && !gap.dismissedAt);
+    if (parkedIndex === -1) {
+      // Not parked (or already retried) — no-op, race-safe.
+      return existing;
+    }
+    const parked = gaps[parkedIndex]!;
+    const dismissedAt = new Date().toISOString();
+    // Dismiss the parked row (ends the lineage → fresh retry budget).
+    const nextGaps = gaps.map((gap, index) =>
+      index === parkedIndex ? { ...gap, dismissedAt, dismissedReason: "human_retry" } : gap
+    );
+    // Re-file a fresh LIVE 'verification' row carrying the note, so the redraft
+    // still sees why the last merge fell short (draftFromGaps reads resubmission
+    // notes only off live verification gaps). The dismissed parked row's note would
+    // otherwise be lost even though its sibling auto gap re-drafts (C1). File it
+    // under the surviving live gap's summary when exactly one remains — the common
+    // case, and the summary-fallback case — so it dedups with that gap into a
+    // single candidate instead of forking a duplicate (#158 review #4). Skip the
+    // re-file only when there is no note to preserve AND a live gap already remains.
+    const survivingLive = nextGaps.filter((gap) => !gap.resolvedAt && !gap.dismissedAt);
+    if (parked.note || survivingLive.length === 0) {
+      const targetSummary = survivingLive.length === 1 ? survivingLive[0]!.summary : parked.summary;
+      nextGaps.push({
+        summary: targetSummary,
+        source: "verification",
+        ...(parked.note ? { note: parked.note } : {})
+      });
+    }
+    const updated: QuestionLog = { ...existing, gaps: nextGaps };
+    this.logs.set(id, updated);
+    this.bumpCatalog(existing.flowId);
+    return updated;
+  }
+
+  async dismissParkedGap(id: string): Promise<QuestionLog | undefined> {
+    const existing = this.logs.get(id);
+    if (!existing) {
+      return undefined;
+    }
+    const gaps = existing.gaps ?? [];
+    const parked = gaps.find((gap) => gap.parkedAt && !gap.resolvedAt && !gap.dismissedAt);
+    if (!parked) {
+      // Not parked — no-op, race-safe.
+      return existing;
+    }
+    const dismissedAt = new Date().toISOString();
+    // Abandon the PARKED topic: dismiss the live gaps sharing the parked summary
+    // (the verification row + its sibling auto gap). Unrelated topics on a
+    // multi-topic question — only hidden by question-level parking, never escalated
+    // — survive and re-enter candidacy (#158 review #2).
+    const nextGaps = gaps.map((gap) =>
+      !gap.resolvedAt && !gap.dismissedAt && gap.summary === parked.summary
+        ? { ...gap, dismissedAt, dismissedReason: "human_dismiss" }
+        : gap
+    );
+    const updated: QuestionLog = { ...existing, gaps: nextGaps };
+    this.logs.set(id, updated);
+    this.bumpCatalog(existing.flowId);
+    return updated;
+  }
+
+  async listParkedQuestions(limit: number): Promise<ParkedQuestion[]> {
+    const parked: ParkedQuestion[] = [];
+    for (const log of this.logs.values()) {
+      const gap = (log.gaps ?? []).find((g) => g.parkedAt && !g.resolvedAt && !g.dismissedAt);
+      if (!gap?.parkedAt) {
+        continue;
+      }
+      parked.push({
+        questionId: log.id,
+        question: log.question,
+        summary: gap.summary,
+        parkedAt: gap.parkedAt,
+        ...(log.flowId ? { flowId: log.flowId } : {}),
+        ...(gap.note ? { note: gap.note } : {})
+      });
+    }
+    return parked.sort((a, b) => b.parkedAt.localeCompare(a.parkedAt)).slice(0, limit);
   }
 
   async resolveGaps(questionIds: string[], summaries: string[], proposalId: string): Promise<number> {
@@ -422,7 +548,11 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       }
       let dismissedHere = 0;
       const gaps = log.gaps.map((gap) => {
-        if (gap.summary !== summary || gap.resolvedAt || gap.dismissedAt) {
+        // In-memory gap ids are `${logId}::${summary}`, so a parked row and its
+        // sibling auto row share an id — never let a reconciler-reachable dismissal
+        // discharge a parked escalation; a human settles those via dismissParkedGap
+        // (#158). (The Postgres store guards the same with `AND parked_at IS NULL`.)
+        if (gap.summary !== summary || gap.resolvedAt || gap.dismissedAt || gap.parkedAt) {
           return gap;
         }
         dismissed += 1;
@@ -442,7 +572,10 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
   }
 
   async list(limit: number): Promise<QuestionLog[]> {
+    // Only live questions surface in the console list; verification re-asks (#154)
+    // are synthetic audit records, not questions a human asked.
     return [...this.logs.values()]
+      .filter((log) => log.purpose !== "verification")
       .sort((left, right) => right.askedAt.localeCompare(left.askedAt))
       .slice(0, limit);
   }
@@ -462,12 +595,16 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     // gap on a confident answer (an observed empty search) must still cluster.
     const groups = new Map<string, { summary: string; flowId?: string; logs: QuestionLog[] }>();
     for (const log of this.logs.values()) {
+      // Verification re-ask logs (#154) are synthetic and never candidates.
+      if (log.purpose === "verification") {
+        continue;
+      }
       const active = (log.gaps ?? []).filter((gap) => !gap.resolvedAt && !gap.dismissedAt);
-      // A question flagged 'needs_attention' hit the verification retry cap: it
+      // A question with a live PARKED gap hit the verification retry cap: it
       // awaits a human, so park the WHOLE question (including its sibling
       // auto/manual gap) out of the candidate set. Gaps on OTHER questions
       // sharing the summary are unaffected.
-      if (active.some((gap) => gap.source === "needs_attention")) {
+      if (active.some((gap) => gap.parkedAt)) {
         continue;
       }
       const summaries = new Set(active.map((gap) => gap.summary));
@@ -484,7 +621,11 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
         summary,
         questionIds: logs.map((log) => log.id),
         count: logs.length,
-        latestAskedAt: logs.map((log) => log.askedAt).sort().at(-1) ?? new Date(0).toISOString(),
+        latestAskedAt:
+          logs
+            .map((log) => log.askedAt)
+            .sort()
+            .at(-1) ?? new Date(0).toISOString(),
         confidence: "low" as const,
         ...(flowId ? { flowId } : {})
       }))

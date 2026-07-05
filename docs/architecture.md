@@ -239,11 +239,12 @@ confident answer (`high`/`medium`) that **cites one of the merged proposal's tar
 docs**. If every triggering question closes, the gaps are resolved (`closure_status =
 verified_closed`); if any stays open, the gaps are **reopened** with the verification
 detail as a `note` so they re-draft (`reopened`). After two failed verifications for the
-same question its gap is filed under the `needs_attention` source, which parks the whole
-question from auto-redrafting (`needs_attention`) so a human can look. Clusterless / seed
-proposals have no triggering questions and skip verification entirely. See
-[question-logging.md](question-logging.md) for the gap sources and
-[ai-jobs.md](ai-jobs.md) for the job.
+same question its `verification` gap is stamped **`parkedAt`** — a first-class "awaiting a
+human" state (not a source) that parks the whole question from auto-redrafting; the proposal
+records `closure_status = needs_attention`. A human retries or dismisses it from the console's
+Parked questions panel. Clusterless / seed proposals have no triggering questions and skip
+verification entirely. See [question-logging.md](question-logging.md) for the gap sources,
+the parked state, and the human workflow, and [ai-jobs.md](ai-jobs.md) for the job.
 
 Before clustering, the reconciler also **prunes resolved gaps**: a gap is resolved by
 `(question, summary)` — now only once the merge's closure verification passes (above) —

@@ -23,11 +23,13 @@ Each question log records:
   distinct unanswered topic is its own gap, tagged `auto` (a whole-question miss
   detected during answer synthesis), `followup` (supporting material a confident
   answer searched for during retrieval but the knowledge base did not contain),
-  `manual` (flagged by an admin), `verification` (a merged proposal failed to close
-  this gap — see [Gap-closure verification](#gap-closure-verification)), or
-  `needs_attention` (verification failed repeatedly and the question is parked from
-  auto-redrafting). A `verification`/`needs_attention` gap may carry a `note` — the
-  detail of why the merged document still did not answer the question.
+  `manual` (flagged by an admin), or `verification` (a merged proposal failed to
+  close this gap — see [Gap-closure verification](#gap-closure-verification)). A
+  `verification` gap may carry a `note` — the detail of why the merged document
+  still did not answer the question — and, once verification has failed past the
+  retry cap, a `parkedAt` timestamp: the whole question is then **parked**,
+  awaiting a human (see [Parked questions](#parked-questions)). Parking is a
+  first-class *state* on a verification gap, not a distinct source.
 - Helpful or unhelpful feedback, when submitted.
 - Manual knowledge-gap flag, when set.
 - Answer trace — the watcher's audit trail of how the answer was produced: the
@@ -129,17 +131,20 @@ subpath-configured destination and every merge would falsely reopen.)
   oldest unrelated gap or another question's gap. When that gap is re-drafted, its `note` is passed to the drafter as
   `resubmissionNotes`, so the model sees why its previous attempt did not close the gap and
   can address the specific shortfall (see [ai-jobs.md](./ai-jobs.md)).
-- After two failed verifications for the same question (`CLOSURE_RETRY_CAP`), its gap is
-  filed under **`needs_attention`** instead. That source parks the *whole question* from
-  gap candidacy, so it stops auto-redrafting and waits for a human (`needs_attention`).
-  The cap counts **distinct proposals** whose re-ask came back `still_open`, not raw rows,
-  so a `verify_gap_closure` job retry re-recording the same proposal's outcome (the job has
-  no idempotency guard) costs 1 toward the cap however many times it retries. The count is
-  also bounded to *since the question's verification lineage last reset* — the
-  resolved/dismissed timestamp of its prior `verification`/`needs_attention` gap row, if
-  any — so a question parked once and later fixed or dismissed by a human gets a fresh
-  retry budget instead of permanently carrying the old count (see `countPriorStillOpen` in
-  `apps/api/src/stores/gap-closure-verification-store.ts`).
+- After two failed verifications for the same question (`CLOSURE_RETRY_CAP`), its live
+  `verification` gap is stamped **`parkedAt`** (with `parkedReason`), which **parks the
+  *whole question*** from gap candidacy and clustering — it stops auto-redrafting and waits
+  for a human (see [Parked questions](#parked-questions)). Parking is a first-class *state*
+  on the verification gap, not a separate source; the proposal's `closure_status` records
+  `needs_attention` as its outcome. The cap counts **distinct proposals** whose re-ask came
+  back `still_open`, not raw rows, so a `verify_gap_closure` job retry re-recording the same
+  proposal's outcome (the job has no idempotency guard) costs 1 toward the cap however many
+  times it retries. The count is also bounded to *since the question's verification lineage
+  last reset* — the resolved/dismissed timestamp of the most recent *settled* `verification`
+  gap row, if any — so a question parked once and later retried, fixed, or dismissed by a
+  human gets a fresh retry budget instead of permanently carrying the old count (see
+  `countPriorStillOpen` in `apps/api/src/stores/gap-closure-verification-store.ts` and
+  `verificationLineageResetSince` in the proposals service).
 
 - If a triggering question's gap was **already resolved or dismissed** before verification
   runs (a sibling proposal's cross-proposal resolve, a reconciler critic dismissal, or a
@@ -165,15 +170,26 @@ subpath-configured destination and every merge would falsely reopen.)
 - If a triggering question's log itself cannot be found (e.g. it was deleted), there is
   nothing to re-ask, so that question is recorded `still_open` with no re-ask and — because
   none of the usual `recordVerificationGap`/retry-cap bookkeeping applies to a question with
-  no log to attach it to — the whole verification escalates straight to `needs_attention`
-  (with a loud warning log) rather than leaving the proposal silently parked at `reopened`
-  forever with no gap filed and no signal for a human to act on.
+  no log to attach it to — the proposal's `closure_status` escalates straight to
+  `needs_attention` (with a loud warning log) rather than leaving it silently parked at
+  `reopened` forever. There is **no parked gap row** in this case (there is no log to attach
+  one to), so the proposal is surfaced on the parked-questions listing as a read-only entry
+  (`reason: triggering_question_deleted`) instead of a retry/dismiss-able question — see
+  [Parked questions](#parked-questions).
 
 Every re-ask is recorded in the `gap_closure_verification` table (verdict, confidence,
 whether it cited a merged doc, and the detail) — an append-only audit trail; the retry cap
 above is *derived* from it (scoped by distinct proposal + a reset boundary), not a raw tally
 of this table's rows. Seed / clusterless proposals have no triggering questions, so nothing
 is verified for them (and nothing was ever resolved).
+
+**Verification re-asks are synthetic (`purpose = "verification"`).** Each re-ask records an
+ordinary `answer_question` question log so the pipeline is exercised exactly as a user
+re-asking would be — but the log is stamped `purpose: "verification"` (question logs default
+to `"live"`). A verification log records its answer + citations for the audit trail, but its
+answer's gap signals are **not** ingested and it is excluded from gap candidacy, the
+questions list, and gap clustering. Otherwise those synthetic logs would re-enter candidacy
+under a fresh question id and auto-redraft the very gap that was just parked (issue #154).
 The verification job and endpoint are documented in [ai-jobs.md](./ai-jobs.md); the
 console surfaces the per-proposal outcome as a closure badge on the Proposals page.
 
@@ -203,6 +219,43 @@ as *unverified* (no `closure_status`) until a re-ask actually completes. So **ru
 two watchers** for verification to make progress; the console shows a warning when only
 one is connected. (The scheduled patrols and the gap reconciler share this
 orchestrator shape and the same two-watcher requirement.)
+
+## Parked questions
+
+When gap-closure verification fails past the retry cap, the question is **parked** — its
+live `verification` gap carries a `parkedAt` timestamp (and `parkedReason`), which excludes
+the *whole question* from gap candidacy and clustering so it stops auto-redrafting and waits
+for a human. Parking is first-class *state*, not a gap source: the "is parked" test is one
+predicate (`parked_at IS NOT NULL AND resolved_at IS NULL AND dismissed_at IS NULL`), used
+identically by candidacy, clustering, and the parked listing.
+
+A human acts on parked questions through the console's **Parked questions** panel (on the
+Gaps page; the proposal's "Needs attention" closure badge links here) or the API:
+
+```bash
+GET  /api/questions/parked        # parked questions (+ note) and missing-log proposals
+POST /api/questions/:id/gap/retry
+POST /api/questions/:id/gap/dismiss
+```
+
+- **Retry** re-admits the question to the draft pipeline with a **fresh retry budget**. It
+  dismisses the live parked row (which becomes the lineage-reset boundary, so
+  `countPriorStillOpen` restarts) and re-files a fresh live `verification` row **carrying the
+  note**, so the re-draft still sees why the previous attempt fell short — the note lives only
+  on the (now-dismissed) verification row, so it would otherwise be lost even though the
+  sibling `auto` gap re-drafts. The re-filed row is filed under the surviving live gap's
+  summary when exactly one remains, so it dedups into a single candidate rather than forking
+  a duplicate. It is never a silent no-op.
+- **Dismiss** abandons the **parked topic**: the live gaps sharing the parked summary (the
+  verification row + its sibling `auto` gap) are dismissed (`human_dismiss`) and never
+  re-cluster. Unrelated topics on a multi-topic question — only hidden by question-level
+  parking, never escalated — survive and re-enter candidacy.
+- Both are no-ops (returning the current log) on a question that is not parked.
+
+`GET /api/questions/parked` also returns the **missing-log** escalations: a proposal whose
+`closure_status` is `needs_attention` but whose triggering question log was deleted before
+verification files no parked gap row, so it is surfaced read-only
+(`reason: triggering_question_deleted`) rather than as a retry/dismiss-able question.
 
 ## Queued Answers
 

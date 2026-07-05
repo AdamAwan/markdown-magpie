@@ -182,10 +182,7 @@ export async function runMergeCascade(
   // behavior: the index was never going to change, so verification still runs.)
   if (reindexOutcome === "failed") {
     if (hasTriggers && !proposal.closureStatus) {
-      logger.warn(
-        { proposalId: proposal.id },
-        "skipping gap-closure verification: destination reindex failed"
-      );
+      logger.warn({ proposalId: proposal.id }, "skipping gap-closure verification: destination reindex failed");
     }
     return { reindexed, verificationEnqueued: false };
   }
@@ -363,8 +360,8 @@ export async function verifyGapClosure(ctx: AppContext, proposal: Proposal): Pro
       const summary = await reopenSummaryFor(ctx, outcome.original, proposal, questionId);
       await ctx.stores.questionLogs.recordVerificationGap(questionId, {
         summary,
-        source: capped ? "needs_attention" : "verification",
-        note: outcome.detail
+        note: outcome.detail,
+        parked: capped
       });
     }
   }
@@ -439,7 +436,7 @@ async function planQuestion(
 
   // A fresh question log for the re-ask; answer_question completion fills in its
   // answer, confidence and citations against the now-updated index.
-  const reasked = await recordAnswerQuestionLog(ctx, original.question);
+  const reasked = await recordAnswerQuestionLog(ctx, original.question, "verification");
   const requestedFlowId = resolveVerificationFlowId(ctx, proposal, original);
   const input = buildAnswerQuestionInput(ctx, {
     questionLogId: reasked.id,
@@ -501,11 +498,7 @@ async function planQuestion(
 // false still_open verdict and can wrongly park a gap needs_attention even
 // though the merged doc fully answers it. Dropping the id falls back to
 // auto-routing across the currently configured flows instead.
-function resolveVerificationFlowId(
-  ctx: AppContext,
-  proposal: Proposal,
-  original: QuestionLog
-): string | undefined {
+function resolveVerificationFlowId(ctx: AppContext, proposal: Proposal, original: QuestionLog): string | undefined {
   const candidate = proposal.flowId ?? original.flowId;
   if (!candidate) {
     return undefined;
@@ -523,21 +516,19 @@ function resolveVerificationFlowId(
 // True when every gap this proposal set out to close FOR THIS QUESTION is already
 // resolved or dismissed — i.e. there is no open work left to verify. Keys on the
 // proposal's recorded summaries (splitGapSummaries) the same way reopenSummaryFor's
-// fallback does, and ignores the `needs_attention` pseudo-source (a parked
-// escalation, not a gap the merge was meant to close). Returns false when the
-// proposal's summaries match none of this question's gaps: there is nothing to
-// reason about, so the caller re-asks as before rather than silently claiming
-// closure. Lets verifyGapClosure skip a wasted re-ask (and avoid re-filing an open
-// gap over a settled/dismissed one) when the gap has already been settled by
-// another proposal, a reconciler dismissal, or a human.
+// fallback does, and ignores a parked gap (an escalation awaiting a human, not a
+// gap the merge was meant to close). Returns false when the proposal's summaries
+// match none of this question's gaps: there is nothing to reason about, so the
+// caller re-asks as before rather than silently claiming closure. Lets
+// verifyGapClosure skip a wasted re-ask (and avoid re-filing an open gap over a
+// settled/dismissed one) when the gap has already been settled by another
+// proposal, a reconciler dismissal, or a human.
 function addressedGapsAllSettled(
-  original: { gaps?: Array<{ summary: string; source: string; resolvedAt?: string; dismissedAt?: string }> },
+  original: { gaps?: Array<{ summary: string; parkedAt?: string; resolvedAt?: string; dismissedAt?: string }> },
   proposal: Proposal
 ): boolean {
   const proposalSummaries = new Set(splitGapSummaries(proposal.gapSummary));
-  const addressed = (original.gaps ?? []).filter(
-    (gap) => gap.source !== "needs_attention" && proposalSummaries.has(gap.summary)
-  );
+  const addressed = (original.gaps ?? []).filter((gap) => !gap.parkedAt && proposalSummaries.has(gap.summary));
   return addressed.length > 0 && addressed.every((gap) => gap.resolvedAt || gap.dismissedAt);
 }
 
@@ -559,7 +550,10 @@ function addressedGapsAllSettled(
 // fallback: the question text.
 async function reopenSummaryFor(
   ctx: AppContext,
-  original: { question: string; gaps?: Array<{ summary: string; source: string; resolvedAt?: string; dismissedAt?: string }> },
+  original: {
+    question: string;
+    gaps?: Array<{ summary: string; parkedAt?: string; resolvedAt?: string; dismissedAt?: string }>;
+  },
   proposal: Proposal,
   questionId: string
 ): Promise<string> {
@@ -574,36 +568,33 @@ async function reopenSummaryFor(
 
   const proposalSummaries = new Set(splitGapSummaries(proposal.gapSummary));
   const addressedGap = (original.gaps ?? []).find(
-    (gap) =>
-      !gap.resolvedAt &&
-      !gap.dismissedAt &&
-      gap.source !== "needs_attention" &&
-      proposalSummaries.has(gap.summary)
+    (gap) => !gap.resolvedAt && !gap.dismissedAt && !gap.parkedAt && proposalSummaries.has(gap.summary)
   );
   return addressedGap?.summary ?? original.question;
 }
 
 // The retry-cap reset boundary for this question, if any: recordVerificationGap
-// keeps at most one LIVE 'verification'/'needs_attention' gap row per question,
-// updating it in place on every reopen — but resolved/dismissed rows are
-// retained (never deleted), so a question can carry several such rows over its
-// lifetime, one per past lineage. The most recent one (gaps are ordered
-// chronologically, so the last match) reflects this question's current state:
-// if it is still live, this is an ongoing streak (no reset — full history still
-// counts); if it is resolved or dismissed, that is exactly the prior
-// closure-retry lineage having ended (a later proposal verified closure, or a
-// human dismissed it) before a new gap arose on the same question, and its
-// timestamp bounds countPriorStillOpen so that old lineage's failures don't
-// count against this new one. Returns undefined when there is no such row
-// (first-ever failure) or the most recent one is still open.
+// keeps at most one LIVE 'verification' gap row per question, updating it in place
+// on every reopen — but resolved/dismissed rows are retained (never deleted), so a
+// question can carry several such rows over its lifetime, one per past lineage.
+//
+// Key on the most recent *settled* (resolved OR dismissed) verification row, NOT
+// merely on "is the most recent row settled". A human retry settles the parked row
+// AND re-files a fresh live one (retryParkedGap, #158), so right after a retry the
+// most-recent row is live again — keying on "most recent row settled" would then
+// return undefined and let countPriorStillOpen sum the whole all-time history,
+// insta-re-parking on the next failure. Because at most one live row exists per
+// lineage, the most recent SETTLED row is always the previous lineage's end, so its
+// timestamp correctly bounds countPriorStillOpen to the current lineage. Returns
+// undefined only when no settled verification row exists (first-ever lineage).
 function verificationLineageResetSince(original: {
   gaps?: Array<{ source: string; resolvedAt?: string; dismissedAt?: string }>;
 }): string | undefined {
   const lineageGap = [...(original.gaps ?? [])]
     .reverse()
-    .find((gap) => gap.source === "verification" || gap.source === "needs_attention");
-  const resetTimestamps = [lineageGap?.resolvedAt, lineageGap?.dismissedAt].filter(
-    (value): value is string => Boolean(value)
+    .find((gap) => gap.source === "verification" && (gap.resolvedAt || gap.dismissedAt));
+  const resetTimestamps = [lineageGap?.resolvedAt, lineageGap?.dismissedAt].filter((value): value is string =>
+    Boolean(value)
   );
   return resetTimestamps.length > 0 ? resetTimestamps.sort().at(-1) : undefined;
 }
@@ -626,7 +617,9 @@ function buildVerificationDetail(
   const citedPaths = answer.citations.map((citation) => citation.path);
   return (
     `Merged ${merged}. Re-asking still returned confidence "${answer.confidence}"` +
-    (cited ? " and did cite the merged doc" : ` and did not cite the merged doc (cited: ${citedPaths.join(", ") || "nothing"})`) +
+    (cited
+      ? " and did cite the merged doc"
+      : ` and did not cite the merged doc (cited: ${citedPaths.join(", ") || "nothing"})`) +
     "; the gap is not yet closed."
   );
 }
@@ -635,11 +628,7 @@ function buildVerificationDetail(
 // rows whose question and summary match the proposal's recorded gap summaries, so
 // unrelated gaps on a multi-topic question are left untouched. Returns the number
 // of gaps newly resolved.
-async function resolveGapsForClosedQuestion(
-  ctx: AppContext,
-  questionId: string,
-  proposal: Proposal
-): Promise<number> {
+async function resolveGapsForClosedQuestion(ctx: AppContext, questionId: string, proposal: Proposal): Promise<number> {
   const summaries = splitGapSummaries(proposal.gapSummary);
   if (summaries.length === 0) {
     return 0;
@@ -901,12 +890,7 @@ export async function getProposalExecutionContext(
 // (pr-opened) plus the earlier stages that have no PR yet but are still work the
 // drafter shouldn't duplicate. Terminal statuses (merged/rejected/superseded)
 // are excluded — that work is settled.
-const IN_FLIGHT_PROPOSAL_STATUSES: ReadonlyArray<Proposal["status"]> = [
-  "draft",
-  "ready",
-  "branch-pushed",
-  "pr-opened"
-];
+const IN_FLIGHT_PROPOSAL_STATUSES: ReadonlyArray<Proposal["status"]> = ["draft", "ready", "branch-pushed", "pr-opened"];
 
 // Reads the flow's on-disk snapshot and returns its in-flight proposals / open
 // pull requests as drafting context. Deliberately off the network — it uses only
@@ -1028,7 +1012,7 @@ export async function draftFromGaps(
               gap.note &&
               !gap.resolvedAt &&
               !gap.dismissedAt &&
-              (gap.source === "verification" || gap.source === "needs_attention") &&
+              gap.source === "verification" &&
               gapSummarySet.has(gap.summary)
           )
           .map((gap) => gap.note as string)
@@ -1043,11 +1027,24 @@ export async function draftFromGaps(
   const flow = selectFlow(deps, overrides.flowId ?? derivedFlowId(matched));
   const sourceIds = overrides.sourceIds ?? flow?.sourceIds;
   const destinationId = overrides.destinationId?.trim() || flow?.destinationId || defaultDestinationId(deps);
-  logger.info({ label, flowId: flow?.id ?? "none", destinationId: destinationId ?? "none", provider: ctx.config.get().aiProvider }, "drafting proposal");
+  logger.info(
+    {
+      label,
+      flowId: flow?.id ?? "none",
+      destinationId: destinationId ?? "none",
+      provider: ctx.config.get().aiProvider
+    },
+    "drafting proposal"
+  );
   const sourceContext = await collectSourceContextCached(deps, sourceIds, overrides.sourceContextCache);
-  const materialFiles = sourceContext.filter((context) => context.path && context.content !== "Source path does not exist.");
+  const materialFiles = sourceContext.filter(
+    (context) => context.path && context.content !== "Source path does not exist."
+  );
   if (materialFiles.length === 0) {
-    logger.warn({ label }, "drafting proposal with no real source files attached — model will likely produce a placeholder; check source configuration and subpaths");
+    logger.warn(
+      { label },
+      "drafting proposal with no real source files attached — model will likely produce a placeholder; check source configuration and subpaths"
+    );
   } else {
     logger.debug({ materialFileCount: materialFiles.length }, "proposal draft source files ready");
   }

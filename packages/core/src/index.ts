@@ -169,11 +169,13 @@ export interface KnowledgeGapSignal {
 }
 
 // "auto"/"manual"/"followup" are the sources a live answer can raise (the model
-// or an admin). "verification"/"needs_attention" are raised server-side after a
-// merged proposal fails gap-closure verification: the triggering question was
-// re-asked and the merged doc still did not answer it. These never come from a
-// provider — the answer_question output schema stays narrow to the first three.
-export type QuestionGapSource = "auto" | "manual" | "followup" | "verification" | "needs_attention";
+// or an admin). "verification" is raised server-side after a merged proposal
+// fails gap-closure verification: the triggering question was re-asked and the
+// merged doc still did not answer it. It never comes from a provider — the
+// answer_question output schema stays narrow to the first three. "Parked,
+// awaiting a human" (repeated verification failures past the retry cap) is NOT a
+// source — it is the `parkedAt` state on a verification gap (see QuestionGap).
+export type QuestionGapSource = "auto" | "manual" | "followup" | "verification";
 
 export interface QuestionGap {
   summary: string;
@@ -191,6 +193,13 @@ export interface QuestionGap {
   // gap is retained for audit but never surfaces as a candidate or clusters again.
   dismissedAt?: string;
   dismissedReason?: string;
+  // Set when a verification gap fails gap-closure past the retry cap: the whole
+  // question is "parked", awaiting a human. First-class escalation STATE (not a
+  // source): while a live parked row exists (parkedAt set, not resolved/dismissed)
+  // the whole question is excluded from gap candidacy and clustering. A human
+  // retry/dismiss settles it (see the parked-gap human workflow, issue #158).
+  parkedAt?: string;
+  parkedReason?: string;
 }
 
 export interface QuestionLog {
@@ -210,6 +219,13 @@ export interface QuestionLog {
   gaps?: QuestionGap[];
   manualGap?: boolean;
   manualGapAt?: string;
+  // Why this question log exists. "live" (default) is a real user/admin question.
+  // "verification" is a gap-closure re-ask synthesised by verifyGapClosure: it
+  // must NOT re-enter gap candidacy, the questions list, or gap clustering — its
+  // answer's gap signals are the merged doc's shortfall, not a fresh gap, and
+  // treating it as live would auto-redraft the very gap that was just parked
+  // (see docs/question-logging.md, issue #154).
+  purpose?: "live" | "verification";
 }
 
 export interface QuestionLogInput {
@@ -218,6 +234,7 @@ export interface QuestionLogInput {
   answer?: AnswerResult;
   retrievedSectionIds: string[];
   flowId?: string;
+  purpose?: "live" | "verification";
 }
 
 export interface QuestionLogUpdateInput {
@@ -249,6 +266,19 @@ export interface GapCluster {
   questionIds: string[];
   priority: number;
   status: "open" | "proposed" | "dismissed" | "resolved";
+}
+
+// A question parked awaiting a human (its verification gap failed closure past
+// the retry cap). Surfaced by the parked-questions listing so an operator can see
+// the diagnostic note and act — retry (re-admit to the pipeline) or dismiss
+// (abandon the topic). See the parked-gap human workflow (issue #158).
+export interface ParkedQuestion {
+  questionId: string;
+  question: string;
+  flowId?: string;
+  summary: string;
+  note?: string;
+  parkedAt: string;
 }
 
 // A semantic grouping of gap candidates that could be addressed by a single
@@ -314,11 +344,7 @@ type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 // history is never lost. Derived here once so the proposal stores don't each
 // hand-maintain the literal list and drift (which once left superseded proposals
 // stuck visible in the UI with no action).
-export const TERMINAL_PROPOSAL_STATUSES: ReadonlyArray<ProposalStatus> = [
-  "merged",
-  "rejected",
-  "superseded"
-];
+export const TERMINAL_PROPOSAL_STATUSES: ReadonlyArray<ProposalStatus> = ["merged", "rejected", "superseded"];
 
 export interface Proposal {
   id: string;

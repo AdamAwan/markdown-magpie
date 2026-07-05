@@ -14,6 +14,7 @@ export type {
   KnowledgeDocument,
   KnowledgeGapSignal,
   KnowledgeStatus,
+  ParkedQuestion,
   Proposal,
   ProposalPublication,
   QuestionFeedback,
@@ -26,7 +27,14 @@ export type {
   WatcherView
 } from "@magpie/core";
 
-import type { KnowledgeDocument, QuestionFeedback, RepositoryRef, ScheduledTaskSettings, WatcherView } from "@magpie/core";
+import type {
+  KnowledgeDocument,
+  ParkedQuestion,
+  QuestionFeedback,
+  RepositoryRef,
+  ScheduledTaskSettings,
+  WatcherView
+} from "@magpie/core";
 
 // Queue/job domain types live in @magpie/jobs (the pg-boss contract). The web
 // re-exports the TYPES so the console's job/schedule views never drift from the
@@ -51,6 +59,18 @@ export const AI_PROVIDERS = [
 // Feedback was the local name for the core QuestionFeedback union; keep the alias
 // so existing call sites continue to read naturally.
 export type Feedback = QuestionFeedback;
+
+// Response of GET /api/questions/parked (the parked-gap human workflow, #158):
+// questions awaiting a human plus the read-only missing-log proposal escalations.
+export interface ParkedProposalView {
+  proposalId: string;
+  title: string;
+  reason: "triggering_question_deleted";
+}
+export interface ParkedView {
+  questions: ParkedQuestion[];
+  proposals: ParkedProposalView[];
+}
 
 // --- Web-only types (not part of the backend domain) -----------------------
 

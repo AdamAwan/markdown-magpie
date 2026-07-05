@@ -15,12 +15,20 @@ import type { AiProviderName } from "./providers.js";
 
 // Records a fresh question log for an answer_question enqueue. Flow and
 // retrieved sections are unknown at enqueue time (the watcher decides them),
-// so the log is recorded without them; completion fills them in.
-export async function recordAnswerQuestionLog(ctx: AppContext, question: string): Promise<QuestionLog> {
+// so the log is recorded without them; completion fills them in. `purpose`
+// defaults to "live"; the gap-closure re-ask path passes "verification" so the
+// synthetic log stays out of gap candidacy, the questions list, and clustering
+// (#154).
+export async function recordAnswerQuestionLog(
+  ctx: AppContext,
+  question: string,
+  purpose: "live" | "verification" = "live"
+): Promise<QuestionLog> {
   return ctx.stores.questionLogs.record({
     question,
     chatProvider: ctx.config.get().aiProvider,
-    retrievedSectionIds: []
+    retrievedSectionIds: [],
+    purpose
   });
 }
 

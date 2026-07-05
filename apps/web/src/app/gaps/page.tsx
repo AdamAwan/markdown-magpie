@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { useConsole } from "../../components/ConsoleProvider";
 import { GapClusterPanel, GapPanel } from "../../components/GapsPanel";
+import { ParkedQuestionsPanel } from "../../components/ParkedQuestionsPanel";
 import { Workbench } from "../../components/ui";
 import { knowledgeFlowLabels } from "../../lib/config";
 
@@ -21,6 +22,7 @@ export default function GapsPage() {
         flowLabels={flowLabels}
       />
       <GapPanel draftProposal={draftProposal} gaps={gaps} loading={loading} flowLabels={flowLabels} />
+      <ParkedQuestionsPanel flowLabels={flowLabels} />
     </Workbench>
   );
 }
