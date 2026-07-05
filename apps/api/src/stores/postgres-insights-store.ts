@@ -87,8 +87,107 @@ export class PostgresInsightsStore implements InsightsStore {
     return [];
   }
 
-  // Implemented in a later task (C1).
-  async funnel(): Promise<FunnelStage[]> {
-    return [];
+  // Gap-to-merge funnel: one count per pipeline stage over the window, in
+  // pipeline order. Each stage counts the distinct entities that *entered* that
+  // stage within [from, to], windowed on the timestamp that marks entry to the
+  // stage. Stages narrow left-to-right so the drop-off between counts is the
+  // conversion signal the chart visualises.
+  //
+  // Stage → table mapping (all real tables; no invented numbers):
+  //   questions  → questions.asked_at                (a question was asked)
+  //   gaps       → question_gaps.created_at           (a gap was raised)
+  //   clustered  → question_gaps that have an active gap_cluster_memberships row
+  //                (windowed on the gap's created_at — membership has no separate
+  //                 lifecycle timestamp worth windowing on here)
+  //   proposals  → proposals.created_at               (a proposal was drafted)
+  //   prs        → proposals.created_at where status reached PR
+  //                (status IN ('pr-opened','merged'); a merged proposal always
+  //                 passed through pr-opened)
+  //   merged     → proposals.merged_at                (the PR was merged)
+  //   verified   → gap_closure_verification.created_at where verdict = 'closed'
+  //
+  // Flow filter: questions/gaps/clustered narrow via questions.flow_id;
+  // proposals/prs/merged via proposals.flow_id; verified joins its proposal to
+  // reach flow_id (gap_closure_verification has no flow_id column of its own).
+  async funnel(range: InsightsRange, flowId?: string): Promise<FunnelStage[]> {
+    const result = await this.pool.query<{
+      questions: string;
+      gaps: string;
+      clustered: string;
+      proposals: string;
+      prs: string;
+      merged: string;
+      verified: string;
+    }>(
+      `
+      WITH params AS (
+        SELECT $1::timestamptz AS from_ts, $2::timestamptz AS to_ts, $3::text AS flow
+      ),
+      q AS (
+        SELECT count(*) AS n
+        FROM questions, params
+        WHERE questions.asked_at >= params.from_ts AND questions.asked_at < params.to_ts
+          AND (params.flow IS NULL OR questions.flow_id = params.flow)
+      ),
+      g AS (
+        SELECT count(*) AS n
+        FROM question_gaps gg
+        JOIN questions qq ON qq.id = gg.question_id, params
+        WHERE gg.created_at >= params.from_ts AND gg.created_at < params.to_ts
+          AND (params.flow IS NULL OR qq.flow_id = params.flow)
+      ),
+      c AS (
+        SELECT count(DISTINCT gg.id) AS n
+        FROM question_gaps gg
+        JOIN questions qq ON qq.id = gg.question_id
+        JOIN gap_cluster_memberships m ON m.gap_id = gg.id AND m.active, params
+        WHERE gg.created_at >= params.from_ts AND gg.created_at < params.to_ts
+          AND (params.flow IS NULL OR qq.flow_id = params.flow)
+      ),
+      p AS (
+        SELECT count(*) AS n
+        FROM proposals pp, params
+        WHERE pp.created_at >= params.from_ts AND pp.created_at < params.to_ts
+          AND (params.flow IS NULL OR pp.flow_id = params.flow)
+      ),
+      pr AS (
+        SELECT count(*) AS n
+        FROM proposals pp, params
+        WHERE pp.created_at >= params.from_ts AND pp.created_at < params.to_ts
+          AND pp.status IN ('pr-opened', 'merged')
+          AND (params.flow IS NULL OR pp.flow_id = params.flow)
+      ),
+      mg AS (
+        SELECT count(*) AS n
+        FROM proposals pp, params
+        WHERE pp.merged_at IS NOT NULL
+          AND pp.merged_at >= params.from_ts AND pp.merged_at < params.to_ts
+          AND (params.flow IS NULL OR pp.flow_id = params.flow)
+      ),
+      v AS (
+        SELECT count(*) AS n
+        FROM gap_closure_verification gcv
+        JOIN proposals pp ON pp.id = gcv.proposal_id, params
+        WHERE gcv.verdict = 'closed'
+          AND gcv.created_at >= params.from_ts AND gcv.created_at < params.to_ts
+          AND (params.flow IS NULL OR pp.flow_id = params.flow)
+      )
+      SELECT q.n AS questions, g.n AS gaps, c.n AS clustered, p.n AS proposals,
+             pr.n AS prs, mg.n AS merged, v.n AS verified
+      FROM q, g, c, p, pr, mg, v
+      `,
+      [range.from.toISOString(), range.to.toISOString(), flowId ?? null]
+    );
+
+    const row = result.rows[0];
+    return [
+      { key: "questions", label: "Questions asked", count: Number(row.questions) },
+      { key: "gaps", label: "Gaps raised", count: Number(row.gaps) },
+      { key: "clustered", label: "Clustered", count: Number(row.clustered) },
+      { key: "proposals", label: "Proposals drafted", count: Number(row.proposals) },
+      { key: "prs", label: "PRs opened", count: Number(row.prs) },
+      { key: "merged", label: "Merged", count: Number(row.merged) },
+      { key: "verified", label: "Verified closed", count: Number(row.verified) }
+    ];
   }
 }

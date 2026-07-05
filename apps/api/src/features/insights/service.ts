@@ -1,4 +1,4 @@
-import type { GapBacklogBucket } from "@magpie/core";
+import type { FunnelStage, GapBacklogBucket } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import type { InsightsRange } from "../../stores/insights-store.js";
 import type { InsightsRangeQuery } from "./schema.js";
@@ -16,4 +16,8 @@ export function resolveRange(query: InsightsRangeQuery): InsightsRange {
 
 export async function gapBacklog(ctx: AppContext, query: InsightsRangeQuery): Promise<GapBacklogBucket[]> {
   return ctx.stores.insights.gapBacklog(resolveRange(query), query.flow);
+}
+
+export async function funnel(ctx: AppContext, query: InsightsRangeQuery): Promise<FunnelStage[]> {
+  return ctx.stores.insights.funnel(resolveRange(query), query.flow);
 }

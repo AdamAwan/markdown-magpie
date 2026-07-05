@@ -16,5 +16,11 @@ export function insightsRoutes(ctx: AppContext): Hono {
     return c.json({ series: await insightsService.gapBacklog(ctx, parsed.data) });
   });
 
+  app.get("/funnel", requireScopes("read:knowledge"), async (c) => {
+    const parsed = insightsRangeQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) throw new HttpError(400, "invalid_insights_query");
+    return c.json({ stages: await insightsService.funnel(ctx, parsed.data) });
+  });
+
   return app;
 }

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiGet, errorMessage } from "../../lib/api";
-import type { GapBacklogBucket } from "../../lib/types";
+import type { FunnelStage, GapBacklogBucket } from "../../lib/types";
 
 // Page-local fetch state for a single insight series. The Insights page fetches
 // on its own (not through ConsoleProvider) so the heavier aggregates stay out of
@@ -46,6 +46,18 @@ export function useGapBacklog(): InsightsResource<GapBacklogBucket[]> {
   const resource = useInsightsResource<{ series: GapBacklogBucket[] }>("/insights/gaps/backlog?bucket=day");
   return {
     data: resource.data?.series,
+    loading: resource.loading,
+    error: resource.error,
+    refresh: resource.refresh
+  };
+}
+
+// Gap-to-merge funnel: one count per pipeline stage over the last 30 days (the
+// v1 fixed window). Stages arrive in pipeline order.
+export function useFunnel(): InsightsResource<FunnelStage[]> {
+  const resource = useInsightsResource<{ stages: FunnelStage[] }>("/insights/funnel");
+  return {
+    data: resource.data?.stages,
     loading: resource.loading,
     error: resource.error,
     refresh: resource.refresh

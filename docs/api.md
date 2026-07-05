@@ -526,6 +526,35 @@ Retries a `failed` job. `409 job_not_failed` if it is not failed; `404 job_not_f
 `{ "workerName", "capabilities": [...] }` and returns `{ "job": Job }` or `{ "job": null }`;
 fail takes a structured `error` object. See [ai-jobs.md](ai-jobs.md).
 
+## Insights
+
+Read-only aggregation endpoints powering the web console's Insights page. All require the
+`read:knowledge` scope. The time window defaults to the last 30 days (`from`/`to` are optional
+ISO timestamps); `flow` narrows to a single flow. Response shapes live in
+`packages/core/src/index.ts`.
+
+### `GET /api/insights/gaps/backlog?from&to&bucket&flow`
+
+Open-gap backlog trend, one row per time bucket (`bucket` = `day` | `week` | `month`, default
+`day`). Each bucket reports the lifecycle transitions within it plus the running net-open total.
+
+- `400 invalid_insights_query` — malformed query.
+- `200` — `{ "series": GapBacklogBucket[] }`.
+
+### `GET /api/insights/funnel?from&to&flow`
+
+Gap-to-merge funnel: one count per pipeline stage over the window, in pipeline order —
+`questions` → `gaps` → `clustered` → `proposals` → `prs` → `merged` → `verified`. Each stage
+counts the distinct entities that entered it within the window (windowed on the timestamp that
+marks entry): questions on `questions.asked_at`, gaps on `question_gaps.created_at`, clustered
+on gaps with an active `gap_cluster_memberships` row, proposals on `proposals.created_at`, prs
+on proposals whose `status` reached `pr-opened`/`merged`, merged on `proposals.merged_at`, and
+verified on `gap_closure_verification` rows with `verdict = 'closed'`. The narrowing counts make
+the drop-off between stages the conversion signal.
+
+- `400 invalid_insights_query` — malformed query.
+- `200` — `{ "stages": FunnelStage[] }`.
+
 ## Type Reference
 
 The response shapes referenced above (`AnswerResult`, `Citation`, `DocumentSection`,
