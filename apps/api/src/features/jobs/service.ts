@@ -81,7 +81,7 @@ export async function acceptFailedJob(ctx: AppContext, id: string): Promise<JobV
 export async function waitForJob(
   ctx: AppContext,
   id: string,
-  options: { timeoutMs?: number; pollMs?: number } = {}
+  options: { timeoutMs?: number; pollMs?: number; signal?: AbortSignal } = {}
 ): Promise<{ terminal: boolean; job: JobView }> {
   const timeoutMs = options.timeoutMs ?? ctx.settings.jobs.waitTimeoutMs;
   const pollMs = options.pollMs ?? ctx.settings.jobs.waitPollMs;
@@ -90,7 +90,15 @@ export async function waitForJob(
     const job = await ctx.jobs.get(id);
     if (!job) throw new Error(`Job not found: ${id}`);
     const terminal = isTerminal(job.state);
-    if (terminal || Date.now() >= deadline) return { terminal, job: (await decorateJobs(ctx, [job]))[0] };
+    // A fired `signal` (the caller's request was aborted — e.g. the maintenance
+    // watcher's verify-closure POST hit its timeout and pg-boss will retry the
+    // job) ends the wait like the deadline does: the caller treats a
+    // non-terminal view as "skip this run", so the orphaned job is cancelled and
+    // no result is acted upon. This is what stops an aborted verifyGapClosure
+    // from continuing to run in parallel with its own retry (#195).
+    if (terminal || Date.now() >= deadline || options.signal?.aborted) {
+      return { terminal, job: (await decorateJobs(ctx, [job]))[0] };
+    }
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
 }
@@ -119,12 +127,16 @@ const IN_FLIGHT_JOB_STATES: ReadonlySet<JobView["state"]> = new Set(["created", 
 //
 // On timeout (the deadline elapses before the job reaches a terminal state), the
 // job is cancelled rather than left to run unread — see cancelOrphanedJob for why
-// that is safe even when a watcher has already claimed it.
+// that is safe even when a watcher has already claimed it. Passing `signal` makes
+// an aborted caller (e.g. a maintenance watcher's POST that hit its own timeout)
+// end the bounded wait the same way — the orphaned job is cancelled and the
+// non-terminal view returned — so the caller can unwind instead of running on in
+// parallel with the retry that abort triggered (#195).
 export async function runJobToCompletion(
   ctx: AppContext,
   type: JobType,
   input: unknown,
-  options: { deadlineMs?: number; pollMs?: number; reuseKey?: (input: unknown) => string } = {}
+  options: { deadlineMs?: number; pollMs?: number; reuseKey?: (input: unknown) => string; signal?: AbortSignal } = {}
 ): Promise<JobView> {
   const job = await acquireJob(ctx, type, input, options.reuseKey);
   const deadlineMs =
@@ -132,7 +144,11 @@ export async function runJobToCompletion(
     ctx.settings.jobs.runToCompletionTimeoutMs ??
     jobDefinition(type).policy.expireInSeconds * 1000;
   const pollMs = options.pollMs ?? ctx.settings.jobs.waitPollMs;
-  const { terminal, job: view } = await waitForJob(ctx, job.id, { timeoutMs: deadlineMs, pollMs });
+  const { terminal, job: view } = await waitForJob(ctx, job.id, {
+    timeoutMs: deadlineMs,
+    pollMs,
+    signal: options.signal
+  });
   return terminal ? view : cancelOrphanedJob(ctx, job.id, view);
 }
 

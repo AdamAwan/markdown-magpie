@@ -220,6 +220,18 @@ two watchers** for verification to make progress; the console shows a warning wh
 one is connected. (The scheduled patrols and the gap reconciler share this
 orchestrator shape and the same two-watcher requirement.)
 
+When the callback POST does exceed the watcher's `maintenanceTimeoutMs`, the watcher
+aborts the request and pg-boss retries the `verify_gap_closure` job. To keep the retry
+from overlapping the original run — two concurrent runs would enqueue duplicate re-asks
+and write duplicate `gap_closure_verification` audit rows — the API threads the request's
+`AbortSignal` into `verifyGapClosure`. The abort cancels the in-flight re-ask bounded
+waits, and the run checks the signal **before committing any verdict**, so an aborted run
+unwinds (throwing `VerificationAbortedError`, mapped to `503`) having written nothing. The
+retry is then the only run that records a verdict. This is distinct from the internal
+`closure_status` entry guard, which only prevents a *sequential* re-run after the first
+has finished — it cannot see an overlap while the first run is still mid-flight (its
+`closure_status` is not yet set) (#195).
+
 ## Parked questions
 
 When gap-closure verification fails past the retry cap, the question is **parked** — its

@@ -189,7 +189,11 @@ export function proposalRoutes(ctx: AppContext): Hono {
       throw new HttpError(404, "proposal_not_found");
     }
     try {
-      const result = await proposalsService.verifyGapClosure(ctx, proposal);
+      // Thread the request's abort signal so that if THIS POST times out on the
+      // watcher (maintenanceTimeoutMs) and pg-boss retries the job, the aborted
+      // original run unwinds instead of overlapping its own retry and writing a
+      // duplicate set of gap_closure_verification rows (#195).
+      const result = await proposalsService.verifyGapClosure(ctx, proposal, c.req.raw.signal);
       return c.json(result);
     } catch (error) {
       // A re-ask that never completed is an infrastructure failure (no provider
@@ -199,6 +203,13 @@ export function proposalRoutes(ctx: AppContext): Hono {
       // still_open that would wrongly reopen or park a correctly-merged doc.
       if (error instanceof proposalsService.VerificationIncompleteError) {
         throw new HttpError(503, "gap_closure_verification_incomplete", error.message);
+      }
+      // The request was aborted mid-run (the watcher already gave up and pg-boss
+      // will retry). The client is gone, so the response is moot, but map it to a
+      // 503 for the same "retry, don't treat as a verdict" semantics rather than
+      // surfacing an unhandled 500.
+      if (error instanceof proposalsService.VerificationAbortedError) {
+        throw new HttpError(503, "gap_closure_verification_aborted", error.message);
       }
       throw error;
     }

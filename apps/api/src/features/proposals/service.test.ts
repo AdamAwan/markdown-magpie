@@ -1064,6 +1064,38 @@ test("verifyGapClosure aborts the whole run when only some re-asks complete, com
   assert.equal(closed.size, 0, "no partial verdict is recorded when the run aborts");
 });
 
+test("verifyGapClosure aborts and commits nothing when the request signal is aborted, even if every re-ask completed", async () => {
+  // Regression for issue #195: the maintenance watcher's verify-closure POST hit
+  // its timeout and pg-boss will retry the job. The original API-side run must
+  // unwind WITHOUT recording a verdict, so it can't overlap its own retry and
+  // write a duplicate set of gap_closure_verification rows. This is the worst case
+  // for a silent double-commit: every re-ask completes confidently (a verdict the
+  // run WOULD normally record as verified_closed and resolve the gap on), yet the
+  // aborted signal must still make it commit nothing.
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  ctx.jobs = new AnsweringJobBroker(ctx, () => ({
+    answer: "Set the X flag.",
+    confidence: "high",
+    citations: [citation("configure-x.md")]
+  }));
+
+  await assert.rejects(
+    () => proposals.verifyGapClosure(ctx, merged, AbortSignal.abort()),
+    (error: unknown) => error instanceof proposals.VerificationAbortedError
+  );
+
+  // Nothing committed: no closure status, no verification audit rows, and — the
+  // point of the bug — the gap is NOT resolved, so the retry run owns the verdict.
+  const reloaded = await ctx.stores.proposals.get(merged.id);
+  assert.equal(reloaded?.closureStatus, undefined, "an aborted run leaves the proposal unverified");
+  const closed = await ctx.stores.gapClosureVerifications.questionsWithClosedVerdict(merged.id);
+  assert.equal(closed.size, 0, "no verdict row is recorded on an aborted run");
+  const q = await ctx.stores.questionLogs.get(log.id);
+  const gap = (q?.gaps ?? []).find((candidate) => candidate.summary === "How to configure X");
+  assert.equal(gap?.resolvedAt, undefined, "the gap stays open for the retry run to resolve");
+});
+
 test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job", async () => {
   const ctx = makeTestContext();
   ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
