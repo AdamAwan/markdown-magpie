@@ -53,7 +53,6 @@ The desired model for a local-git flow: gap → draft → (auto-fold with overla
 - Any change to GitHub publish/merge/PR-poll behaviour.
 - A rejected-content "fingerprint" suppression beyond the cluster freeze (the freeze
   already prevents the immediate re-draft loop; a richer suppression is a follow-up).
-- Rotating the committed `GITHUB_TOKEN` (flagged separately; operational, not code).
 
 ## Design
 
@@ -193,4 +192,3 @@ destinations start being detected as local-git.
 - Hosted "Mark Merged" redundancy tidy-up.
 - Richer rejected-content suppression beyond cluster freeze (avoid re-proposing a
   human-rejected doc even after the cluster is unfrozen).
-- Rotate the committed `GITHUB_TOKEN`.
