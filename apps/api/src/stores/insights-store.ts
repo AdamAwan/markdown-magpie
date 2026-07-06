@@ -1,10 +1,10 @@
 import type {
   FreshnessSummary,
-  FunnelStage,
   GapBacklogBucket,
   InsightsBucketUnit,
   JobErrorBreakdown,
   JobThroughputBucket,
+  JourneySankey,
   LatencyBin,
   PatrolImpact,
   VerificationBucket,
@@ -41,7 +41,10 @@ export interface JobErrorSplit {
 export interface InsightsStore {
   gapBacklog(range: InsightsRange, flowId?: string): Promise<GapBacklogBucket[]>;
   jobThroughput(range: InsightsRange, queueNames?: string[]): Promise<JobThroughputBucket[]>;
-  funnel(range: InsightsRange, flowId?: string): Promise<FunnelStage[]>;
+  // Branching question-journey Sankey: nodes + positive-value links describing
+  // the path questions take through gaps, clusters, proposals, and verification.
+  // Source: `questions`, `question_gaps`, `gap_cluster_memberships`, `proposals`.
+  journey(range: InsightsRange, flowId?: string): Promise<JourneySankey>;
   // Histogram of how long completed answers took (queued → completed), bucketed
   // into fixed latency ranges. Source: pg-boss answer_question job rows.
   answerLatency(range: InsightsRange): Promise<LatencyBin[]>;
@@ -70,8 +73,8 @@ export class NullInsightsStore implements InsightsStore {
   async jobThroughput(): Promise<JobThroughputBucket[]> {
     return [];
   }
-  async funnel(): Promise<FunnelStage[]> {
-    return [];
+  async journey(): Promise<JourneySankey> {
+    return { nodes: [], links: [] };
   }
   async answerLatency(): Promise<LatencyBin[]> {
     return [];

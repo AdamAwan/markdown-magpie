@@ -16,10 +16,13 @@ export function insightsRoutes(ctx: AppContext): Hono {
     return c.json({ series: await insightsService.gapBacklog(ctx, parsed.data) });
   });
 
-  app.get("/funnel", requireScopes("read:knowledge"), async (c) => {
+  // Branching question-journey Sankey. Same range/flow params as the other
+  // time-windowed endpoints; returns a { nodes, links } graph envelope.
+  app.get("/journey", requireScopes("read:knowledge"), async (c) => {
     const parsed = insightsRangeQuerySchema.safeParse(c.req.query());
     if (!parsed.success) throw new HttpError(400, "invalid_insights_query");
-    return c.json({ stages: await insightsService.funnel(ctx, parsed.data) });
+    const { nodes, links } = await insightsService.journey(ctx, parsed.data);
+    return c.json({ nodes, links });
   });
 
   app.get("/jobs/throughput", requireScopes("read:knowledge"), async (c) => {

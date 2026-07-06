@@ -549,19 +549,22 @@ transition (`opened`/`resolved`/`dismissed`/`parked`) per bucket plus the runnin
 is the cumulative net (opened − closed) **within the requested window** — it does not carry a
 baseline of gaps opened before `from`.
 
-### `GET /api/insights/funnel?from&to&flow`
+### `GET /api/insights/journey?from&to&flow`
 
-Gap-to-merge funnel: one count per pipeline stage over the window, in pipeline order —
-`questions` → `gaps` → `clustered` → `proposals` → `prs` → `merged` → `verified`. Each stage
-counts the distinct entities that entered it within the window (windowed on the timestamp that
-marks entry): questions on `questions.asked_at`, gaps on `question_gaps.created_at`, clustered
-on gaps with an active `gap_cluster_memberships` row, proposals on `proposals.created_at`, prs
-on proposals whose `status` reached `pr-opened`/`merged`, merged on `proposals.merged_at`, and
-verified on `gap_closure_verification` rows with `verdict = 'closed'`. The narrowing counts make
-the drop-off between stages the conversion signal.
+Branching question-journey Sankey: a `{ nodes, links }` graph of the path a question takes over
+the window — from being asked (split by `questions.confidence`) through gaps, clusters, proposals,
+and merge/verification — where each link's `value` is a real count and the branches show where
+volume leaks at each stage. Four segments, each windowed on its own entry timestamp: **answer**
+(questions on `questions.asked_at`, each confidence into "no gap" or into the gap segment),
+**gap** (gaps on `question_gaps.created_at`, partitioned into dismissed / parked / clustered /
+open by their terminal columns and an active `gap_cluster_memberships` row), **proposal**
+(proposals on `proposals.created_at`, split by `status` into in-progress / rejected / superseded /
+merged), and **verify** (merged proposals split by `closure_status`). The unit of flow shifts
+question → gap → proposal at the segment boundaries; each segment is internally conserved. Only
+positive-value links (and the nodes they reference) are returned.
 
 - `400 invalid_insights_query` — malformed query.
-- `200` — `{ "stages": FunnelStage[] }`.
+- `200` — `{ "nodes": JourneyNode[], "links": JourneyLink[] }` (`JourneySankey`).
 
 ### `GET /api/insights/jobs/throughput?from&to&bucket&type`
 

@@ -1,9 +1,11 @@
 import pg from "pg";
 import type {
   FreshnessSummary,
-  FunnelStage,
   GapBacklogBucket,
   JobThroughputBucket,
+  JourneyLink,
+  JourneyNode,
+  JourneySankey,
   LatencyBin,
   PatrolImpact,
   VerificationBucket
@@ -44,6 +46,80 @@ const LATENCY_BINS: ReadonlyArray<{ label: string; from: number; to: number | nu
 // a source is "stale" when it has not been synced for FRESHNESS_STALE_DAYS.
 const FRESHNESS_SOON_DAYS = 7;
 const FRESHNESS_STALE_DAYS = 7;
+
+// Every node the journey Sankey can contain, in draw order (left-to-right). The
+// assembler emits only the nodes referenced by a positive-value link, so empty
+// segments drop out cleanly.
+const JOURNEY_NODES: ReadonlyArray<JourneyNode> = [
+  { key: "questions", label: "Questions asked", segment: "answer" },
+  { key: "conf_high", label: "High confidence", segment: "answer" },
+  { key: "conf_medium", label: "Medium confidence", segment: "answer" },
+  { key: "conf_low", label: "Low confidence", segment: "answer" },
+  { key: "conf_unknown", label: "Unknown confidence", segment: "answer" },
+  { key: "no_gap", label: "Answered, no gap", segment: "answer" },
+  { key: "gaps", label: "Gaps raised", segment: "gap" },
+  { key: "gap_dismissed", label: "Dismissed", segment: "gap" },
+  { key: "gap_parked", label: "Parked", segment: "gap" },
+  { key: "gap_open", label: "Open (in flight)", segment: "gap" },
+  { key: "clustered", label: "Clustered", segment: "gap" },
+  { key: "proposals", label: "Proposals drafted", segment: "proposal" },
+  { key: "prop_inprogress", label: "In progress", segment: "proposal" },
+  { key: "prop_rejected", label: "Rejected", segment: "proposal" },
+  { key: "prop_superseded", label: "Superseded", segment: "proposal" },
+  { key: "merged", label: "Merged", segment: "proposal" },
+  { key: "v_closed", label: "Verified closed", segment: "verify" },
+  { key: "v_reopened", label: "Reopened", segment: "verify" },
+  { key: "v_attention", label: "Needs attention", segment: "verify" },
+  { key: "v_awaiting", label: "Awaiting check", segment: "verify" }
+];
+
+// The four confidence buckets, mapping each to its count column prefix and node.
+const JOURNEY_CONFIDENCE = [
+  { suffix: "high", node: "conf_high" },
+  { suffix: "medium", node: "conf_medium" },
+  { suffix: "low", node: "conf_low" },
+  { suffix: "unknown", node: "conf_unknown" }
+] as const;
+
+// Assemble the Sankey payload from the flat count row the journey query returns.
+// Reads each count as a number, builds the directed links, drops any with value
+// 0, and includes only the nodes those links reference. Pure and DB-free so it is
+// unit-testable without Postgres.
+function buildJourney(row: Record<string, string> | undefined): JourneySankey {
+  const n = (key: string): number => Number(row?.[key] ?? 0);
+
+  const links: JourneyLink[] = [];
+  for (const { suffix, node } of JOURNEY_CONFIDENCE) {
+    links.push({ source: "questions", target: node, value: n(`q_${suffix}`) });
+    links.push({ source: node, target: "no_gap", value: n(`nogap_${suffix}`) });
+    // The unit shifts here: confidence → "gaps" is counted in gaps raised (not
+    // questions), so the gap segment below stays internally conserved.
+    links.push({ source: node, target: "gaps", value: n(`gaps_${suffix}`) });
+  }
+  links.push({ source: "gaps", target: "gap_dismissed", value: n("gap_dismissed") });
+  links.push({ source: "gaps", target: "gap_parked", value: n("gap_parked") });
+  links.push({ source: "gaps", target: "gap_open", value: n("gap_open") });
+  links.push({ source: "gaps", target: "clustered", value: n("gap_clustered") });
+  // Second unit shift: clustered gaps → proposals is counted in proposals.
+  links.push({ source: "clustered", target: "proposals", value: n("prop_total") });
+  links.push({ source: "proposals", target: "prop_inprogress", value: n("prop_inprogress") });
+  links.push({ source: "proposals", target: "prop_rejected", value: n("prop_rejected") });
+  links.push({ source: "proposals", target: "prop_superseded", value: n("prop_superseded") });
+  links.push({ source: "proposals", target: "merged", value: n("prop_merged") });
+  links.push({ source: "merged", target: "v_closed", value: n("v_closed") });
+  links.push({ source: "merged", target: "v_reopened", value: n("v_reopened") });
+  links.push({ source: "merged", target: "v_attention", value: n("v_attention") });
+  links.push({ source: "merged", target: "v_awaiting", value: n("v_awaiting") });
+
+  const positive = links.filter((link) => link.value > 0);
+  const referenced = new Set<string>();
+  for (const link of positive) {
+    referenced.add(link.source);
+    referenced.add(link.target);
+  }
+  const nodes = JOURNEY_NODES.filter((node) => referenced.has(node.key));
+  return { nodes, links: positive };
+}
 
 export class PostgresInsightsStore implements InsightsStore {
   // `pgBossSchema` is the schema pg-boss stores its `job` table in. It is
@@ -201,108 +277,93 @@ export class PostgresInsightsStore implements InsightsStore {
     }));
   }
 
-  // Gap-to-merge funnel: one count per pipeline stage over the window, in
-  // pipeline order. Each stage counts the distinct entities that *entered* that
-  // stage within [from, to], windowed on the timestamp that marks entry to the
-  // stage. Stages narrow left-to-right so the drop-off between counts is the
-  // conversion signal the chart visualises.
+  // Branching question-journey Sankey. Every link value is a real count; the
+  // graph shows where volume leaks at each stage rather than only the narrowing
+  // trunk a funnel shows. Four segments, each windowed on its own entry timestamp
+  // (mirroring the funnel's per-stage windowing):
   //
-  // Stage → table mapping (all real tables; no invented numbers):
-  //   questions  → questions.asked_at                (a question was asked)
-  //   gaps       → question_gaps.created_at           (a gap was raised)
-  //   clustered  → question_gaps that have an active gap_cluster_memberships row
-  //                (windowed on the gap's created_at — membership has no separate
-  //                 lifecycle timestamp worth windowing on here)
-  //   proposals  → proposals.created_at               (a proposal was drafted)
-  //   prs        → proposals.created_at where status reached PR
-  //                (status IN ('pr-opened','merged'); a merged proposal always
-  //                 passed through pr-opened)
-  //   merged     → proposals.merged_at                (the PR was merged)
-  //   verified   → gap_closure_verification.created_at where verdict = 'closed'
+  //   answer   — questions.asked_at, split by questions.confidence, then each
+  //              confidence into "no gap" (0 question_gaps rows) or into the gap
+  //              segment (counted in gaps, not questions — see the unit note).
+  //   gap      — question_gaps.created_at, partitioned into mutually exclusive
+  //              terminal arms: dismissed (dismissed_at), parked (parked_at),
+  //              clustered (active gap_cluster_memberships OR resolved_at — the
+  //              resolved gaps reached their outcome via the cluster→proposal
+  //              path), or open (none of the above).
+  //   proposal — proposals.created_at, split by proposals.status into in-progress
+  //              (draft/ready/branch-pushed/pr-opened), rejected, superseded, or
+  //              merged.
+  //   verify   — merged proposals split by proposals.closure_status: verified
+  //              closed, reopened, needs attention, or awaiting check (NULL).
   //
-  // Flow filter: questions/gaps/clustered narrow via questions.flow_id;
-  // proposals/prs/merged via proposals.flow_id; verified joins its proposal to
-  // reach flow_id (gap_closure_verification has no flow_id column of its own).
-  async funnel(range: InsightsRange, flowId?: string): Promise<FunnelStage[]> {
-    const result = await this.pool.query<{
-      questions: string;
-      gaps: string;
-      clustered: string;
-      proposals: string;
-      prs: string;
-      merged: string;
-      verified: string;
-    }>(
+  // The unit of flow shifts question → gap → proposal at the segment boundaries
+  // (one question can raise many gaps; one cluster can yield many proposals).
+  // Each segment is internally conserved; the chart labels the boundaries. Flow
+  // filter narrows questions/gaps via questions.flow_id and proposals via
+  // proposals.flow_id, exactly as the old funnel did.
+  async journey(range: InsightsRange, flowId?: string): Promise<JourneySankey> {
+    const result = await this.pool.query<Record<string, string>>(
       `
       WITH params AS (
         SELECT $1::timestamptz AS from_ts, $2::timestamptz AS to_ts, $3::text AS flow
       ),
       q AS (
-        SELECT count(*) AS n
-        FROM questions, params
-        WHERE questions.asked_at >= params.from_ts AND questions.asked_at < params.to_ts
-          AND (params.flow IS NULL OR questions.flow_id = params.flow)
+        SELECT coalesce(qq.confidence, 'unknown') AS confidence,
+               (SELECT count(*) FROM question_gaps gg WHERE gg.question_id = qq.id) AS gap_count
+        FROM questions qq, params
+        WHERE qq.asked_at >= params.from_ts AND qq.asked_at < params.to_ts
+          AND (params.flow IS NULL OR qq.flow_id = params.flow)
       ),
       g AS (
-        SELECT count(*) AS n
+        SELECT coalesce(qq.confidence, 'unknown') AS confidence,
+               gg.dismissed_at, gg.parked_at, gg.resolved_at,
+               EXISTS (
+                 SELECT 1 FROM gap_cluster_memberships m WHERE m.gap_id = gg.id AND m.active
+               ) AS clustered
         FROM question_gaps gg
         JOIN questions qq ON qq.id = gg.question_id, params
         WHERE gg.created_at >= params.from_ts AND gg.created_at < params.to_ts
           AND (params.flow IS NULL OR qq.flow_id = params.flow)
       ),
-      c AS (
-        SELECT count(DISTINCT gg.id) AS n
-        FROM question_gaps gg
-        JOIN questions qq ON qq.id = gg.question_id
-        JOIN gap_cluster_memberships m ON m.gap_id = gg.id AND m.active, params
-        WHERE gg.created_at >= params.from_ts AND gg.created_at < params.to_ts
-          AND (params.flow IS NULL OR qq.flow_id = params.flow)
-      ),
       p AS (
-        SELECT count(*) AS n
+        SELECT pp.status, pp.closure_status
         FROM proposals pp, params
         WHERE pp.created_at >= params.from_ts AND pp.created_at < params.to_ts
-          AND (params.flow IS NULL OR pp.flow_id = params.flow)
-      ),
-      pr AS (
-        SELECT count(*) AS n
-        FROM proposals pp, params
-        WHERE pp.created_at >= params.from_ts AND pp.created_at < params.to_ts
-          AND pp.status IN ('pr-opened', 'merged')
-          AND (params.flow IS NULL OR pp.flow_id = params.flow)
-      ),
-      mg AS (
-        SELECT count(*) AS n
-        FROM proposals pp, params
-        WHERE pp.merged_at IS NOT NULL
-          AND pp.merged_at >= params.from_ts AND pp.merged_at < params.to_ts
-          AND (params.flow IS NULL OR pp.flow_id = params.flow)
-      ),
-      v AS (
-        SELECT count(*) AS n
-        FROM gap_closure_verification gcv
-        JOIN proposals pp ON pp.id = gcv.proposal_id, params
-        WHERE gcv.verdict = 'closed'
-          AND gcv.created_at >= params.from_ts AND gcv.created_at < params.to_ts
           AND (params.flow IS NULL OR pp.flow_id = params.flow)
       )
-      SELECT q.n AS questions, g.n AS gaps, c.n AS clustered, p.n AS proposals,
-             pr.n AS prs, mg.n AS merged, v.n AS verified
-      FROM q, g, c, p, pr, mg, v
+      SELECT
+        (SELECT count(*) FROM q WHERE confidence = 'high')                                  AS q_high,
+        (SELECT count(*) FROM q WHERE confidence = 'medium')                                AS q_medium,
+        (SELECT count(*) FROM q WHERE confidence = 'low')                                   AS q_low,
+        (SELECT count(*) FROM q WHERE confidence NOT IN ('high','medium','low'))            AS q_unknown,
+        (SELECT count(*) FROM q WHERE confidence = 'high'   AND gap_count = 0)              AS nogap_high,
+        (SELECT count(*) FROM q WHERE confidence = 'medium' AND gap_count = 0)              AS nogap_medium,
+        (SELECT count(*) FROM q WHERE confidence = 'low'    AND gap_count = 0)              AS nogap_low,
+        (SELECT count(*) FROM q WHERE confidence NOT IN ('high','medium','low') AND gap_count = 0) AS nogap_unknown,
+        (SELECT count(*) FROM g WHERE confidence = 'high')                                  AS gaps_high,
+        (SELECT count(*) FROM g WHERE confidence = 'medium')                                AS gaps_medium,
+        (SELECT count(*) FROM g WHERE confidence = 'low')                                   AS gaps_low,
+        (SELECT count(*) FROM g WHERE confidence NOT IN ('high','medium','low'))            AS gaps_unknown,
+        (SELECT count(*) FROM g WHERE dismissed_at IS NOT NULL)                             AS gap_dismissed,
+        (SELECT count(*) FROM g WHERE dismissed_at IS NULL AND parked_at IS NOT NULL)       AS gap_parked,
+        (SELECT count(*) FROM g WHERE dismissed_at IS NULL AND parked_at IS NULL
+                                  AND (clustered OR resolved_at IS NOT NULL))               AS gap_clustered,
+        (SELECT count(*) FROM g WHERE dismissed_at IS NULL AND parked_at IS NULL
+                                  AND NOT clustered AND resolved_at IS NULL)                AS gap_open,
+        (SELECT count(*) FROM p)                                                            AS prop_total,
+        (SELECT count(*) FROM p WHERE status IN ('draft','ready','branch-pushed','pr-opened')) AS prop_inprogress,
+        (SELECT count(*) FROM p WHERE status = 'rejected')                                  AS prop_rejected,
+        (SELECT count(*) FROM p WHERE status = 'superseded')                                AS prop_superseded,
+        (SELECT count(*) FROM p WHERE status = 'merged')                                    AS prop_merged,
+        (SELECT count(*) FROM p WHERE status = 'merged' AND closure_status = 'verified_closed')  AS v_closed,
+        (SELECT count(*) FROM p WHERE status = 'merged' AND closure_status = 'reopened')         AS v_reopened,
+        (SELECT count(*) FROM p WHERE status = 'merged' AND closure_status = 'needs_attention')  AS v_attention,
+        (SELECT count(*) FROM p WHERE status = 'merged' AND closure_status IS NULL)              AS v_awaiting
       `,
       [range.from.toISOString(), range.to.toISOString(), flowId ?? null]
     );
 
-    const row = result.rows[0];
-    return [
-      { key: "questions", label: "Questions asked", count: Number(row.questions) },
-      { key: "gaps", label: "Gaps raised", count: Number(row.gaps) },
-      { key: "clustered", label: "Clustered", count: Number(row.clustered) },
-      { key: "proposals", label: "Proposals drafted", count: Number(row.proposals) },
-      { key: "prs", label: "PRs opened", count: Number(row.prs) },
-      { key: "merged", label: "Merged", count: Number(row.merged) },
-      { key: "verified", label: "Verified closed", count: Number(row.verified) }
-    ];
+    return buildJourney(result.rows[0]);
   }
 
   // Answer-latency histogram (C4). Reads pg-boss's `job` table (completed

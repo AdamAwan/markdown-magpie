@@ -78,11 +78,11 @@ data. Data inventory confirmed against the schema (see the tables named below).
 
 ### Tier 1 — the pipeline story
 
-**C1. Gap-to-merge funnel** *(React Flow)*
-- **Question:** Is the system actually converting questions into merged, verified fixes? Where's the drop-off?
-- **Stages:** questions asked → gaps raised → clustered → proposals drafted → PRs opened → merged → verified-closed, each with a count.
-- **Endpoint:** `GET /insights/funnel?from&to&flow` → `{ stages: FunnelStage[] }`.
-- **Source:** `question_log`, `question_gaps`, `gap_cluster_memberships`, `proposals` (status lifecycle), `gap_closure_verification` (verdict).
+**C1. Question journey** *(Recharts Sankey)*
+- **Question:** What path does a question take, and where does volume leak at each branch — answered confidently, dismissed, parked, rejected, reopened?
+- **Segments:** answer (questions split by `confidence`, then no-gap vs gap-raised) → gap (dismissed / parked / open / clustered) → proposal (in-progress / rejected / superseded / merged) → verify (verified-closed / reopened / needs-attention / awaiting). Link widths are real counts; the unit shifts question → gap → proposal across the graph (labelled on the chart).
+- **Endpoint:** `GET /insights/journey?from&to&flow` → `{ nodes: JourneyNode[], links: JourneyLink[] }`.
+- **Source:** `questions` (`asked_at`, `confidence`), `question_gaps` (terminal timestamps), `gap_cluster_memberships` (`active`), `proposals` (`status`, `closure_status`). Replaces the earlier linear gap-to-merge funnel — a strict superset that also shows disposition, not just drop-off.
 
 **C2. Job throughput & health** *(Recharts stacked area, time-series)*
 - **Question:** Is the queue keeping up? Is a runner failing?

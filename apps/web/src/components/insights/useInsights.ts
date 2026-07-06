@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { apiGet, errorMessage } from "../../lib/api";
 import type {
   FreshnessSummary,
-  FunnelStage,
+  JourneySankey,
   GapBacklogBucket,
   JobErrorBreakdown,
   JobThroughputBucket,
@@ -62,12 +62,13 @@ export function useGapBacklog(): InsightsResource<GapBacklogBucket[]> {
   };
 }
 
-// Gap-to-merge funnel: one count per pipeline stage over the last 30 days (the
-// v1 fixed window). Stages arrive in pipeline order.
-export function useFunnel(): InsightsResource<FunnelStage[]> {
-  const resource = useInsightsResource<{ stages: FunnelStage[] }>("/insights/funnel");
+// Question-journey Sankey: a { nodes, links } graph of the path questions take
+// through gaps, clusters, proposals, and verification over the last 30 days (the
+// v1 fixed window).
+export function useJourney(): InsightsResource<JourneySankey> {
+  const resource = useInsightsResource<JourneySankey>("/insights/journey");
   return {
-    data: resource.data?.stages,
+    data: resource.data,
     loading: resource.loading,
     error: resource.error,
     refresh: resource.refresh
