@@ -896,18 +896,24 @@ export class LocalGitProposalPublisher {
 
     const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", request.branchName], authEnv);
     const branchExists = Boolean(remoteBranch.trim());
+    // A regeneration re-bases on the fresh default tip and force-pushes; a normal
+    // update fast-forwards the existing bot-owned branch. Both differ from a create.
+    const updateInPlace = branchExists && !request.regenerate;
 
     const tempRoot = await mkdtemp(path.join(tmpdir(), "markdown-magpie-worktree-"));
     const worktreePath = path.join(tempRoot, "checkout");
 
     try {
-      if (branchExists) {
+      if (updateInPlace) {
         // Update path: base the worktree on the existing remote branch tip so our
         // new commit is a fast-forward — these branches are bot-owned, so the tip
         // is always our last push and no force is ever needed.
         await git(root, ["fetch", "origin", request.branchName], authEnv);
         await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, `origin/${request.branchName}`]);
       } else {
+        // Create OR regenerate: cut the branch from the current default-base tip. For
+        // a regeneration this discards the stale branch history so the rewritten file
+        // sits directly on the new base — the conflict the old tip carried is gone.
         const baseRef = await resolveBaseRef(root, request.repository);
         await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, baseRef]);
       }
@@ -920,12 +926,18 @@ export class LocalGitProposalPublisher {
 
       const status = await git(worktreePath, ["status", "--porcelain", "--", targetPath]);
       if (!status.trim()) {
-        // No content change. On the create path this is an error; on the update
-        // path it just means the regenerated doc is identical — return the current tip.
+        // No content change against the base. On a fresh create this is an error. On
+        // an in-place update it means the regenerated doc is identical — return the
+        // current tip. On a regenerate it means the fresh base already carries this
+        // exact content, so the branch (now reset to base) needs force-pushing to
+        // clear the stale divergence, then we return the base tip.
         if (!branchExists) {
           throw new Error(`Proposal does not change ${targetPath}`);
         }
         const head = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
+        if (request.regenerate) {
+          await git(worktreePath, ["push", "--force-with-lease", "-u", "origin", request.branchName], authEnv);
+        }
         return {
           branchName: request.branchName,
           commitSha: head,
@@ -944,7 +956,12 @@ export class LocalGitProposalPublisher {
         request.title
       ]);
       const commitSha = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
-      await git(worktreePath, ["push", "-u", "origin", request.branchName], authEnv);
+      // A regeneration rewrote history onto the fresh base, so the remote branch is
+      // no longer an ancestor — force-push (lease-guarded) to replace it in place.
+      const pushArgs = request.regenerate
+        ? ["push", "--force-with-lease", "-u", "origin", request.branchName]
+        : ["push", "-u", "origin", request.branchName];
+      await git(worktreePath, pushArgs, authEnv);
 
       return {
         branchName: request.branchName,
