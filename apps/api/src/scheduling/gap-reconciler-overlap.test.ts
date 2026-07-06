@@ -23,7 +23,7 @@ async function openPr(ctx: AppContext, title: string, targetPath: string, prUrl:
   return proposal.id;
 }
 
-const keepOpen = { fetchPullRequestStatus: async () => ({ merged: false, state: "open" as const }) };
+const keepOpen = { fetchPullRequestStatus: async () => ({ merged: false, state: "open" as const, mergeable: "unknown" as const }) };
 
 describe("detectOverlaps", () => {
   it("cross-links two open PRs that touch the same file", async () => {

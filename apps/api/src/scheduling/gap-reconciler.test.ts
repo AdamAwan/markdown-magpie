@@ -141,7 +141,7 @@ describe("reconcileGaps revision gate", () => {
     await reconcileGaps(ctx, undefined, {
       fetchPullRequestStatus: async () => {
         lookups += 1;
-        return { merged: true, state: "closed" };
+        return { merged: true, state: "closed", mergeable: "unknown" as const };
       }
     });
     assert.equal(lookups, 1, "open PRs are checked even with no gap changes");

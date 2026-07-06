@@ -117,7 +117,7 @@ queue.
 | --- | --- | --- | --- | --- |
 | Gap drafting | `process_gaps_to_pull_requests` | ~10 min | maintenance | `reconcile_gap_clusters`, `draft_markdown_proposal`, then publish/fold/comment GitHub jobs |
 | Source sync | `source_change_sync` | ~10 min | maintenance | `sync_source_changes_generate_plan` → proposal |
-| Snapshot refresh | `refresh_flow_snapshot` | ~5 min | github | — *(leaf: writes the flow snapshot of gaps, proposals, and PR state the reconciler reads; **not scheduled for local-git flows**, which have no PRs to poll)* |
+| Snapshot refresh | `refresh_flow_snapshot` | ~5 min | github | — *(leaf: writes the flow snapshot of gaps, proposals, and PR state the reconciler reads, and reports each open PR's mergeability so a **stale PR** can auto-regenerate — see below; **not scheduled for local-git flows**, which have no PRs to poll)* |
 | Correctness patrol | `correctness_patrol` | hourly | maintenance | `verify_document` → `correct_document`, `dedupe_documents`, `split_document` |
 | Editorial patrol | `editorial_patrol` | hourly | maintenance | `improve_document` |
 
@@ -126,6 +126,22 @@ enqueued *on merge* (the merge cascade below) for any proposal that had triggeri
 questions. A maintenance watcher claims it and POSTs `/api/proposals/:id/verify-closure`,
 where the API re-asks each triggering question as an `answer_question` job it bounded-waits
 on (tier 2), so it fans out into AI work exactly like the scheduled orchestrators.
+
+**Stale-PR auto-regeneration.** A published proposal's PR can go stale: `main`
+advances and touches the same file, so the branch no longer merges. Because a
+single-file proposal is a whole-file write, a conflict means *that exact file changed
+on main* — the right fix is to regenerate the doc against the new base, not a textual
+merge. Each `refresh_flow_snapshot` poll reports GitHub's `mergeable_state` per open
+PR; when the API sees a proposal flip to *conflicting* it enqueues a
+`draft_markdown_proposal` keyed to that proposal (`regenerateProposalId`). The drafter
+re-retrieves scoped context against the fresh base; on completion the API updates the
+proposal in place — keeping its id, title, target path, branch, and open PR — and
+re-publishes with `regenerate: true`, which re-cuts the branch from the current base
+tip and force-pushes, updating the PR. Guards keep it safe: an **approved** PR is never
+rewritten, a per-proposal **retry cap** (`regenerationCount`) stops a structural
+conflict from looping, and at most one regeneration is in flight per proposal. This is
+GitHub-only (local-git destinations have no `mergeable_state`) and single-file only
+(changeset proposals publish through a different path).
 
 Every tier-2 producer that writes a document expresses a `ChangeIntent` and passes
 through the **reconcile gate** (`open-new` / `fold` / `defer`) before a

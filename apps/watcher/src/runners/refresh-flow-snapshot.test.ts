@@ -131,7 +131,7 @@ describe("RefreshFlowSnapshotRunner", () => {
     const api = fakeApi([{ proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" }]);
     const runner = new RefreshFlowSnapshotRunner(
       api,
-      async () => ({ merged: false, state: "open", mergeable: "mergeable" }),
+      async () => ({ merged: false, state: "open", mergeable: "unknown" }),
       async () => {
         throw new Error("graphql exploded");
       }
