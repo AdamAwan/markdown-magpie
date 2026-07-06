@@ -16,6 +16,9 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { withCheckoutLock } from "./checkout-lock.js";
 import { withGitRetry } from "./git-retry.js";
+import { resolvePrimaryBranch } from "./primary-branch.js";
+
+export { resolvePrimaryBranch };
 
 const execFileAsync = promisify(execFile);
 
@@ -1079,6 +1082,7 @@ export async function mergeLocalProposalBranch(
 ): Promise<MergeLocalProposalBranchResult> {
   const { repoPath, branchName, defaultBranch } = request;
   return withCheckoutLock(repoPath, async () => {
+    await assertLocalBranchExists(repoPath, defaultBranch);
     await git(repoPath, ["checkout", defaultBranch]);
 
     const { name, email } = resolveCommitterIdentity();
@@ -1130,6 +1134,7 @@ export async function deleteLocalProposalBranch(
 ): Promise<void> {
   const { repoPath, branchName, defaultBranch } = request;
   await withCheckoutLock(repoPath, async () => {
+    await assertLocalBranchExists(repoPath, defaultBranch);
     await git(repoPath, ["checkout", defaultBranch]);
     await tryGit(repoPath, ["branch", "-D", branchName]);
   });
@@ -1170,12 +1175,58 @@ async function ensureRemote(root: string): Promise<string> {
   return remote.trim();
 }
 
+// The branch a local-git (file://) proposal merges into / is deleted against.
+// The destination repo is the working repo the review branch was cut from, so its
+// own checked-out branch is the merge target. Precedence mirrors resolvePrimaryBranch:
+// the configured `branch` wins, then the repo's origin/HEAD default, then its current
+// branch, then "main". This is the merge/reject counterpart to resolveBaseRef (which
+// runs on the clone at publish time) — both resolve through resolvePrimaryBranch so
+// create and merge can never pick different branches.
+// Guards a `git checkout <branch>` against a branch that does not exist locally,
+// so a misconfigured default branch surfaces a named, actionable error instead of
+// git's opaque "pathspec '<branch>' did not match any file(s) known to git".
+async function assertLocalBranchExists(repoPath: string, branch: string): Promise<void> {
+  const found = await tryGit(repoPath, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]);
+  if (!found.trim()) {
+    throw new Error(
+      `Cannot check out the destination branch "${branch}": it does not exist in ${repoPath}. ` +
+        "Set the repository's configured branch to an existing branch."
+    );
+  }
+}
+
+export async function resolveLocalGitTargetBranch(repoPath: string, configuredBranch?: string): Promise<string> {
+  const originHead = await tryGit(repoPath, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
+  const currentBranch = await tryGit(repoPath, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  return resolvePrimaryBranch({
+    configuredBranch,
+    detectedDefault: originHead.trim().replace(/^origin\//, ""),
+    detectedCurrent: currentBranch.trim()
+  });
+}
+
 async function resolveBaseRef(root: string, repository: RepositoryRef): Promise<string> {
-  const defaultBranch = repository.defaultBranch || repository.git?.defaultBranch || repository.git?.currentBranch || "main";
+  const defaultBranch = resolvePrimaryBranch({
+    configuredBranch: repository.defaultBranch,
+    detectedDefault: repository.git?.defaultBranch,
+    detectedCurrent: repository.git?.currentBranch
+  });
   const remoteRef = `refs/remotes/origin/${defaultBranch}`;
   const hasRemoteRef = await tryGit(root, ["show-ref", "--verify", remoteRef]);
   if (hasRemoteRef.trim()) {
     return `origin/${defaultBranch}`;
+  }
+
+  // No remote-tracking ref — fall back to a local branch of the same name, but
+  // only if it actually exists. Otherwise `git worktree add ... <base>` would fail
+  // with git's opaque "invalid reference: <base>"; surface a named error instead.
+  const hasLocalRef = await tryGit(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${defaultBranch}`]);
+  if (!hasLocalRef.trim()) {
+    throw new Error(
+      `Cannot base the proposal on branch "${defaultBranch}": it does not exist in the repository ` +
+        `(no origin/${defaultBranch} or local ${defaultBranch}). ` +
+        "Set the repository's configured branch to an existing branch."
+    );
   }
 
   return defaultBranch;

@@ -1718,17 +1718,32 @@ test("isProposalStatus accepts every lifecycle status, including superseded, and
 
 // --- local-git merge -------------------------------------------------------
 
-function ctxWithDestination(url: string): ReturnType<typeof makeTestContext> {
+function ctxWithDestination(url: string, branch?: string): ReturnType<typeof makeTestContext> {
   return makeTestContext({
     knowledgeConfig: {
       sources: [],
-      destinations: [{ id: "demo", name: "Demo", url, kind: "git" }],
+      destinations: [{ id: "demo", name: "Demo", url, kind: "git", ...(branch ? { branch } : {}) }],
       flows: [],
       repositories: [],
       roleGrants: {},
       checkoutRoot: ".magpie/checkouts"
     }
   });
+}
+
+// A real non-bare git repo checked out on `branch`, so the local-git merge/reject
+// paths can detect the destination repo's own branch (the branch a review branch
+// was cut from). Returns the file:// URL.
+async function initLocalGitDestination(branch: string): Promise<string> {
+  const dir = await mkdtemp(path.join(tmpdir(), "magpie-merge-dest-"));
+  const run = (args: string[]) => execFileAsync("git", args, { cwd: dir });
+  await run(["init", `--initial-branch=${branch}`]);
+  await run(["config", "user.name", "Test"]);
+  await run(["config", "user.email", "test@example.com"]);
+  await writeFile(path.join(dir, "seed.md"), "# Seed\n", "utf8");
+  await run(["add", "-A"]);
+  await run(["commit", "-m", "seed"]);
+  return pathToFileURL(dir).href;
 }
 
 async function branchPushedProposal(ctx: ReturnType<typeof makeTestContext>, remoteUrl: string): Promise<string> {
@@ -1778,6 +1793,41 @@ test("mergeLocalProposal merges, marks merged, and targets the destination repo"
   assert.equal(calls[0].branchName, "magpie/proposal-abc");
   assert.equal(calls[0].defaultBranch, "main");
   assert.equal((await ctx.stores.proposals.get(id))?.status, "merged");
+});
+
+test("mergeLocalProposal targets the destination repo's own branch when none is configured", async () => {
+  const url = await initLocalGitDestination("master");
+  const ctx = ctxWithDestination(url);
+  const id = await branchPushedProposal(ctx, url);
+  const proposal = await ctx.stores.proposals.get(id);
+  assert.ok(proposal);
+
+  const calls: Array<{ defaultBranch: string }> = [];
+  const result = await proposals.mergeLocalProposal(ctx, proposal, async (req) => {
+    calls.push(req);
+    return { mergeCommitSha: "merge-sha" };
+  });
+
+  assert.equal(result.ok, true);
+  // Not "main": the destination repo is on master, so merge must checkout master.
+  assert.equal(calls[0].defaultBranch, "master");
+});
+
+test("mergeLocalProposal honours the configured branch over detection", async () => {
+  const url = await initLocalGitDestination("master");
+  const ctx = ctxWithDestination(url, "develop");
+  const id = await branchPushedProposal(ctx, url);
+  const proposal = await ctx.stores.proposals.get(id);
+  assert.ok(proposal);
+
+  const calls: Array<{ defaultBranch: string }> = [];
+  const result = await proposals.mergeLocalProposal(ctx, proposal, async (req) => {
+    calls.push(req);
+    return { mergeCommitSha: "merge-sha" };
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls[0].defaultBranch, "develop");
 });
 
 test("mergeLocalProposal rejects a hosted destination", async () => {

@@ -230,14 +230,14 @@ export async function resolveIndexSelection(
     repositoryId?: string;
     name?: string;
   }
-): Promise<{ localPath: string; repositoryId?: string; name?: string }> {
+): Promise<{ localPath: string; repositoryId?: string; name?: string; branch?: string }> {
   const indexableDestinations = deps.knowledgeConfig.destinations.filter(
     (destination) => destination.kind === "local" || destination.kind === "git"
   );
   if (indexableDestinations.length > 0) {
     const configured = selectDestinationForIndex(deps, payload, indexableDestinations);
     const localPath = await resolveConfiguredRepositoryLocalPath(configured, deps.checkoutRoot);
-    return { localPath, repositoryId: configured.id, name: configured.name };
+    return { localPath, repositoryId: configured.id, name: configured.name, branch: configured.branch };
   }
   if (deps.knowledgeConfig.destinations.length > 0) {
     throw new Error("configured_repository_not_indexable");
@@ -261,7 +261,8 @@ async function indexRepositoryForPayload(
   return deps.knowledgeIndex.indexLocalRepository({
     localPath: selection.localPath,
     repositoryId: selection.repositoryId,
-    name: selection.name
+    name: selection.name,
+    configuredBranch: selection.branch
   });
 }
 
