@@ -72,8 +72,8 @@ const IN_FLIGHT_STATES = ["created", "retry", "active"] as const;
 // pg-boss's default schema when ConstructorOptions.schema is unset. countInFlight
 // queries the job table directly (pg-boss's public API has no count), so it needs
 // the schema name; guarded by SCHEMA_IDENTIFIER since it is interpolated into SQL.
-const DEFAULT_PGBOSS_SCHEMA = "pgboss";
-const SCHEMA_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+export const DEFAULT_PGBOSS_SCHEMA = "pgboss";
+export const SCHEMA_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export class PgBossJobBroker implements JobBroker {
   private readonly boss: PgBoss;

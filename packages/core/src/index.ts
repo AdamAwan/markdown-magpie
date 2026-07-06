@@ -1277,3 +1277,110 @@ export interface PublishChangesetRequest {
   title: string;
   changes: ChangesetChange[];
 }
+
+// ---------------------------------------------------------------------------
+// Insights / charts
+//
+// Response shapes for the /insights/* aggregation endpoints, consumed by the
+// web console's Insights page. See docs/insights-charts.md for the per-chart
+// operator questions and source tables.
+// ---------------------------------------------------------------------------
+
+// The time-bucket granularity for a time-series insight. Maps 1:1 to Postgres
+// date_trunc units.
+export type InsightsBucketUnit = "day" | "week" | "month";
+
+// One time bucket of the open-gap backlog trend. `openTotal` is the cumulative
+// number of gaps still open at the end of the bucket; the other counts are the
+// transitions that happened within the bucket.
+export interface GapBacklogBucket {
+  bucketStart: string; // ISO timestamp of the bucket's start
+  opened: number;
+  resolved: number;
+  dismissed: number;
+  parked: number;
+  openTotal: number;
+}
+
+// One time bucket of job throughput, split by terminal/active state.
+export interface JobThroughputBucket {
+  bucketStart: string;
+  completed: number;
+  failed: number;
+  active: number;
+  retry: number;
+}
+
+// One stage of the gap-to-merge funnel, in pipeline order.
+export interface FunnelStage {
+  key: "questions" | "gaps" | "clustered" | "proposals" | "prs" | "merged" | "verified";
+  label: string;
+  count: number;
+}
+
+// One bar of the answer-latency histogram (C4). Buckets completed answer_question
+// jobs by how long they took end-to-end (queued → completed) into fixed latency
+// ranges. `from`/`to` are the range bounds in seconds (`to` null on the open-ended
+// top bucket); `count` is how many completed answers fell in the range.
+export interface LatencyBin {
+  label: string;
+  from: number;
+  to: number | null;
+  count: number;
+}
+
+// The closed-vs-open split of gap-closure verification outcomes (C5). `closed` =
+// verdict 'closed' (the merged doc now answers the re-asked question); `stillOpen`
+// = verdict 'still_open'. Used both as the overall total and per time bucket.
+export interface VerificationSummary {
+  closed: number;
+  stillOpen: number;
+}
+
+// One time bucket of the verification-success trend (C5), tagged with its bucket
+// start so the client can plot success rate over time.
+export interface VerificationBucket extends VerificationSummary {
+  bucketStart: string;
+}
+
+// One bar of the job-error breakdown (C6): a labelled slice of failed pg-boss jobs
+// and how many landed under it. `key` is either an error category (provider /
+// validation / timeout / …) or a job type, depending on which dimension the bar
+// belongs to. Failed rows are unioned across pg-boss's live `job` and `archive`
+// tables so finished failures stay in the history.
+export interface JobErrorBreakdown {
+  key: string;
+  count: number;
+}
+
+// Review-cycle compliance of the active knowledge base (C7). `documents` splits
+// docs that carry a review cadence (`review_cycle_days`) by how their next-review
+// date compares to today; `sources` splits synced sources by how recently they
+// were last checked. A point-in-time snapshot, not a time series.
+export interface DocumentFreshness {
+  fresh: number; // next review is more than the soon-window away
+  due: number; // next review falls within the soon-window
+  overdue: number; // past its next-review date (or never verified)
+}
+
+export interface SourceFreshness {
+  fresh: number; // synced within the stale-window
+  stale: number; // not synced for longer than the stale-window
+}
+
+export interface FreshnessSummary {
+  documents: DocumentFreshness;
+  sources: SourceFreshness;
+}
+
+// Impact of maintenance patrols and the gap→PR reconciler over the window (C8),
+// one row per `maintenance_runs.task_type`. `findings` sums the verify-lens
+// findings patrol runs recorded (`details.findings`); `proposals` sums the
+// proposals the gap→PR runs drafted (`details.proposalsDrafted`). A task type only
+// contributes to the field its runs actually record; the other stays zero.
+export interface PatrolImpact {
+  taskType: string;
+  runs: number;
+  findings: number;
+  proposals: number;
+}

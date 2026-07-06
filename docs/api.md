@@ -526,9 +526,112 @@ Retries a `failed` job. `409 job_not_failed` if it is not failed; `404 job_not_f
 `{ "workerName", "capabilities": [...] }` and returns `{ "job": Job }` or `{ "job": null }`;
 fail takes a structured `error` object. See [ai-jobs.md](ai-jobs.md).
 
+## Insights
+
+Read-only aggregation endpoints powering the web console's Insights page. All require the
+`read:knowledge` scope and return a named-key JSON envelope of already-bucketed, **zero-filled**
+series (every bucket in the window is present even when its counts are `0`, so clients render a
+continuous line without gap-filling). Time params are shared: `?from=<ISO>&to=<ISO>&bucket=day|week|month`,
+defaulting to the last 30 days with `bucket=day`; `flow` narrows to a single flow where supported.
+Response shapes live in `packages/core/src/index.ts`.
+
+### `GET /api/insights/gaps/backlog?from&to&bucket&flow`
+
+Open-gap backlog trend. Buckets `question_gaps` by `date_trunc(bucket, ...)`, counting each lifecycle
+transition (`opened`/`resolved`/`dismissed`/`parked`) per bucket plus the running net-open total.
+`flow` narrows to a single flow.
+
+```json
+{ "series": [ GapBacklogBucket, ... ] }
+```
+
+`GapBacklogBucket` = `{ bucketStart, opened, resolved, dismissed, parked, openTotal }`. `openTotal`
+is the cumulative net (opened − closed) **within the requested window** — it does not carry a
+baseline of gaps opened before `from`.
+
+### `GET /api/insights/funnel?from&to&flow`
+
+Gap-to-merge funnel: one count per pipeline stage over the window, in pipeline order —
+`questions` → `gaps` → `clustered` → `proposals` → `prs` → `merged` → `verified`. Each stage
+counts the distinct entities that entered it within the window (windowed on the timestamp that
+marks entry): questions on `questions.asked_at`, gaps on `question_gaps.created_at`, clustered
+on gaps with an active `gap_cluster_memberships` row, proposals on `proposals.created_at`, prs
+on proposals whose `status` reached `pr-opened`/`merged`, merged on `proposals.merged_at`, and
+verified on `gap_closure_verification` rows with `verdict = 'closed'`. The narrowing counts make
+the drop-off between stages the conversion signal.
+
+- `400 invalid_insights_query` — malformed query.
+- `200` — `{ "stages": FunnelStage[] }`.
+
+### `GET /api/insights/jobs/throughput?from&to&bucket&type`
+
+Job throughput & health. Buckets pg-boss jobs by their `created_on` timestamp and splits them into
+`completed` / `failed` / `active` / `retry` counts per bucket. pg-boss keeps live rows in
+`"<schema>".job` and migrates completed/failed rows to `"<schema>".archive` after retention, so the
+rollup `UNION ALL`s both tables — otherwise finished jobs would vanish from history. `active` folds
+pg-boss's `created` (queued) and `active` (executing) states together. `type`, when given, narrows to
+a single job type (resolved server-side to that type's pg-boss queue names); an unknown type matches
+nothing.
+
+```json
+{ "series": [ JobThroughputBucket, ... ] }
+```
+
+`JobThroughputBucket` = `{ bucketStart, completed, failed, active, retry }`.
+
+### `GET /api/insights/answers/latency?from&to`
+
+Answer-latency histogram (C4). Bins completed answers by how long they took end to end
+into fixed latency ranges. Returns `{ "bins": LatencyBin[] }` (7 fixed bins, `0–5s`
+through `5m+`, always present and zero-filled). Binned by latency range, not time, so it
+takes only the window bounds. Source: pg-boss's own `job` + `archive` tables — completed
+`answer_question` job rows (`state = 'completed'`), latency = `completed_on - created_on`,
+windowed on `created_on`.
+
+### `GET /api/insights/verification/success?from&to&bucket`
+
+Verification success rate (C5). Returns
+`{ "totals": VerificationSummary, "series": VerificationBucket[] }`, splitting gap-closure
+verification outcomes into `closed` vs `stillOpen` overall and per bucket. Source: the
+`gap_closure_verification` table (`verdict` ∈ `closed` / `still_open`, `created_at`).
+
+### `GET /api/insights/jobs/errors?from&to`
+
+Job error breakdown (C6). Returns
+`{ "byCategory": JobErrorBreakdown[], "byType": JobErrorBreakdown[] }`, counting failed jobs
+over the window split by error category and by job type (both ordered most-frequent-first).
+Window-only (no time axis). Source: pg-boss's `job` + `archive` tables — failed rows
+(`state = 'failed'`), windowed on `created_on` (enqueue time, matching C2's creation-time
+axis — not failure time). The `JobError` payload pg-boss stores in the
+job's `output` JSONB column supplies the category (`output->>'category'`, falling back to
+`unknown`); the queue `name` supplies the job type after its `__<capability>` fan-out suffix
+is stripped (`split_part(name, '__', 1)`).
+
+### `GET /api/insights/freshness`
+
+Knowledge-base freshness (C7). A point-in-time snapshot, so it takes no query params. Returns
+`{ "documents": DocumentFreshness, "sources": SourceFreshness }`. `documents` classifies each
+active document that carries a review cadence (`review_cycle_days IS NOT NULL`) by its next
+review date (`last_verified + review_cycle_days`): `overdue` (past due, or never verified),
+`due` (within 7 days), `fresh` (further out). `sources` splits every `source_sync_state` row
+by `last_checked_at`: `stale` if not synced for 7 days, else `fresh`. Source: `documents`
+(`status`, `last_verified`, `review_cycle_days`) and `source_sync_state` (`last_checked_at`).
+
+### `GET /api/insights/patrols?from&to`
+
+Maintenance patrol impact (C8). Returns `{ "runs": PatrolImpact[] }`, one row per
+`maintenance_runs.task_type` over the window (windowed on `started_at`). `runs` counts
+executions; `findings` sums the verify-lens findings patrol runs record (`details.findings`
+JSONB array length); `proposals` sums the proposals the gap→PR reconciler drafts
+(`details.proposalsDrafted`). A task type only contributes to the metric its runs actually
+record; the other stays zero. Source: `maintenance_runs` (`task_type`, `details` JSONB,
+`started_at`).
+
 ## Type Reference
 
 The response shapes referenced above (`AnswerResult`, `Citation`, `DocumentSection`,
 `KnowledgeDocument`, `RepositoryRef`, `QuestionLog`, `GapCandidate`, `Proposal`,
-`ProposalPublication`) are defined in `packages/core/src/index.ts`. The `Job` shape
-(`JobView`) is defined in `packages/jobs/src/types.ts`.
+`ProposalPublication`, `GapBacklogBucket`, `LatencyBin`, `VerificationSummary`,
+`VerificationBucket`, `JobErrorBreakdown`, `DocumentFreshness`, `SourceFreshness`,
+`FreshnessSummary`, `PatrolImpact`) are defined in `packages/core/src/index.ts`. The `Job`
+shape (`JobView`) is defined in `packages/jobs/src/types.ts`.

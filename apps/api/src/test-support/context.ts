@@ -18,6 +18,7 @@ import { InMemorySourceCorpusStore } from "../stores/source-corpus-store.js";
 import { InMemorySnapshotStore } from "../stores/snapshot-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
 import { InMemoryWatcherRegistryStore } from "../stores/watcher-registry-store.js";
+import { NullInsightsStore } from "../stores/insights-store.js";
 import { InMemoryJobAcceptanceStore } from "../stores/job-acceptance-store.js";
 import { InMemoryRateLimitStore } from "../stores/rate-limit-store.js";
 
@@ -67,6 +68,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
       prCrosslinks: new InMemoryPrCrosslinkStore(),
       snapshots: new InMemorySnapshotStore(),
       watchers: new InMemoryWatcherRegistryStore(),
+      insights: new NullInsightsStore(),
       jobAcceptances: new InMemoryJobAcceptanceStore(),
       rateLimit: new InMemoryRateLimitStore()
     },

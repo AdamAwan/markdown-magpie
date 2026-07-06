@@ -25,6 +25,8 @@ import { InMemorySourceCorpusStore } from "../stores/source-corpus-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
 import { InMemoryWatcherRegistryStore } from "../stores/watcher-registry-store.js";
 import { FileSnapshotStore, type SnapshotStore } from "../stores/snapshot-store.js";
+import { NullInsightsStore, type InsightsStore } from "../stores/insights-store.js";
+import { PostgresInsightsStore } from "../stores/postgres-insights-store.js";
 import { snapshotRoot } from "./repositories.js";
 import type { AppConfig, StoreEnvName } from "./config.js";
 import type pg from "pg";
@@ -183,4 +185,11 @@ export function createPrCrosslinkStore(config: AppConfig, pool: pg.Pool): InMemo
 // no Postgres variant; unit tests swap in InMemorySnapshotStore via the test context.
 export function createSnapshotStore(config: AppConfig): SnapshotStore {
   return new FileSnapshotStore(snapshotRoot(config));
+}
+
+// Insights is read-only aggregation that only makes sense over Postgres, so it
+// is Postgres-backed whenever a pool exists (production and DB-backed tests) and
+// a no-op otherwise (in-memory unit tests get NullInsightsStore).
+export function createInsightsStore(pool: pg.Pool | undefined, pgBossSchema: string): InsightsStore {
+  return pool ? new PostgresInsightsStore(pool, pgBossSchema) : new NullInsightsStore();
 }

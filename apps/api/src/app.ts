@@ -23,6 +23,7 @@ import { workerRoutes } from "./features/workers/routes.js";
 import { promptRoutes } from "./features/prompts/routes.js";
 import { snapshotRoutes } from "./features/snapshots/routes.js";
 import { reconciliationRoutes } from "./features/reconciliations/routes.js";
+import { insightsRoutes } from "./features/insights/routes.js";
 import { requireAuth, type ApiAuthOptions } from "./auth/middleware.js";
 import { getBuildInfo } from "./build-info.js";
 import { requestLogging } from "./http/logging.js";
@@ -122,6 +123,7 @@ export function buildApp(ctx: AppContext, options?: ApiAuthOptions): Hono {
   api.route("/prompts", promptRoutes(ctx));
   api.route("/snapshots", snapshotRoutes(ctx));
   api.route("/reconciliations", reconciliationRoutes(ctx));
+  api.route("/insights", insightsRoutes(ctx));
 
   app.route("/api", api);
 
