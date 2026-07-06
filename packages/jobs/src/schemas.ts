@@ -134,14 +134,6 @@ export const summarizeGapOutputSchema = z.object({
   rationale: z.string()
 }) satisfies z.ZodType<SummarizeGapJobOutput>;
 
-const sourceDataContextSchema = z.object({
-  sourceId: z.string(),
-  sourceName: z.string(),
-  kind: z.enum(["local", "git", "internet", "agent"]),
-  path: z.string().optional(),
-  url: z.string().optional(),
-  content: z.string().optional()
-});
 // Mirrors @magpie/core SourceDescriptor. References only — no file content.
 const sourceDescriptorSchema = z.discriminatedUnion("kind", [
   z.object({ id: z.string(), name: z.string(), kind: z.literal("git"), url: z.string(), subpath: z.string().optional() }),
