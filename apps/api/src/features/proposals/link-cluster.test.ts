@@ -25,7 +25,7 @@ describe("createProposalFromCompletedJob cluster linking", () => {
     const ctx = makeTestContext();
     const proposal = await createProposalFromCompletedJob(
       ctx,
-      draftJob({ gapSummaries: ["g"], evidence: [], gapClusterId: "cluster-7" }),
+      draftJob({ gapSummaries: ["g"], evidence: [], sources: [], gapClusterId: "cluster-7" }),
       draftOutput
     );
     assert.equal(proposal?.gapClusterId, "cluster-7");
@@ -35,7 +35,7 @@ describe("createProposalFromCompletedJob cluster linking", () => {
     const ctx = makeTestContext();
     const proposal = await createProposalFromCompletedJob(
       ctx,
-      draftJob({ gapSummaries: ["g"], evidence: [] }),
+      draftJob({ gapSummaries: ["g"], evidence: [], sources: [] }),
       draftOutput
     );
     assert.equal(proposal?.gapClusterId, undefined);

@@ -12,7 +12,7 @@ import type {
   Proposal,
   QuestionLog,
   RepositoryRef,
-  SourceDataContext,
+  SourceDescriptor,
   SplitDocumentJobInput
 } from "@magpie/core";
 import type { JobState, JobView, verifyGapClosureOutputSchema } from "@magpie/jobs";
@@ -42,11 +42,7 @@ import {
   selectDestinationForProposal,
   selectFlow
 } from "../../platform/repositories.js";
-import {
-  collectSourceContext,
-  collectSourceContextCached,
-  type SourceContextCache
-} from "../../platform/source-context.js";
+import { projectSourceDescriptors } from "../../platform/source-descriptors.js";
 import { type AiProviderName } from "../../platform/providers.js";
 import { buildAnswerQuestionInput, recordAnswerQuestionLog } from "../../platform/answer-question.js";
 import { logger } from "../../logger.js";
@@ -1001,8 +997,9 @@ async function buildRegenerationDraftInput(
   const deps = ctx.repositoryDeps();
   const flow = selectFlow(deps, proposal.flowId);
   const sourceIds = flow?.sourceIds;
-  // Fresh, uncached read so the redraft sees whatever moved on the base since publish.
-  const sourceContext = await collectSourceContext(deps, sourceIds);
+  // Descriptor projection is cheap and always fresh, so the redraft references
+  // whatever moved on the base since publish once the watcher resolves them.
+  const sources = projectSourceDescriptors(deps, sourceIds);
   const logs = (
     await Promise.all((proposal.triggeringQuestionIds ?? []).map((id) => ctx.stores.questionLogs.get(id)))
   ).filter((log): log is NonNullable<typeof log> => Boolean(log));
@@ -1010,7 +1007,7 @@ async function buildRegenerationDraftInput(
     gapSummaries: splitGapSummaries(proposal.gapSummary),
     triggeringQuestions: logs.map((log) => log.question),
     evidence: proposal.evidence,
-    sourceContext,
+    sources,
     destinationId: proposal.destinationId,
     // Keep the target path stable so the regenerated doc lands on the same file and
     // the derived branch name (and its open PR) stays put.
@@ -1082,8 +1079,8 @@ export async function getProposalExecutionContext(
 // Core of "draft one proposal from a confirmed cluster of gap summaries",
 // independent of HTTP so the scheduled gap-to-PR task can reuse it. Enqueues a
 // draft_markdown_proposal job; the proposal lands later via the job completion
-// machinery (createProposalFromCompletedJob). Callers that draft in a loop pass one
-// SourceContextCache (see platform/source-context) through so the sources are read once.
+// machinery (createProposalFromCompletedJob). The job carries source *references*
+// (projectSourceDescriptors), which the watcher resolves to a traversable checkout.
 
 // In-flight statuses whose proposals a new draft should be aware of: an open PR
 // (pr-opened) plus the earlier stages that have no PR yet but are still work the
@@ -1139,19 +1136,22 @@ export async function collectOpenPullRequestContext(
 }
 
 // Distils the inputs handed to the drafter into the compact, inspectable record
-// kept on the proposal. Records source-file identities (name/path/url) but not
-// their bodies, which can be large and are already captured elsewhere.
+// kept on the proposal. Records the source identities (name + git url / local
+// path / internet url) that grounded the draft — not their file bodies, which the
+// agent read directly and which are large.
 function buildDraftContext(parts: {
   gapSummaries: string[];
-  sourceContext?: SourceDataContext[];
+  sources?: SourceDescriptor[];
   evidence: Proposal["evidence"];
   openPullRequests?: OpenPullRequestContext[];
 }): DraftContext {
   return {
     gapSummaries: parts.gapSummaries,
-    sourceFiles: (parts.sourceContext ?? [])
-      .filter((source) => source.path || source.url)
-      .map((source) => ({ sourceName: source.sourceName, path: source.path, url: source.url })),
+    sourceFiles: (parts.sources ?? []).map((source) => ({
+      sourceName: source.name,
+      path: source.kind === "local" ? source.path : undefined,
+      url: source.kind === "git" || source.kind === "internet" ? source.url : undefined
+    })),
     evidenceCount: parts.evidence.length,
     openPullRequests: parts.openPullRequests ?? []
   };
@@ -1165,7 +1165,6 @@ export async function draftFromGaps(
     flowId?: string;
     sourceIds?: string[];
     destinationId?: string;
-    sourceContextCache?: SourceContextCache;
     // The flow's in-flight proposals / open PRs to make the drafter aware of.
     // Optional and defaults to none, so the on-demand HTTP path stays unchanged.
     openPullRequests?: OpenPullRequestContext[];
@@ -1235,17 +1234,14 @@ export async function draftFromGaps(
     },
     "drafting proposal"
   );
-  const sourceContext = await collectSourceContextCached(deps, sourceIds, overrides.sourceContextCache);
-  const materialFiles = sourceContext.filter(
-    (context) => context.path && context.content !== "Source path does not exist."
-  );
-  if (materialFiles.length === 0) {
+  const sources = projectSourceDescriptors(deps, sourceIds);
+  if (sources.length === 0) {
     logger.warn(
       { label },
-      "drafting proposal with no real source files attached — model will likely produce a placeholder; check source configuration and subpaths"
+      "drafting proposal with no resolvable source references attached — model will likely produce a placeholder; check that the flow has git/local/internet/agent sources configured"
     );
   } else {
-    logger.debug({ materialFileCount: materialFiles.length }, "proposal draft source files ready");
+    logger.debug({ sourceCount: sources.length }, "proposal draft source references ready");
   }
   // Drafting is enqueue-only: the watcher runs the generative work and the
   // proposal lands later via createProposalFromCompletedJob. The configured
@@ -1257,7 +1253,7 @@ export async function draftFromGaps(
     // Omit entirely when this is not a resubmission, so a first-time draft's
     // prompt input carries no empty noise.
     resubmissionNotes: resubmissionNotes.length ? resubmissionNotes : undefined,
-    sourceContext,
+    sources,
     // Omit the key entirely when there's nothing in flight, so the serialised
     // prompt input carries no empty noise.
     openPullRequests: overrides.openPullRequests?.length ? overrides.openPullRequests : undefined,
@@ -1345,7 +1341,7 @@ export async function createProposalFromCompletedJob(
     jobId: job.id,
     draftContext: buildDraftContext({
       gapSummaries: input.gapSummaries ?? [],
-      sourceContext: input.sourceContext,
+      sources: input.sources,
       evidence: input.evidence ?? [],
       openPullRequests: input.openPullRequests
     })

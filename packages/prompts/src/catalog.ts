@@ -114,20 +114,23 @@ export const DRAFT_MARKDOWN_PROPOSAL: PromptDefinition = {
   id: "draft-markdown-proposal",
   title: "Draft Markdown proposal",
   description:
-    "Drafts a single cohesive Markdown article that addresses every listed gap. Used by the watcher's draft_markdown_proposal job.",
+    "Drafts a single cohesive Markdown article that addresses every listed gap, grounded in the flow's source repositories, which the executing agent explores directly. Used by the watcher's draft_markdown_proposal job.",
   usedBy: ["watcher"],
   outputShape: '{ title, targetPath, markdown, rationale }',
-  instructions: `Draft a single Markdown knowledge base proposal that addresses every gap listed in gapSummaries.
+  instructions: `Draft a single Markdown knowledge base proposal that addresses every gap listed in gapSummaries, grounded in the source repositories you have been given access to.
+
+Grounding:
+- You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for terms from the gap summaries and triggering questions, open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs.
+- Ground every factual claim in files you actually read, and cite their repository paths (e.g. "(see Docs/Specifications/Statements/ingestion.md)").
+- Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs. Where the sources genuinely do not cover a point, write only what can be supported and say so plainly.
 
 Rules:
 - Return JSON only.
 - gapSummaries may contain several related gaps; write ONE cohesive article that covers all of them rather than separate sections that repeat each other.
 - The input may include resubmissionNotes: this is a re-draft because a previous proposal merged but still did NOT answer the triggering questions. Each note explains what was already published and why it fell short. Treat these as the most important guidance — directly address the specific shortfall each note calls out (add the missing specifics, examples, or coverage) rather than restating what the earlier attempt already contained.
-- Markdown must be reviewable and conservative.
-- Use sourceContext when present as raw material for improving the destination knowledge base.
 - The input may include openPullRequests: the flow's already in-flight proposals and currently open pull requests, each with a title, an optional url, and a target path. Do NOT draft something that duplicates one of these. If your article overlaps an open pull request, build on it and reference it (by title and url) in the rationale instead of restating its content; draft only what those in-flight changes leave uncovered.
+- Markdown must be reviewable and conservative; UK English. Include frontmatter with title and status: draft.
 - Cite source file paths, URLs, or agent/internet source names in the rationale.
-- Include frontmatter with title and status: draft.
 
 Return JSON:
 {

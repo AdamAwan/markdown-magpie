@@ -55,6 +55,7 @@ test("draft input schema preserves gapClusterId", () => {
     gapSummaries: ["g"],
     triggeringQuestions: ["q"],
     evidence: [],
+    sources: [],
     expectedOutput: "markdown_proposal",
     gapClusterId: "cluster-1"
   });
@@ -67,6 +68,7 @@ test("draft input schema leaves gapClusterId absent when not provided", () => {
     gapSummaries: ["g"],
     triggeringQuestions: ["q"],
     evidence: [],
+    sources: [],
     expectedOutput: "markdown_proposal"
   });
   assert.equal(parsed.gapClusterId, undefined);
@@ -82,6 +84,7 @@ test("draft input schema preserves triggeringQuestionIds and openPullRequests", 
     gapSummaries: ["g"],
     triggeringQuestions: ["q"],
     evidence: [],
+    sources: [],
     expectedOutput: "markdown_proposal",
     triggeringQuestionIds: ["question-1", "question-2"],
     openPullRequests: [

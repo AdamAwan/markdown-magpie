@@ -112,4 +112,22 @@ describe("sourceDescriptorsOf", () => {
     const job = jobOf("draft_seed_document", { provider: "openai-compatible", flowId: "f1" });
     assert.deepEqual(sourceDescriptorsOf(job), []);
   });
+
+  it("yields a gap-draft job's descriptors", () => {
+    const sources = [git()];
+    const job = jobOf("draft_markdown_proposal", {
+      provider: "openai-compatible",
+      gapSummaries: ["refunds"],
+      triggeringQuestions: [],
+      evidence: [],
+      sources,
+      expectedOutput: "markdown_proposal"
+    });
+    assert.deepEqual(sourceDescriptorsOf(job), sources);
+  });
+
+  it("yields [] for a malformed gap-draft input", () => {
+    const job = jobOf("draft_markdown_proposal", { provider: "openai-compatible" });
+    assert.deepEqual(sourceDescriptorsOf(job), []);
+  });
 });

@@ -270,6 +270,7 @@ test("proposal completion is idempotent when delivered twice", async () => {
     gapSummaries: ["How to configure X"],
     triggeringQuestions: ["How do I configure X?"],
     evidence: [],
+    sources: [],
     expectedOutput: "markdown_proposal"
   };
   const job = await ctx.jobs.create("draft_markdown_proposal", validInput);
@@ -302,6 +303,7 @@ test("#161: a transient side-effect failure returns side_effects_failed, and the
     gapSummaries: ["How to configure X"],
     triggeringQuestions: ["How do I configure X?"],
     evidence: [],
+    sources: [],
     expectedOutput: "markdown_proposal"
   };
   const job = await ctx.jobs.create("draft_markdown_proposal", validInput);

@@ -1132,15 +1132,57 @@ test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job"
   const input = job.input as {
     gapSummaries: string[];
     provider: string;
+    sources: { id: string }[];
     triggeringQuestionIds?: string[];
     openPullRequests?: { status: string }[];
   };
   assert.deepEqual(input.gapSummaries, ["How to configure X"]);
   assert.equal(input.provider, "openai-compatible");
+  // The test context configures no sources, so the projected descriptor set is empty.
+  assert.deepEqual(input.sources, []);
   // Both must survive the broker's schema-parse so the proposal links back to its
   // triggering questions and the drafter sees the in-flight PR it should not duplicate.
   assert.ok(input.triggeringQuestionIds?.includes(log.id), "triggeringQuestionIds survives enqueue");
   assert.equal(input.openPullRequests?.[0]?.status, "pr-opened");
+});
+
+test("draftFromGaps projects the flow's configured sources into the enqueued input", async () => {
+  const ctx = makeTestContext({
+    knowledgeConfig: {
+      sources: [{ id: "handbook", name: "Handbook", kind: "git", url: "https://example.com/handbook.git", subpath: "docs" }],
+      destinations: [],
+      flows: [{ id: "support", name: "Support", sourceIds: ["handbook"], destinationId: "kb" }],
+      repositories: [],
+      roleGrants: {},
+      checkoutRoot: ".magpie/checkouts"
+    }
+  });
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
+  const log = await ctx.stores.questionLogs.record({
+    question: "How do I configure X?",
+    chatProvider: "openai-compatible",
+    retrievedSectionIds: []
+  });
+  await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
+
+  const outcome = await proposals.draftFromGaps(ctx, ["How to configure X"], { flowId: "support" });
+  if (!outcome.ok) {
+    throw new Error("expected a queued draft");
+  }
+
+  const parsed = jobDefinition("draft_markdown_proposal").inputSchema.safeParse(outcome.job.input);
+  assert.ok(parsed.success, "projected descriptors must survive the draft contract");
+  const input = outcome.job.input as { sources: { id: string; kind: string; url?: string; subpath?: string }[] };
+  // Proves deps + the flow's sourceIds actually flow through projectSourceDescriptors —
+  // a hardcoded [] would fail here.
+  assert.deepEqual(input.sources.map((s) => s.id), ["handbook"]);
+  assert.deepEqual(input.sources[0], {
+    id: "handbook",
+    name: "Handbook",
+    kind: "git",
+    url: "https://example.com/handbook.git",
+    subpath: "docs"
+  });
 });
 
 test("draftFromGaps threads a reopened gap's verification note into resubmissionNotes", async () => {

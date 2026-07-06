@@ -134,14 +134,6 @@ export const summarizeGapOutputSchema = z.object({
   rationale: z.string()
 }) satisfies z.ZodType<SummarizeGapJobOutput>;
 
-const sourceDataContextSchema = z.object({
-  sourceId: z.string(),
-  sourceName: z.string(),
-  kind: z.enum(["local", "git", "internet", "agent"]),
-  path: z.string().optional(),
-  url: z.string().optional(),
-  content: z.string().optional()
-});
 // Mirrors @magpie/core SourceDescriptor. References only — no file content.
 const sourceDescriptorSchema = z.discriminatedUnion("kind", [
   z.object({ id: z.string(), name: z.string(), kind: z.literal("git"), url: z.string(), subpath: z.string().optional() }),
@@ -166,7 +158,10 @@ export const draftMarkdownProposalInputSchema = z.object({
   // resubmission so the drafter can address the specific shortfall (see the
   // gap `note` set by verify_gap_closure).
   resubmissionNotes: z.array(z.string()).optional(),
-  sourceContext: z.array(sourceDataContextSchema).optional(),
+  // Mirrors @magpie/core SourceDescriptor. References only — no file content; the
+  // watcher resolves git/local to traversable workspaces. Same schema the seed
+  // input uses.
+  sources: z.array(sourceDescriptorSchema),
   // The drafter's awareness of the flow's in-flight work, so it can avoid
   // duplicating a doc already being drafted or in an open PR.
   openPullRequests: z.array(openPullRequestContextSchema).optional(),

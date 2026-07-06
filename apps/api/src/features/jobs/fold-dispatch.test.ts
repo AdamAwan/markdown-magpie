@@ -9,6 +9,7 @@ const draftInput = {
   gapSummaries: ["g"],
   triggeringQuestions: ["q"],
   evidence: [],
+  sources: [],
   expectedOutput: "markdown_proposal" as const
 };
 const draftOutput = (title: string) => ({ title, targetPath: "ignored", markdown: "# body", rationale: "r" });

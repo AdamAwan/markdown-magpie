@@ -581,6 +581,7 @@ describe("reconcileGaps in-flight draft coverage", () => {
     gapSummaries: ["How to configure X"],
     triggeringQuestions: [],
     evidence: [],
+    sources: [],
     destinationId: "dest",
     expectedOutput: "markdown_proposal" as const,
     gapClusterId: clusterId

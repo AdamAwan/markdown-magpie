@@ -175,6 +175,12 @@ POST /api/proposals/from-gap
 ```
 
 The API enqueues a `draft_markdown_proposal` job with the triggering questions and any available evidence citations.
+Like seeding, gap drafting is **source-grounded**: the job carries `sources: SourceDescriptor[]` (references to the
+flow's configured sources), not an inline file sample — the API no longer samples source files at enqueue time. The
+watcher resolves git/local descriptors to read-only workspaces and the agent explores them directly (CLI tier traverses
+the checkout with its own tools; HTTP tier runs the bounded `list_dir`/`read_file`/`grep` tool loop), using the same
+`MAGPIE_AGENTIC_TIMEOUT_MS` agentic timeout as seeding. Both the demand-driven `draftFromGaps` path and the stale-PR
+regeneration path project descriptors this way.
 When the watcher completes that job, the API stores the generated Markdown proposal for review. The proposal's
 file location is derived from the destination — `<destination docs subpath>/<title-slug>.md` — so it is consistent
 across providers; any `targetPath` returned by the provider is not used to place the file.
