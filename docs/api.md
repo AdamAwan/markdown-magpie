@@ -601,7 +601,8 @@ Job error breakdown (C6). Returns
 `{ "byCategory": JobErrorBreakdown[], "byType": JobErrorBreakdown[] }`, counting failed jobs
 over the window split by error category and by job type (both ordered most-frequent-first).
 Window-only (no time axis). Source: pg-boss's `job` + `archive` tables — failed rows
-(`state = 'failed'`), windowed on `created_on`. The `JobError` payload pg-boss stores in the
+(`state = 'failed'`), windowed on `created_on` (enqueue time, matching C2's creation-time
+axis — not failure time). The `JobError` payload pg-boss stores in the
 job's `output` JSONB column supplies the category (`output->>'category'`, falling back to
 `unknown`); the queue `name` supplies the job type after its `__<capability>` fan-out suffix
 is stripped (`split_part(name, '__', 1)`).

@@ -424,6 +424,9 @@ export class PostgresInsightsStore implements InsightsStore {
   // `split_part(name, '__', 1)` recovers the base job type. Completed/failed rows
   // migrate from `job` to `archive` after retention, so both are UNION ALL'd (a job
   // is in exactly one at a time — no double counting). Ordered most-frequent-first.
+  // The window filters on `created_on` (when the job was enqueued), not on failure
+  // time, matching C2 `jobThroughput`'s creation-time axis; jobs fail shortly after
+  // creation, so the two are effectively the same over a 30-day window.
   async jobErrors(range: InsightsRange): Promise<JobErrorSplit> {
     const result = await this.pool.query<{ dim: "category" | "type"; key: string; count: string }>(
       `
