@@ -2,7 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiGet, errorMessage } from "../../lib/api";
-import type { FunnelStage, GapBacklogBucket, JobThroughputBucket } from "../../lib/types";
+import type {
+  FunnelStage,
+  GapBacklogBucket,
+  JobThroughputBucket,
+  LatencyBin,
+  VerificationBucket,
+  VerificationSummary
+} from "../../lib/types";
 
 // Page-local fetch state for a single insight series. The Insights page fetches
 // on its own (not through ConsoleProvider) so the heavier aggregates stay out of
@@ -69,6 +76,34 @@ export function useJobThroughput(): InsightsResource<JobThroughputBucket[]> {
   const resource = useInsightsResource<{ series: JobThroughputBucket[] }>("/insights/jobs/throughput?bucket=day");
   return {
     data: resource.data?.series,
+    loading: resource.loading,
+    error: resource.error,
+    refresh: resource.refresh
+  };
+}
+
+// Answer-latency histogram (last 30 days). Binned by latency range, not time.
+export function useAnswerLatency(): InsightsResource<LatencyBin[]> {
+  const resource = useInsightsResource<{ bins: LatencyBin[] }>("/insights/answers/latency");
+  return {
+    data: resource.data?.bins,
+    loading: resource.loading,
+    error: resource.error,
+    refresh: resource.refresh
+  };
+}
+
+// The verification-success payload: overall totals plus a per-bucket trend.
+export interface VerificationSuccessData {
+  totals: VerificationSummary;
+  series: VerificationBucket[];
+}
+
+// Verification success rate (last 30 days, daily buckets).
+export function useVerificationSuccess(): InsightsResource<VerificationSuccessData> {
+  const resource = useInsightsResource<VerificationSuccessData>("/insights/verification/success?bucket=day");
+  return {
+    data: resource.data,
     loading: resource.loading,
     error: resource.error,
     refresh: resource.refresh

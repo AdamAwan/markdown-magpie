@@ -19,3 +19,14 @@ export const jobThroughputQuerySchema = insightsRangeQuerySchema.extend({
 });
 
 export type JobThroughputQuery = z.infer<typeof jobThroughputQuerySchema>;
+
+// The answer-latency histogram (C4) has no time axis — it bins by latency range,
+// not by bucket — so it accepts only the window bounds. A bucket is still resolved
+// internally (defaulted to "day") to satisfy the shared InsightsRange, but it does
+// not affect the result.
+export const insightsWindowQuerySchema = z.object({
+  from: z.iso.datetime().optional(),
+  to: z.iso.datetime().optional()
+});
+
+export type InsightsWindowQuery = z.infer<typeof insightsWindowQuerySchema>;

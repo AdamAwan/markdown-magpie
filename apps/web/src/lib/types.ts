@@ -274,4 +274,12 @@ export type {
 
 // Insights chart response shapes, defined once in @magpie/core and consumed by
 // the Insights page and its chart components.
-export type { GapBacklogBucket, JobThroughputBucket, FunnelStage, InsightsBucketUnit } from "@magpie/core";
+export type {
+  GapBacklogBucket,
+  JobThroughputBucket,
+  FunnelStage,
+  InsightsBucketUnit,
+  LatencyBin,
+  VerificationSummary,
+  VerificationBucket
+} from "@magpie/core";

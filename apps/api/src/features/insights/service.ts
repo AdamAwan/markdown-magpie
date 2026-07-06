@@ -1,9 +1,9 @@
-import type { FunnelStage, GapBacklogBucket, JobThroughputBucket } from "@magpie/core";
+import type { FunnelStage, GapBacklogBucket, JobThroughputBucket, LatencyBin } from "@magpie/core";
 import { isJobType } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { queueDefinitionsForType } from "../../jobs/pg-boss-broker.js";
-import type { InsightsRange } from "../../stores/insights-store.js";
-import type { InsightsRangeQuery, JobThroughputQuery } from "./schema.js";
+import type { InsightsRange, VerificationSuccess } from "../../stores/insights-store.js";
+import type { InsightsRangeQuery, InsightsWindowQuery, JobThroughputQuery } from "./schema.js";
 
 const DEFAULT_WINDOW_DAYS = 30;
 
@@ -14,6 +14,14 @@ export function resolveRange(query: InsightsRangeQuery): InsightsRange {
   const to = query.to ? new Date(query.to) : new Date();
   const from = query.from ? new Date(query.from) : new Date(to.getTime() - DEFAULT_WINDOW_DAYS * 24 * 3600 * 1000);
   return { from, to, bucket: query.bucket };
+}
+
+// Resolve a window-only query (no bucket) into a concrete range. The bucket is
+// defaulted to "day" purely to satisfy InsightsRange; window endpoints ignore it.
+export function resolveWindow(query: InsightsWindowQuery): InsightsRange {
+  const to = query.to ? new Date(query.to) : new Date();
+  const from = query.from ? new Date(query.from) : new Date(to.getTime() - DEFAULT_WINDOW_DAYS * 24 * 3600 * 1000);
+  return { from, to, bucket: "day" };
 }
 
 export async function gapBacklog(ctx: AppContext, query: InsightsRangeQuery): Promise<GapBacklogBucket[]> {
@@ -35,4 +43,12 @@ export async function jobThroughput(ctx: AppContext, query: JobThroughputQuery):
       : []
     : undefined;
   return ctx.stores.insights.jobThroughput(resolveRange(query), queueNames);
+}
+
+export async function answerLatency(ctx: AppContext, query: InsightsWindowQuery): Promise<LatencyBin[]> {
+  return ctx.stores.insights.answerLatency(resolveWindow(query));
+}
+
+export async function verificationSuccess(ctx: AppContext, query: InsightsRangeQuery): Promise<VerificationSuccess> {
+  return ctx.stores.insights.verificationSuccess(resolveRange(query));
 }

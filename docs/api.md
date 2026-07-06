@@ -579,9 +579,26 @@ nothing.
 
 `JobThroughputBucket` = `{ bucketStart, completed, failed, active, retry }`.
 
+### `GET /api/insights/answers/latency?from&to`
+
+Answer-latency histogram (C4). Bins completed answers by how long they took end to end
+into fixed latency ranges. Returns `{ "bins": LatencyBin[] }` (7 fixed bins, `0–5s`
+through `5m+`, always present and zero-filled). Binned by latency range, not time, so it
+takes only the window bounds. Source: pg-boss's own `job` + `archive` tables — completed
+`answer_question` job rows (`state = 'completed'`), latency = `completed_on - created_on`,
+windowed on `created_on`.
+
+### `GET /api/insights/verification/success?from&to&bucket`
+
+Verification success rate (C5). Returns
+`{ "totals": VerificationSummary, "series": VerificationBucket[] }`, splitting gap-closure
+verification outcomes into `closed` vs `stillOpen` overall and per bucket. Source: the
+`gap_closure_verification` table (`verdict` ∈ `closed` / `still_open`, `created_at`).
+
 ## Type Reference
 
 The response shapes referenced above (`AnswerResult`, `Citation`, `DocumentSection`,
 `KnowledgeDocument`, `RepositoryRef`, `QuestionLog`, `GapCandidate`, `Proposal`,
-`ProposalPublication`) are defined in `packages/core/src/index.ts`. The `Job` shape
+`ProposalPublication`, `GapBacklogBucket`, `LatencyBin`, `VerificationSummary`,
+`VerificationBucket`) are defined in `packages/core/src/index.ts`. The `Job` shape
 (`JobView`) is defined in `packages/jobs/src/types.ts`.

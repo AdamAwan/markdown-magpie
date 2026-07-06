@@ -1,7 +1,13 @@
 import pg from "pg";
-import type { FunnelStage, GapBacklogBucket, JobThroughputBucket } from "@magpie/core";
+import type {
+  FunnelStage,
+  GapBacklogBucket,
+  JobThroughputBucket,
+  LatencyBin,
+  VerificationBucket
+} from "@magpie/core";
 import { SCHEMA_IDENTIFIER } from "../jobs/pg-boss-broker.js";
-import type { InsightsRange, InsightsStore } from "./insights-store.js";
+import type { InsightsRange, InsightsStore, VerificationSuccess } from "./insights-store.js";
 
 // date_trunc units, whitelisted so the bucket unit is never interpolated from
 // unvalidated input (the zod schema also constrains it to these three).
@@ -10,6 +16,26 @@ const UNIT: Record<InsightsRange["bucket"], "day" | "week" | "month"> = {
   week: "week",
   month: "month"
 };
+
+// The queue-name prefix every answer_question queue shares. answer_question is a
+// provider-routed job type, so it fans out to `answer_question__<provider>` work
+// queues (and their `__dead_letter` siblings). Filtering completed rows by this
+// prefix captures every provider; the state='completed' predicate excludes the
+// dead-letter/failed rows so only genuinely answered questions are measured.
+const ANSWER_QUEUE_PREFIX = "answer_question";
+
+// Fixed latency ranges (seconds) for the answer-latency histogram. Ordered, with
+// an open-ended final bucket (`to: null`). The SQL bins each completed answer by
+// its (completed_on - created_on) duration into exactly one of these.
+const LATENCY_BINS: ReadonlyArray<{ label: string; from: number; to: number | null }> = [
+  { label: "0–5s", from: 0, to: 5 },
+  { label: "5–15s", from: 5, to: 15 },
+  { label: "15–30s", from: 15, to: 30 },
+  { label: "30–60s", from: 30, to: 60 },
+  { label: "1–2m", from: 60, to: 120 },
+  { label: "2–5m", from: 120, to: 300 },
+  { label: "5m+", from: 300, to: null }
+];
 
 export class PostgresInsightsStore implements InsightsStore {
   // `pgBossSchema` is the schema pg-boss stores its `job`/`archive` tables in. It
@@ -270,5 +296,115 @@ export class PostgresInsightsStore implements InsightsStore {
       { key: "merged", label: "Merged", count: Number(row.merged) },
       { key: "verified", label: "Verified closed", count: Number(row.verified) }
     ];
+  }
+
+  // Answer-latency histogram (C4). Reads pg-boss's own job + archive tables (a
+  // completed answer_question row migrates from `job` to `archive` after its
+  // retention window, so both must be scanned or older answers vanish), measures
+  // each completed answer's end-to-end duration (completed_on - created_on), and
+  // bins it into the fixed LATENCY_BINS. `created_on` is used for the window filter
+  // so a bar reflects answers *asked* in the last 30 days, matching the other
+  // charts' "activity in the window" semantics. Empty bins are returned as zero so
+  // the histogram always shows every range.
+  async answerLatency(range: InsightsRange): Promise<LatencyBin[]> {
+    // Bounds passed as parameters ($1/$2/$3); only the pg-boss schema is
+    // interpolated, and it is regex-guarded in the constructor.
+    const bounds = LATENCY_BINS.map((bin) => ({ from: bin.from, to: bin.to }));
+    const result = await this.pool.query<{ idx: string; count: string }>(
+      `
+      WITH answers AS (
+        SELECT created_on, completed_on
+        FROM "${this.pgBossSchema}".job
+        WHERE name LIKE $3 || '%' AND state = 'completed'
+          AND completed_on IS NOT NULL
+          AND created_on >= $1::timestamptz AND created_on <= $2::timestamptz
+        UNION ALL
+        SELECT created_on, completed_on
+        FROM "${this.pgBossSchema}".archive
+        WHERE name LIKE $3 || '%' AND state = 'completed'
+          AND completed_on IS NOT NULL
+          AND created_on >= $1::timestamptz AND created_on <= $2::timestamptz
+      ),
+      durations AS (
+        SELECT extract(epoch FROM (completed_on - created_on)) AS seconds FROM answers
+      ),
+      bins AS (
+        SELECT ordinality - 1 AS idx, (bound->>'from')::numeric AS lo,
+               CASE WHEN bound->>'to' IS NULL THEN NULL ELSE (bound->>'to')::numeric END AS hi
+        FROM jsonb_array_elements($4::jsonb) WITH ORDINALITY AS t(bound, ordinality)
+      )
+      SELECT b.idx::int AS idx,
+        count(d.seconds) FILTER (
+          WHERE d.seconds >= b.lo AND (b.hi IS NULL OR d.seconds < b.hi)
+        ) AS count
+      FROM bins b
+      LEFT JOIN durations d ON true
+      GROUP BY b.idx
+      ORDER BY b.idx
+      `,
+      [range.from.toISOString(), range.to.toISOString(), ANSWER_QUEUE_PREFIX, JSON.stringify(bounds)]
+    );
+
+    const counts = new Map(result.rows.map((row) => [Number(row.idx), Number(row.count)]));
+    return LATENCY_BINS.map((bin, index) => ({
+      label: bin.label,
+      from: bin.from,
+      to: bin.to,
+      count: counts.get(index) ?? 0
+    }));
+  }
+
+  // Verification success rate (C5). Splits gap_closure_verification rows by verdict
+  // ('closed' = the merged doc now answers the re-asked question; 'still_open' =
+  // it does not), reporting both the overall total across the window and the same
+  // split per time bucket for the trend line. Buckets are zero-filled across the
+  // range so the client renders a continuous series.
+  async verificationSuccess(range: InsightsRange): Promise<VerificationSuccess> {
+    const unit = UNIT[range.bucket];
+    const result = await this.pool.query<{
+      bucket_start: Date;
+      closed: string;
+      still_open: string;
+    }>(
+      `
+      WITH params AS (
+        SELECT date_trunc($3, $1::timestamptz) AS from_b,
+               date_trunc($3, $2::timestamptz) AS to_b
+      ),
+      buckets AS (
+        SELECT generate_series(
+          (SELECT from_b FROM params),
+          (SELECT to_b FROM params),
+          ('1 ' || $3)::interval
+        ) AS b
+      ),
+      v AS (
+        SELECT date_trunc($3, created_at) AS b,
+          count(*) FILTER (WHERE verdict = 'closed')      AS closed,
+          count(*) FILTER (WHERE verdict = 'still_open')  AS still_open
+        FROM gap_closure_verification
+        WHERE created_at >= $1::timestamptz AND created_at <= $2::timestamptz
+        GROUP BY 1
+      )
+      SELECT b.b AS bucket_start,
+        coalesce(v.closed, 0)     AS closed,
+        coalesce(v.still_open, 0) AS still_open
+      FROM buckets b
+      LEFT JOIN v ON v.b = b.b
+      ORDER BY b.b
+      `,
+      [range.from.toISOString(), range.to.toISOString(), unit]
+    );
+
+    const series: VerificationBucket[] = result.rows.map((row) => ({
+      bucketStart: row.bucket_start.toISOString(),
+      closed: Number(row.closed),
+      stillOpen: Number(row.still_open)
+    }));
+    const totals = series.reduce(
+      (acc, bucket) => ({ closed: acc.closed + bucket.closed, stillOpen: acc.stillOpen + bucket.stillOpen }),
+      { closed: 0, stillOpen: 0 }
+    );
+    return { totals, series };
   }
 }

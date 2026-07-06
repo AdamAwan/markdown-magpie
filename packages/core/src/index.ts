@@ -1317,3 +1317,28 @@ export interface FunnelStage {
   label: string;
   count: number;
 }
+
+// One bar of the answer-latency histogram (C4). Buckets completed answer_question
+// jobs by how long they took end-to-end (queued → completed) into fixed latency
+// ranges. `from`/`to` are the range bounds in seconds (`to` null on the open-ended
+// top bucket); `count` is how many completed answers fell in the range.
+export interface LatencyBin {
+  label: string;
+  from: number;
+  to: number | null;
+  count: number;
+}
+
+// The closed-vs-open split of gap-closure verification outcomes (C5). `closed` =
+// verdict 'closed' (the merged doc now answers the re-asked question); `stillOpen`
+// = verdict 'still_open'. Used both as the overall total and per time bucket.
+export interface VerificationSummary {
+  closed: number;
+  stillOpen: number;
+}
+
+// One time bucket of the verification-success trend (C5), tagged with its bucket
+// start so the client can plot success rate over time.
+export interface VerificationBucket extends VerificationSummary {
+  bucketStart: string;
+}

@@ -3,16 +3,19 @@ import { test } from "node:test";
 import pg from "pg";
 import { PostgresInsightsStore } from "./postgres-insights-store.js";
 
+// DB-backed rollup tests for the insights SQL. Gated by RUN_PG_INTEGRATION so the
+// default unit run stays database-free (see writing-magpie-tests skill).
 const runIntegration = process.env.RUN_PG_INTEGRATION === "1";
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/markdown_magpie";
 
 // A minimal pg-boss-shaped pair of tables (job + archive) in a throwaway schema.
-// The throughput rollup only reads `name`, `state`, `created_on`, so we replicate
-// just those columns rather than standing up a full pg-boss instance.
+// The throughput/latency rollups only read `name`, `state`, `created_on` (and
+// `completed_on` for latency), so we replicate just those columns rather than
+// standing up a full pg-boss instance.
 const DDL = (schema: string) => `
   CREATE SCHEMA "${schema}";
-  CREATE TABLE "${schema}".job     (name text, state text, created_on timestamptz);
-  CREATE TABLE "${schema}".archive (name text, state text, created_on timestamptz);
+  CREATE TABLE "${schema}".job     (name text, state text, created_on timestamptz, completed_on timestamptz);
+  CREATE TABLE "${schema}".archive (name text, state text, created_on timestamptz, completed_on timestamptz);
 `;
 
 test("gapBacklog buckets question_gaps by day", { skip: !runIntegration }, async (t) => {
@@ -23,7 +26,10 @@ test("gapBacklog buckets question_gaps by day", { skip: !runIntegration }, async
   const q = "insights-test-q1";
   await pool.query("DELETE FROM question_gaps WHERE question_id = $1", [q]);
   await pool.query("DELETE FROM questions WHERE id = $1", [q]);
-  await pool.query("INSERT INTO questions (id, question, asked_at) VALUES ($1, 'q', now())", [q]);
+  await pool.query(
+    "INSERT INTO questions (id, question, chat_provider, asked_at) VALUES ($1, 'q', 'mock', now())",
+    [q]
+  );
   await pool.query(
     "INSERT INTO question_gaps (question_id, summary, created_at, resolved_at) VALUES ($1,'a',now(),NULL),($1,'b',now(),now())",
     [q]
@@ -87,4 +93,54 @@ test("jobThroughput unions job + archive and buckets by state", { skip: !runInte
   // An empty queue-name list (unknown type) matches nothing.
   const none = await store.jobThroughput({ from, to, bucket: "day" }, []);
   assert.ok(none.every((bucket) => bucket.completed + bucket.failed + bucket.active + bucket.retry === 0));
+});
+
+test("verificationSuccess splits gap_closure_verification by verdict", { skip: !runIntegration }, async (t) => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  t.after(() => pool.end());
+  const store = new PostgresInsightsStore(pool, "pgboss");
+
+  // gap_closure_verification.proposal_id has a FK to proposals(id), so seed a
+  // proposal first, then two verification rows (one closed, one still_open).
+  const proposalId = "insights-test-p1";
+  await pool.query("DELETE FROM gap_closure_verification WHERE proposal_id = $1", [proposalId]);
+  await pool.query("DELETE FROM proposals WHERE id = $1", [proposalId]);
+  await pool.query(
+    "INSERT INTO proposals (id, title, status, target_path, markdown) VALUES ($1, 't', 'merged', 'p.md', '#')",
+    [proposalId]
+  );
+  await pool.query(
+    `INSERT INTO gap_closure_verification
+       (id, proposal_id, question_id, verdict, confidence, cited_merged_doc, created_at)
+     VALUES
+       ('insights-test-v1', $1, 'q1', 'closed',     'high', true,  now()),
+       ('insights-test-v2', $1, 'q2', 'still_open', 'low',  false, now())`,
+    [proposalId]
+  );
+
+  const to = new Date();
+  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const result = await store.verificationSuccess({ from, to, bucket: "day" });
+
+  assert.ok(result.totals.closed >= 1);
+  assert.ok(result.totals.stillOpen >= 1);
+  const today = result.series.at(-1);
+  assert.ok(today, "expected at least one zero-filled bucket");
+});
+
+test("answerLatency bins completed answer_question jobs", { skip: !runIntegration }, async (t) => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  t.after(() => pool.end());
+  const store = new PostgresInsightsStore(pool, "pgboss");
+
+  const to = new Date();
+  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const bins = await store.answerLatency({ from, to, bucket: "day" });
+
+  // The histogram always returns every fixed bin (zero-filled), regardless of
+  // whether any pg-boss answer_question rows exist in the window.
+  assert.equal(bins.length, 7);
+  assert.equal(bins[0]?.label, "0–5s");
+  assert.equal(bins.at(-1)?.to, null);
+  for (const bin of bins) assert.ok(bin.count >= 0);
 });
