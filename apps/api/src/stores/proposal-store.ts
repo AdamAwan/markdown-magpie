@@ -49,6 +49,10 @@ export interface ProposalStore {
   recordPublication(id: string, publication: NonNullable<Proposal["publication"]>): Promise<Proposal | undefined>;
   linkCluster(id: string, gapClusterId: string): Promise<Proposal | undefined>;
   updateMarkdown(id: string, markdown: string): Promise<Proposal | undefined>;
+  // Regenerate a stale proposal in place: refresh its markdown/rationale and bump
+  // its regeneration counter. Title and targetPath are never rewritten, so the
+  // derived branch name and open PR stay stable across regenerations.
+  recordRegeneration(id: string, markdown: string, rationale?: string): Promise<Proposal | undefined>;
   // Promote a proposal to a merged file-set (used by the multi-file fold): replace
   // its changeset and refresh the primary markdown. targetPath is never rewritten.
   updateChangeset(id: string, changeset: ChangesetChange[], primaryMarkdown: string): Promise<Proposal | undefined>;
@@ -81,6 +85,7 @@ export class InMemoryProposalStore implements ProposalStore {
       flowId: input.flowId,
       changeset: input.changeset,
       draftContext: input.draftContext,
+      regenerationCount: 0,
       createdAt: new Date().toISOString()
     };
 
@@ -198,6 +203,21 @@ export class InMemoryProposalStore implements ProposalStore {
       return undefined;
     }
     const updated: Proposal = { ...existing, changeset, markdown: primaryMarkdown };
+    this.proposals.set(id, updated);
+    return updated;
+  }
+
+  async recordRegeneration(id: string, markdown: string, rationale?: string): Promise<Proposal | undefined> {
+    const existing = this.proposals.get(id);
+    if (!existing) {
+      return undefined;
+    }
+    const updated: Proposal = {
+      ...existing,
+      markdown,
+      rationale: rationale ?? existing.rationale,
+      regenerationCount: (existing.regenerationCount ?? 0) + 1
+    };
     this.proposals.set(id, updated);
     return updated;
   }

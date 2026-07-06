@@ -165,7 +165,7 @@ export class PublicationRunner {
   }
 
   private async publishProposal(job: JobView): Promise<unknown> {
-    const { proposalId, destination } = publishProposalInputSchema.parse(job.input);
+    const { proposalId, destination, regenerate } = publishProposalInputSchema.parse(job.input);
     logger.info({ jobId: job.id, proposalId }, `publish_proposal[${job.id}]: fetching execution context for proposal ${proposalId}`);
     const context = await this.api.proposalExecutionContext(proposalId);
     const { proposal, repository } = parseProposalContext(context);
@@ -195,7 +195,8 @@ export class PublicationRunner {
         branchName,
         title,
         markdown: proposal.markdown,
-        targetPath: proposal.targetPath
+        targetPath: proposal.targetPath,
+        ...(regenerate ? { regenerate: true } : {})
       });
     }
     logger.info({ jobId: job.id, branchName: publication.branchName, commitSha: publication.commitSha.slice(0, 8) }, `publish_proposal[${job.id}]: pushed ${publication.branchName} at ${publication.commitSha.slice(0, 8)}`);

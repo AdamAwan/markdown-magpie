@@ -55,7 +55,10 @@ describe("RefreshFlowSnapshotRunner", () => {
     ]);
     const runner = new RefreshFlowSnapshotRunner(
       api,
-      async (url) => (url?.endsWith("/1") ? { merged: true, state: "closed" } : { merged: false, state: "closed" }),
+      async (url) =>
+        url?.endsWith("/1")
+          ? { merged: true, state: "closed", mergeable: "unknown" }
+          : { merged: false, state: "closed", mergeable: "unknown" },
       async () => "none"
     );
     const output = (await runner.run(job(), new AbortController().signal)) as {
@@ -71,7 +74,7 @@ describe("RefreshFlowSnapshotRunner", () => {
     const api = fakeApi([{ proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" }]);
     const runner = new RefreshFlowSnapshotRunner(
       api,
-      async () => ({ merged: false, state: "open" }),
+      async () => ({ merged: false, state: "open", mergeable: "mergeable" }),
       async () => "approved"
     );
     const output = (await runner.run(job(), new AbortController().signal)) as {
@@ -80,12 +83,38 @@ describe("RefreshFlowSnapshotRunner", () => {
     assert.equal(output.results[0].reviewDecision, "approved");
   });
 
+  it("reports mergeable=conflicting for a still-open stale PR", async () => {
+    const api = fakeApi([{ proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" }]);
+    const runner = new RefreshFlowSnapshotRunner(
+      api,
+      async () => ({ merged: false, state: "open", mergeable: "conflicting" }),
+      async () => "none"
+    );
+    const output = (await runner.run(job(), new AbortController().signal)) as {
+      results: Array<{ proposalId: string; mergeable?: string }>;
+    };
+    assert.equal(output.results[0].mergeable, "conflicting");
+  });
+
+  it("omits an unknown mergeability so it carries no signal", async () => {
+    const api = fakeApi([{ proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" }]);
+    const runner = new RefreshFlowSnapshotRunner(
+      api,
+      async () => ({ merged: false, state: "open", mergeable: "unknown" }),
+      async () => "none"
+    );
+    const output = (await runner.run(job(), new AbortController().signal)) as {
+      results: Array<{ proposalId: string; mergeable?: string }>;
+    };
+    assert.equal("mergeable" in output.results[0], false);
+  });
+
   it("does not look up the review decision for a merged/closing PR", async () => {
     const api = fakeApi([{ proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" }]);
     let reviewLookups = 0;
     const runner = new RefreshFlowSnapshotRunner(
       api,
-      async () => ({ merged: true, state: "closed" }),
+      async () => ({ merged: true, state: "closed", mergeable: "unknown" }),
       async () => {
         reviewLookups += 1;
         return "approved";
@@ -102,7 +131,7 @@ describe("RefreshFlowSnapshotRunner", () => {
     const api = fakeApi([{ proposalId: "p1", pullRequestUrl: "https://github.com/o/r/pull/1" }]);
     const runner = new RefreshFlowSnapshotRunner(
       api,
-      async () => ({ merged: false, state: "open" }),
+      async () => ({ merged: false, state: "open", mergeable: "mergeable" }),
       async () => {
         throw new Error("graphql exploded");
       }
@@ -120,7 +149,7 @@ describe("RefreshFlowSnapshotRunner", () => {
     ]);
     const runner = new RefreshFlowSnapshotRunner(
       api,
-      async (url) => (url?.endsWith("/1") ? { merged: false, state: "open" } : undefined),
+      async (url) => (url?.endsWith("/1") ? { merged: false, state: "open", mergeable: "mergeable" } : undefined),
       async () => "none"
     );
     const output = (await runner.run(job(), new AbortController().signal)) as {
@@ -138,7 +167,7 @@ describe("RefreshFlowSnapshotRunner", () => {
       api,
       async (url) => {
         if (url?.endsWith("/1")) throw new Error("rate limited");
-        return { merged: true, state: "closed" };
+        return { merged: true, state: "closed", mergeable: "unknown" };
       },
       async () => "none"
     );
@@ -158,7 +187,7 @@ describe("RefreshFlowSnapshotRunner", () => {
       api,
       async () => {
         controller.abort();
-        return { merged: false, state: "open" };
+        return { merged: false, state: "open", mergeable: "mergeable" };
       },
       async () => "none"
     );

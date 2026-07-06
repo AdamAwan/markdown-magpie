@@ -155,6 +155,21 @@ export class PostgresProposalStore implements ProposalStore {
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
+  async recordRegeneration(id: string, markdown: string, rationale?: string): Promise<Proposal | undefined> {
+    const result = await this.pool.query<ProposalRow>(
+      `
+        UPDATE proposals
+        SET markdown = $2,
+            rationale = COALESCE($3, rationale),
+            regeneration_count = regeneration_count + 1
+        WHERE id = $1
+        RETURNING *
+      `,
+      [id, markdown, rationale ?? null]
+    );
+    return result.rows[0] ? mapRow(result.rows[0]) : undefined;
+  }
+
   async updateReviewDecision(id: string, reviewDecision: ReviewDecision): Promise<Proposal | undefined> {
     const result = await this.pool.query<ProposalRow>(
       "UPDATE proposals SET review_decision = $2 WHERE id = $1 RETURNING *",
@@ -199,6 +214,7 @@ interface ProposalRow {
   created_at: Date;
   merged_at: Date | null;
   closure_status: Proposal["closureStatus"] | null;
+  regeneration_count: number;
 }
 
 function mapRow(row: ProposalRow): Proposal {
@@ -222,6 +238,7 @@ function mapRow(row: ProposalRow): Proposal {
     draftContext: row.draft_context ?? undefined,
     createdAt: row.created_at.toISOString(),
     mergedAt: row.merged_at?.toISOString(),
-    closureStatus: row.closure_status ?? undefined
+    closureStatus: row.closure_status ?? undefined,
+    regenerationCount: row.regeneration_count ?? 0
   };
 }
