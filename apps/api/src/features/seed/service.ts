@@ -5,10 +5,7 @@ import type {
 } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import { defaultDestinationId, selectFlow } from "../../platform/repositories.js";
-import {
-  collectSourceContextCached,
-  type SourceContextCache
-} from "../../platform/source-context.js";
+import { projectSourceDescriptors } from "../../platform/source-descriptors.js";
 import { describeExistingDocuments } from "../retrieve/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
 import { logger } from "../../logger.js";
@@ -21,21 +18,19 @@ import { logger } from "../../logger.js";
 async function draftSeedItem(
   ctx: AppContext,
   flowId: string,
-  item: SeedItem,
-  cache: SourceContextCache
+  item: SeedItem
 ): Promise<string> {
   const deps = ctx.repositoryDeps();
   const flow = selectFlow(deps, flowId);
   const sourceIds = flow?.sourceIds;
   const destinationId = flow?.destinationId || defaultDestinationId(deps);
-  const sourceContext = await collectSourceContextCached(deps, sourceIds, cache);
   const input: DraftSeedDocumentJobInput & { provider: AiProviderName } = {
     flowId,
     title: item.title?.trim() || undefined,
     targetPath: item.targetPath?.trim() || undefined,
     coverage: [...new Set(item.coverage.map((point) => point.trim()).filter((point) => point.length > 0))],
     questions: item.questions?.length ? item.questions : undefined,
-    sourceContext,
+    sources: projectSourceDescriptors(deps, sourceIds),
     destinationId,
     provider: ctx.config.get().aiProvider
   };
@@ -45,8 +40,7 @@ async function draftSeedItem(
 }
 
 // Seed a flow: draft each item straight into a proposal, bypassing gap clustering
-// and the intent gate. Source context is collected once and memoised across the
-// items in one call.
+// and the intent gate.
 export async function seedFlow(
   ctx: AppContext,
   flowId: string,
@@ -60,10 +54,9 @@ export async function seedFlow(
   if (usable.length === 0) {
     return { ok: false as const, code: "coverage_required" };
   }
-  const cache: SourceContextCache = new Map();
   const jobIds: string[] = [];
   for (const item of usable) {
-    jobIds.push(await draftSeedItem(ctx, flowId, item, cache));
+    jobIds.push(await draftSeedItem(ctx, flowId, item));
   }
   logger.info({ flowId, count: jobIds.length }, "seeded flow: enqueued draft_seed_document jobs");
   return { ok: true as const, jobIds };

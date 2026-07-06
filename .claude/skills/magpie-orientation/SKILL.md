@@ -45,8 +45,14 @@ Implications you must design around:
   — #150), and the console warns when only one watcher is connected. Run two locally (see
   the **run-magpie** skill).
 - **The watcher has no database access.** API and watcher share only (a) the HTTP API
-  and (b) the managed-checkout volume. The watcher gets a tightly scoped payload and
+  and (b) the managed-checkout volume — which now also hosts read-only *source*
+  workspaces for source-grounded jobs. The watcher gets a tightly scoped payload and
   posts results back; it does not read/write Postgres directly.
+- **Seeding is agentic and source-grounded.** `draft_seed_document` carries
+  `SourceDescriptor[]` references (not sampled file content); the watcher resolves them to
+  read-only checkouts and the agent explores them directly — CLI providers traverse the
+  checkout with native tools, HTTP providers run a bounded `list_dir`/`read_file`/`grep`
+  tool loop.
 - **Provider-neutral.** `AI_PROVIDER` selects `openai-compatible | azure-openai | codex |
   claude`. A watcher advertises a provider **capability** only when that provider's
   credentials are in its environment, and the API only routes a job to a capability a

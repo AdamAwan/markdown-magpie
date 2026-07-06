@@ -1511,7 +1511,7 @@ test("createSeedProposalFromCompletedJob creates a clusterless draft carrying th
   const job = await ctx.jobs.create("draft_seed_document", {
     flowId: "billing",
     coverage: ["what billing is"],
-    sourceContext: [],
+    sources: [],
     provider: "codex"
   });
   const output = { title: "Billing overview", targetPath: "billing.md", markdown: "# Billing", rationale: "seed" };

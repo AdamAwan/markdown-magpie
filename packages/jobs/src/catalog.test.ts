@@ -7,6 +7,7 @@ import {
   answerQuestionInputSchema,
   answerQuestionOutputSchema,
   crosslinkPullRequestsInputSchema,
+  draftSeedDocumentInputSchema,
   jobDefinition,
   jobTypesForCapability,
   jobTypesWithoutCapabilities,
@@ -409,6 +410,23 @@ test("crosslink input schema requires exactly two pull requests", () => {
     pullRequests: [{ proposalId: "p1", pullRequestUrl: "u" }]
   });
   assert.equal(bad.success, false);
+});
+
+test("draft_seed_document input carries source descriptors, not inline content", () => {
+  const input = {
+    provider: "openai-compatible",
+    flowId: "flow-1",
+    coverage: ["how statements are ingested"],
+    sources: [
+      { id: "src-1", name: "Product repo", kind: "git", url: "https://example.com/repo.git", subpath: "Docs" },
+      { id: "src-2", name: "Local notes", kind: "local", path: "/srv/notes" },
+      { id: "src-3", name: "Vendor site", kind: "internet", url: "https://vendor.example" },
+      { id: "src-4", name: "Agent knowledge", kind: "agent" }
+    ]
+  };
+  assert.equal(draftSeedDocumentInputSchema.safeParse(input).success, true);
+  const legacy = { provider: "openai-compatible", flowId: "flow-1", coverage: ["x"], sourceContext: [] };
+  assert.equal(draftSeedDocumentInputSchema.safeParse(legacy).success, false);
 });
 
 test("fold_markdown_proposal is a provider AI job; comment_pull_request is github", () => {

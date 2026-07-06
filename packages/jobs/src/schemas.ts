@@ -142,6 +142,13 @@ const sourceDataContextSchema = z.object({
   url: z.string().optional(),
   content: z.string().optional()
 });
+// Mirrors @magpie/core SourceDescriptor. References only — no file content.
+const sourceDescriptorSchema = z.discriminatedUnion("kind", [
+  z.object({ id: z.string(), name: z.string(), kind: z.literal("git"), url: z.string(), subpath: z.string().optional() }),
+  z.object({ id: z.string(), name: z.string(), kind: z.literal("local"), path: z.string(), subpath: z.string().optional() }),
+  z.object({ id: z.string(), name: z.string(), kind: z.literal("internet"), url: z.string().optional() }),
+  z.object({ id: z.string(), name: z.string(), kind: z.literal("agent") })
+]);
 // Mirrors @magpie/core OpenPullRequestContext. status reuses the core
 // PROPOSAL_STATUSES tuple so the enum can't drift from the type it validates.
 const openPullRequestContextSchema = z.object({
@@ -188,7 +195,7 @@ export const draftSeedDocumentInputSchema = z.object({
   targetPath: z.string().optional(),
   coverage: z.array(z.string()),
   questions: z.array(z.string()).optional(),
-  sourceContext: z.array(sourceDataContextSchema),
+  sources: z.array(sourceDescriptorSchema),
   destinationId: z.string().optional()
 }) satisfies z.ZodType<ProviderInput<CoreDraftSeedDocumentJobInput>>;
 export const draftSeedDocumentOutputSchema = z.object({

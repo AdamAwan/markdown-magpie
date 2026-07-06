@@ -854,7 +854,7 @@ test("completeJob on a draft_seed_document job creates a seed proposal and enque
   const job = await ctx.jobs.create("draft_seed_document", {
     flowId: "billing",
     coverage: ["overview"],
-    sourceContext: [],
+    sources: [],
     provider: "codex"
   });
   const result = await completeJob(ctx, job.id, {

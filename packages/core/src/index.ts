@@ -783,16 +783,26 @@ export interface SeedItem {
   questions?: string[];
 }
 
+// A reference to one of a flow's configured sources, carried on source-grounded
+// job inputs INSTEAD of inline file content. git/local descriptors resolve to a
+// traversable workspace on the watcher (see the source-agentic grounding spec);
+// internet/agent render as prompt notes only.
+export type SourceDescriptor =
+  | { id: string; name: string; kind: "git"; url: string; subpath?: string }
+  | { id: string; name: string; kind: "local"; path: string; subpath?: string }
+  | { id: string; name: string; kind: "internet"; url?: string }
+  | { id: string; name: string; kind: "agent" };
+
 // Input to the draft_seed_document AI job: author a NEW document covering
-// `coverage`, grounded in `sourceContext`, bypassing the demand-driven gap
-// pipeline. `provider` is added at enqueue (see @magpie/jobs).
+// `coverage`, grounded in the source repositories named by `sources`, bypassing
+// the demand-driven gap pipeline. `provider` is added at enqueue (see @magpie/jobs).
 export interface DraftSeedDocumentJobInput {
   flowId: string;
   title?: string;
   targetPath?: string;
   coverage: string[];
   questions?: string[];
-  sourceContext: SourceDataContext[];
+  sources: SourceDescriptor[];
   destinationId?: string;
 }
 

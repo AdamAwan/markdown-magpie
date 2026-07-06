@@ -1,3 +1,5 @@
+import { createAzure } from "@ai-sdk/azure";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createChatProvider } from "@magpie/retrieval";
 import { CAPABILITY_GATES, DEFAULT_CAPABILITY_RUNTIME, type CapabilityRuntime } from "../capabilities.js";
 import type { WatcherApi } from "../http-client.js";
@@ -25,8 +27,19 @@ export function createConfiguredRunners(
     CAPABILITY_GATES.find((gate) => gate.capability === capability)?.ready(env, runtime) ?? false;
 
   const timeoutMs = positiveInt(env.AGENT_API_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS);
+  // Source-grounded CLI runs explore a checkout, so they get their own, much
+  // longer budget than the one-shot AGENT_CLI_TIMEOUT_MS.
+  const agenticTimeoutMs = positiveInt(env.MAGPIE_AGENTIC_TIMEOUT_MS, 600_000);
 
   if (ready("openai-compatible")) {
+    // The agent model drives the source-agent tool loop for source-grounded jobs;
+    // the readiness gate guarantees the env vars are set (the `?? ""` fallbacks
+    // are unreachable but keep the types honest — no non-null assertions).
+    const openaiAgentModel = createOpenAICompatible({
+      name: "openai-compatible",
+      baseURL: trimTrailingSlash(env.OPENAI_COMPATIBLE_BASE_URL ?? ""),
+      ...(env.OPENAI_COMPATIBLE_API_KEY ? { apiKey: env.OPENAI_COMPATIBLE_API_KEY } : {})
+    }).chatModel(env.OPENAI_COMPATIBLE_MODEL ?? "");
     runners.push(
       new ChatRunner(
         "openai-compatible",
@@ -37,12 +50,32 @@ export function createConfiguredRunners(
           model: env.OPENAI_COMPATIBLE_MODEL,
           timeoutMs
         }),
-        api
+        api,
+        openaiAgentModel
       )
     );
   }
 
   if (ready("azure-openai")) {
+    // AZURE_OPENAI_ENDPOINT is the bare resource endpoint
+    // (https://<res>.openai.azure.com) but the SDK builds request URLs directly
+    // from baseURL, so the `/openai` segment must be appended here. `.chat()`
+    // selects the classic chat-completions API (the callable form is the
+    // responses API), and the apiKey is passed explicitly because the SDK's env
+    // fallback reads AZURE_API_KEY, not this repo's AZURE_OPENAI_API_KEY.
+    // useDeploymentBasedUrls pins the SDK to the classic deployments surface —
+    // {endpoint}/openai/deployments/{deployment}/chat/completions?api-version={v}
+    // — the exact URL AzureOpenAIChatProvider builds. AZURE_OPENAI_API_VERSION
+    // carries dated tokens ("2024-10-21") for that surface; the SDK's default v1
+    // surface expects "v1"/"preview"-style tokens and would 400 on them. The
+    // fallback mirrors createChatProvider's default
+    // (packages/retrieval/src/chat-providers.ts) so both Azure paths stay in step.
+    const azureAgentModel = createAzure({
+      apiKey: env.AZURE_OPENAI_API_KEY ?? "",
+      baseURL: `${trimTrailingSlash(env.AZURE_OPENAI_ENDPOINT ?? "")}/openai`,
+      useDeploymentBasedUrls: true,
+      apiVersion: env.AZURE_OPENAI_API_VERSION ?? "2024-10-21"
+    }).chat(env.AZURE_OPENAI_CHAT_DEPLOYMENT ?? "");
     runners.push(
       new ChatRunner(
         "azure-openai",
@@ -54,7 +87,8 @@ export function createConfiguredRunners(
           ...(env.AZURE_OPENAI_API_VERSION ? { azureApiVersion: env.AZURE_OPENAI_API_VERSION } : {}),
           timeoutMs
         }),
-        api
+        api,
+        azureAgentModel
       )
     );
   }
@@ -69,6 +103,7 @@ export function createConfiguredRunners(
         ...optionalModel(env.CODEX_CLI_MODEL),
         api,
         timeoutMs: positiveInt(env.AGENT_CLI_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS),
+        agenticTimeoutMs,
         ...(env.CLI_CANCEL_GRACE_MS ? { cancelGraceMs: positiveInt(env.CLI_CANCEL_GRACE_MS, 5_000) } : {})
       })
     );
@@ -84,6 +119,7 @@ export function createConfiguredRunners(
         ...optionalModel(env.CLAUDE_CLI_MODEL),
         api,
         timeoutMs: positiveInt(env.AGENT_CLI_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS),
+        agenticTimeoutMs,
         ...(env.CLI_CANCEL_GRACE_MS ? { cancelGraceMs: positiveInt(env.CLI_CANCEL_GRACE_MS, 5_000) } : {})
       })
     );
@@ -129,6 +165,12 @@ function normalizePromptMode(value: string | undefined): PromptMode {
 function optionalModel(value: string | undefined): { model: string } | Record<string, never> {
   const trimmed = value?.trim();
   return trimmed ? { model: trimmed } : {};
+}
+
+// The same trailing-slash normalisation the chat/embedding providers apply to
+// their endpoints, so a `.../` env value cannot produce `//chat/completions` URLs.
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
 }
 
 function positiveInt(value: string | undefined, fallback: number): number {
