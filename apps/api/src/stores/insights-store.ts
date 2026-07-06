@@ -14,7 +14,7 @@ export interface InsightsRange {
 // continuous series without gap-filling itself.
 export interface InsightsStore {
   gapBacklog(range: InsightsRange, flowId?: string): Promise<GapBacklogBucket[]>;
-  jobThroughput(range: InsightsRange, type?: string): Promise<JobThroughputBucket[]>;
+  jobThroughput(range: InsightsRange, queueNames?: string[]): Promise<JobThroughputBucket[]>;
   funnel(range: InsightsRange, flowId?: string): Promise<FunnelStage[]>;
 }
 

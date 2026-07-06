@@ -529,17 +529,25 @@ fail takes a structured `error` object. See [ai-jobs.md](ai-jobs.md).
 ## Insights
 
 Read-only aggregation endpoints powering the web console's Insights page. All require the
-`read:knowledge` scope. The time window defaults to the last 30 days (`from`/`to` are optional
-ISO timestamps); `flow` narrows to a single flow. Response shapes live in
-`packages/core/src/index.ts`.
+`read:knowledge` scope and return a named-key JSON envelope of already-bucketed, **zero-filled**
+series (every bucket in the window is present even when its counts are `0`, so clients render a
+continuous line without gap-filling). Time params are shared: `?from=<ISO>&to=<ISO>&bucket=day|week|month`,
+defaulting to the last 30 days with `bucket=day`; `flow` narrows to a single flow where supported.
+Response shapes live in `packages/core/src/index.ts`.
 
 ### `GET /api/insights/gaps/backlog?from&to&bucket&flow`
 
-Open-gap backlog trend, one row per time bucket (`bucket` = `day` | `week` | `month`, default
-`day`). Each bucket reports the lifecycle transitions within it plus the running net-open total.
+Open-gap backlog trend. Buckets `question_gaps` by `date_trunc(bucket, ...)`, counting each lifecycle
+transition (`opened`/`resolved`/`dismissed`/`parked`) per bucket plus the running net-open total.
+`flow` narrows to a single flow.
 
-- `400 invalid_insights_query` — malformed query.
-- `200` — `{ "series": GapBacklogBucket[] }`.
+```json
+{ "series": [ GapBacklogBucket, ... ] }
+```
+
+`GapBacklogBucket` = `{ bucketStart, opened, resolved, dismissed, parked, openTotal }`. `openTotal`
+is the cumulative net (opened − closed) **within the requested window** — it does not carry a
+baseline of gaps opened before `from`.
 
 ### `GET /api/insights/funnel?from&to&flow`
 
@@ -554,6 +562,22 @@ the drop-off between stages the conversion signal.
 
 - `400 invalid_insights_query` — malformed query.
 - `200` — `{ "stages": FunnelStage[] }`.
+
+### `GET /api/insights/jobs/throughput?from&to&bucket&type`
+
+Job throughput & health. Buckets pg-boss jobs by their `created_on` timestamp and splits them into
+`completed` / `failed` / `active` / `retry` counts per bucket. pg-boss keeps live rows in
+`"<schema>".job` and migrates completed/failed rows to `"<schema>".archive` after retention, so the
+rollup `UNION ALL`s both tables — otherwise finished jobs would vanish from history. `active` folds
+pg-boss's `created` (queued) and `active` (executing) states together. `type`, when given, narrows to
+a single job type (resolved server-side to that type's pg-boss queue names); an unknown type matches
+nothing.
+
+```json
+{ "series": [ JobThroughputBucket, ... ] }
+```
+
+`JobThroughputBucket` = `{ bucketStart, completed, failed, active, retry }`.
 
 ## Type Reference
 

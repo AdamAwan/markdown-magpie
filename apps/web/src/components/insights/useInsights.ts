@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiGet, errorMessage } from "../../lib/api";
-import type { FunnelStage, GapBacklogBucket } from "../../lib/types";
+import type { FunnelStage, GapBacklogBucket, JobThroughputBucket } from "../../lib/types";
 
 // Page-local fetch state for a single insight series. The Insights page fetches
 // on its own (not through ConsoleProvider) so the heavier aggregates stay out of
@@ -58,6 +58,17 @@ export function useFunnel(): InsightsResource<FunnelStage[]> {
   const resource = useInsightsResource<{ stages: FunnelStage[] }>("/insights/funnel");
   return {
     data: resource.data?.stages,
+    loading: resource.loading,
+    error: resource.error,
+    refresh: resource.refresh
+  };
+}
+
+// Job throughput & health (last 30 days, daily buckets — the v1 fixed window).
+export function useJobThroughput(): InsightsResource<JobThroughputBucket[]> {
+  const resource = useInsightsResource<{ series: JobThroughputBucket[] }>("/insights/jobs/throughput?bucket=day");
+  return {
+    data: resource.data?.series,
     loading: resource.loading,
     error: resource.error,
     refresh: resource.refresh

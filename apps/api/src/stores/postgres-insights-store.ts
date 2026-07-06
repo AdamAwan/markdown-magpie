@@ -1,5 +1,6 @@
 import pg from "pg";
 import type { FunnelStage, GapBacklogBucket, JobThroughputBucket } from "@magpie/core";
+import { SCHEMA_IDENTIFIER } from "../jobs/pg-boss-broker.js";
 import type { InsightsRange, InsightsStore } from "./insights-store.js";
 
 // date_trunc units, whitelisted so the bucket unit is never interpolated from
@@ -11,7 +12,17 @@ const UNIT: Record<InsightsRange["bucket"], "day" | "week" | "month"> = {
 };
 
 export class PostgresInsightsStore implements InsightsStore {
-  constructor(private readonly pool: pg.Pool) {}
+  // `pgBossSchema` is the schema pg-boss stores its `job`/`archive` tables in. It
+  // is interpolated into SQL (pg identifiers cannot be parameterised), so it is
+  // re-validated against the same guard the broker uses before being trusted.
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly pgBossSchema: string
+  ) {
+    if (!SCHEMA_IDENTIFIER.test(pgBossSchema)) {
+      throw new Error(`Invalid pg-boss schema name: "${pgBossSchema}"`);
+    }
+  }
 
   // Open-gap backlog trend. Each bucket reports the lifecycle transitions that
   // happened within it (opened/resolved/dismissed/parked) and the running net
@@ -81,10 +92,80 @@ export class PostgresInsightsStore implements InsightsStore {
     }));
   }
 
-  // Implemented in a later task (C2). Returning an empty series keeps the
-  // endpoint well-formed until then.
-  async jobThroughput(): Promise<JobThroughputBucket[]> {
-    return [];
+  // Job throughput & health (C2). Buckets pg-boss jobs by `created_on` and splits
+  // them into completed / failed / active / retry counts per bucket.
+  //
+  // pg-boss keeps *live* rows in "<schema>".job and migrates completed/failed rows
+  // to "<schema>".archive once they pass retention. Querying `job` alone would
+  // therefore lose all finished history, so both tables are UNION ALL'd (a job is
+  // in exactly one of them at a time, so there is no double counting). `type`, when
+  // given, narrows to specific pg-boss queue names (resolved from a JobType by the
+  // service layer); it is matched with `= ANY($4)` so it never touches SQL text.
+  async jobThroughput(range: InsightsRange, queueNames?: string[]): Promise<JobThroughputBucket[]> {
+    const unit = UNIT[range.bucket];
+    // `undefined` means no type filter (match all queues); an explicit empty array
+    // means "an unknown type was requested" and must match nothing, so it is passed
+    // through as an empty `text[]` rather than collapsed to NULL.
+    const names = queueNames ?? null;
+    const result = await this.pool.query<{
+      bucket_start: Date;
+      completed: string;
+      failed: string;
+      active: string;
+      retry: string;
+    }>(
+      `
+      WITH params AS (
+        SELECT date_trunc($3, $1::timestamptz) AS from_b,
+               date_trunc($3, $2::timestamptz) AS to_b
+      ),
+      buckets AS (
+        SELECT generate_series(
+          (SELECT from_b FROM params),
+          (SELECT to_b FROM params),
+          ('1 ' || $3)::interval
+        ) AS b
+      ),
+      jobs AS (
+        SELECT name, state, created_on FROM "${this.pgBossSchema}".job
+        UNION ALL
+        SELECT name, state, created_on FROM "${this.pgBossSchema}".archive
+      ),
+      scoped AS (
+        SELECT date_trunc($3, created_on) AS b, state::text AS state
+        FROM jobs
+        WHERE created_on >= (SELECT from_b FROM params)
+          AND created_on <  (SELECT to_b FROM params) + ('1 ' || $3)::interval
+          AND ($4::text[] IS NULL OR name = ANY($4))
+      ),
+      per_bucket AS (
+        SELECT b,
+          count(*) FILTER (WHERE state = 'completed')            AS completed,
+          count(*) FILTER (WHERE state = 'failed')               AS failed,
+          count(*) FILTER (WHERE state IN ('active', 'created')) AS active,
+          count(*) FILTER (WHERE state = 'retry')                AS retry
+        FROM scoped
+        GROUP BY b
+      )
+      SELECT b.b AS bucket_start,
+        coalesce(pb.completed, 0) AS completed,
+        coalesce(pb.failed, 0)    AS failed,
+        coalesce(pb.active, 0)    AS active,
+        coalesce(pb.retry, 0)     AS retry
+      FROM buckets b
+      LEFT JOIN per_bucket pb ON pb.b = b.b
+      ORDER BY b.b
+      `,
+      [range.from.toISOString(), range.to.toISOString(), unit, names]
+    );
+
+    return result.rows.map((row) => ({
+      bucketStart: row.bucket_start.toISOString(),
+      completed: Number(row.completed),
+      failed: Number(row.failed),
+      active: Number(row.active),
+      retry: Number(row.retry)
+    }));
   }
 
   // Gap-to-merge funnel: one count per pipeline stage over the window, in

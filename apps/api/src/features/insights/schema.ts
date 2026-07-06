@@ -11,3 +11,11 @@ export const insightsRangeQuerySchema = z.object({
 });
 
 export type InsightsRangeQuery = z.infer<typeof insightsRangeQuerySchema>;
+
+// Job-throughput query params: the shared range plus an optional `type` narrowing
+// to a single job type (resolved to its pg-boss queue names by the service).
+export const jobThroughputQuerySchema = insightsRangeQuerySchema.extend({
+  type: z.string().trim().min(1).optional()
+});
+
+export type JobThroughputQuery = z.infer<typeof jobThroughputQuerySchema>;

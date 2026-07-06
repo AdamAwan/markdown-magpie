@@ -34,7 +34,7 @@ import {
 } from "./stores/knowledge-repositories.js";
 import { checkoutRoot, syncConfiguredGitCheckouts, type RepositoryDeps } from "./platform/repositories.js";
 import type { JobBroker } from "./jobs/broker.js";
-import { PgBossJobBroker } from "./jobs/pg-boss-broker.js";
+import { DEFAULT_PGBOSS_SCHEMA, PgBossJobBroker } from "./jobs/pg-boss-broker.js";
 import { backfillGapClusters } from "./scheduling/gap-backfill.js";
 import type { JobAcceptanceStore } from "./stores/job-acceptance-store.js";
 import { PostgresJobAcceptanceStore } from "./stores/postgres-job-acceptance-store.js";
@@ -120,8 +120,13 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
   const embedder = new BackgroundEmbedder(knowledgeStore, embedding);
   const background = new BackgroundRunner();
 
+  // Single source of truth for the pg-boss schema shared by the broker (which
+  // owns the job/archive tables) and the insights store (which reads them for the
+  // throughput chart). No config override exists, so both use the default.
+  const pgBossSchema = DEFAULT_PGBOSS_SCHEMA;
   const jobs: JobBroker = new PgBossJobBroker({
     connectionString: databaseUrl,
+    schema: pgBossSchema,
     scheduleTimezone: config.jobs.scheduleTimezone
   });
 
@@ -142,7 +147,7 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
       prCrosslinks: createPrCrosslinkStore(config, pool),
       snapshots: createSnapshotStore(config),
       watchers: createWatcherRegistryStore(config, pool),
-      insights: createInsightsStore(pool),
+      insights: createInsightsStore(pool, pgBossSchema),
       jobAcceptances: new PostgresJobAcceptanceStore(pool),
       rateLimit: new PostgresRateLimitStore(pool)
     },

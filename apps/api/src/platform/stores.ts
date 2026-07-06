@@ -190,6 +190,6 @@ export function createSnapshotStore(config: AppConfig): SnapshotStore {
 // Insights is read-only aggregation that only makes sense over Postgres, so it
 // is Postgres-backed whenever a pool exists (production and DB-backed tests) and
 // a no-op otherwise (in-memory unit tests get NullInsightsStore).
-export function createInsightsStore(pool: pg.Pool | undefined): InsightsStore {
-  return pool ? new PostgresInsightsStore(pool) : new NullInsightsStore();
+export function createInsightsStore(pool: pg.Pool | undefined, pgBossSchema: string): InsightsStore {
+  return pool ? new PostgresInsightsStore(pool, pgBossSchema) : new NullInsightsStore();
 }

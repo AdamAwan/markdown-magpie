@@ -1,7 +1,9 @@
-import type { FunnelStage, GapBacklogBucket } from "@magpie/core";
+import type { FunnelStage, GapBacklogBucket, JobThroughputBucket } from "@magpie/core";
+import { isJobType } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
+import { queueDefinitionsForType } from "../../jobs/pg-boss-broker.js";
 import type { InsightsRange } from "../../stores/insights-store.js";
-import type { InsightsRangeQuery } from "./schema.js";
+import type { InsightsRangeQuery, JobThroughputQuery } from "./schema.js";
 
 const DEFAULT_WINDOW_DAYS = 30;
 
@@ -20,4 +22,17 @@ export async function gapBacklog(ctx: AppContext, query: InsightsRangeQuery): Pr
 
 export async function funnel(ctx: AppContext, query: InsightsRangeQuery): Promise<FunnelStage[]> {
   return ctx.stores.insights.funnel(resolveRange(query), query.flow);
+}
+
+// Resolve an optional job-type filter to the pg-boss queue names that type's work
+// lands in (its work queue(s) plus dead-letter queues). An unknown type yields an
+// empty list, which the store treats as "match nothing" — a safe, explicit empty
+// series rather than silently ignoring the filter.
+export async function jobThroughput(ctx: AppContext, query: JobThroughputQuery): Promise<JobThroughputBucket[]> {
+  const queueNames = query.type
+    ? isJobType(query.type)
+      ? queueDefinitionsForType(query.type).map((queue) => queue.name)
+      : []
+    : undefined;
+  return ctx.stores.insights.jobThroughput(resolveRange(query), queueNames);
 }

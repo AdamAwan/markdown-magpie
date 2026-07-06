@@ -5,11 +5,13 @@ import { Workbench, Button, Row } from "../../components/ui";
 import { ChartCard } from "../../components/insights/ChartCard";
 import { GapBacklogChart } from "../../components/insights/GapBacklogChart";
 import { GapFunnelChart } from "../../components/insights/GapFunnelChart";
-import { useFunnel, useGapBacklog } from "../../components/insights/useInsights";
+import { JobThroughputChart } from "../../components/insights/JobThroughputChart";
+import { useFunnel, useGapBacklog, useJobThroughput } from "../../components/insights/useInsights";
 
 export default function InsightsPage() {
   const backlog = useGapBacklog();
   const funnel = useFunnel();
+  const throughput = useJobThroughput();
 
   // The endpoint zero-fills every day in the window, so a non-empty array can
   // still be "nothing happened". Treat all-zero transitions as empty.
@@ -22,7 +24,12 @@ export default function InsightsPage() {
   // window to visualise a drop-off for.
   const funnelEmpty = !funnel.data || funnel.data.length === 0 || funnel.data.every((s) => s.count === 0);
 
-  const refreshing = backlog.loading || funnel.loading;
+  const throughputEmpty =
+    !throughput.data ||
+    throughput.data.length === 0 ||
+    throughput.data.every((b) => b.completed + b.failed + b.active + b.retry === 0);
+
+  const refreshing = backlog.loading || funnel.loading || throughput.loading;
 
   return (
     <Workbench>
@@ -33,6 +40,7 @@ export default function InsightsPage() {
           onClick={() => {
             backlog.refresh();
             funnel.refresh();
+            throughput.refresh();
           }}
         >
           {refreshing ? "Refreshing" : "Refresh"}
@@ -57,6 +65,16 @@ export default function InsightsPage() {
         empty={backlogEmpty}
       >
         {backlog.data ? <GapBacklogChart series={backlog.data} /> : null}
+      </ChartCard>
+
+      <ChartCard
+        title="Job throughput & health"
+        subtitle="Queue jobs per day, stacked by state (completed/failed/active/retry). Last 30 days."
+        loading={throughput.loading}
+        error={throughput.error}
+        empty={throughputEmpty}
+      >
+        {throughput.data ? <JobThroughputChart series={throughput.data} /> : null}
       </ChartCard>
     </Workbench>
   );
