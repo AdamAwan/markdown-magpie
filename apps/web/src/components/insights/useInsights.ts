@@ -3,10 +3,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiGet, errorMessage } from "../../lib/api";
 import type {
+  FreshnessSummary,
   FunnelStage,
   GapBacklogBucket,
+  JobErrorBreakdown,
   JobThroughputBucket,
   LatencyBin,
+  PatrolImpact,
   VerificationBucket,
   VerificationSummary
 } from "../../lib/types";
@@ -104,6 +107,46 @@ export function useVerificationSuccess(): InsightsResource<VerificationSuccessDa
   const resource = useInsightsResource<VerificationSuccessData>("/insights/verification/success?bucket=day");
   return {
     data: resource.data,
+    loading: resource.loading,
+    error: resource.error,
+    refresh: resource.refresh
+  };
+}
+
+// The job-error-breakdown payload (C6): failed jobs split by category and by type.
+export interface JobErrorsData {
+  byCategory: JobErrorBreakdown[];
+  byType: JobErrorBreakdown[];
+}
+
+// Job error breakdown (last 30 days). Failed jobs grouped by error category and by
+// job type.
+export function useJobErrors(): InsightsResource<JobErrorsData> {
+  const resource = useInsightsResource<JobErrorsData>("/insights/jobs/errors");
+  return {
+    data: resource.data,
+    loading: resource.loading,
+    error: resource.error,
+    refresh: resource.refresh
+  };
+}
+
+// Knowledge-base freshness (C7). A point-in-time snapshot, no window.
+export function useFreshness(): InsightsResource<FreshnessSummary> {
+  const resource = useInsightsResource<FreshnessSummary>("/insights/freshness");
+  return {
+    data: resource.data,
+    loading: resource.loading,
+    error: resource.error,
+    refresh: resource.refresh
+  };
+}
+
+// Maintenance patrol impact (last 30 days), one row per task type.
+export function usePatrolImpact(): InsightsResource<PatrolImpact[]> {
+  const resource = useInsightsResource<{ runs: PatrolImpact[] }>("/insights/patrols");
+  return {
+    data: resource.data?.runs,
     loading: resource.loading,
     error: resource.error,
     refresh: resource.refresh

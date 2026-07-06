@@ -6,13 +6,19 @@ import { ChartCard } from "../../components/insights/ChartCard";
 import { GapBacklogChart } from "../../components/insights/GapBacklogChart";
 import { GapFunnelChart } from "../../components/insights/GapFunnelChart";
 import { JobThroughputChart } from "../../components/insights/JobThroughputChart";
+import { JobErrorBreakdownChart } from "../../components/insights/JobErrorBreakdownChart";
 import { LatencyHistogramChart } from "../../components/insights/LatencyHistogramChart";
 import { VerificationSuccessChart } from "../../components/insights/VerificationSuccessChart";
+import { FreshnessChart } from "../../components/insights/FreshnessChart";
+import { PatrolImpactChart } from "../../components/insights/PatrolImpactChart";
 import {
   useAnswerLatency,
+  useFreshness,
   useFunnel,
   useGapBacklog,
+  useJobErrors,
   useJobThroughput,
+  usePatrolImpact,
   useVerificationSuccess
 } from "../../components/insights/useInsights";
 
@@ -22,6 +28,9 @@ export default function InsightsPage() {
   const throughput = useJobThroughput();
   const latency = useAnswerLatency();
   const verification = useVerificationSuccess();
+  const jobErrors = useJobErrors();
+  const freshness = useFreshness();
+  const patrols = usePatrolImpact();
 
   // The endpoint zero-fills every day in the window, so a non-empty array can
   // still be "nothing happened". Treat all-zero transitions as empty.
@@ -47,14 +56,41 @@ export default function InsightsPage() {
   const verificationEmpty =
     !verification.data || verification.data.totals.closed + verification.data.totals.stillOpen === 0;
 
+  // Job errors are empty until at least one job has failed in the window.
+  const jobErrorsEmpty =
+    !jobErrors.data || jobErrors.data.byCategory.length + jobErrors.data.byType.length === 0;
+
+  // Freshness is a snapshot; empty only when there is nothing to classify.
+  const freshnessEmpty =
+    !freshness.data ||
+    freshness.data.documents.fresh +
+      freshness.data.documents.due +
+      freshness.data.documents.overdue +
+      freshness.data.sources.fresh +
+      freshness.data.sources.stale ===
+      0;
+
+  // Patrols are empty until at least one maintenance run happened in the window.
+  const patrolsEmpty = !patrols.data || patrols.data.length === 0;
+
   const refreshing =
-    backlog.loading || funnel.loading || throughput.loading || latency.loading || verification.loading;
+    backlog.loading ||
+    funnel.loading ||
+    throughput.loading ||
+    latency.loading ||
+    verification.loading ||
+    jobErrors.loading ||
+    freshness.loading ||
+    patrols.loading;
   const refreshAll = () => {
     backlog.refresh();
     funnel.refresh();
     throughput.refresh();
     latency.refresh();
     verification.refresh();
+    jobErrors.refresh();
+    freshness.refresh();
+    patrols.refresh();
   };
 
   return (
@@ -115,6 +151,41 @@ export default function InsightsPage() {
         emptyMessage="No gap-closure verifications in the last 30 days yet."
       >
         {verification.data ? <VerificationSuccessChart totals={verification.data.totals} /> : null}
+      </ChartCard>
+
+      <ChartCard
+        title="Job error breakdown"
+        subtitle="Failed jobs grouped by error category and by job type. Last 30 days."
+        loading={jobErrors.loading}
+        error={jobErrors.error}
+        empty={jobErrorsEmpty}
+        emptyMessage="No jobs failed in the last 30 days."
+      >
+        {jobErrors.data ? (
+          <JobErrorBreakdownChart byCategory={jobErrors.data.byCategory} byType={jobErrors.data.byType} />
+        ) : null}
+      </ChartCard>
+
+      <ChartCard
+        title="Knowledge-base freshness"
+        subtitle="Active documents by review-cycle compliance, and synced sources by last-sync recency."
+        loading={freshness.loading}
+        error={freshness.error}
+        empty={freshnessEmpty}
+        emptyMessage="No documents with a review cycle, and no synced sources yet."
+      >
+        {freshness.data ? <FreshnessChart summary={freshness.data} /> : null}
+      </ChartCard>
+
+      <ChartCard
+        title="Maintenance patrol impact"
+        subtitle="Runs, findings, and proposals per maintenance task type. Last 30 days."
+        loading={patrols.loading}
+        error={patrols.error}
+        empty={patrolsEmpty}
+        emptyMessage="No maintenance runs in the last 30 days yet."
+      >
+        {patrols.data ? <PatrolImpactChart runs={patrols.data} /> : null}
       </ChartCard>
     </Workbench>
   );

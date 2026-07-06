@@ -281,5 +281,10 @@ export type {
   InsightsBucketUnit,
   LatencyBin,
   VerificationSummary,
-  VerificationBucket
+  VerificationBucket,
+  JobErrorBreakdown,
+  DocumentFreshness,
+  SourceFreshness,
+  FreshnessSummary,
+  PatrolImpact
 } from "@magpie/core";
