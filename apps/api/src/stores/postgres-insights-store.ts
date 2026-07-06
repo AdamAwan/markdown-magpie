@@ -1,13 +1,15 @@
 import pg from "pg";
 import type {
+  FreshnessSummary,
   FunnelStage,
   GapBacklogBucket,
   JobThroughputBucket,
   LatencyBin,
+  PatrolImpact,
   VerificationBucket
 } from "@magpie/core";
 import { SCHEMA_IDENTIFIER } from "../jobs/pg-boss-broker.js";
-import type { InsightsRange, InsightsStore, VerificationSuccess } from "./insights-store.js";
+import type { InsightsRange, InsightsStore, JobErrorSplit, VerificationSuccess } from "./insights-store.js";
 
 // date_trunc units, whitelisted so the bucket unit is never interpolated from
 // unvalidated input (the zod schema also constrains it to these three).
@@ -36,6 +38,12 @@ const LATENCY_BINS: ReadonlyArray<{ label: string; from: number; to: number | nu
   { label: "2–5m", from: 120, to: 300 },
   { label: "5m+", from: 300, to: null }
 ];
+
+// KB-freshness windows (C7). A document with a review cadence is "due" when its
+// next review falls within FRESHNESS_SOON_DAYS of today (but is not yet past due);
+// a source is "stale" when it has not been synced for FRESHNESS_STALE_DAYS.
+const FRESHNESS_SOON_DAYS = 7;
+const FRESHNESS_STALE_DAYS = 7;
 
 export class PostgresInsightsStore implements InsightsStore {
   // `pgBossSchema` is the schema pg-boss stores its `job`/`archive` tables in. It
@@ -406,5 +414,137 @@ export class PostgresInsightsStore implements InsightsStore {
       { closed: 0, stillOpen: 0 }
     );
     return { totals, series };
+  }
+
+  // Job error breakdown (C6). Counts failed pg-boss jobs over the window, split by
+  // error category and by job type in one round trip. pg-boss stores the JobError
+  // payload in the job's `output` JSONB column when a job fails (see the broker's
+  // `fail`), so `output->>'category'` is the error category. The queue `name` is
+  // the job type plus an optional `__<capability>` fan-out suffix, so
+  // `split_part(name, '__', 1)` recovers the base job type. Completed/failed rows
+  // migrate from `job` to `archive` after retention, so both are UNION ALL'd (a job
+  // is in exactly one at a time — no double counting). Ordered most-frequent-first.
+  async jobErrors(range: InsightsRange): Promise<JobErrorSplit> {
+    const result = await this.pool.query<{ dim: "category" | "type"; key: string; count: string }>(
+      `
+      WITH jobs AS (
+        SELECT name, state, output, created_on FROM "${this.pgBossSchema}".job
+        UNION ALL
+        SELECT name, state, output, created_on FROM "${this.pgBossSchema}".archive
+      ),
+      failed AS (
+        SELECT name, output
+        FROM jobs
+        WHERE state = 'failed'
+          AND created_on >= $1::timestamptz AND created_on <= $2::timestamptz
+      )
+      SELECT 'category'::text AS dim, coalesce(output->>'category', 'unknown') AS key, count(*)::int AS count
+      FROM failed GROUP BY 2
+      UNION ALL
+      SELECT 'type'::text AS dim, split_part(name, '__', 1) AS key, count(*)::int AS count
+      FROM failed GROUP BY 2
+      ORDER BY dim, count DESC, key
+      `,
+      [range.from.toISOString(), range.to.toISOString()]
+    );
+
+    const byCategory = result.rows
+      .filter((row) => row.dim === "category")
+      .map((row) => ({ key: row.key, count: Number(row.count) }));
+    const byType = result.rows
+      .filter((row) => row.dim === "type")
+      .map((row) => ({ key: row.key, count: Number(row.count) }));
+    return { byCategory, byType };
+  }
+
+  // Knowledge-base freshness (C7). A point-in-time snapshot, so it takes no window.
+  //   documents: only active docs that carry a review cadence (review_cycle_days
+  //     IS NOT NULL) are classified — a doc with no cadence is not subject to review
+  //     and is excluded. next_review = last_verified + review_cycle_days; a doc that
+  //     was never verified (last_verified IS NULL) counts as overdue.
+  //       overdue → next_review < today (or never verified)
+  //       due     → today <= next_review < today + FRESHNESS_SOON_DAYS
+  //       fresh   → next_review >= today + FRESHNESS_SOON_DAYS
+  //   sources: every source_sync_state row, split on last_checked_at.
+  //       stale → last_checked_at < now() - FRESHNESS_STALE_DAYS
+  //       fresh → otherwise
+  async freshness(): Promise<FreshnessSummary> {
+    const documents = await this.pool.query<{ fresh: string; due: string; overdue: string }>(
+      `
+      WITH classified AS (
+        SELECT CASE
+          WHEN last_verified IS NULL THEN 'overdue'
+          WHEN (last_verified + (review_cycle_days || ' days')::interval)::date < current_date THEN 'overdue'
+          WHEN (last_verified + (review_cycle_days || ' days')::interval)::date
+               < current_date + ($1::int || ' days')::interval THEN 'due'
+          ELSE 'fresh'
+        END AS bucket
+        FROM documents
+        WHERE status = 'active' AND review_cycle_days IS NOT NULL
+      )
+      SELECT
+        count(*) FILTER (WHERE bucket = 'fresh')   AS fresh,
+        count(*) FILTER (WHERE bucket = 'due')     AS due,
+        count(*) FILTER (WHERE bucket = 'overdue') AS overdue
+      FROM classified
+      `,
+      [FRESHNESS_SOON_DAYS]
+    );
+
+    const sources = await this.pool.query<{ fresh: string; stale: string }>(
+      `
+      SELECT
+        count(*) FILTER (WHERE last_checked_at >= now() - ($1::int || ' days')::interval) AS fresh,
+        count(*) FILTER (WHERE last_checked_at <  now() - ($1::int || ' days')::interval) AS stale
+      FROM source_sync_state
+      `,
+      [FRESHNESS_STALE_DAYS]
+    );
+
+    const doc = documents.rows[0];
+    const src = sources.rows[0];
+    return {
+      documents: { fresh: Number(doc.fresh), due: Number(doc.due), overdue: Number(doc.overdue) },
+      sources: { fresh: Number(src.fresh), stale: Number(src.stale) }
+    };
+  }
+
+  // Maintenance patrol impact (C8). One row per maintenance_runs.task_type over the
+  // window, windowed on started_at. Each task type records a different payload in
+  // `details`, so each metric reads the key its runs actually write and stays zero
+  // elsewhere: patrol runs store a `details.findings` JSONB array (verify-lens
+  // findings), the gap→PR reconciler stores a numeric `details.proposalsDrafted`.
+  async patrolImpact(range: InsightsRange): Promise<PatrolImpact[]> {
+    const result = await this.pool.query<{
+      task_type: string;
+      runs: string;
+      findings: string;
+      proposals: string;
+    }>(
+      `
+      SELECT task_type,
+        count(*) AS runs,
+        coalesce(sum(
+          CASE WHEN jsonb_typeof(details->'findings') = 'array'
+            THEN jsonb_array_length(details->'findings') ELSE 0 END
+        ), 0) AS findings,
+        coalesce(sum(
+          CASE WHEN jsonb_typeof(details->'proposalsDrafted') = 'number'
+            THEN (details->>'proposalsDrafted')::int ELSE 0 END
+        ), 0) AS proposals
+      FROM maintenance_runs
+      WHERE started_at >= $1::timestamptz AND started_at <= $2::timestamptz
+      GROUP BY task_type
+      ORDER BY task_type
+      `,
+      [range.from.toISOString(), range.to.toISOString()]
+    );
+
+    return result.rows.map((row) => ({
+      taskType: row.task_type,
+      runs: Number(row.runs),
+      findings: Number(row.findings),
+      proposals: Number(row.proposals)
+    }));
   }
 }

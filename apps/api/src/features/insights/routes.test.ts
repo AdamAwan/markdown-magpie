@@ -39,3 +39,39 @@ test("GET /api/insights/verification/success rejects a bad bucket", async () => 
   const res = await app.request("/api/insights/verification/success?bucket=fortnight");
   assert.equal(res.status, 400);
 });
+
+test("GET /api/insights/jobs/errors returns empty breakdowns under the null store", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/insights/jobs/errors");
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { byCategory: [], byType: [] });
+});
+
+test("GET /api/insights/jobs/errors rejects a malformed to", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/insights/jobs/errors?to=not-a-date");
+  assert.equal(res.status, 400);
+});
+
+test("GET /api/insights/freshness returns zeroed document and source splits", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/insights/freshness");
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), {
+    documents: { fresh: 0, due: 0, overdue: 0 },
+    sources: { fresh: 0, stale: 0 }
+  });
+});
+
+test("GET /api/insights/patrols returns an empty runs envelope under the null store", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/insights/patrols");
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { runs: [] });
+});
+
+test("GET /api/insights/patrols rejects a malformed from", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/insights/patrols?from=not-a-date");
+  assert.equal(res.status, 400);
+});

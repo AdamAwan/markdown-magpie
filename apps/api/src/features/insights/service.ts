@@ -1,8 +1,15 @@
-import type { FunnelStage, GapBacklogBucket, JobThroughputBucket, LatencyBin } from "@magpie/core";
+import type {
+  FreshnessSummary,
+  FunnelStage,
+  GapBacklogBucket,
+  JobThroughputBucket,
+  LatencyBin,
+  PatrolImpact
+} from "@magpie/core";
 import { isJobType } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { queueDefinitionsForType } from "../../jobs/pg-boss-broker.js";
-import type { InsightsRange, VerificationSuccess } from "../../stores/insights-store.js";
+import type { InsightsRange, JobErrorSplit, VerificationSuccess } from "../../stores/insights-store.js";
 import type { InsightsRangeQuery, InsightsWindowQuery, JobThroughputQuery } from "./schema.js";
 
 const DEFAULT_WINDOW_DAYS = 30;
@@ -51,4 +58,21 @@ export async function answerLatency(ctx: AppContext, query: InsightsWindowQuery)
 
 export async function verificationSuccess(ctx: AppContext, query: InsightsRangeQuery): Promise<VerificationSuccess> {
   return ctx.stores.insights.verificationSuccess(resolveRange(query));
+}
+
+// Job error breakdown (C6): failed jobs over the window, split by category and by
+// job type. Window-only — there is no time axis, so no bucket.
+export async function jobErrors(ctx: AppContext, query: InsightsWindowQuery): Promise<JobErrorSplit> {
+  return ctx.stores.insights.jobErrors(resolveWindow(query));
+}
+
+// KB freshness (C7): a point-in-time snapshot, so it takes no query params.
+export async function freshness(ctx: AppContext): Promise<FreshnessSummary> {
+  return ctx.stores.insights.freshness();
+}
+
+// Maintenance patrol impact (C8): per-task-type run/finding/proposal counts over
+// the window. Window-only — the chart groups by task type, not by time.
+export async function patrolImpact(ctx: AppContext, query: InsightsWindowQuery): Promise<PatrolImpact[]> {
+  return ctx.stores.insights.patrolImpact(resolveWindow(query));
 }

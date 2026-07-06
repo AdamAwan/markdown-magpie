@@ -1342,3 +1342,45 @@ export interface VerificationSummary {
 export interface VerificationBucket extends VerificationSummary {
   bucketStart: string;
 }
+
+// One bar of the job-error breakdown (C6): a labelled slice of failed pg-boss jobs
+// and how many landed under it. `key` is either an error category (provider /
+// validation / timeout / …) or a job type, depending on which dimension the bar
+// belongs to. Failed rows are unioned across pg-boss's live `job` and `archive`
+// tables so finished failures stay in the history.
+export interface JobErrorBreakdown {
+  key: string;
+  count: number;
+}
+
+// Review-cycle compliance of the active knowledge base (C7). `documents` splits
+// docs that carry a review cadence (`review_cycle_days`) by how their next-review
+// date compares to today; `sources` splits synced sources by how recently they
+// were last checked. A point-in-time snapshot, not a time series.
+export interface DocumentFreshness {
+  fresh: number; // next review is more than the soon-window away
+  due: number; // next review falls within the soon-window
+  overdue: number; // past its next-review date (or never verified)
+}
+
+export interface SourceFreshness {
+  fresh: number; // synced within the stale-window
+  stale: number; // not synced for longer than the stale-window
+}
+
+export interface FreshnessSummary {
+  documents: DocumentFreshness;
+  sources: SourceFreshness;
+}
+
+// Impact of maintenance patrols and the gap→PR reconciler over the window (C8),
+// one row per `maintenance_runs.task_type`. `findings` sums the verify-lens
+// findings patrol runs recorded (`details.findings`); `proposals` sums the
+// proposals the gap→PR runs drafted (`details.proposalsDrafted`). A task type only
+// contributes to the field its runs actually record; the other stays zero.
+export interface PatrolImpact {
+  taskType: string;
+  runs: number;
+  findings: number;
+  proposals: number;
+}

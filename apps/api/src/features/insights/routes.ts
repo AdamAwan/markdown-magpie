@@ -45,5 +45,28 @@ export function insightsRoutes(ctx: AppContext): Hono {
     return c.json({ totals, series });
   });
 
+  // C6 — job error breakdown. Failed jobs over the window, split by error category
+  // and by job type. Window-only (no time axis).
+  app.get("/jobs/errors", requireScopes("read:knowledge"), async (c) => {
+    const parsed = insightsWindowQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) throw new HttpError(400, "invalid_insights_query");
+    const { byCategory, byType } = await insightsService.jobErrors(ctx, parsed.data);
+    return c.json({ byCategory, byType });
+  });
+
+  // C7 — knowledge-base freshness. A point-in-time snapshot; takes no params.
+  app.get("/freshness", requireScopes("read:knowledge"), async (c) => {
+    const { documents, sources } = await insightsService.freshness(ctx);
+    return c.json({ documents, sources });
+  });
+
+  // C8 — maintenance patrol impact. Per-task-type run/finding/proposal counts over
+  // the window. Window-only (grouped by task type, not time).
+  app.get("/patrols", requireScopes("read:knowledge"), async (c) => {
+    const parsed = insightsWindowQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) throw new HttpError(400, "invalid_insights_query");
+    return c.json({ runs: await insightsService.patrolImpact(ctx, parsed.data) });
+  });
+
   return app;
 }
