@@ -19,8 +19,8 @@ const TOTAL_READ_BUDGET_BYTES = 400_000;
 // The HTTP-provider execution tier for source-grounded jobs: a bounded
 // generateText tool loop over the read-only source tools. The CLI tier does not
 // come through here — agent CLIs traverse the checkout natively (see cli.ts).
-// Tool failures are returned to the model as error strings so it can correct
-// course; only infrastructure failures reject.
+// Tool misuse (SourceToolError) is returned to the model as an error string so
+// it can correct course; an infrastructure fault halts the loop and fails the job.
 export async function runSourceAgentJob(options: {
   job: JobView;
   model: LanguageModel;
@@ -31,8 +31,14 @@ export async function runSourceAgentJob(options: {
   const { job, model, workspaces, notes, signal } = options;
   const budget: ToolBudget = { remainingBytes: TOTAL_READ_BUDGET_BYTES };
   // SourceToolError is the tools' whole misuse contract (bad path, budget, binary
-  // file…) — render it for the model. Anything else is an infrastructure fault and
-  // rethrows to fail the job.
+  // file…) — render it for the model. Anything else is an infrastructure fault
+  // that must fail the job. A plain rethrow cannot do that: generateText catches
+  // every throw from a tool's execute and renders it to the model as a tool-error
+  // part, so the job would resolve with an ungrounded draft (and leak raw host
+  // paths to the provider). Instead the first infra fault is recorded here, a stop
+  // condition below halts the loop before the model gets another turn, and the
+  // fault is rethrown once generateText returns.
+  let infraError: unknown;
   const asToolResult = async (run: () => Promise<string>): Promise<string> => {
     try {
       return await run();
@@ -40,6 +46,7 @@ export async function runSourceAgentJob(options: {
       if (error instanceof SourceToolError) {
         return `ERROR: ${error.message}`;
       }
+      infraError ??= error;
       throw error;
     }
   };
@@ -71,9 +78,14 @@ export async function runSourceAgentJob(options: {
     system: JOB_RUNNER_SYSTEM.instructions,
     prompt,
     tools,
-    stopWhen: stepCountIs(MAX_STEPS),
+    stopWhen: [stepCountIs(MAX_STEPS), () => infraError !== undefined],
     abortSignal: signal
   });
+  if (infraError !== undefined) {
+    // An infrastructure fault occurred inside a tool; whatever text the loop
+    // produced is ungrounded. Fail the job — never parse or force an answer.
+    throw infraError;
+  }
   logger.debug(
     { jobId: job.id, steps: result.steps.length, budgetLeft: budget.remainingBytes },
     `${job.type}[${job.id}]: source-agent loop finished in ${result.steps.length} step(s)`

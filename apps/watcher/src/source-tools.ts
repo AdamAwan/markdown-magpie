@@ -5,10 +5,11 @@ import type { SourceWorkspace } from "./source-workspace.js";
 
 // Read-only filesystem tools for the HTTP-provider tool loop. Everything here is
 // deliberately boring and bounded: string in, rendered string out, SourceToolError
-// on misuse. The loop converts errors to tool results so the model can recover;
-// nothing a model passes as an argument can reach outside a workspace root, and
-// no raw fs error (ENOENT, EISDIR, EACCES…) may escape a tool — the loop rethrows
-// anything that isn't a SourceToolError, crashing the job.
+// on misuse. The loop shows SourceToolError to the model as an error result so it
+// can recover; nothing a model passes as an argument can reach outside a workspace
+// root, and no raw fs error (ENOENT, EISDIR, EACCES…) may reach the model — the
+// loop treats anything that isn't a SourceToolError as an infrastructure fault
+// and fails the job.
 
 export class SourceToolError extends Error {}
 

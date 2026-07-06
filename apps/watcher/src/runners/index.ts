@@ -63,10 +63,18 @@ export function createConfiguredRunners(
     // selects the classic chat-completions API (the callable form is the
     // responses API), and the apiKey is passed explicitly because the SDK's env
     // fallback reads AZURE_API_KEY, not this repo's AZURE_OPENAI_API_KEY.
+    // useDeploymentBasedUrls pins the SDK to the classic deployments surface —
+    // {endpoint}/openai/deployments/{deployment}/chat/completions?api-version={v}
+    // — the exact URL AzureOpenAIChatProvider builds. AZURE_OPENAI_API_VERSION
+    // carries dated tokens ("2024-10-21") for that surface; the SDK's default v1
+    // surface expects "v1"/"preview"-style tokens and would 400 on them. The
+    // fallback mirrors createChatProvider's default
+    // (packages/retrieval/src/chat-providers.ts) so both Azure paths stay in step.
     const azureAgentModel = createAzure({
       apiKey: env.AZURE_OPENAI_API_KEY ?? "",
       baseURL: `${trimTrailingSlash(env.AZURE_OPENAI_ENDPOINT ?? "")}/openai`,
-      ...(env.AZURE_OPENAI_API_VERSION ? { apiVersion: env.AZURE_OPENAI_API_VERSION } : {})
+      useDeploymentBasedUrls: true,
+      apiVersion: env.AZURE_OPENAI_API_VERSION ?? "2024-10-21"
     }).chat(env.AZURE_OPENAI_CHAT_DEPLOYMENT ?? "");
     runners.push(
       new ChatRunner(

@@ -28,13 +28,19 @@ export class ChatRunner {
 
   async run(job: JobView, signal: AbortSignal): Promise<unknown> {
     const descriptors = sourceDescriptorsOf(job);
-    if (hasFsSources(descriptors) && this.agentModel) {
-      const { workspaces, notes } = await this.prepareWorkspaces(descriptors, { checkoutRoot: this.checkoutRoot });
-      logger.info(
-        { jobId: job.id, workspaceCount: workspaces.length },
-        `${job.type}[${job.id}]: running source-agent loop over ${workspaces.length} workspace(s)`
+    if (hasFsSources(descriptors)) {
+      if (this.agentModel) {
+        const { workspaces, notes } = await this.prepareWorkspaces(descriptors, { checkoutRoot: this.checkoutRoot });
+        logger.info(
+          { jobId: job.id, workspaceCount: workspaces.length },
+          `${job.type}[${job.id}]: running source-agent loop over ${workspaces.length} workspace(s)`
+        );
+        return runSourceAgentJob({ job, model: this.agentModel, workspaces, notes, signal });
+      }
+      logger.warn(
+        { jobId: job.id },
+        `${job.type}[${job.id}]: job has filesystem sources but no agent model is configured — running un-grounded via the generative path`
       );
-      return runSourceAgentJob({ job, model: this.agentModel, workspaces, notes, signal });
     }
     return runGenerativeJob({ job, model: this.chat, api: this.api, signal });
   }
