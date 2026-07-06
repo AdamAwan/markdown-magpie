@@ -92,7 +92,8 @@ hosts source checkouts. That is an extension of an existing mechanism, not a new
 `CliRunner` (`apps/watcher/src/runners/cli.ts`) gains a source-grounded mode, active when
 the job's resolved workspaces are non-empty:
 
-- **cwd** = primary workspace root. Additional workspaces: `--add-dir <root>` for claude;
+- **cwd** = primary workspace root (the first fs-backed descriptor in the flow's source
+  order). Additional workspaces: `--add-dir <root>` for claude;
   listed as absolute paths in the prompt for codex (its read-only sandbox permits reads
   outside cwd).
 - **Read-only enforcement**, assembled by the runner (not user-configurable):
