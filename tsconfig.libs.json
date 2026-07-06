@@ -1,0 +1,15 @@
+{
+  "//": "Solution file for `tsc -b` incremental builds of the compiled @magpie/* libraries the apps consume. References are listed in dependency order. Used by the `build:libs` script (predev:api / predev:watcher).",
+  "files": [],
+  "references": [
+    { "path": "packages/core/tsconfig.build.json" },
+    { "path": "packages/logger/tsconfig.build.json" },
+    { "path": "packages/prompts/tsconfig.build.json" },
+    { "path": "packages/markdown/tsconfig.build.json" },
+    { "path": "packages/retrieval/tsconfig.build.json" },
+    { "path": "packages/git/tsconfig.build.json" },
+    { "path": "packages/jobs/tsconfig.build.json" },
+    { "path": "packages/auth/tsconfig.build.json" },
+    { "path": "packages/telemetry/tsconfig.build.json" }
+  ]
+}
