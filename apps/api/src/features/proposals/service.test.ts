@@ -1132,11 +1132,14 @@ test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job"
   const input = job.input as {
     gapSummaries: string[];
     provider: string;
+    sources: { id: string }[];
     triggeringQuestionIds?: string[];
     openPullRequests?: { status: string }[];
   };
   assert.deepEqual(input.gapSummaries, ["How to configure X"]);
   assert.equal(input.provider, "openai-compatible");
+  // The test context configures no sources, so the projected descriptor set is empty.
+  assert.deepEqual(input.sources, []);
   // Both must survive the broker's schema-parse so the proposal links back to its
   // triggering questions and the drafter sees the in-flight PR it should not duplicate.
   assert.ok(input.triggeringQuestionIds?.includes(log.id), "triggeringQuestionIds survives enqueue");

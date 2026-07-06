@@ -8,7 +8,6 @@ import { withFlowRunLock } from "./run-lock.js";
 import * as gapsService from "../features/gaps/service.js";
 import { parseCompletedJobOutput, runJobToCompletion } from "../features/jobs/service.js";
 import * as proposalsService from "../features/proposals/service.js";
-import { type SourceContextCache } from "../platform/source-context.js";
 import { describeFlowScope } from "../features/retrieve/service.js";
 import type {
   GapClusterMembershipRecord,
@@ -503,18 +502,13 @@ async function draftProposalsForUncoveredClusters(ctx: AppContext, flowId: strin
     coveredClusterIds.add(clusterId);
   }
 
-  // Collect each source set's context once for the whole run; clusters sharing a
-  // flow (and so the same sources) reuse the bytes instead of re-walking the
-  // checkout per draft.
-  const sourceContextCache: SourceContextCache = new Map();
-
   let drafted = 0;
   for (const cluster of active) {
     if (coveredClusterIds.has(cluster.id)) {
       continue;
     }
     try {
-      const outcome = await gapsService.draftFromCluster(ctx, cluster.id, { sourceContextCache });
+      const outcome = await gapsService.draftFromCluster(ctx, cluster.id, {});
       if (outcome.ok) {
         drafted += 1;
         logger.info({ flowId: flowId ?? "default", clusterId: cluster.id, clusterTitle: cluster.title, jobId: outcome.job.id }, "gap reconciler: enqueued draft for cluster");

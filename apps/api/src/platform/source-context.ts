@@ -8,12 +8,6 @@ import { toPosixPath } from "./paths.js";
 import type { RepositoryDeps } from "./repositories.js";
 import { resolveConfiguredRepositoryLocalPath } from "./repositories.js";
 
-// A per-run memo of collected source context, keyed by the resolved source-id set.
-// Collecting a source walks its checkout and reads up to 24 files, and that material
-// is identical for every proposal drawn from the same sources — so a caller drafting
-// (or seeding) in a loop passes one cache through so the sources are read once.
-export type SourceContextCache = Map<string, SourceDataContext[]>;
-
 export async function collectSourceContext(
   deps: RepositoryDeps,
   sourceIds: string[] | undefined
@@ -80,29 +74,6 @@ export async function collectSourceContext(
   }
 
   return contexts;
-}
-
-// Wraps collectSourceContext with the optional per-run memo. The key is the resolved
-// source-id set (sorted, so order can't fragment it); an undefined set means "the
-// configured default sources", which collectSourceContext resolves deterministically,
-// so it caches safely under a stable sentinel key.
-export async function collectSourceContextCached(
-  deps: RepositoryDeps,
-  sourceIds: string[] | undefined,
-  cache: SourceContextCache | undefined
-): Promise<SourceDataContext[]> {
-  if (!cache) {
-    return collectSourceContext(deps, sourceIds);
-  }
-  const key = sourceIds ? [...sourceIds].sort().join("\0") : "\0default";
-  const cached = cache.get(key);
-  if (cached) {
-    logger.debug({ sourceIds: sourceIds?.join(", ") ?? "default", count: cached.length }, "reusing cached source context");
-    return cached;
-  }
-  const collected = await collectSourceContext(deps, sourceIds);
-  cache.set(key, collected);
-  return collected;
 }
 
 function selectSources(

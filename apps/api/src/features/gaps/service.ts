@@ -1,7 +1,6 @@
 import type { GapCandidate, PersistedGapCluster } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import { collectOpenPullRequestContext, draftFromGaps } from "../proposals/service.js";
-import { type SourceContextCache } from "../../platform/source-context.js";
 import { reconcileGaps as runReconcileGaps } from "../../scheduling/gap-reconciler.js";
 
 export async function listCandidates(ctx: AppContext, limit: number): Promise<GapCandidate[]> {
@@ -59,7 +58,7 @@ export async function listClusters(ctx: AppContext, limit: number): Promise<Pers
 export async function draftFromCluster(
   ctx: AppContext,
   clusterId: string,
-  overrides: { targetPath?: string; destinationId?: string; sourceContextCache?: SourceContextCache }
+  overrides: { targetPath?: string; destinationId?: string }
 ) {
   const cluster = await ctx.stores.gapClusters.getCluster(clusterId);
   if (!cluster || cluster.status !== "active") {
@@ -80,7 +79,6 @@ export async function draftFromCluster(
     flowId: cluster.flowId,
     targetPath: overrides.targetPath,
     destinationId: overrides.destinationId,
-    sourceContextCache: overrides.sourceContextCache,
     openPullRequests,
     gapClusterId: clusterId
   });
