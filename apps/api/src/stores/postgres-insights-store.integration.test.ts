@@ -8,14 +8,14 @@ import { PostgresInsightsStore } from "./postgres-insights-store.js";
 const runIntegration = process.env.RUN_PG_INTEGRATION === "1";
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/markdown_magpie";
 
-// A minimal pg-boss-shaped pair of tables (job + archive) in a throwaway schema.
-// The throughput/latency rollups only read `name`, `state`, `created_on` (and
-// `completed_on` for latency), so we replicate just those columns rather than
-// standing up a full pg-boss instance.
+// A minimal pg-boss-shaped `job` table in a throwaway schema. pg-boss v12 keeps
+// finished jobs in `job` until retention purges them (there is no `archive` table),
+// so a single table is a faithful stand-in. The throughput/latency/error rollups
+// only read `name`, `state`, `created_on`, `completed_on`, and `output`, so we
+// replicate just those columns rather than standing up a full pg-boss instance.
 const DDL = (schema: string) => `
   CREATE SCHEMA "${schema}";
-  CREATE TABLE "${schema}".job     (name text, state text, created_on timestamptz, completed_on timestamptz, output jsonb);
-  CREATE TABLE "${schema}".archive (name text, state text, created_on timestamptz, completed_on timestamptz, output jsonb);
+  CREATE TABLE "${schema}".job (name text, state text, created_on timestamptz, completed_on timestamptz, output jsonb);
 `;
 
 test("gapBacklog buckets question_gaps by day", { skip: !runIntegration }, async (t) => {
@@ -45,7 +45,7 @@ test("gapBacklog buckets question_gaps by day", { skip: !runIntegration }, async
   assert.equal(today.resolved, 1);
 });
 
-test("jobThroughput unions job + archive and buckets by state", { skip: !runIntegration }, async (t) => {
+test("jobThroughput buckets job rows by state", { skip: !runIntegration }, async (t) => {
   const schema = `insights_pgboss_test_${process.pid}`;
   const pool = new pg.Pool({ connectionString: databaseUrl });
   t.after(async () => {
@@ -55,17 +55,14 @@ test("jobThroughput unions job + archive and buckets by state", { skip: !runInte
   await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
   await pool.query(DDL(schema));
 
-  // Completed/failed rows have migrated to archive; active/retry are still live in
-  // job. All created "today". A completed row scoped to another queue name exercises
-  // the `type` filter.
+  // Every state — live and finished — lives in the single `job` table. All created
+  // "today". A completed row scoped to another queue name exercises the `type`
+  // filter.
   await pool.query(
     `INSERT INTO "${schema}".job (name, state, created_on) VALUES
        ('answer_question', 'active', now()),
        ('answer_question', 'created', now()),
-       ('answer_question', 'retry', now())`
-  );
-  await pool.query(
-    `INSERT INTO "${schema}".archive (name, state, created_on) VALUES
+       ('answer_question', 'retry', now()),
        ('answer_question', 'completed', now()),
        ('answer_question', 'completed', now()),
        ('answer_question', 'failed', now()),
@@ -79,7 +76,7 @@ test("jobThroughput unions job + archive and buckets by state", { skip: !runInte
   const all = await store.jobThroughput({ from, to, bucket: "day" });
   const today = all.at(-1);
   assert.ok(today);
-  assert.equal(today.completed, 3); // 2 answer_question + 1 other_queue, from archive
+  assert.equal(today.completed, 3); // 2 answer_question + 1 other_queue
   assert.equal(today.failed, 1);
   assert.equal(today.active, 2); // active + created folded together
   assert.equal(today.retry, 1);
@@ -145,7 +142,7 @@ test("answerLatency bins completed answer_question jobs", { skip: !runIntegratio
   for (const bin of bins) assert.ok(bin.count >= 0);
 });
 
-test("jobErrors splits failed job/archive rows by category and job type", { skip: !runIntegration }, async (t) => {
+test("jobErrors splits failed job rows by category and job type", { skip: !runIntegration }, async (t) => {
   const schema = `insights_pgboss_err_test_${process.pid}`;
   const pool = new pg.Pool({ connectionString: databaseUrl });
   t.after(async () => {
@@ -160,10 +157,7 @@ test("jobErrors splits failed job/archive rows by category and job type", { skip
   await pool.query(
     `INSERT INTO "${schema}".job (name, state, created_on, output) VALUES
        ('answer_question__claude', 'failed', now(), '{"category":"provider"}'::jsonb),
-       ('answer_question__claude', 'active', now(), NULL)`
-  );
-  await pool.query(
-    `INSERT INTO "${schema}".archive (name, state, created_on, output) VALUES
+       ('answer_question__claude', 'active', now(), NULL),
        ('answer_question__codex', 'failed', now(), '{"category":"provider"}'::jsonb),
        ('publish_proposal__github', 'failed', now(), '{"category":"external"}'::jsonb),
        ('answer_question__claude', 'completed', now(), NULL)`

@@ -566,9 +566,9 @@ the drop-off between stages the conversion signal.
 ### `GET /api/insights/jobs/throughput?from&to&bucket&type`
 
 Job throughput & health. Buckets pg-boss jobs by their `created_on` timestamp and splits them into
-`completed` / `failed` / `active` / `retry` counts per bucket. pg-boss keeps live rows in
-`"<schema>".job` and migrates completed/failed rows to `"<schema>".archive` after retention, so the
-rollup `UNION ALL`s both tables — otherwise finished jobs would vanish from history. `active` folds
+`completed` / `failed` / `active` / `retry` counts per bucket. pg-boss v12 keeps every job — live and
+finished — in the partitioned `"<schema>".job` table until retention purges it (there is no separate
+`archive` table), so the rollup reads `job` alone. `active` folds
 pg-boss's `created` (queued) and `active` (executing) states together. `type`, when given, narrows to
 a single job type (resolved server-side to that type's pg-boss queue names); an unknown type matches
 nothing.
@@ -584,7 +584,7 @@ nothing.
 Answer-latency histogram (C4). Bins completed answers by how long they took end to end
 into fixed latency ranges. Returns `{ "bins": LatencyBin[] }` (7 fixed bins, `0–5s`
 through `5m+`, always present and zero-filled). Binned by latency range, not time, so it
-takes only the window bounds. Source: pg-boss's own `job` + `archive` tables — completed
+takes only the window bounds. Source: pg-boss's own `job` table — completed
 `answer_question` job rows (`state = 'completed'`), latency = `completed_on - created_on`,
 windowed on `created_on`.
 
@@ -600,7 +600,7 @@ verification outcomes into `closed` vs `stillOpen` overall and per bucket. Sourc
 Job error breakdown (C6). Returns
 `{ "byCategory": JobErrorBreakdown[], "byType": JobErrorBreakdown[] }`, counting failed jobs
 over the window split by error category and by job type (both ordered most-frequent-first).
-Window-only (no time axis). Source: pg-boss's `job` + `archive` tables — failed rows
+Window-only (no time axis). Source: pg-boss's `job` table — failed rows
 (`state = 'failed'`), windowed on `created_on` (enqueue time, matching C2's creation-time
 axis — not failure time). The `JobError` payload pg-boss stores in the
 job's `output` JSONB column supplies the category (`output->>'category'`, falling back to

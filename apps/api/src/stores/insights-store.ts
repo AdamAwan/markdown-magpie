@@ -49,7 +49,7 @@ export interface InsightsStore {
   // per bucket. Source: the gap_closure_verification table.
   verificationSuccess(range: InsightsRange): Promise<VerificationSuccess>;
   // Failed-job counts over the window, grouped by error category and by job type.
-  // Source: pg-boss `job` + `archive` failed rows (error payload in `output`).
+  // Source: pg-boss `job` failed rows (error payload in `output`).
   jobErrors(range: InsightsRange): Promise<JobErrorSplit>;
   // Review-cycle compliance snapshot of the active KB. Source: `documents`
   // (`last_verified` + `review_cycle_days`) and `source_sync_state.last_checked_at`.
