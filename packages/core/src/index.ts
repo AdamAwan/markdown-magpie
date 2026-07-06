@@ -616,7 +616,12 @@ export interface DraftMarkdownProposalJobInput {
   // weak. Present only on a resubmission, so the drafter can see why its earlier
   // attempt did not close the gap and address the specific shortfall this time.
   resubmissionNotes?: string[];
-  sourceContext?: SourceDataContext[];
+  // References to the flow's configured sources the drafter is grounded in — the
+  // executing agent explores these checkouts directly (see the source-agentic
+  // grounding spec). Replaces the old inline sourceContext file sample. git/local
+  // resolve to traversable workspaces on the watcher; internet/agent render as
+  // prompt notes only. Empty when the flow has no configured sources.
+  sources: SourceDescriptor[];
   // The flow's already in-flight proposals and currently open pull requests, so
   // the drafter is aware of work it should build on or avoid duplicating rather
   // than drafting in a vacuum. Optional and defaults to absent.

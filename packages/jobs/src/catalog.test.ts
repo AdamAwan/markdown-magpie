@@ -7,6 +7,7 @@ import {
   answerQuestionInputSchema,
   answerQuestionOutputSchema,
   crosslinkPullRequestsInputSchema,
+  draftMarkdownProposalInputSchema,
   draftSeedDocumentInputSchema,
   jobDefinition,
   jobTypesForCapability,
@@ -427,6 +428,30 @@ test("draft_seed_document input carries source descriptors, not inline content",
   assert.equal(draftSeedDocumentInputSchema.safeParse(input).success, true);
   const legacy = { provider: "openai-compatible", flowId: "flow-1", coverage: ["x"], sourceContext: [] };
   assert.equal(draftSeedDocumentInputSchema.safeParse(legacy).success, false);
+});
+
+test("draft_markdown_proposal input carries source descriptors, not inline content", () => {
+  const input = {
+    provider: "openai-compatible",
+    gapSummaries: ["how refunds are processed"],
+    triggeringQuestions: ["What is the refund window?"],
+    evidence: [],
+    sources: [
+      { id: "src-1", name: "Product repo", kind: "git", url: "https://example.com/repo.git", subpath: "Docs" },
+      { id: "src-2", name: "Agent knowledge", kind: "agent" }
+    ],
+    expectedOutput: "markdown_proposal"
+  };
+  assert.equal(draftMarkdownProposalInputSchema.safeParse(input).success, true);
+  const legacy = {
+    provider: "openai-compatible",
+    gapSummaries: ["x"],
+    triggeringQuestions: [],
+    evidence: [],
+    sourceContext: [],
+    expectedOutput: "markdown_proposal"
+  };
+  assert.equal(draftMarkdownProposalInputSchema.safeParse(legacy).success, false);
 });
 
 test("fold_markdown_proposal is a provider AI job; comment_pull_request is github", () => {
