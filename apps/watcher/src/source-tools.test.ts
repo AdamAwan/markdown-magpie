@@ -126,6 +126,25 @@ describe("tools", () => {
     await assert.rejects(readFile(workspaces, "s1/docs.md", budget), SourceToolError);
   });
 
+  it("surfaces the errno code, not the absolute host path, on fs failures", async () => {
+    const { root, workspaces } = fixture();
+    const budget: ToolBudget = { remainingBytes: 1000 };
+    // A not-found read is a routine exploration action; its error is rendered to
+    // the model and sent to the provider, so it must not leak the checkout path.
+    await assert.rejects(readFile(workspaces, "s1/does-not-exist.md", budget), (error: unknown) => {
+      assert.ok(error instanceof SourceToolError);
+      assert.match(error.message, /ENOENT/);
+      assert.doesNotMatch(error.message, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      return true;
+    });
+    // list_dir on a missing directory must not leak the path either.
+    await assert.rejects(listDir(workspaces, "s1/no-such-dir"), (error: unknown) => {
+      assert.ok(error instanceof SourceToolError);
+      assert.doesNotMatch(error.message, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      return true;
+    });
+  });
+
   it("marks truncated listings but not complete ones", async () => {
     const { root, workspaces } = fixture();
     mkdirSync(path.join(root, "many"));

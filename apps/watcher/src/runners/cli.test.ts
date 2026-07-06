@@ -380,7 +380,10 @@ describe("CliRunner source-grounded seeding", () => {
     // need no flags — the prompt lists their roots instead.
     const promptArg = call.args.at(-1) ?? "";
     assert.match(promptArg, /\/checkouts\/s2/);
-    assert.equal(call.args.includes("--"), false);
+    // codex's prompt is a bare clap positional; `--` (honoured by clap) sits
+    // immediately before it so a prompt beginning with `-`/`--` cannot be
+    // misparsed as a flag or subcommand.
+    assert.equal(call.args.at(-2), "--");
   });
 
   it("keeps the plain generative path for seed jobs with only non-fs sources", async () => {
@@ -407,5 +410,37 @@ describe("CliRunner source-grounded seeding", () => {
     assert.equal(call.cwd, undefined);
     assert.equal(call.args.includes("--tools"), false);
     assert.equal(call.args.includes("--"), false);
+  });
+
+  it("escalates SIGTERM to SIGKILL when a source-grounded run times out", async () => {
+    const signals: NodeJS.Signals[] = [];
+    // A hung agent: records the kill signals it receives and never exits, so the
+    // grace-window SIGKILL is the only thing that can reap it.
+    const hangingSpawn: CliSpawn = () => {
+      const child = new FakeChild();
+      child.kill = (signal?: NodeJS.Signals): boolean => {
+        signals.push(signal ?? "SIGTERM");
+        return true;
+      };
+      return child;
+    };
+    const runner = new CliRunner({
+      capability: "claude",
+      command: "claude",
+      args: ["-p"],
+      promptMode: "arg",
+      api: fakeApi(),
+      agenticTimeoutMs: 10,
+      cancelGraceMs: 10,
+      prepareWorkspaces: async () => ({
+        workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }],
+        notes: []
+      }),
+      spawnOverride: hangingSpawn
+    });
+    await assert.rejects(runner.run(seedJob("claude"), new AbortController().signal), /timed out/);
+    // Wait past the grace window so the escalation timer fires.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
   });
 });

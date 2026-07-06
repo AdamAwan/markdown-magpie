@@ -64,8 +64,16 @@ function safeRealpath(candidate: string): string {
   }
 }
 
+// Node fs errors embed the ABSOLUTE host path in their `.message` (e.g.
+// "ENOENT: no such file or directory, stat '/srv/checkouts/<sha>/x.md'"). These
+// reasons are rendered into model-visible tool-error strings and sent to the
+// provider on the next turn, so surface only the errno `code` — never the raw
+// message. The model-supplied path is echoed by the caller for context.
 function reasonOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error && "code" in error && typeof error.code === "string") {
+    return error.code;
+  }
+  return "read failed";
 }
 
 export async function listDir(workspaces: SourceWorkspace[], requested: string): Promise<string> {

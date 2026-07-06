@@ -149,14 +149,15 @@ export class CliRunner {
   //   NOT sufficient — it only pre-approves, and Bash still executed in a live
   //   test. `--disallowedTools Write,Edit,NotebookEdit,Bash` is defence in depth
   //   on top of --tools. Extra workspaces need a repeated `--add-dir <dir>` each.
-  // - codex (verified from openai/codex source at 0.142.5, 2026-07-06 — NOT
-  //   executed locally; flagged in the PR as needing a deploy-environment check):
-  //   `--sandbox read-only` is the explicit spelling (the default, but
+  // - codex (spellings verified LIVE via `codex exec --help` on codex-cli 0.142.3,
+  //   2026-07-06): `--sandbox read-only` is the explicit spelling (the default, but
   //   ~/.codex/config.toml can override it, so pass it always).
   //   `--skip-git-repo-check` because codex exec refuses to run in a non-git
   //   directory and local-kind source workspaces need not be git repos. Read-only
   //   mode does not confine reads to cwd, so extra workspaces need no flags —
-  //   they are listed in the prompt.
+  //   they are listed in the prompt. NOTE: codex read-only is enforced by an OS
+  //   sandbox (Landlock/seatbelt); a deploy platform lacking it silently downgrades
+  //   write protection — flagged in the PR as needing a deploy-environment check.
   private readOnlyArgs(prepared: PreparedSources): string[] {
     if (this.capability === "claude") {
       const extraDirs = prepared.workspaces.slice(1).flatMap((ws) => ["--add-dir", ws.rootDir]);
@@ -186,11 +187,15 @@ export class CliRunner {
 
       const extraArgs = opts?.extraArgs ?? [];
       // Extra args go AFTER `--model` (whose single value must not be swallowed
-      // by a trailing variadic flag) and, for claude in arg mode, are terminated
-      // with `--`: claude's `--tools`/`--add-dir` are variadic and would swallow
-      // a positional prompt without it. Structural here — not left to the extra
-      // args' builder — so the extras can never detach from the prompt.
-      const terminator = this.capability === "claude" && this.promptMode === "arg" && extraArgs.length > 0 ? ["--"] : [];
+      // by a trailing variadic flag) and, in arg mode, are terminated with `--`
+      // before the positional prompt. claude's `--tools`/`--add-dir` are variadic
+      // and would swallow the prompt without it; codex's prompt is a bare clap
+      // positional that a leading `-`/`--` in the prompt text would misparse as a
+      // flag — `--` (honoured by clap) forecloses both. Structural here — not left
+      // to the extra args' builder — so the extras can never detach from the
+      // prompt. Only the source-grounded path passes extraArgs, so the plain
+      // generative path (extraArgs empty) is unaffected.
+      const terminator = this.promptMode === "arg" && extraArgs.length > 0 ? ["--"] : [];
       const modelArgs = this.model ? ["--model", this.model] : [];
       const baseArgs = [...this.args, ...modelArgs, ...extraArgs, ...terminator];
       const args = this.promptMode === "arg" ? [...baseArgs, prompt] : baseArgs;
@@ -206,7 +211,11 @@ export class CliRunner {
 
       const timeoutMs = opts?.timeoutMs ?? this.timeoutMs;
       const timeout = setTimeout(() => {
+        // Escalate exactly as the abort path does: a hung agent that ignores
+        // SIGTERM (or whose exit stalls) is force-killed after the grace window
+        // rather than left orphaned consuming API tokens until the host reaps it.
         child.kill("SIGTERM");
+        forceKillTimer = setTimeout(() => child.kill("SIGKILL"), this.cancelGraceMs);
         reject(new Error(`Agent CLI timed out after ${timeoutMs}ms`));
       }, timeoutMs);
 
