@@ -75,9 +75,10 @@ resolvePrimaryBranch({ configuredBranch, detectedDefault, detectedCurrent }): st
 
 `nonEmpty` trims and treats `""`/whitespace as absent.
 
-**Location:** `@magpie/core` (it operates on plain strings and is consumed by `@magpie/git`,
-`apps/api`, and `apps/watcher`; core is the shared dependency with no cycles). If core is
-an awkward fit at implementation time, `@magpie/git` is the fallback home.
+**Location (as built):** `@magpie/git` (`packages/git/src/primary-branch.ts`). It is a
+git-domain concept, `@magpie/git` already has a unit-test runner, and every consumer
+(`apps/api`, `apps/watcher`) already depends on `@magpie/git` — so this needs no new test
+harness and introduces no dependency cycle.
 
 ### 2. `RepositoryRef.defaultBranch` becomes the authoritative carrier
 
@@ -97,10 +98,13 @@ is always a real, config-aware branch name — never empty, never a bare guess.
   authoritative.
 - **PR base** (`apps/watcher/src/runners/publication.ts:216`): use
   `repository.defaultBranch` instead of its own `|| ... || "main"` chain.
-- **Merge / reject** (`apps/api/src/features/proposals/service.ts:797,866`): use the
-  proposal's already-resolved `repository.defaultBranch`. It is already threaded into the
-  execution-context repository view (`service.ts:1072-1073`), so the merge/reject helpers
-  read that instead of `destination.branch?.trim() || "main"`.
+- **Merge / reject** (`apps/api/src/features/proposals/service.ts:797,866`): resolve via
+  `resolveLocalGitTargetBranch(repoPath, destination.branch)` (a `@magpie/git` helper)
+  instead of `destination.branch?.trim() || "main"`. These paths operate directly on the
+  **origin `file://` repo** (not the indexed clone), so the helper resolves through the
+  same `resolvePrimaryBranch` precedence using that repo's own `origin/HEAD` / current
+  branch as detection — guaranteeing it picks the same branch the review branch was cut
+  from.
 
 ### 4. Fail loudly on a non-existent branch
 
