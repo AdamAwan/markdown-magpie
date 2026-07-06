@@ -7,7 +7,7 @@ import { usePathname } from "next/navigation";
 import { useAuth0 } from "@auth0/auth0-react";
 import { ConsoleSection, UiMessage } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
-import { sectionSubtitle, sectionTitle } from "../lib/console";
+import { isActiveJob, sectionSubtitle, sectionTitle } from "../lib/console";
 import { SECTION_NAV, sectionFromPath } from "../lib/sections";
 import { AttentionPanel, NavButton } from "./common";
 import { BuildStatus } from "./BuildStatus";
@@ -315,9 +315,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         ask: questions.length,
         knowledge: stats.sectionCount,
         gaps: gaps.length,
-        jobs: jobs.length,
+        jobs: jobs.filter((job) => isActiveJob(job) || job.state === "failed").length,
         proposals: proposals.length,
-        activity: maintenanceRuns.length,
+        activity: maintenanceRuns.filter((run) => run.status === "running").length,
         schedules: scheduledTasks.length,
         prompts: prompts.length
       }
