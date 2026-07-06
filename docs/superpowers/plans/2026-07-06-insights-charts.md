@@ -40,7 +40,7 @@
 - `apps/api/src/app.ts` — register `api.route("/insights", insightsRoutes(ctx))`.
 
 **Core (modified):**
-- `packages/core/src/index.ts` — add insights response types (`TimeBucket`, `GapBacklogBucket`, `JobThroughputBucket`, `FunnelStage`, `LatencyBin`, `VerificationSummary`, `JobErrorBreakdown`, `FreshnessSummary`, `PatrolImpact`, `WorkerUtilBucket`).
+- `packages/core/src/index.ts` — add insights response types (`InsightsBucketUnit`, `GapBacklogBucket`, `JobThroughputBucket`, `FunnelStage`, `LatencyBin`, `VerificationSummary`, `VerificationBucket`, `JobErrorBreakdown`, `DocumentFreshness`, `SourceFreshness`, `FreshnessSummary`, `PatrolImpact`). `WorkerUtilBucket` was **not** added — C9 dropped (no durable heartbeat samples).
 
 **Web (new):**
 - `apps/web/src/app/insights/page.tsx` — the Insights page (page-local fetch).
@@ -313,8 +313,13 @@ Each is one task = one endpoint (SQL rollup + integration test) + one component 
 ### Task 12: Maintenance patrol impact (C8)
 - `GET /insights/patrols?from&to` → `{ runs: PatrolImpact[] }` where `PatrolImpact = { taskType: string; runs: number; findings: number; proposals: number }`. From `maintenance_runs` (`task_type`, `details` JSONB). Recharts grouped `BarChart`.
 
-### Task 13: Worker utilisation (C9) — CONDITIONAL
-- **First** confirm the watcher persists heartbeat samples (`lastSeenAt`/`currentJobId`) durably enough for a time-series. If NOT, **drop this task** — do not add a sampling table (spec §C9 decision). If yes: `GET /insights/workers?from&to&bucket` → `{ series: WorkerUtilBucket[] }` where `WorkerUtilBucket = { bucketStart: string; workerName: string; busyRatio: number }`. Recharts line-per-worker.
+### Task 13: Worker utilisation (C9) — DROPPED (no durable heartbeat samples)
+- **Resolved:** dropped. The only heartbeat store is `watcher_registrations`
+  (`0025_watcher_registry.sql`), an upsert-per-heartbeat latest-state table (one row
+  per watcher, `last_seen_at` / `current_job_id`, stale rows pruned on read) — not a
+  durable sample series. Building a busy-ratio-over-time chart would require a new
+  sampling table, which the spec's §10.2 locked decision rules out. No endpoint,
+  store method, `WorkerUtilBucket` type, or component was built; no data fabricated.
 
 ---
 

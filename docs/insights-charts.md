@@ -1,6 +1,6 @@
 # Insights & Charts — Specification
 
-**Status:** Draft (spec — not yet a task-by-task implementation plan)
+**Status:** Implemented (C1–C8). C9 dropped — see §C9 and §10.2.
 **Date:** 2026-07-06
 **Owner:** Adam
 
@@ -130,14 +130,19 @@ data. Data inventory confirmed against the schema (see the tables named below).
 - **Endpoint:** `GET /insights/patrols?from&to` → `{ runs: PatrolImpact[] }`.
 - **Source:** `maintenance_runs` (`task_type`, `details` JSONB, timestamps).
 
-**C9. Worker utilisation** *(Recharts, time-series)* — **conditional**
+**C9. Worker utilisation** *(Recharts, time-series)* — **DROPPED (no durable heartbeat samples)**
 - **Question:** Are workers saturated or idle?
 - **Data:** busy ratio per worker over time (fraction of samples with an active job).
-- **Endpoint:** `GET /insights/workers?from&to&bucket` → `{ series: WorkerUtilBucket[] }`.
+- **Endpoint (not built):** `GET /insights/workers?from&to&bucket` → `{ series: WorkerUtilBucket[] }`.
 - **Source:** watcher/worker heartbeat data (`lastSeenAt`, `currentJobId`).
-- **Decision:** if the watcher does **not** already persist heartbeat samples
-  durably enough to build a time-series, **drop this chart** — we will not add a
-  new sampling table for it in this work. Confirm during Phase 3; ditch if absent.
+- **Decision (resolved):** dropped per the locked conditional. The only heartbeat
+  store is `watcher_registrations` (migration `0025_watcher_registry.sql`), which
+  the API **upserts** one row per watcher on every claim/heartbeat and prunes stale
+  rows on read — it holds only each watcher's *latest* `last_seen_at` /
+  `current_job_id`, not a durable time-series of samples. A busy-ratio-over-time
+  chart would require a new sampling table, which §10.2 explicitly rules out for
+  this work. No endpoint, store method, or component was built, and no data was
+  fabricated.
 
 ## 7. Delivery phases
 

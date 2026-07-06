@@ -595,10 +595,42 @@ Verification success rate (C5). Returns
 verification outcomes into `closed` vs `stillOpen` overall and per bucket. Source: the
 `gap_closure_verification` table (`verdict` ∈ `closed` / `still_open`, `created_at`).
 
+### `GET /api/insights/jobs/errors?from&to`
+
+Job error breakdown (C6). Returns
+`{ "byCategory": JobErrorBreakdown[], "byType": JobErrorBreakdown[] }`, counting failed jobs
+over the window split by error category and by job type (both ordered most-frequent-first).
+Window-only (no time axis). Source: pg-boss's `job` + `archive` tables — failed rows
+(`state = 'failed'`), windowed on `created_on`. The `JobError` payload pg-boss stores in the
+job's `output` JSONB column supplies the category (`output->>'category'`, falling back to
+`unknown`); the queue `name` supplies the job type after its `__<capability>` fan-out suffix
+is stripped (`split_part(name, '__', 1)`).
+
+### `GET /api/insights/freshness`
+
+Knowledge-base freshness (C7). A point-in-time snapshot, so it takes no query params. Returns
+`{ "documents": DocumentFreshness, "sources": SourceFreshness }`. `documents` classifies each
+active document that carries a review cadence (`review_cycle_days IS NOT NULL`) by its next
+review date (`last_verified + review_cycle_days`): `overdue` (past due, or never verified),
+`due` (within 7 days), `fresh` (further out). `sources` splits every `source_sync_state` row
+by `last_checked_at`: `stale` if not synced for 7 days, else `fresh`. Source: `documents`
+(`status`, `last_verified`, `review_cycle_days`) and `source_sync_state` (`last_checked_at`).
+
+### `GET /api/insights/patrols?from&to`
+
+Maintenance patrol impact (C8). Returns `{ "runs": PatrolImpact[] }`, one row per
+`maintenance_runs.task_type` over the window (windowed on `started_at`). `runs` counts
+executions; `findings` sums the verify-lens findings patrol runs record (`details.findings`
+JSONB array length); `proposals` sums the proposals the gap→PR reconciler drafts
+(`details.proposalsDrafted`). A task type only contributes to the metric its runs actually
+record; the other stays zero. Source: `maintenance_runs` (`task_type`, `details` JSONB,
+`started_at`).
+
 ## Type Reference
 
 The response shapes referenced above (`AnswerResult`, `Citation`, `DocumentSection`,
 `KnowledgeDocument`, `RepositoryRef`, `QuestionLog`, `GapCandidate`, `Proposal`,
 `ProposalPublication`, `GapBacklogBucket`, `LatencyBin`, `VerificationSummary`,
-`VerificationBucket`) are defined in `packages/core/src/index.ts`. The `Job` shape
-(`JobView`) is defined in `packages/jobs/src/types.ts`.
+`VerificationBucket`, `JobErrorBreakdown`, `DocumentFreshness`, `SourceFreshness`,
+`FreshnessSummary`, `PatrolImpact`) are defined in `packages/core/src/index.ts`. The `Job`
+shape (`JobView`) is defined in `packages/jobs/src/types.ts`.
