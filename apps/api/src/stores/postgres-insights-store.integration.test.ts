@@ -14,8 +14,8 @@ const databaseUrl = process.env.DATABASE_URL ?? "postgres://postgres:postgres@lo
 // standing up a full pg-boss instance.
 const DDL = (schema: string) => `
   CREATE SCHEMA "${schema}";
-  CREATE TABLE "${schema}".job     (name text, state text, created_on timestamptz, completed_on timestamptz);
-  CREATE TABLE "${schema}".archive (name text, state text, created_on timestamptz, completed_on timestamptz);
+  CREATE TABLE "${schema}".job     (name text, state text, created_on timestamptz, completed_on timestamptz, output jsonb);
+  CREATE TABLE "${schema}".archive (name text, state text, created_on timestamptz, completed_on timestamptz, output jsonb);
 `;
 
 test("gapBacklog buckets question_gaps by day", { skip: !runIntegration }, async (t) => {
@@ -143,4 +143,117 @@ test("answerLatency bins completed answer_question jobs", { skip: !runIntegratio
   assert.equal(bins[0]?.label, "0–5s");
   assert.equal(bins.at(-1)?.to, null);
   for (const bin of bins) assert.ok(bin.count >= 0);
+});
+
+test("jobErrors splits failed job/archive rows by category and job type", { skip: !runIntegration }, async (t) => {
+  const schema = `insights_pgboss_err_test_${process.pid}`;
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  t.after(async () => {
+    await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await pool.end();
+  });
+  await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+  await pool.query(DDL(schema));
+
+  // Failed rows carry the JobError payload in `output`; the queue `name` is
+  // `<type>__<capability>` for fan-out queues. A completed row must be ignored.
+  await pool.query(
+    `INSERT INTO "${schema}".job (name, state, created_on, output) VALUES
+       ('answer_question__claude', 'failed', now(), '{"category":"provider"}'::jsonb),
+       ('answer_question__claude', 'active', now(), NULL)`
+  );
+  await pool.query(
+    `INSERT INTO "${schema}".archive (name, state, created_on, output) VALUES
+       ('answer_question__codex', 'failed', now(), '{"category":"provider"}'::jsonb),
+       ('publish_proposal__github', 'failed', now(), '{"category":"external"}'::jsonb),
+       ('answer_question__claude', 'completed', now(), NULL)`
+  );
+
+  const store = new PostgresInsightsStore(pool, schema);
+  const to = new Date();
+  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const { byCategory, byType } = await store.jobErrors({ from, to, bucket: "day" });
+
+  // 3 failed rows: 2 provider + 1 external.
+  assert.deepEqual(byCategory, [
+    { key: "provider", count: 2 },
+    { key: "external", count: 1 }
+  ]);
+  // Fan-out suffix stripped: answer_question (2) + publish_proposal (1).
+  assert.deepEqual(byType, [
+    { key: "answer_question", count: 2 },
+    { key: "publish_proposal", count: 1 }
+  ]);
+});
+
+test("freshness classifies documents by review cadence and sources by last sync", { skip: !runIntegration }, async (t) => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  t.after(() => pool.end());
+  const store = new PostgresInsightsStore(pool, "pgboss");
+
+  const repoId = "insights-test-repo";
+  await pool.query("DELETE FROM documents WHERE repository_id = $1", [repoId]);
+  await pool.query("DELETE FROM repositories WHERE id = $1", [repoId]);
+  await pool.query(
+    `INSERT INTO repositories (id, name, default_branch, local_path, provider)
+     VALUES ($1, 'r', 'main', '/tmp/r', 'local') ON CONFLICT (id) DO NOTHING`,
+    [repoId]
+  );
+  // fresh: verified today, 30-day cycle. due: verified 28 days ago, 30-day cycle
+  // (next review in 2 days, inside the 7-day soon-window). overdue: verified 60
+  // days ago, 30-day cycle. no-cadence doc is excluded.
+  await pool.query(
+    `INSERT INTO documents (id, repository_id, path, title, status, last_verified, review_cycle_days, content) VALUES
+       ('insights-doc-fresh',   $1, 'a.md', 'a', 'active', current_date,             30, '#'),
+       ('insights-doc-due',     $1, 'b.md', 'b', 'active', current_date - 28,        30, '#'),
+       ('insights-doc-overdue', $1, 'c.md', 'c', 'active', current_date - 60,        30, '#'),
+       ('insights-doc-nocycle', $1, 'd.md', 'd', 'active', current_date,           NULL, '#')`,
+    [repoId]
+  );
+
+  const sourceId = "insights-test-source";
+  await pool.query("DELETE FROM source_sync_state WHERE source_id = $1", [sourceId]);
+  await pool.query(
+    `INSERT INTO source_sync_state (flow_id, source_id, last_sha, last_checked_at) VALUES
+       ('insights-flow-a', $1, 'sha1', now()),
+       ('insights-flow-b', $1, 'sha2', now() - interval '30 days')`,
+    [sourceId]
+  );
+
+  const result = await store.freshness();
+  assert.ok(result.documents.fresh >= 1);
+  assert.ok(result.documents.due >= 1);
+  assert.ok(result.documents.overdue >= 1);
+  assert.ok(result.sources.fresh >= 1);
+  assert.ok(result.sources.stale >= 1);
+});
+
+test("patrolImpact aggregates findings and proposals per task type", { skip: !runIntegration }, async (t) => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  t.after(() => pool.end());
+  const store = new PostgresInsightsStore(pool, "pgboss");
+
+  await pool.query("DELETE FROM maintenance_runs WHERE id LIKE 'insights-test-mr-%'");
+  await pool.query(
+    `INSERT INTO maintenance_runs (id, task_type, trigger, status, summary, details, started_at) VALUES
+       ('insights-test-mr-1', 'correctness_patrol', 'scheduled', 'completed', 's',
+         '{"findings":[{"path":"a"},{"path":"b"}]}'::jsonb, now()),
+       ('insights-test-mr-2', 'correctness_patrol', 'scheduled', 'completed', 's',
+         '{"findings":[{"path":"c"}]}'::jsonb, now()),
+       ('insights-test-mr-3', 'process_gaps_to_pull_requests', 'scheduled', 'completed', 's',
+         '{"proposalsDrafted":4}'::jsonb, now())`
+  );
+
+  const to = new Date();
+  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const runs = await store.patrolImpact({ from, to, bucket: "day" });
+
+  const patrol = runs.find((row) => row.taskType === "correctness_patrol");
+  assert.ok(patrol);
+  assert.ok(patrol.runs >= 2);
+  assert.ok(patrol.findings >= 3);
+
+  const gapToPr = runs.find((row) => row.taskType === "process_gaps_to_pull_requests");
+  assert.ok(gapToPr);
+  assert.ok(gapToPr.proposals >= 4);
 });
