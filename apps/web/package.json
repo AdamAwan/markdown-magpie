@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev -p 3000",
+    "dev": "next dev",
     "build": "next build",
     "start": "next start -p 3000",
     "test": "TSX_TSCONFIG_PATH=tsconfig.test.json node --import tsx --test \"src/**/*.test.tsx\"",
