@@ -1311,11 +1311,39 @@ export interface JobThroughputBucket {
   retry: number;
 }
 
-// One stage of the gap-to-merge funnel, in pipeline order.
-export interface FunnelStage {
-  key: "questions" | "gaps" | "clustered" | "proposals" | "prs" | "merged" | "verified";
+// The branching question-journey Sankey. A directed graph of the path a question
+// takes — from being asked (and how confidently it was answered) through gaps,
+// clusters, proposals, and merge/verification outcomes — where each link's value
+// is a real count and the branches show where volume leaks at each stage.
+//
+// The unit of flow shifts across the graph: question → gap → proposal. This is
+// inherent (one question can raise many gaps; one cluster can yield many
+// proposals) and is labelled on the chart. Each segment is internally conserved:
+// widths within a segment sum consistently; only the marked segment boundaries
+// change unit.
+export type JourneySegment = "answer" | "gap" | "proposal" | "verify";
+
+// One node of the journey graph. `key` is a stable identifier used as a link
+// endpoint; `segment` drives colouring and the unit-boundary captions.
+export interface JourneyNode {
+  key: string;
   label: string;
-  count: number;
+  segment: JourneySegment;
+}
+
+// One directed link, sized by `value` (a real count). `source`/`target` are node
+// keys. Only links with value > 0 are emitted, so empty segments collapse.
+export interface JourneyLink {
+  source: string;
+  target: string;
+  value: number;
+}
+
+// The full journey Sankey payload: draw-order nodes plus positive-value links.
+// Only nodes referenced by at least one link are included.
+export interface JourneySankey {
+  nodes: JourneyNode[];
+  links: JourneyLink[];
 }
 
 // One bar of the answer-latency histogram (C4). Buckets completed answer_question

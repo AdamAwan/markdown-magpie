@@ -14,6 +14,19 @@ test("GET /api/insights/gaps/backlog returns an empty series under the null stor
   assert.deepEqual(await res.json(), { series: [] });
 });
 
+test("GET /api/insights/journey returns an empty graph envelope under the null store", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/insights/journey");
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { nodes: [], links: [] });
+});
+
+test("GET /api/insights/journey rejects a malformed from", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/insights/journey?from=not-a-date");
+  assert.equal(res.status, 400);
+});
+
 test("GET /api/insights/answers/latency returns an empty bins envelope", async () => {
   const app = buildApp(makeTestContext());
   const res = await app.request("/api/insights/answers/latency");

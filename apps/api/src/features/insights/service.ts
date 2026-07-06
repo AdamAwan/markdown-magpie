@@ -1,8 +1,8 @@
 import type {
   FreshnessSummary,
-  FunnelStage,
   GapBacklogBucket,
   JobThroughputBucket,
+  JourneySankey,
   LatencyBin,
   PatrolImpact
 } from "@magpie/core";
@@ -35,8 +35,8 @@ export async function gapBacklog(ctx: AppContext, query: InsightsRangeQuery): Pr
   return ctx.stores.insights.gapBacklog(resolveRange(query), query.flow);
 }
 
-export async function funnel(ctx: AppContext, query: InsightsRangeQuery): Promise<FunnelStage[]> {
-  return ctx.stores.insights.funnel(resolveRange(query), query.flow);
+export async function journey(ctx: AppContext, query: InsightsRangeQuery): Promise<JourneySankey> {
+  return ctx.stores.insights.journey(resolveRange(query), query.flow);
 }
 
 // Resolve an optional job-type filter to the pg-boss queue names that type's work

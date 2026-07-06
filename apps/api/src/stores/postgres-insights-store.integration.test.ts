@@ -125,6 +125,80 @@ test("verificationSuccess splits gap_closure_verification by verdict", { skip: !
   assert.ok(today, "expected at least one zero-filled bucket");
 });
 
+test("journey builds the branching Sankey from real domain rows", { skip: !runIntegration }, async (t) => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  t.after(() => pool.end());
+  const store = new PostgresInsightsStore(pool, "pgboss");
+
+  // Isolate the fixture with a dedicated flow_id so the flow-scoped query ignores
+  // whatever else lives in the shared database.
+  const flow = "insights-journey-test";
+  const proposalId = "insights-journey-p1";
+  await pool.query("DELETE FROM proposals WHERE flow_id = $1", [flow]);
+  await pool.query(
+    "DELETE FROM question_gaps WHERE question_id IN (SELECT id FROM questions WHERE flow_id = $1)",
+    [flow]
+  );
+  await pool.query("DELETE FROM gap_clusters WHERE flow_id = $1", [flow]);
+  await pool.query("DELETE FROM questions WHERE flow_id = $1", [flow]);
+
+  // Two high-confidence questions (one raises a gap, one does not) and one
+  // low-confidence question that raises a gap.
+  await pool.query(
+    `INSERT INTO questions (id, question, chat_provider, confidence, flow_id, asked_at) VALUES
+       ('ijq1', 'q', 'mock', 'high', $1, now()),
+       ('ijq2', 'q', 'mock', 'low',  $1, now()),
+       ('ijq3', 'q', 'mock', 'high', $1, now())`,
+    [flow]
+  );
+  await pool.query(
+    "INSERT INTO question_gaps (question_id, summary, created_at, dismissed_at) VALUES ('ijq1','a',now(),now())"
+  );
+  const clustered = await pool.query<{ id: string }>(
+    "INSERT INTO question_gaps (question_id, summary, created_at) VALUES ('ijq2','b',now()) RETURNING id"
+  );
+
+  const cluster = await pool.query<{ id: string }>(
+    "INSERT INTO gap_clusters (flow_id, title, status) VALUES ($1, 'c', 'active') RETURNING id",
+    [flow]
+  );
+  await pool.query(
+    "INSERT INTO gap_cluster_memberships (cluster_id, gap_id, active) VALUES ($1, $2, true)",
+    [cluster.rows[0].id, clustered.rows[0].id]
+  );
+  await pool.query(
+    `INSERT INTO proposals (id, title, status, target_path, markdown, gap_cluster_id, closure_status, flow_id, created_at)
+     VALUES ($1, 't', 'merged', 'p.md', '#', $2, 'verified_closed', $3, now())`,
+    [proposalId, cluster.rows[0].id, flow]
+  );
+
+  const to = new Date();
+  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const { nodes, links } = await store.journey({ from, to, bucket: "day" }, flow);
+
+  const value = (source: string, target: string): number =>
+    links.find((link) => link.source === source && link.target === target)?.value ?? 0;
+
+  assert.equal(value("questions", "conf_high"), 2);
+  assert.equal(value("questions", "conf_low"), 1);
+  assert.equal(value("conf_high", "no_gap"), 1); // ijq3 answered without a gap
+  assert.equal(value("conf_high", "gaps"), 1); // ijq1's gap
+  assert.equal(value("conf_low", "gaps"), 1); // ijq2's gap
+  assert.equal(value("gaps", "gap_dismissed"), 1);
+  assert.equal(value("gaps", "clustered"), 1);
+  assert.equal(value("clustered", "proposals"), 1);
+  assert.equal(value("proposals", "merged"), 1);
+  assert.equal(value("merged", "v_closed"), 1);
+
+  // Only positive links survive, and every node they reference is present.
+  assert.ok(links.every((link) => link.value > 0));
+  const keys = new Set(nodes.map((node) => node.key));
+  for (const link of links) {
+    assert.ok(keys.has(link.source));
+    assert.ok(keys.has(link.target));
+  }
+});
+
 test("answerLatency bins completed answer_question jobs", { skip: !runIntegration }, async (t) => {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   t.after(() => pool.end());

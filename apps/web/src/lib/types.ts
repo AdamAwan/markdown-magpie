@@ -277,7 +277,10 @@ export type {
 export type {
   GapBacklogBucket,
   JobThroughputBucket,
-  FunnelStage,
+  JourneyNode,
+  JourneyLink,
+  JourneySankey,
+  JourneySegment,
   InsightsBucketUnit,
   LatencyBin,
   VerificationSummary,

@@ -4,7 +4,7 @@ import "@xyflow/react/dist/style.css";
 import { Workbench, Button, Row } from "../../components/ui";
 import { ChartCard } from "../../components/insights/ChartCard";
 import { GapBacklogChart } from "../../components/insights/GapBacklogChart";
-import { GapFunnelChart } from "../../components/insights/GapFunnelChart";
+import { QuestionJourneyChart } from "../../components/insights/QuestionJourneyChart";
 import { JobThroughputChart } from "../../components/insights/JobThroughputChart";
 import { JobErrorBreakdownChart } from "../../components/insights/JobErrorBreakdownChart";
 import { LatencyHistogramChart } from "../../components/insights/LatencyHistogramChart";
@@ -14,7 +14,7 @@ import { PatrolImpactChart } from "../../components/insights/PatrolImpactChart";
 import {
   useAnswerLatency,
   useFreshness,
-  useFunnel,
+  useJourney,
   useGapBacklog,
   useJobErrors,
   useJobThroughput,
@@ -24,7 +24,7 @@ import {
 
 export default function InsightsPage() {
   const backlog = useGapBacklog();
-  const funnel = useFunnel();
+  const journey = useJourney();
   const throughput = useJobThroughput();
   const latency = useAnswerLatency();
   const verification = useVerificationSuccess();
@@ -39,9 +39,9 @@ export default function InsightsPage() {
     backlog.data.length === 0 ||
     backlog.data.every((b) => b.opened + b.resolved + b.dismissed + b.parked === 0);
 
-  // The funnel is empty when every stage is zero — no pipeline activity in the
-  // window to visualise a drop-off for.
-  const funnelEmpty = !funnel.data || funnel.data.length === 0 || funnel.data.every((s) => s.count === 0);
+  // The journey is empty when there are no positive-value links — no question
+  // activity in the window to trace a path for.
+  const journeyEmpty = !journey.data || journey.data.links.length === 0;
 
   const throughputEmpty =
     !throughput.data ||
@@ -75,7 +75,7 @@ export default function InsightsPage() {
 
   const refreshing =
     backlog.loading ||
-    funnel.loading ||
+    journey.loading ||
     throughput.loading ||
     latency.loading ||
     verification.loading ||
@@ -84,7 +84,7 @@ export default function InsightsPage() {
     patrols.loading;
   const refreshAll = () => {
     backlog.refresh();
-    funnel.refresh();
+    journey.refresh();
     throughput.refresh();
     latency.refresh();
     verification.refresh();
@@ -102,13 +102,14 @@ export default function InsightsPage() {
       </Row>
 
       <ChartCard
-        title="Gap-to-merge funnel"
-        subtitle="How questions convert into merged, verified fixes — and where the drop-off is. Last 30 days."
-        loading={funnel.loading}
-        error={funnel.error}
-        empty={funnelEmpty}
+        title="Question journey"
+        subtitle="The path a question takes — answered by confidence, gaps, clusters, proposals, and verification — and where volume leaks at each branch. Last 30 days."
+        loading={journey.loading}
+        error={journey.error}
+        empty={journeyEmpty}
+        emptyMessage="No question activity in the last 30 days yet."
       >
-        {funnel.data ? <GapFunnelChart stages={funnel.data} /> : null}
+        {journey.data ? <QuestionJourneyChart journey={journey.data} /> : null}
       </ChartCard>
 
       <ChartCard
