@@ -100,8 +100,15 @@ function buildJourney(row: Record<string, string> | undefined): JourneySankey {
   links.push({ source: "gaps", target: "gap_parked", value: n("gap_parked") });
   links.push({ source: "gaps", target: "gap_open", value: n("gap_open") });
   links.push({ source: "gaps", target: "clustered", value: n("gap_clustered") });
-  // Second unit shift: clustered gaps → proposals is counted in proposals.
-  links.push({ source: "clustered", target: "proposals", value: n("prop_total") });
+  // The clustered → proposals link is the gap→proposal boundary, so it carries the
+  // gap-side count (gap_clustered): the number of clustered gaps handed off, not the
+  // proposal count. This keeps "Clustered" internally conserved (in = out) so its bar
+  // reflects clustered gaps rather than ballooning to prop_total — a Sankey node is
+  // sized by max(in, out). The unit shift then surfaces at "Proposals drafted", whose
+  // outgoing status links sum to prop_total, matching the caption ("gaps become
+  // proposals at Proposals drafted"). Proposals are windowed independently on their own
+  // created_at, so prop_total is not conserved against gap_clustered by design.
+  links.push({ source: "clustered", target: "proposals", value: n("gap_clustered") });
   links.push({ source: "proposals", target: "prop_inprogress", value: n("prop_inprogress") });
   links.push({ source: "proposals", target: "prop_rejected", value: n("prop_rejected") });
   links.push({ source: "proposals", target: "prop_superseded", value: n("prop_superseded") });
@@ -292,7 +299,9 @@ export class PostgresInsightsStore implements InsightsStore {
   //              path), or open (none of the above).
   //   proposal — proposals.created_at, split by proposals.status into in-progress
   //              (draft/ready/branch-pushed/pr-opened), rejected, superseded, or
-  //              merged.
+  //              merged. The gap→proposal boundary link (clustered → proposals) carries
+  //              the gap-side count so "Clustered" stays conserved; the unit shift to
+  //              prop_total surfaces at "Proposals drafted" (see buildJourney).
   //   verify   — merged proposals split by proposals.closure_status: verified
   //              closed, reopened, needs attention, or awaiting check (NULL).
   //
