@@ -1238,7 +1238,7 @@ export async function draftFromGaps(
   if (sources.length === 0) {
     logger.warn(
       { label },
-      "drafting proposal with no source references attached — model will likely produce a placeholder; check source configuration and subpaths"
+      "drafting proposal with no resolvable source references attached — model will likely produce a placeholder; check that the flow has git/local/internet/agent sources configured"
     );
   } else {
     logger.debug({ sourceCount: sources.length }, "proposal draft source references ready");
