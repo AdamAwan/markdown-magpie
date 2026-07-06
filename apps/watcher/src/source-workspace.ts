@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { SourceDescriptor } from "@magpie/core";
 import { ensureGitCheckout } from "@magpie/git";
+import { draftSeedDocumentInputSchema, type JobView } from "@magpie/jobs";
 import { logger } from "./logger.js";
 
 // A resolved, traversable root for one fs-backed source. Both execution tiers
@@ -22,6 +23,17 @@ export interface PreparedSources {
 
 export function hasFsSources(descriptors: SourceDescriptor[]): boolean {
   return descriptors.some((d) => d.kind === "git" || d.kind === "local");
+}
+
+// The source descriptors of a source-grounded job, [] for every other job type.
+// Increment 1: seeding only; increments 2-3 add draft_markdown_proposal and the
+// patrol jobs here.
+export function sourceDescriptorsOf(job: JobView): SourceDescriptor[] {
+  if (job.type !== "draft_seed_document") {
+    return [];
+  }
+  const parsed = draftSeedDocumentInputSchema.safeParse(job.input);
+  return parsed.success ? parsed.data.sources : [];
 }
 
 // Resolves source descriptors to workspaces on the shared checkout volume — the

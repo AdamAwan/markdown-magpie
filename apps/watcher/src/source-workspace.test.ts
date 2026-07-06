@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import type { SourceDescriptor } from "@magpie/core";
-import { hasFsSources, prepareSourceWorkspaces } from "./source-workspace.js";
+import type { JobView } from "@magpie/jobs";
+import { hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf } from "./source-workspace.js";
 
 const git = (over: Partial<Extract<SourceDescriptor, { kind: "git" }>> = {}): SourceDescriptor => ({
   id: "g1", name: "Repo", kind: "git", url: "https://example.com/r.git", ...over
@@ -68,5 +69,47 @@ describe("prepareSourceWorkspaces", () => {
   it("hasFsSources is true only for git/local descriptors", () => {
     assert.equal(hasFsSources([{ id: "a", name: "a", kind: "agent" }]), false);
     assert.equal(hasFsSources([git()]), true);
+  });
+});
+
+describe("sourceDescriptorsOf", () => {
+  const jobOf = (type: JobView["type"], input: unknown): JobView => ({
+    id: "j1",
+    type,
+    queueName: type,
+    deadLetter: false,
+    state: "active",
+    input,
+    retryCount: 0,
+    retryLimit: 3,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    expireInSeconds: 300
+  });
+
+  it("yields a seed job's descriptors", () => {
+    const sources = [git()];
+    const job = jobOf("draft_seed_document", {
+      provider: "openai-compatible",
+      flowId: "f1",
+      coverage: ["statement ingestion"],
+      sources
+    });
+    assert.deepEqual(sourceDescriptorsOf(job), sources);
+  });
+
+  it("yields [] for a non-source-grounded job type", () => {
+    const job = jobOf("answer_question", {
+      provider: "openai-compatible",
+      question: "How do I deploy?",
+      flows: [{ id: "f1", name: "Flow" }],
+      expectedOutput: "answer_result"
+    });
+    assert.deepEqual(sourceDescriptorsOf(job), []);
+  });
+
+  it("yields [] for a malformed seed input", () => {
+    const job = jobOf("draft_seed_document", { provider: "openai-compatible", flowId: "f1" });
+    assert.deepEqual(sourceDescriptorsOf(job), []);
   });
 });
