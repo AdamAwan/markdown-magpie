@@ -117,7 +117,7 @@ queue.
 | --- | --- | --- | --- | --- |
 | Gap drafting | `process_gaps_to_pull_requests` | ~10 min | maintenance | `reconcile_gap_clusters`, `draft_markdown_proposal`, then publish/fold/comment GitHub jobs |
 | Source sync | `source_change_sync` | ~10 min | maintenance | `sync_source_changes_generate_plan` → proposal |
-| Snapshot refresh | `refresh_flow_snapshot` | ~5 min | github | — *(leaf: writes the flow snapshot of gaps, proposals, and PR state the reconciler reads)* |
+| Snapshot refresh | `refresh_flow_snapshot` | ~5 min | github | — *(leaf: writes the flow snapshot of gaps, proposals, and PR state the reconciler reads; **not scheduled for local-git flows**, which have no PRs to poll)* |
 | Correctness patrol | `correctness_patrol` | hourly | maintenance | `verify_document` → `correct_document`, `dedupe_documents`, `split_document` |
 | Editorial patrol | `editorial_patrol` | hourly | maintenance | `improve_document` |
 
@@ -229,7 +229,7 @@ ids that would orphan cluster memberships via `ON DELETE CASCADE` (issue #168).
 ### Merge cascade and gap-closure verification
 
 A merge no longer *blindly* resolves the gaps a proposal set out to close. The merge
-cascade (shared by the local-git Merge action and the PR poller) re-indexes the
+cascade (shared by the local-git **Accept** action and the PR poller) re-indexes the
 destination, then — for any proposal that had triggering questions — enqueues a
 `verify_gap_closure` job instead of marking the gaps resolved. When a maintenance watcher
 drives that job, the API **re-asks each triggering question** through the normal

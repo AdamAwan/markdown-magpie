@@ -120,6 +120,12 @@ the watcher run a job?" → `apps/watcher/src/runners/`. "what does the API expo
 - **Commit AND push little and often** so there's always a reliable revert point.
 - **Update documentation** alongside code (`docs/`, README, this skill) when behavior
   or structure changes.
+- **Local-git vs GitHub flows** — a flow's publish mode is derived from its destination:
+  `flowPublishMode(deps, flowId)` in `apps/api/src/platform/repositories.ts` returns
+  `local-git` when the destination is a `file://` git repo, else `github`. That one
+  predicate drives publish routing, which scheduled tasks are offered (no PR-poll for
+  local-git), and the console's Accept/Bin vs Publish/Merge UI. Don't re-sniff
+  destinations ad hoc — key off it.
 
 ### Commands
 
