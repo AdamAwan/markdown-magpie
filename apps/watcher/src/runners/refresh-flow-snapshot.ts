@@ -5,6 +5,7 @@ import {
   fetchPullRequestReviewDecision as defaultFetchPullRequestReviewDecision
 } from "@magpie/git";
 import type { ReviewDecision } from "@magpie/core";
+import type { PullRequestMergeability } from "@magpie/git";
 import type { WatcherApi } from "../http-client.js";
 import { logger } from "../logger.js";
 
@@ -34,11 +35,17 @@ export class RefreshFlowSnapshotRunner {
   async run(job: JobView, signal: AbortSignal): Promise<unknown> {
     const open = await this.api.listOpenPullRequests(signal);
     logger.info({ jobId: job.id, openCount: open.length }, `refresh_flow_snapshot: checking ${open.length} open pull request(s)`);
-    const results: Array<{ proposalId: string; state: "open" | "closed"; merged: boolean; reviewDecision?: ReviewDecision }> = [];
+    const results: Array<{
+      proposalId: string;
+      state: "open" | "closed";
+      merged: boolean;
+      reviewDecision?: ReviewDecision;
+      mergeable?: PullRequestMergeability;
+    }> = [];
     for (const pr of open) {
       // Honour cancellation/shutdown between host calls so a long list aborts promptly.
       signal.throwIfAborted();
-      let status: { merged: boolean; state: "open" | "closed" } | undefined;
+      let status: { merged: boolean; state: "open" | "closed"; mergeable: PullRequestMergeability } | undefined;
       try {
         status = await this.fetchPullRequestStatus(pr.pullRequestUrl);
       } catch (error) {
@@ -65,7 +72,13 @@ export class RefreshFlowSnapshotRunner {
         proposalId: pr.proposalId,
         state: status.state,
         merged: status.merged,
-        ...(reviewDecision ? { reviewDecision } : {})
+        ...(reviewDecision ? { reviewDecision } : {}),
+        // Only report a settled mergeability for a still-open, un-merged PR — a
+        // closing/merged PR is transitioning this run, and "unknown" carries no
+        // signal, so omit it to keep the reported payload meaningful.
+        ...(status.state === "open" && !status.merged && status.mergeable !== "unknown"
+          ? { mergeable: status.mergeable }
+          : {})
       });
     }
     logger.info({ jobId: job.id, resolved: results.length, total: open.length }, `refresh_flow_snapshot: resolved ${results.length}/${open.length} pull request(s)`);

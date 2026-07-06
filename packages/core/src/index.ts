@@ -397,6 +397,11 @@ export interface Proposal {
   // 'reopened' = at least one is still weak (its gap was left open to re-draft);
   // 'needs_attention' = repeated verification failures, flagged for a human.
   closureStatus?: "verified_closed" | "reopened" | "needs_attention";
+  // How many times this proposal's published PR has been auto-regenerated after
+  // going stale (its base moved and the merge conflicted). Bounds the retry loop:
+  // once it reaches the cap the proposal is surfaced for a human instead of
+  // regenerating again. Absent/0 until the first regeneration.
+  regenerationCount?: number;
 }
 
 // The inputs handed to the drafter, kept alongside the proposal so the context
@@ -625,6 +630,12 @@ export interface DraftMarkdownProposalJobInput {
   // The gap cluster this draft belongs to, so the created proposal can be linked
   // back to it on the autonomous path. Absent on the on-demand HTTP draft path.
   gapClusterId?: string;
+  // When set, this draft is a REGENERATION of an already-published proposal whose
+  // PR went stale (its base moved and the merge now conflicts). The completion
+  // handler updates the existing proposal in place — keeping its id, title, branch,
+  // and open PR — and re-publishes from the fresh base, instead of creating a new
+  // proposal. Absent on a first-time draft.
+  regenerateProposalId?: string;
   expectedOutput: "markdown_proposal";
 }
 
@@ -886,6 +897,12 @@ export interface PublishProposalBranchRequest {
   title: string;
   markdown: string;
   targetPath: string;
+  // When true, re-cut the branch from the CURRENT default-base tip (not the
+  // existing branch tip) and force-push. Used to regenerate a stale PR: the base
+  // moved under the branch, so rewriting the file on top of the old tip would leave
+  // the conflict; re-basing on the fresh tip resolves it. Absent = normal publish
+  // (create fresh, or fast-forward an existing bot-owned branch).
+  regenerate?: boolean;
 }
 
 export interface PublishProposalBranchResponse {

@@ -468,6 +468,13 @@ async function handleRefreshFlowSnapshotCompletion(
     if (result.reviewDecision) {
       await ctx.stores.proposals.updateReviewDecision(result.proposalId, result.reviewDecision);
     }
+    // A still-open PR the watcher found conflicting has gone stale: its base moved
+    // and the merge no longer applies. Auto-regenerate against the fresh base. All
+    // guards (approved, retry cap, in-flight, changeset) live in the service; a
+    // missing/"unknown"/"mergeable" reading carries no signal and is skipped.
+    if (result.mergeable === "conflicting") {
+      await proposalsService.maybeRegenerateStaleProposal(ctx, result.proposalId);
+    }
   }
   try {
     await snapshotsService.recordSnapshotsFromPullRequestResults(ctx, parsed.data.results);

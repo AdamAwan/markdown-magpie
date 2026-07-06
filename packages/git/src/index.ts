@@ -580,11 +580,38 @@ async function findOpenPullRequest(
   return match ? { url: match.html_url as string, number: match.number as number } : undefined;
 }
 
+// Whether an open PR still merges cleanly into its base. GitHub computes this
+// asynchronously, so a freshly-pushed or freshly-changed PR reads "unknown" until
+// the background check settles — callers must treat "unknown" as "no signal", never
+// as a trigger. "conflicting" means the base moved under the branch and the merge no
+// longer applies.
+export type PullRequestMergeability = "mergeable" | "conflicting" | "unknown";
+
 export interface PullRequestStatus {
   merged: boolean;
   // GitHub reports a merged PR as state "closed"; `merged` disambiguates a merge
   // from a close-without-merge.
   state: "open" | "closed";
+  // Derived from GitHub's `mergeable` / `mergeable_state` fields on the PR read.
+  mergeable: PullRequestMergeability;
+}
+
+// Maps GitHub's PR `mergeable` (true | false | null) and `mergeable_state`
+// (clean | dirty | blocked | behind | unstable | unknown) onto our tri-state.
+// `mergeable_state === "dirty"` is GitHub's explicit "has conflicts" marker; a
+// boolean `mergeable === false` corroborates it. Anything not yet computed (null /
+// "unknown") is reported as "unknown" so callers never act on an unsettled read.
+export function toMergeability(
+  mergeable: boolean | null | undefined,
+  mergeableState: string | undefined
+): PullRequestMergeability {
+  if (mergeable === false || mergeableState === "dirty") {
+    return "conflicting";
+  }
+  if (mergeable === true) {
+    return "mergeable";
+  }
+  return "unknown";
 }
 
 export interface PullRequestPoll {
@@ -644,10 +671,19 @@ export async function fetchPullRequestStatusCached(
     throw new Error(`GitHub pull request lookup failed (${response.status}): ${detail.slice(0, 500)}`);
   }
 
-  const data = (await response.json()) as { merged?: boolean; state?: string };
+  const data = (await response.json()) as {
+    merged?: boolean;
+    state?: string;
+    mergeable?: boolean | null;
+    mergeable_state?: string;
+  };
   return {
     notModified: false,
-    status: { merged: Boolean(data.merged), state: data.state === "closed" ? "closed" : "open" },
+    status: {
+      merged: Boolean(data.merged),
+      state: data.state === "closed" ? "closed" : "open",
+      mergeable: toMergeability(data.mergeable, data.mergeable_state)
+    },
     etag: response.headers.get("etag") ?? undefined
   };
 }
@@ -860,18 +896,24 @@ export class LocalGitProposalPublisher {
 
     const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", request.branchName], authEnv);
     const branchExists = Boolean(remoteBranch.trim());
+    // A regeneration re-bases on the fresh default tip and force-pushes; a normal
+    // update fast-forwards the existing bot-owned branch. Both differ from a create.
+    const updateInPlace = branchExists && !request.regenerate;
 
     const tempRoot = await mkdtemp(path.join(tmpdir(), "markdown-magpie-worktree-"));
     const worktreePath = path.join(tempRoot, "checkout");
 
     try {
-      if (branchExists) {
+      if (updateInPlace) {
         // Update path: base the worktree on the existing remote branch tip so our
         // new commit is a fast-forward — these branches are bot-owned, so the tip
         // is always our last push and no force is ever needed.
         await git(root, ["fetch", "origin", request.branchName], authEnv);
         await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, `origin/${request.branchName}`]);
       } else {
+        // Create OR regenerate: cut the branch from the current default-base tip. For
+        // a regeneration this discards the stale branch history so the rewritten file
+        // sits directly on the new base — the conflict the old tip carried is gone.
         const baseRef = await resolveBaseRef(root, request.repository);
         await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, baseRef]);
       }
@@ -884,12 +926,18 @@ export class LocalGitProposalPublisher {
 
       const status = await git(worktreePath, ["status", "--porcelain", "--", targetPath]);
       if (!status.trim()) {
-        // No content change. On the create path this is an error; on the update
-        // path it just means the regenerated doc is identical — return the current tip.
+        // No content change against the base. On a fresh create this is an error. On
+        // an in-place update it means the regenerated doc is identical — return the
+        // current tip. On a regenerate it means the fresh base already carries this
+        // exact content, so the branch (now reset to base) needs force-pushing to
+        // clear the stale divergence, then we return the base tip.
         if (!branchExists) {
           throw new Error(`Proposal does not change ${targetPath}`);
         }
         const head = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
+        if (request.regenerate) {
+          await git(worktreePath, ["push", "--force-with-lease", "-u", "origin", request.branchName], authEnv);
+        }
         return {
           branchName: request.branchName,
           commitSha: head,
@@ -908,7 +956,12 @@ export class LocalGitProposalPublisher {
         request.title
       ]);
       const commitSha = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
-      await git(worktreePath, ["push", "-u", "origin", request.branchName], authEnv);
+      // A regeneration rewrote history onto the fresh base, so the remote branch is
+      // no longer an ancestor — force-push (lease-guarded) to replace it in place.
+      const pushArgs = request.regenerate
+        ? ["push", "--force-with-lease", "-u", "origin", request.branchName]
+        : ["push", "-u", "origin", request.branchName];
+      await git(worktreePath, pushArgs, authEnv);
 
       return {
         branchName: request.branchName,

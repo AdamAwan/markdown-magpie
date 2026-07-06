@@ -169,6 +169,9 @@ export const draftMarkdownProposalInputSchema = z.object({
   // triggering questions; must be on the schema or the broker strips it.
   triggeringQuestionIds: z.array(z.string()).optional(),
   gapClusterId: z.string().optional(),
+  // Set when this draft regenerates an already-published proposal whose PR went
+  // stale; the completion handler updates that proposal in place and re-publishes.
+  regenerateProposalId: z.string().optional(),
   expectedOutput: z.literal("markdown_proposal")
 }) satisfies z.ZodType<ProviderInput<CoreDraftMarkdownProposalJobInput>>;
 export const draftMarkdownProposalOutputSchema = z.object({
@@ -437,7 +440,11 @@ export const refreshFlowSnapshotOutputSchema = z.object({
     merged: z.boolean(),
     // Mirrors @magpie/core ReviewDecision. Optional: the watcher only attaches it
     // for still-open PRs it could read; a missing value means "undetermined".
-    reviewDecision: z.enum(["approved", "changes_requested", "review_required", "none"]).optional()
+    reviewDecision: z.enum(["approved", "changes_requested", "review_required", "none"]).optional(),
+    // Whether the still-open PR still merges cleanly. Optional: only attached for
+    // open PRs the watcher could read a mergeable state for. "unknown" (or missing)
+    // means undetermined and must never trigger regeneration.
+    mergeable: z.enum(["mergeable", "conflicting", "unknown"]).optional()
   }))
 });
 
@@ -454,7 +461,11 @@ export const processGapsToPullRequestsOutputSchema = z.object({
 // so enqueues predating the field (and legacy jobs) keep the original behaviour.
 export const publishProposalInputSchema = z.object({
   proposalId: z.string(),
-  destination: z.enum(["github", "local-git"]).default("github")
+  destination: z.enum(["github", "local-git"]).default("github"),
+  // When true, the publisher re-cuts the branch from the current default-base tip
+  // and force-pushes, updating the existing PR in place. Set by the stale-PR
+  // regeneration path; absent/false for a first publish.
+  regenerate: z.boolean().optional()
 });
 export const publishProposalOutputSchema = z.object({
   proposalId: z.string(),

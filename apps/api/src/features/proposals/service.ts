@@ -42,7 +42,11 @@ import {
   selectDestinationForProposal,
   selectFlow
 } from "../../platform/repositories.js";
-import { collectSourceContextCached, type SourceContextCache } from "../../platform/source-context.js";
+import {
+  collectSourceContext,
+  collectSourceContextCached,
+  type SourceContextCache
+} from "../../platform/source-context.js";
 import { type AiProviderName } from "../../platform/providers.js";
 import { buildAnswerQuestionInput, recordAnswerQuestionLog } from "../../platform/answer-question.js";
 import { logger } from "../../logger.js";
@@ -924,15 +928,120 @@ export async function requestProposalPublication(
   return { ok: true, job };
 }
 
+// How many times a stale proposal's PR is auto-regenerated before it is left for a
+// human. A conflict that survives this many fresh-base redrafts is structural (the
+// target path moved, the folder was deleted) — regenerating again won't help.
+export const REGENERATION_CAP = 3;
+
+// Drives auto-regeneration of an already-published proposal whose PR the watcher
+// reported as conflicting (its base moved and the merge no longer applies). Called
+// per conflicting PR from the refresh_flow_snapshot completion. All guards live here
+// so the completion handler stays a thin loop. On a clean pass it enqueues a
+// draft_markdown_proposal keyed to the existing proposal; the completion handler for
+// that job updates the proposal in place and re-publishes onto the same branch.
+export async function maybeRegenerateStaleProposal(ctx: AppContext, proposalId: string): Promise<void> {
+  const proposal = await ctx.stores.proposals.get(proposalId);
+  if (!proposal) {
+    return;
+  }
+  // Only a published, still-open proposal can be stale.
+  if (proposal.status !== "pr-opened" && proposal.status !== "branch-pushed") {
+    return;
+  }
+  // Never rewrite content under a reviewer who already approved the PR — the
+  // reconcile gate's non-touchable rule. Surface it instead of regenerating.
+  if (proposal.reviewDecision === "approved") {
+    logger.info({ proposalId }, "stale PR is approved — leaving for a human rather than regenerating");
+    return;
+  }
+  // Bounded retry: after the cap the conflict is structural; stop and surface it.
+  if ((proposal.regenerationCount ?? 0) >= REGENERATION_CAP) {
+    logger.warn(
+      { proposalId, regenerationCount: proposal.regenerationCount },
+      "stale PR hit the regeneration cap — leaving for a human"
+    );
+    return;
+  }
+  // A multi-file changeset (dedupe/split) publishes through a different path that
+  // does not force-push from the fresh base; regenerating it here is out of scope.
+  if (proposal.changeset && proposal.changeset.length > 0) {
+    return;
+  }
+  // Idempotent: don't stack a second regeneration while one is already in flight.
+  if (await hasInflightRegeneration(ctx, proposalId)) {
+    return;
+  }
+
+  const input = await buildRegenerationDraftInput(ctx, proposal);
+  const job = await ctx.jobs.create("draft_markdown_proposal", input);
+  logger.info({ jobId: job.id, proposalId }, "enqueued regeneration draft for stale proposal PR");
+}
+
+// True when a draft_markdown_proposal keyed to this proposal is still queued or
+// running, so we never enqueue a duplicate regeneration for the same PR.
+async function hasInflightRegeneration(ctx: AppContext, proposalId: string): Promise<boolean> {
+  const { jobs } = await ctx.jobs.list({ type: "draft_markdown_proposal", limit: 200 });
+  const inflight = new Set(["created", "retry", "active"]);
+  return jobs.some((job) => {
+    const input = job.input as Partial<DraftMarkdownProposalJobInput>;
+    return input?.regenerateProposalId === proposalId && inflight.has(job.state);
+  });
+}
+
+// Rebuilds the drafter input for a regeneration straight from the stored proposal —
+// its gaps, evidence, target path, and flow — re-collecting source context against
+// the CURRENT base so the redraft reflects whatever moved on main. Deliberately does
+// not depend on the gaps still being open candidates (a published proposal's gaps
+// may have aged out), unlike the first-draft path.
+async function buildRegenerationDraftInput(
+  ctx: AppContext,
+  proposal: Proposal
+): Promise<DraftMarkdownProposalJobInput & { provider: AiProviderName }> {
+  const deps = ctx.repositoryDeps();
+  const flow = selectFlow(deps, proposal.flowId);
+  const sourceIds = flow?.sourceIds;
+  // Fresh, uncached read so the redraft sees whatever moved on the base since publish.
+  const sourceContext = await collectSourceContext(deps, sourceIds);
+  const logs = (
+    await Promise.all((proposal.triggeringQuestionIds ?? []).map((id) => ctx.stores.questionLogs.get(id)))
+  ).filter((log): log is NonNullable<typeof log> => Boolean(log));
+  return {
+    gapSummaries: splitGapSummaries(proposal.gapSummary),
+    triggeringQuestions: logs.map((log) => log.question),
+    evidence: proposal.evidence,
+    sourceContext,
+    destinationId: proposal.destinationId,
+    // Keep the target path stable so the regenerated doc lands on the same file and
+    // the derived branch name (and its open PR) stays put.
+    targetPath: proposal.targetPath,
+    triggeringQuestionIds: proposal.triggeringQuestionIds,
+    gapClusterId: proposal.gapClusterId,
+    regenerateProposalId: proposal.id,
+    provider: ctx.config.get().aiProvider,
+    expectedOutput: "markdown_proposal"
+  };
+}
+
 // The single place the publish destination is decided: a file:// destination
 // routes to the local-git publish queue (push only, no PR — a token-less watcher
 // can serve it), anything else to github. Shared by the manual/scheduled publish
 // path here and the source-sync fold in scheduling/fold.ts, so both route
 // identically. isLocalGitDestination is config-only (no git/network).
-export async function enqueuePublishProposal(ctx: AppContext, proposal: Proposal): Promise<JobView> {
+export async function enqueuePublishProposal(
+  ctx: AppContext,
+  proposal: Proposal,
+  options: { regenerate?: boolean } = {}
+): Promise<JobView> {
   const destination = isLocalGitDestination(ctx, proposal) ? "local-git" : "github";
-  const job = await ctx.jobs.create("publish_proposal", { proposalId: proposal.id, destination });
-  logger.info({ jobId: job.id, proposalId: proposal.id, destination }, "enqueued publish_proposal job");
+  const job = await ctx.jobs.create("publish_proposal", {
+    proposalId: proposal.id,
+    destination,
+    ...(options.regenerate ? { regenerate: true } : {})
+  });
+  logger.info(
+    { jobId: job.id, proposalId: proposal.id, destination, regenerate: Boolean(options.regenerate) },
+    "enqueued publish_proposal job"
+  );
   return job;
 }
 
@@ -1216,6 +1325,14 @@ export async function createProposalFromCompletedJob(
     triggeringQuestionIds?: string[];
   };
 
+  // A regeneration updates an already-published proposal in place and re-publishes,
+  // rather than creating a new draft. Returns undefined so the caller's at-draft fold
+  // hook is skipped — this proposal is already in flight, not a fresh draft.
+  if (input.regenerateProposalId) {
+    await applyRegeneratedProposal(ctx, input.regenerateProposalId, output);
+    return undefined;
+  }
+
   return ctx.stores.proposals.create({
     ...output,
     targetPath: resolveProposalTargetPath(destinationSubpath(ctx.repositoryDeps(), input.destinationId), output.title),
@@ -1232,6 +1349,28 @@ export async function createProposalFromCompletedJob(
       openPullRequests: input.openPullRequests
     })
   });
+}
+
+// Applies a completed regeneration draft to its already-published proposal: refresh
+// the markdown/rationale, bump the regeneration counter, and re-publish. Title and
+// targetPath are intentionally kept as-is (not taken from the redraft output) so the
+// derived branch name and its open PR stay stable and the publisher force-pushes the
+// fresh-base commit onto the existing branch instead of opening a new PR.
+async function applyRegeneratedProposal(
+  ctx: AppContext,
+  proposalId: string,
+  output: DraftMarkdownProposalJobOutput
+): Promise<void> {
+  const updated = await ctx.stores.proposals.recordRegeneration(proposalId, output.markdown, output.rationale);
+  if (!updated) {
+    logger.warn({ proposalId }, "regeneration draft completed but its proposal is gone — skipping re-publish");
+    return;
+  }
+  await enqueuePublishProposal(ctx, updated, { regenerate: true });
+  logger.info(
+    { proposalId, regenerationCount: updated.regenerationCount },
+    "regenerated stale proposal against fresh base — re-publishing onto existing branch"
+  );
 }
 
 // Completion handler for correct_document jobs: a verify-lens repair landed, so
