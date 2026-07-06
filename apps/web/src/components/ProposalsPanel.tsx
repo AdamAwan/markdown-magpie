@@ -152,7 +152,8 @@ export function ProposalPanel({
   selectedProposal,
   setSelectedProposalId,
   updateProposalStatus,
-  mergeProposal
+  mergeProposal,
+  rejectProposal
 }: {
   loading: boolean;
   publishProposal: (proposalId: string) => Promise<void>;
@@ -161,6 +162,7 @@ export function ProposalPanel({
   setSelectedProposalId: (id: string) => void;
   updateProposalStatus: (proposalId: string, status: Proposal["status"]) => Promise<void>;
   mergeProposal: (proposalId: string) => Promise<void>;
+  rejectProposal: (proposalId: string) => Promise<void>;
 }) {
   return (
     <Surface>
@@ -282,44 +284,66 @@ export function ProposalPanel({
                     selected
                     disabled={loading || selectedProposal.status !== "draft"}
                     onClick={() => void updateProposalStatus(selectedProposal.id, "ready")}
-                    title="Mark this draft as ready for the future PR workflow"
+                    title="Mark this draft as ready to publish a review branch"
                   >
                     Mark Ready
                   </Chip>
-                  <Chip
-                    selected
-                    disabled={loading || selectedProposal.status !== "ready"}
-                    onClick={() => void publishProposal(selectedProposal.id)}
-                    title="Create and push a Git branch for this ready proposal"
-                  >
-                    Publish Branch
-                  </Chip>
                   {selectedProposal.localGitDestination ? (
-                    <Chip
-                      selected
-                      disabled={loading || selectedProposal.status !== "branch-pushed"}
-                      onClick={() => void mergeProposal(selectedProposal.id)}
-                      title="Merge this proposal's branch into the local repository's default branch, then resolve its gaps and re-index"
-                    >
-                      Merge
-                    </Chip>
+                    // Local-git review model: publish a review branch (no PR), then a
+                    // human Accepts (merge) or Bins (reject) it. No PR ceremony.
+                    <>
+                      <Chip
+                        selected
+                        disabled={loading || selectedProposal.status !== "ready"}
+                        onClick={() => void publishProposal(selectedProposal.id)}
+                        title="Push a review branch into the local repository (no pull request)"
+                      >
+                        Publish for review
+                      </Chip>
+                      <Chip
+                        selected
+                        disabled={loading || selectedProposal.status !== "branch-pushed"}
+                        onClick={() => void mergeProposal(selectedProposal.id)}
+                        title="Accept: merge the review branch into the local repository's default branch, resolve its gaps, and re-index"
+                      >
+                        Accept
+                      </Chip>
+                      <Chip
+                        disabled={loading || selectedProposal.status !== "branch-pushed"}
+                        onClick={() => void rejectProposal(selectedProposal.id)}
+                        title="Bin: reject this proposal — delete the review branch and freeze its gap cluster so it is not re-proposed"
+                      >
+                        Bin
+                      </Chip>
+                    </>
                   ) : (
-                    <Chip
-                      selected
-                      disabled={loading || selectedProposal.status !== "branch-pushed"}
-                      onClick={() => void updateProposalStatus(selectedProposal.id, "merged")}
-                      title="Mark a branch-only proposal as merged (for a destination with no pull request to poll): resolves its gaps and re-indexes the knowledge base. A proposal with an open PR is marked merged automatically when the PR merges."
-                    >
-                      Mark Merged
-                    </Chip>
+                    // GitHub model: publish a branch, open a PR, mark merged / reject.
+                    <>
+                      <Chip
+                        selected
+                        disabled={loading || selectedProposal.status !== "ready"}
+                        onClick={() => void publishProposal(selectedProposal.id)}
+                        title="Create and push a Git branch for this ready proposal"
+                      >
+                        Publish Branch
+                      </Chip>
+                      <Chip
+                        selected
+                        disabled={loading || selectedProposal.status !== "branch-pushed"}
+                        onClick={() => void updateProposalStatus(selectedProposal.id, "merged")}
+                        title="Mark a branch-only proposal as merged (for a destination with no pull request to poll): resolves its gaps and re-indexes the knowledge base. A proposal with an open PR is marked merged automatically when the PR merges."
+                      >
+                        Mark Merged
+                      </Chip>
+                      <Chip
+                        disabled={loading || selectedProposal.status !== "draft"}
+                        onClick={() => void updateProposalStatus(selectedProposal.id, "rejected")}
+                        title="Reject this generated proposal"
+                      >
+                        Reject
+                      </Chip>
+                    </>
                   )}
-                  <Chip
-                    disabled={loading || selectedProposal.status !== "draft"}
-                    onClick={() => void updateProposalStatus(selectedProposal.id, "rejected")}
-                    title="Reject this generated proposal"
-                  >
-                    Reject
-                  </Chip>
                   {selectedProposal.publication ? (
                     <Badge tone="neutral" mono title={`Published commit ${selectedProposal.publication.commitSha}`}>
                       {selectedProposal.publication.branchName}
@@ -335,10 +359,12 @@ export function ProposalPanel({
                     <ContextValue label="Branch" value={selectedProposal.publication.branchName} />
                     <ContextValue label="Commit" value={shortSha(selectedProposal.publication.commitSha)} />
                     <ContextValue label="Remote" value={selectedProposal.publication.remoteUrl ?? "Not recorded"} />
-                    <ContextValue
-                      label="Pull request"
-                      value={selectedProposal.publication.pullRequestUrl ?? "Not raised"}
-                    />
+                    {selectedProposal.localGitDestination ? null : (
+                      <ContextValue
+                        label="Pull request"
+                        value={selectedProposal.publication.pullRequestUrl ?? "Not raised"}
+                      />
+                    )}
                     <ContextValue
                       label="Published"
                       value={new Date(selectedProposal.publication.publishedAt).toLocaleString()}

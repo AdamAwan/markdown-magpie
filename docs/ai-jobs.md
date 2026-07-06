@@ -245,9 +245,25 @@ Publication is enqueue-only. The API validates the repository pre-flight and enq
 `GET /api/proposals/:id/execution-context` (the proposal plus a credential-free repository config),
 commits the Markdown to a new `magpie/proposal-*` branch and pushes it. For a GitHub destination it
 then opens a pull request; for a local-git (`file://`) destination it stops at the pushed branch (no
-PR to open) and the console's Merge action completes the publish. It reports the result back via job
-completion — which records the branch, commit SHA, and (for GitHub) PR URL on the proposal. Invalid
-publishes fail fast with the same `404`/`409` codes before any job is created.
+PR to open) and the console's **Accept** (merge) / **Bin** (reject) actions complete the review. It
+reports the result back via job completion — which records the branch, commit SHA, and (for GitHub)
+PR URL on the proposal. Invalid publishes fail fast with the same `404`/`409` codes before any job is
+created.
+
+### Local-git flows (`file://` destinations)
+
+A flow whose destination resolves to a `file://` git repo publishes without any GitHub ceremony. A
+destination is recognized as local-git however its `file://` URL is written in `KNOWLEDGE_DESTINATIONS`
+(bare string, `path`, or `url`). For such a flow:
+
+- Publishing routes to `publish_proposal__local_git` (push a review branch, no PR).
+- The console shows **Accept** (`POST /api/proposals/:id/merge` — merge the branch into the default
+  branch, resolve gaps, re-index) and **Bin** (`POST /api/proposals/:id/reject` — mark `rejected`,
+  freeze the gap cluster so it is not re-drafted, and delete the review branch). Bin is the local
+  mirror of a GitHub pull request closed without merging.
+- The github-only `refresh_flow_snapshot` PR-poll task is **not** scheduled for a local-git flow, and
+  `crosslink_pull_requests` / `comment_pull_request` never fire (they only act on `pr-opened`
+  proposals, which a local-git flow never reaches).
 
 ## Seeding a flow
 

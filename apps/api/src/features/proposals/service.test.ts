@@ -1827,3 +1827,65 @@ test("list attaches localGitDestination", async () => {
   const [listed] = await proposals.list(ctx, 10);
   assert.equal(listed.localGitDestination, true);
 });
+
+// --- local-git reject (Bin) ------------------------------------------------
+
+test("rejectLocalProposal marks rejected and deletes the review branch", async () => {
+  const url = pathToFileURL(path.join(tmpdir(), "demo-kb")).href;
+  const ctx = ctxWithDestination(url);
+  const id = await branchPushedProposal(ctx, url);
+  const proposal = await ctx.stores.proposals.get(id);
+  assert.ok(proposal);
+
+  const calls: Array<{ repoPath: string; branchName: string; defaultBranch: string }> = [];
+  const result = await proposals.rejectLocalProposal(ctx, proposal, async (req) => {
+    calls.push(req);
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].repoPath, fileURLToPath(url));
+  assert.equal(calls[0].branchName, "magpie/proposal-abc");
+  assert.equal(calls[0].defaultBranch, "main");
+  assert.equal((await ctx.stores.proposals.get(id))?.status, "rejected");
+});
+
+test("rejectLocalProposal still rejects when the branch delete fails", async () => {
+  const url = pathToFileURL(path.join(tmpdir(), "demo-kb")).href;
+  const ctx = ctxWithDestination(url);
+  const id = await branchPushedProposal(ctx, url);
+  const proposal = await ctx.stores.proposals.get(id);
+  assert.ok(proposal);
+
+  // A failed branch delete is repo tidy-up: the proposal is authoritatively rejected.
+  const result = await proposals.rejectLocalProposal(ctx, proposal, async () => {
+    throw new Error("git branch -D failed");
+  });
+  assert.equal(result.ok, true);
+  assert.equal((await ctx.stores.proposals.get(id))?.status, "rejected");
+});
+
+test("rejectLocalProposal rejects a hosted destination", async () => {
+  const ctx = ctxWithDestination("https://github.com/o/r.git");
+  const id = await branchPushedProposal(ctx, "https://github.com/o/r.git");
+  const proposal = await ctx.stores.proposals.get(id);
+  assert.ok(proposal);
+  const result = await proposals.rejectLocalProposal(ctx, proposal, async () => undefined);
+  assert.equal(result.ok === false && result.code, "not_local_git_destination");
+});
+
+test("rejectLocalProposal rejects a proposal that is not branch-pushed", async () => {
+  const ctx = ctxWithDestination("file:///tmp/demo-kb");
+  const created = await ctx.stores.proposals.create({
+    title: "Draft",
+    targetPath: "d.md",
+    markdown: "# d\n",
+    rationale: "r",
+    evidence: [],
+    destinationId: "demo"
+  });
+  const proposal = await ctx.stores.proposals.get(created.id);
+  assert.ok(proposal);
+  const result = await proposals.rejectLocalProposal(ctx, proposal, async () => undefined);
+  assert.equal(result.ok === false && result.code, "proposal_not_rejectable");
+});

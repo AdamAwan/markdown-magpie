@@ -287,8 +287,21 @@ function normalizeRepositoryEntry(value: unknown): ConfiguredKnowledgeRepository
 
 function normalizeRepositoryObject(candidate: Record<string, unknown>): ConfiguredKnowledgeRepository | undefined {
   const rawValue = stringValue(candidate.value);
-  const url = stringValue(candidate.url) ?? stringValue(candidate.gitUrl) ?? stringValue(candidate.remoteUrl) ?? (isGitUrl(rawValue) ? rawValue : undefined);
-  const pathValue = stringValue(candidate.path) ?? stringValue(candidate.localPath) ?? (!isGitUrl(rawValue) ? rawValue : undefined);
+  const pathCandidate = stringValue(candidate.path) ?? stringValue(candidate.localPath);
+  // A file:// value given in the path/localPath field is a LOCAL GIT repo (one we
+  // clone and push branches to), not a plain filesystem directory — promote it to
+  // `url` so it normalizes to kind "git". (A `file://` in `value` or `url` is already
+  // covered below: isGitUrl now matches file://.)
+  const pathIsFileUrl = isFileUrl(pathCandidate);
+  const url =
+    stringValue(candidate.url) ??
+    stringValue(candidate.gitUrl) ??
+    stringValue(candidate.remoteUrl) ??
+    (isGitUrl(rawValue) ? rawValue : undefined) ??
+    (pathIsFileUrl ? pathCandidate : undefined);
+  const pathValue = pathIsFileUrl
+    ? undefined
+    : (pathCandidate ?? (!isGitUrl(rawValue) ? rawValue : undefined));
   const kind = normalizeKind(candidate.kind, candidate.type, url, pathValue, rawValue);
 
   if (kind === "agent") {
@@ -376,7 +389,14 @@ function normalizeKind(
 }
 
 function isGitUrl(value: string | undefined): value is string {
-  return Boolean(value && (/^(?:https?:\/\/|git@|ssh:\/\/)/i.test(value) || /\.git(?:#.+)?$/i.test(value)));
+  return Boolean(value && (/^(?:https?:\/\/|git@|ssh:\/\/|file:\/\/)/i.test(value) || /\.git(?:#.+)?$/i.test(value)));
+}
+
+// A file:// URL — a local git repository we clone and push branches to. Narrower
+// than isGitUrl so path/localPath promotion (above) only ever pulls a local-git URL
+// out of the path field, never a `.git`-suffixed filesystem path.
+function isFileUrl(value: string | undefined): value is string {
+  return Boolean(value && /^file:\/\//i.test(value));
 }
 
 function stringValue(value: unknown): string | undefined {

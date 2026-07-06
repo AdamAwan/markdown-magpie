@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { mergeLocalProposalBranch } from "./index.js";
+import { deleteLocalProposalBranch, mergeLocalProposalBranch } from "./index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -77,4 +77,24 @@ test("mergeLocalProposalBranch aborts and throws on conflict, leaving main untou
   assert.equal(content.trim(), "C");
   const branches = await execFileAsync("git", ["branch", "--list", BRANCH], { cwd: repoPath });
   assert.equal(branches.stdout.trim().replace(/^\*?\s*/, ""), BRANCH);
+});
+
+test("deleteLocalProposalBranch removes the review branch without merging it", async () => {
+  const repoPath = await initRepoWithProposalBranch();
+
+  await deleteLocalProposalBranch({ repoPath, branchName: BRANCH, defaultBranch: "main" });
+
+  // The branch is gone and its unmerged change never landed on main.
+  const branches = await execFileAsync("git", ["branch", "--list", BRANCH], { cwd: repoPath });
+  assert.equal(branches.stdout.trim(), "", "binned proposal branch is deleted");
+  const onMain = await execFileAsync("git", ["ls-files", "new-doc.md"], { cwd: repoPath });
+  assert.equal(onMain.stdout.trim(), "", "the branch's change did not merge into main");
+});
+
+test("deleteLocalProposalBranch is a no-op when the branch is already gone", async () => {
+  const repoPath = await initRepoWithProposalBranch();
+  await execFileAsync("git", ["branch", "-D", BRANCH], { cwd: repoPath });
+
+  // A missing branch is not an error — the desired end state already holds.
+  await deleteLocalProposalBranch({ repoPath, branchName: BRANCH, defaultBranch: "main" });
 });

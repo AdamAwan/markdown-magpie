@@ -296,4 +296,43 @@ describe("knowledge repository configuration", () => {
       assert.deepEqual(getConfiguredRoleGrants({ KNOWLEDGE_ROLE_GRANTS: "[1,2,3]" }), {});
     });
   });
+
+  describe("file:// local-git destinations", () => {
+    // A file:// destination is a LOCAL GIT repo (clone + push branches), so it must
+    // normalize to kind "git" with a `url` no matter which field carries it — that
+    // `url` is what the whole local-git flow mode keys off (isFileUrl).
+    it("recognizes a file:// URL given in the url field", () => {
+      const [destination] = getConfiguredKnowledgeDestinations({
+        KNOWLEDGE_DESTINATIONS: JSON.stringify([{ id: "demo", name: "Demo", url: "file:///tmp/demo-repo" }])
+      });
+      assert.equal(destination.kind, "git");
+      assert.equal(destination.url, "file:///tmp/demo-repo");
+    });
+
+    it("promotes a file:// value in the path field to a git url", () => {
+      const [destination] = getConfiguredKnowledgeDestinations({
+        KNOWLEDGE_DESTINATIONS: JSON.stringify([{ id: "demo", name: "Demo", path: "file:///tmp/demo-repo" }])
+      });
+      assert.equal(destination.kind, "git");
+      assert.equal(destination.url, "file:///tmp/demo-repo");
+      assert.equal(destination.path, undefined);
+    });
+
+    it("recognizes a bare file:// string destination", () => {
+      const [destination] = getConfiguredKnowledgeDestinations({
+        KNOWLEDGE_DESTINATIONS: JSON.stringify(["file:///tmp/demo-repo"])
+      });
+      assert.equal(destination.kind, "git");
+      assert.equal(destination.url, "file:///tmp/demo-repo");
+    });
+
+    it("leaves a plain directory path as a non-git local destination", () => {
+      const [destination] = getConfiguredKnowledgeDestinations({
+        KNOWLEDGE_DESTINATIONS: JSON.stringify([{ id: "docs", name: "Docs", path: "knowledge-bases/product" }])
+      });
+      assert.equal(destination.kind, "local");
+      assert.equal(destination.url, undefined);
+      assert.equal(destination.path, "knowledge-bases/product");
+    });
+  });
 });

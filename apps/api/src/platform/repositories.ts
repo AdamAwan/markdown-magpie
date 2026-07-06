@@ -327,12 +327,60 @@ export async function seedConfiguredKnowledge(
   return { indexed, failures };
 }
 
+// The destination a flow publishes into, resolved from the flow's destinationId.
+// Undefined when the flow (or its destination) is not configured.
+function destinationForFlow(
+  deps: RepositoryDeps,
+  flowId: string | undefined
+): ConfiguredKnowledgeRepository | undefined {
+  if (!flowId) {
+    return undefined;
+  }
+  const flow = deps.knowledgeConfig.flows.find((candidate) => candidate.id === flowId);
+  if (!flow) {
+    return undefined;
+  }
+  return deps.knowledgeConfig.destinations.find((destination) => destination.id === flow.destinationId);
+}
+
+// True when a configured destination's URL is a file:// local git repository — the
+// single fact the whole local-git flow mode keys off. Shared so proposal-level and
+// flow-level checks can never disagree.
+export function isFileUrl(url: string | undefined): url is string {
+  if (!url) {
+    return false;
+  }
+  try {
+    return new URL(url).protocol === "file:";
+  } catch {
+    return false;
+  }
+}
+
+// How a flow publishes: "local-git" when its destination is a file:// git repo
+// (push a review branch, no PR — Accept/Bin), "github" otherwise. The one predicate
+// that drives publish routing, scheduled-task gating, and the proposal UI.
+export function flowPublishMode(
+  deps: RepositoryDeps,
+  flowId: string | undefined
+): "local-git" | "github" {
+  return isFileUrl(destinationForFlow(deps, flowId)?.url) ? "local-git" : "github";
+}
+
 export function selectDestinationForProposal(
   deps: RepositoryDeps,
-  proposal: { targetPath?: string; destinationId?: string }
+  proposal: { targetPath?: string; destinationId?: string; flowId?: string }
 ): ConfiguredKnowledgeRepository | undefined {
   if (proposal.destinationId) {
     return deps.knowledgeConfig.destinations.find((destination) => destination.id === proposal.destinationId);
+  }
+
+  // Resolve via the proposal's flow before path/subpath matching, so a flow-scoped
+  // proposal always lands on its flow's destination and never falls through to the
+  // "unresolved → github" gap when several destinations are configured.
+  const viaFlow = destinationForFlow(deps, proposal.flowId);
+  if (viaFlow) {
+    return viaFlow;
   }
 
   const targetPath = normalizeRelativePath(proposal.targetPath);

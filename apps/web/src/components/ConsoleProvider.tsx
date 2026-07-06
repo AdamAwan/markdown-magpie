@@ -609,6 +609,26 @@ function useConsoleController() {
     }
   }
 
+  async function rejectProposal(proposalId: string) {
+    setLoading(true);
+    clearMessage();
+    try {
+      const result = await apiPost<{ proposal: Proposal }>(`/proposals/${proposalId}/reject`, {});
+      setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
+      setSelectedProposalId(result.proposal.id);
+      showMessage(
+        "Proposal binned — the review branch was deleted and its gap cluster frozen so it is not re-proposed.",
+        "success"
+      );
+      // Rejected proposals drop out of the active list; pull fresh state.
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function publishProposal(proposalId: string) {
     setLoading(true);
     clearMessage();
@@ -814,6 +834,7 @@ function useConsoleController() {
     draftCluster,
     updateProposalStatus,
     mergeProposal,
+    rejectProposal,
     publishProposal,
     saveScheduledTask,
     runScheduledTask,
