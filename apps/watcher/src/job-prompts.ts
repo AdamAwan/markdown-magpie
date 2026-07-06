@@ -26,6 +26,7 @@ import {
   VERIFY_DOCUMENT
 } from "@magpie/prompts";
 import type { RetrievedSection } from "./http-client.js";
+import type { SourceWorkspace } from "./source-workspace.js";
 
 // The answer-question output the watcher returns after route -> retrieve ->
 // answer. Citations are derived in code (never trusted from the model), so this
@@ -104,20 +105,50 @@ export function buildPrompt(job: JobView, sources?: SourceDataContext[]): string
     return `${GENERIC_JOB.instructions}\n\nJob:\n${JSON.stringify({ type: job.type, input: job.input }, null, 2)}`;
   }
   if (sources) {
-    const input = omitSourcesRef(job.input);
+    const input = omitInputKeys(job.input, ["sourcesRef"]);
     return `${SOURCE_MATERIAL_HEADER}\n${JSON.stringify(sources, null, 2)}\n\n${instructions}\n\nInput:\n${JSON.stringify(input, null, 2)}`;
   }
   return `${instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
 }
 
-// A shallow copy of a job input without its `sourcesRef`. The corpus that ref
-// points to is rendered separately (above), so the bare hash would just be noise
-// in the serialized input.
-function omitSourcesRef(input: unknown): unknown {
+// Prompt for source-grounded jobs on the agentic paths. The instructions come
+// from the same catalog entry both tiers share; what differs is how the agent
+// addresses the source material — the CLI tier works inside the checkout with its
+// native tools, the tool-loop tier addresses "<sourceId>/<relative path>" through
+// list_dir/read_file/grep. The job input is rendered WITHOUT the `sources` field:
+// the descriptors were resolved into the workspace listing above, so the raw
+// references would be noise.
+export function buildSourceGroundedPrompt(
+  job: JobView,
+  workspaces: SourceWorkspace[],
+  notes: string[],
+  mode: "cli" | "tools"
+): string {
+  const instructions = JOB_INSTRUCTIONS[job.type] ?? GENERIC_JOB.instructions;
+  const workspaceLines = workspaces
+    .map((ws) =>
+      mode === "cli"
+        ? `- ${ws.name}: ${ws.rootDir}${workspaces.indexOf(ws) === 0 ? " (your working directory)" : ""}`
+        : `- ${ws.name}: address paths as "${ws.sourceId}/<relative path>" in list_dir/read_file/grep`
+    )
+    .join("\n");
+  const access =
+    mode === "cli"
+      ? "Source repositories available (read-only; explore with your file tools):"
+      : "Source repositories available through your tools (list_dir, read_file, grep):";
+  const noteBlock = notes.length > 0 ? `\nSource notes:\n${notes.map((n) => `- ${n}`).join("\n")}\n` : "";
+  const input = omitInputKeys(job.input, ["sources", "sourcesRef"]);
+  return `${access}\n${workspaceLines}\n${noteBlock}\n${instructions}\n\nInput:\n${JSON.stringify(input, null, 2)}`;
+}
+
+// A shallow copy of a job input without the named keys. Used to drop `sourcesRef`
+// (its corpus is rendered separately as a leading block) and, for the
+// source-grounded prompt, `sources` (resolved into the workspace listing instead).
+function omitInputKeys(input: unknown, keys: string[]): unknown {
   if (typeof input !== "object" || input === null) {
     return input;
   }
-  return Object.fromEntries(Object.entries(input).filter(([key]) => key !== "sourcesRef"));
+  return Object.fromEntries(Object.entries(input).filter(([key]) => !keys.includes(key)));
 }
 
 // Parses and validates a model's JSON against the job's output contract from

@@ -6,6 +6,7 @@ import {
   applyGroundingVerdict,
   buildAnswerOutput,
   buildPrompt,
+  buildSourceGroundedPrompt,
   forcedSearchQueries,
   parseGroundingVerdict,
   parseJobOutput,
@@ -86,6 +87,40 @@ describe("buildPrompt", () => {
     const improve = buildPrompt(job("improve_document", { path: "b.md", content: "y", sourcesRef: "h" }), corpus);
     const block = (prompt: string): string => prompt.slice(0, prompt.indexOf("\n\n") + 1);
     assert.equal(block(verify), block(improve), "the leading corpus block is byte-identical across job types");
+  });
+});
+
+describe("buildSourceGroundedPrompt", () => {
+  const sourceGroundedJob = {
+    id: "j1",
+    type: "draft_seed_document",
+    input: {
+      provider: "openai-compatible",
+      flowId: "f1",
+      coverage: ["statement ingestion"],
+      sources: [{ id: "s1", name: "Product repo", kind: "git", url: "https://example.com/r.git" }]
+    }
+  } as JobView;
+  const workspaces = [{ sourceId: "s1", name: "Product repo", rootDir: "/checkouts/s1" }];
+
+  it("lists workspaces, omits the sources field from the input JSON, and ends with the input", () => {
+    const prompt = buildSourceGroundedPrompt(
+      sourceGroundedJob,
+      workspaces,
+      ["Source \"X\" is unavailable (gone)."],
+      "cli"
+    );
+    assert.match(prompt, /Product repo/);
+    assert.match(prompt, /\/checkouts\/s1/);
+    assert.match(prompt, /unavailable \(gone\)/);
+    assert.doesNotMatch(prompt, /"sources"/);
+    assert.ok(prompt.indexOf("statement ingestion") > prompt.indexOf("Product repo"));
+  });
+
+  it("describes tool-loop paths for the tools mode", () => {
+    const prompt = buildSourceGroundedPrompt(sourceGroundedJob, workspaces, [], "tools");
+    assert.match(prompt, /list_dir/);
+    assert.match(prompt, /s1\//);
   });
 });
 

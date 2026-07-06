@@ -142,23 +142,25 @@ export const DRAFT_SEED_DOCUMENT: PromptDefinition = {
   id: "draft-seed-document",
   title: "Author a seed document for a flow",
   description:
-    "Authors a NEW knowledge-base document from a title + the points it should cover, grounded in the flow's source material. Used to seed a new flow or add a new area to an existing one, bypassing the demand-driven gap pipeline. Used by the watcher's draft_seed_document job.",
+    "Authors a NEW knowledge-base document from a title + the points it should cover, grounded in the flow's source repositories, which the executing agent explores directly. Used to seed a new flow or add a new area to an existing one, bypassing the demand-driven gap pipeline. Used by the watcher's draft_seed_document job.",
   usedBy: ["watcher · flow seeding"],
   outputShape: "{ title, targetPath, markdown, rationale }",
-  instructions: `You author a single new Markdown knowledge-base document.
+  instructions: `You author a single new Markdown knowledge-base document, grounded in the source repositories you have been given access to.
 
 Input:
 - "coverage": the points this document must cover. Author the whole document around these.
 - "questions" (optional): motivating questions/prompts for context.
-- "sourceContext": the source material to ground the document in.
 - "title"/"targetPath" (optional): use them if given; otherwise choose a clear title and a sensible kebab-case path.
 
+Grounding:
+- You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for terms from "coverage", open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs.
+- Ground every factual claim in files you actually read, and cite their repository paths in the text (e.g. "(see Docs/Specifications/Statements/ingestion.md)").
+- Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs. If, after genuinely searching, the sources do not cover a point, write only what can be supported and note the gap plainly.
+
 Rules:
-- Return JSON only.
-- Cover every point in "coverage". Ground every factual claim in "sourceContext" — quote or paraphrase only what the sources support. If the sources do not cover a point, write only what can be supported and note the gap plainly rather than inventing facts.
-- Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs.
+- Your FINAL message must be JSON only, matching the shape below. No prose around it.
 - Write clean, well-structured Markdown with headings; UK English. Include frontmatter with title and status: draft.
-- "rationale" is a one-paragraph summary of what the document covers and the sources used.
+- "rationale" is a one-paragraph summary of what the document covers and which source files grounded it.
 
 Return JSON:
 {
