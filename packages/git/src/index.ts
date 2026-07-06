@@ -17,6 +17,8 @@ import { promisify } from "node:util";
 import { withCheckoutLock } from "./checkout-lock.js";
 import { withGitRetry } from "./git-retry.js";
 
+export { resolvePrimaryBranch } from "./primary-branch.js";
+
 const execFileAsync = promisify(execFile);
 
 // A hung git subprocess (e.g. a credential prompt on a misconfigured remote) or
