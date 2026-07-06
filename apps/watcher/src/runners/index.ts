@@ -27,6 +27,9 @@ export function createConfiguredRunners(
     CAPABILITY_GATES.find((gate) => gate.capability === capability)?.ready(env, runtime) ?? false;
 
   const timeoutMs = positiveInt(env.AGENT_API_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS);
+  // Source-grounded CLI runs explore a checkout, so they get their own, much
+  // longer budget than the one-shot AGENT_CLI_TIMEOUT_MS.
+  const agenticTimeoutMs = positiveInt(env.MAGPIE_AGENTIC_TIMEOUT_MS, 600_000);
 
   if (ready("openai-compatible")) {
     // The agent model drives the source-agent tool loop for source-grounded jobs;
@@ -92,6 +95,7 @@ export function createConfiguredRunners(
         ...optionalModel(env.CODEX_CLI_MODEL),
         api,
         timeoutMs: positiveInt(env.AGENT_CLI_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS),
+        agenticTimeoutMs,
         ...(env.CLI_CANCEL_GRACE_MS ? { cancelGraceMs: positiveInt(env.CLI_CANCEL_GRACE_MS, 5_000) } : {})
       })
     );
@@ -107,6 +111,7 @@ export function createConfiguredRunners(
         ...optionalModel(env.CLAUDE_CLI_MODEL),
         api,
         timeoutMs: positiveInt(env.AGENT_CLI_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS),
+        agenticTimeoutMs,
         ...(env.CLI_CANCEL_GRACE_MS ? { cancelGraceMs: positiveInt(env.CLI_CANCEL_GRACE_MS, 5_000) } : {})
       })
     );

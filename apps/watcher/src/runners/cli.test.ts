@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
 import { JOB_TYPES, jobDefinition, type JobView, type JobType } from "@magpie/jobs";
 import type { RetrievedSection, WatcherApi } from "../http-client.js";
-import { CliRunner } from "./cli.js";
+import { CliRunner, type CliSpawn, type SpawnedCli } from "./cli.js";
 
 function job(type: JobView["type"], input: unknown): JobView {
   return {
@@ -62,6 +64,54 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     listOpenPullRequests: async () => [],
     getSourceCorpus: async () => [],
     ...overrides
+  };
+}
+
+const SEED_OUTPUT = {
+  title: "Statements Module",
+  targetPath: "statements/overview.md",
+  markdown: "# Statements\n\nGrounded content.",
+  rationale: "Grounded in the Repo checkout."
+};
+const SEED_OUTPUT_JSON = JSON.stringify(SEED_OUTPUT);
+
+function seedJob(provider: "codex" | "claude"): JobView {
+  return job("draft_seed_document", {
+    provider,
+    flowId: "f1",
+    coverage: ["statement ingestion"],
+    sources: [{ id: "s1", name: "Repo", kind: "local", path: "unused-here" }]
+  });
+}
+
+interface SpawnCall {
+  command: string;
+  args: string[];
+  cwd?: string;
+}
+
+// Scripted stand-in for a spawned CLI: real streams so the runner's data
+// listeners work, exit driven by the fake spawn below.
+class FakeChild extends EventEmitter implements SpawnedCli {
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  stdin = new PassThrough();
+  kill(): boolean {
+    return true;
+  }
+}
+
+// A CliSpawn that records every invocation, then emits the given stdout and a
+// clean exit — no real process involved.
+function fakeSpawn(calls: SpawnCall[], stdout: string): CliSpawn {
+  return (command, args, options) => {
+    calls.push({ command, args: [...args], ...(options.cwd !== undefined ? { cwd: options.cwd } : {}) });
+    const child = new FakeChild();
+    setImmediate(() => {
+      child.stdout.emit("data", Buffer.from(stdout));
+      child.emit("close", 0);
+    });
+    return child;
   };
 }
 
@@ -257,5 +307,105 @@ describe("CliRunner", () => {
     const running = runner.run(SUMMARIZE, controller.signal);
     setTimeout(() => controller.abort(new Error("cancelled")), 20);
     await assert.rejects(running);
+  });
+});
+
+describe("CliRunner source-grounded seeding", () => {
+  it("runs draft_seed_document inside the source workspace with hard read-only claude tools", async () => {
+    const calls: SpawnCall[] = [];
+    const runner = new CliRunner({
+      capability: "claude",
+      command: "claude",
+      args: ["-p"],
+      promptMode: "arg",
+      model: "my-model",
+      api: fakeApi(),
+      agenticTimeoutMs: 600_000,
+      prepareWorkspaces: async () => ({
+        workspaces: [
+          { sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" },
+          { sourceId: "s2", name: "Docs", rootDir: "/checkouts/s2" }
+        ],
+        notes: []
+      }),
+      spawnOverride: fakeSpawn(calls, SEED_OUTPUT_JSON)
+    });
+    const output = await runner.run(seedJob("claude"), new AbortController().signal);
+    assert.deepEqual(output, SEED_OUTPUT);
+
+    const call = calls[0]!;
+    // The primary workspace is the CLI's working directory.
+    assert.equal(call.cwd, "/checkouts/s1");
+    // --tools hard-removes everything but the read-only tools (verified live on
+    // claude v2.1.201; --allowedTools alone does NOT block Bash).
+    const toolsAt = call.args.indexOf("--tools");
+    assert.ok(toolsAt >= 0, `expected --tools in ${call.args.join(" ")}`);
+    assert.equal(call.args[toolsAt + 1], "Read,Grep,Glob");
+    // --model must be consumed BEFORE the variadic read-only flags begin, or
+    // --add-dir would swallow it as a directory value.
+    assert.ok(call.args.indexOf("--model") >= 0 && call.args.indexOf("--model") < toolsAt);
+    // Every workspace beyond the first is granted via a repeated --add-dir.
+    const addDirAt = call.args.indexOf("--add-dir");
+    assert.equal(call.args[addDirAt + 1], "/checkouts/s2");
+    // claude's --tools/--add-dir are variadic and would swallow a trailing
+    // positional prompt, so "--" must sit immediately before the prompt.
+    assert.equal(call.args.at(-2), "--");
+    assert.match(call.args.at(-1) ?? "", /Source repositories available/);
+  });
+
+  it("passes --sandbox read-only and --skip-git-repo-check for codex and lists extra workspaces in the prompt", async () => {
+    const calls: SpawnCall[] = [];
+    const runner = new CliRunner({
+      capability: "codex",
+      command: "codex",
+      args: ["exec"],
+      promptMode: "arg",
+      api: fakeApi(),
+      prepareWorkspaces: async () => ({
+        workspaces: [
+          { sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" },
+          { sourceId: "s2", name: "Docs", rootDir: "/checkouts/s2" }
+        ],
+        notes: []
+      }),
+      spawnOverride: fakeSpawn(calls, SEED_OUTPUT_JSON)
+    });
+    const output = await runner.run(seedJob("codex"), new AbortController().signal);
+    assert.deepEqual(output, SEED_OUTPUT);
+
+    const call = calls[0]!;
+    assert.equal(call.cwd, "/checkouts/s1");
+    assert.deepEqual(call.args.slice(1, 4), ["--sandbox", "read-only", "--skip-git-repo-check"]);
+    // codex read-only mode does not confine reads to cwd, so extra workspaces
+    // need no flags — the prompt lists their roots instead.
+    const promptArg = call.args.at(-1) ?? "";
+    assert.match(promptArg, /\/checkouts\/s2/);
+    assert.equal(call.args.includes("--"), false);
+  });
+
+  it("keeps the plain generative path for seed jobs with only non-fs sources", async () => {
+    const calls: SpawnCall[] = [];
+    const runner = new CliRunner({
+      capability: "claude",
+      command: "claude",
+      args: ["-p"],
+      promptMode: "arg",
+      api: fakeApi(),
+      prepareWorkspaces: async () => {
+        throw new Error("must not be called for non-fs sources");
+      },
+      spawnOverride: fakeSpawn(calls, SEED_OUTPUT_JSON)
+    });
+    const nonFsJob = seedJob("claude");
+    (nonFsJob.input as { sources: unknown }).sources = [
+      { id: "i1", name: "Site", kind: "internet", url: "https://x.example" }
+    ];
+    const output = await runner.run(nonFsJob, new AbortController().signal);
+    assert.deepEqual(output, SEED_OUTPUT);
+
+    const call = calls[0]!;
+    assert.equal(call.cwd, undefined);
+    assert.equal(call.args.includes("--tools"), false);
+    assert.equal(call.args.includes("--"), false);
   });
 });
