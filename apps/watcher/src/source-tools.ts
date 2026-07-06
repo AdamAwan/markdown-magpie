@@ -153,8 +153,8 @@ export async function readFile(
 // Literal, case-insensitive substring search — deliberately not a regex. A
 // model-supplied pattern can backtrack catastrophically (ReDoS) and a synchronous
 // regex hang cannot be aborted, whereas literal matching is linear-time by
-// construction. (The glob filter below is built from escaped input, so it is
-// backtracking-safe and cannot throw.)
+// construction. The glob filter uses the same principle: an iterative wildcard
+// matcher, never a RegExp compiled from model input.
 export async function grepWorkspaces(
   workspaces: SourceWorkspace[],
   query: string,
@@ -164,12 +164,12 @@ export async function grepWorkspaces(
     throw new SourceToolError("grep query must not be empty; pass the literal text to search for");
   }
   const needle = query.toLowerCase();
-  const globRegex = glob ? globToRegex(glob) : undefined;
+  const globTokens = glob === undefined ? undefined : tokenizeGlob(glob);
   const hits: string[] = [];
   for (const workspace of workspaces) {
     const keepWalking = walk(workspace.rootDir, (absolute) => {
       const relative = `${workspace.sourceId}/${path.relative(workspace.rootDir, absolute).replaceAll("\\", "/")}`;
-      if (!TEXT_FILE.test(absolute) || (globRegex && !globRegex.test(relative))) {
+      if (!TEXT_FILE.test(absolute) || (globTokens && !matchGlob(globTokens, relative))) {
         return true;
       }
       let content: string;
@@ -222,13 +222,54 @@ function walk(dir: string, visit: (file: string) => boolean): boolean {
   return true;
 }
 
-function globToRegex(glob: string): RegExp {
-  // "*" matches within a path segment, "**" across segments. The "\0" placeholder
-  // keeps the single-star replacement from mangling double stars.
-  const escaped = glob
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replaceAll("**", "\0")
-    .replace(/\*/g, "[^/]*")
-    .replaceAll("\0", ".*");
-  return new RegExp(`^${escaped}$`, "i");
+// Glob semantics for the grep path filter: "*" matches within a path segment,
+// "**" across segments; everything else is a literal, case-insensitive character.
+// Deliberately NOT compiled to a RegExp — a model-supplied glob converted to
+// ".*"-style patterns backtracks catastrophically on pathological inputs. The
+// dynamic-programming matcher below is O(path length × token count) worst case.
+type GlobToken = { kind: "char"; value: string } | { kind: "star" } | { kind: "globstar" };
+
+function tokenizeGlob(glob: string): GlobToken[] {
+  const tokens: GlobToken[] = [];
+  let i = 0;
+  while (i < glob.length) {
+    if (glob[i] === "*") {
+      let stars = 0;
+      while (glob[i] === "*") {
+        stars += 1;
+        i += 1;
+      }
+      tokens.push(stars > 1 ? { kind: "globstar" } : { kind: "star" });
+    } else {
+      tokens.push({ kind: "char", value: glob[i]!.toLowerCase() });
+      i += 1;
+    }
+  }
+  return tokens;
+}
+
+function matchGlob(tokens: GlobToken[], candidate: string): boolean {
+  const text = candidate.toLowerCase();
+  // matched[j]: whether tokens[0..j) match the text consumed so far. Rolled
+  // forward one character at a time — no backtracking, ever.
+  let matched: boolean[] = new Array<boolean>(tokens.length + 1).fill(false);
+  matched[0] = true;
+  for (let j = 1; j <= tokens.length; j += 1) {
+    matched[j] = matched[j - 1]! && tokens[j - 1]!.kind !== "char";
+  }
+  for (const ch of text) {
+    const next: boolean[] = new Array<boolean>(tokens.length + 1).fill(false);
+    for (let j = 1; j <= tokens.length; j += 1) {
+      const token = tokens[j - 1]!;
+      if (token.kind === "char") {
+        next[j] = matched[j - 1]! && token.value === ch;
+      } else if (token.kind === "star") {
+        next[j] = next[j - 1]! || (matched[j]! && ch !== "/");
+      } else {
+        next[j] = next[j - 1]! || matched[j]!;
+      }
+    }
+    matched = next;
+  }
+  return matched[tokens.length]!;
 }

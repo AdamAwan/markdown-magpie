@@ -86,6 +86,28 @@ describe("tools", () => {
     assert.doesNotMatch(dotted, /1x2 grid/);
   });
 
+  it("filters grep hits with segment-aware globs", async () => {
+    const { workspaces } = fixture();
+    // "**" crosses segments, "*" does not.
+    assert.match(await grepWorkspaces(workspaces, "statement", "s1/docs/**"), /docs\/spec\.md/);
+    assert.match(await grepWorkspaces(workspaces, "statement", "**/*.md"), /docs\/spec\.md/);
+    assert.equal(await grepWorkspaces(workspaces, "statement", "s1/*.txt"), "(no matches)");
+    // "*" stays within one path segment: s1/*.md must not reach s1/docs/spec.md.
+    assert.doesNotMatch(await grepWorkspaces(workspaces, "statement", "s1/*.md"), /docs\/spec\.md/);
+    assert.match(await grepWorkspaces(workspaces, "Statements", "s1/*.md"), /readme\.md/);
+  });
+
+  it("matches pathological globs in linear time instead of backtracking", async () => {
+    const { root, workspaces } = fixture();
+    // A long same-character filename plus a "**a"-repeated glob detonates a
+    // backtracking matcher; the DP matcher must return promptly.
+    writeFileSync(path.join(root, `${"a".repeat(200)}.md`), "statement run");
+    const started = performance.now();
+    const hits = await grepWorkspaces(workspaces, "statement", `${"**a".repeat(20)}b`);
+    assert.equal(hits, "(no matches)");
+    assert.ok(performance.now() - started < 1000, "glob matching must not backtrack");
+  });
+
   it("rejects empty grep queries", async () => {
     const { workspaces } = fixture();
     await assert.rejects(grepWorkspaces(workspaces, ""), SourceToolError);
