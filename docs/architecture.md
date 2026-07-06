@@ -39,7 +39,11 @@ hard dependency on one model vendor. **The API never calls a chat model inline.*
 enqueues a job; a separate **watcher** process claims it, invokes the configured
 provider, and posts the result back over HTTP. The API and watcher share only the
 HTTP API and the managed-checkout volume — the watcher has no direct database
-access.
+access. The shared checkout volume now also hosts *source* checkouts for
+source-grounded jobs (seeding): the watcher resolves a job's `SourceDescriptor[]`
+to read-only workspaces there and lets the agent explore them directly, so seeding
+no longer samples source files API-side. See the source-agentic grounding spec
+([docs/superpowers/specs/2026-07-06-source-agentic-grounding-design.md](superpowers/specs/2026-07-06-source-agentic-grounding-design.md)).
 
 Embeddings are the one exception to the queue model: the API computes them **inline**
 (it holds an embedding provider) for both indexing and query-time retrieval, rather than

@@ -283,7 +283,26 @@ POST /api/flows/:flowId/seed
 ```
 
 Each *item* (a title plus the points it should cover) is drafted directly into a
-`draft_seed_document` AI job, grounded in the flow's source material. On completion the API
+`draft_seed_document` AI job, grounded in the flow's source repositories, which the
+executing agent explores directly. The job input carries `sources: SourceDescriptor[]`
+(references to the flow's configured sources — git/local/internet/agent) rather than an
+inline file sample: the API no longer samples source files at enqueue time. The watcher
+resolves each git/local descriptor to a traversable workspace on the shared checkout
+volume (the same `ensureGitCheckout` plumbing publication uses) and grounds the draft in
+two ways depending on provider:
+
+- **CLI providers (`claude`, `codex`)** run inside the primary source checkout read-only —
+  the agent traverses the repository with its own file tools. Read-only enforcement is
+  assembled in code (`--tools Read,Grep,Glob --disallowedTools …` for claude; `--sandbox
+  read-only` for codex) so operator arg config cannot drop it.
+- **HTTP providers (`openai-compatible`, `azure-openai`)** run a bounded Vercel AI SDK tool
+  loop over path-confined read-only tools (`list_dir`/`read_file`/`grep`).
+
+Agentic exploration takes minutes, so these runs use a longer timeout —
+`MAGPIE_AGENTIC_TIMEOUT_MS` (default 600 000 ms / 10 min). Keep it below the
+`draft_seed_document` queue expiration (900 s) so a run cannot outlive its lease. If every
+filesystem-backed source fails to resolve, the job fails loudly rather than drafting an
+ungrounded document. On completion the API
 creates a clusterless proposal carrying the flow's id first-class and reconciles it through the
 shared gate: a seed doc that overlaps an open PR on the same path folds into it, otherwise it
 self-publishes as its own PR. So seeding still ends at a reviewable pull request — the same
