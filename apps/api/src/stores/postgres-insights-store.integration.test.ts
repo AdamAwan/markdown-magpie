@@ -166,10 +166,14 @@ test("journey builds the branching Sankey from real domain rows", { skip: !runIn
     "INSERT INTO gap_cluster_memberships (cluster_id, gap_id, active) VALUES ($1, $2, true)",
     [cluster.rows[0].id, clustered.rows[0].id]
   );
+  // Two proposals off the single cluster: one merged, one still a draft. This makes
+  // prop_total (2) differ from gap_clustered (1) so the boundary link can be asserted
+  // to follow the gap-side count, not the proposal count.
   await pool.query(
     `INSERT INTO proposals (id, title, status, target_path, markdown, gap_cluster_id, closure_status, flow_id, created_at)
-     VALUES ($1, 't', 'merged', 'p.md', '#', $2, 'verified_closed', $3, now())`,
-    [proposalId, cluster.rows[0].id, flow]
+     VALUES ($1, 't', 'merged', 'p.md', '#', $2, 'verified_closed', $3, now()),
+            ($4, 't', 'draft',  'p2.md', '#', $2, NULL,              $3, now())`,
+    [proposalId, cluster.rows[0].id, flow, `${proposalId}-2`]
   );
 
   const to = new Date();
@@ -186,7 +190,11 @@ test("journey builds the branching Sankey from real domain rows", { skip: !runIn
   assert.equal(value("conf_low", "gaps"), 1); // ijq2's gap
   assert.equal(value("gaps", "gap_dismissed"), 1);
   assert.equal(value("gaps", "clustered"), 1);
+  // The gap→proposal boundary link carries the gap-side count (1 clustered gap), not
+  // prop_total (2 proposals) — that keeps "Clustered" conserved. The unit shift to
+  // prop_total surfaces at "Proposals drafted", whose status arms sum to 2.
   assert.equal(value("clustered", "proposals"), 1);
+  assert.equal(value("proposals", "prop_inprogress"), 1); // the draft
   assert.equal(value("proposals", "merged"), 1);
   assert.equal(value("merged", "v_closed"), 1);
 

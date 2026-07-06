@@ -25,7 +25,9 @@ const fixture: JourneySankey = {
     { source: "conf_low", target: "gaps", value: 12 },
     { source: "gaps", target: "gap_dismissed", value: 4 },
     { source: "gaps", target: "clustered", value: 14 },
-    { source: "clustered", target: "proposals", value: 9 },
+    // Boundary link carries the gap-side count (Clustered stays conserved at 14); the
+    // unit shift to proposal counts surfaces at "Proposals drafted" downstream.
+    { source: "clustered", target: "proposals", value: 14 },
     { source: "proposals", target: "merged", value: 6 },
     { source: "merged", target: "v_closed", value: 4 }
   ]
