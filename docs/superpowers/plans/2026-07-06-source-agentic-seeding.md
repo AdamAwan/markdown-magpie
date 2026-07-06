@@ -1,5 +1,7 @@
 # Source-Agentic Seeding (Increment 1) Implementation Plan
 
+> **STATUS — COMPLETE (2026-07-06).** All 7 tasks implemented, adversarially reviewed, and validated (build/typecheck/lint/deadcode/full test suite green; watcher 185/185). Review findings on the agentic tiers were fixed in `c44b913` (no BLOCKER/HIGH). Open as **PR #209** → main. Follow-ups deferred to increments 2–3 and noted in the PR body (codex OS-sandbox deploy check; operator-droppable `-p`/`exec`; `extractJson` fragility; process-group kill).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the blind 24-file source sample in seeding (`draft_seed_document`) with direct agentic access to source checkouts — CLI providers traverse natively, HTTP providers get a bounded Vercel AI SDK tool loop.
