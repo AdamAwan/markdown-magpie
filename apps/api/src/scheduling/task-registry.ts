@@ -1,6 +1,7 @@
 import type { ScheduledTaskSettings } from "@magpie/core";
 import type { JobType } from "@magpie/jobs";
 import type { AppContext } from "../context.js";
+import { flowPublishMode } from "../platform/repositories.js";
 
 // A concrete, schedulable side-process. Each one is a single flow's instance of a
 // template below: it has its own key, schedule, and queued job, so the UI and the
@@ -43,6 +44,10 @@ interface FlowTaskTemplate {
   // snapshot jobs take no input today (`{}`); per-flow jobs take `{flowId}`.
   jobType: JobType;
   input(flowId: string | undefined): unknown;
+  // When true, this task is only meaningful for a flow that publishes to GitHub
+  // (e.g. PR polling). It is NOT expanded for a local-git flow, which has no pull
+  // requests and must never be offered GitHub-shaped scheduled work.
+  githubOnly?: boolean;
 }
 
 const flowTaskTemplates: FlowTaskTemplate[] = [
@@ -76,7 +81,10 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
       "the reconciler stops calling the git host live. Runs more often than the reconciler by default.",
     defaultCron: "*/5 * * * *",
     jobType: "refresh_flow_snapshot",
-    input: () => ({})
+    input: () => ({}),
+    // PR polling: only ever relevant to a GitHub flow. A local-git flow has no pull
+    // requests, so this task is not expanded for it (see listScheduledTasks).
+    githubOnly: true
   },
   {
     baseKey: "fix-patrol",
@@ -122,19 +130,24 @@ function expansionFlows(ctx: AppContext): Array<{ id: string | undefined; name: 
 // Computed from config on each call so adding/removing a flow is picked up
 // without a restart.
 export function listScheduledTasks(ctx: AppContext): ScheduledTaskDefinition[] {
-  return flowTaskTemplates.flatMap((template) =>
-    expansionFlows(ctx).map((flow) => ({
-      key: taskKey(template.baseKey, flow.id),
-      baseKey: template.baseKey,
-      flowId: flow.id,
-      typeLabel: template.typeLabel,
-      label: `${template.typeLabel} · ${flow.name}`,
-      description: template.description,
-      defaultCron: template.defaultCron,
-      jobType: template.jobType,
-      input: template.input(flow.id)
-    }))
-  );
+  const deps = ctx.repositoryDeps();
+  return expansionFlows(ctx).flatMap((flow) => {
+    const isLocalGit = flowPublishMode(deps, flow.id) === "local-git";
+    return flowTaskTemplates
+      // A local-git flow is never offered GitHub-only tasks (PR polling).
+      .filter((template) => !(template.githubOnly && isLocalGit))
+      .map((template) => ({
+        key: taskKey(template.baseKey, flow.id),
+        baseKey: template.baseKey,
+        flowId: flow.id,
+        typeLabel: template.typeLabel,
+        label: `${template.typeLabel} · ${flow.name}`,
+        description: template.description,
+        defaultCron: template.defaultCron,
+        jobType: template.jobType,
+        input: template.input(flow.id)
+      }));
+  });
 }
 
 export function findScheduledTask(ctx: AppContext, key: string): ScheduledTaskDefinition | undefined {

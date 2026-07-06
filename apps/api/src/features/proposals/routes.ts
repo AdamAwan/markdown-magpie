@@ -178,6 +178,27 @@ export function proposalRoutes(ctx: AppContext): Hono {
     return c.json({ proposal, cascadeScheduled: true });
   });
 
+  // Bin (reject) a branch-pushed local-git proposal: mark rejected, freeze its
+  // cluster, and delete the review branch. The local mirror of closing a PR without
+  // merging — there is no cascade (nothing merged), so this returns synchronously.
+  app.post("/:id/reject", requireScopes("manage:knowledge"), async (c) => {
+    const id = c.req.param("id");
+    const existing = await proposalsService.get(ctx, id);
+    if (!existing || !can(ctx, c, "read", existing.flowId)) {
+      throw new HttpError(404, "proposal_not_found");
+    }
+    assertCan(ctx, c, "manage", existing.flowId);
+
+    const outcome = await proposalsService.rejectLocalProposal(ctx, existing);
+    if (!outcome.ok) {
+      // Client/state errors (wrong status or non-local destination) — 409 Conflict
+      // with the specific code, symmetric with the merge route.
+      throw new HttpError(409, outcome.code, outcome.message);
+    }
+
+    return c.json({ proposal: outcome.proposal });
+  });
+
   // Maintenance callback: the watcher claims a verify_gap_closure job and POSTs
   // here (mirroring the reconcile/patrol endpoints). The API holds the
   // orchestration — re-asking the triggering questions and running the

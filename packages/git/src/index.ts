@@ -1056,6 +1056,32 @@ export async function mergeLocalProposalBranch(
   });
 }
 
+export interface DeleteLocalProposalBranchRequest {
+  // The destination repo's own working tree (the folder the user browses). The
+  // proposal branch was pushed here, so it exists as a local ref.
+  repoPath: string;
+  branchName: string;
+  // Checked out first so the branch being deleted is never the current branch
+  // (git refuses to delete the checked-out branch).
+  defaultBranch: string;
+}
+
+// Deletes an unmerged proposal review branch from a local-git destination — the
+// "Bin" (reject) action, the local analog of closing a pull request without
+// merging. Checks out the default branch (so the deleted branch is never current),
+// then force-deletes the branch. Best-effort delete: a missing branch is not an
+// error (the desired end state — the branch is gone — already holds). Serialized on
+// the checkout lock like merge/publish, since it mutates the shared `.git`.
+export async function deleteLocalProposalBranch(
+  request: DeleteLocalProposalBranchRequest
+): Promise<void> {
+  const { repoPath, branchName, defaultBranch } = request;
+  await withCheckoutLock(repoPath, async () => {
+    await git(repoPath, ["checkout", defaultBranch]);
+    await tryGit(repoPath, ["branch", "-D", branchName]);
+  });
+}
+
 function resolveTargetPath(repository: RepositoryRef, targetPath: string): string {
   const normalizedTargetPath = toPosixPath(targetPath).replace(/^\/+/, "");
   const relativePathFromRoot = repository.git?.relativePathFromRoot;

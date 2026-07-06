@@ -19,7 +19,7 @@ import type { JobState, JobView, verifyGapClosureOutputSchema } from "@magpie/jo
 import { parseCompletedJobOutput, runJobToCompletion } from "../jobs/service.js";
 import { evaluateClosure, proposalTargetPaths } from "./closure-eval.js";
 import { fileURLToPath } from "node:url";
-import { mergeLocalProposalBranch } from "@magpie/git";
+import { deleteLocalProposalBranch, mergeLocalProposalBranch } from "@magpie/git";
 import { z } from "zod";
 import {
   answerQuestionOutputSchema,
@@ -37,6 +37,7 @@ import {
   defaultDestinationId,
   destinationSubpath,
   findRepositoryForProposal,
+  isFileUrl,
   resolveConfiguredRepositoryLocalPath,
   selectDestinationForProposal,
   selectFlow
@@ -742,17 +743,6 @@ async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal
   }
 }
 
-function isFileUrl(url: string | undefined): url is string {
-  if (!url) {
-    return false;
-  }
-  try {
-    return new URL(url).protocol === "file:";
-  } catch {
-    return false;
-  }
-}
-
 // True when the proposal's configured destination is a local-git (file://)
 // repository — the case where the console offers a real Merge instead of the
 // hosted "Mark Merged". Config-only (no git/network), cheap enough per list item.
@@ -817,6 +807,68 @@ export async function mergeLocalProposal(
     return { ok: false, code: "proposal_not_mergeable", message: "Proposal not found." };
   }
   return { ok: true, proposal: merged };
+}
+
+export type RejectLocalProposalResult =
+  | { ok: true; proposal: Proposal }
+  | {
+      ok: false;
+      code: "proposal_not_rejectable" | "not_local_git_destination";
+      message: string;
+    };
+
+// Bins (rejects) a branch-pushed local-git proposal — the local mirror of a GitHub
+// pull request closed without merging (see applyPullRequestTransition): mark the
+// proposal `rejected`, freeze its gap cluster so it is not re-drafted, and delete
+// the pushed review branch. The branch delete is injected so tests exercise the
+// orchestration without shelling out. Marking rejected + freezing is the
+// authoritative state and happens first; a failed branch delete is logged but does
+// not fail the rejection (the leftover branch is stale and harmless), mirroring how
+// the merge path treats its post-merge branch cleanup as best-effort.
+export async function rejectLocalProposal(
+  ctx: AppContext,
+  proposal: Proposal,
+  deleteBranch: typeof deleteLocalProposalBranch = deleteLocalProposalBranch
+): Promise<RejectLocalProposalResult> {
+  if (proposal.status !== "branch-pushed" || !proposal.publication?.branchName) {
+    return {
+      ok: false,
+      code: "proposal_not_rejectable",
+      message: "Only a branch-pushed proposal with a published branch can be rejected."
+    };
+  }
+
+  const destination = selectDestinationForProposal(ctx.repositoryDeps(), proposal);
+  if (!destination || !isFileUrl(destination.url)) {
+    return {
+      ok: false,
+      code: "not_local_git_destination",
+      message: "This proposal's destination is not a local-git (file://) repository."
+    };
+  }
+
+  const rejected = await ctx.stores.proposals.updateStatus(proposal.id, "rejected");
+  if (!rejected) {
+    return { ok: false, code: "proposal_not_rejectable", message: "Proposal not found." };
+  }
+  if (rejected.gapClusterId) {
+    await ctx.stores.gapClusters.freezeCluster(rejected.gapClusterId);
+  }
+
+  try {
+    await deleteBranch({
+      repoPath: fileURLToPath(destination.url),
+      branchName: proposal.publication.branchName,
+      defaultBranch: destination.branch?.trim() || "main"
+    });
+  } catch (error) {
+    logger.warn(
+      { proposalId: proposal.id, err: error instanceof Error ? error.message : String(error) },
+      "reject: branch delete failed (proposal already rejected and frozen)"
+    );
+  }
+
+  return { ok: true, proposal: rejected };
 }
 
 type PublishValidationError = {
