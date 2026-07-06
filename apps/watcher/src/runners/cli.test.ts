@@ -84,6 +84,17 @@ function seedJob(provider: "codex" | "claude"): JobView {
   });
 }
 
+function proposalJob(provider: "codex" | "claude"): JobView {
+  return job("draft_markdown_proposal", {
+    provider,
+    gapSummaries: ["refunds"],
+    triggeringQuestions: [],
+    evidence: [],
+    sources: [{ id: "s1", name: "Repo", kind: "local", path: "unused-here" }],
+    expectedOutput: "markdown_proposal"
+  });
+}
+
 interface SpawnCall {
   command: string;
   args: string[];
@@ -442,5 +453,31 @@ describe("CliRunner source-grounded seeding", () => {
     // Wait past the grace window so the escalation timer fires.
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  });
+
+  it("routes draft_markdown_proposal with fs sources through the read-only source-grounded path", async () => {
+    const calls: SpawnCall[] = [];
+    const runner = new CliRunner({
+      capability: "claude",
+      command: "claude",
+      args: ["-p"],
+      promptMode: "arg",
+      api: fakeApi(),
+      prepareWorkspaces: async () => ({
+        workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }],
+        notes: []
+      }),
+      spawnOverride: fakeSpawn(calls, SEED_OUTPUT_JSON)
+    });
+    const output = await runner.run(proposalJob("claude"), new AbortController().signal);
+    assert.deepEqual(output, SEED_OUTPUT);
+
+    const call = calls[0]!;
+    // cwd = the workspace root and the hard read-only tools present ⇒ it went
+    // through runSourceGrounded, not the plain generative path.
+    assert.equal(call.cwd, "/checkouts/s1");
+    assert.ok(call.args.includes("--tools"));
+    assert.equal(call.args[call.args.indexOf("--tools") + 1], "Read,Grep,Glob");
+    assert.equal(call.args.at(-2), "--");
   });
 });

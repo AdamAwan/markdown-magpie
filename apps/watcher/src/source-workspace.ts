@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { SourceDescriptor } from "@magpie/core";
 import { ensureGitCheckout } from "@magpie/git";
-import { draftSeedDocumentInputSchema, type JobView } from "@magpie/jobs";
+import { draftMarkdownProposalInputSchema, draftSeedDocumentInputSchema, type JobView } from "@magpie/jobs";
 import { logger } from "./logger.js";
 
 // A resolved, traversable root for one fs-backed source. Both execution tiers
@@ -26,14 +26,17 @@ export function hasFsSources(descriptors: SourceDescriptor[]): boolean {
 }
 
 // The source descriptors of a source-grounded job, [] for every other job type.
-// Increment 1: seeding only; increments 2-3 add draft_markdown_proposal and the
-// patrol jobs here.
+// Increments 1-2: seeding and gap drafting; increment 3 adds the patrol jobs here.
 export function sourceDescriptorsOf(job: JobView): SourceDescriptor[] {
-  if (job.type !== "draft_seed_document") {
-    return [];
+  if (job.type === "draft_seed_document") {
+    const parsed = draftSeedDocumentInputSchema.safeParse(job.input);
+    return parsed.success ? parsed.data.sources : [];
   }
-  const parsed = draftSeedDocumentInputSchema.safeParse(job.input);
-  return parsed.success ? parsed.data.sources : [];
+  if (job.type === "draft_markdown_proposal") {
+    const parsed = draftMarkdownProposalInputSchema.safeParse(job.input);
+    return parsed.success ? parsed.data.sources : [];
+  }
+  return [];
 }
 
 // Resolves source descriptors to workspaces on the shared checkout volume — the
