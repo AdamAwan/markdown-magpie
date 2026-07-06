@@ -580,11 +580,38 @@ async function findOpenPullRequest(
   return match ? { url: match.html_url as string, number: match.number as number } : undefined;
 }
 
+// Whether an open PR still merges cleanly into its base. GitHub computes this
+// asynchronously, so a freshly-pushed or freshly-changed PR reads "unknown" until
+// the background check settles — callers must treat "unknown" as "no signal", never
+// as a trigger. "conflicting" means the base moved under the branch and the merge no
+// longer applies.
+export type PullRequestMergeability = "mergeable" | "conflicting" | "unknown";
+
 export interface PullRequestStatus {
   merged: boolean;
   // GitHub reports a merged PR as state "closed"; `merged` disambiguates a merge
   // from a close-without-merge.
   state: "open" | "closed";
+  // Derived from GitHub's `mergeable` / `mergeable_state` fields on the PR read.
+  mergeable: PullRequestMergeability;
+}
+
+// Maps GitHub's PR `mergeable` (true | false | null) and `mergeable_state`
+// (clean | dirty | blocked | behind | unstable | unknown) onto our tri-state.
+// `mergeable_state === "dirty"` is GitHub's explicit "has conflicts" marker; a
+// boolean `mergeable === false` corroborates it. Anything not yet computed (null /
+// "unknown") is reported as "unknown" so callers never act on an unsettled read.
+export function toMergeability(
+  mergeable: boolean | null | undefined,
+  mergeableState: string | undefined
+): PullRequestMergeability {
+  if (mergeable === false || mergeableState === "dirty") {
+    return "conflicting";
+  }
+  if (mergeable === true) {
+    return "mergeable";
+  }
+  return "unknown";
 }
 
 export interface PullRequestPoll {
@@ -644,10 +671,19 @@ export async function fetchPullRequestStatusCached(
     throw new Error(`GitHub pull request lookup failed (${response.status}): ${detail.slice(0, 500)}`);
   }
 
-  const data = (await response.json()) as { merged?: boolean; state?: string };
+  const data = (await response.json()) as {
+    merged?: boolean;
+    state?: string;
+    mergeable?: boolean | null;
+    mergeable_state?: string;
+  };
   return {
     notModified: false,
-    status: { merged: Boolean(data.merged), state: data.state === "closed" ? "closed" : "open" },
+    status: {
+      merged: Boolean(data.merged),
+      state: data.state === "closed" ? "closed" : "open",
+      mergeable: toMergeability(data.mergeable, data.mergeable_state)
+    },
     etag: response.headers.get("etag") ?? undefined
   };
 }
