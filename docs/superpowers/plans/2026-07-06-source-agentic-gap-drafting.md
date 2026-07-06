@@ -1,5 +1,7 @@
 # Source-Agentic Gap Drafting (Increment 2) Implementation Plan
 
+> **STATUS — COMPLETE (2026-07-07).** All 5 tasks implemented via subagent-driven development (Tasks 1-2 with per-task spec + code-quality review; Tasks 3-4 inline + a final consolidated review, verdict ready-to-merge). Validated: build/typecheck/lint(0 errors)/deadcode clean; watcher 188, prompts 9, jobs 53, apps/api 688. Open as **PR #210** → main. Increment 3 (patrols + sampler demolition) still to come.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Move gap drafting (`draft_markdown_proposal` / `draftFromGaps`) onto the source-agentic grounding model that increment 1 built for seeding — the job carries `SourceDescriptor[]` references instead of a blind file sample, and the watcher lets the agent explore the source checkout directly.
