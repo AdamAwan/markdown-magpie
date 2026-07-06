@@ -121,8 +121,8 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
   const background = new BackgroundRunner();
 
   // Single source of truth for the pg-boss schema shared by the broker (which
-  // owns the job/archive tables) and the insights store (which reads them for the
-  // throughput chart). No config override exists, so both use the default.
+  // owns the job table) and the insights store (which reads it for the throughput
+  // chart). No config override exists, so both use the default.
   const pgBossSchema = DEFAULT_PGBOSS_SCHEMA;
   const jobs: JobBroker = new PgBossJobBroker({
     connectionString: databaseUrl,

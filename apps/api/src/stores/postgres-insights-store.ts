@@ -46,8 +46,8 @@ const FRESHNESS_SOON_DAYS = 7;
 const FRESHNESS_STALE_DAYS = 7;
 
 export class PostgresInsightsStore implements InsightsStore {
-  // `pgBossSchema` is the schema pg-boss stores its `job`/`archive` tables in. It
-  // is interpolated into SQL (pg identifiers cannot be parameterised), so it is
+  // `pgBossSchema` is the schema pg-boss stores its `job` table in. It is
+  // interpolated into SQL (pg identifiers cannot be parameterised), so it is
   // re-validated against the same guard the broker uses before being trusted.
   constructor(
     private readonly pool: pg.Pool,
@@ -129,12 +129,13 @@ export class PostgresInsightsStore implements InsightsStore {
   // Job throughput & health (C2). Buckets pg-boss jobs by `created_on` and splits
   // them into completed / failed / active / retry counts per bucket.
   //
-  // pg-boss keeps *live* rows in "<schema>".job and migrates completed/failed rows
-  // to "<schema>".archive once they pass retention. Querying `job` alone would
-  // therefore lose all finished history, so both tables are UNION ALL'd (a job is
-  // in exactly one of them at a time, so there is no double counting). `type`, when
-  // given, narrows to specific pg-boss queue names (resolved from a JobType by the
-  // service layer); it is matched with `= ANY($4)` so it never touches SQL text.
+  // pg-boss v12 keeps every job — live *and* finished — in the partitioned
+  // "<schema>".job table; a completed/failed row stays there until pg-boss's
+  // retention (`keep_until`) purges it. There is no separate `archive` table (it
+  // was removed in pg-boss v10), so `job` alone holds all history within the
+  // retention window. `type`, when given, narrows to specific pg-boss queue names
+  // (resolved from a JobType by the service layer); it is matched with `= ANY($4)`
+  // so it never touches SQL text.
   async jobThroughput(range: InsightsRange, queueNames?: string[]): Promise<JobThroughputBucket[]> {
     const unit = UNIT[range.bucket];
     // `undefined` means no type filter (match all queues); an explicit empty array
@@ -162,8 +163,6 @@ export class PostgresInsightsStore implements InsightsStore {
       ),
       jobs AS (
         SELECT name, state, created_on FROM "${this.pgBossSchema}".job
-        UNION ALL
-        SELECT name, state, created_on FROM "${this.pgBossSchema}".archive
       ),
       scoped AS (
         SELECT date_trunc($3, created_on) AS b, state::text AS state
@@ -306,11 +305,11 @@ export class PostgresInsightsStore implements InsightsStore {
     ];
   }
 
-  // Answer-latency histogram (C4). Reads pg-boss's own job + archive tables (a
-  // completed answer_question row migrates from `job` to `archive` after its
-  // retention window, so both must be scanned or older answers vanish), measures
-  // each completed answer's end-to-end duration (completed_on - created_on), and
-  // bins it into the fixed LATENCY_BINS. `created_on` is used for the window filter
+  // Answer-latency histogram (C4). Reads pg-boss's `job` table (completed
+  // answer_question rows stay there until retention purges them; pg-boss v12 has no
+  // separate `archive` table), measures each completed answer's end-to-end duration
+  // (completed_on - created_on), and bins it into the fixed LATENCY_BINS.
+  // `created_on` is used for the window filter
   // so a bar reflects answers *asked* in the last 30 days, matching the other
   // charts' "activity in the window" semantics. Empty bins are returned as zero so
   // the histogram always shows every range.
@@ -323,12 +322,6 @@ export class PostgresInsightsStore implements InsightsStore {
       WITH answers AS (
         SELECT created_on, completed_on
         FROM "${this.pgBossSchema}".job
-        WHERE name LIKE $3 || '%' AND state = 'completed'
-          AND completed_on IS NOT NULL
-          AND created_on >= $1::timestamptz AND created_on <= $2::timestamptz
-        UNION ALL
-        SELECT created_on, completed_on
-        FROM "${this.pgBossSchema}".archive
         WHERE name LIKE $3 || '%' AND state = 'completed'
           AND completed_on IS NOT NULL
           AND created_on >= $1::timestamptz AND created_on <= $2::timestamptz
@@ -421,9 +414,9 @@ export class PostgresInsightsStore implements InsightsStore {
   // payload in the job's `output` JSONB column when a job fails (see the broker's
   // `fail`), so `output->>'category'` is the error category. The queue `name` is
   // the job type plus an optional `__<capability>` fan-out suffix, so
-  // `split_part(name, '__', 1)` recovers the base job type. Completed/failed rows
-  // migrate from `job` to `archive` after retention, so both are UNION ALL'd (a job
-  // is in exactly one at a time — no double counting). Ordered most-frequent-first.
+  // `split_part(name, '__', 1)` recovers the base job type. Failed rows stay in the
+  // partitioned `job` table until retention purges them (pg-boss v12 has no separate
+  // `archive` table), so `job` alone holds them. Ordered most-frequent-first.
   // The window filters on `created_on` (when the job was enqueued), not on failure
   // time, matching C2 `jobThroughput`'s creation-time axis; jobs fail shortly after
   // creation, so the two are effectively the same over a 30-day window.
@@ -432,8 +425,6 @@ export class PostgresInsightsStore implements InsightsStore {
       `
       WITH jobs AS (
         SELECT name, state, output, created_on FROM "${this.pgBossSchema}".job
-        UNION ALL
-        SELECT name, state, output, created_on FROM "${this.pgBossSchema}".archive
       ),
       failed AS (
         SELECT name, output
