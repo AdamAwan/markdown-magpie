@@ -19,7 +19,7 @@ import type { JobState, JobView, verifyGapClosureOutputSchema } from "@magpie/jo
 import { parseCompletedJobOutput, runJobToCompletion } from "../jobs/service.js";
 import { evaluateClosure, proposalTargetPaths } from "./closure-eval.js";
 import { fileURLToPath } from "node:url";
-import { deleteLocalProposalBranch, mergeLocalProposalBranch } from "@magpie/git";
+import { deleteLocalProposalBranch, mergeLocalProposalBranch, resolveLocalGitTargetBranch } from "@magpie/git";
 import { z } from "zod";
 import {
   answerQuestionOutputSchema,
@@ -794,7 +794,7 @@ export async function mergeLocalProposal(
   }
 
   const repoPath = fileURLToPath(destination.url);
-  const defaultBranch = destination.branch?.trim() || "main";
+  const defaultBranch = await resolveLocalGitTargetBranch(repoPath, destination.branch);
 
   try {
     await merge({ repoPath, branchName: proposal.publication.branchName, defaultBranch });
@@ -860,10 +860,11 @@ export async function rejectLocalProposal(
   }
 
   try {
+    const repoPath = fileURLToPath(destination.url);
     await deleteBranch({
-      repoPath: fileURLToPath(destination.url),
+      repoPath,
       branchName: proposal.publication.branchName,
-      defaultBranch: destination.branch?.trim() || "main"
+      defaultBranch: await resolveLocalGitTargetBranch(repoPath, destination.branch)
     });
   } catch (error) {
     logger.warn(

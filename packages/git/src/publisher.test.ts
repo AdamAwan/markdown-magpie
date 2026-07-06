@@ -41,6 +41,25 @@ describe("LocalGitProposalPublisher create-or-update", () => {
     assert.notEqual(second.commitSha, first.commitSha, "a new commit lands on the existing branch");
   });
 
+  it("fails clearly when the configured base branch does not exist", async () => {
+    const { repository } = await initBareRemoteWithClone();
+    // The remote only has `main`; a stale/misconfigured default of `master` must
+    // surface a named error, not git's opaque "invalid reference: master".
+    const publisher = new LocalGitProposalPublisher();
+
+    await assert.rejects(
+      () =>
+        publisher.publish({
+          repository: { ...repository, defaultBranch: "master" },
+          branchName: "magpie/topic",
+          title: "docs: topic",
+          markdown: "# v1\n",
+          targetPath: "docs/topic.md"
+        }),
+      /branch "master".*does not exist/
+    );
+  });
+
   it("returns the existing tip when the regenerated document is unchanged", async () => {
     const { repository } = await initBareRemoteWithClone();
     const publisher = new LocalGitProposalPublisher();

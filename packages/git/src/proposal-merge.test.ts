@@ -47,6 +47,17 @@ test("mergeLocalProposalBranch merges the branch into main and deletes it", asyn
   assert.equal(branches.stdout.trim(), "", "merged proposal branch is deleted");
 });
 
+test("mergeLocalProposalBranch fails clearly when the target branch does not exist", async () => {
+  const repoPath = await initRepoWithProposalBranch();
+
+  // The repo only has `main` (+ the proposal branch); a misconfigured default of
+  // `master` must produce a named error, not git's opaque "pathspec did not match".
+  await assert.rejects(
+    () => mergeLocalProposalBranch({ repoPath, branchName: BRANCH, defaultBranch: "master" }),
+    /branch "master".*does not exist/
+  );
+});
+
 test("mergeLocalProposalBranch aborts and throws on conflict, leaving main untouched", async () => {
   const repoPath = path.join(await mkdtemp(path.join(tmpdir(), "magpie-merge-")), "repo");
   await mkdir(repoPath, { recursive: true });

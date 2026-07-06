@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { DocumentSection, EmbeddingProvider, GitRepositoryContext, KnowledgeDocument, RankedSection, RepositoryRef } from "@magpie/core";
 import { parseMarkdownDocument, splitIntoSections } from "@magpie/markdown";
-import { isAncestor, listChangedMarkdown, type ChangedMarkdownFile } from "@magpie/git";
+import { isAncestor, listChangedMarkdown, resolvePrimaryBranch, type ChangedMarkdownFile } from "@magpie/git";
 import { fuseRankings } from "@magpie/retrieval";
 import { logger } from "../logger.js";
 import { LruCache } from "./lru-cache.js";
@@ -186,13 +186,22 @@ export class InMemoryKnowledgeIndex {
     localPath: string;
     repositoryId?: string;
     name?: string;
+    configuredBranch?: string;
   }): Promise<IndexedRepositorySummary> {
     const localPath = resolveLocalPath(input.localPath);
     const git = await detectGitContext(localPath);
     const repository: RepositoryRef = {
       id: input.repositoryId ?? slugify(path.basename(localPath)),
       name: input.name ?? path.basename(localPath),
-      defaultBranch: git.defaultBranch ?? git.currentBranch ?? "main",
+      // The single primary-branch precedence: configured `branch` wins, else the
+      // detected origin/HEAD default, else the current branch, else "main". Making
+      // this authoritative here means every downstream consumer can read
+      // `defaultBranch` instead of re-deriving it and diverging.
+      defaultBranch: resolvePrimaryBranch({
+        configuredBranch: input.configuredBranch,
+        detectedDefault: git.defaultBranch,
+        detectedCurrent: git.currentBranch
+      }),
       localPath,
       provider: "local",
       remoteUrl: git.remoteUrl,

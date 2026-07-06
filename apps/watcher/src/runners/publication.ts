@@ -19,6 +19,7 @@ import {
   LocalGitProposalPublisher,
   raisePullRequest,
   commentOnPullRequest,
+  resolvePrimaryBranch,
   type RaisePullRequestRequest,
   type RaisedPullRequest
 } from "@magpie/git";
@@ -213,7 +214,11 @@ export class PublicationRunner {
       );
     } else {
       try {
-        const baseBranch = repository.defaultBranch || repository.git?.defaultBranch || "main";
+        const baseBranch = resolvePrimaryBranch({
+          configuredBranch: repository.defaultBranch,
+          detectedDefault: repository.git?.defaultBranch,
+          detectedCurrent: repository.git?.currentBranch
+        });
         const raised = await this.deps.raisePullRequest({
           remoteUrl: publication.remoteUrl,
           headBranch: publication.branchName,
