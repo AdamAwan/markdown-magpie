@@ -928,6 +928,11 @@ export interface PublishProposalBranchResponse {
   branchName: string;
   commitSha: string;
   remoteUrl?: string;
+  // True when the proposal's content was byte-identical to what the base already
+  // carries on a fresh branch create, so nothing was published (no branch pushed).
+  // The generated doc is a no-op — autonomous generation can emit one — and the
+  // caller settles the proposal as superseded rather than treating it as a failure.
+  noChange?: boolean;
 }
 
 // ---------------------------------------------------------------------------

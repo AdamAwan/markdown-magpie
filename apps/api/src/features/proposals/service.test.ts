@@ -1981,3 +1981,48 @@ test("rejectLocalProposal rejects a proposal that is not branch-pushed", async (
   const result = await proposals.rejectLocalProposal(ctx, proposal, async () => undefined);
   assert.equal(result.ok === false && result.code, "proposal_not_rejectable");
 });
+
+test("recordPublicationFromCompletedJob supersedes a proposal when the publish was a no-op", async () => {
+  const ctx = makeTestContext();
+  const created = await ctx.stores.proposals.create({
+    title: "Already covered",
+    targetPath: "already-covered.md",
+    markdown: "# Already covered\n",
+    rationale: "r",
+    evidence: []
+  });
+  const job = await ctx.jobs.create("publish_proposal", { proposalId: created.id, destination: "local-git" });
+
+  const updated = await proposals.recordPublicationFromCompletedJob(ctx, job, {
+    proposalId: created.id,
+    branchName: "magpie/proposal-x",
+    commitSha: "basetip",
+    publishedAt: new Date().toISOString(),
+    noChange: true
+  });
+
+  assert.equal(updated?.status, "superseded", "a no-op publish settles the proposal as superseded");
+  assert.equal(updated?.publication, undefined, "no publication branch is recorded for a no-op");
+});
+
+test("recordPublicationFromCompletedJob records the branch when the publish changed files", async () => {
+  const ctx = makeTestContext();
+  const created = await ctx.stores.proposals.create({
+    title: "Real change",
+    targetPath: "real-change.md",
+    markdown: "# Real change\n",
+    rationale: "r",
+    evidence: []
+  });
+  const job = await ctx.jobs.create("publish_proposal", { proposalId: created.id, destination: "local-git" });
+
+  const updated = await proposals.recordPublicationFromCompletedJob(ctx, job, {
+    proposalId: created.id,
+    branchName: "magpie/proposal-y",
+    commitSha: "newcommit",
+    publishedAt: new Date().toISOString()
+  });
+
+  assert.notEqual(updated?.status, "superseded", "a real publish is not superseded");
+  assert.equal(updated?.publication?.branchName, "magpie/proposal-y", "the published branch is recorded");
+});

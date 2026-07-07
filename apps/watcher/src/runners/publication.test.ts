@@ -142,6 +142,31 @@ describe("PublicationRunner", () => {
     assert.equal(parsed.pullRequestUrl, "https://github.com/acme/docs/pull/9");
   });
 
+  it("reports a no-op publish and raises no PR when the content already matches the base", async () => {
+    let prRaised = false;
+    const runner = new PublicationRunner(fakeApi(), {
+      prepareRepository: async (repository) => repository,
+      publishProposal: async (request) => ({
+        branchName: request.branchName,
+        commitSha: "basetip",
+        remoteUrl: REPOSITORY.remoteUrl,
+        noChange: true
+      }),
+      publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
+      raisePullRequest: async () => {
+        prRaised = true;
+        return { url: "https://github.com/acme/docs/pull/7", number: 7 };
+      },
+      commentOnPullRequest: async () => undefined
+    });
+
+    const output = await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), new AbortController().signal);
+    const parsed = publishProposalOutputSchema.parse(output);
+    assert.equal(parsed.noChange, true, "the output flags the no-op so the API can supersede the proposal");
+    assert.equal(parsed.pullRequestUrl, undefined, "a no-op publishes no branch, so there is no PR");
+    assert.equal(prRaised, false, "a no-op never attempts to raise a PR");
+  });
+
   it("degrades to a branch-only proposal publish when PR raising fails", async () => {
     const runner = new PublicationRunner(fakeApi(), {
       prepareRepository: async (repository) => repository,

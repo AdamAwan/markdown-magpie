@@ -475,7 +475,11 @@ export const publishProposalOutputSchema = z.object({
   commitSha: z.string(),
   remoteUrl: z.string().optional(),
   pullRequestUrl: z.string().optional(),
-  publishedAt: z.string()
+  publishedAt: z.string(),
+  // True when the generated content was byte-identical to the base on a fresh
+  // create, so no branch was pushed. The API settles the proposal as superseded
+  // instead of recording a (non-existent) published branch.
+  noChange: z.boolean().optional()
 });
 
 export const sourceChangeSyncInputSchema = z.object({ flowId: z.string().optional() });
