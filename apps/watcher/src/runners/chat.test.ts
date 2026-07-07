@@ -730,6 +730,49 @@ describe("ChatRunner", () => {
     assert.equal(output.merges[0].confirmed, false, "unparseable critic ⇒ not confirmed");
   });
 
+  it("parses a reshape proposal even when the model fences the JSON in prose (reconcile_gap_clusters)", async () => {
+    // Providers routinely wrap JSON in a ```json fence or a sentence of preamble.
+    // The propose path must tolerate that (via extractJson) rather than silently
+    // discarding the whole proposal — the fan-out bug where 100 overlapping clusters
+    // each became a proposal because a fenced proposal parsed to empty merges.
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("strict reviewer")) {
+        return JSON.stringify({ verdicts: [{ id: "merge-0", confirmed: true }] });
+      }
+      return "Here is the reshape:\n```json\n" +
+        JSON.stringify({ merges: [{ clusterIds: ["c1", "c2"], rationale: "same doc covers both" }], splits: [], dismissals: [] }) +
+        "\n```";
+    });
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const output = (await runner.run(
+      job("reconcile_gap_clusters", {
+        provider: "openai-compatible",
+        clusters: [
+          { id: "c1", title: "Alpha" },
+          { id: "c2", title: "Beta" }
+        ]
+      }),
+      new AbortController().signal
+    )) as { merges: Array<{ clusterIds: string[]; confirmed: boolean }> };
+    assert.equal(output.merges.length, 1, "the fenced proposal was parsed, not discarded");
+    assert.deepEqual(output.merges[0].clusterIds, ["c1", "c2"]);
+    assert.equal(output.merges[0].confirmed, true, "the parsed merge reached the critic and was confirmed");
+  });
+
+  it("asks the provider for JSON on the reshape propose call (reconcile_gap_clusters)", async () => {
+    const chat = new FakeChatProvider(() => JSON.stringify({ merges: [], splits: [], dismissals: [] }));
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    await runner.run(
+      job("reconcile_gap_clusters", {
+        provider: "openai-compatible",
+        clusters: [{ id: "c1", title: "Alpha" }]
+      }),
+      new AbortController().signal
+    );
+    const propose = chat.requests.find((r) => !r.system.includes("strict reviewer"));
+    assert.equal(propose?.responseFormat, "json", "the propose call requests JSON mode like the critic does");
+  });
+
   it("dispatches a seed job with fs sources to the source-agent loop", async () => {
     // A draft_seed_document carrying a local-kind source must run the agentic tool
     // loop over prepared workspaces, not the one-shot generative path.

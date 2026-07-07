@@ -200,6 +200,24 @@ export class PublicationRunner {
         ...(regenerate ? { regenerate: true } : {})
       });
     }
+    // A no-op create: the generated content already matches the base, so no branch
+    // was pushed and there is nothing to open a PR for. Report it so the API settles
+    // the proposal as superseded rather than recording a published branch.
+    if (publication.noChange) {
+      logger.info(
+        { jobId: job.id, proposalId, branchName: publication.branchName },
+        `publish_proposal[${job.id}]: proposal is a no-op (content already in the base); nothing published`
+      );
+      return publishProposalOutputSchema.parse({
+        proposalId,
+        branchName: publication.branchName,
+        commitSha: publication.commitSha,
+        ...(publication.remoteUrl ? { remoteUrl: publication.remoteUrl } : {}),
+        publishedAt: new Date().toISOString(),
+        noChange: true
+      });
+    }
+
     logger.info({ jobId: job.id, branchName: publication.branchName, commitSha: publication.commitSha.slice(0, 8) }, `publish_proposal[${job.id}]: pushed ${publication.branchName} at ${publication.commitSha.slice(0, 8)}`);
 
     // The branch is pushed. For a github destination, try to open a PR — a PR

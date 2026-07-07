@@ -929,15 +929,23 @@ export class LocalGitProposalPublisher {
 
       const status = await git(worktreePath, ["status", "--porcelain", "--", targetPath]);
       if (!status.trim()) {
-        // No content change against the base. On a fresh create this is an error. On
-        // an in-place update it means the regenerated doc is identical — return the
-        // current tip. On a regenerate it means the fresh base already carries this
-        // exact content, so the branch (now reset to base) needs force-pushing to
-        // clear the stale divergence, then we return the base tip.
-        if (!branchExists) {
-          throw new Error(`Proposal does not change ${targetPath}`);
-        }
+        // No content change against the base. On a fresh create the generated doc is
+        // a no-op — the base already carries this exact content — so there is nothing
+        // to publish: return the base tip flagged noChange rather than throwing, and
+        // the caller settles the proposal as superseded. On an in-place update it
+        // means the regenerated doc is identical — return the current tip. On a
+        // regenerate it means the fresh base already carries this exact content, so
+        // the branch (now reset to base) needs force-pushing to clear the stale
+        // divergence, then we return the base tip.
         const head = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
+        if (!branchExists) {
+          return {
+            branchName: request.branchName,
+            commitSha: head,
+            remoteUrl: request.repository.remoteUrl ?? request.repository.git?.remoteUrl,
+            noChange: true
+          };
+        }
         if (request.regenerate) {
           await git(worktreePath, ["push", "--force-with-lease", "-u", "origin", request.branchName], authEnv);
         }
@@ -1024,15 +1032,16 @@ export class LocalGitProposalPublisher {
 
       const status = await git(worktreePath, ["status", "--porcelain"]);
       if (!status.trim()) {
-        if (branchExists) {
-          const head = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
-          return {
-            branchName: request.branchName,
-            commitSha: head,
-            remoteUrl: request.repository.remoteUrl ?? request.repository.git?.remoteUrl
-          };
-        }
-        throw new Error("Crunch plan does not change any files");
+        const head = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
+        // A no-op on a fresh create: the base already carries this exact file-set, so
+        // there is nothing to publish. Flag noChange rather than throwing, mirroring
+        // the single-file publisher; an existing branch just returns its tip.
+        return {
+          branchName: request.branchName,
+          commitSha: head,
+          remoteUrl: request.repository.remoteUrl ?? request.repository.git?.remoteUrl,
+          ...(branchExists ? {} : { noChange: true })
+        };
       }
 
       const { name: authorName, email: authorEmail } = resolveCommitterIdentity();

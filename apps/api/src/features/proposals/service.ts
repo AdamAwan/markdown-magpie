@@ -1588,6 +1588,18 @@ export async function recordPublicationFromCompletedJob(
     return undefined;
   }
 
+  // A no-op publish: the generated content already matched the base, so no branch
+  // was pushed. There is nothing to review or merge, so settle the proposal as
+  // superseded (terminal, hidden from the inbox) instead of recording a published
+  // branch that does not exist.
+  if (output.noChange) {
+    logger.info(
+      { proposalId: output.proposalId },
+      "publish_proposal completed as a no-op (content already in the base); superseding the proposal"
+    );
+    return ctx.stores.proposals.updateStatus(output.proposalId, "superseded");
+  }
+
   return ctx.stores.proposals.recordPublication(output.proposalId, {
     provider: "local-git",
     branchName: output.branchName,

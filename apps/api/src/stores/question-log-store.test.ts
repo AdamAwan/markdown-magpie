@@ -222,6 +222,71 @@ test("listGapCandidates still includes auto-detected low-confidence gaps", async
   assert.equal(candidates[0].summary, "No source material for: vaccines");
 });
 
+test("drops the no-source-material fallback gap so it never becomes a candidate", async () => {
+  const store = new InMemoryQuestionLogStore();
+  // A whole-question miss where the model named no specific gap: the watcher emits
+  // the synthesised fallback that echoes the question verbatim. It must not seed a
+  // gap candidate (and so never a singleton cluster/proposal) — the fan-out source.
+  await store.record({
+    question: "What TLS versions does NXG use in transit?",
+    chatProvider: "codex",
+    answer: {
+      answer: "I could not find reliable source material for this question.",
+      confidence: "low",
+      citations: [],
+      gaps: [
+        {
+          summary: "No sufficient source material found for: What TLS versions does NXG use in transit?",
+          question: "What TLS versions does NXG use in transit?",
+          confidence: "low",
+          citedSectionIds: [],
+          source: "auto"
+        }
+      ]
+    },
+    retrievedSectionIds: []
+  });
+
+  assert.deepEqual(await store.listGapCandidates(50), [], "the echoed fallback never enters gap candidacy");
+});
+
+test("keeps a model-articulated gap alongside a dropped fallback on the same answer", async () => {
+  const store = new InMemoryQuestionLogStore();
+  await store.record({
+    question: "How does NXG encrypt data and where are keys stored?",
+    chatProvider: "codex",
+    answer: {
+      answer: "Partial.",
+      confidence: "low",
+      citations: [],
+      gaps: [
+        {
+          summary: "No sufficient source material found for: key storage",
+          question: "keys?",
+          confidence: "low",
+          citedSectionIds: [],
+          source: "auto"
+        },
+        {
+          summary: "Encryption key storage location is undocumented",
+          question: "keys?",
+          confidence: "low",
+          citedSectionIds: [],
+          source: "auto"
+        }
+      ]
+    },
+    retrievedSectionIds: []
+  });
+
+  const candidates = await store.listGapCandidates(50);
+  assert.deepEqual(
+    candidates.map((c) => c.summary),
+    ["Encryption key storage location is undocumented"],
+    "only the real, articulated gap survives; the fallback is dropped"
+  );
+});
+
 test("listGapCandidates lists each gap of a multi-topic question separately and clusters shared gaps", async () => {
   const store = new InMemoryQuestionLogStore();
   const first = await store.record({

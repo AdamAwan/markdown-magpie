@@ -552,6 +552,65 @@ describe("reconcileGaps autonomous drafting", () => {
       "only the newly uncovered cluster was enqueued; the covered cluster was untouched"
     );
   });
+
+  it("caps the draft fan-out per tick and drains the rest on later ticks when reshape collapses nothing", async () => {
+    // The fan-out incident: a questionnaire produced many fine-grained gaps, reshape
+    // merged none of them, and drafting enqueued a proposal for every singleton
+    // cluster in one tick. The cap bounds NEW drafts per tick; the remainder is
+    // deferred (the processed revision is held) so later ticks drain it — without
+    // re-running the metered reshape, since the composition is unchanged.
+    const jobs = new ReshapingJobBroker(() => ({ merges: [], splits: [], dismissals: [] }));
+    const ctx = makeTestContext({ jobs, config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" }) });
+    const deps = {
+      fetchPullRequestStatus: async () => undefined,
+      publishProposal: async () => {},
+      supersedeProposal: async () => {}
+    };
+
+    // 14 distinct gaps → 14 singleton clusters that reshape leaves uncollapsed.
+    const gapCount = 14;
+    for (let i = 0; i < gapCount; i += 1) {
+      const log = await ctx.stores.questionLogs.record({
+        question: `q${i}?`,
+        chatProvider: "openai-compatible",
+        retrievedSectionIds: []
+      });
+      await ctx.stores.questionLogs.recordManualGap(log.id, `Distinct topic ${i}`);
+    }
+
+    // Tick 1: 14 uncovered clusters, cap 10 → 10 drafts, 4 deferred, revision held.
+    await reconcileGaps(ctx, undefined, deps);
+    assert.equal(
+      (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length,
+      10,
+      "the first tick drafts at most the per-tick cap, not one per singleton cluster"
+    );
+    const catalogRevision = await ctx.stores.questionLogs.getGapCatalogRevision(undefined);
+    assert.notEqual(
+      await ctx.stores.gapClusters.getProcessedRevision(undefined),
+      catalogRevision,
+      "a capped tick holds the processed revision so the next tick re-enters"
+    );
+
+    // Tick 2: the 10 in-flight drafts still cover their clusters, so only the 4
+    // deferred ones draft. Reshape must NOT re-run — the composition is unchanged.
+    await reconcileGaps(ctx, undefined, deps);
+    assert.equal(
+      (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length,
+      14,
+      "the deferred clusters drain on the next tick"
+    );
+    assert.equal(
+      (await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length,
+      1,
+      "draining the deferred backlog re-ran no metered reshape (composition unchanged)"
+    );
+    assert.equal(
+      await ctx.stores.gapClusters.getProcessedRevision(undefined),
+      catalogRevision,
+      "once drafting fully drains, the revision advances and the gate closes"
+    );
+  });
 });
 
 describe("reconcileGaps in-flight draft coverage", () => {
