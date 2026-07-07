@@ -22,10 +22,6 @@ export function normalizeRelativePath(value: string | undefined): string {
   return value?.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "") ?? "";
 }
 
-export function toPosixPath(value: string): string {
-  return value.replace(/\\/g, "/");
-}
-
 export function apiLink(path: string): string {
   return `/api${path}`;
 }

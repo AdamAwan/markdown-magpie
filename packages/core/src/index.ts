@@ -676,15 +676,16 @@ export interface UnprovableClaim {
   reason: string;
 }
 
-// Input to the verify_document AI job: one knowledge-base document plus a reference
-// to the source material to check it against. The corpus itself is stored once per
-// patrol tick (content-addressed by its hash) and fetched by the watcher via that
-// ref, rather than copied by value into every job in the batch (#163 Part 2).
-// `provider` is added at enqueue (see @magpie/jobs).
+// Input to the verify_document AI job: one knowledge-base document plus references
+// to the flow's configured sources to check it against. The executing agent
+// explores those checkouts directly (see the source-agentic grounding spec);
+// git/local descriptors resolve to read-only workspaces on the watcher, while
+// internet/agent render as prompt notes only. `provider` is added at enqueue
+// (see @magpie/jobs).
 export interface VerifyDocumentJobInput {
   path: string;
   content: string;
-  sourcesRef: string;
+  sources: SourceDescriptor[];
 }
 
 // The verify lens's verdict for one document: "healthy" (claims empty) or
@@ -701,9 +702,10 @@ export interface CorrectDocumentJobInput {
   path: string;
   content: string;
   claims: UnprovableClaim[];
-  // Reference to the shared source corpus (see VerifyDocumentJobInput). The watcher
-  // resolves it to ground every correction; not copied by value into the job (#163).
-  sourcesRef: string;
+  // References to the flow's configured sources the repair/expansion is grounded
+  // in — the executing agent explores these checkouts directly (see
+  // VerifyDocumentJobInput). Replaces the old shared-corpus reference.
+  sources: SourceDescriptor[];
   destinationId?: string;
   flowId?: string;
 }
@@ -757,9 +759,10 @@ export interface SplitDocumentJobOutput {
 export interface ImproveDocumentJobInput {
   path: string;
   content: string;
-  // Reference to the shared source corpus (see VerifyDocumentJobInput). The watcher
-  // resolves it to ground the expansion; not copied by value into the job (#163).
-  sourcesRef: string;
+  // References to the flow's configured sources the repair/expansion is grounded
+  // in — the executing agent explores these checkouts directly (see
+  // VerifyDocumentJobInput). Replaces the old shared-corpus reference.
+  sources: SourceDescriptor[];
   destinationId?: string;
   flowId?: string;
 }

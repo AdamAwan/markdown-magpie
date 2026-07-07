@@ -350,7 +350,7 @@ export const verifyDocumentInputSchema = z.object({
   provider: providerSchema,
   path: z.string(),
   content: z.string(),
-  sourcesRef: z.string()
+  sources: z.array(sourceDescriptorSchema)
 }) satisfies z.ZodType<ProviderInput<CoreVerifyDocumentJobInput>>;
 export const verifyDocumentOutputSchema = z.object({
   verdict: z.enum(["healthy", "unprovable"]),
@@ -362,7 +362,7 @@ export const correctDocumentInputSchema = z.object({
   path: z.string(),
   content: z.string(),
   claims: z.array(z.object({ claim: z.string(), reason: z.string() })),
-  sourcesRef: z.string(),
+  sources: z.array(sourceDescriptorSchema),
   destinationId: z.string().optional(),
   flowId: z.string().optional()
 }) satisfies z.ZodType<ProviderInput<CoreCorrectDocumentJobInput>>;
@@ -411,7 +411,7 @@ export const improveDocumentInputSchema = z.object({
   provider: providerSchema,
   path: z.string(),
   content: z.string(),
-  sourcesRef: z.string(),
+  sources: z.array(sourceDescriptorSchema),
   destinationId: z.string().optional(),
   flowId: z.string().optional()
 }) satisfies z.ZodType<ProviderInput<CoreImproveDocumentJobInput>>;

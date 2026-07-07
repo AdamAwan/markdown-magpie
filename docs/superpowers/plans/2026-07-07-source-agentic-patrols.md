@@ -117,7 +117,7 @@ survives until Task 4.
 - Consumes: `SourceDescriptor` / `sourceDescriptorSchema` / `projectSourceDescriptors`
   (increment 1, unchanged).
 
-- [ ] **Step 1: Write the failing schema test**
+- [x] **Step 1: Write the failing schema test**
 
 In `packages/jobs/src/catalog.test.ts`, next to the seed/proposal descriptor tests, add:
 
@@ -149,7 +149,7 @@ Import the three schemas at the top of the file if not present. Run
 `npm run build && npm test -w packages/jobs` → the new test FAILS (schemas still require
 `sourcesRef`).
 
-- [ ] **Step 2: Change the core types**
+- [x] **Step 2: Change the core types**
 
 In `packages/core/src/index.ts`, replace the three `sourcesRef: string;` fields. For
 `VerifyDocumentJobInput` (~679–688), also rewrite the interface comment (it describes the
@@ -182,7 +182,7 @@ field (and its `#163` comment) with:
 Keep every other field (`claims`, `destinationId`, `flowId`) unchanged.
 `SourceDescriptor` is declared later in the same file — no import needed.
 
-- [ ] **Step 3: Update the jobs schemas**
+- [x] **Step 3: Update the jobs schemas**
 
 In `packages/jobs/src/schemas.ts`, in each of `verifyDocumentInputSchema` (~353),
 `correctDocumentInputSchema` (~365), `improveDocumentInputSchema` (~414), replace
@@ -195,7 +195,7 @@ In `packages/jobs/src/schemas.ts`, in each of `verifyDocumentInputSchema` (~353)
 `sourceDescriptorSchema` is defined at ~line 137 in this file. The
 `satisfies z.ZodType<ProviderInput<...>>` clauses enforce agreement with Step 2.
 
-- [ ] **Step 4: Fix the jobs test fixtures and run**
+- [x] **Step 4: Fix the jobs test fixtures and run**
 
 In `packages/jobs/src/schemas.test.ts`: the verify round-trip test (~24–33) and the
 "requires a sourcesRef" test (~34) — reshape to `sources` (round-trip a git descriptor;
@@ -205,7 +205,7 @@ swaps `sourcesRef: "corpus-hash"` for `sources: []`.
 Run: `npm run build -w packages/core -w packages/jobs && npm test -w packages/jobs && npm test -w packages/core`
 Expected: PASS. (Root `npm run build` still fails — apps/api is rewired below.)
 
-- [ ] **Step 5: Raise the three queue expirations**
+- [x] **Step 5: Raise the three queue expirations**
 
 In `packages/jobs/src/catalog.ts` (~104–108), change the `expireInSeconds` argument for
 `verify_document`, `correct_document`, and `improve_document` from `10 * 60` to
@@ -219,7 +219,7 @@ In `packages/jobs/src/catalog.ts` (~104–108), change the `expireInSeconds` arg
 
 `dedupe_documents` / `split_document` stay at `10 * 60` (not source-grounded).
 
-- [ ] **Step 6: Re-key the change-gate hash**
+- [x] **Step 6: Re-key the change-gate hash**
 
 In `apps/api/src/scheduling/patrol-hash.ts`, delete `hashSourceCorpus` and its
 `SourceDataContext` import; add (keep `hashDocumentContent` untouched; import
@@ -263,7 +263,7 @@ hash changes when a descriptor's `url`/`subpath` changes; empty set is stable; a
 field-boundary case (e.g. `name: "ab"`+`url: "c"` vs `name: "a"`+`url: "bc"` must
 differ). Keep the `hashDocumentContent` test.
 
-- [ ] **Step 7: Re-thread the verify lens**
+- [x] **Step 7: Re-thread the verify lens**
 
 In `apps/api/src/scheduling/verify-lens.ts`: `runVerifyLens`'s input field
 `sourcesRef: string` (~58) becomes `sources: SourceDescriptor[]`; the `verifyDocument`
@@ -277,7 +277,7 @@ In `verify-lens.test.ts`, swap every `sourcesRef: "test-corpus"` input field (~3
 67, 86, 102) for `sources: []` (and rename the field passed to `runVerifyLens`). Where a
 test asserts the fn received the ref, assert it received the same `sources` array.
 
-- [ ] **Step 8: Rewire the patrol service**
+- [x] **Step 8: Rewire the patrol service**
 
 In `apps/api/src/features/patrol/service.ts`:
 
@@ -344,7 +344,7 @@ const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sou
    hold corpus-based hashes, so every doc re-checks once after deploy (intended: one full
    re-verify under grounded exploration).
 
-- [ ] **Step 9: Update the API test fixtures**
+- [x] **Step 9: Update the API test fixtures**
 
 - `apps/api/src/features/patrol/service.test.ts`: the "stores the corpus once and threads
   one resolvable sourcesRef" test (~143–170) becomes "projects descriptors once and
@@ -357,7 +357,7 @@ const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sou
   `apps/api/src/features/proposals/service.test.ts` (~1531, 1700): `sourcesRef:
   "test-corpus"` → `sources: []`.
 
-- [ ] **Step 10: Delete the sampler**
+- [x] **Step 10: Delete the sampler**
 
 Delete `apps/api/src/platform/source-context.ts` entirely (its only caller was the patrol
 service). Verify first:
@@ -368,7 +368,7 @@ rg -n "collectSourceContext|source-context" apps/ packages/ --glob '*.ts'
 
 Expect zero hits outside the file itself before deleting.
 
-- [ ] **Step 11: Run everything and commit**
+- [x] **Step 11: Run everything and commit**
 
 Run: `npm run build && npm test -w packages/jobs && npm test -w apps/api && npm run typecheck && npm run lint && npm run deadcode`
 Expected: all PASS. If knip flags anything newly dead here, it should only be corpus

@@ -21,17 +21,17 @@ test("process_gaps_to_pull_requests input requires and preserves flowId", () => 
   assert.deepEqual(parsed, { flowId: "magpie-support" });
 });
 
-test("verify_document input round-trips path/content/sourcesRef with a provider", () => {
+test("verify_document input round-trips path/content/sources with a provider", () => {
   const ok = verifyDocumentInputSchema.safeParse({
     provider: "codex",
     path: "kb/refunds.md",
     content: "Refunds take 5 days.",
-    sourcesRef: "corpus-hash"
+    sources: [{ id: "src-1", name: "Product repo", kind: "git", url: "https://example.com/repo.git", subpath: "Docs" }]
   });
   assert.equal(ok.success, true);
 });
 
-test("verify_document input requires a sourcesRef", () => {
+test("verify_document input requires sources", () => {
   const missing = verifyDocumentInputSchema.safeParse({
     provider: "codex",
     path: "kb/refunds.md",
@@ -161,7 +161,7 @@ test("improve_document schemas round-trip explicit improve and no-op outputs", (
       provider: "codex",
       path: "kb/refunds.md",
       content: "# Refunds",
-      sourcesRef: "corpus-hash",
+      sources: [],
       destinationId: "docs",
       flowId: "billing"
     }).success
