@@ -28,7 +28,8 @@ import type {
   SplitDocumentJobOutput,
   ImproveDocumentJobInput as CoreImproveDocumentJobInput,
   ImproveDocumentJobOutput,
-  ChangesetChange
+  ChangesetChange,
+  SourceMapUpdate
 } from "@magpie/core";
 import { AI_PROVIDERS, type AiProviderName, type JobError } from "./types.js";
 
@@ -141,6 +142,17 @@ const sourceDescriptorSchema = z.discriminatedUnion("kind", [
   z.object({ id: z.string(), name: z.string(), kind: z.literal("internet"), url: z.string().optional() }),
   z.object({ id: z.string(), name: z.string(), kind: z.literal("agent") })
 ]);
+// Mirrors @magpie/core SourceMapUpdate — an optional, agent-contributed
+// source-map hint on source-grounded outputs. Must be on the schema or the
+// broker strips it from the completed output before the API can apply it.
+const sourceMapUpdateSchema = z.object({
+  sourceId: z.string(),
+  topic: z.string(),
+  paths: z.array(z.string()),
+  description: z.string(),
+  observedSha: z.string().optional()
+}) satisfies z.ZodType<SourceMapUpdate>;
+const mapUpdatesField = z.array(sourceMapUpdateSchema).optional();
 // Mirrors @magpie/core OpenPullRequestContext. status reuses the core
 // PROPOSAL_STATUSES tuple so the enum can't drift from the type it validates.
 const openPullRequestContextSchema = z.object({
@@ -180,7 +192,8 @@ export const draftMarkdownProposalOutputSchema = z.object({
   title: z.string(),
   targetPath: z.string(),
   markdown: z.string(),
-  rationale: z.string()
+  rationale: z.string(),
+  mapUpdates: mapUpdatesField
 }) satisfies z.ZodType<DraftMarkdownProposalJobOutput>;
 
 export const draftSeedDocumentInputSchema = z.object({
@@ -197,7 +210,8 @@ export const draftSeedDocumentOutputSchema = z.object({
   title: z.string(),
   targetPath: z.string(),
   markdown: z.string(),
-  rationale: z.string()
+  rationale: z.string(),
+  mapUpdates: mapUpdatesField
 }) satisfies z.ZodType<DraftSeedDocumentJobOutput>;
 
 const existingDocumentContextSchema = z.object({
@@ -354,7 +368,8 @@ export const verifyDocumentInputSchema = z.object({
 }) satisfies z.ZodType<ProviderInput<CoreVerifyDocumentJobInput>>;
 export const verifyDocumentOutputSchema = z.object({
   verdict: z.enum(["healthy", "unprovable"]),
-  claims: z.array(z.object({ claim: z.string(), reason: z.string() }))
+  claims: z.array(z.object({ claim: z.string(), reason: z.string() })),
+  mapUpdates: mapUpdatesField
 }) satisfies z.ZodType<VerifyDocumentJobOutput>;
 
 export const correctDocumentInputSchema = z.object({
@@ -368,7 +383,8 @@ export const correctDocumentInputSchema = z.object({
 }) satisfies z.ZodType<ProviderInput<CoreCorrectDocumentJobInput>>;
 export const correctDocumentOutputSchema = z.object({
   markdown: z.string(),
-  rationale: z.string()
+  rationale: z.string(),
+  mapUpdates: mapUpdatesField
 }) satisfies z.ZodType<CorrectDocumentJobOutput>;
 
 const changesetChangeSchema = z.object({
@@ -416,8 +432,8 @@ export const improveDocumentInputSchema = z.object({
   flowId: z.string().optional()
 }) satisfies z.ZodType<ProviderInput<CoreImproveDocumentJobInput>>;
 export const improveDocumentOutputSchema = z.union([
-  z.object({ improved: z.literal(false), rationale: z.string(), markdown: z.string().optional() }),
-  z.object({ improved: z.literal(true), markdown: z.string(), rationale: z.string() })
+  z.object({ improved: z.literal(false), rationale: z.string(), markdown: z.string().optional(), mapUpdates: mapUpdatesField }),
+  z.object({ improved: z.literal(true), markdown: z.string(), rationale: z.string(), mapUpdates: mapUpdatesField })
 ]) satisfies z.ZodType<ImproveDocumentJobOutput>;
 
 export const foldChangesetProposalInputSchema = z.object({

@@ -694,6 +694,7 @@ export interface VerifyDocumentJobInput {
 export interface VerifyDocumentJobOutput {
   verdict: "healthy" | "unprovable";
   claims: UnprovableClaim[];
+  mapUpdates?: SourceMapUpdate[];
 }
 
 // Input to the correct_document AI job: a document the verify lens flagged as
@@ -717,6 +718,7 @@ export interface CorrectDocumentJobInput {
 export interface CorrectDocumentJobOutput {
   markdown: string;
   rationale: string;
+  mapUpdates?: SourceMapUpdate[];
 }
 
 // Input to the dedupe_documents AI job: the document under patrol plus its k nearest
@@ -772,6 +774,7 @@ export interface ImproveDocumentJobOutput {
   improved: boolean;
   markdown?: string;
   rationale: string;
+  mapUpdates?: SourceMapUpdate[];
 }
 
 export interface DraftMarkdownProposalJobOutput {
@@ -779,6 +782,7 @@ export interface DraftMarkdownProposalJobOutput {
   targetPath: string;
   markdown: string;
   rationale: string;
+  mapUpdates?: SourceMapUpdate[];
 }
 
 // One unit of flow seeding: a document to author, described by what it should
@@ -807,6 +811,17 @@ export interface SourceMapEntry {
   observedSha?: string;
   createdAt: string; // ISO-8601
   updatedAt: string; // ISO-8601
+}
+
+// One agent-contributed source-map hint, carried optionally on source-grounded
+// job outputs. observedSha is stamped by the WATCHER from the checkout it
+// actually explored — a model-supplied value is always overwritten or removed.
+export interface SourceMapUpdate {
+  sourceId: string;
+  topic: string;
+  paths: string[];
+  description: string;
+  observedSha?: string;
 }
 
 // A reference to one of a flow's configured sources, carried on source-grounded
@@ -838,6 +853,7 @@ export interface DraftSeedDocumentJobOutput {
   targetPath: string;
   markdown: string;
   rationale: string;
+  mapUpdates?: SourceMapUpdate[];
 }
 
 // A section of an existing flow document, surfaced to the outline generator as
