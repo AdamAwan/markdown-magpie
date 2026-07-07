@@ -2026,3 +2026,65 @@ test("recordPublicationFromCompletedJob records the branch when the publish chan
   assert.notEqual(updated?.status, "superseded", "a real publish is not superseded");
   assert.equal(updated?.publication?.branchName, "magpie/proposal-y", "the published branch is recorded");
 });
+
+test("createProposalFromCompletedJob folds reported uncoveredPoints into the rationale, not the body", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_markdown_proposal", {
+    provider: "codex",
+    gapSummaries: ["How to configure X"],
+    triggeringQuestions: ["How do I configure X?"],
+    evidence: [],
+    sources: [],
+    expectedOutput: "markdown_proposal"
+  });
+  const output = {
+    title: "Configuring X",
+    targetPath: "configuring-x.md",
+    markdown: "# Configuring X",
+    rationale: "grounded in repo docs",
+    uncoveredPoints: ["X's retry limits", "X's default timeout"]
+  };
+
+  const proposal = await proposals.createProposalFromCompletedJob(ctx, job, output);
+  assert.ok(proposal);
+  assert.ok(proposal?.rationale?.includes("grounded in repo docs"), "original rationale is preserved");
+  assert.ok(proposal?.rationale?.includes("Not covered by the sources"));
+  assert.ok(proposal?.rationale?.includes("X's retry limits"));
+  assert.equal(proposal?.markdown, "# Configuring X", "the note never lands in the document body");
+});
+
+test("createSeedProposalFromCompletedJob folds reported uncoveredPoints into the rationale", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_seed_document", {
+    flowId: "billing",
+    coverage: ["what billing is", "refund SLAs"],
+    sources: [],
+    provider: "codex"
+  });
+  const output = {
+    title: "Billing overview",
+    targetPath: "billing.md",
+    markdown: "# Billing",
+    rationale: "seed",
+    uncoveredPoints: ["refund SLAs"]
+  };
+
+  const proposal = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
+  assert.ok(proposal?.rationale?.includes("Not covered by the sources"));
+  assert.ok(proposal?.rationale?.includes("refund SLAs"));
+  assert.equal(proposal?.markdown, "# Billing");
+});
+
+test("an empty or absent uncoveredPoints leaves the rationale untouched", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_seed_document", {
+    flowId: "billing",
+    coverage: ["what billing is"],
+    sources: [],
+    provider: "codex"
+  });
+  const output = { title: "Billing", targetPath: "billing.md", markdown: "# Billing", rationale: "seed", uncoveredPoints: [] };
+
+  const proposal = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
+  assert.equal(proposal?.rationale, "seed");
+});

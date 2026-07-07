@@ -1295,6 +1295,28 @@ export function splitGapSummaries(gapSummary: string | undefined): string[] {
     .filter((summary) => summary.length > 0);
 }
 
+// #213: a draft's contract is to OMIT source-uncovered points from the document
+// body and report them in uncoveredPoints. This folds that report into the
+// reviewer-visible rationale — the natural surfacing a proposal already has (web
+// console + PR body) — and warns so the omission is operator-visible. Deliberately
+// NOT synthetic gap rows: the gap pipeline is demand-driven (question logs), and
+// fabricating demand from a drafter's self-report is a product decision out of
+// scope here. Empty/absent reports return the rationale unchanged.
+function foldUncoveredPointsIntoRationale(
+  job: JobView,
+  output: { targetPath: string; rationale: string; uncoveredPoints?: string[] }
+): string {
+  const points = (output.uncoveredPoints ?? []).map((point) => point.trim()).filter((point) => point.length > 0);
+  if (points.length === 0) {
+    return output.rationale;
+  }
+  logger.warn(
+    { jobId: job.id, jobType: job.type, targetPath: output.targetPath, uncoveredPoints: points },
+    "draft reported source-uncovered points; omitted from the document body and recorded on the proposal rationale"
+  );
+  return `${output.rationale}\n\nNot covered by the sources (omitted from the document): ${points.join("; ")}.`;
+}
+
 function dedupeCitations(citations: Proposal["evidence"]): Proposal["evidence"] {
   const seen = new Set<string>();
   const result: Proposal["evidence"] = [];
@@ -1322,16 +1344,21 @@ export async function createProposalFromCompletedJob(
     triggeringQuestionIds?: string[];
   };
 
+  const withReport: DraftMarkdownProposalJobOutput = {
+    ...output,
+    rationale: foldUncoveredPointsIntoRationale(job, output)
+  };
+
   // A regeneration updates an already-published proposal in place and re-publishes,
   // rather than creating a new draft. Returns undefined so the caller's at-draft fold
   // hook is skipped — this proposal is already in flight, not a fresh draft.
   if (input.regenerateProposalId) {
-    await applyRegeneratedProposal(ctx, input.regenerateProposalId, output);
+    await applyRegeneratedProposal(ctx, input.regenerateProposalId, withReport);
     return undefined;
   }
 
   return ctx.stores.proposals.create({
-    ...output,
+    ...withReport,
     targetPath: resolveProposalTargetPath(destinationSubpath(ctx.repositoryDeps(), input.destinationId), output.title),
     evidence: input.evidence ?? [],
     gapSummary: input.gapSummaries ? joinGapSummaries(input.gapSummaries) : undefined,
@@ -1431,7 +1458,7 @@ export async function createSeedProposalFromCompletedJob(
       parsed.data.targetPath || parsed.data.title
     ),
     markdown: parsed.data.markdown,
-    rationale: parsed.data.rationale,
+    rationale: foldUncoveredPointsIntoRationale(job, parsed.data),
     evidence: [],
     flowId: input.flowId,
     destinationId: input.destinationId,
