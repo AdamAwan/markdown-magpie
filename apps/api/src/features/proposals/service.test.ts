@@ -2026,3 +2026,157 @@ test("recordPublicationFromCompletedJob records the branch when the publish chan
   assert.notEqual(updated?.status, "superseded", "a real publish is not superseded");
   assert.equal(updated?.publication?.branchName, "magpie/proposal-y", "the published branch is recorded");
 });
+
+test("createProposalFromCompletedJob folds reported uncoveredPoints into the rationale, not the body", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_markdown_proposal", {
+    provider: "codex",
+    gapSummaries: ["How to configure X"],
+    triggeringQuestions: ["How do I configure X?"],
+    evidence: [],
+    sources: [],
+    expectedOutput: "markdown_proposal"
+  });
+  const output = {
+    title: "Configuring X",
+    targetPath: "configuring-x.md",
+    markdown: "# Configuring X",
+    rationale: "grounded in repo docs",
+    uncoveredPoints: ["X's retry limits", "X's default timeout"]
+  };
+
+  const proposal = await proposals.createProposalFromCompletedJob(ctx, job, output);
+  assert.ok(proposal);
+  assert.ok(proposal?.rationale?.includes("grounded in repo docs"), "original rationale is preserved");
+  assert.ok(proposal?.rationale?.includes("Not covered by the sources"));
+  assert.ok(proposal?.rationale?.includes("X's retry limits"));
+  assert.equal(proposal?.markdown, "# Configuring X", "the note never lands in the document body");
+});
+
+test("createSeedProposalFromCompletedJob folds reported uncoveredPoints into the rationale", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_seed_document", {
+    flowId: "billing",
+    coverage: ["what billing is", "refund SLAs"],
+    sources: [],
+    provider: "codex"
+  });
+  const output = {
+    title: "Billing overview",
+    targetPath: "billing.md",
+    markdown: "# Billing",
+    rationale: "seed",
+    uncoveredPoints: ["refund SLAs"]
+  };
+
+  const proposal = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
+  assert.ok(proposal?.rationale?.includes("Not covered by the sources"));
+  assert.ok(proposal?.rationale?.includes("refund SLAs"));
+  assert.equal(proposal?.markdown, "# Billing");
+});
+
+test("an empty or absent uncoveredPoints leaves the rationale untouched", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_seed_document", {
+    flowId: "billing",
+    coverage: ["what billing is"],
+    sources: [],
+    provider: "codex"
+  });
+  const output = { title: "Billing", targetPath: "billing.md", markdown: "# Billing", rationale: "seed", uncoveredPoints: [] };
+
+  const proposal = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
+  assert.equal(proposal?.rationale, "seed");
+});
+
+test("createSeedProposalFromCompletedJob flags advisory-style headings on the rationale", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_seed_document", {
+    flowId: "billing",
+    coverage: ["what billing is"],
+    sources: [],
+    provider: "codex"
+  });
+  const output = {
+    title: "Billing overview",
+    targetPath: "billing.md",
+    markdown: "# Billing\n\n## Recommendations\n\nAdopt three phases.",
+    rationale: "seed"
+  };
+
+  const proposal = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
+  assert.ok(proposal?.rationale?.includes("Register check: advisory-style headings detected"));
+  assert.ok(proposal?.rationale?.includes('"Recommendations"'));
+  assert.ok(proposal?.markdown.includes("## Recommendations"), "flag only — the body is never edited");
+});
+
+test("createProposalFromCompletedJob flags advisory-style headings on the rationale", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_markdown_proposal", {
+    provider: "codex",
+    gapSummaries: ["audit logging"],
+    triggeringQuestions: ["How is audit logging done?"],
+    evidence: [],
+    sources: [],
+    expectedOutput: "markdown_proposal"
+  });
+  const output = {
+    title: "Audit logging",
+    targetPath: "audit-logging.md",
+    markdown: "# Audit logging\n\n## Next steps\n\nImplement phase 1.",
+    rationale: "grounded"
+  };
+
+  const proposal = await proposals.createProposalFromCompletedJob(ctx, job, output);
+  assert.ok(proposal?.rationale?.includes("Register check: advisory-style headings detected"));
+  assert.ok(proposal?.rationale?.includes('"Next steps"'));
+});
+
+test("createProposalFromCompletedJob stacks the uncoveredPoints note and the register-check note in order", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_markdown_proposal", {
+    provider: "codex",
+    gapSummaries: ["audit logging"],
+    triggeringQuestions: ["How is audit logging done?"],
+    evidence: [],
+    sources: [],
+    expectedOutput: "markdown_proposal"
+  });
+  const output = {
+    title: "Audit logging",
+    targetPath: "audit-logging.md",
+    markdown: "# Audit logging\n\n## Next steps\n\nImplement phase 1.",
+    rationale: "grounded in repo docs",
+    uncoveredPoints: ["X"]
+  };
+
+  const proposal = await proposals.createProposalFromCompletedJob(ctx, job, output);
+  assert.ok(proposal);
+  const rationale = proposal?.rationale ?? "";
+  const originalIndex = rationale.indexOf("grounded in repo docs");
+  const uncoveredIndex = rationale.indexOf("Not covered by the sources");
+  const registerIndex = rationale.indexOf("Register check:");
+  assert.ok(originalIndex >= 0, "original rationale is preserved");
+  assert.ok(uncoveredIndex > originalIndex, "uncovered-points note follows the original rationale");
+  assert.ok(rationale.includes("X"), "uncovered-points note mentions the reported point");
+  assert.ok(registerIndex > uncoveredIndex, "register-check note follows the uncovered-points note");
+  assert.ok(rationale.includes('"Next steps"'), "register-check note names the detected heading");
+  assert.equal(
+    proposal?.markdown,
+    "# Audit logging\n\n## Next steps\n\nImplement phase 1.",
+    "the markdown body is unchanged by either note"
+  );
+});
+
+test("a clean draft's rationale carries no register-check note", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_seed_document", {
+    flowId: "billing",
+    coverage: ["what billing is"],
+    sources: [],
+    provider: "codex"
+  });
+  const output = { title: "Billing", targetPath: "billing.md", markdown: "# Billing\n\n## Plans", rationale: "seed" };
+  const proposal = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
+  assert.equal(proposal?.rationale, "seed");
+});

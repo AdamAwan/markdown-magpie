@@ -32,6 +32,7 @@ import { type AiProviderName } from "../../platform/providers.js";
 import type { ProposalInput } from "../../stores/proposal-store.js";
 import * as foldService from "../../scheduling/fold.js";
 import { logger } from "../../logger.js";
+import { flagAdvisoryDraft } from "../proposals/register-check.js";
 
 // How many retrieved sections to consider, and how many distinct documents to
 // hand the model as editable candidates. Kept small so the model sees only the
@@ -296,7 +297,14 @@ export async function attachSourceSyncPlanFromCompletedJob(
     return;
   }
   const existing = await ctx.stores.proposals.getByJobId(job.id);
-  const proposal = existing ?? await ctx.stores.proposals.create(sourceSyncProposalInput(completed, parsed.data, changeset, job));
+  const proposal =
+    existing ??
+    (await ctx.stores.proposals.create(
+      flagAdvisoryDraft(sourceSyncProposalInput(completed, parsed.data, changeset, job), {
+        jobId: job.id,
+        jobType: job.type
+      })
+    ));
   await foldService.reconcileSourceSyncProposal(ctx, proposal);
 }
 

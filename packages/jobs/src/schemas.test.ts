@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   draftMarkdownProposalInputSchema,
+  draftMarkdownProposalOutputSchema,
+  draftSeedDocumentOutputSchema,
   foldMarkdownProposalInputSchema,
   foldMarkdownProposalOutputSchema,
   commentPullRequestInputSchema,
@@ -202,4 +204,18 @@ test("refresh output schema rejects an unknown reviewDecision value", () => {
       results: [{ proposalId: "p1", state: "open", merged: false, reviewDecision: "maybe" }]
     }).success
   );
+});
+
+test("draft outputs accept and preserve optional uncoveredPoints", () => {
+  const base = { title: "T", targetPath: "t.md", markdown: "# T", rationale: "r" };
+  // Absent stays valid (back-compat with providers that report nothing).
+  assert.equal(draftMarkdownProposalOutputSchema.safeParse(base).success, true);
+  assert.equal(draftSeedDocumentOutputSchema.safeParse(base).success, true);
+  // Present round-trips.
+  const gap = draftSeedDocumentOutputSchema.parse({ ...base, uncoveredPoints: ["refund SLAs"] });
+  assert.deepEqual(gap.uncoveredPoints, ["refund SLAs"]);
+  const draft = draftMarkdownProposalOutputSchema.parse({ ...base, uncoveredPoints: ["retry limits"] });
+  assert.deepEqual(draft.uncoveredPoints, ["retry limits"]);
+  // Malformed entries are rejected, not coerced.
+  assert.equal(draftSeedDocumentOutputSchema.safeParse({ ...base, uncoveredPoints: [42] }).success, false);
 });
