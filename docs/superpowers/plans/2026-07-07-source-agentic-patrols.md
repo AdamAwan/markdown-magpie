@@ -1,7 +1,12 @@
 # Source-Agentic Patrols + Demolition (Increment 3) Implementation Plan
 
-> **STATUS — IN PROGRESS (2026-07-07).** Task-by-task execution on branch
-> `claude/source-agentic-increment-3-zc9tyw`.
+> **STATUS — COMPLETE (2026-07-07).** All 5 tasks implemented via subagent-driven
+> development (Task 1 with per-task adversarial spec + code-quality review, findings
+> fixed in `3b258ba`; Tasks 2–5 with a final consolidated review, verdict
+> ready-to-merge, findings fixed in `154048f`). Validated: build/typecheck/lint(0
+> errors)/deadcode clean; full suite 1,227 tests, 0 fail; migration 0045 ordering-guard
+> green (clean-DB proof via CI `test:db`). Open as **PR #211** → main. Completes the
+> three-increment source-agentic grounding spec.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps
@@ -756,7 +761,7 @@ rg -n "sourcesRef|source corpus|source-corpus|sampler" docs/ai-jobs.md docs/arch
 
 Expected: gates PASS; grep only hits deliberate historical/superseded-note wording.
 
-- [ ] **Step 3: Commit, push, PR**
+- [x] **Step 3: Commit, push, PR**
 
 ```bash
 git add docs/ai-jobs.md docs/architecture.md docs/maintenance-redesign.md \
