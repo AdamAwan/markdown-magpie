@@ -9,6 +9,7 @@ import type { WatcherTouch } from "../../stores/watcher-registry-store.js";
 import { refreshFlowSnapshotOutputSchema } from "@magpie/jobs";
 import * as proposalsService from "../proposals/service.js";
 import * as sourceSyncService from "../source-sync/service.js";
+import * as sourceMapService from "../source-map/service.js";
 import * as snapshotsService from "../snapshots/service.js";
 import { applyPullRequestTransition } from "../../scheduling/gap-reconciler.js";
 import * as foldService from "../../scheduling/fold.js";
@@ -356,6 +357,9 @@ export async function completeJob(
     await foldService.applyChangesetFoldFromCompletedJob(ctx, existingJob, resultData);
     await proposalsService.recordPublicationFromCompletedJob(ctx, existingJob, resultData);
     await sourceSyncService.attachSourceSyncPlanFromCompletedJob(ctx, existingJob, resultData);
+    // Source-map contributions ride source-grounded outputs; applying them is
+    // internally best-effort (the service never throws) and idempotent on replay.
+    await sourceMapService.applySourceMapUpdatesFromCompletedJob(ctx, existingJob, resultData);
     await handleRefreshFlowSnapshotCompletion(ctx, existingJob, resultData);
     // The watcher is free again the moment it completes a job; reflect that
     // immediately rather than waiting for its next idle claim poll.
