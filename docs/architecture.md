@@ -204,6 +204,23 @@ it — drafting is enqueue-only, so the proposal row exists only once the draft 
 completes, and without this a run whose draft is still in flight (or an overlap that
 slips through) would enqueue a duplicate full generation for the same cluster.
 
+**Fan-out containment.** The reshape (step 2) is the *only* step that collapses
+near-duplicate singleton clusters, so two safeguards keep a batch of fine-grained
+gaps from fanning out into one proposal each. First, the reshape's propose call is
+parsed leniently (JSON mode plus the shared `extractJson`, first-`{`…last-`}`) — a
+provider that wraps its proposal in a ```json fence or prose no longer has the whole
+proposal silently discarded and every reshape collapsed to "no merges". Second,
+`draftProposalsForUncoveredClusters` bounds NEW drafts to `MAX_DRAFTS_PER_TICK` per
+flow per tick: reshape is best-effort (a timeout, failure, or under-merge leaves the
+raw singletons intact), so when more uncovered clusters remain the reconciler drafts
+a capped batch, warns loudly, and **holds the processed revision** so a later tick
+re-enters and drains the rest — re-entry finds no new gaps and an unchanged
+composition hash, so the metered reshape is skipped and only the capped drafting
+repeats. Malformed gap signals never reach this stage: the synthesised
+no-source-material fallback (a summary echoing the raw question) is dropped at gap
+ingestion (`isSeedableGapSummary`), so a batch of unanswered questions does not each
+seed its own singleton cluster.
+
 Because the API bounded-waits on a batch of AI jobs inside these callbacks, a
 maintenance orchestration request (`/api/gaps/reconcile`, `/api/source-sync/run`,
 `/api/fix-patrol/run`, `/api/fix-patrol/improve/run`) legitimately stays open for
@@ -325,3 +342,10 @@ proposal to a Git branch and pushes it; when a host token is configured the bran
 raised as a pull request, and the `gaps-to-pull-requests` reconciler advances proposals as
 their PRs are merged or closed. If no token is available, publishing degrades gracefully to a
 pushed branch.
+
+A **no-op publish** — a fresh branch create whose generated content is byte-identical to what
+the base already carries, which autonomous generation can emit — is not an error. The publisher
+returns the base tip flagged `noChange` instead of throwing, the watcher runner skips the PR
+step, and the API settles the proposal as **superseded** (terminal, hidden from the inbox)
+rather than recording a branch that was never pushed. The publication outbox action completes
+normally, so it no longer retries a change that will always be a no-op.
