@@ -165,3 +165,35 @@ A script under `scripts/` (eval-script conventions from `writing-magpie-tests`):
 
 Update `docs/architecture.md` (gap-reconciler section) and the env-var reference
 for `GAP_CLUSTER_ASSIGN_THRESHOLD` alongside the code.
+
+## Implementation notes (post-eval)
+
+Chosen threshold: **0.84** — the lowest zero-over-merge sweep value (0.82) plus a
+0.02 safety margin, from `npm run eval:gap-threshold` over the committed fixture
+(`scripts/fixtures/gap-threshold-embeddings.json`, model
+`openai/text-embedding-3-small`, 62 labelled summaries: 15 paraphrase themes +
+18 distinct singletons, with deliberate near-cousin traps).
+
+Key sweep rows (pairwise, same-theme = positive):
+
+| T    | components | precision | recall | over-merges |
+|------|-----------|-----------|--------|-------------|
+| 0.80 | 52        | 0.867     | 0.265  | 1           |
+| 0.82 | 53        | 1.000     | 0.265  | 0           |
+| **0.84** | 54    | **1.000** | **0.245** | **0**   |
+| 0.86 | 55        | 1.000     | 0.204  | 0           |
+| 0.90 | 58        | 1.000     | 0.082  | 0           |
+
+**Empirical finding that revises the design's expectations:** with
+`text-embedding-3-small`, the worst must-not-merge trap — "How is data encrypted
+while in transit?" vs "How is data encrypted at rest?" — scores cosine **0.810**,
+*higher* than most genuine loose paraphrase pairs (the design's own aspirational
+example, "What TLS versions are supported for data in transit?" vs "Which
+encryption protocols protect data in transit?", scores only 0.712). No threshold
+can therefore catch loose paraphrases without over-merging. At 0.84, phase 1
+safely banks **near-identical rewordings** (which sit 0.86–0.99 — the shape
+repeated model re-answers of the same gap actually produce) and leaves loose
+paraphrase consolidation to the reshape critic — consistent with the
+"cheap wins only" mandate, just with a narrower definition of "cheap win" than
+the design first sketched. `--pairs` on the eval script prints the full pair
+landscape; re-run the sweep before changing the default or the embedding model.

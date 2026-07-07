@@ -81,11 +81,7 @@ export function normalisedMean(vectors: number[][]): number[] {
 // threshold produces (every member is within the threshold of the centroid by
 // construction). The exact path remains the full recompute the reconciler runs
 // when a representative is null.
-export function foldIntoCentroid(
-  representative: number[],
-  priorCount: number,
-  additions: number[][]
-): number[] {
+export function foldIntoCentroid(representative: number[], priorCount: number, additions: number[][]): number[] {
   const sum = representative.map((value) => value * priorCount);
   for (const vector of additions) {
     if (vector.length !== sum.length) {

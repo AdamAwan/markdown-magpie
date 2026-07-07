@@ -49,10 +49,7 @@ const themes: Record<string, string[]> = {
     "What is the backup retention period?",
     "For how many days are database backups kept?"
   ],
-  "log-retention": [
-    "How long are audit logs retained?",
-    "What is the log retention period?"
-  ],
+  "log-retention": ["How long are audit logs retained?", "What is the log retention period?"],
   mfa: [
     "Is multi-factor authentication enforced for staff?",
     "Is multi-factor authentication required for staff?", // ~
@@ -96,10 +93,7 @@ const themes: Record<string, string[]> = {
     "How often are user access rights reviewed?",
     "Is there a periodic access recertification process?"
   ],
-  "disaster-recovery": [
-    "What is the disaster recovery RTO?",
-    "How fast can service be restored after a major outage?"
-  ],
+  "disaster-recovery": ["What is the disaster recovery RTO?", "How fast can service be restored after a major outage?"],
   soc2: [
     "Is a SOC 2 Type II report available?",
     "Is a SOC 2 Type 2 report available?", // ~
@@ -162,9 +156,7 @@ async function loadOrEmbed(refresh: boolean): Promise<Map<string, number[]>> {
   const apiKey = env.OPENAI_COMPATIBLE_EMBEDDING_API_KEY || env.OPENAI_COMPATIBLE_API_KEY;
   const model = env.OPENAI_COMPATIBLE_EMBEDDING_MODEL;
   if (!baseUrl || !apiKey || !model) {
-    throw new Error(
-      "No cached fixture and no OPENAI_COMPATIBLE_EMBEDDING_* credentials in the environment/.env"
-    );
+    throw new Error("No cached fixture and no OPENAI_COMPATIBLE_EMBEDDING_* credentials in the environment/.env");
   }
   const provider = createEmbeddingProvider({ provider: "openai-compatible", apiKey, baseUrl, model });
   const texts = corpus.map((entry) => entry.text);
