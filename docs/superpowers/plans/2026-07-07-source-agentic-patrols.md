@@ -404,7 +404,7 @@ git push -u origin claude/source-agentic-increment-3-zc9tyw
 JSON output shapes VERBATIM; the change is the grounding language (mirror the
 `Grounding:` block of `DRAFT_SEED_DOCUMENT`/`DRAFT_MARKDOWN_PROPOSAL`). UK English.
 
-- [ ] **Step 1: Rewrite `VERIFY_DOCUMENT.instructions`** (update `description` to say
+- [x] **Step 1: Rewrite `VERIFY_DOCUMENT.instructions`** (update `description` to say
   "…against the flow's source repositories, which the executing agent explores
   directly."):
 
@@ -434,7 +434,7 @@ Return JSON:
 }`
 ```
 
-- [ ] **Step 2: Rewrite `CORRECT_DOCUMENT.instructions`** — same pattern: Input block
+- [x] **Step 2: Rewrite `CORRECT_DOCUMENT.instructions`** — same pattern: Input block
   keeps `"path"/"content"` and `"claims"`; the `- "sources": the source material…` line
   is replaced by a `Grounding:` block ("You have DIRECT access to the source repositories
   listed in the prompt. Explore them to establish what is actually true for each flagged
@@ -443,7 +443,7 @@ Return JSON:
   unsupported assertions, leave the rest of the document unchanged, one-paragraph
   rationale. Update `description` accordingly.
 
-- [ ] **Step 3: Rewrite `IMPROVE_DOCUMENT.instructions`** — Input keeps
+- [x] **Step 3: Rewrite `IMPROVE_DOCUMENT.instructions`** — Input keeps
   `"path"/"content"`; replace the `- "sources": …` line with the `Grounding:` block
   ("…search for material that belongs in this document, open the files that matter…
   every addition must be grounded in files you actually read; cite the supporting
@@ -451,7 +451,7 @@ Return JSON:
   target, no invention, `{"improved": false}` when nothing source-backed belongs, full
   document in `markdown` when improving. Update `description`.
 
-- [ ] **Step 4: Run and fix pinned assertions**
+- [x] **Step 4: Run and fix pinned assertions**
 
 Run: `npm test -w packages/prompts` — fix any `catalog.test.ts` assertion pinning the old
 `"sources"`-input wording. Then `npm run build && npm test -w apps/watcher` — confirm no
@@ -459,7 +459,7 @@ Run: `npm test -w packages/prompts` — fix any `catalog.test.ts` assertion pinn
 assert on input rendering, not instruction bodies — they should pass untouched until
 Task 4).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/prompts/src/catalog.ts packages/prompts/src/catalog.test.ts
