@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { SourceDescriptor, SourceMapEntry } from "@magpie/core";
-import { ensureGitCheckout } from "@magpie/git";
+import { ensureGitCheckout, getHeadSha } from "@magpie/git";
 import {
   correctDocumentInputSchema,
   draftMarkdownProposalInputSchema,
@@ -20,6 +20,9 @@ export interface SourceWorkspace {
   sourceId: string;
   name: string;
   rootDir: string;
+  // HEAD of the resolved checkout, when it is a git repo. Best-effort — absent
+  // for local-kind sources and any repo whose HEAD could not be read.
+  headSha?: string;
 }
 
 export interface PreparedSources {
@@ -73,9 +76,14 @@ export function sourceDescriptorsOf(job: JobView): SourceDescriptor[] {
 // source access is exactly the silent-placeholder failure this feature removes.
 export async function prepareSourceWorkspaces(
   descriptors: SourceDescriptor[],
-  options: { checkoutRoot: string; checkout?: typeof ensureGitCheckout }
+  options: {
+    checkoutRoot: string;
+    checkout?: typeof ensureGitCheckout;
+    headSha?: (localPath: string) => Promise<string | undefined>;
+  }
 ): Promise<PreparedSources> {
   const checkout = options.checkout ?? ensureGitCheckout;
+  const readHeadSha = options.headSha ?? getHeadSha;
   const workspaces: SourceWorkspace[] = [];
   const notes: string[] = [];
 
@@ -93,14 +101,23 @@ export async function prepareSourceWorkspaces(
       continue;
     }
     try {
-      const rootDir =
+      const repoRoot =
         descriptor.kind === "git"
-          ? withSubpath((await checkout({ id: descriptor.id, url: descriptor.url, checkoutRoot: options.checkoutRoot })).localPath, descriptor.subpath)
-          : withSubpath(descriptor.path, descriptor.subpath);
+          ? (await checkout({ id: descriptor.id, url: descriptor.url, checkoutRoot: options.checkoutRoot })).localPath
+          : descriptor.path;
+      const rootDir = withSubpath(repoRoot, descriptor.subpath);
       if (!existsSync(rootDir)) {
         throw new Error(`resolved root does not exist: ${rootDir}`);
       }
-      workspaces.push({ sourceId: descriptor.id, name: descriptor.name, rootDir });
+      // Best-effort: a local-kind source need not be a git repo, and a sha is only
+      // a staleness stamp for map hints — never fail workspace preparation for it.
+      let headSha: string | undefined;
+      try {
+        headSha = await readHeadSha(repoRoot);
+      } catch {
+        headSha = undefined;
+      }
+      workspaces.push({ sourceId: descriptor.id, name: descriptor.name, rootDir, ...(headSha ? { headSha } : {}) });
     } catch (error) {
       const message = error instanceof Error ? error.message : "unavailable";
       logger.warn({ sourceId: descriptor.id, err: message }, "source workspace unavailable");
@@ -137,4 +154,26 @@ export async function fetchSourceMapEntries(
     );
     return [];
   }
+}
+
+// Stamps the watcher-observed checkout sha onto every mapUpdate in a parsed
+// source-grounded output, overwriting anything the model put there: the sha
+// is an infrastructure fact, never trusted from the model. Outputs without a
+// mapUpdates array pass through untouched.
+export function stampSourceMapUpdates(output: unknown, workspaces: SourceWorkspace[]): unknown {
+  if (typeof output !== "object" || output === null || !("mapUpdates" in output) || !Array.isArray(output.mapUpdates)) {
+    return output;
+  }
+  const shaBySource = new Map(
+    workspaces.flatMap((ws) => (ws.headSha ? [[ws.sourceId, ws.headSha] as const] : []))
+  );
+  const mapUpdates = output.mapUpdates.map((update: unknown) => {
+    if (typeof update !== "object" || update === null || !("sourceId" in update) || typeof update.sourceId !== "string") {
+      return update;
+    }
+    const stripped = Object.fromEntries(Object.entries(update).filter(([key]) => key !== "observedSha"));
+    const sha = shaBySource.get(update.sourceId);
+    return sha ? { ...stripped, observedSha: sha } : stripped;
+  });
+  return { ...output, mapUpdates };
 }

@@ -5,7 +5,7 @@ import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import type { WatcherApi } from "../http-client.js";
 import { buildSourceGroundedPrompt, parseJobOutput } from "../job-prompts.js";
 import { logger } from "../logger.js";
-import { fetchSourceMapEntries, hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf, type PreparedSources } from "../source-workspace.js";
+import { fetchSourceMapEntries, hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf, stampSourceMapUpdates, type PreparedSources } from "../source-workspace.js";
 import { PROVIDER_JOB_TYPES, runGenerativeJob } from "./generative.js";
 
 export type PromptMode = "arg" | "stdin";
@@ -138,7 +138,7 @@ export class CliRunner {
       extraArgs: this.readOnlyArgs(prepared),
       timeoutMs: this.agenticTimeoutMs
     });
-    return parseJobOutput(job, content);
+    return stampSourceMapUpdates(parseJobOutput(job, content), prepared.workspaces);
   }
 
   // Read-only enforcement is assembled HERE, per capability, so it cannot be

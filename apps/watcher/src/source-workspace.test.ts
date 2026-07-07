@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import type { SourceDescriptor } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
-import { fetchSourceMapEntries, hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf } from "./source-workspace.js";
+import { fetchSourceMapEntries, hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf, stampSourceMapUpdates } from "./source-workspace.js";
 
 const git = (over: Partial<Extract<SourceDescriptor, { kind: "git" }>> = {}): SourceDescriptor => ({
   id: "g1", name: "Repo", kind: "git", url: "https://example.com/r.git", ...over
@@ -24,6 +24,22 @@ describe("prepareSourceWorkspaces", () => {
     const prepared = await prepareSourceWorkspaces([git({ subpath: "Docs" })], { checkoutRoot, checkout });
     assert.deepEqual(prepared.workspaces, [{ sourceId: "g1", name: "Repo", rootDir: path.join(cloned, "Docs") }]);
     assert.deepEqual(prepared.notes, []);
+  });
+
+  it("captures the checkout head sha on the workspace", async () => {
+    const checkoutRoot = mkdtempSync(path.join(tmpdir(), "magpie-ws-"));
+    const cloned = path.join(checkoutRoot, "g1");
+    mkdirSync(cloned, { recursive: true });
+    const checkout = async (req: { id: string; url: string; checkoutRoot: string }) => ({
+      localPath: cloned,
+      remoteUrl: req.url
+    });
+    const prepared = await prepareSourceWorkspaces([git()], {
+      checkoutRoot,
+      checkout,
+      headSha: async () => "abc123"
+    });
+    assert.equal(prepared.workspaces[0]?.headSha, "abc123");
   });
 
   it("uses local sources in place and notes internet/agent sources", async () => {
@@ -192,5 +208,35 @@ describe("sourceDescriptorsOf", () => {
       neighbours: []
     });
     assert.deepEqual(sourceDescriptorsOf(dedupe), []);
+  });
+});
+
+describe("stampSourceMapUpdates", () => {
+  const workspaces = [{ sourceId: "s1", name: "S1", rootDir: "/tmp/s1", headSha: "real-sha" }];
+  const update = { sourceId: "s1", topic: "t", paths: ["p/"], description: "d" };
+
+  it("overwrites a model-supplied observedSha with the workspace sha", () => {
+    const stamped = stampSourceMapUpdates(
+      { verdict: "healthy", claims: [], mapUpdates: [{ ...update, observedSha: "model-lie" }] },
+      workspaces
+    );
+    assert.deepEqual(stamped, {
+      verdict: "healthy",
+      claims: [],
+      mapUpdates: [{ ...update, observedSha: "real-sha" }]
+    });
+  });
+
+  it("removes observedSha when the workspace sha is unknown", () => {
+    const stamped = stampSourceMapUpdates(
+      { verdict: "healthy", claims: [], mapUpdates: [{ ...update, observedSha: "model-lie" }] },
+      [{ sourceId: "s1", name: "S1", rootDir: "/tmp/s1" }]
+    );
+    assert.deepEqual(stamped, { verdict: "healthy", claims: [], mapUpdates: [update] });
+  });
+
+  it("passes through outputs without mapUpdates", () => {
+    const output = { verdict: "healthy", claims: [] };
+    assert.equal(stampSourceMapUpdates(output, workspaces), output);
   });
 });
