@@ -168,6 +168,16 @@ export interface KnowledgeGapSignal {
   source: QuestionGapSource;
 }
 
+// Prefix of the synthesised gap summary a live answer emits when the flow flagged
+// a knowledge gap (or retrieval was empty) but the model named no specific gap
+// topics: it echoes the raw question ("No sufficient source material found for:
+// <question>") rather than describing a topic. Owned here as one source of truth
+// so the watcher builds it and the API recognises it identically. Such a summary
+// records the miss but is a poor proposal seed — it restates the question and
+// never merges with a sibling wording — so the API drops it before it becomes a
+// gap row, and it never seeds a cluster or proposal.
+export const NO_SOURCE_MATERIAL_GAP_PREFIX = "No sufficient source material found for:";
+
 // "auto"/"manual"/"followup" are the sources a live answer can raise (the model
 // or an admin). "verification" is raised server-side after a merged proposal
 // fails gap-closure verification: the triggering question was re-asked and the

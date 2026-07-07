@@ -10,12 +10,26 @@ import type {
   QuestionLogInput,
   QuestionLogUpdateInput
 } from "@magpie/core";
+import { NO_SOURCE_MATERIAL_GAP_PREFIX } from "@magpie/core";
+
+// Whether a gap summary is worth seeding a cluster/proposal from. Drops the
+// synthesised no-source-material fallback: it echoes the raw question rather than
+// naming a topic, so it never merges with a sibling wording and is a poor proposal
+// seed (a batch of unanswered questions would otherwise each seed its own singleton
+// cluster — the gap-reconciler fan-out). Shared by both store implementations so
+// their gap ingestion stays identical. Empty summaries are handled separately.
+export function isSeedableGapSummary(summary: string): boolean {
+  return !summary.trim().startsWith(NO_SOURCE_MATERIAL_GAP_PREFIX);
+}
 
 // Gaps carried on an answer, preserving each signal's source ("auto" for a
 // whole-question miss, "followup" for missing supporting material a confident
-// answer searched for and did not find).
+// answer searched for and did not find). Non-seedable summaries (the echoed
+// no-source-material fallback) are dropped so they never cluster or draft.
 function gapsFromAnswer(answer: AnswerResult | undefined): QuestionGap[] {
-  return (answer?.gaps ?? []).map((gap) => ({ summary: gap.summary, source: gap.source }));
+  return (answer?.gaps ?? [])
+    .filter((gap) => isSeedableGapSummary(gap.summary))
+    .map((gap) => ({ summary: gap.summary, source: gap.source }));
 }
 
 // Stable map key for a (summary, flowId) gap pair. The flow is coalesced to ''

@@ -6,6 +6,7 @@ import type {
   KnowledgeGapSignal,
   OutOfScope
 } from "@magpie/core";
+import { NO_SOURCE_MATERIAL_GAP_PREFIX } from "@magpie/core";
 import type { JobType, JobView } from "@magpie/jobs";
 import { jobDefinition } from "@magpie/jobs";
 import type { z } from "zod";
@@ -219,7 +220,7 @@ export function buildAnswerOutput(
     const summaries =
       structured && structured.gaps.length > 0
         ? structured.gaps
-        : [`No sufficient source material found for: ${question}`];
+        : [`${NO_SOURCE_MATERIAL_GAP_PREFIX} ${question}`];
     const autoGaps = summaries.map((summary) => toGapSignal(summary, question, citedSectionIds, "low", "auto"));
     return {
       answer: answer || "I could not find reliable source material for this question.",

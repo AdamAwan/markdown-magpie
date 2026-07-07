@@ -13,7 +13,7 @@ import type {
   QuestionLogInput,
   QuestionLogUpdateInput
 } from "@magpie/core";
-import { answerGapsUnchanged, gapSummaryKey, type QuestionLogStore } from "./question-log-store.js";
+import { answerGapsUnchanged, gapSummaryKey, isSeedableGapSummary, type QuestionLogStore } from "./question-log-store.js";
 import { valuesClause } from "./sql-bulk.js";
 
 export class PostgresQuestionLogStore implements QuestionLogStore {
@@ -886,11 +886,13 @@ async function bumpGapCatalog(client: pg.PoolClient, flowId: string | null): Pro
 
 // The gaps carried on an answer, each preserving its source ("auto" for a
 // whole-question miss, "followup" for missing supporting material a confident
-// answer searched for and could not find). Empty summaries are dropped.
+// answer searched for and could not find). Empty and non-seedable summaries (the
+// echoed no-source-material fallback) are dropped so they never become a gap row,
+// cluster, or proposal — isSeedableGapSummary is shared with the in-memory store.
 function answerGapRows(answer: AnswerResult | undefined): Array<{ summary: string; source: QuestionGapSource }> {
   return (answer?.gaps ?? [])
     .map((gap) => ({ summary: gap.summary.trim(), source: gap.source }))
-    .filter((gap) => gap.summary.length > 0);
+    .filter((gap) => gap.summary.length > 0 && isSeedableGapSummary(gap.summary));
 }
 
 interface QuestionRow {
