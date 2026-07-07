@@ -47,6 +47,10 @@ them directly, so no source-grounded job samples source files API-side. The shar
 source-corpus snapshot store and its `/api/source-corpus` endpoint are gone. See
 the source-agentic grounding spec
 ([docs/superpowers/specs/2026-07-06-source-agentic-grounding-design.md](superpowers/specs/2026-07-06-source-agentic-grounding-design.md)).
+Source-grounded prompts now begin with per-source "source map" hints — lightweight topic-indexed
+navigation metadata maintained by the agents themselves, stored in Postgres, and fetched through the
+watcher's scoped-context API — internal to source navigation and never appearing in answer retrieval
+or user-facing output.
 
 Embeddings are the one exception to the queue model: the API computes them **inline**
 (it holds an embedding provider) for both indexing and query-time retrieval, rather than

@@ -95,6 +95,12 @@ The watcher drives a job through these; operators rarely call them directly:
   question + flow texts inline), abstaining on a low-margin score so the watcher falls
   back to the chat router. Both keep embeddings/retrieval inside the API — the watcher
   is HTTP-only. See [question-logging.md](./question-logging.md) → Queued Answers.
+- `GET /api/source-map?sourceIds=…` — retrieve per-source navigation hints for the
+  watcher at workspace preparation. Query parameter `sourceIds` accepts a comma-separated
+  list of source IDs (e.g. `?sourceIds=agent,flowerbi`). Returns `{ "entries": SourceMapEntry[] }`,
+  the ≤100 most-recently-updated entries per requested source (scope: `manage:jobs`,
+  capped at 100 reads per requested source per request). Returns `400` if `sourceIds` is
+  missing or malformed.
 
 ## Completion is never re-billed (#161)
 
@@ -376,6 +382,41 @@ compare the document against its destination neighbours. See the source-agentic 
 spec
 ([docs/superpowers/specs/2026-07-06-source-agentic-grounding-design.md](superpowers/specs/2026-07-06-source-agentic-grounding-design.md)).
 
+## Source map (agent navigation hints)
+
+Agents working on source-grounded jobs need lightweight navigation metadata to orient
+themselves in large source codebases. The source map is a per-source store of topic-indexed
+navigation hints maintained by the agents themselves: each entry pairs a topic with one or
+more file paths and a one-line description, unique on `(source_id, topic)`.
+
+**Read path.** At workspace preparation for any source-grounded job, the watcher fetches
+the source map via `GET /api/source-map?sourceIds=…` (scope: `manage:jobs`) and renders
+it to the agent prompt after the repository list, framed as unverified hints that the agent
+may update if they are outdated or incomplete. The map is a best-effort fetch — it is
+rendered only for sources that successfully respond — and the job never fails if the fetch
+times out or returns partial results.
+
+**Write path.** The five source-grounded job types — `draft_seed_document`, `draft_markdown_proposal`,
+`verify_document`, `correct_document`, and `improve_document` — accept an optional `mapUpdates`
+field in their output: an array of updates to the source map, keyed by `(source_id, topic)`.
+The completion dispatcher applies these updates best-effort: each update is merged into the store
+(upsert by source+topic) and persisted to Postgres. Updates are capped at 20 per job; beyond
+that limit they are dropped with a log warning. A per-source cap of 200 entries is enforced
+with oldest-updated eviction: when the cap is reached, the least-recently-updated entry for
+that source is evicted to make room for the new one. Malformed updates (invalid source_id,
+oversized topic/paths/description) are dropped with a structured log warning and never cause
+the job to fail.
+
+**`observed_sha`.** Each source map entry records the Git HEAD SHA of the source at the time
+the entry was written, stamped by the watcher during workspace preparation. This value is
+always taken from the checkout HEAD, never trusted from the agent — any `observed_sha` values
+supplied by the model are overwritten. Entries from non-git sources keep `observed_sha` null.
+
+**Boundaries.** The source map is strictly internal metadata and **never** enters answer
+retrieval, user-facing output, or the indexed knowledge base. Staleness invalidation via
+source-change-sync (e.g. detecting that the HEAD SHA no longer matches and pruning stale
+entries) is a follow-up tracked in #215 and not implemented in this phase.
+
 ## Watcher Model
 
 The watcher has no direct database access. It talks to the API only:
@@ -471,7 +512,9 @@ Provider support should stay behind `AgentRunner` adapters:
 
 ## Storage
 
-Use `STORAGE_BACKEND=postgres` for local development and deployments.
+Use `STORAGE_BACKEND=postgres` for local development and deployments. Optional backend
+overrides: `SOURCE_MAP_STORE` selects the storage backend for the source map (useful for
+testing or alternate implementations; defaults to postgres when not set).
 
 Jobs and schedules are owned entirely by pg-boss (the `JobBroker`), which manages its own
 Postgres tables. The legacy custom job table and its queue-selection override have been

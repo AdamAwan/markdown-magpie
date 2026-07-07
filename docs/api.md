@@ -526,6 +526,34 @@ Retries a `failed` job. `409 job_not_failed` if it is not failed; `404 job_not_f
 `{ "workerName", "capabilities": [...] }` and returns `{ "job": Job }` or `{ "job": null }`;
 fail takes a structured `error` object. See [ai-jobs.md](ai-jobs.md).
 
+### `GET /api/source-map?sourceIds=…`
+
+Retrieves navigation hints for source-grounded job execution. Query parameter `sourceIds`
+is required and accepts a comma-separated list of source IDs to fetch hints for.
+
+Scope: `manage:jobs`. Read cap: 100 entries per requested source per request.
+
+**Response (200):**
+
+```json
+{
+  "entries": [
+    {
+      "source_id": "agent",
+      "topic": "authentication flow",
+      "paths": ["src/auth/login.ts", "src/auth/oauth.ts"],
+      "description": "OAuth2 login and token refresh implementation",
+      "observed_sha": "abc123de"
+    }
+  ]
+}
+```
+
+**Error cases:**
+
+- `400 missing_source_ids` — `sourceIds` query parameter is missing.
+- `400 invalid_source_ids` — `sourceIds` is malformed (e.g. not comma-separated).
+
 ## Insights
 
 Read-only aggregation endpoints powering the web console's Insights page. All require the
