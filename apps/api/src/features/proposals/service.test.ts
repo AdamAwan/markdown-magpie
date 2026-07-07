@@ -2088,3 +2088,59 @@ test("an empty or absent uncoveredPoints leaves the rationale untouched", async 
   const proposal = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
   assert.equal(proposal?.rationale, "seed");
 });
+
+test("createSeedProposalFromCompletedJob flags advisory-style headings on the rationale", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_seed_document", {
+    flowId: "billing",
+    coverage: ["what billing is"],
+    sources: [],
+    provider: "codex"
+  });
+  const output = {
+    title: "Billing overview",
+    targetPath: "billing.md",
+    markdown: "# Billing\n\n## Recommendations\n\nAdopt three phases.",
+    rationale: "seed"
+  };
+
+  const proposal = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
+  assert.ok(proposal?.rationale?.includes("Register check: advisory-style headings detected"));
+  assert.ok(proposal?.rationale?.includes('"Recommendations"'));
+  assert.ok(proposal?.markdown.includes("## Recommendations"), "flag only — the body is never edited");
+});
+
+test("createProposalFromCompletedJob flags advisory-style headings on the rationale", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_markdown_proposal", {
+    provider: "codex",
+    gapSummaries: ["audit logging"],
+    triggeringQuestions: ["How is audit logging done?"],
+    evidence: [],
+    sources: [],
+    expectedOutput: "markdown_proposal"
+  });
+  const output = {
+    title: "Audit logging",
+    targetPath: "audit-logging.md",
+    markdown: "# Audit logging\n\n## Next steps\n\nImplement phase 1.",
+    rationale: "grounded"
+  };
+
+  const proposal = await proposals.createProposalFromCompletedJob(ctx, job, output);
+  assert.ok(proposal?.rationale?.includes("Register check: advisory-style headings detected"));
+  assert.ok(proposal?.rationale?.includes('"Next steps"'));
+});
+
+test("a clean draft's rationale carries no register-check note", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_seed_document", {
+    flowId: "billing",
+    coverage: ["what billing is"],
+    sources: [],
+    provider: "codex"
+  });
+  const output = { title: "Billing", targetPath: "billing.md", markdown: "# Billing\n\n## Plans", rationale: "seed" };
+  const proposal = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
+  assert.equal(proposal?.rationale, "seed");
+});

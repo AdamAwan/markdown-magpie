@@ -46,6 +46,7 @@ import { projectSourceDescriptors } from "../../platform/source-descriptors.js";
 import { type AiProviderName } from "../../platform/providers.js";
 import { buildAnswerQuestionInput, recordAnswerQuestionLog } from "../../platform/answer-question.js";
 import { logger } from "../../logger.js";
+import { advisoryNote, collectAdvisoryHeadings, flagAdvisoryDraft } from "./register-check.js";
 
 type PublishProposalJobOutput = z.infer<typeof publishProposalOutputSchema>;
 
@@ -1357,22 +1358,27 @@ export async function createProposalFromCompletedJob(
     return undefined;
   }
 
-  return ctx.stores.proposals.create({
-    ...withReport,
-    targetPath: resolveProposalTargetPath(destinationSubpath(ctx.repositoryDeps(), input.destinationId), output.title),
-    evidence: input.evidence ?? [],
-    gapSummary: input.gapSummaries ? joinGapSummaries(input.gapSummaries) : undefined,
-    triggeringQuestionIds: input.triggeringQuestionIds,
-    destinationId: input.destinationId,
-    gapClusterId: input.gapClusterId,
-    jobId: job.id,
-    draftContext: buildDraftContext({
-      gapSummaries: input.gapSummaries ?? [],
-      sources: input.sources,
-      evidence: input.evidence ?? [],
-      openPullRequests: input.openPullRequests
-    })
-  });
+  return ctx.stores.proposals.create(
+    flagAdvisoryDraft(
+      {
+        ...withReport,
+        targetPath: resolveProposalTargetPath(destinationSubpath(ctx.repositoryDeps(), input.destinationId), output.title),
+        evidence: input.evidence ?? [],
+        gapSummary: input.gapSummaries ? joinGapSummaries(input.gapSummaries) : undefined,
+        triggeringQuestionIds: input.triggeringQuestionIds,
+        destinationId: input.destinationId,
+        gapClusterId: input.gapClusterId,
+        jobId: job.id,
+        draftContext: buildDraftContext({
+          gapSummaries: input.gapSummaries ?? [],
+          sources: input.sources,
+          evidence: input.evidence ?? [],
+          openPullRequests: input.openPullRequests
+        })
+      },
+      { jobId: job.id, jobType: job.type }
+    )
+  );
 }
 
 // Applies a completed regeneration draft to its already-published proposal: refresh
@@ -1385,7 +1391,16 @@ async function applyRegeneratedProposal(
   proposalId: string,
   output: DraftMarkdownProposalJobOutput
 ): Promise<void> {
-  const updated = await ctx.stores.proposals.recordRegeneration(proposalId, output.markdown, output.rationale);
+  const headings = collectAdvisoryHeadings(output.markdown);
+  let rationale = output.rationale;
+  if (headings.length > 0) {
+    logger.warn(
+      { proposalId, advisoryHeadings: headings },
+      "regenerated draft contains advisory-style headings; flagged on the proposal rationale (not blocked)"
+    );
+    rationale = `${rationale}\n\n${advisoryNote(headings)}`;
+  }
+  const updated = await ctx.stores.proposals.recordRegeneration(proposalId, output.markdown, rationale);
   if (!updated) {
     logger.warn({ proposalId }, "regeneration draft completed but its proposal is gone — skipping re-publish");
     return;
@@ -1418,16 +1433,21 @@ export async function createCorrectiveProposalFromCompletedJob(
   if (!input.path) {
     return undefined;
   }
-  return ctx.stores.proposals.create({
-    title: `Verify: correct unprovable claims in ${input.path}`,
-    targetPath: input.path,
-    markdown: parsed.data.markdown,
-    rationale: parsed.data.rationale,
-    evidence: [],
-    flowId: input.flowId,
-    destinationId: input.destinationId,
-    jobId: job.id
-  });
+  return ctx.stores.proposals.create(
+    flagAdvisoryDraft(
+      {
+        title: `Verify: correct unprovable claims in ${input.path}`,
+        targetPath: input.path,
+        markdown: parsed.data.markdown,
+        rationale: parsed.data.rationale,
+        evidence: [],
+        flowId: input.flowId,
+        destinationId: input.destinationId,
+        jobId: job.id
+      },
+      { jobId: job.id, jobType: job.type }
+    )
+  );
 }
 
 // Completion handler for draft_seed_document jobs: a seed draft landed, so create a
@@ -1451,19 +1471,24 @@ export async function createSeedProposalFromCompletedJob(
   if (!input.flowId) {
     return undefined;
   }
-  return ctx.stores.proposals.create({
-    title: parsed.data.title,
-    targetPath: resolveProposalTargetPath(
-      destinationSubpath(ctx.repositoryDeps(), input.destinationId),
-      parsed.data.targetPath || parsed.data.title
-    ),
-    markdown: parsed.data.markdown,
-    rationale: foldUncoveredPointsIntoRationale(job, parsed.data),
-    evidence: [],
-    flowId: input.flowId,
-    destinationId: input.destinationId,
-    jobId: job.id
-  });
+  return ctx.stores.proposals.create(
+    flagAdvisoryDraft(
+      {
+        title: parsed.data.title,
+        targetPath: resolveProposalTargetPath(
+          destinationSubpath(ctx.repositoryDeps(), input.destinationId),
+          parsed.data.targetPath || parsed.data.title
+        ),
+        markdown: parsed.data.markdown,
+        rationale: foldUncoveredPointsIntoRationale(job, parsed.data),
+        evidence: [],
+        flowId: input.flowId,
+        destinationId: input.destinationId,
+        jobId: job.id
+      },
+      { jobId: job.id, jobType: job.type }
+    )
+  );
 }
 
 // Completion handler for dedupe_documents jobs: a dedupe-lens scan landed. When it
@@ -1586,16 +1611,21 @@ export async function createImproveProposalFromCompletedJob(
   if (!input.path || parsed.data.markdown.trim() === input.content?.trim()) {
     return undefined;
   }
-  return ctx.stores.proposals.create({
-    title: `Improve: expand ${input.path}`,
-    targetPath: input.path,
-    markdown: parsed.data.markdown,
-    rationale: parsed.data.rationale,
-    evidence: [],
-    flowId: input.flowId,
-    destinationId: input.destinationId,
-    jobId: job.id
-  });
+  return ctx.stores.proposals.create(
+    flagAdvisoryDraft(
+      {
+        title: `Improve: expand ${input.path}`,
+        targetPath: input.path,
+        markdown: parsed.data.markdown,
+        rationale: parsed.data.rationale,
+        evidence: [],
+        flowId: input.flowId,
+        destinationId: input.destinationId,
+        jobId: job.id
+      },
+      { jobId: job.id, jobType: job.type }
+    )
+  );
 }
 // Completion handler for publish_proposal jobs: records the validated git
 // publication the watcher performed (branch, commit, optional remote/PR url) onto

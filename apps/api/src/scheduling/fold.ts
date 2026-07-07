@@ -8,6 +8,7 @@ import type { ChangeIntent } from "./intent.js";
 import { decideReconciliation, openPullRequestSummaries, sharedTargets } from "./reconcile-gate.js";
 import { proposalFlowId, sameFlowOpenProposals } from "./flow.js";
 import { proposalChangeset, proposalTargets } from "./changeset.js";
+import { collectAdvisoryHeadings } from "../features/proposals/register-check.js";
 
 // At-draft fold: when a freshly-created draft proposal overlaps a touchable open
 // proposal in the SAME flow, enqueue a fold_markdown_proposal job to merge them.
@@ -314,6 +315,14 @@ export async function applyFoldFromCompletedJob(
     return;
   }
 
+  const advisoryHeadings = collectAdvisoryHeadings(parsed.data.markdown);
+  if (advisoryHeadings.length > 0) {
+    logger.warn(
+      { survivorId: survivor.id, rivalId: rival.id, jobId: job.id, advisoryHeadings },
+      "folded markdown contains advisory-style headings (flagged, not blocked)"
+    );
+  }
+
   // A changeset survivor (dedupe/split) publishes from its `changeset`, not its
   // `markdown` (see publishProposal in the watcher). Folding a single-file rival into
   // it must therefore write the merged content into the changeset's primary entry —
@@ -386,6 +395,13 @@ export async function applyChangesetFoldFromCompletedJob(
   // the merge dropped the primary path).
   const primaryMarkdown =
     parsed.data.changeset.find((change) => change.path === survivor.targetPath)?.content ?? survivor.markdown;
+  const advisoryHeadings = collectAdvisoryHeadings(primaryMarkdown, parsed.data.changeset);
+  if (advisoryHeadings.length > 0) {
+    logger.warn(
+      { survivorId: survivor.id, rivalId: rival.id, jobId: job.id, advisoryHeadings },
+      "folded changeset contains advisory-style headings (flagged, not blocked)"
+    );
+  }
   await ctx.stores.proposals.updateChangeset(survivor.id, parsed.data.changeset, primaryMarkdown);
   await ctx.stores.proposals.updateStatus(rival.id, "superseded");
   await ctx.stores.gapClusters.enqueuePublicationAction(survivor.id, "publish");
