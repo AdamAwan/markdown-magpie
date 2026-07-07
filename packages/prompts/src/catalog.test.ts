@@ -115,3 +115,15 @@ test("every content-producing prompt carries the factual-register contract", () 
     assert.match(instructions, /IS allowed/, `${id} misses the source-stated-plan exception`);
   }
 });
+
+// #213: uncovered points are OMITTED from the document body and reported in the
+// structured uncoveredPoints field — never written into the markdown as notes.
+test("draft prompts route uncovered points to uncoveredPoints, not the document body", () => {
+  for (const id of ["draft-markdown-proposal", "draft-seed-document"]) {
+    const instructions = getPrompt(id)?.instructions ?? "";
+    assert.doesNotMatch(instructions, /note the gap plainly/, `${id} still writes gaps into the body`);
+    assert.doesNotMatch(instructions, /say so plainly/, `${id} still writes gaps into the body`);
+    assert.match(instructions, /OMIT it from the document entirely/, `${id} misses the omission rule`);
+    assert.match(instructions, /"uncoveredPoints"/, `${id} misses the reporting field`);
+  }
+});

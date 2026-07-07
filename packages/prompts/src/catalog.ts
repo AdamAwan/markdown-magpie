@@ -132,13 +132,13 @@ export const DRAFT_MARKDOWN_PROPOSAL: PromptDefinition = {
   description:
     "Drafts a single cohesive Markdown article that addresses every listed gap, grounded in the flow's source repositories, which the executing agent explores directly. Used by the watcher's draft_markdown_proposal job.",
   usedBy: ["watcher"],
-  outputShape: '{ title, targetPath, markdown, rationale }',
+  outputShape: '{ title, targetPath, markdown, rationale, uncoveredPoints? }',
   instructions: `Draft a single Markdown knowledge base proposal that addresses every gap listed in gapSummaries, grounded in the source repositories you have been given access to.
 
 Grounding:
 - You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for terms from the gap summaries and triggering questions, open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs.
 - Ground every factual claim in files you actually read, and cite their repository paths (e.g. "(see Docs/Specifications/Statements/ingestion.md)").
-- Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs. Where the sources genuinely do not cover a point, write only what can be supported and say so plainly.
+- Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs. Where the sources genuinely do not cover a point, OMIT it from the document entirely — never write the gap, a placeholder, or a note about missing coverage into the document body — and list that point in "uncoveredPoints" instead.
 
 Rules:
 - Return JSON only.
@@ -154,7 +154,8 @@ Return JSON:
   "title": "string",
   "targetPath": "string",
   "markdown": "string",
-  "rationale": "string"
+  "rationale": "string",
+  "uncoveredPoints": ["a point the sources do not support (omit when none)"]
 }`
 };
 
@@ -164,7 +165,7 @@ export const DRAFT_SEED_DOCUMENT: PromptDefinition = {
   description:
     "Authors a NEW knowledge-base document from a title + the points it should cover, grounded in the flow's source repositories, which the executing agent explores directly. Used to seed a new flow or add a new area to an existing one, bypassing the demand-driven gap pipeline. Used by the watcher's draft_seed_document job.",
   usedBy: ["watcher · flow seeding"],
-  outputShape: "{ title, targetPath, markdown, rationale }",
+  outputShape: "{ title, targetPath, markdown, rationale, uncoveredPoints? }",
   instructions: `You author a single new Markdown knowledge-base document, grounded in the source repositories you have been given access to.
 
 Input:
@@ -175,7 +176,7 @@ Input:
 Grounding:
 - You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for terms from "coverage", open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs.
 - Ground every factual claim in files you actually read, and cite their repository paths in the text (e.g. "(see Docs/Specifications/Statements/ingestion.md)").
-- Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs. If, after genuinely searching, the sources do not cover a point, write only what can be supported and note the gap plainly.
+- Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs. If, after genuinely searching, the sources do not cover a coverage point, OMIT it from the document entirely — never write the gap, a placeholder, or a note about missing coverage into the document body — and list that point in "uncoveredPoints" instead.
 
 Rules:
 - Your FINAL message must be JSON only, matching the shape below. No prose around it.
@@ -188,7 +189,8 @@ Return JSON:
   "title": "the document title",
   "targetPath": "kebab-case/path.md",
   "markdown": "the full document",
-  "rationale": "string"
+  "rationale": "string",
+  "uncoveredPoints": ["a coverage point the sources do not support (omit when none)"]
 }`
 };
 
