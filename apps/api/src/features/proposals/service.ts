@@ -25,6 +25,7 @@ import {
   answerQuestionOutputSchema,
   correctDocumentOutputSchema,
   dedupeDocumentsOutputSchema,
+  draftMarkdownProposalOutputSchema,
   draftSeedDocumentOutputSchema,
   improveDocumentOutputSchema,
   publishProposalOutputSchema,
@@ -1679,15 +1680,5 @@ function isPublishProposalJobOutput(value: unknown): value is PublishProposalJob
 }
 
 function isDraftMarkdownProposalJobOutput(value: unknown): value is DraftMarkdownProposalJobOutput {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const candidate = value as Partial<DraftMarkdownProposalJobOutput>;
-  return (
-    typeof candidate.title === "string" &&
-    typeof candidate.targetPath === "string" &&
-    typeof candidate.markdown === "string" &&
-    typeof candidate.rationale === "string"
-  );
+  return draftMarkdownProposalOutputSchema.safeParse(value).success;
 }

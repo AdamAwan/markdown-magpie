@@ -2132,6 +2132,42 @@ test("createProposalFromCompletedJob flags advisory-style headings on the ration
   assert.ok(proposal?.rationale?.includes('"Next steps"'));
 });
 
+test("createProposalFromCompletedJob stacks the uncoveredPoints note and the register-check note in order", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_markdown_proposal", {
+    provider: "codex",
+    gapSummaries: ["audit logging"],
+    triggeringQuestions: ["How is audit logging done?"],
+    evidence: [],
+    sources: [],
+    expectedOutput: "markdown_proposal"
+  });
+  const output = {
+    title: "Audit logging",
+    targetPath: "audit-logging.md",
+    markdown: "# Audit logging\n\n## Next steps\n\nImplement phase 1.",
+    rationale: "grounded in repo docs",
+    uncoveredPoints: ["X"]
+  };
+
+  const proposal = await proposals.createProposalFromCompletedJob(ctx, job, output);
+  assert.ok(proposal);
+  const rationale = proposal?.rationale ?? "";
+  const originalIndex = rationale.indexOf("grounded in repo docs");
+  const uncoveredIndex = rationale.indexOf("Not covered by the sources");
+  const registerIndex = rationale.indexOf("Register check:");
+  assert.ok(originalIndex >= 0, "original rationale is preserved");
+  assert.ok(uncoveredIndex > originalIndex, "uncovered-points note follows the original rationale");
+  assert.ok(rationale.includes("X"), "uncovered-points note mentions the reported point");
+  assert.ok(registerIndex > uncoveredIndex, "register-check note follows the uncovered-points note");
+  assert.ok(rationale.includes('"Next steps"'), "register-check note names the detected heading");
+  assert.equal(
+    proposal?.markdown,
+    "# Audit logging\n\n## Next steps\n\nImplement phase 1.",
+    "the markdown body is unchanged by either note"
+  );
+});
+
 test("a clean draft's rationale carries no register-check note", async () => {
   const ctx = makeTestContext();
   const job = await ctx.jobs.create("draft_seed_document", {

@@ -198,7 +198,13 @@ backstop, the API runs an advisory-heading check (`findAdvisoryHeadings` in
 headings like "Recommendations", "Next steps", "Action items", "Roadmap" or "Future
 work" is **flagged, never failed** — a structured log warning plus a "Register check:"
 note on the proposal rationale — because a document may legitimately describe a roadmap
-its source states.
+its source states. At the two fold appliers (`applyFoldFromCompletedJob`,
+`applyChangesetFoldFromCompletedJob` in `apps/api/src/scheduling/fold.ts`) the check is
+**log-only**: a fold rewrites markdown, not rationale, so the surviving proposal's
+original draft-time rationale note (if any) survives the fold untouched. `dedupe_documents`
+and `split_document` outputs are **deliberately not checked**: they reorganise existing KB
+content rather than author anything new, so any advisory heading present already pre-dates
+the proposal.
 
 ```bash
 curl -s http://localhost:4000/api/proposals
