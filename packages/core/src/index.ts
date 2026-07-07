@@ -792,6 +792,23 @@ export interface SeedItem {
   questions?: string[];
 }
 
+// One agent-maintained navigation hint for a source repository (#215): where a
+// topic lives, as concrete repo paths plus a one-line description. Internal
+// metadata for source-grounded job prompts — never knowledge-base content, and
+// never part of answer retrieval or user-facing output. observedSha is the
+// checkout HEAD the hint was observed at (stamped by the watcher when known);
+// staleness invalidation against source-change-sync is a follow-up.
+export interface SourceMapEntry {
+  id: string;
+  sourceId: string;
+  topic: string;
+  paths: string[];
+  description: string;
+  observedSha?: string;
+  createdAt: string; // ISO-8601
+  updatedAt: string; // ISO-8601
+}
+
 // A reference to one of a flow's configured sources, carried on source-grounded
 // job inputs INSTEAD of inline file content. git/local descriptors resolve to a
 // traversable workspace on the watcher (see the source-agentic grounding spec);

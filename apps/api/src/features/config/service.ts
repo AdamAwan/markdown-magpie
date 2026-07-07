@@ -156,6 +156,7 @@ export async function resetData(ctx: AppContext) {
   await ctx.stores.scheduledTasks.reset();
   await ctx.stores.sourceSync.reset();
   await ctx.stores.patrol.reset();
+  await ctx.stores.sourceMap.reset();
   await ctx.stores.jobAcceptances.reset();
 
   // Clear the durable job queue (pg-boss owns all jobs/schedules now), then
