@@ -400,14 +400,29 @@ async function reconcileGapClusters({ job, model, signal }: GenerativeJobOptions
   const proposeResponse = await model.complete({
     system: GAP_RECONCILE_PROPOSE.instructions,
     messages: [{ role: "user", content: summary }],
+    // Ask for JSON explicitly, mirroring the critic call. Without it the provider
+    // is free to wrap the proposal in a ```json fence or prose, which — combined with
+    // a raw JSON.parse — used to silently discard the whole proposal and collapse
+    // every reshape to "no merges" (the 100-singleton fan-out).
+    responseFormat: "json",
     signal
   });
   const proposal = parseReshape(proposeResponse.content);
 
   const opCount = proposal.merges.length + proposal.splits.length + proposal.dismissals.length;
-  logger.debug(
-    { jobId: job.id, mergeCount: proposal.merges.length, splitCount: proposal.splits.length, dismissalCount: proposal.dismissals.length },
-    `reconcile_gap_clusters[${job.id}]: critic-confirming ${proposal.merges.length} merge(s), ${proposal.splits.length} split(s), ${proposal.dismissals.length} dismissal(s)`
+  // Surface the propose-side result (pre-critic) at info: the confirmed verdict alone
+  // can't tell "the model proposed nothing" from "the critic rejected everything", and
+  // an empty proposal over many clusters is the fan-out signature worth seeing in logs.
+  logger.info(
+    {
+      jobId: job.id,
+      clusterCount: input.clusters.length,
+      proposeResponseChars: proposeResponse.content.length,
+      mergeCount: proposal.merges.length,
+      splitCount: proposal.splits.length,
+      dismissalCount: proposal.dismissals.length
+    },
+    `reconcile_gap_clusters[${job.id}]: propose returned ${proposal.merges.length} merge(s), ${proposal.splits.length} split(s), ${proposal.dismissals.length} dismissal(s) over ${input.clusters.length} cluster(s)`
   );
 
   // One batched critic pass over every proposed operation (was one provider call per
@@ -523,7 +538,10 @@ function parseCriticVerdicts(content: string): Map<string, boolean> {
 function parseReshape(content: string): { merges: ProposedMerge[]; splits: ProposedSplit[]; dismissals: ProposedDismissal[] } {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(content);
+    // extractJson tolerates a ```json fence or surrounding prose (first `{` … last `}`),
+    // the same lenient extraction every other job's output uses. A raw JSON.parse here
+    // used to drop an otherwise-valid proposal whenever the provider added any wrapper.
+    parsed = extractJson(content);
   } catch {
     return { merges: [], splits: [], dismissals: [] };
   }
