@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { EmbeddingProvider } from "@magpie/core";
 import type { JobType, JobView } from "@magpie/jobs";
 import { reconcileGapClustersOutputSchema } from "@magpie/jobs";
 import type { z } from "zod";
@@ -902,5 +903,169 @@ describe("reconcileGaps audit", () => {
     assert.equal(runs.length, 1);
     assert.equal(runs[0].status, "failed");
     assert.equal(runs[0].error, "reconcile exploded");
+  });
+});
+
+// Deterministic embedding fixture: each summary maps to a fixed unit vector.
+// Unknown text throws so a test cannot silently embed something it didn't stub.
+function fakeEmbeddingProvider(vectorsBySummary: Record<string, number[]>): EmbeddingProvider {
+  return {
+    async embed(texts: string[]): Promise<number[][]> {
+      return texts.map((text) => {
+        const vector = vectorsBySummary[text];
+        if (!vector) {
+          throw new Error(`no fixture vector for: ${text}`);
+        }
+        return vector;
+      });
+    }
+  };
+}
+
+// cosine(EAST, NEAR_EAST) ≈ 0.995 (an obvious near-duplicate, comfortably above
+// any sane threshold); cosine(EAST, NORTH) = 0 (unambiguously distinct).
+const EAST = [1, 0];
+const NEAR_EAST = [0.9950124, 0.0995463];
+const NORTH = [0, 1];
+
+async function recordGap(ctx: AppContext, question: string, summary: string): Promise<void> {
+  const log = await ctx.stores.questionLogs.record({
+    question,
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
+  await ctx.stores.questionLogs.recordManualGap(log.id, summary);
+}
+
+describe("reconcileGaps embedding-based assignment", () => {
+  const noPr = { fetchPullRequestStatus: async () => undefined };
+
+  it("collapses paraphrase gaps into one cluster and keeps distinct gaps separate", async () => {
+    const ctx = makeTestContext({
+      providers: {
+        embedding: fakeEmbeddingProvider({
+          "TLS versions for data in transit": EAST,
+          "encryption protocols protecting data in transit": NEAR_EAST,
+          "backup retention period": NORTH
+        })
+      }
+    });
+    await recordGap(ctx, "q1", "TLS versions for data in transit");
+    await recordGap(ctx, "q2", "encryption protocols protecting data in transit");
+    await recordGap(ctx, "q3", "backup retention period");
+
+    await reconcileGaps(ctx, undefined, noPr);
+
+    const clusters = await ctx.stores.gapClusters.listActiveClusters();
+    assert.equal(clusters.length, 2, "paraphrases share a cluster; the distinct gap seeds its own");
+    const sizes = (
+      await Promise.all(clusters.map((c) => ctx.stores.gapClusters.listMembershipsForCluster(c.id)))
+    )
+      .map((m) => m.length)
+      .sort();
+    assert.deepEqual(sizes, [1, 2]);
+    for (const cluster of clusters) {
+      assert.ok(cluster.representativeEmbedding, "every seeded cluster persists a representative");
+    }
+  });
+
+  it("joins a later paraphrase to the existing cluster instead of seeding a new one", async () => {
+    const ctx = makeTestContext({
+      providers: {
+        embedding: fakeEmbeddingProvider({
+          "TLS versions for data in transit": EAST,
+          "encryption protocols protecting data in transit": NEAR_EAST
+        })
+      }
+    });
+    await recordGap(ctx, "q1", "TLS versions for data in transit");
+    await reconcileGaps(ctx, undefined, noPr);
+    assert.equal((await ctx.stores.gapClusters.listActiveClusters()).length, 1);
+
+    await recordGap(ctx, "q2", "encryption protocols protecting data in transit");
+    await reconcileGaps(ctx, undefined, noPr);
+
+    const clusters = await ctx.stores.gapClusters.listActiveClusters();
+    assert.equal(clusters.length, 1, "the paraphrase joined the existing cluster");
+    const memberships = await ctx.stores.gapClusters.listMembershipsForCluster(clusters[0].id);
+    assert.equal(memberships.length, 2);
+  });
+
+  it("recomputes a nulled representative from member summaries before matching", async () => {
+    const ctx = makeTestContext({
+      providers: {
+        embedding: fakeEmbeddingProvider({
+          "TLS versions for data in transit": EAST,
+          "encryption protocols protecting data in transit": NEAR_EAST
+        })
+      }
+    });
+    await recordGap(ctx, "q1", "TLS versions for data in transit");
+    await reconcileGaps(ctx, undefined, noPr);
+    const [seeded] = await ctx.stores.gapClusters.listActiveClusters();
+    await ctx.stores.gapClusters.setClusterRepresentative(seeded.id, null);
+
+    await recordGap(ctx, "q2", "encryption protocols protecting data in transit");
+    await reconcileGaps(ctx, undefined, noPr);
+
+    const clusters = await ctx.stores.gapClusters.listActiveClusters();
+    assert.equal(clusters.length, 1, "recomputed representative still attracts the paraphrase");
+    assert.ok(clusters[0].representativeEmbedding, "recompute persisted the representative");
+  });
+
+  it("fails the run (recorded failed) when the configured provider's embed call throws", async () => {
+    const ctx = makeTestContext({
+      providers: {
+        embedding: {
+          async embed(): Promise<number[][]> {
+            throw new Error("embedding endpoint down");
+          }
+        }
+      }
+    });
+    await recordGap(ctx, "q1", "some gap");
+
+    await assert.rejects(() => reconcileGaps(ctx, undefined, noPr), /embedding endpoint down/);
+    const runs = await ctx.stores.maintenanceRuns.list({ taskType: "process_gaps_to_pull_requests", limit: 10 });
+    assert.equal(runs[0]?.status, "failed", "the failed tick is auditable and will retry");
+    assert.equal(
+      (await ctx.stores.gapClusters.listActiveClusters()).length,
+      0,
+      "no singleton fallback clusters were created"
+    );
+  });
+
+  it("nulls the survivor's representative when a confirmed merge changes its composition", async () => {
+    const jobs = new ReshapingJobBroker((input) => {
+      const clusterIds = (input as { clusters: Array<{ id: string }> }).clusters.map((c) => c.id);
+      return clusterIds.length >= 2
+        ? {
+            merges: [{ clusterIds: clusterIds.slice(0, 2), rationale: "same topic", confirmed: true }],
+            splits: [],
+            dismissals: []
+          }
+        : { merges: [], splits: [], dismissals: [] };
+    });
+    const ctx = makeTestContext({
+      jobs,
+      providers: {
+        embedding: fakeEmbeddingProvider({
+          "TLS versions for data in transit": EAST,
+          "backup retention period": NORTH
+        })
+      }
+    });
+    await recordGap(ctx, "q1", "TLS versions for data in transit");
+    await recordGap(ctx, "q2", "backup retention period");
+
+    await reconcileGaps(ctx, undefined, noPr);
+
+    const clusters = await ctx.stores.gapClusters.listActiveClusters();
+    assert.equal(clusters.length, 1, "merge left one survivor");
+    assert.equal(
+      clusters[0].representativeEmbedding,
+      undefined,
+      "survivor representative nulled for lazy recompute"
+    );
   });
 });
