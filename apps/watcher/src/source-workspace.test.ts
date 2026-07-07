@@ -235,6 +235,15 @@ describe("stampSourceMapUpdates", () => {
     assert.deepEqual(stamped, { verdict: "healthy", claims: [], mapUpdates: [update] });
   });
 
+  it("strips observedSha when the update's sourceId matches no workspace", () => {
+    const foreign = { ...update, sourceId: "s-unknown" };
+    const stamped = stampSourceMapUpdates(
+      { verdict: "healthy", claims: [], mapUpdates: [{ ...foreign, observedSha: "model-lie" }] },
+      workspaces
+    );
+    assert.deepEqual(stamped, { verdict: "healthy", claims: [], mapUpdates: [foreign] });
+  });
+
   it("passes through outputs without mapUpdates", () => {
     const output = { verdict: "healthy", claims: [] };
     assert.equal(stampSourceMapUpdates(output, workspaces), output);

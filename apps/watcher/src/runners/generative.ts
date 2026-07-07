@@ -19,6 +19,7 @@ import { routeQuestionToFlow, type FlowRoute, type RoutableFlow } from "@magpie/
 import type { z } from "zod";
 import type { RetrievedSection, WatcherApi } from "../http-client.js";
 import { logger } from "../logger.js";
+import { stampSourceMapUpdates } from "../source-workspace.js";
 import {
   applyGroundingVerdict,
   buildAnswerOutput,
@@ -73,7 +74,12 @@ export async function runGenerativeJob(options: GenerativeJobOptions): Promise<u
     messages: [{ role: "user", content: prompt }],
     signal: options.signal
   });
-  return parseJobOutput(job, response.content);
+  // The generative path never observes a checkout, so it can never vouch for a
+  // model-supplied observedSha: stamping with no workspaces strips the field from
+  // every mapUpdate. This keeps the stamping invariant global — source-grounded
+  // job types that fall back here (non-fs sources, or fs sources without an agent
+  // model) cannot smuggle a sha the watcher didn't observe.
+  return stampSourceMapUpdates(parseJobOutput(job, response.content), []);
 }
 
 // The agentic answer loop. After routing + a seed retrieval the model assesses
