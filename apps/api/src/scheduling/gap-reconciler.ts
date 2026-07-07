@@ -184,7 +184,19 @@ async function reconcileGapsInner(
     details.decisionsApplied = clustering.decisionsApplied;
     details.proposalsDrafted = clustering.proposalsDrafted;
     details.reshapeSkipped = clustering.reshapeSkipped;
-    await ctx.stores.gapClusters.setProcessedRevision(flowId, catalogRevision, new Date().toISOString());
+    // Only mark this revision processed once drafting has fully drained. When the
+    // per-tick cap deferred some clusters, hold the revision so the next tick re-enters
+    // reconcileClusters and drafts the next batch. Re-entry is cheap: clustering finds
+    // no new gaps and the composition hash is unchanged, so the metered reshape is
+    // skipped — only the capped drafting repeats until the backlog clears.
+    if (clustering.draftsDeferred) {
+      logger.warn(
+        { flowLabel, catalogRevision },
+        "gap reconciler: drafting was capped this tick; holding the processed revision so remaining clusters draft on later ticks"
+      );
+    } else {
+      await ctx.stores.gapClusters.setProcessedRevision(flowId, catalogRevision, new Date().toISOString());
+    }
   } else {
     details.skippedModelWork = true;
     logger.info({ flowLabel, catalogRevision, pending: pending.length }, "gap reconciler: catalog revision unchanged; draining pending actions");
@@ -303,7 +315,11 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
     | "decisionsApplied"
     | "proposalsDrafted"
     | "reshapeSkipped"
-  >
+  > & {
+    // True when the per-tick draft cap left uncovered clusters undrafted. The caller
+    // holds the processed revision so the next tick re-enters and drains the remainder.
+    draftsDeferred: boolean;
+  }
 > {
   const flowLabel = flowId ?? "default";
   const details = {
@@ -313,7 +329,8 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
     dismissDecisions: 0,
     decisionsApplied: 0,
     proposalsDrafted: 0,
-    reshapeSkipped: false
+    reshapeSkipped: false,
+    draftsDeferred: false
   };
 
   // 0) Evict resolved gaps from whatever active cluster still holds them. A gap
@@ -476,16 +493,34 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
   // so a fresh cluster becomes a pull request autonomously instead of waiting for
   // a manual trigger. This is the autonomous gap->PR step the on-demand pipeline
   // used to do.
-  details.proposalsDrafted = await draftProposalsForUncoveredClusters(ctx, flowId);
+  const draftOutcome = await draftProposalsForUncoveredClusters(ctx, flowId);
+  details.proposalsDrafted = draftOutcome.drafted;
+  details.draftsDeferred = draftOutcome.deferred > 0;
   return details;
 }
 
-// Drafts a proposal for each active cluster in this flow with no linked proposal.
-// draftFromCluster links the proposal and enqueues its publish action, which
-// drainPublicationOutbox processes in the same run. Frozen clusters (merged/
-// rejected PRs) are excluded by listActiveClusters, so content a reviewer already
-// declined is never re-raised.
-async function draftProposalsForUncoveredClusters(ctx: AppContext, flowId: string | undefined): Promise<number> {
+// Fan-out containment ceiling: the most NEW proposal drafts a single reconcile tick
+// will enqueue for one flow. Reshape is meant to collapse near-duplicate singleton
+// clusters before drafting, but it is best-effort — a timeout (no second watcher), a
+// job failure, malformed output, or a model that simply under-merges all leave the
+// raw singleton set intact. Without a ceiling a single questionnaire that produced
+// ~100 fine-grained gaps drafts ~100 proposals (and ~100 publish jobs) in one tick.
+// A capped tick drafts up to this many and DEFERS the rest: the caller holds the
+// processed revision so the next tick re-enters and drafts the next batch (reshape is
+// composition-hash-skipped on re-entry, so deferral spends no extra model work). This
+// turns a silent runaway into a slow, observable bleed an operator can catch.
+const MAX_DRAFTS_PER_TICK = 10;
+
+// Drafts a proposal for each active cluster in this flow with no linked proposal, up
+// to MAX_DRAFTS_PER_TICK per tick. draftFromCluster links the proposal and enqueues
+// its publish action, which drainPublicationOutbox processes in the same run. Frozen
+// clusters (merged/rejected PRs) are excluded by listActiveClusters, so content a
+// reviewer already declined is never re-raised. Returns the count drafted this tick
+// and how many uncovered clusters were left undrafted by the cap (deferred).
+async function draftProposalsForUncoveredClusters(
+  ctx: AppContext,
+  flowId: string | undefined
+): Promise<{ drafted: number; deferred: number }> {
   const active = await ctx.stores.gapClusters.listActiveClustersForFlow(flowId);
   const proposals = await ctx.stores.proposals.list(500);
   const coveredClusterIds = new Set(
@@ -502,11 +537,20 @@ async function draftProposalsForUncoveredClusters(ctx: AppContext, flowId: strin
     coveredClusterIds.add(clusterId);
   }
 
+  const uncovered = active.filter((cluster) => !coveredClusterIds.has(cluster.id));
+  const toDraft = uncovered.slice(0, MAX_DRAFTS_PER_TICK);
+  const deferred = uncovered.length - toDraft.length;
+  if (deferred > 0) {
+    // Loud on purpose: reaching the cap means reshape did not collapse the singleton
+    // set the way it should have — the fan-out signature. Surface it so it's alertable.
+    logger.warn(
+      { flowId: flowId ?? "default", uncovered: uncovered.length, drafting: toDraft.length, deferred, cap: MAX_DRAFTS_PER_TICK },
+      "gap reconciler: uncovered cluster count exceeds the per-tick draft cap; drafting a capped batch and deferring the rest (reshape likely under-collapsed)"
+    );
+  }
+
   let drafted = 0;
-  for (const cluster of active) {
-    if (coveredClusterIds.has(cluster.id)) {
-      continue;
-    }
+  for (const cluster of toDraft) {
     try {
       const outcome = await gapsService.draftFromCluster(ctx, cluster.id, {});
       if (outcome.ok) {
@@ -520,8 +564,8 @@ async function draftProposalsForUncoveredClusters(ctx: AppContext, flowId: strin
       logger.warn({ flowId: flowId ?? "default", clusterId: cluster.id, err: message }, "gap reconciler: failed to draft proposal for cluster");
     }
   }
-  logger.info({ flowId: flowId ?? "default", drafted }, "gap reconciler: drafted new proposals for uncovered clusters");
-  return drafted;
+  logger.info({ flowId: flowId ?? "default", drafted, deferred }, "gap reconciler: drafted new proposals for uncovered clusters");
+  return { drafted, deferred };
 }
 
 // The non-terminal job states in which a draft is still "in flight" and so counts
