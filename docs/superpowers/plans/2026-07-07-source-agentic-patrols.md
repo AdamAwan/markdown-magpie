@@ -485,7 +485,7 @@ git push
   and `ChatRunner.run()` already call `hasFsSources(sourceDescriptorsOf(job))` — no
   runner edit.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `apps/watcher/src/source-workspace.test.ts`, extend the `sourceDescriptorsOf` block
 (match the existing fixture style):
@@ -511,7 +511,7 @@ it("returns [] for a malformed verify_document input and for non-grounded types"
 
 Run: `npm run build && npm test -w apps/watcher` → FAIL (patrol types return `[]`).
 
-- [ ] **Step 2: Implement — schema lookup instead of a growing if-chain**
+- [x] **Step 2: Implement — schema lookup instead of a growing if-chain**
 
 In `apps/watcher/src/source-workspace.ts`, replace `sourceDescriptorsOf` (and extend the
 `@magpie/jobs` import):
@@ -563,7 +563,7 @@ export function sourceDescriptorsOf(job: JobView): SourceDescriptor[] {
 
 Run: `npm test -w apps/watcher` → PASS.
 
-- [ ] **Step 3: Dispatch proof in the runner tests**
+- [x] **Step 3: Dispatch proof in the runner tests**
 
 In `apps/watcher/src/runners/cli.test.ts`'s source-grounded describe block, add one test
 mirroring the existing seed/proposal dispatch tests: a `verify_document` job with a
@@ -575,7 +575,7 @@ scripted stdout `{"verdict":"healthy","claims":[]}` parses to the job output. In
 `prepareWorkspaces` was called (agent path) rather than the generative path. Reuse each
 file's existing seams/fixtures.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
 Run: `npm run build && npm test -w apps/watcher && npm run typecheck && npm run lint && npm run deadcode`
 Expected: PASS.

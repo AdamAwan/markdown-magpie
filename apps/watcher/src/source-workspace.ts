@@ -2,7 +2,15 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { SourceDescriptor } from "@magpie/core";
 import { ensureGitCheckout } from "@magpie/git";
-import { draftMarkdownProposalInputSchema, draftSeedDocumentInputSchema, type JobView } from "@magpie/jobs";
+import {
+  correctDocumentInputSchema,
+  draftMarkdownProposalInputSchema,
+  draftSeedDocumentInputSchema,
+  improveDocumentInputSchema,
+  verifyDocumentInputSchema,
+  type JobType,
+  type JobView
+} from "@magpie/jobs";
 import { logger } from "./logger.js";
 
 // A resolved, traversable root for one fs-backed source. Both execution tiers
@@ -25,18 +33,37 @@ export function hasFsSources(descriptors: SourceDescriptor[]): boolean {
   return descriptors.some((d) => d.kind === "git" || d.kind === "local");
 }
 
-// The source descriptors of a source-grounded job, [] for every other job type.
-// Increments 1-2: seeding and gap drafting; increment 3 adds the patrol jobs here.
+// The input schema of each source-grounded job type — every input that carries
+// `sources: SourceDescriptor[]`. All five arrived with the source-agentic
+// grounding increments (seeding, gap drafting, patrols); a type absent here is
+// not source-grounded and never routes to the agentic tiers.
+function sourceGroundedInputSchema(type: JobType) {
+  switch (type) {
+    case "draft_seed_document":
+      return draftSeedDocumentInputSchema;
+    case "draft_markdown_proposal":
+      return draftMarkdownProposalInputSchema;
+    case "verify_document":
+      return verifyDocumentInputSchema;
+    case "correct_document":
+      return correctDocumentInputSchema;
+    case "improve_document":
+      return improveDocumentInputSchema;
+    default:
+      return undefined;
+  }
+}
+
+// The source descriptors of a source-grounded job, [] for every other job type
+// (and for a malformed input — the job then runs the plain one-shot path and
+// fails on its own terms rather than here).
 export function sourceDescriptorsOf(job: JobView): SourceDescriptor[] {
-  if (job.type === "draft_seed_document") {
-    const parsed = draftSeedDocumentInputSchema.safeParse(job.input);
-    return parsed.success ? parsed.data.sources : [];
+  const schema = sourceGroundedInputSchema(job.type);
+  if (!schema) {
+    return [];
   }
-  if (job.type === "draft_markdown_proposal") {
-    const parsed = draftMarkdownProposalInputSchema.safeParse(job.input);
-    return parsed.success ? parsed.data.sources : [];
-  }
-  return [];
+  const parsed = schema.safeParse(job.input);
+  return parsed.success ? parsed.data.sources : [];
 }
 
 // Resolves source descriptors to workspaces on the shared checkout volume — the
