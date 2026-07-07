@@ -178,6 +178,16 @@ prunable — jobs are short-lived, so the store reaps rows untouched past a rete
 See `apps/api/src/stores/source-corpus-store.ts`, `features/source-corpus/routes.ts`, and the
 watcher's `getSourceCorpus` / `job-prompts.ts` (`#163` Part 2).
 
+> **Superseded (2026-07).** The shared corpus snapshot above — and the source half of the
+> change gate — did not survive the source-agentic grounding work: the patrol child jobs now
+> carry `sources: SourceDescriptor[]` and the executing agent explores the flow's source
+> checkouts directly at job runtime, so there is no sampled corpus to snapshot, ship, or
+> hash. `source_corpus_snapshot`, the `/api/source-corpus` endpoint, and `sourcesRef` are
+> deleted, and the gate's `sources_hash` is now a hash of the flow's source-*descriptor* set
+> (source-config-keyed): it re-arms when a source is added, removed, re-pointed, or
+> re-scoped, not on a source-content edit. See
+> `docs/superpowers/specs/2026-07-06-source-agentic-grounding-design.md`.
+
 ---
 
 ## 5. The reconcile gate in detail

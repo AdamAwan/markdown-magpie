@@ -729,7 +729,7 @@ git push
 - Modify: `.claude/skills/magpie-orientation/SKILL.md`
 - Modify: this plan's STATUS line
 
-- [ ] **Step 1: Docs**
+- [x] **Step 1: Docs**
 
 - `docs/ai-jobs.md`: the `verify_document`/`correct_document`/`improve_document` entries —
   inputs now carry `sources: SourceDescriptor[]`; execution is agentic like the draft
@@ -747,7 +747,7 @@ git push
   and source-grounded" bullet — patrols now too; DELETE the "(Patrols still use the old
   sampler until increment 3.)" caveat and name the five source-grounded job types.
 
-- [ ] **Step 2: Full validation + stale-reference sweep**
+- [x] **Step 2: Full validation + stale-reference sweep**
 
 ```bash
 npm run build && npm run typecheck && npm run lint && npm test && npm run deadcode
