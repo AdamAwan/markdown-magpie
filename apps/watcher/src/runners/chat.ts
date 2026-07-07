@@ -3,7 +3,7 @@ import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import type { LanguageModel } from "ai";
 import type { WatcherApi } from "../http-client.js";
 import { logger } from "../logger.js";
-import { hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf } from "../source-workspace.js";
+import { fetchSourceMapEntries, hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf } from "../source-workspace.js";
 import { PROVIDER_JOB_TYPES, runGenerativeJob } from "./generative.js";
 import { runSourceAgentJob } from "./source-agent.js";
 
@@ -35,7 +35,8 @@ export class ChatRunner {
           { jobId: job.id, workspaceCount: workspaces.length },
           `${job.type}[${job.id}]: running source-agent loop over ${workspaces.length} workspace(s)`
         );
-        return runSourceAgentJob({ job, model: this.agentModel, workspaces, notes, signal });
+        const mapEntries = await fetchSourceMapEntries(this.api, workspaces);
+        return runSourceAgentJob({ job, model: this.agentModel, workspaces, notes, mapEntries, signal });
       }
       logger.warn(
         { jobId: job.id },

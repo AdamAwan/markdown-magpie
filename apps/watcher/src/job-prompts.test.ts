@@ -102,6 +102,31 @@ describe("buildSourceGroundedPrompt", () => {
     assert.match(prompt, /list_dir/);
     assert.match(prompt, /s1\//);
   });
+
+  const mapEntry = {
+    id: "e1",
+    sourceId: "s1",
+    topic: "event system",
+    paths: ["Products/Common/UserActivity/"],
+    description: "User-activity events live here",
+    createdAt: "2026-07-07T00:00:00.000Z",
+    updatedAt: "2026-07-07T00:00:00.000Z"
+  };
+
+  it("renders source map hints after the repository list, framed as unverified", () => {
+    const prompt = buildSourceGroundedPrompt(sourceGroundedJob, workspaces, [], "cli", [mapEntry]);
+    assert.ok(prompt.includes("Source map hints"));
+    assert.ok(prompt.includes("unverified"));
+    assert.ok(
+      prompt.includes("- [s1] event system: Products/Common/UserActivity/ — User-activity events live here")
+    );
+    assert.ok(prompt.indexOf("Source map hints") > prompt.indexOf("Source repositories available"));
+  });
+
+  it("renders no source map block when there are no hints", () => {
+    const prompt = buildSourceGroundedPrompt(sourceGroundedJob, workspaces, [], "cli");
+    assert.ok(!prompt.includes("Source map hints"));
+  });
 });
 
 describe("buildAnswerOutput", () => {

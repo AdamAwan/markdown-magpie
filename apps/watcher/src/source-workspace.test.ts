@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import type { SourceDescriptor } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
-import { hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf } from "./source-workspace.js";
+import { fetchSourceMapEntries, hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf } from "./source-workspace.js";
 
 const git = (over: Partial<Extract<SourceDescriptor, { kind: "git" }>> = {}): SourceDescriptor => ({
   id: "g1", name: "Repo", kind: "git", url: "https://example.com/r.git", ...over
@@ -69,6 +69,28 @@ describe("prepareSourceWorkspaces", () => {
   it("hasFsSources is true only for git/local descriptors", () => {
     assert.equal(hasFsSources([{ id: "a", name: "a", kind: "agent" }]), false);
     assert.equal(hasFsSources([git()]), true);
+  });
+});
+
+describe("fetchSourceMapEntries", () => {
+  const ws = { sourceId: "s1", name: "S1", rootDir: "/tmp/s1" };
+
+  it("returns the api's entries for the workspace source ids", async () => {
+    const seen: string[][] = [];
+    const api = {
+      sourceMapEntries: async (ids: string[]) => {
+        seen.push(ids);
+        return [];
+      }
+    };
+    await fetchSourceMapEntries(api, [ws]);
+    assert.deepEqual(seen, [["s1"]]);
+  });
+
+  it("degrades to no hints when the api is absent or the call fails", async () => {
+    assert.deepEqual(await fetchSourceMapEntries(undefined, [ws]), []);
+    const failing = { sourceMapEntries: async (): Promise<never> => { throw new Error("boom"); } };
+    assert.deepEqual(await fetchSourceMapEntries(failing, [ws]), []);
   });
 });
 

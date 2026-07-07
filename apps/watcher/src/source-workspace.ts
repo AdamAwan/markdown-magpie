@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { SourceDescriptor } from "@magpie/core";
+import type { SourceDescriptor, SourceMapEntry } from "@magpie/core";
 import { ensureGitCheckout } from "@magpie/git";
 import {
   correctDocumentInputSchema,
@@ -116,4 +116,25 @@ export async function prepareSourceWorkspaces(
 
 function withSubpath(root: string, subpath: string | undefined): string {
   return subpath ? path.join(root, subpath) : root;
+}
+
+// Fetches the source-map hints for the prepared fs workspaces. Best-effort by
+// contract: hints are optional context, so an absent api or any failure
+// degrades to an empty list rather than failing the job.
+export async function fetchSourceMapEntries(
+  api: { sourceMapEntries(sourceIds: string[]): Promise<SourceMapEntry[]> } | undefined,
+  workspaces: SourceWorkspace[]
+): Promise<SourceMapEntry[]> {
+  if (!api || workspaces.length === 0) {
+    return [];
+  }
+  try {
+    return await api.sourceMapEntries(workspaces.map((ws) => ws.sourceId));
+  } catch (error) {
+    logger.warn(
+      { err: error instanceof Error ? error.message : String(error) },
+      "source map fetch failed; continuing without hints"
+    );
+    return [];
+  }
 }

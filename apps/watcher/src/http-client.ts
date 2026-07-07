@@ -1,4 +1,5 @@
 import type { ApiTokenProvider } from "@magpie/auth";
+import type { SourceMapEntry } from "@magpie/core";
 import type { JobCapability, JobError, JobView } from "@magpie/jobs";
 import type { Logger } from "@magpie/logger";
 import type { EmbeddingRoute, RoutableFlow } from "@magpie/retrieval";
@@ -87,6 +88,9 @@ export interface WatcherApi extends WatcherApiClient {
   // github-capability refresh runner, which holds the GitHub credentials the API
   // no longer does.
   listOpenPullRequests(signal?: AbortSignal): Promise<OpenPullRequestRef[]>;
+  // The source-map hints for the given sources (GET /api/source-map). Callers
+  // treat this as best-effort optional context — see fetchSourceMapEntries.
+  sourceMapEntries(sourceIds: string[]): Promise<SourceMapEntry[]>;
 }
 
 export interface HttpClientOptions {
@@ -308,6 +312,13 @@ export class HttpWatcherApi implements WatcherApi {
 
   async proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext> {
     return this.get<ProposalExecutionContext>(`/api/proposals/${proposalId}/execution-context`);
+  }
+
+  async sourceMapEntries(sourceIds: string[]): Promise<SourceMapEntry[]> {
+    const { entries } = await this.get<{ entries: SourceMapEntry[] }>(
+      `/api/source-map?sourceIds=${encodeURIComponent(sourceIds.join(","))}`
+    );
+    return entries;
   }
 
   private async post<TResponse>(
