@@ -14,7 +14,11 @@ export function knowledgeRepositoryErrorCode(message: string): string {
     return "local_path_not_allowed";
   }
 
-  if (message.includes("cannot_be_checked_out") || message.includes("repository_url_required") || message === "configured_repository_not_indexable") {
+  if (
+    message.includes("cannot_be_checked_out") ||
+    message.includes("repository_url_required") ||
+    message === "configured_repository_not_indexable"
+  ) {
     return "configured_repository_not_indexable";
   }
 

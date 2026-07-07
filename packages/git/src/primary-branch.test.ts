@@ -15,10 +15,7 @@ test("configured branch wins over every detected value", () => {
 });
 
 test("detected default is used when no branch is configured", () => {
-  assert.equal(
-    resolvePrimaryBranch({ detectedDefault: "main", detectedCurrent: "feature" }),
-    "main"
-  );
+  assert.equal(resolvePrimaryBranch({ detectedDefault: "main", detectedCurrent: "feature" }), "main");
 });
 
 test("detected current is used when configured and default are absent", () => {

@@ -154,7 +154,10 @@ describe("RefreshFlowSnapshotRunner", () => {
     const output = (await runner.run(job(), new AbortController().signal)) as {
       results: Array<{ proposalId: string }>;
     };
-    assert.deepEqual(output.results.map((r) => r.proposalId), ["p1"]);
+    assert.deepEqual(
+      output.results.map((r) => r.proposalId),
+      ["p1"]
+    );
   });
 
   it("continues past a status lookup that throws", async () => {
@@ -173,7 +176,10 @@ describe("RefreshFlowSnapshotRunner", () => {
     const output = (await runner.run(job(), new AbortController().signal)) as {
       results: Array<{ proposalId: string }>;
     };
-    assert.deepEqual(output.results.map((r) => r.proposalId), ["p2"]);
+    assert.deepEqual(
+      output.results.map((r) => r.proposalId),
+      ["p2"]
+    );
   });
 
   it("aborts between requests when the signal fires", async () => {

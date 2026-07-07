@@ -66,10 +66,22 @@ describe("loadWatcherConfig — field validation", () => {
   });
 
   it("rejects a non-positive-integer poll interval", () => {
-    assert.throws(() => loadWatcherConfig({ AUTH_REQUIRED: "false", WATCHER_POLL_INTERVAL_MS: "0" }), /WATCHER_POLL_INTERVAL_MS/);
-    assert.throws(() => loadWatcherConfig({ AUTH_REQUIRED: "false", WATCHER_POLL_INTERVAL_MS: "-5" }), /WATCHER_POLL_INTERVAL_MS/);
-    assert.throws(() => loadWatcherConfig({ AUTH_REQUIRED: "false", WATCHER_POLL_INTERVAL_MS: "3.5" }), /WATCHER_POLL_INTERVAL_MS/);
-    assert.throws(() => loadWatcherConfig({ AUTH_REQUIRED: "false", WATCHER_POLL_INTERVAL_MS: "nope" }), /WATCHER_POLL_INTERVAL_MS/);
+    assert.throws(
+      () => loadWatcherConfig({ AUTH_REQUIRED: "false", WATCHER_POLL_INTERVAL_MS: "0" }),
+      /WATCHER_POLL_INTERVAL_MS/
+    );
+    assert.throws(
+      () => loadWatcherConfig({ AUTH_REQUIRED: "false", WATCHER_POLL_INTERVAL_MS: "-5" }),
+      /WATCHER_POLL_INTERVAL_MS/
+    );
+    assert.throws(
+      () => loadWatcherConfig({ AUTH_REQUIRED: "false", WATCHER_POLL_INTERVAL_MS: "3.5" }),
+      /WATCHER_POLL_INTERVAL_MS/
+    );
+    assert.throws(
+      () => loadWatcherConfig({ AUTH_REQUIRED: "false", WATCHER_POLL_INTERVAL_MS: "nope" }),
+      /WATCHER_POLL_INTERVAL_MS/
+    );
   });
 
   it("rejects a lone client-credential half regardless of auth mode", () => {

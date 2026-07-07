@@ -55,7 +55,11 @@ export async function readFlowSnapshot(
 // un-routed/default flow. Cached per run to avoid repeat cluster reads.
 type ClusterFlowCache = Map<string, string | undefined>;
 
-async function proposalFlowId(ctx: AppContext, proposal: Proposal, cache: ClusterFlowCache): Promise<string | undefined> {
+async function proposalFlowId(
+  ctx: AppContext,
+  proposal: Proposal,
+  cache: ClusterFlowCache
+): Promise<string | undefined> {
   const clusterId = proposal.gapClusterId;
   if (!clusterId) {
     return undefined;
@@ -132,13 +136,18 @@ export async function refreshSnapshot(
     const prior = previousByProposal.get(proposal.id);
     carried += 1;
     pullRequests.push(
-      prior ? { ...prior, checkedAt: takenAt } : { proposalId: proposal.id, url, merged: false, state: "unknown", checkedAt: takenAt }
+      prior
+        ? { ...prior, checkedAt: takenAt }
+        : { proposalId: proposal.id, url, merged: false, state: "unknown", checkedAt: takenAt }
     );
   }
 
   const snapshot: FlowSnapshot = { flowId, takenAt, catalogRevision, gaps, proposals, pullRequests };
   await ctx.stores.snapshots.write(snapshot);
-  logger.info({ flowLabel, gaps: gaps.length, proposals: proposals.length, openPrs: pullRequests.length, carried }, "snapshot refresh completed");
+  logger.info(
+    { flowLabel, gaps: gaps.length, proposals: proposals.length, openPrs: pullRequests.length, carried },
+    "snapshot refresh completed"
+  );
   return snapshot;
 }
 
@@ -154,7 +163,11 @@ export async function recordSnapshotsFromPullRequestResults(
   const statuses = new Map<string, PullRequestReading>(
     results.map((result) => [
       result.proposalId,
-      { merged: result.merged, state: result.state, ...(result.reviewDecision ? { reviewDecision: result.reviewDecision } : {}) }
+      {
+        merged: result.merged,
+        state: result.state,
+        ...(result.reviewDecision ? { reviewDecision: result.reviewDecision } : {})
+      }
     ])
   );
   const flowIds: Array<string | undefined> = [undefined, ...ctx.knowledgeConfig.flows.map((flow) => flow.id)];

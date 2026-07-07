@@ -15,9 +15,7 @@ export function gapRoutes(ctx: AppContext): Hono {
     const limit = parseLimit(c.req.query("limit") ?? null, 50);
     // Gap candidates carry the flow whose questions surfaced them; a role-aware
     // principal only sees candidates for flows it can read.
-    const gaps = (await gapsService.listCandidates(ctx, limit)).filter((gap) =>
-      can(ctx, c, "read", gap.flowId)
-    );
+    const gaps = (await gapsService.listCandidates(ctx, limit)).filter((gap) => can(ctx, c, "read", gap.flowId));
     return c.json({ gaps });
   });
 

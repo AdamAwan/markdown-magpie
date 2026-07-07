@@ -59,7 +59,10 @@ export function retrievalMode(config: AppConfig): { mode: "hybrid" | "keyword"; 
   if (!hasEmbeddings) {
     return { mode: "keyword", reason: "Add an embeddings endpoint to enable semantic search." };
   }
-  return { mode: "keyword", reason: "Semantic search requires the Postgres knowledge store (KNOWLEDGE_STORE=postgres)." };
+  return {
+    mode: "keyword",
+    reason: "Semantic search requires the Postgres knowledge store (KNOWLEDGE_STORE=postgres)."
+  };
 }
 
 // The selectable AI providers in the queue-only world. The API never runs AI

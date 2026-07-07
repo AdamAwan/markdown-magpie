@@ -25,10 +25,7 @@ import {
 } from "@magpie/git";
 import path from "node:path";
 import { z } from "zod";
-import type {
-  ProposalExecutionContext,
-  WatcherApi
-} from "../http-client.js";
+import type { ProposalExecutionContext, WatcherApi } from "../http-client.js";
 import { logger } from "../logger.js";
 
 // The git operations the publication runner needs, injectable so tests exercise
@@ -72,9 +69,8 @@ export async function preparePublicationRepository(
     branch: repository.defaultBranch
   });
   const relativePath = repository.git?.relativePathFromRoot;
-  const indexedPath = relativePath && relativePath !== "."
-    ? path.join(prepared.localPath, relativePath)
-    : prepared.localPath;
+  const indexedPath =
+    relativePath && relativePath !== "." ? path.join(prepared.localPath, relativePath) : prepared.localPath;
 
   return {
     ...repository,
@@ -167,7 +163,10 @@ export class PublicationRunner {
 
   private async publishProposal(job: JobView): Promise<unknown> {
     const { proposalId, destination, regenerate } = publishProposalInputSchema.parse(job.input);
-    logger.info({ jobId: job.id, proposalId }, `publish_proposal[${job.id}]: fetching execution context for proposal ${proposalId}`);
+    logger.info(
+      { jobId: job.id, proposalId },
+      `publish_proposal[${job.id}]: fetching execution context for proposal ${proposalId}`
+    );
     const context = await this.api.proposalExecutionContext(proposalId);
     const { proposal, repository } = parseProposalContext(context);
     const preparedRepository = await this.deps.prepareRepository(toRepositoryRef(repository));
@@ -190,7 +189,10 @@ export class PublicationRunner {
         changes: proposal.changeset
       });
     } else {
-      logger.info({ jobId: job.id, proposalId, branchName }, `publish_proposal[${job.id}]: publishing "${proposal.title}" to branch ${branchName}`);
+      logger.info(
+        { jobId: job.id, proposalId, branchName },
+        `publish_proposal[${job.id}]: publishing "${proposal.title}" to branch ${branchName}`
+      );
       publication = await this.deps.publishProposal({
         repository: preparedRepository,
         branchName,
@@ -218,7 +220,10 @@ export class PublicationRunner {
       });
     }
 
-    logger.info({ jobId: job.id, branchName: publication.branchName, commitSha: publication.commitSha.slice(0, 8) }, `publish_proposal[${job.id}]: pushed ${publication.branchName} at ${publication.commitSha.slice(0, 8)}`);
+    logger.info(
+      { jobId: job.id, branchName: publication.branchName, commitSha: publication.commitSha.slice(0, 8) },
+      `publish_proposal[${job.id}]: pushed ${publication.branchName} at ${publication.commitSha.slice(0, 8)}`
+    );
 
     // The branch is pushed. For a github destination, try to open a PR — a PR
     // failure must not lose the branch, so degrade to a branch-only publish. A
@@ -246,7 +251,10 @@ export class PublicationRunner {
         });
         pullRequestUrl = raised?.url;
         if (pullRequestUrl) {
-          logger.info({ jobId: job.id, pullRequestUrl }, `publish_proposal[${job.id}]: opened pull request ${pullRequestUrl}`);
+          logger.info(
+            { jobId: job.id, pullRequestUrl },
+            `publish_proposal[${job.id}]: opened pull request ${pullRequestUrl}`
+          );
         }
       } catch (error) {
         logger.warn(
@@ -321,7 +329,9 @@ function toRepositoryRef(repository: PublishRepository): RepositoryRef {
             scope: asGitScope(repository.git.scope),
             indexedPath: repository.git.indexedPath,
             ...(repository.git.workTreeRoot ? { workTreeRoot: repository.git.workTreeRoot } : {}),
-            ...(repository.git.relativePathFromRoot ? { relativePathFromRoot: repository.git.relativePathFromRoot } : {}),
+            ...(repository.git.relativePathFromRoot
+              ? { relativePathFromRoot: repository.git.relativePathFromRoot }
+              : {}),
             ...(repository.git.currentBranch ? { currentBranch: repository.git.currentBranch } : {}),
             ...(repository.git.defaultBranch ? { defaultBranch: repository.git.defaultBranch } : {}),
             ...(repository.git.remoteUrl ? { remoteUrl: repository.git.remoteUrl } : {})
@@ -352,7 +362,10 @@ function buildPullRequestBody(proposal: PublishProposal): string {
     lines.push(proposal.rationale, "");
   }
   const summaries = proposal.gapSummary
-    ? proposal.gapSummary.split("\n").map((entry) => entry.trim()).filter(Boolean)
+    ? proposal.gapSummary
+        .split("\n")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
     : [];
   if (summaries.length > 0) {
     lines.push("Gaps addressed:");

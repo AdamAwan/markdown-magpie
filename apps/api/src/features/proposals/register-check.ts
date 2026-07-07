@@ -39,10 +39,7 @@ export function advisoryNote(headings: string[]): string {
 
 // Runs the check over a draft ProposalInput just before it is stored: warns and
 // appends the note to the rationale. Returns the input untouched when clean.
-export function flagAdvisoryDraft(
-  input: ProposalInput,
-  context: { jobId?: string; jobType: string }
-): ProposalInput {
+export function flagAdvisoryDraft(input: ProposalInput, context: { jobId?: string; jobType: string }): ProposalInput {
   const headings = collectAdvisoryHeadings(input.markdown, input.changeset);
   if (headings.length === 0) {
     return input;

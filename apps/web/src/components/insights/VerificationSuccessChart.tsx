@@ -52,8 +52,7 @@ export function VerificationSuccessChart({ totals }: { totals: VerificationSumma
         </PieChart>
       </ResponsiveContainer>
       <Centre>
-        {successRate}%
-        <CentreLabel>closed</CentreLabel>
+        {successRate}%<CentreLabel>closed</CentreLabel>
       </Centre>
     </Wrap>
   );

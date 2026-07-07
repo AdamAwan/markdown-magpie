@@ -129,9 +129,9 @@ export function McpPanel() {
       </Surface.Header>
       <Surface.Body>
         <Intro>
-          The Markdown Magpie MCP server lets your AI tools query this knowledge base directly — search sections,
-          ask cited questions, and report gaps without leaving your editor. Point any MCP client at the endpoint
-          below, then sign in through the browser when prompted.
+          The Markdown Magpie MCP server lets your AI tools query this knowledge base directly — search sections, ask
+          cited questions, and report gaps without leaving your editor. Point any MCP client at the endpoint below, then
+          sign in through the browser when prompted.
         </Intro>
 
         <Endpoint>
@@ -160,8 +160,7 @@ export function McpPanel() {
             <Output>Add the server to the client&apos;s MCP configuration:</Output>
             <CopyBlock code={jsonConfig} />
             <Output>
-              The first request prompts you to sign in through the browser; the client remembers the session
-              afterwards.
+              The first request prompts you to sign in through the browser; the client remembers the session afterwards.
             </Output>
           </ClientCard>
         </Clients>

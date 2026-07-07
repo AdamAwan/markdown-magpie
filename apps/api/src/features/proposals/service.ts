@@ -1362,7 +1362,10 @@ export async function createProposalFromCompletedJob(
     flagAdvisoryDraft(
       {
         ...withReport,
-        targetPath: resolveProposalTargetPath(destinationSubpath(ctx.repositoryDeps(), input.destinationId), output.title),
+        targetPath: resolveProposalTargetPath(
+          destinationSubpath(ctx.repositoryDeps(), input.destinationId),
+          output.title
+        ),
         evidence: input.evidence ?? [],
         gapSummary: input.gapSummaries ? joinGapSummaries(input.gapSummaries) : undefined,
         triggeringQuestionIds: input.triggeringQuestionIds,

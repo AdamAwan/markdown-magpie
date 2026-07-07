@@ -393,7 +393,11 @@ test("the change gate skips re-verifying an unchanged doc on the next tick (idle
   const second = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified));
   assert.ok(second.ok);
   if (!second.ok) return;
-  assert.deepEqual(verified, [], "unchanged docs against an unchanged source configuration are gated — no provider calls");
+  assert.deepEqual(
+    verified,
+    [],
+    "unchanged docs against an unchanged source configuration are gated — no provider calls"
+  );
   assert.equal((second.selected as string[]).length, 2, "the cursor still selected both docs");
 
   // The cursor still rotates: last_checked_at advances even for a gated doc.
@@ -443,7 +447,12 @@ test("the change gate re-verifies unchanged docs when the source configuration c
 
   // Re-point the configured source; the doc body is untouched. The config half of
   // the gate (the descriptor hash) must re-arm.
-  ctx.knowledgeConfig.sources[0] = { id: "repo", name: "Product repo", kind: "git", url: "https://example.com/other.git" };
+  ctx.knowledgeConfig.sources[0] = {
+    id: "repo",
+    name: "Product repo",
+    kind: "git",
+    url: "https://example.com/other.git"
+  };
   verified.length = 0;
   const second = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified));
   assert.ok(second.ok);

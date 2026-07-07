@@ -45,7 +45,10 @@ test("verify_document input requires sources", () => {
 test("verify_document output rejects an unknown verdict and accepts healthy/unprovable", () => {
   assert.equal(verifyDocumentOutputSchema.safeParse({ verdict: "healthy", claims: [] }).success, true);
   assert.equal(
-    verifyDocumentOutputSchema.safeParse({ verdict: "unprovable", claims: [{ claim: "5 days", reason: "source says 7" }] }).success,
+    verifyDocumentOutputSchema.safeParse({
+      verdict: "unprovable",
+      claims: [{ claim: "5 days", reason: "source says 7" }]
+    }).success,
     true
   );
   assert.equal(verifyDocumentOutputSchema.safeParse({ verdict: "maybe", claims: [] }).success, false);
@@ -175,7 +178,9 @@ test("improve_document schemas round-trip explicit improve and no-op outputs", (
       rationale: "Added source-backed partial refund coverage."
     }).success
   );
-  assert.ok(improveDocumentOutputSchema.safeParse({ improved: false, rationale: "No clear source-backed addition." }).success);
+  assert.ok(
+    improveDocumentOutputSchema.safeParse({ improved: false, rationale: "No clear source-backed addition." }).success
+  );
   assert.ok(!improveDocumentOutputSchema.safeParse({ improved: true, rationale: "missing markdown" }).success);
 });
 

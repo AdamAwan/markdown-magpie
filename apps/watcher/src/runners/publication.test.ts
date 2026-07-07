@@ -3,10 +3,7 @@ import { describe, it } from "node:test";
 import type { RepositoryRef } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { publishProposalOutputSchema } from "@magpie/jobs";
-import type {
-  ProposalExecutionContext,
-  WatcherApi
-} from "../http-client.js";
+import type { ProposalExecutionContext, WatcherApi } from "../http-client.js";
 import { preparePublicationRepository, PublicationRunner } from "./publication.js";
 
 function job(type: JobView["type"], input: unknown): JobView {
@@ -93,7 +90,10 @@ describe("PublicationRunner", () => {
       commentOnPullRequest: async () => undefined
     });
 
-    const output = await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), new AbortController().signal);
+    const output = await runner.run(
+      job("publish_proposal", { proposalId: "prop-12345678" }),
+      new AbortController().signal
+    );
     const parsed = publishProposalOutputSchema.parse(output);
     assert.equal(parsed.proposalId, "prop-12345678");
     assert.equal(parsed.branchName, "magpie/proposal-prop-123-deploy-guide");
@@ -132,7 +132,10 @@ describe("PublicationRunner", () => {
       commentOnPullRequest: async () => undefined
     });
 
-    const output = await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), new AbortController().signal);
+    const output = await runner.run(
+      job("publish_proposal", { proposalId: "prop-12345678" }),
+      new AbortController().signal
+    );
     const parsed = publishProposalOutputSchema.parse(output);
     assert.equal(singleFileCalled, false, "single-file publish must not run for a changeset proposal");
     assert.deepEqual(changesetCall?.changes, [
@@ -160,7 +163,10 @@ describe("PublicationRunner", () => {
       commentOnPullRequest: async () => undefined
     });
 
-    const output = await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), new AbortController().signal);
+    const output = await runner.run(
+      job("publish_proposal", { proposalId: "prop-12345678" }),
+      new AbortController().signal
+    );
     const parsed = publishProposalOutputSchema.parse(output);
     assert.equal(parsed.noChange, true, "the output flags the no-op so the API can supersede the proposal");
     assert.equal(parsed.pullRequestUrl, undefined, "a no-op publishes no branch, so there is no PR");
@@ -170,14 +176,21 @@ describe("PublicationRunner", () => {
   it("degrades to a branch-only proposal publish when PR raising fails", async () => {
     const runner = new PublicationRunner(fakeApi(), {
       prepareRepository: async (repository) => repository,
-      publishProposal: async (request) => ({ branchName: request.branchName, commitSha: "abc123", remoteUrl: REPOSITORY.remoteUrl }),
+      publishProposal: async (request) => ({
+        branchName: request.branchName,
+        commitSha: "abc123",
+        remoteUrl: REPOSITORY.remoteUrl
+      }),
       publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
       raisePullRequest: async () => {
         throw new Error("pr api down");
       },
       commentOnPullRequest: async () => undefined
     });
-    const output = await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), new AbortController().signal);
+    const output = await runner.run(
+      job("publish_proposal", { proposalId: "prop-12345678" }),
+      new AbortController().signal
+    );
     const parsed = publishProposalOutputSchema.parse(output);
     assert.equal(parsed.pullRequestUrl, undefined);
     assert.equal(parsed.commitSha, "abc123");
@@ -187,7 +200,11 @@ describe("PublicationRunner", () => {
     let prRaised = false;
     const runner = new PublicationRunner(fakeApi(), {
       prepareRepository: async (repository) => repository,
-      publishProposal: async (request) => ({ branchName: request.branchName, commitSha: "abc123", remoteUrl: "file:///tmp/local-repo" }),
+      publishProposal: async (request) => ({
+        branchName: request.branchName,
+        commitSha: "abc123",
+        remoteUrl: "file:///tmp/local-repo"
+      }),
       publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
       raisePullRequest: async () => {
         prRaised = true;
@@ -251,10 +268,7 @@ describe("PublicationRunner", () => {
       provider: "github"
     };
 
-    await assert.rejects(
-      () => preparePublicationRepository(repository, "/data/checkouts"),
-      /remote URL/
-    );
+    await assert.rejects(() => preparePublicationRepository(repository, "/data/checkouts"), /remote URL/);
   });
 
   it("rewrites API-host paths to the watcher checkout and preserves repository subdirectory scope", async () => {
@@ -275,17 +289,13 @@ describe("PublicationRunner", () => {
     };
     let checkoutRequest: unknown;
 
-    const prepared = await preparePublicationRepository(
-      repository,
-      "/data/checkouts",
-      async (request) => {
-        checkoutRequest = request;
-        return {
-          localPath: "/data/checkouts/repo-1",
-          remoteUrl: "https://github.com/acme/docs.git"
-        };
-      }
-    );
+    const prepared = await preparePublicationRepository(repository, "/data/checkouts", async (request) => {
+      checkoutRequest = request;
+      return {
+        localPath: "/data/checkouts/repo-1",
+        remoteUrl: "https://github.com/acme/docs.git"
+      };
+    });
 
     assert.deepEqual(checkoutRequest, {
       id: "repo-1",

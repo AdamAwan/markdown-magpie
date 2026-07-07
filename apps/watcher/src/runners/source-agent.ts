@@ -4,13 +4,7 @@ import type { JobView } from "@magpie/jobs";
 import { JOB_RUNNER_SYSTEM } from "@magpie/prompts";
 import { buildSourceGroundedPrompt, parseJobOutput } from "../job-prompts.js";
 import { logger } from "../logger.js";
-import {
-  grepWorkspaces,
-  listDir,
-  readFile,
-  SourceToolError,
-  type ToolBudget
-} from "../source-tools.js";
+import { grepWorkspaces, listDir, readFile, SourceToolError, type ToolBudget } from "../source-tools.js";
 import type { SourceWorkspace } from "../source-workspace.js";
 
 const MAX_STEPS = 24;
@@ -53,8 +47,7 @@ export async function runSourceAgentJob(options: {
 
   const tools = {
     list_dir: tool({
-      description:
-        'List a directory. Path is "<sourceId>/<relative path>"; pass "" to list the available sources.',
+      description: 'List a directory. Path is "<sourceId>/<relative path>"; pass "" to list the available sources.',
       inputSchema: z.object({ path: z.string() }),
       execute: ({ path: requested }) => asToolResult(() => listDir(workspaces, requested))
     }),

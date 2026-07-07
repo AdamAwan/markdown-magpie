@@ -60,10 +60,7 @@ export const jobErrorSchema = z.object({
   message: z.string(),
   category: z.enum(["provider", "validation", "configuration", "timeout", "external", "internal"]),
   provider: z.string().optional(),
-  details: z.record(
-    z.string(),
-    z.union([z.string(), z.number(), z.boolean(), z.null()])
-  ).optional(),
+  details: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
   executor: z.string().optional()
 }) satisfies z.ZodType<JobError>;
 
@@ -103,11 +100,13 @@ export const answerQuestionInputSchema = z.object({
   provider: providerSchema,
   questionLogId: z.string().optional(),
   question: z.string(),
-  flows: z.array(z.object({
-    id: z.string(),
-    name: z.string(),
-    persona: z.string().optional()
-  })),
+  flows: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      persona: z.string().optional()
+    })
+  ),
   requestedFlowId: z.string().optional(),
   expectedOutput: z.literal("answer_result")
 }) satisfies z.ZodType<ProviderInput<CoreAnswerQuestionJobInput>>;
@@ -136,8 +135,20 @@ export const summarizeGapOutputSchema = z.object({
 
 // Mirrors @magpie/core SourceDescriptor. References only — no file content.
 const sourceDescriptorSchema = z.discriminatedUnion("kind", [
-  z.object({ id: z.string(), name: z.string(), kind: z.literal("git"), url: z.string(), subpath: z.string().optional() }),
-  z.object({ id: z.string(), name: z.string(), kind: z.literal("local"), path: z.string(), subpath: z.string().optional() }),
+  z.object({
+    id: z.string(),
+    name: z.string(),
+    kind: z.literal("git"),
+    url: z.string(),
+    subpath: z.string().optional()
+  }),
+  z.object({
+    id: z.string(),
+    name: z.string(),
+    kind: z.literal("local"),
+    path: z.string(),
+    subpath: z.string().optional()
+  }),
   z.object({ id: z.string(), name: z.string(), kind: z.literal("internet"), url: z.string().optional() }),
   z.object({ id: z.string(), name: z.string(), kind: z.literal("agent") })
 ]);
@@ -286,44 +297,54 @@ const maintenanceOperationSchema = z.object({
   deletes: z.array(z.string()).default([])
 });
 export const reconcileGapClustersInputSchema = z.object({
-  clusters: z.array(z.object({
-    id: z.string(),
-    flowId: z.string().optional(),
-    title: z.string(),
-    // Scope grounding attached by the API (via inline retrieval against the flow's
-    // destination) so the model can judge whether a cluster is off-topic for the
-    // knowledge base. `topRelevance` is the best retrieval relevance found for the
-    // cluster's topic (0 when nothing matched); `snippets` are short excerpts of the
-    // best matches. Absent when the flow has no destination content to retrieve from.
-    scope: z.object({
-      persona: z.string().optional(),
-      topRelevance: z.number(),
-      snippets: z.array(z.string())
-    }).optional()
-  })),
+  clusters: z.array(
+    z.object({
+      id: z.string(),
+      flowId: z.string().optional(),
+      title: z.string(),
+      // Scope grounding attached by the API (via inline retrieval against the flow's
+      // destination) so the model can judge whether a cluster is off-topic for the
+      // knowledge base. `topRelevance` is the best retrieval relevance found for the
+      // cluster's topic (0 when nothing matched); `snippets` are short excerpts of the
+      // best matches. Absent when the flow has no destination content to retrieve from.
+      scope: z
+        .object({
+          persona: z.string().optional(),
+          topRelevance: z.number(),
+          snippets: z.array(z.string())
+        })
+        .optional()
+    })
+  ),
   flowId: z.string().optional(),
   provider: providerSchema
 });
 export const reconcileGapClustersOutputSchema = z.object({
-  merges: z.array(z.object({
-    clusterIds: z.array(z.string()),
-    rationale: z.string(),
-    confirmed: z.boolean()
-  })),
-  splits: z.array(z.object({
-    clusterId: z.string(),
-    children: z.array(z.object({ gapIds: z.array(z.string()) })),
-    rationale: z.string(),
-    confirmed: z.boolean()
-  })),
+  merges: z.array(
+    z.object({
+      clusterIds: z.array(z.string()),
+      rationale: z.string(),
+      confirmed: z.boolean()
+    })
+  ),
+  splits: z.array(
+    z.object({
+      clusterId: z.string(),
+      children: z.array(z.object({ gapIds: z.array(z.string()) })),
+      rationale: z.string(),
+      confirmed: z.boolean()
+    })
+  ),
   // Clusters the model judged off-topic for the knowledge base (unrelated to the
   // source knowledge). Each is critic-confirmed; the reconciler dismisses confirmed
   // ones permanently so they never draft a proposal.
-  dismissals: z.array(z.object({
-    clusterId: z.string(),
-    rationale: z.string(),
-    confirmed: z.boolean()
-  }))
+  dismissals: z.array(
+    z.object({
+      clusterId: z.string(),
+      rationale: z.string(),
+      confirmed: z.boolean()
+    })
+  )
 });
 
 const sourceChangeFileSchema = z.object({
@@ -441,18 +462,20 @@ export const foldChangesetProposalOutputSchema = z.object({
 
 export const refreshFlowSnapshotInputSchema = z.object({});
 export const refreshFlowSnapshotOutputSchema = z.object({
-  results: z.array(z.object({
-    proposalId: z.string(),
-    state: z.enum(["open", "closed"]),
-    merged: z.boolean(),
-    // Mirrors @magpie/core ReviewDecision. Optional: the watcher only attaches it
-    // for still-open PRs it could read; a missing value means "undetermined".
-    reviewDecision: z.enum(["approved", "changes_requested", "review_required", "none"]).optional(),
-    // Whether the still-open PR still merges cleanly. Optional: only attached for
-    // open PRs the watcher could read a mergeable state for. "unknown" (or missing)
-    // means undetermined and must never trigger regeneration.
-    mergeable: z.enum(["mergeable", "conflicting", "unknown"]).optional()
-  }))
+  results: z.array(
+    z.object({
+      proposalId: z.string(),
+      state: z.enum(["open", "closed"]),
+      merged: z.boolean(),
+      // Mirrors @magpie/core ReviewDecision. Optional: the watcher only attaches it
+      // for still-open PRs it could read; a missing value means "undetermined".
+      reviewDecision: z.enum(["approved", "changes_requested", "review_required", "none"]).optional(),
+      // Whether the still-open PR still merges cleanly. Optional: only attached for
+      // open PRs the watcher could read a mergeable state for. "unknown" (or missing)
+      // means undetermined and must never trigger regeneration.
+      mergeable: z.enum(["mergeable", "conflicting", "unknown"]).optional()
+    })
+  )
 });
 
 export const processGapsToPullRequestsInputSchema = z.object({
@@ -527,9 +550,7 @@ export const verifyGapClosureOutputSchema = z.object({
 export const crosslinkPullRequestsInputSchema = z.object({
   flowId: z.string().optional(),
   targets: z.array(z.string()),
-  pullRequests: z
-    .array(z.object({ proposalId: z.string(), pullRequestUrl: z.string() }))
-    .length(2)
+  pullRequests: z.array(z.object({ proposalId: z.string(), pullRequestUrl: z.string() })).length(2)
 });
 export const crosslinkPullRequestsOutputSchema = z.object({
   commented: z.array(z.string()),

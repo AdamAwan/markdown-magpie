@@ -19,10 +19,7 @@ test("POST /api/flows/:flowId/seed drafts one job per item and returns their ids
   ctx.knowledgeConfig.flows = [{ id: "flow-x", name: "Flow X", sourceIds: [], destinationId: "kb" }];
   const app = buildApp(ctx);
   const res = await seedRequest(app, "flow-x", {
-    items: [
-      { title: "Overview", coverage: ["what it is"] },
-      { coverage: ["config"] }
-    ]
+    items: [{ title: "Overview", coverage: ["what it is"] }, { coverage: ["config"] }]
   });
   assert.equal(res.status, 200);
   const body = (await res.json()) as { ok: boolean; jobIds: string[] };

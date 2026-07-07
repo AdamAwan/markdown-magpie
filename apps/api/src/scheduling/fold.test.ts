@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { makeTestContext } from "../test-support/context.js";
-import { reconcileDraftedProposal, reconcileCorrectiveProposal, reconcileSeedProposal, reconcileDedupeProposal, reconcileSplitProposal, reconcileImproveProposal, reconcileSourceSyncProposal, applyFoldFromCompletedJob, applyChangesetFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
+import {
+  reconcileDraftedProposal,
+  reconcileCorrectiveProposal,
+  reconcileSeedProposal,
+  reconcileDedupeProposal,
+  reconcileSplitProposal,
+  reconcileImproveProposal,
+  reconcileSourceSyncProposal,
+  applyFoldFromCompletedJob,
+  applyChangesetFoldFromCompletedJob,
+  enqueueFoldFallback
+} from "./fold.js";
 import type { AppContext } from "../context.js";
 
 async function clusterWithGap(ctx: AppContext, flowId: string | undefined, summary: string): Promise<string> {
@@ -11,7 +22,11 @@ async function clusterWithGap(ctx: AppContext, flowId: string | undefined, summa
     retrievedSectionIds: []
   });
   await ctx.stores.questionLogs.recordManualGap(log.id, summary);
-  const cluster = await ctx.stores.gapClusters.createCluster({ ...(flowId ? { flowId } : {}), title: summary, revision: 1 });
+  const cluster = await ctx.stores.gapClusters.createCluster({
+    ...(flowId ? { flowId } : {}),
+    title: summary,
+    revision: 1
+  });
   const [gapId] = await ctx.stores.questionLogs.gapIdsForSummary(summary);
   await ctx.stores.gapClusters.assignGapToCluster(cluster.id, gapId);
   return cluster.id;
@@ -394,7 +409,10 @@ describe("reconcileImproveProposal", () => {
     await reconcileImproveProposal(ctx, rival);
     assert.equal((await ctx.jobs.list({ type: "fold_markdown_proposal" })).jobs.length, 0);
     const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
-    assert.deepEqual(actions.map((a) => a.proposalId), [rival.id]);
+    assert.deepEqual(
+      actions.map((a) => a.proposalId),
+      [rival.id]
+    );
   });
 });
 describe("applyFoldFromCompletedJob", () => {
@@ -578,7 +596,10 @@ describe("applyChangesetFoldFromCompletedJob", () => {
       { path: "kb/a.md", delete: true }
     ];
 
-    await applyChangesetFoldFromCompletedJob(ctx, await ctx.jobs.get(job.id), { changeset: merged, rationale: "merged" });
+    await applyChangesetFoldFromCompletedJob(ctx, await ctx.jobs.get(job.id), {
+      changeset: merged,
+      rationale: "merged"
+    });
 
     const updated = await ctx.stores.proposals.get(survivor.id);
     assert.deepEqual(updated?.changeset, merged);
@@ -634,7 +655,10 @@ describe("enqueueFoldFallback", () => {
       rationale: "r",
       evidence: [],
       flowId: "billing",
-      changeset: [{ path: "kb/a.md", content: "# A merged" }, { path: "kb/b.md", delete: true }]
+      changeset: [
+        { path: "kb/a.md", content: "# A merged" },
+        { path: "kb/b.md", delete: true }
+      ]
     });
     const job = await ctx.jobs.create("fold_changeset_proposal", {
       provider: "codex",
@@ -729,7 +753,10 @@ describe("reconcileSourceSyncProposal", () => {
     await reconcileSourceSyncProposal(ctx, rival);
 
     const jobs = (await ctx.jobs.list({})).jobs;
-    assert.equal(jobs.some((job) => job.type === "fold_changeset_proposal"), false);
+    assert.equal(
+      jobs.some((job) => job.type === "fold_changeset_proposal"),
+      false
+    );
     const publishJobs = jobs.filter((job) => job.type === "publish_proposal");
     assert.equal(publishJobs.length, 1);
     assert.equal((publishJobs[0].input as { proposalId: string }).proposalId, rival.id);

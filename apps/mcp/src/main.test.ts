@@ -15,17 +15,11 @@ test("resolveStdioAuthToken throws when auth is required but the token is missin
 });
 
 test("resolveStdioAuthToken fails closed: unset AUTH_REQUIRED still requires the token", () => {
-  assert.throws(
-    () => resolveStdioAuthToken({}),
-    /MCP_AUTH_TOKEN is required unless AUTH_REQUIRED=false/
-  );
+  assert.throws(() => resolveStdioAuthToken({}), /MCP_AUTH_TOKEN is required unless AUTH_REQUIRED=false/);
 });
 
 test("resolveStdioAuthToken returns the token when auth is required and present", () => {
-  assert.equal(
-    resolveStdioAuthToken({ AUTH_REQUIRED: "true", MCP_AUTH_TOKEN: "stdio-token" }),
-    "stdio-token"
-  );
+  assert.equal(resolveStdioAuthToken({ AUTH_REQUIRED: "true", MCP_AUTH_TOKEN: "stdio-token" }), "stdio-token");
 });
 
 test("resolveStdioAuthToken returns undefined and never throws when auth is explicitly disabled", () => {

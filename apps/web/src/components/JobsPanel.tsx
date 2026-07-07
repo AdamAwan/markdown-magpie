@@ -3,17 +3,7 @@ import styled from "@emotion/styled";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { JobCapability, JobState, JobType, JobView, ScheduleView, WatcherStatus, WatcherView } from "../lib/types";
 import { formatJobType, isActiveJob } from "../lib/console";
-import {
-  Actions,
-  Badge,
-  Button,
-  EmptyState,
-  Field,
-  IconButton,
-  Select,
-  Surface,
-  statusTone
-} from "./ui";
+import { Actions, Badge, Button, EmptyState, Field, IconButton, Select, Surface, statusTone } from "./ui";
 
 const JOB_STATES: JobState[] = ["created", "retry", "active", "completed", "cancelled", "failed", "blocked"];
 
@@ -56,7 +46,13 @@ const CAPABILITY_JOB_TYPES = {
   claude: PROVIDER_JOB_TYPES,
   github: ["refresh_flow_snapshot", "publish_proposal", "crosslink_pull_requests", "comment_pull_request"],
   "local-git": ["publish_proposal"],
-  maintenance: ["process_gaps_to_pull_requests", "source_change_sync", "correctness_patrol", "editorial_patrol", "verify_gap_closure"]
+  maintenance: [
+    "process_gaps_to_pull_requests",
+    "source_change_sync",
+    "correctness_patrol",
+    "editorial_patrol",
+    "verify_gap_closure"
+  ]
 } as const satisfies Record<JobCapability, readonly JobType[]>;
 
 const JobsPage = styled.section(({ theme }) => ({

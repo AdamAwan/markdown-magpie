@@ -51,11 +51,7 @@ function define(
 ): JobDefinition {
   const providerWork = spec === "provider";
   const fanOut = typeof spec === "object";
-  const capabilities: readonly JobCapability[] = providerWork
-    ? AI_PROVIDERS
-    : fanOut
-      ? spec.capabilities
-      : [spec];
+  const capabilities: readonly JobCapability[] = providerWork ? AI_PROVIDERS : fanOut ? spec.capabilities : [spec];
   // The input field that selects the capability, and a fallback when it is absent.
   const field = providerWork ? "provider" : fanOut ? spec.field : undefined;
   const fallback = fanOut ? spec.default : undefined;
@@ -91,31 +87,163 @@ function define(
 }
 
 const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
-  answer_question: define("answer_question", "provider", schemas.answerQuestionInputSchema, schemas.answerQuestionOutputSchema, 5 * 60),
-  summarize_gap: define("summarize_gap", "provider", schemas.summarizeGapInputSchema, schemas.summarizeGapOutputSchema, 10 * 60),
-  draft_markdown_proposal: define("draft_markdown_proposal", "provider", schemas.draftMarkdownProposalInputSchema, schemas.draftMarkdownProposalOutputSchema, 15 * 60),
-  draft_seed_document: define("draft_seed_document", "provider", schemas.draftSeedDocumentInputSchema, schemas.draftSeedDocumentOutputSchema, 15 * 60),
-  outline_flow_seed: define("outline_flow_seed", "provider", schemas.outlineFlowSeedInputSchema, schemas.outlineFlowSeedOutputSchema, 10 * 60),
-  fold_markdown_proposal: define("fold_markdown_proposal", "provider", schemas.foldMarkdownProposalInputSchema, schemas.foldMarkdownProposalOutputSchema, 15 * 60),
-  detect_contradiction: define("detect_contradiction", "provider", schemas.detectContradictionInputSchema, schemas.detectContradictionOutputSchema, 10 * 60),
-  suggest_consolidation: define("suggest_consolidation", "provider", schemas.suggestConsolidationInputSchema, schemas.suggestConsolidationOutputSchema, 10 * 60),
-  reconcile_gap_clusters: define("reconcile_gap_clusters", "provider", schemas.reconcileGapClustersInputSchema, schemas.reconcileGapClustersOutputSchema, 5 * 60),
-  sync_source_changes_generate_plan: define("sync_source_changes_generate_plan", "provider", schemas.syncSourceChangesGeneratePlanInputSchema, schemas.syncSourceChangesGeneratePlanOutputSchema, 60 * 60),
+  answer_question: define(
+    "answer_question",
+    "provider",
+    schemas.answerQuestionInputSchema,
+    schemas.answerQuestionOutputSchema,
+    5 * 60
+  ),
+  summarize_gap: define(
+    "summarize_gap",
+    "provider",
+    schemas.summarizeGapInputSchema,
+    schemas.summarizeGapOutputSchema,
+    10 * 60
+  ),
+  draft_markdown_proposal: define(
+    "draft_markdown_proposal",
+    "provider",
+    schemas.draftMarkdownProposalInputSchema,
+    schemas.draftMarkdownProposalOutputSchema,
+    15 * 60
+  ),
+  draft_seed_document: define(
+    "draft_seed_document",
+    "provider",
+    schemas.draftSeedDocumentInputSchema,
+    schemas.draftSeedDocumentOutputSchema,
+    15 * 60
+  ),
+  outline_flow_seed: define(
+    "outline_flow_seed",
+    "provider",
+    schemas.outlineFlowSeedInputSchema,
+    schemas.outlineFlowSeedOutputSchema,
+    10 * 60
+  ),
+  fold_markdown_proposal: define(
+    "fold_markdown_proposal",
+    "provider",
+    schemas.foldMarkdownProposalInputSchema,
+    schemas.foldMarkdownProposalOutputSchema,
+    15 * 60
+  ),
+  detect_contradiction: define(
+    "detect_contradiction",
+    "provider",
+    schemas.detectContradictionInputSchema,
+    schemas.detectContradictionOutputSchema,
+    10 * 60
+  ),
+  suggest_consolidation: define(
+    "suggest_consolidation",
+    "provider",
+    schemas.suggestConsolidationInputSchema,
+    schemas.suggestConsolidationOutputSchema,
+    10 * 60
+  ),
+  reconcile_gap_clusters: define(
+    "reconcile_gap_clusters",
+    "provider",
+    schemas.reconcileGapClustersInputSchema,
+    schemas.reconcileGapClustersOutputSchema,
+    5 * 60
+  ),
+  sync_source_changes_generate_plan: define(
+    "sync_source_changes_generate_plan",
+    "provider",
+    schemas.syncSourceChangesGeneratePlanInputSchema,
+    schemas.syncSourceChangesGeneratePlanOutputSchema,
+    60 * 60
+  ),
   // verify/correct/improve are source-grounded agentic jobs (increment 3): like
   // the draft jobs, exploration runs for minutes (MAGPIE_AGENTIC_TIMEOUT_MS
   // defaults to 10 minutes), so the queue must not expire them at a one-shot horizon.
-  verify_document: define("verify_document", "provider", schemas.verifyDocumentInputSchema, schemas.verifyDocumentOutputSchema, 15 * 60),
-  correct_document: define("correct_document", "provider", schemas.correctDocumentInputSchema, schemas.correctDocumentOutputSchema, 15 * 60),
-  dedupe_documents: define("dedupe_documents", "provider", schemas.dedupeDocumentsInputSchema, schemas.dedupeDocumentsOutputSchema, 10 * 60),
-  split_document: define("split_document", "provider", schemas.splitDocumentInputSchema, schemas.splitDocumentOutputSchema, 10 * 60),
-  improve_document: define("improve_document", "provider", schemas.improveDocumentInputSchema, schemas.improveDocumentOutputSchema, 15 * 60),
-  fold_changeset_proposal: define("fold_changeset_proposal", "provider", schemas.foldChangesetProposalInputSchema, schemas.foldChangesetProposalOutputSchema, 15 * 60),
-  refresh_flow_snapshot: define("refresh_flow_snapshot", "github", schemas.refreshFlowSnapshotInputSchema, schemas.refreshFlowSnapshotOutputSchema, 5 * 60),
-  process_gaps_to_pull_requests: define("process_gaps_to_pull_requests", "maintenance", schemas.processGapsToPullRequestsInputSchema, schemas.processGapsToPullRequestsOutputSchema, 60 * 60),
-  source_change_sync: define("source_change_sync", "maintenance", schemas.sourceChangeSyncInputSchema, schemas.sourceChangeSyncOutputSchema, 60 * 60),
-  correctness_patrol: define("correctness_patrol", "maintenance", schemas.correctnessPatrolInputSchema, schemas.correctnessPatrolOutputSchema, 60 * 60),
-  editorial_patrol: define("editorial_patrol", "maintenance", schemas.editorialPatrolInputSchema, schemas.editorialPatrolOutputSchema, 60 * 60),
-  verify_gap_closure: define("verify_gap_closure", "maintenance", schemas.verifyGapClosureInputSchema, schemas.verifyGapClosureOutputSchema, 60 * 60),
+  verify_document: define(
+    "verify_document",
+    "provider",
+    schemas.verifyDocumentInputSchema,
+    schemas.verifyDocumentOutputSchema,
+    15 * 60
+  ),
+  correct_document: define(
+    "correct_document",
+    "provider",
+    schemas.correctDocumentInputSchema,
+    schemas.correctDocumentOutputSchema,
+    15 * 60
+  ),
+  dedupe_documents: define(
+    "dedupe_documents",
+    "provider",
+    schemas.dedupeDocumentsInputSchema,
+    schemas.dedupeDocumentsOutputSchema,
+    10 * 60
+  ),
+  split_document: define(
+    "split_document",
+    "provider",
+    schemas.splitDocumentInputSchema,
+    schemas.splitDocumentOutputSchema,
+    10 * 60
+  ),
+  improve_document: define(
+    "improve_document",
+    "provider",
+    schemas.improveDocumentInputSchema,
+    schemas.improveDocumentOutputSchema,
+    15 * 60
+  ),
+  fold_changeset_proposal: define(
+    "fold_changeset_proposal",
+    "provider",
+    schemas.foldChangesetProposalInputSchema,
+    schemas.foldChangesetProposalOutputSchema,
+    15 * 60
+  ),
+  refresh_flow_snapshot: define(
+    "refresh_flow_snapshot",
+    "github",
+    schemas.refreshFlowSnapshotInputSchema,
+    schemas.refreshFlowSnapshotOutputSchema,
+    5 * 60
+  ),
+  process_gaps_to_pull_requests: define(
+    "process_gaps_to_pull_requests",
+    "maintenance",
+    schemas.processGapsToPullRequestsInputSchema,
+    schemas.processGapsToPullRequestsOutputSchema,
+    60 * 60
+  ),
+  source_change_sync: define(
+    "source_change_sync",
+    "maintenance",
+    schemas.sourceChangeSyncInputSchema,
+    schemas.sourceChangeSyncOutputSchema,
+    60 * 60
+  ),
+  correctness_patrol: define(
+    "correctness_patrol",
+    "maintenance",
+    schemas.correctnessPatrolInputSchema,
+    schemas.correctnessPatrolOutputSchema,
+    60 * 60
+  ),
+  editorial_patrol: define(
+    "editorial_patrol",
+    "maintenance",
+    schemas.editorialPatrolInputSchema,
+    schemas.editorialPatrolOutputSchema,
+    60 * 60
+  ),
+  verify_gap_closure: define(
+    "verify_gap_closure",
+    "maintenance",
+    schemas.verifyGapClosureInputSchema,
+    schemas.verifyGapClosureOutputSchema,
+    60 * 60
+  ),
   // Publishing a branch to a file:// destination needs no GitHub token, so it fans
   // out over {github, local-git} keyed off input.destination. Enqueues that omit it
   // (legacy jobs) default to github, matching the pre-local-git behaviour.
@@ -126,8 +254,20 @@ const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
     schemas.publishProposalOutputSchema,
     15 * 60
   ),
-  crosslink_pull_requests: define("crosslink_pull_requests", "github", schemas.crosslinkPullRequestsInputSchema, schemas.crosslinkPullRequestsOutputSchema, 10 * 60),
-  comment_pull_request: define("comment_pull_request", "github", schemas.commentPullRequestInputSchema, schemas.commentPullRequestOutputSchema, 10 * 60)
+  crosslink_pull_requests: define(
+    "crosslink_pull_requests",
+    "github",
+    schemas.crosslinkPullRequestsInputSchema,
+    schemas.crosslinkPullRequestsOutputSchema,
+    10 * 60
+  ),
+  comment_pull_request: define(
+    "comment_pull_request",
+    "github",
+    schemas.commentPullRequestInputSchema,
+    schemas.commentPullRequestOutputSchema,
+    10 * 60
+  )
 });
 
 export function jobDefinition(type: JobType): JobDefinition {
@@ -191,11 +331,13 @@ const workQueues = concreteWorkQueues();
 
 const queueDefinitions: readonly QueueDefinition[] = Object.freeze([
   ...workQueues,
-  ...workQueues.map((queue) => Object.freeze({
-    name: queue.policy!.deadLetter!,
-    type: queue.type,
-    deadLetter: true
-  }))
+  ...workQueues.map((queue) =>
+    Object.freeze({
+      name: queue.policy!.deadLetter!,
+      type: queue.type,
+      deadLetter: true
+    })
+  )
 ]);
 
 export function allQueueDefinitions(): QueueDefinition[] {

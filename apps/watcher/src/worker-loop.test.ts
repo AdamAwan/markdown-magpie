@@ -107,7 +107,9 @@ const CAPS: JobCapability[] = ["openai-compatible", "maintenance"];
 describe("WorkerLoop", () => {
   it("sends the watcher's capabilities on claim", async () => {
     const api = new FakeApiClient({ jobs: [undefined] });
-    const loop = new WorkerLoop(api, [new FakeRunner(async () => ({}))], CAPS, "w1", silentLogger, { pollIntervalMs: 1 });
+    const loop = new WorkerLoop(api, [new FakeRunner(async () => ({}))], CAPS, "w1", silentLogger, {
+      pollIntervalMs: 1
+    });
     // No job available — claim once, then stop.
     await loop.tick();
     assert.equal(api.claims.length, 1);

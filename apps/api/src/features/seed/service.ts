@@ -1,8 +1,4 @@
-import type {
-  DraftSeedDocumentJobInput,
-  OutlineFlowSeedJobInput,
-  SeedItem
-} from "@magpie/core";
+import type { DraftSeedDocumentJobInput, OutlineFlowSeedJobInput, SeedItem } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import { defaultDestinationId, selectFlow } from "../../platform/repositories.js";
 import { projectSourceDescriptors } from "../../platform/source-descriptors.js";
@@ -15,11 +11,7 @@ import { logger } from "../../logger.js";
 // draftFromGaps requires — seed coverage is authored intent, not a logged gap.
 // Enqueue-only: the proposal lands later via createSeedProposalFromCompletedJob
 // (a completion handler in the proposals service).
-async function draftSeedItem(
-  ctx: AppContext,
-  flowId: string,
-  item: SeedItem
-): Promise<string> {
+async function draftSeedItem(ctx: AppContext, flowId: string, item: SeedItem): Promise<string> {
   const deps = ctx.repositoryDeps();
   const flow = selectFlow(deps, flowId);
   const sourceIds = flow?.sourceIds;

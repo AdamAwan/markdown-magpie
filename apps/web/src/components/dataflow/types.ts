@@ -8,14 +8,7 @@
 // (Source / Processing / Storage / AI provider / User-API); `decision` is a
 // branch point (the diamond shapes in the old mermaid graphs) and `highlight`
 // emphasises a pivotal node such as the reconcile gate.
-export type FlowNodeKind =
-  | "source"
-  | "processing"
-  | "storage"
-  | "ai"
-  | "user"
-  | "decision"
-  | "highlight";
+export type FlowNodeKind = "source" | "processing" | "storage" | "ai" | "user" | "decision" | "highlight";
 
 interface FlowNodeDef {
   id: string;

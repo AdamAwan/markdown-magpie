@@ -196,15 +196,12 @@ test("askQuestion throws when the job fails without leaking payload", async () =
   });
 
   try {
-    await assert.rejects(
-      askQuestion("q"),
-      (error: Error) => {
-        assert.match(error.message, /job-1/);
-        assert.match(error.message, /failed/);
-        assert.doesNotMatch(error.message, /secret|do not surface/);
-        return true;
-      }
-    );
+    await assert.rejects(askQuestion("q"), (error: Error) => {
+      assert.match(error.message, /job-1/);
+      assert.match(error.message, /failed/);
+      assert.doesNotMatch(error.message, /secret|do not surface/);
+      return true;
+    });
   } finally {
     stub.restore();
   }
@@ -221,15 +218,12 @@ test("askQuestion throws when the job is cancelled without leaking payload", asy
   });
 
   try {
-    await assert.rejects(
-      askQuestion("q"),
-      (error: Error) => {
-        assert.match(error.message, /job-1/);
-        assert.match(error.message, /cancelled/);
-        assert.doesNotMatch(error.message, /secret|do not surface/);
-        return true;
-      }
-    );
+    await assert.rejects(askQuestion("q"), (error: Error) => {
+      assert.match(error.message, /job-1/);
+      assert.match(error.message, /cancelled/);
+      assert.doesNotMatch(error.message, /secret|do not surface/);
+      return true;
+    });
   } finally {
     stub.restore();
   }
@@ -245,15 +239,12 @@ test("askQuestion times out when the job never reaches a terminal state", async 
   });
 
   try {
-    await assert.rejects(
-      askQuestion("q"),
-      (error: Error) => {
-        assert.match(error.message, /Timed out/);
-        assert.match(error.message, /job-1/);
-        assert.match(error.message, /retry/);
-        return true;
-      }
-    );
+    await assert.rejects(askQuestion("q"), (error: Error) => {
+      assert.match(error.message, /Timed out/);
+      assert.match(error.message, /job-1/);
+      assert.match(error.message, /retry/);
+      return true;
+    });
   } finally {
     stub.restore();
   }
@@ -389,8 +380,7 @@ test("generateOutline polls the detail link when the wait response is non-termin
 test("generateOutline throws when the job fails without leaking payload", async () => {
   const stub = stubOutlineFetch({
     outline: () => jsonResponse({ ok: true, jobId: "job-9" }),
-    wait: () =>
-      jsonResponse({ job: { id: "job-9", state: "failed", output: { secret: "do not surface" } } })
+    wait: () => jsonResponse({ job: { id: "job-9", state: "failed", output: { secret: "do not surface" } } })
   });
 
   try {

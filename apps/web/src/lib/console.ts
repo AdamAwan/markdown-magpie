@@ -1,4 +1,13 @@
-import { ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, JobType, JobView, KnowledgeStats, WatcherView } from "./types";
+import {
+  ConsoleNotice,
+  ConsoleSection,
+  Health,
+  JobTransitionMessage,
+  JobType,
+  JobView,
+  KnowledgeStats,
+  WatcherView
+} from "./types";
 
 export function sectionTitle(section: ConsoleSection): string {
   if (section === "knowledge") {

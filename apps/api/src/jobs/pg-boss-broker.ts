@@ -32,10 +32,9 @@ export interface PgBossJobBrokerOptions {
   scheduleTimezone?: string;
 }
 
-export type PgBossQueuePolicyOverrides = Partial<Pick<
-  UpdateQueueOptions,
-  "retryLimit" | "retryDelay" | "retryBackoff" | "retryDelayMax"
->>;
+export type PgBossQueuePolicyOverrides = Partial<
+  Pick<UpdateQueueOptions, "retryLimit" | "retryDelay" | "retryBackoff" | "retryDelayMax">
+>;
 
 const queueDefinitions = allQueueDefinitions();
 const queueByName = new Map(queueDefinitions.map((queue) => [queue.name, queue]));
@@ -220,10 +219,12 @@ export class PgBossJobBroker implements JobBroker {
   // filters to avoid that.
   async list(filters: JobListFilters): Promise<{ jobs: JobView[]; total: number }> {
     const queuesToScan = filters.type ? queueDefinitionsForType(filters.type) : queueDefinitions;
-    const batches = await Promise.all(queuesToScan.map(async (queue) => {
-      const jobs = await this.boss.findJobs<JobEnvelope>(queue.name);
-      return jobs.map((job) => toJobView(queue.name, job));
-    }));
+    const batches = await Promise.all(
+      queuesToScan.map(async (queue) => {
+        const jobs = await this.boss.findJobs<JobEnvelope>(queue.name);
+        return jobs.map((job) => toJobView(queue.name, job));
+      })
+    );
     let jobs = batches.flat();
     if (filters.state) jobs = jobs.filter((job) => job.state === filters.state);
     if (filters.createdAfter) jobs = jobs.filter((job) => job.createdAt > filters.createdAfter!);
@@ -274,13 +275,14 @@ export class PgBossJobBroker implements JobBroker {
         storageKey: storageScheduleKey(schedule.key)
       };
     });
-    const desiredSchedules = new Set(normalized
-      .filter((schedule) => schedule.enabled)
-      .map((schedule) => scheduleIdentity(schedule.queueName, schedule.storageKey)));
+    const desiredSchedules = new Set(
+      normalized
+        .filter((schedule) => schedule.enabled)
+        .map((schedule) => scheduleIdentity(schedule.queueName, schedule.storageKey))
+    );
     const existing = await this.boss.getSchedules();
     for (const schedule of existing) {
-      if (isJobEnvelope(schedule.data)
-        && !desiredSchedules.has(scheduleIdentity(schedule.name, schedule.key))) {
+      if (isJobEnvelope(schedule.data) && !desiredSchedules.has(scheduleIdentity(schedule.name, schedule.key))) {
         await this.boss.unschedule(schedule.name, schedule.key);
       }
     }
@@ -301,15 +303,21 @@ export class PgBossJobBroker implements JobBroker {
 
   async listSchedules(): Promise<ScheduleView[]> {
     const schedules = await this.boss.getSchedules();
-    return schedules.flatMap((schedule) => isJobEnvelope(schedule.data) ? [{
-      key: publicScheduleKey(schedule.key),
-      type: schedule.data.type,
-      cron: schedule.cron,
-      enabled: true,
-      // pg-boss does not surface a portable next-run timestamp, so derive it from
-      // the cron in the same timezone the schedule fires in.
-      nextRunAt: nextRunFor(schedule.cron, schedule.timezone)
-    }] : []);
+    return schedules.flatMap((schedule) =>
+      isJobEnvelope(schedule.data)
+        ? [
+            {
+              key: publicScheduleKey(schedule.key),
+              type: schedule.data.type,
+              cron: schedule.cron,
+              enabled: true,
+              // pg-boss does not surface a portable next-run timestamp, so derive it from
+              // the cron in the same timezone the schedule fires in.
+              nextRunAt: nextRunFor(schedule.cron, schedule.timezone)
+            }
+          ]
+        : []
+    );
   }
 
   async reset(): Promise<void> {
@@ -345,10 +353,12 @@ export class PgBossJobBroker implements JobBroker {
   private async locate(id: string): Promise<{ queue: QueueDefinition; job: JobWithMetadata<JobEnvelope> } | undefined> {
     for (let start = 0; start < queueDefinitions.length; start += LOCATE_CONCURRENCY) {
       const batch = queueDefinitions.slice(start, start + LOCATE_CONCURRENCY);
-      const results = await Promise.all(batch.map(async (queue) => {
-        const [job] = await this.boss.findJobs<JobEnvelope>(queue.name, { id });
-        return job ? { queue, job } : undefined;
-      }));
+      const results = await Promise.all(
+        batch.map(async (queue) => {
+          const [job] = await this.boss.findJobs<JobEnvelope>(queue.name, { id });
+          return job ? { queue, job } : undefined;
+        })
+      );
       const found = results.find((result) => result !== undefined);
       if (found) return found;
     }
@@ -389,9 +399,7 @@ function toJobView(queueName: string, job: JobWithMetadata<JobEnvelope>): JobVie
   if (!queue) throw new Error(`Unknown pg-boss queue: ${queueName}`);
   if (!isJobEnvelope(job.data)) throw new Error(`Invalid job envelope for ${job.id}`);
 
-  const state: JobState = job.blocked && (job.state === "created" || job.state === "retry")
-    ? "blocked"
-    : job.state;
+  const state: JobState = job.blocked && (job.state === "created" || job.state === "retry") ? "blocked" : job.state;
   const output = isRecord(job.output) ? job.output : undefined;
   const error = (state === "retry" || state === "failed") && isJobError(output) ? output : undefined;
   const updatedAt = latestDate(job.createdOn, job.startedOn, job.heartbeatOn, job.completedOn).toISOString();
@@ -422,17 +430,21 @@ function toJobView(queueName: string, job: JobWithMetadata<JobEnvelope>): JobVie
 }
 
 function isJobEnvelope(value: unknown): value is JobEnvelope {
-  return isRecord(value)
-    && typeof value.type === "string"
-    && "input" in value
-    && queueDefinitions.some((queue) => queue.type === value.type);
+  return (
+    isRecord(value) &&
+    typeof value.type === "string" &&
+    "input" in value &&
+    queueDefinitions.some((queue) => queue.type === value.type)
+  );
 }
 
 function isJobError(value: unknown): value is JobError {
-  return isRecord(value)
-    && typeof value.code === "string"
-    && typeof value.message === "string"
-    && typeof value.category === "string";
+  return (
+    isRecord(value) &&
+    typeof value.code === "string" &&
+    typeof value.message === "string" &&
+    typeof value.category === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -449,7 +461,9 @@ function dateString(value: Date | null | undefined): string | undefined {
 }
 
 function latestDate(...values: Array<Date | null | undefined>): Date {
-  return new Date(Math.max(...values.filter((value): value is Date => value instanceof Date).map((value) => value.getTime())));
+  return new Date(
+    Math.max(...values.filter((value): value is Date => value instanceof Date).map((value) => value.getTime()))
+  );
 }
 
 // The next fire time for a cron in the schedule's timezone, as an ISO string, or

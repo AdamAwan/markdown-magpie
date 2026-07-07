@@ -50,7 +50,10 @@ function createStore<T>(
   return memory();
 }
 
-export function createQuestionLogStore(config: AppConfig, pool: pg.Pool): InMemoryQuestionLogStore | PostgresQuestionLogStore {
+export function createQuestionLogStore(
+  config: AppConfig,
+  pool: pg.Pool
+): InMemoryQuestionLogStore | PostgresQuestionLogStore {
   return createStore<InMemoryQuestionLogStore | PostgresQuestionLogStore>(
     config,
     pool,
@@ -83,7 +86,10 @@ export function createGapClosureVerificationStore(
   );
 }
 
-export function createScheduledTaskStore(config: AppConfig, pool: pg.Pool): InMemoryScheduledTaskStore | PostgresScheduledTaskStore {
+export function createScheduledTaskStore(
+  config: AppConfig,
+  pool: pg.Pool
+): InMemoryScheduledTaskStore | PostgresScheduledTaskStore {
   return createStore<InMemoryScheduledTaskStore | PostgresScheduledTaskStore>(
     config,
     pool,
@@ -93,7 +99,10 @@ export function createScheduledTaskStore(config: AppConfig, pool: pg.Pool): InMe
   );
 }
 
-export function createSourceSyncStore(config: AppConfig, pool: pg.Pool): InMemorySourceSyncStore | PostgresSourceSyncStore {
+export function createSourceSyncStore(
+  config: AppConfig,
+  pool: pg.Pool
+): InMemorySourceSyncStore | PostgresSourceSyncStore {
   return createStore<InMemorySourceSyncStore | PostgresSourceSyncStore>(
     config,
     pool,
@@ -113,7 +122,10 @@ export function createPatrolStore(config: AppConfig, pool: pg.Pool): InMemoryPat
   );
 }
 
-export function createGapClusterStore(config: AppConfig, pool: pg.Pool): InMemoryGapClusterStore | PostgresGapClusterStore {
+export function createGapClusterStore(
+  config: AppConfig,
+  pool: pg.Pool
+): InMemoryGapClusterStore | PostgresGapClusterStore {
   return createStore<InMemoryGapClusterStore | PostgresGapClusterStore>(
     config,
     pool,
@@ -136,7 +148,10 @@ export function createReconciliationDecisionStore(
   );
 }
 
-export function createMaintenanceRunStore(config: AppConfig, pool: pg.Pool): InMemoryMaintenanceRunStore | PostgresMaintenanceRunStore {
+export function createMaintenanceRunStore(
+  config: AppConfig,
+  pool: pg.Pool
+): InMemoryMaintenanceRunStore | PostgresMaintenanceRunStore {
   return createStore<InMemoryMaintenanceRunStore | PostgresMaintenanceRunStore>(
     config,
     pool,
@@ -146,7 +161,10 @@ export function createMaintenanceRunStore(config: AppConfig, pool: pg.Pool): InM
   );
 }
 
-export function createWatcherRegistryStore(config: AppConfig, pool: pg.Pool): InMemoryWatcherRegistryStore | PostgresWatcherRegistryStore {
+export function createWatcherRegistryStore(
+  config: AppConfig,
+  pool: pg.Pool
+): InMemoryWatcherRegistryStore | PostgresWatcherRegistryStore {
   return createStore<InMemoryWatcherRegistryStore | PostgresWatcherRegistryStore>(
     config,
     pool,
@@ -156,7 +174,10 @@ export function createWatcherRegistryStore(config: AppConfig, pool: pg.Pool): In
   );
 }
 
-export function createPrCrosslinkStore(config: AppConfig, pool: pg.Pool): InMemoryPrCrosslinkStore | PostgresPrCrosslinkStore {
+export function createPrCrosslinkStore(
+  config: AppConfig,
+  pool: pg.Pool
+): InMemoryPrCrosslinkStore | PostgresPrCrosslinkStore {
   return createStore<InMemoryPrCrosslinkStore | PostgresPrCrosslinkStore>(
     config,
     pool,

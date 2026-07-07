@@ -53,7 +53,11 @@ test("uses horizontal layout for linear dataflow diagrams", () => {
   for (const key of HORIZONTAL_KEYS) {
     assert.equal(buildFlowGraph(key, modelInfo).direction, "LR", `${key} should read left-to-right`);
   }
-  assert.equal(buildFlowGraph("improvement", modelInfo).direction, "TB", "branch-heavy improvement view stays vertical");
+  assert.equal(
+    buildFlowGraph("improvement", modelInfo).direction,
+    "TB",
+    "branch-heavy improvement view stays vertical"
+  );
 });
 
 test("every edge and group reference resolves to a node in the same flow", () => {

@@ -11,7 +11,10 @@ describe("InMemoryGapClusterStore", () => {
     assert.equal(cluster.reconciliationRevision, 3);
 
     const active = await store.listActiveClusters();
-    assert.deepEqual(active.map((c) => c.id), [cluster.id]);
+    assert.deepEqual(
+      active.map((c) => c.id),
+      [cluster.id]
+    );
   });
 
   it("scopes active clusters to one flow and honours the limit", async () => {
@@ -26,7 +29,10 @@ describe("InMemoryGapClusterStore", () => {
 
     // undefined flow matches the un-routed/default clusters only.
     const def = await store.listActiveClustersForFlow(undefined);
-    assert.deepEqual(def.map((c) => c.id), [dDefault.id]);
+    assert.deepEqual(
+      def.map((c) => c.id),
+      [dDefault.id]
+    );
 
     // Frozen clusters drop out, and the limit bounds the result.
     await store.freezeCluster(b.id);
@@ -43,9 +49,15 @@ describe("InMemoryGapClusterStore", () => {
     await store.assignGapToCluster(f2.id, "gap-2");
 
     const inF1 = await store.listActiveMembershipsForFlow("f1");
-    assert.deepEqual(inF1.map((m) => m.gapId), ["gap-1"]);
+    assert.deepEqual(
+      inF1.map((m) => m.gapId),
+      ["gap-1"]
+    );
     const inF2 = await store.listActiveMembershipsForFlow("f2");
-    assert.deepEqual(inF2.map((m) => m.gapId), ["gap-2"]);
+    assert.deepEqual(
+      inF2.map((m) => m.gapId),
+      ["gap-2"]
+    );
   });
 
   it("batch-assigns many gaps, deactivating any prior membership", async () => {

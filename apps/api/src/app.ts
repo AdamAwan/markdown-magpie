@@ -94,10 +94,7 @@ export function buildApp(ctx: AppContext, options?: ApiAuthOptions): Hono {
       }
     }
     const ready = databaseOk && brokerStarted;
-    return c.json(
-      { ready, checks: { database: databaseOk, broker: brokerStarted } },
-      ready ? 200 : 503
-    );
+    return c.json({ ready, checks: { database: databaseOk, broker: brokerStarted } }, ready ? 200 : 503);
   });
   api.use("*", requireAuth(authOptions));
 

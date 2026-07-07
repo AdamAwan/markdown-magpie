@@ -40,7 +40,12 @@ function BreakdownPanel({ caption, rows, fill }: { caption: string; rows: JobErr
       <ResponsiveContainer width="100%" height={height}>
         <BarChart data={data} layout="vertical" margin={{ top: 8, right: 12, bottom: 0, left: 12 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={theme.color.border} horizontal={false} />
-          <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12, fill: theme.color.textMuted }} tickLine={false} />
+          <XAxis
+            type="number"
+            allowDecimals={false}
+            tick={{ fontSize: 12, fill: theme.color.textMuted }}
+            tickLine={false}
+          />
           <YAxis
             type="category"
             dataKey="label"

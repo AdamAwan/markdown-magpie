@@ -19,7 +19,9 @@ describe("PostgresKnowledgeStore re-index pruning", { skip: databaseUrl ? false 
   it("removes documents absent from the new source set", async () => {
     const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
     const repositoryId = `prune-test-${Date.now()}`;
-    const summary = (paths: string[]): { summary: IndexedRepositorySummary; documents: KnowledgeDocument[]; sections: DocumentSection[] } => {
+    const summary = (
+      paths: string[]
+    ): { summary: IndexedRepositorySummary; documents: KnowledgeDocument[]; sections: DocumentSection[] } => {
       const documents: KnowledgeDocument[] = paths.map((path) => ({
         id: `${repositoryId}:${path}`,
         repositoryId,
@@ -61,7 +63,9 @@ describe("PostgresKnowledgeStore re-index pruning", { skip: databaseUrl ? false 
     await store.saveIndexedRepository(second.summary, second.documents, second.sections);
 
     const loaded = await store.loadAll();
-    const paths = loaded.documents.filter((document) => document.repositoryId === repositoryId).map((document) => document.path);
+    const paths = loaded.documents
+      .filter((document) => document.repositoryId === repositoryId)
+      .map((document) => document.path);
     assert.deepEqual(paths.sort(), ["keep.md"]);
   });
 });
@@ -113,7 +117,11 @@ describe("PostgresKnowledgeStore keyword search", { skip: databaseUrl ? false : 
     };
 
     const primary = buildRepo(repositoryId, [
-      { path: "rollback.md", heading: "Hotfix Rollback", content: "Run the rollback workflow and notify the incident lead." },
+      {
+        path: "rollback.md",
+        heading: "Hotfix Rollback",
+        content: "Run the rollback workflow and notify the incident lead."
+      },
       { path: "felines.md", heading: "Grooming", content: "Sticky residue is removed with oil before bathing." }
     ]);
     const otherRepo = buildRepo(otherRepositoryId, [
@@ -127,7 +135,10 @@ describe("PostgresKnowledgeStore keyword search", { skip: databaseUrl ? false : 
     assert.ok(scoped.length >= 1, "expected at least one keyword hit");
     assert.equal(scoped[0].id, `${repositoryId}:rollback.md:0`);
     assert.ok(scoped[0].relevance > 0 && scoped[0].relevance <= 1);
-    assert.ok(scoped.every((hit) => hit.id.startsWith(`${repositoryId}:`)), "scope must exclude the other repository");
+    assert.ok(
+      scoped.every((hit) => hit.id.startsWith(`${repositoryId}:`)),
+      "scope must exclude the other repository"
+    );
 
     const empty = await store.searchByKeyword("   ", 10, [repositoryId]);
     assert.deepEqual(empty, []);
@@ -214,139 +225,140 @@ describe("PostgresKnowledgeStore applyIncrementalIndex", { skip: databaseUrl ? f
   });
 });
 
-describe("PostgresKnowledgeStore embedding carry-forward", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
-  // A 1536-dim unit vector: the schema's embedding column is vector(1536).
-  const vector = (seed: number): number[] => {
-    const v = new Array<number>(1536).fill(0);
-    v[0] = seed;
-    return v;
-  };
-
-  const buildDoc = (
-    repositoryId: string,
-    p: string,
-    sectionContents: string[]
-  ): { document: KnowledgeDocument; sections: DocumentSection[] } => {
-    const document: KnowledgeDocument = {
-      id: `${repositoryId}:${p}`,
-      repositoryId,
-      path: p,
-      metadata: { title: p, status: "draft", tags: [], relatedDocs: [] },
-      content: sectionContents.join("\n")
+describe(
+  "PostgresKnowledgeStore embedding carry-forward",
+  { skip: databaseUrl ? false : "DATABASE_URL not set" },
+  () => {
+    // A 1536-dim unit vector: the schema's embedding column is vector(1536).
+    const vector = (seed: number): number[] => {
+      const v = new Array<number>(1536).fill(0);
+      v[0] = seed;
+      return v;
     };
-    const sections: DocumentSection[] = sectionContents.map((content, ordinal) => ({
-      id: `${document.id}:${ordinal}`,
-      documentId: document.id,
-      path: p,
-      heading: `${p}#${ordinal}`,
-      headingPath: [p],
-      anchor: String(ordinal),
-      content,
-      ordinal
-    }));
-    return { document, sections };
-  };
 
-  const repositoryRef = (repositoryId: string): IndexedRepositorySummary["repository"] => ({
-    id: repositoryId,
-    name: repositoryId,
-    defaultBranch: "main",
-    localPath: "/tmp",
-    provider: "local"
-  });
+    const buildDoc = (
+      repositoryId: string,
+      p: string,
+      sectionContents: string[]
+    ): { document: KnowledgeDocument; sections: DocumentSection[] } => {
+      const document: KnowledgeDocument = {
+        id: `${repositoryId}:${p}`,
+        repositoryId,
+        path: p,
+        metadata: { title: p, status: "draft", tags: [], relatedDocs: [] },
+        content: sectionContents.join("\n")
+      };
+      const sections: DocumentSection[] = sectionContents.map((content, ordinal) => ({
+        id: `${document.id}:${ordinal}`,
+        documentId: document.id,
+        path: p,
+        heading: `${p}#${ordinal}`,
+        headingPath: [p],
+        anchor: String(ordinal),
+        content,
+        ordinal
+      }));
+      return { document, sections };
+    };
 
-  it("keeps embeddings for unchanged sections and resets only changed ones on full re-index", async () => {
-    const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
-    const repositoryId = `carry-full-${Date.now()}`;
-    const repository = repositoryRef(repositoryId);
-
-    const first = buildDoc(repositoryId, "doc.md", ["alpha", "bravo", "charlie"]);
-    await store.saveIndexedRepository(
-      { repository, documentCount: 1, sectionCount: first.sections.length },
-      [first.document],
-      first.sections
-    );
-
-    // Embed all three sections, then confirm none are pending.
-    await store.saveSectionEmbeddings(first.sections.map((s) => ({ id: s.id, embedding: vector(1) })));
-    assert.equal(await store.countSectionsNeedingEmbedding(repositoryId), 0);
-
-    // Re-index the same doc with only the middle section's content changed.
-    const second = buildDoc(repositoryId, "doc.md", ["alpha", "bravo CHANGED", "charlie"]);
-    await store.saveIndexedRepository(
-      { repository, documentCount: 1, sectionCount: second.sections.length },
-      [second.document],
-      second.sections
-    );
-
-    // Exactly the changed section (ordinal 1) is now missing its embedding; the
-    // two unchanged sections carried their vectors forward.
-    const pending = await store.listSectionsNeedingEmbedding(10, repositoryId);
-    assert.deepEqual(
-      pending.map((s) => s.id),
-      [`${repositoryId}:doc.md:1`]
-    );
-  });
-
-  it("carries embeddings forward for untouched sections on incremental re-index", async () => {
-    const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
-    const repositoryId = `carry-incr-${Date.now()}`;
-    const repository = repositoryRef(repositoryId);
-
-    const seed = buildDoc(repositoryId, "doc.md", ["one", "two", "three"]);
-    await store.saveIndexedRepository(
-      { repository, documentCount: 1, sectionCount: seed.sections.length, commitSha: "sha-1" },
-      [seed.document],
-      seed.sections
-    );
-    await store.saveSectionEmbeddings(seed.sections.map((s) => ({ id: s.id, embedding: vector(2) })));
-    assert.equal(await store.countSectionsNeedingEmbedding(repositoryId), 0);
-
-    // Incremental: the doc changes so its last section's text differs, and a
-    // fourth section is appended. Sections 0 and 1 are byte-identical.
-    const changed = buildDoc(repositoryId, "doc.md", ["one", "two", "three CHANGED", "four"]);
-    await store.applyIncrementalIndex({
-      repository,
-      commitSha: "sha-2",
-      upsertedDocuments: [changed.document],
-      upsertedSections: changed.sections,
-      deletedDocumentIds: []
+    const repositoryRef = (repositoryId: string): IndexedRepositorySummary["repository"] => ({
+      id: repositoryId,
+      name: repositoryId,
+      defaultBranch: "main",
+      localPath: "/tmp",
+      provider: "local"
     });
 
-    // Only the changed section (ordinal 2) and the brand-new one (ordinal 3) need
-    // embedding; ordinals 0 and 1 kept their vectors.
-    const pending = await store.listSectionsNeedingEmbedding(10, repositoryId);
-    assert.deepEqual(
-      pending.map((s) => s.id).sort(),
-      [`${repositoryId}:doc.md:2`, `${repositoryId}:doc.md:3`]
-    );
-  });
+    it("keeps embeddings for unchanged sections and resets only changed ones on full re-index", async () => {
+      const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
+      const repositoryId = `carry-full-${Date.now()}`;
+      const repository = repositoryRef(repositoryId);
 
-  it("deletes sections dropped from a shrinking document", async () => {
-    const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
-    const repositoryId = `carry-shrink-${Date.now()}`;
-    const repository = repositoryRef(repositoryId);
+      const first = buildDoc(repositoryId, "doc.md", ["alpha", "bravo", "charlie"]);
+      await store.saveIndexedRepository(
+        { repository, documentCount: 1, sectionCount: first.sections.length },
+        [first.document],
+        first.sections
+      );
 
-    const before = buildDoc(repositoryId, "doc.md", ["s0", "s1", "s2"]);
-    await store.saveIndexedRepository(
-      { repository, documentCount: 1, sectionCount: before.sections.length },
-      [before.document],
-      before.sections
-    );
+      // Embed all three sections, then confirm none are pending.
+      await store.saveSectionEmbeddings(first.sections.map((s) => ({ id: s.id, embedding: vector(1) })));
+      assert.equal(await store.countSectionsNeedingEmbedding(repositoryId), 0);
 
-    // Re-index with only the first section remaining.
-    const after = buildDoc(repositoryId, "doc.md", ["s0"]);
-    await store.saveIndexedRepository(
-      { repository, documentCount: 1, sectionCount: after.sections.length },
-      [after.document],
-      after.sections
-    );
+      // Re-index the same doc with only the middle section's content changed.
+      const second = buildDoc(repositoryId, "doc.md", ["alpha", "bravo CHANGED", "charlie"]);
+      await store.saveIndexedRepository(
+        { repository, documentCount: 1, sectionCount: second.sections.length },
+        [second.document],
+        second.sections
+      );
 
-    const loaded = await store.loadAll();
-    const ids = loaded.sections
-      .filter((s) => s.documentId === `${repositoryId}:doc.md`)
-      .map((s) => s.id)
-      .sort();
-    assert.deepEqual(ids, [`${repositoryId}:doc.md:0`]);
-  });
-});
+      // Exactly the changed section (ordinal 1) is now missing its embedding; the
+      // two unchanged sections carried their vectors forward.
+      const pending = await store.listSectionsNeedingEmbedding(10, repositoryId);
+      assert.deepEqual(
+        pending.map((s) => s.id),
+        [`${repositoryId}:doc.md:1`]
+      );
+    });
+
+    it("carries embeddings forward for untouched sections on incremental re-index", async () => {
+      const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
+      const repositoryId = `carry-incr-${Date.now()}`;
+      const repository = repositoryRef(repositoryId);
+
+      const seed = buildDoc(repositoryId, "doc.md", ["one", "two", "three"]);
+      await store.saveIndexedRepository(
+        { repository, documentCount: 1, sectionCount: seed.sections.length, commitSha: "sha-1" },
+        [seed.document],
+        seed.sections
+      );
+      await store.saveSectionEmbeddings(seed.sections.map((s) => ({ id: s.id, embedding: vector(2) })));
+      assert.equal(await store.countSectionsNeedingEmbedding(repositoryId), 0);
+
+      // Incremental: the doc changes so its last section's text differs, and a
+      // fourth section is appended. Sections 0 and 1 are byte-identical.
+      const changed = buildDoc(repositoryId, "doc.md", ["one", "two", "three CHANGED", "four"]);
+      await store.applyIncrementalIndex({
+        repository,
+        commitSha: "sha-2",
+        upsertedDocuments: [changed.document],
+        upsertedSections: changed.sections,
+        deletedDocumentIds: []
+      });
+
+      // Only the changed section (ordinal 2) and the brand-new one (ordinal 3) need
+      // embedding; ordinals 0 and 1 kept their vectors.
+      const pending = await store.listSectionsNeedingEmbedding(10, repositoryId);
+      assert.deepEqual(pending.map((s) => s.id).sort(), [`${repositoryId}:doc.md:2`, `${repositoryId}:doc.md:3`]);
+    });
+
+    it("deletes sections dropped from a shrinking document", async () => {
+      const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
+      const repositoryId = `carry-shrink-${Date.now()}`;
+      const repository = repositoryRef(repositoryId);
+
+      const before = buildDoc(repositoryId, "doc.md", ["s0", "s1", "s2"]);
+      await store.saveIndexedRepository(
+        { repository, documentCount: 1, sectionCount: before.sections.length },
+        [before.document],
+        before.sections
+      );
+
+      // Re-index with only the first section remaining.
+      const after = buildDoc(repositoryId, "doc.md", ["s0"]);
+      await store.saveIndexedRepository(
+        { repository, documentCount: 1, sectionCount: after.sections.length },
+        [after.document],
+        after.sections
+      );
+
+      const loaded = await store.loadAll();
+      const ids = loaded.sections
+        .filter((s) => s.documentId === `${repositoryId}:doc.md`)
+        .map((s) => s.id)
+        .sort();
+      assert.deepEqual(ids, [`${repositoryId}:doc.md:0`]);
+    });
+  }
+);

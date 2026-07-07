@@ -356,9 +356,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         >
           {SECTION_NAV.map((entry, index) => (
             <Fragment key={entry.section}>
-              {index > 0 && entry.group !== SECTION_NAV[index - 1].group ? (
-                <NavDivider role="presentation" />
-              ) : null}
+              {index > 0 && entry.group !== SECTION_NAV[index - 1].group ? <NavDivider role="presentation" /> : null}
               <NavButton
                 active={activeSection === entry.section}
                 count={counts[entry.section]}

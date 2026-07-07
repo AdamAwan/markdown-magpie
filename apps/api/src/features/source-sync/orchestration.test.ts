@@ -65,9 +65,7 @@ async function seed(broker: FakeJobBroker): Promise<Seeded> {
   const ctx = makeTestContext({ jobs: broker });
   ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
   ctx.knowledgeConfig.checkoutRoot = checkoutRoot;
-  ctx.knowledgeConfig.sources = [
-    { id: "src-1", name: "Rules repo", kind: "git", url: sourceRemote }
-  ];
+  ctx.knowledgeConfig.sources = [{ id: "src-1", name: "Rules repo", kind: "git", url: sourceRemote }];
 
   await ctx.stores.knowledgeIndex.indexLocalRepository({
     localPath: destClone,
@@ -137,7 +135,10 @@ test("triggerSourceSyncRun enqueues a running plan job and advances the baseline
     assert.equal((await ctx.stores.sourceSync.getState(undefined, "src-1"))?.lastSha, head.trim());
 
     // No publication yet — that waits on the plan job completing.
-    assert.equal((await ctx.jobs.list({})).jobs.filter((job) => job.type === "publish_source_sync" as never).length, 0);
+    assert.equal(
+      (await ctx.jobs.list({})).jobs.filter((job) => job.type === ("publish_source_sync" as never)).length,
+      0
+    );
   } finally {
     await cleanup();
   }
@@ -175,7 +176,10 @@ test("completing the plan job creates a source-sync proposal and enqueues propos
     const publishProposal = (await ctx.jobs.list({})).jobs.find((job) => job.type === "publish_proposal");
     assert.ok(publishProposal, "proposal publication enqueued");
     assert.deepEqual(publishProposal.input, { proposalId: proposal.id, destination: "github" });
-    assert.equal((await ctx.jobs.list({})).jobs.some((job) => job.type === "publish_source_sync" as never), false);
+    assert.equal(
+      (await ctx.jobs.list({})).jobs.some((job) => job.type === ("publish_source_sync" as never)),
+      false
+    );
   } finally {
     await cleanup();
   }
@@ -193,7 +197,12 @@ test("a plan job that exhausts its retries fails the linked run without rewindin
 
     // Fail the plan job until pg-boss would give up (retryLimit retries, then a
     // terminal failure). Only the terminal failure fails the run.
-    const jobError = { code: "runner_failed", message: "model unavailable", category: "external" as const, executor: "watcher" };
+    const jobError = {
+      code: "runner_failed",
+      message: "model unavailable",
+      category: "external" as const,
+      executor: "watcher"
+    };
     let failed = await failJob(ctx, jobId, jobError);
     while (failed?.state !== "failed") {
       failed = await failJob(ctx, jobId, jobError);
@@ -209,12 +218,14 @@ test("a plan job that exhausts its retries fails the linked run without rewindin
     assert.equal((await ctx.stores.sourceSync.getState(undefined, "src-1"))?.lastSha, head.trim());
 
     // No publication for a failed run.
-    assert.equal((await ctx.jobs.list({})).jobs.filter((job) => job.type === "publish_source_sync" as never).length, 0);
+    assert.equal(
+      (await ctx.jobs.list({})).jobs.filter((job) => job.type === ("publish_source_sync" as never)).length,
+      0
+    );
   } finally {
     await cleanup();
   }
 });
-
 
 test("a source-sync change that overlaps a touchable open PR enqueues a fold", async () => {
   const broker = new FakeJobBroker();
@@ -225,8 +236,12 @@ test("a source-sync change that overlaps a touchable open PR enqueues a fold", a
     const jobId = run.jobId!;
 
     await ctx.stores.proposals.create({
-      title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
-      evidence: [], triggeringQuestionIds: []
+      title: "Guide",
+      targetPath: "guide.md",
+      markdown: "# Guide",
+      rationale: "r",
+      evidence: [],
+      triggeringQuestionIds: []
     });
 
     const outcome = await completeJob(ctx, jobId, PLAN);
@@ -236,7 +251,10 @@ test("a source-sync change that overlaps a touchable open PR enqueues a fold", a
     assert.ok(proposal, "source-sync proposal created");
     const foldJob = (await ctx.jobs.list({})).jobs.find((job) => job.type === "fold_changeset_proposal");
     assert.ok(foldJob, "source-sync proposal folded into touchable overlap");
-    assert.equal((await ctx.jobs.list({})).jobs.some((job) => job.type === "publish_source_sync" as never), false);
+    assert.equal(
+      (await ctx.jobs.list({})).jobs.some((job) => job.type === ("publish_source_sync" as never)),
+      false
+    );
   } finally {
     await cleanup();
   }
@@ -251,8 +269,12 @@ test("a source-sync change that overlaps an approved PR self-publishes as a prop
     const jobId = run.jobId!;
 
     const existing = await ctx.stores.proposals.create({
-      title: "Guide", targetPath: "guide.md", markdown: "# Guide", rationale: "r",
-      evidence: [], triggeringQuestionIds: []
+      title: "Guide",
+      targetPath: "guide.md",
+      markdown: "# Guide",
+      rationale: "r",
+      evidence: [],
+      triggeringQuestionIds: []
     });
     await ctx.stores.proposals.updateReviewDecision(existing.id, "approved");
 
@@ -328,7 +350,14 @@ async function seedLargeCommit(broker: FakeJobBroker, bulkFileCount: number): Pr
   const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD~1"], { cwd: repoPath });
   await ctx.stores.sourceSync.setState(undefined, "src-1", stdout.trim());
 
-  return { ctx, checkoutRoot, repoPath, cleanup: async () => { await rm(root, { recursive: true, force: true }); } };
+  return {
+    ctx,
+    checkoutRoot,
+    repoPath,
+    cleanup: async () => {
+      await rm(root, { recursive: true, force: true });
+    }
+  };
 }
 
 test("a commit exceeding SOURCE_SYNC_MAX_CHANGED_FILES caps the job input but records the true total and advances the baseline", async () => {
@@ -349,7 +378,11 @@ test("a commit exceeding SOURCE_SYNC_MAX_CHANGED_FILES caps the job input but re
     // Only the first N files were materialized into the plan job input...
     const planJob = (await ctx.jobs.list({})).jobs.find((job) => job.type === "sync_source_changes_generate_plan");
     assert.ok(planJob, "plan job enqueued");
-    const input = planJob.input as { changes: unknown[]; totalChangedFileCount?: number; changedFilesTruncated?: boolean };
+    const input = planJob.input as {
+      changes: unknown[];
+      totalChangedFileCount?: number;
+      changedFilesTruncated?: boolean;
+    };
     assert.equal(input.changes.length, 5, "only the cap's worth of files go downstream");
     // ...and the truncation is made visible on the job input.
     assert.equal(input.totalChangedFileCount, bulkFileCount + 1, "job input carries the true total");
@@ -379,7 +412,11 @@ test("a commit under SOURCE_SYNC_MAX_CHANGED_FILES is not truncated", async () =
     assert.equal(run.changedFileCount, 4);
     const planJob = (await ctx.jobs.list({})).jobs.find((job) => job.type === "sync_source_changes_generate_plan");
     assert.ok(planJob, "plan job enqueued");
-    const input = planJob.input as { changes: unknown[]; totalChangedFileCount?: number; changedFilesTruncated?: boolean };
+    const input = planJob.input as {
+      changes: unknown[];
+      totalChangedFileCount?: number;
+      changedFilesTruncated?: boolean;
+    };
     assert.equal(input.changes.length, 4, "all changed files go downstream when under the cap");
     assert.equal(input.changedFilesTruncated, false, "no truncation flagged");
     assert.equal(input.totalChangedFileCount, 4);
@@ -447,7 +484,14 @@ async function seedNulCommit(broker: FakeJobBroker): Promise<Seeded & { repoPath
   const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD~1"], { cwd: repoPath });
   await ctx.stores.sourceSync.setState(undefined, "src-1", stdout.trim());
 
-  return { ctx, checkoutRoot, repoPath, cleanup: async () => { await rm(root, { recursive: true, force: true }); } };
+  return {
+    ctx,
+    checkoutRoot,
+    repoPath,
+    cleanup: async () => {
+      await rm(root, { recursive: true, force: true });
+    }
+  };
 }
 
 test("a changed file whose diff contains a NUL byte is sanitized so the JSONB job input is safe and the baseline advances", async () => {
@@ -457,7 +501,9 @@ test("a changed file whose diff contains a NUL byte is sanitized so the JSONB jo
     // Sanity-check the fixture: the raw git diff really does carry a NUL byte, so this
     // test would fail without sanitization (and proves the scenario is real, not a
     // "binary files differ" no-op).
-    const { stdout: rawDiff } = await execFileAsync("git", ["diff", "HEAD~1..HEAD", "--", "rules.ts"], { cwd: repoPath });
+    const { stdout: rawDiff } = await execFileAsync("git", ["diff", "HEAD~1..HEAD", "--", "rules.ts"], {
+      cwd: repoPath
+    });
     assert.ok(rawDiff.includes(NUL), "fixture precondition: git emits a text diff containing a NUL byte");
 
     const runs = await triggerSourceSyncRun(ctx, { trigger: "scheduled" });
@@ -488,5 +534,3 @@ test("a changed file whose diff contains a NUL byte is sanitized so the JSONB jo
     await cleanup();
   }
 });
-
-
