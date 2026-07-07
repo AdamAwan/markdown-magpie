@@ -614,7 +614,7 @@ all deleted.
 - Modify: `packages/core/src/index.ts` (~663–670: delete `SourceDataContext`)
 - Create: `packages/db/migrations/0045_drop_source_corpus_snapshot.sql`
 
-- [ ] **Step 1: Watcher — remove the corpus resolution path**
+- [x] **Step 1: Watcher — remove the corpus resolution path**
 
 - `runners/generative.ts`: delete `resolveSourceCorpus` and `sourcesRefOf` (~81–97) and
   the `SourceDataContext` import (~35); the prompt line (~70–72) becomes:
@@ -641,7 +641,7 @@ all deleted.
 
 Run: `npm run build && npm test -w apps/watcher` → PASS.
 
-- [ ] **Step 2: API — remove endpoint, store, wiring**
+- [x] **Step 2: API — remove endpoint, store, wiring**
 
 - `app.ts`: remove the `sourceCorpusRoutes` import (~18) and mount (~118).
 - Delete `apps/api/src/features/source-corpus/` and the four store files
@@ -654,7 +654,7 @@ Run: `npm run build && npm test -w apps/watcher` → PASS.
 
 Run: `npm run build && npm test -w apps/api` → PASS.
 
-- [ ] **Step 3: Core — delete `SourceDataContext`**
+- [x] **Step 3: Core — delete `SourceDataContext`**
 
 Delete the interface at `packages/core/src/index.ts` ~663–670. Verify first:
 
@@ -664,7 +664,7 @@ rg -n "SourceDataContext" --glob '*.ts'
 
 Expect the definition as the only hit.
 
-- [ ] **Step 4: Migration — drop the snapshot table**
+- [x] **Step 4: Migration — drop the snapshot table**
 
 Follow the **write-a-migration** skill (`.claude/skills/write-a-migration/SKILL.md`):
 next free prefix is `0045` (confirm with `ls packages/db/migrations/ | tail`). Create
@@ -684,7 +684,7 @@ Validate the ordering guard: `node --test scripts/lib/migration-order.test.mjs`.
 `npm run test:db` only if the environment has Docker (writing-magpie-tests skill);
 otherwise note in the PR that the migration was validated by the ordering guard + CI.
 
-- [ ] **Step 5: The demolition greps (all must be empty)**
+- [x] **Step 5: The demolition greps (all must be empty)**
 
 ```bash
 rg -n "sourcesRef|SourceDataContext|collectSourceContext|getSourceCorpus|hashSourceCorpus" --glob '*.ts'
@@ -694,7 +694,7 @@ rg -n "sourceCorpus|SourceCorpus|source-corpus|source_corpus" --glob '*.ts'
 Expected: zero hits for the first; the second may hit only the new migration file's name
 in comments if any — otherwise zero. (`docs/` hits are handled in Task 5.)
 
-- [ ] **Step 6: Full gates and commit**
+- [x] **Step 6: Full gates and commit**
 
 ```bash
 git status --porcelain   # confirm no stray build artifacts are being committed

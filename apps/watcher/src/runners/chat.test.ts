@@ -70,7 +70,6 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
     runImprovePatrol: async () => ({ runId: "run-1", selectedCount: 0, enqueuedCount: 0 }),
     listOpenPullRequests: async () => [],
-    getSourceCorpus: async () => [],
     ...overrides
   };
 }

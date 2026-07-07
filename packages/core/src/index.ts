@@ -660,15 +660,6 @@ export interface OpenPullRequestContext {
   status: Proposal["status"];
 }
 
-export interface SourceDataContext {
-  sourceId: string;
-  sourceName: string;
-  kind: "local" | "git" | "internet" | "agent";
-  path?: string;
-  url?: string;
-  content?: string;
-}
-
 // One claim in a knowledge-base document the verify lens could not substantiate
 // against the document's source material, with the model's reason.
 export interface UnprovableClaim {

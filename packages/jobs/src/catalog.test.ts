@@ -474,11 +474,13 @@ test("patrol child-job inputs carry source descriptors, not a corpus ref", () =>
   assert.equal(verifyDocumentInputSchema.safeParse(verify).success, true);
   assert.equal(correctDocumentInputSchema.safeParse(correct).success, true);
   assert.equal(improveDocumentInputSchema.safeParse(improve).success, true);
-  const legacy = { provider: "openai-compatible", path: "kb/a.md", content: "# A", sourcesRef: "hash" };
+  // The pre-migration inputs carried a corpus-ref string instead of a sources
+  // array; anything without `sources` is rejected regardless of extra keys.
+  const legacy = { provider: "openai-compatible", path: "kb/a.md", content: "# A" };
   assert.equal(verifyDocumentInputSchema.safeParse(legacy).success, false);
   assert.equal(improveDocumentInputSchema.safeParse(legacy).success, false);
-  // With claims present the only legacy-shaped thing about this input is the
-  // corpus ref, so its rejection pins the sources requirement specifically.
+  // With claims present the only thing missing is `sources`, so this rejection
+  // pins the sources requirement specifically.
   const legacyCorrect = { ...legacy, claims: [{ claim: "x", reason: "y" }] };
   assert.equal(correctDocumentInputSchema.safeParse(legacyCorrect).success, false);
 });

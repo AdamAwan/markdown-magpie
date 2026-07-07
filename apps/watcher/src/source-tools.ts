@@ -24,8 +24,8 @@ const READ_MAX_FILE_BYTES = 5 * 1024 * 1024;
 const GREP_MAX_MATCHES = 50;
 const LIST_MAX_ENTRIES = 200;
 const IGNORED_DIRS = new Set([".git", "node_modules", "dist", "build", ".next", "coverage", "vendor", ".turbo"]);
-// Same text-file gate the old sampler used (source-context.ts) — binary content
-// is never useful to the model and wrecks budgets.
+// The text-file gate (inherited from the corpus sampler this path replaced) —
+// binary content is never useful to the model and wrecks budgets.
 const TEXT_FILE = /\.(?:md|mdx|txt|ts|tsx|js|jsx|mjs|cjs|json|yml|yaml|toml|py|go|rs|cs|java|kt|swift|php|rb|css|scss|html|sql|sh|ps1|xml|csv)$/i;
 
 // Tool paths are "<sourceId>/<relative posix path>"; "" or "<sourceId>" address the

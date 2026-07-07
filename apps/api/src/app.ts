@@ -15,7 +15,6 @@ import { seedRoutes } from "./features/seed/routes.js";
 import { proposalRoutes } from "./features/proposals/routes.js";
 import { sourceSyncRoutes } from "./features/source-sync/routes.js";
 import { fixPatrolRoutes } from "./features/patrol/routes.js";
-import { sourceCorpusRoutes } from "./features/source-corpus/routes.js";
 import { maintenanceRunRoutes } from "./features/maintenance-runs/routes.js";
 import { scheduledTaskRoutes } from "./features/scheduled-tasks/routes.js";
 import { jobRoutes } from "./features/jobs/routes.js";
@@ -115,7 +114,6 @@ export function buildApp(ctx: AppContext, options?: ApiAuthOptions): Hono {
   api.route("/proposals", proposalRoutes(ctx));
   api.route("/source-sync", sourceSyncRoutes(ctx));
   api.route("/fix-patrol", fixPatrolRoutes(ctx));
-  api.route("/source-corpus", sourceCorpusRoutes(ctx));
   api.route("/maintenance-runs", maintenanceRunRoutes(ctx));
   api.route("/scheduled-tasks", scheduledTaskRoutes(ctx));
   api.route("/jobs", jobRoutes(ctx));

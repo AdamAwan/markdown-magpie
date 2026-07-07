@@ -48,9 +48,10 @@ describe("buildPrompt", () => {
   });
 
   it("uses the verify-document instructions for a verify_document job", () => {
-    const prompt = buildPrompt(job("verify_document", { path: "kb/a.md", content: "x", sourcesRef: "h" }));
+    const prompt = buildPrompt(job("verify_document", { path: "kb/a.md", content: "x", sources: [] }));
     assert.match(prompt, /verify a Markdown knowledge-base document/);
-    assert.match(prompt, /"path"/);
+    // The input JSON trails the instructions.
+    assert.ok(prompt.indexOf('"path"') > prompt.indexOf("verify a Markdown"));
   });
 
   it("uses the split-document instructions for a split_document job", () => {
@@ -60,33 +61,10 @@ describe("buildPrompt", () => {
   });
 
   it("uses the improve-document instructions for an improve_document job", () => {
-    const prompt = buildPrompt(job("improve_document", { path: "kb/a.md", content: "# A", sourcesRef: "h" }));
+    const prompt = buildPrompt(job("improve_document", { path: "kb/a.md", content: "# A", sources: [] }));
     assert.match(prompt, /fine-but-thin/);
-    assert.match(prompt, /"path"/);
-  });
-
-  it("renders a resolved corpus as a leading block and drops the bare sourcesRef", () => {
-    const corpus = [
-      { sourceId: "s1", sourceName: "Billing", kind: "git" as const, content: "partial refunds are supported" }
-    ];
-    const prompt = buildPrompt(job("verify_document", { path: "kb/a.md", content: "x", sourcesRef: "corpus-hash" }), corpus);
-    // The shared corpus comes first (a stable cacheable prefix) and carries the material...
-    assert.match(prompt, /^Source material \(shared across this batch\):/);
-    assert.match(prompt, /partial refunds are supported/);
-    // ...while the per-document input still follows the instructions,
-    assert.match(prompt, /verify a Markdown knowledge-base document/);
-    assert.match(prompt, /"path": "kb\/a.md"/);
-    // ...and the now-redundant ref hash is not serialized into the input block.
-    assert.doesNotMatch(prompt, /corpus-hash/);
-    assert.doesNotMatch(prompt, /sourcesRef/);
-  });
-
-  it("keeps the corpus block identical across job types so the provider can cache it", () => {
-    const corpus = [{ sourceId: "s1", sourceName: "Billing", kind: "git" as const, content: "refund policy" }];
-    const verify = buildPrompt(job("verify_document", { path: "a.md", content: "x", sourcesRef: "h" }), corpus);
-    const improve = buildPrompt(job("improve_document", { path: "b.md", content: "y", sourcesRef: "h" }), corpus);
-    const block = (prompt: string): string => prompt.slice(0, prompt.indexOf("\n\n") + 1);
-    assert.equal(block(verify), block(improve), "the leading corpus block is byte-identical across job types");
+    // The input JSON trails the instructions.
+    assert.ok(prompt.indexOf('"path"') > prompt.indexOf("fine-but-thin"));
   });
 });
 

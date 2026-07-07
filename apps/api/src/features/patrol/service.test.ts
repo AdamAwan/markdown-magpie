@@ -159,12 +159,6 @@ test("runFixPatrol projects descriptors once and threads the same sources to ver
     }
   });
   await indexDocs(ctx, ["a.md"]);
-  // The corpus store is legacy plumbing (deleted in the demolition task): the
-  // descriptor-grounded patrol must never write to it.
-  let corpusTouched = false;
-  ctx.stores.sourceCorpus.save = async () => {
-    corpusTouched = true;
-  };
   const verifySources: SourceDescriptor[][] = [];
   const correctSources: SourceDescriptor[][] = [];
   const verifyDocument: VerifyDocumentFn = async (_ctx, input) => {
@@ -191,7 +185,6 @@ test("runFixPatrol projects descriptors once and threads the same sources to ver
   assert.deepEqual(verifySources[0], expected);
   assert.deepEqual(correctSources[0], expected);
   assert.equal(verifySources[0], correctSources[0], "verify and correct share one projected array");
-  assert.equal(corpusTouched, false, "the legacy corpus store is not written by the descriptor-grounded patrol");
 });
 
 test("runImprovePatrol threads the projected descriptors to every improve scan", async () => {

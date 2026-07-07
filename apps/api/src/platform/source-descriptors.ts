@@ -3,10 +3,10 @@ import type { ConfiguredKnowledgeRepository } from "../stores/knowledge-reposito
 import type { RepositoryDeps } from "./repositories.js";
 
 // Projects a flow's configured sources into the reference-only descriptors that
-// source-grounded job inputs carry. This replaces the API-side file sampling that
-// collectSourceContext performed for seeding: content is no longer collected here;
-// the watcher resolves these references to traversable workspaces. Selection rules
-// match the old sampler: explicit ids filter the configured set; no ids means the
+// source-grounded job inputs carry. This replaced the API-side file sampling
+// (deleted with the corpus pipeline): no content is collected here; the watcher
+// resolves these references to traversable workspaces. Selection rules match the
+// sampler it replaced: explicit ids filter the configured set; no ids means the
 // first three configured sources.
 export function projectSourceDescriptors(
   deps: RepositoryDeps,

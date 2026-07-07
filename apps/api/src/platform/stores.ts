@@ -6,7 +6,6 @@ import { PostgresQuestionLogStore } from "../stores/postgres-question-log-store.
 import { PostgresReconciliationDecisionStore } from "../stores/postgres-reconciliation-decision-store.js";
 import { PostgresScheduledTaskStore } from "../stores/postgres-scheduled-task-store.js";
 import { PostgresPatrolStore } from "../stores/postgres-patrol-store.js";
-import { PostgresSourceCorpusStore } from "../stores/postgres-source-corpus-store.js";
 import { PostgresSourceSyncStore } from "../stores/postgres-source-sync-store.js";
 import { PostgresWatcherRegistryStore } from "../stores/postgres-watcher-registry-store.js";
 import { InMemoryProposalStore } from "../stores/proposal-store.js";
@@ -21,7 +20,6 @@ import { InMemoryMaintenanceRunStore } from "../stores/maintenance-run-store.js"
 import { PostgresMaintenanceRunStore } from "../stores/postgres-maintenance-run-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
 import { InMemoryPatrolStore } from "../stores/patrol-store.js";
-import { InMemorySourceCorpusStore } from "../stores/source-corpus-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
 import { InMemoryWatcherRegistryStore } from "../stores/watcher-registry-store.js";
 import { FileSnapshotStore, type SnapshotStore } from "../stores/snapshot-store.js";
@@ -112,19 +110,6 @@ export function createPatrolStore(config: AppConfig, pool: pg.Pool): InMemoryPat
     "PATROL_STORE",
     (pool) => new PostgresPatrolStore(pool),
     () => new InMemoryPatrolStore()
-  );
-}
-
-export function createSourceCorpusStore(
-  config: AppConfig,
-  pool: pg.Pool
-): InMemorySourceCorpusStore | PostgresSourceCorpusStore {
-  return createStore<InMemorySourceCorpusStore | PostgresSourceCorpusStore>(
-    config,
-    pool,
-    "SOURCE_CORPUS_STORE",
-    (pool) => new PostgresSourceCorpusStore(pool),
-    () => new InMemorySourceCorpusStore()
   );
 }
 
