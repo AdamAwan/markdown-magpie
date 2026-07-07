@@ -46,6 +46,14 @@ describe("InMemorySourceMapStore", () => {
     assert.ok((await store.listBySource("s1", 10)).every((e) => e.sourceId === "s1"));
   });
 
+  it("treats an empty-string observedSha as absent, matching the Postgres store", async () => {
+    const store = new InMemorySourceMapStore();
+    const created = await store.upsert({ sourceId: "s1", topic: "t", paths: ["a/"], description: "d", observedSha: "" });
+    assert.equal(created.observedSha, undefined);
+    const [entry] = await store.listBySource("s1", 10);
+    assert.equal(entry.observedSha, undefined);
+  });
+
   it("pruneToLimit evicts the oldest-updated entries beyond the cap", async () => {
     const store = new InMemorySourceMapStore();
     for (const topic of ["a", "b", "c"]) {

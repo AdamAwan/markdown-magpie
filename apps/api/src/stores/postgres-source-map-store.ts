@@ -7,8 +7,10 @@ export class PostgresSourceMapStore implements SourceMapStore {
   constructor(private readonly pool: pg.Pool) {}
 
   async listBySource(sourceId: string, limit: number): Promise<SourceMapEntry[]> {
+    // seq DESC breaks equal-updated_at ties by most-recent write, matching the
+    // in-memory store's write-sequence tie-break exactly.
     const result = await this.pool.query<SourceMapEntryRow>(
-      "SELECT * FROM source_map_entries WHERE source_id = $1 ORDER BY updated_at DESC, topic ASC LIMIT $2",
+      "SELECT * FROM source_map_entries WHERE source_id = $1 ORDER BY updated_at DESC, seq DESC LIMIT $2",
       [sourceId, limit]
     );
     return result.rows.map(mapRow);
@@ -16,7 +18,9 @@ export class PostgresSourceMapStore implements SourceMapStore {
 
   async upsert(update: SourceMapUpsert): Promise<SourceMapEntry> {
     // Latest observation wins wholesale, including observed_sha (an update
-    // without a sha clears a stale one rather than keeping it).
+    // without a sha — or with an empty one — clears a stale sha rather than
+    // keeping it). seq is bumped on replace so a re-touched row wins
+    // equal-updated_at ties in write order.
     const result = await this.pool.query<SourceMapEntryRow>(
       `
         INSERT INTO source_map_entries (id, source_id, topic, paths, description, observed_sha)
@@ -25,6 +29,7 @@ export class PostgresSourceMapStore implements SourceMapStore {
           SET paths = EXCLUDED.paths,
               description = EXCLUDED.description,
               observed_sha = EXCLUDED.observed_sha,
+              seq = nextval(pg_get_serial_sequence('source_map_entries', 'seq')),
               updated_at = now()
         RETURNING *
       `,
@@ -34,7 +39,7 @@ export class PostgresSourceMapStore implements SourceMapStore {
         update.topic,
         JSON.stringify(update.paths),
         update.description,
-        update.observedSha ?? null
+        update.observedSha ? update.observedSha : null
       ]
     );
     return mapRow(result.rows[0]);
@@ -48,7 +53,7 @@ export class PostgresSourceMapStore implements SourceMapStore {
           AND id NOT IN (
             SELECT id FROM source_map_entries
             WHERE source_id = $1
-            ORDER BY updated_at DESC, topic ASC
+            ORDER BY updated_at DESC, seq DESC
             LIMIT $2
           )
       `,
@@ -69,6 +74,9 @@ interface SourceMapEntryRow {
   paths: string[];
   description: string;
   observed_sha: string | null;
+  // Monotonic write counter used only for ORDER BY tie-breaks; pg returns
+  // bigint columns as strings. Not part of the SourceMapEntry contract.
+  seq: string;
   created_at: Date;
   updated_at: Date;
 }

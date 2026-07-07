@@ -17,7 +17,8 @@ export interface SourceMapUpsert {
 // user-facing content. Entry-level merge semantics (one row per topic) so
 // concurrent jobs never clobber a whole document.
 export interface SourceMapStore {
-  // Entries for one source, most-recently-updated first, capped by limit.
+  // Entries for one source, most-recently-updated first (ties broken by
+  // most-recent write), capped by limit. Both backends guarantee this ordering.
   listBySource(sourceId: string, limit: number): Promise<SourceMapEntry[]>;
   // Insert or replace the entry for (sourceId, topic).
   upsert(update: SourceMapUpsert): Promise<SourceMapEntry>;
