@@ -8,6 +8,7 @@ import type {
   UpdateClusterInput
 } from "./gap-cluster-store.js";
 import { chunk, valuesClause } from "./sql-bulk.js";
+import { parseVectorLiteral, toVectorLiteral } from "./vector-literal.js";
 
 // gap_cluster_memberships inserts bind 3 params/row (cluster_id, gap_id,
 // rationale); keep the chunk well under Postgres' 65535-param cap.
@@ -21,6 +22,7 @@ interface ClusterRow {
   status: "active" | "frozen" | "dismissed";
   parent_cluster_id: string | null;
   reconciliation_revision: string;
+  representative_embedding: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -77,11 +79,18 @@ export class PostgresGapClusterStore implements GapClusterStore {
   async createCluster(input: CreateClusterInput): Promise<GapClusterRecord> {
     const result = await this.pool.query<ClusterRow>(
       `
-        INSERT INTO gap_clusters (flow_id, title, rationale, parent_cluster_id, reconciliation_revision)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO gap_clusters (flow_id, title, rationale, parent_cluster_id, reconciliation_revision, representative_embedding)
+        VALUES ($1, $2, $3, $4, $5, $6::vector)
         RETURNING *
       `,
-      [input.flowId ?? null, input.title, input.rationale ?? null, input.parentClusterId ?? null, input.revision]
+      [
+        input.flowId ?? null,
+        input.title,
+        input.rationale ?? null,
+        input.parentClusterId ?? null,
+        input.revision,
+        input.representativeEmbedding ? toVectorLiteral(input.representativeEmbedding) : null
+      ]
     );
     return mapCluster(result.rows[0]);
   }
@@ -110,6 +119,13 @@ export class PostgresGapClusterStore implements GapClusterStore {
     await this.pool.query(
       "UPDATE gap_clusters SET status = 'dismissed', rationale = coalesce($2, rationale), updated_at = now() WHERE id = $1",
       [id, rationale ?? null]
+    );
+  }
+
+  async setClusterRepresentative(id: string, embedding: number[] | null): Promise<void> {
+    await this.pool.query(
+      "UPDATE gap_clusters SET representative_embedding = $2::vector, updated_at = now() WHERE id = $1",
+      [id, embedding ? toVectorLiteral(embedding) : null]
     );
   }
 
@@ -319,6 +335,9 @@ function mapCluster(row: ClusterRow): GapClusterRecord {
     status: row.status,
     parentClusterId: row.parent_cluster_id ?? undefined,
     reconciliationRevision: Number(row.reconciliation_revision),
+    representativeEmbedding: row.representative_embedding
+      ? parseVectorLiteral(row.representative_embedding)
+      : undefined,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
   };
