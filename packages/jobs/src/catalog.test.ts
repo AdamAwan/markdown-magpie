@@ -477,6 +477,10 @@ test("patrol child-job inputs carry source descriptors, not a corpus ref", () =>
   const legacy = { provider: "openai-compatible", path: "kb/a.md", content: "# A", sourcesRef: "hash" };
   assert.equal(verifyDocumentInputSchema.safeParse(legacy).success, false);
   assert.equal(improveDocumentInputSchema.safeParse(legacy).success, false);
+  // With claims present the only legacy-shaped thing about this input is the
+  // corpus ref, so its rejection pins the sources requirement specifically.
+  const legacyCorrect = { ...legacy, claims: [{ claim: "x", reason: "y" }] };
+  assert.equal(correctDocumentInputSchema.safeParse(legacyCorrect).success, false);
 });
 
 test("fold_markdown_proposal is a provider AI job; comment_pull_request is github", () => {

@@ -9,7 +9,7 @@ import type {
   VerifyFinding,
   ChangeIntentTrace
 } from "@magpie/core";
-import { verifyDocumentOutputSchema } from "@magpie/jobs";
+import { verifyDocumentInputSchema, verifyDocumentOutputSchema } from "@magpie/jobs";
 import { selectFlow } from "../../platform/repositories.js";
 import { selectPatrolBatch } from "../../scheduling/patrol-cursor.js";
 import { hashDocumentContent, hashSourceDescriptors } from "../../scheduling/patrol-hash.js";
@@ -70,26 +70,31 @@ function resolveScope(
   };
 }
 
-// Dedupe key for reuseKey (#162): a verify already in flight for this document
-// (routed to the same provider) is the same piece of work a concurrent patrol
-// tick would otherwise duplicate, so wait on it instead of enqueueing another.
+// Dedupe key for reuseKey (#162): a verify already in flight for this document —
+// routed to the same provider AND grounded in the same source configuration — is
+// the same piece of work a concurrent patrol tick would otherwise duplicate, so
+// wait on it instead of enqueueing another. The descriptor hash matters: the
+// change gate is config-keyed now, so a verdict reused across a config change
+// would stamp a sourcesHash no verify ever explored and gate the doc on it.
 function verifyDocumentReuseKey(input: unknown): string {
-  if (!input || typeof input !== "object") return "unknown";
-  const candidate = input as { path?: unknown; provider?: unknown };
-  const path = typeof candidate.path === "string" ? candidate.path : "__unknown__";
-  const provider = typeof candidate.provider === "string" ? candidate.provider : "__unknown__";
-  return `${provider}:${path}`;
+  const parsed = verifyDocumentInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return "unknown";
+  }
+  return `${parsed.data.provider}:${parsed.data.path}:${hashSourceDescriptors(parsed.data.sources)}`;
 }
 
 // Default verify: enqueue a verify_document AI job and bounded-wait for the watcher
 // to complete it (mirrors gap-reconciler's reshape job). Returns undefined on any
 // non-completion so the lens skips that document rather than failing the tick.
 
-// The bounded wait on one verify job. The queue expiry is 15 min (agentic
+// Cap on the bounded wait for one verify job. The queue expiry is 15 min (agentic
 // headroom), but the patrol tick runs inside the watcher's 15-minute maintenance
 // POST envelope — letting the wait follow the expiry would hand the whole
-// envelope to one hung verify. 10 minutes matches the agentic timeout the job
-// itself runs under.
+// envelope to one hung verify, so it is capped at the 10-minute agentic timeout
+// the job itself runs under. A CAP, not an override: a tighter configured global
+// bound (JOB_RUN_TO_COMPLETION_TIMEOUT_MS — the test harness relies on it to keep
+// bounded waits at 100ms) still wins below.
 const VERIFY_WAIT_BUDGET_MS = 10 * 60_000;
 
 const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sources }) => {
@@ -103,7 +108,10 @@ const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sou
   try {
     terminal = await runJobToCompletion(ctx, "verify_document", input, {
       reuseKey: verifyDocumentReuseKey,
-      deadlineMs: VERIFY_WAIT_BUDGET_MS
+      deadlineMs: Math.min(
+        VERIFY_WAIT_BUDGET_MS,
+        ctx.settings.jobs.runToCompletionTimeoutMs ?? VERIFY_WAIT_BUDGET_MS
+      )
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "verify job failed";

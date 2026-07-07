@@ -194,6 +194,37 @@ test("runFixPatrol projects descriptors once and threads the same sources to ver
   assert.equal(corpusTouched, false, "the legacy corpus store is not written by the descriptor-grounded patrol");
 });
 
+test("runImprovePatrol threads the projected descriptors to every improve scan", async () => {
+  const ctx = makeTestContext({
+    knowledgeConfig: {
+      sources: [
+        { id: "repo", name: "Product repo", kind: "git", url: "https://example.com/repo.git", subpath: "Docs" }
+      ],
+      destinations: [],
+      flows: [],
+      repositories: [],
+      roleGrants: {},
+      checkoutRoot: ".magpie/checkouts"
+    }
+  });
+  await indexDocs(ctx, ["a.md"]);
+  const improved: ImproveDocumentJobInput[] = [];
+  const outcome = await patrol.runImprovePatrol(
+    ctx,
+    { trigger: "scheduled" },
+    {
+      improveDocument: async (_ctx, input) => {
+        improved.push(input);
+      }
+    }
+  );
+  assert.ok(outcome.ok);
+  assert.equal(improved.length, 1);
+  assert.deepEqual(improved[0].sources, [
+    { id: "repo", name: "Product repo", kind: "git", url: "https://example.com/repo.git", subpath: "Docs" }
+  ]);
+});
+
 test("runFixPatrol runs the dedupe lens over the batch, enqueuing a scan per doc with a near-duplicate", async () => {
   const ctx = makeTestContext();
   // Two documents that share a heading — the keyword index ranks each as a strong
@@ -399,6 +430,38 @@ test("the change gate re-verifies a doc whose content changed, and only that doc
   const second = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified));
   assert.ok(second.ok);
   assert.deepEqual(verified, ["a.md"], "only the changed doc is re-verified; the unchanged one stays gated");
+});
+
+test("the change gate re-verifies unchanged docs when the source configuration changes", async () => {
+  const ctx = makeTestContext({
+    knowledgeConfig: {
+      sources: [{ id: "repo", name: "Product repo", kind: "git", url: "https://example.com/repo.git" }],
+      destinations: [],
+      flows: [],
+      repositories: [],
+      roleGrants: {},
+      checkoutRoot: ".magpie/checkouts"
+    }
+  });
+  await indexDocs(ctx, ["a.md"]);
+  const verified: string[] = [];
+  await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified));
+  assert.deepEqual(verified, ["a.md"]);
+
+  // Re-point the configured source; the doc body is untouched. The config half of
+  // the gate (the descriptor hash) must re-arm.
+  ctx.knowledgeConfig.sources[0] = { id: "repo", name: "Product repo", kind: "git", url: "https://example.com/other.git" };
+  verified.length = 0;
+  const second = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified));
+  assert.ok(second.ok);
+  assert.deepEqual(verified, ["a.md"], "a source-configuration change re-arms the gate for unchanged docs");
+
+  // And with the config now stable again, the doc gates as usual — guards against
+  // the descriptor hash being noisy (re-arming every tick would defeat the gate).
+  verified.length = 0;
+  const third = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified));
+  assert.ok(third.ok);
+  assert.deepEqual(verified, [], "same configuration + same content stays gated");
 });
 
 test("the change gate keeps a doc whose verify did not complete re-checkable next tick", async () => {
