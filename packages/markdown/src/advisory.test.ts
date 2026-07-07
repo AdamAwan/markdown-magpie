@@ -43,4 +43,33 @@ describe("findAdvisoryHeadings", () => {
   it("returns empty for a document with no headings", () => {
     assert.deepEqual(findAdvisoryHeadings("just a paragraph"), []);
   });
+
+  it("flags a setext H1 heading (=== underline)", () => {
+    const markdown = "Recommendations\n================\nbody";
+    assert.deepEqual(findAdvisoryHeadings(markdown), ["Recommendations"]);
+  });
+
+  it("flags a setext H2 heading (--- underline)", () => {
+    const markdown = ["Next steps", "---", "body"].join("\n");
+    assert.deepEqual(findAdvisoryHeadings(markdown), ["Next steps"]);
+  });
+
+  it("does not treat a standalone thematic break as a setext heading", () => {
+    const markdown = ["Some text", "", "---", "", "More text"].join("\n");
+    assert.deepEqual(findAdvisoryHeadings(markdown), []);
+  });
+
+  it("does not turn frontmatter delimiters into headings", () => {
+    const markdown = ["---", "title: Recommendations", "---", "body"].join("\n");
+    assert.deepEqual(findAdvisoryHeadings(markdown), []);
+  });
+
+  it("ignores a setext-lookalike heading inside a fenced code block", () => {
+    const markdown = ["## Usage", "```md", "Recommendations", "===", "```", "body"].join("\n");
+    assert.deepEqual(findAdvisoryHeadings(markdown), []);
+  });
+
+  it("strips the optional closing hash sequence from a closed ATX heading", () => {
+    assert.deepEqual(findAdvisoryHeadings("## Recommendations ##"), ["Recommendations"]);
+  });
 });
