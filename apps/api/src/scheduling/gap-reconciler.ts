@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Proposal } from "@magpie/core";
+import type { EmbeddingProvider, GapCandidate, Proposal } from "@magpie/core";
 import { fetchPullRequestStatus as defaultFetchPullRequestStatus } from "@magpie/git";
 import { logger } from "../logger.js";
 import { reconcileGapClustersOutputSchema, type JobState } from "@magpie/jobs";
@@ -16,6 +16,13 @@ import type {
 } from "../stores/gap-cluster-store.js";
 import { pairKey } from "../stores/pr-crosslink-store.js";
 import { gapSummaryKey } from "../stores/question-log-store.js";
+import {
+  foldIntoCentroid,
+  l2Normalise,
+  normalisedMean,
+  planAssignments,
+  type ClusterRepresentative
+} from "./gap-assignment.js";
 import { selectRetainingChildOnSplit, selectSurvivingClusterOnMerge } from "./gap-reconciler-lineage.js";
 import { sharedTargets } from "./reconcile-gate.js";
 
@@ -353,37 +360,15 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
     }
   }
 
-  // 1) Assign this flow's unassigned gaps to their own new cluster. The gap ids
-  // for every candidate are resolved in ONE batched query (not one per
-  // candidate), and only this flow's active memberships are loaded.
-  const candidates = (await ctx.stores.questionLogs.listGapCandidates(200)).filter((c) => sameFlow(c.flowId, flowId));
-  const activeMemberships = await ctx.stores.gapClusters.listActiveMembershipsForFlow(flowId);
-  const assignedGapIds = new Set(activeMemberships.map((m) => m.gapId));
-  const gapIdsByCandidate = await ctx.stores.questionLogs.gapIdsForSummaries(
-    candidates.map((candidate) => ({ summary: candidate.summary, flowId: candidate.flowId }))
-  );
-
-  let clustersCreated = 0;
-  for (const candidate of candidates) {
-    const gapIds = gapIdsByCandidate.get(gapSummaryKey(candidate.summary, candidate.flowId)) ?? [];
-    const unassigned = gapIds.filter((id) => !assignedGapIds.has(id));
-    if (unassigned.length === 0) {
-      continue;
-    }
-    const revision = await ctx.stores.questionLogs.getGapCatalogRevision(flowId);
-    const cluster = await ctx.stores.gapClusters.createCluster({
-      flowId: candidate.flowId,
-      title: candidate.summary.slice(0, 80),
-      revision
-    });
-    clustersCreated += 1;
-    details.clustersCreated += 1;
-    await ctx.stores.gapClusters.assignGapsToCluster(cluster.id, unassigned, "initial assignment");
-    for (const gapId of unassigned) {
-      assignedGapIds.add(gapId);
-    }
-  }
-  logger.info({ flowLabel, clustersCreated }, "gap reconciler: created new clusters from unassigned gaps");
+  // 1) Assign this flow's unassigned gaps. With an embedding provider, phase 1
+  // is a coarse semantic pre-clusterer: near-duplicate wordings bucket together
+  // (joining an existing cluster or seeding one shared new cluster) so the
+  // reshape critic adjudicates a handful of buckets instead of discovering
+  // every merge across ~100 singletons (the fan-out incident). Without a
+  // provider (keyword-only deployments), fall back to the original
+  // one-cluster-per-distinct-summary behaviour. Reshape (step 2) remains the
+  // semantic refiner either way.
+  details.clustersCreated = await assignNewGaps(ctx, flowId, flowLabel);
 
   // 2) Reshape this flow's active clusters. The propose→critic generative step now
   // runs as a reconcile_gap_clusters AI job in the watcher; the API enqueues it and
@@ -497,6 +482,195 @@ async function reconcileClusters(ctx: AppContext, flowId: string | undefined): P
   details.proposalsDrafted = draftOutcome.drafted;
   details.draftsDeferred = draftOutcome.deferred > 0;
   return details;
+}
+
+// One unassigned gap-candidate: the distinct (summary, flow) pair plus the gap
+// row ids not yet held by any active cluster.
+interface PendingCandidate {
+  candidate: GapCandidate;
+  key: string;
+  gapIds: string[];
+}
+
+// Resolves this flow's candidates that still have unassigned gap rows, then
+// routes to the embedding-based assignment or the exact-summary fallback. The
+// gap ids for every candidate are resolved in ONE batched query (not one per
+// candidate), and only this flow's active memberships are loaded. Returns the
+// number of clusters created.
+async function assignNewGaps(ctx: AppContext, flowId: string | undefined, flowLabel: string): Promise<number> {
+  const candidates = (await ctx.stores.questionLogs.listGapCandidates(200)).filter((c) => sameFlow(c.flowId, flowId));
+  const activeMemberships = await ctx.stores.gapClusters.listActiveMembershipsForFlow(flowId);
+  const assignedGapIds = new Set(activeMemberships.map((m) => m.gapId));
+  const gapIdsByCandidate = await ctx.stores.questionLogs.gapIdsForSummaries(
+    candidates.map((candidate) => ({ summary: candidate.summary, flowId: candidate.flowId }))
+  );
+  const pending: PendingCandidate[] = [];
+  for (const candidate of candidates) {
+    const key = gapSummaryKey(candidate.summary, candidate.flowId);
+    const gapIds = (gapIdsByCandidate.get(key) ?? []).filter((id) => !assignedGapIds.has(id));
+    if (gapIds.length > 0) {
+      pending.push({ candidate, key, gapIds });
+    }
+  }
+  if (pending.length === 0) {
+    logger.info({ flowLabel, clustersCreated: 0 }, "gap reconciler: no unassigned gaps to cluster");
+    return 0;
+  }
+
+  const embedding = ctx.providers.embedding;
+  if (!embedding) {
+    return assignNewGapsBySummary(ctx, flowId, flowLabel, pending);
+  }
+  return assignNewGapsByEmbedding(ctx, flowId, flowLabel, pending, embedding);
+}
+
+// The original phase-1 behaviour: one new cluster per distinct summary. Kept
+// for deployments with no embedding provider configured (keyword-only mode).
+async function assignNewGapsBySummary(
+  ctx: AppContext,
+  flowId: string | undefined,
+  flowLabel: string,
+  pending: PendingCandidate[]
+): Promise<number> {
+  let clustersCreated = 0;
+  for (const entry of pending) {
+    const revision = await ctx.stores.questionLogs.getGapCatalogRevision(flowId);
+    const cluster = await ctx.stores.gapClusters.createCluster({
+      flowId: entry.candidate.flowId,
+      title: entry.candidate.summary.slice(0, 80),
+      revision
+    });
+    clustersCreated += 1;
+    await ctx.stores.gapClusters.assignGapsToCluster(cluster.id, entry.gapIds, "initial assignment");
+  }
+  logger.info(
+    { flowLabel, clustersCreated },
+    "gap reconciler: created new clusters from unassigned gaps (no embedding provider; exact-summary buckets)"
+  );
+  return clustersCreated;
+}
+
+// Embedding-based phase 1. All similarity decisions are made against the
+// tick-start snapshot of cluster representatives (see planAssignments), so the
+// outcome is order-independent and a re-raised identical gap re-lands
+// deterministically. An embed failure here is an infra failure and propagates:
+// the tick records a failed MaintenanceRun and retries later, rather than
+// silently degrading into the 100-singleton fallback (the #150 principle).
+async function assignNewGapsByEmbedding(
+  ctx: AppContext,
+  flowId: string | undefined,
+  flowLabel: string,
+  pending: PendingCandidate[],
+  embedding: EmbeddingProvider
+): Promise<number> {
+  const threshold = ctx.settings.gapClustering.assignThreshold;
+
+  // Representatives for this flow's active clusters, recomputing any that are
+  // missing (pre-feature rows, or nulled by a reshape/prune composition change)
+  // from their distinct active member summaries.
+  const clusters = await ctx.stores.gapClusters.listActiveClustersForFlow(flowId);
+  const representatives: ClusterRepresentative[] = [];
+  const distinctSummaryCounts = new Map<string, number>();
+  for (const cluster of clusters) {
+    if (cluster.representativeEmbedding) {
+      representatives.push({ clusterId: cluster.id, embedding: cluster.representativeEmbedding });
+      continue;
+    }
+    const members = await ctx.stores.gapClusters.listMembershipsForCluster(cluster.id);
+    if (members.length === 0) {
+      continue; // emptied clusters were frozen in step 0b; defensive only
+    }
+    const { summaries } = await ctx.stores.questionLogs.gapDetailsForIds(members.map((m) => m.gapId));
+    if (summaries.length === 0) {
+      continue;
+    }
+    const representative = normalisedMean(await embedAll(embedding, summaries));
+    await ctx.stores.gapClusters.setClusterRepresentative(cluster.id, representative);
+    representatives.push({ clusterId: cluster.id, embedding: representative });
+    distinctSummaryCounts.set(cluster.id, summaries.length);
+  }
+
+  const vectors = await embedAll(embedding, pending.map((entry) => entry.candidate.summary));
+  const entriesByKey = new Map(pending.map((entry, index) => [entry.key, { entry, embedding: vectors[index] }]));
+  const plan = planAssignments(
+    pending.map((entry, index) => ({ key: entry.key, embedding: vectors[index] })),
+    representatives,
+    threshold
+  );
+
+  // Joins: move the gaps in, then fold the genuinely-new summaries into the
+  // stored centroid (see foldIntoCentroid for why n·r is a safe stand-in for
+  // the member-vector sum). A summary already present — a re-raised identical
+  // gap — must not re-weight the centroid.
+  let joinedCandidates = 0;
+  for (const [clusterId, keys] of plan.joins) {
+    const representative = representatives.find((r) => r.clusterId === clusterId);
+    const members = await ctx.stores.gapClusters.listMembershipsForCluster(clusterId);
+    const { summaries } = await ctx.stores.questionLogs.gapDetailsForIds(members.map((m) => m.gapId));
+    const existingSummaries = new Set(summaries);
+    const additions: number[][] = [];
+    for (const key of keys) {
+      const match = entriesByKey.get(key);
+      if (!match) {
+        continue;
+      }
+      await ctx.stores.gapClusters.assignGapsToCluster(clusterId, match.entry.gapIds, "assigned by embedding similarity");
+      joinedCandidates += 1;
+      if (!existingSummaries.has(match.entry.candidate.summary)) {
+        additions.push(match.embedding);
+      }
+    }
+    if (representative && additions.length > 0) {
+      const priorCount = Math.max(distinctSummaryCounts.get(clusterId) ?? existingSummaries.size, 1);
+      const updated = foldIntoCentroid(representative.embedding, priorCount, additions);
+      await ctx.stores.gapClusters.setClusterRepresentative(clusterId, updated);
+    }
+  }
+
+  // Seeds: one cluster per connected component of unmatched candidates. The
+  // component keys are sorted, and a key embeds the summary after a fixed
+  // per-flow prefix, so the first entry carries the lexicographically-first
+  // summary — matching the fallback path's title choice.
+  let clustersCreated = 0;
+  for (const componentKeys of plan.seeds) {
+    const entries = componentKeys
+      .map((key) => entriesByKey.get(key))
+      .filter((match): match is NonNullable<typeof match> => match !== undefined);
+    if (entries.length === 0) {
+      continue;
+    }
+    const revision = await ctx.stores.questionLogs.getGapCatalogRevision(flowId);
+    const cluster = await ctx.stores.gapClusters.createCluster({
+      flowId: entries[0].entry.candidate.flowId,
+      title: entries[0].entry.candidate.summary.slice(0, 80),
+      revision,
+      representativeEmbedding: normalisedMean(entries.map((match) => match.embedding))
+    });
+    clustersCreated += 1;
+    for (const match of entries) {
+      await ctx.stores.gapClusters.assignGapsToCluster(
+        cluster.id,
+        match.entry.gapIds,
+        entries.length > 1 ? "seeded with paraphrase group" : "initial assignment"
+      );
+    }
+  }
+
+  logger.info(
+    { flowLabel, clustersCreated, joinedCandidates, threshold },
+    "gap reconciler: assigned new gaps by embedding similarity"
+  );
+  return clustersCreated;
+}
+
+// Embeds a batch and L2-normalises every vector, refusing a mismatched batch
+// (the same guard embed-sections.ts applies).
+async function embedAll(provider: EmbeddingProvider, texts: string[]): Promise<number[][]> {
+  const vectors = await provider.embed(texts);
+  if (vectors.length !== texts.length) {
+    throw new Error(`embedding provider returned ${vectors.length} vector(s) for ${texts.length} input(s)`);
+  }
+  return vectors.map(l2Normalise);
 }
 
 // Fan-out containment ceiling: the most NEW proposal drafts a single reconcile tick
@@ -616,6 +790,14 @@ async function pruneResolvedMemberships(ctx: AppContext): Promise<void> {
   const resolved = gapIds.filter((id) => !unresolved.has(id));
   if (resolved.length > 0) {
     await ctx.stores.gapClusters.deactivateMembershipsForGaps(resolved);
+    // Pruning changed those clusters' compositions; null their representatives
+    // so the next assignment pass recomputes the centroids without the
+    // resolved gaps.
+    const resolvedSet = new Set(resolved);
+    const affectedClusterIds = new Set(active.filter((m) => resolvedSet.has(m.gapId)).map((m) => m.clusterId));
+    for (const clusterId of affectedClusterIds) {
+      await ctx.stores.gapClusters.setClusterRepresentative(clusterId, null);
+    }
   }
 }
 
@@ -750,6 +932,9 @@ async function applyMerge(ctx: AppContext, merge: ProposedMerge, flowId: string 
       await ctx.stores.gapClusters.enqueuePublicationAction(proposal.id, "supersede");
     }
   }
+  // The survivor's composition changed; null its representative so the next
+  // assignment pass recomputes the centroid from the merged membership.
+  await ctx.stores.gapClusters.setClusterRepresentative(survivorId, null);
   await ctx.stores.gapClusters.updateCluster(survivorId, { revision });
   const survivorProposal = await proposalForCluster(ctx, survivorId);
   if (survivorProposal) {
@@ -782,6 +967,10 @@ async function applySplit(ctx: AppContext, split: ProposedSplit, flowId: string 
       await ctx.stores.gapClusters.assignGapToCluster(newCluster.id, gapId, "split");
     }
   }
+  // The retained cluster lost members to its children; null its representative
+  // for lazy recompute. Children are created without one and recompute the
+  // same way.
+  await ctx.stores.gapClusters.setClusterRepresentative(original.id, null);
   await ctx.stores.gapClusters.updateCluster(original.id, { revision });
   const retainedProposal = await proposalForCluster(ctx, original.id);
   if (retainedProposal) {

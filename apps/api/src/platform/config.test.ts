@@ -72,6 +72,25 @@ describe("loadConfig — valid configs", () => {
     assert.equal(invalid.flowRouter.minMargin, 0.05);
   });
 
+  it("defaults the gap-assignment threshold and honours a valid override", () => {
+    const config = loadConfig(minimalEnv);
+    assert.equal(config.gapClustering.assignThreshold, 0.84);
+
+    const overridden = loadConfig({ ...minimalEnv, GAP_CLUSTER_ASSIGN_THRESHOLD: "0.95" });
+    assert.equal(overridden.gapClustering.assignThreshold, 0.95);
+  });
+
+  it("falls back on out-of-range or non-numeric gap thresholds, including 0", () => {
+    for (const bad of ["0", "-0.5", "1.5", "abc", ""]) {
+      const config = loadConfig({ ...minimalEnv, GAP_CLUSTER_ASSIGN_THRESHOLD: bad });
+      assert.equal(
+        config.gapClustering.assignThreshold,
+        0.84,
+        `value ${JSON.stringify(bad)} must fall back to the default`
+      );
+    }
+  });
+
   it("parses CORS_ALLOWED_ORIGINS into a trimmed allow-list", () => {
     const config = loadConfig({
       ...minimalEnv,

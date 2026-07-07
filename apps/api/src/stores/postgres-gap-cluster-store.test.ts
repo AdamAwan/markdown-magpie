@@ -115,6 +115,27 @@ describe("PostgresGapClusterStore", { skip: databaseUrl ? false : "DATABASE_URL 
     assert.equal(await store.getProcessedRevision(flow), 7, "updating the hash leaves the revision alone");
   });
 
+  it("round-trips the representative embedding, clearing on null", async () => {
+    const embedding = Array.from({ length: 1536 }, (_, i) => (i === 0 ? 1 : 0));
+    const replacement = Array.from({ length: 1536 }, (_, i) => (i === 1 ? 1 : 0));
+
+    const created = await store.createCluster({
+      title: `rep-${randomUUID()}`,
+      revision: 1,
+      representativeEmbedding: embedding
+    });
+    assert.deepEqual((await store.getCluster(created.id))?.representativeEmbedding, embedding);
+
+    await store.setClusterRepresentative(created.id, replacement);
+    assert.deepEqual((await store.getCluster(created.id))?.representativeEmbedding, replacement);
+
+    await store.setClusterRepresentative(created.id, null);
+    assert.equal((await store.getCluster(created.id))?.representativeEmbedding, undefined);
+
+    const bare = await store.createCluster({ title: `bare-${randomUUID()}`, revision: 1 });
+    assert.equal((await store.getCluster(bare.id))?.representativeEmbedding, undefined);
+  });
+
   it("queues and retries publication actions", async () => {
     const proposalId = await insertProposal(databaseUrl as string);
     const action = await store.enqueuePublicationAction(proposalId, "publish");
