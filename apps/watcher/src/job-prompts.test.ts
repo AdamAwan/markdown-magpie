@@ -50,8 +50,9 @@ describe("buildPrompt", () => {
   it("uses the verify-document instructions for a verify_document job", () => {
     const prompt = buildPrompt(job("verify_document", { path: "kb/a.md", content: "x", sources: [] }));
     assert.match(prompt, /verify a Markdown knowledge-base document/);
-    // The input JSON trails the instructions.
-    assert.ok(prompt.indexOf('"path"') > prompt.indexOf("verify a Markdown"));
+    // The input JSON trails the instructions (the concrete path value appears
+    // only in the rendered input, never in the instruction text).
+    assert.ok(prompt.indexOf('"kb/a.md"') > prompt.indexOf("verify a Markdown"));
   });
 
   it("uses the split-document instructions for a split_document job", () => {
@@ -63,8 +64,9 @@ describe("buildPrompt", () => {
   it("uses the improve-document instructions for an improve_document job", () => {
     const prompt = buildPrompt(job("improve_document", { path: "kb/a.md", content: "# A", sources: [] }));
     assert.match(prompt, /fine-but-thin/);
-    // The input JSON trails the instructions.
-    assert.ok(prompt.indexOf('"path"') > prompt.indexOf("fine-but-thin"));
+    // The input JSON trails the instructions (the concrete path value appears
+    // only in the rendered input, never in the instruction text).
+    assert.ok(prompt.indexOf('"kb/a.md"') > prompt.indexOf("fine-but-thin"));
   });
 });
 

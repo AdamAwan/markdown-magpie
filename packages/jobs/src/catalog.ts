@@ -103,7 +103,7 @@ const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
   sync_source_changes_generate_plan: define("sync_source_changes_generate_plan", "provider", schemas.syncSourceChangesGeneratePlanInputSchema, schemas.syncSourceChangesGeneratePlanOutputSchema, 60 * 60),
   // verify/correct/improve are source-grounded agentic jobs (increment 3): like
   // the draft jobs, exploration runs for minutes (MAGPIE_AGENTIC_TIMEOUT_MS
-  // defaults to 10), so the queue must not expire them at a one-shot horizon.
+  // defaults to 10 minutes), so the queue must not expire them at a one-shot horizon.
   verify_document: define("verify_document", "provider", schemas.verifyDocumentInputSchema, schemas.verifyDocumentOutputSchema, 15 * 60),
   correct_document: define("correct_document", "provider", schemas.correctDocumentInputSchema, schemas.correctDocumentOutputSchema, 15 * 60),
   dedupe_documents: define("dedupe_documents", "provider", schemas.dedupeDocumentsInputSchema, schemas.dedupeDocumentsOutputSchema, 10 * 60),
