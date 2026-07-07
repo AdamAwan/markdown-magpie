@@ -191,6 +191,27 @@ When the watcher completes that job, the API stores the generated Markdown propo
 file location is derived from the destination — `<destination docs subpath>/<title-slug>.md` — so it is consistent
 across providers; any `targetPath` returned by the provider is not used to place the file.
 
+Drafts are register-constrained (#213): every content-producing prompt (gap drafts, seed
+drafts, both folds, source-sync rewrites, corrective rewrites, improve growth) carries a
+shared factual-register contract — documents state what the sources state, and never
+author their own recommendations, next steps, action items, roadmaps, or editorial
+commentary (describing a plan a *source itself states* remains allowed). Points the
+sources do not cover are **omitted from the document body** and reported in the draft
+output's optional `uncoveredPoints` field; the API logs a warning and folds them into
+the proposal's rationale so the reviewer sees what could not be supported. As a
+backstop, the API runs an advisory-heading check (`findAdvisoryHeadings` in
+`@magpie/markdown`) over every draft/rewrite/fold output it consumes: a draft containing
+headings like "Recommendations", "Next steps", "Action items", "Roadmap" or "Future
+work" is **flagged, never failed** — a structured log warning plus a "Register check:"
+note on the proposal rationale — because a document may legitimately describe a roadmap
+its source states. At the two fold appliers (`applyFoldFromCompletedJob`,
+`applyChangesetFoldFromCompletedJob` in `apps/api/src/scheduling/fold.ts`) the check is
+**log-only**: a fold rewrites markdown, not rationale, so the surviving proposal's
+original draft-time rationale note (if any) survives the fold untouched. `dedupe_documents`
+and `split_document` outputs are **deliberately not checked**: they reorganise existing KB
+content rather than author anything new, so any advisory heading present already pre-dates
+the proposal.
+
 ```bash
 curl -s http://localhost:4000/api/proposals
 ```
@@ -314,7 +335,13 @@ Agentic exploration takes minutes, so these runs use a longer timeout —
 `MAGPIE_AGENTIC_TIMEOUT_MS` (default 600 000 ms / 10 min). Keep it below the
 `draft_seed_document` queue expiration (900 s) so a run cannot outlive its lease. If every
 filesystem-backed source fails to resolve, the job fails loudly rather than drafting an
-ungrounded document. On completion the API
+ungrounded document.
+
+Coverage points the sources do not support are omitted from the authored document and
+come back in the output's `uncoveredPoints` field, which the API folds into the seed
+proposal's rationale (see the register constraint above).
+
+On completion the API
 creates a clusterless proposal carrying the flow's id first-class and reconciles it through the
 shared gate: a seed doc that overlaps an open PR on the same path folds into it, otherwise it
 self-publishes as its own PR. So seeding still ends at a reviewable pull request — the same

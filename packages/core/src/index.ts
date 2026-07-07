@@ -783,6 +783,11 @@ export interface DraftMarkdownProposalJobOutput {
   markdown: string;
   rationale: string;
   mapUpdates?: SourceMapUpdate[];
+  // Points the gaps asked for that the sources do not support. #213: these are
+  // OMITTED from the document body (a document states only what the sources
+  // state) and reported here so the API can surface them on the proposal
+  // rationale. Optional: absent when the sources covered everything.
+  uncoveredPoints?: string[];
 }
 
 // One unit of flow seeding: a document to author, described by what it should
@@ -854,6 +859,9 @@ export interface DraftSeedDocumentJobOutput {
   markdown: string;
   rationale: string;
   mapUpdates?: SourceMapUpdate[];
+  // Coverage points the sources do not support, OMITTED from the document body
+  // (#213) and reported here for the proposal rationale.
+  uncoveredPoints?: string[];
 }
 
 // A section of an existing flow document, surfaced to the outline generator as

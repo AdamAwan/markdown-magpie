@@ -118,4 +118,26 @@ describe("InMemoryGapClusterStore", () => {
     assert.equal(stillPending[0].attempts, 1);
     assert.equal(stillPending[0].lastError, "push rejected");
   });
+
+  it("persists a representative embedding set at creation and via the setter, clearing on null", async () => {
+    const store = new InMemoryGapClusterStore();
+    const created = await store.createCluster({
+      title: "t",
+      revision: 1,
+      representativeEmbedding: [1, 0, 0]
+    });
+    assert.deepEqual((await store.getCluster(created.id))?.representativeEmbedding, [1, 0, 0]);
+
+    await store.setClusterRepresentative(created.id, [0, 1, 0]);
+    assert.deepEqual((await store.getCluster(created.id))?.representativeEmbedding, [0, 1, 0]);
+
+    await store.setClusterRepresentative(created.id, null);
+    assert.equal((await store.getCluster(created.id))?.representativeEmbedding, undefined);
+  });
+
+  it("leaves the representative undefined when not supplied at creation", async () => {
+    const store = new InMemoryGapClusterStore();
+    const created = await store.createCluster({ title: "t", revision: 1 });
+    assert.equal((await store.getCluster(created.id))?.representativeEmbedding, undefined);
+  });
 });

@@ -19,6 +19,7 @@
     "dev:web": "npm run dev -w @magpie/web",
     "dev": "npm run dev --workspaces --if-present",
     "eval:api": "node --import tsx scripts/eval-api.ts",
+    "eval:gap-threshold": "node --import tsx scripts/eval-gap-threshold.ts",
     "e2e:jobs": "node --import tsx scripts/e2e-jobs.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

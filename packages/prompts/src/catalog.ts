@@ -19,6 +19,22 @@ const SOURCE_MAP_CONTRACT = `Source map:
 - Keep each update terse: a short topic, the concrete repository paths, and a ONE-LINE description. This is an index, not documentation — do not dump prose, file contents, or anything you only needed for this one job. Omit "mapUpdates" when you learned nothing worth recording.
 - Never set "observedSha" — it is stamped automatically.`;
 
+// Shared register contract for every prompt that authors or rewrites knowledge-base
+// document markdown (gap drafts, seed drafts, both folds, source-sync rewrites,
+// corrective rewrites, improve growth). Issue #213: drafts were producing
+// "Recommendations" / "Next steps" / phased-plan sections and editorial commentary
+// on the sources. Documents DESCRIBE their sources; the one carve-out is that
+// describing a plan or roadmap a source itself states is a factual claim about
+// that source, so it stays allowed.
+const FACTUAL_REGISTER_CONTRACT =
+  "Register: the document is factual and descriptive — it states what the sources state, in the " +
+  "present tense. NEVER author your own recommendations, next steps, action items, roadmaps, phased " +
+  "plans, or editorial commentary on the sources (for example that something \"should\" be published " +
+  "or implemented). Describing a plan, roadmap, or recommendation that a source itself states is a " +
+  "factual claim about that source and IS allowed — attribute it to the source. Do not add sections " +
+  "such as \"Recommendations\", \"Next steps\", \"Action items\", \"Roadmap\", or \"Future work\" " +
+  "unless they describe content a source itself states.";
+
 export const ANSWER_QUESTION: PromptDefinition = {
   id: "answer-question",
   title: "Answer question",
@@ -124,18 +140,19 @@ export const DRAFT_MARKDOWN_PROPOSAL: PromptDefinition = {
   description:
     "Drafts a single cohesive Markdown article that addresses every listed gap, grounded in the flow's source repositories, which the executing agent explores directly. Used by the watcher's draft_markdown_proposal job.",
   usedBy: ["watcher"],
-  outputShape: '{ title, targetPath, markdown, rationale, mapUpdates? }',
+  outputShape: '{ title, targetPath, markdown, rationale, mapUpdates?, uncoveredPoints? }',
   instructions: `Draft a single Markdown knowledge base proposal that addresses every gap listed in gapSummaries, grounded in the source repositories you have been given access to.
 
 Grounding:
 - You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for terms from the gap summaries and triggering questions, open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs.
 - Ground every factual claim in files you actually read, and cite their repository paths (e.g. "(see Docs/Specifications/Statements/ingestion.md)").
-- Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs. Where the sources genuinely do not cover a point, write only what can be supported and say so plainly.
+- Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs. Where the sources genuinely do not cover a point, OMIT it from the document entirely — never write the gap, a placeholder, or a note about missing coverage into the document body — and list that point in "uncoveredPoints" instead.
 
 ${SOURCE_MAP_CONTRACT}
 
 Rules:
 - Return JSON only.
+- ${FACTUAL_REGISTER_CONTRACT}
 - gapSummaries may contain several related gaps; write ONE cohesive article that covers all of them rather than separate sections that repeat each other.
 - The input may include resubmissionNotes: this is a re-draft because a previous proposal merged but still did NOT answer the triggering questions. Each note explains what was already published and why it fell short. Treat these as the most important guidance — directly address the specific shortfall each note calls out (add the missing specifics, examples, or coverage) rather than restating what the earlier attempt already contained.
 - The input may include openPullRequests: the flow's already in-flight proposals and currently open pull requests, each with a title, an optional url, and a target path. Do NOT draft something that duplicates one of these. If your article overlaps an open pull request, build on it and reference it (by title and url) in the rationale instead of restating its content; draft only what those in-flight changes leave uncovered.
@@ -150,7 +167,8 @@ Return JSON:
   "rationale": "string",
   "mapUpdates": [
     { "sourceId": "string", "topic": "string", "paths": ["string"], "description": "string" }
-  ]
+  ],
+  "uncoveredPoints": ["a point the sources do not support (omit when none)"]
 }`
 };
 
@@ -160,7 +178,7 @@ export const DRAFT_SEED_DOCUMENT: PromptDefinition = {
   description:
     "Authors a NEW knowledge-base document from a title + the points it should cover, grounded in the flow's source repositories, which the executing agent explores directly. Used to seed a new flow or add a new area to an existing one, bypassing the demand-driven gap pipeline. Used by the watcher's draft_seed_document job.",
   usedBy: ["watcher · flow seeding"],
-  outputShape: "{ title, targetPath, markdown, rationale, mapUpdates? }",
+  outputShape: "{ title, targetPath, markdown, rationale, mapUpdates?, uncoveredPoints? }",
   instructions: `You author a single new Markdown knowledge-base document, grounded in the source repositories you have been given access to.
 
 Input:
@@ -171,12 +189,13 @@ Input:
 Grounding:
 - You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for terms from "coverage", open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs.
 - Ground every factual claim in files you actually read, and cite their repository paths in the text (e.g. "(see Docs/Specifications/Statements/ingestion.md)").
-- Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs. If, after genuinely searching, the sources do not cover a point, write only what can be supported and note the gap plainly.
+- Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs. If, after genuinely searching, the sources do not cover a coverage point, OMIT it from the document entirely — never write the gap, a placeholder, or a note about missing coverage into the document body — and list that point in "uncoveredPoints" instead.
 
 ${SOURCE_MAP_CONTRACT}
 
 Rules:
 - Your FINAL message must be JSON only, matching the shape below. No prose around it.
+- ${FACTUAL_REGISTER_CONTRACT}
 - Write clean, well-structured Markdown with headings; UK English. Include frontmatter with title and status: draft.
 - "rationale" is a one-paragraph summary of what the document covers and which source files grounded it.
 
@@ -188,7 +207,8 @@ Return JSON:
   "rationale": "string",
   "mapUpdates": [
     { "sourceId": "string", "topic": "string", "paths": ["string"], "description": "string" }
-  ]
+  ],
+  "uncoveredPoints": ["a coverage point the sources do not support (omit when none)"]
 }`
 };
 
@@ -236,6 +256,7 @@ export const FOLD_MARKDOWN_PROPOSAL: PromptDefinition = {
 
 Rules:
 - Return JSON only.
+- ${FACTUAL_REGISTER_CONTRACT} When either input contains advisory sections you cannot attribute to a source, do not carry them forward as your own voice.
 - Produce a single article in "markdown" that preserves every fact from BOTH inputs. Do not lose information.
 - Do not duplicate sections or restate the same point twice; integrate the rival's content where it belongs.
 - Keep the survivor's overall structure and frontmatter where sensible, and extend it with the rival's material.
@@ -260,6 +281,7 @@ export const FOLD_CHANGESET_PROPOSAL: PromptDefinition = {
 
 Rules:
 - Return JSON only.
+- ${FACTUAL_REGISTER_CONTRACT}
 - The unified "changeset" must cover the UNION of every path in both inputs.
 - For a path in "sharedPaths", apply BOTH changes coherently: rewrite that document so it reflects the survivor's and the rival's intent together. Never lose information and never simply concatenate — integrate.
 - A path that only one side touches is carried through unchanged (keep its content, or its delete).
@@ -297,6 +319,7 @@ Goal:
 
 Rules:
 - Return JSON only.
+- ${FACTUAL_REGISTER_CONTRACT}
 - Only assert facts supported by the diffs. Do NOT invent new information or document behaviour the diff does not show.
 - Use the candidate document paths exactly as provided. Every write must contain the full new file content. Do not delete documents.
 - Use kind "rewrite" for every operation.
@@ -377,6 +400,7 @@ ${SOURCE_MAP_CONTRACT}
 
 Rules:
 - Return JSON only.
+- ${FACTUAL_REGISTER_CONTRACT}
 - For each listed claim: rewrite it so it matches what the sources actually support, quoting/paraphrasing only what the sources say. If NOTHING in the sources supports the claim, REMOVE it and smooth the surrounding prose.
 - Never introduce a new assertion that the sources do not support. Do not invent figures, dates, or facts.
 - Leave every other part of the document unchanged.
@@ -479,6 +503,7 @@ ${SOURCE_MAP_CONTRACT}
 
 Rules:
 - Return JSON only.
+- ${FACTUAL_REGISTER_CONTRACT}
 - ${CONSERVATIVE_CONTRACT} Here a clear case is a fine-but-thin document — broadly correct and cohesive, but missing useful detail that the sources clearly support.
 - Use only material from files you actually read for new facts. Do not invent facts, figures, dates, examples, or behaviour.
 - Keep this single-target. Do not split, dedupe, rename, delete, move material to another file, or create new documents.

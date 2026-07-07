@@ -193,7 +193,10 @@ export const draftMarkdownProposalOutputSchema = z.object({
   targetPath: z.string(),
   markdown: z.string(),
   rationale: z.string(),
-  mapUpdates: mapUpdatesField
+  mapUpdates: mapUpdatesField,
+  // #213: source-uncovered points, omitted from the markdown by contract. Must be
+  // declared here or the broker strips it before the completion handler reads it.
+  uncoveredPoints: z.array(z.string()).optional()
 }) satisfies z.ZodType<DraftMarkdownProposalJobOutput>;
 
 export const draftSeedDocumentInputSchema = z.object({
@@ -211,7 +214,9 @@ export const draftSeedDocumentOutputSchema = z.object({
   targetPath: z.string(),
   markdown: z.string(),
   rationale: z.string(),
-  mapUpdates: mapUpdatesField
+  mapUpdates: mapUpdatesField,
+  // #213: see draftMarkdownProposalOutputSchema.uncoveredPoints.
+  uncoveredPoints: z.array(z.string()).optional()
 }) satisfies z.ZodType<DraftSeedDocumentJobOutput>;
 
 const existingDocumentContextSchema = z.object({

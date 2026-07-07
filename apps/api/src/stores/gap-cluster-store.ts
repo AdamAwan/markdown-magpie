@@ -10,6 +10,11 @@ export interface GapClusterRecord {
   status: "active" | "frozen" | "dismissed";
   parentClusterId?: string;
   reconciliationRevision: number;
+  // L2-normalised centroid of the cluster's distinct active member gap-summary
+  // embeddings, used by the reconciler's phase-1 assignment. Undefined = not
+  // yet computed, or invalidated by a composition change (reshape merge/split,
+  // resolved-gap pruning) — the next assignment pass recomputes it lazily.
+  representativeEmbedding?: number[];
   createdAt: string;
   updatedAt: string;
 }
@@ -40,6 +45,7 @@ export interface CreateClusterInput {
   rationale?: string;
   parentClusterId?: string;
   revision: number;
+  representativeEmbedding?: number[];
 }
 
 export interface UpdateClusterInput {
@@ -63,6 +69,10 @@ export interface GapClusterStore {
   // leaves the active set; the reconciler also dismisses the cluster's member gaps so
   // they never re-surface. The rationale is stored on the cluster for audit.
   dismissCluster(id: string, rationale?: string): Promise<void>;
+  // Sets or clears (null) the cluster's representative embedding. Cleared when
+  // a reshape or prune changes the cluster's composition so the next assignment
+  // pass recomputes the centroid from the surviving members.
+  setClusterRepresentative(id: string, embedding: number[] | null): Promise<void>;
 
   listActiveMemberships(): Promise<GapClusterMembershipRecord[]>;
   // Active memberships whose cluster belongs to one flow, resolved in SQL so the
@@ -157,6 +167,7 @@ export class InMemoryGapClusterStore implements GapClusterStore {
       status: "active",
       parentClusterId: input.parentClusterId,
       reconciliationRevision: input.revision,
+      representativeEmbedding: input.representativeEmbedding,
       createdAt: now,
       updatedAt: now
     };
@@ -194,6 +205,18 @@ export class InMemoryGapClusterStore implements GapClusterStore {
         ...existing,
         status: "dismissed",
         ...(rationale ? { rationale } : {}),
+        updatedAt: this.now()
+      });
+    }
+  }
+
+  async setClusterRepresentative(id: string, embedding: number[] | null): Promise<void> {
+    const existing = this.clusters.get(id);
+    if (existing) {
+      const { representativeEmbedding: _cleared, ...rest } = existing;
+      this.clusters.set(id, {
+        ...rest,
+        ...(embedding ? { representativeEmbedding: embedding } : {}),
         updatedAt: this.now()
       });
     }

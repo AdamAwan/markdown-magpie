@@ -13,6 +13,7 @@ import type {
   SectionVectorSearch
 } from "./knowledge-index.js";
 import { chunk, valuesClause } from "./sql-bulk.js";
+import { toVectorLiteral } from "./vector-literal.js";
 
 // Bind-parameter budget per statement (Postgres caps at 65535). Documents bind
 // 10 params/row and sections 8, so these chunk sizes stay well under the cap.
@@ -481,10 +482,6 @@ interface SectionRow {
   anchor: string;
   ordinal: number;
   content: string;
-}
-
-function toVectorLiteral(embedding: number[]): string {
-  return `[${embedding.join(",")}]`;
 }
 
 // ts_rank returns a small non-negative score (typically well under 1 for short

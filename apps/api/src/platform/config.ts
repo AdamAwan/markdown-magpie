@@ -131,6 +131,14 @@ export interface AppConfig {
   // then does the chat routing call it would have done anyway — so these degrade
   // safely and never affect routing correctness. See docs/question-logging.md.
   flowRouter: FlowRouterConfig;
+  // Phase-1 gap assignment: the cosine floor a new gap must clear against an
+  // active cluster's representative embedding to join it (and for two new gaps
+  // to seed one shared cluster). Deliberately conservative — it collapses only
+  // obvious near-duplicates; subtler consolidation is the reshape critic's job.
+  // A blank or out-of-range value falls back to the default rather than failing
+  // boot: like the flow-router cut-offs this is a safety-neutral tuning knob
+  // (a mis-tune only changes how much pre-collapsing phase 1 does).
+  gapClustering: GapClusteringConfig;
   watcher: {
     name?: string;
     pollIntervalMs?: number;
@@ -170,6 +178,25 @@ function resolveFlowRouterConfig(env: NodeJS.ProcessEnv): FlowRouterConfig {
     minTopScore: parseUnitFloat(env.FLOW_ROUTER_MIN_SCORE, FLOW_ROUTER_DEFAULT_MIN_SCORE),
     minMargin: parseUnitFloat(env.FLOW_ROUTER_MIN_MARGIN, FLOW_ROUTER_DEFAULT_MIN_MARGIN)
   };
+}
+
+interface GapClusteringConfig {
+  assignThreshold: number;
+}
+
+// Chosen by the offline sweep in scripts/eval-gap-threshold.ts (fixture:
+// text-embedding-3-small): zero over-merges from 0.82 across the labelled
+// paraphrase/trap corpus — the worst must-not-merge pair (encryption in transit
+// vs at rest) sits at 0.810 — so the default is that floor plus a 0.02 safety
+// margin. At 0.84 every near-identical rewording still collapses (pair
+// precision 1.0). Re-run the sweep before changing this, and re-tune via
+// GAP_CLUSTER_ASSIGN_THRESHOLD if a deployment uses a different embedding model.
+const GAP_CLUSTER_DEFAULT_ASSIGN_THRESHOLD = 0.84;
+
+function resolveGapClusteringConfig(env: NodeJS.ProcessEnv): GapClusteringConfig {
+  const value = parseUnitFloat(env.GAP_CLUSTER_ASSIGN_THRESHOLD, GAP_CLUSTER_DEFAULT_ASSIGN_THRESHOLD);
+  // A threshold of 0 would bucket every gap together; treat it as invalid.
+  return { assignThreshold: value > 0 ? value : GAP_CLUSTER_DEFAULT_ASSIGN_THRESHOLD };
 }
 
 function parseUnitFloat(raw: string | undefined, fallback: number): number {
@@ -428,6 +455,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       aiMaxInflightJobs: parsed.AI_MAX_INFLIGHT_JOBS ?? 20
     },
     flowRouter: resolveFlowRouterConfig(env),
+    gapClustering: resolveGapClusteringConfig(env),
     watcher: {
       name: parsed.WATCHER_NAME,
       pollIntervalMs: parsed.WATCHER_POLL_INTERVAL_MS,

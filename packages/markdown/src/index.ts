@@ -1,4 +1,5 @@
 import type { DocumentMetadata, DocumentSection, KnowledgeDocument } from "@magpie/core";
+export { findAdvisoryHeadings } from "./advisory.js";
 
 export interface ParsedMarkdown {
   metadata: DocumentMetadata;

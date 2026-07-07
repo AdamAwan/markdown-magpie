@@ -101,3 +101,38 @@ test("source-grounded prompts describe source-map hints and contributions", () =
     assert.ok(prompt?.outputShape.includes("mapUpdates"), `${id} outputShape mentions mapUpdates`);
   }
 });
+
+// The factual-register contract (#213): every prompt that authors or rewrites KB
+// document markdown must carry the shared register clause forbidding self-authored
+// advisory content (recommendations, next steps, roadmaps, editorial commentary)
+// while still allowing a document to DESCRIBE a plan a source itself states.
+const CONTENT_PRODUCING_PROMPT_IDS = [
+  "draft-markdown-proposal",
+  "draft-seed-document",
+  "fold-markdown-proposal",
+  "fold-changeset-proposal",
+  "source-change-sync",
+  "correct-document",
+  "improve-document"
+];
+
+test("every content-producing prompt carries the factual-register contract", () => {
+  for (const id of CONTENT_PRODUCING_PROMPT_IDS) {
+    const instructions = getPrompt(id)?.instructions ?? "";
+    assert.match(instructions, /factual and descriptive/, `${id} misses the register clause`);
+    assert.match(instructions, /NEVER author your own recommendations/, `${id} misses the advisory ban`);
+    assert.match(instructions, /IS allowed/, `${id} misses the source-stated-plan exception`);
+  }
+});
+
+// #213: uncovered points are OMITTED from the document body and reported in the
+// structured uncoveredPoints field — never written into the markdown as notes.
+test("draft prompts route uncovered points to uncoveredPoints, not the document body", () => {
+  for (const id of ["draft-markdown-proposal", "draft-seed-document"]) {
+    const instructions = getPrompt(id)?.instructions ?? "";
+    assert.doesNotMatch(instructions, /note the gap plainly/, `${id} still writes gaps into the body`);
+    assert.doesNotMatch(instructions, /say so plainly/, `${id} still writes gaps into the body`);
+    assert.match(instructions, /OMIT it from the document entirely/, `${id} misses the omission rule`);
+    assert.match(instructions, /"uncoveredPoints"/, `${id} misses the reporting field`);
+  }
+});

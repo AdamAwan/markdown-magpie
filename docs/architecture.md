@@ -208,8 +208,34 @@ it — drafting is enqueue-only, so the proposal row exists only once the draft 
 completes, and without this a run whose draft is still in flight (or an overlap that
 slips through) would enqueue a duplicate full generation for the same cluster.
 
-**Fan-out containment.** The reshape (step 2) is the *only* step that collapses
-near-duplicate singleton clusters, so two safeguards keep a batch of fine-grained
+**Phase-1 assignment is an embedding-based coarse pre-clusterer.** Before the
+reshape, each unassigned gap's summary is embedded inline (embeddings are the
+sanctioned inline exception to queue-only) and compared, within its flow only,
+against each active cluster's stored representative embedding — the L2-normalised
+centroid of the cluster's distinct member gap summaries
+(`gap_clusters.representative_embedding`, migration 0046). A gap joins the nearest
+cluster at or above `GAP_CLUSTER_ASSIGN_THRESHOLD` (default 0.84, set by the
+offline sweep in `scripts/eval-gap-threshold.ts`); the rest form connected
+components (pairwise cosine ≥ the threshold) that each seed one new cluster, so a
+burst of near-identically-worded gaps lands as one bucket instead of N singletons.
+Decisions are made against a tick-start snapshot of representatives (pure planner:
+`apps/api/src/scheduling/gap-assignment.ts`), so assignment is order-independent
+and a re-raised identical gap re-lands deterministically. The threshold is
+deliberately conservative — the eval showed the worst must-not-merge pair
+("encryption in transit" vs "at rest") sits at cosine 0.81 with the configured
+embedding model, *above* most genuine paraphrase pairs — so phase 1 banks only
+near-duplicate rewordings and leaves real paraphrase consolidation to the reshape
+critic, which remains the semantic refiner. A cluster whose composition changes
+(merge, split, resolved-gap pruning) has its representative nulled and lazily
+recomputed from its surviving members' summaries on the next assignment pass.
+With no embedding provider configured, phase 1 falls back to the original
+one-cluster-per-distinct-summary behaviour; if the provider is configured but an
+embed call fails, the tick fails (and retries) rather than silently fanning out
+singletons.
+
+**Fan-out containment.** Phase 1 (above) only pre-collapses near-identical
+wordings, so the reshape (step 2) remains the step that must collapse genuinely
+paraphrased singleton clusters, and two safeguards keep a batch of fine-grained
 gaps from fanning out into one proposal each. First, the reshape's propose call is
 parsed leniently (JSON mode plus the shared `extractJson`, first-`{`…last-`}`) — a
 provider that wraps its proposal in a ```json fence or prose no longer has the whole
