@@ -60,6 +60,26 @@ describe("applySourceMapUpdatesFromCompletedJob (via completeJob)", () => {
     assert.ok(entries.some((e) => e.topic === "fresh"));
   });
 
+  it("rejects mapUpdates with an empty paths array", async () => {
+    const ctx = makeTestContext();
+    const result = await completedVerifyJob(ctx, [
+      { sourceId: "s1", topic: "t", paths: [], description: "d" }
+    ]);
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "invalid_output");
+    assert.deepEqual(await ctx.stores.sourceMap.listBySource("s1", 10), []);
+  });
+
+  it("rejects mapUpdates with an empty string in paths", async () => {
+    const ctx = makeTestContext();
+    const result = await completedVerifyJob(ctx, [
+      { sourceId: "s1", topic: "t", paths: [""], description: "d" }
+    ]);
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "invalid_output");
+    assert.deepEqual(await ctx.stores.sourceMap.listBySource("s1", 10), []);
+  });
+
   it("ignores non-source-grounded job types", async () => {
     const ctx = makeTestContext();
     const job = await createJob(ctx, "summarize_gap", {

@@ -399,6 +399,18 @@ times out or returns partial results.
 **Write path.** The five source-grounded job types — `draft_seed_document`, `draft_markdown_proposal`,
 `verify_document`, `correct_document`, and `improve_document` — accept an optional `mapUpdates`
 field in their output: an array of updates to the source map, keyed by `(source_id, topic)`.
+Each update has the following shape:
+
+```
+{ "sourceId": string, "topic": string, "paths": string[], "description": string, "observedSha"?: string }
+```
+
+- `sourceId` — id of the source the hint belongs to.
+- `topic` — short label for what the path(s) cover (max 120 chars).
+- `paths` — one or more file/directory paths relevant to the topic (max 8, each ≤260 chars).
+- `description` — one-line summary (max 240 chars).
+- `observedSha` — stamped by the watcher, never trusted from the model; absent for non-git sources.
+
 The completion dispatcher applies these updates best-effort: each update is merged into the store
 (upsert by source+topic) and persisted to Postgres. Updates are capped at 20 per job; beyond
 that limit they are dropped with a log warning. A per-source cap of 200 entries is enforced

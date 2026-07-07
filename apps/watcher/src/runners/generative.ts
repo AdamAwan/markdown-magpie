@@ -75,10 +75,11 @@ export async function runGenerativeJob(options: GenerativeJobOptions): Promise<u
     signal: options.signal
   });
   // The generative path never observes a checkout, so it can never vouch for a
-  // model-supplied observedSha: stamping with no workspaces strips the field from
-  // every mapUpdate. This keeps the stamping invariant global — source-grounded
-  // job types that fall back here (non-fs sources, or fs sources without an agent
-  // model) cannot smuggle a sha the watcher didn't observe.
+  // model-supplied observedSha: stampSourceMapUpdates strips the field from every
+  // mapUpdate when given an empty workspaces array (see source-workspace.ts for
+  // the stamp/strip contract). Source-grounded job types that fall back here
+  // (non-fs sources, or fs sources without an agent model) cannot smuggle a sha
+  // the watcher didn't observe.
   return stampSourceMapUpdates(parseJobOutput(job, response.content), []);
 }
 

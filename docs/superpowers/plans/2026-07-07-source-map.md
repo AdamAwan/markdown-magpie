@@ -23,7 +23,7 @@
 ## File Structure
 
 - `packages/core/src/index.ts`: `SourceMapEntry` (Task 1), `SourceMapUpdate` (Task 4), `mapUpdates?` on five job-output interfaces (Task 4).
-- `packages/db/migrations/0046_source_map_entries.sql`: new table (Task 1).
+- `packages/db/migrations/0047_source_map_entries.sql`: new table (Task 1).
 - `apps/api/src/stores/source-map-store.ts` (+ `.test.ts`): interface + in-memory store (Task 1).
 - `apps/api/src/stores/postgres-source-map-store.ts` (+ `.test.ts`): Postgres store (Task 1).
 - `apps/api/src/platform/config.ts`, `apps/api/src/platform/stores.ts`, `apps/api/src/context.ts`, `apps/api/src/test-support/context.ts`, `apps/api/src/features/config/service.ts`: wiring (Task 1).
@@ -43,7 +43,7 @@
 
 **Files:**
 - Modify: `packages/core/src/index.ts`
-- Create: `packages/db/migrations/0046_source_map_entries.sql`
+- Create: `packages/db/migrations/0047_source_map_entries.sql`
 - Create: `apps/api/src/stores/source-map-store.ts`
 - Create: `apps/api/src/stores/source-map-store.test.ts`
 - Create: `apps/api/src/stores/postgres-source-map-store.ts`
@@ -108,7 +108,7 @@ export function createSourceMapStore(config: AppConfig, pool: pg.Pool): InMemory
   // staleness invalidation against source-change-sync is a follow-up.
   ```
 
-- [ ] Create `packages/db/migrations/0046_source_map_entries.sql` (0045 is the current max on this branch — re-check with `ls packages/db/migrations/ | tail` before creating; if another branch merged a 0046 first, use the next free prefix and update references below):
+- [ ] Create `packages/db/migrations/0047_source_map_entries.sql` (0045 is the current max on this branch — re-check with `ls packages/db/migrations/ | tail` before creating; if another branch merged a 0046 first, use the next free prefix and update references below):
 
   ```sql
   -- Source map (#215): persistent, agent-maintained navigation hints per source
@@ -471,7 +471,7 @@ export function createSourceMapStore(config: AppConfig, pool: pg.Pool): InMemory
 - [ ] Commit:
 
   ```bash
-  git add packages/core/src/index.ts packages/db/migrations/0046_source_map_entries.sql apps/api/src/stores/source-map-store.ts apps/api/src/stores/source-map-store.test.ts apps/api/src/stores/postgres-source-map-store.ts apps/api/src/stores/postgres-source-map-store.test.ts apps/api/src/platform/config.ts apps/api/src/platform/stores.ts apps/api/src/context.ts apps/api/src/test-support/context.ts apps/api/src/features/config/service.ts
+  git add packages/core/src/index.ts packages/db/migrations/0047_source_map_entries.sql apps/api/src/stores/source-map-store.ts apps/api/src/stores/source-map-store.test.ts apps/api/src/stores/postgres-source-map-store.ts apps/api/src/stores/postgres-source-map-store.test.ts apps/api/src/platform/config.ts apps/api/src/platform/stores.ts apps/api/src/context.ts apps/api/src/test-support/context.ts apps/api/src/features/config/service.ts
   git commit -m "feat(source-map): source_map_entries table and store pair (#215)"
   git push
   ```

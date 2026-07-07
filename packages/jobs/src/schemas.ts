@@ -148,7 +148,7 @@ const sourceDescriptorSchema = z.discriminatedUnion("kind", [
 const sourceMapUpdateSchema = z.object({
   sourceId: z.string(),
   topic: z.string(),
-  paths: z.array(z.string()),
+  paths: z.array(z.string().min(1)).min(1),
   description: z.string(),
   observedSha: z.string().optional()
 }) satisfies z.ZodType<SourceMapUpdate>;

@@ -158,8 +158,11 @@ export async function fetchSourceMapEntries(
 
 // Stamps the watcher-observed checkout sha onto every mapUpdate in a parsed
 // source-grounded output, overwriting anything the model put there: the sha
-// is an infrastructure fact, never trusted from the model. Outputs without a
-// mapUpdates array pass through untouched.
+// is an infrastructure fact, never trusted from the model. When workspaces is
+// EMPTY (the ungrounded fallback path — non-fs sources or the generative
+// runner) every update's observedSha is stripped out, because the watcher
+// never actually observed the checkout. Outputs without a mapUpdates array
+// pass through untouched.
 export function stampSourceMapUpdates(output: unknown, workspaces: SourceWorkspace[]): unknown {
   if (typeof output !== "object" || output === null || !("mapUpdates" in output) || !Array.isArray(output.mapUpdates)) {
     return output;
