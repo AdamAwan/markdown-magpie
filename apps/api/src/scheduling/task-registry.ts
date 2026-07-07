@@ -102,7 +102,7 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
     typeLabel: "Editorial patrol · expand thin docs",
     description:
       "Rolls its own cursor across this flow's knowledge-base documents, sending the least-recently-improved " +
-      "ones to the model with the flow's source material so fine-but-thin documents grow source-backed coverage. " +
+      "ones to an agent that explores the flow's source repositories so fine-but-thin documents grow source-backed coverage. " +
       "Separate from the Correctness patrol: it proposes editorial expansion, not correctness or structural fixes.",
     defaultCron: "0 * * * *",
     jobType: "editorial_patrol",

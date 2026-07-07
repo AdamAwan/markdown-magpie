@@ -3,9 +3,10 @@ export type PatrolCursorKind = "fix" | "improve";
 export interface PatrolCursorEntry {
   docPath: string;
   lastCheckedAt: string;
-  // The document's content hash and the flow's source-corpus hash recorded the
-  // last time this doc was actually checked (#163). Undefined until the first
-  // check records them — so a never-checked doc never matches the change gate.
+  // The document's content hash and the hash of the flow's source-descriptor
+  // set recorded the last time this doc was actually checked (#163). Undefined
+  // until the first check records them — so a never-checked doc never matches
+  // the change gate.
   contentHash?: string;
   sourcesHash?: string;
 }

@@ -6,7 +6,6 @@ import type {
   KnowledgeGapSignal,
   OutOfScope
 } from "@magpie/core";
-import type { SourceDataContext } from "@magpie/core";
 import type { JobType, JobView } from "@magpie/jobs";
 import { jobDefinition } from "@magpie/jobs";
 import type { z } from "zod";
@@ -89,24 +88,15 @@ const JOB_INSTRUCTIONS: Partial<Record<JobType, string>> = {
   improve_document: IMPROVE_DOCUMENT.instructions
 };
 
-// Label for the shared source-corpus block (see buildPrompt).
-const SOURCE_MATERIAL_HEADER = "Source material (shared across this batch):";
-
-// Per-job prompt for the generic chat path. The job's input is embedded as JSON
-// after the task instructions. When a patrol job references the shared source
-// corpus by `sourcesRef`, the runner resolves that corpus and passes it here; the
-// corpus is then rendered as an identical FIRST block across every job in the tick
-// that shares it, so the provider's prefix prompt caching can reuse it instead of
-// re-billing the whole corpus per job (#163 Part 2). The per-document input — the
-// only part that varies — comes last so the cacheable prefix is as long as possible.
-export function buildPrompt(job: JobView, sources?: SourceDataContext[]): string {
+// Per-job prompt for the generic chat path: the task instructions followed by
+// the job's input embedded as JSON. Source-grounded jobs (whose inputs carry
+// `sources` descriptors) render through buildSourceGroundedPrompt on the agentic
+// paths instead; the old shared-corpus leading block this function once rendered
+// died with the corpus pipeline.
+export function buildPrompt(job: JobView): string {
   const instructions = JOB_INSTRUCTIONS[job.type];
   if (!instructions) {
     return `${GENERIC_JOB.instructions}\n\nJob:\n${JSON.stringify({ type: job.type, input: job.input }, null, 2)}`;
-  }
-  if (sources) {
-    const input = omitInputKeys(job.input, ["sourcesRef"]);
-    return `${SOURCE_MATERIAL_HEADER}\n${JSON.stringify(sources, null, 2)}\n\n${instructions}\n\nInput:\n${JSON.stringify(input, null, 2)}`;
   }
   return `${instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
 }
@@ -137,13 +127,13 @@ export function buildSourceGroundedPrompt(
       ? "Source repositories available (read-only; explore with your file tools):"
       : "Source repositories available through your tools (list_dir, read_file, grep):";
   const noteBlock = notes.length > 0 ? `\nSource notes:\n${notes.map((n) => `- ${n}`).join("\n")}\n` : "";
-  const input = omitInputKeys(job.input, ["sources", "sourcesRef"]);
+  const input = omitInputKeys(job.input, ["sources"]);
   return `${access}\n${workspaceLines}\n${noteBlock}\n${instructions}\n\nInput:\n${JSON.stringify(input, null, 2)}`;
 }
 
-// A shallow copy of a job input without the named keys. Used to drop `sourcesRef`
-// (its corpus is rendered separately as a leading block) and, for the
-// source-grounded prompt, `sources` (resolved into the workspace listing instead).
+// A shallow copy of a job input without the named keys. Used by the
+// source-grounded prompt to drop `sources` — the descriptors are resolved into
+// the workspace listing above, so the raw references would be noise.
 function omitInputKeys(input: unknown, keys: string[]): unknown {
   if (typeof input !== "object" || input === null) {
     return input;

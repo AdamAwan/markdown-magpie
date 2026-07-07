@@ -305,20 +305,23 @@ export const VERIFY_DOCUMENT: PromptDefinition = {
   id: "verify-document",
   title: "Verify a document against its sources",
   description:
-    "Checks whether a knowledge-base document's claims are still provable against the supplied source material, returning only the claims the sources fail to support. Conservative: silent on healthy documents. Used by the watcher's verify_document job.",
+    "Checks whether a knowledge-base document's claims are still provable against the flow's source repositories, which the executing agent explores directly. Returns only the claims the sources fail to support. Conservative: silent on healthy documents. Used by the watcher's verify_document job.",
   usedBy: ["watcher · fix-patrol"],
   outputShape: '{ verdict, claims[] }',
-  instructions: `You verify a Markdown knowledge-base document against the source material it should be derived from. Decide whether each substantive claim the document makes is still supported by the sources.
+  instructions: `You verify a Markdown knowledge-base document against the source repositories it should be derived from. Decide whether each substantive claim the document makes is still supported by the sources.
 
 Input:
 - "path" and "content": the knowledge-base document under review.
-- "sources": the source material (files, references) to check the document against.
+
+Grounding:
+- You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for the terms each claim rests on, open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs before judging a claim.
+- Judge every claim against files you actually read. Where a source is listed as reference-only (internet/agent), treat it as supporting context, not something you can check claims against.
 
 Rules:
 - Return JSON only.
 - ${CONSERVATIVE_CONTRACT} Here a clear case is a claim the sources clearly contradict or clearly fail to support; when you are unsure, or the sources simply do not mention the claim, treat the document as healthy and do NOT flag it.
 - If every claim is supported (or the sources give you nothing to disprove), return verdict "healthy" with an empty claims array.
-- Otherwise return verdict "unprovable" and list ONLY the specific unprovable claims, each with a short reason citing what the sources say (or fail to say).
+- Otherwise return verdict "unprovable" and list ONLY the specific unprovable claims, each with a short reason citing the source files you checked (or searched and found silent).
 - Do not propose edits or rewrites. You only report.
 
 Return JSON:
@@ -334,15 +337,18 @@ export const CORRECT_DOCUMENT: PromptDefinition = {
   id: "correct-document",
   title: "Correct a document's unprovable claims",
   description:
-    "Repairs a knowledge-base document the verify lens flagged: each unprovable claim is rewritten to match a supporting source excerpt, or removed when the sources do not support it. Returns the full corrected document. Used by the watcher's correct_document job.",
+    "Repairs a knowledge-base document the verify lens flagged: each unprovable claim is rewritten to match what the flow's source repositories actually support — the executing agent explores them directly — or removed when the sources do not support it. Returns the full corrected document. Used by the watcher's correct_document job.",
   usedBy: ["watcher · fix-patrol"],
   outputShape: "{ markdown, rationale }",
-  instructions: `You correct a Markdown knowledge-base document whose listed claims could not be proven against its source material. Produce a corrected version of the WHOLE document.
+  instructions: `You correct a Markdown knowledge-base document whose listed claims could not be proven against the source repositories it should be derived from. Produce a corrected version of the WHOLE document.
 
 Input:
 - "path" and "content": the document under repair.
 - "claims": the specific unprovable claims to fix, each with a reason.
-- "sources": the source material to ground every correction in.
+
+Grounding:
+- You have DIRECT access to the source repositories listed in the prompt. Explore them to establish what is actually true for each flagged claim: list directories to learn the structure, search for the terms the claim rests on, open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs before rewriting anything.
+- Ground every correction in files you actually read, and cite their repository paths in the rationale. Where a source is listed as reference-only (internet/agent), treat it as supporting context, not something you can check claims against.
 
 Rules:
 - Return JSON only.
@@ -429,24 +435,27 @@ export const IMPROVE_DOCUMENT: PromptDefinition = {
   id: "improve-document",
   title: "Improve a fine-but-thin document",
   description:
-    "Expands a single knowledge-base document when the supplied source material clearly supports useful additional coverage. Conservative: silent when no source-backed growth is warranted. Used by the watcher's improve_document job (improve-patrol).",
+    "Expands a single knowledge-base document when the flow's source repositories — which the executing agent explores directly — clearly support useful additional coverage. Conservative: silent when no source-backed growth is warranted. Used by the watcher's improve_document job (improve-patrol).",
   usedBy: ["watcher - improve-patrol"],
   outputShape: "{ improved, markdown?, rationale }",
   instructions: `You improve a fine-but-thin Markdown knowledge-base document by adding source-backed coverage that belongs in this document.
 
 Input:
 - "path" and "content": the one knowledge-base document under review.
-- "sources": source material you may use as raw material for additions.
+
+Grounding:
+- You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for material that belongs in this document, open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs.
+- Every addition must be grounded in files you actually read; cite the supporting repository paths in the rationale. Where a source is listed as reference-only (internet/agent), treat it as supporting context, not raw material for new facts.
 
 Rules:
 - Return JSON only.
-- ${CONSERVATIVE_CONTRACT} Here a clear case is a fine-but-thin document — broadly correct and cohesive, but missing useful detail that the supplied sources clearly support.
-- Use only supplied source material for new facts. Do not invent facts, figures, dates, examples, or behaviour.
+- ${CONSERVATIVE_CONTRACT} Here a clear case is a fine-but-thin document — broadly correct and cohesive, but missing useful detail that the sources clearly support.
+- Use only material from files you actually read for new facts. Do not invent facts, figures, dates, examples, or behaviour.
 - Keep this single-target. Do not split, dedupe, rename, delete, move material to another file, or create new documents.
 - Preserve the existing structure and tone where sensible. Add focused sections or paragraphs only where they improve coverage.
 - If no clear source-backed addition belongs in this document, return {"improved": false, "rationale": "..."}.
 - When improving, return the full updated document in "markdown".
-- "rationale" is a one-paragraph summary of what you added and which source paths or names support it.
+- "rationale" is a one-paragraph summary of what you added and which repository paths support it.
 
 Return JSON:
 {

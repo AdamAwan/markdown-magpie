@@ -4,7 +4,12 @@ import { makeTestContext } from "../../test-support/context.js";
 import type { VerifyDocumentFn } from "../../scheduling/verify-lens.js";
 import type { DedupeDocumentFn } from "../../scheduling/dedupe-lens.js";
 import type { SplitDocumentFn } from "../../scheduling/split-lens.js";
-import type { DedupeDocumentsJobInput, ImproveDocumentJobInput, SplitDocumentJobInput } from "@magpie/core";
+import type {
+  DedupeDocumentsJobInput,
+  ImproveDocumentJobInput,
+  SourceDescriptor,
+  SplitDocumentJobInput
+} from "@magpie/core";
 import * as patrol from "./service.js";
 import type { CorrectDocumentFn } from "./service.js";
 
@@ -140,17 +145,28 @@ test("runFixPatrol enqueues a correction for each unprovable finding, none for h
   assert.deepEqual(corrected, [{ path: "a.md", claims: 1 }]);
 });
 
-test("runFixPatrol stores the corpus once and threads one resolvable sourcesRef to verify and correct (#163 Part 2)", async () => {
-  const ctx = makeTestContext();
+test("runFixPatrol projects descriptors once and threads the same sources to verify and correct", async () => {
+  const ctx = makeTestContext({
+    knowledgeConfig: {
+      sources: [
+        { id: "repo", name: "Product repo", kind: "git", url: "https://example.com/repo.git", subpath: "Docs" }
+      ],
+      destinations: [],
+      flows: [],
+      repositories: [],
+      roleGrants: {},
+      checkoutRoot: ".magpie/checkouts"
+    }
+  });
   await indexDocs(ctx, ["a.md"]);
-  const verifyRefs: string[] = [];
-  const correctRefs: string[] = [];
+  const verifySources: SourceDescriptor[][] = [];
+  const correctSources: SourceDescriptor[][] = [];
   const verifyDocument: VerifyDocumentFn = async (_ctx, input) => {
-    verifyRefs.push(input.sourcesRef);
+    verifySources.push(input.sources);
     return { verdict: "unprovable", claims: [{ claim: "stale", reason: "no source" }] };
   };
   const correctDocument: CorrectDocumentFn = async (_ctx, input) => {
-    correctRefs.push(input.sourcesRef);
+    correctSources.push(input.sources);
   };
 
   const outcome = await patrol.runFixPatrol(
@@ -159,13 +175,47 @@ test("runFixPatrol stores the corpus once and threads one resolvable sourcesRef 
     { verifyDocument, correctDocument, dedupeDocument: async () => {} }
   );
   assert.ok(outcome.ok);
-  // Every job in the tick carries the SAME ref — the corpus is not copied per job.
-  const refs = [...verifyRefs, ...correctRefs];
-  assert.ok(refs.length >= 2);
-  assert.equal(new Set(refs).size, 1, "verify and correct share one corpus ref");
-  // ...and that ref resolves to the corpus the API stored once for the tick.
-  const stored = await ctx.stores.sourceCorpus.get(refs[0]);
-  assert.ok(stored !== undefined, "the referenced corpus snapshot was persisted");
+  // Every job in the tick carries the SAME projected descriptor set — references
+  // only, no sampled file content.
+  const expected = [
+    { id: "repo", name: "Product repo", kind: "git", url: "https://example.com/repo.git", subpath: "Docs" }
+  ];
+  assert.equal(verifySources.length, 1);
+  assert.equal(correctSources.length, 1);
+  assert.deepEqual(verifySources[0], expected);
+  assert.deepEqual(correctSources[0], expected);
+  assert.equal(verifySources[0], correctSources[0], "verify and correct share one projected array");
+});
+
+test("runImprovePatrol threads the projected descriptors to every improve scan", async () => {
+  const ctx = makeTestContext({
+    knowledgeConfig: {
+      sources: [
+        { id: "repo", name: "Product repo", kind: "git", url: "https://example.com/repo.git", subpath: "Docs" }
+      ],
+      destinations: [],
+      flows: [],
+      repositories: [],
+      roleGrants: {},
+      checkoutRoot: ".magpie/checkouts"
+    }
+  });
+  await indexDocs(ctx, ["a.md"]);
+  const improved: ImproveDocumentJobInput[] = [];
+  const outcome = await patrol.runImprovePatrol(
+    ctx,
+    { trigger: "scheduled" },
+    {
+      improveDocument: async (_ctx, input) => {
+        improved.push(input);
+      }
+    }
+  );
+  assert.ok(outcome.ok);
+  assert.equal(improved.length, 1);
+  assert.deepEqual(improved[0].sources, [
+    { id: "repo", name: "Product repo", kind: "git", url: "https://example.com/repo.git", subpath: "Docs" }
+  ]);
 });
 
 test("runFixPatrol runs the dedupe lens over the batch, enqueuing a scan per doc with a near-duplicate", async () => {
@@ -343,7 +393,7 @@ test("the change gate skips re-verifying an unchanged doc on the next tick (idle
   const second = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified));
   assert.ok(second.ok);
   if (!second.ok) return;
-  assert.deepEqual(verified, [], "unchanged docs against an unchanged corpus are gated — no provider calls");
+  assert.deepEqual(verified, [], "unchanged docs against an unchanged source configuration are gated — no provider calls");
   assert.equal((second.selected as string[]).length, 2, "the cursor still selected both docs");
 
   // The cursor still rotates: last_checked_at advances even for a gated doc.
@@ -373,6 +423,38 @@ test("the change gate re-verifies a doc whose content changed, and only that doc
   const second = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified));
   assert.ok(second.ok);
   assert.deepEqual(verified, ["a.md"], "only the changed doc is re-verified; the unchanged one stays gated");
+});
+
+test("the change gate re-verifies unchanged docs when the source configuration changes", async () => {
+  const ctx = makeTestContext({
+    knowledgeConfig: {
+      sources: [{ id: "repo", name: "Product repo", kind: "git", url: "https://example.com/repo.git" }],
+      destinations: [],
+      flows: [],
+      repositories: [],
+      roleGrants: {},
+      checkoutRoot: ".magpie/checkouts"
+    }
+  });
+  await indexDocs(ctx, ["a.md"]);
+  const verified: string[] = [];
+  await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified));
+  assert.deepEqual(verified, ["a.md"]);
+
+  // Re-point the configured source; the doc body is untouched. The config half of
+  // the gate (the descriptor hash) must re-arm.
+  ctx.knowledgeConfig.sources[0] = { id: "repo", name: "Product repo", kind: "git", url: "https://example.com/other.git" };
+  verified.length = 0;
+  const second = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified));
+  assert.ok(second.ok);
+  assert.deepEqual(verified, ["a.md"], "a source-configuration change re-arms the gate for unchanged docs");
+
+  // And with the config now stable again, the doc gates as usual — guards against
+  // the descriptor hash being noisy (re-arming every tick would defeat the gate).
+  verified.length = 0;
+  const third = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, recordingDeps(verified));
+  assert.ok(third.ok);
+  assert.deepEqual(verified, [], "same configuration + same content stays gated");
 });
 
 test("the change gate keeps a doc whose verify did not complete re-checkable next tick", async () => {

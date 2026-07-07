@@ -283,8 +283,5 @@ const missingApi: WatcherApi = {
   runSourceSync: async () => ({ runIds: [] }),
   runFixPatrol: async () => ({ runId: "", selectedCount: 0, findingCount: 0 }),
   runImprovePatrol: async () => ({ runId: "", selectedCount: 0, enqueuedCount: 0 }),
-  listOpenPullRequests: async () => [],
-  getSourceCorpus: async () => {
-    throw new Error("CLI runner requires a WatcherApi to resolve a job's source corpus");
-  }
+  listOpenPullRequests: async () => []
 };

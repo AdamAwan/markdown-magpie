@@ -351,6 +351,31 @@ console's **Seed / add an area** page drives — pick a flow, enter a topic, *Ge
 edit the proposed documents, then *Seed*. Over MCP the same two steps are `kb_outline` →
 `kb_seed`. The generated PRs flow into the normal review queue.
 
+## Patrol child jobs (`verify_document` / `correct_document` / `improve_document`)
+
+The hourly patrols (`correctness_patrol` / `editorial_patrol` — see
+[architecture.md](architecture.md) for the scheduled-task table) fan out into three
+provider jobs, one document at a time: `verify_document` decides whether a doc's claims
+are still supported by the flow's sources, `correct_document` repairs the claims verify
+flagged, and `improve_document` grows a healthy-but-thin doc. All three are
+**source-grounded** the same way as `draft_seed_document` and `draft_markdown_proposal`:
+each input carries the document (`path`, `content` — plus the flagged `claims` for
+correct) and `sources: SourceDescriptor[]` — references to the flow's configured sources,
+projected at enqueue time, never inline file content. The watcher resolves the git/local
+descriptors to read-only workspaces on the shared checkout volume and the executing agent
+explores them directly — CLI providers (`claude`, `codex`) traverse the checkout with
+their own tools under read-only enforcement assembled in code; HTTP providers
+(`openai-compatible`, `azure-openai`) run the bounded `list_dir`/`read_file`/`grep` tool
+loop — under the same `MAGPIE_AGENTIC_TIMEOUT_MS` agentic timeout as the draft jobs
+(default 600 000 ms / 10 min; the three queues expire at 900 s to leave headroom, and the
+patrol tick's bounded wait on a `verify_document` job stays pinned at 10 min so one hung
+verify cannot consume the whole maintenance envelope). `internet`/`agent` sources render
+as reference-only prompt notes; a flow with no filesystem-backed sources runs the plain
+one-shot path. `dedupe_documents` and `split_document` are **not** source-grounded — they
+compare the document against its destination neighbours. See the source-agentic grounding
+spec
+([docs/superpowers/specs/2026-07-06-source-agentic-grounding-design.md](superpowers/specs/2026-07-06-source-agentic-grounding-design.md)).
+
 ## Watcher Model
 
 The watcher has no direct database access. It talks to the API only:

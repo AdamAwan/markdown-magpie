@@ -130,4 +130,45 @@ describe("sourceDescriptorsOf", () => {
     const job = jobOf("draft_markdown_proposal", { provider: "openai-compatible" });
     assert.deepEqual(sourceDescriptorsOf(job), []);
   });
+
+  it("returns descriptors for the patrol child jobs", () => {
+    const sources = [git({ id: "s1" })];
+    const verify = jobOf("verify_document", {
+      provider: "openai-compatible",
+      path: "kb/a.md",
+      content: "# A",
+      sources
+    });
+    const correct = jobOf("correct_document", {
+      provider: "openai-compatible",
+      path: "kb/a.md",
+      content: "# A",
+      claims: [{ claim: "x", reason: "y" }],
+      sources
+    });
+    const improve = jobOf("improve_document", {
+      provider: "openai-compatible",
+      path: "kb/a.md",
+      content: "# A",
+      sources
+    });
+    for (const job of [verify, correct, improve]) {
+      assert.deepEqual(
+        sourceDescriptorsOf(job).map((s) => s.id),
+        ["s1"]
+      );
+    }
+  });
+
+  it("returns [] for a malformed verify_document input and for non-grounded types", () => {
+    const malformed = jobOf("verify_document", { provider: "openai-compatible" });
+    assert.deepEqual(sourceDescriptorsOf(malformed), []);
+    const dedupe = jobOf("dedupe_documents", {
+      provider: "openai-compatible",
+      path: "a",
+      content: "x",
+      neighbours: []
+    });
+    assert.deepEqual(sourceDescriptorsOf(dedupe), []);
+  });
 });

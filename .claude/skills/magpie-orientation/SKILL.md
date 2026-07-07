@@ -48,11 +48,12 @@ Implications you must design around:
   and (b) the managed-checkout volume — which now also hosts read-only *source*
   workspaces for source-grounded jobs. The watcher gets a tightly scoped payload and
   posts results back; it does not read/write Postgres directly.
-- **Seeding and gap drafting are agentic and source-grounded.** `draft_seed_document` and
-  `draft_markdown_proposal` carry `SourceDescriptor[]` references (not sampled file content);
-  the watcher resolves them to read-only checkouts and the agent explores them directly — CLI
-  providers traverse the checkout with native tools, HTTP providers run a bounded
-  `list_dir`/`read_file`/`grep` tool loop. (Patrols still use the old sampler until increment 3.)
+- **Seeding, gap drafting, and the patrol child jobs are agentic and source-grounded.**
+  Five job types — `draft_seed_document`, `draft_markdown_proposal`, `verify_document`,
+  `correct_document`, `improve_document` — carry `SourceDescriptor[]` references (not
+  sampled file content); the watcher resolves them to read-only checkouts and the agent
+  explores them directly — CLI providers traverse the checkout with native tools, HTTP
+  providers run a bounded `list_dir`/`read_file`/`grep` tool loop.
 - **Provider-neutral.** `AI_PROVIDER` selects `openai-compatible | azure-openai | codex |
   claude`. A watcher advertises a provider **capability** only when that provider's
   credentials are in its environment, and the API only routes a job to a capability a

@@ -9,16 +9,16 @@ import type {
   VerifyFinding,
   ChangeIntentTrace
 } from "@magpie/core";
-import { verifyDocumentOutputSchema } from "@magpie/jobs";
+import { verifyDocumentInputSchema, verifyDocumentOutputSchema } from "@magpie/jobs";
 import { selectFlow } from "../../platform/repositories.js";
 import { selectPatrolBatch } from "../../scheduling/patrol-cursor.js";
-import { hashDocumentContent, hashSourceCorpus } from "../../scheduling/patrol-hash.js";
+import { hashDocumentContent, hashSourceDescriptors } from "../../scheduling/patrol-hash.js";
+import { projectSourceDescriptors } from "../../platform/source-descriptors.js";
 import type { PatrolStamp } from "../../stores/patrol-store.js";
 import { flowCoveredPaths } from "../../scheduling/flow.js";
 import { runVerifyLens, type VerifyDocumentFn } from "../../scheduling/verify-lens.js";
 import { runDedupeLens, type DedupeDocumentFn } from "../../scheduling/dedupe-lens.js";
 import { runSplitLens, type SplitDocumentFn } from "../../scheduling/split-lens.js";
-import { collectSourceContext } from "../../platform/source-context.js";
 import { parseCompletedJobOutput, runJobToCompletion } from "../jobs/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
 import { logger } from "../../logger.js";
@@ -70,30 +70,49 @@ function resolveScope(
   };
 }
 
-// Dedupe key for reuseKey (#162): a verify already in flight for this document
-// (routed to the same provider) is the same piece of work a concurrent patrol
-// tick would otherwise duplicate, so wait on it instead of enqueueing another.
+// Dedupe key for reuseKey (#162): a verify already in flight for this document —
+// routed to the same provider AND grounded in the same source configuration — is
+// the same piece of work a concurrent patrol tick would otherwise duplicate, so
+// wait on it instead of enqueueing another. The descriptor hash matters: the
+// change gate is config-keyed now, so a verdict reused across a config change
+// would stamp a sourcesHash no verify ever explored and gate the doc on it.
 function verifyDocumentReuseKey(input: unknown): string {
-  if (!input || typeof input !== "object") return "unknown";
-  const candidate = input as { path?: unknown; provider?: unknown };
-  const path = typeof candidate.path === "string" ? candidate.path : "__unknown__";
-  const provider = typeof candidate.provider === "string" ? candidate.provider : "__unknown__";
-  return `${provider}:${path}`;
+  const parsed = verifyDocumentInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return "unknown";
+  }
+  return `${parsed.data.provider}:${parsed.data.path}:${hashSourceDescriptors(parsed.data.sources)}`;
 }
 
 // Default verify: enqueue a verify_document AI job and bounded-wait for the watcher
 // to complete it (mirrors gap-reconciler's reshape job). Returns undefined on any
 // non-completion so the lens skips that document rather than failing the tick.
-const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sourcesRef }) => {
+
+// Cap on the bounded wait for one verify job. The queue expiry is 15 min (agentic
+// headroom), but the patrol tick runs inside the watcher's 15-minute maintenance
+// POST envelope — letting the wait follow the expiry would hand the whole
+// envelope to one hung verify, so it is capped at the 10-minute agentic timeout
+// the job itself runs under. A CAP, not an override: a tighter configured global
+// bound (JOB_RUN_TO_COMPLETION_TIMEOUT_MS — the test harness relies on it to keep
+// bounded waits at 100ms) still wins below.
+const VERIFY_WAIT_BUDGET_MS = 10 * 60_000;
+
+const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sources }) => {
   const input = {
     path,
     content,
-    sourcesRef,
+    sources,
     provider: ctx.config.get().aiProvider
   } satisfies VerifyDocumentJobInput & { provider: AiProviderName };
   let terminal;
   try {
-    terminal = await runJobToCompletion(ctx, "verify_document", input, { reuseKey: verifyDocumentReuseKey });
+    terminal = await runJobToCompletion(ctx, "verify_document", input, {
+      reuseKey: verifyDocumentReuseKey,
+      deadlineMs: Math.min(
+        VERIFY_WAIT_BUDGET_MS,
+        ctx.settings.jobs.runToCompletionTimeoutMs ?? VERIFY_WAIT_BUDGET_MS
+      )
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "verify job failed";
     logger.warn({ path, err: message }, "verify lens: verify_document could not run");
@@ -115,7 +134,7 @@ const defaultCorrectDocument: CorrectDocumentFn = async (ctx, input) => {
     path: input.path,
     content: input.content,
     claims: input.claims,
-    sourcesRef: input.sourcesRef,
+    sources: input.sources,
     destinationId: input.destinationId,
     flowId: input.flowId,
     provider: ctx.config.get().aiProvider
@@ -154,7 +173,7 @@ const defaultImproveDocument: ImproveDocumentFn = async (ctx, input) => {
   await ctx.jobs.create("improve_document", {
     path: input.path,
     content: input.content,
-    sourcesRef: input.sourcesRef,
+    sources: input.sources,
     destinationId: input.destinationId,
     flowId: input.flowId,
     provider: ctx.config.get().aiProvider
@@ -255,22 +274,23 @@ export async function runFixPatrol(
   const actionable = selected.filter((path) => !covered.has(path));
   const skipped = selected.length - actionable.length;
 
-  // The source material is the same for every document in the flow, so collect it
-  // once per tick — and only when there is at least one document to consider. It's
-  // needed up front (before any lens runs) so the change gate below can hash it.
+  // Project the flow's configured sources into the reference-only descriptors the
+  // patrol child jobs are grounded in. Projection is cheap and identical for every
+  // document in the tick; its hash is the config half of the change gate below.
   const actionableSet = new Set(actionable);
   const actionableDocuments = documents.filter((doc) => actionableSet.has(doc.path));
-  const sources =
-    actionableDocuments.length > 0 ? await collectSourceContext(ctx.repositoryDeps(), scope.sourceIds) : [];
-  const sourcesHash = hashSourceCorpus(sources);
+  const sources = projectSourceDescriptors(ctx.repositoryDeps(), scope.sourceIds);
+  const sourcesHash = hashSourceDescriptors(sources);
 
   // Change gate (#163): skip the (provider-billed) lenses for any document whose body
-  // AND the source corpus are byte-identical to the last time it was checked — the
-  // verdict cannot have changed, so re-running verify/dedupe/split would burn calls to
-  // re-learn a known result. A never-checked doc (no recorded hash) and any hash
-  // mismatch fall through to a full check. On an idle KB this drops the tick to ~zero
-  // provider/embedding calls while the cursor still rotates (all selected docs are
-  // stamped below, unchanged ones with their existing hash preserved).
+  // AND the flow's source configuration are identical to the last time it was checked
+  // — the verdict cannot have changed, so re-running verify/dedupe/split would burn
+  // calls to re-learn a known result. A never-checked doc (no recorded hash) and any
+  // hash mismatch fall through to a full check. On an idle KB this drops the tick to
+  // ~zero provider/embedding calls while the cursor still rotates (all selected docs
+  // are stamped below, unchanged ones with their existing hash preserved). Note that
+  // pre-migration cursor rows hold corpus-based hashes, so every doc re-checks once
+  // after deploy (intended: one full re-verify under grounded exploration).
   const contentHashByPath = new Map(actionableDocuments.map((doc) => [doc.path, hashDocumentContent(doc.content)]));
   const toCheck = actionableDocuments.filter((doc) => {
     const prior = priorByPath.get(doc.path);
@@ -278,21 +298,13 @@ export async function runFixPatrol(
   });
   const gated = actionableDocuments.length - toCheck.length;
 
-  // Persist the corpus ONCE per tick, content-addressed by its hash, so the
-  // verify/correct jobs below carry only that ref instead of a by-value copy of
-  // the whole corpus each (#163 Part 2). Saved only when at least one doc will be
-  // checked (i.e. a job that references it will be enqueued).
-  if (toCheck.length > 0) {
-    await ctx.stores.sourceCorpus.save(sourcesHash, sources);
-  }
-
   // Run the verify lens over the documents that actually need checking this tick.
   const selectedSet = new Set(toCheck.map((doc) => doc.path));
   const selectedDocuments = toCheck.map((doc) => ({ path: doc.path, content: doc.content }));
   const { findings, checkedPaths } = await runVerifyLens(ctx, {
     flowId: options.flowId,
     documents: selectedDocuments,
-    sourcesRef: sourcesHash,
+    sources,
     verifyDocument
   });
 
@@ -308,7 +320,7 @@ export async function runFixPatrol(
       path: finding.path,
       content: document.content,
       claims: finding.claims,
-      sourcesRef: sourcesHash,
+      sources,
       destinationId: document.repositoryId,
       flowId: options.flowId
     });
@@ -413,27 +425,25 @@ export async function runImprovePatrol(
   const actionable = selected.filter((path) => !covered.has(path));
   const skipped = selected.length - actionable.length;
 
+  // Project the flow's configured sources into the reference-only descriptors the
+  // improve scans are grounded in (see runFixPatrol). Projection is cheap and
+  // identical for every document in the tick; its hash is the config half of the
+  // change gate below.
   const actionableSet = new Set(actionable);
   const actionableDocuments = documents.filter((doc) => actionableSet.has(doc.path));
-  const sources =
-    actionableDocuments.length > 0 ? await collectSourceContext(ctx.repositoryDeps(), scope.sourceIds) : [];
-  const sourcesHash = hashSourceCorpus(sources);
+  const sources = projectSourceDescriptors(ctx.repositoryDeps(), scope.sourceIds);
+  const sourcesHash = hashSourceDescriptors(sources);
 
-  // Change gate (#163): an improve scan of a doc that is byte-identical against a
-  // byte-identical source corpus would re-propose the same edit, so skip enqueueing
-  // it. Never-checked docs and any hash mismatch fall through and are scanned.
+  // Change gate (#163): an improve scan of a doc that is byte-identical against an
+  // identical source configuration would re-propose the same edit, so skip
+  // enqueueing it. Never-checked docs and any hash mismatch fall through and are
+  // scanned.
   const contentHashByPath = new Map(actionableDocuments.map((doc) => [doc.path, hashDocumentContent(doc.content)]));
   const toCheck = actionableDocuments.filter((doc) => {
     const prior = priorByPath.get(doc.path);
     return !(prior?.contentHash === contentHashByPath.get(doc.path) && prior?.sourcesHash === sourcesHash);
   });
   const gated = actionableDocuments.length - toCheck.length;
-
-  // Persist the corpus once per tick (see runFixPatrol) so each improve scan carries
-  // only a ref to it rather than a by-value copy (#163 Part 2).
-  if (toCheck.length > 0) {
-    await ctx.stores.sourceCorpus.save(sourcesHash, sources);
-  }
 
   const checkedPaths = new Set<string>();
   let enqueuedCount = 0;
@@ -442,7 +452,7 @@ export async function runImprovePatrol(
       await improveDocument(ctx, {
         path: document.path,
         content: document.content,
-        sourcesRef: sourcesHash,
+        sources,
         destinationId: document.repositoryId,
         flowId: options.flowId
       });

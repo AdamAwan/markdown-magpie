@@ -1,37 +1,42 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { SourceDataContext } from "@magpie/core";
-import { hashDocumentContent, hashSourceCorpus } from "./patrol-hash.js";
+import type { SourceDescriptor } from "@magpie/core";
+import { hashDocumentContent, hashSourceDescriptors } from "./patrol-hash.js";
 
 test("hashDocumentContent is stable for identical content and differs when it changes", () => {
   assert.equal(hashDocumentContent("# Doc\nbody"), hashDocumentContent("# Doc\nbody"));
   assert.notEqual(hashDocumentContent("# Doc\nbody"), hashDocumentContent("# Doc\nbody "));
 });
 
-function source(overrides: Partial<SourceDataContext>): SourceDataContext {
-  return { sourceId: "s1", sourceName: "S1", kind: "local", ...overrides };
+function gitSource(overrides: Partial<Extract<SourceDescriptor, { kind: "git" }>>): SourceDescriptor {
+  return { id: "s1", name: "S1", kind: "git", url: "https://example.com/repo.git", ...overrides };
 }
 
-test("hashSourceCorpus is order-independent", () => {
-  const a = source({ sourceId: "a", content: "alpha" });
-  const b = source({ sourceId: "b", content: "beta" });
-  assert.equal(hashSourceCorpus([a, b]), hashSourceCorpus([b, a]));
+test("hashSourceDescriptors is order-independent", () => {
+  const a = gitSource({ id: "a" });
+  const b = gitSource({ id: "b" });
+  assert.equal(hashSourceDescriptors([a, b]), hashSourceDescriptors([b, a]));
 });
 
-test("hashSourceCorpus changes when any source's content changes", () => {
-  const before = [source({ sourceId: "a", content: "alpha" })];
-  const after = [source({ sourceId: "a", content: "alpha edited" })];
-  assert.notEqual(hashSourceCorpus(before), hashSourceCorpus(after));
+test("hashSourceDescriptors changes when a descriptor is re-pointed or re-scoped", () => {
+  const before = [gitSource({ url: "https://example.com/repo.git" })];
+  const rePointed = [gitSource({ url: "https://example.com/other.git" })];
+  assert.notEqual(hashSourceDescriptors(before), hashSourceDescriptors(rePointed));
+
+  const scoped = [gitSource({ subpath: "Docs" })];
+  const reScoped = [gitSource({ subpath: "Guides" })];
+  assert.notEqual(hashSourceDescriptors(scoped), hashSourceDescriptors(reScoped));
+  assert.notEqual(hashSourceDescriptors(before), hashSourceDescriptors(scoped));
 });
 
-test("hashSourceCorpus distinguishes content that only differs across a field boundary", () => {
-  // Field-boundary robustness: two sources whose (path, content) split differently
+test("an empty descriptor set hashes to a stable value", () => {
+  assert.equal(hashSourceDescriptors([]), hashSourceDescriptors([]));
+});
+
+test("hashSourceDescriptors distinguishes values that only differ across a field boundary", () => {
+  // Field-boundary robustness: two descriptors whose (name, url) split differently
   // must not collide just because a naive join would concatenate to the same string.
-  const left = hashSourceCorpus([source({ path: "a", content: "bc" })]);
-  const right = hashSourceCorpus([source({ path: "ab", content: "c" })]);
+  const left = hashSourceDescriptors([gitSource({ name: "ab", url: "c" })]);
+  const right = hashSourceDescriptors([gitSource({ name: "a", url: "bc" })]);
   assert.notEqual(left, right);
-});
-
-test("an empty corpus hashes to a stable value", () => {
-  assert.equal(hashSourceCorpus([]), hashSourceCorpus([]));
 });

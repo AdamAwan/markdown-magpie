@@ -6,14 +6,17 @@ import {
   allQueueDefinitions,
   answerQuestionInputSchema,
   answerQuestionOutputSchema,
+  correctDocumentInputSchema,
   crosslinkPullRequestsInputSchema,
   draftMarkdownProposalInputSchema,
   draftSeedDocumentInputSchema,
+  improveDocumentInputSchema,
   jobDefinition,
   jobTypesForCapability,
   jobTypesWithoutCapabilities,
   queueNameForJob,
-  queueNamesForCapabilities
+  queueNamesForCapabilities,
+  verifyDocumentInputSchema
 } from "./index.js";
 
 const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
@@ -28,11 +31,11 @@ const EXPIRATION_SECONDS = {
   suggest_consolidation: 10 * 60,
   reconcile_gap_clusters: 5 * 60,
   sync_source_changes_generate_plan: 60 * 60,
-  verify_document: 10 * 60,
-  correct_document: 10 * 60,
+  verify_document: 15 * 60,
+  correct_document: 15 * 60,
   dedupe_documents: 10 * 60,
   split_document: 10 * 60,
-  improve_document: 10 * 60,
+  improve_document: 15 * 60,
   fold_changeset_proposal: 15 * 60,
   refresh_flow_snapshot: 5 * 60,
   process_gaps_to_pull_requests: 60 * 60,
@@ -452,6 +455,34 @@ test("draft_markdown_proposal input carries source descriptors, not inline conte
     expectedOutput: "markdown_proposal"
   };
   assert.equal(draftMarkdownProposalInputSchema.safeParse(legacy).success, false);
+});
+
+test("patrol child-job inputs carry source descriptors, not a corpus ref", () => {
+  const sources = [
+    { id: "src-1", name: "Product repo", kind: "git", url: "https://example.com/repo.git", subpath: "Docs" },
+    { id: "src-2", name: "Agent knowledge", kind: "agent" }
+  ];
+  const verify = { provider: "openai-compatible", path: "kb/a.md", content: "# A", sources };
+  const correct = {
+    provider: "openai-compatible",
+    path: "kb/a.md",
+    content: "# A",
+    claims: [{ claim: "x", reason: "y" }],
+    sources
+  };
+  const improve = { provider: "openai-compatible", path: "kb/a.md", content: "# A", sources };
+  assert.equal(verifyDocumentInputSchema.safeParse(verify).success, true);
+  assert.equal(correctDocumentInputSchema.safeParse(correct).success, true);
+  assert.equal(improveDocumentInputSchema.safeParse(improve).success, true);
+  // The pre-migration inputs carried a corpus-ref string instead of a sources
+  // array; anything without `sources` is rejected regardless of extra keys.
+  const legacy = { provider: "openai-compatible", path: "kb/a.md", content: "# A" };
+  assert.equal(verifyDocumentInputSchema.safeParse(legacy).success, false);
+  assert.equal(improveDocumentInputSchema.safeParse(legacy).success, false);
+  // With claims present the only thing missing is `sources`, so this rejection
+  // pins the sources requirement specifically.
+  const legacyCorrect = { ...legacy, claims: [{ claim: "x", reason: "y" }] };
+  assert.equal(correctDocumentInputSchema.safeParse(legacyCorrect).success, false);
 });
 
 test("fold_markdown_proposal is a provider AI job; comment_pull_request is github", () => {

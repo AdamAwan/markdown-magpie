@@ -40,9 +40,11 @@ enqueues a job; a separate **watcher** process claims it, invokes the configured
 provider, and posts the result back over HTTP. The API and watcher share only the
 HTTP API and the managed-checkout volume — the watcher has no direct database
 access. The shared checkout volume now also hosts *source* checkouts for
-source-grounded jobs (seeding and gap drafting): the watcher resolves a job's
-`SourceDescriptor[]` to read-only workspaces there and lets the agent explore them
-directly, so neither seeding nor gap drafting samples source files API-side. See
+source-grounded jobs (seeding, gap drafting, and the patrol child jobs
+`verify_document` / `correct_document` / `improve_document`): the watcher resolves a
+job's `SourceDescriptor[]` to read-only workspaces there and lets the agent explore
+them directly, so no source-grounded job samples source files API-side. The shared
+source-corpus snapshot store and its `/api/source-corpus` endpoint are gone. See
 the source-agentic grounding spec
 ([docs/superpowers/specs/2026-07-06-source-agentic-grounding-design.md](superpowers/specs/2026-07-06-source-agentic-grounding-design.md)).
 

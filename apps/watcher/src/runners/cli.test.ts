@@ -62,7 +62,6 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
     runImprovePatrol: async () => ({ runId: "run-1", selectedCount: 0, enqueuedCount: 0 }),
     listOpenPullRequests: async () => [],
-    getSourceCorpus: async () => [],
     ...overrides
   };
 }
@@ -453,6 +452,41 @@ describe("CliRunner source-grounded seeding", () => {
     // Wait past the grace window so the escalation timer fires.
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  });
+
+  it("routes verify_document with fs sources through the read-only source-grounded path", async () => {
+    const verifyOutput = { verdict: "healthy", claims: [] };
+    const calls: SpawnCall[] = [];
+    const runner = new CliRunner({
+      capability: "claude",
+      command: "claude",
+      args: ["-p"],
+      promptMode: "arg",
+      api: fakeApi(),
+      prepareWorkspaces: async () => ({
+        workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }],
+        notes: []
+      }),
+      spawnOverride: fakeSpawn(calls, JSON.stringify(verifyOutput))
+    });
+    const output = await runner.run(
+      job("verify_document", {
+        provider: "claude",
+        path: "kb/a.md",
+        content: "# A",
+        sources: [{ id: "s1", name: "Repo", kind: "local", path: "unused-here" }]
+      }),
+      new AbortController().signal
+    );
+    assert.deepEqual(output, verifyOutput);
+
+    const call = calls[0]!;
+    // cwd = the workspace root and the hard read-only tools present ⇒ the patrol
+    // job went through runSourceGrounded, not the plain generative path.
+    assert.equal(call.cwd, "/checkouts/s1");
+    assert.ok(call.args.includes("--tools"));
+    assert.equal(call.args[call.args.indexOf("--tools") + 1], "Read,Grep,Glob");
+    assert.equal(call.args.at(-2), "--");
   });
 
   it("routes draft_markdown_proposal with fs sources through the read-only source-grounded path", async () => {

@@ -453,7 +453,7 @@ test("improve_document completion drafts a proposal and gates it (open-new -> pu
   const job = await ctx.jobs.create("improve_document", {
     path: "kb/refunds.md",
     content: "# Refunds",
-    sourcesRef: "test-corpus",
+    sources: [],
     destinationId: "docs",
     flowId: "billing",
     provider: "codex"
@@ -486,7 +486,7 @@ test("improve_document no-op completion creates no proposal or publication actio
   const job = await ctx.jobs.create("improve_document", {
     path: "kb/refunds.md",
     content: "# Refunds",
-    sourcesRef: "test-corpus",
+    sources: [],
     destinationId: "docs",
     flowId: "billing",
     provider: "codex"
@@ -835,7 +835,7 @@ test("completeJob on a correct_document job creates a corrective proposal and en
     path: "a.md",
     content: "# a",
     claims: [{ claim: "stale", reason: "x" }],
-    sourcesRef: "test-corpus",
+    sources: [],
     destinationId: "docs",
     flowId: "billing",
     provider: "codex"

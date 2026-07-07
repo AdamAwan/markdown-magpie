@@ -70,7 +70,6 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
     runImprovePatrol: async () => ({ runId: "run-1", selectedCount: 0, enqueuedCount: 0 }),
     listOpenPullRequests: async () => [],
-    getSourceCorpus: async () => [],
     ...overrides
   };
 }
@@ -780,6 +779,54 @@ describe("ChatRunner", () => {
 
     assert.deepEqual(preparedFor, ["s1"], "the job's descriptors are resolved to workspaces");
     assert.equal(output.title, "Statements Module");
+    assert.equal(chat.requests.length, 0, "no one-shot generative call is made");
+  });
+
+  it("dispatches an improve_document job with fs sources to the source-agent loop", async () => {
+    // A patrol child job carrying a local-kind source must run the agentic tool
+    // loop over prepared workspaces, not the one-shot generative path.
+    const improveOutput = JSON.stringify({ improved: false, rationale: "nothing source-backed to add" });
+    // The scripted model answers with valid output immediately — no tool turns
+    // needed to prove the dispatch went through the agent path.
+    const agentModel = new MockLanguageModelV3({
+      doGenerate: {
+        content: [{ type: "text", text: improveOutput }],
+        finishReason: { unified: "stop", raw: "stop" },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined }
+        },
+        warnings: []
+      }
+    });
+    const chat = new FakeChatProvider(() => {
+      throw new Error("the chat provider must not be called on the agent path");
+    });
+    const preparedFor: string[] = [];
+    const runner = new ChatRunner(
+      "openai-compatible",
+      chat,
+      fakeApi(),
+      agentModel,
+      "/data/checkouts",
+      async (descriptors) => {
+        preparedFor.push(...descriptors.map((descriptor) => descriptor.id));
+        return { workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }], notes: [] };
+      }
+    );
+    const output = (await runner.run(
+      job("improve_document", {
+        provider: "openai-compatible",
+        path: "kb/a.md",
+        content: "# A",
+        sources: [{ id: "s1", name: "Repo", kind: "local", path: "/srv/repo" }]
+      }),
+      new AbortController().signal
+    )) as { improved: boolean; rationale: string };
+
+    assert.deepEqual(preparedFor, ["s1"], "the job's descriptors are resolved to workspaces");
+    assert.equal(output.improved, false);
+    assert.equal(output.rationale, "nothing source-backed to add");
     assert.equal(chat.requests.length, 0, "no one-shot generative call is made");
   });
 
