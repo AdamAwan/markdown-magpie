@@ -14,7 +14,10 @@ export function resolvePrimaryBranch(inputs: {
   detectedCurrent?: string;
 }): string {
   return (
-    nonEmpty(inputs.configuredBranch) ?? nonEmpty(inputs.detectedDefault) ?? nonEmpty(inputs.detectedCurrent) ?? "main"
+    nonEmpty(inputs.configuredBranch) ??
+    nonEmpty(inputs.detectedDefault) ??
+    nonEmpty(inputs.detectedCurrent) ??
+    "main"
   );
 }
 

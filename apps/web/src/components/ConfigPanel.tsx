@@ -140,10 +140,7 @@ export function ConfigPanel({
       const refreshed = await apiGet<RuntimeConfig>("/config");
       onConfigChange(refreshed);
       const failureNote = result.failures.length > 0 ? ` (${result.failures.length} source(s) failed to re-index)` : "";
-      onMessage(
-        `Data reset. Re-indexed ${result.reindexed} knowledge source(s)${failureNote}.`,
-        result.failures.length > 0 ? "danger" : "success"
-      );
+      onMessage(`Data reset. Re-indexed ${result.reindexed} knowledge source(s)${failureNote}.`, result.failures.length > 0 ? "danger" : "success");
     } catch (error) {
       onMessage(errorMessage(error), "danger");
     } finally {
@@ -212,22 +209,19 @@ export function ConfigPanel({
           <ConfigGroup title="API" value={{ ...config.api, browserApiBaseUrl: apiBaseUrl }} />
           <ConfigGroup title="Stores" value={config.stores} />
           <ConfigGroup title="Knowledge" value={config.knowledge} />
-          <ConfigGroup
-            title="Retrieval"
-            value={{
-              mode: config.retrieval.mode,
-              embeddingProvider: config.retrieval.embeddingProvider,
-              reason: config.retrieval.reason
-            }}
-          />
+          <ConfigGroup title="Retrieval" value={{
+            mode: config.retrieval.mode,
+            embeddingProvider: config.retrieval.embeddingProvider,
+            reason: config.retrieval.reason
+          }} />
           <ConfigGroup title="Providers" value={config.providers} />
           <ConfigGroup title="Watcher" value={config.watcher} />
         </ConfigStack>
         <ResetControl>
           <h3>Demo controls</h3>
           <EmptyState>
-            Deletes all questions, proposals, gaps and jobs, resets AI config, and re-indexes the knowledge bases from
-            configuration.
+            Deletes all questions, proposals, gaps and jobs, resets AI config, and re-indexes the
+            knowledge bases from configuration.
           </EmptyState>
           {confirmingReset ? (
             <ResetConfirm>
@@ -276,10 +270,7 @@ function flattenConfig(value: Record<string, unknown>, prefix = ""): Record<stri
       };
     }
 
-    result[nextKey] =
-      typeof itemValue === "string" || typeof itemValue === "number" || itemValue === null
-        ? itemValue
-        : JSON.stringify(itemValue);
+    result[nextKey] = typeof itemValue === "string" || typeof itemValue === "number" || itemValue === null ? itemValue : JSON.stringify(itemValue);
     return result;
   }, {});
 }

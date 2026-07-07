@@ -170,18 +170,12 @@ async function reconcileGapsInner(
   // (a) Revision gate.
   if (catalogRevision === processed && pending.length === 0) {
     details.skippedModelWork = true;
-    logger.info(
-      { flowLabel, catalogRevision },
-      "gap reconciler: no gap changes and no pending publication actions; ran PR-state pass only"
-    );
+    logger.info({ flowLabel, catalogRevision }, "gap reconciler: no gap changes and no pending publication actions; ran PR-state pass only");
     return details;
   }
 
   if (catalogRevision !== processed) {
-    logger.info(
-      { flowLabel, processed, catalogRevision },
-      "gap reconciler: gap catalog advanced; reconciling clusters"
-    );
+    logger.info({ flowLabel, processed, catalogRevision }, "gap reconciler: gap catalog advanced; reconciling clusters");
     const clustering = await reconcileClusters(ctx, flowId);
     details.clustersCreated = clustering.clustersCreated;
     details.mergeDecisions = clustering.mergeDecisions;
@@ -205,10 +199,7 @@ async function reconcileGapsInner(
     }
   } else {
     details.skippedModelWork = true;
-    logger.info(
-      { flowLabel, catalogRevision, pending: pending.length },
-      "gap reconciler: catalog revision unchanged; draining pending actions"
-    );
+    logger.info({ flowLabel, catalogRevision, pending: pending.length }, "gap reconciler: catalog revision unchanged; draining pending actions");
   }
 
   // (d) Outbox: retry this flow's pending/failed publication actions without re-running models.
@@ -297,10 +288,7 @@ export async function applyPullRequestTransition(
   } else if (status.state === "closed") {
     const rejected = await ctx.stores.proposals.updateStatus(proposalId, "rejected");
     if (rejected) {
-      logger.info(
-        { proposalId },
-        "gap reconciler: proposal PR closed without merge; marked rejected and froze its cluster"
-      );
+      logger.info({ proposalId }, "gap reconciler: proposal PR closed without merge; marked rejected and froze its cluster");
       await freezeClusterForProposal(ctx, rejected);
       return true;
     }
@@ -317,10 +305,7 @@ async function freezeClusterForProposal(ctx: AppContext, proposal: Proposal): Pr
 // (c) Clustering for one flow: assign the flow's new gaps, then propose
 // merges/splits over the flow's active set and apply only the critic-confirmed
 // changes. Everything is filtered to `flowId` so a reshape can never mix flows.
-async function reconcileClusters(
-  ctx: AppContext,
-  flowId: string | undefined
-): Promise<
+async function reconcileClusters(ctx: AppContext, flowId: string | undefined): Promise<
   Pick<
     GapReconcileRunDetails,
     | "clustersCreated"
@@ -364,10 +349,7 @@ async function reconcileClusters(
     const members = await ctx.stores.gapClusters.listMembershipsForCluster(cluster.id);
     if (members.length === 0) {
       await ctx.stores.gapClusters.freezeCluster(cluster.id);
-      logger.info(
-        { flowLabel, clusterId: cluster.id, clusterTitle: cluster.title },
-        "gap reconciler: froze cluster — all gaps resolved"
-      );
+      logger.info({ flowLabel, clusterId: cluster.id, clusterTitle: cluster.title }, "gap reconciler: froze cluster — all gaps resolved");
     }
   }
 
@@ -448,10 +430,7 @@ async function reconcileClusters(
           clusterIds: merge.clusterIds
         });
         if (!merge.confirmed) {
-          logger.info(
-            { flowLabel, clusterCount: merge.clusterIds.length },
-            "gap reconciler: critic rejected proposed merge"
-          );
+          logger.info({ flowLabel, clusterCount: merge.clusterIds.length }, "gap reconciler: critic rejected proposed merge");
           continue;
         }
         details.decisionsApplied += 1;
@@ -476,15 +455,8 @@ async function reconcileClusters(
           continue;
         }
         details.decisionsApplied += 1;
-        logger.info(
-          { flowLabel, clusterId: split.clusterId, childCount: split.children.length },
-          "gap reconciler: critic confirmed split of cluster"
-        );
-        await applySplit(
-          ctx,
-          { clusterId: split.clusterId, children: split.children, rationale: split.rationale },
-          flowId
-        );
+        logger.info({ flowLabel, clusterId: split.clusterId, childCount: split.children.length }, "gap reconciler: critic confirmed split of cluster");
+        await applySplit(ctx, { clusterId: split.clusterId, children: split.children, rationale: split.rationale }, flowId);
       }
       // Dismissals run before drafting (step 4) so an off-topic cluster never becomes
       // a pull request. A confirmed dismissal drops the cluster and dismisses its
@@ -500,17 +472,11 @@ async function reconcileClusters(
           clusterIds: [dismissal.clusterId]
         });
         if (!dismissal.confirmed) {
-          logger.info(
-            { flowLabel, clusterId: dismissal.clusterId },
-            "gap reconciler: critic rejected proposed dismissal"
-          );
+          logger.info({ flowLabel, clusterId: dismissal.clusterId }, "gap reconciler: critic rejected proposed dismissal");
           continue;
         }
         details.decisionsApplied += 1;
-        logger.info(
-          { flowLabel, clusterId: dismissal.clusterId },
-          "gap reconciler: critic confirmed dismissal of off-topic cluster"
-        );
+        logger.info({ flowLabel, clusterId: dismissal.clusterId }, "gap reconciler: critic confirmed dismissal of off-topic cluster");
         await applyDismissal(ctx, { clusterId: dismissal.clusterId, rationale: dismissal.rationale }, flowId);
       }
       // Record the composition we just judged, so a later tick whose active set is
@@ -557,7 +523,9 @@ async function draftProposalsForUncoveredClusters(
 ): Promise<{ drafted: number; deferred: number }> {
   const active = await ctx.stores.gapClusters.listActiveClustersForFlow(flowId);
   const proposals = await ctx.stores.proposals.list(500);
-  const coveredClusterIds = new Set(proposals.map((p) => p.gapClusterId).filter((id): id is string => Boolean(id)));
+  const coveredClusterIds = new Set(
+    proposals.map((p) => p.gapClusterId).filter((id): id is string => Boolean(id))
+  );
   // Drafting is enqueue-only: a proposal row appears only when the
   // draft_markdown_proposal job completes (the gaps job-completion path links it to
   // its cluster). A draft still queued/active for a cluster therefore ALREADY covers
@@ -576,13 +544,7 @@ async function draftProposalsForUncoveredClusters(
     // Loud on purpose: reaching the cap means reshape did not collapse the singleton
     // set the way it should have — the fan-out signature. Surface it so it's alertable.
     logger.warn(
-      {
-        flowId: flowId ?? "default",
-        uncovered: uncovered.length,
-        drafting: toDraft.length,
-        deferred,
-        cap: MAX_DRAFTS_PER_TICK
-      },
+      { flowId: flowId ?? "default", uncovered: uncovered.length, drafting: toDraft.length, deferred, cap: MAX_DRAFTS_PER_TICK },
       "gap reconciler: uncovered cluster count exceeds the per-tick draft cap; drafting a capped batch and deferring the rest (reshape likely under-collapsed)"
     );
   }
@@ -593,28 +555,16 @@ async function draftProposalsForUncoveredClusters(
       const outcome = await gapsService.draftFromCluster(ctx, cluster.id, {});
       if (outcome.ok) {
         drafted += 1;
-        logger.info(
-          { flowId: flowId ?? "default", clusterId: cluster.id, clusterTitle: cluster.title, jobId: outcome.job.id },
-          "gap reconciler: enqueued draft for cluster"
-        );
+        logger.info({ flowId: flowId ?? "default", clusterId: cluster.id, clusterTitle: cluster.title, jobId: outcome.job.id }, "gap reconciler: enqueued draft for cluster");
       } else {
-        logger.warn(
-          { flowId: flowId ?? "default", clusterId: cluster.id, code: outcome.code },
-          "gap reconciler: could not draft proposal for cluster"
-        );
+        logger.warn({ flowId: flowId ?? "default", clusterId: cluster.id, code: outcome.code }, "gap reconciler: could not draft proposal for cluster");
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "draft failed";
-      logger.warn(
-        { flowId: flowId ?? "default", clusterId: cluster.id, err: message },
-        "gap reconciler: failed to draft proposal for cluster"
-      );
+      logger.warn({ flowId: flowId ?? "default", clusterId: cluster.id, err: message }, "gap reconciler: failed to draft proposal for cluster");
     }
   }
-  logger.info(
-    { flowId: flowId ?? "default", drafted, deferred },
-    "gap reconciler: drafted new proposals for uncovered clusters"
-  );
+  logger.info({ flowId: flowId ?? "default", drafted, deferred }, "gap reconciler: drafted new proposals for uncovered clusters");
   return { drafted, deferred };
 }
 
@@ -745,19 +695,13 @@ async function requestReshape(
   }
 
   if (terminal.state !== "completed") {
-    logger.warn(
-      { flowLabel, jobId: terminal.id, state: terminal.state },
-      "gap reconciler: reshape job did not complete; skipping reshape this run"
-    );
+    logger.warn({ flowLabel, jobId: terminal.id, state: terminal.state }, "gap reconciler: reshape job did not complete; skipping reshape this run");
     return undefined;
   }
 
   const parsed = parseCompletedJobOutput(reconcileGapClustersOutputSchema, terminal.output);
   if (!parsed) {
-    logger.warn(
-      { flowLabel, jobId: terminal.id },
-      "gap reconciler: reshape job returned malformed output; skipping reshape"
-    );
+    logger.warn({ flowLabel, jobId: terminal.id }, "gap reconciler: reshape job returned malformed output; skipping reshape");
     return undefined;
   }
   return parsed;
@@ -849,11 +793,7 @@ async function applySplit(ctx: AppContext, split: ProposedSplit, flowId: string 
 // resurface as candidates or re-cluster) then dismiss the cluster itself (so it
 // leaves the active set and never drafts). Defence-in-depth: only a still-active
 // cluster of this flow is dismissed, matching applyMerge/applySplit.
-async function applyDismissal(
-  ctx: AppContext,
-  dismissal: ProposedDismissal,
-  flowId: string | undefined
-): Promise<void> {
+async function applyDismissal(ctx: AppContext, dismissal: ProposedDismissal, flowId: string | undefined): Promise<void> {
   const cluster = await ctx.stores.gapClusters.getCluster(dismissal.clusterId);
   if (!cluster || cluster.status !== "active" || !sameFlow(cluster.flowId, flowId)) {
     return;
@@ -956,10 +896,7 @@ async function drainPublicationOutbox(
       const message = error instanceof Error ? error.message : "publication failed";
       await ctx.stores.gapClusters.markPublicationActionFailed(action.id, message);
       failed += 1;
-      logger.warn(
-        { actionId: action.id, kind: action.kind, proposalId: action.proposalId, err: message },
-        "publication action failed"
-      );
+      logger.warn({ actionId: action.id, kind: action.kind, proposalId: action.proposalId, err: message }, "publication action failed");
     }
   }
   logger.info({ flowLabel, done, failed }, "gap reconciler: publication outbox drained");
@@ -970,7 +907,11 @@ async function drainPublicationOutbox(
 // same file, cross-link them once. Uses the spine's sharedTargets; records each
 // pair in prCrosslinks so a pair is linked once, not every tick. Best-effort —
 // a per-pair failure is logged and never aborts reconcileGaps.
-async function detectOverlaps(ctx: AppContext, flowId: string | undefined, cache: ClusterFlowCache): Promise<number> {
+async function detectOverlaps(
+  ctx: AppContext,
+  flowId: string | undefined,
+  cache: ClusterFlowCache
+): Promise<number> {
   const open = await ctx.stores.proposals.list(200, { status: "pr-opened" });
   const candidates: Array<{ id: string; targetPath: string; pullRequestUrl: string }> = [];
   for (const proposal of open) {
@@ -1006,7 +947,7 @@ async function detectOverlaps(ctx: AppContext, flowId: string | undefined, cache
       }
     }
   }
-  overlappingPairs.sort((l, r) => l[0] - r[0] || l[1] - r[1]);
+  overlappingPairs.sort((l, r) => (l[0] - r[0]) || (l[1] - r[1]));
 
   // One query loads every already-linked pair among the candidates, replacing the
   // per-pair has() round-trip in the loop below.
@@ -1034,10 +975,7 @@ async function detectOverlaps(ctx: AppContext, flowId: string | undefined, cache
           { proposalId: b.id, pullRequestUrl: b.pullRequestUrl }
         ]
       });
-      logger.info(
-        { flowId: flowId ?? "default", proposalA: a.id, proposalB: b.id, targets },
-        "gap reconciler: cross-linked overlapping PRs"
-      );
+      logger.info({ flowId: flowId ?? "default", proposalA: a.id, proposalB: b.id, targets }, "gap reconciler: cross-linked overlapping PRs");
     } catch (error) {
       const message = error instanceof Error ? error.message : "overlap cross-link failed";
       logger.warn({ proposalA: a.id, proposalB: b.id, err: message }, "overlap cross-link failed");

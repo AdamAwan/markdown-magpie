@@ -4,7 +4,9 @@ import type { ConfiguredKnowledgeFlow, ScheduledTask } from "../lib/types";
 import { renderMarkup } from "../test/render";
 import { SchedulesPanel } from "./SchedulesPanel";
 
-const flows: ConfiguredKnowledgeFlow[] = [{ id: "docs", name: "Docs", sourceIds: ["source"], destinationId: "dest" }];
+const flows: ConfiguredKnowledgeFlow[] = [
+  { id: "docs", name: "Docs", sourceIds: ["source"], destinationId: "dest" }
+];
 
 const scheduledTask: ScheduledTask = {
   key: "correctness_patrol:docs",

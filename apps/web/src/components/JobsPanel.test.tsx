@@ -39,7 +39,9 @@ test("renders jobs, workers, and schedules as separate panels", () => {
 });
 
 test("shows the explicitly selected job in the detail pane", () => {
-  const html = renderMarkup(<JobsPanel jobs={jobs} schedules={[]} workers={[]} selectedJob={jobs[1]} {...callbacks} />);
+  const html = renderMarkup(
+    <JobsPanel jobs={jobs} schedules={[]} workers={[]} selectedJob={jobs[1]} {...callbacks} />
+  );
 
   assert.match(html, /old-job-input/);
   // The selected list item is flagged for the highlight styling.

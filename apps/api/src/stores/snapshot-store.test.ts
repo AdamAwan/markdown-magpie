@@ -11,27 +11,9 @@ function sampleSnapshot(flowId: string | undefined): FlowSnapshot {
     flowId,
     takenAt: "2026-06-19T00:00:00.000Z",
     catalogRevision: 7,
-    gaps: [
-      {
-        summary: "How to configure X",
-        questionIds: ["q1"],
-        count: 1,
-        latestAskedAt: "2026-06-19T00:00:00.000Z",
-        confidence: "low"
-      }
-    ],
-    proposals: [
-      { id: "p1", title: "X", status: "pr-opened", gapClusterId: "c1", pullRequestUrl: "https://github.com/o/r/pull/1" }
-    ],
-    pullRequests: [
-      {
-        proposalId: "p1",
-        url: "https://github.com/o/r/pull/1",
-        merged: false,
-        state: "open",
-        checkedAt: "2026-06-19T00:00:00.000Z"
-      }
-    ]
+    gaps: [{ summary: "How to configure X", questionIds: ["q1"], count: 1, latestAskedAt: "2026-06-19T00:00:00.000Z", confidence: "low" }],
+    proposals: [{ id: "p1", title: "X", status: "pr-opened", gapClusterId: "c1", pullRequestUrl: "https://github.com/o/r/pull/1" }],
+    pullRequests: [{ proposalId: "p1", url: "https://github.com/o/r/pull/1", merged: false, state: "open", checkedAt: "2026-06-19T00:00:00.000Z" }]
   };
 }
 

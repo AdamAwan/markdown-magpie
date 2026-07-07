@@ -4,24 +4,21 @@ import { allQueueDefinitions } from "@magpie/jobs";
 import { pgBossQueueOptions, queueDefinitionsForType } from "./pg-boss-broker.js";
 
 test("pgBossQueueOptions applies explicit test overrides without changing untouched policy fields", () => {
-  const options = pgBossQueueOptions(
-    {
-      retryLimit: 2,
-      retryDelay: 30,
-      retryBackoff: true,
-      retryDelayMax: 600,
-      heartbeatSeconds: 60,
-      expireInSeconds: 300,
-      retentionSeconds: 1_209_600,
-      deleteAfterSeconds: 2_592_000,
-      deadLetter: "refresh_flow_snapshot__dead_letter"
-    },
-    {
-      retryLimit: 1,
-      retryDelay: 1,
-      retryBackoff: false
-    }
-  );
+  const options = pgBossQueueOptions({
+    retryLimit: 2,
+    retryDelay: 30,
+    retryBackoff: true,
+    retryDelayMax: 600,
+    heartbeatSeconds: 60,
+    expireInSeconds: 300,
+    retentionSeconds: 1_209_600,
+    deleteAfterSeconds: 2_592_000,
+    deadLetter: "refresh_flow_snapshot__dead_letter"
+  }, {
+    retryLimit: 1,
+    retryDelay: 1,
+    retryBackoff: false
+  });
 
   assert.deepEqual(options, {
     retryLimit: 1,

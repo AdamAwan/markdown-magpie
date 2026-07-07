@@ -41,15 +41,17 @@ const justifyMap = {
 } as const;
 
 /** Horizontal flex row with a token-based gap. */
-export const Row = styled.div<RowProps>(({ theme, gap = "md", align = "center", justify = "start", wrap = false }) => ({
-  display: "flex",
-  flexDirection: "row",
-  gap: theme.space[gap],
-  alignItems: alignMap[align],
-  justifyContent: justifyMap[justify],
-  flexWrap: wrap ? "wrap" : "nowrap",
-  minWidth: 0
-}));
+export const Row = styled.div<RowProps>(
+  ({ theme, gap = "md", align = "center", justify = "start", wrap = false }) => ({
+    display: "flex",
+    flexDirection: "row",
+    gap: theme.space[gap],
+    alignItems: alignMap[align],
+    justifyContent: justifyMap[justify],
+    flexWrap: wrap ? "wrap" : "nowrap",
+    minWidth: 0
+  })
+);
 
 /** Scrollable grid list — the standard capped-height feed used across panels. */
 export const ScrollList = styled.div(({ theme }) => ({

@@ -31,7 +31,10 @@ export class OpenAICompatibleChatProvider implements ChatProvider {
         },
         body: JSON.stringify({
           model: this.config.model,
-          messages: [{ role: "system", content: request.system }, ...request.messages],
+          messages: [
+            { role: "system", content: request.system },
+            ...request.messages
+          ],
           temperature: 0.2,
           ...(request.responseFormat === "json" ? { response_format: { type: "json_object" } } : {})
         })
@@ -66,7 +69,10 @@ export class AzureOpenAIChatProvider implements ChatProvider {
           "content-type": "application/json"
         },
         body: JSON.stringify({
-          messages: [{ role: "system", content: request.system }, ...request.messages],
+          messages: [
+            { role: "system", content: request.system },
+            ...request.messages
+          ],
           temperature: 0.2,
           ...(request.responseFormat === "json" ? { response_format: { type: "json_object" } } : {})
         })

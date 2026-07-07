@@ -16,10 +16,7 @@ const PR = "https://github.com/o/r/pull/7";
 function stubFetch(handlers: { graphql?: () => unknown; reviews?: () => unknown }): void {
   globalThis.fetch = (async (url: string) => {
     if (url.includes("/graphql")) {
-      return {
-        ok: true,
-        json: async () => handlers.graphql?.() ?? { data: { repository: { pullRequest: { reviewDecision: null } } } }
-      };
+      return { ok: true, json: async () => handlers.graphql?.() ?? { data: { repository: { pullRequest: { reviewDecision: null } } } } };
     }
     return { ok: true, json: async () => handlers.reviews?.() ?? [] };
   }) as unknown as typeof fetch;
@@ -39,11 +36,7 @@ test("maps GraphQL APPROVED to approved without hitting the reviews list", async
   process.env.GITHUB_TOKEN = "t";
   let reviewsCalled = false;
   globalThis.fetch = (async (url: string) => {
-    if (url.includes("/graphql"))
-      return {
-        ok: true,
-        json: async () => ({ data: { repository: { pullRequest: { reviewDecision: "APPROVED" } } } })
-      };
+    if (url.includes("/graphql")) return { ok: true, json: async () => ({ data: { repository: { pullRequest: { reviewDecision: "APPROVED" } } } }) };
     reviewsCalled = true;
     return { ok: true, json: async () => [] };
   }) as unknown as typeof fetch;

@@ -47,11 +47,7 @@ export function loadHealthConfig(env: NodeJS.ProcessEnv): HealthServerConfig {
   return {
     port: parsePort(env.WATCHER_HEALTH_PORT, "WATCHER_HEALTH_PORT", DEFAULT_PORT),
     host: env.WATCHER_HEALTH_HOST?.trim() || DEFAULT_HOST,
-    staleAfterMs: parsePositiveInt(
-      env.WATCHER_HEALTH_STALE_AFTER_MS,
-      "WATCHER_HEALTH_STALE_AFTER_MS",
-      DEFAULT_STALE_AFTER_MS
-    )
+    staleAfterMs: parsePositiveInt(env.WATCHER_HEALTH_STALE_AFTER_MS, "WATCHER_HEALTH_STALE_AFTER_MS", DEFAULT_STALE_AFTER_MS)
   };
 }
 

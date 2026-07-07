@@ -27,7 +27,8 @@ export interface EmbeddingRouteOptions {
  * (flow-selection-required), so this router never triggers that path itself.
  */
 export type EmbeddingRoute =
-  { status: "routed"; flowId: string; confidence: Confidence; margin: number } | { status: "abstain" };
+  | { status: "routed"; flowId: string; confidence: Confidence; margin: number }
+  | { status: "abstain" };
 
 /**
  * Cosine similarity of two equal-length vectors. Returns 0 (rather than NaN) for a zero

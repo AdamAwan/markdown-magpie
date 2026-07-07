@@ -126,10 +126,15 @@ export class InMemoryGapClusterStore implements GapClusterStore {
   }
 
   async listActiveClusters(): Promise<GapClusterRecord[]> {
-    return [...this.clusters.values()].filter((c) => c.status === "active").sort((l, r) => l.id.localeCompare(r.id));
+    return [...this.clusters.values()]
+      .filter((c) => c.status === "active")
+      .sort((l, r) => l.id.localeCompare(r.id));
   }
 
-  async listActiveClustersForFlow(flowId: string | undefined, limit?: number): Promise<GapClusterRecord[]> {
+  async listActiveClustersForFlow(
+    flowId: string | undefined,
+    limit?: number
+  ): Promise<GapClusterRecord[]> {
     const flow = flowId ?? "";
     const matches = [...this.clusters.values()]
       .filter((c) => c.status === "active" && (c.flowId ?? "") === flow)

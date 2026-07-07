@@ -4,9 +4,7 @@ import { makeTestContext } from "../test-support/context.js";
 import { reconcileGaps } from "./gap-reconciler.js";
 import type { AppContext } from "../context.js";
 
-const keepOpen = {
-  fetchPullRequestStatus: async () => ({ merged: false, state: "open" as const, mergeable: "unknown" as const })
-};
+const keepOpen = { fetchPullRequestStatus: async () => ({ merged: false, state: "open" as const, mergeable: "unknown" as const }) };
 
 async function seedClusterWithGap(ctx: AppContext, summary: string): Promise<string> {
   const log = await ctx.stores.questionLogs.record({

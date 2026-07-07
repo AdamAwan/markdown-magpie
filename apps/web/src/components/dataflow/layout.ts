@@ -109,7 +109,9 @@ export function layoutGraph(graph: FlowGraph): LayoutResult {
   // trusting dagre's cluster dimensions, so the box always fully encloses them.
   // Extra top/left padding leaves room for the group's label banner.
   const positionedGroups: PositionedGroup[] = groups.map((group) => {
-    const members = graph.nodes.filter((node) => node.group === group.id).map((node) => byId.get(node.id)!);
+    const members = graph.nodes
+      .filter((node) => node.group === group.id)
+      .map((node) => byId.get(node.id)!);
     const left = Math.min(...members.map((member) => member.x));
     const top = Math.min(...members.map((member) => member.y));
     const right = Math.max(...members.map((member) => member.x + member.width));

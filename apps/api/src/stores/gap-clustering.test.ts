@@ -1,22 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { GapCandidate } from "@magpie/core";
-import {
-  assembleClusters,
-  buildCluster,
-  clusterId,
-  selectClustersToDraft,
-  singletonCluster
-} from "./gap-clustering.js";
+import { assembleClusters, buildCluster, clusterId, selectClustersToDraft, singletonCluster } from "./gap-clustering.js";
 
 function candidate(summary: string, questionIds: string[]): GapCandidate {
-  return {
-    summary,
-    questionIds,
-    count: questionIds.length,
-    latestAskedAt: "2026-06-16T00:00:00.000Z",
-    confidence: "low"
-  };
+  return { summary, questionIds, count: questionIds.length, latestAskedAt: "2026-06-16T00:00:00.000Z", confidence: "low" };
 }
 
 // The motivating case: one multi-topic question produced three related gaps and
@@ -49,7 +37,10 @@ test("assembleClusters groups the gaps the model returned together into one clus
 test("assembleClusters keeps distinct clusters separate", () => {
   const gaps = [...cheese, candidate("how often to bathe a cat", ["q2"])];
   const clusters = assembleClusters(gaps, {
-    clusters: [{ summaries: cheese.map((gap) => gap.summary) }, { summaries: ["how often to bathe a cat"] }]
+    clusters: [
+      { summaries: cheese.map((gap) => gap.summary) },
+      { summaries: ["how often to bathe a cat"] }
+    ]
   });
 
   assert.equal(clusters.length, 2);
@@ -130,12 +121,7 @@ test("clusterId is distinct for the same summaries under different flows", () =>
   assert.equal(clusterId(["a", "b"], "magpie-sales"), clusterId(["b", "a"], "magpie-sales"));
 });
 
-const clusterOf = (summaries: string[]) =>
-  buildCluster(
-    summaries.map((s) => candidate(s, ["q"])),
-    undefined,
-    undefined
-  );
+const clusterOf = (summaries: string[]) => buildCluster(summaries.map((s) => candidate(s, ["q"])), undefined, undefined);
 
 test("selectClustersToDraft returns the live summaries of an uncovered cluster", () => {
   const selected = selectClustersToDraft([clusterOf(["a", "b"])], ["a", "b"], []);

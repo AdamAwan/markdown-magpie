@@ -35,18 +35,10 @@ test("a second draft on the same target enqueues a fold instead of a rival", asy
 test("completing a fold job applies it (rival superseded, survivor markdown updated)", async () => {
   const ctx = makeTestContext();
   const survivor = await ctx.stores.proposals.create({
-    title: "A",
-    targetPath: "kb/refunds.md",
-    markdown: "# survivor",
-    rationale: "r",
-    evidence: []
+    title: "A", targetPath: "kb/refunds.md", markdown: "# survivor", rationale: "r", evidence: []
   });
   const rival = await ctx.stores.proposals.create({
-    title: "B",
-    targetPath: "kb/refunds.md",
-    markdown: "# rival",
-    rationale: "r",
-    evidence: []
+    title: "B", targetPath: "kb/refunds.md", markdown: "# rival", rationale: "r", evidence: []
   });
   const job = await ctx.jobs.create("fold_markdown_proposal", {
     provider: "codex",
@@ -68,11 +60,7 @@ test("completing a fold job applies it (rival superseded, survivor markdown upda
 test("a failed fold job enqueues the rival's publish fallback", async () => {
   const ctx = makeTestContext();
   const rival = await ctx.stores.proposals.create({
-    title: "B",
-    targetPath: "kb/refunds.md",
-    markdown: "# rival",
-    rationale: "r",
-    evidence: []
+    title: "B", targetPath: "kb/refunds.md", markdown: "# rival", rationale: "r", evidence: []
   });
   const job = await ctx.jobs.create("fold_markdown_proposal", {
     provider: "codex",

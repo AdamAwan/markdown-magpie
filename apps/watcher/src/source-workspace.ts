@@ -95,11 +95,7 @@ export async function prepareSourceWorkspaces(
     try {
       const rootDir =
         descriptor.kind === "git"
-          ? withSubpath(
-              (await checkout({ id: descriptor.id, url: descriptor.url, checkoutRoot: options.checkoutRoot }))
-                .localPath,
-              descriptor.subpath
-            )
+          ? withSubpath((await checkout({ id: descriptor.id, url: descriptor.url, checkoutRoot: options.checkoutRoot })).localPath, descriptor.subpath)
           : withSubpath(descriptor.path, descriptor.subpath);
       if (!existsSync(rootDir)) {
         throw new Error(`resolved root does not exist: ${rootDir}`);

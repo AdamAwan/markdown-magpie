@@ -74,7 +74,9 @@ export class InMemoryGapClosureVerificationStore implements GapClosureVerificati
 
   async questionsWithClosedVerdict(proposalId: string): Promise<Set<string>> {
     return new Set(
-      this.rows.filter((row) => row.proposalId === proposalId && row.verdict === "closed").map((row) => row.questionId)
+      this.rows
+        .filter((row) => row.proposalId === proposalId && row.verdict === "closed")
+        .map((row) => row.questionId)
     );
   }
 

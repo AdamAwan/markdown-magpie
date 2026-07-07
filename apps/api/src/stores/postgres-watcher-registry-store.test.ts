@@ -51,9 +51,6 @@ describe("PostgresWatcherRegistryStore", { skip: databaseUrl ? false : "DATABASE
     // A zero-length window: a row inserted in an earlier transaction is already
     // stale relative to this list()'s now(), so it is pruned and excluded.
     const listed = await store.list(0);
-    assert.equal(
-      listed.find((w) => w.name === name),
-      undefined
-    );
+    assert.equal(listed.find((w) => w.name === name), undefined);
   });
 });

@@ -16,10 +16,7 @@ test("PostgresPatrolStore", { skip: databaseUrl ? false : "DATABASE_URL not set"
 
   await store.stampChecked("billing", ["improve.md"], "improve");
   assert.deepEqual((await store.listCursor("billing")).map((entry) => entry.docPath).sort(), ["a.md", "b.md"]);
-  assert.deepEqual(
-    (await store.listCursor("billing", "improve")).map((entry) => entry.docPath),
-    ["improve.md"]
-  );
+  assert.deepEqual((await store.listCursor("billing", "improve")).map((entry) => entry.docPath), ["improve.md"]);
 
   // Re-stamping a doc keeps one row (upsert), not two.
   await store.stampChecked("billing", ["a.md"]);

@@ -33,16 +33,10 @@ describe("PostgresMaintenanceRunStore", { skip: databaseUrl ? false : "DATABASE_
     });
 
     const forFlow = await store.list({ flowId, limit: 10 });
-    assert.deepEqual(
-      forFlow.map((r) => r.id),
-      [newer.id, older.id]
-    );
+    assert.deepEqual(forFlow.map((r) => r.id), [newer.id, older.id]);
 
     const fixOnly = await store.list({ taskType: "correctness_patrol", flowId, limit: 10 });
-    assert.deepEqual(
-      fixOnly.map((r) => r.id),
-      [older.id]
-    );
+    assert.deepEqual(fixOnly.map((r) => r.id), [older.id]);
 
     const fetched = await store.get(older.id);
     assert.equal(fetched?.summary, "older");

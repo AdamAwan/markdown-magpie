@@ -85,7 +85,7 @@ test("draftFromCluster enqueues a draft_markdown_proposal job for the cluster", 
   });
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
-
+    
     chatProvider: "openai-compatible",
     retrievedSectionIds: []
   });
@@ -112,7 +112,7 @@ test("draftFromCluster enqueues without error when the flow has in-flight PRs", 
 
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
-
+    
     chatProvider: "openai-compatible",
     retrievedSectionIds: []
   });
@@ -126,19 +126,10 @@ test("draftFromCluster enqueues without error when the flow has in-flight PRs", 
   // covered directly in proposals/service.test.ts; here we only assert the draft
   // still enqueues cleanly when a snapshot is present.
   const other = await ctx.stores.proposals.create({
-    title: "Other doc",
-    targetPath: "other.md",
-    markdown: "#",
-    rationale: "r",
-    evidence: []
+    title: "Other doc", targetPath: "other.md", markdown: "#", rationale: "r", evidence: []
   });
   const own = await ctx.stores.proposals.create({
-    title: "Own doc",
-    targetPath: "own.md",
-    markdown: "#",
-    rationale: "r",
-    evidence: [],
-    gapClusterId: cluster.id
+    title: "Own doc", targetPath: "own.md", markdown: "#", rationale: "r", evidence: [], gapClusterId: cluster.id
   });
   await ctx.stores.snapshots.write({
     flowId: undefined,
@@ -150,13 +141,7 @@ test("draftFromCluster enqueues without error when the flow has in-flight PRs", 
       { id: own.id, title: "Own doc", status: "draft", gapClusterId: cluster.id }
     ],
     pullRequests: [
-      {
-        proposalId: other.id,
-        url: "https://github.com/o/r/pull/9",
-        merged: false,
-        state: "open",
-        checkedAt: new Date().toISOString()
-      }
+      { proposalId: other.id, url: "https://github.com/o/r/pull/9", merged: false, state: "open", checkedAt: new Date().toISOString() }
     ]
   });
 

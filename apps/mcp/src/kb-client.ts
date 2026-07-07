@@ -3,9 +3,15 @@
 // the API plumbing avoids the apiUrl/postJson/getJson/askQuestion drift that
 // comes from copy-pasting it per transport.
 
-import { ON_BEHALF_OF_ROLES_HEADER, ON_BEHALF_OF_SUBJECT_HEADER, serializeOnBehalfRoles } from "@magpie/auth";
+import {
+  ON_BEHALF_OF_ROLES_HEADER,
+  ON_BEHALF_OF_SUBJECT_HEADER,
+  serializeOnBehalfRoles
+} from "@magpie/auth";
 
-const apiBaseUrl = trimTrailingSlash((process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/api$/, ""));
+const apiBaseUrl = trimTrailingSlash(
+  (process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/api$/, "")
+);
 
 // The API always answers questions asynchronously: POST /ask enqueues an
 // answer_question job and returns 202 with { questionId, job, links }. kb_ask
@@ -89,7 +95,9 @@ function trimTrailingSlash(value: string): string {
 }
 
 function apiUrl(path: string): string {
-  return path.startsWith("/api/") || path === "/api" ? `${apiBaseUrl}${path}` : `${apiBaseUrl}/api${path}`;
+  return path.startsWith("/api/") || path === "/api"
+    ? `${apiBaseUrl}${path}`
+    : `${apiBaseUrl}/api${path}`;
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -133,7 +141,11 @@ async function readApiResponse(response: Response, path: string): Promise<unknow
 // terminal state, so callers never see internal job, queue, or retrieval-context
 // details. The terminal job's output is the envelope { result, executor }; the
 // answer fields live in `result` (the answerQuestionOutputSchema shape).
-export async function askQuestion(question: string, options?: KbClientOptions, flow?: string): Promise<AskResult> {
+export async function askQuestion(
+  question: string,
+  options?: KbClientOptions,
+  flow?: string
+): Promise<AskResult> {
   const body = flow ? { question, flow } : { question };
   const ask = asObject(await postJson("/ask", body, options));
   const questionId = typeof ask.questionId === "string" ? ask.questionId : undefined;
@@ -378,7 +390,10 @@ export async function submitFeedback(
 // it should cover) are drafted straight into proposals → PRs, bypassing the gap
 // pipeline. The item shape is validated server-side by the seed endpoint; we pass it
 // through so the tool stays a thin surface over POST /flows/:id/seed.
-export async function seedFlow(args: Record<string, unknown> | undefined, options?: KbClientOptions): Promise<unknown> {
+export async function seedFlow(
+  args: Record<string, unknown> | undefined,
+  options?: KbClientOptions
+): Promise<unknown> {
   const flow = stringArgument(args, "flow");
   const items = args?.items;
   return asObject(await postJson(`/flows/${encodeURIComponent(flow)}/seed`, { items }, options));
@@ -444,7 +459,11 @@ export async function generateOutline(
 // strategy: hit the job's server-side long-poll wait endpoint once, then fall
 // back to detail polling. Turns failed/cancelled or a deadline overrun into a
 // clear error that names the job id and state but never echoes payload data.
-async function waitForOutlineJob(jobId: string, deadline: number, options?: KbClientOptions): Promise<JobView> {
+async function waitForOutlineJob(
+  jobId: string,
+  deadline: number,
+  options?: KbClientOptions
+): Promise<JobView> {
   const encoded = encodeURIComponent(jobId);
   let job = readJob(await getJson(`/jobs/${encoded}/wait`, options));
 

@@ -35,7 +35,14 @@ export const Chip = forwardRef<HTMLButtonElement, ChipProps>(function Chip(
   ref
 ) {
   return (
-    <StyledChip ref={ref} type={type} $selected={selected} aria-pressed={selected} data-selected={selected} {...rest}>
+    <StyledChip
+      ref={ref}
+      type={type}
+      $selected={selected}
+      aria-pressed={selected}
+      data-selected={selected}
+      {...rest}
+    >
       {children}
     </StyledChip>
   );

@@ -26,8 +26,7 @@ const LIST_MAX_ENTRIES = 200;
 const IGNORED_DIRS = new Set([".git", "node_modules", "dist", "build", ".next", "coverage", "vendor", ".turbo"]);
 // The text-file gate (inherited from the corpus sampler this path replaced) —
 // binary content is never useful to the model and wrecks budgets.
-const TEXT_FILE =
-  /\.(?:md|mdx|txt|ts|tsx|js|jsx|mjs|cjs|json|yml|yaml|toml|py|go|rs|cs|java|kt|swift|php|rb|css|scss|html|sql|sh|ps1|xml|csv)$/i;
+const TEXT_FILE = /\.(?:md|mdx|txt|ts|tsx|js|jsx|mjs|cjs|json|yml|yaml|toml|py|go|rs|cs|java|kt|swift|php|rb|css|scss|html|sql|sh|ps1|xml|csv)$/i;
 
 // Tool paths are "<sourceId>/<relative posix path>"; "" or "<sourceId>" address the
 // root. realpath containment catches both `..` traversal and symlink escapes.
@@ -154,10 +153,9 @@ export async function readFile(
   // length. A final read can overshoot the byte budget by up to the multibyte
   // factor before the ≤0 refusal above kicks in — acceptable for a soft cap.
   budget.remainingBytes -= Buffer.byteLength(slice, "utf8");
-  const suffix =
-    offset + slice.length < content.length
-      ? `\n\n[truncated at ${offset + slice.length} of ${content.length} chars; re-call with offset=${offset + slice.length} if needed]`
-      : "";
+  const suffix = offset + slice.length < content.length
+    ? `\n\n[truncated at ${offset + slice.length} of ${content.length} chars; re-call with offset=${offset + slice.length} if needed]`
+    : "";
   return slice + suffix;
 }
 
@@ -166,7 +164,11 @@ export async function readFile(
 // regex hang cannot be aborted, whereas literal matching is linear-time by
 // construction. The glob filter uses the same principle: an iterative wildcard
 // matcher, never a RegExp compiled from model input.
-export async function grepWorkspaces(workspaces: SourceWorkspace[], query: string, glob?: string): Promise<string> {
+export async function grepWorkspaces(
+  workspaces: SourceWorkspace[],
+  query: string,
+  glob?: string
+): Promise<string> {
   if (query.trim() === "") {
     throw new SourceToolError("grep query must not be empty; pass the literal text to search for");
   }

@@ -1,7 +1,17 @@
 "use client";
 
 import { useTheme } from "@emotion/react";
-import { Area, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  Area,
+  CartesianGrid,
+  ComposedChart,
+  Legend,
+  Line,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from "recharts";
 import type { GapBacklogBucket } from "../../lib/types";
 
 function shortDate(iso: string): string {

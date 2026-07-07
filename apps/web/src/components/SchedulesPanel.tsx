@@ -9,7 +9,8 @@ import { Actions, Badge, Button, Chip, Field, Input, Surface } from "./ui";
 // flow's full set of scheduled work sits together).
 type GroupBy = "type" | "flow";
 
-const SCHEDULE_COLUMNS = "minmax(200px, 1.6fr) minmax(120px, 0.9fr) minmax(150px, 1fr) 64px minmax(170px, auto)";
+const SCHEDULE_COLUMNS =
+  "minmax(200px, 1.6fr) minmax(120px, 0.9fr) minmax(150px, 1fr) 64px minmax(170px, auto)";
 
 const Hint = styled.p(({ theme }) => ({
   margin: `0 0 ${theme.space.md}`,
@@ -207,8 +208,7 @@ export function SchedulesPanel({
   scheduledTasks: ScheduledTask[];
 }) {
   const [groupBy, setGroupBy] = useState<GroupBy>("type");
-  const flowName = (flowId?: string) =>
-    flows.find((flow) => flow.id === flowId)?.name ?? flowId ?? "Default knowledge base";
+  const flowName = (flowId?: string) => flows.find((flow) => flow.id === flowId)?.name ?? flowId ?? "Default knowledge base";
 
   // Each scheduled task carries both grouping axes — the flow-free task type and
   // the flow it runs for — so the table can group by either without re-parsing
@@ -365,9 +365,7 @@ function ScheduleRow({ entry, groupBy, loading }: { entry: ScheduleEntry; groupB
         <ScheduleName>
           <ScheduleTitle>
             {namesType ? entry.typeLabel : entry.flowName}
-            {namesType && entry.typeDescription ? (
-              <InfoDot label={entry.typeLabel} text={entry.typeDescription} />
-            ) : null}
+            {namesType && entry.typeDescription ? <InfoDot label={entry.typeLabel} text={entry.typeDescription} /> : null}
           </ScheduleTitle>
         </ScheduleName>
         <span>{setting.enabled ? <code>{setting.cron}</code> : "—"}</span>

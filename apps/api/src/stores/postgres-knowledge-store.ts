@@ -63,10 +63,10 @@ export class PostgresKnowledgeStore
       // Prune documents (cascading to their sections) for source files that no
       // longer exist in the repository, so a re-index doesn't leave stale docs
       // behind. The incoming set is authoritative for this repository.
-      await client.query("DELETE FROM documents WHERE repository_id = $1 AND path <> ALL($2::text[])", [
-        summary.repository.id,
-        documents.map((document) => document.path)
-      ]);
+      await client.query(
+        "DELETE FROM documents WHERE repository_id = $1 AND path <> ALL($2::text[])",
+        [summary.repository.id, documents.map((document) => document.path)]
+      );
 
       // Replace the surviving documents' sections via an upsert that carries each
       // unchanged section's embedding forward, so a full re-index no longer wipes

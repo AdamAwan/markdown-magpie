@@ -35,7 +35,9 @@ export class PostgresWatcherRegistryStore implements WatcherRegistryStore {
       "DELETE FROM watcher_registrations WHERE last_seen_at < now() - ($1::double precision * interval '1 millisecond')",
       [activeWithinMs]
     );
-    const result = await this.pool.query<WatcherRow>("SELECT * FROM watcher_registrations ORDER BY last_seen_at DESC");
+    const result = await this.pool.query<WatcherRow>(
+      "SELECT * FROM watcher_registrations ORDER BY last_seen_at DESC"
+    );
     return result.rows.map(mapRow);
   }
 

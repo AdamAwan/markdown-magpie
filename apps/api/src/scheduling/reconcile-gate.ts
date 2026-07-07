@@ -41,7 +41,10 @@ export type ReconciliationDecision =
 // pre-filter: the actual fold/rewrite is an LLM step performed later by the caller
 // (see docs/maintenance-redesign.md §5). An intent with no known targets cannot be
 // reconciled by file-set, so it opens a new PR.
-export function decideReconciliation(intent: ChangeIntent, openPrs: OpenPullRequestSummary[]): ReconciliationDecision {
+export function decideReconciliation(
+  intent: ChangeIntent,
+  openPrs: OpenPullRequestSummary[]
+): ReconciliationDecision {
   if (intent.targets.length === 0) {
     return { kind: "open-new" };
   }

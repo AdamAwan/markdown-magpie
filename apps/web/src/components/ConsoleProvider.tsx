@@ -715,7 +715,11 @@ function useConsoleController() {
   // /jobs/:id/wait can return a still-active job when its deadline elapses, so loop
   // until terminal. Returns undefined (and surfaces the error) when generation fails,
   // so the caller can reset its own generating state.
-  async function generateOutline(targetFlowId: string, topic: string, notes: string): Promise<SeedItem[] | undefined> {
+  async function generateOutline(
+    targetFlowId: string,
+    topic: string,
+    notes: string
+  ): Promise<SeedItem[] | undefined> {
     clearMessage();
     try {
       const trimmedNotes = notes.trim();
@@ -724,7 +728,12 @@ function useConsoleController() {
         { topic: topic.trim(), notes: trimmedNotes ? trimmedNotes : undefined }
       );
       let job = await waitForJob({ id: jobId });
-      while (job.state === "created" || job.state === "retry" || job.state === "active" || job.state === "blocked") {
+      while (
+        job.state === "created" ||
+        job.state === "retry" ||
+        job.state === "active" ||
+        job.state === "blocked"
+      ) {
         job = await waitForJob({ id: jobId });
       }
       if (job.state !== "completed") {

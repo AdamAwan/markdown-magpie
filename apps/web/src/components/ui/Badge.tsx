@@ -14,10 +14,9 @@ interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
 }
 
 const StyledBadge = styled.span<{ $tone: BadgeTone; $mono: boolean }>(({ theme, $tone, $mono }) => {
-  const palette =
-    $tone === "accent"
-      ? { fg: theme.color.accent, bg: theme.color.accentBg, border: theme.color.accentBorder }
-      : theme.color.status[$tone];
+  const palette = $tone === "accent"
+    ? { fg: theme.color.accent, bg: theme.color.accentBg, border: theme.color.accentBorder }
+    : theme.color.status[$tone];
   return {
     display: "inline-flex",
     alignItems: "center",
@@ -53,17 +52,8 @@ export function Badge({ tone = "neutral", dot = false, mono = false, children, .
 }
 
 const GREEN = new Set([
-  "high",
-  "medium",
-  "completed",
-  "good",
-  "ready",
-  "branch-pushed",
-  "pr-opened",
-  "merged",
-  "repository-root",
-  "succeeded",
-  "success"
+  "high", "medium", "completed", "good", "ready", "branch-pushed", "pr-opened", "merged",
+  "repository-root", "succeeded", "success"
 ]);
 const RED = new Set(["low", "failed", "bad", "rejected", "not-git", "error", "cancelled"]);
 const BLUE = new Set(["unknown", "pending", "claimed", "subdirectory", "queued", "created"]);

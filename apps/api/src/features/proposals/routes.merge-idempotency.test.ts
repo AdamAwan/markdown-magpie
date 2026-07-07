@@ -58,19 +58,13 @@ async function seedBranchPushedWithGap(ctx: AppContext): Promise<string> {
   return created.id;
 }
 
-async function postMergedStatus(
-  app: Hono,
-  id: string
-): Promise<{ status: number; body: { proposal?: { status: string }; cascadeScheduled?: boolean } }> {
+async function postMergedStatus(app: Hono, id: string): Promise<{ status: number; body: { proposal?: { status: string }; cascadeScheduled?: boolean } }> {
   const res = await app.request(`/proposals/${id}/status`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ status: "merged" })
   });
-  return {
-    status: res.status,
-    body: (await res.json()) as { proposal?: { status: string }; cascadeScheduled?: boolean }
-  };
+  return { status: res.status, body: (await res.json()) as { proposal?: { status: string }; cascadeScheduled?: boolean } };
 }
 
 describe("POST /proposals/:id/status merged→merged idempotency", () => {

@@ -305,8 +305,7 @@ const schema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["AUTH0_ISSUER_BASE_URL"],
-        message:
-          "AUTH0_ISSUER_BASE_URL or AUTH0_DOMAIN is required when auth is enabled (set AUTH_REQUIRED=false to disable auth)"
+        message: "AUTH0_ISSUER_BASE_URL or AUTH0_DOMAIN is required when auth is enabled (set AUTH_REQUIRED=false to disable auth)"
       });
     }
   });

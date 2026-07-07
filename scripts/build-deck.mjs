@@ -507,9 +507,5 @@ const webPresentationDir = join(ROOT, "apps/web/public/presentation");
 mkdirSync(webPresentationDir, { recursive: true });
 writeFileSync(join(webPresentationDir, "index.html"), HTML);
 const kb = Math.round(Buffer.byteLength(HTML) / 1024);
-console.log(
-  `Wrote presentation/index.html and apps/web/public/presentation/index.html (${kb} KB, ${slides_count(HTML)} slides)`
-);
-function slides_count(h) {
-  return (h.match(/class="slide /g) || []).length;
-}
+console.log(`Wrote presentation/index.html and apps/web/public/presentation/index.html (${kb} KB, ${slides_count(HTML)} slides)`);
+function slides_count(h){return (h.match(/class="slide /g)||[]).length;}

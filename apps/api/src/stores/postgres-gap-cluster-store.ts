@@ -55,7 +55,10 @@ export class PostgresGapClusterStore implements GapClusterStore {
     return result.rows.map(mapCluster);
   }
 
-  async listActiveClustersForFlow(flowId: string | undefined, limit?: number): Promise<GapClusterRecord[]> {
+  async listActiveClustersForFlow(
+    flowId: string | undefined,
+    limit?: number
+  ): Promise<GapClusterRecord[]> {
     // Scope to one flow in SQL (coalescing NULL flow_id to '' so the un-routed
     // flow matches), and bound the scan when a limit is given.
     const base = "SELECT * FROM gap_clusters WHERE status = 'active' AND coalesce(flow_id, '') = $1 ORDER BY id ASC";
@@ -146,11 +149,10 @@ export class PostgresGapClusterStore implements GapClusterStore {
     try {
       await client.query("BEGIN");
       await client.query("UPDATE gap_cluster_memberships SET active = false WHERE active AND gap_id = $1", [gapId]);
-      await client.query("INSERT INTO gap_cluster_memberships (cluster_id, gap_id, rationale) VALUES ($1, $2, $3)", [
-        clusterId,
-        gapId,
-        rationale ?? null
-      ]);
+      await client.query(
+        "INSERT INTO gap_cluster_memberships (cluster_id, gap_id, rationale) VALUES ($1, $2, $3)",
+        [clusterId, gapId, rationale ?? null]
+      );
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -254,7 +256,10 @@ export class PostgresGapClusterStore implements GapClusterStore {
     );
   }
 
-  async enqueuePublicationAction(proposalId: string, kind: "publish" | "supersede"): Promise<PublicationActionRecord> {
+  async enqueuePublicationAction(
+    proposalId: string,
+    kind: "publish" | "supersede"
+  ): Promise<PublicationActionRecord> {
     const result = await this.pool.query<ActionRow>(
       "INSERT INTO gap_publication_actions (proposal_id, kind) VALUES ($1, $2) RETURNING *",
       [proposalId, kind]
@@ -270,7 +275,9 @@ export class PostgresGapClusterStore implements GapClusterStore {
   }
 
   async markPublicationActionDone(id: string): Promise<void> {
-    await this.pool.query("UPDATE gap_publication_actions SET status = 'done', updated_at = now() WHERE id = $1", [id]);
+    await this.pool.query("UPDATE gap_publication_actions SET status = 'done', updated_at = now() WHERE id = $1", [
+      id
+    ]);
   }
 
   async markPublicationActionFailed(id: string, error: string): Promise<void> {

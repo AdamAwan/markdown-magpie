@@ -11,7 +11,15 @@ import {
 import { shortSha } from "../lib/format";
 import type { AppTheme } from "../theme/theme";
 import { ContextValue } from "./common";
-import { Actions, Badge, Button, EmptyState, IconButton, Surface, statusTone } from "./ui";
+import {
+  Actions,
+  Badge,
+  Button,
+  EmptyState,
+  IconButton,
+  Surface,
+  statusTone
+} from "./ui";
 
 /** Sidebar id for documents that no configured flow produced (e.g. console uploads). */
 export const OTHER_DOCUMENTS_ID = "__other_documents__";
@@ -81,30 +89,13 @@ export function RepositoryContextPanel({ repositories }: { repositories: Reposit
                 <ContextValue label="Branch" value={repository.git?.currentBranch ?? repository.defaultBranch} />
                 <ContextValue label="HEAD" value={shortSha(repository.git?.headSha)} />
                 <ContextValue label="Git Root" value={repository.git?.workTreeRoot ?? "Not detected"} />
-                <ContextValue
-                  label="Indexed Folder"
-                  value={repository.git?.relativePathFromRoot ?? repository.git?.indexedPath ?? repository.localPath}
-                />
-                <ContextValue
-                  label="Remote"
-                  value={repository.git?.remoteUrl ?? repository.remoteUrl ?? "Not configured"}
-                />
-                <ContextValue
-                  label="Working Tree"
-                  value={
-                    repository.git?.hasUncommittedChanges
-                      ? "Uncommitted changes"
-                      : repository.git?.scope === "not-git"
-                        ? "Not a git work tree"
-                        : "Clean"
-                  }
-                />
+                <ContextValue label="Indexed Folder" value={repository.git?.relativePathFromRoot ?? repository.git?.indexedPath ?? repository.localPath} />
+                <ContextValue label="Remote" value={repository.git?.remoteUrl ?? repository.remoteUrl ?? "Not configured"} />
+                <ContextValue label="Working Tree" value={repository.git?.hasUncommittedChanges ? "Uncommitted changes" : repository.git?.scope === "not-git" ? "Not a git work tree" : "Clean"} />
               </GitContextGrid>
             </RepositoryContextCard>
           ))}
-          {repositories.length === 0 ? (
-            <EmptyState>No repository context available yet. Index a repository to detect its Git scope.</EmptyState>
-          ) : null}
+          {repositories.length === 0 ? <EmptyState>No repository context available yet. Index a repository to detect its Git scope.</EmptyState> : null}
         </RepositoryContextList>
       </Surface.Body>
     </Surface>
@@ -232,11 +223,7 @@ export function FlowsPanel({
   const entries = buildFlowEntries(flows, destinations, sources, documents);
 
   if (entries.length === 0) {
-    return (
-      <EmptyState>
-        No knowledge flows are configured. Add KNOWLEDGE_FLOWS or KNOWLEDGE_DESTINATIONS to the API environment.
-      </EmptyState>
-    );
+    return <EmptyState>No knowledge flows are configured. Add KNOWLEDGE_FLOWS or KNOWLEDGE_DESTINATIONS to the API environment.</EmptyState>;
   }
 
   const active = entries.find((entry) => entry.id === selectedFlowId) ?? entries[0];
@@ -244,77 +231,71 @@ export function FlowsPanel({
 
   return (
     <Tooltip.Provider delayDuration={150}>
-      <FlowWorkspace>
-        <FlowSidebar aria-label="Knowledge flows">
-          {entries.map((entry) => (
-            <FlowSidebarItem
-              $selected={entry.id === active.id}
-              key={entry.id}
-              onClick={() => setSelectedFlowId(entry.id)}
-              type="button"
-            >
-              <FlowSidebarName>{entry.name}</FlowSidebarName>
-              <FlowSidebarMeta>{flowSummary(entry)}</FlowSidebarMeta>
-            </FlowSidebarItem>
-          ))}
-        </FlowSidebar>
+    <FlowWorkspace>
+      <FlowSidebar aria-label="Knowledge flows">
+        {entries.map((entry) => (
+          <FlowSidebarItem
+            $selected={entry.id === active.id}
+            key={entry.id}
+            onClick={() => setSelectedFlowId(entry.id)}
+            type="button"
+          >
+            <FlowSidebarName>{entry.name}</FlowSidebarName>
+            <FlowSidebarMeta>{flowSummary(entry)}</FlowSidebarMeta>
+          </FlowSidebarItem>
+        ))}
+      </FlowSidebar>
 
-        <FlowDetail>
-          <FlowDetailHead>
-            <div>
-              <h3>{active.name}</h3>
-              {active.isOther ? (
-                <Path>Indexed documents not produced by a configured flow (for example, console uploads).</Path>
-              ) : (
-                <FlowPipeline
-                  destination={active.destination}
-                  fallbackDestinationId={active.flow?.destinationId}
-                  sources={active.sources}
-                />
-              )}
-            </div>
-            <FlowDetailActions>
-              {active.flow?.persona ? (
-                <IconButton
-                  label={`View persona for ${active.name}`}
-                  onClick={() => setPersonaFlow(active.flow ?? null)}
-                  title="View flow persona"
-                >
-                  <PersonIcon />
-                </IconButton>
-              ) : null}
-              {active.isOther ? null : (
-                <Button
-                  variant="primary"
-                  disabled={indexing || !active.destination}
-                  onClick={() => {
-                    setSelectedFlowId(active.id);
-                    void onIndex(active.id);
-                  }}
-                  title="Index the destination knowledge base used by /ask and MCP"
-                >
-                  {indexing ? "Indexing" : "Index KB"}
-                </Button>
-              )}
-            </FlowDetailActions>
-          </FlowDetailHead>
+      <FlowDetail>
+        <FlowDetailHead>
+          <div>
+            <h3>{active.name}</h3>
+            {active.isOther ? (
+              <Path>Indexed documents not produced by a configured flow (for example, console uploads).</Path>
+            ) : (
+              <FlowPipeline destination={active.destination} fallbackDestinationId={active.flow?.destinationId} sources={active.sources} />
+            )}
+          </div>
+          <FlowDetailActions>
+            {active.flow?.persona ? (
+              <IconButton
+                label={`View persona for ${active.name}`}
+                onClick={() => setPersonaFlow(active.flow ?? null)}
+                title="View flow persona"
+              >
+                <PersonIcon />
+              </IconButton>
+            ) : null}
+            {active.isOther ? null : (
+              <Button
+                variant="primary"
+                disabled={indexing || !active.destination}
+                onClick={() => {
+                  setSelectedFlowId(active.id);
+                  void onIndex(active.id);
+                }}
+                title="Index the destination knowledge base used by /ask and MCP"
+              >
+                {indexing ? "Indexing" : "Index KB"}
+              </Button>
+            )}
+          </FlowDetailActions>
+        </FlowDetailHead>
 
-          <FlowSection>
-            <FlowSectionTitle>Indexed documents</FlowSectionTitle>
-            <FlowDocuments
-              documents={active.documents}
-              onOpenFull={setFullScreenDocument}
-              onSelect={setSelectedDocumentId}
-              selectedDocument={activeDocument}
-            />
-          </FlowSection>
-        </FlowDetail>
+        <FlowSection>
+          <FlowSectionTitle>Indexed documents</FlowSectionTitle>
+          <FlowDocuments
+            documents={active.documents}
+            onOpenFull={setFullScreenDocument}
+            onSelect={setSelectedDocumentId}
+            selectedDocument={activeDocument}
+          />
+        </FlowSection>
+      </FlowDetail>
 
-        {fullScreenDocument ? (
-          <DocumentModal document={fullScreenDocument} onClose={() => setFullScreenDocument(null)} />
-        ) : null}
-        {personaFlow ? <PersonaModal flow={personaFlow} onClose={() => setPersonaFlow(null)} /> : null}
-      </FlowWorkspace>
+      {fullScreenDocument ? <DocumentModal document={fullScreenDocument} onClose={() => setFullScreenDocument(null)} /> : null}
+      {personaFlow ? <PersonaModal flow={personaFlow} onClose={() => setPersonaFlow(null)} /> : null}
+    </FlowWorkspace>
     </Tooltip.Provider>
   );
 }
@@ -441,11 +422,7 @@ const FlowNodeGroup = styled.div(({ theme }) => ({
 function flowNodePalette(theme: AppTheme, variant: FlowNodeVariant) {
   switch (variant) {
     case "agent":
-      return {
-        borderColor: theme.color.status.running.border,
-        background: theme.color.status.running.bg,
-        color: theme.color.text
-      };
+      return { borderColor: theme.color.status.running.border, background: theme.color.status.running.bg, color: theme.color.text };
     case "internet":
       return { borderColor: theme.color.accentBorder, background: theme.color.accentBg, color: theme.color.text };
     case "destination":
@@ -505,13 +482,15 @@ function FlowPipeline({
             <RepositoryNode variant={repositoryNodeVariant(source)} key={source.id} repository={source} />
           ))
         ) : (
-          <FlowNode $variant="missing" $static>
-            No sources
-          </FlowNode>
+          <FlowNode $variant="missing" $static>No sources</FlowNode>
         )}
       </FlowNodeGroup>
       <FlowArrow aria-hidden="true">-&gt;</FlowArrow>
-      <RepositoryNode variant="destination" fallbackLabel={fallbackDestinationId} repository={destination} />
+      <RepositoryNode
+        variant="destination"
+        fallbackLabel={fallbackDestinationId}
+        repository={destination}
+      />
     </FlowPipe>
   );
 }
@@ -576,11 +555,7 @@ function RepositoryNode({
   repository?: ConfiguredKnowledgeRepository;
 }) {
   if (!repository) {
-    return (
-      <FlowNode $variant={variant} $static>
-        {fallbackLabel ?? "Unknown"}
-      </FlowNode>
-    );
+    return <FlowNode $variant={variant} $static>{fallbackLabel ?? "Unknown"}</FlowNode>;
   }
 
   const rows: Array<{ label: string; value: string }> = [
@@ -598,9 +573,7 @@ function RepositoryNode({
   return (
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
-        <FlowNode $variant={variant} $static>
-          {repository.name}
-        </FlowNode>
+        <FlowNode $variant={variant} $static>{repository.name}</FlowNode>
       </Tooltip.Trigger>
       <Tooltip.Portal>
         <RepositoryTooltipContent sideOffset={6} collisionPadding={12}>
@@ -747,18 +720,10 @@ function FlowDocuments({
                     <small>{document.path.split("/").at(-1) ?? document.path}</small>
                   </FlowDocSelect>
                   <FlowDocRowSide>
-                    <Badge
-                      tone={statusTone(document.metadata.status)}
-                      title={`Document status: ${document.metadata.status}`}
-                    >
+                    <Badge tone={statusTone(document.metadata.status)} title={`Document status: ${document.metadata.status}`}>
                       {document.metadata.status}
                     </Badge>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => onOpenFull(document)}
-                      title="Open full Markdown"
-                    >
+                    <Button variant="secondary" size="sm" onClick={() => onOpenFull(document)} title="Open full Markdown">
                       Open
                     </Button>
                   </FlowDocRowSide>
@@ -818,12 +783,7 @@ function DocumentModal({ document: knowledgeDocument, onClose }: { document: Kno
 
   return (
     <ModalBackdrop onClick={onClose} role="presentation">
-      <Modal
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label={knowledgeDocument.metadata.title}
-      >
+      <Modal onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={knowledgeDocument.metadata.title}>
         <ModalHead>
           <div>
             <h3>{knowledgeDocument.metadata.title}</h3>
@@ -881,9 +841,7 @@ function flowSummary(entry: FlowEntry): string {
   return `${sourceLabel} → ${destinationLabel} · ${entry.documents.length} docs`;
 }
 
-function groupDocumentsByFolder(
-  documents: KnowledgeDocument[]
-): Array<{ name: string; documents: KnowledgeDocument[] }> {
+function groupDocumentsByFolder(documents: KnowledgeDocument[]): Array<{ name: string; documents: KnowledgeDocument[] }> {
   const groups = new Map<string, KnowledgeDocument[]>();
   for (const document of documents) {
     const segments = document.path.split("/");

@@ -9,7 +9,10 @@ import { knowledgeFlows } from "../../lib/config";
 export default function SeedPage() {
   const { config, loading, generateOutline, seedFlow } = useConsole();
 
-  const flows = useMemo(() => knowledgeFlows(config).map((flow) => ({ id: flow.id, name: flow.name })), [config]);
+  const flows = useMemo(
+    () => knowledgeFlows(config).map((flow) => ({ id: flow.id, name: flow.name })),
+    [config]
+  );
 
   return (
     <Workbench>

@@ -15,7 +15,8 @@ import {
 } from "./knowledge-index.js";
 
 const exec = promisify(execFile);
-const git = (cwd: string, args: string[]): Promise<string> => exec("git", args, { cwd }).then((r) => r.stdout.trim());
+const git = (cwd: string, args: string[]): Promise<string> =>
+  exec("git", args, { cwd }).then((r) => r.stdout.trim());
 
 // A persistence double that records which save path was exercised and lets a
 // test seed the prior indexed SHA returned from loadAll() (simulating a restart).
@@ -60,10 +61,7 @@ async function commit(root: string, message: string): Promise<string> {
 }
 
 function docPaths(index: InMemoryKnowledgeIndex): string[] {
-  return index
-    .listDocuments()
-    .map((document) => document.path)
-    .sort();
+  return index.listDocuments().map((document) => document.path).sort();
 }
 
 afterEach(async () => {
@@ -115,7 +113,10 @@ describe("InMemoryKnowledgeIndex incremental reindex", () => {
     assert.deepEqual(docPaths(index), ["added.md", "edit.md", "keep.md"]);
     const apply = persistence.incrementalApplies[0];
     // Only the committed-changed files were re-read and upserted; keep.md was not.
-    assert.deepEqual(apply.upsertedDocuments.map((d: KnowledgeDocument) => d.path).sort(), ["added.md", "edit.md"]);
+    assert.deepEqual(
+      apply.upsertedDocuments.map((d: KnowledgeDocument) => d.path).sort(),
+      ["added.md", "edit.md"]
+    );
     assert.deepEqual(apply.deletedDocumentIds, ["repo:remove.md"]);
 
     // The edited document's content is the new body.
@@ -144,10 +145,7 @@ describe("InMemoryKnowledgeIndex incremental reindex", () => {
     assert.deepEqual(docPaths(index), ["new-name.md"]);
     const apply = persistence.incrementalApplies[0];
     assert.deepEqual(apply.deletedDocumentIds, ["repo:old-name.md"]);
-    assert.deepEqual(
-      apply.upsertedDocuments.map((d: KnowledgeDocument) => d.path),
-      ["new-name.md"]
-    );
+    assert.deepEqual(apply.upsertedDocuments.map((d: KnowledgeDocument) => d.path), ["new-name.md"]);
   });
 
   it("leaves unchanged documents' commitSha untouched; only changed docs get HEAD", async () => {
@@ -213,7 +211,10 @@ describe("InMemoryKnowledgeIndex incremental reindex", () => {
     assert.equal(persistence.incrementalApplies.length, 1);
     assert.deepEqual(docPaths(index), ["added.md", "guide.md", "intro.md"]);
     const apply = persistence.incrementalApplies[0];
-    assert.deepEqual(apply.upsertedDocuments.map((d: KnowledgeDocument) => d.path).sort(), ["added.md", "guide.md"]);
+    assert.deepEqual(
+      apply.upsertedDocuments.map((d: KnowledgeDocument) => d.path).sort(),
+      ["added.md", "guide.md"]
+    );
     // The outside/ change must not leak into the indexed subtree.
     assert.ok(!docPaths(index).includes("other.md"));
   });

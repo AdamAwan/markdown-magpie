@@ -51,14 +51,8 @@ describe("refreshSnapshot", () => {
 
     const snapshot = await refreshSnapshot(ctx, undefined, noPulls);
 
-    assert.ok(
-      snapshot.gaps.some((g) => g.summary === "How to configure X"),
-      "the gap was captured"
-    );
-    assert.ok(
-      snapshot.proposals.some((p) => p.id === proposal.id),
-      "the proposal was captured"
-    );
+    assert.ok(snapshot.gaps.some((g) => g.summary === "How to configure X"), "the gap was captured");
+    assert.ok(snapshot.proposals.some((p) => p.id === proposal.id), "the proposal was captured");
     assert.equal(snapshot.pullRequests.length, 0, "a draft proposal has no PR state");
 
     // The snapshot is persisted, not just returned.
@@ -69,7 +63,11 @@ describe("refreshSnapshot", () => {
     const ctx = makeTestContext();
     const proposal = await openPrProposal(ctx);
 
-    const snapshot = await refreshSnapshot(ctx, undefined, new Map([[proposal.id, { merged: false, state: "open" }]]));
+    const snapshot = await refreshSnapshot(
+      ctx,
+      undefined,
+      new Map([[proposal.id, { merged: false, state: "open" }]])
+    );
 
     assert.equal(snapshot.pullRequests.length, 1);
     assert.equal(snapshot.pullRequests[0].state, "open");
@@ -105,16 +103,10 @@ describe("refreshSnapshot", () => {
     await ctx.stores.proposals.linkCluster(proposal.id, cluster.id);
 
     const defaultSnapshot = await refreshSnapshot(ctx, undefined, noPulls);
-    assert.ok(
-      !defaultSnapshot.proposals.some((p) => p.id === proposal.id),
-      "alpha's proposal is absent from the default flow"
-    );
+    assert.ok(!defaultSnapshot.proposals.some((p) => p.id === proposal.id), "alpha's proposal is absent from the default flow");
 
     const alphaSnapshot = await refreshSnapshot(ctx, "alpha", noPulls);
-    assert.ok(
-      alphaSnapshot.proposals.some((p) => p.id === proposal.id),
-      "alpha's proposal is in the alpha snapshot"
-    );
+    assert.ok(alphaSnapshot.proposals.some((p) => p.id === proposal.id), "alpha's proposal is in the alpha snapshot");
   });
 });
 
@@ -140,11 +132,7 @@ describe("recordSnapshotsFromPullRequestResults", () => {
     assert.equal(views.length, 2, "both the default and the alpha flow get a snapshot");
     const defaultSnapshot = views.find((v) => v.flowId === undefined);
     assert.equal(defaultSnapshot?.pullRequests[0]?.state, "open");
-    assert.equal(
-      defaultSnapshot?.pullRequests[0]?.reviewDecision,
-      "approved",
-      "the review decision reached the snapshot"
-    );
+    assert.equal(defaultSnapshot?.pullRequests[0]?.reviewDecision, "approved", "the review decision reached the snapshot");
   });
 });
 

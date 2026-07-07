@@ -1,4 +1,10 @@
-import { createLocalJWKSet, createRemoteJWKSet, jwtVerify, type JSONWebKeySet, type JWTPayload } from "jose";
+import {
+  createLocalJWKSet,
+  createRemoteJWKSet,
+  jwtVerify,
+  type JSONWebKeySet,
+  type JWTPayload
+} from "jose";
 
 export { createApiTokenProvider, type ApiTokenProvider, type ApiTokenProviderConfig } from "./api-token.js";
 export {
@@ -63,7 +69,8 @@ export function isAuthRequired(value: string | undefined): boolean {
 
 export function authSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): AuthSettings {
   const issuerBase =
-    env.AUTH0_ISSUER_BASE_URL ?? (env.AUTH0_DOMAIN ? `https://${env.AUTH0_DOMAIN}` : "https://markdown-magpie.local");
+    env.AUTH0_ISSUER_BASE_URL ??
+    (env.AUTH0_DOMAIN ? `https://${env.AUTH0_DOMAIN}` : "https://markdown-magpie.local");
   const issuer = trimTrailingSlash(issuerBase) + "/";
 
   return {

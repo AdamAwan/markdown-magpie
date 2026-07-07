@@ -26,11 +26,7 @@ export async function runDedupeLens(
   let enqueued = 0;
   for (const document of input.documents) {
     try {
-      const neighbours = await dedupeNeighbours(
-        ctx,
-        { path: document.path, content: document.content },
-        input.repositoryIds
-      );
+      const neighbours = await dedupeNeighbours(ctx, { path: document.path, content: document.content }, input.repositoryIds);
       if (neighbours.length === 0) {
         continue;
       }

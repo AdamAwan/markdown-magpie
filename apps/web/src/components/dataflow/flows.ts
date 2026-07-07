@@ -7,7 +7,14 @@ import type { FlowGraph } from "./types";
 type ModelInfo = ReturnType<typeof extractModelInfo>;
 
 export type FlowKey =
-  "overview" | "ask" | "improvement" | "automation" | "reconcile" | "gappr" | "schedules" | "perflow";
+  | "overview"
+  | "ask"
+  | "improvement"
+  | "automation"
+  | "reconcile"
+  | "gappr"
+  | "schedules"
+  | "perflow";
 
 export interface FlowDef {
   key: FlowKey;
@@ -500,31 +507,11 @@ function schedules(): FlowGraph {
     ],
     nodes: [
       { id: "sched", kind: "user", label: "⏱️ pg-boss scheduler\nper-flow cron + run-lock" },
-      {
-        id: "tGaps",
-        kind: "processing",
-        label: "Gap drafting\nprocess_gaps_to_pull_requests\n~10m · maintenance",
-        group: "tier1"
-      },
+      { id: "tGaps", kind: "processing", label: "Gap drafting\nprocess_gaps_to_pull_requests\n~10m · maintenance", group: "tier1" },
       { id: "tSync", kind: "processing", label: "Source sync\nsource_change_sync\n~10m · maintenance", group: "tier1" },
-      {
-        id: "tFix",
-        kind: "processing",
-        label: "Correctness patrol\ncorrectness_patrol\nhourly · maintenance",
-        group: "tier1"
-      },
-      {
-        id: "tImp",
-        kind: "processing",
-        label: "Editorial patrol\neditorial_patrol\nhourly · maintenance",
-        group: "tier1"
-      },
-      {
-        id: "tSnap",
-        kind: "processing",
-        label: "Snapshot refresh\nrefresh_flow_snapshot\n~5m · github",
-        group: "tier1"
-      },
+      { id: "tFix", kind: "processing", label: "Correctness patrol\ncorrectness_patrol\nhourly · maintenance", group: "tier1" },
+      { id: "tImp", kind: "processing", label: "Editorial patrol\neditorial_patrol\nhourly · maintenance", group: "tier1" },
+      { id: "tSnap", kind: "processing", label: "Snapshot refresh\nrefresh_flow_snapshot\n~5m · github", group: "tier1" },
       { id: "jReshape", kind: "ai", label: "reconcile_gap_clusters\n(if ≥2 clusters)", group: "tier2" },
       { id: "jDraft", kind: "ai", label: "draft_markdown_proposal\nper uncovered cluster", group: "tier2" },
       { id: "jSyncPlan", kind: "ai", label: "sync_source_changes_generate_plan\nper changed source", group: "tier2" },
@@ -537,8 +524,7 @@ function schedules(): FlowGraph {
       {
         id: "pub",
         kind: "user",
-        label:
-          "🚀 github jobs\npublish_proposal · fold_markdown_proposal\nfold_changeset_proposal · comment_pull_request",
+        label: "🚀 github jobs\npublish_proposal · fold_markdown_proposal\nfold_changeset_proposal · comment_pull_request",
         group: "converge"
       }
     ],

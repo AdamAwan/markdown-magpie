@@ -65,7 +65,10 @@ async function start(): Promise<void> {
     shuttingDown = true;
     logger.info({ signal }, "received signal; draining background work before exit");
     server.close();
-    Promise.race([ctx.background.whenIdle(), new Promise((resolve) => setTimeout(resolve, config.apiShutdownDrainMs))])
+    Promise.race([
+      ctx.background.whenIdle(),
+      new Promise((resolve) => setTimeout(resolve, config.apiShutdownDrainMs))
+    ])
       .then(() => ctx.jobs.stop())
       // Close the shared store pool after the broker so no store query is mid-flight
       // when its connections are torn down. Best-effort: shutdown exits regardless.

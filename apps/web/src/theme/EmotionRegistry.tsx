@@ -115,7 +115,12 @@ export function EmotionRegistry({ children }: { children: ReactNode }) {
         styles += rules;
       }
     }
-    return <style data-emotion={`${cache.key} ${names.join(" ")}`} dangerouslySetInnerHTML={{ __html: styles }} />;
+    return (
+      <style
+        data-emotion={`${cache.key} ${names.join(" ")}`}
+        dangerouslySetInnerHTML={{ __html: styles }}
+      />
+    );
   });
 
   return (

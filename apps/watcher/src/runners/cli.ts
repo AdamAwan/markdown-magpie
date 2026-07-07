@@ -5,12 +5,7 @@ import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import type { WatcherApi } from "../http-client.js";
 import { buildSourceGroundedPrompt, parseJobOutput } from "../job-prompts.js";
 import { logger } from "../logger.js";
-import {
-  hasFsSources,
-  prepareSourceWorkspaces,
-  sourceDescriptorsOf,
-  type PreparedSources
-} from "../source-workspace.js";
+import { hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf, type PreparedSources } from "../source-workspace.js";
 import { PROVIDER_JOB_TYPES, runGenerativeJob } from "./generative.js";
 
 export type PromptMode = "arg" | "stdin";
@@ -124,11 +119,7 @@ export class CliRunner {
     });
   }
 
-  private async runSourceGrounded(
-    job: JobView,
-    descriptors: SourceDescriptor[],
-    signal: AbortSignal
-  ): Promise<unknown> {
+  private async runSourceGrounded(job: JobView, descriptors: SourceDescriptor[], signal: AbortSignal): Promise<unknown> {
     const prepared = await this.prepareWorkspaces(descriptors, { checkoutRoot: this.checkoutRoot });
     // prepareSourceWorkspaces throws when no fs source resolved, so a first
     // workspace always exists on this path.
@@ -138,13 +129,7 @@ export class CliRunner {
     }
     const prompt = buildSourceGroundedPrompt(job, prepared.workspaces, prepared.notes, "cli");
     logger.info(
-      {
-        jobId: job.id,
-        jobType: job.type,
-        command: this.command,
-        workspaceCount: prepared.workspaces.length,
-        cwd: primary.rootDir
-      },
+      { jobId: job.id, jobType: job.type, command: this.command, workspaceCount: prepared.workspaces.length, cwd: primary.rootDir },
       `${job.type}[${job.id}]: running ${this.command} CLI read-only over ${prepared.workspaces.length} source workspace(s)`
     );
     const content = await this.spawnCli(prompt, signal, {
@@ -185,25 +170,15 @@ export class CliRunner {
     return {
       complete: async (request: ChatRequest): Promise<ChatResponse> => {
         const prompt = renderCliPrompt(request);
-        logger.debug(
-          { jobId: job.id, jobType: job.type, command: this.command, promptMode: this.promptMode },
-          `${job.type}[${job.id}]: invoking ${this.command} CLI (${this.promptMode} mode)`
-        );
+        logger.debug({ jobId: job.id, jobType: job.type, command: this.command, promptMode: this.promptMode }, `${job.type}[${job.id}]: invoking ${this.command} CLI (${this.promptMode} mode)`);
         const content = await this.spawnCli(prompt, request.signal ?? new AbortController().signal);
-        logger.debug(
-          { jobId: job.id, jobType: job.type, command: this.command, outputLength: content.length },
-          `${job.type}[${job.id}]: ${this.command} CLI finished, ${content.length} char(s) of output`
-        );
+        logger.debug({ jobId: job.id, jobType: job.type, command: this.command, outputLength: content.length }, `${job.type}[${job.id}]: ${this.command} CLI finished, ${content.length} char(s) of output`);
         return { content };
       }
     };
   }
 
-  private spawnCli(
-    prompt: string,
-    signal: AbortSignal,
-    opts?: { cwd?: string; extraArgs?: string[]; timeoutMs?: number }
-  ): Promise<string> {
+  private spawnCli(prompt: string, signal: AbortSignal, opts?: { cwd?: string; extraArgs?: string[]; timeoutMs?: number }): Promise<string> {
     return new Promise((resolve, reject) => {
       if (signal.aborted) {
         reject(new Error("CLI runner aborted before start"));

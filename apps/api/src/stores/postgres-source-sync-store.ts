@@ -94,11 +94,7 @@ export class PostgresSourceSyncStore implements SourceSyncStore {
     return result.rows[0] ? mapRunRow(result.rows[0]) : undefined;
   }
 
-  async completeRun(
-    id: string,
-    plan: MaintenancePlan,
-    changeset: ChangesetChange[]
-  ): Promise<SourceSyncRun | undefined> {
+  async completeRun(id: string, plan: MaintenancePlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined> {
     return this.transitionFromRunning(
       "UPDATE source_sync_runs SET status = 'completed', plan = $2, changeset = $3, error = NULL, completed_at = now() WHERE id = $1 AND status = 'running' RETURNING *",
       [id, JSON.stringify(plan), JSON.stringify(changeset)],
@@ -125,7 +121,11 @@ export class PostgresSourceSyncStore implements SourceSyncStore {
   // Runs a terminal-transition UPDATE guarded by status = 'running'. When the run is
   // already terminal the UPDATE matches nothing, so fall back to the current row — a
   // re-delivered completion/failure is then an idempotent no-op rather than a regress.
-  private async transitionFromRunning(sql: string, params: unknown[], id: string): Promise<SourceSyncRun | undefined> {
+  private async transitionFromRunning(
+    sql: string,
+    params: unknown[],
+    id: string
+  ): Promise<SourceSyncRun | undefined> {
     const result = await this.pool.query<SourceSyncRunRow>(sql, params);
     return result.rows[0] ? mapRunRow(result.rows[0]) : this.getRun(id);
   }

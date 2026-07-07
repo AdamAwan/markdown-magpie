@@ -126,10 +126,7 @@ describe("withFlowRunLock", () => {
     );
     assert.equal(pool.held.size, 0, "a thrown body still frees the lock");
     assert.equal(pool.released, 1, "and returns the connection");
-    assert.deepEqual(pool.events, [
-      "try:process_gaps_to_pull_requests flow-a:true",
-      "unlock:process_gaps_to_pull_requests flow-a"
-    ]);
+    assert.deepEqual(pool.events, ["try:process_gaps_to_pull_requests flow-a:true", "unlock:process_gaps_to_pull_requests flow-a"]);
   });
 
   it("runs unlocked when there is no pool (in-memory/unit wiring)", async () => {
@@ -149,45 +146,41 @@ describe("withFlowRunLock", () => {
 const runIntegration = process.env.RUN_PG_INTEGRATION === "1";
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/markdown_magpie";
 
-test(
-  "withFlowRunLock serializes the same flow across two real Postgres connections",
-  { skip: !runIntegration },
-  async () => {
-    const { Pool } = await import("pg");
-    const pool = new Pool({ connectionString: databaseUrl, max: 4 });
-    try {
-      let releaseFirst!: () => void;
-      const finishFirst = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
+test("withFlowRunLock serializes the same flow across two real Postgres connections", { skip: !runIntegration }, async () => {
+  const { Pool } = await import("pg");
+  const pool = new Pool({ connectionString: databaseUrl, max: 4 });
+  try {
+    let releaseFirst!: () => void;
+    const finishFirst = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let secondRan = 0;
+
+    // First holder parks while holding the lock on its own connection.
+    const first = withFlowRunLock(pool, "process_gaps_to_pull_requests", "flow-int", async () => {
+      // A concurrent acquire of the SAME flow (a second connection) must be refused.
+      const overlap = await withFlowRunLock(pool, "process_gaps_to_pull_requests", "flow-int", async () => {
+        secondRan += 1;
       });
-      let secondRan = 0;
-
-      // First holder parks while holding the lock on its own connection.
-      const first = withFlowRunLock(pool, "process_gaps_to_pull_requests", "flow-int", async () => {
-        // A concurrent acquire of the SAME flow (a second connection) must be refused.
-        const overlap = await withFlowRunLock(pool, "process_gaps_to_pull_requests", "flow-int", async () => {
-          secondRan += 1;
-        });
-        assert.deepEqual(overlap, { acquired: false }, "the second connection is refused the held lock");
-        // A DIFFERENT flow is not blocked, even while flow-int is held.
-        let otherRan = 0;
-        const other = await withFlowRunLock(pool, "process_gaps_to_pull_requests", "flow-other", async () => {
-          otherRan += 1;
-        });
-        assert.deepEqual(other, { acquired: true, value: undefined }, "a distinct flow acquires in parallel");
-        assert.equal(otherRan, 1);
-        releaseFirst();
-        await finishFirst;
+      assert.deepEqual(overlap, { acquired: false }, "the second connection is refused the held lock");
+      // A DIFFERENT flow is not blocked, even while flow-int is held.
+      let otherRan = 0;
+      const other = await withFlowRunLock(pool, "process_gaps_to_pull_requests", "flow-other", async () => {
+        otherRan += 1;
       });
+      assert.deepEqual(other, { acquired: true, value: undefined }, "a distinct flow acquires in parallel");
+      assert.equal(otherRan, 1);
+      releaseFirst();
+      await finishFirst;
+    });
 
-      assert.deepEqual(await first, { acquired: true, value: undefined });
-      assert.equal(secondRan, 0, "the overlapping run's body never executed");
+    assert.deepEqual(await first, { acquired: true, value: undefined });
+    assert.equal(secondRan, 0, "the overlapping run's body never executed");
 
-      // Once released, the flow is acquirable again.
-      const reacquire = await withFlowRunLock(pool, "process_gaps_to_pull_requests", "flow-int", async () => "ok");
-      assert.deepEqual(reacquire, { acquired: true, value: "ok" });
-    } finally {
-      await pool.end();
-    }
+    // Once released, the flow is acquirable again.
+    const reacquire = await withFlowRunLock(pool, "process_gaps_to_pull_requests", "flow-int", async () => "ok");
+    assert.deepEqual(reacquire, { acquired: true, value: "ok" });
+  } finally {
+    await pool.end();
   }
-);
+});

@@ -50,7 +50,9 @@ export async function embedPendingSections(options: EmbedPendingOptions): Promis
     }
     // One multi-row write per provider batch instead of one round-trip per
     // section (the original loop awaited saveSectionEmbedding sequentially).
-    await options.store.saveSectionEmbeddings(pending.map((section, i) => ({ id: section.id, embedding: vectors[i] })));
+    await options.store.saveSectionEmbeddings(
+      pending.map((section, i) => ({ id: section.id, embedding: vectors[i] }))
+    );
     embeddedCount += pending.length;
   }
 

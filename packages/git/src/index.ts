@@ -166,7 +166,11 @@ async function cloneCheckout(
 
   if (partialCloneEnabled()) {
     try {
-      await git(request.checkoutRoot, ["clone", "--filter=blob:none", ...baseArgs, request.url, localPath], authEnv);
+      await git(
+        request.checkoutRoot,
+        ["clone", "--filter=blob:none", ...baseArgs, request.url, localPath],
+        authEnv
+      );
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : "partial clone failed";
@@ -192,10 +196,9 @@ async function cloneCheckout(
 // implementations emit when rejecting a filtered fetch.
 function isPartialCloneUnsupported(message: string): boolean {
   return (
-    (/filter/i.test(message) &&
-      /(not support|unsupported|unknown|invalid|does not allow|not allowed|unrecognized|expected)/i.test(message)) ||
-    /uploadpack\.allowfilter|allow.?filter|partial clone/i.test(message)
-  );
+    /filter/i.test(message) &&
+    /(not support|unsupported|unknown|invalid|does not allow|not allowed|unrecognized|expected)/i.test(message)
+  ) || /uploadpack\.allowfilter|allow.?filter|partial clone/i.test(message);
 }
 
 // A single file touched by a range of source commits. `diff` is the unified
@@ -257,11 +260,7 @@ export async function diffChangedFiles(
   const subpathArgs = options.subpath?.trim() ? ["--", options.subpath.trim()] : [];
   const authEnv = options.authEnv;
 
-  const nameStatus = await git(
-    localPath,
-    ["diff", "--name-status", "-M", `${fromSha}..${toSha}`, ...subpathArgs],
-    authEnv
-  );
+  const nameStatus = await git(localPath, ["diff", "--name-status", "-M", `${fromSha}..${toSha}`, ...subpathArgs], authEnv);
   const allEntries = parseNameStatus(nameStatus);
   const totalCount = allEntries.length;
 
@@ -457,7 +456,11 @@ export async function listChangedMarkdown(
 // was not rewritten between them. Uses `git merge-base --is-ancestor`, whose
 // exit code is the answer (0 = ancestor, 1 = not). Returns false on any error
 // (bad/missing ref), so an undecidable check fails closed to a full reindex.
-export async function isAncestor(localPath: string, ancestorSha: string, descendantSha: string): Promise<boolean> {
+export async function isAncestor(
+  localPath: string,
+  ancestorSha: string,
+  descendantSha: string
+): Promise<boolean> {
   try {
     await execFileAsync("git", ["merge-base", "--is-ancestor", ancestorSha, descendantSha], {
       cwd: localPath,
@@ -655,9 +658,10 @@ export async function fetchPullRequestStatusCached(
     headers["If-None-Match"] = etag;
   }
 
-  const response = await githubFetch(`https://api.github.com/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`, {
-    headers
-  });
+  const response = await githubFetch(
+    `https://api.github.com/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`,
+    { headers }
+  );
 
   if (response.status === 304) {
     return { notModified: true };
@@ -689,9 +693,7 @@ export async function fetchPullRequestStatusCached(
 
 // Unconditional read, for callers that have no cached ETag. Returns undefined in
 // all the skip cases above. Kept as the simple shape the live PR-state fallback uses.
-export async function fetchPullRequestStatus(
-  pullRequestUrl: string | undefined
-): Promise<PullRequestStatus | undefined> {
+export async function fetchPullRequestStatus(pullRequestUrl: string | undefined): Promise<PullRequestStatus | undefined> {
   return (await fetchPullRequestStatusCached(pullRequestUrl)).status;
 }
 
@@ -1136,7 +1138,9 @@ export interface DeleteLocalProposalBranchRequest {
 // then force-deletes the branch. Best-effort delete: a missing branch is not an
 // error (the desired end state — the branch is gone — already holds). Serialized on
 // the checkout lock like merge/publish, since it mutates the shared `.git`.
-export async function deleteLocalProposalBranch(request: DeleteLocalProposalBranchRequest): Promise<void> {
+export async function deleteLocalProposalBranch(
+  request: DeleteLocalProposalBranchRequest
+): Promise<void> {
   const { repoPath, branchName, defaultBranch } = request;
   await withCheckoutLock(repoPath, async () => {
     await assertLocalBranchExists(repoPath, defaultBranch);
@@ -1153,10 +1157,7 @@ function resolveTargetPath(repository: RepositoryRef, targetPath: string): strin
   }
 
   const normalizedRelativePath = toPosixPath(relativePathFromRoot).replace(/^\/+|\/+$/g, "");
-  if (
-    normalizedTargetPath === normalizedRelativePath ||
-    normalizedTargetPath.startsWith(`${normalizedRelativePath}/`)
-  ) {
+  if (normalizedTargetPath === normalizedRelativePath || normalizedTargetPath.startsWith(`${normalizedRelativePath}/`)) {
     return normalizedTargetPath;
   }
 
@@ -1378,7 +1379,9 @@ export interface CommentOnPullRequestRequest {
 // so this targets the issues endpoint. Returns the created comment's URL, or
 // undefined when there is no token or the URL is not a GitHub PR URL — quiet
 // degradation symmetric with raisePullRequest.
-export async function commentOnPullRequest(request: CommentOnPullRequestRequest): Promise<string | undefined> {
+export async function commentOnPullRequest(
+  request: CommentOnPullRequestRequest
+): Promise<string | undefined> {
   const target = parsePullRequestUrl(request.pullRequestUrl);
   if (!target) {
     return undefined;
@@ -1411,7 +1414,9 @@ export async function commentOnPullRequest(request: CommentOnPullRequestRequest)
   return data.html_url;
 }
 
-function parsePullRequestUrl(url: string): { owner: string; repo: string; number: number } | undefined {
+function parsePullRequestUrl(
+  url: string
+): { owner: string; repo: string; number: number } | undefined {
   const match = /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/.exec(url);
   if (!match) {
     return undefined;

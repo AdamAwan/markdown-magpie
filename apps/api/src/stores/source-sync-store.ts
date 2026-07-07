@@ -79,7 +79,9 @@ export class InMemorySourceSyncStore implements SourceSyncStore {
   }
 
   async listRuns(limit: number): Promise<SourceSyncRun[]> {
-    return [...this.runs.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, limit);
+    return [...this.runs.values()]
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, limit);
   }
 
   async getRun(id: string): Promise<SourceSyncRun | undefined> {
@@ -93,11 +95,7 @@ export class InMemorySourceSyncStore implements SourceSyncStore {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
   }
 
-  async completeRun(
-    id: string,
-    plan: MaintenancePlan,
-    changeset: ChangesetChange[]
-  ): Promise<SourceSyncRun | undefined> {
+  async completeRun(id: string, plan: MaintenancePlan, changeset: ChangesetChange[]): Promise<SourceSyncRun | undefined> {
     return this.transitionFromRunning(id, {
       status: "completed",
       plan,

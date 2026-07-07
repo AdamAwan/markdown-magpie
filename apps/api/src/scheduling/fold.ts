@@ -61,10 +61,7 @@ export async function reconcileDraftedProposal(ctx: AppContext, rival: Proposal)
     rivalEvidence: rival.evidence,
     expectedOutput: "folded_markdown"
   });
-  logger.info(
-    { rivalId: rival.id, survivorId: survivor.id, targetPath: rival.targetPath },
-    "fold: enqueued fold_markdown_proposal"
-  );
+  logger.info({ rivalId: rival.id, survivorId: survivor.id, targetPath: rival.targetPath }, "fold: enqueued fold_markdown_proposal");
 }
 
 // Gate + publish a clusterless proposal (verify corrective, flow seed, …). Unlike
@@ -73,7 +70,11 @@ export async function reconcileDraftedProposal(ctx: AppContext, rival: Proposal)
 // its own PR; only a touchable overlap on the same path folds. `lens` is cosmetic
 // for the gate (only `targets` drive decideReconciliation) but is threaded for the
 // intent audit trail. Best-effort — the caller (completeJob) guards throws.
-async function reconcileClusterlessProposal(ctx: AppContext, proposal: Proposal, lens: MaintenanceLens): Promise<void> {
+async function reconcileClusterlessProposal(
+  ctx: AppContext,
+  proposal: Proposal,
+  lens: MaintenanceLens
+): Promise<void> {
   if (proposal.status !== "draft" || !proposal.targetPath) {
     return;
   }
@@ -102,10 +103,7 @@ async function reconcileClusterlessProposal(ctx: AppContext, proposal: Proposal,
         rivalEvidence: proposal.evidence,
         expectedOutput: "folded_markdown"
       });
-      logger.info(
-        { proposalId: proposal.id, survivorId: survivor.id, targetPath: proposal.targetPath, lens },
-        "clusterless fold: enqueued fold of proposal"
-      );
+      logger.info({ proposalId: proposal.id, survivorId: survivor.id, targetPath: proposal.targetPath, lens }, "clusterless fold: enqueued fold of proposal");
       return;
     }
     // Survivor vanished between gate and fetch — fall through to self-publish.
@@ -113,10 +111,7 @@ async function reconcileClusterlessProposal(ctx: AppContext, proposal: Proposal,
 
   // open-new, defer, or a fold whose survivor disappeared: publish as its own PR.
   await ctx.stores.gapClusters.enqueuePublicationAction(proposal.id, "publish");
-  logger.info(
-    { proposalId: proposal.id, decision: decision.kind, targetPath: proposal.targetPath, lens },
-    "clusterless proposal: enqueued to publish"
-  );
+  logger.info({ proposalId: proposal.id, decision: decision.kind, targetPath: proposal.targetPath, lens }, "clusterless proposal: enqueued to publish");
 }
 
 // The verify lens's corrective proposal — a repair of an existing doc.
@@ -162,10 +157,7 @@ export async function reconcileDedupeProposal(ctx: AppContext, proposal: Proposa
         sharedPaths: sharedTargets(proposalTargets(survivor), targets),
         expectedOutput: "folded_changeset"
       });
-      logger.info(
-        { proposalId: proposal.id, survivorId: survivor.id, targets },
-        "dedupe fold: enqueued fold of proposal"
-      );
+      logger.info({ proposalId: proposal.id, survivorId: survivor.id, targets }, "dedupe fold: enqueued fold of proposal");
       return;
     }
     // Survivor vanished between gate and fetch — fall through to self-publish.
@@ -208,10 +200,7 @@ export async function reconcileSplitProposal(ctx: AppContext, proposal: Proposal
         sharedPaths: sharedTargets(proposalTargets(survivor), targets),
         expectedOutput: "folded_changeset"
       });
-      logger.info(
-        { proposalId: proposal.id, survivorId: survivor.id, targets },
-        "split fold: enqueued fold of proposal"
-      );
+      logger.info({ proposalId: proposal.id, survivorId: survivor.id, targets }, "split fold: enqueued fold of proposal");
       return;
     }
   }
@@ -251,10 +240,7 @@ export async function reconcileSourceSyncProposal(ctx: AppContext, proposal: Pro
         sharedPaths: sharedTargets(proposalTargets(survivor), targets),
         expectedOutput: "folded_changeset"
       });
-      logger.info(
-        { proposalId: proposal.id, survivorId: survivor.id, targets },
-        "source-sync fold: enqueued fold of proposal"
-      );
+      logger.info({ proposalId: proposal.id, survivorId: survivor.id, targets }, "source-sync fold: enqueued fold of proposal");
       return;
     }
   }
@@ -295,19 +281,13 @@ export async function reconcileImproveProposal(ctx: AppContext, proposal: Propos
         rivalEvidence: proposal.evidence,
         expectedOutput: "folded_markdown"
       });
-      logger.info(
-        { proposalId: proposal.id, survivorId: survivor.id, targetPath: proposal.targetPath },
-        "improve fold: enqueued fold of proposal"
-      );
+      logger.info({ proposalId: proposal.id, survivorId: survivor.id, targetPath: proposal.targetPath }, "improve fold: enqueued fold of proposal");
       return;
     }
   }
 
   await ctx.stores.gapClusters.enqueuePublicationAction(proposal.id, "publish");
-  logger.info(
-    { proposalId: proposal.id, decision: decision.kind, targetPath: proposal.targetPath },
-    "improve: enqueued to publish"
-  );
+  logger.info({ proposalId: proposal.id, decision: decision.kind, targetPath: proposal.targetPath }, "improve: enqueued to publish");
 }
 // Applies a completed fold: update the survivor's markdown, absorb the rival's gap
 // cluster into the survivor's (so the rival's gaps resolve when the survivor merges),
@@ -380,10 +360,7 @@ export async function applyFoldFromCompletedJob(
         "_(automated fold-on-overlap)_"
     });
   }
-  logger.info(
-    { rivalId: rival.id, survivorId: survivor.id },
-    "fold: merged rival into survivor; survivor re-publish enqueued"
-  );
+  logger.info({ rivalId: rival.id, survivorId: survivor.id }, "fold: merged rival into survivor; survivor re-publish enqueued");
 }
 
 // Applies a completed multi-file fold: promote the survivor to the merged file-set
@@ -438,10 +415,7 @@ export async function applyChangesetFoldFromCompletedJob(
         "This PR has been updated to include that material. _(automated fold-on-overlap)_"
     });
   }
-  logger.info(
-    { rivalId: rival.id, survivorId: survivor.id },
-    "changeset fold: merged rival into survivor; survivor re-publish enqueued"
-  );
+  logger.info({ rivalId: rival.id, survivorId: survivor.id }, "changeset fold: merged rival into survivor; survivor re-publish enqueued");
 }
 
 // Fold failed terminally: publish the rival as its own PR so its change is never lost.
@@ -460,8 +434,5 @@ export async function enqueueFoldFallback(ctx: AppContext, job: JobView | undefi
     return;
   }
   await ctx.stores.gapClusters.enqueuePublicationAction(rival.id, "publish");
-  logger.info(
-    { jobId: job.id, rivalId: rival.id },
-    "fold fallback: fold job failed; enqueued rival to publish as its own PR"
-  );
+  logger.info({ jobId: job.id, rivalId: rival.id }, "fold fallback: fold job failed; enqueued rival to publish as its own PR");
 }

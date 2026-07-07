@@ -62,12 +62,15 @@ export function singletonCluster(candidate: GapCandidate): SuggestedGapCluster {
 // matched exactly, then case-insensitively; any candidate the model dropped or
 // duplicated is given its own cluster so nothing disappears from the reviewer's
 // view and no gap is drafted twice.
-export function assembleClusters(candidates: GapCandidate[], parsed: unknown, flowId?: string): SuggestedGapCluster[] {
+export function assembleClusters(
+  candidates: GapCandidate[],
+  parsed: unknown,
+  flowId?: string
+): SuggestedGapCluster[] {
   const bySummary = new Map(candidates.map((candidate) => [candidate.summary, candidate]));
   const byNormalized = new Map(candidates.map((candidate) => [normalizeSummary(candidate.summary), candidate]));
-  const groups = (
-    parsed as { clusters?: Array<{ title?: unknown; summaries?: unknown; rationale?: unknown }> } | undefined
-  )?.clusters;
+  const groups = (parsed as { clusters?: Array<{ title?: unknown; summaries?: unknown; rationale?: unknown }> } | undefined)
+    ?.clusters;
 
   const clusters: SuggestedGapCluster[] = [];
   const assigned = new Set<string>();

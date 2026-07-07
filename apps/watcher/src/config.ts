@@ -154,8 +154,7 @@ const schema = z
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["AUTH0_ISSUER_BASE_URL"],
-          message:
-            "AUTH0_ISSUER_BASE_URL or AUTH0_DOMAIN is required for the watcher's client-credentials grant when auth is enabled"
+          message: "AUTH0_ISSUER_BASE_URL or AUTH0_DOMAIN is required for the watcher's client-credentials grant when auth is enabled"
         });
       }
     }

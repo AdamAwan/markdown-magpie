@@ -100,7 +100,9 @@ test("extractModelInfo labels Azure OpenAI deployments", () => {
 });
 
 test("extractModelInfo ignores non-string provider fields", () => {
-  const info = extractModelInfo(config({ providers: { openAiCompatible: { model: 42, baseUrl: null } } }));
+  const info = extractModelInfo(
+    config({ providers: { openAiCompatible: { model: 42, baseUrl: null } } })
+  );
   assert.deepEqual(info, {});
 });
 

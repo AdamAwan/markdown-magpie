@@ -28,8 +28,8 @@ export function ReconciliationsPanel({ decisions }: { decisions: ReconciliationD
       </Surface.Header>
       <Surface.Body>
         <Hint>
-          How the reconciler reshapes each flow&apos;s gap clusters: the model&apos;s rationale for a merge or split and
-          whether the critic confirmed it. Only confirmed decisions are applied.
+          How the reconciler reshapes each flow&apos;s gap clusters: the model&apos;s rationale for a merge or
+          split and whether the critic confirmed it. Only confirmed decisions are applied.
         </Hint>
         <ScrollList>
           {decisions.map((decision) => (
@@ -39,7 +39,11 @@ export function ReconciliationsPanel({ decisions }: { decisions: ReconciliationD
                   {decision.kind === "merge" ? "Merge" : "Split"} · {decision.flowId ?? "default"}
                 </h3>
                 <Row gap="md">
-                  <Badge tone={statusTone(decision.confirmed ? "ready" : "rejected")} dot title="Critic verdict">
+                  <Badge
+                    tone={statusTone(decision.confirmed ? "ready" : "rejected")}
+                    dot
+                    title="Critic verdict"
+                  >
                     {decision.confirmed ? "confirmed" : "rejected"}
                   </Badge>
                   {decision.applied ? (
@@ -56,7 +60,9 @@ export function ReconciliationsPanel({ decisions }: { decisions: ReconciliationD
               </Path>
             </ListRow>
           ))}
-          {decisions.length === 0 ? <EmptyState>No reconciliation decisions recorded yet.</EmptyState> : null}
+          {decisions.length === 0 ? (
+            <EmptyState>No reconciliation decisions recorded yet.</EmptyState>
+          ) : null}
         </ScrollList>
       </Surface.Body>
     </Surface>

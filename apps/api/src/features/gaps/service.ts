@@ -22,7 +22,9 @@ export async function reconcileFlow(ctx: AppContext, flowId: string): Promise<vo
 export async function listClusters(ctx: AppContext, limit: number): Promise<PersistedGapCluster[]> {
   const clusters = await ctx.stores.gapClusters.listActiveClusters();
   const proposals = await ctx.stores.proposals.list(500);
-  const proposalByCluster = new Map(proposals.filter((p) => p.gapClusterId).map((p) => [p.gapClusterId as string, p]));
+  const proposalByCluster = new Map(
+    proposals.filter((p) => p.gapClusterId).map((p) => [p.gapClusterId as string, p])
+  );
 
   const result: PersistedGapCluster[] = [];
   for (const cluster of clusters.slice(0, limit)) {

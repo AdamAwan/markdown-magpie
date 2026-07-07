@@ -36,7 +36,8 @@ function seedJob(): JobView {
 }
 
 type ScriptedTurn =
-  { toolCall: { toolName: string; input: unknown } } | { text: string | ((conversation: string) => string) };
+  | { toolCall: { toolName: string; input: unknown } }
+  | { text: string | ((conversation: string) => string) };
 
 // One MockLanguageModelV3 doGenerate result per scripted turn: a tool-call part
 // (input is a STRINGIFIED JSON string in the V3 spec) or a final text part. A

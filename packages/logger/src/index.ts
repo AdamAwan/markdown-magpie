@@ -30,7 +30,8 @@ export function createLogger(opts: LoggerOptions = {}): Logger {
   if (destination !== undefined) {
     // Explicit sink: raw JSON, no transport. Used by tests and the stdio MCP
     // server (which must keep stdout free for JSON-RPC and log to stderr).
-    const stream = typeof destination === "number" ? pino.destination({ dest: destination, sync: true }) : destination;
+    const stream =
+      typeof destination === "number" ? pino.destination({ dest: destination, sync: true }) : destination;
     return pino(options, stream);
   }
 
@@ -55,10 +56,7 @@ const FLUSH_TIMEOUT_MS = 1_000;
 //
 // `exit` is injectable purely so tests can assert the exit code without tearing
 // down the test runner; production always uses the real process.exit.
-export function installCrashHandlers(
-  logger: Logger,
-  exit: (code: number) => void = (code) => process.exit(code)
-): void {
+export function installCrashHandlers(logger: Logger, exit: (code: number) => void = (code) => process.exit(code)): void {
   const onFatal = createFatalHandler(logger, exit);
   process.on("uncaughtException", (error) => onFatal("uncaughtException", error));
   process.on("unhandledRejection", (reason) => onFatal("unhandledRejection", reason));

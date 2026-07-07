@@ -8,7 +8,8 @@ import { describe, it } from "node:test";
 import { ensureGitCheckout } from "./index.js";
 
 const exec = promisify(execFile);
-const git = (cwd: string, args: string[]): Promise<string> => exec("git", args, { cwd }).then((r) => r.stdout.trim());
+const git = (cwd: string, args: string[]): Promise<string> =>
+  exec("git", args, { cwd }).then((r) => r.stdout.trim());
 
 async function initBareRemote(): Promise<{ root: string; remotePath: string; seedClone: string }> {
   const root = await mkdtemp(path.join(tmpdir(), "magpie-ensure-test-"));

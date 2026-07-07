@@ -8,7 +8,8 @@ import { describe, it } from "node:test";
 import { isAncestor, listChangedMarkdown } from "./index.js";
 
 const exec = promisify(execFile);
-const git = (cwd: string, args: string[]): Promise<string> => exec("git", args, { cwd }).then((r) => r.stdout.trim());
+const git = (cwd: string, args: string[]): Promise<string> =>
+  exec("git", args, { cwd }).then((r) => r.stdout.trim());
 
 async function initRepo(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "magpie-changed-md-"));

@@ -121,7 +121,12 @@ describe("HttpWatcherApi complete() retry", () => {
   });
 
   it("gives up after exhausting retries on a persistent 5xx", async () => {
-    const state = installScriptedFetch([{ status: 502 }, { status: 502 }, { status: 502 }, { status: 502 }]);
+    const state = installScriptedFetch([
+      { status: 502 },
+      { status: 502 },
+      { status: 502 },
+      { status: 502 }
+    ]);
     const api = new HttpWatcherApi({
       apiBaseUrl: "http://api.test",
       workerName: "test-worker",

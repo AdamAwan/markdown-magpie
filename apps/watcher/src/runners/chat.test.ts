@@ -277,10 +277,7 @@ describe("ChatRunner", () => {
       };
     };
 
-    assert.ok(
-      queries.some((q) => q.includes("example")),
-      "should run the model's follow-up search"
-    );
+    assert.ok(queries.some((q) => q.includes("example")), "should run the model's follow-up search");
     assert.ok(
       flowsSeen.every((flowId) => flowId === "flow-b"),
       "follow-up searches stay within the routed flow"
@@ -381,10 +378,7 @@ describe("ChatRunner", () => {
       controller.signal
     );
     assert.ok(signals.length >= 1);
-    assert.ok(
-      signals.every((signal) => signal === controller.signal),
-      "retrieve receives the job abort signal"
-    );
+    assert.ok(signals.every((signal) => signal === controller.signal), "retrieve receives the job abort signal");
   });
 
   it("uses a caller-specified flow directly and skips routing", async () => {
@@ -430,7 +424,11 @@ describe("ChatRunner", () => {
     // "sold" the answer with compliance claims (SOC 2) the context never states.
     const chat = new FakeChatProvider((request) => {
       if (request.system.includes("You verify a drafted")) {
-        assert.match(request.messages[0]?.content ?? "", /SOC 2 certified/, "the verifier reviews the drafted answer");
+        assert.match(
+          request.messages[0]?.content ?? "",
+          /SOC 2 certified/,
+          "the verifier reviews the drafted answer"
+        );
         assert.match(
           request.messages[0]?.content ?? "",
           /\[section doc-1#deploy\]/,
@@ -525,16 +523,8 @@ describe("ChatRunner", () => {
       "the cited section is shown in full"
     );
     assert.match(verifyMessage, /\[section doc-2#extra\] # Extra context/, "the uncited section's heading is shown");
-    assert.doesNotMatch(
-      verifyMessage,
-      /Uncited body that must not be re-sent\./,
-      "the uncited section's body is withheld"
-    );
-    assert.match(
-      verifyMessage,
-      /Also retrieved \(headings only/,
-      "uncited sections are grouped under the headings-only label"
-    );
+    assert.doesNotMatch(verifyMessage, /Uncited body that must not be re-sent\./, "the uncited section's body is withheld");
+    assert.match(verifyMessage, /Also retrieved \(headings only/, "uncited sections are grouped under the headings-only label");
   });
 
   it("keeps the drafted answer when the grounding verdict is unparseable (fails open)", async () => {
@@ -630,10 +620,7 @@ describe("ChatRunner", () => {
   it("runs buildPrompt -> chat -> parseJobOutput for non-answer jobs", async () => {
     const chat = new FakeChatProvider(() => JSON.stringify({ summary: "s", priority: 1, rationale: "r" }));
     const runner = new ChatRunner("openai-compatible", chat, fakeApi());
-    const output = await runner.run(
-      job("summarize_gap", { questions: ["q"], citedSections: [] }),
-      new AbortController().signal
-    );
+    const output = await runner.run(job("summarize_gap", { questions: ["q"], citedSections: [] }), new AbortController().signal);
     assert.deepEqual(output, { summary: "s", priority: 1, rationale: "r" });
   });
 
@@ -683,12 +670,7 @@ describe("ChatRunner", () => {
       controller.signal
     )) as {
       merges: Array<{ clusterIds: string[]; rationale: string; confirmed: boolean }>;
-      splits: Array<{
-        clusterId: string;
-        children: Array<{ gapIds: string[] }>;
-        rationale: string;
-        confirmed: boolean;
-      }>;
+      splits: Array<{ clusterId: string; children: Array<{ gapIds: string[] }>; rationale: string; confirmed: boolean }>;
       dismissals: Array<{ clusterId: string; rationale: string; confirmed: boolean }>;
     };
 
@@ -757,15 +739,9 @@ describe("ChatRunner", () => {
       if (request.system.includes("strict reviewer")) {
         return JSON.stringify({ verdicts: [{ id: "merge-0", confirmed: true }] });
       }
-      return (
-        "Here is the reshape:\n```json\n" +
-        JSON.stringify({
-          merges: [{ clusterIds: ["c1", "c2"], rationale: "same doc covers both" }],
-          splits: [],
-          dismissals: []
-        }) +
-        "\n```"
-      );
+      return "Here is the reshape:\n```json\n" +
+        JSON.stringify({ merges: [{ clusterIds: ["c1", "c2"], rationale: "same doc covers both" }], splits: [], dismissals: [] }) +
+        "\n```";
     });
     const runner = new ChatRunner("openai-compatible", chat, fakeApi());
     const output = (await runner.run(

@@ -8,11 +8,7 @@ import type { JobView } from "@magpie/jobs";
 import { hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf } from "./source-workspace.js";
 
 const git = (over: Partial<Extract<SourceDescriptor, { kind: "git" }>> = {}): SourceDescriptor => ({
-  id: "g1",
-  name: "Repo",
-  kind: "git",
-  url: "https://example.com/r.git",
-  ...over
+  id: "g1", name: "Repo", kind: "git", url: "https://example.com/r.git", ...over
 });
 
 describe("prepareSourceWorkspaces", () => {
@@ -51,10 +47,10 @@ describe("prepareSourceWorkspaces", () => {
     const failing = async () => {
       throw new Error("clone failed");
     };
-    const prepared = await prepareSourceWorkspaces([git(), { id: "l1", name: "Notes", kind: "local", path: dir }], {
-      checkoutRoot: dir,
-      checkout: failing
-    });
+    const prepared = await prepareSourceWorkspaces(
+      [git(), { id: "l1", name: "Notes", kind: "local", path: dir }],
+      { checkoutRoot: dir, checkout: failing }
+    );
     assert.equal(prepared.workspaces.length, 1);
     assert.equal(prepared.notes.length, 1);
     assert.match(prepared.notes[0]!, /Repo.*unavailable/i);

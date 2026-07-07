@@ -5,11 +5,7 @@ import { AnswerProse } from "./AnswerProse";
 
 test("renders Markdown emphasis and lists as real elements, not raw markers", () => {
   const markup = renderMarkup(
-    <AnswerProse
-      text={
-        "**Highlight these key points:**\n\n* **Your data stays on your infrastructure.** Runs locally.\n* **Encryption end to end.**"
-      }
-    />
+    <AnswerProse text={"**Highlight these key points:**\n\n* **Your data stays on your infrastructure.** Runs locally.\n* **Encryption end to end.**"} />
   );
 
   // The bold markers become <strong>, not literal asterisks.

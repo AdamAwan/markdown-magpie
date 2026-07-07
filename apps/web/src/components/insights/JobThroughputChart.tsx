@@ -1,7 +1,16 @@
 "use client";
 
 import { useTheme } from "@emotion/react";
-import { Area, AreaChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Legend,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from "recharts";
 import type { JobThroughputBucket } from "../../lib/types";
 
 function shortDate(iso: string): string {

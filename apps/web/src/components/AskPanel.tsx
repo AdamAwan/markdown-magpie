@@ -100,9 +100,7 @@ function AnswerTraceBlock({ trace }: { trace: AnswerTrace }) {
       <ul>
         <li>
           Routing: {ROUTING_LABELS[trace.routing.mode]}
-          {trace.routing.mode === "routed" && trace.routing.confidence
-            ? ` (${trace.routing.confidence} confidence)`
-            : ""}
+          {trace.routing.mode === "routed" && trace.routing.confidence ? ` (${trace.routing.confidence} confidence)` : ""}
         </li>
         <li>
           Retrieval: {trace.seedSectionCount} seed section(s), {trace.poolSectionCount} in the final pool
@@ -212,7 +210,9 @@ export function AskPanel({
   toggleCitations: (questionId: string) => void;
 }) {
   const query = answeredSearch.trim().toLowerCase();
-  const filteredQuestions = query ? questions.filter((item) => item.question.toLowerCase().includes(query)) : questions;
+  const filteredQuestions = query
+    ? questions.filter((item) => item.question.toLowerCase().includes(query))
+    : questions;
   // The ask response is enqueue-only — it carries the queued job, not an answer.
   // The answer (and its flow) land on the logged question once the watcher
   // completes the answer_question job, so recover both from the question log.

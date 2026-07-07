@@ -108,7 +108,10 @@ const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sou
   try {
     terminal = await runJobToCompletion(ctx, "verify_document", input, {
       reuseKey: verifyDocumentReuseKey,
-      deadlineMs: Math.min(VERIFY_WAIT_BUDGET_MS, ctx.settings.jobs.runToCompletionTimeoutMs ?? VERIFY_WAIT_BUDGET_MS)
+      deadlineMs: Math.min(
+        VERIFY_WAIT_BUDGET_MS,
+        ctx.settings.jobs.runToCompletionTimeoutMs ?? VERIFY_WAIT_BUDGET_MS
+      )
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "verify job failed";
@@ -378,19 +381,7 @@ export async function runFixPatrol(
     }
   });
   logger.info(
-    {
-      trigger: options.trigger,
-      flowId: options.flowId ?? "(default)",
-      selected: selected.length,
-      checked: checkedPaths.length,
-      gated,
-      universe: universe.length,
-      findings: findings.length,
-      dedupeScans,
-      splitScans,
-      skipped,
-      runId: run.id
-    },
+    { trigger: options.trigger, flowId: options.flowId ?? "(default)", selected: selected.length, checked: checkedPaths.length, gated, universe: universe.length, findings: findings.length, dedupeScans, splitScans, skipped, runId: run.id },
     "fix-patrol completed"
   );
   return {
@@ -494,16 +485,7 @@ export async function runImprovePatrol(
     details: { universeCount: universe.length, selectedCount: selected.length, selected, skipped, gated, enqueuedCount }
   });
   logger.info(
-    {
-      trigger: options.trigger,
-      flowId: options.flowId ?? "(default)",
-      selected: selected.length,
-      universe: universe.length,
-      enqueued: enqueuedCount,
-      gated,
-      skipped,
-      runId: run.id
-    },
+    { trigger: options.trigger, flowId: options.flowId ?? "(default)", selected: selected.length, universe: universe.length, enqueued: enqueuedCount, gated, skipped, runId: run.id },
     "improve-patrol completed"
   );
   return {

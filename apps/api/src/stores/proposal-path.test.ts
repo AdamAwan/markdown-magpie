@@ -3,7 +3,10 @@ import { test } from "node:test";
 import { resolveProposalTargetPath } from "@magpie/core";
 
 test("places the proposal under the destination's docs subpath", () => {
-  assert.equal(resolveProposalTargetPath("docs", "How do I trim claws?"), "docs/how-do-i-trim-claws.md");
+  assert.equal(
+    resolveProposalTargetPath("docs", "How do I trim claws?"),
+    "docs/how-do-i-trim-claws.md"
+  );
 });
 
 test("writes to the repository root when the destination has no subpath", () => {
@@ -12,7 +15,10 @@ test("writes to the repository root when the destination has no subpath", () => 
 });
 
 test("normalises slashes and trims surrounding separators in the subpath", () => {
-  assert.equal(resolveProposalTargetPath("/knowledge\\cats/", "Trimming Claws"), "knowledge/cats/trimming-claws.md");
+  assert.equal(
+    resolveProposalTargetPath("/knowledge\\cats/", "Trimming Claws"),
+    "knowledge/cats/trimming-claws.md"
+  );
 });
 
 test("never adds a 'proposed/' staging prefix — the branch is the proposal", () => {

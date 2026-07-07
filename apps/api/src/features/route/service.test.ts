@@ -51,11 +51,7 @@ test("embeds question + flows in one batched call, then reuses cached flow vecto
 
   await route(ctx, { question: "deploy question two", flows: FLOWS });
   assert.equal(provider.calls.length, 2);
-  assert.deepEqual(
-    provider.calls[1],
-    ["deploy question two"],
-    "flow vectors are cached — only the question is re-embedded"
-  );
+  assert.deepEqual(provider.calls[1], ["deploy question two"], "flow vectors are cached — only the question is re-embedded");
 });
 
 test("routes using each flow's config routing summary, resolved server-side by id", async () => {
@@ -90,13 +86,7 @@ test("routes using each flow's config routing summary, resolved server-side by i
 
 test("abstains on a near-tie (all flows equally similar)", async () => {
   const ctx = makeTestContext({ providers: { embedding: new FakeEmbeddingProvider(() => [1, 1]) } });
-  const result = await route(ctx, {
-    question: "ambiguous",
-    flows: [
-      { id: "a", name: "A" },
-      { id: "b", name: "B" }
-    ]
-  });
+  const result = await route(ctx, { question: "ambiguous", flows: [{ id: "a", name: "A" }, { id: "b", name: "B" }] });
   assert.equal(result.status, "abstain");
 });
 

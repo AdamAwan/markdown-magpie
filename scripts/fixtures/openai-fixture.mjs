@@ -113,12 +113,8 @@ const server = createServer(async (req, res) => {
     if (/\[slow\]/i.test(user)) {
       console.log(`[fixture] answer call [slow] -> delaying ${SLOW_DELAY_MS}ms`);
       let aborted = false;
-      req.on("aborted", () => {
-        aborted = true;
-      });
-      res.on("close", () => {
-        aborted = true;
-      });
+      req.on("aborted", () => { aborted = true; });
+      res.on("close", () => { aborted = true; });
       const start = Date.now();
       // Interruptible sleep so a client cancel/abort short-circuits the delay.
       while (Date.now() - start < SLOW_DELAY_MS && !aborted) {

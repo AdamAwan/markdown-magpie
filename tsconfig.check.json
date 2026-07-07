@@ -4,10 +4,19 @@
     "jsx": "preserve",
     "noEmit": true
   },
-  "include": ["apps/**/*.ts", "apps/**/*.tsx", "packages/**/*.ts"],
+  "include": [
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "packages/**/*.ts"
+  ],
   // apps/web is a Next.js app that uses "bundler" module resolution (see
   // apps/web/tsconfig.json) and is type-checked by `next build`. It must not be
   // checked here under the base's nodenext resolution, which rejects the
   // extension-less relative imports that are correct for the bundler.
-  "exclude": ["node_modules", "dist", ".next", "apps/web"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    ".next",
+    "apps/web"
+  ]
 }

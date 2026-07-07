@@ -112,9 +112,7 @@ async function ask(question: string): Promise<{ answer: string; citations: unkno
   }
 
   if (!terminalState) {
-    throw new Error(
-      `Timed out waiting for job ${response.job.id} (question ${response.questionId}). Is a watcher running?`
-    );
+    throw new Error(`Timed out waiting for job ${response.job.id} (question ${response.questionId}). Is a watcher running?`);
   }
   if (terminalState !== "completed") {
     throw new Error(`Job ${response.job.id} for question ${response.questionId} ended in state '${terminalState}'.`);

@@ -23,7 +23,10 @@ function assertThrowsNaming(env: NodeJS.ProcessEnv, ...vars: string[]): Error {
   );
   assert.ok(error, "expected loadConfig to throw");
   for (const name of vars) {
-    assert.ok(error.message.includes(name), `expected error message to name ${name}; got:\n${error.message}`);
+    assert.ok(
+      error.message.includes(name),
+      `expected error message to name ${name}; got:\n${error.message}`
+    );
   }
   return error;
 }
@@ -253,7 +256,10 @@ describe("loadConfig — rejects bad/missing config", () => {
   });
 
   it("requires the audience when AUTH_REQUIRED=true", () => {
-    assertThrowsNaming({ ...minimalEnv, AUTH_REQUIRED: "true", AUTH0_DOMAIN: "tenant.eu.auth0.com" }, "AUTH0_AUDIENCE");
+    assertThrowsNaming(
+      { ...minimalEnv, AUTH_REQUIRED: "true", AUTH0_DOMAIN: "tenant.eu.auth0.com" },
+      "AUTH0_AUDIENCE"
+    );
   });
 
   it("requires a domain or issuer when AUTH_REQUIRED=true", () => {

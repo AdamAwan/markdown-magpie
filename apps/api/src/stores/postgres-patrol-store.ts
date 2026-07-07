@@ -24,9 +24,10 @@ export class PostgresPatrolStore implements PatrolStore {
       last_checked_at: Date;
       content_hash: string | null;
       sources_hash: string | null;
-    }>("SELECT doc_path, last_checked_at, content_hash, sources_hash FROM patrol_cursor WHERE flow_id = $1", [
-      cursorFlowId(flowId, kind)
-    ]);
+    }>(
+      "SELECT doc_path, last_checked_at, content_hash, sources_hash FROM patrol_cursor WHERE flow_id = $1",
+      [cursorFlowId(flowId, kind)]
+    );
     return result.rows.map((row) => ({
       docPath: row.doc_path,
       lastCheckedAt: row.last_checked_at.toISOString(),

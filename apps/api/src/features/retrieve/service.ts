@@ -23,7 +23,9 @@ interface RetrievedSection {
   relevance: number;
 }
 
-export type RetrieveResult = { ok: true; sections: RetrievedSection[] } | { ok: false; code: "unknown_flow" };
+export type RetrieveResult =
+  | { ok: true; sections: RetrievedSection[] }
+  | { ok: false; code: "unknown_flow" };
 
 // Sections below this fused-relevance floor are dropped rather than returned as
 // weak filler. Without it, hybrid search always yields its top-K (vector search

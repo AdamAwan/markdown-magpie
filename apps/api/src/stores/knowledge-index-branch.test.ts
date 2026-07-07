@@ -8,7 +8,8 @@ import { afterEach, describe, it } from "node:test";
 import { InMemoryKnowledgeIndex } from "./knowledge-index.js";
 
 const exec = promisify(execFile);
-const git = (cwd: string, args: string[]): Promise<string> => exec("git", args, { cwd }).then((r) => r.stdout.trim());
+const git = (cwd: string, args: string[]): Promise<string> =>
+  exec("git", args, { cwd }).then((r) => r.stdout.trim());
 
 const tempRoots: string[] = [];
 

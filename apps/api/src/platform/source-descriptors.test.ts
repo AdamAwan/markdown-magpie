@@ -27,10 +27,7 @@ describe("projectSourceDescriptors", () => {
     const deps = depsWith(
       ["a", "b", "c", "d"].map((id) => ({ id, name: id, kind: "local" as const, path: `/srv/${id}` }))
     );
-    assert.deepEqual(
-      projectSourceDescriptors(deps, undefined).map((d) => d.id),
-      ["a", "b", "c"]
-    );
+    assert.deepEqual(projectSourceDescriptors(deps, undefined).map((d) => d.id), ["a", "b", "c"]);
   });
 
   it("skips a git source with no resolvable url and a local source with no path", () => {

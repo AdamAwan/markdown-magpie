@@ -87,7 +87,9 @@ test("renders change intent trace chips and debug details", () => {
 });
 
 test("each run card exposes a details action", () => {
-  const html = renderMarkup(<ActivityPanel flows={[]} runs={[run({ id: "run-1", taskType: "correctness_patrol" })]} />);
+  const html = renderMarkup(
+    <ActivityPanel flows={[]} runs={[run({ id: "run-1", taskType: "correctness_patrol" })]} />
+  );
 
   assert.match(html, /aria-label="View details for Correctness patrol run"/);
 });
@@ -113,10 +115,7 @@ test("maintenance run details modal renders formatted JSON details", () => {
 
 test("maintenance run details modal renders an empty object when details are absent", () => {
   const html = renderMarkup(
-    <MaintenanceRunDetailsModal
-      onClose={() => undefined}
-      run={run({ id: "run-1", taskType: "correctness_patrol", details: {} })}
-    />
+    <MaintenanceRunDetailsModal onClose={() => undefined} run={run({ id: "run-1", taskType: "correctness_patrol", details: {} })} />
   );
 
   // Emotion replaces the old `docModalBody jsonBlock` class with a hashed class,

@@ -15,12 +15,7 @@ function captureLogger() {
   });
   return {
     logger: createLogger({ level: "info", destination: stream }),
-    lines: () =>
-      chunks
-        .join("")
-        .split("\n")
-        .filter(Boolean)
-        .map((l) => JSON.parse(l) as Record<string, unknown>)
+    lines: () => chunks.join("").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>)
   };
 }
 

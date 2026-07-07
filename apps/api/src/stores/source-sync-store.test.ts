@@ -57,28 +57,12 @@ test("markSkipped and failRun transition only a running run", async () => {
   const store = new InMemorySourceSyncStore();
   const plan = { summary: "s", operations: [], rationale: "r" };
 
-  const skip = await store.createRun({
-    sourceId: "s",
-    trigger: "scheduled",
-    status: "running",
-    jobId: "j2",
-    toSha: "b",
-    changedFileCount: 1,
-    candidateCount: 1
-  });
+  const skip = await store.createRun({ sourceId: "s", trigger: "scheduled", status: "running", jobId: "j2", toSha: "b", changedFileCount: 1, candidateCount: 1 });
   const skipped = await store.markSkipped(skip.id, plan);
   assert.equal(skipped?.status, "skipped");
   assert.ok(skipped?.plan, "skipped run keeps the plan it considered");
 
-  const fail = await store.createRun({
-    sourceId: "s",
-    trigger: "scheduled",
-    status: "running",
-    jobId: "j3",
-    toSha: "b",
-    changedFileCount: 1,
-    candidateCount: 1
-  });
+  const fail = await store.createRun({ sourceId: "s", trigger: "scheduled", status: "running", jobId: "j3", toSha: "b", changedFileCount: 1, candidateCount: 1 });
   const failed = await store.failRun(fail.id, "boom");
   assert.equal(failed?.status, "failed");
   assert.equal(failed?.error, "boom");
@@ -87,14 +71,7 @@ test("markSkipped and failRun transition only a running run", async () => {
 test("listRuns returns most recent first and reset clears everything", async () => {
   const store = new InMemorySourceSyncStore();
   await store.setState("flow", "src", "sha");
-  await store.createRun({
-    sourceId: "src",
-    trigger: "manual",
-    status: "skipped",
-    toSha: "b",
-    changedFileCount: 1,
-    candidateCount: 0
-  });
+  await store.createRun({ sourceId: "src", trigger: "manual", status: "skipped", toSha: "b", changedFileCount: 1, candidateCount: 0 });
 
   assert.equal((await store.listRuns(10)).length, 1);
 
@@ -102,3 +79,4 @@ test("listRuns returns most recent first and reset clears everything", async () 
   assert.equal((await store.listRuns(10)).length, 0);
   assert.equal(await store.getState("flow", "src"), undefined);
 });
+

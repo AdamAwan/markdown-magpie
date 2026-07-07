@@ -28,9 +28,7 @@ function resolveApiBaseUrl(): string {
 }
 
 export function resolveApiUrl(path: string): string {
-  return path.startsWith("/api/") || path === "/api"
-    ? `${resolveApiBaseUrl()}${path}`
-    : `${resolveApiBaseUrl()}/api${path}`;
+  return path.startsWith("/api/") || path === "/api" ? `${resolveApiBaseUrl()}${path}` : `${resolveApiBaseUrl()}/api${path}`;
 }
 
 // Default per-request timeout. Each call also accepts a caller AbortSignal, which

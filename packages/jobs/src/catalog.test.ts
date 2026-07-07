@@ -113,16 +113,10 @@ test("publish_proposal routes by destination and defaults to github", () => {
   assert.equal(definition.requiredCapability({ proposalId: "p", destination: "github" }), "github");
   // Legacy enqueues that omit destination fall back to github.
   assert.equal(definition.requiredCapability({ proposalId: "p" }), "github");
-  assert.equal(
-    queueNameForJob("publish_proposal", { proposalId: "p", destination: "local-git" }),
-    "publish_proposal__local_git"
-  );
+  assert.equal(queueNameForJob("publish_proposal", { proposalId: "p", destination: "local-git" }), "publish_proposal__local_git");
   assert.equal(queueNameForJob("publish_proposal", { proposalId: "p" }), "publish_proposal__github");
   // An unknown destination is rejected rather than silently defaulted.
-  assert.throws(
-    () => queueNameForJob("publish_proposal", { proposalId: "p", destination: "gitlab" as never }),
-    /destination/i
-  );
+  assert.throws(() => queueNameForJob("publish_proposal", { proposalId: "p", destination: "gitlab" as never }), /destination/i);
 });
 
 test("jobTypesForCapability and jobTypesWithoutCapabilities reflect the catalog", () => {
@@ -252,10 +246,7 @@ test("source_change_sync is a maintenance queue named by its type", () => {
 test("process_gaps_to_pull_requests requires a flowId but stays on the maintenance queue", () => {
   const definition = jobDefinition("process_gaps_to_pull_requests");
   assert.equal(definition.requiredCapability({ flowId: "billing" }), "maintenance");
-  assert.equal(
-    queueNameForJob("process_gaps_to_pull_requests", { flowId: "billing" }),
-    "process_gaps_to_pull_requests"
-  );
+  assert.equal(queueNameForJob("process_gaps_to_pull_requests", { flowId: "billing" }), "process_gaps_to_pull_requests");
   assert.ok(!definition.inputSchema.safeParse({}).success);
   assert.ok(definition.inputSchema.safeParse({ flowId: "billing" }).success);
 });
@@ -269,10 +260,7 @@ test("correctness_patrol is a maintenance queue named by its type", () => {
 test("correctness_patrol input accepts an optional flowId; output carries runId + selectedCount + findingCount", () => {
   assert.ok(jobDefinition("correctness_patrol").inputSchema.safeParse({}).success);
   assert.ok(jobDefinition("correctness_patrol").inputSchema.safeParse({ flowId: "billing" }).success);
-  assert.ok(
-    jobDefinition("correctness_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3, findingCount: 1 })
-      .success
-  );
+  assert.ok(jobDefinition("correctness_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3, findingCount: 1 }).success);
   assert.ok(!jobDefinition("correctness_patrol").outputSchema.safeParse({ runId: "r1", selectedCount: 3 }).success);
 });
 
@@ -308,7 +296,9 @@ test("all queue definitions provision every AI provider partition and a dead-let
     assert.equal(definition.deadLetter, false);
     assert.ok(definition.policy?.deadLetter);
     assert.ok(
-      queueDefinitions.some((candidate) => candidate.name === definition.policy?.deadLetter && candidate.deadLetter)
+      queueDefinitions.some(
+        (candidate) => candidate.name === definition.policy?.deadLetter && candidate.deadLetter
+      )
     );
   }
 
@@ -326,10 +316,7 @@ test("answer_question input carries routing flows, not pre-retrieved context", (
     provider: "openai-compatible",
     questionLogId: "log-1",
     question: "How do I configure X?",
-    flows: [
-      { id: "flow-1", name: "Support", persona: "You are helpful" },
-      { id: "flow-2", name: "Eng" }
-    ],
+    flows: [{ id: "flow-1", name: "Support", persona: "You are helpful" }, { id: "flow-2", name: "Eng" }],
     expectedOutput: "answer_result"
   });
   assert.ok(valid.success, "flows-based input should be accepted");
@@ -401,7 +388,10 @@ test("answer_question output may carry the watcher's answer trace", () => {
 
 test("queue naming rejects a missing or invalid AI provider", () => {
   assert.throws(() => queueNameForJob("answer_question", {}), /provider/i);
-  assert.throws(() => queueNameForJob("answer_question", { provider: "mock" as never }), /provider/i);
+  assert.throws(
+    () => queueNameForJob("answer_question", { provider: "mock" as never }),
+    /provider/i
+  );
 });
 
 test("crosslink_pull_requests is a registered github job", () => {

@@ -28,11 +28,7 @@ test("Badge carries its tone as a data hook and renders a dot when asked", () =>
   assert.match(plain, /data-tone="completed"/);
   assert.match(plain, />Completed</);
 
-  const dotted = renderMarkup(
-    <Badge tone="failed" dot>
-      Failed
-    </Badge>
-  );
+  const dotted = renderMarkup(<Badge tone="failed" dot>Failed</Badge>);
   assert.match(dotted, /data-tone="failed"/);
   assert.match(dotted, /aria-hidden/);
 });

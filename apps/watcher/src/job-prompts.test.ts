@@ -87,7 +87,7 @@ describe("buildSourceGroundedPrompt", () => {
     const prompt = buildSourceGroundedPrompt(
       sourceGroundedJob,
       workspaces,
-      ['Source "X" is unavailable (gone).'],
+      ["Source \"X\" is unavailable (gone)."],
       "cli"
     );
     assert.match(prompt, /Product repo/);
@@ -167,13 +167,7 @@ describe("buildAnswerOutput", () => {
   it("does not fall through to an auto gap for an off-topic question with empty retrieval", () => {
     // Empty retrieval would normally force an auto gap; outOfScope must pre-empt it.
     const output = buildAnswerOutput(
-      JSON.stringify({
-        answer: "Off topic.",
-        confidence: "low",
-        isKnowledgeGap: true,
-        outOfScope: true,
-        gaps: ["cats"]
-      }),
+      JSON.stringify({ answer: "Off topic.", confidence: "low", isKnowledgeGap: true, outOfScope: true, gaps: ["cats"] }),
       [],
       "Do cats purr?",
       undefined
@@ -308,13 +302,7 @@ describe("forcedSearchQueries", () => {
   it("does not force a search for an off-topic question", () => {
     assert.deepEqual(
       forcedSearchQueries(
-        JSON.stringify({
-          answer: "Off topic.",
-          confidence: "low",
-          isKnowledgeGap: true,
-          outOfScope: true,
-          gaps: ["cats"]
-        })
+        JSON.stringify({ answer: "Off topic.", confidence: "low", isKnowledgeGap: true, outOfScope: true, gaps: ["cats"] })
       ),
       []
     );

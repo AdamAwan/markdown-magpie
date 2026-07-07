@@ -93,13 +93,10 @@ export function jobRoutes(ctx: AppContext): Hono {
           // the watcher falls back to fail(), pg-boss no-ops the fail on the
           // completed row, so the output still survives.
           const status =
-            outcome.code === "job_not_found"
-              ? 404
-              : outcome.code === "job_cancelled"
-                ? 409
-                : outcome.code === "side_effects_failed"
-                  ? 500
-                  : 400;
+            outcome.code === "job_not_found" ? 404
+            : outcome.code === "job_cancelled" ? 409
+            : outcome.code === "side_effects_failed" ? 500
+            : 400;
           throw new HttpError(status, outcome.code);
         }
         return c.json({ job: outcome.job });
