@@ -10,7 +10,7 @@
 // exactly the same rule and can never drift.
 
 // Max consensus count, to keep the data model simple.
-export const MAX_CONSENSUS_COUNT = 5;
+const MAX_CONSENSUS_COUNT = 5;
 
 // Paths agree when their Jaccard similarity strictly exceeds this threshold.
 const AGREEMENT_THRESHOLD = 0.5;
