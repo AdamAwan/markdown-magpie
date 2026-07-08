@@ -109,6 +109,7 @@ describe("buildSourceGroundedPrompt", () => {
     topic: "event system",
     paths: ["Products/Common/UserActivity/"],
     description: "User-activity events live here",
+    consensusCount: 1,
     createdAt: "2026-07-07T00:00:00.000Z",
     updatedAt: "2026-07-07T00:00:00.000Z"
   };
