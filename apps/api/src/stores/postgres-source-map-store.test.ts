@@ -88,12 +88,12 @@ describe("PostgresSourceMapStore", { skip: databaseUrl ? false : "DATABASE_URL n
     const first = await store.upsert({
       sourceId,
       topic: "events",
-      paths: ["src/events/", "lib/emitter.ts"],
+      paths: ["src/events/", "lib/emitter.ts", "src/handlers/"],
       description: "Event system"
     });
     assert.equal(first.consensusCount, 1);
 
-    // Agent 2 agrees: similar but slightly different paths (2/3 overlap = 66% > 50%)
+    // Agent 2 agrees: 2 of 3 union paths overlap (2/3 = 66% > 50%)
     const second = await store.upsert({
       sourceId,
       topic: "events",
@@ -103,11 +103,11 @@ describe("PostgresSourceMapStore", { skip: databaseUrl ? false : "DATABASE_URL n
     assert.equal(second.consensusCount, 2);
     assert.equal(second.id, first.id);
 
-    // Agent 3 agrees again
+    // Agent 3 agrees again: 2 of 3 union paths overlap with agent 2 (2/3 = 66% > 50%)
     const third = await store.upsert({
       sourceId,
       topic: "events",
-      paths: ["src/events/"],
+      paths: ["src/events/", "src/handlers/", "lib/index.ts"],
       description: "Event system"
     });
     assert.equal(third.consensusCount, 3);
@@ -118,26 +118,26 @@ describe("PostgresSourceMapStore", { skip: databaseUrl ? false : "DATABASE_URL n
     const first = await store.upsert({
       sourceId,
       topic: "api",
-      paths: ["src/api/", "src/rest/"],
+      paths: ["src/api/", "src/rest/", "src/routes/"],
       description: "REST API"
     });
     assert.equal(first.consensusCount, 1);
 
-    // Agent 2 disagrees: completely different paths (0% overlap <= 50%)
+    // Agent 2 disagrees: only 1 of 5 union paths overlap (1/5 = 20% <= 50%)
     const second = await store.upsert({
       sourceId,
       topic: "api",
-      paths: ["lib/graphql/", "server/"],
-      description: "GraphQL API"
+      paths: ["src/api/", "lib/graphql/", "server/"],
+      description: "Mixed API"
     });
     assert.equal(second.consensusCount, 1);
 
-    // Agreement returns from agent 3 (similar to agent 2)
+    // Agreement returns from agent 3: 2 of 3 union paths overlap with agent 2 (2/3 = 66% > 50%)
     const third = await store.upsert({
       sourceId,
       topic: "api",
-      paths: ["lib/graphql/"],
-      description: "GraphQL API"
+      paths: ["src/api/", "lib/graphql/"],
+      description: "Mixed API"
     });
     assert.equal(third.consensusCount, 2);
   });
