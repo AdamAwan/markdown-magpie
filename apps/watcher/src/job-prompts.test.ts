@@ -125,7 +125,7 @@ describe("buildSourceGroundedPrompt", () => {
 
   it("renders no source map block when there are no hints", () => {
     const prompt = buildSourceGroundedPrompt(sourceGroundedJob, workspaces, [], "cli");
-    assert.ok(!prompt.includes("Source map hints"));
+    assert.doesNotMatch(prompt, /Source map hints — notes from previous agents/);
   });
 });
 

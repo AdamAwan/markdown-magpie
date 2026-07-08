@@ -15,8 +15,6 @@ import {
   splitDocumentOutputSchema,
   verifyDocumentInputSchema,
   verifyDocumentOutputSchema,
-  draftSeedDocumentOutputSchema,
-  draftMarkdownProposalOutputSchema,
   correctDocumentOutputSchema
 } from "./schemas.js";
 
