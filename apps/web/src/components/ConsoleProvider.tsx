@@ -36,6 +36,8 @@ import {
   RuntimeConfig,
   ScheduledTask,
   ScheduleView,
+  SourceMapEntry,
+  SourceMapResponse,
   SuggestedGapCluster,
   UiMessage,
   WatcherView,
@@ -90,6 +92,7 @@ function useConsoleController() {
   const [prompts, setPrompts] = useState<PromptSummary[]>([]);
   const [flowSnapshots, setFlowSnapshots] = useState<FlowSnapshot[]>([]);
   const [reconciliationDecisions, setReconciliationDecisions] = useState<ReconciliationDecision[]>([]);
+  const [sourceMapEntries, setSourceMapEntries] = useState<SourceMapEntry[]>([]);
   const [config, setConfig] = useState<RuntimeConfig | undefined>();
   const [selectedProposalId, setSelectedProposalId] = useState<string | undefined>();
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | undefined>();
@@ -157,6 +160,27 @@ function useConsoleController() {
       setFlowId(configuredFlowIds[0]);
     }
   }, [config, flowId]);
+
+  useEffect(() => {
+    const sourceIds = (config?.knowledge?.sources ?? [])
+      .map((source) => source.id)
+      .filter(Boolean);
+    if (sourceIds.length === 0) {
+      setSourceMapEntries([]);
+      return;
+    }
+    let cancelled = false;
+    apiGet<SourceMapResponse>(`/source-map?sourceIds=${sourceIds.join(",")}`)
+      .then((result) => {
+        if (!cancelled) setSourceMapEntries(result.entries);
+      })
+      .catch(() => {
+        if (!cancelled) setSourceMapEntries([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [config?.knowledge?.sources]);
 
   useEffect(() => {
     if (!message) {
@@ -792,6 +816,7 @@ function useConsoleController() {
     prompts,
     flowSnapshots,
     reconciliationDecisions,
+    sourceMapEntries,
     config,
     selectedProposalId,
     selectedDocumentId,

@@ -22,6 +22,7 @@ export type {
   QuestionLog,
   RepositoryRef,
   ScheduledTaskSettings,
+  SourceMapEntry,
   SuggestedGapCluster,
   WatcherStatus,
   WatcherView
@@ -33,6 +34,7 @@ import type {
   QuestionFeedback,
   RepositoryRef,
   ScheduledTaskSettings,
+  SourceMapEntry,
   WatcherView
 } from "@magpie/core";
 
@@ -79,6 +81,7 @@ export type ConsoleSection =
   | "knowledge"
   | "gaps"
   | "seed"
+  | "source-map"
   | "jobs"
   | "proposals"
   | "activity"
@@ -250,6 +253,10 @@ export interface AskResponse {
   questionId: string;
   job: JobView;
   links?: AskLinks;
+}
+
+export interface SourceMapResponse {
+  entries: SourceMapEntry[];
 }
 
 export interface IndexRepositoryResponse {
