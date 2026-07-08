@@ -41,11 +41,11 @@
     "eslint": "^10.0.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.7.0",
-    "knip": "^6.23.0",
+    "knip": "^6.25.0",
     "prettier": "^3.9.4",
-    "tsx": "^4.22.4",
+    "tsx": "^4.23.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.62.1"
+    "typescript-eslint": "^8.63.0"
   },
   "overrides": {
     "postcss": "^8.5.10"
