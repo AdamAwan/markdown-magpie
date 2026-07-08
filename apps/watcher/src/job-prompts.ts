@@ -4,7 +4,8 @@ import type {
   Confidence,
   FlowSelectionRequired,
   KnowledgeGapSignal,
-  OutOfScope
+  OutOfScope,
+  SourceMapEntry
 } from "@magpie/core";
 import { NO_SOURCE_MATERIAL_GAP_PREFIX } from "@magpie/core";
 import type { JobType, JobView } from "@magpie/jobs";
@@ -113,7 +114,8 @@ export function buildSourceGroundedPrompt(
   job: JobView,
   workspaces: SourceWorkspace[],
   notes: string[],
-  mode: "cli" | "tools"
+  mode: "cli" | "tools",
+  mapEntries: SourceMapEntry[] = []
 ): string {
   const instructions = JOB_INSTRUCTIONS[job.type] ?? GENERIC_JOB.instructions;
   const workspaceLines = workspaces
@@ -128,8 +130,16 @@ export function buildSourceGroundedPrompt(
       ? "Source repositories available (read-only; explore with your file tools):"
       : "Source repositories available through your tools (list_dir, read_file, grep):";
   const noteBlock = notes.length > 0 ? `\nSource notes:\n${notes.map((n) => `- ${n}`).join("\n")}\n` : "";
+  // Navigation hints recorded by previous agents. Deliberately framed as
+  // unverified: they are starting points for exploration, never facts to cite.
+  const mapBlock =
+    mapEntries.length > 0
+      ? `\nSource map hints — notes from previous agents about where things live. These are unverified: use them as starting points and verify against the repository before relying on them.\n${mapEntries
+          .map((entry) => `- [${entry.sourceId}] ${entry.topic}: ${entry.paths.join(", ")} — ${entry.description}`)
+          .join("\n")}\n`
+      : "";
   const input = omitInputKeys(job.input, ["sources"]);
-  return `${access}\n${workspaceLines}\n${noteBlock}\n${instructions}\n\nInput:\n${JSON.stringify(input, null, 2)}`;
+  return `${access}\n${workspaceLines}\n${noteBlock}${mapBlock}\n${instructions}\n\nInput:\n${JSON.stringify(input, null, 2)}`;
 }
 
 // A shallow copy of a job input without the named keys. Used by the

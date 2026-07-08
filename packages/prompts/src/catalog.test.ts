@@ -93,6 +93,15 @@ test("withPersona returns the base unchanged when no persona is set", () => {
   assert.equal(withPersona("BASE", "   "), "BASE");
 });
 
+test("source-grounded prompts describe source-map hints and contributions", () => {
+  for (const id of ["draft-markdown-proposal", "draft-seed-document", "verify-document", "correct-document", "improve-document"]) {
+    const prompt = getPrompt(id);
+    assert.ok(prompt?.instructions.includes("Source map hints"), `${id} explains the hint block`);
+    assert.ok(prompt?.instructions.includes("mapUpdates"), `${id} instructs mapUpdates contributions`);
+    assert.ok(prompt?.outputShape.includes("mapUpdates"), `${id} outputShape mentions mapUpdates`);
+  }
+});
+
 // The factual-register contract (#213): every prompt that authors or rewrites KB
 // document markdown must carry the shared register clause forbidding self-authored
 // advisory content (recommendations, next steps, roadmaps, editorial commentary)

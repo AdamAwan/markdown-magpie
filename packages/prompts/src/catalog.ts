@@ -11,6 +11,14 @@ const CONSERVATIVE_CONTRACT =
   "ambiguous, or the inputs do not prove it, take NO action and return the negative " +
   "result described below rather than forcing a change.";
 
+// Shared source-map contract for the five source-grounded prompts: consult the
+// hint block first (but verify), and contribute terse updates back.
+const SOURCE_MAP_CONTRACT = `Source map:
+- The prompt may include "Source map hints": navigation notes recorded by previous agents about where things live in the sources. They are UNVERIFIED — use them as starting points for your exploration, and verify against the repository before relying on them. Never cite a hint as evidence.
+- Contribute back via "mapUpdates" (optional array in your JSON output): record durable, non-obvious findings about WHERE things live — e.g. which directory owns a feature, where the specs sit — and corrections to hints you found to be wrong (same sourceId and topic, corrected paths/description).
+- Keep each update terse: a short topic, the concrete repository paths, and a ONE-LINE description. This is an index, not documentation — do not dump prose, file contents, or anything you only needed for this one job. Omit "mapUpdates" when you learned nothing worth recording.
+- Never set "observedSha" — it is stamped automatically.`;
+
 // Shared register contract for every prompt that authors or rewrites knowledge-base
 // document markdown (gap drafts, seed drafts, both folds, source-sync rewrites,
 // corrective rewrites, improve growth). Issue #213: drafts were producing
@@ -132,13 +140,15 @@ export const DRAFT_MARKDOWN_PROPOSAL: PromptDefinition = {
   description:
     "Drafts a single cohesive Markdown article that addresses every listed gap, grounded in the flow's source repositories, which the executing agent explores directly. Used by the watcher's draft_markdown_proposal job.",
   usedBy: ["watcher"],
-  outputShape: '{ title, targetPath, markdown, rationale, uncoveredPoints? }',
+  outputShape: '{ title, targetPath, markdown, rationale, mapUpdates?, uncoveredPoints? }',
   instructions: `Draft a single Markdown knowledge base proposal that addresses every gap listed in gapSummaries, grounded in the source repositories you have been given access to.
 
 Grounding:
 - You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for terms from the gap summaries and triggering questions, open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs.
 - Ground every factual claim in files you actually read, and cite their repository paths (e.g. "(see Docs/Specifications/Statements/ingestion.md)").
 - Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs. Where the sources genuinely do not cover a point, OMIT it from the document entirely — never write the gap, a placeholder, or a note about missing coverage into the document body — and list that point in "uncoveredPoints" instead.
+
+${SOURCE_MAP_CONTRACT}
 
 Rules:
 - Return JSON only.
@@ -155,6 +165,9 @@ Return JSON:
   "targetPath": "string",
   "markdown": "string",
   "rationale": "string",
+  "mapUpdates": [
+    { "sourceId": "string", "topic": "string", "paths": ["string"], "description": "string" }
+  ],
   "uncoveredPoints": ["a point the sources do not support (omit when none)"]
 }`
 };
@@ -165,7 +178,7 @@ export const DRAFT_SEED_DOCUMENT: PromptDefinition = {
   description:
     "Authors a NEW knowledge-base document from a title + the points it should cover, grounded in the flow's source repositories, which the executing agent explores directly. Used to seed a new flow or add a new area to an existing one, bypassing the demand-driven gap pipeline. Used by the watcher's draft_seed_document job.",
   usedBy: ["watcher · flow seeding"],
-  outputShape: "{ title, targetPath, markdown, rationale, uncoveredPoints? }",
+  outputShape: "{ title, targetPath, markdown, rationale, mapUpdates?, uncoveredPoints? }",
   instructions: `You author a single new Markdown knowledge-base document, grounded in the source repositories you have been given access to.
 
 Input:
@@ -177,6 +190,8 @@ Grounding:
 - You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for terms from "coverage", open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs.
 - Ground every factual claim in files you actually read, and cite their repository paths in the text (e.g. "(see Docs/Specifications/Statements/ingestion.md)").
 - Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs. If, after genuinely searching, the sources do not cover a coverage point, OMIT it from the document entirely — never write the gap, a placeholder, or a note about missing coverage into the document body — and list that point in "uncoveredPoints" instead.
+
+${SOURCE_MAP_CONTRACT}
 
 Rules:
 - Your FINAL message must be JSON only, matching the shape below. No prose around it.
@@ -190,6 +205,9 @@ Return JSON:
   "targetPath": "kebab-case/path.md",
   "markdown": "the full document",
   "rationale": "string",
+  "mapUpdates": [
+    { "sourceId": "string", "topic": "string", "paths": ["string"], "description": "string" }
+  ],
   "uncoveredPoints": ["a coverage point the sources do not support (omit when none)"]
 }`
 };
@@ -330,7 +348,7 @@ export const VERIFY_DOCUMENT: PromptDefinition = {
   description:
     "Checks whether a knowledge-base document's claims are still provable against the flow's source repositories, which the executing agent explores directly. Returns only the claims the sources fail to support. Conservative: silent on healthy documents. Used by the watcher's verify_document job.",
   usedBy: ["watcher · fix-patrol"],
-  outputShape: '{ verdict, claims[] }',
+  outputShape: '{ verdict, claims[], mapUpdates? }',
   instructions: `You verify a Markdown knowledge-base document against the source repositories it should be derived from. Decide whether each substantive claim the document makes is still supported by the sources.
 
 Input:
@@ -339,6 +357,8 @@ Input:
 Grounding:
 - You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for the terms each claim rests on, open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs before judging a claim.
 - Judge every claim against files you actually read. Where a source is listed as reference-only (internet/agent), treat it as supporting context, not something you can check claims against.
+
+${SOURCE_MAP_CONTRACT}
 
 Rules:
 - Return JSON only.
@@ -352,6 +372,9 @@ Return JSON:
   "verdict": "healthy | unprovable",
   "claims": [
     { "claim": "string", "reason": "string" }
+  ],
+  "mapUpdates": [
+    { "sourceId": "string", "topic": "string", "paths": ["string"], "description": "string" }
   ]
 }`
 };
@@ -362,7 +385,7 @@ export const CORRECT_DOCUMENT: PromptDefinition = {
   description:
     "Repairs a knowledge-base document the verify lens flagged: each unprovable claim is rewritten to match what the flow's source repositories actually support — the executing agent explores them directly — or removed when the sources do not support it. Returns the full corrected document. Used by the watcher's correct_document job.",
   usedBy: ["watcher · fix-patrol"],
-  outputShape: "{ markdown, rationale }",
+  outputShape: "{ markdown, rationale, mapUpdates? }",
   instructions: `You correct a Markdown knowledge-base document whose listed claims could not be proven against the source repositories it should be derived from. Produce a corrected version of the WHOLE document.
 
 Input:
@@ -372,6 +395,8 @@ Input:
 Grounding:
 - You have DIRECT access to the source repositories listed in the prompt. Explore them to establish what is actually true for each flagged claim: list directories to learn the structure, search for the terms the claim rests on, open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs before rewriting anything.
 - Ground every correction in files you actually read, and cite their repository paths in the rationale. Where a source is listed as reference-only (internet/agent), treat it as supporting context, not something you can check claims against.
+
+${SOURCE_MAP_CONTRACT}
 
 Rules:
 - Return JSON only.
@@ -384,7 +409,10 @@ Rules:
 Return JSON:
 {
   "markdown": "the full corrected document",
-  "rationale": "string"
+  "rationale": "string",
+  "mapUpdates": [
+    { "sourceId": "string", "topic": "string", "paths": ["string"], "description": "string" }
+  ]
 }`
 };
 
@@ -461,7 +489,7 @@ export const IMPROVE_DOCUMENT: PromptDefinition = {
   description:
     "Expands a single knowledge-base document when the flow's source repositories — which the executing agent explores directly — clearly support useful additional coverage. Conservative: silent when no source-backed growth is warranted. Used by the watcher's improve_document job (improve-patrol).",
   usedBy: ["watcher - improve-patrol"],
-  outputShape: "{ improved, markdown?, rationale }",
+  outputShape: "{ improved, markdown?, rationale, mapUpdates? }",
   instructions: `You improve a fine-but-thin Markdown knowledge-base document by adding source-backed coverage that belongs in this document.
 
 Input:
@@ -470,6 +498,8 @@ Input:
 Grounding:
 - You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for material that belongs in this document, open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs.
 - Every addition must be grounded in files you actually read; cite the supporting repository paths in the rationale. Where a source is listed as reference-only (internet/agent), treat it as supporting context, not raw material for new facts.
+
+${SOURCE_MAP_CONTRACT}
 
 Rules:
 - Return JSON only.
@@ -486,7 +516,10 @@ Return JSON:
 {
   "improved": true,
   "markdown": "the full improved document",
-  "rationale": "string"
+  "rationale": "string",
+  "mapUpdates": [
+    { "sourceId": "string", "topic": "string", "paths": ["string"], "description": "string" }
+  ]
 }`
 };
 export const GAP_RECONCILE_PROPOSE: PromptDefinition = {

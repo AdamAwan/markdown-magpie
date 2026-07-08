@@ -14,7 +14,8 @@ import {
   splitDocumentInputSchema,
   splitDocumentOutputSchema,
   verifyDocumentInputSchema,
-  verifyDocumentOutputSchema
+  verifyDocumentOutputSchema,
+  correctDocumentOutputSchema
 } from "./schemas.js";
 
 test("process_gaps_to_pull_requests input requires and preserves flowId", () => {
@@ -204,6 +205,37 @@ test("refresh output schema rejects an unknown reviewDecision value", () => {
       results: [{ proposalId: "p1", state: "open", merged: false, reviewDecision: "maybe" }]
     }).success
   );
+});
+
+test.describe("source map updates on source-grounded outputs", () => {
+  const update = {
+    sourceId: "s1",
+    topic: "event system",
+    paths: ["src/events/"],
+    description: "Event bus and handlers",
+    observedSha: "abc123"
+  };
+
+  test("accepts outputs carrying mapUpdates on all five source-grounded jobs", () => {
+    assert.equal(verifyDocumentOutputSchema.safeParse({ verdict: "healthy", claims: [], mapUpdates: [update] }).success, true);
+    assert.equal(correctDocumentOutputSchema.safeParse({ markdown: "# d", rationale: "r", mapUpdates: [update] }).success, true);
+    assert.equal(draftSeedDocumentOutputSchema.safeParse({ title: "t", targetPath: "p.md", markdown: "# d", rationale: "r", mapUpdates: [update] }).success, true);
+    assert.equal(draftMarkdownProposalOutputSchema.safeParse({ title: "t", targetPath: "p.md", markdown: "# d", rationale: "r", mapUpdates: [update] }).success, true);
+    assert.equal(improveDocumentOutputSchema.safeParse({ improved: false, rationale: "r", mapUpdates: [update] }).success, true);
+    assert.equal(improveDocumentOutputSchema.safeParse({ improved: true, markdown: "# d", rationale: "r", mapUpdates: [update] }).success, true);
+  });
+
+  test("still accepts outputs without mapUpdates", () => {
+    assert.equal(verifyDocumentOutputSchema.safeParse({ verdict: "healthy", claims: [] }).success, true);
+  });
+
+  test("rejects a mapUpdate missing its topic", () => {
+    const { topic: _omitted, ...broken } = update;
+    assert.equal(
+      verifyDocumentOutputSchema.safeParse({ verdict: "healthy", claims: [], mapUpdates: [broken] }).success,
+      false
+    );
+  });
 });
 
 test("draft outputs accept and preserve optional uncoveredPoints", () => {

@@ -15,6 +15,7 @@ import {
   createScheduledTaskStore,
   createInsightsStore,
   createSnapshotStore,
+  createSourceMapStore,
   createSourceSyncStore,
   createWatcherRegistryStore,
   storeBackend
@@ -49,6 +50,7 @@ export interface AppContext {
     gapClosureVerifications: ReturnType<typeof createGapClosureVerificationStore>;
     scheduledTasks: ReturnType<typeof createScheduledTaskStore>;
     sourceSync: ReturnType<typeof createSourceSyncStore>;
+    sourceMap: ReturnType<typeof createSourceMapStore>;
     patrol: ReturnType<typeof createPatrolStore>;
     gapClusters: ReturnType<typeof createGapClusterStore>;
     reconciliations: ReturnType<typeof createReconciliationDecisionStore>;
@@ -137,6 +139,7 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
       gapClosureVerifications: createGapClosureVerificationStore(config, pool),
       scheduledTasks: createScheduledTaskStore(config, pool),
       sourceSync: createSourceSyncStore(config, pool),
+      sourceMap: createSourceMapStore(config, pool),
       patrol: createPatrolStore(config, pool),
       gapClusters: createGapClusterStore(config, pool),
       reconciliations: createReconciliationDecisionStore(config, pool),

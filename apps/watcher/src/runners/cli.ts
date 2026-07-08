@@ -5,7 +5,7 @@ import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import type { WatcherApi } from "../http-client.js";
 import { buildSourceGroundedPrompt, parseJobOutput } from "../job-prompts.js";
 import { logger } from "../logger.js";
-import { hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf, type PreparedSources } from "../source-workspace.js";
+import { fetchSourceMapEntries, hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf, stampSourceMapUpdates, type PreparedSources } from "../source-workspace.js";
 import { PROVIDER_JOB_TYPES, runGenerativeJob } from "./generative.js";
 
 export type PromptMode = "arg" | "stdin";
@@ -127,7 +127,8 @@ export class CliRunner {
     if (!primary) {
       throw new Error("source-grounded run has no prepared workspace");
     }
-    const prompt = buildSourceGroundedPrompt(job, prepared.workspaces, prepared.notes, "cli");
+    const mapEntries = await fetchSourceMapEntries(this.api, prepared.workspaces);
+    const prompt = buildSourceGroundedPrompt(job, prepared.workspaces, prepared.notes, "cli", mapEntries);
     logger.info(
       { jobId: job.id, jobType: job.type, command: this.command, workspaceCount: prepared.workspaces.length, cwd: primary.rootDir },
       `${job.type}[${job.id}]: running ${this.command} CLI read-only over ${prepared.workspaces.length} source workspace(s)`
@@ -137,7 +138,7 @@ export class CliRunner {
       extraArgs: this.readOnlyArgs(prepared),
       timeoutMs: this.agenticTimeoutMs
     });
-    return parseJobOutput(job, content);
+    return stampSourceMapUpdates(parseJobOutput(job, content), prepared.workspaces);
   }
 
   // Read-only enforcement is assembled HERE, per capability, so it cannot be
@@ -283,5 +284,6 @@ const missingApi: WatcherApi = {
   runSourceSync: async () => ({ runIds: [] }),
   runFixPatrol: async () => ({ runId: "", selectedCount: 0, findingCount: 0 }),
   runImprovePatrol: async () => ({ runId: "", selectedCount: 0, enqueuedCount: 0 }),
-  listOpenPullRequests: async () => []
+  listOpenPullRequests: async () => [],
+  sourceMapEntries: async () => []
 };

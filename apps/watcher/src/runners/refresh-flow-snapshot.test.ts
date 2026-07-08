@@ -34,7 +34,8 @@ function fakeApi(open: OpenPullRequestRef[]): WatcherApi {
     runSourceSync: async () => ({ runIds: [] }),
     runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
     runImprovePatrol: async () => ({ runId: "run-1", selectedCount: 0, enqueuedCount: 0 }),
-    listOpenPullRequests: async () => open
+    listOpenPullRequests: async () => open,
+    sourceMapEntries: async () => []
   };
 }
 

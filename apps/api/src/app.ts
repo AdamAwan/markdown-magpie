@@ -14,6 +14,7 @@ import { gapRoutes } from "./features/gaps/routes.js";
 import { seedRoutes } from "./features/seed/routes.js";
 import { proposalRoutes } from "./features/proposals/routes.js";
 import { sourceSyncRoutes } from "./features/source-sync/routes.js";
+import { sourceMapRoutes } from "./features/source-map/routes.js";
 import { fixPatrolRoutes } from "./features/patrol/routes.js";
 import { maintenanceRunRoutes } from "./features/maintenance-runs/routes.js";
 import { scheduledTaskRoutes } from "./features/scheduled-tasks/routes.js";
@@ -113,6 +114,7 @@ export function buildApp(ctx: AppContext, options?: ApiAuthOptions): Hono {
   api.route("/flows", seedRoutes(ctx));
   api.route("/proposals", proposalRoutes(ctx));
   api.route("/source-sync", sourceSyncRoutes(ctx));
+  api.route("/source-map", sourceMapRoutes(ctx));
   api.route("/fix-patrol", fixPatrolRoutes(ctx));
   api.route("/maintenance-runs", maintenanceRunRoutes(ctx));
   api.route("/scheduled-tasks", scheduledTaskRoutes(ctx));

@@ -694,6 +694,7 @@ export interface VerifyDocumentJobInput {
 export interface VerifyDocumentJobOutput {
   verdict: "healthy" | "unprovable";
   claims: UnprovableClaim[];
+  mapUpdates?: SourceMapUpdate[];
 }
 
 // Input to the correct_document AI job: a document the verify lens flagged as
@@ -717,6 +718,7 @@ export interface CorrectDocumentJobInput {
 export interface CorrectDocumentJobOutput {
   markdown: string;
   rationale: string;
+  mapUpdates?: SourceMapUpdate[];
 }
 
 // Input to the dedupe_documents AI job: the document under patrol plus its k nearest
@@ -772,6 +774,7 @@ export interface ImproveDocumentJobOutput {
   improved: boolean;
   markdown?: string;
   rationale: string;
+  mapUpdates?: SourceMapUpdate[];
 }
 
 export interface DraftMarkdownProposalJobOutput {
@@ -779,6 +782,7 @@ export interface DraftMarkdownProposalJobOutput {
   targetPath: string;
   markdown: string;
   rationale: string;
+  mapUpdates?: SourceMapUpdate[];
   // Points the gaps asked for that the sources do not support. #213: these are
   // OMITTED from the document body (a document states only what the sources
   // state) and reported here so the API can surface them on the proposal
@@ -795,6 +799,34 @@ export interface SeedItem {
   targetPath?: string;
   coverage: string[];
   questions?: string[];
+}
+
+// One agent-maintained navigation hint for a source repository (#215): where a
+// topic lives, as concrete repo paths plus a one-line description. Internal
+// metadata for source-grounded job prompts — never knowledge-base content, and
+// never part of answer retrieval or user-facing output. observedSha is the
+// checkout HEAD the hint was observed at (stamped by the watcher when known);
+// staleness invalidation against source-change-sync is a follow-up.
+export interface SourceMapEntry {
+  id: string;
+  sourceId: string;
+  topic: string;
+  paths: string[];
+  description: string;
+  observedSha?: string;
+  createdAt: string; // ISO-8601
+  updatedAt: string; // ISO-8601
+}
+
+// One agent-contributed source-map hint, carried optionally on source-grounded
+// job outputs. observedSha is stamped by the WATCHER from the checkout it
+// actually explored — a model-supplied value is always overwritten or removed.
+export interface SourceMapUpdate {
+  sourceId: string;
+  topic: string;
+  paths: string[];
+  description: string;
+  observedSha?: string;
 }
 
 // A reference to one of a flow's configured sources, carried on source-grounded
@@ -826,6 +858,7 @@ export interface DraftSeedDocumentJobOutput {
   targetPath: string;
   markdown: string;
   rationale: string;
+  mapUpdates?: SourceMapUpdate[];
   // Coverage points the sources do not support, OMITTED from the document body
   // (#213) and reported here for the proposal rationale.
   uncoveredPoints?: string[];

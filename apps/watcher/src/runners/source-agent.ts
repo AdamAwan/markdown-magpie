@@ -1,5 +1,6 @@
 import { generateText, stepCountIs, tool, type LanguageModel, type ModelMessage } from "ai";
 import { z } from "zod";
+import type { SourceMapEntry } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { JOB_RUNNER_SYSTEM } from "@magpie/prompts";
 import { buildSourceGroundedPrompt, parseJobOutput } from "../job-prompts.js";
@@ -26,9 +27,10 @@ export async function runSourceAgentJob(options: {
   model: LanguageModel;
   workspaces: SourceWorkspace[];
   notes: string[];
+  mapEntries?: SourceMapEntry[];
   signal: AbortSignal;
 }): Promise<unknown> {
-  const { job, model, workspaces, notes, signal } = options;
+  const { job, model, workspaces, notes, mapEntries = [], signal } = options;
   const budget: ToolBudget = { remainingBytes: TOTAL_READ_BUDGET_BYTES };
   // SourceToolError is the tools' whole misuse contract (bad path, budget, binary
   // file…) — render it for the model. Anything else is an infrastructure fault
@@ -72,7 +74,7 @@ export async function runSourceAgentJob(options: {
     })
   };
 
-  const prompt = buildSourceGroundedPrompt(job, workspaces, notes, "tools");
+  const prompt = buildSourceGroundedPrompt(job, workspaces, notes, "tools", mapEntries);
   const result = await generateText({
     model,
     system: JOB_RUNNER_SYSTEM.instructions,

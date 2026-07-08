@@ -70,6 +70,7 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
     runImprovePatrol: async () => ({ runId: "run-1", selectedCount: 0, enqueuedCount: 0 }),
     listOpenPullRequests: async () => [],
+    sourceMapEntries: async () => [],
     ...overrides
   };
 }
@@ -871,6 +872,55 @@ describe("ChatRunner", () => {
     assert.equal(output.improved, false);
     assert.equal(output.rationale, "nothing source-backed to add");
     assert.equal(chat.requests.length, 0, "no one-shot generative call is made");
+  });
+
+  it("strips a model-supplied observedSha on the generative path (non-fs sources)", async () => {
+    // A seed job with only internet sources runs the plain generative path, which
+    // never observes a checkout — so a model-asserted observedSha must be stripped
+    // before the output goes back to the worker loop.
+    const seedOutput = JSON.stringify({
+      title: "T",
+      targetPath: "t.md",
+      markdown: "---\ntitle: T\nstatus: draft\n---\n\n# T",
+      rationale: "r",
+      mapUpdates: [{ sourceId: "i1", topic: "t", paths: ["p/"], description: "d", observedSha: "model-lie" }]
+    });
+    const chat = new FakeChatProvider(() => seedOutput);
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const output = (await runner.run(
+      job("draft_seed_document", {
+        provider: "openai-compatible",
+        flowId: "f1",
+        coverage: ["statement ingestion"],
+        sources: [{ id: "i1", name: "Site", kind: "internet", url: "https://x.example" }]
+      }),
+      new AbortController().signal
+    )) as { mapUpdates?: Array<Record<string, unknown>> };
+
+    assert.deepEqual(output.mapUpdates, [{ sourceId: "i1", topic: "t", paths: ["p/"], description: "d" }]);
+  });
+
+  it("strips a model-supplied observedSha when fs sources fall back to the generative path (no agent model)", async () => {
+    // fs sources but no agentModel: ChatRunner warns and runs the generative path.
+    // No checkout is observed there either, so the sha must still be stripped.
+    const verifyOutput = JSON.stringify({
+      verdict: "healthy",
+      claims: [],
+      mapUpdates: [{ sourceId: "s1", topic: "t", paths: ["p/"], description: "d", observedSha: "model-lie" }]
+    });
+    const chat = new FakeChatProvider(() => verifyOutput);
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const output = (await runner.run(
+      job("verify_document", {
+        provider: "openai-compatible",
+        path: "kb/a.md",
+        content: "# A",
+        sources: [{ id: "s1", name: "Repo", kind: "local", path: "/srv/repo" }]
+      }),
+      new AbortController().signal
+    )) as { mapUpdates?: Array<Record<string, unknown>> };
+
+    assert.deepEqual(output.mapUpdates, [{ sourceId: "s1", topic: "t", paths: ["p/"], description: "d" }]);
   });
 
   it("keeps a seed job with only non-fs sources on the generative path", async () => {
