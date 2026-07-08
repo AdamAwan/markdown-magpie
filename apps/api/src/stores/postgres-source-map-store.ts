@@ -2,19 +2,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import type { SourceMapEntry } from "@magpie/core";
 import type { SourceMapStore, SourceMapUpsert } from "./source-map-store.js";
-
-// Max consensus count to keep the data model simple.
-const MAX_CONSENSUS_COUNT = 5;
-
-// Computes Jaccard similarity of two path sets: |intersection| / |union|.
-// Returns a value in [0, 1], where 1.0 means identical sets.
-function jaccardSimilarity(paths1: string[], paths2: string[]): number {
-  const set1 = new Set(paths1);
-  const set2 = new Set(paths2);
-  const intersection = [...set1].filter((p) => set2.has(p)).length;
-  const union = new Set([...set1, ...set2]).size;
-  return union === 0 ? 0 : intersection / union;
-}
+import { nextConsensusCount } from "./source-map-consensus.js";
 
 export class PostgresSourceMapStore implements SourceMapStore {
   constructor(private readonly pool: pg.Pool) {}
@@ -30,55 +18,60 @@ export class PostgresSourceMapStore implements SourceMapStore {
   }
 
   async upsert(update: SourceMapUpsert): Promise<SourceMapEntry> {
-    // Fetch the existing entry to calculate consensus count based on path overlap
-    const existingResult = await this.pool.query<SourceMapEntryRow>(
-      "SELECT * FROM source_map_entries WHERE source_id = $1 AND topic = $2",
-      [update.sourceId, update.topic]
-    );
-
-    // Determine consensus count based on path overlap
-    let consensusCount = 1;
-    if (existingResult.rows.length > 0) {
+    // The consensus count is a read-modify-write against the existing row, so
+    // it must be computed and written atomically: two source-grounded jobs can
+    // complete concurrently and contribute the same (source_id, topic), and a
+    // plain SELECT-then-upsert would let both read the same count and lose one
+    // agent's increment. A transaction with SELECT ... FOR UPDATE serialises
+    // concurrent upserts on the row so each increment is counted (#219).
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const existingResult = await client.query<SourceMapEntryRow>(
+        "SELECT * FROM source_map_entries WHERE source_id = $1 AND topic = $2 FOR UPDATE",
+        [update.sourceId, update.topic]
+      );
       const existing = existingResult.rows[0];
-      const similarity = jaccardSimilarity(update.paths, existing.paths);
-      // If new paths overlap sufficiently with existing paths, agents agree
-      if (similarity > 0.5) {
-        consensusCount = Math.min(existing.consensus_count + 1, MAX_CONSENSUS_COUNT);
-      } else {
-        // Otherwise reset to 1 (contradicting hint)
-        consensusCount = 1;
-      }
-    }
+      const consensusCount = nextConsensusCount(
+        update.paths,
+        existing ? { consensusCount: existing.consensus_count, paths: existing.paths } : undefined
+      );
 
-    // Latest observation wins wholesale, including observed_sha (an update
-    // without a sha — or with an empty one — clears a stale sha rather than
-    // keeping it). seq is bumped on replace so a re-touched row wins
-    // equal-updated_at ties in write order. consensus_count is updated based
-    // on path similarity to track credibility via agent consensus (#219).
-    const result = await this.pool.query<SourceMapEntryRow>(
-      `
-        INSERT INTO source_map_entries (id, source_id, topic, paths, description, observed_sha, consensus_count)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (source_id, topic) DO UPDATE
-          SET paths = EXCLUDED.paths,
-              description = EXCLUDED.description,
-              observed_sha = EXCLUDED.observed_sha,
-              consensus_count = EXCLUDED.consensus_count,
-              seq = nextval(pg_get_serial_sequence('source_map_entries', 'seq')),
-              updated_at = now()
-        RETURNING *
-      `,
-      [
-        randomUUID(),
-        update.sourceId,
-        update.topic,
-        JSON.stringify(update.paths),
-        update.description,
-        update.observedSha ? update.observedSha : null,
-        consensusCount
-      ]
-    );
-    return mapRow(result.rows[0]);
+      // Latest observation wins wholesale, including observed_sha (an update
+      // without a sha — or with an empty one — clears a stale sha rather than
+      // keeping it). seq is bumped on replace so a re-touched row wins
+      // equal-updated_at ties in write order.
+      const result = await client.query<SourceMapEntryRow>(
+        `
+          INSERT INTO source_map_entries (id, source_id, topic, paths, description, observed_sha, consensus_count)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          ON CONFLICT (source_id, topic) DO UPDATE
+            SET paths = EXCLUDED.paths,
+                description = EXCLUDED.description,
+                observed_sha = EXCLUDED.observed_sha,
+                consensus_count = EXCLUDED.consensus_count,
+                seq = nextval(pg_get_serial_sequence('source_map_entries', 'seq')),
+                updated_at = now()
+          RETURNING *
+        `,
+        [
+          randomUUID(),
+          update.sourceId,
+          update.topic,
+          JSON.stringify(update.paths),
+          update.description,
+          update.observedSha ? update.observedSha : null,
+          consensusCount
+        ]
+      );
+      await client.query("COMMIT");
+      return mapRow(result.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async pruneToLimit(sourceId: string, limit: number): Promise<number> {

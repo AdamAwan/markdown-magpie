@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SourceMapEntry } from "@magpie/core";
+import { nextConsensusCount } from "./source-map-consensus.js";
 
 // The write shape for one hint. Keyed on (sourceId, topic): an upsert with an
 // existing key replaces that entry's paths/description/sha (latest observation
@@ -33,19 +34,6 @@ function entryKey(sourceId: string, topic: string): string {
   return `${sourceId}\0${topic}`;
 }
 
-// Computes Jaccard similarity of two path sets: |intersection| / |union|.
-// Returns a value in [0, 1], where 1.0 means identical sets.
-function jaccardSimilarity(paths1: string[], paths2: string[]): number {
-  const set1 = new Set(paths1);
-  const set2 = new Set(paths2);
-  const intersection = [...set1].filter((p) => set2.has(p)).length;
-  const union = new Set([...set1, ...set2]).size;
-  return union === 0 ? 0 : intersection / union;
-}
-
-// Max consensus count to keep the data model simple.
-const MAX_CONSENSUS_COUNT = 5;
-
 export class InMemorySourceMapStore implements SourceMapStore {
   private readonly entries = new Map<string, SourceMapEntry>();
   // updatedAt has only millisecond resolution, so synchronous upserts in the
@@ -75,19 +63,6 @@ export class InMemorySourceMapStore implements SourceMapStore {
     const key = entryKey(update.sourceId, update.topic);
     const existing = this.entries.get(key);
 
-    // Determine consensus count based on path overlap with existing entry
-    let consensusCount = 1;
-    if (existing) {
-      const similarity = jaccardSimilarity(update.paths, existing.paths);
-      // If new paths overlap sufficiently with existing paths, agents agree
-      if (similarity > 0.5) {
-        consensusCount = Math.min(existing.consensusCount + 1, MAX_CONSENSUS_COUNT);
-      } else {
-        // Otherwise reset to 1 (contradicting hint)
-        consensusCount = 1;
-      }
-    }
-
     const entry: SourceMapEntry = {
       id: existing?.id ?? randomUUID(),
       sourceId: update.sourceId,
@@ -95,7 +70,7 @@ export class InMemorySourceMapStore implements SourceMapStore {
       paths: [...update.paths],
       description: update.description,
       ...(update.observedSha ? { observedSha: update.observedSha } : {}),
-      consensusCount,
+      consensusCount: nextConsensusCount(update.paths, existing),
       createdAt: existing?.createdAt ?? now,
       updatedAt: now
     };
