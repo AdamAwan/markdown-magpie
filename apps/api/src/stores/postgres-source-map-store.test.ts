@@ -20,10 +20,12 @@ describe("PostgresSourceMapStore", { skip: databaseUrl ? false : "DATABASE_URL n
       observedSha: "abc123"
     });
     assert.ok(created.id);
+    assert.equal(created.consensusCount, 1);
     const entries = await store.listBySource(sourceId, 10);
     assert.equal(entries.length, 1);
     assert.deepEqual(entries[0].paths, ["src/events/", "docs/events.md"]);
     assert.equal(entries[0].observedSha, "abc123");
+    assert.equal(entries[0].consensusCount, 1);
   });
 
   it("upsert replaces on (source_id, topic) and bumps updated_at", async () => {
@@ -79,5 +81,85 @@ describe("PostgresSourceMapStore", { skip: databaseUrl ? false : "DATABASE_URL n
     const evicted = await store.pruneToLimit(sourceId, 2);
     assert.equal(evicted, 1);
     assert.equal((await store.listBySource(sourceId, 10)).length, 2);
+  });
+
+  it("increments consensus count when paths overlap above threshold (Jaccard > 0.5)", async () => {
+    const sourceId = `src-${randomUUID()}`;
+    const first = await store.upsert({
+      sourceId,
+      topic: "events",
+      paths: ["src/events/", "lib/emitter.ts", "src/handlers/"],
+      description: "Event system"
+    });
+    assert.equal(first.consensusCount, 1);
+
+    // Agent 2 agrees: 2 of 3 union paths overlap (2/3 = 66% > 50%)
+    const second = await store.upsert({
+      sourceId,
+      topic: "events",
+      paths: ["src/events/", "src/handlers/"],
+      description: "Event system"
+    });
+    assert.equal(second.consensusCount, 2);
+    assert.equal(second.id, first.id);
+
+    // Agent 3 agrees again: 2 of 3 union paths overlap with agent 2 (2/3 = 66% > 50%)
+    const third = await store.upsert({
+      sourceId,
+      topic: "events",
+      paths: ["src/events/", "src/handlers/", "lib/index.ts"],
+      description: "Event system"
+    });
+    assert.equal(third.consensusCount, 3);
+  });
+
+  it("resets consensus count when paths contradict (Jaccard <= 0.5)", async () => {
+    const sourceId = `src-${randomUUID()}`;
+    const first = await store.upsert({
+      sourceId,
+      topic: "api",
+      paths: ["src/api/", "src/rest/", "src/routes/"],
+      description: "REST API"
+    });
+    assert.equal(first.consensusCount, 1);
+
+    // Agent 2 disagrees: only 1 of 5 union paths overlap (1/5 = 20% <= 50%)
+    const second = await store.upsert({
+      sourceId,
+      topic: "api",
+      paths: ["src/api/", "lib/graphql/", "server/"],
+      description: "Mixed API"
+    });
+    assert.equal(second.consensusCount, 1);
+
+    // Agreement returns from agent 3: 2 of 3 union paths overlap with agent 2 (2/3 = 66% > 50%)
+    const third = await store.upsert({
+      sourceId,
+      topic: "api",
+      paths: ["src/api/", "lib/graphql/"],
+      description: "Mixed API"
+    });
+    assert.equal(third.consensusCount, 2);
+  });
+
+  it("caps consensus count at 5", async () => {
+    const sourceId = `src-${randomUUID()}`;
+    let entry = await store.upsert({
+      sourceId,
+      topic: "t",
+      paths: ["p/"],
+      description: "d"
+    });
+    assert.equal(entry.consensusCount, 1);
+
+    for (let i = 0; i < 10; i++) {
+      entry = await store.upsert({
+        sourceId,
+        topic: "t",
+        paths: ["p/"],
+        description: "d"
+      });
+    }
+    assert.equal(entry.consensusCount, 5);
   });
 });

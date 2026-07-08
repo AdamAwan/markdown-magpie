@@ -539,15 +539,22 @@ Scope: `manage:jobs`. Read cap: 100 entries per requested source per request.
 {
   "entries": [
     {
-      "source_id": "agent",
+      "id": "b0c1…",
+      "sourceId": "agent",
       "topic": "authentication flow",
       "paths": ["src/auth/login.ts", "src/auth/oauth.ts"],
       "description": "OAuth2 login and token refresh implementation",
-      "observed_sha": "abc123de"
+      "observedSha": "abc123de",
+      "consensusCount": 3,
+      "createdAt": "2026-07-01T12:00:00.000Z",
+      "updatedAt": "2026-07-08T09:30:00.000Z"
     }
   ]
 }
 ```
+
+`consensusCount` is how many agents have independently contributed the same
+topic → paths mapping (capped at 5) — a credibility signal, not currency.
 
 **Error cases:**
 

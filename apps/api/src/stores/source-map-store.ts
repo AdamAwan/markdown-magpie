@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { SourceMapEntry } from "@magpie/core";
+import { nextConsensusCount } from "./source-map-consensus.js";
 
 // The write shape for one hint. Keyed on (sourceId, topic): an upsert with an
 // existing key replaces that entry's paths/description/sha (latest observation
-// wins), preserving id and createdAt.
+// wins), preserving id and createdAt. If the new hint's paths overlap with the
+// existing entry's paths above a threshold (Jaccard similarity > 0.5), the
+// consensus count is incremented (capped at 5).
 export interface SourceMapUpsert {
   sourceId: string;
   topic: string;
@@ -59,6 +62,7 @@ export class InMemorySourceMapStore implements SourceMapStore {
     const now = new Date().toISOString();
     const key = entryKey(update.sourceId, update.topic);
     const existing = this.entries.get(key);
+
     const entry: SourceMapEntry = {
       id: existing?.id ?? randomUUID(),
       sourceId: update.sourceId,
@@ -66,6 +70,7 @@ export class InMemorySourceMapStore implements SourceMapStore {
       paths: [...update.paths],
       description: update.description,
       ...(update.observedSha ? { observedSha: update.observedSha } : {}),
+      consensusCount: nextConsensusCount(update.paths, existing),
       createdAt: existing?.createdAt ?? now,
       updatedAt: now
     };

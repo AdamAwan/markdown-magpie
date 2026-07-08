@@ -451,6 +451,14 @@ the entry was written, stamped by the watcher during workspace preparation. This
 always taken from the checkout HEAD, never trusted from the agent — any `observed_sha` values
 supplied by the model are overwritten. Entries from non-git sources keep `observed_sha` null.
 
+**`consensusCount`.** Each entry carries a consensus count (credibility, distinct from the
+`observed_sha` currency signal). On upsert, the new hint's paths are compared to the existing
+entry's via Jaccard similarity: an overlap above 0.5 means an agent independently agreed, so
+the count increments (capped at 5); an overlap at or below 0.5 is a contradicting hint and
+resets the count to 1, as does a first-seen `(source_id, topic)`. The count is computed
+atomically (the write takes a row lock) so concurrent job completions can't lose an increment.
+Higher counts mean more agents agree; surfacing/filtering hints by it is a follow-up (#219).
+
 **Boundaries.** The source map is strictly internal metadata and **never** enters answer
 retrieval, user-facing output, or the indexed knowledge base. Staleness invalidation via
 source-change-sync (e.g. detecting that the HEAD SHA no longer matches and pruning stale

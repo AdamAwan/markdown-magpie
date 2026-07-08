@@ -83,8 +83,11 @@ export async function applySourceMapUpdatesFromCompletedJob(
     try {
       await ctx.stores.sourceMap.upsert({
         sourceId: update.sourceId,
+        // Mirror rejectReason's normalisation exactly: empty-string paths are
+        // dropped so they can't reach the store and skew the consensus Jaccard
+        // (a stray "" in the set inflates the union and depresses similarity).
+        paths: update.paths.map((path) => path.trim()).filter(Boolean),
         topic: update.topic.trim(),
-        paths: update.paths.map((path) => path.trim()),
         description: update.description.trim(),
         ...(update.observedSha ? { observedSha: update.observedSha } : {})
       });

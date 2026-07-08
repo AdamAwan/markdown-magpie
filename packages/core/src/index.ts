@@ -806,7 +806,9 @@ export interface SeedItem {
 // metadata for source-grounded job prompts — never knowledge-base content, and
 // never part of answer retrieval or user-facing output. observedSha is the
 // checkout HEAD the hint was observed at (stamped by the watcher when known);
-// staleness invalidation against source-change-sync is a follow-up.
+// staleness invalidation against source-change-sync is a follow-up. consensusCount
+// tracks how many agents have independently contributed the same topic → paths
+// mapping, indicating credibility; capped at 5.
 export interface SourceMapEntry {
   id: string;
   sourceId: string;
@@ -814,6 +816,7 @@ export interface SourceMapEntry {
   paths: string[];
   description: string;
   observedSha?: string;
+  consensusCount: number;
   createdAt: string; // ISO-8601
   updatedAt: string; // ISO-8601
 }
