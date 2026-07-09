@@ -388,7 +388,7 @@ export const CORRECT_DOCUMENT: PromptDefinition = {
   description:
     "Repairs a knowledge-base document the verify lens flagged: each unprovable claim is rewritten to match what the flow's source repositories actually support — the executing agent explores them directly — or removed when the sources do not support it. Returns the full corrected document. Used by the watcher's correct_document job.",
   usedBy: ["watcher · fix-patrol"],
-  outputShape: "{ markdown, rationale, mapUpdates? }",
+  outputShape: "{ markdown, rationale, mapUpdates?, provenance? }",
   instructions: `You correct a Markdown knowledge-base document whose listed claims could not be proven against the source repositories it should be derived from. Produce a corrected version of the WHOLE document.
 
 Input:
@@ -397,7 +397,7 @@ Input:
 
 Grounding:
 - You have DIRECT access to the source repositories listed in the prompt. Explore them to establish what is actually true for each flagged claim: list directories to learn the structure, search for the terms the claim rests on, open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs before rewriting anything.
-- Ground every correction in files you actually read, and cite their repository paths in the rationale. Where a source is listed as reference-only (internet/agent), treat it as supporting context, not something you can check claims against.
+- Ground every correction in files you actually read, and report each corrected or rewritten claim in the "provenance" array of your JSON output: a short restatement of the corrected claim, the slug of the section heading it lives under ("anchor"), and the source id + repo-relative path(s) (plus optional "L10-L20" line hints) of the files that ground the corrected wording. Where a source is listed as reference-only (internet/agent), treat it as supporting context, not something you can check claims against.
 
 ${SOURCE_MAP_CONTRACT}
 
@@ -408,7 +408,7 @@ Rules:
 - A claim flagged as an inline source-path citation is a formatting defect, not a factual error: remove the parenthetical/reference from the body and smooth the sentence; do not change the factual content it was attached to.
 - Never introduce a new assertion that the sources do not support. Do not invent figures, dates, or facts.
 - Leave every other part of the document unchanged.
-- "rationale" is a one-paragraph summary of what you changed and why.
+- "rationale" is a one-paragraph summary of what you changed and why; per-claim citations belong in "provenance", not the rationale.
 
 Return JSON:
 {
@@ -416,7 +416,8 @@ Return JSON:
   "rationale": "string",
   "mapUpdates": [
     { "sourceId": "string", "topic": "string", "paths": ["string"], "description": "string" }
-  ]
+  ],
+  "provenance": [{"claim": "...", "anchor": "section-slug", "sources": [{"sourceId": "...", "path": "...", "lines": "L10-L20"}]}]
 }`
 };
 
@@ -493,7 +494,7 @@ export const IMPROVE_DOCUMENT: PromptDefinition = {
   description:
     "Expands a single knowledge-base document when the flow's source repositories — which the executing agent explores directly — clearly support useful additional coverage. Conservative: silent when no source-backed growth is warranted. Used by the watcher's improve_document job (improve-patrol).",
   usedBy: ["watcher - improve-patrol"],
-  outputShape: "{ improved, markdown?, rationale, mapUpdates? }",
+  outputShape: "{ improved, markdown?, rationale, mapUpdates?, provenance? }",
   instructions: `You improve a fine-but-thin Markdown knowledge-base document by adding source-backed coverage that belongs in this document.
 
 Input:
@@ -501,7 +502,7 @@ Input:
 
 Grounding:
 - You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for material that belongs in this document, open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs.
-- Every addition must be grounded in files you actually read; cite the supporting repository paths in the rationale. Where a source is listed as reference-only (internet/agent), treat it as supporting context, not raw material for new facts.
+- Every addition must be grounded in files you actually read; report each claim you add or materially change in the "provenance" array of your JSON output: a short restatement of the claim, the slug of the section heading it lives under ("anchor"), and the source id + repo-relative path(s) (plus optional "L10-L20" line hints) of the files that ground it. Provenance only applies to an improvement — when "improved" is false, omit "provenance". Where a source is listed as reference-only (internet/agent), treat it as supporting context, not raw material for new facts.
 
 ${SOURCE_MAP_CONTRACT}
 
@@ -514,7 +515,7 @@ Rules:
 - Preserve the existing structure and tone where sensible. Add focused sections or paragraphs only where they improve coverage.
 - If no clear source-backed addition belongs in this document, return {"improved": false, "rationale": "..."}.
 - When improving, return the full updated document in "markdown".
-- "rationale" is a one-paragraph summary of what you added and which repository paths support it.
+- "rationale" is a one-paragraph summary of what you added; per-claim support goes in "provenance", not the rationale.
 
 Return JSON:
 {
@@ -523,7 +524,8 @@ Return JSON:
   "rationale": "string",
   "mapUpdates": [
     { "sourceId": "string", "topic": "string", "paths": ["string"], "description": "string" }
-  ]
+  ],
+  "provenance": [{"claim": "...", "anchor": "section-slug", "sources": [{"sourceId": "...", "path": "...", "lines": "L10-L20"}]}]
 }`
 };
 export const GAP_RECONCILE_PROPOSE: PromptDefinition = {
