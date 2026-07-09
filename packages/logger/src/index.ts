@@ -1,4 +1,5 @@
 import pino from "pino";
+import pinoPretty from "pino-pretty";
 
 export type Logger = pino.Logger;
 
@@ -7,7 +8,7 @@ export type Logger = pino.Logger;
 interface LoggerOptions {
   /** Minimum level to emit. Defaults to "info". */
   level?: string;
-  /** Use the human-readable pino-pretty transport (dev). Ignored when `destination` is set. */
+  /** Use human-readable pino-pretty output (dev). Ignored when `destination` is set. */
   pretty?: boolean;
   /** Fields merged into every log line (e.g. { service: "api" }). */
   base?: Record<string, unknown>;
@@ -36,7 +37,13 @@ export function createLogger(opts: LoggerOptions = {}): Logger {
   }
 
   if (pretty) {
-    return pino({ ...options, transport: { target: "pino-pretty", options: { colorize: true } } });
+    // In-process pretty stream, deliberately NOT pino's worker-thread transport
+    // (`transport: { target: "pino-pretty" }`). The worker (ThreadStream) can wedge
+    // process shutdown: a `node --test` child that finished its tests waits on the
+    // transport thread and intermittently never exits, hanging the whole run at
+    // 0 CPU — seen repeatedly in CI and locally. Pretty output is dev/test-only,
+    // so worker-thread throughput isolation buys nothing here.
+    return pino(options, pinoPretty({ colorize: true }));
   }
 
   return pino(options);
