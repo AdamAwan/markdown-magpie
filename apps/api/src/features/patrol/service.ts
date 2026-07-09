@@ -12,7 +12,8 @@ import type {
 import { verifyDocumentInputSchema, verifyDocumentOutputSchema } from "@magpie/jobs";
 import { selectFlow } from "../../platform/repositories.js";
 import { selectPatrolBatch } from "../../scheduling/patrol-cursor.js";
-import { hashDocumentContent, hashSourceDescriptors } from "../../scheduling/patrol-hash.js";
+import { hashDocumentContent, hashProvenanceClaims, hashSourceDescriptors } from "../../scheduling/patrol-hash.js";
+import { foldProvenanceEvents } from "../proposals/provenance.js";
 import { projectSourceDescriptors } from "../../platform/source-descriptors.js";
 import type { PatrolStamp } from "../../stores/patrol-store.js";
 import { flowCoveredPaths } from "../../scheduling/flow.js";
@@ -71,17 +72,21 @@ function resolveScope(
 }
 
 // Dedupe key for reuseKey (#162): a verify already in flight for this document —
-// routed to the same provider AND grounded in the same source configuration — is
-// the same piece of work a concurrent patrol tick would otherwise duplicate, so
-// wait on it instead of enqueueing another. The descriptor hash matters: the
-// change gate is config-keyed now, so a verdict reused across a config change
-// would stamp a sourcesHash no verify ever explored and gate the doc on it.
+// routed to the same provider AND grounded in the same source configuration AND
+// told about the same folded citedClaims — is the same piece of work a
+// concurrent patrol tick would otherwise duplicate, so wait on it instead of
+// enqueueing another. The descriptor hash matters: the change gate is
+// config-keyed now, so a verdict reused across a config change would stamp a
+// sourcesHash no verify ever explored and gate the doc on it. The claims hash
+// (#214 phase 2) matters the same way: a merge can change a document's folded
+// provenance without touching its body, and reusing across that change would
+// return a verdict computed against claims the job was never told about.
 function verifyDocumentReuseKey(input: unknown): string {
   const parsed = verifyDocumentInputSchema.safeParse(input);
   if (!parsed.success) {
     return "unknown";
   }
-  return `${parsed.data.provider}:${parsed.data.path}:${hashSourceDescriptors(parsed.data.sources)}`;
+  return `${parsed.data.provider}:${parsed.data.path}:${hashSourceDescriptors(parsed.data.sources)}:${hashProvenanceClaims(parsed.data.citedClaims ?? [])}`;
 }
 
 // Default verify: enqueue a verify_document AI job and bounded-wait for the watcher
@@ -97,11 +102,30 @@ function verifyDocumentReuseKey(input: unknown): string {
 // bounded waits at 100ms) still wins below.
 const VERIFY_WAIT_BUDGET_MS = 10 * 60_000;
 
+// Cap on how many merged-proposal provenance events the fold reads per document.
+// A cap, not pagination: hitting it means the OLDEST events beyond it were
+// ignored, which must be visible to operators rather than silently reading as
+// full provenance coverage.
+const PROVENANCE_EVENT_CAP = 50;
+
 const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sources }) => {
+  // #214 phase 2: fold the document's provenance event stream (its merged
+  // proposals) into advisory citedClaims the verify agent checks first. An
+  // empty fold omits the field entirely so the job input — and therefore the
+  // rendered prompt — is byte-identical to a pre-provenance verify.
+  const events = await ctx.stores.proposals.listMergedByTargetPath(path, PROVENANCE_EVENT_CAP);
+  if (events.length === PROVENANCE_EVENT_CAP) {
+    logger.warn(
+      { path, cap: PROVENANCE_EVENT_CAP },
+      "verify lens: provenance event cap reached; events beyond the oldest 50 merges were ignored"
+    );
+  }
+  const citedClaims = foldProvenanceEvents(events, content);
   const input = {
     path,
     content,
     sources,
+    ...(citedClaims.length > 0 ? { citedClaims } : {}),
     provider: ctx.config.get().aiProvider
   } satisfies VerifyDocumentJobInput & { provider: AiProviderName };
   let terminal;

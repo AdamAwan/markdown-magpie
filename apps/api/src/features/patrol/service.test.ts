@@ -7,9 +7,11 @@ import type { SplitDocumentFn } from "../../scheduling/split-lens.js";
 import type {
   DedupeDocumentsJobInput,
   ImproveDocumentJobInput,
+  ProvenanceClaim,
   SourceDescriptor,
   SplitDocumentJobInput
 } from "@magpie/core";
+import { verifyDocumentInputSchema } from "@magpie/jobs";
 import * as patrol from "./service.js";
 import type { CorrectDocumentFn } from "./service.js";
 
@@ -496,6 +498,114 @@ test("runImprovePatrol gates an unchanged doc on the next tick", async () => {
   if (!second.ok) return;
   assert.deepEqual(improved, [], "unchanged docs are gated — no improve scans enqueued");
   assert.equal(second.enqueuedCount, 0);
+});
+
+// The default verify path (no injected verifyDocument) enqueues a real
+// verify_document job on the fake broker; the broker never completes it, the
+// bounded wait times out at the test context's 100ms, and the orphaned job is
+// cancelled — but its input stays inspectable via ctx.jobs.list. These tests
+// pin down what that input carries (#214 phase 2: folded citedClaims).
+const QUIET_LENS_DEPS = {
+  correctDocument: (async () => {}) as CorrectDocumentFn,
+  dedupeDocument: (async () => {}) as DedupeDocumentFn,
+  splitDocument: (async () => {}) as SplitDocumentFn
+};
+
+async function seedMergedProposal(
+  ctx: ReturnType<typeof makeTestContext>,
+  targetPath: string,
+  provenance: ProvenanceClaim[]
+): Promise<void> {
+  const proposal = await ctx.stores.proposals.create({
+    title: `Provenance for ${targetPath}`,
+    targetPath,
+    markdown: `# ${targetPath}`,
+    rationale: "r",
+    evidence: [],
+    provenance
+  });
+  await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+}
+
+test("the default verify job input carries citedClaims folded from merged-proposal provenance", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  // Two merged events for a.md: the later one supersedes the shared anchor.
+  // indexDocs gives a.md the content "# a.md", whose heading slugs to "a-md".
+  await seedMergedProposal(ctx, "a.md", [
+    { claim: "old claim", anchor: "a-md", sources: [{ sourceId: "src-1", path: "docs/old.md" }] }
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  await seedMergedProposal(ctx, "a.md", [
+    { claim: "new claim", anchor: "a-md", sources: [{ sourceId: "src-1", path: "docs/new.md" }] },
+    { claim: "unanchored claim", sources: [{ sourceId: "src-1", path: "docs/free.md" }] }
+  ]);
+
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(outcome.ok);
+
+  const { jobs } = await ctx.jobs.list({ type: "verify_document" });
+  assert.equal(jobs.length, 1);
+  const input = verifyDocumentInputSchema.parse(jobs[0].input);
+  assert.deepEqual(input.citedClaims, [
+    { claim: "new claim", anchor: "a-md", sources: [{ sourceId: "src-1", path: "docs/new.md" }] },
+    { claim: "unanchored claim", sources: [{ sourceId: "src-1", path: "docs/free.md" }] }
+  ]);
+});
+
+test("without merged provenance the default verify job input is byte-identical to today's", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  // A merged proposal WITHOUT provenance must contribute nothing (not an empty array).
+  await seedMergedProposal(ctx, "a.md", []);
+
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(outcome.ok);
+
+  const { jobs } = await ctx.jobs.list({ type: "verify_document" });
+  assert.equal(jobs.length, 1);
+  assert.deepEqual(jobs[0].input, {
+    provider: "codex",
+    path: "a.md",
+    content: "# a.md",
+    sources: []
+  });
+});
+
+test("a provenance change busts the verify reuse key; identical claims still reuse", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  await seedMergedProposal(ctx, "a.md", [
+    { claim: "new claim", anchor: "a-md", sources: [{ sourceId: "src-1", path: "docs/new.md" }] }
+  ]);
+
+  // An in-flight verify for the same doc/sources/provider but WITHOUT the folded
+  // claims (e.g. enqueued before the proposal merged) is now stale work: the
+  // patrol must enqueue a fresh job, not piggyback on it.
+  await ctx.jobs.create("verify_document", { provider: "codex", path: "a.md", content: "# a.md", sources: [] });
+  const first = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(first.ok);
+  const afterDifferentClaims = await ctx.jobs.list({ type: "verify_document" });
+  assert.equal(afterDifferentClaims.jobs.length, 2, "different folded claims ⇒ different reuse key ⇒ new job");
+
+  // An in-flight verify that already carries the SAME folded claims is the same
+  // piece of work — the patrol reuses it instead of duplicating.
+  const ctx2 = makeTestContext();
+  await indexDocs(ctx2, ["a.md"]);
+  await seedMergedProposal(ctx2, "a.md", [
+    { claim: "new claim", anchor: "a-md", sources: [{ sourceId: "src-1", path: "docs/new.md" }] }
+  ]);
+  await ctx2.jobs.create("verify_document", {
+    provider: "codex",
+    path: "a.md",
+    content: "# a.md",
+    sources: [],
+    citedClaims: [{ claim: "new claim", anchor: "a-md", sources: [{ sourceId: "src-1", path: "docs/new.md" }] }]
+  });
+  const second = await patrol.runFixPatrol(ctx2, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(second.ok);
+  const afterIdenticalClaims = await ctx2.jobs.list({ type: "verify_document" });
+  assert.equal(afterIdenticalClaims.jobs.length, 1, "identical folded claims ⇒ same reuse key ⇒ job reused");
 });
 
 test("runFixPatrol skips a document already covered by an open same-flow proposal", async () => {
