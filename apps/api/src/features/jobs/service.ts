@@ -8,6 +8,7 @@ import type { JobListFilters } from "../../jobs/broker.js";
 import type { WatcherTouch } from "../../stores/watcher-registry-store.js";
 import { refreshFlowSnapshotOutputSchema } from "@magpie/jobs";
 import * as proposalsService from "../proposals/service.js";
+import * as seedService from "../seed/service.js";
 import * as sourceSyncService from "../source-sync/service.js";
 import * as sourceMapService from "../source-map/service.js";
 import * as snapshotsService from "../snapshots/service.js";
@@ -326,6 +327,9 @@ export async function completeJob(
         logger.warn({ proposalId: seedProposal.id, err: error instanceof Error ? error.message : String(error) }, "seed reconcile for proposal failed");
       }
     }
+    // Outline completions persist a reviewable seed plan (no-op for other job
+    // types; a real store failure correctly rides the 500-replay contract below).
+    await seedService.createSeedPlanFromCompletedJob(ctx, existingJob, resultData);
     const dedupeProposal = await proposalsService.createDedupeProposalFromCompletedJob(ctx, existingJob, resultData);
     if (dedupeProposal) {
       // Dedupe reconcile is best-effort too — it gates the multi-file change and either

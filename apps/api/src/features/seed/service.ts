@@ -1,12 +1,14 @@
 import type {
   DraftSeedDocumentJobInput,
   OutlineFlowSeedJobInput,
-  SeedItem
+  SeedItem,
+  SeedPlan
 } from "@magpie/core";
-import type { JobView } from "@magpie/jobs";
+import { outlineFlowSeedOutputSchema, type JobView } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { defaultDestinationId, selectFlow } from "../../platform/repositories.js";
 import { projectSourceDescriptors } from "../../platform/source-descriptors.js";
+import { hashSourceDescriptors } from "../../scheduling/patrol-hash.js";
 import { listExistingDocuments } from "../retrieve/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
 import { logger } from "../../logger.js";
@@ -111,4 +113,52 @@ export async function outlineFlowSeed(
     "enqueued outline_flow_seed job"
   );
   return { ok: true as const, jobId: job.id, reused: false };
+}
+
+// Completion handler for outline_flow_seed: persist the proposed plan for
+// review. Idempotent on the job id (store-level unique on outline_job_id).
+// A fresh proposed plan supersedes an older still-proposed plan for the flow —
+// the newer exploration reflects newer sources/config. Charter/persona are
+// resolved run-scoped: the flow config's value when the input carried one,
+// else the model's proposal (flagged so the console offers copy-to-config).
+export async function createSeedPlanFromCompletedJob(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<SeedPlan | undefined> {
+  if (!job || job.type !== "outline_flow_seed") {
+    return undefined;
+  }
+  const parsed = outlineFlowSeedOutputSchema.safeParse(output);
+  if (!parsed.success) {
+    return undefined;
+  }
+  const input = job.input as Partial<OutlineFlowSeedJobInput>;
+  if (!input.flowId) {
+    return undefined;
+  }
+  const previous = await ctx.stores.seedPlans.latestByFlow(input.flowId, "proposed");
+  const charter = input.charter ?? parsed.data.proposedCharter;
+  const persona = input.persona ?? parsed.data.proposedPersona;
+  const plan = await ctx.stores.seedPlans.create({
+    flowId: input.flowId,
+    origin: input.origin ?? "manual",
+    ...(charter !== undefined ? { charter } : {}),
+    ...(persona !== undefined ? { persona } : {}),
+    charterProposed: !input.charter && Boolean(parsed.data.proposedCharter),
+    personaProposed: !input.persona && Boolean(parsed.data.proposedPersona),
+    items: parsed.data.items,
+    rationale: parsed.data.rationale,
+    ...(input.notes !== undefined ? { notes: input.notes } : {}),
+    outlineJobId: job.id,
+    sourceHash: hashSourceDescriptors(input.sources ?? [])
+  });
+  if (previous && previous.id !== plan.id) {
+    await ctx.stores.seedPlans.setStatus(previous.id, "superseded");
+  }
+  logger.info(
+    { planId: plan.id, flowId: plan.flowId, items: plan.items.length, superseded: previous?.id },
+    "persisted seed plan from completed outline job"
+  );
+  return plan;
 }
