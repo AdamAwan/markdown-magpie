@@ -15,6 +15,7 @@ import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
 import { FakeJobBroker } from "../jobs/fake-broker.js";
 import { InMemoryPatrolStore } from "../stores/patrol-store.js";
 import { InMemorySnapshotStore } from "../stores/snapshot-store.js";
+import { InMemorySeedPlanStore } from "../stores/seed-plan-store.js";
 import { InMemorySourceMapStore } from "../stores/source-map-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
 import { InMemoryWatcherRegistryStore } from "../stores/watcher-registry-store.js";
@@ -61,6 +62,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
       scheduledTasks: new InMemoryScheduledTaskStore(),
       sourceSync: new InMemorySourceSyncStore(),
       sourceMap: new InMemorySourceMapStore(),
+      seedPlans: new InMemorySeedPlanStore(),
       patrol: new InMemoryPatrolStore(),
       gapClusters: new InMemoryGapClusterStore(),
       reconciliations: new InMemoryReconciliationDecisionStore(),

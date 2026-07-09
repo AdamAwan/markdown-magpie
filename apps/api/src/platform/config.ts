@@ -29,7 +29,8 @@ const STORE_ENV_NAMES = [
   "WATCHER_REGISTRY_STORE",
   "PR_CROSSLINK_STORE",
   "GAP_CLOSURE_VERIFICATION_STORE",
-  "SOURCE_MAP_STORE"
+  "SOURCE_MAP_STORE",
+  "SEED_PLAN_STORE"
 ] as const;
 
 export type StoreEnvName = (typeof STORE_ENV_NAMES)[number];

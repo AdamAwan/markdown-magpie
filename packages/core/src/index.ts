@@ -381,6 +381,10 @@ export interface Proposal {
   destinationId?: string;
   rationale?: string;
   jobId?: string;
+  // The seed plan whose approval drafted this proposal (self-seeding flows).
+  // Read back off the draft job input at completion so the plan view can show
+  // per-item drafting/publication progress. Absent for non-seed proposals.
+  seedPlanId?: string;
   publication?: ProposalPublication;
   // The latest review decision observed on this proposal's pull request, polled by
   // the watcher's refresh_flow_snapshot job. Absent until the PR has been polled (or
