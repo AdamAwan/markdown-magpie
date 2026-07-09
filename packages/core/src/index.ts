@@ -754,6 +754,10 @@ export interface CorrectDocumentJobOutput {
   markdown: string;
   rationale: string;
   mapUpdates?: SourceMapUpdate[];
+  // #214 phase 3: per-claim grounding for the claims this correction introduces
+  // or materially rewrites — the corrective proposal is a provenance event for
+  // its own diff. Optional — absence is warned, never rejected.
+  provenance?: ProvenanceClaim[];
 }
 
 // Input to the dedupe_documents AI job: the document under patrol plus its k nearest
@@ -805,12 +809,25 @@ export interface ImproveDocumentJobInput {
   flowId?: string;
 }
 
-export interface ImproveDocumentJobOutput {
-  improved: boolean;
-  markdown?: string;
-  rationale: string;
-  mapUpdates?: SourceMapUpdate[];
-}
+// Output of improve_document. A no-op verdict (improved: false) carries no
+// provenance by design — it grounds no new claims and must not be warned as a
+// missing-provenance draft. The improved variant may declare per-claim
+// grounding for the claims its rewrite introduces or materially changes (#214
+// phase 3); optional — absence is warned, never rejected.
+export type ImproveDocumentJobOutput =
+  | {
+      improved: false;
+      markdown?: string;
+      rationale: string;
+      mapUpdates?: SourceMapUpdate[];
+    }
+  | {
+      improved: true;
+      markdown: string;
+      rationale: string;
+      mapUpdates?: SourceMapUpdate[];
+      provenance?: ProvenanceClaim[];
+    };
 
 export interface DraftMarkdownProposalJobOutput {
   title: string;
@@ -945,12 +962,21 @@ export interface FoldMarkdownProposalJobInput {
   rivalMarkdown: string;
   rivalGapSummaries: string[];
   rivalEvidence: Citation[];
+  // #214 phase 3: both parents' claim provenance, handed to the fold so it can
+  // re-attribute every surviving claim to the folded document's headings.
+  // Optional — pre-feature parents carry none.
+  survivorProvenance?: ProvenanceClaim[];
+  rivalProvenance?: ProvenanceClaim[];
   expectedOutput: "folded_markdown";
 }
 
 export interface FoldMarkdownProposalJobOutput {
   markdown: string;
   rationale: string;
+  // #214 phase 3: the merged document's provenance (union of the parents'
+  // surviving claims, re-anchored). Optional — when absent the API falls back
+  // to concatenating both parents' claims onto the survivor.
+  provenance?: ProvenanceClaim[];
 }
 
 // Input to the fold_changeset_proposal AI job: a multi-file (dedupe/split) rival that

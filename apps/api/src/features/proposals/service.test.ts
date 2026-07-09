@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
@@ -12,6 +12,7 @@ import type { AnswerResult, KnowledgeGapSignal } from "@magpie/core";
 import { RuntimeConfigHolder } from "../../config-holder.js";
 import { FakeJobBroker } from "../../jobs/fake-broker.js";
 import { makeTestContext } from "../../test-support/context.js";
+import { logger } from "../../logger.js";
 import * as proposals from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -2143,6 +2144,101 @@ test("a draft without provenance still creates the proposal", async () => {
   const proposal = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
   assert.ok(proposal, "absence of provenance never blocks the proposal");
   assert.equal(proposal?.provenance, undefined);
+});
+
+// #214 phase 3: the rewrite jobs document their own diffs — their proposals are
+// provenance events for the claims the rewrite introduced or changed.
+test("createCorrectiveProposalFromCompletedJob persists the correction's provenance", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("correct_document", {
+    path: "a.md",
+    content: "# a",
+    claims: [{ claim: "stale", reason: "x" }],
+    sources: [],
+    destinationId: "docs",
+    flowId: "billing",
+    provider: "codex"
+  });
+  const provenance = [
+    {
+      claim: "Retries cap at 5 attempts",
+      anchor: "retry-behaviour",
+      sources: [{ sourceId: "src-1", path: "src/retry.ts", lines: "L10-L14" }]
+    }
+  ];
+
+  const proposal = await proposals.createCorrectiveProposalFromCompletedJob(ctx, job, {
+    markdown: "# a (fixed)",
+    rationale: "rewrote the stale claim",
+    provenance
+  });
+  assert.deepEqual(proposal?.provenance, provenance);
+});
+
+test("createImproveProposalFromCompletedJob persists the improvement's provenance", async () => {
+  const ctx = makeTestContext();
+  const job = await improveJob(ctx);
+  const provenance = [
+    {
+      claim: "Partial refunds are supported",
+      anchor: "partial-refunds",
+      sources: [{ sourceId: "src-1", path: "src/refunds.ts", lines: "L4-L9" }]
+    }
+  ];
+
+  const proposal = await proposals.createImproveProposalFromCompletedJob(ctx, job, {
+    improved: true,
+    markdown: "# Refunds\nPartial refunds are supported.",
+    rationale: "added partial refund coverage",
+    provenance
+  });
+  assert.deepEqual(proposal?.provenance, provenance);
+});
+
+test("a rewrite output without provenance warns but still creates the proposal", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("correct_document", {
+    path: "a.md",
+    content: "# a",
+    claims: [{ claim: "stale", reason: "x" }],
+    sources: [],
+    provider: "codex"
+  });
+  const warn = mock.method(logger, "warn");
+  try {
+    const proposal = await proposals.createCorrectiveProposalFromCompletedJob(ctx, job, {
+      markdown: "# a (fixed)",
+      rationale: "r"
+    });
+    assert.ok(proposal, "absence of provenance never blocks the proposal");
+    assert.equal(proposal?.provenance, undefined);
+    assert.ok(
+      warn.mock.calls.some((call) => String(call.arguments[1]).includes("without per-claim provenance")),
+      "missing provenance on a rewrite is operator-visible"
+    );
+  } finally {
+    warn.mock.restore();
+  }
+});
+
+test("a no-op improvement neither creates a proposal nor warns about missing provenance", async () => {
+  const ctx = makeTestContext();
+  const job = await improveJob(ctx);
+  const warn = mock.method(logger, "warn");
+  try {
+    const created = await proposals.createImproveProposalFromCompletedJob(ctx, job, {
+      improved: false,
+      rationale: "Already complete."
+    });
+    assert.equal(created, undefined);
+    assert.equal(
+      warn.mock.calls.filter((call) => String(call.arguments[1]).includes("without per-claim provenance")).length,
+      0,
+      "improved: false grounds no new claims, so it must not warn as a missing-provenance draft"
+    );
+  } finally {
+    warn.mock.restore();
+  }
 });
 
 test("an empty or absent uncoveredPoints leaves the rationale untouched", async () => {

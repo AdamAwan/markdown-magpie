@@ -225,7 +225,25 @@ watcher's publication runner) and in the console's proposal view. A draft that o
 field is warned about but still published — quality is enforced by review and (phase 2)
 the verify patrol, never by rejecting drafts. Legacy inline citations in already-published
 documents are cleaned up organically by the verify→correct patrol, which flags them as
-formatting defects. Design:
+formatting defects.
+
+The **rewrite jobs are provenance events for their own diffs** too (#214 phase 3):
+`correct_document` and the `improved: true` branch of `improve_document` carry the same
+optional `provenance` field — the claims their rewrite introduces or materially changes,
+cited in the structured field instead of the prose rationale — persisted onto the
+corrective/improve proposal by the completion handlers (an `improved: false` no-op grounds
+no new claims and never warns). `fold_markdown_proposal` receives both parents' provenance
+(`survivorProvenance`/`rivalProvenance` on its input) and returns the merged document's
+re-anchored `provenance`; the fold applier rewrites the survivor's provenance event with
+the folded content (`ProposalStore.setProvenance` — the only post-create provenance
+write), falling back to concatenating both parents' claims (with a log warning) when the
+fold output carries none. **Documented limitation:** `dedupe_documents` and
+`split_document` changesets carry no per-claim provenance — their PRs describe the
+content move, `git blame` through the move reaches the pre-move provenance events, and
+phase 2's anchor-staleness guard makes the verify patrol fall back to full re-derivation
+for restructured sections. (The changeset fold accordingly concatenates the parents'
+claims onto the survivor rather than dropping them.) Revisit only if verify's fallback
+rate on moved documents proves noisy in practice. Design:
 [the claim-provenance spec](superpowers/specs/2026-07-08-claim-provenance-design.md).
 
 ```bash

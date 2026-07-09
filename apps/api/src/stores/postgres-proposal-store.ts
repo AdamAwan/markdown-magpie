@@ -156,6 +156,13 @@ export class PostgresProposalStore implements ProposalStore {
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
+  async setProvenance(id: string, provenance: ProvenanceClaim[] | undefined): Promise<void> {
+    await this.pool.query("UPDATE proposals SET provenance = $2 WHERE id = $1", [
+      id,
+      provenance ? JSON.stringify(provenance) : null
+    ]);
+  }
+
   async recordRegeneration(id: string, markdown: string, rationale?: string): Promise<Proposal | undefined> {
     const result = await this.pool.query<ProposalRow>(
       `

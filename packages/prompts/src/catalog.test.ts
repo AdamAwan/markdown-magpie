@@ -140,6 +140,33 @@ test("draft prompts require structured provenance and forbid inline path citatio
   }
 });
 
+// #214 phase 3: the rewrite jobs document their own diffs — per-claim citations
+// move from the prose rationale to the structured provenance field, so the
+// corrective/improvement proposal rows become provenance events too.
+test("rewrite prompts require structured provenance instead of rationale citations", () => {
+  for (const id of ["correct-document", "improve-document", "fold-markdown-proposal"]) {
+    const prompt = getPrompt(id);
+    assert.ok(prompt?.instructions.includes('"provenance"'), `${id} instructs the provenance array`);
+    assert.doesNotMatch(
+      prompt?.instructions ?? "",
+      /repository paths in the rationale/,
+      `${id} no longer routes citations to the rationale`
+    );
+    assert.ok(prompt?.outputShape.includes("provenance"), `${id} outputShape mentions provenance`);
+  }
+  const improve = getPrompt("improve-document")?.instructions ?? "";
+  assert.doesNotMatch(
+    improve,
+    /which repository paths support it/,
+    "improve's rationale rule no longer asks for paths"
+  );
+  assert.match(
+    improve,
+    /"improved" is false, omit "provenance"/,
+    "improve scopes provenance to the improved: true output"
+  );
+});
+
 // #214 cleanup: pre-feature documents may still carry inline "(see ...)" source
 // citations from the old draft prompts. The verify→correct patrol strips them
 // organically: verify flags each as a claim, correct removes the parenthetical

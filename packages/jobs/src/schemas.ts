@@ -275,11 +275,19 @@ export const foldMarkdownProposalInputSchema = z.object({
   rivalMarkdown: z.string(),
   rivalGapSummaries: z.array(z.string()),
   rivalEvidence: z.array(citationSchema),
+  // #214 phase 3: both parents' claim provenance, so the fold can re-attribute
+  // every surviving claim to the folded document's headings.
+  survivorProvenance: provenanceField,
+  rivalProvenance: provenanceField,
   expectedOutput: z.literal("folded_markdown")
 }) satisfies z.ZodType<ProviderInput<CoreFoldMarkdownProposalJobInput>>;
 export const foldMarkdownProposalOutputSchema = z.object({
   markdown: z.string(),
-  rationale: z.string()
+  rationale: z.string(),
+  // #214 phase 3: the merged document's provenance (union of the parents',
+  // re-anchored). Must be on the schema or the broker strips it before the
+  // API can rewrite the survivor's provenance event.
+  provenance: provenanceField
 }) satisfies z.ZodType<FoldMarkdownProposalJobOutput>;
 
 // A single-PR comment as a github job (the API holds no GitHub token, so commenting
@@ -414,7 +422,10 @@ export const correctDocumentInputSchema = z.object({
 export const correctDocumentOutputSchema = z.object({
   markdown: z.string(),
   rationale: z.string(),
-  mapUpdates: mapUpdatesField
+  mapUpdates: mapUpdatesField,
+  // #214 phase 3: the corrected claims this diff introduces or rewrites, so the
+  // corrective proposal is a provenance event too.
+  provenance: provenanceField
 }) satisfies z.ZodType<CorrectDocumentJobOutput>;
 
 const changesetChangeSchema = z.object({
@@ -462,8 +473,12 @@ export const improveDocumentInputSchema = z.object({
   flowId: z.string().optional()
 }) satisfies z.ZodType<ProviderInput<CoreImproveDocumentJobInput>>;
 export const improveDocumentOutputSchema = z.union([
+  // The improved: false branch carries no provenance by design — a no-op
+  // improvement grounds no new claims, so a stray field is stripped, not kept.
   z.object({ improved: z.literal(false), rationale: z.string(), markdown: z.string().optional(), mapUpdates: mapUpdatesField }),
-  z.object({ improved: z.literal(true), markdown: z.string(), rationale: z.string(), mapUpdates: mapUpdatesField })
+  // #214 phase 3: provenance for the claims the rewritten markdown introduces
+  // or materially changes.
+  z.object({ improved: z.literal(true), markdown: z.string(), rationale: z.string(), mapUpdates: mapUpdatesField, provenance: provenanceField })
 ]) satisfies z.ZodType<ImproveDocumentJobOutput>;
 
 export const foldChangesetProposalInputSchema = z.object({

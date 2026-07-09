@@ -186,6 +186,33 @@ test("updateChangeset returns undefined for an unknown proposal", async () => {
   assert.equal(await store.updateChangeset("nope", [], "x"), undefined);
 });
 
+// #214 phase 3: a fold rewrites the survivor's content, so its provenance event
+// is rewritten with it — the only post-create provenance write.
+test("setProvenance sets, replaces, and clears the provenance", async () => {
+  const store = new InMemoryProposalStore();
+  const created = await store.create(draft("folded"));
+  assert.equal(created.provenance, undefined);
+
+  const first = [{ claim: "A", sources: [{ sourceId: "s1", path: "a.md" }] }];
+  await store.setProvenance(created.id, first);
+  assert.deepEqual((await store.get(created.id))?.provenance, first);
+
+  const replaced = [
+    { claim: "A", sources: [{ sourceId: "s1", path: "a.md" }] },
+    { claim: "B", anchor: "b", sources: [{ sourceId: "s2", path: "b.md", lines: "L1-L3" }] }
+  ];
+  await store.setProvenance(created.id, replaced);
+  assert.deepEqual((await store.get(created.id))?.provenance, replaced);
+
+  await store.setProvenance(created.id, undefined);
+  assert.equal((await store.get(created.id))?.provenance, undefined);
+});
+
+test("setProvenance is a no-op for an unknown proposal", async () => {
+  const store = new InMemoryProposalStore();
+  await store.setProvenance("nope", [{ claim: "A", sources: [{ sourceId: "s1" }] }]);
+});
+
 test("listMergedByTargetPath returns merged proposals touching a path, oldest merge first", async () => {
   const store = new InMemoryProposalStore();
   // Two merged proposals target docs/a.md; merge the "late" one first so the
