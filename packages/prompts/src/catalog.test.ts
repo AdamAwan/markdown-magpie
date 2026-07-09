@@ -144,7 +144,7 @@ test("draft prompts require structured provenance and forbid inline path citatio
 // move from the prose rationale to the structured provenance field, so the
 // corrective/improvement proposal rows become provenance events too.
 test("rewrite prompts require structured provenance instead of rationale citations", () => {
-  for (const id of ["correct-document", "improve-document"]) {
+  for (const id of ["correct-document", "improve-document", "fold-markdown-proposal"]) {
     const prompt = getPrompt(id);
     assert.ok(prompt?.instructions.includes('"provenance"'), `${id} instructs the provenance array`);
     assert.doesNotMatch(

@@ -47,6 +47,27 @@ describe("PostgresProposalStore", { skip: databaseUrl ? false : "DATABASE_URL no
     assert.deepEqual(fetched?.provenance, provenance);
   });
 
+  // #214 phase 3: the fold rewrites the survivor's provenance event alongside
+  // its content — set, replace, and clear (undefined → NULL) must round-trip.
+  it("setProvenance sets, replaces, and clears the provenance column", async () => {
+    const created = await store.create(draft(`set-provenance-${Date.now()}`));
+    assert.equal(created.provenance, undefined);
+
+    const first = [{ claim: "A", sources: [{ sourceId: "s1", path: "a.md" }] }];
+    await store.setProvenance(created.id, first);
+    assert.deepEqual((await store.get(created.id))?.provenance, first);
+
+    const replaced = [
+      { claim: "A", sources: [{ sourceId: "s1", path: "a.md" }] },
+      { claim: "B", anchor: "b", sources: [{ sourceId: "s2", path: "b.md", lines: "L1-L3" }] }
+    ];
+    await store.setProvenance(created.id, replaced);
+    assert.deepEqual((await store.get(created.id))?.provenance, replaced);
+
+    await store.setProvenance(created.id, undefined);
+    assert.equal((await store.get(created.id))?.provenance, undefined);
+  });
+
   it("excludes terminal proposals from the default list but keeps them as history", async () => {
     const stamp = Date.now();
     const active = await store.create(draft(`active-${stamp}`));

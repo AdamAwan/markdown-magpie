@@ -5,6 +5,7 @@ import type {
   DraftContext,
   DraftMarkdownProposalJobOutput,
   Proposal,
+  ProvenanceClaim,
   ReviewDecision
 } from "@magpie/core";
 
@@ -56,6 +57,10 @@ export interface ProposalStore {
   // Promote a proposal to a merged file-set (used by the multi-file fold): replace
   // its changeset and refresh the primary markdown. targetPath is never rewritten.
   updateChangeset(id: string, changeset: ChangesetChange[], primaryMarkdown: string): Promise<Proposal | undefined>;
+  // Replace the proposal's per-claim provenance (#214). The fold rewrites the
+  // survivor's content, so its provenance event must be rewritten with it — the
+  // only post-create provenance write. undefined clears the column.
+  setProvenance(id: string, provenance: ProvenanceClaim[] | undefined): Promise<void>;
   updateReviewDecision(id: string, reviewDecision: ReviewDecision): Promise<Proposal | undefined>;
   reset(): Promise<void>;
 }
@@ -206,6 +211,14 @@ export class InMemoryProposalStore implements ProposalStore {
     const updated: Proposal = { ...existing, changeset, markdown: primaryMarkdown };
     this.proposals.set(id, updated);
     return updated;
+  }
+
+  async setProvenance(id: string, provenance: ProvenanceClaim[] | undefined): Promise<void> {
+    const existing = this.proposals.get(id);
+    if (!existing) {
+      return;
+    }
+    this.proposals.set(id, { ...existing, provenance });
   }
 
   async recordRegeneration(id: string, markdown: string, rationale?: string): Promise<Proposal | undefined> {

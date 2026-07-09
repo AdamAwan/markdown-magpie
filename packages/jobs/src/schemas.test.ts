@@ -269,6 +269,44 @@ test("draft output schemas keep the provenance field (broker-strip protection)",
   }
 });
 
+test("fold schemas round-trip parent and merged provenance (broker-strip protection)", () => {
+  const provenance = [
+    {
+      claim: "Refunds settle within 5 days",
+      anchor: "refund-settlement",
+      sources: [{ sourceId: "src-1", path: "src/refunds/settle.ts", lines: "L20-L31" }]
+    }
+  ];
+  const input = {
+    provider: "codex",
+    survivorProposalId: "s1",
+    rivalProposalId: "r1",
+    targetPath: "kb/refunds.md",
+    survivorMarkdown: "# survivor",
+    rivalMarkdown: "# rival",
+    rivalGapSummaries: [],
+    rivalEvidence: [],
+    expectedOutput: "folded_markdown"
+  };
+  const parsedInput = foldMarkdownProposalInputSchema.safeParse({
+    ...input,
+    survivorProvenance: provenance,
+    rivalProvenance: provenance
+  });
+  assert.ok(parsedInput.success);
+  assert.deepEqual(parsedInput.success ? parsedInput.data.survivorProvenance : undefined, provenance);
+  assert.deepEqual(parsedInput.success ? parsedInput.data.rivalProvenance : undefined, provenance);
+  assert.ok(foldMarkdownProposalInputSchema.safeParse(input).success, "parent provenance stays optional");
+
+  const parsedOutput = foldMarkdownProposalOutputSchema.safeParse({ markdown: "# merged", rationale: "r", provenance });
+  assert.ok(parsedOutput.success);
+  assert.deepEqual(parsedOutput.success ? parsedOutput.data.provenance : undefined, provenance);
+  assert.ok(
+    foldMarkdownProposalOutputSchema.safeParse({ markdown: "# merged", rationale: "r" }).success,
+    "merged provenance stays optional"
+  );
+});
+
 test("rewrite output schemas keep the provenance field (broker-strip protection)", () => {
   const provenance = [
     {

@@ -275,11 +275,19 @@ export const foldMarkdownProposalInputSchema = z.object({
   rivalMarkdown: z.string(),
   rivalGapSummaries: z.array(z.string()),
   rivalEvidence: z.array(citationSchema),
+  // #214 phase 3: both parents' claim provenance, so the fold can re-attribute
+  // every surviving claim to the folded document's headings.
+  survivorProvenance: provenanceField,
+  rivalProvenance: provenanceField,
   expectedOutput: z.literal("folded_markdown")
 }) satisfies z.ZodType<ProviderInput<CoreFoldMarkdownProposalJobInput>>;
 export const foldMarkdownProposalOutputSchema = z.object({
   markdown: z.string(),
-  rationale: z.string()
+  rationale: z.string(),
+  // #214 phase 3: the merged document's provenance (union of the parents',
+  // re-anchored). Must be on the schema or the broker strips it before the
+  // API can rewrite the survivor's provenance event.
+  provenance: provenanceField
 }) satisfies z.ZodType<FoldMarkdownProposalJobOutput>;
 
 // A single-PR comment as a github job (the API holds no GitHub token, so commenting

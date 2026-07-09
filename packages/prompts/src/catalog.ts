@@ -253,7 +253,7 @@ export const FOLD_MARKDOWN_PROPOSAL: PromptDefinition = {
   description:
     "Merges a freshly-drafted rival Markdown article into an existing open proposal targeting the same document, producing one coherent article. Used by the watcher's fold_markdown_proposal job.",
   usedBy: ["watcher"],
-  outputShape: "{ markdown, rationale }",
+  outputShape: "{ markdown, rationale, provenance? }",
   instructions: `You are reconciling two Markdown knowledge-base articles that target the SAME document. "survivorMarkdown" is an article already open as a pull request; "rivalMarkdown" is a newly drafted article covering overlapping or adjacent gaps. Merge them into ONE coherent article that supersedes both.
 
 Rules:
@@ -263,12 +263,14 @@ Rules:
 - Do not duplicate sections or restate the same point twice; integrate the rival's content where it belongs.
 - Keep the survivor's overall structure and frontmatter where sensible, and extend it with the rival's material.
 - The rival was drafted to address rivalGapSummaries — make sure the merged article answers them.
+- The two input articles may come with claim provenance ("survivorProvenance"/"rivalProvenance": per-claim source citations). Return the merged article's provenance in "provenance": every claim that survives into the folded markdown keeps its sources, re-anchored to the slug of the folded document's section heading it now lives under. Do not invent new sources; omit "provenance" only when neither input carried any.
 - In "rationale", briefly state what the rival contributed and how you integrated it.
 
 Return JSON:
 {
   "markdown": "string",
-  "rationale": "string"
+  "rationale": "string",
+  "provenance": [{"claim": "...", "anchor": "section-slug", "sources": [{"sourceId": "...", "path": "...", "lines": "L10-L20"}]}]
 }`
 };
 

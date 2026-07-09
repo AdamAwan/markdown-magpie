@@ -956,12 +956,21 @@ export interface FoldMarkdownProposalJobInput {
   rivalMarkdown: string;
   rivalGapSummaries: string[];
   rivalEvidence: Citation[];
+  // #214 phase 3: both parents' claim provenance, handed to the fold so it can
+  // re-attribute every surviving claim to the folded document's headings.
+  // Optional — pre-feature parents carry none.
+  survivorProvenance?: ProvenanceClaim[];
+  rivalProvenance?: ProvenanceClaim[];
   expectedOutput: "folded_markdown";
 }
 
 export interface FoldMarkdownProposalJobOutput {
   markdown: string;
   rationale: string;
+  // #214 phase 3: the merged document's provenance (union of the parents'
+  // surviving claims, re-anchored). Optional — when absent the API falls back
+  // to concatenating both parents' claims onto the survivor.
+  provenance?: ProvenanceClaim[];
 }
 
 // Input to the fold_changeset_proposal AI job: a multi-file (dedupe/split) rival that
