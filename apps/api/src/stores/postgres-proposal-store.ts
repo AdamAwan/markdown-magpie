@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { TERMINAL_PROPOSAL_STATUSES } from "@magpie/core";
-import type { ChangesetChange, Citation, DraftContext, Proposal, ReviewDecision } from "@magpie/core";
+import type { ChangesetChange, Citation, DraftContext, Proposal, ProvenanceClaim, ReviewDecision } from "@magpie/core";
 import type { ProposalInput, ProposalListOptions, ProposalStore } from "./proposal-store.js";
 
 export class PostgresProposalStore implements ProposalStore {
@@ -14,9 +14,9 @@ export class PostgresProposalStore implements ProposalStore {
         INSERT INTO proposals (
           id, title, status, target_path, markdown, evidence, gap_summary,
           triggering_question_ids, rationale, job_id, destination_id, gap_cluster_id,
-          draft_context, flow_id, changeset
+          draft_context, flow_id, changeset, provenance
         )
-        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11::bigint, $12, $13, $14)
+        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11::bigint, $12, $13, $14, $15)
         ON CONFLICT (job_id) WHERE job_id IS NOT NULL
         DO UPDATE SET job_id = EXCLUDED.job_id
         RETURNING *
@@ -35,7 +35,8 @@ export class PostgresProposalStore implements ProposalStore {
         input.gapClusterId ?? null,
         input.draftContext ? JSON.stringify(input.draftContext) : null,
         input.flowId ?? null,
-        input.changeset ? JSON.stringify(input.changeset) : null
+        input.changeset ? JSON.stringify(input.changeset) : null,
+        input.provenance ? JSON.stringify(input.provenance) : null
       ]
     );
 
@@ -211,6 +212,7 @@ interface ProposalRow {
   publication: Proposal["publication"] | null;
   review_decision: string | null;
   draft_context: DraftContext | null;
+  provenance: ProvenanceClaim[] | null;
   created_at: Date;
   merged_at: Date | null;
   closure_status: Proposal["closureStatus"] | null;
@@ -236,6 +238,7 @@ function mapRow(row: ProposalRow): Proposal {
     publication: row.publication ?? undefined,
     reviewDecision: (row.review_decision as ReviewDecision | null) ?? undefined,
     draftContext: row.draft_context ?? undefined,
+    provenance: row.provenance ?? undefined,
     createdAt: row.created_at.toISOString(),
     mergedAt: row.merged_at?.toISOString(),
     closureStatus: row.closure_status ?? undefined,

@@ -393,6 +393,13 @@ export interface Proposal {
   // based on, not just its output. Absent on proposals drafted before this was
   // captured.
   draftContext?: DraftContext;
+  // Per-claim source provenance captured from the draft job output (#214).
+  // Event-log semantics: once this proposal is MERGED, this row IS the
+  // provenance event for its targetPath — "what supported this change when it
+  // shipped", not "what currently supports the document". Documents themselves
+  // carry no provenance. Absent on proposals drafted before this was captured
+  // or when the draft omitted the field.
+  provenance?: ProvenanceClaim[];
   createdAt: string;
   // Stamped when the proposal is marked merged. Marking merged also resolves the
   // gaps it closed so they stop surfacing as candidates.
@@ -412,6 +419,28 @@ export interface Proposal {
   // once it reaches the cap the proposal is surfaced for a human instead of
   // regenerating again. Absent/0 until the first regeneration.
   regenerationCount?: number;
+}
+
+// One source location that grounds a ProvenanceClaim. sourceId references a
+// SourceDescriptor.id from the job input; path is repo-relative within that
+// source. Reference-only sources (internet/agent) are legitimate here — they
+// ground a claim as supporting context, matching how the drafting prompts
+// treat them.
+export interface ProvenanceClaimSource {
+  sourceId: string;
+  path?: string; // repo-relative file path (git/local sources)
+  lines?: string; // optional "L12-L40" hint
+  url?: string; // internet sources
+}
+
+// One substantive claim in a drafted document and the source locations that
+// ground it (#214). anchor is the slug of the section heading the claim lives
+// under — a display-grouping and soft staleness key, NOT an exact-text key;
+// claims are never keyed by exact body text.
+export interface ProvenanceClaim {
+  claim: string; // short restatement of the claim, not a body quote
+  anchor?: string;
+  sources: ProvenanceClaimSource[];
 }
 
 // The inputs handed to the drafter, kept alongside the proposal so the context
@@ -788,6 +817,9 @@ export interface DraftMarkdownProposalJobOutput {
   // state) and reported here so the API can surface them on the proposal
   // rationale. Optional: absent when the sources covered everything.
   uncoveredPoints?: string[];
+  // #214: per-claim source grounding for the drafted markdown. Optional —
+  // absence is tolerated (warned by the completion handler, never rejected).
+  provenance?: ProvenanceClaim[];
 }
 
 // One unit of flow seeding: a document to author, described by what it should
@@ -865,6 +897,8 @@ export interface DraftSeedDocumentJobOutput {
   // Coverage points the sources do not support, OMITTED from the document body
   // (#213) and reported here for the proposal rationale.
   uncoveredPoints?: string[];
+  // #214: see DraftMarkdownProposalJobOutput.provenance.
+  provenance?: ProvenanceClaim[];
 }
 
 // A section of an existing flow document, surfaced to the outline generator as

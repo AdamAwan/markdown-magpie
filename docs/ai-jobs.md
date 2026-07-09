@@ -212,6 +212,22 @@ and `split_document` outputs are **deliberately not checked**: they reorganise e
 content rather than author anything new, so any advisory heading present already pre-dates
 the proposal.
 
+Drafts also carry **per-claim provenance** (#214): both draft outputs
+(`draft_markdown_proposal`, `draft_seed_document`) include an optional
+`provenance: ProvenanceClaim[]` field — each substantive claim in the drafted markdown
+with the source id + repo-relative path(s) that ground it. The document **body contains no
+repository paths or source names** (the old inline "(see …)" citations leaked into answers
+served by `answer_question`); citations live only in the structured field. The API persists
+it on the proposal (`proposals.provenance`, migration 0049) where it follows event-log
+semantics: a **merged** proposal's row is the permanent provenance event for its target
+path. Reviewers see the map in the PR body ("Claim provenance" section, rendered by the
+watcher's publication runner) and in the console's proposal view. A draft that omits the
+field is warned about but still published — quality is enforced by review and (phase 2)
+the verify patrol, never by rejecting drafts. Legacy inline citations in already-published
+documents are cleaned up organically by the verify→correct patrol, which flags them as
+formatting defects. Design:
+[the claim-provenance spec](superpowers/specs/2026-07-08-claim-provenance-design.md).
+
 ```bash
 curl -s http://localhost:4000/api/proposals
 ```
@@ -339,7 +355,9 @@ ungrounded document.
 
 Coverage points the sources do not support are omitted from the authored document and
 come back in the output's `uncoveredPoints` field, which the API folds into the seed
-proposal's rationale (see the register constraint above).
+proposal's rationale (see the register constraint above). Per-claim source citations come
+back in the output's `provenance` field and are persisted on the seed proposal (see the
+provenance paragraph above) — the authored document itself carries no source paths.
 
 On completion the API
 creates a clusterless proposal carrying the flow's id first-class and reconciles it through the

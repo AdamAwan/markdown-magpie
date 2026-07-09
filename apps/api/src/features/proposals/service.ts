@@ -10,6 +10,7 @@ import type {
   GapCandidate,
   OpenPullRequestContext,
   Proposal,
+  ProvenanceClaim,
   QuestionLog,
   RepositoryRef,
   SourceDescriptor,
@@ -1319,6 +1320,21 @@ function foldUncoveredPointsIntoRationale(
   return `${output.rationale}\n\nNot covered by the sources (omitted from the document): ${points.join("; ")}.`;
 }
 
+// #214: drafts must report per-claim provenance. Absence is tolerated (the
+// field is optional end-to-end; review + the verify patrol enforce quality)
+// but warned, so silent regressions in drafter behaviour are operator-visible.
+function warnMissingProvenance(
+  job: JobView,
+  output: { targetPath: string; provenance?: ProvenanceClaim[] }
+): void {
+  if (!output.provenance || output.provenance.length === 0) {
+    logger.warn(
+      { jobId: job.id, jobType: job.type, targetPath: output.targetPath },
+      "draft completed without per-claim provenance; proposal will carry none"
+    );
+  }
+}
+
 function dedupeCitations(citations: Proposal["evidence"]): Proposal["evidence"] {
   const seen = new Set<string>();
   const result: Proposal["evidence"] = [];
@@ -1346,6 +1362,9 @@ export async function createProposalFromCompletedJob(
     triggeringQuestionIds?: string[];
   };
 
+  warnMissingProvenance(job, output);
+  // The spread below carries output.provenance (with the rest of the draft
+  // output) into the created proposal via ProposalInput.
   const withReport: DraftMarkdownProposalJobOutput = {
     ...output,
     rationale: foldUncoveredPointsIntoRationale(job, output)
@@ -1472,6 +1491,7 @@ export async function createSeedProposalFromCompletedJob(
   if (!input.flowId) {
     return undefined;
   }
+  warnMissingProvenance(job, parsed.data);
   return ctx.stores.proposals.create(
     flagAdvisoryDraft(
       {
@@ -1483,6 +1503,7 @@ export async function createSeedProposalFromCompletedJob(
         markdown: parsed.data.markdown,
         rationale: foldUncoveredPointsIntoRationale(job, parsed.data),
         evidence: [],
+        provenance: parsed.data.provenance,
         flowId: input.flowId,
         destinationId: input.destinationId,
         jobId: job.id

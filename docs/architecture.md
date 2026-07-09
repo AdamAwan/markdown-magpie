@@ -107,6 +107,15 @@ Proposal generation runs along two paths:
   proposals for any cluster not already covered, publishes them as pull requests, and advances
   proposals as their PRs merge or close — all in one task with no manual review step.
 
+Every proposal carries **per-claim provenance** (#214): the draft jobs return a structured
+`provenance` array (each substantive claim plus the source files that ground it) instead of
+citing repository paths inline in the document body, so internal source locations never
+leak into answers. The map is persisted on the proposal row (append-only event-log
+semantics: a merged proposal's row is the provenance event for its target path) and
+rendered for reviewers in the PR body and the console's proposal view — for local-git
+flows, which have no PRs, the console is the review surface. See
+[the claim-provenance spec](superpowers/specs/2026-07-08-claim-provenance-design.md).
+
 Both paths stop at a **pull request**: automated flows open and update PRs, but the *merge*
 that changes the source of truth is always a human action on the hosting provider. Because AI
 flows ingest untrusted content (questions, source Markdown, diffs), this mandatory-human-review

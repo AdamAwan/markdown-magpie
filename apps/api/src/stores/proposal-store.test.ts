@@ -185,3 +185,21 @@ test("updateChangeset returns undefined for an unknown proposal", async () => {
   const store = new InMemoryProposalStore();
   assert.equal(await store.updateChangeset("nope", [], "x"), undefined);
 });
+
+test("create persists per-claim provenance and leaves it undefined when absent", async () => {
+  const store = new InMemoryProposalStore();
+  const provenance = [
+    {
+      claim: "Logs are retained for 12 months",
+      anchor: "log-retention",
+      sources: [{ sourceId: "src-1", path: "docs/ops/logging.md", lines: "L10-L14" }]
+    }
+  ];
+  const withProvenance = await store.create({ ...draft("cited"), provenance });
+  assert.deepEqual(withProvenance.provenance, provenance);
+  assert.deepEqual((await store.get(withProvenance.id))?.provenance, provenance);
+
+  const without = await store.create(draft("uncited"));
+  assert.equal(without.provenance, undefined);
+  assert.equal((await store.get(without.id))?.provenance, undefined);
+});

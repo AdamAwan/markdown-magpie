@@ -86,6 +86,31 @@ const ClusterGaps = styled.ul(({ theme }) => ({
   "& li > span": { flex: 1, minWidth: 0 }
 }));
 
+// One entry per provenance claim (#214): the claim text, then a muted mono line
+// of the source locations that ground it. Sibling of ClusterGaps — the claims
+// stack a second line inside each item, so they need their own grid layout.
+const ProvenanceClaims = styled.ul(({ theme }) => ({
+  margin: 0,
+  padding: 0,
+  listStyle: "none",
+  display: "grid",
+  gap: theme.space.sm,
+  "& li": {
+    display: "grid",
+    gap: theme.space.xs,
+    padding: `${theme.space.sm} ${theme.space.lg}`,
+    border: `1px solid ${theme.color.border}`,
+    borderRadius: theme.radius.md,
+    background: theme.color.surface,
+    fontSize: theme.font.size.md
+  },
+  "& li > small": {
+    color: theme.color.textMuted,
+    fontFamily: theme.font.mono,
+    fontSize: theme.font.size.sm
+  }
+}));
+
 const Actions = styled.div(({ theme }) => ({
   display: "flex",
   alignItems: "center",
@@ -277,6 +302,37 @@ export function ProposalPanel({
                         </ClusterGaps>
                       </>
                     ) : null}
+                  </DraftContext>
+                ) : null}
+                {selectedProposal.provenance && selectedProposal.provenance.length > 0 ? (
+                  // #214: the per-claim provenance map from the draft output. For
+                  // local-git flows (no PR) this console view IS the review
+                  // surface for claims-vs-sources; for GitHub flows it mirrors
+                  // the PR body's "Claim provenance" section.
+                  <DraftContext>
+                    <summary>Claim provenance ({selectedProposal.provenance.length})</summary>
+                    <ProvenanceClaims>
+                      {selectedProposal.provenance.map((claim, index) => (
+                        <li key={`${claim.anchor ?? ""}-${index}`}>
+                          <span>
+                            {claim.anchor ? <Path>{claim.anchor} — </Path> : null}
+                            {claim.claim}
+                          </span>
+                          <small>
+                            {claim.sources
+                              .map((source) =>
+                                [
+                                  source.sourceId,
+                                  source.path ? `: ${source.path}` : "",
+                                  source.lines ? ` (${source.lines})` : "",
+                                  source.url ? ` ${source.url}` : ""
+                                ].join("")
+                              )
+                              .join(" · ")}
+                          </small>
+                        </li>
+                      ))}
+                    </ProvenanceClaims>
                   </DraftContext>
                 ) : null}
                 <Actions>

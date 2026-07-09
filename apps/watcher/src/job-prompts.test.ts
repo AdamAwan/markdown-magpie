@@ -93,7 +93,11 @@ describe("buildSourceGroundedPrompt", () => {
     assert.match(prompt, /Product repo/);
     assert.match(prompt, /\/checkouts\/s1/);
     assert.match(prompt, /unavailable \(gone\)/);
-    assert.doesNotMatch(prompt, /"sources"/);
+    // The input's source DESCRIPTORS must not render — they are resolved into
+    // the workspace listing above. (The instructions themselves may mention a
+    // "sources" key: the provenance output template does, #214.)
+    assert.doesNotMatch(prompt, /https:\/\/example\.com\/r\.git/);
+    assert.doesNotMatch(prompt, /"kind"/);
     assert.ok(prompt.indexOf("statement ingestion") > prompt.indexOf("Product repo"));
   });
 

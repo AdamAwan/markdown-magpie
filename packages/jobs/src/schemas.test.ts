@@ -251,3 +251,30 @@ test("draft outputs accept and preserve optional uncoveredPoints", () => {
   // Malformed entries are rejected, not coerced.
   assert.equal(draftSeedDocumentOutputSchema.safeParse({ ...base, uncoveredPoints: [42] }).success, false);
 });
+
+test("draft output schemas keep the provenance field (broker-strip protection)", () => {
+  const provenance = [
+    {
+      claim: "Logs are retained for 12 months",
+      anchor: "log-retention",
+      sources: [{ sourceId: "src-1", path: "docs/ops/logging.md", lines: "L10-L14" }]
+    }
+  ];
+  const base = { title: "t", targetPath: "p.md", markdown: "# d", rationale: "r" };
+  for (const schema of [draftMarkdownProposalOutputSchema, draftSeedDocumentOutputSchema]) {
+    const parsed = schema.safeParse({ ...base, provenance });
+    assert.ok(parsed.success);
+    assert.deepEqual(parsed.success ? parsed.data.provenance : undefined, provenance);
+    assert.ok(schema.safeParse(base).success, "provenance stays optional");
+  }
+});
+
+test("provenance rejects a claim without sources array", () => {
+  const base = { title: "t", targetPath: "p.md", markdown: "# d", rationale: "r" };
+  assert.ok(
+    !draftMarkdownProposalOutputSchema.safeParse({
+      ...base,
+      provenance: [{ claim: "c" }]
+    }).success
+  );
+});

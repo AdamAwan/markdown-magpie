@@ -140,12 +140,12 @@ export const DRAFT_MARKDOWN_PROPOSAL: PromptDefinition = {
   description:
     "Drafts a single cohesive Markdown article that addresses every listed gap, grounded in the flow's source repositories, which the executing agent explores directly. Used by the watcher's draft_markdown_proposal job.",
   usedBy: ["watcher"],
-  outputShape: '{ title, targetPath, markdown, rationale, mapUpdates?, uncoveredPoints? }',
+  outputShape: '{ title, targetPath, markdown, rationale, mapUpdates?, uncoveredPoints?, provenance? }',
   instructions: `Draft a single Markdown knowledge base proposal that addresses every gap listed in gapSummaries, grounded in the source repositories you have been given access to.
 
 Grounding:
 - You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for terms from the gap summaries and triggering questions, open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs.
-- Ground every factual claim in files you actually read, and cite their repository paths (e.g. "(see Docs/Specifications/Statements/ingestion.md)").
+- Ground every factual claim in files you actually read. The document BODY must contain NO repository paths, file references, or source names — readers of answers built from this document must never see internal source locations. Instead, report every substantive claim in the "provenance" array of your JSON output: a short restatement of the claim, the slug of the section heading it lives under ("anchor"), and the source id + repo-relative path(s) (plus optional "L10-L20" line hints) of the files that ground it.
 - Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs. Where the sources genuinely do not cover a point, OMIT it from the document entirely — never write the gap, a placeholder, or a note about missing coverage into the document body — and list that point in "uncoveredPoints" instead.
 
 ${SOURCE_MAP_CONTRACT}
@@ -157,7 +157,7 @@ Rules:
 - The input may include resubmissionNotes: this is a re-draft because a previous proposal merged but still did NOT answer the triggering questions. Each note explains what was already published and why it fell short. Treat these as the most important guidance — directly address the specific shortfall each note calls out (add the missing specifics, examples, or coverage) rather than restating what the earlier attempt already contained.
 - The input may include openPullRequests: the flow's already in-flight proposals and currently open pull requests, each with a title, an optional url, and a target path. Do NOT draft something that duplicates one of these. If your article overlaps an open pull request, build on it and reference it (by title and url) in the rationale instead of restating its content; draft only what those in-flight changes leave uncovered.
 - Markdown must be reviewable and conservative; UK English. Include frontmatter with title and status: draft.
-- Cite source file paths, URLs, or agent/internet source names in the rationale.
+- The rationale stays a prose summary; per-claim citations belong in "provenance", not the rationale and never the body.
 
 Return JSON:
 {
@@ -168,7 +168,8 @@ Return JSON:
   "mapUpdates": [
     { "sourceId": "string", "topic": "string", "paths": ["string"], "description": "string" }
   ],
-  "uncoveredPoints": ["a point the sources do not support (omit when none)"]
+  "uncoveredPoints": ["a point the sources do not support (omit when none)"],
+  "provenance": [{"claim": "...", "anchor": "section-slug", "sources": [{"sourceId": "...", "path": "...", "lines": "L10-L20"}]}]
 }`
 };
 
@@ -178,7 +179,7 @@ export const DRAFT_SEED_DOCUMENT: PromptDefinition = {
   description:
     "Authors a NEW knowledge-base document from a title + the points it should cover, grounded in the flow's source repositories, which the executing agent explores directly. Used to seed a new flow or add a new area to an existing one, bypassing the demand-driven gap pipeline. Used by the watcher's draft_seed_document job.",
   usedBy: ["watcher · flow seeding"],
-  outputShape: "{ title, targetPath, markdown, rationale, mapUpdates?, uncoveredPoints? }",
+  outputShape: "{ title, targetPath, markdown, rationale, mapUpdates?, uncoveredPoints?, provenance? }",
   instructions: `You author a single new Markdown knowledge-base document, grounded in the source repositories you have been given access to.
 
 Input:
@@ -188,7 +189,7 @@ Input:
 
 Grounding:
 - You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for terms from "coverage", open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs.
-- Ground every factual claim in files you actually read, and cite their repository paths in the text (e.g. "(see Docs/Specifications/Statements/ingestion.md)").
+- Ground every factual claim in files you actually read. The document BODY must contain NO repository paths, file references, or source names — readers of answers built from this document must never see internal source locations. Instead, report every substantive claim in the "provenance" array of your JSON output: a short restatement of the claim, the slug of the section heading it lives under ("anchor"), and the source id + repo-relative path(s) (plus optional "L10-L20" line hints) of the files that ground it.
 - Never introduce assertions the sources do not support. Do not fabricate figures, dates, or APIs. If, after genuinely searching, the sources do not cover a coverage point, OMIT it from the document entirely — never write the gap, a placeholder, or a note about missing coverage into the document body — and list that point in "uncoveredPoints" instead.
 
 ${SOURCE_MAP_CONTRACT}
@@ -197,7 +198,7 @@ Rules:
 - Your FINAL message must be JSON only, matching the shape below. No prose around it.
 - ${FACTUAL_REGISTER_CONTRACT}
 - Write clean, well-structured Markdown with headings; UK English. Include frontmatter with title and status: draft.
-- "rationale" is a one-paragraph summary of what the document covers and which source files grounded it.
+- "rationale" is a one-paragraph prose summary of what the document covers; per-claim citations belong in "provenance", not the rationale and never the body.
 
 Return JSON:
 {
@@ -208,7 +209,8 @@ Return JSON:
   "mapUpdates": [
     { "sourceId": "string", "topic": "string", "paths": ["string"], "description": "string" }
   ],
-  "uncoveredPoints": ["a coverage point the sources do not support (omit when none)"]
+  "uncoveredPoints": ["a coverage point the sources do not support (omit when none)"],
+  "provenance": [{"claim": "...", "anchor": "section-slug", "sources": [{"sourceId": "...", "path": "...", "lines": "L10-L20"}]}]
 }`
 };
 
@@ -365,6 +367,7 @@ Rules:
 - ${CONSERVATIVE_CONTRACT} Here a clear case is a claim the sources clearly contradict or clearly fail to support; when you are unsure, or the sources simply do not mention the claim, treat the document as healthy and do NOT flag it.
 - If every claim is supported (or the sources give you nothing to disprove), return verdict "healthy" with an empty claims array.
 - Otherwise return verdict "unprovable" and list ONLY the specific unprovable claims, each with a short reason citing the source files you checked (or searched and found silent).
+- Inline repository-path citations in the document body (e.g. "(see Docs/.../ingestion.md)") are a defect regardless of factual accuracy — internal source paths must never appear in published content. Flag each as a claim with reason "inline source-path citation".
 - Do not propose edits or rewrites. You only report.
 
 Return JSON:
@@ -402,6 +405,7 @@ Rules:
 - Return JSON only.
 - ${FACTUAL_REGISTER_CONTRACT}
 - For each listed claim: rewrite it so it matches what the sources actually support, quoting/paraphrasing only what the sources say. If NOTHING in the sources supports the claim, REMOVE it and smooth the surrounding prose.
+- A claim flagged as an inline source-path citation is a formatting defect, not a factual error: remove the parenthetical/reference from the body and smooth the sentence; do not change the factual content it was attached to.
 - Never introduce a new assertion that the sources do not support. Do not invent figures, dates, or facts.
 - Leave every other part of the document unchanged.
 - "rationale" is a one-paragraph summary of what you changed and why.

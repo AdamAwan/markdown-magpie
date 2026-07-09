@@ -2075,6 +2075,76 @@ test("createSeedProposalFromCompletedJob folds reported uncoveredPoints into the
   assert.equal(proposal?.markdown, "# Billing");
 });
 
+test("createProposalFromCompletedJob persists the draft's provenance on the proposal", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_markdown_proposal", {
+    provider: "codex",
+    gapSummaries: ["How to configure X"],
+    triggeringQuestions: ["How do I configure X?"],
+    evidence: [],
+    sources: [],
+    expectedOutput: "markdown_proposal"
+  });
+  const provenance = [
+    {
+      claim: "X retries up to 5 times",
+      anchor: "retry-behaviour",
+      sources: [{ sourceId: "src-1", path: "src/x/retry.ts", lines: "L10-L14" }]
+    }
+  ];
+  const output = {
+    title: "Configuring X",
+    targetPath: "configuring-x.md",
+    markdown: "# Configuring X",
+    rationale: "grounded in repo docs",
+    provenance
+  };
+
+  const proposal = await proposals.createProposalFromCompletedJob(ctx, job, output);
+  assert.deepEqual(proposal?.provenance, provenance);
+});
+
+test("createSeedProposalFromCompletedJob persists provenance", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_seed_document", {
+    flowId: "billing",
+    coverage: ["what billing is"],
+    sources: [],
+    provider: "codex"
+  });
+  const provenance = [
+    {
+      claim: "Invoices are issued monthly",
+      sources: [{ sourceId: "src-1", path: "docs/billing.md" }]
+    }
+  ];
+  const output = {
+    title: "Billing overview",
+    targetPath: "billing.md",
+    markdown: "# Billing",
+    rationale: "seed",
+    provenance
+  };
+
+  const proposal = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
+  assert.deepEqual(proposal?.provenance, provenance);
+});
+
+test("a draft without provenance still creates the proposal", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_seed_document", {
+    flowId: "billing",
+    coverage: ["what billing is"],
+    sources: [],
+    provider: "codex"
+  });
+  const output = { title: "Billing", targetPath: "billing.md", markdown: "# Billing", rationale: "seed" };
+
+  const proposal = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
+  assert.ok(proposal, "absence of provenance never blocks the proposal");
+  assert.equal(proposal?.provenance, undefined);
+});
+
 test("an empty or absent uncoveredPoints leaves the rationale untouched", async () => {
   const ctx = makeTestContext();
   const job = await ctx.jobs.create("draft_seed_document", {
