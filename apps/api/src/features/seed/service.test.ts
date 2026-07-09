@@ -52,9 +52,19 @@ test("seedFlow rejects an unknown flow", async () => {
 function billingFlowContext(): ReturnType<typeof makeTestContext> {
   return makeTestContext({
     knowledgeConfig: {
-      sources: [],
+      sources: [{ id: "src-1", name: "Billing repo", kind: "git", url: "https://example.com/billing.git" }],
       destinations: [{ id: "docs", name: "Docs", kind: "local", path: "docs" }],
-      flows: [{ id: "billing", name: "Billing", sourceIds: [], destinationId: "docs", persona: "Support agent" }],
+      flows: [
+        {
+          id: "billing",
+          name: "Billing",
+          sourceIds: ["src-1"],
+          destinationId: "docs",
+          persona: "Support agent",
+          charter: "Everything a support agent needs about billing",
+          routingSummary: "billing"
+        }
+      ],
       repositories: [],
       roleGrants: {},
       checkoutRoot: ".magpie/checkouts"
@@ -62,11 +72,12 @@ function billingFlowContext(): ReturnType<typeof makeTestContext> {
   });
 }
 
-test("outlineFlowSeed enqueues an outline_flow_seed job carrying flowId + topic + persona", async () => {
+test("outlineFlowSeed enqueues a source-grounded planning job with flow config and no topic", async () => {
   const ctx = billingFlowContext();
-  const result = await seed.outlineFlowSeed(ctx, "billing", { topic: "Refunds", notes: "focus on partial refunds" });
+  const result = await seed.outlineFlowSeed(ctx, "billing", { notes: "focus on partial refunds", origin: "manual" });
   assert.ok(result.ok);
   if (!result.ok) throw new Error("unreachable");
+  assert.equal(result.reused, false);
 
   const { jobs } = await ctx.jobs.list({ type: "outline_flow_seed" });
   assert.equal(jobs.length, 1);
@@ -74,31 +85,45 @@ test("outlineFlowSeed enqueues an outline_flow_seed job carrying flowId + topic 
   assert.ok(parsed.success, "enqueued input should match the outline_flow_seed contract");
   const input = jobs[0].input as {
     flowId?: string;
-    topic?: string;
+    origin?: string;
     notes?: string;
+    sources?: { id: string }[];
     persona?: string;
+    charter?: string;
+    routingSummary?: string;
     existingDocuments?: unknown[];
     provider?: string;
   };
   assert.equal(input.flowId, "billing");
-  assert.equal(input.topic, "Refunds");
+  assert.equal(input.origin, "manual");
   assert.equal(input.notes, "focus on partial refunds");
+  assert.deepEqual(input.sources?.map((source) => source.id), ["src-1"]);
   assert.equal(input.persona, "Support agent");
+  assert.equal(input.charter, "Everything a support agent needs about billing");
+  assert.equal(input.routingSummary, "billing");
   assert.ok(Array.isArray(input.existingDocuments));
+  assert.ok(!("topic" in (jobs[0].input as Record<string, unknown>)));
   assert.equal(input.provider, "codex");
   assert.equal(result.jobId, jobs[0].id);
 });
 
-test("outlineFlowSeed rejects an unknown flow", async () => {
-  const ctx = makeTestContext();
-  const result = await seed.outlineFlowSeed(ctx, "no-such-flow", { topic: "x" });
-  assert.equal(result.ok, false);
-  assert.deepEqual((await ctx.jobs.list({})).jobs, []);
+test("outlineFlowSeed reuses an in-flight outline job for the same flow", async () => {
+  const ctx = billingFlowContext();
+  const first = await seed.outlineFlowSeed(ctx, "billing", { origin: "manual" });
+  assert.ok(first.ok);
+  if (!first.ok) throw new Error("unreachable");
+  const second = await seed.outlineFlowSeed(ctx, "billing", { origin: "auto" });
+  assert.ok(second.ok);
+  if (!second.ok) throw new Error("unreachable");
+  assert.equal(second.reused, true);
+  assert.equal(second.jobId, first.jobId);
+  const { jobs } = await ctx.jobs.list({ type: "outline_flow_seed" });
+  assert.equal(jobs.length, 1);
 });
 
-test("outlineFlowSeed rejects an empty topic", async () => {
-  const ctx = billingFlowContext();
-  const result = await seed.outlineFlowSeed(ctx, "billing", { topic: "   " });
+test("outlineFlowSeed rejects an unknown flow", async () => {
+  const ctx = makeTestContext();
+  const result = await seed.outlineFlowSeed(ctx, "no-such-flow", { origin: "manual" });
   assert.equal(result.ok, false);
   assert.deepEqual((await ctx.jobs.list({})).jobs, []);
 });

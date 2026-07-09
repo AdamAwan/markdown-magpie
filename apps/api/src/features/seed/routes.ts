@@ -37,9 +37,10 @@ export function seedRoutes(ctx: AppContext): Hono {
     }
   );
 
-  // Generate a seed outline (a proposed SeedItem[]) for a topic, grounded in the
-  // flow's existing docs. Enqueue-only: returns the job id; the caller waits on the
-  // job and reads its output, edits the items, then POSTs them to /seed above.
+  // Propose a seed plan for the flow: enqueue the source-grounded planning job
+  // (no topic — the agent explores the flow's sources and plans the whole flow).
+  // Enqueue-only: returns the job id; the persisted plan lands via the job's
+  // completion handler and is reviewed on the Seed page.
   app.post(
     "/:flowId/outline",
     requireScopes("manage:jobs"),
@@ -55,12 +56,12 @@ export function seedRoutes(ctx: AppContext): Hono {
       }
       // Outlining reads the flow's KB and enqueues a job scoped to it.
       assertCan(ctx, c, "manage", flowId);
-      const { topic, notes } = c.req.valid("json");
-      const outcome = await outlineFlowSeed(ctx, flowId, { topic, notes });
+      const { notes } = c.req.valid("json");
+      const outcome = await outlineFlowSeed(ctx, flowId, { notes, origin: "manual" });
       if (!outcome.ok) {
         throw new HttpError(outcome.code === "flow_not_found" ? 404 : 400, outcome.code);
       }
-      return c.json({ ok: true, jobId: outcome.jobId });
+      return c.json({ ok: true, jobId: outcome.jobId, reused: outcome.reused });
     }
   );
 

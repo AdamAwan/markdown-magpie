@@ -125,6 +125,22 @@ export async function describeExistingDocuments(
   }));
 }
 
+// Whole-flow document inventory for the seed planner: every destination doc's
+// path + title, unscored (the planner needs the full structure, not a top-k for
+// a query). Bounded to keep the prompt sane on huge KBs.
+export function listExistingDocuments(ctx: AppContext, flowId: string, limit = 200): ExistingDocumentContext[] {
+  const scope = resolveRepositoryScope(ctx, flowId);
+  if (!scope.ok) {
+    return [];
+  }
+  const filter = scope.repositoryIds ? new Set(scope.repositoryIds) : undefined;
+  return ctx.stores.knowledgeIndex
+    .listDocuments()
+    .filter((doc) => !filter || filter.has(doc.repositoryId))
+    .slice(0, limit)
+    .map((doc) => ({ path: doc.path, heading: doc.metadata.title || doc.path }));
+}
+
 // Maps a flowId to the repository scope its destination defines, mirroring how
 // the old ask() routing scoped retrieval. An absent flowId is the deliberate
 // unscoped case; a flowId that names no configured flow is a caller error

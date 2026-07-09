@@ -900,6 +900,9 @@ export type SourceDescriptor =
 // Input to the draft_seed_document AI job: author a NEW document covering
 // `coverage`, grounded in the source repositories named by `sources`, bypassing
 // the demand-driven gap pipeline. `provider` is added at enqueue (see @magpie/jobs).
+// charter/persona are the seed plan's run-scoped shaping (charter bounds scope,
+// persona shapes voice); seedPlanId is read back off the stored job input at
+// completion to link the proposal to its plan (triggeringQuestionIds precedent).
 export interface DraftSeedDocumentJobInput {
   flowId: string;
   title?: string;
@@ -908,6 +911,9 @@ export interface DraftSeedDocumentJobInput {
   questions?: string[];
   sources: SourceDescriptor[];
   destinationId?: string;
+  charter?: string;
+  persona?: string;
+  seedPlanId?: string;
 }
 
 // Output of draft_seed_document: the authored document plus a short rationale.
@@ -924,32 +930,81 @@ export interface DraftSeedDocumentJobOutput {
   provenance?: ProvenanceClaim[];
 }
 
-// A section of an existing flow document, surfaced to the outline generator as
-// retrieval grounding so it proposes docs that fit the current structure and do
-// not restate what the knowledge base already covers.
+// An existing flow document surfaced to the outline planner so it proposes docs
+// that fit the current structure and do not restate what the knowledge base
+// already covers. excerpt is optional: the whole-flow lister supplies
+// path+heading only; the retrieval-scored variant keeps excerpts.
 export interface ExistingDocumentContext {
   path: string;
   heading: string;
-  excerpt: string;
+  excerpt?: string;
 }
 
-// Input to the outline_flow_seed AI job: propose a SeedItem[] (a doc list, titles +
-// coverage) for `topic`, grounded in the flow's existing docs. It only PROPOSES —
-// its output feeds the v1 seed endpoint after human review. `provider` is added at
-// enqueue (see @magpie/jobs).
+// Input to the outline_flow_seed AI job: source-grounded whole-flow planning.
+// There is no topic — `notes` is the optional human steer. `origin` records what
+// triggered the run (a human click or the sparse-flow bootstrap). `charter` is
+// the flow's coverage mission (config), distinct from `persona` (voice) and
+// `routingSummary` (router blurb) — all optional; when charter/persona are
+// absent the model proposes them (see output). It only PROPOSES — the persisted
+// plan waits for human review before anything is drafted. `provider` is added
+// at enqueue (see @magpie/jobs).
 export interface OutlineFlowSeedJobInput {
   flowId: string;
-  topic: string;
+  origin: "manual" | "auto";
   notes?: string;
+  sources: SourceDescriptor[];
   existingDocuments: ExistingDocumentContext[];
   persona?: string;
+  charter?: string;
+  routingSummary?: string;
 }
 
-// Output of outline_flow_seed: the proposed seed items plus a short rationale for
-// the overall shape. The items are edited by a human before being seeded.
+// Output of outline_flow_seed: the proposed seed items plus a short rationale
+// for the overall shape.
 export interface OutlineFlowSeedJobOutput {
   items: SeedItem[];
   rationale: string;
+  // Proposed only when the input lacked charter/persona. Never written to flow
+  // config by the system — surfaced in the console with a copy-to-config hint
+  // and carried run-scoped on the seed plan.
+  proposedCharter?: string;
+  proposedPersona?: string;
+  mapUpdates?: SourceMapUpdate[];
+}
+
+// A persisted, human-reviewable document plan proposed by outline_flow_seed.
+// Item ids are stable uuids so PATCH edits and approve-replay address items
+// unambiguously.
+export type SeedPlanStatus = "proposed" | "approved" | "dismissed" | "superseded";
+export type SeedPlanItemStatus = "proposed" | "approved" | "dismissed";
+export interface SeedPlanItem extends SeedItem {
+  id: string;
+  status: SeedPlanItemStatus;
+  // Set when approval enqueued this item's draft job; replay skips items that
+  // already have one (idempotent partial-approve recovery).
+  draftJobId?: string;
+}
+export interface SeedPlan {
+  id: string;
+  flowId: string;
+  status: SeedPlanStatus;
+  origin: "manual" | "auto";
+  // Run-scoped charter/persona: flow config's when set, else the model's
+  // proposal, as later edited by the reviewer. *Proposed flags record that the
+  // value came from the model (drives the copy-to-config hint in the console).
+  charter?: string;
+  persona?: string;
+  charterProposed: boolean;
+  personaProposed: boolean;
+  items: SeedPlanItem[];
+  rationale: string;
+  notes?: string;
+  outlineJobId: string;
+  // hashSourceDescriptors() of the input sources — the bootstrap dismissal
+  // guard compares this against the flow's current sources.
+  sourceHash: string;
+  createdAt: string; // ISO-8601
+  updatedAt: string; // ISO-8601
 }
 
 export interface FoldMarkdownProposalJobInput {

@@ -13,10 +13,8 @@ export const seedBodySchema = z.object({
   items: z.array(seedItemSchema).min(1)
 });
 
-// Body for generating a seed outline: a topic to plan coverage for, plus optional
-// freeform notes. The outline job proposes the SeedItem[]; a human reviews before
-// seeding.
+// Body for proposing a seed plan: optional freeform steer only. The planner
+// derives scope from the flow's charter/sources — there is no topic.
 export const outlineBodySchema = z.object({
-  topic: z.string().min(1),
   notes: z.string().optional()
 });

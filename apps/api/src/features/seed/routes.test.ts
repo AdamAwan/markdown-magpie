@@ -68,35 +68,40 @@ function outlineRequest(app: ReturnType<typeof buildApp>, flowId: string, body: 
   });
 }
 
-test("POST /api/flows/:flowId/outline enqueues an outline job and returns its id", async () => {
+test("POST /api/flows/:flowId/outline enqueues a planning job from notes only (no topic required)", async () => {
   const ctx = makeTestContext();
   ctx.knowledgeConfig.flows = [{ id: "flow-x", name: "Flow X", sourceIds: [], destinationId: "kb" }];
   const app = buildApp(ctx);
-  const res = await outlineRequest(app, "flow-x", { topic: "Refunds", notes: "partial refunds" });
+  const res = await outlineRequest(app, "flow-x", { notes: "partial refunds" });
   assert.equal(res.status, 200);
-  const body = (await res.json()) as { ok: boolean; jobId: string };
+  const body = (await res.json()) as { ok: boolean; jobId: string; reused: boolean };
   assert.equal(body.ok, true);
   assert.equal(typeof body.jobId, "string");
+  assert.equal(body.reused, false);
 
   const { jobs } = await ctx.jobs.list({ type: "outline_flow_seed" });
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0].id, body.jobId);
+  const input = jobs[0].input as Record<string, unknown>;
+  assert.equal(input.origin, "manual");
+  assert.ok(!("topic" in input), "the planning input carries no topic");
+});
+
+test("POST /api/flows/:flowId/outline accepts an empty body", async () => {
+  const ctx = makeTestContext();
+  ctx.knowledgeConfig.flows = [{ id: "flow-x", name: "Flow X", sourceIds: [], destinationId: "kb" }];
+  const app = buildApp(ctx);
+  const res = await outlineRequest(app, "flow-x", {});
+  assert.equal(res.status, 200);
+  const { jobs } = await ctx.jobs.list({ type: "outline_flow_seed" });
+  assert.equal(jobs.length, 1);
 });
 
 test("POST /api/flows/:flowId/outline returns 404 for an unknown flow", async () => {
   const ctx = makeTestContext();
   ctx.knowledgeConfig.flows = [{ id: "flow-x", name: "Flow X", sourceIds: [], destinationId: "kb" }];
   const app = buildApp(ctx);
-  const res = await outlineRequest(app, "missing", { topic: "x" });
+  const res = await outlineRequest(app, "missing", { notes: "x" });
   assert.equal(res.status, 404);
   assert.deepEqual(await res.json(), { error: "flow_not_found" });
-});
-
-test("POST /api/flows/:flowId/outline returns 400 for an empty topic", async () => {
-  const ctx = makeTestContext();
-  ctx.knowledgeConfig.flows = [{ id: "flow-x", name: "Flow X", sourceIds: [], destinationId: "kb" }];
-  const app = buildApp(ctx);
-  const res = await outlineRequest(app, "flow-x", { topic: "" });
-  assert.equal(res.status, 400);
-  assert.deepEqual(await res.json(), { error: "invalid_outline_body" });
 });

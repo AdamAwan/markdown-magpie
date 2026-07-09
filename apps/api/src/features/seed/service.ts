@@ -3,10 +3,11 @@ import type {
   OutlineFlowSeedJobInput,
   SeedItem
 } from "@magpie/core";
+import type { JobView } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { defaultDestinationId, selectFlow } from "../../platform/repositories.js";
 import { projectSourceDescriptors } from "../../platform/source-descriptors.js";
-import { describeExistingDocuments } from "../retrieve/service.js";
+import { listExistingDocuments } from "../retrieve/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
 import { logger } from "../../logger.js";
 
@@ -62,35 +63,52 @@ export async function seedFlow(
   return { ok: true as const, jobIds };
 }
 
-// Propose a seed outline for a topic: enqueue an outline_flow_seed job grounded in the
-// flow's existing docs (retrieved inline for the topic) so the model proposes a doc list
-// that fits the current structure. Enqueue-only — the proposed SeedItem[] lands as the
-// job's output; a human reviews/edits it in the console, then the seed path above
-// executes it. Like the rest of seeding it bypasses the gap pipeline entirely, and
-// (unlike draftSeedItem) it authors nothing: it only plans.
+// Find an in-flight (non-terminal) outline job for this flow so a second
+// propose click / bootstrap tick reuses it instead of double-planning.
+export async function findInFlightOutlineJob(ctx: AppContext, flowId: string): Promise<JobView | undefined> {
+  const { jobs } = await ctx.jobs.list({ type: "outline_flow_seed", limit: 200 });
+  return jobs.find((job) => {
+    if (!["created", "retry", "active", "blocked"].includes(job.state)) {
+      return false;
+    }
+    const input = job.input as Partial<OutlineFlowSeedJobInput>;
+    return input.flowId === flowId;
+  });
+}
+
+// Propose a seed plan for a flow: enqueue the source-grounded outline_flow_seed
+// job. No topic — the agent explores the sources and plans the whole flow,
+// scoped by the flow's charter when configured. Enqueue-only: the plan row is
+// created by createSeedPlanFromCompletedJob when the job lands.
 export async function outlineFlowSeed(
   ctx: AppContext,
   flowId: string,
-  request: { topic: string; notes?: string }
-): Promise<{ ok: true; jobId: string } | { ok: false; code: string }> {
-  const flow = selectFlow(ctx.repositoryDeps(), flowId);
+  request: { notes?: string; origin: "manual" | "auto" }
+): Promise<{ ok: true; jobId: string; reused: boolean } | { ok: false; code: string }> {
+  const deps = ctx.repositoryDeps();
+  const flow = selectFlow(deps, flowId);
   if (!flow) {
     return { ok: false as const, code: "flow_not_found" };
   }
-  const topic = request.topic.trim();
-  if (topic.length === 0) {
-    return { ok: false as const, code: "topic_required" };
+  const inFlight = await findInFlightOutlineJob(ctx, flowId);
+  if (inFlight) {
+    return { ok: true as const, jobId: inFlight.id, reused: true };
   }
-  const existingDocuments = await describeExistingDocuments(ctx, flowId, topic);
   const input: OutlineFlowSeedJobInput & { provider: AiProviderName } = {
     flowId,
-    topic,
+    origin: request.origin,
     notes: request.notes?.trim() || undefined,
-    existingDocuments,
+    sources: projectSourceDescriptors(deps, flow.sourceIds),
+    existingDocuments: listExistingDocuments(ctx, flowId),
     ...(flow.persona ? { persona: flow.persona } : {}),
+    ...(flow.charter ? { charter: flow.charter } : {}),
+    ...(flow.routingSummary ? { routingSummary: flow.routingSummary } : {}),
     provider: ctx.config.get().aiProvider
   };
   const job = await ctx.jobs.create("outline_flow_seed", input);
-  logger.info({ jobId: job.id, flowId, existingDocs: existingDocuments.length }, "enqueued outline_flow_seed job");
-  return { ok: true as const, jobId: job.id };
+  logger.info(
+    { jobId: job.id, flowId, origin: request.origin, sources: input.sources.length },
+    "enqueued outline_flow_seed job"
+  );
+  return { ok: true as const, jobId: job.id, reused: false };
 }
