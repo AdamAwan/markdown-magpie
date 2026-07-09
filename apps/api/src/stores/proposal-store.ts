@@ -62,6 +62,11 @@ export interface ProposalStore {
   // only post-create provenance write. undefined clears the column.
   setProvenance(id: string, provenance: ProvenanceClaim[] | undefined): Promise<void>;
   updateReviewDecision(id: string, reviewDecision: ReviewDecision): Promise<Proposal | undefined>;
+  // Merged proposals whose primary target or changeset touches `path`, oldest
+  // merge first (event order). The provenance event stream for a document
+  // (#214): each merged row records what supported its change when it shipped,
+  // and the verify patrol folds this stream into advisory citedClaims.
+  listMergedByTargetPath(path: string, limit: number): Promise<Proposal[]>;
   reset(): Promise<void>;
 }
 
@@ -244,6 +249,23 @@ export class InMemoryProposalStore implements ProposalStore {
     const updated: Proposal = { ...existing, reviewDecision };
     this.proposals.set(id, updated);
     return updated;
+  }
+
+  async listMergedByTargetPath(path: string, limit: number): Promise<Proposal[]> {
+    // Mirrors the Postgres ORDER BY merged_at ASC NULLS LAST: a merged row
+    // somehow missing its stamp sorts after every stamped event.
+    return [...this.proposals.values()]
+      .filter(
+        (proposal) =>
+          proposal.status === "merged" &&
+          (proposal.targetPath === path || (proposal.changeset ?? []).some((entry) => entry.path === path))
+      )
+      .sort((left, right) => {
+        if (!left.mergedAt) return right.mergedAt ? 1 : 0;
+        if (!right.mergedAt) return -1;
+        return left.mergedAt.localeCompare(right.mergedAt);
+      })
+      .slice(0, limit);
   }
 
   async reset(): Promise<void> {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { SourceDescriptor } from "@magpie/core";
+import type { ProvenanceClaim, SourceDescriptor } from "@magpie/core";
 
 // The change gate (#163) compares a document's current content and the flow's
 // current source configuration against the hashes recorded the last time the doc
@@ -41,4 +41,29 @@ export function hashSourceDescriptors(sources: readonly SourceDescriptor[]): str
     )
     .sort();
   return createHash("sha256").update(perSource.join("")).digest("hex");
+}
+
+// Hash of the folded citedClaims a verify job is told about (#214 phase 2), the
+// third leg of the verify reuse key: a provenance change after a merge must not
+// reuse a verify verdict computed against the old claim set. Same
+// digest-per-item pattern as hashSourceDescriptors — with explicit field (\x01)
+// / row (\x02) separators inside each claim's source list so no flat join is
+// ambiguous — but deliberately order-SENSITIVE, unlike the descriptor hash: the
+// fold's output order is deterministic, and two inputs presenting the claims in
+// a different order render different prompts.
+export function hashProvenanceClaims(claims: readonly ProvenanceClaim[]): string {
+  const perClaim = claims.map((claim) =>
+    createHash("sha256")
+      .update(claim.claim)
+      .update("\0")
+      .update(claim.anchor ?? "")
+      .update("\0")
+      .update(
+        claim.sources
+          .map((source) => [source.sourceId, source.path ?? "", source.lines ?? "", source.url ?? ""].join("\u0001"))
+          .join("\u0002")
+      )
+      .digest("hex")
+  );
+  return createHash("sha256").update(perClaim.join("")).digest("hex");
 }

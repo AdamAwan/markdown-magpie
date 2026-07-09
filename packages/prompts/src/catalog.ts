@@ -357,6 +357,7 @@ export const VERIFY_DOCUMENT: PromptDefinition = {
 
 Input:
 - "path" and "content": the knowledge-base document under review.
+- "citedClaims" (optional): claims previously published in this document, each with the source locations that grounded it when it shipped.
 
 Grounding:
 - You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for the terms each claim rests on, open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs before judging a claim.
@@ -369,6 +370,8 @@ Rules:
 - ${CONSERVATIVE_CONTRACT} Here a clear case is a claim the sources clearly contradict or clearly fail to support; when you are unsure, or the sources simply do not mention the claim, treat the document as healthy and do NOT flag it.
 - If every claim is supported (or the sources give you nothing to disprove), return verdict "healthy" with an empty claims array.
 - Otherwise return verdict "unprovable" and list ONLY the specific unprovable claims, each with a short reason citing the source files you checked (or searched and found silent).
+- The input may include "citedClaims": claims previously published with the source locations that grounded them. Check each cited claim FIRST against its cited location(s). If the cited file no longer exists or no longer supports the claim, flag it with a reason starting "cited support changed:" naming the cited path — that distinguishes support that moved out from under a claim from a claim that was never provable. A cited claim whose support still holds needs no further work. Claims NOT in citedClaims are verified by exploring the sources as usual.
+- citedClaims is advisory: if it contradicts what you find in the sources, trust the sources.
 - Inline repository-path citations in the document body (e.g. "(see Docs/.../ingestion.md)") are a defect regardless of factual accuracy — internal source paths must never appear in published content. Flag each as a claim with reason "inline source-path citation".
 - Do not propose edits or rewrites. You only report.
 

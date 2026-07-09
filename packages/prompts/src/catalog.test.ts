@@ -181,6 +181,19 @@ test("the verify→correct patrol flags and strips legacy inline source-path cit
   assert.match(correct, /do not change the factual content/, "correct leaves the facts alone");
 });
 
+// #214 phase 2: verify receives advisory citedClaims (the provenance folded
+// from the document's merged proposals) and checks each against its cited
+// location FIRST, distinguishing "cited support changed" from a claim that was
+// never provable; claims without provenance re-derive as before, and the
+// sources always win over the advisory input.
+test("verify checks citedClaims against their cited locations first", () => {
+  const verify = getPrompt("verify-document")?.instructions ?? "";
+  assert.match(verify, /citedClaims/, "verify names the input field");
+  assert.match(verify, /cited support changed:/, "verify prescribes the cited-support-changed reason prefix");
+  assert.match(verify, /NOT in citedClaims/, "unlisted claims fall back to full re-derivation");
+  assert.match(verify, /advisory/, "citedClaims is advisory — the sources win on conflict");
+});
+
 // #213: uncovered points are OMITTED from the document body and reported in the
 // structured uncoveredPoints field — never written into the markdown as notes.
 test("draft prompts route uncovered points to uncoveredPoints, not the document body", () => {

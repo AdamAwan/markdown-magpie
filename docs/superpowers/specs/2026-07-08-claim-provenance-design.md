@@ -232,8 +232,11 @@ for no benefit.) Ships with phase 1.
    schemas, migration 0049, prompt edits for the two draft jobs, completion
    handler persistence, publish payload + PR body render, proposal UI,
    cleanup-sweep script + doc. Independently shippable and valuable.
+   *Implemented* (plan `2026-07-09-claim-provenance-capture.md`).
 2. **Phase 2 — verify consumption.** Event-log fold, `citedClaims` on the
    verify contract, prompt extension, staleness guard.
+   *Implemented* (plan `2026-07-09-claim-provenance-verify.md`; adds
+   migration 0050 — a partial index for the per-document event query).
 3. **Phase 3 — rewrite jobs.** `provenance` on correct/improve outputs, prompt
    moves from rationale-citations to structured, fold/dedupe/split handling.
    *Implemented* (plan `2026-07-09-claim-provenance-rewrites.md`; no new

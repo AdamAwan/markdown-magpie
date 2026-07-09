@@ -34,6 +34,29 @@ test("verify_document input round-trips path/content/sources with a provider", (
   assert.equal(ok.success, true);
 });
 
+test("verify_document input accepts and round-trips optional citedClaims", () => {
+  const base = {
+    provider: "codex",
+    path: "kb/refunds.md",
+    content: "Refunds take 5 days.",
+    sources: [{ id: "src-1", name: "Product repo", kind: "git", url: "https://example.com/repo.git", subpath: "Docs" }]
+  };
+  const citedClaims = [
+    {
+      claim: "Refunds take 5 days",
+      anchor: "refunds",
+      sources: [{ sourceId: "src-1", path: "docs/refunds.md", lines: "L3-L7" }]
+    }
+  ];
+  const parsed = verifyDocumentInputSchema.safeParse({ ...base, citedClaims });
+  assert.equal(parsed.success, true);
+  assert.deepEqual(parsed.success ? parsed.data.citedClaims : undefined, citedClaims);
+  // Stays optional: today's input shape parses unchanged.
+  const withoutClaims = verifyDocumentInputSchema.safeParse(base);
+  assert.equal(withoutClaims.success, true);
+  assert.equal(withoutClaims.success ? "citedClaims" in withoutClaims.data : true, false);
+});
+
 test("verify_document input requires sources", () => {
   const missing = verifyDocumentInputSchema.safeParse({
     provider: "codex",

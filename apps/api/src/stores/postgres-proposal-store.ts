@@ -186,6 +186,32 @@ export class PostgresProposalStore implements ProposalStore {
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
+  async listMergedByTargetPath(path: string, limit: number): Promise<Proposal[]> {
+    // The provenance event stream for a document (#214): merged rows whose
+    // primary target or changeset touches the path, oldest merge first. The
+    // primary-path half is served by proposals_merged_target_path_idx;
+    // changeset matches are rarer and filtered here. jsonb_array_elements on a
+    // NULL changeset yields no rows inside EXISTS, which is the desired
+    // semantics (covered by the store integration test).
+    const result = await this.pool.query<ProposalRow>(
+      `
+        SELECT * FROM proposals
+        WHERE status = 'merged'
+          AND (
+            target_path = $1
+            OR EXISTS (
+              SELECT 1 FROM jsonb_array_elements(changeset) AS entry
+              WHERE entry->>'path' = $1
+            )
+          )
+        ORDER BY merged_at ASC NULLS LAST
+        LIMIT $2
+      `,
+      [path, limit]
+    );
+    return result.rows.map(mapRow);
+  }
+
   async reset(): Promise<void> {
     const client = await this.pool.connect();
     try {

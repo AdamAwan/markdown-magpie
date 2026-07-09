@@ -145,6 +145,48 @@ describe("PostgresProposalStore", { skip: databaseUrl ? false : "DATABASE_URL no
     assert.equal(relinked?.gapClusterId, cluster.id);
   });
 
+  it("listMergedByTargetPath returns merged proposals touching a path, oldest merge first", async () => {
+    // Unique per run: the suite shares one database and never resets the table.
+    const path = `docs/prov-${randomUUID()}.md`;
+    const otherPath = `docs/prov-other-${randomUUID()}.md`;
+
+    const late = await store.create({ ...draft(`prov-late-${Date.now()}`), targetPath: path });
+    const early = await store.create({ ...draft(`prov-early-${Date.now()}`), targetPath: path });
+    const other = await store.create({ ...draft(`prov-other-${Date.now()}`), targetPath: otherPath });
+    await store.create({ ...draft(`prov-draft-${Date.now()}`), targetPath: path });
+    const viaChangeset = await store.create({
+      ...draft(`prov-changeset-${Date.now()}`),
+      targetPath: otherPath,
+      changeset: [
+        { path: otherPath, content: "# other" },
+        { path, content: "# moved" }
+      ]
+    });
+
+    // Merge out of creation order so the assertion exercises merged_at ordering;
+    // the store stamps merged_at itself, so space the merges out.
+    await store.updateStatus(early.id, "merged");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await store.updateStatus(late.id, "merged");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await store.updateStatus(viaChangeset.id, "merged");
+    await store.updateStatus(other.id, "merged");
+
+    const events = await store.listMergedByTargetPath(path, 10);
+    assert.deepEqual(
+      events.map((proposal) => proposal.id),
+      [early.id, late.id, viaChangeset.id],
+      "primary-path and changeset matches, oldest merge first; drafts and other paths excluded"
+    );
+
+    const capped = await store.listMergedByTargetPath(path, 2);
+    assert.deepEqual(
+      capped.map((proposal) => proposal.id),
+      [early.id, late.id],
+      "the limit keeps the oldest events"
+    );
+  });
+
   it("getByClusterId returns the cluster's non-terminal proposal, newest first", async () => {
     const clusterStore = new PostgresGapClusterStore(makeTestPool(databaseUrl as string));
     const cluster = await clusterStore.createCluster({ title: `c-${randomUUID()}`, revision: 1 });

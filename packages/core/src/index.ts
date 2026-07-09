@@ -716,6 +716,12 @@ export interface VerifyDocumentJobInput {
   path: string;
   content: string;
   sources: SourceDescriptor[];
+  // #214 phase 2: advisory per-claim provenance folded from the document's
+  // merged proposals (see the API's foldProvenanceEvents). The agent checks
+  // these against their cited locations first; claims not listed here are
+  // re-derived from scratch as before. Absent/empty leaves verify behaviour
+  // exactly as it was.
+  citedClaims?: ProvenanceClaim[];
 }
 
 // The verify lens's verdict for one document: "healthy" (claims empty) or
