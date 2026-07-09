@@ -1453,6 +1453,8 @@ export async function createCorrectiveProposalFromCompletedJob(
   if (!input.path) {
     return undefined;
   }
+  // #214 phase 3: a correction is a provenance event for its own diff.
+  warnMissingProvenance(job, { targetPath: input.path, provenance: parsed.data.provenance });
   return ctx.stores.proposals.create(
     flagAdvisoryDraft(
       {
@@ -1461,6 +1463,7 @@ export async function createCorrectiveProposalFromCompletedJob(
         markdown: parsed.data.markdown,
         rationale: parsed.data.rationale,
         evidence: [],
+        provenance: parsed.data.provenance,
         flowId: input.flowId,
         destinationId: input.destinationId,
         jobId: job.id
@@ -1633,6 +1636,10 @@ export async function createImproveProposalFromCompletedJob(
   if (!input.path || parsed.data.markdown.trim() === input.content?.trim()) {
     return undefined;
   }
+  // #214 phase 3: only a materialised improvement is a provenance event — the
+  // improved: false and unchanged-body exits above ground no new claims and
+  // must never warn as missing-provenance drafts.
+  warnMissingProvenance(job, { targetPath: input.path, provenance: parsed.data.provenance });
   return ctx.stores.proposals.create(
     flagAdvisoryDraft(
       {
@@ -1641,6 +1648,7 @@ export async function createImproveProposalFromCompletedJob(
         markdown: parsed.data.markdown,
         rationale: parsed.data.rationale,
         evidence: [],
+        provenance: parsed.data.provenance,
         flowId: input.flowId,
         destinationId: input.destinationId,
         jobId: job.id
