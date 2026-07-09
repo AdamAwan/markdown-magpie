@@ -29,7 +29,8 @@ import type {
   ImproveDocumentJobInput as CoreImproveDocumentJobInput,
   ImproveDocumentJobOutput,
   ChangesetChange,
-  SourceMapUpdate
+  SourceMapUpdate,
+  ProvenanceClaim
 } from "@magpie/core";
 import { AI_PROVIDERS, type AiProviderName, type JobError } from "./types.js";
 
@@ -153,6 +154,24 @@ const sourceMapUpdateSchema = z.object({
   observedSha: z.string().optional()
 }) satisfies z.ZodType<SourceMapUpdate>;
 const mapUpdatesField = z.array(sourceMapUpdateSchema).optional();
+// Mirrors @magpie/core ProvenanceClaim — per-claim source grounding on draft
+// outputs (#214). Must be on the schema or the broker strips it from the
+// completed output before the API can persist it (same trap as mapUpdates).
+const provenanceClaimSchema = z.object({
+  claim: z.string().min(1),
+  anchor: z.string().optional(),
+  sources: z
+    .array(
+      z.object({
+        sourceId: z.string(),
+        path: z.string().optional(),
+        lines: z.string().optional(),
+        url: z.string().optional()
+      })
+    )
+    .min(1)
+}) satisfies z.ZodType<ProvenanceClaim>;
+const provenanceField = z.array(provenanceClaimSchema).optional();
 // Mirrors @magpie/core OpenPullRequestContext. status reuses the core
 // PROPOSAL_STATUSES tuple so the enum can't drift from the type it validates.
 const openPullRequestContextSchema = z.object({
@@ -196,7 +215,8 @@ export const draftMarkdownProposalOutputSchema = z.object({
   mapUpdates: mapUpdatesField,
   // #213: source-uncovered points, omitted from the markdown by contract. Must be
   // declared here or the broker strips it before the completion handler reads it.
-  uncoveredPoints: z.array(z.string()).optional()
+  uncoveredPoints: z.array(z.string()).optional(),
+  provenance: provenanceField
 }) satisfies z.ZodType<DraftMarkdownProposalJobOutput>;
 
 export const draftSeedDocumentInputSchema = z.object({
@@ -216,7 +236,8 @@ export const draftSeedDocumentOutputSchema = z.object({
   rationale: z.string(),
   mapUpdates: mapUpdatesField,
   // #213: see draftMarkdownProposalOutputSchema.uncoveredPoints.
-  uncoveredPoints: z.array(z.string()).optional()
+  uncoveredPoints: z.array(z.string()).optional(),
+  provenance: provenanceField
 }) satisfies z.ZodType<DraftSeedDocumentJobOutput>;
 
 const existingDocumentContextSchema = z.object({
