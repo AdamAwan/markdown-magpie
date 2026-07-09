@@ -427,6 +427,22 @@ compare the document against its destination neighbours. See the source-agentic 
 spec
 ([docs/superpowers/specs/2026-07-06-source-agentic-grounding-design.md](superpowers/specs/2026-07-06-source-agentic-grounding-design.md)).
 
+`verify_document` additionally accepts an optional **`citedClaims: ProvenanceClaim[]`**
+(#214 phase 2): the document's per-claim provenance, folded at enqueue time from its
+merged proposals (the event log captured in phase 1 — see the provenance paragraph in the
+draft-jobs section above). The patrol's default verify path reads the merged-proposal
+stream for the document (`listMergedByTargetPath`, capped at the oldest 50 events with an
+operator-visible warning beyond that), folds it so later merges supersede earlier ones per
+claim anchor, and **drops claims whose section anchor no longer exists in the current
+document content** — a stale anchor falls back to full re-derivation rather than risking a
+false "cited support changed" verdict. The agent checks each cited claim against its cited
+location first and flags moved/vanished support with a `cited support changed:` reason;
+claims without provenance are re-derived exactly as before. The field is **advisory**: the
+agent still explores the sources and trusts them over the fold, and an absent/empty fold
+leaves the job input — and the rendered prompt — byte-identical to a pre-provenance
+verify. The verify reuse key incorporates a hash of the folded claims, so a merge that
+changes a document's provenance without touching its body never reuses a stale verdict.
+
 ## Source map (agent navigation hints)
 
 Agents working on source-grounded jobs need lightweight navigation metadata to orient

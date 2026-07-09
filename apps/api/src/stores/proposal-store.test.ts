@@ -186,6 +186,57 @@ test("updateChangeset returns undefined for an unknown proposal", async () => {
   assert.equal(await store.updateChangeset("nope", [], "x"), undefined);
 });
 
+test("listMergedByTargetPath returns merged proposals touching a path, oldest merge first", async () => {
+  const store = new InMemoryProposalStore();
+  // Two merged proposals target docs/a.md; merge the "late" one first so the
+  // ordering assertion exercises mergedAt, not insertion order.
+  const late = await store.create({ ...draft("late"), targetPath: "docs/a.md" });
+  const early = await store.create({ ...draft("early"), targetPath: "docs/a.md" });
+  const other = await store.create({ ...draft("other"), targetPath: "docs/b.md" });
+  await store.create({ ...draft("draft-only"), targetPath: "docs/a.md" });
+  await store.updateStatus(early.id, "merged");
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  await store.updateStatus(late.id, "merged");
+  await store.updateStatus(other.id, "merged");
+
+  const events = await store.listMergedByTargetPath("docs/a.md", 10);
+  assert.deepEqual(
+    events.map((proposal) => proposal.id),
+    [early.id, late.id],
+    "only the merged docs/a.md proposals, oldest merge first"
+  );
+});
+
+test("listMergedByTargetPath includes merged changesets touching the path and honours the limit", async () => {
+  const store = new InMemoryProposalStore();
+  const primary = await store.create({ ...draft("primary"), targetPath: "docs/a.md" });
+  const viaChangeset = await store.create({
+    ...draft("via-changeset"),
+    targetPath: "docs/c.md",
+    changeset: [
+      { path: "docs/c.md", content: "# c" },
+      { path: "docs/a.md", content: "# a moved" }
+    ]
+  });
+  await store.updateStatus(primary.id, "merged");
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  await store.updateStatus(viaChangeset.id, "merged");
+
+  const events = await store.listMergedByTargetPath("docs/a.md", 10);
+  assert.deepEqual(
+    events.map((proposal) => proposal.id),
+    [primary.id, viaChangeset.id],
+    "a merged changeset entry touching the path is a provenance event for it"
+  );
+
+  const capped = await store.listMergedByTargetPath("docs/a.md", 1);
+  assert.deepEqual(
+    capped.map((proposal) => proposal.id),
+    [primary.id],
+    "the limit keeps the OLDEST events (the stream is folded oldest-first)"
+  );
+});
+
 test("create persists per-claim provenance and leaves it undefined when absent", async () => {
   const store = new InMemoryProposalStore();
   const provenance = [

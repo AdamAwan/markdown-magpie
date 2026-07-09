@@ -149,7 +149,11 @@ function numberOrUndefined(value: string | undefined): number | undefined {
   return Number.isInteger(parsed) ? parsed : undefined;
 }
 
-function slugify(value: string): string {
+// THE heading→anchor slug rule. splitIntoSections derives every section anchor
+// with it (over the joined heading path), and the provenance fold (#214) uses it
+// to test whether a claim's recorded anchor still names a live heading. Exported
+// so there is exactly one slug implementation — a second copy WILL drift.
+export function slugify(value: string): string {
   return value
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
