@@ -390,7 +390,11 @@ export const verifyDocumentInputSchema = z.object({
   provider: providerSchema,
   path: z.string(),
   content: z.string(),
-  sources: z.array(sourceDescriptorSchema)
+  sources: z.array(sourceDescriptorSchema),
+  // #214 phase 2: advisory per-claim provenance folded from the document's
+  // merged proposals. The agent checks these against their cited locations
+  // first; claims not listed here are re-derived from scratch as before.
+  citedClaims: z.array(provenanceClaimSchema).optional()
 }) satisfies z.ZodType<ProviderInput<CoreVerifyDocumentJobInput>>;
 export const verifyDocumentOutputSchema = z.object({
   verdict: z.enum(["healthy", "unprovable"]),
