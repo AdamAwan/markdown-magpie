@@ -1,8 +1,8 @@
 import type {
   DraftSeedDocumentJobInput,
   OutlineFlowSeedJobInput,
-  SeedItem,
-  SeedPlan
+  SeedPlan,
+  SeedPlanItem
 } from "@magpie/core";
 import { outlineFlowSeedOutputSchema, type JobView } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
@@ -12,62 +12,43 @@ import { hashSourceDescriptors } from "../../scheduling/patrol-hash.js";
 import { listExistingDocuments } from "../retrieve/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
 import { logger } from "../../logger.js";
+import type { SeedPlanPatchBody } from "./schema.js";
 
-// Enqueue a draft_seed_document for one seed item. Reuses the flow/source/
-// destination resolution draftFromGaps uses, but skips the gap-candidate matching
-// draftFromGaps requires — seed coverage is authored intent, not a logged gap.
-// Enqueue-only: the proposal lands later via createSeedProposalFromCompletedJob
-// (a completion handler in the proposals service).
-async function draftSeedItem(
-  ctx: AppContext,
-  flowId: string,
-  item: SeedItem
-): Promise<string> {
+// Enqueue a draft_seed_document for one approved plan item. Reuses the
+// flow/source/destination resolution draftFromGaps uses, but skips the
+// gap-candidate matching — seed coverage is reviewed intent, not a logged gap.
+// The plan's run-scoped charter/persona ride the input (charter bounds scope,
+// persona shapes voice) and seedPlanId links the eventual proposal back to the
+// plan. Enqueue-only: the proposal lands later via
+// createSeedProposalFromCompletedJob (a completion handler in the proposals
+// service).
+async function draftSeedItem(ctx: AppContext, plan: SeedPlan, item: SeedPlanItem): Promise<string> {
   const deps = ctx.repositoryDeps();
-  const flow = selectFlow(deps, flowId);
-  const sourceIds = flow?.sourceIds;
-  const destinationId = flow?.destinationId || defaultDestinationId(deps);
+  const flow = selectFlow(deps, plan.flowId);
   const input: DraftSeedDocumentJobInput & { provider: AiProviderName } = {
-    flowId,
+    flowId: plan.flowId,
     title: item.title?.trim() || undefined,
     targetPath: item.targetPath?.trim() || undefined,
     coverage: [...new Set(item.coverage.map((point) => point.trim()).filter((point) => point.length > 0))],
     questions: item.questions?.length ? item.questions : undefined,
-    sources: projectSourceDescriptors(deps, sourceIds),
-    destinationId,
+    sources: projectSourceDescriptors(deps, flow?.sourceIds),
+    destinationId: flow?.destinationId || defaultDestinationId(deps),
+    ...(plan.charter ? { charter: plan.charter } : {}),
+    ...(plan.persona ? { persona: plan.persona } : {}),
+    seedPlanId: plan.id,
     provider: ctx.config.get().aiProvider
   };
   const job = await ctx.jobs.create("draft_seed_document", input);
-  logger.info({ jobId: job.id, flowId, targetPath: input.targetPath ?? "auto" }, "enqueued draft_seed_document job");
+  logger.info(
+    { jobId: job.id, flowId: plan.flowId, planId: plan.id, targetPath: input.targetPath ?? "auto" },
+    "enqueued draft_seed_document job"
+  );
   return job.id;
-}
-
-// Seed a flow: draft each item straight into a proposal, bypassing gap clustering
-// and the intent gate.
-export async function seedFlow(
-  ctx: AppContext,
-  flowId: string,
-  items: SeedItem[]
-): Promise<{ ok: true; jobIds: string[] } | { ok: false; code: string }> {
-  const flow = selectFlow(ctx.repositoryDeps(), flowId);
-  if (!flow) {
-    return { ok: false as const, code: "flow_not_found" };
-  }
-  const usable = items.filter((item) => item.coverage.some((point) => point.trim().length > 0));
-  if (usable.length === 0) {
-    return { ok: false as const, code: "coverage_required" };
-  }
-  const jobIds: string[] = [];
-  for (const item of usable) {
-    jobIds.push(await draftSeedItem(ctx, flowId, item));
-  }
-  logger.info({ flowId, count: jobIds.length }, "seeded flow: enqueued draft_seed_document jobs");
-  return { ok: true as const, jobIds };
 }
 
 // Find an in-flight (non-terminal) outline job for this flow so a second
 // propose click / bootstrap tick reuses it instead of double-planning.
-export async function findInFlightOutlineJob(ctx: AppContext, flowId: string): Promise<JobView | undefined> {
+async function findInFlightOutlineJob(ctx: AppContext, flowId: string): Promise<JobView | undefined> {
   const { jobs } = await ctx.jobs.list({ type: "outline_flow_seed", limit: 200 });
   return jobs.find((job) => {
     if (!["created", "retry", "active", "blocked"].includes(job.state)) {
@@ -161,4 +142,95 @@ export async function createSeedPlanFromCompletedJob(
     "persisted seed plan from completed outline job"
   );
   return plan;
+}
+
+// --- Plan review -----------------------------------------------------------
+// Thin wrappers over the seed-plan store that enforce the status rules the
+// spec locks: plans are edited/dismissed only while "proposed"; approval is
+// re-enterable so a mid-loop enqueue failure recovers by re-approving.
+
+export async function listSeedPlans(ctx: AppContext, flowId: string): Promise<SeedPlan[]> {
+  return ctx.stores.seedPlans.listByFlow(flowId);
+}
+
+export async function getSeedPlan(ctx: AppContext, planId: string): Promise<SeedPlan | undefined> {
+  return ctx.stores.seedPlans.get(planId);
+}
+
+export async function patchSeedPlan(
+  ctx: AppContext,
+  planId: string,
+  patch: SeedPlanPatchBody
+): Promise<{ ok: true; plan: SeedPlan } | { ok: false; code: "plan_not_found" | "plan_not_editable" }> {
+  const plan = await ctx.stores.seedPlans.get(planId);
+  if (!plan) {
+    return { ok: false as const, code: "plan_not_found" as const };
+  }
+  if (plan.status !== "proposed") {
+    return { ok: false as const, code: "plan_not_editable" as const };
+  }
+  const updated = await ctx.stores.seedPlans.patch(planId, patch);
+  return { ok: true as const, plan: updated ?? plan };
+}
+
+export async function dismissSeedPlan(
+  ctx: AppContext,
+  planId: string
+): Promise<{ ok: true; plan: SeedPlan } | { ok: false; code: "plan_not_found" | "plan_not_dismissable" }> {
+  const plan = await ctx.stores.seedPlans.get(planId);
+  if (!plan) {
+    return { ok: false as const, code: "plan_not_found" as const };
+  }
+  if (plan.status !== "proposed") {
+    return { ok: false as const, code: "plan_not_dismissable" as const };
+  }
+  const updated = await ctx.stores.seedPlans.setStatus(planId, "dismissed");
+  logger.info({ planId, flowId: plan.flowId }, "dismissed seed plan");
+  return { ok: true as const, plan: updated ?? plan };
+}
+
+// Approve a plan: flip remaining proposed items to approved and enqueue one
+// draft_seed_document per non-dismissed item. The plan status is set to
+// "approved" BEFORE the enqueue loop deliberately: a mid-loop crash leaves an
+// approved plan with partial draftJobIds, and re-approving completes the
+// remainder (items that already carry a draftJobId are skipped).
+export async function approveSeedPlan(
+  ctx: AppContext,
+  planId: string
+): Promise<
+  | { ok: true; plan: SeedPlan; jobIds: string[] }
+  | { ok: false; code: "plan_not_found" | "plan_not_approvable" | "coverage_required" }
+> {
+  const plan = await ctx.stores.seedPlans.get(planId);
+  if (!plan) {
+    return { ok: false as const, code: "plan_not_found" as const };
+  }
+  if (plan.status !== "proposed" && plan.status !== "approved") {
+    return { ok: false as const, code: "plan_not_approvable" as const };
+  }
+  const toDraft = plan.items.filter((item) => item.status !== "dismissed");
+  if (toDraft.some((item) => !item.coverage.some((point) => point.trim().length > 0))) {
+    return { ok: false as const, code: "coverage_required" as const };
+  }
+  await ctx.stores.seedPlans.patch(plan.id, {
+    items: toDraft
+      .filter((item) => item.status === "proposed")
+      .map((item) => ({ id: item.id, status: "approved" as const }))
+  });
+  await ctx.stores.seedPlans.setStatus(plan.id, "approved");
+  const jobIds: string[] = [];
+  for (const item of toDraft) {
+    if (item.draftJobId) {
+      continue;
+    }
+    const jobId = await draftSeedItem(ctx, { ...plan, status: "approved" }, item);
+    await ctx.stores.seedPlans.setItemDraftJob(plan.id, item.id, jobId);
+    jobIds.push(jobId);
+  }
+  const updated = await ctx.stores.seedPlans.get(plan.id);
+  logger.info(
+    { planId: plan.id, flowId: plan.flowId, enqueued: jobIds.length },
+    "approved seed plan: enqueued draft_seed_document jobs"
+  );
+  return { ok: true as const, plan: updated ?? plan, jobIds };
 }

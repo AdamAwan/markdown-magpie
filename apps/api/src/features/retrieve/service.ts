@@ -98,33 +98,6 @@ export async function describeFlowScope(
   };
 }
 
-// Existing-doc grounding for the seed outline generator: the flow's own sections
-// most relevant to a topic, so the model proposes docs that fit the current
-// structure and don't restate what's covered. Like describeFlowScope it runs the
-// same inline hybrid search WITHOUT the relevance floor (the point is to show the
-// nearest structure even when the topic is only loosely covered), but returns
-// per-section path/heading/excerpt rather than a scalar. Returns [] for an unknown
-// flow — the caller has already validated the flow; this is best-effort grounding.
-const EXISTING_DOC_EXCERPT_CHARS = 240;
-
-export async function describeExistingDocuments(
-  ctx: AppContext,
-  flowId: string | undefined,
-  query: string,
-  limit = 8
-): Promise<ExistingDocumentContext[]> {
-  const scope = resolveRepositoryScope(ctx, flowId);
-  if (!scope.ok) {
-    return [];
-  }
-  const ranked = await ctx.stores.knowledgeIndex.search(query, limit, scope.repositoryIds);
-  return ranked.map(({ section }) => ({
-    path: section.path,
-    heading: section.heading,
-    excerpt: section.content.slice(0, EXISTING_DOC_EXCERPT_CHARS)
-  }));
-}
-
 // Whole-flow document inventory for the seed planner: every destination doc's
 // path + title, unscored (the planner needs the full structure, not a top-k for
 // a query). Bounded to keep the prompt sane on huge KBs.
