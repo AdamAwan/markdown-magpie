@@ -85,6 +85,7 @@ export class InMemoryProposalStore implements ProposalStore {
       flowId: input.flowId,
       changeset: input.changeset,
       draftContext: input.draftContext,
+      provenance: input.provenance,
       regenerationCount: 0,
       createdAt: new Date().toISOString()
     };

@@ -27,15 +27,24 @@ describe("PostgresProposalStore", { skip: databaseUrl ? false : "DATABASE_URL no
   const store = new PostgresProposalStore(makeTestPool(databaseUrl as string));
 
   it("round-trips a draft through create and get", async () => {
-    const created = await store.create(draft(`roundtrip-${Date.now()}`));
+    const provenance = [
+      {
+        claim: "Logs are retained for 12 months",
+        anchor: "log-retention",
+        sources: [{ sourceId: "src-1", path: "docs/ops/logging.md", lines: "L10-L14" }]
+      }
+    ];
+    const created = await store.create({ ...draft(`roundtrip-${Date.now()}`), provenance });
     assert.equal(created.status, "draft");
     // Postgres coalesces a missing value to an empty array; the row should too.
     assert.deepEqual(created.triggeringQuestionIds, []);
+    assert.deepEqual(created.provenance, provenance);
 
     const fetched = await store.get(created.id);
     assert.equal(fetched?.id, created.id);
     assert.equal(fetched?.title, created.title);
     assert.equal(fetched?.markdown, created.markdown);
+    assert.deepEqual(fetched?.provenance, provenance);
   });
 
   it("excludes terminal proposals from the default list but keeps them as history", async () => {
