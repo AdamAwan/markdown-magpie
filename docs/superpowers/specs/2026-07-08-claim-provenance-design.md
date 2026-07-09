@@ -151,6 +151,13 @@ Phase 3 (rewrite jobs document their own diffs):
   provenance with a `logger.warn`. Dedupe/split changesets carry provenance per
   changeset entry only if cheap; otherwise their PRs state "content moved from
   X" and the pre-move events remain the trace (documented limitation).
+  *Shipped as the documented limitation:* dedupe/split changesets carry no
+  per-claim provenance — their PRs describe the move, `git blame` through the
+  move reaches the pre-move provenance events, and phase 2's anchor-staleness
+  guard makes verify re-derive for restructured sections (the changeset fold
+  concatenates both parents' claims onto the survivor rather than dropping
+  them). Revisit only if verify's fallback rate on moved documents proves
+  noisy in practice.
 
 ## Prompt changes (`packages/prompts/src/catalog.ts`)
 
@@ -229,6 +236,8 @@ for no benefit.) Ships with phase 1.
    verify contract, prompt extension, staleness guard.
 3. **Phase 3 — rewrite jobs.** `provenance` on correct/improve outputs, prompt
    moves from rationale-citations to structured, fold/dedupe/split handling.
+   *Implemented* (plan `2026-07-09-claim-provenance-rewrites.md`; no new
+   migration — phase 1's `provenance` column serves all proposal kinds).
 
 Each phase is one PR-sized unit; later phases degrade gracefully if never
 shipped (the log just has fewer event types).

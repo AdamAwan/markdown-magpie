@@ -27,13 +27,13 @@
 - Modify: `packages/jobs/src/schemas.ts` (`correctDocumentOutputSchema` lines 389–393; `improveDocumentOutputSchema` union lines 439–442 — the field goes on **both** union branches? No: only the branches that carry content — `improved: true` always, and the `improved: false` branch NOT at all, since it produces no new claims)
 - Test: `packages/jobs/src/schemas.test.ts`
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
   1. `correctDocumentOutputSchema` round-trips `provenance` (broker-strip protection; reuse the phase-1 test fixture shape).
   2. `improveDocumentOutputSchema` accepts `provenance` on the `improved: true` branch and rejects it on the `improved: false` branch (zod strict objects strip rather than reject — assert whichever the file's existing union tests assert for extra fields; if the schemas are non-strict, assert it parses but is absent from the false-branch type instead. Match the existing `mapUpdates`-on-union test at lines ~179–225).
 
-- [ ] **Step 2: Implement** — add `provenance: provenanceField` (the phase-1 shared field) to `correctDocumentOutputSchema` and to the `improved: true` branch; mirror on the core interfaces (`ImproveDocumentJobOutput` is a union type in core — put the field on the improved variant).
+- [x] **Step 2: Implement** — add `provenance: provenanceField` (the phase-1 shared field) to `correctDocumentOutputSchema` and to the `improved: true` branch; mirror on the core interfaces (`ImproveDocumentJobOutput` is a union type in core — put the field on the improved variant).
 
-- [ ] **Step 3: Validate and commit** — `npm test -w @magpie/jobs && npm run typecheck`; commit `feat(jobs): provenance on correct/improve outputs (#214)`; push `-u origin claude/claim-provenance-rewrites`.
+- [x] **Step 3: Validate and commit** — `npm test -w @magpie/jobs && npm run typecheck`; commit `feat(jobs): provenance on correct/improve outputs (#214)`; push `-u origin claude/claim-provenance-rewrites`.
 
 ---
 
@@ -43,15 +43,15 @@
 - Modify: `packages/prompts/src/catalog.ts` (`CORRECT_DOCUMENT` lines 382–417, `IMPROVE_DOCUMENT` lines 486–524)
 - Test: `packages/prompts/src/catalog.test.ts`
 
-- [ ] **Step 1: Failing tests** — mirror the phase-1 draft-prompt test: both ids instruct `"provenance"`, neither instructs citing paths **in the rationale**, both outputShapes mention provenance.
+- [x] **Step 1: Failing tests** — mirror the phase-1 draft-prompt test: both ids instruct `"provenance"`, neither instructs citing paths **in the rationale**, both outputShapes mention provenance.
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 `CORRECT_DOCUMENT`: replace the grounding bullet's "and cite their repository paths in the rationale" (line 397) with "report each corrected or rewritten claim in the "provenance" array of your JSON output (claim, section anchor, and the source files that ground the corrected wording)". Extend the Return-JSON block (409–416) with the provenance line (phase-1 shape). The body-cleanliness rule from phase 1's Task 7 already lives in this prompt — leave it.
 
 `IMPROVE_DOCUMENT`: same treatment for the grounding line (500) and the rationale rule (513 — "which repository paths support it" becomes "per-claim support goes in \"provenance\""); provenance only applies when `improved` is true — say so explicitly ("when improved is false, omit provenance"). Extend the Return-JSON block (515–523).
 
-- [ ] **Step 3: Validate and commit** — `npm test -w @magpie/prompts`; commit `feat(prompts): correct/improve emit structured provenance (#214)`; push.
+- [x] **Step 3: Validate and commit** — `npm test -w @magpie/prompts`; commit `feat(prompts): correct/improve emit structured provenance (#214)`; push.
 
 ---
 
@@ -61,14 +61,14 @@
 - Modify: `apps/api/src/features/proposals/service.ts` (`createCorrectiveProposalFromCompletedJob` lines 1421–1452, `createImproveProposalFromCompletedJob` lines 1599–1630)
 - Test: `apps/api/src/features/proposals/service.test.ts`
 
-- [ ] **Step 1: Failing tests** (model on the existing corrective/improve tests at lines 1525/1707)
+- [x] **Step 1: Failing tests** (model on the existing corrective/improve tests at lines 1525/1707)
   1. Corrective proposal carries the correct job's `provenance`.
   2. Improve proposal (improved: true) carries it.
   3. `improved: false` output creates nothing and warns nothing (existing behaviour — regression guard only if not already covered).
 
-- [ ] **Step 2: Implement** — add `provenance: parsed.data.provenance,` to both `create` inputs; call `warnMissingProvenance` in both handlers (for improve, only on the `improved: true` path). `ProposalInput` already carries the field (phase 1).
+- [x] **Step 2: Implement** — add `provenance: parsed.data.provenance,` to both `create` inputs; call `warnMissingProvenance` in both handlers (for improve, only on the `improved: true` path). `ProposalInput` already carries the field (phase 1).
 
-- [ ] **Step 3: Validate and commit** — `npm test -w @magpie/api`; commit `feat(api): rewrite proposals carry provenance (#214)`; push.
+- [x] **Step 3: Validate and commit** — `npm test -w @magpie/api`; commit `feat(api): rewrite proposals carry provenance (#214)`; push.
 
 ---
 
@@ -89,12 +89,12 @@
 setProvenance(id: string, provenance: ProvenanceClaim[] | undefined): Promise<void>;
 ```
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
   1. Schemas: fold input round-trips `survivorProvenance`/`rivalProvenance` (optional); output round-trips `provenance` (optional).
   2. Store: `setProvenance` round-trip on both stores (set, replace, clear with undefined → NULL).
   3. Fold apply: given survivor+rival proposals with provenance and a fold output carrying merged provenance, the survivor row ends with the output's provenance. Given a fold output WITHOUT provenance, the survivor ends with `[...survivor.provenance ?? [], ...rival.provenance ?? []]` (concat fallback) and a warn is logged. Given neither parent has provenance, no write and no warn.
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 - Contracts: `survivorProvenance: provenanceField, rivalProvenance: provenanceField` on the fold input; `provenance: provenanceField` on the output.
 - Enqueue sites (all three: `reconcileDraftedProposal`, `reconcileClusterlessProposal`, `reconcileImproveProposal`): pass `survivorProvenance: survivor.provenance, rivalProvenance: rival.provenance` (the second site names the rival `proposal` — read the code, don't pattern-match blindly).
@@ -112,16 +112,16 @@ if (folded && folded.length > 0) {
 Apply the same to `applyChangesetFoldFromCompletedJob` (lines 371–419).
 - Postgres `setProvenance`: `UPDATE proposals SET provenance = $2 WHERE id = $1` with `JSON.stringify`/NULL binding (mirror the `updateReviewDecision` shape at lines 173–179).
 
-- [ ] **Step 3: Validate and commit** — `npm test -w @magpie/api -w @magpie/jobs && npm run test:db`; commit `feat(fold): survivor inherits merged claim provenance (#214)`; push.
+- [x] **Step 3: Validate and commit** — `npm test -w @magpie/api -w @magpie/jobs && npm run test:db`; commit `feat(fold): survivor inherits merged claim provenance (#214)`; push.
 
 ---
 
 ### Task 5: Documented limitation + docs + full sweep
 
-- [ ] `dedupe_documents` / `split_document` changesets do **not** carry per-claim provenance in this phase. Document the limitation where the spec's phase-3 section already flags it, and in `docs/ai-jobs.md`: their PRs describe the move; `git blame` through the move reaches the pre-move provenance events; the phase-2 anchor-staleness guard makes verify re-derive for restructured sections. Revisit only if verify's fallback rate on moved documents proves noisy in practice.
-- [ ] Update `docs/ai-jobs.md` for the changed contracts; mark the spec's phase-3 status.
-- [ ] Full validation: `npm run build && npm run typecheck && npm run lint && npm test && npm run test:db`.
-- [ ] Commit `docs: claim provenance phase 3 (#214)`; push.
+- [x] `dedupe_documents` / `split_document` changesets do **not** carry per-claim provenance in this phase. Document the limitation where the spec's phase-3 section already flags it, and in `docs/ai-jobs.md`: their PRs describe the move; `git blame` through the move reaches the pre-move provenance events; the phase-2 anchor-staleness guard makes verify re-derive for restructured sections. Revisit only if verify's fallback rate on moved documents proves noisy in practice.
+- [x] Update `docs/ai-jobs.md` for the changed contracts; mark the spec's phase-3 status.
+- [x] Full validation: `npm run build && npm run typecheck && npm run lint && npm test && npm run test:db`.
+- [x] Commit `docs: claim provenance phase 3 (#214)`; push.
 
 ## Done when
 
