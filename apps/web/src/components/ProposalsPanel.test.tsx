@@ -58,3 +58,26 @@ test("a github proposal keeps Publish Branch / Mark Merged and the PR field", ()
   assert.doesNotMatch(html, />Accept</);
   assert.doesNotMatch(html, />Bin</);
 });
+
+test("a proposal with provenance renders the claims and their sources", () => {
+  const html = render(
+    branchPushed({
+      provenance: [
+        {
+          claim: "Logs are retained for 12 months",
+          anchor: "log-retention",
+          sources: [{ sourceId: "src-1", path: "docs/ops/logging.md", lines: "L10-L14" }]
+        }
+      ]
+    })
+  );
+  assert.match(html, /Claim provenance \(1\)/);
+  assert.match(html, /Logs are retained for 12 months/);
+  assert.match(html, /docs\/ops\/logging\.md/);
+  assert.match(html, /L10-L14/);
+});
+
+test("a proposal without provenance renders no provenance section", () => {
+  const html = render(branchPushed());
+  assert.doesNotMatch(html, /Claim provenance/);
+});
