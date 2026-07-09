@@ -192,14 +192,16 @@ Phase 3 (rewrite jobs document their own diffs):
 
 No strip pipeline is needed going forward — provenance never enters document
 bodies. Existing published documents may still carry inline `(see …)` citations
-from the old prompts. Cleanup: a **one-off, operator-triggered sweep** — scan
-each flow destination's checkout for inline citation patterns
-(`\(see [^)]*\.md[^)]*\)` and the surrounding sentence), and enqueue a
-`correct_document`-shaped rewrite per affected doc with claims of the form
-"remove inline repository-path citation; content otherwise unchanged". Runs
-through the normal proposal→review→PR path (no silent mass edit). Ships with
-phase 1; documented in `docs/`, not scheduled — run once per deployment and
-retire.
+from the old prompts. Cleanup: **via the existing verify→correct patrol**, not
+a one-off script — the `VERIFY_DOCUMENT` prompt is extended to flag inline
+repository-path citations in the body as claims (a defect regardless of factual
+accuracy), and `CORRECT_DOCUMENT` is told such a claim is a formatting defect:
+remove the parenthetical and smooth the sentence, leaving the factual content
+alone. This reuses the queue-only machinery with zero new code paths, gets PR
+review for free, and catches stragglers continuously instead of once. (An
+earlier draft of this spec sketched an operator-triggered sweep script; the
+patrol approach replaced it — a script would have needed new enqueue surface
+for no benefit.) Ships with phase 1.
 
 ## Failure semantics
 
