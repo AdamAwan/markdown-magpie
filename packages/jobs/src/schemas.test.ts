@@ -269,6 +269,34 @@ test("draft output schemas keep the provenance field (broker-strip protection)",
   }
 });
 
+test("rewrite output schemas keep the provenance field (broker-strip protection)", () => {
+  const provenance = [
+    {
+      claim: "Retries back off exponentially",
+      anchor: "retry-policy",
+      sources: [{ sourceId: "src-1", path: "src/queue/retry.ts", lines: "L4-L18" }]
+    }
+  ];
+  // correct_document round-trips provenance and keeps it optional.
+  const corrected = correctDocumentOutputSchema.safeParse({ markdown: "# d", rationale: "r", provenance });
+  assert.ok(corrected.success);
+  assert.deepEqual(corrected.success ? corrected.data.provenance : undefined, provenance);
+  assert.ok(correctDocumentOutputSchema.safeParse({ markdown: "# d", rationale: "r" }).success, "provenance stays optional");
+  // improve_document carries it on the improved: true branch only.
+  const improved = improveDocumentOutputSchema.safeParse({ improved: true, markdown: "# d", rationale: "r", provenance });
+  assert.ok(improved.success);
+  assert.deepEqual(
+    improved.success && improved.data.improved ? improved.data.provenance : undefined,
+    provenance
+  );
+  assert.ok(improveDocumentOutputSchema.safeParse({ improved: true, markdown: "# d", rationale: "r" }).success);
+  // A no-op improvement grounds no new claims: the non-strict false branch
+  // strips a stray provenance field rather than rejecting the output.
+  const noop = improveDocumentOutputSchema.parse({ improved: false, rationale: "r", provenance });
+  assert.equal(noop.improved, false);
+  assert.ok(!("provenance" in noop), "improved: false branch does not carry provenance");
+});
+
 test("provenance rejects a claim without sources array", () => {
   const base = { title: "t", targetPath: "p.md", markdown: "# d", rationale: "r" };
   assert.ok(

@@ -748,6 +748,10 @@ export interface CorrectDocumentJobOutput {
   markdown: string;
   rationale: string;
   mapUpdates?: SourceMapUpdate[];
+  // #214 phase 3: per-claim grounding for the claims this correction introduces
+  // or materially rewrites — the corrective proposal is a provenance event for
+  // its own diff. Optional — absence is warned, never rejected.
+  provenance?: ProvenanceClaim[];
 }
 
 // Input to the dedupe_documents AI job: the document under patrol plus its k nearest
@@ -799,12 +803,25 @@ export interface ImproveDocumentJobInput {
   flowId?: string;
 }
 
-export interface ImproveDocumentJobOutput {
-  improved: boolean;
-  markdown?: string;
-  rationale: string;
-  mapUpdates?: SourceMapUpdate[];
-}
+// Output of improve_document. A no-op verdict (improved: false) carries no
+// provenance by design — it grounds no new claims and must not be warned as a
+// missing-provenance draft. The improved variant may declare per-claim
+// grounding for the claims its rewrite introduces or materially changes (#214
+// phase 3); optional — absence is warned, never rejected.
+export type ImproveDocumentJobOutput =
+  | {
+      improved: false;
+      markdown?: string;
+      rationale: string;
+      mapUpdates?: SourceMapUpdate[];
+    }
+  | {
+      improved: true;
+      markdown: string;
+      rationale: string;
+      mapUpdates?: SourceMapUpdate[];
+      provenance?: ProvenanceClaim[];
+    };
 
 export interface DraftMarkdownProposalJobOutput {
   title: string;

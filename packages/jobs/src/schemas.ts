@@ -410,7 +410,10 @@ export const correctDocumentInputSchema = z.object({
 export const correctDocumentOutputSchema = z.object({
   markdown: z.string(),
   rationale: z.string(),
-  mapUpdates: mapUpdatesField
+  mapUpdates: mapUpdatesField,
+  // #214 phase 3: the corrected claims this diff introduces or rewrites, so the
+  // corrective proposal is a provenance event too.
+  provenance: provenanceField
 }) satisfies z.ZodType<CorrectDocumentJobOutput>;
 
 const changesetChangeSchema = z.object({
@@ -458,8 +461,12 @@ export const improveDocumentInputSchema = z.object({
   flowId: z.string().optional()
 }) satisfies z.ZodType<ProviderInput<CoreImproveDocumentJobInput>>;
 export const improveDocumentOutputSchema = z.union([
+  // The improved: false branch carries no provenance by design — a no-op
+  // improvement grounds no new claims, so a stray field is stripped, not kept.
   z.object({ improved: z.literal(false), rationale: z.string(), markdown: z.string().optional(), mapUpdates: mapUpdatesField }),
-  z.object({ improved: z.literal(true), markdown: z.string(), rationale: z.string(), mapUpdates: mapUpdatesField })
+  // #214 phase 3: provenance for the claims the rewritten markdown introduces
+  // or materially changes.
+  z.object({ improved: z.literal(true), markdown: z.string(), rationale: z.string(), mapUpdates: mapUpdatesField, provenance: provenanceField })
 ]) satisfies z.ZodType<ImproveDocumentJobOutput>;
 
 export const foldChangesetProposalInputSchema = z.object({
