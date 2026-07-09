@@ -367,6 +367,7 @@ Rules:
 - ${CONSERVATIVE_CONTRACT} Here a clear case is a claim the sources clearly contradict or clearly fail to support; when you are unsure, or the sources simply do not mention the claim, treat the document as healthy and do NOT flag it.
 - If every claim is supported (or the sources give you nothing to disprove), return verdict "healthy" with an empty claims array.
 - Otherwise return verdict "unprovable" and list ONLY the specific unprovable claims, each with a short reason citing the source files you checked (or searched and found silent).
+- Inline repository-path citations in the document body (e.g. "(see Docs/.../ingestion.md)") are a defect regardless of factual accuracy — internal source paths must never appear in published content. Flag each as a claim with reason "inline source-path citation".
 - Do not propose edits or rewrites. You only report.
 
 Return JSON:
@@ -404,6 +405,7 @@ Rules:
 - Return JSON only.
 - ${FACTUAL_REGISTER_CONTRACT}
 - For each listed claim: rewrite it so it matches what the sources actually support, quoting/paraphrasing only what the sources say. If NOTHING in the sources supports the claim, REMOVE it and smooth the surrounding prose.
+- A claim flagged as an inline source-path citation is a formatting defect, not a factual error: remove the parenthetical/reference from the body and smooth the sentence; do not change the factual content it was attached to.
 - Never introduce a new assertion that the sources do not support. Do not invent figures, dates, or facts.
 - Leave every other part of the document unchanged.
 - "rationale" is a one-paragraph summary of what you changed and why.

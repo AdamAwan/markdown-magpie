@@ -140,6 +140,20 @@ test("draft prompts require structured provenance and forbid inline path citatio
   }
 });
 
+// #214 cleanup: pre-feature documents may still carry inline "(see ...)" source
+// citations from the old draft prompts. The verify→correct patrol strips them
+// organically: verify flags each as a claim, correct removes the parenthetical
+// as a formatting defect without touching the factual content.
+test("the verify→correct patrol flags and strips legacy inline source-path citations", () => {
+  const verify = getPrompt("verify-document")?.instructions ?? "";
+  assert.match(verify, /[Ii]nline repository-path citations?/, "verify names the defect");
+  assert.match(verify, /inline source-path citation/, "verify prescribes the claim reason");
+  const correct = getPrompt("correct-document")?.instructions ?? "";
+  assert.match(correct, /inline source-path citation/, "correct recognises the flagged reason");
+  assert.match(correct, /formatting defect/, "correct treats it as formatting, not a factual error");
+  assert.match(correct, /do not change the factual content/, "correct leaves the facts alone");
+});
+
 // #213: uncovered points are OMITTED from the document body and reported in the
 // structured uncoveredPoints field — never written into the markdown as notes.
 test("draft prompts route uncovered points to uncoveredPoints, not the document body", () => {
