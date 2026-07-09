@@ -103,9 +103,9 @@ function verifyDocumentReuseKey(input: unknown): string {
 const VERIFY_WAIT_BUDGET_MS = 10 * 60_000;
 
 // Cap on how many merged-proposal provenance events the fold reads per document.
-// A cap, not pagination: hitting it means the OLDEST events beyond it were
-// ignored, which must be visible to operators rather than silently reading as
-// full provenance coverage.
+// A cap, not pagination: the query returns the OLDEST events first, so hitting
+// it means every merge after the fiftieth was ignored — which must be visible
+// to operators rather than silently reading as full provenance coverage.
 const PROVENANCE_EVENT_CAP = 50;
 
 const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sources }) => {

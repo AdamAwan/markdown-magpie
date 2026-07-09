@@ -37,7 +37,7 @@
 listMergedByTargetPath(path: string, limit: number): Promise<Proposal[]>;
 ```
 
-- [ ] **Step 1: Migration** — a partial index so the per-document event query doesn't scan all proposals:
+- [x] **Step 1: Migration** — a partial index so the per-document event query doesn't scan all proposals:
 
 ```sql
 -- Phase-2 claim provenance (#214): verify reads a document's provenance
@@ -50,13 +50,13 @@ CREATE INDEX IF NOT EXISTS proposals_merged_target_path_idx
 
 Run the migration-order guard test — PASS.
 
-- [ ] **Step 2: Failing store tests**
+- [x] **Step 2: Failing store tests**
 
 In-memory: three proposals — merged targeting `docs/a.md` (early `mergedAt`), merged targeting `docs/a.md` (later), merged targeting `docs/b.md`, plus a non-merged `docs/a.md` draft. `listMergedByTargetPath("docs/a.md", 10)` returns exactly the two merged `a.md` rows, oldest-merge first. Add a changeset case: a merged proposal with `targetPath: "docs/c.md"` whose `changeset` contains `{ path: "docs/a.md", content: "…" }` IS returned for `docs/a.md`.
 
 Postgres: mirror the primary-path and changeset cases inside the existing gated `describe` (line 26), reusing its lifecycle helpers.
 
-- [ ] **Step 3: Verify failure**, then **Step 4: Implement**
+- [x] **Step 3: Verify failure**, then **Step 4: Implement**
 
 Postgres:
 
@@ -76,7 +76,7 @@ LIMIT $2
 
 (`changeset` is nullable — `jsonb_array_elements` on NULL inside `EXISTS` yields no rows, which is the desired semantics; confirm with the test rather than assuming, and guard with `changeset IS NOT NULL AND` if the planner complains.) In-memory: filter + sort by `mergedAt`.
 
-- [ ] **Step 5: Validate and commit**
+- [x] **Step 5: Validate and commit**
 
 ```bash
 npm test -w @magpie/api && npm run test:db
@@ -108,20 +108,20 @@ git push -u origin claude/claim-provenance-verify
 export function foldProvenanceEvents(events: Proposal[], currentContent: string): ProvenanceClaim[];
 ```
 
-- [ ] **Step 1: Failing tests** — cover:
+- [x] **Step 1: Failing tests** — cover:
   1. Single event → its claims returned (anchors present in content).
   2. Two events, same anchor → later event's claim wins; different anchors → both survive.
   3. A claim whose anchor has no matching heading in `currentContent` is dropped; a claim with **no** anchor is kept (nothing to check).
   4. Events with `provenance: undefined` are skipped without error.
   5. Deterministic output order (event order, then within-event order).
 
-- [ ] **Step 2: Verify failure**, then **Step 3: Implement**
+- [x] **Step 2: Verify failure**, then **Step 3: Implement**
 
 Anchor existence check: reuse the **same** heading→anchor slugging the indexer uses — the sectioniser in `packages/markdown` produces `Citation.anchor`, so locate that helper (grep `anchor` in `packages/markdown/src/`) and call it over the parsed document's headings. Do **not** hand-roll a second slug rule; two implementations WILL drift. If the helper isn't exported, export it from `@magpie/markdown` (and consume it — knip flags dead exports).
 
-- [ ] **Step 4: Run** — `npm test -w @magpie/api` PASS.
+- [x] **Step 4: Run** — `npm test -w @magpie/api` PASS.
 
-- [ ] **Step 5: Commit** — `feat(api): provenance event fold with anchor staleness guard (#214)`; push.
+- [x] **Step 5: Commit** — `feat(api): provenance event fold with anchor staleness guard (#214)`; push.
 
 ---
 
@@ -132,9 +132,9 @@ Anchor existence check: reuse the **same** heading→anchor slugging the indexer
 - Modify: `packages/jobs/src/schemas.ts` (`verifyDocumentInputSchema`, lines 368–373)
 - Test: `packages/jobs/src/schemas.test.ts`
 
-- [ ] **Step 1: Failing test** — `verifyDocumentInputSchema` accepts and round-trips `citedClaims: ProvenanceClaim[]`; stays optional.
+- [x] **Step 1: Failing test** — `verifyDocumentInputSchema` accepts and round-trips `citedClaims: ProvenanceClaim[]`; stays optional.
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 ```ts
 export const verifyDocumentInputSchema = z.object({
@@ -151,7 +151,7 @@ export const verifyDocumentInputSchema = z.object({
 
 Mirror on the core interface. Note: `buildSourceGroundedPrompt` (`apps/watcher/src/job-prompts.ts:113–143`) strips only `sources` from the rendered input (`omitInputKeys(job.input, ["sources"])`, line 141), so `citedClaims` reaches the agentic prompt automatically — **no watcher change**.
 
-- [ ] **Step 3: Validate and commit** — `npm test -w @magpie/jobs && npm run typecheck`; commit `feat(jobs): citedClaims on the verify_document contract (#214)`; push.
+- [x] **Step 3: Validate and commit** — `npm test -w @magpie/jobs && npm run typecheck`; commit `feat(jobs): citedClaims on the verify_document contract (#214)`; push.
 
 ---
 
@@ -164,12 +164,12 @@ Mirror on the core interface. Note: `buildSourceGroundedPrompt` (`apps/watcher/s
 **Interfaces:**
 - Consumes: Task 1 query + Task 2 fold.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
   1. With two merged proposals for the doc path carrying provenance, the created `verify_document` job input contains the folded `citedClaims`.
   2. With no merged proposals (or none carrying provenance), the input has `citedClaims: undefined` — byte-identical to today.
   3. Two calls with identical `path`/`sources` but different folded claims produce **different** reuse keys.
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 In `defaultVerifyDocument` (before building the input at 101–106):
 
@@ -182,9 +182,9 @@ Pass `citedClaims: citedClaims.length > 0 ? citedClaims : undefined` in the job 
 
 The limit 50 is a cap, not pagination — `log()`-equivalent: if `events.length === 50`, `logger.warn` that older events were ignored (silent truncation would read as full coverage).
 
-- [ ] **Step 3: Run** — `npm test -w @magpie/api` PASS.
+- [x] **Step 3: Run** — `npm test -w @magpie/api` PASS.
 
-- [ ] **Step 4: Commit** — `feat(patrol): feed folded claim provenance into verify_document (#214)`; push.
+- [x] **Step 4: Commit** — `feat(patrol): feed folded claim provenance into verify_document (#214)`; push.
 
 ---
 
@@ -194,22 +194,22 @@ The limit 50 is a cap, not pagination — `log()`-equivalent: if `events.length 
 - Modify: `packages/prompts/src/catalog.ts` (`VERIFY_DOCUMENT`, lines 345–380)
 - Test: `packages/prompts/src/catalog.test.ts`
 
-- [ ] **Step 1: Failing test** — `verify-document` instructions mention `citedClaims` and distinguish the two reason kinds.
+- [x] **Step 1: Failing test** — `verify-document` instructions mention `citedClaims` and distinguish the two reason kinds.
 
-- [ ] **Step 2: Implement** — add to the Rules block (keeping the conservative contract intact):
+- [x] **Step 2: Implement** — add to the Rules block (keeping the conservative contract intact):
 
 ```
 - The input may include "citedClaims": claims previously published with the source locations that grounded them. Check each cited claim FIRST against its cited location(s). If the cited file no longer exists or no longer supports the claim, flag it with a reason starting "cited support changed:" naming the cited path. A cited claim whose support still holds needs no further work. Claims NOT in citedClaims are verified by exploring the sources as usual.
 - citedClaims is advisory: if it contradicts what you find in the sources, trust the sources.
 ```
 
-- [ ] **Step 3: Validate and commit** — `npm test -w @magpie/prompts`; commit `feat(prompts): verify checks cited provenance first (#214)`; push.
+- [x] **Step 3: Validate and commit** — `npm test -w @magpie/prompts`; commit `feat(prompts): verify checks cited provenance first (#214)`; push.
 
 ---
 
 ### Task 6: Documentation + full sweep
 
-- [ ] Update `docs/ai-jobs.md` (verify_document input) and the spec's phase-2 status. Full validation: `npm run build && npm run typecheck && npm run lint && npm test && npm run test:db`. Commit `docs: claim provenance phase 2 (#214)`; push.
+- [x] Update `docs/ai-jobs.md` (verify_document input) and the spec's phase-2 status. Full validation: `npm run build && npm run typecheck && npm run lint && npm test && npm run test:db`. Commit `docs: claim provenance phase 2 (#214)`; push.
 
 ## Done when
 
