@@ -15,8 +15,8 @@
     "@magpie/core": "file:../core"
   },
   "devDependencies": {
-    "@types/node": "^26.1.0",
-    "tsx": "^4.22.4",
+    "@types/node": "^26.1.1",
+    "tsx": "^4.23.0",
     "typescript": "^6.0.3"
   }
 }
