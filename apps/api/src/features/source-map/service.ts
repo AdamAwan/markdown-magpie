@@ -12,11 +12,12 @@ const MAX_PATH_LENGTH = 260;
 const MAX_DESCRIPTION_LENGTH = 240;
 const MAX_ENTRIES_PER_SOURCE = 200;
 
-// The five job types whose inputs carry `sources` and whose outputs may carry
+// The six job types whose inputs carry `sources` and whose outputs may carry
 // `mapUpdates`. Anything else is a no-op here.
 const SOURCE_GROUNDED_JOB_TYPES: ReadonlySet<JobType> = new Set<JobType>([
   "draft_seed_document",
   "draft_markdown_proposal",
+  "outline_flow_seed",
   "verify_document",
   "correct_document",
   "improve_document"

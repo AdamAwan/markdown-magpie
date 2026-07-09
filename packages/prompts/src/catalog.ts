@@ -216,26 +216,40 @@ Return JSON:
 
 export const OUTLINE_FLOW_SEED: PromptDefinition = {
   id: "outline-flow-seed",
-  title: "Outline a seed plan for a flow",
+  title: "Plan the seed coverage for a flow",
   description:
-    "Proposes a list of documents to author (each a title + the points it should cover) for a topic, grounded in the flow's existing docs so the plan fits the current structure and does not restate what is already covered. Proposes only — a human reviews and edits before seeding. Used by the watcher's outline_flow_seed job.",
+    "Explores a flow's source repositories and proposes the complete list of documents its knowledge base needs (each a title + the points it should cover), fitted to the flow's existing docs. When the flow lacks a charter or persona it proposes one from what it found. Proposes only — a human reviews the persisted plan before anything is drafted. Used by the watcher's outline_flow_seed job.",
   usedBy: ["watcher · flow seeding"],
-  outputShape: "{ items: [{ title, targetPath?, coverage[], questions? }], rationale }",
-  instructions: `You plan how to seed a Markdown knowledge base with content about a topic. You PROPOSE a list of documents to author — you do NOT write them.
+  outputShape:
+    "{ items: [{ title, targetPath?, coverage[], questions? }], rationale, proposedCharter?, proposedPersona?, mapUpdates? }",
+  instructions: `You plan how to seed a Markdown knowledge base, grounded in the source repositories you have been given access to. You PROPOSE a complete list of documents to author — you do NOT write them.
 
 Input:
-- "topic": the subject area to plan coverage for.
-- "notes" (optional): freeform guidance from the requester (scope, audience, must-haves).
-- "existingDocuments": sections already in this flow's knowledge base (path, heading, excerpt). These show the current structure and what is already covered.
-- "persona" (optional): the flow's audience/voice.
+- "charter" (optional): what this knowledge base should cover — your scope. When present, plan to it.
+- "persona" (optional): the audience/voice of the flow.
+- "routingSummary" (optional): a one-line topical blurb for the flow.
+- "notes" (optional): freeform guidance from the requester for THIS run.
+- "existingDocuments": documents already in this flow's knowledge base (path, heading, sometimes an excerpt). These show what is already covered.
+- "origin": whether a human requested this run ("manual") or the system proposed it for a sparse flow ("auto").
+
+Grounding:
+- You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search broadly, open the files that matter, and follow references. Do not stop at the first area you find — the plan should reflect the WHOLE corpus that falls inside the scope, not one topic.
+- Every proposed item's "coverage" must name specific, authorable points grounded in files you actually read — not vague headings and not invented facts.
+
+Scope:
+- When "charter" is given, it defines what is in scope. Propose nothing outside it.
+- When "charter" is absent, derive the scope yourself from the sources, the flow's name/persona/routingSummary, and "notes" — and return it as "proposedCharter": 2–4 sentences stating what this knowledge base should cover and for whom. A human will edit it.
+- When "persona" is absent, also return "proposedPersona": one sentence naming the audience and voice.
 
 Rules:
 - Return JSON only.
 - Propose one entry in "items" per document worth authoring. Each is { "title", "targetPath" (optional, kebab-case), "coverage" (the points that document should cover), "questions" (optional motivating questions) }.
-- Fit the EXISTING structure: do not propose a document that restates what an existing document already covers. When the topic extends an existing document, either leave it out or make the coverage explicitly about the NEW material only.
-- Break the topic into cohesive, non-overlapping documents; prefer a handful of focused docs over one sprawling one. Each item's "coverage" must be specific, authorable points — not vague headings.
-- Propose only what the topic and notes support. Do not invent facts; "coverage" describes what to write about, grounded in the topic, not asserted knowledge.
-- "rationale" is a one-paragraph summary of the proposed shape and how it relates to the existing docs.
+- Fit the EXISTING structure: do not propose a document that restates what an existing document already covers. When new material extends an existing document, make the coverage explicitly about the NEW material only.
+- Break the corpus into cohesive, non-overlapping documents; prefer focused docs over sprawling ones. Order items most-important-first.
+- "rationale" is a one-paragraph summary of the proposed shape, how it relates to the existing docs, and anything in scope you deliberately left out.
+
+${SOURCE_MAP_CONTRACT}
+
 - UK English throughout.
 
 Return JSON:
@@ -243,7 +257,12 @@ Return JSON:
   "items": [
     { "title": "string", "targetPath": "kebab-case/path.md", "coverage": ["point", "point"], "questions": ["string"] }
   ],
-  "rationale": "string"
+  "rationale": "string",
+  "proposedCharter": "string (only when no charter was given)",
+  "proposedPersona": "string (only when no persona was given)",
+  "mapUpdates": [
+    { "sourceId": "string", "topic": "string", "paths": ["string"], "description": "string" }
+  ]
 }`
 };
 
