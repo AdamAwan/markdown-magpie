@@ -31,9 +31,25 @@ Admission control on concurrent metered work. Before the ask service enqueues an
 a rejection never orphans state — it calls `assertAiCapacity`
 (`apps/api/src/platform/ai-capacity.ts`). That counts the AI jobs currently in
 flight (states `created | retry | active`, across every provider queue) via
-`broker.countInFlight`, a single aggregate SQL count over pg-boss's job table.
-At or above `AI_MAX_INFLIGHT_JOBS` it throws `429 { "error": "ai_capacity" }`
-with `Retry-After`.
+`broker.countInFlight`, aggregate SQL counts over pg-boss's job table.
+
+The check is **class-aware** (#240). AI job types split into an *interactive*
+class — a live caller is waiting: `answer_question` (including gap-closure
+verification re-asks) and `outline_flow_seed`; see `INTERACTIVE_AI_JOB_TYPES` in
+`packages/jobs/src/catalog.ts` — and everything else, the maintenance fan-out
+(patrol scans, drafting, gap summaries, …). An interactive enqueue is rejected
+with `429 { "error": "ai_capacity" }` + `Retry-After` only when **both** hold:
+
+1. in-flight interactive jobs ≥ `AI_INTERACTIVE_RESERVED_JOBS` (the reserve is
+   fully occupied), **and**
+2. in-flight AI jobs of any class ≥ `AI_MAX_INFLIGHT_JOBS` (the global ceiling
+   is reached).
+
+So an hourly patrol burst that fills the global ceiling can no longer push
+`/api/ask` into 429: maintenance work never occupies the interactive reserve,
+which always leaves at least `AI_INTERACTIVE_RESERVED_JOBS` slots claimable by
+asks. Set the reserve to `0` to restore the single shared ceiling; values above
+the ceiling are clamped to it.
 
 This is deliberately **admission control, not backpressure**: at the ceiling we
 *reject* new work (the client resubmits after `Retry-After`) rather than queueing
@@ -66,6 +82,7 @@ auth-disabled local dev.
 | `RATE_LIMIT_ASK_PER_WINDOW`     | `30`    | Ask-tier requests per principal per window.                    |
 | `RATE_LIMIT_TRIGGER_PER_WINDOW` | `5`     | Trigger-tier requests per principal per window.                |
 | `AI_MAX_INFLIGHT_JOBS`          | `20`    | Global ceiling on concurrent in-flight AI jobs.                |
+| `AI_INTERACTIVE_RESERVED_JOBS`  | `5`     | In-flight slots reserved for interactive AI jobs (`0` disables the reserve; clamped to the ceiling). |
 
 ## Observability (Grafana)
 
@@ -90,6 +107,7 @@ the API logs to Loki and query by field).
 | ------------------- | ------------------------------------------------ |
 | `decision`          | `"allowed"` (`debug`) or `"blocked"` (`warn`)    |
 | `inFlight` / `limit`| current in-flight AI jobs vs. the ceiling        |
+| `interactiveInFlight` / `reserved` | interactive-class in-flight jobs vs. the reserved headroom |
 | `retryAfterSeconds` | present on blocked events                        |
 
 > `allowed` decisions log at `debug`, so to graph request-vs-limit volume (not

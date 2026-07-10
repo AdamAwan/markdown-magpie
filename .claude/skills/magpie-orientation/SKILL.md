@@ -217,7 +217,11 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
     (`apps/api/src/http/rate-limit.ts`; no-op when auth is off). L2: a global in-flight
     AI-job cap (`AI_MAX_INFLIGHT_JOBS`, default 20) enforced at enqueue time *before*
     recording the question log (`apps/api/src/platform/ai-capacity.ts`) —
-    admission control, not backpressure (`docs/rate-limiting.md`).
+    admission control, not backpressure (`docs/rate-limiting.md`). L2 is class-aware
+    (#240): interactive jobs (`INTERACTIVE_AI_JOB_TYPES` — `answer_question`,
+    `outline_flow_seed`) keep `AI_INTERACTIVE_RESERVED_JOBS` (default 5) in-flight
+    slots that maintenance fan-out never occupies, and brokers probe interactive
+    queues first on claim — so patrol bursts can't starve live asks.
 18. **Authorization** — single-tenant, two layers: global scopes (`read:knowledge`,
     `ask:knowledge`, `manage:knowledge`, `manage:jobs`, `manage:admin`,
     `feedback:questions`) via `requireScopes`, plus **flow-scoped capabilities**
