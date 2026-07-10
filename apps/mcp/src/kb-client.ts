@@ -386,17 +386,20 @@ export async function submitFeedback(
   return { questionId, kind, question: response.question };
 }
 
-// Seeds a flow with initial content in one shot: `items` (each a title + the points
-// it should cover) are drafted straight into proposals → PRs, bypassing the gap
-// pipeline. The item shape is validated server-side by the seed endpoint; we pass it
-// through so the tool stays a thin surface over POST /flows/:id/seed.
-export async function seedFlow(
+// Approves a persisted seed plan (from kb_outline or the console): POST
+// /seed-plans/:id/approve drafts one document per approved item straight into
+// the proposal → PR pipeline, carrying the plan's run-scoped charter/persona.
+// Thin surface — status rules (409 on a non-proposed plan) are server-side.
+export async function approveSeedPlan(
   args: Record<string, unknown> | undefined,
   options?: KbClientOptions
-): Promise<unknown> {
-  const flow = stringArgument(args, "flow");
-  const items = args?.items;
-  return asObject(await postJson(`/flows/${encodeURIComponent(flow)}/seed`, { items }, options));
+): Promise<{ planId: string; jobIds: string[] }> {
+  const plan = stringArgument(args, "plan");
+  const response = asObject(await postJson(`/seed-plans/${encodeURIComponent(plan)}/approve`, {}, options));
+  const jobIds = Array.isArray(response.jobIds)
+    ? response.jobIds.filter((id): id is string => typeof id === "string")
+    : [];
+  return { planId: plan, jobIds };
 }
 
 // ── seed outline ──────────────────────────────────────────────────────────────
@@ -408,12 +411,21 @@ const outlinePollIntervalMs = parsePositiveInt(process.env.OUTLINE_POLL_INTERVAL
 const outlineTimeoutMs = parsePositiveInt(process.env.OUTLINE_TIMEOUT_MS, 180000);
 
 export interface OutlineResult {
-  jobId: string;
-  // The proposed documents: each a title plus the points it should cover. This is
-  // exactly the item shape kb_seed consumes. `coverage` may be empty in raw model
-  // output (the caller reviews and fills it in before seeding), so it is not
-  // required here. Typed inline so this public return type carries the shape
-  // without a separately-exported element alias for the dead-code check to flag.
+  // The persisted seed plan the run produced — approve it with kb_seed (or
+  // review/edit it in the console).
+  planId: string;
+  // The run-scoped charter/persona. The *Proposed flags record that the value
+  // came from the model (the flow config lacked one) — copy it into
+  // KNOWLEDGE_FLOWS to make it permanent.
+  charter?: string;
+  charterProposed: boolean;
+  persona?: string;
+  personaProposed: boolean;
+  // The proposed documents: each a title plus the points it should cover.
+  // `coverage` may be empty in raw model output (a human edits before
+  // approving), so it is not required here. Typed inline so this public return
+  // type carries the shape without a separately-exported element alias for the
+  // dead-code check to flag.
   items: {
     title?: string;
     targetPath?: string;
@@ -428,21 +440,20 @@ export interface OutlineResult {
 // it is invisible to the dead-code check.
 type OutlineItem = OutlineResult["items"][number];
 
-// Generates a seed outline for a topic WITHOUT seeding anything: POST
-// /flows/:id/outline enqueues an outline_flow_seed job (grounded in the flow's
-// existing docs and persona) and returns { ok, jobId }. We wait on the job — its
-// server-side long-poll wait link first, then detail polling — until it reaches a
-// terminal state, unwrap the { result, executor } envelope, and return the
-// proposed items + rationale. The caller reviews/edits the items and passes them
-// to kb_seed; this function deliberately never seeds on its own.
+// Proposes a seed plan for a flow WITHOUT drafting anything: POST
+// /flows/:id/outline enqueues the source-grounded outline_flow_seed job (no
+// topic — the agent explores the flow's sources and plans the whole flow) and
+// returns { ok, jobId }. We wait on the job — its server-side long-poll wait
+// link first, then detail polling — until it reaches a terminal state, then
+// fetch the persisted plan its completion created and return it. Approval
+// (kb_seed / the console) is the only path that drafts.
 export async function generateOutline(
   args: Record<string, unknown> | undefined,
   options?: KbClientOptions
 ): Promise<OutlineResult> {
   const flow = stringArgument(args, "flow");
-  const topic = stringArgument(args, "topic");
   const notes = optionalStringArgument(args, "notes");
-  const body = notes ? { topic, notes } : { topic };
+  const body = notes ? { notes } : {};
 
   const created = asObject(await postJson(`/flows/${encodeURIComponent(flow)}/outline`, body, options));
   const jobId = created.jobId;
@@ -451,8 +462,15 @@ export async function generateOutline(
   }
 
   const deadline = Date.now() + outlineTimeoutMs;
-  const job = await waitForOutlineJob(jobId, deadline, options);
-  return { jobId, ...readOutline(job) };
+  await waitForOutlineJob(jobId, deadline, options);
+  const plans = asObject(await getJson(`/flows/${encodeURIComponent(flow)}/seed-plans`, options));
+  const plan = (Array.isArray(plans.plans) ? plans.plans : [])
+    .map((candidate) => asObject(candidate))
+    .find((candidate) => candidate.outlineJobId === jobId);
+  if (!plan) {
+    throw new Error(`Outline job ${jobId} completed but no persisted plan was found for it`);
+  }
+  return readPlan(plan);
 }
 
 // Waits for an outline job to reach a terminal state. Mirrors askQuestion's
@@ -488,22 +506,28 @@ async function waitForOutlineJob(
   }
 }
 
-// Unwraps a completed outline job's { result, executor } envelope into the
-// proposed items + rationale. Tolerates a missing rationale but requires the
-// result to carry an items array — that array is the whole point of the outline.
-function readOutline(job: JobView): { items: OutlineItem[]; rationale?: string } {
-  if (job.output === undefined) {
-    throw new Error(`Outline job ${job.id} completed without producing an outline`);
+// Projects a persisted seed-plan row into the tool's return shape. Requires an
+// id and an items array — those are the whole point of the plan; everything
+// else degrades to absent.
+function readPlan(plan: Record<string, unknown>): OutlineResult {
+  const planId = plan.id;
+  if (typeof planId !== "string" || planId.length === 0) {
+    throw new Error("Seed plan response did not include a plan id");
   }
-
-  const result = asObject(asObject(job.output).result);
-  if (!Array.isArray(result.items)) {
-    throw new Error(`Outline job ${job.id} completed without an items array`);
+  if (!Array.isArray(plan.items)) {
+    throw new Error(`Seed plan ${planId} carries no items array`);
   }
-
-  const items = result.items.filter(isOutlineItem);
-  const rationale = typeof result.rationale === "string" ? result.rationale : undefined;
-  return rationale ? { items, rationale } : { items };
+  const items = plan.items.filter(isOutlineItem);
+  const rationale = typeof plan.rationale === "string" ? plan.rationale : undefined;
+  return {
+    planId,
+    ...(typeof plan.charter === "string" ? { charter: plan.charter } : {}),
+    charterProposed: plan.charterProposed === true,
+    ...(typeof plan.persona === "string" ? { persona: plan.persona } : {}),
+    personaProposed: plan.personaProposed === true,
+    items,
+    ...(rationale ? { rationale } : {})
+  };
 }
 
 function isOutlineItem(value: unknown): value is OutlineItem {

@@ -138,7 +138,7 @@ test("tools/call kb_outline requires manage:jobs scope", async () => {
   const res = await request(app)
     .post("/mcp")
     .set("authorization", await auth.token(["read:knowledge"]))
-    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_outline", arguments: { flow: "f", topic: "prompt library" } } });
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_outline", arguments: { flow: "f", notes: "prompt library" } } });
   assert.equal(res.status, 403);
 });
 
@@ -148,7 +148,7 @@ test("tools/call kb_seed requires manage:jobs scope", async () => {
   const res = await request(app)
     .post("/mcp")
     .set("authorization", await auth.token(["read:knowledge"]))
-    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_seed", arguments: { flow: "f", items: [{ coverage: ["x"] }] } } });
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_seed", arguments: { plan: "plan-1" } } });
   assert.equal(res.status, 403);
 });
 
