@@ -1571,6 +1571,20 @@ test("createSeedProposalFromCompletedJob creates a clusterless draft carrying th
   assert.equal((await proposals.list(ctx, 50)).length, 1);
 });
 
+test("createSeedProposalFromCompletedJob carries the input's seedPlanId onto the proposal", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("draft_seed_document", {
+    flowId: "billing",
+    coverage: ["what billing is"],
+    sources: [],
+    seedPlanId: "plan-1",
+    provider: "codex"
+  });
+  const output = { title: "Billing overview", targetPath: "billing.md", markdown: "# Billing", rationale: "seed" };
+  const proposal = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
+  assert.equal(proposal?.seedPlanId, "plan-1");
+});
+
 async function dedupeJob(ctx: ReturnType<typeof makeTestContext>) {
   return ctx.jobs.create("dedupe_documents", {
     path: "kb/refunds.md",

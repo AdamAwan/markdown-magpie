@@ -8,7 +8,7 @@ export function sectionTitle(section: ConsoleSection): string {
     return "Turn weak answers into proposals";
   }
   if (section === "seed") {
-    return "Seed a flow or add a new area";
+    return "Plan and seed a flow from its sources";
   }
   if (section === "jobs") {
     return "Watch AI and MCP job flow";
@@ -49,7 +49,7 @@ export function sectionSubtitle(section: ConsoleSection): string {
     return "Prioritise repeated gaps and draft Markdown updates from them.";
   }
   if (section === "seed") {
-    return "Generate an outline for a topic, edit the proposed documents, and draft them straight into review — bypassing the demand-driven gap pipeline.";
+    return "Propose a source-grounded seed plan, review and edit it (charter, documents), then approve to draft straight into review — bypassing the demand-driven gap pipeline.";
   }
   if (section === "jobs") {
     return "See queued, claimed, completed, and failed AI work in one stable table.";

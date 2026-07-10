@@ -80,6 +80,26 @@ describe("applySourceMapUpdatesFromCompletedJob (via completeJob)", () => {
     assert.deepEqual(await ctx.stores.sourceMap.listBySource("s1", 10), []);
   });
 
+  it("applies mapUpdates from a completed outline_flow_seed job", async () => {
+    const ctx = makeTestContext();
+    const job = await createJob(ctx, "outline_flow_seed", {
+      provider: "codex",
+      flowId: "f1",
+      origin: "manual",
+      sources: [gitSource],
+      existingDocuments: []
+    });
+    const result = await completeJob(ctx, job.id, {
+      items: [{ title: "Runbook", coverage: ["restarts"] }],
+      rationale: "r",
+      mapUpdates: [{ sourceId: "s1", topic: "restarts", paths: ["ops/"], description: "Runbooks live here" }]
+    });
+    assert.equal(result.ok, true);
+    const entries = await ctx.stores.sourceMap.listBySource("s1", 10);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].topic, "restarts");
+  });
+
   it("ignores non-source-grounded job types", async () => {
     const ctx = makeTestContext();
     const job = await createJob(ctx, "summarize_gap", {

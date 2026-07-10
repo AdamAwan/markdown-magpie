@@ -18,7 +18,7 @@ import {
 } from "@magpie/auth";
 import type { JSONWebKeySet } from "jose";
 import { z } from "zod/v4";
-import { askQuestion, generateOutline, getJson, listFlows, seedFlow, submitFeedback, type KbClientOptions } from "./kb-client.js";
+import { approveSeedPlan, askQuestion, generateOutline, getJson, listFlows, submitFeedback, type KbClientOptions } from "./kb-client.js";
 import { createMcpLogger } from "./logger.js";
 
 // ── Configuration ──────────────────────────────────────────────────────────
@@ -204,19 +204,15 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     "kb_outline",
     {
       description:
-        "Generate a proposed seed outline for a topic: a list of documents to author (each a title plus the " +
-        "points it should cover), auto-drafted and grounded in the flow's existing docs and persona — so you " +
-        "don't have to write the coverage points by hand. This does NOT seed anything: it returns the proposed " +
-        "items for you to review and edit, then pass to kb_seed. Discover flow ids with kb_flows.",
+        "Propose a seed plan for a flow by exploring its source repositories — no topic needed. Returns the " +
+        "persisted plan (documents + proposed charter) for review; nothing is drafted. Approve with kb_seed, " +
+        "or review/edit in the console. Discover flow ids with kb_flows.",
       inputSchema: z.object({
-        flow: z.string().describe("The flow id to outline for (from kb_flows)."),
-        topic: z
-          .string()
-          .describe("The area/subject to outline documents for, e.g. \"the product's prompt library\"."),
+        flow: z.string().describe("The flow id to plan for (from kb_flows)."),
         notes: z
           .string()
           .optional()
-          .describe("Optional extra guidance to steer the outline (scope, angle, what to include or leave out).")
+          .describe("Optional guidance to steer this planning run (emphasis, exclusions, audience).")
       })
     },
     async (args) => {
@@ -229,30 +225,14 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     "kb_seed",
     {
       description:
-        "Seed a flow with initial content: submit a list of documents to author, each a title plus the " +
-        "points it should cover. Each is drafted straight into a proposal → pull request, skipping the " +
-        "gap-clustering pipeline. Use for a brand-new flow or to add a new area of knowledge to an " +
-        "existing one. Tip: use kb_outline first to auto-generate the items instead of writing coverage " +
-        "points by hand. Discover flow ids with kb_flows.",
+        "Approve a seed plan (from kb_outline or the console): drafts one document per approved item straight " +
+        "into the proposal → pull-request pipeline. Edit or partially dismiss items in the console first if needed.",
       inputSchema: z.object({
-        flow: z.string().describe("The flow id to seed (from kb_flows)."),
-        items: z
-          .array(
-            z.object({
-              title: z.string().optional().describe("Optional document title."),
-              targetPath: z.string().optional().describe("Optional destination-relative path."),
-              coverage: z.array(z.string()).describe("The points this document must cover. At least one."),
-              questions: z
-                .array(z.string())
-                .optional()
-                .describe("Optional motivating questions/prompts for context.")
-            })
-          )
-          .describe("One entry per document to author.")
+        plan: z.string().describe("The seed plan id to approve (from kb_outline's planId, or the console).")
       })
     },
     async (args) => {
-      const result = await seedFlow(args, kbOptions);
+      const result = await approveSeedPlan(args, kbOptions);
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
     }
   );

@@ -3,8 +3,11 @@ import { test } from "node:test";
 import {
   draftMarkdownProposalInputSchema,
   draftMarkdownProposalOutputSchema,
+  draftSeedDocumentInputSchema,
   draftSeedDocumentOutputSchema,
   foldMarkdownProposalInputSchema,
+  outlineFlowSeedInputSchema,
+  outlineFlowSeedOutputSchema,
   foldMarkdownProposalOutputSchema,
   commentPullRequestInputSchema,
   processGapsToPullRequestsInputSchema,
@@ -366,4 +369,53 @@ test("provenance rejects a claim without sources array", () => {
       provenance: [{ claim: "c" }]
     }).success
   );
+});
+
+test("outline_flow_seed input carries sources/charter/origin; topic is gone", () => {
+  const input = {
+    provider: "codex",
+    flowId: "flow-1",
+    origin: "auto",
+    notes: "focus on operator-facing behaviour",
+    sources: [{ id: "src-1", name: "Repo", kind: "git", url: "https://example.com/r.git" }],
+    existingDocuments: [{ path: "a.md", heading: "A" }],
+    persona: "site reliability engineers",
+    charter: "Everything an operator needs to run the service",
+    routingSummary: "operations"
+  };
+  const parsed = outlineFlowSeedInputSchema.safeParse(input);
+  assert.ok(parsed.success);
+  assert.equal(parsed.success ? parsed.data.origin : undefined, "auto");
+  assert.ok(!outlineFlowSeedInputSchema.safeParse({ ...input, origin: "cron" }).success);
+  assert.ok(!("topic" in outlineFlowSeedInputSchema.shape));
+});
+
+test("outline_flow_seed output keeps proposedCharter/proposedPersona/mapUpdates (broker-strip protection)", () => {
+  const output = {
+    items: [{ title: "Runbook", coverage: ["how to restart"] }],
+    rationale: "r",
+    proposedCharter: "Cover operational runbooks",
+    proposedPersona: "on-call engineers",
+    mapUpdates: [{ sourceId: "src-1", topic: "restarts", paths: ["ops/restart.md"], description: "d" }]
+  };
+  const parsed = outlineFlowSeedOutputSchema.safeParse(output);
+  assert.ok(parsed.success);
+  assert.equal(parsed.success ? parsed.data.proposedCharter : undefined, output.proposedCharter);
+  assert.deepEqual(parsed.success ? parsed.data.mapUpdates : undefined, output.mapUpdates);
+  assert.ok(outlineFlowSeedOutputSchema.safeParse({ items: [], rationale: "r" }).success, "proposals stay optional");
+});
+
+test("draft_seed_document input keeps charter/persona/seedPlanId (input read-back protection)", () => {
+  const input = {
+    provider: "codex",
+    flowId: "flow-1",
+    coverage: ["c"],
+    sources: [],
+    charter: "Cover operational runbooks",
+    persona: "on-call engineers",
+    seedPlanId: "plan-1"
+  };
+  const parsed = draftSeedDocumentInputSchema.safeParse(input);
+  assert.ok(parsed.success);
+  assert.equal(parsed.success ? parsed.data.seedPlanId : undefined, "plan-1");
 });

@@ -14,9 +14,9 @@ export class PostgresProposalStore implements ProposalStore {
         INSERT INTO proposals (
           id, title, status, target_path, markdown, evidence, gap_summary,
           triggering_question_ids, rationale, job_id, destination_id, gap_cluster_id,
-          draft_context, flow_id, changeset, provenance
+          draft_context, flow_id, changeset, provenance, seed_plan_id
         )
-        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11::bigint, $12, $13, $14, $15)
+        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11::bigint, $12, $13, $14, $15, $16)
         ON CONFLICT (job_id) WHERE job_id IS NOT NULL
         DO UPDATE SET job_id = EXCLUDED.job_id
         RETURNING *
@@ -36,7 +36,8 @@ export class PostgresProposalStore implements ProposalStore {
         input.draftContext ? JSON.stringify(input.draftContext) : null,
         input.flowId ?? null,
         input.changeset ? JSON.stringify(input.changeset) : null,
-        input.provenance ? JSON.stringify(input.provenance) : null
+        input.provenance ? JSON.stringify(input.provenance) : null,
+        input.seedPlanId ?? null
       ]
     );
 
@@ -246,6 +247,7 @@ interface ProposalRow {
   review_decision: string | null;
   draft_context: DraftContext | null;
   provenance: ProvenanceClaim[] | null;
+  seed_plan_id: string | null;
   created_at: Date;
   merged_at: Date | null;
   closure_status: Proposal["closureStatus"] | null;
@@ -272,6 +274,7 @@ function mapRow(row: ProposalRow): Proposal {
     reviewDecision: (row.review_decision as ReviewDecision | null) ?? undefined,
     draftContext: row.draft_context ?? undefined,
     provenance: row.provenance ?? undefined,
+    seedPlanId: row.seed_plan_id ?? undefined,
     createdAt: row.created_at.toISOString(),
     mergedAt: row.merged_at?.toISOString(),
     closureStatus: row.closure_status ?? undefined,

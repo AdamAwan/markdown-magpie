@@ -56,7 +56,14 @@ const CAPABILITY_JOB_TYPES = {
   claude: PROVIDER_JOB_TYPES,
   github: ["refresh_flow_snapshot", "publish_proposal", "crosslink_pull_requests", "comment_pull_request"],
   "local-git": ["publish_proposal"],
-  maintenance: ["process_gaps_to_pull_requests", "source_change_sync", "correctness_patrol", "editorial_patrol", "verify_gap_closure"]
+  maintenance: [
+    "process_gaps_to_pull_requests",
+    "source_change_sync",
+    "correctness_patrol",
+    "editorial_patrol",
+    "verify_gap_closure",
+    "seed_bootstrap"
+  ]
 } as const satisfies Record<JobCapability, readonly JobType[]>;
 
 const JobsPage = styled.section(({ theme }) => ({

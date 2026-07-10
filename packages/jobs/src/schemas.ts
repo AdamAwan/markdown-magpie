@@ -227,7 +227,13 @@ export const draftSeedDocumentInputSchema = z.object({
   coverage: z.array(z.string()),
   questions: z.array(z.string()).optional(),
   sources: z.array(sourceDescriptorSchema),
-  destinationId: z.string().optional()
+  destinationId: z.string().optional(),
+  // Run-scoped shaping from the seed plan; seedPlanId is read back at completion
+  // to link the proposal (triggeringQuestionIds precedent) — must be on the
+  // schema or the broker strips it.
+  charter: z.string().optional(),
+  persona: z.string().optional(),
+  seedPlanId: z.string().optional()
 }) satisfies z.ZodType<ProviderInput<CoreDraftSeedDocumentJobInput>>;
 export const draftSeedDocumentOutputSchema = z.object({
   title: z.string(),
@@ -243,10 +249,10 @@ export const draftSeedDocumentOutputSchema = z.object({
 const existingDocumentContextSchema = z.object({
   path: z.string(),
   heading: z.string(),
-  excerpt: z.string()
+  excerpt: z.string().optional()
 });
 // The seed item shape as the model RETURNS it: coverage may be empty in raw model
-// output (a human edits before seeding, and the v1 seed endpoint enforces min(1)).
+// output (a human edits before approving, and plan approval enforces non-empty).
 const seedItemSchema = z.object({
   title: z.string().optional(),
   targetPath: z.string().optional(),
@@ -256,14 +262,22 @@ const seedItemSchema = z.object({
 export const outlineFlowSeedInputSchema = z.object({
   provider: providerSchema,
   flowId: z.string(),
-  topic: z.string(),
+  origin: z.enum(["manual", "auto"]),
   notes: z.string().optional(),
+  sources: z.array(sourceDescriptorSchema),
   existingDocuments: z.array(existingDocumentContextSchema),
-  persona: z.string().optional()
+  persona: z.string().optional(),
+  charter: z.string().optional(),
+  routingSummary: z.string().optional()
 }) satisfies z.ZodType<ProviderInput<CoreOutlineFlowSeedJobInput>>;
 export const outlineFlowSeedOutputSchema = z.object({
   items: z.array(seedItemSchema),
-  rationale: z.string()
+  rationale: z.string(),
+  // Proposed only when the flow lacked them; must be declared or the broker
+  // strips them before the plan-creation handler reads them.
+  proposedCharter: z.string().optional(),
+  proposedPersona: z.string().optional(),
+  mapUpdates: mapUpdatesField
 }) satisfies z.ZodType<OutlineFlowSeedJobOutput>;
 
 export const foldMarkdownProposalInputSchema = z.object({
@@ -565,6 +579,17 @@ export const editorialPatrolOutputSchema = z.object({
   runId: z.string(),
   selectedCount: z.number().int(),
   enqueuedCount: z.number().int()
+});
+
+export const seedBootstrapInputSchema = z.object({ flowId: z.string() });
+// One sparse-flow bootstrap tick: either it enqueued an outline_flow_seed run
+// (outlineJobId reports which, possibly a reused in-flight one) or it no-oped
+// and `reason` says why: no_sources | kb_populated | plan_pending |
+// outline_in_flight | seed_proposals_open | dismissed_unchanged.
+export const seedBootstrapOutputSchema = z.object({
+  enqueued: z.boolean(),
+  reason: z.string().optional(),
+  outlineJobId: z.string().optional()
 });
 
 export const verifyGapClosureInputSchema = z.object({ proposalId: z.string() });

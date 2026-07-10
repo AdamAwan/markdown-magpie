@@ -29,7 +29,8 @@ const STORE_ENV_NAMES = [
   "WATCHER_REGISTRY_STORE",
   "PR_CROSSLINK_STORE",
   "GAP_CLOSURE_VERIFICATION_STORE",
-  "SOURCE_MAP_STORE"
+  "SOURCE_MAP_STORE",
+  "SEED_PLAN_STORE"
 ] as const;
 
 export type StoreEnvName = (typeof STORE_ENV_NAMES)[number];
@@ -125,6 +126,12 @@ export interface AppConfig {
     // Global ceiling on in-flight (created|retry|active) AI jobs. New AI work is
     // rejected at enqueue with 429 once this many are already in flight.
     aiMaxInflightJobs: number;
+  };
+  // Sparse-flow seed bootstrap (SEED_BOOTSTRAP_MAX_DOCS): a flow whose indexed
+  // destination has fewer than this many documents counts as "near-empty" and is
+  // eligible for an auto-proposed seed plan.
+  seeding: {
+    bootstrapMaxDocs: number;
   };
   // Abstain-biased cosine cut-offs for the embedding-based flow router (POST
   // /api/route). A mis-tune only makes the router abstain more often — the watcher
@@ -287,6 +294,7 @@ const schema = z
     RATE_LIMIT_ASK_PER_WINDOW: optionalPositiveInt,
     RATE_LIMIT_TRIGGER_PER_WINDOW: optionalPositiveInt,
     AI_MAX_INFLIGHT_JOBS: optionalPositiveInt,
+    SEED_BOOTSTRAP_MAX_DOCS: optionalPositiveInt,
 
     WATCHER_NAME: optionalString,
     WATCHER_POLL_INTERVAL_MS: optionalPositiveInt,
@@ -453,6 +461,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       askPerWindow: parsed.RATE_LIMIT_ASK_PER_WINDOW ?? 30,
       triggerPerWindow: parsed.RATE_LIMIT_TRIGGER_PER_WINDOW ?? 5,
       aiMaxInflightJobs: parsed.AI_MAX_INFLIGHT_JOBS ?? 20
+    },
+    seeding: {
+      bootstrapMaxDocs: parsed.SEED_BOOTSTRAP_MAX_DOCS ?? 3
     },
     flowRouter: resolveFlowRouterConfig(env),
     gapClustering: resolveGapClusteringConfig(env),

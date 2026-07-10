@@ -1509,7 +1509,10 @@ export async function createSeedProposalFromCompletedJob(
         provenance: parsed.data.provenance,
         flowId: input.flowId,
         destinationId: input.destinationId,
-        jobId: job.id
+        jobId: job.id,
+        // Read back off the stored input so the plan view can show per-item
+        // drafting/publication progress (triggeringQuestionIds precedent).
+        seedPlanId: input.seedPlanId
       },
       { jobId: job.id, jobType: job.type }
     )

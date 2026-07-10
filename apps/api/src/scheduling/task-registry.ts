@@ -107,6 +107,17 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
     defaultCron: "0 * * * *",
     jobType: "editorial_patrol",
     input: (flowId) => ({ flowId })
+  },
+  {
+    baseKey: "seed-bootstrap",
+    typeLabel: "Seed bootstrap · plan a sparse flow",
+    description:
+      "Checks whether this flow has sources but a near-empty knowledge base. When it does (and no plan is pending, " +
+      "in flight, drafting, or recently dismissed for the same sources), it proposes a seed plan by exploring the " +
+      "sources — the plan waits on the Seed page for human review; nothing is drafted without approval.",
+    defaultCron: "0 * * * *",
+    jobType: "seed_bootstrap",
+    input: (flowId) => ({ flowId })
   }
 ];
 

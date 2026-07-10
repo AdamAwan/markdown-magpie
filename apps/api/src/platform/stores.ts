@@ -21,6 +21,8 @@ import { InMemoryMaintenanceRunStore } from "../stores/maintenance-run-store.js"
 import { PostgresMaintenanceRunStore } from "../stores/postgres-maintenance-run-store.js";
 import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
 import { InMemoryPatrolStore } from "../stores/patrol-store.js";
+import { InMemorySeedPlanStore } from "../stores/seed-plan-store.js";
+import { PostgresSeedPlanStore } from "../stores/postgres-seed-plan-store.js";
 import { InMemorySourceMapStore } from "../stores/source-map-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
 import { InMemoryWatcherRegistryStore } from "../stores/watcher-registry-store.js";
@@ -112,6 +114,16 @@ export function createSourceMapStore(config: AppConfig, pool: pg.Pool): InMemory
     "SOURCE_MAP_STORE",
     (pool) => new PostgresSourceMapStore(pool),
     () => new InMemorySourceMapStore()
+  );
+}
+
+export function createSeedPlanStore(config: AppConfig, pool: pg.Pool): InMemorySeedPlanStore | PostgresSeedPlanStore {
+  return createStore<InMemorySeedPlanStore | PostgresSeedPlanStore>(
+    config,
+    pool,
+    "SEED_PLAN_STORE",
+    (pool) => new PostgresSeedPlanStore(pool),
+    () => new InMemorySeedPlanStore()
   );
 }
 

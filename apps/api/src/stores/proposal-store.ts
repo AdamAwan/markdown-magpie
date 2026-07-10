@@ -21,6 +21,8 @@ export interface ProposalInput extends DraftMarkdownProposalJobOutput {
   // rather than the single targetPath/markdown; dedupe (and later split) set it.
   changeset?: ChangesetChange[];
   draftContext?: DraftContext;
+  // The seed plan whose approval drafted this proposal (self-seeding flows).
+  seedPlanId?: string;
 }
 
 export interface ProposalListOptions {
@@ -96,6 +98,7 @@ export class InMemoryProposalStore implements ProposalStore {
       changeset: input.changeset,
       draftContext: input.draftContext,
       provenance: input.provenance,
+      seedPlanId: input.seedPlanId,
       regenerationCount: 0,
       createdAt: new Date().toISOString()
     };

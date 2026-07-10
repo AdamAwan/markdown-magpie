@@ -57,8 +57,9 @@ Implications you must design around:
   `/api/source-map`) and (b) the shared checkout volume (`MAGPIE_CHECKOUT_ROOT`, default
   `.magpie/checkouts`), which hosts destination checkouts and read-only *source*
   workspaces for source-grounded jobs.
-- **Five job types are agentic and source-grounded**: `draft_seed_document`,
-  `draft_markdown_proposal`, `verify_document`, `correct_document`, `improve_document`
+- **Six job types are agentic and source-grounded**: `draft_seed_document`,
+  `draft_markdown_proposal`, `outline_flow_seed`, `verify_document`, `correct_document`,
+  `improve_document`
   (authoritative switch: `sourceGroundedInputSchema()` in
   `apps/watcher/src/source-workspace.ts`). They carry `SourceDescriptor[]` references
   (kinds `git`/`local` resolve to filesystem workspaces; `internet`/`agent` become prompt
@@ -180,10 +181,23 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
     `verified_closed` (the only path that resolves gaps), `reopened` (re-draft with
     notes), `needs_attention` (after 2 failures the question is **parked** — a state, not
     a gap source; humans Retry/Dismiss from the console).
-13. **Seeding** — bootstrap a flow without waiting for gaps: `POST /api/flows/:id/outline`
-    (`outline_flow_seed`, proposes `SeedItem[]`, no side effects) → human edits →
-    `POST /api/flows/:id/seed` (one source-grounded `draft_seed_document` per item,
-    straight to proposal → PR, still via the reconcile gate).
+13. **Seeding** — plan-centric and self-seeding: `POST /api/flows/:id/outline` (no topic;
+    optional `notes` steer) enqueues the **source-grounded** `outline_flow_seed` job, whose
+    agent explores the flow's sources and proposes a whole-flow document plan — plus a
+    `proposedCharter`/`proposedPersona` when the flow config lacks them (the system never
+    writes flow config; the console offers copy-to-config). The completion handler persists
+    the plan in `seed_plans` (proposed → approved | dismissed | superseded; a new proposed
+    plan supersedes an older un-reviewed one). Humans review at `/seed` or
+    `/api/seed-plans/*` (PATCH edits only while proposed; approve is replay-safe and the
+    **only** drafting entry point — the raw `POST /flows/:id/seed` is gone): approval
+    enqueues one `draft_seed_document` per approved item carrying the plan's run-scoped
+    `charter`/`persona` + `seedPlanId` (proposal linkage), straight to proposal → PR via the
+    reconcile gate. The hourly per-flow `seed_bootstrap` maintenance job auto-proposes a
+    plan for a flow with sources but < `SEED_BOOTSTRAP_MAX_DOCS` (default 3) indexed docs —
+    self-quiescing guards; a dismissed plan is not re-proposed until the flow's source
+    descriptors change (source-hash comparison). A flow's optional `charter` config field
+    (coverage mission) is planning-scope guidance only — distinct from `persona` (voice) and
+    `routingSummary` (router blurb).
 14. **Source map** (#215/#219/#220) — agents' own navigation hints about source repos:
     `(sourceId, topic) → paths + description`, persisted in `source_map_entries`
     (migration 0047). Source-grounded job outputs contribute optional `mapUpdates`
@@ -225,7 +239,7 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
 
 ## 3. Job catalog cheat sheet
 
-25 job types in `packages/jobs/src/types.ts`; contracts in `schemas.ts`, routing in
+26 job types in `packages/jobs/src/types.ts`; contracts in `schemas.ts`, routing in
 `catalog.ts`. AI (provider-fanned) jobs get retry 3 / backoff 15→300 s; others retry 2.
 
 **16 provider (AI) jobs** — queue `` `${type}__${provider}` ``:
@@ -235,7 +249,7 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
 `sync_source_changes_generate_plan`, `verify_document`, `correct_document`,
 `dedupe_documents`, `split_document`, `improve_document`.
 
-**9 non-provider jobs**:
+**10 non-provider jobs**:
 
 | type | capability | trigger | role |
 |---|---|---|---|
@@ -244,6 +258,7 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
 | `correctness_patrol` | maintenance | cron hourly | orchestrator → `POST /api/fix-patrol/run` |
 | `editorial_patrol` | maintenance | cron hourly | orchestrator → `POST /api/fix-patrol/improve/run` |
 | `verify_gap_closure` | maintenance | **on merge** (not cron) | orchestrator → `POST /api/proposals/:id/verify-closure` |
+| `seed_bootstrap` | maintenance | cron hourly | guard-check → `POST /api/flows/:id/seed-bootstrap/run` (enqueue-and-return, never bounded-waits) |
 | `refresh_flow_snapshot` | github | cron ~5 min (GitHub flows only) | leaf: polls PRs, reports mergeability |
 | `publish_proposal` | github / local-git (destination fan-out) | event | leaf: push branch, open PR |
 | `crosslink_pull_requests` | github | event | leaf: comment linking two PRs |
@@ -289,7 +304,7 @@ apps/
 packages/
   core/       Shared domain types + provider interfaces (incl. ProvenanceClaim).
   auth/       Auth0 token validation + on-behalf-of helpers.
-  db/         SQL migrations (0001–0050; see the write-a-migration skill).
+  db/         SQL migrations (0001–0051; see the write-a-migration skill).
   git/        Git sync + PR adapters: ensureGitCheckout (blobless partial clones),
               PR status/mergeability polling, LocalGitProposalPublisher, checkout locks.
   jobs/       Job contracts: JOB_TYPES, capabilities, input/output schemas, queue

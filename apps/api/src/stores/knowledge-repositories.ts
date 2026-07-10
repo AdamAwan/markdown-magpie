@@ -25,6 +25,10 @@ export interface ConfiguredKnowledgeFlow {
   // Distinct from `persona` (which is answering *voice* and is injected into the
   // answer prompt): a routing summary sharpens routing without changing the answer.
   routingSummary?: string;
+  // Coverage mission for seeding/planning prompts — what this KB should cover.
+  // Distinct from persona (voice) and routingSummary (router blurb). Consumed by
+  // seed planning only; never injected into answer prompts or router flow text.
+  charter?: string;
 }
 
 export interface KnowledgeRepositorySelection {
@@ -212,13 +216,15 @@ function normalizeFlowEntry(value: unknown): ConfiguredKnowledgeFlow | undefined
   const id = stringValue(candidate.id) ?? `${sourceIds.join("-")}-to-${destinationId}`;
   const persona = stringValue(candidate.persona) ?? stringValue(candidate.description);
   const routingSummary = stringValue(candidate.routingSummary) ?? stringValue(candidate.summary);
+  const charter = stringValue(candidate.charter);
   return {
     id,
     name: stringValue(candidate.name) ?? id,
     sourceIds,
     destinationId,
     ...(persona ? { persona } : {}),
-    ...(routingSummary ? { routingSummary } : {})
+    ...(routingSummary ? { routingSummary } : {}),
+    ...(charter ? { charter } : {})
   };
 }
 

@@ -11,7 +11,7 @@ import { routeRoutes } from "./features/route/routes.js";
 import { knowledgeRoutes } from "./features/knowledge/routes.js";
 import { questionRoutes } from "./features/questions/routes.js";
 import { gapRoutes } from "./features/gaps/routes.js";
-import { seedRoutes } from "./features/seed/routes.js";
+import { seedPlanRoutes, seedRoutes } from "./features/seed/routes.js";
 import { proposalRoutes } from "./features/proposals/routes.js";
 import { sourceSyncRoutes } from "./features/source-sync/routes.js";
 import { sourceMapRoutes } from "./features/source-map/routes.js";
@@ -112,6 +112,7 @@ export function buildApp(ctx: AppContext, options?: ApiAuthOptions): Hono {
   api.route("/questions", questionRoutes(ctx));
   api.route("/gaps", gapRoutes(ctx));
   api.route("/flows", seedRoutes(ctx));
+  api.route("/seed-plans", seedPlanRoutes(ctx));
   api.route("/proposals", proposalRoutes(ctx));
   api.route("/source-sync", sourceSyncRoutes(ctx));
   api.route("/source-map", sourceMapRoutes(ctx));
