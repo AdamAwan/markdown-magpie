@@ -1,4 +1,4 @@
-import type { MaintenanceLens, Proposal } from "@magpie/core";
+import type { MaintenanceLens, Proposal, ProvenanceClaim } from "@magpie/core";
 import { logger } from "../logger.js";
 import type { JobView } from "@magpie/jobs";
 import { foldChangesetProposalOutputSchema, foldMarkdownProposalOutputSchema } from "@magpie/jobs";
@@ -59,6 +59,8 @@ export async function reconcileDraftedProposal(ctx: AppContext, rival: Proposal)
     rivalMarkdown: rival.markdown,
     rivalGapSummaries: splitGapSummaries(rival.gapSummary),
     rivalEvidence: rival.evidence,
+    survivorProvenance: survivor.provenance,
+    rivalProvenance: rival.provenance,
     expectedOutput: "folded_markdown"
   });
   logger.info({ rivalId: rival.id, survivorId: survivor.id, targetPath: rival.targetPath }, "fold: enqueued fold_markdown_proposal");
@@ -101,6 +103,8 @@ async function reconcileClusterlessProposal(
         rivalMarkdown: proposal.markdown,
         rivalGapSummaries: [],
         rivalEvidence: proposal.evidence,
+        survivorProvenance: survivor.provenance,
+        rivalProvenance: proposal.provenance,
         expectedOutput: "folded_markdown"
       });
       logger.info({ proposalId: proposal.id, survivorId: survivor.id, targetPath: proposal.targetPath, lens }, "clusterless fold: enqueued fold of proposal");
@@ -279,6 +283,8 @@ export async function reconcileImproveProposal(ctx: AppContext, proposal: Propos
         rivalMarkdown: proposal.markdown,
         rivalGapSummaries: [],
         rivalEvidence: proposal.evidence,
+        survivorProvenance: survivor.provenance,
+        rivalProvenance: proposal.provenance,
         expectedOutput: "folded_markdown"
       });
       logger.info({ proposalId: proposal.id, survivorId: survivor.id, targetPath: proposal.targetPath }, "improve fold: enqueued fold of proposal");
@@ -289,6 +295,28 @@ export async function reconcileImproveProposal(ctx: AppContext, proposal: Propos
   await ctx.stores.gapClusters.enqueuePublicationAction(proposal.id, "publish");
   logger.info({ proposalId: proposal.id, decision: decision.kind, targetPath: proposal.targetPath }, "improve: enqueued to publish");
 }
+// #214 phase 3: a fold rewrites the survivor's content, so its provenance event
+// must be rewritten with it. Preferred source is the fold output's own
+// re-anchored provenance; this fallback concatenates both parents' claims so
+// the rival's grounding is never silently dropped — warned, because the claims'
+// sources stay right but their anchors may no longer match the folded headings.
+// Nothing to write (and nothing to warn) when neither parent carried any.
+function concatParentProvenance(
+  survivor: Proposal,
+  rival: Proposal,
+  job: JobView
+): ProvenanceClaim[] | undefined {
+  const combined = [...(survivor.provenance ?? []), ...(rival.provenance ?? [])];
+  if (combined.length === 0) {
+    return undefined;
+  }
+  logger.warn(
+    { jobId: job.id, jobType: job.type, survivorId: survivor.id, rivalId: rival.id },
+    "fold output carried no provenance; concatenating both parents' claims onto the survivor"
+  );
+  return combined;
+}
+
 // Applies a completed fold: update the survivor's markdown, absorb the rival's gap
 // cluster into the survivor's (so the rival's gaps resolve when the survivor merges),
 // supersede the rival, and re-publish the survivor through the outbox. Idempotent on
@@ -337,6 +365,12 @@ export async function applyFoldFromCompletedJob(
     await ctx.stores.proposals.updateChangeset(survivor.id, merged, parsed.data.markdown);
   } else {
     await ctx.stores.proposals.updateMarkdown(survivor.id, parsed.data.markdown);
+  }
+
+  // The survivor's provenance event now describes the folded content (#214).
+  const foldedProvenance = parsed.data.provenance ?? concatParentProvenance(survivor, rival, job);
+  if (foldedProvenance && foldedProvenance.length > 0) {
+    await ctx.stores.proposals.setProvenance(survivor.id, foldedProvenance);
   }
 
   if (survivor.gapClusterId && rival.gapClusterId && survivor.gapClusterId !== rival.gapClusterId) {
@@ -403,6 +437,16 @@ export async function applyChangesetFoldFromCompletedJob(
     );
   }
   await ctx.stores.proposals.updateChangeset(survivor.id, parsed.data.changeset, primaryMarkdown);
+
+  // The changeset fold output carries no provenance by contract (dedupe/split
+  // changesets are a documented limitation, see docs/ai-jobs.md), so the
+  // parents' claims are concatenated onto the survivor rather than silently
+  // dropped (#214).
+  const foldedProvenance = concatParentProvenance(survivor, rival, job);
+  if (foldedProvenance && foldedProvenance.length > 0) {
+    await ctx.stores.proposals.setProvenance(survivor.id, foldedProvenance);
+  }
+
   await ctx.stores.proposals.updateStatus(rival.id, "superseded");
   await ctx.stores.gapClusters.enqueuePublicationAction(survivor.id, "publish");
 

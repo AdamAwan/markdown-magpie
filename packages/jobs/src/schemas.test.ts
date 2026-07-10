@@ -3,8 +3,11 @@ import { test } from "node:test";
 import {
   draftMarkdownProposalInputSchema,
   draftMarkdownProposalOutputSchema,
+  draftSeedDocumentInputSchema,
   draftSeedDocumentOutputSchema,
   foldMarkdownProposalInputSchema,
+  outlineFlowSeedInputSchema,
+  outlineFlowSeedOutputSchema,
   foldMarkdownProposalOutputSchema,
   commentPullRequestInputSchema,
   processGapsToPullRequestsInputSchema,
@@ -32,6 +35,29 @@ test("verify_document input round-trips path/content/sources with a provider", (
     sources: [{ id: "src-1", name: "Product repo", kind: "git", url: "https://example.com/repo.git", subpath: "Docs" }]
   });
   assert.equal(ok.success, true);
+});
+
+test("verify_document input accepts and round-trips optional citedClaims", () => {
+  const base = {
+    provider: "codex",
+    path: "kb/refunds.md",
+    content: "Refunds take 5 days.",
+    sources: [{ id: "src-1", name: "Product repo", kind: "git", url: "https://example.com/repo.git", subpath: "Docs" }]
+  };
+  const citedClaims = [
+    {
+      claim: "Refunds take 5 days",
+      anchor: "refunds",
+      sources: [{ sourceId: "src-1", path: "docs/refunds.md", lines: "L3-L7" }]
+    }
+  ];
+  const parsed = verifyDocumentInputSchema.safeParse({ ...base, citedClaims });
+  assert.equal(parsed.success, true);
+  assert.deepEqual(parsed.success ? parsed.data.citedClaims : undefined, citedClaims);
+  // Stays optional: today's input shape parses unchanged.
+  const withoutClaims = verifyDocumentInputSchema.safeParse(base);
+  assert.equal(withoutClaims.success, true);
+  assert.equal(withoutClaims.success ? "citedClaims" in withoutClaims.data : true, false);
 });
 
 test("verify_document input requires sources", () => {
@@ -250,4 +276,146 @@ test("draft outputs accept and preserve optional uncoveredPoints", () => {
   assert.deepEqual(draft.uncoveredPoints, ["retry limits"]);
   // Malformed entries are rejected, not coerced.
   assert.equal(draftSeedDocumentOutputSchema.safeParse({ ...base, uncoveredPoints: [42] }).success, false);
+});
+
+test("draft output schemas keep the provenance field (broker-strip protection)", () => {
+  const provenance = [
+    {
+      claim: "Logs are retained for 12 months",
+      anchor: "log-retention",
+      sources: [{ sourceId: "src-1", path: "docs/ops/logging.md", lines: "L10-L14" }]
+    }
+  ];
+  const base = { title: "t", targetPath: "p.md", markdown: "# d", rationale: "r" };
+  for (const schema of [draftMarkdownProposalOutputSchema, draftSeedDocumentOutputSchema]) {
+    const parsed = schema.safeParse({ ...base, provenance });
+    assert.ok(parsed.success);
+    assert.deepEqual(parsed.success ? parsed.data.provenance : undefined, provenance);
+    assert.ok(schema.safeParse(base).success, "provenance stays optional");
+  }
+});
+
+test("fold schemas round-trip parent and merged provenance (broker-strip protection)", () => {
+  const provenance = [
+    {
+      claim: "Refunds settle within 5 days",
+      anchor: "refund-settlement",
+      sources: [{ sourceId: "src-1", path: "src/refunds/settle.ts", lines: "L20-L31" }]
+    }
+  ];
+  const input = {
+    provider: "codex",
+    survivorProposalId: "s1",
+    rivalProposalId: "r1",
+    targetPath: "kb/refunds.md",
+    survivorMarkdown: "# survivor",
+    rivalMarkdown: "# rival",
+    rivalGapSummaries: [],
+    rivalEvidence: [],
+    expectedOutput: "folded_markdown"
+  };
+  const parsedInput = foldMarkdownProposalInputSchema.safeParse({
+    ...input,
+    survivorProvenance: provenance,
+    rivalProvenance: provenance
+  });
+  assert.ok(parsedInput.success);
+  assert.deepEqual(parsedInput.success ? parsedInput.data.survivorProvenance : undefined, provenance);
+  assert.deepEqual(parsedInput.success ? parsedInput.data.rivalProvenance : undefined, provenance);
+  assert.ok(foldMarkdownProposalInputSchema.safeParse(input).success, "parent provenance stays optional");
+
+  const parsedOutput = foldMarkdownProposalOutputSchema.safeParse({ markdown: "# merged", rationale: "r", provenance });
+  assert.ok(parsedOutput.success);
+  assert.deepEqual(parsedOutput.success ? parsedOutput.data.provenance : undefined, provenance);
+  assert.ok(
+    foldMarkdownProposalOutputSchema.safeParse({ markdown: "# merged", rationale: "r" }).success,
+    "merged provenance stays optional"
+  );
+});
+
+test("rewrite output schemas keep the provenance field (broker-strip protection)", () => {
+  const provenance = [
+    {
+      claim: "Retries back off exponentially",
+      anchor: "retry-policy",
+      sources: [{ sourceId: "src-1", path: "src/queue/retry.ts", lines: "L4-L18" }]
+    }
+  ];
+  // correct_document round-trips provenance and keeps it optional.
+  const corrected = correctDocumentOutputSchema.safeParse({ markdown: "# d", rationale: "r", provenance });
+  assert.ok(corrected.success);
+  assert.deepEqual(corrected.success ? corrected.data.provenance : undefined, provenance);
+  assert.ok(correctDocumentOutputSchema.safeParse({ markdown: "# d", rationale: "r" }).success, "provenance stays optional");
+  // improve_document carries it on the improved: true branch only.
+  const improved = improveDocumentOutputSchema.safeParse({ improved: true, markdown: "# d", rationale: "r", provenance });
+  assert.ok(improved.success);
+  assert.deepEqual(
+    improved.success && improved.data.improved ? improved.data.provenance : undefined,
+    provenance
+  );
+  assert.ok(improveDocumentOutputSchema.safeParse({ improved: true, markdown: "# d", rationale: "r" }).success);
+  // A no-op improvement grounds no new claims: the non-strict false branch
+  // strips a stray provenance field rather than rejecting the output.
+  const noop = improveDocumentOutputSchema.parse({ improved: false, rationale: "r", provenance });
+  assert.equal(noop.improved, false);
+  assert.ok(!("provenance" in noop), "improved: false branch does not carry provenance");
+});
+
+test("provenance rejects a claim without sources array", () => {
+  const base = { title: "t", targetPath: "p.md", markdown: "# d", rationale: "r" };
+  assert.ok(
+    !draftMarkdownProposalOutputSchema.safeParse({
+      ...base,
+      provenance: [{ claim: "c" }]
+    }).success
+  );
+});
+
+test("outline_flow_seed input carries sources/charter/origin; topic is gone", () => {
+  const input = {
+    provider: "codex",
+    flowId: "flow-1",
+    origin: "auto",
+    notes: "focus on operator-facing behaviour",
+    sources: [{ id: "src-1", name: "Repo", kind: "git", url: "https://example.com/r.git" }],
+    existingDocuments: [{ path: "a.md", heading: "A" }],
+    persona: "site reliability engineers",
+    charter: "Everything an operator needs to run the service",
+    routingSummary: "operations"
+  };
+  const parsed = outlineFlowSeedInputSchema.safeParse(input);
+  assert.ok(parsed.success);
+  assert.equal(parsed.success ? parsed.data.origin : undefined, "auto");
+  assert.ok(!outlineFlowSeedInputSchema.safeParse({ ...input, origin: "cron" }).success);
+  assert.ok(!("topic" in outlineFlowSeedInputSchema.shape));
+});
+
+test("outline_flow_seed output keeps proposedCharter/proposedPersona/mapUpdates (broker-strip protection)", () => {
+  const output = {
+    items: [{ title: "Runbook", coverage: ["how to restart"] }],
+    rationale: "r",
+    proposedCharter: "Cover operational runbooks",
+    proposedPersona: "on-call engineers",
+    mapUpdates: [{ sourceId: "src-1", topic: "restarts", paths: ["ops/restart.md"], description: "d" }]
+  };
+  const parsed = outlineFlowSeedOutputSchema.safeParse(output);
+  assert.ok(parsed.success);
+  assert.equal(parsed.success ? parsed.data.proposedCharter : undefined, output.proposedCharter);
+  assert.deepEqual(parsed.success ? parsed.data.mapUpdates : undefined, output.mapUpdates);
+  assert.ok(outlineFlowSeedOutputSchema.safeParse({ items: [], rationale: "r" }).success, "proposals stay optional");
+});
+
+test("draft_seed_document input keeps charter/persona/seedPlanId (input read-back protection)", () => {
+  const input = {
+    provider: "codex",
+    flowId: "flow-1",
+    coverage: ["c"],
+    sources: [],
+    charter: "Cover operational runbooks",
+    persona: "on-call engineers",
+    seedPlanId: "plan-1"
+  };
+  const parsed = draftSeedDocumentInputSchema.safeParse(input);
+  assert.ok(parsed.success);
+  assert.equal(parsed.success ? parsed.data.seedPlanId : undefined, "plan-1");
 });

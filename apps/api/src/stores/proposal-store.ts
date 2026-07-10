@@ -5,6 +5,7 @@ import type {
   DraftContext,
   DraftMarkdownProposalJobOutput,
   Proposal,
+  ProvenanceClaim,
   ReviewDecision
 } from "@magpie/core";
 
@@ -20,6 +21,8 @@ export interface ProposalInput extends DraftMarkdownProposalJobOutput {
   // rather than the single targetPath/markdown; dedupe (and later split) set it.
   changeset?: ChangesetChange[];
   draftContext?: DraftContext;
+  // The seed plan whose approval drafted this proposal (self-seeding flows).
+  seedPlanId?: string;
 }
 
 export interface ProposalListOptions {
@@ -56,7 +59,16 @@ export interface ProposalStore {
   // Promote a proposal to a merged file-set (used by the multi-file fold): replace
   // its changeset and refresh the primary markdown. targetPath is never rewritten.
   updateChangeset(id: string, changeset: ChangesetChange[], primaryMarkdown: string): Promise<Proposal | undefined>;
+  // Replace the proposal's per-claim provenance (#214). The fold rewrites the
+  // survivor's content, so its provenance event must be rewritten with it — the
+  // only post-create provenance write. undefined clears the column.
+  setProvenance(id: string, provenance: ProvenanceClaim[] | undefined): Promise<void>;
   updateReviewDecision(id: string, reviewDecision: ReviewDecision): Promise<Proposal | undefined>;
+  // Merged proposals whose primary target or changeset touches `path`, oldest
+  // merge first (event order). The provenance event stream for a document
+  // (#214): each merged row records what supported its change when it shipped,
+  // and the verify patrol folds this stream into advisory citedClaims.
+  listMergedByTargetPath(path: string, limit: number): Promise<Proposal[]>;
   reset(): Promise<void>;
 }
 
@@ -85,6 +97,8 @@ export class InMemoryProposalStore implements ProposalStore {
       flowId: input.flowId,
       changeset: input.changeset,
       draftContext: input.draftContext,
+      provenance: input.provenance,
+      seedPlanId: input.seedPlanId,
       regenerationCount: 0,
       createdAt: new Date().toISOString()
     };
@@ -207,6 +221,14 @@ export class InMemoryProposalStore implements ProposalStore {
     return updated;
   }
 
+  async setProvenance(id: string, provenance: ProvenanceClaim[] | undefined): Promise<void> {
+    const existing = this.proposals.get(id);
+    if (!existing) {
+      return;
+    }
+    this.proposals.set(id, { ...existing, provenance });
+  }
+
   async recordRegeneration(id: string, markdown: string, rationale?: string): Promise<Proposal | undefined> {
     const existing = this.proposals.get(id);
     if (!existing) {
@@ -230,6 +252,23 @@ export class InMemoryProposalStore implements ProposalStore {
     const updated: Proposal = { ...existing, reviewDecision };
     this.proposals.set(id, updated);
     return updated;
+  }
+
+  async listMergedByTargetPath(path: string, limit: number): Promise<Proposal[]> {
+    // Mirrors the Postgres ORDER BY merged_at ASC NULLS LAST: a merged row
+    // somehow missing its stamp sorts after every stamped event.
+    return [...this.proposals.values()]
+      .filter(
+        (proposal) =>
+          proposal.status === "merged" &&
+          (proposal.targetPath === path || (proposal.changeset ?? []).some((entry) => entry.path === path))
+      )
+      .sort((left, right) => {
+        if (!left.mergedAt) return right.mergedAt ? 1 : 0;
+        if (!right.mergedAt) return -1;
+        return left.mergedAt.localeCompare(right.mergedAt);
+      })
+      .slice(0, limit);
   }
 
   async reset(): Promise<void> {

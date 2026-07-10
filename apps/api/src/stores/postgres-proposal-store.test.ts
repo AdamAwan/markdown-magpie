@@ -27,15 +27,45 @@ describe("PostgresProposalStore", { skip: databaseUrl ? false : "DATABASE_URL no
   const store = new PostgresProposalStore(makeTestPool(databaseUrl as string));
 
   it("round-trips a draft through create and get", async () => {
-    const created = await store.create(draft(`roundtrip-${Date.now()}`));
+    const provenance = [
+      {
+        claim: "Logs are retained for 12 months",
+        anchor: "log-retention",
+        sources: [{ sourceId: "src-1", path: "docs/ops/logging.md", lines: "L10-L14" }]
+      }
+    ];
+    const created = await store.create({ ...draft(`roundtrip-${Date.now()}`), provenance });
     assert.equal(created.status, "draft");
     // Postgres coalesces a missing value to an empty array; the row should too.
     assert.deepEqual(created.triggeringQuestionIds, []);
+    assert.deepEqual(created.provenance, provenance);
 
     const fetched = await store.get(created.id);
     assert.equal(fetched?.id, created.id);
     assert.equal(fetched?.title, created.title);
     assert.equal(fetched?.markdown, created.markdown);
+    assert.deepEqual(fetched?.provenance, provenance);
+  });
+
+  // #214 phase 3: the fold rewrites the survivor's provenance event alongside
+  // its content — set, replace, and clear (undefined → NULL) must round-trip.
+  it("setProvenance sets, replaces, and clears the provenance column", async () => {
+    const created = await store.create(draft(`set-provenance-${Date.now()}`));
+    assert.equal(created.provenance, undefined);
+
+    const first = [{ claim: "A", sources: [{ sourceId: "s1", path: "a.md" }] }];
+    await store.setProvenance(created.id, first);
+    assert.deepEqual((await store.get(created.id))?.provenance, first);
+
+    const replaced = [
+      { claim: "A", sources: [{ sourceId: "s1", path: "a.md" }] },
+      { claim: "B", anchor: "b", sources: [{ sourceId: "s2", path: "b.md", lines: "L1-L3" }] }
+    ];
+    await store.setProvenance(created.id, replaced);
+    assert.deepEqual((await store.get(created.id))?.provenance, replaced);
+
+    await store.setProvenance(created.id, undefined);
+    assert.equal((await store.get(created.id))?.provenance, undefined);
   });
 
   it("excludes terminal proposals from the default list but keeps them as history", async () => {
@@ -113,6 +143,48 @@ describe("PostgresProposalStore", { skip: databaseUrl ? false : "DATABASE_URL no
 
     const relinked = await store.linkCluster(proposal.id, cluster.id);
     assert.equal(relinked?.gapClusterId, cluster.id);
+  });
+
+  it("listMergedByTargetPath returns merged proposals touching a path, oldest merge first", async () => {
+    // Unique per run: the suite shares one database and never resets the table.
+    const path = `docs/prov-${randomUUID()}.md`;
+    const otherPath = `docs/prov-other-${randomUUID()}.md`;
+
+    const late = await store.create({ ...draft(`prov-late-${Date.now()}`), targetPath: path });
+    const early = await store.create({ ...draft(`prov-early-${Date.now()}`), targetPath: path });
+    const other = await store.create({ ...draft(`prov-other-${Date.now()}`), targetPath: otherPath });
+    await store.create({ ...draft(`prov-draft-${Date.now()}`), targetPath: path });
+    const viaChangeset = await store.create({
+      ...draft(`prov-changeset-${Date.now()}`),
+      targetPath: otherPath,
+      changeset: [
+        { path: otherPath, content: "# other" },
+        { path, content: "# moved" }
+      ]
+    });
+
+    // Merge out of creation order so the assertion exercises merged_at ordering;
+    // the store stamps merged_at itself, so space the merges out.
+    await store.updateStatus(early.id, "merged");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await store.updateStatus(late.id, "merged");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await store.updateStatus(viaChangeset.id, "merged");
+    await store.updateStatus(other.id, "merged");
+
+    const events = await store.listMergedByTargetPath(path, 10);
+    assert.deepEqual(
+      events.map((proposal) => proposal.id),
+      [early.id, late.id, viaChangeset.id],
+      "primary-path and changeset matches, oldest merge first; drafts and other paths excluded"
+    );
+
+    const capped = await store.listMergedByTargetPath(path, 2);
+    assert.deepEqual(
+      capped.map((proposal) => proposal.id),
+      [early.id, late.id],
+      "the limit keeps the oldest events"
+    );
   });
 
   it("getByClusterId returns the cluster's non-terminal proposal, newest first", async () => {

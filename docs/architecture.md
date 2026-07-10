@@ -40,7 +40,7 @@ enqueues a job; a separate **watcher** process claims it, invokes the configured
 provider, and posts the result back over HTTP. The API and watcher share only the
 HTTP API and the managed-checkout volume — the watcher has no direct database
 access. The shared checkout volume now also hosts *source* checkouts for
-source-grounded jobs (seeding, gap drafting, and the patrol child jobs
+source-grounded jobs (seed planning + drafting, gap drafting, and the patrol child jobs
 `verify_document` / `correct_document` / `improve_document`): the watcher resolves a
 job's `SourceDescriptor[]` to read-only workspaces there and lets the agent explore
 them directly, so no source-grounded job samples source files API-side. The shared
@@ -107,6 +107,15 @@ Proposal generation runs along two paths:
   proposals for any cluster not already covered, publishes them as pull requests, and advances
   proposals as their PRs merge or close — all in one task with no manual review step.
 
+Every proposal carries **per-claim provenance** (#214): the draft jobs return a structured
+`provenance` array (each substantive claim plus the source files that ground it) instead of
+citing repository paths inline in the document body, so internal source locations never
+leak into answers. The map is persisted on the proposal row (append-only event-log
+semantics: a merged proposal's row is the provenance event for its target path) and
+rendered for reviewers in the PR body and the console's proposal view — for local-git
+flows, which have no PRs, the console is the review surface. See
+[the claim-provenance spec](superpowers/specs/2026-07-08-claim-provenance-design.md).
+
 Both paths stop at a **pull request**: automated flows open and update PRs, but the *merge*
 that changes the source of truth is always a human action on the hosting provider. Because AI
 flows ingest untrusted content (questions, source Markdown, diffs), this mandatory-human-review
@@ -118,8 +127,9 @@ branch-protection expectations that keep the review gate enforced.
 
 Background tasks are registered **per flow** in the scheduler and managed from the
 **Schedules** page. The model has two tiers: each scheduled task fires *exactly one*
-job on its cron (tier 1), and four of those are *maintenance orchestrators* that fan
-out into the AI and GitHub jobs that do the real work (tier 2). The job-type
+job on its cron (tier 1), and five of those are *maintenance* jobs — four fan out into
+the AI and GitHub jobs that do the real work (tier 2); the seed bootstrap enqueues its
+planning job and returns without waiting on it. The job-type
 identifier is also the pg-boss queue name, so the same string names the row in the
 Schedules UI, the box in the dataflow diagram, and the `type=` filter in the job
 queue.
@@ -131,6 +141,7 @@ queue.
 | Snapshot refresh | `refresh_flow_snapshot` | ~5 min | github | — *(leaf: writes the flow snapshot of gaps, proposals, and PR state the reconciler reads, and reports each open PR's mergeability so a **stale PR** can auto-regenerate — see below; **not scheduled for local-git flows**, which have no PRs to poll)* |
 | Correctness patrol | `correctness_patrol` | hourly | maintenance | `verify_document` → `correct_document`, `dedupe_documents`, `split_document` |
 | Editorial patrol | `editorial_patrol` | hourly | maintenance | `improve_document` |
+| Seed bootstrap | `seed_bootstrap` | hourly | maintenance | `outline_flow_seed` for a sparse flow (enqueue-and-return — never bounded-waits; the plan waits for human review) |
 
 One more maintenance job — `verify_gap_closure` — is **not** scheduled on a cron; it is
 enqueued *on merge* (the merge cascade below) for any proposal that had triggering
@@ -160,16 +171,22 @@ through the **reconcile gate** (`open-new` / `fold` / `defer`) before a
 schedules converge on one mechanism. The **Scheduled Jobs → Job Types** diagram on
 the `/dataflow` page draws the full fan-out.
 
-Not every producer is scheduled. **Flow seeding** is an on-demand producer:
-`POST /api/flows/:id/seed` (and the `kb_seed` MCP tool) enqueue a `draft_seed_document`
-AI job per requested doc, bypassing the demand-inference half (gap clustering + the
-intent gate) since the caller supplies the intent. The resulting clusterless proposals
-still converge on the same reconcile gate and `publish_proposal` path, so seeding a new
-flow — or adding a new area to an existing one — ends at a reviewable PR like everything
-else. The item list can be authored by hand or proposed by the `outline_flow_seed` AI job
-(`POST /api/flows/:id/outline`), which is grounded in the flow's existing docs via inline
-retrieval and only *proposes* — its `SeedItem[]` output feeds the seed endpoint after a human
-edits it. The console's **Seed / add an area** page drives topic → outline → edit → seed. See
+**Flow seeding** is plan-centric and self-seeding. Planning starts from the flow's
+*sources*: `POST /api/flows/:id/outline` (one click, no topic; also the `kb_outline` MCP
+tool) enqueues the source-grounded `outline_flow_seed` job, whose agent explores the
+flow's source repositories and proposes a complete document plan — plus a charter/persona
+proposal when the flow config lacks one (the system never writes flow config; the console
+offers copy-to-config). The completion handler persists the plan in `seed_plans`, where it
+waits behind a **human review gate**: edit charter/persona and items, approve or dismiss
+(`/api/seed-plans/*`; the `kb_seed` MCP tool approves by plan id). Approval — the only
+drafting entry point — enqueues one `draft_seed_document` per approved item carrying the
+plan's run-scoped charter/persona, bypassing the demand-inference half (gap clustering +
+the intent gate) since the plan supplies the intent. The resulting clusterless proposals
+still converge on the same reconcile gate and `publish_proposal` path, so seeding ends at a
+reviewable PR like everything else. A per-flow hourly `seed_bootstrap` maintenance task
+auto-proposes a plan for any flow with sources but a near-empty KB (guards make it
+self-quiescing; a dismissed plan is not re-proposed until the flow's sources change). The
+console's **Seed** page drives propose → review/edit → approve. See
 [`ai-jobs.md`](./ai-jobs.md) (§ Seeding a flow).
 
 Orchestration detail: a maintenance watcher claims a `process_gaps_to_pull_requests`

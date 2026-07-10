@@ -43,6 +43,7 @@ const EXPIRATION_SECONDS = {
   correctness_patrol: 60 * 60,
   editorial_patrol: 60 * 60,
   verify_gap_closure: 60 * 60,
+  seed_bootstrap: 60 * 60,
   publish_proposal: 15 * 60,
   crosslink_pull_requests: 10 * 60,
   fold_markdown_proposal: 15 * 60,
@@ -139,8 +140,23 @@ test("maintenance capability yields only orchestration work queues", () => {
     "source_change_sync",
     "correctness_patrol",
     "editorial_patrol",
-    "verify_gap_closure"
+    "verify_gap_closure",
+    "seed_bootstrap"
   ]);
+});
+
+test("seed_bootstrap is a maintenance job with an unpartitioned queue name", () => {
+  const definition = jobDefinition("seed_bootstrap");
+  assert.deepEqual([...definition.capabilities], ["maintenance"]);
+  assert.equal(definition.requiredCapability({ flowId: "f1" }), "maintenance");
+  assert.equal(definition.queueName({ flowId: "f1" }), "seed_bootstrap");
+  assert.deepEqual(definition.inputSchema.parse({ flowId: "f1" }), { flowId: "f1" });
+  assert.equal(definition.policy.retryLimit, 2);
+  assert.ok(
+    definition.outputSchema.safeParse({ enqueued: false, reason: "plan_pending" }).success,
+    "no-op ticks report their reason"
+  );
+  assert.ok(definition.outputSchema.safeParse({ enqueued: true, outlineJobId: "j1" }).success);
 });
 
 test("verify_gap_closure is a maintenance job with an unpartitioned queue name", () => {

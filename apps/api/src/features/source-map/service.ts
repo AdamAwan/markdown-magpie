@@ -12,11 +12,12 @@ const MAX_PATH_LENGTH = 260;
 const MAX_DESCRIPTION_LENGTH = 240;
 const MAX_ENTRIES_PER_SOURCE = 200;
 
-// The five job types whose inputs carry `sources` and whose outputs may carry
+// The six job types whose inputs carry `sources` and whose outputs may carry
 // `mapUpdates`. Anything else is a no-op here.
 const SOURCE_GROUNDED_JOB_TYPES: ReadonlySet<JobType> = new Set<JobType>([
   "draft_seed_document",
   "draft_markdown_proposal",
+  "outline_flow_seed",
   "verify_document",
   "correct_document",
   "improve_document"
@@ -83,8 +84,11 @@ export async function applySourceMapUpdatesFromCompletedJob(
     try {
       await ctx.stores.sourceMap.upsert({
         sourceId: update.sourceId,
+        // Mirror rejectReason's normalisation exactly: empty-string paths are
+        // dropped so they can't reach the store and skew the consensus Jaccard
+        // (a stray "" in the set inflates the union and depresses similarity).
+        paths: update.paths.map((path) => path.trim()).filter(Boolean),
         topic: update.topic.trim(),
-        paths: update.paths.map((path) => path.trim()),
         description: update.description.trim(),
         ...(update.observedSha ? { observedSha: update.observedSha } : {})
       });

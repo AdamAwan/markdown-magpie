@@ -23,6 +23,7 @@ export const JOB_TYPES = [
   "correctness_patrol",
   "editorial_patrol",
   "verify_gap_closure",
+  "seed_bootstrap",
   "publish_proposal",
   "crosslink_pull_requests",
   "comment_pull_request"

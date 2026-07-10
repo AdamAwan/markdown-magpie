@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
+import type { ProvenanceClaim } from "@magpie/core";
 import { makeTestContext } from "../test-support/context.js";
+import { logger } from "../logger.js";
 import { reconcileDraftedProposal, reconcileCorrectiveProposal, reconcileSeedProposal, reconcileDedupeProposal, reconcileSplitProposal, reconcileImproveProposal, reconcileSourceSyncProposal, applyFoldFromCompletedJob, applyChangesetFoldFromCompletedJob, enqueueFoldFallback } from "./fold.js";
 import type { AppContext } from "../context.js";
 
@@ -17,15 +19,23 @@ async function clusterWithGap(ctx: AppContext, flowId: string | undefined, summa
   return cluster.id;
 }
 
-async function draft(ctx: AppContext, opts: { targetPath: string; gapClusterId?: string }) {
+async function draft(
+  ctx: AppContext,
+  opts: { targetPath: string; gapClusterId?: string; provenance?: ProvenanceClaim[] }
+) {
   return ctx.stores.proposals.create({
     title: "T",
     targetPath: opts.targetPath,
     markdown: "# body",
     rationale: "r",
     evidence: [],
-    ...(opts.gapClusterId ? { gapClusterId: opts.gapClusterId } : {})
+    ...(opts.gapClusterId ? { gapClusterId: opts.gapClusterId } : {}),
+    ...(opts.provenance ? { provenance: opts.provenance } : {})
   });
+}
+
+function claim(name: string): ProvenanceClaim {
+  return { claim: name, anchor: name.toLowerCase(), sources: [{ sourceId: "s1", path: `${name}.md` }] };
 }
 
 describe("reconcileDraftedProposal", () => {
@@ -37,6 +47,18 @@ describe("reconcileDraftedProposal", () => {
     const jobs = (await ctx.jobs.list({ type: "fold_markdown_proposal" })).jobs;
     assert.equal(jobs.length, 1);
     assert.equal((jobs[0].input as { rivalProposalId: string }).rivalProposalId, rival.id);
+  });
+
+  it("carries both parents' provenance on the fold job input (#214)", async () => {
+    const ctx = makeTestContext();
+    await draft(ctx, { targetPath: "kb/refunds.md", provenance: [claim("Survivor")] });
+    const rival = await draft(ctx, { targetPath: "kb/refunds.md", provenance: [claim("Rival")] });
+    await reconcileDraftedProposal(ctx, rival);
+    const jobs = (await ctx.jobs.list({ type: "fold_markdown_proposal" })).jobs;
+    assert.equal(jobs.length, 1);
+    const input = jobs[0].input as { survivorProvenance?: ProvenanceClaim[]; rivalProvenance?: ProvenanceClaim[] };
+    assert.deepEqual(input.survivorProvenance, [claim("Survivor")]);
+    assert.deepEqual(input.rivalProvenance, [claim("Rival")]);
   });
 
   it("does not fold when there is no overlap", async () => {
@@ -128,6 +150,41 @@ describe("reconcileCorrectiveProposal", () => {
     await reconcileCorrectiveProposal(ctx, rival);
     assert.equal((await ctx.jobs.list({ type: "fold_markdown_proposal" })).jobs.length, 1);
     assert.deepEqual(await ctx.stores.gapClusters.listPendingPublicationActions(), []);
+  });
+
+  it("carries both parents' provenance on the fold job input (#214)", async () => {
+    const ctx = makeTestContext();
+    const survivor = await ctx.stores.proposals.create({
+      title: "Gap doc",
+      targetPath: "a.md",
+      markdown: "# survivor",
+      rationale: "r",
+      evidence: [],
+      flowId: "billing",
+      provenance: [claim("Survivor")]
+    });
+    await ctx.stores.proposals.recordPublication(survivor.id, {
+      provider: "local-git",
+      branchName: "b",
+      commitSha: "c",
+      pullRequestUrl: "https://github.com/o/r/pull/1",
+      publishedAt: new Date().toISOString()
+    });
+    const rival = await ctx.stores.proposals.create({
+      title: "Verify: correct unprovable claims in a.md",
+      targetPath: "a.md",
+      markdown: "# rival",
+      rationale: "r",
+      evidence: [],
+      flowId: "billing",
+      provenance: [claim("Rival")]
+    });
+    await reconcileCorrectiveProposal(ctx, rival);
+    const foldJobs = (await ctx.jobs.list({ type: "fold_markdown_proposal" })).jobs;
+    assert.equal(foldJobs.length, 1);
+    const input = foldJobs[0].input as { survivorProvenance?: ProvenanceClaim[]; rivalProvenance?: ProvenanceClaim[] };
+    assert.deepEqual(input.survivorProvenance, [claim("Survivor")]);
+    assert.deepEqual(input.rivalProvenance, [claim("Rival")]);
   });
 });
 
@@ -371,6 +428,42 @@ describe("reconcileImproveProposal", () => {
     assert.deepEqual(await ctx.stores.gapClusters.listPendingPublicationActions(), []);
   });
 
+  it("carries both parents' provenance on the fold job input (#214)", async () => {
+    const ctx = makeTestContext();
+    const survivor = await ctx.stores.proposals.create({
+      title: "Gap doc",
+      targetPath: "kb/refunds.md",
+      markdown: "# survivor",
+      rationale: "r",
+      evidence: [],
+      flowId: "billing",
+      provenance: [claim("Survivor")]
+    });
+    await ctx.stores.proposals.recordPublication(survivor.id, {
+      provider: "local-git",
+      branchName: "b",
+      commitSha: "c",
+      pullRequestUrl: "https://github.com/o/r/pull/1",
+      publishedAt: new Date().toISOString()
+    });
+    const rival = await ctx.stores.proposals.create({
+      title: "Improve: expand kb/refunds.md",
+      targetPath: "kb/refunds.md",
+      markdown: "# Refunds\nPartial refunds are supported.",
+      rationale: "Added source-backed coverage.",
+      evidence: [],
+      flowId: "billing",
+      provenance: [claim("Rival")]
+    });
+
+    await reconcileImproveProposal(ctx, rival);
+    const foldJobs = (await ctx.jobs.list({ type: "fold_markdown_proposal" })).jobs;
+    assert.equal(foldJobs.length, 1);
+    const input = foldJobs[0].input as { survivorProvenance?: ProvenanceClaim[]; rivalProvenance?: ProvenanceClaim[] };
+    assert.deepEqual(input.survivorProvenance, [claim("Survivor")]);
+    assert.deepEqual(input.rivalProvenance, [claim("Rival")]);
+  });
+
   it("defer (overlap only an approved PR) self-publishes the improve proposal", async () => {
     const ctx = makeTestContext();
     const approved = await ctx.stores.proposals.create({
@@ -468,6 +561,113 @@ describe("applyFoldFromCompletedJob", () => {
     // markdown stays in sync with the primary entry.
     assert.equal(updated?.markdown, "# a (merged)");
     assert.equal((await ctx.stores.proposals.get(rival.id))?.status, "superseded");
+  });
+
+  // #214 phase 3: the fold rewrites the survivor's content, so its provenance
+  // event is rewritten with it — preferring the fold output's re-anchored
+  // claims, falling back to concatenating both parents' so the rival's
+  // grounding is never silently dropped.
+  it("replaces the survivor's provenance with the fold output's merged claims", async () => {
+    const ctx = makeTestContext();
+    const survivor = await draft(ctx, { targetPath: "kb/refunds.md", provenance: [claim("Survivor")] });
+    const rival = await draft(ctx, { targetPath: "kb/refunds.md", provenance: [claim("Rival")] });
+    const job = await ctx.jobs.create("fold_markdown_proposal", {
+      provider: "codex",
+      survivorProposalId: survivor.id,
+      rivalProposalId: rival.id,
+      targetPath: "kb/refunds.md",
+      survivorMarkdown: "# survivor",
+      rivalMarkdown: "# rival",
+      rivalGapSummaries: [],
+      rivalEvidence: [],
+      survivorProvenance: survivor.provenance,
+      rivalProvenance: rival.provenance,
+      expectedOutput: "folded_markdown"
+    });
+    const merged = [claim("Survivor"), claim("Rival")].map((entry) => ({ ...entry, anchor: "merged-section" }));
+
+    const warn = mock.method(logger, "warn");
+    try {
+      await applyFoldFromCompletedJob(ctx, await ctx.jobs.get(job.id), {
+        markdown: "# merged",
+        rationale: "folded",
+        provenance: merged
+      });
+      assert.deepEqual((await ctx.stores.proposals.get(survivor.id))?.provenance, merged);
+      assert.equal(
+        warn.mock.calls.filter((call) => String(call.arguments[1]).includes("provenance")).length,
+        0,
+        "an output that re-attributes provenance itself needs no fallback warn"
+      );
+    } finally {
+      warn.mock.restore();
+    }
+  });
+
+  it("concatenates both parents' provenance (with a warn) when the fold output carries none", async () => {
+    const ctx = makeTestContext();
+    const survivor = await draft(ctx, { targetPath: "kb/refunds.md", provenance: [claim("Survivor")] });
+    const rival = await draft(ctx, { targetPath: "kb/refunds.md", provenance: [claim("Rival")] });
+    const job = await ctx.jobs.create("fold_markdown_proposal", {
+      provider: "codex",
+      survivorProposalId: survivor.id,
+      rivalProposalId: rival.id,
+      targetPath: "kb/refunds.md",
+      survivorMarkdown: "# survivor",
+      rivalMarkdown: "# rival",
+      rivalGapSummaries: [],
+      rivalEvidence: [],
+      survivorProvenance: survivor.provenance,
+      rivalProvenance: rival.provenance,
+      expectedOutput: "folded_markdown"
+    });
+
+    const warn = mock.method(logger, "warn");
+    try {
+      await applyFoldFromCompletedJob(ctx, await ctx.jobs.get(job.id), { markdown: "# merged", rationale: "folded" });
+      assert.deepEqual(
+        (await ctx.stores.proposals.get(survivor.id))?.provenance,
+        [claim("Survivor"), claim("Rival")],
+        "concat fallback: survivor's claims first, then the rival's"
+      );
+      assert.equal(
+        warn.mock.calls.filter((call) => String(call.arguments[1]).includes("provenance")).length,
+        1,
+        "the concat fallback is operator-visible"
+      );
+    } finally {
+      warn.mock.restore();
+    }
+  });
+
+  it("writes no provenance and warns nothing when neither parent has any", async () => {
+    const ctx = makeTestContext();
+    const survivor = await draft(ctx, { targetPath: "kb/refunds.md" });
+    const rival = await draft(ctx, { targetPath: "kb/refunds.md" });
+    const job = await ctx.jobs.create("fold_markdown_proposal", {
+      provider: "codex",
+      survivorProposalId: survivor.id,
+      rivalProposalId: rival.id,
+      targetPath: "kb/refunds.md",
+      survivorMarkdown: "# survivor",
+      rivalMarkdown: "# rival",
+      rivalGapSummaries: [],
+      rivalEvidence: [],
+      expectedOutput: "folded_markdown"
+    });
+
+    const warn = mock.method(logger, "warn");
+    try {
+      await applyFoldFromCompletedJob(ctx, await ctx.jobs.get(job.id), { markdown: "# merged", rationale: "folded" });
+      assert.equal((await ctx.stores.proposals.get(survivor.id))?.provenance, undefined);
+      assert.equal(
+        warn.mock.calls.filter((call) => String(call.arguments[1]).includes("provenance")).length,
+        0,
+        "no provenance anywhere is not a fallback"
+      );
+    } finally {
+      warn.mock.restore();
+    }
   });
 
   it("is idempotent: a second call with the same job is a no-op", async () => {
@@ -588,6 +788,51 @@ describe("applyChangesetFoldFromCompletedJob", () => {
     const pending = await ctx.stores.gapClusters.listPendingPublicationActions();
     assert.ok(pending.some((a) => a.proposalId === survivor.id && a.kind === "publish"));
     assert.equal((await ctx.jobs.list({ type: "comment_pull_request" })).jobs.length, 1);
+  });
+
+  // #214 phase 3: the changeset fold output carries no provenance by contract
+  // (dedupe/split changesets are a documented limitation), so the parents'
+  // claims are concatenated onto the survivor rather than silently dropped.
+  it("concatenates both parents' provenance onto the survivor (with a warn)", async () => {
+    const ctx = makeTestContext();
+    const survivor = await draft(ctx, { targetPath: "kb/b.md", provenance: [claim("Survivor")] });
+    const rival = await ctx.stores.proposals.create({
+      title: "Dedupe: reconcile kb/a.md with kb/b.md",
+      targetPath: "kb/a.md",
+      markdown: "# A merged",
+      rationale: "r",
+      evidence: [],
+      flowId: "billing",
+      provenance: [claim("Rival")],
+      changeset: [
+        { path: "kb/a.md", content: "# A merged" },
+        { path: "kb/b.md", delete: true }
+      ]
+    });
+    const job = await ctx.jobs.create("fold_changeset_proposal", {
+      provider: "codex",
+      survivorProposalId: survivor.id,
+      rivalProposalId: rival.id,
+      survivorChangeset: [{ path: "kb/b.md", content: "# B" }],
+      rivalChangeset: rival.changeset!,
+      sharedPaths: ["kb/b.md"],
+      expectedOutput: "folded_changeset"
+    });
+
+    const warn = mock.method(logger, "warn");
+    try {
+      await applyChangesetFoldFromCompletedJob(ctx, await ctx.jobs.get(job.id), {
+        changeset: [{ path: "kb/b.md", content: "# B\nnow covers A" }],
+        rationale: "merged"
+      });
+      assert.deepEqual(
+        (await ctx.stores.proposals.get(survivor.id))?.provenance,
+        [claim("Survivor"), claim("Rival")]
+      );
+      assert.equal(warn.mock.calls.filter((call) => String(call.arguments[1]).includes("provenance")).length, 1);
+    } finally {
+      warn.mock.restore();
+    }
   });
 
   it("no-ops when the rival is already superseded (idempotent)", async () => {

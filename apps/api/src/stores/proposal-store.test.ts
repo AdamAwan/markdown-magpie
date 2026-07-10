@@ -185,3 +185,99 @@ test("updateChangeset returns undefined for an unknown proposal", async () => {
   const store = new InMemoryProposalStore();
   assert.equal(await store.updateChangeset("nope", [], "x"), undefined);
 });
+
+// #214 phase 3: a fold rewrites the survivor's content, so its provenance event
+// is rewritten with it — the only post-create provenance write.
+test("setProvenance sets, replaces, and clears the provenance", async () => {
+  const store = new InMemoryProposalStore();
+  const created = await store.create(draft("folded"));
+  assert.equal(created.provenance, undefined);
+
+  const first = [{ claim: "A", sources: [{ sourceId: "s1", path: "a.md" }] }];
+  await store.setProvenance(created.id, first);
+  assert.deepEqual((await store.get(created.id))?.provenance, first);
+
+  const replaced = [
+    { claim: "A", sources: [{ sourceId: "s1", path: "a.md" }] },
+    { claim: "B", anchor: "b", sources: [{ sourceId: "s2", path: "b.md", lines: "L1-L3" }] }
+  ];
+  await store.setProvenance(created.id, replaced);
+  assert.deepEqual((await store.get(created.id))?.provenance, replaced);
+
+  await store.setProvenance(created.id, undefined);
+  assert.equal((await store.get(created.id))?.provenance, undefined);
+});
+
+test("setProvenance is a no-op for an unknown proposal", async () => {
+  const store = new InMemoryProposalStore();
+  await store.setProvenance("nope", [{ claim: "A", sources: [{ sourceId: "s1" }] }]);
+});
+
+test("listMergedByTargetPath returns merged proposals touching a path, oldest merge first", async () => {
+  const store = new InMemoryProposalStore();
+  // Two merged proposals target docs/a.md; merge the "late" one first so the
+  // ordering assertion exercises mergedAt, not insertion order.
+  const late = await store.create({ ...draft("late"), targetPath: "docs/a.md" });
+  const early = await store.create({ ...draft("early"), targetPath: "docs/a.md" });
+  const other = await store.create({ ...draft("other"), targetPath: "docs/b.md" });
+  await store.create({ ...draft("draft-only"), targetPath: "docs/a.md" });
+  await store.updateStatus(early.id, "merged");
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  await store.updateStatus(late.id, "merged");
+  await store.updateStatus(other.id, "merged");
+
+  const events = await store.listMergedByTargetPath("docs/a.md", 10);
+  assert.deepEqual(
+    events.map((proposal) => proposal.id),
+    [early.id, late.id],
+    "only the merged docs/a.md proposals, oldest merge first"
+  );
+});
+
+test("listMergedByTargetPath includes merged changesets touching the path and honours the limit", async () => {
+  const store = new InMemoryProposalStore();
+  const primary = await store.create({ ...draft("primary"), targetPath: "docs/a.md" });
+  const viaChangeset = await store.create({
+    ...draft("via-changeset"),
+    targetPath: "docs/c.md",
+    changeset: [
+      { path: "docs/c.md", content: "# c" },
+      { path: "docs/a.md", content: "# a moved" }
+    ]
+  });
+  await store.updateStatus(primary.id, "merged");
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  await store.updateStatus(viaChangeset.id, "merged");
+
+  const events = await store.listMergedByTargetPath("docs/a.md", 10);
+  assert.deepEqual(
+    events.map((proposal) => proposal.id),
+    [primary.id, viaChangeset.id],
+    "a merged changeset entry touching the path is a provenance event for it"
+  );
+
+  const capped = await store.listMergedByTargetPath("docs/a.md", 1);
+  assert.deepEqual(
+    capped.map((proposal) => proposal.id),
+    [primary.id],
+    "the limit keeps the OLDEST events (the stream is folded oldest-first)"
+  );
+});
+
+test("create persists per-claim provenance and leaves it undefined when absent", async () => {
+  const store = new InMemoryProposalStore();
+  const provenance = [
+    {
+      claim: "Logs are retained for 12 months",
+      anchor: "log-retention",
+      sources: [{ sourceId: "src-1", path: "docs/ops/logging.md", lines: "L10-L14" }]
+    }
+  ];
+  const withProvenance = await store.create({ ...draft("cited"), provenance });
+  assert.deepEqual(withProvenance.provenance, provenance);
+  assert.deepEqual((await store.get(withProvenance.id))?.provenance, provenance);
+
+  const without = await store.create(draft("uncited"));
+  assert.equal(without.provenance, undefined);
+  assert.equal((await store.get(without.id))?.provenance, undefined);
+});

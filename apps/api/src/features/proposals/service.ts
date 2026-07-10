@@ -10,6 +10,7 @@ import type {
   GapCandidate,
   OpenPullRequestContext,
   Proposal,
+  ProvenanceClaim,
   QuestionLog,
   RepositoryRef,
   SourceDescriptor,
@@ -1319,6 +1320,21 @@ function foldUncoveredPointsIntoRationale(
   return `${output.rationale}\n\nNot covered by the sources (omitted from the document): ${points.join("; ")}.`;
 }
 
+// #214: drafts must report per-claim provenance. Absence is tolerated (the
+// field is optional end-to-end; review + the verify patrol enforce quality)
+// but warned, so silent regressions in drafter behaviour are operator-visible.
+function warnMissingProvenance(
+  job: JobView,
+  output: { targetPath: string; provenance?: ProvenanceClaim[] }
+): void {
+  if (!output.provenance || output.provenance.length === 0) {
+    logger.warn(
+      { jobId: job.id, jobType: job.type, targetPath: output.targetPath },
+      "draft completed without per-claim provenance; proposal will carry none"
+    );
+  }
+}
+
 function dedupeCitations(citations: Proposal["evidence"]): Proposal["evidence"] {
   const seen = new Set<string>();
   const result: Proposal["evidence"] = [];
@@ -1346,6 +1362,9 @@ export async function createProposalFromCompletedJob(
     triggeringQuestionIds?: string[];
   };
 
+  warnMissingProvenance(job, output);
+  // The spread below carries output.provenance (with the rest of the draft
+  // output) into the created proposal via ProposalInput.
   const withReport: DraftMarkdownProposalJobOutput = {
     ...output,
     rationale: foldUncoveredPointsIntoRationale(job, output)
@@ -1434,6 +1453,8 @@ export async function createCorrectiveProposalFromCompletedJob(
   if (!input.path) {
     return undefined;
   }
+  // #214 phase 3: a correction is a provenance event for its own diff.
+  warnMissingProvenance(job, { targetPath: input.path, provenance: parsed.data.provenance });
   return ctx.stores.proposals.create(
     flagAdvisoryDraft(
       {
@@ -1442,6 +1463,7 @@ export async function createCorrectiveProposalFromCompletedJob(
         markdown: parsed.data.markdown,
         rationale: parsed.data.rationale,
         evidence: [],
+        provenance: parsed.data.provenance,
         flowId: input.flowId,
         destinationId: input.destinationId,
         jobId: job.id
@@ -1472,6 +1494,7 @@ export async function createSeedProposalFromCompletedJob(
   if (!input.flowId) {
     return undefined;
   }
+  warnMissingProvenance(job, parsed.data);
   return ctx.stores.proposals.create(
     flagAdvisoryDraft(
       {
@@ -1483,9 +1506,13 @@ export async function createSeedProposalFromCompletedJob(
         markdown: parsed.data.markdown,
         rationale: foldUncoveredPointsIntoRationale(job, parsed.data),
         evidence: [],
+        provenance: parsed.data.provenance,
         flowId: input.flowId,
         destinationId: input.destinationId,
-        jobId: job.id
+        jobId: job.id,
+        // Read back off the stored input so the plan view can show per-item
+        // drafting/publication progress (triggeringQuestionIds precedent).
+        seedPlanId: input.seedPlanId
       },
       { jobId: job.id, jobType: job.type }
     )
@@ -1612,6 +1639,10 @@ export async function createImproveProposalFromCompletedJob(
   if (!input.path || parsed.data.markdown.trim() === input.content?.trim()) {
     return undefined;
   }
+  // #214 phase 3: only a materialised improvement is a provenance event — the
+  // improved: false and unchanged-body exits above ground no new claims and
+  // must never warn as missing-provenance drafts.
+  warnMissingProvenance(job, { targetPath: input.path, provenance: parsed.data.provenance });
   return ctx.stores.proposals.create(
     flagAdvisoryDraft(
       {
@@ -1620,6 +1651,7 @@ export async function createImproveProposalFromCompletedJob(
         markdown: parsed.data.markdown,
         rationale: parsed.data.rationale,
         evidence: [],
+        provenance: parsed.data.provenance,
         flowId: input.flowId,
         destinationId: input.destinationId,
         jobId: job.id

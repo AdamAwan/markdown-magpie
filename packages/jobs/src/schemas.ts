@@ -29,7 +29,8 @@ import type {
   ImproveDocumentJobInput as CoreImproveDocumentJobInput,
   ImproveDocumentJobOutput,
   ChangesetChange,
-  SourceMapUpdate
+  SourceMapUpdate,
+  ProvenanceClaim
 } from "@magpie/core";
 import { AI_PROVIDERS, type AiProviderName, type JobError } from "./types.js";
 
@@ -153,6 +154,24 @@ const sourceMapUpdateSchema = z.object({
   observedSha: z.string().optional()
 }) satisfies z.ZodType<SourceMapUpdate>;
 const mapUpdatesField = z.array(sourceMapUpdateSchema).optional();
+// Mirrors @magpie/core ProvenanceClaim — per-claim source grounding on draft
+// outputs (#214). Must be on the schema or the broker strips it from the
+// completed output before the API can persist it (same trap as mapUpdates).
+const provenanceClaimSchema = z.object({
+  claim: z.string().min(1),
+  anchor: z.string().optional(),
+  sources: z
+    .array(
+      z.object({
+        sourceId: z.string(),
+        path: z.string().optional(),
+        lines: z.string().optional(),
+        url: z.string().optional()
+      })
+    )
+    .min(1)
+}) satisfies z.ZodType<ProvenanceClaim>;
+const provenanceField = z.array(provenanceClaimSchema).optional();
 // Mirrors @magpie/core OpenPullRequestContext. status reuses the core
 // PROPOSAL_STATUSES tuple so the enum can't drift from the type it validates.
 const openPullRequestContextSchema = z.object({
@@ -196,7 +215,8 @@ export const draftMarkdownProposalOutputSchema = z.object({
   mapUpdates: mapUpdatesField,
   // #213: source-uncovered points, omitted from the markdown by contract. Must be
   // declared here or the broker strips it before the completion handler reads it.
-  uncoveredPoints: z.array(z.string()).optional()
+  uncoveredPoints: z.array(z.string()).optional(),
+  provenance: provenanceField
 }) satisfies z.ZodType<DraftMarkdownProposalJobOutput>;
 
 export const draftSeedDocumentInputSchema = z.object({
@@ -207,7 +227,13 @@ export const draftSeedDocumentInputSchema = z.object({
   coverage: z.array(z.string()),
   questions: z.array(z.string()).optional(),
   sources: z.array(sourceDescriptorSchema),
-  destinationId: z.string().optional()
+  destinationId: z.string().optional(),
+  // Run-scoped shaping from the seed plan; seedPlanId is read back at completion
+  // to link the proposal (triggeringQuestionIds precedent) — must be on the
+  // schema or the broker strips it.
+  charter: z.string().optional(),
+  persona: z.string().optional(),
+  seedPlanId: z.string().optional()
 }) satisfies z.ZodType<ProviderInput<CoreDraftSeedDocumentJobInput>>;
 export const draftSeedDocumentOutputSchema = z.object({
   title: z.string(),
@@ -216,16 +242,17 @@ export const draftSeedDocumentOutputSchema = z.object({
   rationale: z.string(),
   mapUpdates: mapUpdatesField,
   // #213: see draftMarkdownProposalOutputSchema.uncoveredPoints.
-  uncoveredPoints: z.array(z.string()).optional()
+  uncoveredPoints: z.array(z.string()).optional(),
+  provenance: provenanceField
 }) satisfies z.ZodType<DraftSeedDocumentJobOutput>;
 
 const existingDocumentContextSchema = z.object({
   path: z.string(),
   heading: z.string(),
-  excerpt: z.string()
+  excerpt: z.string().optional()
 });
 // The seed item shape as the model RETURNS it: coverage may be empty in raw model
-// output (a human edits before seeding, and the v1 seed endpoint enforces min(1)).
+// output (a human edits before approving, and plan approval enforces non-empty).
 const seedItemSchema = z.object({
   title: z.string().optional(),
   targetPath: z.string().optional(),
@@ -235,14 +262,22 @@ const seedItemSchema = z.object({
 export const outlineFlowSeedInputSchema = z.object({
   provider: providerSchema,
   flowId: z.string(),
-  topic: z.string(),
+  origin: z.enum(["manual", "auto"]),
   notes: z.string().optional(),
+  sources: z.array(sourceDescriptorSchema),
   existingDocuments: z.array(existingDocumentContextSchema),
-  persona: z.string().optional()
+  persona: z.string().optional(),
+  charter: z.string().optional(),
+  routingSummary: z.string().optional()
 }) satisfies z.ZodType<ProviderInput<CoreOutlineFlowSeedJobInput>>;
 export const outlineFlowSeedOutputSchema = z.object({
   items: z.array(seedItemSchema),
-  rationale: z.string()
+  rationale: z.string(),
+  // Proposed only when the flow lacked them; must be declared or the broker
+  // strips them before the plan-creation handler reads them.
+  proposedCharter: z.string().optional(),
+  proposedPersona: z.string().optional(),
+  mapUpdates: mapUpdatesField
 }) satisfies z.ZodType<OutlineFlowSeedJobOutput>;
 
 export const foldMarkdownProposalInputSchema = z.object({
@@ -254,11 +289,19 @@ export const foldMarkdownProposalInputSchema = z.object({
   rivalMarkdown: z.string(),
   rivalGapSummaries: z.array(z.string()),
   rivalEvidence: z.array(citationSchema),
+  // #214 phase 3: both parents' claim provenance, so the fold can re-attribute
+  // every surviving claim to the folded document's headings.
+  survivorProvenance: provenanceField,
+  rivalProvenance: provenanceField,
   expectedOutput: z.literal("folded_markdown")
 }) satisfies z.ZodType<ProviderInput<CoreFoldMarkdownProposalJobInput>>;
 export const foldMarkdownProposalOutputSchema = z.object({
   markdown: z.string(),
-  rationale: z.string()
+  rationale: z.string(),
+  // #214 phase 3: the merged document's provenance (union of the parents',
+  // re-anchored). Must be on the schema or the broker strips it before the
+  // API can rewrite the survivor's provenance event.
+  provenance: provenanceField
 }) satisfies z.ZodType<FoldMarkdownProposalJobOutput>;
 
 // A single-PR comment as a github job (the API holds no GitHub token, so commenting
@@ -369,7 +412,11 @@ export const verifyDocumentInputSchema = z.object({
   provider: providerSchema,
   path: z.string(),
   content: z.string(),
-  sources: z.array(sourceDescriptorSchema)
+  sources: z.array(sourceDescriptorSchema),
+  // #214 phase 2: advisory per-claim provenance folded from the document's
+  // merged proposals. The agent checks these against their cited locations
+  // first; claims not listed here are re-derived from scratch as before.
+  citedClaims: z.array(provenanceClaimSchema).optional()
 }) satisfies z.ZodType<ProviderInput<CoreVerifyDocumentJobInput>>;
 export const verifyDocumentOutputSchema = z.object({
   verdict: z.enum(["healthy", "unprovable"]),
@@ -389,7 +436,10 @@ export const correctDocumentInputSchema = z.object({
 export const correctDocumentOutputSchema = z.object({
   markdown: z.string(),
   rationale: z.string(),
-  mapUpdates: mapUpdatesField
+  mapUpdates: mapUpdatesField,
+  // #214 phase 3: the corrected claims this diff introduces or rewrites, so the
+  // corrective proposal is a provenance event too.
+  provenance: provenanceField
 }) satisfies z.ZodType<CorrectDocumentJobOutput>;
 
 const changesetChangeSchema = z.object({
@@ -437,8 +487,12 @@ export const improveDocumentInputSchema = z.object({
   flowId: z.string().optional()
 }) satisfies z.ZodType<ProviderInput<CoreImproveDocumentJobInput>>;
 export const improveDocumentOutputSchema = z.union([
+  // The improved: false branch carries no provenance by design — a no-op
+  // improvement grounds no new claims, so a stray field is stripped, not kept.
   z.object({ improved: z.literal(false), rationale: z.string(), markdown: z.string().optional(), mapUpdates: mapUpdatesField }),
-  z.object({ improved: z.literal(true), markdown: z.string(), rationale: z.string(), mapUpdates: mapUpdatesField })
+  // #214 phase 3: provenance for the claims the rewritten markdown introduces
+  // or materially changes.
+  z.object({ improved: z.literal(true), markdown: z.string(), rationale: z.string(), mapUpdates: mapUpdatesField, provenance: provenanceField })
 ]) satisfies z.ZodType<ImproveDocumentJobOutput>;
 
 export const foldChangesetProposalInputSchema = z.object({
@@ -525,6 +579,17 @@ export const editorialPatrolOutputSchema = z.object({
   runId: z.string(),
   selectedCount: z.number().int(),
   enqueuedCount: z.number().int()
+});
+
+export const seedBootstrapInputSchema = z.object({ flowId: z.string() });
+// One sparse-flow bootstrap tick: either it enqueued an outline_flow_seed run
+// (outlineJobId reports which, possibly a reused in-flight one) or it no-oped
+// and `reason` says why: no_sources | kb_populated | plan_pending |
+// outline_in_flight | seed_proposals_open | dismissed_unchanged.
+export const seedBootstrapOutputSchema = z.object({
+  enqueued: z.boolean(),
+  reason: z.string().optional(),
+  outlineJobId: z.string().optional()
 });
 
 export const verifyGapClosureInputSchema = z.object({ proposalId: z.string() });

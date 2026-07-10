@@ -7,7 +7,8 @@ import { Surface, Workbench } from "../../components/ui";
 import { knowledgeFlows } from "../../lib/config";
 
 export default function SeedPage() {
-  const { config, loading, generateOutline, seedFlow } = useConsole();
+  const { config, loading, proposeSeedPlan, listSeedPlans, patchSeedPlan, approveSeedPlan, dismissSeedPlan } =
+    useConsole();
 
   const flows = useMemo(
     () => knowledgeFlows(config).map((flow) => ({ id: flow.id, name: flow.name })),
@@ -18,10 +19,18 @@ export default function SeedPage() {
     <Workbench>
       <Surface>
         <Surface.Header>
-          <h2>Seed / add an area</h2>
+          <h2>Seed / plan a flow</h2>
         </Surface.Header>
         <Surface.Body>
-          <SeedPanel flows={flows} loading={loading} onGenerate={generateOutline} onSeed={seedFlow} />
+          <SeedPanel
+            flows={flows}
+            loading={loading}
+            onPropose={proposeSeedPlan}
+            onListPlans={listSeedPlans}
+            onPatch={patchSeedPlan}
+            onApprove={approveSeedPlan}
+            onDismiss={dismissSeedPlan}
+          />
         </Surface.Body>
       </Surface>
     </Workbench>

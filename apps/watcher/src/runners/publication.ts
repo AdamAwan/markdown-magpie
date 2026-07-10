@@ -116,6 +116,21 @@ const changesetChangeSchema = z.object({
   content: z.string().optional(),
   delete: z.boolean().optional()
 });
+// Mirrors @magpie/core ProvenanceClaim (#214), local like changesetChangeSchema:
+// this file validates the API's execution-context response with its own zod
+// mirrors of just the fields the runner uses.
+const provenanceClaimSchema = z.object({
+  claim: z.string(),
+  anchor: z.string().optional(),
+  sources: z.array(
+    z.object({
+      sourceId: z.string(),
+      path: z.string().optional(),
+      lines: z.string().optional(),
+      url: z.string().optional()
+    })
+  )
+});
 const proposalSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -125,7 +140,10 @@ const proposalSchema = z.object({
   gapSummary: z.string().optional(),
   // A multi-file proposal (dedupe/split) carries its full file-set here; when
   // present it is published as a changeset rather than the single targetPath.
-  changeset: z.array(changesetChangeSchema).optional()
+  changeset: z.array(changesetChangeSchema).optional(),
+  // Per-claim source provenance from the draft output (#214), rendered into the
+  // PR body so the reviewer sees claims and their grounding side by side.
+  provenance: z.array(provenanceClaimSchema).optional()
 });
 type PublishRepository = z.infer<typeof repositorySchema>;
 type PublishProposal = z.infer<typeof proposalSchema>;
@@ -345,7 +363,7 @@ function createProposalBranchName(proposal: PublishProposal): string {
   return `magpie/proposal-${proposal.id.slice(0, 8)}-${slugify(proposal.title).slice(0, 40)}`;
 }
 
-// Human-facing PR description, mirroring the API's buildPullRequestBody.
+// Human-facing PR description (single render site).
 function buildPullRequestBody(proposal: PublishProposal): string {
   const lines = ["Proposed by Markdown Magpie to close knowledge gaps.", ""];
   if (proposal.rationale) {
@@ -357,6 +375,25 @@ function buildPullRequestBody(proposal: PublishProposal): string {
   if (summaries.length > 0) {
     lines.push("Gaps addressed:");
     lines.push(...summaries.map((summary) => `- ${summary}`));
+  }
+  // #214: the per-claim provenance map. The PR (and the git history behind it)
+  // is the human-facing provenance record — the document body itself carries no
+  // source citations, so this section is where a reviewer checks each claim
+  // against its grounding. Absent/empty provenance renders nothing, keeping
+  // pre-feature proposals' bodies unchanged.
+  if (proposal.provenance && proposal.provenance.length > 0) {
+    lines.push("", "### Claim provenance", "");
+    for (const claim of proposal.provenance) {
+      lines.push(`- **${claim.anchor ?? "(document)"}** — ${claim.claim}`);
+      for (const source of claim.sources) {
+        const location = [
+          source.path ?? "",
+          source.lines ? ` (${source.lines})` : "",
+          source.url ? `${source.path ? " " : ""}${source.url}` : ""
+        ].join("");
+        lines.push(`  - ${source.sourceId}${location ? `: ${location}` : ""}`);
+      }
+    }
   }
   return lines.join("\n").trim();
 }

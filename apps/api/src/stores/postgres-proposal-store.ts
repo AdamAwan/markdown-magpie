@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { TERMINAL_PROPOSAL_STATUSES } from "@magpie/core";
-import type { ChangesetChange, Citation, DraftContext, Proposal, ReviewDecision } from "@magpie/core";
+import type { ChangesetChange, Citation, DraftContext, Proposal, ProvenanceClaim, ReviewDecision } from "@magpie/core";
 import type { ProposalInput, ProposalListOptions, ProposalStore } from "./proposal-store.js";
 
 export class PostgresProposalStore implements ProposalStore {
@@ -14,9 +14,9 @@ export class PostgresProposalStore implements ProposalStore {
         INSERT INTO proposals (
           id, title, status, target_path, markdown, evidence, gap_summary,
           triggering_question_ids, rationale, job_id, destination_id, gap_cluster_id,
-          draft_context, flow_id, changeset
+          draft_context, flow_id, changeset, provenance, seed_plan_id
         )
-        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11::bigint, $12, $13, $14)
+        VALUES ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11::bigint, $12, $13, $14, $15, $16)
         ON CONFLICT (job_id) WHERE job_id IS NOT NULL
         DO UPDATE SET job_id = EXCLUDED.job_id
         RETURNING *
@@ -35,7 +35,9 @@ export class PostgresProposalStore implements ProposalStore {
         input.gapClusterId ?? null,
         input.draftContext ? JSON.stringify(input.draftContext) : null,
         input.flowId ?? null,
-        input.changeset ? JSON.stringify(input.changeset) : null
+        input.changeset ? JSON.stringify(input.changeset) : null,
+        input.provenance ? JSON.stringify(input.provenance) : null,
+        input.seedPlanId ?? null
       ]
     );
 
@@ -155,6 +157,13 @@ export class PostgresProposalStore implements ProposalStore {
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
+  async setProvenance(id: string, provenance: ProvenanceClaim[] | undefined): Promise<void> {
+    await this.pool.query("UPDATE proposals SET provenance = $2 WHERE id = $1", [
+      id,
+      provenance ? JSON.stringify(provenance) : null
+    ]);
+  }
+
   async recordRegeneration(id: string, markdown: string, rationale?: string): Promise<Proposal | undefined> {
     const result = await this.pool.query<ProposalRow>(
       `
@@ -176,6 +185,32 @@ export class PostgresProposalStore implements ProposalStore {
       [id, reviewDecision]
     );
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
+  }
+
+  async listMergedByTargetPath(path: string, limit: number): Promise<Proposal[]> {
+    // The provenance event stream for a document (#214): merged rows whose
+    // primary target or changeset touches the path, oldest merge first. The
+    // primary-path half is served by proposals_merged_target_path_idx;
+    // changeset matches are rarer and filtered here. jsonb_array_elements on a
+    // NULL changeset yields no rows inside EXISTS, which is the desired
+    // semantics (covered by the store integration test).
+    const result = await this.pool.query<ProposalRow>(
+      `
+        SELECT * FROM proposals
+        WHERE status = 'merged'
+          AND (
+            target_path = $1
+            OR EXISTS (
+              SELECT 1 FROM jsonb_array_elements(changeset) AS entry
+              WHERE entry->>'path' = $1
+            )
+          )
+        ORDER BY merged_at ASC NULLS LAST
+        LIMIT $2
+      `,
+      [path, limit]
+    );
+    return result.rows.map(mapRow);
   }
 
   async reset(): Promise<void> {
@@ -211,6 +246,8 @@ interface ProposalRow {
   publication: Proposal["publication"] | null;
   review_decision: string | null;
   draft_context: DraftContext | null;
+  provenance: ProvenanceClaim[] | null;
+  seed_plan_id: string | null;
   created_at: Date;
   merged_at: Date | null;
   closure_status: Proposal["closureStatus"] | null;
@@ -236,6 +273,8 @@ function mapRow(row: ProposalRow): Proposal {
     publication: row.publication ?? undefined,
     reviewDecision: (row.review_decision as ReviewDecision | null) ?? undefined,
     draftContext: row.draft_context ?? undefined,
+    provenance: row.provenance ?? undefined,
+    seedPlanId: row.seed_plan_id ?? undefined,
     createdAt: row.created_at.toISOString(),
     mergedAt: row.merged_at?.toISOString(),
     closureStatus: row.closure_status ?? undefined,

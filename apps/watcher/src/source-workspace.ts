@@ -7,6 +7,7 @@ import {
   draftMarkdownProposalInputSchema,
   draftSeedDocumentInputSchema,
   improveDocumentInputSchema,
+  outlineFlowSeedInputSchema,
   verifyDocumentInputSchema,
   type JobType,
   type JobView
@@ -37,15 +38,18 @@ export function hasFsSources(descriptors: SourceDescriptor[]): boolean {
 }
 
 // The input schema of each source-grounded job type — every input that carries
-// `sources: SourceDescriptor[]`. All five arrived with the source-agentic
-// grounding increments (seeding, gap drafting, patrols); a type absent here is
-// not source-grounded and never routes to the agentic tiers.
+// `sources: SourceDescriptor[]`. Six types: five arrived with the source-agentic
+// grounding increments (seeding, gap drafting, patrols) and outline_flow_seed
+// joined with self-seeding flows (whole-flow seed planning). A type absent here
+// is not source-grounded and never routes to the agentic tiers.
 function sourceGroundedInputSchema(type: JobType) {
   switch (type) {
     case "draft_seed_document":
       return draftSeedDocumentInputSchema;
     case "draft_markdown_proposal":
       return draftMarkdownProposalInputSchema;
+    case "outline_flow_seed":
+      return outlineFlowSeedInputSchema;
     case "verify_document":
       return verifyDocumentInputSchema;
     case "correct_document":

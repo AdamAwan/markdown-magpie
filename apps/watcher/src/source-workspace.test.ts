@@ -151,6 +151,18 @@ describe("sourceDescriptorsOf", () => {
     assert.deepEqual(sourceDescriptorsOf(job), []);
   });
 
+  it("yields an outline job's descriptors", () => {
+    const sources = [git()];
+    const job = jobOf("outline_flow_seed", {
+      provider: "openai-compatible",
+      flowId: "f1",
+      origin: "manual",
+      sources,
+      existingDocuments: []
+    });
+    assert.deepEqual(sourceDescriptorsOf(job), sources);
+  });
+
   it("yields a gap-draft job's descriptors", () => {
     const sources = [git()];
     const job = jobOf("draft_markdown_proposal", {

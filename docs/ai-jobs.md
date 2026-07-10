@@ -212,6 +212,40 @@ and `split_document` outputs are **deliberately not checked**: they reorganise e
 content rather than author anything new, so any advisory heading present already pre-dates
 the proposal.
 
+Drafts also carry **per-claim provenance** (#214): both draft outputs
+(`draft_markdown_proposal`, `draft_seed_document`) include an optional
+`provenance: ProvenanceClaim[]` field — each substantive claim in the drafted markdown
+with the source id + repo-relative path(s) that ground it. The document **body contains no
+repository paths or source names** (the old inline "(see …)" citations leaked into answers
+served by `answer_question`); citations live only in the structured field. The API persists
+it on the proposal (`proposals.provenance`, migration 0049) where it follows event-log
+semantics: a **merged** proposal's row is the permanent provenance event for its target
+path. Reviewers see the map in the PR body ("Claim provenance" section, rendered by the
+watcher's publication runner) and in the console's proposal view. A draft that omits the
+field is warned about but still published — quality is enforced by review and (phase 2)
+the verify patrol, never by rejecting drafts. Legacy inline citations in already-published
+documents are cleaned up organically by the verify→correct patrol, which flags them as
+formatting defects.
+
+The **rewrite jobs are provenance events for their own diffs** too (#214 phase 3):
+`correct_document` and the `improved: true` branch of `improve_document` carry the same
+optional `provenance` field — the claims their rewrite introduces or materially changes,
+cited in the structured field instead of the prose rationale — persisted onto the
+corrective/improve proposal by the completion handlers (an `improved: false` no-op grounds
+no new claims and never warns). `fold_markdown_proposal` receives both parents' provenance
+(`survivorProvenance`/`rivalProvenance` on its input) and returns the merged document's
+re-anchored `provenance`; the fold applier rewrites the survivor's provenance event with
+the folded content (`ProposalStore.setProvenance` — the only post-create provenance
+write), falling back to concatenating both parents' claims (with a log warning) when the
+fold output carries none. **Documented limitation:** `dedupe_documents` and
+`split_document` changesets carry no per-claim provenance — their PRs describe the
+content move, `git blame` through the move reaches the pre-move provenance events, and
+phase 2's anchor-staleness guard makes the verify patrol fall back to full re-derivation
+for restructured sections. (The changeset fold accordingly concatenates the parents'
+claims onto the survivor rather than dropping them.) Revisit only if verify's fallback
+rate on moved documents proves noisy in practice. Design:
+[the claim-provenance spec](superpowers/specs/2026-07-08-claim-provenance-design.md).
+
 ```bash
 curl -s http://localhost:4000/api/proposals
 ```
@@ -302,87 +336,94 @@ destination is recognized as local-git however its `file://` URL is written in `
 
 The demand-driven pipeline above (question → gap → cluster → proposal) is how knowledge
 *evolves* from real usage. To **bootstrap** a new flow — or add a whole new area of knowledge
-(e.g. a new feature) to an existing one — there is a direct authoring path that skips the
-gap-clustering and intent-inference half entirely:
+to an existing one — seeding is **self-seeding**: planning starts from the flow's *sources*,
+not from a human-typed topic, and every plan waits behind a human review gate before anything
+is drafted.
 
-```json
-POST /api/flows/:flowId/seed
-{
-  "items": [
-    { "title": "Billing overview", "coverage": ["what billing is", "the plans"] },
-    { "coverage": ["refund policy", "how to request a refund"] }
-  ]
-}
-```
-
-Each *item* (a title plus the points it should cover) is drafted directly into a
-`draft_seed_document` AI job, grounded in the flow's source repositories, which the
-executing agent explores directly. The job input carries `sources: SourceDescriptor[]`
-(references to the flow's configured sources — git/local/internet/agent) rather than an
-inline file sample: the API no longer samples source files at enqueue time. The watcher
-resolves each git/local descriptor to a traversable workspace on the shared checkout
-volume (the same `ensureGitCheckout` plumbing publication uses) and grounds the draft in
-two ways depending on provider:
-
-- **CLI providers (`claude`, `codex`)** run inside the primary source checkout read-only —
-  the agent traverses the repository with its own file tools. Read-only enforcement is
-  assembled in code (`--tools Read,Grep,Glob --disallowedTools …` for claude; `--sandbox
-  read-only` for codex) so operator arg config cannot drop it.
-- **HTTP providers (`openai-compatible`, `azure-openai`)** run a bounded Vercel AI SDK tool
-  loop over path-confined read-only tools (`list_dir`/`read_file`/`grep`).
-
-Agentic exploration takes minutes, so these runs use a longer timeout —
-`MAGPIE_AGENTIC_TIMEOUT_MS` (default 600 000 ms / 10 min). Keep it below the
-`draft_seed_document` queue expiration (900 s) so a run cannot outlive its lease. If every
-filesystem-backed source fails to resolve, the job fails loudly rather than drafting an
-ungrounded document.
-
-Coverage points the sources do not support are omitted from the authored document and
-come back in the output's `uncoveredPoints` field, which the API folds into the seed
-proposal's rationale (see the register constraint above).
-
-On completion the API
-creates a clusterless proposal carrying the flow's id first-class and reconciles it through the
-shared gate: a seed doc that overlaps an open PR on the same path folds into it, otherwise it
-self-publishes as its own PR. So seeding still ends at a reviewable pull request — the same
-human gate as everything else — but without the `reconcile_gap_clusters` job, the intent gate,
-or the maintenance-cron wait. The endpoint requires the `manage:jobs` scope (and `manage` on
-the target flow) and returns the enqueued job ids.
-
-The same operation is exposed over MCP as the `kb_seed` tool, so an interviewer LLM can submit
-a finished outline in one shot rather than streaming questions into `kb_ask` and waiting for
-the gap pipeline.
-
-### Generating the outline (`outline_flow_seed`)
-
-Writing the `items` list by hand (or via an external interviewer LLM) is not the only way to
-produce it. The `outline_flow_seed` AI job **proposes** the list from a topic:
+### Planning (`outline_flow_seed`)
 
 ```json
 POST /api/flows/:flowId/outline
-{ "topic": "Refund handling", "notes": "focus on partial refunds" }
+{ "notes": "optional freeform steer for this run" }
 ```
 
-The API grounds the job in the flow's *existing* docs — it retrieves the closest destination
-sections for the topic (inline embeddings, the same mechanism the gap reconciler uses for scope
-grounding) and passes them as context along with the flow persona — so the model proposes
-documents that fit the current structure and don't restate what's already covered. The job
-returns `{ items: SeedItem[], rationale }`; it **only proposes** and drafts nothing. Its output
-rides on the job record (read it back via `GET /api/jobs/:id/wait`), so there is no completion
-side-effect and no new stored entity. The endpoint requires the `manage:jobs` scope (and
-`manage` on the target flow) and returns the enqueued job id.
+There is **no topic**. The endpoint enqueues an `outline_flow_seed` job whose input carries
+`sources: SourceDescriptor[]` (the flow's configured sources), the flow's whole existing
+document inventory (path + title, unscored), and the flow's optional `persona`, `charter`
+and `routingSummary` from `KNOWLEDGE_FLOWS`, plus `origin: "manual" | "auto"` recording what
+triggered the run. It is one of the **source-grounded** job set: the watcher resolves the
+git/local descriptors to read-only workspaces and the agent explores them directly (CLI
+providers traverse natively; HTTP providers use the bounded tool loop), then proposes a
+complete, non-overlapping document plan for the whole flow — fitted to the existing docs,
+scoped by the `charter` when configured. When the flow lacks a charter (or persona) the
+model **proposes** one (`proposedCharter` / `proposedPersona` on the output); the system
+never writes flow config — the console shows the proposal with a copy-to-config hint, and
+the value is carried run-scoped on the plan. Outline outputs may also contribute source-map
+`mapUpdates` like the other source-grounded jobs.
 
-The same operation is exposed over MCP as the `kb_outline` tool: it enqueues the job, waits for
-it, and returns `{ jobId, items, rationale }` so an MCP client can bootstrap the `items` instead
-of writing coverage points by hand. Like the console flow, it **only proposes** — the caller
-reviews/edits the returned items and then calls `kb_seed` to draft them, keeping a human (or the
-calling agent) in the loop between the two steps.
+On completion the API persists a **seed plan** (`seed_plans` table, status `proposed`,
+idempotent on the outline job id); a fresh proposed plan supersedes an older still-proposed
+one for the same flow. The endpoint reuses an in-flight outline job for the flow rather than
+double-planning (`{ jobId, reused: true }`), requires the `manage:jobs` scope (and `manage`
+on the target flow), and returns the enqueued job id.
 
-The full path is: **topic → `outline_flow_seed` (retrieval-grounded) → human edits/approves the
-proposed `items` → `POST /flows/:id/seed`** (the direct authoring path above). This is what the
-console's **Seed / add an area** page drives — pick a flow, enter a topic, *Generate outline*,
-edit the proposed documents, then *Seed*. Over MCP the same two steps are `kb_outline` →
-`kb_seed`. The generated PRs flow into the normal review queue.
+### Review and approval (the human gate)
+
+Plans are reviewed on the console's **Seed** page or via the API:
+
+- `GET /api/flows/:flowId/seed-plans` — the flow's plans, newest first.
+- `GET /api/seed-plans/:id`, `PATCH /api/seed-plans/:id` — read and edit (charter/persona
+  text, per-item fields, per-item approve/dismiss). Editing is only allowed while the plan
+  is `proposed` (409 otherwise).
+- `POST /api/seed-plans/:id/approve` — flips the plan to `approved` and enqueues one
+  `draft_seed_document` per non-dismissed item, carrying the plan's run-scoped
+  `charter`/`persona` and `seedPlanId`. Replay-safe: items that already recorded a
+  `draftJobId` are skipped, so re-approving after a mid-loop failure completes the
+  remainder. Rejects with `coverage_required` when an approvable item has no coverage.
+- `POST /api/seed-plans/:id/dismiss` — a sticky human "no" (see the bootstrap below).
+
+**Plan approval is the only drafting entry point** — the old raw-items
+`POST /api/flows/:flowId/seed` endpoint is gone.
+
+### Drafting (`draft_seed_document`)
+
+Each approved item drafts through a `draft_seed_document` AI job, grounded in the flow's
+source repositories exactly as before (source-grounded workspaces; CLI native traversal or
+the HTTP bounded tool loop; `MAGPIE_AGENTIC_TIMEOUT_MS` default 600 000 ms — keep it below
+the 900 s queue expiration; a job whose filesystem sources all fail to resolve fails loudly).
+The input now also carries the plan's `charter` (bounds scope), `persona` (shapes voice) and
+`seedPlanId` — read back at completion to stamp the proposal's `seedPlanId` so the plan view
+can show per-item drafting/publication progress.
+
+Coverage points the sources do not support are omitted from the authored document and come
+back in `uncoveredPoints`, folded into the proposal rationale (see the register constraint
+above). Per-claim citations come back in `provenance` and are persisted on the proposal. On
+completion the API creates a clusterless proposal carrying the flow's id first-class and
+reconciles it through the shared gate: a seed doc that overlaps an open PR on the same path
+folds into it, otherwise it self-publishes as its own PR. Seeding still ends at a reviewable
+pull request — the same human gate as everything else.
+
+### Sparse-flow bootstrap (`seed_bootstrap`)
+
+A per-flow scheduled task (`seed-bootstrap`, hourly by default) makes seeding
+self-starting: the maintenance watcher POSTs the thin
+`POST /api/flows/:flowId/seed-bootstrap/run` endpoint, which checks guards cheapest-first
+and **no-ops** (reporting the reason) unless all hold: the flow has ≥1 source; the indexed
+destination has fewer than `SEED_BOOTSTRAP_MAX_DOCS` documents (default 3); no `proposed`
+plan is pending; no outline job is in flight; no open seed-originated proposals exist for
+the flow; and the latest `dismissed` plan's source hash differs from the flow's current
+sources (dismissal is sticky per source config — a human "no" is only re-litigated when the
+sources change). When every guard passes it enqueues `outline_flow_seed` with
+`origin: "auto"` and returns immediately — unlike the patrol orchestrators it never
+bounded-waits; the plan lands via the completion handler and waits for human review.
+
+### MCP
+
+Over MCP the two steps are `kb_outline` → `kb_seed`: `kb_outline` (flow + optional `notes`)
+enqueues the planning run, waits for it, and returns the **persisted plan**
+(`planId`, `charter`/`persona` with proposed flags, `items`, `rationale`); `kb_seed`
+approves a plan by id and returns the enqueued draft job ids. Editing or partially
+dismissing items happens in the console.
 
 ## Patrol child jobs (`verify_document` / `correct_document` / `improve_document`)
 
@@ -409,6 +450,22 @@ compare the document against its destination neighbours. See the source-agentic 
 spec
 ([docs/superpowers/specs/2026-07-06-source-agentic-grounding-design.md](superpowers/specs/2026-07-06-source-agentic-grounding-design.md)).
 
+`verify_document` additionally accepts an optional **`citedClaims: ProvenanceClaim[]`**
+(#214 phase 2): the document's per-claim provenance, folded at enqueue time from its
+merged proposals (the event log captured in phase 1 — see the provenance paragraph in the
+draft-jobs section above). The patrol's default verify path reads the merged-proposal
+stream for the document (`listMergedByTargetPath`, capped at the oldest 50 events with an
+operator-visible warning beyond that), folds it so later merges supersede earlier ones per
+claim anchor, and **drops claims whose section anchor no longer exists in the current
+document content** — a stale anchor falls back to full re-derivation rather than risking a
+false "cited support changed" verdict. The agent checks each cited claim against its cited
+location first and flags moved/vanished support with a `cited support changed:` reason;
+claims without provenance are re-derived exactly as before. The field is **advisory**: the
+agent still explores the sources and trusts them over the fold, and an absent/empty fold
+leaves the job input — and the rendered prompt — byte-identical to a pre-provenance
+verify. The verify reuse key incorporates a hash of the folded claims, so a merge that
+changes a document's provenance without touching its body never reuses a stale verdict.
+
 ## Source map (agent navigation hints)
 
 Agents working on source-grounded jobs need lightweight navigation metadata to orient
@@ -423,8 +480,9 @@ may update if they are outdated or incomplete. The map is a best-effort fetch �
 rendered only for sources that successfully respond — and the job never fails if the fetch
 times out or returns partial results.
 
-**Write path.** The five source-grounded job types — `draft_seed_document`, `draft_markdown_proposal`,
-`verify_document`, `correct_document`, and `improve_document` — accept an optional `mapUpdates`
+**Write path.** The six source-grounded job types — `draft_seed_document`, `draft_markdown_proposal`,
+`outline_flow_seed`, `verify_document`, `correct_document`, and `improve_document` — accept an
+optional `mapUpdates`
 field in their output: an array of updates to the source map, keyed by `(source_id, topic)`.
 Each update has the following shape:
 
@@ -450,6 +508,14 @@ the job to fail.
 the entry was written, stamped by the watcher during workspace preparation. This value is
 always taken from the checkout HEAD, never trusted from the agent — any `observed_sha` values
 supplied by the model are overwritten. Entries from non-git sources keep `observed_sha` null.
+
+**`consensusCount`.** Each entry carries a consensus count (credibility, distinct from the
+`observed_sha` currency signal). On upsert, the new hint's paths are compared to the existing
+entry's via Jaccard similarity: an overlap above 0.5 means an agent independently agreed, so
+the count increments (capped at 5); an overlap at or below 0.5 is a contradicting hint and
+resets the count to 1, as does a first-seen `(source_id, topic)`. The count is computed
+atomically (the write takes a row lock) so concurrent job completions can't lose an increment.
+Higher counts mean more agents agree; surfacing/filtering hints by it is a follow-up (#219).
 
 **Boundaries.** The source map is strictly internal metadata and **never** enters answer
 retrieval, user-facing output, or the indexed knowledge base. Staleness invalidation via

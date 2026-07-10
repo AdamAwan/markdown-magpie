@@ -34,6 +34,7 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     runSourceSync: async () => ({ runIds: [] }),
     runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
     runImprovePatrol: async () => ({ runId: "run-1", selectedCount: 0, enqueuedCount: 0 }),
+    runSeedBootstrap: async () => ({ enqueued: false, reason: "kb_populated" }),
     listOpenPullRequests: async () => [],
     sourceMapEntries: async () => [],
     ...overrides
@@ -49,6 +50,7 @@ describe("MaintenanceRunner", () => {
     assert.ok(runner.supports("correctness_patrol"));
     assert.ok(runner.supports("editorial_patrol"));
     assert.ok(runner.supports("verify_gap_closure"));
+    assert.ok(runner.supports("seed_bootstrap"));
     assert.ok(!runner.supports("answer_question"));
     // refresh_flow_snapshot is a github-capability job, not maintenance.
     assert.ok(!runner.supports("refresh_flow_snapshot"));
@@ -223,6 +225,33 @@ describe("MaintenanceRunner", () => {
     await assert.rejects(
       () => runner.run(job("verify_gap_closure", {}), new AbortController().signal),
       /proposalId/
+    );
+  });
+
+  it("POSTs the seed-bootstrap endpoint with the flowId and returns schema-valid output", async () => {
+    let called: string | undefined;
+    const api = fakeApi({
+      runSeedBootstrap: async (flowId) => {
+        called = flowId;
+        return { enqueued: true, outlineJobId: "outline-1" };
+      }
+    });
+    const runner = new MaintenanceRunner(api);
+    const output = await runner.run(job("seed_bootstrap", { flowId: "flow-1" }), new AbortController().signal);
+    assert.equal(called, "flow-1");
+    assert.deepEqual(output, { enqueued: true, outlineJobId: "outline-1" });
+  });
+
+  it("rejects seed_bootstrap jobs without a flowId", async () => {
+    const api = fakeApi({
+      runSeedBootstrap: async () => {
+        throw new Error("should not call runSeedBootstrap without a flowId");
+      }
+    });
+    const runner = new MaintenanceRunner(api);
+    await assert.rejects(
+      () => runner.run(job("seed_bootstrap", {}), new AbortController().signal),
+      /flowId/
     );
   });
 

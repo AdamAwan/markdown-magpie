@@ -153,6 +153,36 @@ describe("knowledge repository configuration", () => {
     assert.equal(flows.find((flow) => flow.id === "dev-flow")?.routingSummary, "Deployments, CI, and rollbacks.");
   });
 
+  it("parses a flow charter, separately from persona and routing summary", () => {
+    const sources = [{ id: "agent", name: "Agent Knowledge", kind: "agent" as const }];
+    const destinations = [
+      { id: "sec", name: "Security KB", url: "https://github.com/example/sec.git", kind: "git" as const },
+      { id: "dev", name: "Dev KB", url: "https://github.com/example/dev.git", kind: "git" as const }
+    ];
+    const flows = getConfiguredKnowledgeFlows(
+      {
+        KNOWLEDGE_FLOWS: JSON.stringify([
+          {
+            id: "sec-flow",
+            sourceIds: ["agent"],
+            destinationId: "sec",
+            persona: "Formal, high-level.",
+            charter: "Cover everything an operator needs to run the service."
+          },
+          { id: "dev-flow", sourceIds: ["agent"], destinationId: "dev" }
+        ])
+      },
+      sources,
+      destinations
+    );
+
+    const sec = flows.find((flow) => flow.id === "sec-flow");
+    assert.equal(sec?.charter, "Cover everything an operator needs to run the service.");
+    assert.equal(sec?.persona, "Formal, high-level.", "charter does not overwrite persona");
+    const dev = flows.find((flow) => flow.id === "dev-flow");
+    assert.ok(dev && !("charter" in dev), "absent charter yields no key");
+  });
+
   it("infers one flow per destination when flows are not configured", () => {
     const flows = getConfiguredKnowledgeFlows(
       {},

@@ -316,6 +316,61 @@ the watcher completes the `draft_markdown_proposal` job.
 
 - `404 cluster_not_found` — no active cluster with that id.
 
+## Seeding (plans)
+
+Seeding is plan-centric — see the Seeding section in [ai-jobs.md](ai-jobs.md#seeding-a-flow)
+for the full lifecycle. All seeding routes require the `manage:jobs` scope plus `manage` on
+the plan's flow; unknown/cross-flow ids read as `404`.
+
+### `POST /api/flows/:flowId/outline`
+
+Proposes a seed plan: enqueues the source-grounded `outline_flow_seed` planning job (no
+topic — the body is `{ "notes"?: string }`, an optional steer for this run). Enqueue-only:
+returns `{ "ok": true, "jobId": string, "reused": boolean }`; `reused: true` means an
+outline run for this flow was already in flight and its job id was returned instead. The
+persisted plan is created by the job's completion handler.
+
+### `GET /api/flows/:flowId/seed-plans` · `GET /api/seed-plans/:id`
+
+List a flow's plans (newest first, `{ "plans": [SeedPlan, ...] }`) or fetch one
+(`{ "plan": SeedPlan }`). A `SeedPlan` carries `{ id, flowId, status, origin, charter?,
+persona?, charterProposed, personaProposed, items, rationale, notes?, outlineJobId,
+sourceHash, createdAt, updatedAt }`; each item has a stable `id`, a per-item `status`
+(`proposed | approved | dismissed`) and, once approval enqueued its draft, a `draftJobId`.
+
+### `PATCH /api/seed-plans/:id`
+
+Reviewer edits — `{ "charter"?, "persona"?, "items"?: [{ id, title?, targetPath?,
+coverage?, questions?, status? }] }`. Only while the plan is `proposed`; afterwards
+`409 plan_not_editable`.
+
+### `POST /api/seed-plans/:id/approve`
+
+Flips the plan to `approved` and enqueues one `draft_seed_document` per non-dismissed item
+(carrying the plan's run-scoped charter/persona and `seedPlanId`). Returns
+`{ "plan": SeedPlan, "jobIds": string[] }`. Replay-safe: items that already recorded a
+`draftJobId` are skipped, so re-approving after a mid-loop enqueue failure completes the
+remainder. `400 coverage_required` when an approvable item has no coverage;
+`409 plan_not_approvable` for dismissed/superseded plans.
+
+### `POST /api/seed-plans/:id/dismiss`
+
+Dismisses a `proposed` plan (`409 plan_not_dismissable` otherwise). Dismissal is sticky for
+the sparse-flow bootstrap: the plan's source hash suppresses re-proposal until the flow's
+sources change.
+
+### `POST /api/flows/:flowId/seed-bootstrap/run`
+
+Thin orchestration endpoint the maintenance watcher's `seed_bootstrap` runner POSTs (rate
+limited on the trigger tier). Checks the sparse-flow guards and, when they all pass,
+enqueues an auto-origin planning run. Returns
+`{ "enqueued": boolean, "reason"?: string, "outlineJobId"?: string }` — `reason` names the
+guard that no-oped the tick (`no_sources | kb_populated | plan_pending | outline_in_flight
+| seed_proposals_open | dismissed_unchanged`).
+
+> The legacy raw-items `POST /api/flows/:flowId/seed` endpoint is **removed** — plan
+> approval is the only drafting entry point.
+
 ## Proposals
 
 See the Proposal Review and Storage sections in [ai-jobs.md](ai-jobs.md).
@@ -539,15 +594,22 @@ Scope: `manage:jobs`. Read cap: 100 entries per requested source per request.
 {
   "entries": [
     {
-      "source_id": "agent",
+      "id": "b0c1…",
+      "sourceId": "agent",
       "topic": "authentication flow",
       "paths": ["src/auth/login.ts", "src/auth/oauth.ts"],
       "description": "OAuth2 login and token refresh implementation",
-      "observed_sha": "abc123de"
+      "observedSha": "abc123de",
+      "consensusCount": 3,
+      "createdAt": "2026-07-01T12:00:00.000Z",
+      "updatedAt": "2026-07-08T09:30:00.000Z"
     }
   ]
 }
 ```
+
+`consensusCount` is how many agents have independently contributed the same
+topic → paths mapping (capped at 5) — a credibility signal, not currency.
 
 **Error cases:**
 

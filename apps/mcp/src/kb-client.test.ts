@@ -12,7 +12,7 @@ process.env.ANSWER_TIMEOUT_MS = "50";
 process.env.OUTLINE_POLL_INTERVAL_MS = "1";
 process.env.OUTLINE_TIMEOUT_MS = "50";
 
-const { getJson, askQuestion, generateOutline } = await import("./kb-client.js");
+const { getJson, askQuestion, generateOutline, approveSeedPlan } = await import("./kb-client.js");
 
 // Locks the contract Task 4 added: when a token is supplied, getJson attaches a
 // single lowercase `authorization: Bearer <token>` header and nothing else.
@@ -278,22 +278,24 @@ test("askQuestion throws when the ask response omits job links", async () => {
 
 // ── generateOutline wait/poll state machine ───────────────────────────────────
 //
-// generateOutline is a create→wait→poll loop over the durable outline_flow_seed
-// job, but unlike askQuestion the create response carries only { ok, jobId } (no
+// generateOutline is a create→wait→poll→fetch-plan loop over the durable
+// outline_flow_seed job. The create response carries only { ok, jobId } (no
 // links), so the client builds the wait/detail paths itself:
-//   POST /flows/:id/outline → { ok, jobId }
-//   GET  /jobs/:id/wait      → long-poll; terminal job (200) or projection (202)
-//   GET  /jobs/:id           → detail poll, repeated until terminal
-// The terminal output is the { result, executor } envelope; the proposed items
-// live in result.items. Same 1ms poll interval / 50ms timeout pinned above.
+//   POST /flows/:id/outline     → { ok, jobId, reused }
+//   GET  /jobs/:id/wait          → long-poll; terminal job (200) or projection (202)
+//   GET  /jobs/:id               → detail poll, repeated until terminal
+//   GET  /flows/:id/seed-plans   → the persisted plan whose outlineJobId matches
+// Same 1ms poll interval / 50ms timeout pinned above.
 
 // Builds a fetch stub for the outline flow, dispatching on the outline POST, the
-// wait link, and the detail-poll link. Detail handlers receive the (1-based) call
-// count so a test can return non-terminal-then-terminal across polls.
+// wait link, the detail-poll link, and the seed-plans list. Detail handlers
+// receive the (1-based) call count so a test can return non-terminal-then-
+// terminal across polls.
 interface OutlineStubHandlers {
   outline: () => Response;
   wait?: () => Response;
   job?: (callIndex: number) => Response;
+  plans?: () => Response;
 }
 
 function stubOutlineFetch(handlers: OutlineStubHandlers): { urls: string[]; restore: () => void } {
@@ -307,6 +309,12 @@ function stubOutlineFetch(handlers: OutlineStubHandlers): { urls: string[]; rest
 
     if (url.endsWith("/outline")) {
       return handlers.outline();
+    }
+    if (url.endsWith("/seed-plans")) {
+      if (!handlers.plans) {
+        throw new Error(`unexpected seed-plans request: ${url}`);
+      }
+      return handlers.plans();
     }
     if (url.includes("/wait")) {
       if (!handlers.wait) {
@@ -326,36 +334,48 @@ function stubOutlineFetch(handlers: OutlineStubHandlers): { urls: string[]; rest
   return { urls, restore: () => (globalThis.fetch = originalFetch) };
 }
 
-const outlineOutput = {
-  result: {
-    items: [
-      { title: "Prompt library overview", coverage: ["what each prompt does"], questions: ["which prompt for X?"] },
-      { title: "Flow personas", targetPath: "personas.md", coverage: ["the support persona", "the sales persona"] }
-    ],
-    rationale: "Two non-overlapping docs cover the library and its personas."
-  },
-  executor: "watcher"
+const persistedPlan = {
+  id: "plan-1",
+  flowId: "magpie-support",
+  status: "proposed",
+  origin: "manual",
+  charter: "Cover the prompt library end to end",
+  charterProposed: true,
+  personaProposed: false,
+  items: [
+    { id: "i1", status: "proposed", title: "Prompt library overview", coverage: ["what each prompt does"] },
+    { id: "i2", status: "proposed", title: "Flow personas", targetPath: "personas.md", coverage: ["the support persona"] }
+  ],
+  rationale: "Two non-overlapping docs cover the library and its personas.",
+  outlineJobId: "job-9"
 };
 
-const outlineArgs = { flow: "magpie-support", topic: "the product's prompt library" };
+const outlineArgs = { flow: "magpie-support", notes: "focus on the prompt library" };
 
 // 1. Happy path: outline POST returns a jobId, the wait link returns a completed
-// job, and generateOutline returns the items + rationale from output.result (NOT
-// output itself) plus the jobId. The POST targets the flow's /outline route.
-test("generateOutline returns the items from a completed wait response", async () => {
+// job, and generateOutline fetches the persisted plan whose outlineJobId matches
+// and returns its review shape (planId + charter flags + items + rationale).
+test("generateOutline returns the persisted plan after the job completes", async () => {
   const stub = stubOutlineFetch({
-    outline: () => jsonResponse({ ok: true, jobId: "job-9" }),
-    wait: () => jsonResponse({ job: { id: "job-9", state: "completed", output: outlineOutput } })
+    outline: () => jsonResponse({ ok: true, jobId: "job-9", reused: false }),
+    wait: () => jsonResponse({ job: { id: "job-9", state: "completed" } }),
+    plans: () => jsonResponse({ plans: [{ ...persistedPlan, outlineJobId: "other" }, persistedPlan] })
   });
 
   try {
     const result = await generateOutline(outlineArgs);
 
-    assert.deepEqual(result, { jobId: "job-9", ...outlineOutput.result });
-    // outline POST + single wait, no detail poll needed.
-    assert.equal(stub.urls.length, 2);
+    assert.equal(result.planId, "plan-1");
+    assert.equal(result.charter, "Cover the prompt library end to end");
+    assert.equal(result.charterProposed, true);
+    assert.equal(result.personaProposed, false);
+    assert.equal(result.items.length, 2);
+    assert.equal(result.rationale, persistedPlan.rationale);
+    // outline POST + single wait + plan fetch, no detail poll needed.
+    assert.equal(stub.urls.length, 3);
     assert.ok(stub.urls[0].endsWith("/api/flows/magpie-support/outline"));
     assert.ok(stub.urls[1].endsWith("/api/jobs/job-9/wait"));
+    assert.ok(stub.urls[2].endsWith("/api/flows/magpie-support/seed-plans"));
   } finally {
     stub.restore();
   }
@@ -365,21 +385,38 @@ test("generateOutline returns the items from a completed wait response", async (
 // client falls back to detail polling until the job completes.
 test("generateOutline polls the detail link when the wait response is non-terminal", async () => {
   const stub = stubOutlineFetch({
-    outline: () => jsonResponse({ ok: true, jobId: "job-9" }),
+    outline: () => jsonResponse({ ok: true, jobId: "job-9", reused: false }),
     wait: () => jsonResponse({ job: { id: "job-9", state: "active" } }, 202),
     job: (call) =>
       call < 2
         ? jsonResponse({ job: { id: "job-9", state: "active" } }, 202)
-        : jsonResponse({ job: { id: "job-9", state: "completed", output: outlineOutput } })
+        : jsonResponse({ job: { id: "job-9", state: "completed" } }),
+    plans: () => jsonResponse({ plans: [persistedPlan] })
   });
 
   try {
     const result = await generateOutline(outlineArgs);
 
     assert.equal(result.items.length, 2);
-    assert.equal(result.jobId, "job-9");
+    assert.equal(result.planId, "plan-1");
     const detailPolls = stub.urls.filter((u) => u.endsWith("/api/jobs/job-9"));
     assert.ok(detailPolls.length >= 2, `expected >=2 detail polls, got ${detailPolls.length}`);
+  } finally {
+    stub.restore();
+  }
+});
+
+// 2b. A completed run whose plan row is missing (e.g. deleted between the wait
+// and the fetch) is an explicit error naming the job, never a silent empty plan.
+test("generateOutline throws when no persisted plan matches the completed job", async () => {
+  const stub = stubOutlineFetch({
+    outline: () => jsonResponse({ ok: true, jobId: "job-9", reused: false }),
+    wait: () => jsonResponse({ job: { id: "job-9", state: "completed" } }),
+    plans: () => jsonResponse({ plans: [] })
+  });
+
+  try {
+    await assert.rejects(generateOutline(outlineArgs), /job-9.*no persisted plan/);
   } finally {
     stub.restore();
   }
@@ -437,5 +474,28 @@ test("generateOutline throws when the outline response omits a job id", async ()
     assert.equal(stub.urls.length, 1);
   } finally {
     stub.restore();
+  }
+});
+
+// ── approveSeedPlan ────────────────────────────────────────────────────────────
+//
+// kb_seed approves a persisted plan: one POST to /seed-plans/:id/approve, jobIds
+// passed through. Status rules (409 on a non-proposed plan) are server-side and
+// surface through the normal HTTP error path.
+test("approveSeedPlan POSTs the approve route and returns the enqueued job ids", async () => {
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+    urls.push(typeof input === "string" ? input : input.toString());
+    return jsonResponse({ plan: { id: "plan-1", status: "approved" }, jobIds: ["draft-1", "draft-2"] });
+  }) as typeof fetch;
+
+  try {
+    const result = await approveSeedPlan({ plan: "plan-1" });
+    assert.deepEqual(result, { planId: "plan-1", jobIds: ["draft-1", "draft-2"] });
+    assert.equal(urls.length, 1);
+    assert.ok(urls[0].endsWith("/api/seed-plans/plan-1/approve"));
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });

@@ -1,7 +1,7 @@
 import { argv, stdin, stdout } from "node:process";
 import { fileURLToPath } from "node:url";
 import { isAuthRequired } from "@magpie/auth";
-import { askQuestion, generateOutline, getJson, listFlows, optionalStringArgument, seedFlow, stringArgument, submitFeedback } from "./kb-client.js";
+import { approveSeedPlan, askQuestion, generateOutline, getJson, listFlows, optionalStringArgument, stringArgument, submitFeedback } from "./kb-client.js";
 import { createMcpLogger } from "./logger.js";
 
 type JsonRpcId = string | number | null;
@@ -132,69 +132,39 @@ const tools = [
   {
     name: "kb_outline",
     description:
-      "Generate a proposed seed outline for a topic: a list of documents to author (each a title plus the points it should " +
-      "cover), auto-drafted and grounded in the flow's existing docs and persona — so you don't have to write the coverage " +
-      "points by hand. This does NOT seed anything: it returns the proposed items for you to review and edit, then pass to " +
-      "kb_seed. Use it to bootstrap the items for kb_seed. Discover flow ids with kb_flows.",
+      "Propose a seed plan for a flow by exploring its source repositories — no topic needed. Returns the persisted plan " +
+      "(documents + proposed charter) for review; nothing is drafted. Approve with kb_seed, or review/edit in the console. " +
+      "Discover flow ids with kb_flows.",
     inputSchema: {
       type: "object",
       properties: {
         flow: {
           type: "string",
-          description: "The flow id to outline for (from kb_flows)."
-        },
-        topic: {
-          type: "string",
-          description: "The area/subject to outline documents for, e.g. 'the product's prompt library'."
+          description: "The flow id to plan for (from kb_flows)."
         },
         notes: {
           type: "string",
-          description: "Optional extra guidance to steer the outline (scope, angle, what to include or leave out)."
+          description: "Optional guidance to steer this planning run (emphasis, exclusions, audience)."
         }
       },
-      required: ["flow", "topic"],
+      required: ["flow"],
       additionalProperties: false
     } satisfies JsonSchema
   },
   {
     name: "kb_seed",
     description:
-      "Seed a flow with initial content: submit a list of documents to author, each a title plus the points it should cover. " +
-      "Each is drafted straight into a proposal → pull request, skipping the gap-clustering pipeline. " +
-      "Use for a brand-new flow or to add a new area of knowledge (e.g. a new feature) to an existing one. " +
-      "Tip: use kb_outline first to auto-generate the items instead of writing coverage points by hand. Discover flow ids with kb_flows.",
+      "Approve a seed plan (from kb_outline or the console): drafts one document per approved item straight into the " +
+      "proposal → pull-request pipeline. Edit or partially dismiss items in the console first if needed.",
     inputSchema: {
       type: "object",
       properties: {
-        flow: {
+        plan: {
           type: "string",
-          description: "The flow id to seed (from kb_flows)."
-        },
-        items: {
-          type: "array",
-          description: "One entry per document to author.",
-          items: {
-            type: "object",
-            properties: {
-              title: { type: "string", description: "Optional document title." },
-              targetPath: { type: "string", description: "Optional destination-relative path." },
-              coverage: {
-                type: "array",
-                items: { type: "string" },
-                description: "The points this document must cover. At least one."
-              },
-              questions: {
-                type: "array",
-                items: { type: "string" },
-                description: "Optional motivating questions/prompts for context."
-              }
-            },
-            required: ["coverage"],
-            additionalProperties: false
-          }
+          description: "The seed plan id to approve (from kb_outline's planId, or the console)."
         }
       },
-      required: ["flow", "items"],
+      required: ["plan"],
       additionalProperties: false
     } satisfies JsonSchema
   }
@@ -345,7 +315,7 @@ async function callTool(params: ToolCallParams): Promise<unknown> {
   }
 
   if (params.name === "kb_seed") {
-    const result = await seedFlow(params.arguments, { token: stdioAuthToken });
+    const result = await approveSeedPlan(params.arguments, { token: stdioAuthToken });
     return textResult(result);
   }
 

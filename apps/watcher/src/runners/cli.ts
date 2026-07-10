@@ -284,6 +284,7 @@ const missingApi: WatcherApi = {
   runSourceSync: async () => ({ runIds: [] }),
   runFixPatrol: async () => ({ runId: "", selectedCount: 0, findingCount: 0 }),
   runImprovePatrol: async () => ({ runId: "", selectedCount: 0, enqueuedCount: 0 }),
+  runSeedBootstrap: async () => ({ enqueued: false, reason: "no_sources" }),
   listOpenPullRequests: async () => [],
   sourceMapEntries: async () => []
 };

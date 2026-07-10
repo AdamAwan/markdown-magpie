@@ -381,6 +381,10 @@ export interface Proposal {
   destinationId?: string;
   rationale?: string;
   jobId?: string;
+  // The seed plan whose approval drafted this proposal (self-seeding flows).
+  // Read back off the draft job input at completion so the plan view can show
+  // per-item drafting/publication progress. Absent for non-seed proposals.
+  seedPlanId?: string;
   publication?: ProposalPublication;
   // The latest review decision observed on this proposal's pull request, polled by
   // the watcher's refresh_flow_snapshot job. Absent until the PR has been polled (or
@@ -393,6 +397,13 @@ export interface Proposal {
   // based on, not just its output. Absent on proposals drafted before this was
   // captured.
   draftContext?: DraftContext;
+  // Per-claim source provenance captured from the draft job output (#214).
+  // Event-log semantics: once this proposal is MERGED, this row IS the
+  // provenance event for its targetPath — "what supported this change when it
+  // shipped", not "what currently supports the document". Documents themselves
+  // carry no provenance. Absent on proposals drafted before this was captured
+  // or when the draft omitted the field.
+  provenance?: ProvenanceClaim[];
   createdAt: string;
   // Stamped when the proposal is marked merged. Marking merged also resolves the
   // gaps it closed so they stop surfacing as candidates.
@@ -412,6 +423,28 @@ export interface Proposal {
   // once it reaches the cap the proposal is surfaced for a human instead of
   // regenerating again. Absent/0 until the first regeneration.
   regenerationCount?: number;
+}
+
+// One source location that grounds a ProvenanceClaim. sourceId references a
+// SourceDescriptor.id from the job input; path is repo-relative within that
+// source. Reference-only sources (internet/agent) are legitimate here — they
+// ground a claim as supporting context, matching how the drafting prompts
+// treat them.
+export interface ProvenanceClaimSource {
+  sourceId: string;
+  path?: string; // repo-relative file path (git/local sources)
+  lines?: string; // optional "L12-L40" hint
+  url?: string; // internet sources
+}
+
+// One substantive claim in a drafted document and the source locations that
+// ground it (#214). anchor is the slug of the section heading the claim lives
+// under — a display-grouping and soft staleness key, NOT an exact-text key;
+// claims are never keyed by exact body text.
+export interface ProvenanceClaim {
+  claim: string; // short restatement of the claim, not a body quote
+  anchor?: string;
+  sources: ProvenanceClaimSource[];
 }
 
 // The inputs handed to the drafter, kept alongside the proposal so the context
@@ -687,6 +720,12 @@ export interface VerifyDocumentJobInput {
   path: string;
   content: string;
   sources: SourceDescriptor[];
+  // #214 phase 2: advisory per-claim provenance folded from the document's
+  // merged proposals (see the API's foldProvenanceEvents). The agent checks
+  // these against their cited locations first; claims not listed here are
+  // re-derived from scratch as before. Absent/empty leaves verify behaviour
+  // exactly as it was.
+  citedClaims?: ProvenanceClaim[];
 }
 
 // The verify lens's verdict for one document: "healthy" (claims empty) or
@@ -719,6 +758,10 @@ export interface CorrectDocumentJobOutput {
   markdown: string;
   rationale: string;
   mapUpdates?: SourceMapUpdate[];
+  // #214 phase 3: per-claim grounding for the claims this correction introduces
+  // or materially rewrites — the corrective proposal is a provenance event for
+  // its own diff. Optional — absence is warned, never rejected.
+  provenance?: ProvenanceClaim[];
 }
 
 // Input to the dedupe_documents AI job: the document under patrol plus its k nearest
@@ -770,12 +813,25 @@ export interface ImproveDocumentJobInput {
   flowId?: string;
 }
 
-export interface ImproveDocumentJobOutput {
-  improved: boolean;
-  markdown?: string;
-  rationale: string;
-  mapUpdates?: SourceMapUpdate[];
-}
+// Output of improve_document. A no-op verdict (improved: false) carries no
+// provenance by design — it grounds no new claims and must not be warned as a
+// missing-provenance draft. The improved variant may declare per-claim
+// grounding for the claims its rewrite introduces or materially changes (#214
+// phase 3); optional — absence is warned, never rejected.
+export type ImproveDocumentJobOutput =
+  | {
+      improved: false;
+      markdown?: string;
+      rationale: string;
+      mapUpdates?: SourceMapUpdate[];
+    }
+  | {
+      improved: true;
+      markdown: string;
+      rationale: string;
+      mapUpdates?: SourceMapUpdate[];
+      provenance?: ProvenanceClaim[];
+    };
 
 export interface DraftMarkdownProposalJobOutput {
   title: string;
@@ -788,6 +844,9 @@ export interface DraftMarkdownProposalJobOutput {
   // state) and reported here so the API can surface them on the proposal
   // rationale. Optional: absent when the sources covered everything.
   uncoveredPoints?: string[];
+  // #214: per-claim source grounding for the drafted markdown. Optional —
+  // absence is tolerated (warned by the completion handler, never rejected).
+  provenance?: ProvenanceClaim[];
 }
 
 // One unit of flow seeding: a document to author, described by what it should
@@ -806,7 +865,9 @@ export interface SeedItem {
 // metadata for source-grounded job prompts — never knowledge-base content, and
 // never part of answer retrieval or user-facing output. observedSha is the
 // checkout HEAD the hint was observed at (stamped by the watcher when known);
-// staleness invalidation against source-change-sync is a follow-up.
+// staleness invalidation against source-change-sync is a follow-up. consensusCount
+// tracks how many agents have independently contributed the same topic → paths
+// mapping, indicating credibility; capped at 5.
 export interface SourceMapEntry {
   id: string;
   sourceId: string;
@@ -814,6 +875,7 @@ export interface SourceMapEntry {
   paths: string[];
   description: string;
   observedSha?: string;
+  consensusCount: number;
   createdAt: string; // ISO-8601
   updatedAt: string; // ISO-8601
 }
@@ -842,6 +904,9 @@ export type SourceDescriptor =
 // Input to the draft_seed_document AI job: author a NEW document covering
 // `coverage`, grounded in the source repositories named by `sources`, bypassing
 // the demand-driven gap pipeline. `provider` is added at enqueue (see @magpie/jobs).
+// charter/persona are the seed plan's run-scoped shaping (charter bounds scope,
+// persona shapes voice); seedPlanId is read back off the stored job input at
+// completion to link the proposal to its plan (triggeringQuestionIds precedent).
 export interface DraftSeedDocumentJobInput {
   flowId: string;
   title?: string;
@@ -850,6 +915,9 @@ export interface DraftSeedDocumentJobInput {
   questions?: string[];
   sources: SourceDescriptor[];
   destinationId?: string;
+  charter?: string;
+  persona?: string;
+  seedPlanId?: string;
 }
 
 // Output of draft_seed_document: the authored document plus a short rationale.
@@ -862,34 +930,85 @@ export interface DraftSeedDocumentJobOutput {
   // Coverage points the sources do not support, OMITTED from the document body
   // (#213) and reported here for the proposal rationale.
   uncoveredPoints?: string[];
+  // #214: see DraftMarkdownProposalJobOutput.provenance.
+  provenance?: ProvenanceClaim[];
 }
 
-// A section of an existing flow document, surfaced to the outline generator as
-// retrieval grounding so it proposes docs that fit the current structure and do
-// not restate what the knowledge base already covers.
+// An existing flow document surfaced to the outline planner so it proposes docs
+// that fit the current structure and do not restate what the knowledge base
+// already covers. excerpt is optional: the whole-flow lister supplies
+// path+heading only; the retrieval-scored variant keeps excerpts.
 export interface ExistingDocumentContext {
   path: string;
   heading: string;
-  excerpt: string;
+  excerpt?: string;
 }
 
-// Input to the outline_flow_seed AI job: propose a SeedItem[] (a doc list, titles +
-// coverage) for `topic`, grounded in the flow's existing docs. It only PROPOSES —
-// its output feeds the v1 seed endpoint after human review. `provider` is added at
-// enqueue (see @magpie/jobs).
+// Input to the outline_flow_seed AI job: source-grounded whole-flow planning.
+// There is no topic — `notes` is the optional human steer. `origin` records what
+// triggered the run (a human click or the sparse-flow bootstrap). `charter` is
+// the flow's coverage mission (config), distinct from `persona` (voice) and
+// `routingSummary` (router blurb) — all optional; when charter/persona are
+// absent the model proposes them (see output). It only PROPOSES — the persisted
+// plan waits for human review before anything is drafted. `provider` is added
+// at enqueue (see @magpie/jobs).
 export interface OutlineFlowSeedJobInput {
   flowId: string;
-  topic: string;
+  origin: "manual" | "auto";
   notes?: string;
+  sources: SourceDescriptor[];
   existingDocuments: ExistingDocumentContext[];
   persona?: string;
+  charter?: string;
+  routingSummary?: string;
 }
 
-// Output of outline_flow_seed: the proposed seed items plus a short rationale for
-// the overall shape. The items are edited by a human before being seeded.
+// Output of outline_flow_seed: the proposed seed items plus a short rationale
+// for the overall shape.
 export interface OutlineFlowSeedJobOutput {
   items: SeedItem[];
   rationale: string;
+  // Proposed only when the input lacked charter/persona. Never written to flow
+  // config by the system — surfaced in the console with a copy-to-config hint
+  // and carried run-scoped on the seed plan.
+  proposedCharter?: string;
+  proposedPersona?: string;
+  mapUpdates?: SourceMapUpdate[];
+}
+
+// A persisted, human-reviewable document plan proposed by outline_flow_seed.
+// Item ids are stable uuids so PATCH edits and approve-replay address items
+// unambiguously.
+export type SeedPlanStatus = "proposed" | "approved" | "dismissed" | "superseded";
+export type SeedPlanItemStatus = "proposed" | "approved" | "dismissed";
+export interface SeedPlanItem extends SeedItem {
+  id: string;
+  status: SeedPlanItemStatus;
+  // Set when approval enqueued this item's draft job; replay skips items that
+  // already have one (idempotent partial-approve recovery).
+  draftJobId?: string;
+}
+export interface SeedPlan {
+  id: string;
+  flowId: string;
+  status: SeedPlanStatus;
+  origin: "manual" | "auto";
+  // Run-scoped charter/persona: flow config's when set, else the model's
+  // proposal, as later edited by the reviewer. *Proposed flags record that the
+  // value came from the model (drives the copy-to-config hint in the console).
+  charter?: string;
+  persona?: string;
+  charterProposed: boolean;
+  personaProposed: boolean;
+  items: SeedPlanItem[];
+  rationale: string;
+  notes?: string;
+  outlineJobId: string;
+  // hashSourceDescriptors() of the input sources — the bootstrap dismissal
+  // guard compares this against the flow's current sources.
+  sourceHash: string;
+  createdAt: string; // ISO-8601
+  updatedAt: string; // ISO-8601
 }
 
 export interface FoldMarkdownProposalJobInput {
@@ -902,12 +1021,21 @@ export interface FoldMarkdownProposalJobInput {
   rivalMarkdown: string;
   rivalGapSummaries: string[];
   rivalEvidence: Citation[];
+  // #214 phase 3: both parents' claim provenance, handed to the fold so it can
+  // re-attribute every surviving claim to the folded document's headings.
+  // Optional — pre-feature parents carry none.
+  survivorProvenance?: ProvenanceClaim[];
+  rivalProvenance?: ProvenanceClaim[];
   expectedOutput: "folded_markdown";
 }
 
 export interface FoldMarkdownProposalJobOutput {
   markdown: string;
   rationale: string;
+  // #214 phase 3: the merged document's provenance (union of the parents'
+  // surviving claims, re-anchored). Optional — when absent the API falls back
+  // to concatenating both parents' claims onto the survivor.
+  provenance?: ProvenanceClaim[];
 }
 
 // Input to the fold_changeset_proposal AI job: a multi-file (dedupe/split) rival that

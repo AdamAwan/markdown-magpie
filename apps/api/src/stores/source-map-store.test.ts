@@ -14,12 +14,14 @@ describe("InMemorySourceMapStore", () => {
     });
     assert.ok(created.id);
     assert.equal(created.createdAt, created.updatedAt);
+    assert.equal(created.consensusCount, 1);
 
     const entries = await store.listBySource("s1", 10);
     assert.equal(entries.length, 1);
     assert.equal(entries[0].topic, "event system");
     assert.deepEqual(entries[0].paths, ["src/events/"]);
     assert.equal(entries[0].observedSha, "abc123");
+    assert.equal(entries[0].consensusCount, 1);
   });
 
   it("replaces the entry for the same (sourceId, topic), keeping id and createdAt", async () => {
@@ -72,5 +74,86 @@ describe("InMemorySourceMapStore", () => {
     await store.upsert({ sourceId: "s1", topic: "t", paths: ["p/"], description: "d" });
     await store.reset();
     assert.deepEqual(await store.listBySource("s1", 10), []);
+  });
+
+  it("increments consensus count when paths overlap above threshold (Jaccard > 0.5)", async () => {
+    const store = new InMemorySourceMapStore();
+    const first = await store.upsert({
+      sourceId: "s1",
+      topic: "events",
+      paths: ["src/events/", "lib/emitter.ts", "src/handlers/"],
+      description: "Event system"
+    });
+    assert.equal(first.consensusCount, 1);
+
+    // Agent 2 agrees: similar but slightly different paths (2/3 overlap = 66% > 50%)
+    const second = await store.upsert({
+      sourceId: "s1",
+      topic: "events",
+      paths: ["src/events/", "src/handlers/"],
+      description: "Event system"
+    });
+    assert.equal(second.consensusCount, 2);
+    assert.equal(second.id, first.id);
+
+    // Agent 3 agrees again (1/2 overlap = 50%, not > 50%, so resets)
+    // Then agent 4 agrees with agent 2
+    const third = await store.upsert({
+      sourceId: "s1",
+      topic: "events",
+      paths: ["src/events/", "src/handlers/", "lib/index.ts"],
+      description: "Event system"
+    });
+    assert.equal(third.consensusCount, 3);
+  });
+
+  it("resets consensus count when paths contradict (Jaccard <= 0.5)", async () => {
+    const store = new InMemorySourceMapStore();
+    const first = await store.upsert({
+      sourceId: "s1",
+      topic: "api",
+      paths: ["src/api/", "src/rest/", "src/routes/"],
+      description: "REST API"
+    });
+    assert.equal(first.consensusCount, 1);
+
+    // Agent 2 disagrees: mostly different paths (1/4 overlap = 25% <= 50%)
+    const second = await store.upsert({
+      sourceId: "s1",
+      topic: "api",
+      paths: ["src/api/", "lib/graphql/", "server/"],
+      description: "Mixed API"
+    });
+    assert.equal(second.consensusCount, 1);
+
+    // Agent 3 agrees with agent 2 (2/3 overlap = 66% > 50%)
+    const third = await store.upsert({
+      sourceId: "s1",
+      topic: "api",
+      paths: ["src/api/", "lib/graphql/"],
+      description: "Mixed API"
+    });
+    assert.equal(third.consensusCount, 2);
+  });
+
+  it("caps consensus count at 5", async () => {
+    const store = new InMemorySourceMapStore();
+    let entry = await store.upsert({
+      sourceId: "s1",
+      topic: "t",
+      paths: ["p/"],
+      description: "d"
+    });
+    assert.equal(entry.consensusCount, 1);
+
+    for (let i = 0; i < 10; i++) {
+      entry = await store.upsert({
+        sourceId: "s1",
+        topic: "t",
+        paths: ["p/"],
+        description: "d"
+      });
+    }
+    assert.equal(entry.consensusCount, 5);
   });
 });

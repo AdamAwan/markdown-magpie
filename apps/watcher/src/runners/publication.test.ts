@@ -59,6 +59,7 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     runSourceSync: async () => ({ runIds: [] }),
     runFixPatrol: async () => ({ runId: "run-1", selectedCount: 0, findingCount: 0 }),
     runImprovePatrol: async () => ({ runId: "run-1", selectedCount: 0, enqueuedCount: 0 }),
+    runSeedBootstrap: async () => ({ enqueued: false, reason: "no_sources" }),
     listOpenPullRequests: async () => [],
     sourceMapEntries: async () => [],
     ...overrides
@@ -141,6 +142,69 @@ describe("PublicationRunner", () => {
       { path: "ops/deploy-old.md", delete: true }
     ]);
     assert.equal(parsed.pullRequestUrl, "https://github.com/acme/docs/pull/9");
+  });
+
+  it("renders the proposal's claim provenance into the PR body", async () => {
+    const provenanceContext: ProposalExecutionContext = {
+      proposal: {
+        id: "prop-12345678",
+        title: "Deploy guide",
+        markdown: "# Deploy\n",
+        targetPath: "ops/deploy.md",
+        rationale: "Close the deploy gap",
+        gapSummary: "no deploy docs",
+        provenance: [
+          {
+            claim: "Logs are retained for 12 months",
+            anchor: "log-retention",
+            sources: [{ sourceId: "src-1", path: "docs/ops/logging.md", lines: "L10-L14" }]
+          },
+          {
+            claim: "Deploys roll back automatically on failed health checks",
+            sources: [{ sourceId: "src-2", path: "ops/deploy.sh" }, { sourceId: "src-3", url: "https://example.com/rollbacks" }]
+          }
+        ]
+      },
+      repository: REPOSITORY
+    };
+    let prBody: string | undefined;
+    const runner = new PublicationRunner(fakeApi({ proposalExecutionContext: async () => provenanceContext }), {
+      prepareRepository: async (repository) => repository,
+      publishProposal: async (request) => ({ branchName: request.branchName, commitSha: "abc123", remoteUrl: REPOSITORY.remoteUrl }),
+      publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
+      raisePullRequest: async (request) => {
+        prBody = request.body;
+        return { url: "https://github.com/acme/docs/pull/7", number: 7 };
+      },
+      commentOnPullRequest: async () => undefined
+    });
+
+    await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), new AbortController().signal);
+    assert.ok(prBody, "a PR body was built");
+    assert.match(prBody!, /### Claim provenance/);
+    assert.match(prBody!, /Logs are retained for 12 months/);
+    assert.match(prBody!, /Deploys roll back automatically on failed health checks/);
+    assert.match(prBody!, /docs\/ops\/logging\.md \(L10-L14\)/);
+    assert.match(prBody!, /log-retention/);
+    assert.match(prBody!, /https:\/\/example\.com\/rollbacks/);
+  });
+
+  it("renders no provenance section when the proposal carries none", async () => {
+    let prBody: string | undefined;
+    const runner = new PublicationRunner(fakeApi(), {
+      prepareRepository: async (repository) => repository,
+      publishProposal: async (request) => ({ branchName: request.branchName, commitSha: "abc123", remoteUrl: REPOSITORY.remoteUrl }),
+      publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
+      raisePullRequest: async (request) => {
+        prBody = request.body;
+        return { url: "https://github.com/acme/docs/pull/7", number: 7 };
+      },
+      commentOnPullRequest: async () => undefined
+    });
+
+    await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), new AbortController().signal);
+    assert.ok(prBody, "a PR body was built");
+    assert.doesNotMatch(prBody!, /### Claim provenance/);
   });
 
   it("reports a no-op publish and raises no PR when the content already matches the base", async () => {

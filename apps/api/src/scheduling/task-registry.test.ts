@@ -23,7 +23,7 @@ test("each configured flow gets its own per-flow instance of every task", () => 
   ];
 
   const tasks = listScheduledTasks(ctx);
-  assert.equal(tasks.length, 10, "five templates × two flows");
+  assert.equal(tasks.length, 12, "six templates × two flows");
 
   for (const flowId of ["alpha", "beta"]) {
     assert.ok(findScheduledTask(ctx, `gaps-to-pull-requests::${flowId}`), `gaps task exists for ${flowId}`);
@@ -31,6 +31,7 @@ test("each configured flow gets its own per-flow instance of every task", () => 
     assert.ok(findScheduledTask(ctx, `snapshot-refresh::${flowId}`), `snapshot fetch exists for ${flowId}`);
     assert.ok(findScheduledTask(ctx, `fix-patrol::${flowId}`), `fix patrol exists for ${flowId}`);
     assert.ok(findScheduledTask(ctx, `improve-patrol::${flowId}`), `improve patrol exists for ${flowId}`);
+    assert.ok(findScheduledTask(ctx, `seed-bootstrap::${flowId}`), `seed bootstrap exists for ${flowId}`);
   }
 
   // Labels name the flow so the per-flow controls are distinguishable in the UI.
@@ -48,13 +49,13 @@ test("a local-git flow is not offered the github-only snapshot-refresh (PR poll)
     { id: "hosted-flow", name: "Hosted", sourceIds: [], destinationId: "hosted" }
   ];
 
-  // The local flow keeps the reconcile/publish + patrol tasks (four templates) but
-  // drops snapshot-refresh; the hosted flow keeps all five.
+  // The local flow keeps the reconcile/publish + patrol + seed-bootstrap tasks
+  // (five templates) but drops snapshot-refresh; the hosted flow keeps all six.
   assert.equal(findScheduledTask(ctx, "snapshot-refresh::local-flow"), undefined, "no PR poll for a local-git flow");
   assert.ok(findScheduledTask(ctx, "snapshot-refresh::hosted-flow"), "the hosted flow still polls PRs");
   assert.ok(findScheduledTask(ctx, "gaps-to-pull-requests::local-flow"), "the local flow still reconciles/publishes");
   assert.ok(findScheduledTask(ctx, "fix-patrol::local-flow"), "the local flow still patrols");
-  assert.equal(listScheduledTasks(ctx).length, 4 + 5, "local flow: 4 tasks, hosted flow: 5 tasks");
+  assert.equal(listScheduledTasks(ctx).length, 5 + 6, "local flow: 5 tasks, hosted flow: 6 tasks");
 });
 
 test("the gaps-to-pull-requests task queues the reconciler job with the flow in its input", () => {

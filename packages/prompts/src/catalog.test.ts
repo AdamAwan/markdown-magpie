@@ -125,6 +125,75 @@ test("every content-producing prompt carries the factual-register contract", () 
   }
 });
 
+// #214: per-claim citations go to the structured provenance field — the document
+// body must contain NO repository paths, so internal source locations can never
+// leak into answers built from the document.
+test("draft prompts require structured provenance and forbid inline path citations", () => {
+  for (const id of ["draft-markdown-proposal", "draft-seed-document"]) {
+    const prompt = getPrompt(id);
+    assert.ok(prompt?.instructions.includes('"provenance"'), `${id} instructs the provenance array`);
+    assert.ok(
+      !/cite their repository paths (in the text|\(e\.g\.)/.test(prompt?.instructions ?? ""),
+      `${id} no longer instructs inline body citations`
+    );
+    assert.ok(prompt?.outputShape.includes("provenance"), `${id} outputShape mentions provenance`);
+  }
+});
+
+// #214 phase 3: the rewrite jobs document their own diffs — per-claim citations
+// move from the prose rationale to the structured provenance field, so the
+// corrective/improvement proposal rows become provenance events too.
+test("rewrite prompts require structured provenance instead of rationale citations", () => {
+  for (const id of ["correct-document", "improve-document", "fold-markdown-proposal"]) {
+    const prompt = getPrompt(id);
+    assert.ok(prompt?.instructions.includes('"provenance"'), `${id} instructs the provenance array`);
+    assert.doesNotMatch(
+      prompt?.instructions ?? "",
+      /repository paths in the rationale/,
+      `${id} no longer routes citations to the rationale`
+    );
+    assert.ok(prompt?.outputShape.includes("provenance"), `${id} outputShape mentions provenance`);
+  }
+  const improve = getPrompt("improve-document")?.instructions ?? "";
+  assert.doesNotMatch(
+    improve,
+    /which repository paths support it/,
+    "improve's rationale rule no longer asks for paths"
+  );
+  assert.match(
+    improve,
+    /"improved" is false, omit "provenance"/,
+    "improve scopes provenance to the improved: true output"
+  );
+});
+
+// #214 cleanup: pre-feature documents may still carry inline "(see ...)" source
+// citations from the old draft prompts. The verify→correct patrol strips them
+// organically: verify flags each as a claim, correct removes the parenthetical
+// as a formatting defect without touching the factual content.
+test("the verify→correct patrol flags and strips legacy inline source-path citations", () => {
+  const verify = getPrompt("verify-document")?.instructions ?? "";
+  assert.match(verify, /[Ii]nline repository-path citations?/, "verify names the defect");
+  assert.match(verify, /inline source-path citation/, "verify prescribes the claim reason");
+  const correct = getPrompt("correct-document")?.instructions ?? "";
+  assert.match(correct, /inline source-path citation/, "correct recognises the flagged reason");
+  assert.match(correct, /formatting defect/, "correct treats it as formatting, not a factual error");
+  assert.match(correct, /do not change the factual content/, "correct leaves the facts alone");
+});
+
+// #214 phase 2: verify receives advisory citedClaims (the provenance folded
+// from the document's merged proposals) and checks each against its cited
+// location FIRST, distinguishing "cited support changed" from a claim that was
+// never provable; claims without provenance re-derive as before, and the
+// sources always win over the advisory input.
+test("verify checks citedClaims against their cited locations first", () => {
+  const verify = getPrompt("verify-document")?.instructions ?? "";
+  assert.match(verify, /citedClaims/, "verify names the input field");
+  assert.match(verify, /cited support changed:/, "verify prescribes the cited-support-changed reason prefix");
+  assert.match(verify, /NOT in citedClaims/, "unlisted claims fall back to full re-derivation");
+  assert.match(verify, /advisory/, "citedClaims is advisory — the sources win on conflict");
+});
+
 // #213: uncovered points are OMITTED from the document body and reported in the
 // structured uncoveredPoints field — never written into the markdown as notes.
 test("draft prompts route uncovered points to uncoveredPoints, not the document body", () => {
