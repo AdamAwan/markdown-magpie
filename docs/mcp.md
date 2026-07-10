@@ -66,19 +66,19 @@ Input:
 
 ### `kb_outline`
 
-Generates a proposed seed outline for a topic so you don't have to write the coverage points by hand. It enqueues an `outline_flow_seed` job (grounded in the flow's existing docs and persona), waits for it, and returns the proposed documents. It **only proposes** — nothing is drafted or seeded; the caller reviews/edits the returned `items` and then passes them to `kb_seed`.
+Proposes a seed plan for a flow by exploring its source repositories — **no topic needed**. It enqueues the source-grounded `outline_flow_seed` job, waits for it, then returns the **persisted plan** its completion created. It **only proposes** — nothing is drafted; the plan waits behind the review gate. Approve it with `kb_seed`, or review/edit it in the console.
 
-Input: `{ "flow": string, "topic": string, "notes"?: string }`
+Input: `{ "flow": string, "notes"?: string }` (`notes` is an optional steer for this run).
 
-Returns `{ "jobId": string, "items": SeedItem[], "rationale"?: string }`, where each `SeedItem` is `{ title?, targetPath?, coverage: string[], questions?: string[] }` — the same item shape `kb_seed` consumes. On `failed`/`cancelled`, or if the timeout is exceeded, `kb_outline` raises an error naming the job id and state (no payload data is echoed).
+Returns `{ "planId": string, "charter"?: string, "charterProposed": boolean, "persona"?: string, "personaProposed": boolean, "items": SeedItem[], "rationale"?: string }`, where each `SeedItem` is `{ title?, targetPath?, coverage: string[], questions?: string[] }`. The `*Proposed` flags record that the charter/persona came from the model because the flow config lacked one — copy the value into `KNOWLEDGE_FLOWS` to make it permanent. On `failed`/`cancelled`, or if the timeout is exceeded, `kb_outline` raises an error naming the job id and state (no payload data is echoed).
 
 ### `kb_seed`
 
-Seeds a flow with initial content: submit a list of documents to author (each a title plus the points it should cover). Each item is drafted straight into a proposal → pull request, skipping the gap-clustering pipeline. Use `kb_outline` first to auto-generate the `items`, or supply them directly.
+Approves a seed plan (from `kb_outline` or the console): drafts one document per approved item straight into the proposal → pull-request pipeline, carrying the plan's run-scoped charter/persona. Edit or partially dismiss items in the console first if needed.
 
-Input: `{ "flow": string, "items": SeedItem[] }` where each `SeedItem` is `{ title?, targetPath?, coverage: string[] (≥1), questions?: string[] }`.
+Input: `{ "plan": string }` — the plan id (from `kb_outline`'s `planId`, or the console).
 
-Returns `{ "ok": true, "jobIds": string[] }` — one enqueued `draft_seed_document` job per item. See [ai-jobs.md](ai-jobs.md#seeding-a-flow) for the full seeding flow.
+Returns `{ "planId": string, "jobIds": string[] }` — one enqueued `draft_seed_document` job per approved item. See [ai-jobs.md](ai-jobs.md#seeding-a-flow) for the full seeding flow.
 
 ## Configuration
 

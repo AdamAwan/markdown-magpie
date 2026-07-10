@@ -133,7 +133,9 @@ function planDate(plan: SeedPlan): string {
 }
 
 // Plan/item statuses mapped onto the theme's status tones.
-function statusTone(status: SeedPlan["status"] | SeedPlanItem["status"]): "pending" | "completed" | "failed" | "neutral" {
+function statusTone(
+  status: SeedPlan["status"] | SeedPlanItem["status"]
+): "pending" | "completed" | "failed" | "neutral" {
   switch (status) {
     case "proposed":
       return "pending";
@@ -317,8 +319,8 @@ export function SeedPanel({
           {planningJobId ? "Planning…" : "Propose seed plan"}
         </Button>
         <Hint>
-          The planning agent explores the flow&rsquo;s source repositories and proposes a complete document plan —
-          no topic needed. The plan appears below for review; nothing is drafted until you approve it.
+          The planning agent explores the flow&rsquo;s source repositories and proposes a complete document plan — no
+          topic needed. The plan appears below for review; nothing is drafted until you approve it.
         </Hint>
       </SeedForm>
 

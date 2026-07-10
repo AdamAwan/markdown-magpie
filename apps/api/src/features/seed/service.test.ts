@@ -53,7 +53,10 @@ test("outlineFlowSeed enqueues a source-grounded planning job with flow config a
   assert.equal(input.flowId, "billing");
   assert.equal(input.origin, "manual");
   assert.equal(input.notes, "focus on partial refunds");
-  assert.deepEqual(input.sources?.map((source) => source.id), ["src-1"]);
+  assert.deepEqual(
+    input.sources?.map((source) => source.id),
+    ["src-1"]
+  );
   assert.equal(input.persona, "Support agent");
   assert.equal(input.charter, "Everything a support agent needs about billing");
   assert.equal(input.routingSummary, "billing");
@@ -92,10 +95,7 @@ const outlineOutput = {
   rationale: "Operations end to end."
 };
 
-async function completedOutlineJob(
-  ctx: ReturnType<typeof makeTestContext>,
-  input: Record<string, unknown> = {}
-) {
+async function completedOutlineJob(ctx: ReturnType<typeof makeTestContext>, input: Record<string, unknown> = {}) {
   return ctx.jobs.create("outline_flow_seed", {
     provider: "codex",
     flowId: "billing",
@@ -235,7 +235,10 @@ test("approveSeedPlan enqueues one draft per non-dismissed item carrying charter
     assert.equal(input.charter, "Everything a support agent needs about billing");
     assert.equal(input.persona, "Support agent");
     assert.equal(input.seedPlanId, plan.id);
-    assert.deepEqual((input.sources as { id: string }[]).map((source) => source.id), ["src-1"]);
+    assert.deepEqual(
+      (input.sources as { id: string }[]).map((source) => source.id),
+      ["src-1"]
+    );
     assert.equal(input.destinationId, "docs");
   }
 });
@@ -428,7 +431,10 @@ test("runSeedBootstrap 404s an unknown flow", async () => {
 test("listSeedPlans and getSeedPlan read plans back", async () => {
   const ctx = billingFlowContext();
   const plan = await proposedPlan(ctx);
-  assert.deepEqual((await seed.listSeedPlans(ctx, "billing")).map((entry) => entry.id), [plan.id]);
+  assert.deepEqual(
+    (await seed.listSeedPlans(ctx, "billing")).map((entry) => entry.id),
+    [plan.id]
+  );
   assert.equal((await seed.getSeedPlan(ctx, plan.id))?.id, plan.id);
   assert.equal(await seed.getSeedPlan(ctx, "no-such-plan"), undefined);
 });

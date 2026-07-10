@@ -62,7 +62,10 @@ describe("InMemorySeedPlanStore", () => {
     await store.create(newPlan({ outlineJobId: "job-other", flowId: "flow-2" }));
 
     const plans = await store.listByFlow("flow-1");
-    assert.deepEqual(plans.map((plan) => plan.id), [second.id, first.id]);
+    assert.deepEqual(
+      plans.map((plan) => plan.id),
+      [second.id, first.id]
+    );
 
     await store.setStatus(first.id, "dismissed");
     const latestProposed = await store.latestByFlow("flow-1", "proposed");

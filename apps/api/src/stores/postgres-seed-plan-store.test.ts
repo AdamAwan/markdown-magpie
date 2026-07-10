@@ -72,7 +72,10 @@ describe("PostgresSeedPlanStore", { skip: databaseUrl ? false : "DATABASE_URL no
     const second = await store.create(newPlan({ flowId }));
 
     const plans = await store.listByFlow(flowId);
-    assert.deepEqual(plans.map((plan) => plan.id), [second.id, first.id]);
+    assert.deepEqual(
+      plans.map((plan) => plan.id),
+      [second.id, first.id]
+    );
 
     await store.setStatus(first.id, "dismissed");
     assert.equal((await store.latestByFlow(flowId, "proposed"))?.id, second.id);
