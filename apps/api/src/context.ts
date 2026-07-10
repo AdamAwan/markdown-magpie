@@ -22,7 +22,7 @@ import {
   storeBackend
 } from "./platform/stores.js";
 import type { InsightsStore } from "./stores/insights-store.js";
-import { createConfiguredEmbeddingProvider } from "./platform/providers.js";
+import { createConfiguredEmbeddingProvider, embeddingModelId } from "./platform/providers.js";
 import { createDbPool } from "./platform/db-pool.js";
 import type { AppConfig } from "./platform/config.js";
 import type pg from "pg";
@@ -97,7 +97,9 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
   // store is always Postgres-backed, so the pool is always created here.
   const pool = createDbPool(config);
   const knowledgeStore =
-    storeBackend(config, "KNOWLEDGE_STORE") === "postgres" ? new PostgresKnowledgeStore(pool) : undefined;
+    storeBackend(config, "KNOWLEDGE_STORE") === "postgres"
+      ? new PostgresKnowledgeStore(pool, embeddingModelId(config))
+      : undefined;
   const embedding = knowledgeStore ? createConfiguredEmbeddingProvider(config) : undefined;
   const knowledgeIndex = knowledgeStore
     ? new InMemoryKnowledgeIndex(knowledgeStore, {
@@ -174,6 +176,19 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
       };
     },
     async bootstrap() {
+      // Adopt pre-versioning section vectors under the configured embedding
+      // model before anything can trigger the background embedder — otherwise a
+      // NULL stamp reads as a model mismatch and the whole corpus re-embeds.
+      // Best-effort: an unreachable store surfaces on the required steps below.
+      try {
+        const adopted = await knowledgeStore?.adoptUnversionedEmbeddings();
+        if (adopted) {
+          logger.info({ adopted, embeddingModel: embeddingModelId(config) }, "adopted unversioned section embeddings");
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        logger.error({ err: message }, "failed to adopt unversioned section embeddings");
+      }
       // Syncing git checkouts is required: a failure here aborts startup (the
       // caller maps a throw to a non-zero exit). Hydrating the index is
       // best-effort — a fresh or unreachable store should not stop the server.
@@ -192,6 +207,10 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
         const message = error instanceof Error ? error.message : "Unknown error";
         logger.error({ err: message }, "failed to backfill gap clusters");
       }
+      // An embedding-model change invalidates the whole corpus's vectors at once,
+      // and (unlike a content change) nothing re-indexes to notice it — so kick
+      // the embedder here. A no-op pass when nothing is pending is one cheap query.
+      void embedder.trigger();
     }
   };
   return ctx;

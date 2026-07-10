@@ -105,8 +105,10 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
    (curated KB, written-to) / `KNOWLEDGE_FLOWS` (source→destination links). **Only the
    destination KB is indexed as the answer corpus**; raw sources only ground drafting.
    Deterministic section ids + embedding carry-forward on re-index: unchanged sections
-   keep their vectors, so re-indexing an unchanged corpus costs zero embedding calls
-   (`docs/ingestion.md`).
+   keep their vectors, so re-indexing an unchanged corpus costs zero embedding calls.
+   Section vectors carry an `embedding_model` stamp (migration 0052): vector search only
+   matches the configured model's vectors, and a model change re-embeds via the same
+   carry-forward path (`docs/ingestion.md`).
 2. **Retrieval** — hybrid pgvector + in-memory keyword scoring fused with Reciprocal Rank
    Fusion (`packages/retrieval/src/rrf.ts`); keyword-only fallback without embeddings.
    Mode reported at `GET /api/config` → `retrieval.mode`.

@@ -76,6 +76,27 @@ The upshot: re-indexing a corpus that hasn't changed (a common trigger — every
 publish pre-flight, dirty checkout, or plain-directory destination forces a full re-index)
 costs **zero** embedding calls instead of re-embedding the whole corpus.
 
+### Embedding-model versioning
+
+Vectors from different embedding models (or dimensions) are not comparable, so every stored
+section vector carries an `embedding_model` stamp identifying the model that produced it
+(`openai-compatible:<model>` or `azure-openai:<deployment>` — see `embeddingModelId` in
+`apps/api/src/platform/providers.ts`):
+
+- **Query-time guard**: vector search only matches sections whose stamp equals the configured
+  model, so a model switch can never silently fuse similarities computed against two different
+  vector spaces. Until re-embedding catches up, unmatched sections are still reachable through
+  keyword search.
+- **Re-embed on change**: a section whose stamp differs from the configured model counts as
+  "needing embedding", exactly like a content change — the same background embedder recomputes
+  and re-stamps it. The API also kicks the embedder once at startup, since a model change
+  (an env edit + restart) invalidates vectors without any re-index to notice it.
+- **Upgrade adoption**: vectors persisted before the stamp existed are `NULL`-stamped; at
+  startup the API adopts them under the configured model (they can only have been produced by
+  whatever was configured when they were computed) instead of paying a full-corpus re-embed.
+- The carry-forward upsert moves the stamp with the vector: carried forward when the vector
+  is, cleared to `NULL` when the vector resets.
+
 ## Search
 
 ```bash
