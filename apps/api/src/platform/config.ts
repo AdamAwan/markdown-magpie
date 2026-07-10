@@ -126,6 +126,13 @@ export interface AppConfig {
     // Global ceiling on in-flight (created|retry|active) AI jobs. New AI work is
     // rejected at enqueue with 429 once this many are already in flight.
     aiMaxInflightJobs: number;
+    // In-flight slots reserved for interactive AI jobs (a live caller waiting —
+    // INTERACTIVE_AI_JOB_TYPES): an interactive enqueue is rejected only once
+    // this many interactive jobs are in flight AND the global ceiling is
+    // reached, so maintenance fan-out can never push /api/ask into 429 (#240).
+    // 0 disables the reserve (pre-#240 behaviour); values above the ceiling are
+    // clamped to it at the gate.
+    aiInteractiveReservedJobs: number;
   };
   // Sparse-flow seed bootstrap (SEED_BOOTSTRAP_MAX_DOCS): a flow whose indexed
   // destination has fewer than this many documents counts as "near-empty" and is
@@ -232,6 +239,16 @@ const optionalPositiveInt = z.preprocess(
     .optional()
 );
 
+// Like optionalPositiveInt but 0 is meaningful (e.g. "reserve no slots").
+const optionalNonNegativeInt = z.preprocess(
+  emptyToUndefined,
+  z
+    .string()
+    .regex(/^\d+$/, "must be a non-negative integer")
+    .transform((value) => Number.parseInt(value, 10))
+    .optional()
+);
+
 const optionalString = z.preprocess(emptyToUndefined, z.string().optional());
 const optionalUrl = z.preprocess(emptyToUndefined, z.string().url("must be a valid URL").optional());
 const optionalBackend = z.preprocess(emptyToUndefined, z.enum(["memory", "postgres"]).optional());
@@ -294,6 +311,7 @@ const schema = z
     RATE_LIMIT_ASK_PER_WINDOW: optionalPositiveInt,
     RATE_LIMIT_TRIGGER_PER_WINDOW: optionalPositiveInt,
     AI_MAX_INFLIGHT_JOBS: optionalPositiveInt,
+    AI_INTERACTIVE_RESERVED_JOBS: optionalNonNegativeInt,
     SEED_BOOTSTRAP_MAX_DOCS: optionalPositiveInt,
 
     WATCHER_NAME: optionalString,
@@ -460,7 +478,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       windowMs: parsed.RATE_LIMIT_WINDOW_MS ?? 60_000,
       askPerWindow: parsed.RATE_LIMIT_ASK_PER_WINDOW ?? 30,
       triggerPerWindow: parsed.RATE_LIMIT_TRIGGER_PER_WINDOW ?? 5,
-      aiMaxInflightJobs: parsed.AI_MAX_INFLIGHT_JOBS ?? 20
+      aiMaxInflightJobs: parsed.AI_MAX_INFLIGHT_JOBS ?? 20,
+      aiInteractiveReservedJobs: parsed.AI_INTERACTIVE_RESERVED_JOBS ?? 5
     },
     seeding: {
       bootstrapMaxDocs: parsed.SEED_BOOTSTRAP_MAX_DOCS ?? 3

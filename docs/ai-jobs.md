@@ -71,9 +71,14 @@ available for inspection and retry, but no longer trigger the console warning.
 
 The watcher drives a job through these; operators rarely call them directly:
 
-- `POST /api/jobs/claim` — claim the oldest claimable job matching the worker's
+- `POST /api/jobs/claim` — claim the next claimable job matching the worker's
   capabilities: `{ "workerName": "local-dev-watcher", "capabilities": ["openai-compatible", "maintenance"] }`.
-  Returns `{ "job": JobView }` or `{ "job": null }`.
+  Returns `{ "job": JobView }` or `{ "job": null }`. Queues holding
+  **interactive-class** jobs (`INTERACTIVE_AI_JOB_TYPES`: `answer_question`,
+  `outline_flow_seed` — a live caller is waiting) are offered before the
+  background/maintenance queues, so an ask is never queued behind earlier patrol
+  fan-out for a free watcher (#240); background queues are served round-robin,
+  oldest-first within a queue.
 - `POST /api/jobs/:id/heartbeat` — keep a long-running claim alive; the response
   flags `cancelled` so the watcher can abort.
 - `POST /api/jobs/:id/complete` — `{ "output": { ... }, "executor": "..." }`.

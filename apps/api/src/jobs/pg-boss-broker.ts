@@ -1,5 +1,6 @@
 import {
   allQueueDefinitions,
+  isInteractiveJobType,
   jobDefinition,
   queueNameForJob,
   queueNamesForCapabilities,
@@ -51,6 +52,13 @@ for (const queue of queueDefinitions) {
   const existing = queuesByType.get(queue.type);
   if (existing) existing.push(queue);
   else queuesByType.set(queue.type, [queue]);
+}
+
+// Whether a work queue holds interactive-class jobs (see INTERACTIVE_AI_JOB_TYPES
+// in @magpie/jobs) — the claim-side lane split keys off the queue's job type.
+function isInteractiveQueue(queueName: string): boolean {
+  const queue = queueByName.get(queueName);
+  return queue !== undefined && isInteractiveJobType(queue.type);
 }
 
 // Bounds how many queues locate() probes concurrently for a single job id, so a
@@ -152,23 +160,44 @@ export class PgBossJobBroker implements JobBroker {
     const queues = queueNamesForCapabilities(capabilities);
     if (queues.length === 0) return undefined;
 
-    const start = this.claimCursor % queues.length;
-    for (let offset = 0; offset < queues.length; offset += 1) {
-      const index = (start + offset) % queues.length;
-      const queueName = queues[index]!;
-      const [job] = await this.boss.fetch<JobEnvelope>(queueName, {
-        batchSize: 1,
-        includeMetadata: true,
-        orderByCreatedOn: true
-      });
+    // Interactive lane (#240): a live caller is waiting on interactive-class
+    // jobs, so their queues are probed before any background queue — a freed-up
+    // watcher picks up an answer_question ahead of patrol fan-out that was
+    // enqueued earlier. The interactive partition is at most two queues per
+    // provider capability and usually empty, so fixed-order probing costs one
+    // fetch per queue and needs no fairness cursor of its own.
+    const interactive = queues.filter((name) => isInteractiveQueue(name));
+    for (const queueName of interactive) {
+      const job = await this.fetchOne(queueName);
+      if (job) return toJobView(queueName, job);
+    }
+
+    // Background queues keep the original round-robin so no single busy queue
+    // (e.g. a patrol's verify_document fan-out) starves its siblings.
+    const background = queues.filter((name) => !isInteractiveQueue(name));
+    if (background.length === 0) return undefined;
+    const start = this.claimCursor % background.length;
+    for (let offset = 0; offset < background.length; offset += 1) {
+      const index = (start + offset) % background.length;
+      const queueName = background[index]!;
+      const job = await this.fetchOne(queueName);
       if (job) {
-        this.claimCursor = (index + 1) % queues.length;
+        this.claimCursor = (index + 1) % background.length;
         return toJobView(queueName, job);
       }
     }
 
-    this.claimCursor = (start + 1) % queues.length;
+    this.claimCursor = (start + 1) % background.length;
     return undefined;
+  }
+
+  private async fetchOne(queueName: string): Promise<JobWithMetadata<JobEnvelope> | undefined> {
+    const [job] = await this.boss.fetch<JobEnvelope>(queueName, {
+      batchSize: 1,
+      includeMetadata: true,
+      orderByCreatedOn: true
+    });
+    return job;
   }
 
   async heartbeat(id: string): Promise<JobView> {

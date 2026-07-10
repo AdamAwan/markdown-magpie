@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  isInteractiveJobType,
   jobDefinition,
   queueNameForJob,
   queueNamesForCapabilities,
@@ -72,22 +73,27 @@ export class FakeJobBroker implements JobBroker {
   async claim(workerName: string, capabilities: JobCapability[]): Promise<JobView | undefined> {
     const acceptedQueues = new Set(queueNamesForCapabilities(capabilities));
 
-    for (const [id, job] of this.jobs) {
-      if ((job.state === "created" || job.state === "retry") && acceptedQueues.has(job.queueName)) {
-        const now = new Date().toISOString();
-        const claimed: JobView = {
-          ...job,
-          state: "active",
-          startedAt: now,
-          updatedAt: now
-        };
-        this.jobs.set(id, claimed);
-        void workerName; // recorded in real implementation; not needed in fake
-        return claimed;
-      }
+    // Mirror the real broker's interactive lane (#240): among claimable jobs, an
+    // interactive-class one (see INTERACTIVE_AI_JOB_TYPES) is claimed ahead of
+    // any older background job; within a class, insertion order (FIFO) holds.
+    const claimable = [...this.jobs.values()].filter(
+      (job) => (job.state === "created" || job.state === "retry") && acceptedQueues.has(job.queueName)
+    );
+    const job = claimable.find((candidate) => isInteractiveJobType(candidate.type)) ?? claimable[0];
+    if (!job) {
+      return undefined;
     }
 
-    return undefined;
+    const now = new Date().toISOString();
+    const claimed: JobView = {
+      ...job,
+      state: "active",
+      startedAt: now,
+      updatedAt: now
+    };
+    this.jobs.set(job.id, claimed);
+    void workerName; // recorded in real implementation; not needed in fake
+    return claimed;
   }
 
   async heartbeat(id: string): Promise<JobView> {

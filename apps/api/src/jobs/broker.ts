@@ -31,6 +31,11 @@ export interface JobBroker {
   // the broker as up from this without issuing a query.
   isStarted(): boolean;
   create(type: JobType, input: unknown): Promise<JobView>;
+  // Hand the next runnable job to a watcher. Contract: queues holding
+  // interactive-class jobs (INTERACTIVE_AI_JOB_TYPES — a live caller is waiting)
+  // are offered before background/maintenance queues, so an answer_question is
+  // never queued behind earlier patrol fan-out for a free watcher (#240).
+  // Background queues are served round-robin so none starves its siblings.
   claim(workerName: string, capabilities: JobCapability[]): Promise<JobView | undefined>;
   heartbeat(id: string): Promise<JobView>;
   complete(id: string, output: unknown): Promise<JobView>;
