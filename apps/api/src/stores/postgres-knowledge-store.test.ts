@@ -322,6 +322,35 @@ describe("PostgresKnowledgeStore embedding carry-forward", { skip: databaseUrl ?
     );
   });
 
+  it("carries the embedding_model stamp forward with the vector and clears both on change", async () => {
+    const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string), "openai-compatible:model-a");
+    const repositoryId = `carry-model-${Date.now()}`;
+    const repository = repositoryRef(repositoryId);
+
+    const first = buildDoc(repositoryId, "doc.md", ["alpha", "bravo"]);
+    await store.saveIndexedRepository(
+      { repository, documentCount: 1, sectionCount: first.sections.length },
+      [first.document],
+      first.sections
+    );
+    await store.saveSectionEmbeddings(first.sections.map((s) => ({ id: s.id, embedding: vector(1) })));
+    assert.equal(await store.countSectionsNeedingEmbedding(repositoryId), 0);
+
+    // Re-index with only the second section changed: the first keeps its vector
+    // AND its model stamp (so it still isn't pending), the second resets both.
+    const second = buildDoc(repositoryId, "doc.md", ["alpha", "bravo CHANGED"]);
+    await store.saveIndexedRepository(
+      { repository, documentCount: 1, sectionCount: second.sections.length },
+      [second.document],
+      second.sections
+    );
+    const pending = await store.listSectionsNeedingEmbedding(10, repositoryId);
+    assert.deepEqual(
+      pending.map((s) => s.id),
+      [`${repositoryId}:doc.md:1`]
+    );
+  });
+
   it("deletes sections dropped from a shrinking document", async () => {
     const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
     const repositoryId = `carry-shrink-${Date.now()}`;
@@ -348,5 +377,113 @@ describe("PostgresKnowledgeStore embedding carry-forward", { skip: databaseUrl ?
       .map((s) => s.id)
       .sort();
     assert.deepEqual(ids, [`${repositoryId}:doc.md:0`]);
+  });
+});
+
+describe("PostgresKnowledgeStore embedding-model versioning", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
+  const MODEL_A = "openai-compatible:model-a";
+  const MODEL_B = "openai-compatible:model-b";
+
+  const vector = (seed: number): number[] => {
+    const v = new Array<number>(1536).fill(0);
+    v[0] = seed;
+    return v;
+  };
+
+  const seedRepo = async (store: PostgresKnowledgeStore, repositoryId: string): Promise<{ sectionId: string }> => {
+    const document: KnowledgeDocument = {
+      id: `${repositoryId}:doc.md`,
+      repositoryId,
+      path: "doc.md",
+      metadata: { title: "doc.md", status: "draft", tags: [], relatedDocs: [] },
+      content: "# doc\nbody\n"
+    };
+    const section: DocumentSection = {
+      id: `${document.id}:0`,
+      documentId: document.id,
+      path: "doc.md",
+      heading: "doc",
+      headingPath: ["doc"],
+      anchor: "0",
+      content: "body",
+      ordinal: 0
+    };
+    await store.saveIndexedRepository(
+      {
+        repository: { id: repositoryId, name: repositoryId, defaultBranch: "main", localPath: "/tmp", provider: "local" },
+        documentCount: 1,
+        sectionCount: 1
+      },
+      [document],
+      [section]
+    );
+    return { sectionId: section.id };
+  };
+
+  it("vector search only matches vectors produced by the configured model", async () => {
+    const pool = makeTestPool(databaseUrl as string);
+    const storeA = new PostgresKnowledgeStore(pool, MODEL_A);
+    const repositoryId = `model-guard-${Date.now()}`;
+    const { sectionId } = await seedRepo(storeA, repositoryId);
+    await storeA.saveSectionEmbeddings([{ id: sectionId, embedding: vector(1) }]);
+
+    // Same model: the vector is comparable and the section is found.
+    const sameModel = await storeA.searchByEmbedding(vector(1), 10, [repositoryId]);
+    assert.deepEqual(sameModel.map((hit) => hit.id), [sectionId]);
+
+    // A store configured with a different model must not see model-a vectors.
+    const storeB = new PostgresKnowledgeStore(pool, MODEL_B);
+    const otherModel = await storeB.searchByEmbedding(vector(1), 10, [repositoryId]);
+    assert.deepEqual(otherModel, []);
+
+    // An unversioned store (no embeddings configured) keeps the legacy
+    // behaviour of matching every stored vector.
+    const unversioned = new PostgresKnowledgeStore(pool);
+    const legacy = await unversioned.searchByEmbedding(vector(1), 10, [repositoryId]);
+    assert.deepEqual(legacy.map((hit) => hit.id), [sectionId]);
+  });
+
+  it("treats a model mismatch as needing re-embedding, and re-embedding restores search", async () => {
+    const pool = makeTestPool(databaseUrl as string);
+    const storeA = new PostgresKnowledgeStore(pool, MODEL_A);
+    const repositoryId = `model-reembed-${Date.now()}`;
+    const { sectionId } = await seedRepo(storeA, repositoryId);
+    await storeA.saveSectionEmbeddings([{ id: sectionId, embedding: vector(1) }]);
+    assert.equal(await storeA.countSectionsNeedingEmbedding(repositoryId), 0);
+
+    // Under model B the stored vector is stale: the section is pending again.
+    const storeB = new PostgresKnowledgeStore(pool, MODEL_B);
+    assert.equal(await storeB.countSectionsNeedingEmbedding(repositoryId), 1);
+    const pending = await storeB.listSectionsNeedingEmbedding(10, repositoryId);
+    assert.deepEqual(pending.map((s) => s.id), [sectionId]);
+
+    // Re-embedding under model B clears the backlog and makes the section
+    // visible to model-B vector search again.
+    await storeB.saveSectionEmbeddings([{ id: sectionId, embedding: vector(2) }]);
+    assert.equal(await storeB.countSectionsNeedingEmbedding(repositoryId), 0);
+    const hits = await storeB.searchByEmbedding(vector(2), 10, [repositoryId]);
+    assert.deepEqual(hits.map((hit) => hit.id), [sectionId]);
+  });
+
+  it("adopts pre-versioning vectors under the configured model instead of re-embedding", async () => {
+    const pool = makeTestPool(databaseUrl as string);
+    // An unversioned store writes a NULL-stamped vector, exactly like data
+    // saved before the embedding_model column existed.
+    const unversioned = new PostgresKnowledgeStore(pool);
+    const repositoryId = `model-adopt-${Date.now()}`;
+    const { sectionId } = await seedRepo(unversioned, repositoryId);
+    await unversioned.saveSectionEmbeddings([{ id: sectionId, embedding: vector(3) }]);
+
+    const storeA = new PostgresKnowledgeStore(pool, MODEL_A);
+    assert.equal(await storeA.countSectionsNeedingEmbedding(repositoryId), 1, "unadopted legacy vector reads as stale");
+
+    const adopted = await storeA.adoptUnversionedEmbeddings();
+    assert.ok(adopted >= 1, "at least this test's legacy vector is adopted");
+    assert.equal(await storeA.countSectionsNeedingEmbedding(repositoryId), 0, "adoption avoids a re-embed");
+    const hits = await storeA.searchByEmbedding(vector(3), 10, [repositoryId]);
+    assert.deepEqual(hits.map((hit) => hit.id), [sectionId]);
+
+    // Adoption on an unversioned store is a no-op by definition.
+    assert.equal(await unversioned.adoptUnversionedEmbeddings(), 0);
   });
 });
