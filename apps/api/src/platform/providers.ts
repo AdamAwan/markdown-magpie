@@ -31,6 +31,23 @@ export function embeddingProviderName(config: AppConfig): EmbeddingProviderName 
   return undefined;
 }
 
+// Identity of the configured embedding model, stamped onto section vectors so a
+// model change re-embeds instead of silently mixing incompatible vectors. The
+// provider name is part of the identity because the model string alone is not
+// unique across providers (Azure identifies models by operator-chosen deployment
+// name — the closest stable identity Azure exposes). Undefined when embeddings
+// are not configured.
+export function embeddingModelId(config: AppConfig): string | undefined {
+  const provider = embeddingProviderName(config);
+  if (provider === "openai-compatible") {
+    return `openai-compatible:${config.embeddings.openAiCompatible.embeddingModel}`;
+  }
+  if (provider === "azure-openai") {
+    return `azure-openai:${config.embeddings.azureOpenAi.embeddingDeployment}`;
+  }
+  return undefined;
+}
+
 export function createConfiguredEmbeddingProvider(config: AppConfig) {
   const provider = embeddingProviderName(config);
   if (!provider) {

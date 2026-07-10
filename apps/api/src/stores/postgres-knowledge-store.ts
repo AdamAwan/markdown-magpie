@@ -26,7 +26,15 @@ const EMBEDDING_UPDATE_CHUNK = 1000;
 export class PostgresKnowledgeStore
   implements KnowledgePersistence, SectionVectorSearch, SectionKeywordSearch, EmbeddingPersistence
 {
-  constructor(private readonly pool: pg.Pool) {}
+  // `embeddingModel` identifies the configured embedding model (see
+  // embeddingModelId in platform/providers.ts). Vectors from different models
+  // are not comparable, so saves stamp it, vector search only matches it, and a
+  // stored section whose stamp differs counts as needing (re-)embedding.
+  // Undefined (no embeddings configured) preserves the unversioned behaviour.
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly embeddingModel?: string
+  ) {}
 
   async saveIndexedRepository(
     summary: IndexedRepositorySummary,
@@ -218,8 +226,10 @@ export class PostgresKnowledgeStore
   // conflict the row's columns are refreshed, but the embedding is kept only when
   // both content and heading are byte-identical to the stored row — otherwise it
   // resets to NULL so the background embedder (which targets embedding IS NULL)
-  // recomputes exactly the changed sections. Shared by the full and incremental
-  // save paths; runs on the caller's transaction client.
+  // recomputes exactly the changed sections. The embedding_model stamp travels
+  // with the vector: carried forward when the vector is, cleared when it resets.
+  // Shared by the full and incremental save paths; runs on the caller's
+  // transaction client.
   private async upsertSections(client: pg.PoolClient, sections: DocumentSection[]): Promise<void> {
     for (const batch of chunk(sections, SECTION_INSERT_CHUNK)) {
       await client.query(
@@ -240,6 +250,12 @@ export class PostgresKnowledgeStore
                 WHEN document_sections.content = EXCLUDED.content
                   AND document_sections.heading = EXCLUDED.heading
                 THEN document_sections.embedding
+                ELSE NULL
+              END,
+              embedding_model = CASE
+                WHEN document_sections.content = EXCLUDED.content
+                  AND document_sections.heading = EXCLUDED.heading
+                THEN document_sections.embedding_model
                 ELSE NULL
               END
         `,
@@ -325,7 +341,10 @@ export class PostgresKnowledgeStore
   ): Promise<Array<{ id: string; similarity: number }>> {
     const literal = toVectorLiteral(embedding);
     // A null filter ($3) matches every repository; otherwise restrict to the flow's
-    // destination via the section -> document -> repository join.
+    // destination via the section -> document -> repository join. A null model
+    // ($4, unversioned store) matches every vector; otherwise only vectors the
+    // configured model produced are comparable to the query embedding — stale
+    // vectors from a previous model are invisible here until re-embedded.
     const repositoryFilter = repositoryIds && repositoryIds.length > 0 ? repositoryIds : null;
     const result = await this.pool.query<{ id: string; similarity: string }>(
       `
@@ -334,10 +353,11 @@ export class PostgresKnowledgeStore
         JOIN documents d ON d.id = s.document_id
         WHERE s.embedding IS NOT NULL
           AND ($3::text[] IS NULL OR d.repository_id = ANY($3))
+          AND ($4::text IS NULL OR s.embedding_model = $4)
         ORDER BY s.embedding <=> $1::vector
         LIMIT $2
       `,
-      [literal, limit, repositoryFilter]
+      [literal, limit, repositoryFilter, this.embeddingModel ?? null]
     );
     return result.rows.map((row) => ({ id: row.id, similarity: Number(row.similarity) }));
   }
@@ -372,18 +392,23 @@ export class PostgresKnowledgeStore
     return result.rows.map((row) => ({ id: row.id, relevance: normaliseRank(Number(row.relevance)) }));
   }
 
+  // A section "needs embedding" when it has no vector, or (on a versioned store)
+  // when its vector was produced by a different model than the configured one —
+  // a model change re-embeds exactly like a content change, via the same
+  // background-embedder path. On an unversioned store ($3 NULL) only vectorless
+  // sections qualify, preserving the original behaviour.
   async listSectionsNeedingEmbedding(limit: number, repositoryId?: string): Promise<SectionToEmbed[]> {
     const result = await this.pool.query<{ id: string; heading: string; content: string }>(
       `
         SELECT s.id, s.heading, s.content
         FROM document_sections s
         JOIN documents d ON d.id = s.document_id
-        WHERE s.embedding IS NULL
+        WHERE (s.embedding IS NULL OR ($3::text IS NOT NULL AND s.embedding_model IS DISTINCT FROM $3))
           AND ($1::text IS NULL OR d.repository_id = $1)
         ORDER BY s.id
         LIMIT $2
       `,
-      [repositoryId ?? null, limit]
+      [repositoryId ?? null, limit, this.embeddingModel ?? null]
     );
     return result.rows.map((row) => ({
       id: row.id,
@@ -397,12 +422,30 @@ export class PostgresKnowledgeStore
         SELECT count(*) AS count
         FROM document_sections s
         JOIN documents d ON d.id = s.document_id
-        WHERE s.embedding IS NULL
+        WHERE (s.embedding IS NULL OR ($2::text IS NOT NULL AND s.embedding_model IS DISTINCT FROM $2))
           AND ($1::text IS NULL OR d.repository_id = $1)
       `,
-      [repositoryId ?? null]
+      [repositoryId ?? null, this.embeddingModel ?? null]
     );
     return Number(result.rows[0]?.count ?? 0);
+  }
+
+  // One-time upgrade grace for vectors that predate embedding-model versioning:
+  // a NULL-stamped vector can only have been produced by the model that was
+  // configured when it was computed, so an unchanged configuration adopts them
+  // under the current model instead of paying a full-corpus re-embed. If the
+  // operator switched models at the same time, the stamp is wrong in exactly the
+  // way it already was pre-versioning — and the next genuine model change fixes
+  // it. New saves always stamp, so this converges to a no-op.
+  async adoptUnversionedEmbeddings(): Promise<number> {
+    if (!this.embeddingModel) {
+      return 0;
+    }
+    const result = await this.pool.query(
+      "UPDATE document_sections SET embedding_model = $1 WHERE embedding IS NOT NULL AND embedding_model IS NULL",
+      [this.embeddingModel]
+    );
+    return result.rowCount ?? 0;
   }
 
   async reset(): Promise<void> {
@@ -422,10 +465,10 @@ export class PostgresKnowledgeStore
   }
 
   async saveSectionEmbedding(id: string, embedding: number[]): Promise<void> {
-    await this.pool.query("UPDATE document_sections SET embedding = $2::vector WHERE id = $1", [
-      id,
-      toVectorLiteral(embedding)
-    ]);
+    await this.pool.query(
+      "UPDATE document_sections SET embedding = $2::vector, embedding_model = $3 WHERE id = $1",
+      [id, toVectorLiteral(embedding), this.embeddingModel ?? null]
+    );
   }
 
   async saveSectionEmbeddings(entries: SectionEmbeddingToSave[]): Promise<void> {
@@ -440,11 +483,11 @@ export class PostgresKnowledgeStore
       await this.pool.query(
         `
           UPDATE document_sections AS s
-          SET embedding = v.embedding::vector
+          SET embedding = v.embedding::vector, embedding_model = $${batch.length * 2 + 1}
           FROM (VALUES ${valuesClause(batch.length, 2)}) AS v(id, embedding)
           WHERE s.id = v.id
         `,
-        batch.flatMap((entry) => [entry.id, toVectorLiteral(entry.embedding)])
+        [...batch.flatMap((entry) => [entry.id, toVectorLiteral(entry.embedding)]), this.embeddingModel ?? null]
       );
     }
   }
