@@ -319,6 +319,112 @@ test("dismissSeedPlan flips proposed → dismissed; anything else → plan_not_d
   assert.deepEqual(await seed.dismissSeedPlan(ctx, "no-such-plan"), { ok: false, code: "plan_not_found" });
 });
 
+test("runSeedBootstrap no-ops with no_sources for a flow without sources", async () => {
+  const ctx = makeTestContext({
+    knowledgeConfig: {
+      sources: [],
+      destinations: [{ id: "docs", name: "Docs", kind: "local", path: "docs" }],
+      flows: [{ id: "billing", name: "Billing", sourceIds: [], destinationId: "docs" }],
+      repositories: [],
+      roleGrants: {},
+      checkoutRoot: ".magpie/checkouts"
+    }
+  });
+  const result = await seed.runSeedBootstrap(ctx, "billing");
+  assert.deepEqual(result, { ok: true, enqueued: false, reason: "no_sources" });
+  assert.deepEqual((await ctx.jobs.list({})).jobs, []);
+});
+
+test("runSeedBootstrap no-ops with kb_populated when the destination has enough docs", async () => {
+  const ctx = billingFlowContext();
+  await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
+    documents: ["a.md", "b.md", "c.md"].map((path) => ({ path, content: `# ${path}` })),
+    repositoryId: "docs"
+  });
+  const result = await seed.runSeedBootstrap(ctx, "billing");
+  assert.deepEqual(result, { ok: true, enqueued: false, reason: "kb_populated" });
+});
+
+test("runSeedBootstrap no-ops with plan_pending when a proposed plan exists", async () => {
+  const ctx = billingFlowContext();
+  await proposedPlan(ctx);
+  const result = await seed.runSeedBootstrap(ctx, "billing");
+  assert.deepEqual(result, { ok: true, enqueued: false, reason: "plan_pending" });
+});
+
+test("runSeedBootstrap no-ops with outline_in_flight when an outline job is pending", async () => {
+  const ctx = billingFlowContext();
+  const outline = await seed.outlineFlowSeed(ctx, "billing", { origin: "manual" });
+  assert.ok(outline.ok);
+  const result = await seed.runSeedBootstrap(ctx, "billing");
+  assert.deepEqual(result, { ok: true, enqueued: false, reason: "outline_in_flight" });
+});
+
+test("runSeedBootstrap no-ops with seed_proposals_open when a plan's proposal is still open", async () => {
+  const ctx = billingFlowContext();
+  await ctx.stores.proposals.create({
+    title: "Runbook",
+    targetPath: "runbook.md",
+    markdown: "# Runbook",
+    rationale: "seed",
+    evidence: [],
+    flowId: "billing",
+    seedPlanId: "plan-1"
+  });
+  const result = await seed.runSeedBootstrap(ctx, "billing");
+  assert.deepEqual(result, { ok: true, enqueued: false, reason: "seed_proposals_open" });
+});
+
+test("runSeedBootstrap no-ops with dismissed_unchanged while the sources match the dismissed plan", async () => {
+  const ctx = billingFlowContext();
+  // The dismissed plan's sourceHash must match the flow's CURRENT sources, so
+  // build it through the real enqueue → completion path, then dismiss.
+  const outline = await seed.outlineFlowSeed(ctx, "billing", { origin: "manual" });
+  assert.ok(outline.ok);
+  if (!outline.ok) throw new Error("unreachable");
+  const job = await ctx.jobs.get(outline.jobId);
+  const plan = await seed.createSeedPlanFromCompletedJob(ctx, job, outlineOutput);
+  assert.ok(plan);
+  await ctx.jobs.cancel(outline.jobId);
+  await ctx.stores.seedPlans.setStatus(plan!.id, "dismissed");
+
+  const result = await seed.runSeedBootstrap(ctx, "billing");
+  assert.deepEqual(result, { ok: true, enqueued: false, reason: "dismissed_unchanged" });
+});
+
+test("runSeedBootstrap enqueues an auto-origin outline when every guard passes", async () => {
+  const ctx = billingFlowContext();
+  const result = await seed.runSeedBootstrap(ctx, "billing");
+  assert.ok(result.ok);
+  if (!result.ok) throw new Error("unreachable");
+  assert.equal(result.enqueued, true);
+  assert.ok(result.outlineJobId);
+  const { jobs } = await ctx.jobs.list({ type: "outline_flow_seed" });
+  assert.equal(jobs.length, 1);
+  assert.equal((jobs[0].input as { origin?: string }).origin, "auto");
+});
+
+test("runSeedBootstrap re-proposes when the dismissed plan's hash differs from the current sources", async () => {
+  const ctx = billingFlowContext();
+  // A dismissed plan whose sourceHash reflects DIFFERENT sources than the flow
+  // has now (the operator re-pointed the flow since the human said no).
+  const plan = await proposedPlan(ctx, outlineOutput, {
+    sources: [{ id: "old-src", name: "Old", kind: "git", url: "https://example.com/old.git" }]
+  });
+  await ctx.jobs.cancel(plan.outlineJobId);
+  await ctx.stores.seedPlans.setStatus(plan.id, "dismissed");
+
+  const result = await seed.runSeedBootstrap(ctx, "billing");
+  assert.ok(result.ok);
+  if (!result.ok) throw new Error("unreachable");
+  assert.equal(result.enqueued, true);
+});
+
+test("runSeedBootstrap 404s an unknown flow", async () => {
+  const ctx = makeTestContext();
+  assert.deepEqual(await seed.runSeedBootstrap(ctx, "no-such-flow"), { ok: false, code: "flow_not_found" });
+});
+
 test("listSeedPlans and getSeedPlan read plans back", async () => {
   const ctx = billingFlowContext();
   const plan = await proposedPlan(ctx);

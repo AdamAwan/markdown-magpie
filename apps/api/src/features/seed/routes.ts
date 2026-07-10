@@ -4,13 +4,15 @@ import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
 import { assertCan } from "../../auth/capabilities.js";
 import { HttpError } from "../../http/errors.js";
+import { rateLimit } from "../../http/rate-limit.js";
 import {
   approveSeedPlan,
   dismissSeedPlan,
   getSeedPlan,
   listSeedPlans,
   outlineFlowSeed,
-  patchSeedPlan
+  patchSeedPlan,
+  runSeedBootstrap
 } from "./service.js";
 import { outlineBodySchema, seedPlanPatchSchema } from "./schema.js";
 
@@ -49,6 +51,19 @@ export function seedRoutes(ctx: AppContext): Hono {
       return c.json({ ok: true, jobId: outcome.jobId, reused: outcome.reused });
     }
   );
+
+  // Thin orchestration endpoint the maintenance watcher's seed_bootstrap runner
+  // POSTs. Checks the sparse-flow guards and, when they all pass, enqueues an
+  // auto-origin outline_flow_seed job — it never bounded-waits on it (the plan
+  // lands via the completion handler).
+  app.post("/:flowId/seed-bootstrap/run", requireScopes("manage:jobs"), rateLimit(ctx, "trigger"), async (c) => {
+    const flowId = c.req.param("flowId");
+    const outcome = await runSeedBootstrap(ctx, flowId);
+    if (!outcome.ok) {
+      throw new HttpError(404, outcome.code);
+    }
+    return c.json({ enqueued: outcome.enqueued, reason: outcome.reason, outlineJobId: outcome.outlineJobId });
+  });
 
   // The flow's seed plans, newest first.
   app.get("/:flowId/seed-plans", requireScopes("manage:jobs"), async (c) => {

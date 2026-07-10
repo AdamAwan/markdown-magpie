@@ -581,6 +581,17 @@ export const editorialPatrolOutputSchema = z.object({
   enqueuedCount: z.number().int()
 });
 
+export const seedBootstrapInputSchema = z.object({ flowId: z.string() });
+// One sparse-flow bootstrap tick: either it enqueued an outline_flow_seed run
+// (outlineJobId reports which, possibly a reused in-flight one) or it no-oped
+// and `reason` says why: no_sources | kb_populated | plan_pending |
+// outline_in_flight | seed_proposals_open | dismissed_unchanged.
+export const seedBootstrapOutputSchema = z.object({
+  enqueued: z.boolean(),
+  reason: z.string().optional(),
+  outlineJobId: z.string().optional()
+});
+
 export const verifyGapClosureInputSchema = z.object({ proposalId: z.string() });
 export const verifyGapClosureOutputSchema = z.object({
   proposalId: z.string(),

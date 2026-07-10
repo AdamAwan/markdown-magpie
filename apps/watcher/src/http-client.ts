@@ -84,6 +84,13 @@ export interface WatcherApi extends WatcherApiClient {
     flowId: string | undefined,
     signal?: AbortSignal
   ): Promise<{ runId: string; selectedCount: number; enqueuedCount: number }>;
+  // Drives a sparse-flow seed-bootstrap tick in the API: guard checks + (when
+  // they pass) an enqueue of an auto-origin outline_flow_seed job. The API
+  // returns immediately — it never bounded-waits on the planning job.
+  runSeedBootstrap(
+    flowId: string,
+    signal?: AbortSignal
+  ): Promise<{ enqueued: boolean; reason?: string; outlineJobId?: string }>;
   // The flow's currently open pull requests with a PR URL to poll. Used by the
   // github-capability refresh runner, which holds the GitHub credentials the API
   // no longer does.
@@ -295,6 +302,18 @@ export class HttpWatcherApi implements WatcherApi {
     return this.post<{ runId: string; selectedCount: number; enqueuedCount: number }>(
       "/api/fix-patrol/improve/run",
       { ...(flowId ? { flowId } : {}) },
+      signal,
+      this.maintenanceTimeoutMs
+    );
+  }
+
+  async runSeedBootstrap(
+    flowId: string,
+    signal?: AbortSignal
+  ): Promise<{ enqueued: boolean; reason?: string; outlineJobId?: string }> {
+    return this.post<{ enqueued: boolean; reason?: string; outlineJobId?: string }>(
+      `/api/flows/${encodeURIComponent(flowId)}/seed-bootstrap/run`,
+      {},
       signal,
       this.maintenanceTimeoutMs
     );

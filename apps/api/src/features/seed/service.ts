@@ -9,6 +9,7 @@ import type { AppContext } from "../../context.js";
 import { defaultDestinationId, selectFlow } from "../../platform/repositories.js";
 import { projectSourceDescriptors } from "../../platform/source-descriptors.js";
 import { hashSourceDescriptors } from "../../scheduling/patrol-hash.js";
+import { sameFlowOpenProposals } from "../../scheduling/flow.js";
 import { listExistingDocuments } from "../retrieve/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
 import { logger } from "../../logger.js";
@@ -233,4 +234,50 @@ export async function approveSeedPlan(
     "approved seed plan: enqueued draft_seed_document jobs"
   );
   return { ok: true as const, plan: updated ?? plan, jobIds };
+}
+
+// Sparse-flow auto-seeding tick (thin orchestration endpoint body). Checks the
+// guards in cheapest-first order and proposes a plan only when the flow has
+// sources, a near-empty KB, and no pending/duplicate/vetoed planning work.
+// Enqueue-and-return: unlike the patrols it never bounded-waits — the plan
+// lands via createSeedPlanFromCompletedJob. Dismissal is sticky per source
+// config: a human "no" is re-litigated only when the flow's sources change.
+export async function runSeedBootstrap(
+  ctx: AppContext,
+  flowId: string
+): Promise<
+  { ok: true; enqueued: boolean; reason?: string; outlineJobId?: string } | { ok: false; code: "flow_not_found" }
+> {
+  const deps = ctx.repositoryDeps();
+  const flow = selectFlow(deps, flowId);
+  if (!flow) {
+    return { ok: false as const, code: "flow_not_found" as const };
+  }
+  const sources = projectSourceDescriptors(deps, flow.sourceIds);
+  if (sources.length === 0) {
+    return { ok: true as const, enqueued: false, reason: "no_sources" };
+  }
+  if (listExistingDocuments(ctx, flowId).length >= ctx.settings.seeding.bootstrapMaxDocs) {
+    return { ok: true as const, enqueued: false, reason: "kb_populated" };
+  }
+  if (await ctx.stores.seedPlans.latestByFlow(flowId, "proposed")) {
+    return { ok: true as const, enqueued: false, reason: "plan_pending" };
+  }
+  if (await findInFlightOutlineJob(ctx, flowId)) {
+    return { ok: true as const, enqueued: false, reason: "outline_in_flight" };
+  }
+  const openProposals = await sameFlowOpenProposals(ctx, flowId);
+  if (openProposals.some((proposal) => proposal.seedPlanId)) {
+    return { ok: true as const, enqueued: false, reason: "seed_proposals_open" };
+  }
+  const dismissed = await ctx.stores.seedPlans.latestByFlow(flowId, "dismissed");
+  if (dismissed && dismissed.sourceHash === hashSourceDescriptors(sources)) {
+    return { ok: true as const, enqueued: false, reason: "dismissed_unchanged" };
+  }
+  const outcome = await outlineFlowSeed(ctx, flowId, { origin: "auto" });
+  if (!outcome.ok) {
+    return { ok: false as const, code: "flow_not_found" as const };
+  }
+  logger.info({ flowId, outlineJobId: outcome.jobId, reused: outcome.reused }, "seed bootstrap proposed a plan");
+  return { ok: true as const, enqueued: true, outlineJobId: outcome.jobId };
 }

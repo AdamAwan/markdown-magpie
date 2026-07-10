@@ -3,6 +3,8 @@ import {
   correctnessPatrolOutputSchema,
   editorialPatrolOutputSchema,
   processGapsToPullRequestsOutputSchema,
+  seedBootstrapInputSchema,
+  seedBootstrapOutputSchema,
   sourceChangeSyncOutputSchema,
   verifyGapClosureInputSchema,
   verifyGapClosureOutputSchema
@@ -15,7 +17,8 @@ const MAINTENANCE_JOB_TYPES: ReadonlySet<JobType> = new Set([
   "source_change_sync",
   "correctness_patrol",
   "editorial_patrol",
-  "verify_gap_closure"
+  "verify_gap_closure",
+  "seed_bootstrap"
 ]);
 
 // Runs the scheduled maintenance jobs by POSTing a thin API endpoint, keeping the
@@ -47,7 +50,22 @@ export class MaintenanceRunner {
     if (job.type === "verify_gap_closure") {
       return this.verifyGapClosure(job, signal);
     }
+    if (job.type === "seed_bootstrap") {
+      return this.runSeedBootstrap(job, signal);
+    }
     throw new Error(`MaintenanceRunner cannot handle ${job.type}`);
+  }
+
+  private async runSeedBootstrap(job: JobView, signal: AbortSignal): Promise<unknown> {
+    const { flowId } = seedBootstrapInputSchema.parse(job.input);
+    logger.info({ jobId: job.id, flowId }, `seed_bootstrap[${job.id}]: checking sparse-flow seeding for flow ${flowId}`);
+    const result = await this.api.runSeedBootstrap(flowId, signal);
+    const output = seedBootstrapOutputSchema.parse(result);
+    logger.info(
+      { jobId: job.id, flowId, enqueued: output.enqueued, reason: output.reason ?? null },
+      `seed_bootstrap[${job.id}]: ${output.enqueued ? `proposed a plan (outline job ${output.outlineJobId})` : `no-op (${output.reason})`}`
+    );
+    return output;
   }
 
   private async verifyGapClosure(job: JobView, signal: AbortSignal): Promise<unknown> {
