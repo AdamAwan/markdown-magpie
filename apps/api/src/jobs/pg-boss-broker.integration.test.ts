@@ -102,16 +102,25 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
     await broker.complete(openAiClaim!.id, { answer: "hosted", confidence: "high", citations: [] });
   });
 
-  await t.test("rotates fairly across accepted queues", async () => {
-    const answerOne = await broker.create("answer_question", codexAnswer("answer-one"));
-    const answerTwo = await broker.create("answer_question", codexAnswer("answer-two"));
+  await t.test("claims interactive-class jobs ahead of earlier background work", async () => {
+    // Background fan-out lands first, then a live ask arrives: the ask must be
+    // claimed before both older jobs (#240's interactive lane), and only then
+    // does the background backlog drain.
     const proposal = await broker.create("draft_markdown_proposal", {
       provider: "codex",
       gapSummaries: ["gap"],
       triggeringQuestions: ["question"],
       evidence: [],
+      sources: [],
       expectedOutput: "markdown_proposal"
     });
+    const summary = await broker.create("summarize_gap", {
+      provider: "codex",
+      questions: ["q"],
+      citedSections: [],
+      expectedOutput: "gap_summary"
+    });
+    const answer = await broker.create("answer_question", codexAnswer("live-ask"));
 
     const claimed = [];
     for (let index = 0; index < 3; index += 1) {
@@ -119,11 +128,14 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
       assert.ok(job);
       claimed.push(job);
     }
-    assert.deepEqual(new Set(claimed.slice(0, 2).map((job) => job.queueName)), new Set([
-      "answer_question__codex",
-      "draft_markdown_proposal__codex"
+    assert.equal(claimed[0]!.id, answer.id);
+    assert.deepEqual(new Set(claimed.slice(1).map((job) => job.id)), new Set([proposal.id, summary.id]));
+    // Background queues keep the round-robin fairness the combined loop had:
+    // the two background claims come from two different queues.
+    assert.deepEqual(new Set(claimed.slice(1).map((job) => job.queueName)), new Set([
+      "draft_markdown_proposal__codex",
+      "summarize_gap__codex"
     ]));
-    assert.deepEqual(new Set(claimed.map((job) => job.id)), new Set([answerOne.id, answerTwo.id, proposal.id]));
     for (const job of claimed) {
       await broker.cancel(job.id);
     }

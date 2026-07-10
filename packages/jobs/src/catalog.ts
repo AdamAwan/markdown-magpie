@@ -169,6 +169,26 @@ export function isAiJobType(type: JobType): boolean {
   return aiJobTypes.has(type);
 }
 
+// The interactive class of AI work: jobs a live caller is waiting on right now —
+// POST /api/ask (answer_question, including verify_gap_closure's re-asks, which
+// a blocked orchestrator bounded-waits on) and the console's flow outline
+// (outline_flow_seed). Every other AI_JOB_TYPES member is maintenance fan-out
+// that nobody is sitting in front of. This split drives the two QoS levers for
+// #240: brokers probe interactive queues first when a watcher claims, and the
+// API's AI capacity gate reserves interactive headroom at enqueue time.
+export const INTERACTIVE_AI_JOB_TYPES = [
+  "answer_question",
+  "outline_flow_seed"
+] as const satisfies readonly JobType[];
+
+const interactiveJobTypes = new Set<JobType>(INTERACTIVE_AI_JOB_TYPES);
+
+// Whether a job type belongs to the interactive class above. Used by brokers to
+// order queue probes during claim, so it must stay a pure catalog fact.
+export function isInteractiveJobType(type: JobType): boolean {
+  return interactiveJobTypes.has(type);
+}
+
 function concreteWorkQueues(): QueueDefinition[] {
   return JOB_TYPES.flatMap((type) => {
     const definition = jobDefinition(type);

@@ -30,6 +30,26 @@ test("fake broker supports create, claim, heartbeat, complete, cancel, and retry
   assert.equal((await broker.get(created.id))?.state, "cancelled");
 });
 
+// Mirrors the real broker's interactive lane (#240): a live ask enqueued after
+// background fan-out is still the first job a watcher claims.
+test("claim hands out interactive-class jobs before older background work", async () => {
+  const broker = new FakeJobBroker();
+  const proposal = await broker.create("draft_markdown_proposal", {
+    provider: "codex" as const,
+    gapSummaries: ["gap"],
+    triggeringQuestions: ["question"],
+    evidence: [],
+    sources: [],
+    expectedOutput: "markdown_proposal" as const
+  });
+  const answer = await broker.create("answer_question", validAnswerInput);
+
+  const first = await broker.claim("worker-1", ["codex"]);
+  assert.equal(first?.id, answer.id);
+  const second = await broker.claim("worker-1", ["codex"]);
+  assert.equal(second?.id, proposal.id);
+});
+
 // Mirrors pg-boss's cancelJobs SQL (`WHERE state < 'completed'`): cancelling a job
 // that already reached a terminal state must be a no-op, not an overwrite. This
 // is what makes runJobToCompletion's timeout-cancel (#162) race-safe against a

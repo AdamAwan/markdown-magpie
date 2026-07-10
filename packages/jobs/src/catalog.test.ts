@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  AI_JOB_TYPES,
   AI_PROVIDERS,
+  INTERACTIVE_AI_JOB_TYPES,
   JOB_TYPES,
   allQueueDefinitions,
   answerQuestionInputSchema,
@@ -11,6 +13,7 @@ import {
   draftMarkdownProposalInputSchema,
   draftSeedDocumentInputSchema,
   improveDocumentInputSchema,
+  isInteractiveJobType,
   jobDefinition,
   jobTypesForCapability,
   jobTypesWithoutCapabilities,
@@ -80,6 +83,20 @@ test("provider work retries three times and non-provider work retries twice", ()
     assert.equal(policy.retryDelay, 30);
     assert.equal(policy.retryDelayMax, 600);
   }
+});
+
+test("the interactive class is exactly the caller-waited subset of AI work", () => {
+  assert.deepEqual([...INTERACTIVE_AI_JOB_TYPES], ["answer_question", "outline_flow_seed"]);
+  // Every interactive type is provider-routed AI work — the class is a QoS split
+  // within AI_JOB_TYPES, never a new kind of job.
+  for (const type of INTERACTIVE_AI_JOB_TYPES) {
+    assert.ok((AI_JOB_TYPES as readonly string[]).includes(type));
+    assert.ok(isInteractiveJobType(type));
+  }
+  // Maintenance fan-out and non-AI work are not interactive.
+  assert.equal(isInteractiveJobType("verify_document"), false);
+  assert.equal(isInteractiveJobType("draft_markdown_proposal"), false);
+  assert.equal(isInteractiveJobType("publish_proposal"), false);
 });
 
 test("codex capability can only claim codex-partitioned AI work", () => {
