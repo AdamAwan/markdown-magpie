@@ -43,12 +43,28 @@ import {
   WatcherView,
   WorkersResponse
 } from "../lib/types";
-import type { SeedItem } from "@magpie/core";
-import { apiDelete, apiGet, apiPost, errorMessage } from "../lib/api";
+import type { SeedPlan } from "@magpie/core";
+import { apiDelete, apiGet, apiPatch, apiPost, errorMessage } from "../lib/api";
 import { knowledgeFlows } from "../lib/config";
-import { buildAttentionNotices, formatJobType, isActiveJob, jobResult, jobTransitionMessages } from "../lib/console";
+import { buildAttentionNotices, formatJobType, isActiveJob, jobTransitionMessages } from "../lib/console";
 import { sectionPath } from "../lib/sections";
 import { OTHER_DOCUMENTS_ID } from "./KnowledgePanel";
+
+// Mirrors the API's seed-plan PATCH body (apps/api/src/features/seed/schema.ts):
+// reviewer edits to charter/persona text plus per-item field edits and status
+// flips, addressed by the items' stable ids.
+export interface SeedPlanPatchBody {
+  charter?: string;
+  persona?: string;
+  items?: Array<{
+    id: string;
+    title?: string;
+    targetPath?: string;
+    coverage?: string[];
+    questions?: string[];
+    status?: "proposed" | "approved" | "dismissed";
+  }>;
+}
 
 // `/knowledge/documents` and `/knowledge/repositories` are now paginated
 // (server default 50, capped at 200 — see apps/api/src/platform/paths.ts
@@ -734,63 +750,92 @@ function useConsoleController() {
     }
   }
 
-  // Generate a seed outline: enqueue outline_flow_seed and poll it to completion,
-  // then hand the proposed items back for the human to edit. The bounded
-  // /jobs/:id/wait can return a still-active job when its deadline elapses, so loop
-  // until terminal. Returns undefined (and surfaces the error) when generation fails,
-  // so the caller can reset its own generating state.
-  async function generateOutline(
+  // Propose a seed plan for a flow: enqueue the source-grounded planning job.
+  // Enqueue-only — the persisted plan lands via the job's completion handler, so
+  // the panel polls listSeedPlans rather than waiting on the job here. `reused`
+  // means an outline run for this flow was already in flight and its job id is
+  // returned instead of double-planning.
+  async function proposeSeedPlan(
     targetFlowId: string,
-    topic: string,
     notes: string
-  ): Promise<SeedItem[] | undefined> {
+  ): Promise<{ jobId: string; reused: boolean } | undefined> {
     clearMessage();
     try {
       const trimmedNotes = notes.trim();
-      const { jobId } = await apiPost<{ ok: boolean; jobId: string }>(
+      const outcome = await apiPost<{ ok: boolean; jobId: string; reused: boolean }>(
         `/flows/${encodeURIComponent(targetFlowId)}/outline`,
-        { topic: topic.trim(), notes: trimmedNotes ? trimmedNotes : undefined }
+        { notes: trimmedNotes ? trimmedNotes : undefined }
       );
-      let job = await waitForJob({ id: jobId });
-      while (
-        job.state === "created" ||
-        job.state === "retry" ||
-        job.state === "active" ||
-        job.state === "blocked"
-      ) {
-        job = await waitForJob({ id: jobId });
-      }
-      if (job.state !== "completed") {
-        throw new Error(job.error?.message ?? "Outline generation did not complete.");
-      }
-      await refresh({ silent: true });
-      // The completed job's output is the queue envelope { result, executor }; the
-      // outline_flow_seed payload (its items) lives under `result`. Reading
-      // job.output.items directly always yields undefined, so the panel would show
-      // no proposed documents.
-      return jobResult<{ items?: SeedItem[] }>(job)?.items ?? [];
+      showMessage(
+        outcome.reused
+          ? "Already planning this flow — the existing run's plan will appear here for review when ready."
+          : "Planning — exploring the flow's sources; the plan will appear here for review when ready.",
+        "info"
+      );
+      await refresh({ preserveMessage: true, silent: true });
+      return { jobId: outcome.jobId, reused: outcome.reused };
     } catch (error) {
       showMessage(errorMessage(error), "danger");
       return undefined;
     }
   }
 
-  // Seed a flow with the reviewed items: POST the v1 endpoint, which drafts one
-  // document per item into the proposal → PR pipeline. Returns the enqueued job ids
-  // (undefined on failure, with the error surfaced).
-  async function seedFlow(targetFlowId: string, items: SeedItem[]): Promise<string[] | undefined> {
+  // The flow's persisted seed plans, newest first (undefined on failure, with
+  // the error surfaced). The seed panel renders from these rows — never from a
+  // raw outline job output.
+  async function listSeedPlans(targetFlowId: string): Promise<SeedPlan[] | undefined> {
+    try {
+      const { plans } = await apiGet<{ plans: SeedPlan[] }>(
+        `/flows/${encodeURIComponent(targetFlowId)}/seed-plans`
+      );
+      return plans;
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
+  // Save reviewer edits (charter/persona text, item fields, per-item status) to
+  // a still-proposed plan.
+  async function patchSeedPlan(planId: string, patch: SeedPlanPatchBody): Promise<SeedPlan | undefined> {
     clearMessage();
     try {
-      const { jobIds } = await apiPost<{ ok: boolean; jobIds: string[] }>(
-        `/flows/${encodeURIComponent(targetFlowId)}/seed`,
-        { items }
+      const { plan } = await apiPatch<{ plan: SeedPlan }>(`/seed-plans/${encodeURIComponent(planId)}`, patch);
+      showMessage("Plan edits saved.", "success");
+      return plan;
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
+  // Approve a plan: the API drafts one document per approved item straight into
+  // the proposal → PR pipeline, carrying the plan's charter/persona.
+  async function approveSeedPlan(planId: string): Promise<{ plan: SeedPlan; jobIds: string[] } | undefined> {
+    clearMessage();
+    try {
+      const outcome = await apiPost<{ plan: SeedPlan; jobIds: string[] }>(
+        `/seed-plans/${encodeURIComponent(planId)}/approve`,
+        {}
       );
       showMessage(
-        `Seeding ${jobIds.length} document${jobIds.length === 1 ? "" : "s"} into the flow — drafts will appear as proposals.`,
+        `Approved — drafting ${outcome.jobIds.length} document${outcome.jobIds.length === 1 ? "" : "s"}; drafts will appear as proposals.`,
         "success"
       );
       await refresh({ preserveMessage: true });
-      return jobIds;
+      return outcome;
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
+  async function dismissSeedPlan(planId: string): Promise<SeedPlan | undefined> {
+    clearMessage();
+    try {
+      const { plan } = await apiPost<{ plan: SeedPlan }>(`/seed-plans/${encodeURIComponent(planId)}/dismiss`, {});
+      showMessage("Plan dismissed. It will not be re-proposed until the flow's sources change.", "success");
+      return plan;
     } catch (error) {
       showMessage(errorMessage(error), "danger");
       return undefined;
@@ -864,8 +909,11 @@ function useConsoleController() {
     saveScheduledTask,
     runScheduledTask,
     indexRepository,
-    generateOutline,
-    seedFlow
+    proposeSeedPlan,
+    listSeedPlans,
+    patchSeedPlan,
+    approveSeedPlan,
+    dismissSeedPlan
   };
 }
 

@@ -77,6 +77,18 @@ export async function apiPost<T>(path: string, body: unknown, options: ApiReques
   return readResponse<T>(response);
 }
 
+export async function apiPatch<T>(path: string, body: unknown, options: ApiRequestOptions = {}): Promise<T> {
+  const response = await fetch(resolveApiUrl(path), {
+    method: "PATCH",
+    headers: await authHeaders({
+      "content-type": "application/json"
+    }),
+    body: JSON.stringify(body),
+    signal: requestSignal(options)
+  });
+  return readResponse<T>(response);
+}
+
 export async function apiDelete<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
   const response = await fetch(resolveApiUrl(path), {
     method: "DELETE",
