@@ -1,5 +1,5 @@
 import type { SeedPlan, SeedPlanItem } from "@magpie/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import styled from "@emotion/styled";
 import type { SeedPlanPatchBody } from "./ConsoleProvider";
 import { Actions, Badge, Button, Chip, EmptyState, Field, Input, Row, Select, Textarea } from "./ui";
@@ -182,16 +182,24 @@ export function SeedPanel({
 
   const selectedPlan = plans.find((plan) => plan.id === selectedPlanId);
 
-  const refreshPlans = useCallback(
-    async (targetFlowId: string) => {
-      const next = await onListPlans(targetFlowId);
-      if (next) {
-        setPlans(next);
-      }
-      return next;
-    },
-    [onListPlans]
-  );
+  // The ConsoleProvider re-renders on every poll tick (4s fast tier while jobs
+  // run, 30s slow tier always) and hands down freshly-created handler functions
+  // each time. Read the latest one through a ref so `refreshPlans` stays
+  // referentially stable and the effects below re-run only when the flow or the
+  // in-flight planning job actually changes — depending on the prop directly
+  // reset the plan list and collapsed the open review pane on every tick.
+  const onListPlansRef = useRef(onListPlans);
+  useEffect(() => {
+    onListPlansRef.current = onListPlans;
+  });
+
+  const refreshPlans = useCallback(async (targetFlowId: string) => {
+    const next = await onListPlansRef.current(targetFlowId);
+    if (next) {
+      setPlans(next);
+    }
+    return next;
+  }, []);
 
   function hydrate(plan: SeedPlan) {
     setSelectedPlanId(plan.id);
