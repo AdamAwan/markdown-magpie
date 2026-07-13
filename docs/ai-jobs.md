@@ -608,6 +608,36 @@ Prompt mode can be:
 
 The agent must return JSON matching the job output schema. The watcher extracts and validates JSON before completing the job.
 
+### CLI environment isolation
+
+A local agent CLI boots as a full interactive assistant by default — its own system
+prompt and persona, the complete toolset, and whatever MCP servers, settings, hooks, and
+project memory (CLAUDE.md) the operator's environment or the working directory carries.
+Left unisolated, a one-shot completion run can behave like a chat session (one incident:
+a `claude -p` answer job replied by asking the reader to grant it MCP tool permissions,
+and that chatter shipped as the answer). The runner therefore assembles isolation args in
+code (`apps/watcher/src/runners/cli.ts`), after the operator-configured
+`CODEX_CLI_ARGS` / `CLAUDE_CLI_ARGS`, so configuration cannot drop them:
+
+- **One-shot generative runs** execute in a neutral working directory (the OS temp dir —
+  no host-project CLAUDE.md / `.mcp.json` / `.claude` settings) with, for claude,
+  `--tools ""` (no tools), `--strict-mcp-config` (no MCP servers),
+  `--setting-sources ""` (no user/project settings, hooks, or plugins), and
+  `--system-prompt` carrying the job-runner instructions so they replace the CLI's
+  interactive persona instead of riding as user text. codex gets `--sandbox read-only
+  --skip-git-repo-check` (it has no system-prompt flag, so its prompt keeps the folded
+  `SYSTEM:` block).
+- **Source-grounded runs** keep the read-only explore toolset (`--tools Read,Grep,Glob`
+  plus disallowed write tools for claude; `--sandbox read-only` for codex) and, for
+  claude, also get `--strict-mcp-config` and `--setting-sources ""` — a source checkout
+  may carry its own `.mcp.json` (this repo does) or committed `.claude` settings, and
+  neither may reach the agent.
+
+Defence in depth on the answer side: an `answer_question` reply that ignores the
+structured JSON contract (plain prose) is always grounding-verified despite its low
+confidence, and fails closed — if the verifier cannot vouch for the prose, the safe
+fallback answer ships instead of the raw text.
+
 ## Provider Compatibility Practice
 
 Provider support should stay behind `AgentRunner` adapters:

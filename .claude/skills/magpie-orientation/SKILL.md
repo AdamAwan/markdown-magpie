@@ -66,7 +66,12 @@ Implications you must design around:
   notes only), not sampled file content. The agent explores the checkout directly:
   - **CLI providers** (codex, claude) traverse natively; read-only is enforced in code
     (`readOnlyArgs()` in `runners/cli.ts` — e.g. `--tools Read,Grep,Glob` for claude,
-    `--sandbox read-only` for codex) so operator arg config can't drop it.
+    `--sandbox read-only` for codex) so operator arg config can't drop it. CLI runs are
+    also environment-isolated in code (`generativeIsolationArgs()` for one-shot runs:
+    neutral temp-dir cwd, `--tools ""`, `--strict-mcp-config`, `--setting-sources ""`,
+    system prompt via `--system-prompt`; source-grounded claude runs get the MCP/settings
+    flags too) so host or checkout MCP config, settings/hooks, and CLAUDE.md never reach
+    the agent — see "CLI environment isolation" in `docs/ai-jobs.md`.
   - **HTTP providers** run a bounded tool loop (`runners/source-agent.ts`): `list_dir` /
     `read_file` / `grep` tools, max 24 steps, 400 KB total read budget, realpath
     confinement (no `..`/symlink/absolute escape). Infra faults fail the job — the loop

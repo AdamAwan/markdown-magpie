@@ -552,6 +552,97 @@ describe("ChatRunner", () => {
     assert.equal(output.confidence, "high", "a flaky verifier must not downgrade every answer");
   });
 
+  it("verifies unstructured prose answers despite low confidence and keeps them when grounded", async () => {
+    // A model that ignores the JSON contract but genuinely answers in plain prose:
+    // the prose is the least-trusted output the loop can produce, so it must pass
+    // the grounding check to ship — low confidence alone no longer skips it.
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      return "Run the deploy script.";
+    });
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-a", name: "Alpha" }],
+        requestedFlowId: "flow-a",
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { answer: string; confidence: string; trace?: { verification: { status: string } } };
+
+    assert.ok(
+      chat.requests.some((request) => request.system.includes("You verify a drafted")),
+      "an unstructured answer must be grounding-checked before it ships"
+    );
+    assert.equal(output.answer, "Run the deploy script.", "grounded prose still ships verbatim");
+    assert.equal(output.confidence, "low", "contract-ignoring output stays distrusted");
+    assert.equal(output.trace?.verification.status, "grounded");
+  });
+
+  it("replaces unstructured prose with the fallback when the grounding verdict is unparseable (fails closed)", async () => {
+    // The incident class: a CLI provider's interactive persona leaks through as
+    // conversational chatter ("grant me tool access..."). Nothing can vouch for
+    // it — the structured contract was ignored AND the verifier produced no
+    // verdict — so the raw prose must never reach the reader.
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("You verify a drafted")) {
+        return "not a verdict at all";
+      }
+      return "I need permission to search the knowledge base. Could you grant access to the kb_search tool?";
+    });
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-a", name: "Alpha" }],
+        requestedFlowId: "flow-a",
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { answer: string; confidence: string; trace?: { verification: { status: string } } };
+
+    assert.doesNotMatch(output.answer, /grant access/, "unvouched chatter must not ship as the answer");
+    assert.match(output.answer, /could not produce a reliable answer/);
+    assert.equal(output.confidence, "low");
+    assert.equal(output.trace?.verification.status, "verdict_unparseable");
+  });
+
+  it("replaces ungrounded unstructured prose with the fallback when the verifier offers no revision", async () => {
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: false, unsupportedClaims: ["a permission plea, not an answer"] });
+      }
+      return "I need permission to search the knowledge base before I can answer.";
+    });
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-a", name: "Alpha" }],
+        requestedFlowId: "flow-a",
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as {
+      answer: string;
+      confidence: string;
+      gaps?: Array<{ summary: string }>;
+      trace?: { verification: { status: string } };
+    };
+
+    assert.doesNotMatch(output.answer, /permission/, "ungrounded chatter with no revision must not ship");
+    assert.match(output.answer, /could not produce a reliable answer/);
+    assert.equal(output.confidence, "low");
+    assert.equal(output.trace?.verification.status, "claims_stripped");
+    assert.ok(output.gaps?.some((gap) => gap.summary === "a permission plea, not an answer"));
+  });
+
   it("skips the grounding check for knowledge-gap answers", async () => {
     const chat = new FakeChatProvider(() =>
       JSON.stringify({ answer: "Not covered.", confidence: "low", isKnowledgeGap: true, gaps: ["rollback docs"] })
