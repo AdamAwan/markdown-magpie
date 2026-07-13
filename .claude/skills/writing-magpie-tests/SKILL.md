@@ -34,6 +34,20 @@ npm test                       # all workspaces (npm run test --workspaces --if-
 npm test -w @magpie/jobs       # one workspace
 ```
 
+## Web component tests (apps/web)
+
+Two harnesses in `apps/web/src/test`, both under `node:test`:
+
+- **`renderMarkup`** (`render.tsx`) — `renderToStaticMarkup` inside the app's ThemeProvider.
+  Default for "does it render the right markup" assertions. Effects **never run** here.
+- **`renderDom` / `changeValue` / `click`** (`dom.tsx`) — mounts for real via
+  `react-dom/client` on a happy-dom document (registered by `@happy-dom/global-registrator`),
+  wrapped in `act`. Use when the behaviour only exists across renders: effects, polling,
+  state persistence through prop-identity changes. `rerender` simulates a parent (e.g. the
+  ConsoleProvider poll tick) handing down fresh callback identities — panels must not treat
+  that as a data change and reset UI state (the seed-panel collapse regression test is the
+  model).
+
 ## Postgres-backed integration tests
 
 Anything needing a real database is **gated by an env flag** so `npm test` stays fast and
