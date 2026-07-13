@@ -29,6 +29,7 @@ import {
   forcedSearchQueries,
   parseGroundingVerdict,
   parseJobOutput,
+  UNPARSEABLE_ANSWER_FALLBACK,
   withVerification,
   type AnswerLoopTrace,
   type AnswerOutput
@@ -205,10 +206,19 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
 
 // Post-answer grounding check: a second model call reviews the drafted answer
 // against the retrieved pool and every unsupported claim is stripped, the answer
-// downgraded to low, and the claims recorded as gaps. Only medium/high answers are
+// downgraded to low, and the claims recorded as gaps. Medium/high answers are
 // checked — gap, out-of-scope, and already-low answers ship distrusted anyway. An
 // unparseable verdict fails open (keeps the drafted answer) so a flaky verifier
 // cannot downgrade every answer.
+//
+// Exception on both counts: an UNSTRUCTURED answer (the model ignored the JSON
+// contract and replied in prose) is always verified despite its low confidence,
+// and fails CLOSED — when neither the contract nor the verifier can vouch for
+// the prose, the safe fallback ships instead. Prose from a contract-ignoring
+// model can be a genuine answer (grounded prose still ships verbatim), but it
+// can also be conversational chatter — a CLI provider once asked the reader to
+// grant it MCP tool permissions, and low confidence alone let that skip
+// verification and ship as the "answer".
 //
 // To avoid re-sending the whole pool (already sent verbatim in the assess call), the
 // context is split: the *cited* sections go in full, while the retrieved-but-uncited
@@ -224,13 +234,14 @@ async function verifyAnswerGrounding(
   signal: AbortSignal,
   jobId: string
 ): Promise<AnswerOutput> {
+  const unstructured = output.trace?.answerContract === "unstructured";
   if (output.outOfScope) {
     return withVerification(output, { status: "skipped", skipReason: "out_of_scope" });
   }
   if (sections.length === 0) {
     return withVerification(output, { status: "skipped", skipReason: "no_sections" });
   }
-  if (output.confidence !== "high" && output.confidence !== "medium") {
+  if (!unstructured && output.confidence !== "high" && output.confidence !== "medium") {
     return withVerification(output, { status: "skipped", skipReason: "low_confidence" });
   }
 
@@ -256,6 +267,10 @@ async function verifyAnswerGrounding(
 
   const verdict = parseGroundingVerdict(response.content);
   if (!verdict) {
+    if (unstructured) {
+      logger.warn({ jobId }, `answer_question[${jobId}]: grounding verdict was unparseable for an unstructured answer; shipping the fallback`);
+      return withVerification({ ...output, answer: UNPARSEABLE_ANSWER_FALLBACK }, { status: "verdict_unparseable" });
+    }
     logger.warn({ jobId }, `answer_question[${jobId}]: grounding verdict was unparseable; keeping the drafted answer`);
     return withVerification(output, { status: "verdict_unparseable" });
   }
@@ -266,7 +281,12 @@ async function verifyAnswerGrounding(
     { jobId, unsupportedClaimCount: verdict.unsupportedClaims.length, revised: Boolean(verdict.revisedAnswer) },
     `answer_question[${jobId}]: answer contained ${verdict.unsupportedClaims.length} unsupported claim(s); downgrading to low confidence`
   );
-  return withVerification(applyGroundingVerdict(output, verdict, question), {
+  const applied = applyGroundingVerdict(output, verdict, question);
+  // Ungrounded prose with no revision to fall back on: applyGroundingVerdict
+  // keeps the drafted answer in that case, which for a contract-ignoring reply
+  // means shipping unvouched chatter — replace it with the safe fallback.
+  const result = unstructured && !verdict.revisedAnswer ? { ...applied, answer: UNPARSEABLE_ANSWER_FALLBACK } : applied;
+  return withVerification(result, {
     status: "claims_stripped",
     unsupportedClaims: verdict.unsupportedClaims
   });

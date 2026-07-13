@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { tmpdir } from "node:os";
 import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
 import { JOB_TYPES, jobDefinition, type JobView, type JobType } from "@magpie/jobs";
+import { JOB_RUNNER_SYSTEM } from "@magpie/prompts";
 import type { RetrievedSection, WatcherApi } from "../http-client.js";
 import { CliRunner, type CliSpawn, type SpawnedCli } from "./cli.js";
 
@@ -197,7 +199,10 @@ describe("CliRunner", () => {
       command: "node",
       args: [
         "-e",
-        "let prompt = ''; process.stdin.on('data', chunk => prompt += chunk); process.stdin.on('end', () => { if (!prompt.includes('\\\"summary\\\":\\\"s\\\"')) process.exit(3); process.stdout.write(JSON.stringify({ summary: 's', priority: 1, rationale: 'r' })); });"
+        "let prompt = ''; process.stdin.on('data', chunk => prompt += chunk); process.stdin.on('end', () => { if (!prompt.includes('\\\"summary\\\":\\\"s\\\"')) process.exit(3); process.stdout.write(JSON.stringify({ summary: 's', priority: 1, rationale: 'r' })); });",
+        // Stops node's own option parsing so the runner's isolation flags reach
+        // the script's argv instead (same shape as the --model stdin test above).
+        "--"
       ],
       promptMode: "stdin",
       buildPromptOverride: () => RESULT_JSON
@@ -294,6 +299,72 @@ describe("CliRunner", () => {
     assert.equal(output.splits[0].confirmed, false);
   });
 
+  it("isolates the claude one-shot generative path from the host environment", async () => {
+    const calls: SpawnCall[] = [];
+    const runner = new CliRunner({
+      capability: "claude",
+      command: "claude",
+      args: ["-p"],
+      promptMode: "arg",
+      model: "my-model",
+      spawnOverride: fakeSpawn(calls, RESULT_JSON)
+    });
+    const output = await runner.run(SUMMARIZE, new AbortController().signal);
+    assert.deepEqual(output, { summary: "s", priority: 1, rationale: "r" });
+
+    const call = calls[0]!;
+    // Neutral cwd: run in the temp dir so the host project's CLAUDE.md, .mcp.json,
+    // and .claude/ settings cannot leak into the completion's context.
+    assert.equal(call.cwd, tmpdir());
+    // A one-shot completion needs NO tools; `--tools ""` disables the whole set so
+    // the CLI's interactive persona has nothing to reach for (and nothing to ask
+    // the "user" to grant).
+    const toolsAt = call.args.indexOf("--tools");
+    assert.ok(toolsAt >= 0, `expected --tools in ${call.args.join(" ")}`);
+    assert.equal(call.args[toolsAt + 1], "");
+    // No MCP servers from any config, and no user/project settings (hooks,
+    // permission grants, plugins).
+    assert.ok(call.args.includes("--strict-mcp-config"));
+    const sourcesAt = call.args.indexOf("--setting-sources");
+    assert.ok(sourcesAt >= 0);
+    assert.equal(call.args[sourcesAt + 1], "");
+    // The job-runner instructions ride as THE system prompt, not as user text
+    // competing with the CLI's built-in interactive persona...
+    const systemAt = call.args.indexOf("--system-prompt");
+    assert.ok(systemAt >= 0);
+    assert.equal(call.args[systemAt + 1], JOB_RUNNER_SYSTEM.instructions);
+    // ...so the positional prompt no longer carries the folded SYSTEM: block.
+    assert.doesNotMatch(call.args.at(-1) ?? "", /^SYSTEM:/);
+    // Variadic isolation flags must not swallow the prompt.
+    assert.equal(call.args.at(-2), "--");
+    // --model is consumed before the variadic isolation flags begin.
+    assert.ok(call.args.indexOf("--model") >= 0 && call.args.indexOf("--model") < toolsAt);
+  });
+
+  it("runs the codex one-shot generative path sandboxed read-only in a neutral cwd", async () => {
+    const calls: SpawnCall[] = [];
+    const runner = new CliRunner({
+      capability: "codex",
+      command: "codex",
+      args: ["exec"],
+      promptMode: "arg",
+      spawnOverride: fakeSpawn(calls, RESULT_JSON)
+    });
+    const output = await runner.run(SUMMARIZE, new AbortController().signal);
+    assert.deepEqual(output, { summary: "s", priority: 1, rationale: "r" });
+
+    const call = calls[0]!;
+    assert.equal(call.cwd, tmpdir());
+    const sandboxAt = call.args.indexOf("--sandbox");
+    assert.ok(sandboxAt >= 0, `expected --sandbox in ${call.args.join(" ")}`);
+    assert.equal(call.args[sandboxAt + 1], "read-only");
+    // The temp dir is not a git repo; codex exec refuses non-git dirs without this.
+    assert.ok(call.args.includes("--skip-git-repo-check"));
+    // codex has no system-prompt flag, so its prompt keeps the folded SYSTEM: block.
+    assert.match(call.args.at(-1) ?? "", /^SYSTEM:/);
+    assert.equal(call.args.at(-2), "--");
+  });
+
   it("rejects when the CLI exits non-zero, including stderr", async () => {
     const runner = new CliRunner({
       capability: "codex",
@@ -359,6 +430,13 @@ describe("CliRunner source-grounded seeding", () => {
     // Every workspace beyond the first is granted via a repeated --add-dir.
     const addDirAt = call.args.indexOf("--add-dir");
     assert.equal(call.args[addDirAt + 1], "/checkouts/s2");
+    // No MCP servers — a checkout may carry its own .mcp.json (this repo does),
+    // and the agent must never see the KB's own MCP tools; no user/project
+    // settings either (a hostile source repo could otherwise inject hooks).
+    assert.ok(call.args.includes("--strict-mcp-config"));
+    const sourcesAt = call.args.indexOf("--setting-sources");
+    assert.ok(sourcesAt >= 0);
+    assert.equal(call.args[sourcesAt + 1], "");
     // claude's --tools/--add-dir are variadic and would swallow a trailing
     // positional prompt, so "--" must sit immediately before the prompt.
     assert.equal(call.args.at(-2), "--");
@@ -419,9 +497,10 @@ describe("CliRunner source-grounded seeding", () => {
     assert.deepEqual(output, SEED_OUTPUT);
 
     const call = calls[0]!;
-    assert.equal(call.cwd, undefined);
-    assert.equal(call.args.includes("--tools"), false);
-    assert.equal(call.args.includes("--"), false);
+    // Generative (non-source-grounded) runs get the neutral-cwd isolation, not a
+    // checkout cwd, and the empty toolset rather than the read-only explore set.
+    assert.equal(call.cwd, tmpdir());
+    assert.equal(call.args[call.args.indexOf("--tools") + 1], "");
   });
 
   it("escalates SIGTERM to SIGKILL when a source-grounded run times out", async () => {

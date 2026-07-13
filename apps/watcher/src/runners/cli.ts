@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import type { ChatProvider, ChatRequest, ChatResponse, SourceDescriptor } from "@magpie/core";
 import type { JobCapability, JobType, JobView } from "@magpie/jobs";
@@ -162,7 +163,51 @@ export class CliRunner {
   private readOnlyArgs(prepared: PreparedSources): string[] {
     if (this.capability === "claude") {
       const extraDirs = prepared.workspaces.slice(1).flatMap((ws) => ["--add-dir", ws.rootDir]);
-      return ["--tools", "Read,Grep,Glob", "--disallowedTools", "Write,Edit,NotebookEdit,Bash", ...extraDirs];
+      // --strict-mcp-config (with no --mcp-config) loads zero MCP servers: a
+      // checkout may carry its own .mcp.json (this repo does — it would hand the
+      // agent the KB's own kb_* tools), and the operator's user-scope servers
+      // must not leak in either. --setting-sources "" skips user/project
+      // settings entirely, so a source repo's committed .claude/settings.json
+      // (hooks — arbitrary command execution) is inert. Both verified live on
+      // claude v2.1.x, 2026-07-13.
+      return [
+        "--tools",
+        "Read,Grep,Glob",
+        "--disallowedTools",
+        "Write,Edit,NotebookEdit,Bash",
+        "--strict-mcp-config",
+        "--setting-sources",
+        "",
+        ...extraDirs
+      ];
+    }
+    return ["--sandbox", "read-only", "--skip-git-repo-check"];
+  }
+
+  // Isolation for one-shot generative runs, assembled HERE per capability for the
+  // same reason as readOnlyArgs: operator arg config can't drop it. A generative
+  // job is a completion — the CLI must behave like a completion endpoint, not
+  // like the interactive assistant it boots as by default. Without this, a
+  // `claude -p` run carries the full interactive toolset and persona; when a
+  // prompt tempted it to "look something up" it answered with a plea to grant it
+  // tool permissions, and that chatter shipped as the job output.
+  //
+  // Verified spellings (claude v2.1.x, live 2026-07-13):
+  // - `--tools ""` empties the built-in toolset (nothing to reach for, nothing to
+  //   ask the "user" to grant).
+  // - `--strict-mcp-config` with no --mcp-config loads zero MCP servers.
+  // - `--setting-sources ""` skips user/project settings (hooks, permission
+  //   grants, plugins/skills).
+  // - `--system-prompt` makes the job-runner instructions THE system prompt.
+  //   renderCliPrompt's folded "SYSTEM:" block is user-level text that competes
+  //   with (and loses to) the CLI's own persona; this flag replaces that persona.
+  // codex (spellings shared with readOnlyArgs, verified on codex-cli 0.142.x):
+  // `--sandbox read-only` (config.toml can override the default, so pass it
+  // always) and `--skip-git-repo-check` (the neutral cwd is not a git repo).
+  // codex exec has no system-prompt flag, so its prompt keeps the folded block.
+  private generativeIsolationArgs(system: string): string[] {
+    if (this.capability === "claude") {
+      return ["--tools", "", "--strict-mcp-config", "--setting-sources", "", "--system-prompt", system];
     }
     return ["--sandbox", "read-only", "--skip-git-repo-check"];
   }
@@ -170,9 +215,17 @@ export class CliRunner {
   private modelFor(job: JobView): ChatProvider {
     return {
       complete: async (request: ChatRequest): Promise<ChatResponse> => {
-        const prompt = renderCliPrompt(request);
+        // claude carries the system prompt on --system-prompt, so its positional
+        // prompt is the messages alone; codex keeps the folded SYSTEM: block.
+        const prompt = this.capability === "claude" ? renderCliMessages(request) : renderCliPrompt(request);
         logger.debug({ jobId: job.id, jobType: job.type, command: this.command, promptMode: this.promptMode }, `${job.type}[${job.id}]: invoking ${this.command} CLI (${this.promptMode} mode)`);
-        const content = await this.spawnCli(prompt, request.signal ?? new AbortController().signal);
+        const content = await this.spawnCli(prompt, request.signal ?? new AbortController().signal, {
+          // Neutral cwd: the watcher's own cwd is a Claude Code project in dev
+          // (this repo), whose CLAUDE.md / .mcp.json / .claude settings would
+          // otherwise load into the completion's context.
+          cwd: tmpdir(),
+          extraArgs: this.generativeIsolationArgs(request.system)
+        });
         logger.debug({ jobId: job.id, jobType: job.type, command: this.command, outputLength: content.length }, `${job.type}[${job.id}]: ${this.command} CLI finished, ${content.length} char(s) of output`);
         return { content };
       }
@@ -194,8 +247,8 @@ export class CliRunner {
       // positional that a leading `-`/`--` in the prompt text would misparse as a
       // flag — `--` (honoured by clap) forecloses both. Structural here — not left
       // to the extra args' builder — so the extras can never detach from the
-      // prompt. Only the source-grounded path passes extraArgs, so the plain
-      // generative path (extraArgs empty) is unaffected.
+      // prompt. Every spawn passes extraArgs now (readOnlyArgs on the
+      // source-grounded path, generativeIsolationArgs on the one-shot path).
       const terminator = this.promptMode === "arg" && extraArgs.length > 0 ? ["--"] : [];
       const modelArgs = this.model ? ["--model", this.model] : [];
       const baseArgs = [...this.args, ...modelArgs, ...extraArgs, ...terminator];
@@ -261,8 +314,11 @@ export class CliRunner {
 }
 
 function renderCliPrompt(request: ChatRequest): string {
-  const messages = request.messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`).join("\n\n");
-  return `SYSTEM:\n${request.system}\n\n${messages}`;
+  return `SYSTEM:\n${request.system}\n\n${renderCliMessages(request)}`;
+}
+
+function renderCliMessages(request: ChatRequest): string {
+  return request.messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`).join("\n\n");
 }
 
 const missingApi: WatcherApi = {
