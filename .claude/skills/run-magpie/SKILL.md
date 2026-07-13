@@ -58,10 +58,14 @@ mkdir -p .magpie/checkouts
 AUTH_REQUIRED=false MAGPIE_CHECKOUT_ROOT="$PWD/.magpie/checkouts" npm run dev:api   # background
 
 # 4. Watcher — REQUIRED for the queue-only world (answers, drafts, publishing).
-#    Clear the M2M creds so it talks to the local API with no auth header.
+#    Clear the M2M creds so it talks to the local API with no auth header, and
+#    OVERRIDE API_BASE_URL — the committed .env points it at the PRODUCTION API,
+#    so without the override the watcher silently polls prod and 401s every claim
+#    while local jobs sit queued forever.
 #    On startup it logs which capabilities are ready; `provider` must be ready to
 #    answer questions (it reads the OPENAI_COMPATIBLE_* keys from .env).
-AUTH_REQUIRED=false WATCHER_API_CLIENT_ID= WATCHER_API_CLIENT_SECRET= \
+API_BASE_URL=http://localhost:4000 \
+  AUTH_REQUIRED=false WATCHER_API_CLIENT_ID= WATCHER_API_CLIENT_SECRET= \
   MAGPIE_CHECKOUT_ROOT="$PWD/.magpie/checkouts" npm run dev:watcher                 # background
 
 # 4b. Run a SECOND watcher for the maintenance orchestrators (gap-closure
@@ -72,7 +76,8 @@ AUTH_REQUIRED=false WATCHER_API_CLIENT_ID= WATCHER_API_CLIENT_SECRET= \
 #     doc never verifies (it stays honestly "unverified" — the fix in #150 keeps it
 #     from being falsely reopened). Each process gets a unique registry id, so the
 #     same command is fine; the console warns while only one is connected.
-AUTH_REQUIRED=false WATCHER_API_CLIENT_ID= WATCHER_API_CLIENT_SECRET= \
+API_BASE_URL=http://localhost:4000 \
+  AUTH_REQUIRED=false WATCHER_API_CLIENT_ID= WATCHER_API_CLIENT_SECRET= \
   MAGPIE_CHECKOUT_ROOT="$PWD/.magpie/checkouts" npm run dev:watcher                 # background
 
 # 5. Web on :3000. Set MAGPIE_DEV_API_PROXY so the browser reaches the API
@@ -125,6 +130,10 @@ Knowledge / Proposals / Crunch.
 - **`401` on API calls / watcher can't claim jobs** → you're running against the prod
   `.env` with `AUTH_REQUIRED=true`. Override `AUTH_REQUIRED=false` for local dev (steps
   3 and 4).
+- **Watcher logs `POST /api/jobs/claim failed with 401` even though the local API has
+  auth off** → the watcher isn't talking to your API at all: `.env`'s `API_BASE_URL`
+  points at the production deployment. Override `API_BASE_URL=http://localhost:4000`
+  (step 4). Verify with `curl -s localhost:4000/api/workers` — your watcher must appear.
 - **`/data/checkouts` not writable** → always override `MAGPIE_CHECKOUT_ROOT` locally,
   or the API's `bootstrap()` logs "Failed to sync configured git repositories" and exits 1.
 - **Web can't reach API / CORS** → you forgot `MAGPIE_DEV_API_PROXY=http://localhost:4000`

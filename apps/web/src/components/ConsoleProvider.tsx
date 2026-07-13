@@ -46,7 +46,7 @@ import {
 import type { SeedPlan } from "@magpie/core";
 import { apiDelete, apiGet, apiPatch, apiPost, errorMessage } from "../lib/api";
 import { knowledgeFlows } from "../lib/config";
-import { buildAttentionNotices, formatJobType, isActiveJob, jobTransitionMessages } from "../lib/console";
+import { buildAttentionNotices, formatJobType, isActiveJob, jobTransitionMessages, runPublishProposal } from "../lib/console";
 import { sectionPath } from "../lib/sections";
 import { OTHER_DOCUMENTS_ID } from "./KnowledgePanel";
 
@@ -673,21 +673,12 @@ function useConsoleController() {
     setLoading(true);
     clearMessage();
     try {
-      // Publication is now enqueue-only: the API validates and returns a queued
-      // publish_proposal job. The watcher executes the git and records the
-      // publication back onto the proposal, which a later refresh picks up.
-      const result = await apiPost<{ job?: JobView }>(`/proposals/${proposalId}/publish`, {});
-      openSection("jobs");
-      if (result.job) {
-        const job = await waitForJob(result.job);
-        showMessage(
-          isActiveJob(job)
-            ? `${formatJobType(job.type)} queued. We will update this page when it finishes.`
-            : `${formatJobType(job.type)} ${job.state}.`,
-          job.state === "failed" ? "danger" : "info"
-        );
-      }
-      await refresh({ preserveMessage: true });
+      // Fire-and-forget enqueue (see runPublishProposal): no jump to the Jobs
+      // section and no /jobs/:id/wait long-poll, so the shared `loading` flag
+      // clears as soon as the job is queued instead of blocking the console for
+      // up to the API's 25s wait deadline. The active-job 4s polling (plus
+      // jobTransitionMessages) surfaces the publish outcome on this page.
+      await runPublishProposal({ apiPost, showMessage, refresh }, proposalId);
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     } finally {
