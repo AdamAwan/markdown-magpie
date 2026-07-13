@@ -1,4 +1,4 @@
-import { ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, JobType, JobView, KnowledgeStats, WatcherView } from "./types";
+import { ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, JobType, JobView, KnowledgeStats, UiMessage, WatcherView } from "./types";
 
 export function sectionTitle(section: ConsoleSection): string {
   if (section === "knowledge") {
@@ -226,6 +226,27 @@ export function formatJobType(type: string): string {
       .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : ""))
       .join(" ")
   );
+}
+
+// The console-side effects publishing needs, injected so the flow is testable and
+// so it *cannot* navigate or long-poll: the deps deliberately exclude openSection
+// and the /jobs/:id/wait helper.
+export interface PublishProposalDeps {
+  apiPost: (path: string, body: unknown) => Promise<{ job?: JobView }>;
+  showMessage: (text: string, tone: UiMessage["tone"]) => void;
+  refresh: (options: { preserveMessage: boolean }) => Promise<void>;
+}
+
+// Publication is enqueue-only on the API, and the console treats it as
+// fire-and-forget: enqueue, report "queued", refresh in place. The regular
+// polling picks up the watcher's result, so the user keeps working on the page
+// they are on instead of being bounced to Jobs behind a blocked UI.
+export async function runPublishProposal(deps: PublishProposalDeps, proposalId: string): Promise<void> {
+  const result = await deps.apiPost(`/proposals/${proposalId}/publish`, {});
+  if (result.job) {
+    deps.showMessage(`${formatJobType(result.job.type)} queued. This page will update when it finishes.`, "info");
+  }
+  await deps.refresh({ preserveMessage: true });
 }
 
 // A completed job's output is the queue envelope { result, executor }: the job's

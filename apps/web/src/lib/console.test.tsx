@@ -6,10 +6,11 @@ import {
   isActiveJob,
   jobResult,
   jobTransitionMessages,
+  runPublishProposal,
   sectionSubtitle,
   sectionTitle
 } from "./console";
-import type { ConsoleSection, Health, JobType, JobView, KnowledgeStats, WatcherView } from "./types";
+import type { ConsoleSection, Health, JobType, JobView, KnowledgeStats, UiMessage, WatcherView } from "./types";
 
 const now = "2026-06-30T12:00:00.000Z";
 
@@ -289,4 +290,65 @@ test("jobResult unwraps the { result, executor } envelope, not job.output direct
 
 test("jobResult returns undefined when the job has no output yet", () => {
   assert.equal(jobResult(job({ id: "j2", state: "active", output: undefined })), undefined);
+});
+
+// Publication is enqueue-only and must stay fire-and-forget in the console: one
+// POST, a "queued" message, a refresh — no navigation away from the proposal and
+// no long-poll on /jobs/:id/wait holding the global loading flag for up to 25s.
+function publishHarness(response: { job?: JobView }) {
+  const apiCalls: Array<{ path: string; body: unknown }> = [];
+  const messages: Array<Pick<UiMessage, "text" | "tone">> = [];
+  const refreshes: Array<{ preserveMessage: boolean }> = [];
+  const deps = {
+    apiPost: async (path: string, body: unknown) => {
+      apiCalls.push({ path, body });
+      return response;
+    },
+    showMessage: (text: string, tone: UiMessage["tone"]) => {
+      messages.push({ text, tone });
+    },
+    refresh: async (options: { preserveMessage: boolean }) => {
+      refreshes.push(options);
+    }
+  };
+  return { deps, apiCalls, messages, refreshes };
+}
+
+test("runPublishProposal enqueues once, reports the queued job, and refreshes in place", async () => {
+  const queued = job({ id: "pub-1", type: "publish_proposal", state: "created" });
+  const { deps, apiCalls, messages, refreshes } = publishHarness({ job: queued });
+
+  await runPublishProposal(deps, "p1");
+
+  // Exactly one API call: the enqueue. No follow-up /jobs/:id/wait long-poll.
+  assert.deepEqual(apiCalls, [{ path: "/proposals/p1/publish", body: {} }]);
+  assert.deepEqual(messages, [
+    { text: "Publish Proposal queued. This page will update when it finishes.", tone: "info" }
+  ]);
+  assert.deepEqual(refreshes, [{ preserveMessage: true }]);
+});
+
+test("runPublishProposal still refreshes when the API returns no job", async () => {
+  const { deps, messages, refreshes } = publishHarness({});
+
+  await runPublishProposal(deps, "p1");
+
+  assert.deepEqual(messages, []);
+  assert.deepEqual(refreshes, [{ preserveMessage: true }]);
+});
+
+test("runPublishProposal propagates API errors without refreshing", async () => {
+  const refreshes: Array<{ preserveMessage: boolean }> = [];
+  const deps = {
+    apiPost: async () => {
+      throw new Error("publish rejected");
+    },
+    showMessage: () => undefined,
+    refresh: async (options: { preserveMessage: boolean }) => {
+      refreshes.push(options);
+    }
+  };
+
+  await assert.rejects(runPublishProposal(deps, "p1"), /publish rejected/);
+  assert.deepEqual(refreshes, []);
 });
