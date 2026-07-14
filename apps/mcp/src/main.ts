@@ -1,7 +1,7 @@
 import { argv, stdin, stdout } from "node:process";
 import { fileURLToPath } from "node:url";
 import { isAuthRequired } from "@magpie/auth";
-import { approveSeedPlan, askQuestion, generateOutline, getJson, listFlows, optionalStringArgument, stringArgument, submitFeedback } from "./kb-client.js";
+import { approveSeedPlan, askQuestion, generateOutline, getCitationSections, getJson, listFlows, optionalStringArgument, stringArgument, submitFeedback } from "./kb-client.js";
 import { createMcpLogger } from "./logger.js";
 
 type JsonRpcId = string | number | null;
@@ -167,6 +167,28 @@ const tools = [
       required: ["plan"],
       additionalProperties: false
     } satisfies JsonSchema
+  },
+  {
+    name: "kb_citation",
+    description:
+      "Fetch the full content of cited knowledge-base sections so the evidence behind an answer can be shown. " +
+      "Pass the sectionId values from kb_ask citations (or kb_search results). Returns the currently indexed " +
+      "version of each section plus a `missing` list for ids that no longer exist (the knowledge base changed " +
+      "since the answer — re-ask or use kb_search).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sectionIds: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: 20,
+          description: "The sectionId values to resolve, from kb_ask citations or kb_search results."
+        }
+      },
+      required: ["sectionIds"],
+      additionalProperties: false
+    } satisfies JsonSchema
   }
 ];
 
@@ -316,6 +338,11 @@ async function callTool(params: ToolCallParams): Promise<unknown> {
 
   if (params.name === "kb_seed") {
     const result = await approveSeedPlan(params.arguments, { token: stdioAuthToken });
+    return textResult(result);
+  }
+
+  if (params.name === "kb_citation") {
+    const result = await getCitationSections(params.arguments, { token: stdioAuthToken });
     return textResult(result);
   }
 
