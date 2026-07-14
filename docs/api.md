@@ -140,6 +140,13 @@ Searches indexed sections. `limit` defaults to `5`. When hybrid retrieval is act
 - `400 query_required` — missing `q`.
 - `200` — `{ "sections": [ DocumentSection, ... ] }`.
 
+### `GET /api/knowledge/sections/:id`
+
+Resolves one indexed section in full — the lookup behind MCP's `kb_citation`, which expands a citation's excerpt into the complete evidence passage.
+
+- `404 section_not_found` — the id is not in the index (e.g. the section was re-indexed away).
+- `200` — `{ "section": DocumentSection }`.
+
 ### `POST /api/knowledge/repositories/index`
 
 Indexes the destination KB for a configured flow. See [ingestion.md](ingestion.md).

@@ -48,6 +48,12 @@ Input: `{ "query": string, "limit"?: number }`
 
 Returns indexed Markdown sections matching the keyword query.
 
+### `kb_flows`
+
+Input: `{}`
+
+Lists the knowledge flows a question can be routed to. Returns `{ "flows": [ { "id": string, "name": string }, ... ] }`; use an id as the `flow` argument to `kb_ask` or `kb_outline`.
+
 ### `kb_feedback`
 
 Reports feedback on a previously asked question, using the `questionId` returned by `kb_ask`.
@@ -79,6 +85,14 @@ Approves a seed plan (from `kb_outline` or the console): drafts one document per
 Input: `{ "plan": string }` — the plan id (from `kb_outline`'s `planId`, or the console).
 
 Returns `{ "planId": string, "jobIds": string[] }` — one enqueued `draft_seed_document` job per approved item. See [ai-jobs.md](ai-jobs.md#seeding-a-flow) for the full seeding flow.
+
+### `kb_citation`
+
+Fetches the full content of cited sections so end users can see the evidence behind an answer.
+
+Input: `{ "sectionIds": string[] }` — 1–20 `sectionId` values from `kb_ask` citations (or `kb_search` results).
+
+Returns `{ "sections": [ DocumentSection, ... ], "missing": string[] }`. Each section is the **currently indexed** version (the KB may have changed since the answer was produced). Ids that no longer resolve land in `missing` instead of failing the call — the knowledge base changed; re-ask or use `kb_search`.
 
 ## Configuration
 
@@ -135,6 +149,7 @@ Per-tool scopes:
 | `kb_feedback` | `feedback:questions` |
 | `kb_outline` | `manage:jobs` |
 | `kb_seed` | `manage:jobs` |
+| `kb_citation` | `read:knowledge` |
 
 The inbound user token is validated locally and **never forwarded** to the API. The HTTP server calls the API with its own separate service token, `MCP_API_AUTH_TOKEN` (a machine-to-machine credential). Startup fails fast if `AUTH_REQUIRED=true` and this token is missing.
 
