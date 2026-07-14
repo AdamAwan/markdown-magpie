@@ -1,12 +1,16 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
+import type { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
+import type { Proposal } from "@magpie/core";
+import type { JobView } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
 import { assertCan, can } from "../../auth/capabilities.js";
 import { apiLink, parseLimit } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
 import * as proposalsService from "./service.js";
-import { draftFromGapsBodySchema, proposalStatusBodySchema } from "./schema.js";
+import { bulkProposalActionBodySchema, draftFromGapsBodySchema, proposalStatusBodySchema } from "./schema.js";
 
 export function proposalRoutes(ctx: AppContext): Hono {
   const app = new Hono();
@@ -74,6 +78,30 @@ export function proposalRoutes(ctx: AppContext): Hono {
 
   registerCreateFromGaps("/from-gap");
   registerCreateFromGaps("/from-gaps");
+
+  // One review action applied across many proposals — the console's bulk bar.
+  // Outcomes are strictly per id: a bad id (unknown, cross-flow, wrong status,
+  // PR-tracked) is reported for that id and never fails the rest of the batch,
+  // so the response is always 200 with a results array (400 only for a
+  // malformed body). Ids are processed sequentially so a batch of local-git
+  // merges contends for the destination checkout lock one at a time.
+  app.post(
+    "/bulk",
+    requireScopes("manage:knowledge"),
+    zValidator("json", bulkProposalActionBodySchema, (result, c) => {
+      if (!result.success) {
+        return c.json({ error: "valid_bulk_action_required" }, 400);
+      }
+    }),
+    async (c) => {
+      const { action, ids } = c.req.valid("json");
+      const results: BulkOutcome[] = [];
+      for (const id of ids) {
+        results.push(await applyBulkAction(ctx, c, action, id));
+      }
+      return c.json({ results });
+    }
+  );
 
   app.get("/:id", requireScopes("read:knowledge"), async (c) => {
     const proposal = await proposalsService.get(ctx, c.req.param("id"));
@@ -292,4 +320,95 @@ export function proposalRoutes(ctx: AppContext): Hono {
   });
 
   return app;
+}
+
+type BulkAction = z.infer<typeof bulkProposalActionBodySchema>["action"];
+
+// The per-id envelope of a bulk action. `code` aggregates the composed service
+// results' unions (merge/reject/publish validation codes) plus the bulk-level
+// guards, so it stays a plain string rather than restating every member.
+type BulkOutcome =
+  | { id: string; ok: true; proposal?: Proposal; job?: JobView }
+  | { id: string; ok: false; code: string };
+
+// The same off-request merge cascade the single-item merge routes schedule: the
+// merge is already recorded; resolving gaps and re-indexing (a git fetch) runs
+// in the background.
+function scheduleMergeCascade(ctx: AppContext, proposal: Proposal): void {
+  ctx.background.run(`merge-cascade ${proposal.id}`, async () => {
+    await proposalsService.runMergeCascade(ctx, proposal);
+  });
+}
+
+async function applyBulkAction(ctx: AppContext, c: Context, action: BulkAction, id: string): Promise<BulkOutcome> {
+  const existing = await proposalsService.get(ctx, id);
+  // Same masking as the single routes: an unreadable id reads as not-found so
+  // the bulk surface can't enumerate cross-flow proposals either. A readable
+  // but unmanageable flow is reported per id instead of 403ing the batch.
+  if (!existing || !can(ctx, c, "read", existing.flowId)) {
+    return { id, ok: false, code: "proposal_not_found" };
+  }
+  if (!can(ctx, c, "manage", existing.flowId)) {
+    return { id, ok: false, code: "forbidden" };
+  }
+
+  switch (action) {
+    case "ready": {
+      // updateStatus writes unconditionally, so bulk guards the draft → ready
+      // transition explicitly (the single /status route leaves that to the UI).
+      if (existing.status !== "draft") {
+        return { id, ok: false, code: "invalid_status" };
+      }
+      const proposal = await proposalsService.updateStatus(ctx, id, "ready");
+      return proposal ? { id, ok: true, proposal } : { id, ok: false, code: "proposal_not_found" };
+    }
+    case "publish": {
+      if (existing.status !== "ready") {
+        return { id, ok: false, code: "invalid_status" };
+      }
+      const outcome = await proposalsService.requestProposalPublication(ctx, existing);
+      return outcome.ok ? { id, ok: true, job: outcome.job } : { id, ok: false, code: outcome.code };
+    }
+    case "merge": {
+      // A live pull request owns its own merge transition (the PR-poll path);
+      // hand-asserting it merged here would let a user claim a merge that never
+      // happened — identical to the single /:id/status guard.
+      if (existing.publication?.pullRequestUrl) {
+        return { id, ok: false, code: "proposal_merge_tracked_by_pull_request" };
+      }
+      if (existing.localGitDestination) {
+        const outcome = await proposalsService.mergeLocalProposal(ctx, existing);
+        if (!outcome.ok) {
+          return { id, ok: false, code: outcome.code };
+        }
+        scheduleMergeCascade(ctx, outcome.proposal);
+        return { id, ok: true, proposal: outcome.proposal };
+      }
+      // Manual no-PR merge. Guarding on the pre-write status keeps a retried
+      // bulk merge from re-scheduling the cascade and double-enqueuing
+      // verify_gap_closure (mirrors the /:id/status transition gate).
+      if (existing.status !== "branch-pushed") {
+        return { id, ok: false, code: "invalid_status" };
+      }
+      const proposal = await proposalsService.updateStatus(ctx, id, "merged");
+      if (!proposal) {
+        return { id, ok: false, code: "proposal_not_found" };
+      }
+      scheduleMergeCascade(ctx, proposal);
+      return { id, ok: true, proposal };
+    }
+    case "reject": {
+      // Local-git bin (branch-pushed: delete branch + freeze cluster) vs the
+      // hosted flows' draft-only reject — the same split as the single routes.
+      if (existing.localGitDestination) {
+        const outcome = await proposalsService.rejectLocalProposal(ctx, existing);
+        return outcome.ok ? { id, ok: true, proposal: outcome.proposal } : { id, ok: false, code: outcome.code };
+      }
+      if (existing.status !== "draft") {
+        return { id, ok: false, code: "invalid_status" };
+      }
+      const proposal = await proposalsService.updateStatus(ctx, id, "rejected");
+      return proposal ? { id, ok: true, proposal } : { id, ok: false, code: "proposal_not_found" };
+    }
+  }
 }

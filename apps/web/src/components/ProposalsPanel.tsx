@@ -1,6 +1,8 @@
 import styled from "@emotion/styled";
+import { useMemo, useState } from "react";
 import { Proposal } from "../lib/types";
 import { shortSha } from "../lib/format";
+import { BulkProposalAction, bulkActionEligible } from "../lib/console";
 import { ContextValue } from "./common";
 import type { StatusTone } from "../theme/theme";
 import { Badge, Chip, EmptyState, ScrollList, Stack, Surface, statusTone } from "./ui";
@@ -12,19 +14,54 @@ const ProposalGrid = styled.div(({ theme }) => ({
   "@media (max-width: 1050px)": { gridTemplateColumns: "1fr" }
 }));
 
+// A list entry: the bulk-selection checkbox beside the preview button. The
+// divider lives here (not on the button) so the checkbox column sits inside it.
+const ProposalRow = styled.div(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: "auto minmax(0, 1fr)",
+  alignItems: "start",
+  gap: theme.space.md,
+  borderTop: `1px solid ${theme.color.border}`,
+  "&:first-of-type": { borderTop: 0 }
+}));
+
+// Checkboxes can't nest inside the row's preview <button>, hence the split row.
+const RowCheckbox = styled.input(({ theme }) => ({
+  marginTop: theme.space.lg,
+  accentColor: theme.color.accent,
+  cursor: "pointer"
+}));
+
 const ProposalItem = styled.button<{ $selected: boolean }>(({ theme, $selected }) => ({
   display: "grid",
   gap: theme.space.xs,
   width: "100%",
   border: 0,
-  borderTop: `1px solid ${theme.color.border}`,
   background: theme.color.surface,
   color: $selected ? theme.color.accent : theme.color.text,
   padding: `${theme.space.lg} 0`,
   textAlign: "left",
   cursor: "pointer",
-  "&:first-of-type": { borderTop: 0 },
   "& > span": { fontWeight: theme.font.weight.semibold }
+}));
+
+// The bulk control strip above the list: select-all plus one chip per bulk
+// action, counting the selected proposals eligible for it.
+const BulkBar = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: theme.space.md,
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.sm,
+  "& > label": {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: theme.space.sm,
+    cursor: "pointer",
+    userSelect: "none",
+    "& > input": { accentColor: theme.color.accent, cursor: "pointer" }
+  }
 }));
 
 const ProposalPreview = styled.div(({ theme }) => ({
@@ -170,6 +207,33 @@ const ClosureLink = styled.a({
   cursor: "pointer"
 });
 
+// The bulk bar's actions in pipeline order. Labels pair the local-git and
+// hosted verbs since one selection can span both kinds of flow.
+const BULK_ACTIONS: Array<{ action: BulkProposalAction; label: string; title: string }> = [
+  {
+    action: "ready",
+    label: "Mark Ready",
+    title: "Mark the selected draft proposals as ready to publish"
+  },
+  {
+    action: "publish",
+    label: "Publish",
+    title: "Queue a publish job for each selected ready proposal"
+  },
+  {
+    action: "merge",
+    label: "Accept / Merge",
+    title:
+      "Merge each selected branch-pushed proposal. Proposals with an open pull request are skipped — they are merged by the PR itself."
+  },
+  {
+    action: "reject",
+    label: "Reject / Bin",
+    title:
+      "Reject the selected proposals: drafts on hosted flows, pushed review branches (Bin) on local-git flows"
+  }
+];
+
 export function ProposalPanel({
   loading,
   publishProposal,
@@ -178,7 +242,8 @@ export function ProposalPanel({
   setSelectedProposalId,
   updateProposalStatus,
   mergeProposal,
-  rejectProposal
+  rejectProposal,
+  bulkProposalAction
 }: {
   loading: boolean;
   publishProposal: (proposalId: string) => Promise<void>;
@@ -188,7 +253,31 @@ export function ProposalPanel({
   updateProposalStatus: (proposalId: string, status: Proposal["status"]) => Promise<void>;
   mergeProposal: (proposalId: string) => Promise<void>;
   rejectProposal: (proposalId: string) => Promise<void>;
+  bulkProposalAction: (action: BulkProposalAction, ids: string[]) => Promise<void>;
 }) {
+  // The bulk selection. Raw state may hold ids that have since left the list
+  // (merged/rejected proposals drop off the active page), so every consumer
+  // reads the pruned `checked` view; an actioned-but-still-listed proposal
+  // (draft → ready) stays checked, which is what lets ready → publish chain.
+  const [checkedIds, setCheckedIds] = useState<string[]>([]);
+  const checked = useMemo(() => {
+    const listed = new Set(proposals.map((proposal) => proposal.id));
+    return checkedIds.filter((id) => listed.has(id));
+  }, [checkedIds, proposals]);
+  const checkedProposals = useMemo(
+    () => proposals.filter((proposal) => checked.includes(proposal.id)),
+    [proposals, checked]
+  );
+  const allChecked = proposals.length > 0 && checked.length === proposals.length;
+
+  function toggleChecked(id: string) {
+    setCheckedIds((current) => (current.includes(id) ? current.filter((other) => other !== id) : [...current, id]));
+  }
+
+  function toggleAll() {
+    setCheckedIds(allChecked ? [] : proposals.map((proposal) => proposal.id));
+  }
+
   return (
     <Surface>
       <Surface.Header>
@@ -198,18 +287,49 @@ export function ProposalPanel({
         </Badge>
       </Surface.Header>
       <Surface.Body>
+        {proposals.length > 0 ? (
+          <BulkBar>
+            <label title="Select every listed proposal for a bulk action">
+              <input aria-label="Select all proposals" checked={allChecked} onChange={toggleAll} type="checkbox" />
+              {checked.length > 0 ? `${checked.length} of ${proposals.length} selected` : "Select all"}
+            </label>
+            {BULK_ACTIONS.map(({ action, label, title }) => {
+              const eligibleIds = checkedProposals
+                .filter((proposal) => bulkActionEligible(action, proposal))
+                .map((proposal) => proposal.id);
+              return (
+                <Chip
+                  key={action}
+                  selected={action !== "reject"}
+                  disabled={loading || eligibleIds.length === 0}
+                  onClick={() => void bulkProposalAction(action, eligibleIds)}
+                  title={title}
+                >
+                  {label} ({eligibleIds.length})
+                </Chip>
+              );
+            })}
+          </BulkBar>
+        ) : null}
         <ProposalGrid>
           <ScrollList>
             {proposals.map((proposal) => (
-              <ProposalItem
-                $selected={selectedProposal?.id === proposal.id}
-                key={proposal.id}
-                onClick={() => setSelectedProposalId(proposal.id)}
-                type="button"
-              >
-                <span>{proposal.title}</span>
-                <Path>{proposal.targetPath}</Path>
-              </ProposalItem>
+              <ProposalRow key={proposal.id}>
+                <RowCheckbox
+                  aria-label={`Select ${proposal.title}`}
+                  checked={checked.includes(proposal.id)}
+                  onChange={() => toggleChecked(proposal.id)}
+                  type="checkbox"
+                />
+                <ProposalItem
+                  $selected={selectedProposal?.id === proposal.id}
+                  onClick={() => setSelectedProposalId(proposal.id)}
+                  type="button"
+                >
+                  <span>{proposal.title}</span>
+                  <Path>{proposal.targetPath}</Path>
+                </ProposalItem>
+              </ProposalRow>
             ))}
             {proposals.length === 0 ? <EmptyState>No proposals generated yet.</EmptyState> : null}
           </ScrollList>

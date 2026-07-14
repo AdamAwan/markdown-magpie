@@ -1,4 +1,4 @@
-import { ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, JobType, JobView, KnowledgeStats, UiMessage, WatcherView } from "./types";
+import { ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, JobType, JobView, KnowledgeStats, Proposal, UiMessage, WatcherView } from "./types";
 
 export function sectionTitle(section: ConsoleSection): string {
   if (section === "knowledge") {
@@ -247,6 +247,109 @@ export async function runPublishProposal(deps: PublishProposalDeps, proposalId: 
     deps.showMessage(`${formatJobType(result.job.type)} queued. This page will update when it finishes.`, "info");
   }
   await deps.refresh({ preserveMessage: true });
+}
+
+// The console's bulk review actions, mirroring the API's POST /proposals/bulk
+// contract (apps/api/src/features/proposals/routes.ts applyBulkAction).
+export type BulkProposalAction = "ready" | "publish" | "merge" | "reject";
+
+export interface BulkProposalResult {
+  id: string;
+  ok: boolean;
+  code?: string;
+}
+
+type BulkEligibilityView = Pick<Proposal, "status" | "publication" | "localGitDestination">;
+
+// Client-side mirror of the API's per-action eligibility, used to count/disable
+// the bulk bar's buttons. The server re-guards every id, so a stale mirror can
+// only mislabel a button, never bypass a guard.
+export function bulkActionEligible(action: BulkProposalAction, proposal: BulkEligibilityView): boolean {
+  switch (action) {
+    case "ready":
+      return proposal.status === "draft";
+    case "publish":
+      return proposal.status === "ready";
+    case "merge":
+      // A live pull request owns its own merge transition; manual merge (local
+      // Accept or hosted no-PR Mark Merged) needs a pushed branch.
+      return proposal.status === "branch-pushed" && !proposal.publication?.pullRequestUrl;
+    case "reject":
+      // Local-git Bin works on the pushed review branch; hosted Reject only on drafts.
+      return proposal.localGitDestination ? proposal.status === "branch-pushed" : proposal.status === "draft";
+  }
+}
+
+const BULK_SUCCESS_VERBS: Record<BulkProposalAction, (count: number) => string> = {
+  ready: (count) => `Marked ${count} proposal${count === 1 ? "" : "s"} ready.`,
+  publish: (count) => `Queued ${count} publish job${count === 1 ? "" : "s"}. This page will update as they finish.`,
+  merge: (count) =>
+    `Merged ${count} proposal${count === 1 ? "" : "s"} — resolving gaps and re-indexing in the background.`,
+  reject: (count) => `Rejected ${count} proposal${count === 1 ? "" : "s"}.`
+};
+
+// One summary line for a whole batch: the success verb plus a compact skip
+// tally by failure code, e.g. "Merged 7 proposals — … Skipped 2: …".
+export function bulkOutcomeMessage(
+  action: BulkProposalAction,
+  results: BulkProposalResult[]
+): Pick<UiMessage, "text" | "tone"> {
+  const succeeded = results.filter((result) => result.ok).length;
+  const failures = results.filter((result) => !result.ok);
+  const parts: string[] = [];
+  if (succeeded > 0) {
+    parts.push(BULK_SUCCESS_VERBS[action](succeeded));
+  }
+  if (failures.length > 0) {
+    const byCode = new Map<string, number>();
+    for (const failure of failures) {
+      const code = failure.code ?? "error";
+      byCode.set(code, (byCode.get(code) ?? 0) + 1);
+    }
+    const tally = [...byCode.entries()]
+      .map(([code, count]) => (count === 1 ? code : `${code} ×${count}`))
+      .join(", ");
+    parts.push(`Skipped ${failures.length}: ${tally}.`);
+  }
+  return {
+    text: parts.join(" "),
+    tone: succeeded === 0 ? "danger" : "success"
+  };
+}
+
+// Keeps the proposal preview stable across refreshes. If the selected proposal
+// survived, keep it. If it dropped out (merged/rejected/binned drop off the
+// active list), move to its nearest surviving neighbour in the PREVIOUS list
+// order — not back to the top of the list, which is the "page jumps around"
+// complaint when working a backlog top to bottom.
+export function anchorProposalSelection(
+  previous: Array<Pick<Proposal, "id">>,
+  next: Array<Pick<Proposal, "id">>,
+  selectedId: string | undefined
+): string | undefined {
+  if (selectedId && next.some((proposal) => proposal.id === selectedId)) {
+    return selectedId;
+  }
+  const fallback = next[0]?.id;
+  if (!selectedId) {
+    return fallback;
+  }
+  const previousIndex = previous.findIndex((proposal) => proposal.id === selectedId);
+  if (previousIndex === -1) {
+    return fallback;
+  }
+  const nextIds = new Set(next.map((proposal) => proposal.id));
+  for (let offset = 1; offset < previous.length; offset++) {
+    const after = previous[previousIndex + offset];
+    if (after && nextIds.has(after.id)) {
+      return after.id;
+    }
+    const before = previous[previousIndex - offset];
+    if (before && nextIds.has(before.id)) {
+      return before.id;
+    }
+  }
+  return fallback;
 }
 
 // A completed job's output is the queue envelope { result, executor }: the job's
