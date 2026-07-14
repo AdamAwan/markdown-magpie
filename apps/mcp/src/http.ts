@@ -18,7 +18,7 @@ import {
 } from "@magpie/auth";
 import type { JSONWebKeySet } from "jose";
 import { z } from "zod/v4";
-import { approveSeedPlan, askQuestion, generateOutline, getJson, listFlows, submitFeedback, type KbClientOptions } from "./kb-client.js";
+import { approveSeedPlan, askQuestion, generateOutline, getCitationSections, getJson, listFlows, submitFeedback, type KbClientOptions } from "./kb-client.js";
 import { createMcpLogger } from "./logger.js";
 
 // ── Configuration ──────────────────────────────────────────────────────────
@@ -35,7 +35,8 @@ const TOOL_SCOPES: Record<string, string> = {
   "kb_ask": "ask:knowledge",
   "kb_feedback": "feedback:questions",
   "kb_outline": "manage:jobs",
-  "kb_seed": "manage:jobs"
+  "kb_seed": "manage:jobs",
+  "kb_citation": "read:knowledge"
 };
 
 // Resolves the auth settings the HTTP MCP server validates inbound tokens with.
@@ -233,6 +234,28 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     },
     async (args) => {
       const result = await approveSeedPlan(args, kbOptions);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.registerTool(
+    "kb_citation",
+    {
+      description:
+        "Fetch the full content of cited knowledge-base sections so the evidence behind an answer can be " +
+        "shown. Pass the sectionId values from kb_ask citations (or kb_search results). Returns the currently " +
+        "indexed version of each section plus a `missing` list for ids that no longer exist (the knowledge " +
+        "base changed since the answer — re-ask or use kb_search).",
+      inputSchema: z.object({
+        sectionIds: z
+          .array(z.string())
+          .min(1)
+          .max(20)
+          .describe("The sectionId values to resolve, from kb_ask citations or kb_search results.")
+      })
+    },
+    async (args) => {
+      const result = await getCitationSections(args, kbOptions);
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
     }
   );

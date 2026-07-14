@@ -152,6 +152,16 @@ test("tools/call kb_seed requires manage:jobs scope", async () => {
   assert.equal(res.status, 403);
 });
 
+test("tools/call kb_citation requires read:knowledge scope", async () => {
+  const auth = await makeTestAuth();
+  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const res = await request(app)
+    .post("/mcp")
+    .set("authorization", await auth.token(["ask:knowledge"]))
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_citation", arguments: { sectionIds: ["sec-1"] } } });
+  assert.equal(res.status, 403);
+});
+
 test("a valid token with the right scope passes the MCP boundary (reaches transport)", async () => {
   const auth = await makeTestAuth();
   const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
