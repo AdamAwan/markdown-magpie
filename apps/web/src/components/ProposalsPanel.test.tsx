@@ -27,14 +27,15 @@ function branchPushed(overrides: Partial<Proposal> = {}): Proposal {
   };
 }
 
-function render(proposal: Proposal): string {
-  return renderList([proposal], proposal);
+function render(proposal: Proposal, pendingPublishIds?: ReadonlySet<string>): string {
+  return renderList([proposal], proposal, pendingPublishIds);
 }
 
-function renderList(proposals: Proposal[], selectedProposal?: Proposal): string {
+function renderList(proposals: Proposal[], selectedProposal?: Proposal, pendingPublishIds?: ReadonlySet<string>): string {
   return renderMarkup(
     <ProposalPanel
       loading={false}
+      pendingPublishIds={pendingPublishIds ?? new Set()}
       publishProposal={noop}
       proposals={proposals}
       selectedProposal={selectedProposal ?? proposals[0]}
@@ -106,11 +107,13 @@ function draft(id: string, overrides: Partial<Proposal> = {}): Proposal {
 
 function panelWith(
   proposals: Proposal[],
-  bulkProposalAction: (action: BulkProposalAction, ids: string[]) => Promise<void>
+  bulkProposalAction: (action: BulkProposalAction, ids: string[]) => Promise<void>,
+  pendingPublishIds: ReadonlySet<string> = new Set()
 ) {
   return (
     <ProposalPanel
       loading={false}
+      pendingPublishIds={pendingPublishIds}
       publishProposal={noop}
       proposals={proposals}
       selectedProposal={proposals[0]}
@@ -168,6 +171,39 @@ test("a zero-eligible bulk chip is disabled", async () => {
   );
   assert.ok(publishChip);
   assert.equal((publishChip as HTMLButtonElement).disabled, true);
+  unmount();
+});
+
+// --- queued-publish state ---
+
+test("a ready proposal with a queued publish job disables Publish and says so", async () => {
+  const ready = draft("p1", { status: "ready" });
+  const { container, unmount } = await renderDom(panelWith([ready], noop, new Set(["p1"])));
+  const publishChip = [...container.querySelectorAll("button")].find((button) =>
+    /^Publish Branch$/.test(button.textContent ?? "")
+  );
+  assert.ok(publishChip);
+  assert.equal((publishChip as HTMLButtonElement).disabled, true);
+  assert.match(container.textContent ?? "", /Publish queued/);
+  unmount();
+});
+
+test("a ready local-git proposal with a queued publish job disables Publish for review", async () => {
+  const ready = draft("p1", { status: "ready", localGitDestination: true });
+  const { container, unmount } = await renderDom(panelWith([ready], noop, new Set(["p1"])));
+  const publishChip = [...container.querySelectorAll("button")].find((button) =>
+    /^Publish for review$/.test(button.textContent ?? "")
+  );
+  assert.ok(publishChip);
+  assert.equal((publishChip as HTMLButtonElement).disabled, true);
+  unmount();
+});
+
+test("a queued publish drops the proposal from the bulk Publish count", async () => {
+  const proposals = [draft("p1", { status: "ready" }), draft("p2", { status: "ready" })];
+  const { container, unmount } = await renderDom(panelWith(proposals, noop, new Set(["p1"])));
+  await click(container.querySelector<HTMLInputElement>('input[aria-label="Select all proposals"]')!);
+  assert.match(container.textContent ?? "", /Publish \(1\)/);
   unmount();
 });
 

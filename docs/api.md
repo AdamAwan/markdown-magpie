@@ -453,7 +453,9 @@ Each id composes the matching single-item behaviour:
 
 - `ready` — `draft → ready`; any other status reports `invalid_status`.
 - `publish` — enqueue-only publication of a `ready` proposal (the same pre-flight and
-  `publish_proposal` job as `POST /:id/publish`); the per-id result carries the `job`.
+  `publish_proposal` job as `POST /:id/publish`); the per-id result carries the `job`. Like the
+  single route, a proposal whose publish is already in flight reuses that job rather than
+  enqueueing a duplicate.
 - `merge` — local-git `branch-pushed` proposals git-merge exactly like `POST /:id/merge`;
   hosted `branch-pushed` proposals without a pull request take the manual no-PR merge of
   `POST /:id/status`. A proposal with a live pull request reports
@@ -540,6 +542,13 @@ the Markdown to a new `magpie/proposal-*` branch, pushing it, and opening a pull
 the watcher publication runner, which fetches `GET /api/proposals/:id/execution-context` and records
 the result back via job completion. Invalid publishes still fail fast with the same status codes
 before any job is created.
+
+Publication is **idempotent while queued**: the proposal record stays `ready` until the watcher
+completes, so a repeated publish request (double click, bulk re-select, replayed completion side
+effect) returns the in-flight `publish_proposal` job for the proposal instead of enqueueing a
+duplicate. A new job is only created once the previous one settles (completed, failed, or
+cancelled). The console mirrors this by disabling Publish and showing "Publish queued" while a
+publish job for the proposal is in flight.
 
 - `404 proposal_not_found`.
 - `409 proposal_not_ready` — only `ready` proposals can be published.

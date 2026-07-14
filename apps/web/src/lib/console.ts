@@ -249,6 +249,27 @@ export async function runPublishProposal(deps: PublishProposalDeps, proposalId: 
   await deps.refresh({ preserveMessage: true });
 }
 
+// Proposal ids whose publish_proposal job is still in flight. A queued publish
+// leaves the proposal record itself untouched (it stays `ready` until the
+// watcher reports back), so "publish already requested" is derived from the
+// polled jobs list instead — which also self-heals: a publish that fails
+// terminally drops out of this set and the button re-enables for a retry.
+// The API enforces the same invariant by reusing the in-flight job, so this
+// mirror can only mislabel a button, never cause a duplicate.
+export function pendingPublishProposalIds(jobs: JobView[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const job of jobs) {
+    if (job.type !== "publish_proposal" || !isActiveJob(job)) {
+      continue;
+    }
+    const input = job.input as Partial<{ proposalId: string }>;
+    if (input?.proposalId) {
+      ids.add(input.proposalId);
+    }
+  }
+  return ids;
+}
+
 // The console's bulk review actions, mirroring the API's POST /proposals/bulk
 // contract (apps/api/src/features/proposals/routes.ts applyBulkAction).
 export type BulkProposalAction = "ready" | "publish" | "merge" | "reject";
@@ -263,13 +284,19 @@ type BulkEligibilityView = Pick<Proposal, "status" | "publication" | "localGitDe
 
 // Client-side mirror of the API's per-action eligibility, used to count/disable
 // the bulk bar's buttons. The server re-guards every id, so a stale mirror can
-// only mislabel a button, never bypass a guard.
-export function bulkActionEligible(action: BulkProposalAction, proposal: BulkEligibilityView): boolean {
+// only mislabel a button, never bypass a guard. `publishPending` marks a
+// proposal from pendingPublishProposalIds — publishable by status, but with a
+// publish job already in flight.
+export function bulkActionEligible(
+  action: BulkProposalAction,
+  proposal: BulkEligibilityView,
+  options: { publishPending?: boolean } = {}
+): boolean {
   switch (action) {
     case "ready":
       return proposal.status === "draft";
     case "publish":
-      return proposal.status === "ready";
+      return proposal.status === "ready" && !options.publishPending;
     case "merge":
       // A live pull request owns its own merge transition; manual merge (local
       // Accept or hosted no-PR Mark Merged) needs a pushed branch.

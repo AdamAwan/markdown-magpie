@@ -236,6 +236,7 @@ const BULK_ACTIONS: Array<{ action: BulkProposalAction; label: string; title: st
 
 export function ProposalPanel({
   loading,
+  pendingPublishIds,
   publishProposal,
   proposals,
   selectedProposal,
@@ -246,6 +247,10 @@ export function ProposalPanel({
   bulkProposalAction
 }: {
   loading: boolean;
+  // Proposals whose publish job is still queued or running (derived from the
+  // polled jobs list — see pendingPublishProposalIds). Publish stays offered by
+  // status alone otherwise, since a queued publish leaves the proposal `ready`.
+  pendingPublishIds: ReadonlySet<string>;
   publishProposal: (proposalId: string) => Promise<void>;
   proposals: Proposal[];
   selectedProposal?: Proposal;
@@ -269,6 +274,7 @@ export function ProposalPanel({
     [proposals, checked]
   );
   const allChecked = proposals.length > 0 && checked.length === proposals.length;
+  const publishQueued = selectedProposal ? pendingPublishIds.has(selectedProposal.id) : false;
 
   function toggleChecked(id: string) {
     setCheckedIds((current) => (current.includes(id) ? current.filter((other) => other !== id) : [...current, id]));
@@ -295,7 +301,9 @@ export function ProposalPanel({
             </label>
             {BULK_ACTIONS.map(({ action, label, title }) => {
               const eligibleIds = checkedProposals
-                .filter((proposal) => bulkActionEligible(action, proposal))
+                .filter((proposal) =>
+                  bulkActionEligible(action, proposal, { publishPending: pendingPublishIds.has(proposal.id) })
+                )
                 .map((proposal) => proposal.id);
               return (
                 <Chip
@@ -470,9 +478,13 @@ export function ProposalPanel({
                     <>
                       <Chip
                         selected
-                        disabled={loading || selectedProposal.status !== "ready"}
+                        disabled={loading || selectedProposal.status !== "ready" || publishQueued}
                         onClick={() => void publishProposal(selectedProposal.id)}
-                        title="Push a review branch into the local repository (no pull request)"
+                        title={
+                          publishQueued
+                            ? "A publish job for this proposal is already queued"
+                            : "Push a review branch into the local repository (no pull request)"
+                        }
                       >
                         Publish for review
                       </Chip>
@@ -497,9 +509,13 @@ export function ProposalPanel({
                     <>
                       <Chip
                         selected
-                        disabled={loading || selectedProposal.status !== "ready"}
+                        disabled={loading || selectedProposal.status !== "ready" || publishQueued}
                         onClick={() => void publishProposal(selectedProposal.id)}
-                        title="Create and push a Git branch for this ready proposal"
+                        title={
+                          publishQueued
+                            ? "A publish job for this proposal is already queued"
+                            : "Create and push a Git branch for this ready proposal"
+                        }
                       >
                         Publish Branch
                       </Chip>
@@ -523,6 +539,10 @@ export function ProposalPanel({
                   {selectedProposal.publication ? (
                     <Badge tone="neutral" mono title={`Published commit ${selectedProposal.publication.commitSha}`}>
                       {selectedProposal.publication.branchName}
+                    </Badge>
+                  ) : publishQueued ? (
+                    <Badge tone="pending" title="A publish job for this proposal is queued; this page updates when it finishes">
+                      Publish queued
                     </Badge>
                   ) : (
                     <Badge tone="neutral" title="Ready proposals can be published as Git branches">

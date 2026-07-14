@@ -17,7 +17,7 @@ import type {
   SplitDocumentJobInput
 } from "@magpie/core";
 import type { JobState, JobView, verifyGapClosureOutputSchema } from "@magpie/jobs";
-import { parseCompletedJobOutput, runJobToCompletion } from "../jobs/service.js";
+import { IN_FLIGHT_JOB_STATES, parseCompletedJobOutput, runJobToCompletion } from "../jobs/service.js";
 import { evaluateClosure, proposalTargetPaths } from "./closure-eval.js";
 import { fileURLToPath } from "node:url";
 import { deleteLocalProposalBranch, mergeLocalProposalBranch, resolveLocalGitTargetBranch } from "@magpie/git";
@@ -29,6 +29,7 @@ import {
   draftMarkdownProposalOutputSchema,
   draftSeedDocumentOutputSchema,
   improveDocumentOutputSchema,
+  publishProposalInputSchema,
   publishProposalOutputSchema,
   splitDocumentOutputSchema
 } from "@magpie/jobs";
@@ -981,10 +982,19 @@ export async function maybeRegenerateStaleProposal(ctx: AppContext, proposalId: 
 // running, so we never enqueue a duplicate regeneration for the same PR.
 async function hasInflightRegeneration(ctx: AppContext, proposalId: string): Promise<boolean> {
   const { jobs } = await ctx.jobs.list({ type: "draft_markdown_proposal", limit: 200 });
-  const inflight = new Set(["created", "retry", "active"]);
   return jobs.some((job) => {
     const input = job.input as Partial<DraftMarkdownProposalJobInput>;
-    return input?.regenerateProposalId === proposalId && inflight.has(job.state);
+    return input?.regenerateProposalId === proposalId && IN_FLIGHT_JOB_STATES.has(job.state);
+  });
+}
+
+// The publish_proposal job still queued or running for this proposal, if any —
+// the "publish already requested" signal enqueuePublishProposal dedupes on.
+async function findInflightPublishJob(ctx: AppContext, proposalId: string): Promise<JobView | undefined> {
+  const { jobs } = await ctx.jobs.list({ type: "publish_proposal", limit: 200 });
+  return jobs.find((job) => {
+    const input = job.input as Partial<z.infer<typeof publishProposalInputSchema>>;
+    return input?.proposalId === proposalId && IN_FLIGHT_JOB_STATES.has(job.state);
   });
 }
 
@@ -1033,6 +1043,18 @@ export async function enqueuePublishProposal(
   proposal: Proposal,
   options: { regenerate?: boolean } = {}
 ): Promise<JobView> {
+  // One publish per proposal in flight. The proposal record itself carries no
+  // trace of a queued publish (it stays `ready` until the watcher reports back),
+  // so nothing upstream can guard this: a double click, a re-selected bulk
+  // publish, or a replayed completion side effect would each stack another git
+  // push of the same branch. Reuse the queued job instead — the same idempotent
+  // shape as runJobToCompletion's reuseKey.
+  const existing = await findInflightPublishJob(ctx, proposal.id);
+  if (existing) {
+    logger.info({ jobId: existing.id, proposalId: proposal.id }, "reusing in-flight publish_proposal job");
+    return existing;
+  }
+
   const destination = isLocalGitDestination(ctx, proposal) ? "local-git" : "github";
   const job = await ctx.jobs.create("publish_proposal", {
     proposalId: proposal.id,
