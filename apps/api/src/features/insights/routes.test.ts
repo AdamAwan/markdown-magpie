@@ -104,3 +104,16 @@ test("GET /api/insights/feedback rejects a bad bucket", async () => {
   const res = await app.request("/api/insights/feedback?bucket=fortnight");
   assert.equal(res.status, 400);
 });
+
+test("GET /api/insights/ai-usage returns an empty usage envelope under the null store", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/insights/ai-usage");
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { usage: [] });
+});
+
+test("GET /api/insights/ai-usage rejects a malformed from", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/insights/ai-usage?from=not-a-date");
+  assert.equal(res.status, 400);
+});

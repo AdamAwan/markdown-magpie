@@ -81,5 +81,13 @@ export function insightsRoutes(ctx: AppContext): Hono {
     return c.json({ totals, series });
   });
 
+  // C11 — AI token usage. Watcher-reported token spend per (job type, provider)
+  // pair over the window (#241). Window-only (grouped by pair, not time).
+  app.get("/ai-usage", requireScopes("read:knowledge"), async (c) => {
+    const parsed = insightsWindowQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) throw new HttpError(400, "invalid_insights_query");
+    return c.json({ usage: await insightsService.aiUsage(ctx, parsed.data) });
+  });
+
   return app;
 }

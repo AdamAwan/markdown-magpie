@@ -1660,3 +1660,19 @@ export interface PatrolImpact {
   findings: number;
   proposals: number;
 }
+
+// AI token usage over the window (C11), one row per (job type, provider) pair
+// that completed at least one job carrying provider-reported usage (#241).
+// `jobs` counts every completed job of the pair in the window; `jobsWithUsage`
+// counts the subset that actually reported usage, so the chart can flag how
+// much of the pair's spend is invisible (CLI providers report nothing). Token
+// sums cover only the reporting subset.
+export interface AiUsageBreakdown {
+  jobType: string;
+  provider: string;
+  jobs: number;
+  jobsWithUsage: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}

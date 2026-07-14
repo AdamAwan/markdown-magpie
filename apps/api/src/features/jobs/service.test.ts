@@ -78,6 +78,30 @@ test("connected-watcher registry tracks busy/idle across the job lifecycle", asy
   assert.deepEqual(workers[0].capabilities, ["codex"]);
 });
 
+test("completeJob persists watcher-reported usage on the completion envelope (#241)", async () => {
+  const ctx = makeTestContext();
+  const withUsage = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+  const output = { answer: "a", confidence: "high", citations: [] };
+  assert.equal(
+    (await completeJob(ctx, withUsage.id, output, "w-1", { inputTokens: 140, outputTokens: 25, totalTokens: 165 })).ok,
+    true
+  );
+  const persisted = await ctx.jobs.get(withUsage.id);
+  assert.deepEqual(persisted?.output, {
+    result: output,
+    executor: "w-1",
+    usage: { inputTokens: 140, outputTokens: 25, totalTokens: 165 }
+  });
+
+  // No reported usage → no usage key at all, so the Insights rollup's
+  // jsonb_typeof(output->'usage') = 'object' predicate cleanly skips the row.
+  const withoutUsage = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+  assert.equal((await completeJob(ctx, withoutUsage.id, output, "w-1")).ok, true);
+  assert.deepEqual((await ctx.jobs.get(withoutUsage.id))?.output, { result: output, executor: "w-1" });
+});
+
 test("a watcher drops out of the registry once silent past the active window", async () => {
   const ctx = makeTestContext();
   await claimJob(ctx, "w-stale", ["codex"]);

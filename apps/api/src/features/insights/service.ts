@@ -1,4 +1,5 @@
 import type {
+  AiUsageBreakdown,
   FreshnessSummary,
   GapBacklogBucket,
   JobThroughputBucket,
@@ -81,4 +82,10 @@ export async function patrolImpact(ctx: AppContext, query: InsightsWindowQuery):
 // the unhelpful-on-confident subset called out (#241).
 export async function answerFeedback(ctx: AppContext, query: InsightsRangeQuery): Promise<AnswerFeedback> {
   return ctx.stores.insights.answerFeedback(resolveRange(query), query.flow);
+}
+
+// AI token usage (C11): watcher-reported token spend per (job type, provider)
+// over the window (#241). Window-only — grouped by pair, not time.
+export async function aiUsage(ctx: AppContext, query: InsightsWindowQuery): Promise<AiUsageBreakdown[]> {
+  return ctx.stores.insights.aiUsage(resolveWindow(query));
 }

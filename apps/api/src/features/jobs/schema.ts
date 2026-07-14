@@ -23,9 +23,19 @@ export const claimJobBodySchema = z.object({
 export const heartbeatJobBodySchema = z.object({
   workerName: z.string().trim().min(1).optional()
 });
+// The watcher's summed provider-reported token usage for the run (#241).
+// Optional end to end: CLI providers report nothing, and older watchers don't
+// send the field at all. Bounded to non-negative integers so a confused
+// provider can't persist NaN/negative counts into the completion envelope.
+export const jobUsageSchema = z.object({
+  inputTokens: z.number().int().nonnegative().optional(),
+  outputTokens: z.number().int().nonnegative().optional(),
+  totalTokens: z.number().int().nonnegative().optional()
+});
 export const completeJobBodySchema = z.object({
   output: z.unknown(),
-  executor: z.string().trim().min(1).optional()
+  executor: z.string().trim().min(1).optional(),
+  usage: jobUsageSchema.optional()
 });
 export const failJobBodySchema = z.object({
   error: z.object({

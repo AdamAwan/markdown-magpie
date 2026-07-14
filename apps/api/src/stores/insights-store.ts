@@ -1,4 +1,5 @@
 import type {
+  AiUsageBreakdown,
   FeedbackBucket,
   FeedbackSummary,
   FreshnessSummary,
@@ -74,6 +75,11 @@ export interface InsightsStore {
   // with the unhelpful-on-confident subset called out. Source: `questions`
   // (`feedback`, `feedback_at`, `confidence`).
   answerFeedback(range: InsightsRange, flowId?: string): Promise<AnswerFeedback>;
+  // AI token usage per (job type, provider) over the window (C11, #241).
+  // Source: completed pg-boss `job` rows on the provider-fanned queues, whose
+  // `{ result, executor, usage }` completion envelope carries the watcher's
+  // summed provider-reported usage.
+  aiUsage(range: InsightsRange): Promise<AiUsageBreakdown[]>;
 }
 
 // Used when the process runs without a Postgres pool (in-memory unit tests):
@@ -107,5 +113,8 @@ export class NullInsightsStore implements InsightsStore {
   }
   async answerFeedback(): Promise<AnswerFeedback> {
     return { totals: { helpful: 0, unhelpful: 0, unhelpfulConfident: 0 }, series: [] };
+  }
+  async aiUsage(): Promise<AiUsageBreakdown[]> {
+    return [];
   }
 }
