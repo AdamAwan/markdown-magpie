@@ -724,6 +724,12 @@ export class InMemoryKnowledgeIndex {
     return this.documents.size;
   }
 
+  // Resolves one section by id — the lookup behind GET /knowledge/sections/:id,
+  // which lets MCP clients expand a citation's excerpt into the full evidence.
+  getSection(id: string): DocumentSection | undefined {
+    return this.sections.get(id);
+  }
+
   listRepositories(options?: { limit?: number; offset?: number }): RepositoryRef[] {
     const sorted = [...this.repositories.values()].sort((left, right) => left.name.localeCompare(right.name));
     return paginate(sorted, options);

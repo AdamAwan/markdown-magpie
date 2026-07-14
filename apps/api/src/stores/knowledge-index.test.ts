@@ -257,6 +257,20 @@ describe("InMemoryKnowledgeIndex.search", () => {
   });
 });
 
+describe("InMemoryKnowledgeIndex.getSection", () => {
+  it("returns an indexed section by id and undefined for unknown ids", async () => {
+    const index = new InMemoryKnowledgeIndex();
+    await seed(index);
+
+    const [ranked] = await index.search("rollback the hotfix", 1);
+    assert.ok(ranked, "expected the indexed section to be searchable");
+
+    const section = index.getSection(ranked.section.id);
+    assert.deepEqual(section, ranked.section);
+    assert.equal(index.getSection("nope"), undefined);
+  });
+});
+
 describe("InMemoryKnowledgeIndex.indexLocalRepository", () => {
   it("indexes many files concurrently while keeping document order deterministic", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "magpie-knowledge-index-"));
