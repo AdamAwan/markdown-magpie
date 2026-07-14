@@ -26,6 +26,7 @@ import {
   SUMMARIZE_GAP,
   VERIFY_DOCUMENT
 } from "@magpie/prompts";
+import type { FetchableInternetSource } from "./fetch-url.js";
 import type { RetrievedSection } from "./http-client.js";
 import type { SourceWorkspace } from "./source-workspace.js";
 
@@ -115,7 +116,8 @@ export function buildSourceGroundedPrompt(
   workspaces: SourceWorkspace[],
   notes: string[],
   mode: "cli" | "tools",
-  mapEntries: SourceMapEntry[] = []
+  mapEntries: SourceMapEntry[] = [],
+  fetchable: FetchableInternetSource[] = []
 ): string {
   const instructions = JOB_INSTRUCTIONS[job.type] ?? GENERIC_JOB.instructions;
   const workspaceLines = workspaces
@@ -129,6 +131,23 @@ export function buildSourceGroundedPrompt(
     mode === "cli"
       ? "Source repositories available (read-only; explore with your file tools):"
       : "Source repositories available through your tools (list_dir, read_file, grep):";
+  // A job can be grounded in fetchable internet sources alone (#242); render the
+  // repository block only when there is a repository to explore.
+  const repoBlock = workspaces.length > 0 ? `${access}\n${workspaceLines}\n` : "";
+  // Fetchable internet sources (#242). The tool names differ per tier: the tool
+  // loop exposes fetch_url; a CLI agent uses its own web-fetch tool (the runner
+  // only passes sources here when its CLI can actually fetch). Fetched pages are
+  // reference material like any other source — the factual-register and
+  // grounding contracts in the job instructions apply to them unchanged.
+  const fetchBlock =
+    fetchable.length > 0
+      ? `\nInternet sources available through ${mode === "cli" ? "your web-fetch tool" : "the fetch_url tool"} (https only; hosts outside the allowlist are refused):\n${fetchable
+          .map(
+            (source) =>
+              `- ${source.name}:${source.url ? ` start at ${source.url};` : ""} allowed hosts: ${source.allowedHosts.join(", ")}`
+          )
+          .join("\n")}\n`
+      : "";
   const noteBlock = notes.length > 0 ? `\nSource notes:\n${notes.map((n) => `- ${n}`).join("\n")}\n` : "";
   // Navigation hints recorded by previous agents. Deliberately framed as
   // unverified: they are starting points for exploration, never facts to cite.
@@ -139,7 +158,7 @@ export function buildSourceGroundedPrompt(
           .join("\n")}\n`
       : "";
   const input = omitInputKeys(job.input, ["sources"]);
-  return `${access}\n${workspaceLines}\n${noteBlock}${mapBlock}\n${instructions}\n\nInput:\n${JSON.stringify(input, null, 2)}`;
+  return `${repoBlock}${fetchBlock}${noteBlock}${mapBlock}\n${instructions}\n\nInput:\n${JSON.stringify(input, null, 2)}`;
 }
 
 // A shallow copy of a job input without the named keys. Used by the

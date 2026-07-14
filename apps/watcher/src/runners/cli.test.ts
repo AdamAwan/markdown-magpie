@@ -409,7 +409,8 @@ describe("CliRunner source-grounded seeding", () => {
           { sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" },
           { sourceId: "s2", name: "Docs", rootDir: "/checkouts/s2" }
         ],
-        notes: []
+        notes: [],
+        fetchable: []
       }),
       spawnOverride: fakeSpawn(calls, SEED_OUTPUT_JSON)
     });
@@ -456,7 +457,8 @@ describe("CliRunner source-grounded seeding", () => {
           { sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" },
           { sourceId: "s2", name: "Docs", rootDir: "/checkouts/s2" }
         ],
-        notes: []
+        notes: [],
+        fetchable: []
       }),
       spawnOverride: fakeSpawn(calls, SEED_OUTPUT_JSON)
     });
@@ -474,6 +476,67 @@ describe("CliRunner source-grounded seeding", () => {
     // immediately before it so a prompt beginning with `-`/`--` cannot be
     // misparsed as a flag or subcommand.
     assert.equal(call.args.at(-2), "--");
+  });
+
+  it("grants claude a domain-scoped WebFetch when the operator allowlisted internet sources (#242)", async () => {
+    const calls: SpawnCall[] = [];
+    const runner = new CliRunner({
+      capability: "claude",
+      command: "claude",
+      args: ["-p"],
+      promptMode: "arg",
+      api: fakeApi(),
+      prepareWorkspaces: async () => ({
+        workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }],
+        notes: [],
+        fetchable: [
+          { sourceId: "i1", name: "Vendor docs", url: "https://docs.x.example/start", allowedHosts: ["docs.x.example", "ref.x.example"] }
+        ]
+      }),
+      spawnOverride: fakeSpawn(calls, SEED_OUTPUT_JSON)
+    });
+    await runner.run(seedJob("claude"), new AbortController().signal);
+
+    const call = calls[0]!;
+    // WebFetch joins the hard toolset…
+    assert.equal(call.args[call.args.indexOf("--tools") + 1], "Read,Grep,Glob,WebFetch");
+    // …and each allowlisted host becomes a domain-scoped permission rule; in
+    // print mode anything the rules don't pre-approve is denied, so the rules
+    // ARE the allowlist.
+    const allowedAt = call.args.indexOf("--allowedTools");
+    assert.ok(allowedAt >= 0, `expected --allowedTools in ${call.args.join(" ")}`);
+    assert.equal(call.args[allowedAt + 1], "WebFetch(domain:docs.x.example)");
+    assert.equal(call.args[allowedAt + 2], "WebFetch(domain:ref.x.example)");
+    // The prompt names the source fetchable for the CLI tier.
+    assert.match(call.args.at(-1) ?? "", /your web-fetch tool/);
+  });
+
+  it("degrades fetchable internet sources to reference-only notes for codex (#242)", async () => {
+    const calls: SpawnCall[] = [];
+    const runner = new CliRunner({
+      capability: "codex",
+      command: "codex",
+      args: ["exec"],
+      promptMode: "arg",
+      api: fakeApi(),
+      prepareWorkspaces: async () => ({
+        workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }],
+        notes: [],
+        fetchable: [
+          { sourceId: "i1", name: "Vendor docs", url: "https://docs.x.example/start", allowedHosts: ["docs.x.example"] }
+        ]
+      }),
+      spawnOverride: fakeSpawn(calls, SEED_OUTPUT_JSON)
+    });
+    await runner.run(seedJob("codex"), new AbortController().signal);
+
+    const call = calls[0]!;
+    // codex's read-only OS sandbox blocks network, so no fetch affordance is
+    // promised: the source renders as the reference-only note it always was.
+    const promptArg = call.args.at(-1) ?? "";
+    assert.match(promptArg, /Internet source "Vendor docs": https:\/\/docs\.x\.example\/start \(reference only; not fetched\)\./);
+    assert.doesNotMatch(promptArg, /web-fetch tool/);
+    assert.ok(!call.args.includes("--allowedTools"));
   });
 
   it("keeps the plain generative path for seed jobs with only non-fs sources", async () => {
@@ -525,7 +588,8 @@ describe("CliRunner source-grounded seeding", () => {
       cancelGraceMs: 10,
       prepareWorkspaces: async () => ({
         workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }],
-        notes: []
+        notes: [],
+        fetchable: []
       }),
       spawnOverride: hangingSpawn
     });
@@ -546,7 +610,8 @@ describe("CliRunner source-grounded seeding", () => {
       api: fakeApi(),
       prepareWorkspaces: async () => ({
         workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }],
-        notes: []
+        notes: [],
+        fetchable: []
       }),
       spawnOverride: fakeSpawn(calls, JSON.stringify(verifyOutput))
     });
@@ -580,7 +645,8 @@ describe("CliRunner source-grounded seeding", () => {
       api: fakeApi(),
       prepareWorkspaces: async () => ({
         workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }],
-        notes: []
+        notes: [],
+        fetchable: []
       }),
       spawnOverride: fakeSpawn(calls, SEED_OUTPUT_JSON)
     });

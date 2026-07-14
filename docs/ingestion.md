@@ -20,7 +20,14 @@ Supported source kinds:
 
 - `local`: `{ "path": "knowledge-bases/product" }`
 - `git`: `{ "url": "https://github.com/org/repo.git", "subpath": "docs" }`
-- `internet`: `{ "kind": "internet", "url": "https://example.com/docs" }` or `"internet"`
+- `internet`: `{ "kind": "internet", "url": "https://example.com/docs" }` or `"internet"`.
+  Optionally add `"allowedHosts": ["docs.example.com"]` to let the executing agent
+  actually **fetch** pages from those hosts over https while drafting/verifying (#242).
+  Without it the source stays a reference-only prompt note. Hostnames match exactly
+  (no wildcards or subdomains), redirects are re-checked against the list, and every
+  retrieval is logged by the watcher. Keep the list strict: fetched web content is
+  untrusted input to the drafting agent (see
+  [threat-model.md](threat-model.md)).
 - `agent`: `{ "kind": "agent" }` or `"agent"`
 
 Remote git sources and destinations are cloned or fast-forward pulled into `MAGPIE_CHECKOUT_ROOT`

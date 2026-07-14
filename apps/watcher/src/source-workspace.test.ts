@@ -56,6 +56,26 @@ describe("prepareSourceWorkspaces", () => {
     assert.deepEqual(prepared.workspaces, [{ sourceId: "l1", name: "Notes", rootDir: dir }]);
     assert.equal(prepared.notes.length, 2);
     assert.match(prepared.notes[0]!, /https:\/\/x\.example/);
+    assert.deepEqual(prepared.fetchable, []);
+  });
+
+  it("collects allowlisted internet sources as fetchable instead of noting them (#242)", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "magpie-local-"));
+    const prepared = await prepareSourceWorkspaces(
+      [
+        { id: "l1", name: "Notes", kind: "local", path: dir },
+        { id: "i1", name: "Vendor docs", kind: "internet", url: "https://docs.x.example/start", allowedHosts: ["docs.x.example"] },
+        { id: "i2", name: "Ref only", kind: "internet", url: "https://ref.example" }
+      ],
+      { checkoutRoot: dir }
+    );
+    assert.deepEqual(prepared.fetchable, [
+      { sourceId: "i1", name: "Vendor docs", url: "https://docs.x.example/start", allowedHosts: ["docs.x.example"] }
+    ]);
+    // The fetchable source is rendered by the prompt builder per tier, so it
+    // must NOT also degrade to a reference-only note; the unlisted one still does.
+    assert.equal(prepared.notes.length, 1);
+    assert.match(prepared.notes[0]!, /Ref only.*reference only/);
   });
 
   it("degrades to a note when one fs source fails but another resolves", async () => {

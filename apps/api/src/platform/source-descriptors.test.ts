@@ -30,6 +30,17 @@ describe("projectSourceDescriptors", () => {
     assert.deepEqual(projectSourceDescriptors(deps, undefined).map((d) => d.id), ["a", "b", "c"]);
   });
 
+  it("carries an internet source's fetch allowlist onto the descriptor (#242)", () => {
+    const deps = depsWith([
+      { id: "i", name: "Site", kind: "internet", url: "https://x.example", allowedHosts: ["docs.x.example"] },
+      { id: "i2", name: "Ref", kind: "internet", url: "https://y.example", allowedHosts: [] }
+    ]);
+    assert.deepEqual(projectSourceDescriptors(deps, ["i", "i2"]), [
+      { id: "i", name: "Site", kind: "internet", url: "https://x.example", allowedHosts: ["docs.x.example"] },
+      { id: "i2", name: "Ref", kind: "internet", url: "https://y.example" }
+    ]);
+  });
+
   it("skips a git source with no resolvable url and a local source with no path", () => {
     const deps = depsWith([
       { id: "bad-git", name: "x", kind: "git" },

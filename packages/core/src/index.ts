@@ -893,12 +893,16 @@ export interface SourceMapUpdate {
 
 // A reference to one of a flow's configured sources, carried on source-grounded
 // job inputs INSTEAD of inline file content. git/local descriptors resolve to a
-// traversable workspace on the watcher (see the source-agentic grounding spec);
-// internet/agent render as prompt notes only.
+// traversable workspace on the watcher (see the source-agentic grounding spec).
+// internet descriptors are fetchable by the executing agent ONLY when the
+// operator configured a non-empty `allowedHosts` allowlist (#242) — without it
+// they render as prompt notes, as does the agent kind. Fetched web content is
+// untrusted input to the drafting agent (docs/threat-model.md), which is why
+// fetching is strictly opt-in per descriptor.
 export type SourceDescriptor =
   | { id: string; name: string; kind: "git"; url: string; subpath?: string }
   | { id: string; name: string; kind: "local"; path: string; subpath?: string }
-  | { id: string; name: string; kind: "internet"; url?: string }
+  | { id: string; name: string; kind: "internet"; url?: string; allowedHosts?: string[] }
   | { id: string; name: string; kind: "agent" };
 
 // Input to the draft_seed_document AI job: author a NEW document covering

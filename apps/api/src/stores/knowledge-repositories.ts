@@ -10,6 +10,10 @@ export interface ConfiguredKnowledgeRepository {
   branch?: string;
   subpath?: string;
   kind: "local" | "git" | "internet" | "agent";
+  // internet sources only (#242): hostnames the executing agent may fetch over
+  // https. Absent/empty means the source stays a prompt-note reference — fetch
+  // access is strictly operator opt-in.
+  allowedHosts?: string[];
 }
 
 export interface ConfiguredKnowledgeFlow {
@@ -322,10 +326,12 @@ function normalizeRepositoryObject(candidate: Record<string, unknown>): Configur
   if (kind === "internet") {
     const internetUrl = rawValue === "internet" ? undefined : (url ?? rawValue);
     const id = stringValue(candidate.id) ?? (internetUrl ? slugFromPath(internetUrl) : "internet");
+    const allowedHosts = normalizeAllowedHosts(candidate.allowedHosts);
     return {
       id,
       name: stringValue(candidate.name) ?? id,
       ...(internetUrl ? { url: internetUrl } : {}),
+      ...(allowedHosts ? { allowedHosts } : {}),
       kind
     };
   }
@@ -407,6 +413,24 @@ function isFileUrl(value: string | undefined): value is string {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+// Fetch-allowlist entries are hostnames, compared case-insensitively against the
+// hostname of every URL the agent asks to fetch. Defensive like the rest of the
+// parser: non-arrays and non-string entries are dropped, hosts are lowercased
+// and deduped, and an empty result is treated as "not configured".
+function normalizeAllowedHosts(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const hosts = [
+    ...new Set(
+      value
+        .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase().replace(/\.$/, "") : ""))
+        .filter(Boolean)
+    )
+  ];
+  return hosts.length > 0 ? hosts : undefined;
 }
 
 function normalizeSubpath(value: string | undefined): string | undefined {
