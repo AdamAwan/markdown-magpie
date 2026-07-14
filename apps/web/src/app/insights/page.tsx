@@ -9,9 +9,11 @@ import { JobThroughputChart } from "../../components/insights/JobThroughputChart
 import { JobErrorBreakdownChart } from "../../components/insights/JobErrorBreakdownChart";
 import { LatencyHistogramChart } from "../../components/insights/LatencyHistogramChart";
 import { VerificationSuccessChart } from "../../components/insights/VerificationSuccessChart";
+import { FeedbackChart } from "../../components/insights/FeedbackChart";
 import { FreshnessChart } from "../../components/insights/FreshnessChart";
 import { PatrolImpactChart } from "../../components/insights/PatrolImpactChart";
 import {
+  useAnswerFeedback,
   useAnswerLatency,
   useFreshness,
   useJourney,
@@ -28,6 +30,7 @@ export default function InsightsPage() {
   const throughput = useJobThroughput();
   const latency = useAnswerLatency();
   const verification = useVerificationSuccess();
+  const feedback = useAnswerFeedback();
   const jobErrors = useJobErrors();
   const freshness = useFreshness();
   const patrols = usePatrolImpact();
@@ -56,6 +59,9 @@ export default function InsightsPage() {
   const verificationEmpty =
     !verification.data || verification.data.totals.closed + verification.data.totals.stillOpen === 0;
 
+  // Feedback is empty until at least one helpful/unhelpful verdict was given.
+  const feedbackEmpty = !feedback.data || feedback.data.totals.helpful + feedback.data.totals.unhelpful === 0;
+
   // Job errors are empty until at least one job has failed in the window.
   const jobErrorsEmpty =
     !jobErrors.data || jobErrors.data.byCategory.length + jobErrors.data.byType.length === 0;
@@ -79,6 +85,7 @@ export default function InsightsPage() {
     throughput.loading ||
     latency.loading ||
     verification.loading ||
+    feedback.loading ||
     jobErrors.loading ||
     freshness.loading ||
     patrols.loading;
@@ -88,6 +95,7 @@ export default function InsightsPage() {
     throughput.refresh();
     latency.refresh();
     verification.refresh();
+    feedback.refresh();
     jobErrors.refresh();
     freshness.refresh();
     patrols.refresh();
@@ -152,6 +160,17 @@ export default function InsightsPage() {
         emptyMessage="No gap-closure verifications in the last 30 days yet."
       >
         {verification.data ? <VerificationSuccessChart totals={verification.data.totals} /> : null}
+      </ChartCard>
+
+      <ChartCard
+        title="Answer feedback"
+        subtitle="Helpful vs unhelpful verdicts per day and the unhelpful rate. Unhelpful on a confident answer is the strongest quality signal — it also raises a gap. Last 30 days."
+        loading={feedback.loading}
+        error={feedback.error}
+        empty={feedbackEmpty}
+        emptyMessage="No answer feedback in the last 30 days yet."
+      >
+        {feedback.data ? <FeedbackChart series={feedback.data.series} /> : null}
       </ChartCard>
 
       <ChartCard

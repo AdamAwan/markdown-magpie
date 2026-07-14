@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiGet, errorMessage } from "../../lib/api";
 import type {
+  FeedbackBucket,
+  FeedbackSummary,
   FreshnessSummary,
   JourneySankey,
   GapBacklogBucket,
@@ -135,6 +137,24 @@ export function useJobErrors(): InsightsResource<JobErrorsData> {
 // Knowledge-base freshness (C7). A point-in-time snapshot, no window.
 export function useFreshness(): InsightsResource<FreshnessSummary> {
   const resource = useInsightsResource<FreshnessSummary>("/insights/freshness");
+  return {
+    data: resource.data,
+    loading: resource.loading,
+    error: resource.error,
+    refresh: resource.refresh
+  };
+}
+
+// The answer-feedback payload (C10): overall totals plus a per-bucket trend.
+export interface AnswerFeedbackData {
+  totals: FeedbackSummary;
+  series: FeedbackBucket[];
+}
+
+// Answer feedback (last 30 days, daily buckets): helpful/unhelpful verdicts and
+// the unhelpful rate, with unhelpful-on-confident-answer called out (#241).
+export function useAnswerFeedback(): InsightsResource<AnswerFeedbackData> {
+  const resource = useInsightsResource<AnswerFeedbackData>("/insights/feedback?bucket=day");
   return {
     data: resource.data,
     loading: resource.loading,

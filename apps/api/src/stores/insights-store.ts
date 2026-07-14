@@ -1,4 +1,6 @@
 import type {
+  FeedbackBucket,
+  FeedbackSummary,
   FreshnessSummary,
   GapBacklogBucket,
   InsightsBucketUnit,
@@ -38,6 +40,14 @@ export interface JobErrorSplit {
   byType: JobErrorBreakdown[];
 }
 
+// The result of an answer-feedback query (C10): the overall helpful/unhelpful
+// split across the window plus the same split per time bucket, from which the
+// client plots the unhelpful-rate trend (#241).
+export interface AnswerFeedback {
+  totals: FeedbackSummary;
+  series: FeedbackBucket[];
+}
+
 export interface InsightsStore {
   gapBacklog(range: InsightsRange, flowId?: string): Promise<GapBacklogBucket[]>;
   jobThroughput(range: InsightsRange, queueNames?: string[]): Promise<JobThroughputBucket[]>;
@@ -60,6 +70,10 @@ export interface InsightsStore {
   // Maintenance-patrol / gap→PR impact over the window, one row per task type.
   // Source: `maintenance_runs` (`task_type`, `details` JSONB).
   patrolImpact(range: InsightsRange): Promise<PatrolImpact[]>;
+  // Helpful/unhelpful feedback split on live answers, overall and per bucket,
+  // with the unhelpful-on-confident subset called out. Source: `questions`
+  // (`feedback`, `feedback_at`, `confidence`).
+  answerFeedback(range: InsightsRange, flowId?: string): Promise<AnswerFeedback>;
 }
 
 // Used when the process runs without a Postgres pool (in-memory unit tests):
@@ -90,5 +104,8 @@ export class NullInsightsStore implements InsightsStore {
   }
   async patrolImpact(): Promise<PatrolImpact[]> {
     return [];
+  }
+  async answerFeedback(): Promise<AnswerFeedback> {
+    return { totals: { helpful: 0, unhelpful: 0, unhelpfulConfident: 0 }, series: [] };
   }
 }
