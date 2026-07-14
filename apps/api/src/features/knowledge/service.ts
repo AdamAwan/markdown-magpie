@@ -1,3 +1,4 @@
+import type { DocumentSection } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import { resolveIndexSelection } from "../../platform/repositories.js";
 
@@ -61,6 +62,12 @@ export async function search(
   limit: number
 ): Promise<Awaited<ReturnType<AppContext["stores"]["knowledgeIndex"]["search"]>>> {
   return ctx.stores.knowledgeIndex.search(query, limit);
+}
+
+// Resolves one indexed section in full — the lookup MCP's kb_citation uses to
+// expand a citation's excerpt into the complete evidence passage.
+export function getSection(ctx: AppContext, id: string): DocumentSection | undefined {
+  return ctx.stores.knowledgeIndex.getSection(id);
 }
 
 export interface PaginationOptions {
