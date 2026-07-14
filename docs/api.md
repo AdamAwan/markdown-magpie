@@ -787,11 +787,25 @@ and mutable, so the series reflects each question's current verdict. Verificatio
 (`purpose != 'live'`) are excluded. `flow` narrows to a single flow. Source: `questions`
 (`feedback`, `feedback_at`, `confidence`).
 
+### `GET /api/insights/ai-usage?from&to`
+
+AI token usage (C11, #241). Returns `{ "usage": AiUsageBreakdown[] }`, one row per
+(job type, provider) pair that completed at least one AI job in the window, ordered by
+`totalTokens` (heaviest first). `jobs` counts every completed job of the pair;
+`jobsWithUsage` counts the subset whose completion actually carried provider-reported
+usage — CLI providers (codex/claude) emit raw text and report nothing, so their spend is
+*unmetered*, not zero. Token sums cover only the reporting subset. Window-only (grouped by
+pair, not time), windowed on `created_on` (enqueue time, matching C2/C6). Source: pg-boss's
+`job` table — completed rows on the provider-fanned AI work queues, whose persisted
+`{ result, executor, usage }` completion envelope carries the watcher's summed
+provider-reported usage; the queue-name → (type, provider) mapping is derived from the
+`@magpie/jobs` catalog.
+
 ## Type Reference
 
 The response shapes referenced above (`AnswerResult`, `Citation`, `DocumentSection`,
 `KnowledgeDocument`, `RepositoryRef`, `QuestionLog`, `GapCandidate`, `Proposal`,
 `ProposalPublication`, `GapBacklogBucket`, `LatencyBin`, `VerificationSummary`,
 `VerificationBucket`, `JobErrorBreakdown`, `DocumentFreshness`, `SourceFreshness`,
-`FreshnessSummary`, `PatrolImpact`) are defined in `packages/core/src/index.ts`. The `Job`
+`FreshnessSummary`, `PatrolImpact`, `AiUsageBreakdown`) are defined in `packages/core/src/index.ts`. The `Job`
 shape (`JobView`) is defined in `packages/jobs/src/types.ts`.

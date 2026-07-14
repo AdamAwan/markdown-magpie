@@ -1,6 +1,6 @@
 # Insights & Charts — Specification
 
-**Status:** Implemented (C1–C8, C10). C9 dropped — see §C9 and §10.2.
+**Status:** Implemented (C1–C8, C10, C11). C9 dropped — see §C9 and §10.2.
 **Date:** 2026-07-06
 **Owner:** Adam
 
@@ -149,6 +149,12 @@ data. Data inventory confirmed against the schema (see the tables named below).
 - **Data:** live questions' helpful/unhelpful verdicts per bucket (windowed on `feedback_at`), the `unhelpful` stack split into confident-answer rejections (`confidence` high/medium — the subset that also raises a `feedback` gap, see `docs/question-logging.md`) and the rest, plus an unhelpful-rate line. Verification re-asks excluded.
 - **Endpoint:** `GET /insights/feedback?from&to&bucket&flow` → `{ totals: FeedbackSummary, series: FeedbackBucket[] }`.
 - **Source:** `questions` (`feedback`, `feedback_at`, `confidence`, `purpose`).
+
+**C11. AI token usage** *(Recharts stacked bars, window-only)* — added later (#241)
+- **Question:** What is each job type costing per provider — e.g. what did the correctness patrol spend this week?
+- **Data:** one stacked bar (input + output tokens) per (job type, provider) pair over the window, heaviest first. The tooltip reports `jobsWithUsage`/`jobs` ("jobs metered") because CLI providers report no usage at all — their spend is unmetered, not zero.
+- **Endpoint:** `GET /insights/ai-usage?from&to` → `{ usage: AiUsageBreakdown[] }`.
+- **Source:** pg-boss `job` — completed rows on the provider-fanned AI queues; the watcher sums each run's provider-reported usage and the API persists it on the `{ result, executor, usage }` completion envelope. No new table: the pg-boss retention window (30 days) covers the chart's window, and the queue-name → (type, provider) mapping is derived from the `@magpie/jobs` catalog.
 
 ## 7. Delivery phases
 
