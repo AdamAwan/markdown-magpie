@@ -33,7 +33,7 @@ interface FakeApiOptions {
 
 class FakeApiClient implements WatcherApiClient {
   claims: { workerName: string; capabilities: JobCapability[] }[] = [];
-  completed: { id: string; output: unknown }[] = [];
+  completed: { id: string; output: unknown; usage?: unknown }[] = [];
   failed: { id: string; error: JobError }[] = [];
   heartbeatCalls = 0;
   private readonly jobs: (JobView | undefined)[];
@@ -54,8 +54,8 @@ class FakeApiClient implements WatcherApiClient {
     return { cancelled: this.heartbeats.length ? Boolean(this.heartbeats.shift()) : false };
   }
 
-  async complete(id: string, output: unknown): Promise<void> {
-    this.completed.push({ id, output });
+  async complete(id: string, output: unknown, usage?: unknown): Promise<void> {
+    this.completed.push({ id, output, ...(usage !== undefined ? { usage } : {}) });
   }
 
   async fail(id: string, error: JobError): Promise<void> {
@@ -68,16 +68,22 @@ class FakeRunner implements JobRunner {
   ran = 0;
   lastSignal: AbortSignal | undefined;
 
-  constructor(private readonly behaviour: (signal: AbortSignal) => Promise<unknown>) {}
+  constructor(
+    private readonly behaviour: (signal: AbortSignal, onUsage?: (usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number }) => void) => Promise<unknown>
+  ) {}
 
   supports(type: JobType): boolean {
     return type === "answer_question";
   }
 
-  async run(_job: JobView, signal: AbortSignal): Promise<unknown> {
+  async run(
+    _job: JobView,
+    signal: AbortSignal,
+    onUsage?: (usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number }) => void
+  ): Promise<unknown> {
     this.ran += 1;
     this.lastSignal = signal;
-    return this.behaviour(signal);
+    return this.behaviour(signal, onUsage);
   }
 }
 
@@ -123,6 +129,22 @@ describe("WorkerLoop", () => {
     assert.equal(api.completed.length, 1);
     assert.deepEqual(api.completed[0], { id: "job-1", output: { answer: "ok" } });
     assert.equal(api.failed.length, 0);
+  });
+
+  it("sums runner-reported usage and attaches it to the completion (#241)", async () => {
+    const api = new FakeApiClient({ jobs: [fakeJob()] });
+    const runner = new FakeRunner(async (_signal, onUsage) => {
+      onUsage?.({ inputTokens: 100, outputTokens: 20, totalTokens: 120 });
+      onUsage?.({ inputTokens: 40, outputTokens: 5 });
+      return { answer: "ok" };
+    });
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", silentLogger, { pollIntervalMs: 1 });
+    await loop.tick();
+    assert.deepEqual(api.completed[0], {
+      id: "job-1",
+      output: { answer: "ok" },
+      usage: { inputTokens: 140, outputTokens: 25, totalTokens: 120 }
+    });
   });
 
   it("fails a job exactly once when the runner throws", async () => {

@@ -1,5 +1,5 @@
 import type { ApiTokenProvider } from "@magpie/auth";
-import type { SourceMapEntry } from "@magpie/core";
+import type { AiUsage, SourceMapEntry } from "@magpie/core";
 import type { JobCapability, JobError, JobView } from "@magpie/jobs";
 import type { Logger } from "@magpie/logger";
 import type { EmbeddingRoute, RoutableFlow } from "@magpie/retrieval";
@@ -10,7 +10,10 @@ import type { EmbeddingRoute, RoutableFlow } from "@magpie/retrieval";
 export interface WatcherApiClient {
   claim(workerName: string, capabilities: JobCapability[]): Promise<JobView | undefined>;
   heartbeat(jobId: string): Promise<{ cancelled: boolean }>;
-  complete(jobId: string, output: unknown): Promise<void>;
+  // `usage` is the run's summed provider-reported token usage (#241), omitted
+  // when the provider reported nothing; the API persists it on the completion
+  // envelope for the Insights AI-usage chart.
+  complete(jobId: string, output: unknown, usage?: AiUsage): Promise<void>;
   fail(jobId: string, error: JobError): Promise<void>;
 }
 
@@ -202,7 +205,7 @@ export class HttpWatcherApi implements WatcherApi {
     return { cancelled: Boolean(cancelled) };
   }
 
-  async complete(jobId: string, output: unknown): Promise<void> {
+  async complete(jobId: string, output: unknown, usage?: AiUsage): Promise<void> {
     // The output is only ever held in the runner's memory, so a dropped response
     // here must not fall straight through to worker-loop's fail() fallback (which
     // would discard it and force a full paid-for regeneration) when the failure
@@ -210,7 +213,11 @@ export class HttpWatcherApi implements WatcherApi {
     let attempt = 0;
     for (;;) {
       try {
-        await this.post(`/api/jobs/${jobId}/complete`, { output, executor: this.workerName });
+        await this.post(`/api/jobs/${jobId}/complete`, {
+          output,
+          executor: this.workerName,
+          ...(usage ? { usage } : {})
+        });
         return;
       } catch (error) {
         if (attempt >= COMPLETE_RETRY_ATTEMPTS || !isRetryableCompleteError(error)) {

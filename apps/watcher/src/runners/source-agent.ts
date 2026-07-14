@@ -1,6 +1,6 @@
 import { generateText, stepCountIs, tool, type LanguageModel, type ModelMessage } from "ai";
 import { z } from "zod";
-import type { SourceMapEntry } from "@magpie/core";
+import type { AiUsage, SourceMapEntry } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { JOB_RUNNER_SYSTEM } from "@magpie/prompts";
 import { UrlFetcher, type FetchableInternetSource } from "../fetch-url.js";
@@ -14,6 +14,7 @@ import {
   type ToolBudget
 } from "../source-tools.js";
 import type { SourceWorkspace } from "../source-workspace.js";
+import { usageFromLanguageModelUsage } from "../usage.js";
 
 const MAX_STEPS = 24;
 const TOTAL_READ_BUDGET_BYTES = 400_000;
@@ -33,8 +34,17 @@ export async function runSourceAgentJob(options: {
   // tool, sharing the same read budget as the filesystem tools.
   fetchable?: FetchableInternetSource[];
   signal: AbortSignal;
+  // Receives the loop's provider-reported token usage (#241) — the aggregate
+  // across every step, plus the forced closing turn when one runs.
+  onUsage?: (usage: AiUsage) => void;
 }): Promise<unknown> {
-  const { job, model, workspaces, notes, mapEntries = [], fetchable = [], signal } = options;
+  const { job, model, workspaces, notes, mapEntries = [], fetchable = [], signal, onUsage } = options;
+  const reportUsage = (usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number }): void => {
+    const mapped = usageFromLanguageModelUsage(usage);
+    if (mapped && onUsage) {
+      onUsage(mapped);
+    }
+  };
   const budget: ToolBudget = { remainingBytes: TOTAL_READ_BUDGET_BYTES };
   // SourceToolError is the tools' whole misuse contract (bad path, budget, binary
   // file…) — render it for the model. Anything else is an infrastructure fault
@@ -104,6 +114,8 @@ export async function runSourceAgentJob(options: {
     stopWhen: [stepCountIs(MAX_STEPS), () => infraError !== undefined],
     abortSignal: signal
   });
+  // Report usage before the infra-fault check: the tokens were spent either way.
+  reportUsage(result.totalUsage);
   if (infraError !== undefined) {
     // An infrastructure fault occurred inside a tool; whatever text the loop
     // produced is ungrounded. Fail the job — never parse or force an answer.
@@ -135,6 +147,7 @@ export async function runSourceAgentJob(options: {
       }
     ];
     const forced = await generateText({ model, system: JOB_RUNNER_SYSTEM.instructions, messages, abortSignal: signal });
+    reportUsage(forced.totalUsage);
     return parseJobOutput(job, forced.text);
   }
 }
