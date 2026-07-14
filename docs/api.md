@@ -436,6 +436,39 @@ later by the job-completion path. The route never drafts inline.
 - `404 gap_candidate_not_found` — no candidate matches the summary.
 - `202` — `{ "job": Job, "links": { "job": "/api/jobs/:id", "wait": "/api/jobs/:id/wait", "cancel": "/api/jobs/:id/cancel", "proposals": "/api/proposals" } }`.
 
+### `POST /api/proposals/bulk`
+
+One review action applied across many proposals — the console's bulk bar. Outcomes are
+strictly **per id**: a bad id (unknown, cross-flow, wrong status, PR-tracked) is reported
+for that id and never fails the rest of the batch, so the response is always `200` with a
+results array (`400` only for a malformed body). Ids are processed sequentially so a batch
+of local-git merges contends for the destination checkout lock one at a time.
+
+```json
+{ "action": "ready", "ids": ["<proposal-id>", "..."] }
+```
+
+`action` is one of `ready`, `publish`, `merge`, `reject`; `ids` holds 1–100 proposal ids.
+Each id composes the matching single-item behaviour:
+
+- `ready` — `draft → ready`; any other status reports `invalid_status`.
+- `publish` — enqueue-only publication of a `ready` proposal (the same pre-flight and
+  `publish_proposal` job as `POST /:id/publish`); the per-id result carries the `job`.
+- `merge` — local-git `branch-pushed` proposals git-merge exactly like `POST /:id/merge`;
+  hosted `branch-pushed` proposals without a pull request take the manual no-PR merge of
+  `POST /:id/status`. A proposal with a live pull request reports
+  `proposal_merge_tracked_by_pull_request` (its merge is owned by the PR poller). The merge
+  cascade is scheduled once per newly-merged id — a retried batch cannot re-run it.
+- `reject` — local-git `branch-pushed` proposals are binned like `POST /:id/reject`;
+  hosted `draft` proposals are marked `rejected`.
+
+Per-id auth mirrors the single routes: an id the caller cannot read reports
+`proposal_not_found` (no cross-flow enumeration); readable but lacking `manage` on the
+flow reports `forbidden`.
+
+- `400 valid_bulk_action_required` — malformed body (unknown action, 0 or >100 ids).
+- `200` — `{ "results": [ { "id": string, "ok": boolean, "code"?: string, "proposal"?: Proposal, "job"?: Job }, ... ] }`.
+
 ### `GET /api/proposals/:id`
 
 - `404 proposal_not_found`.
