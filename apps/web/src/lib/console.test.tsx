@@ -10,6 +10,7 @@ import {
   jobResult,
   jobTransitionMessages,
   pillSummary,
+  pendingPublishProposalIds,
   runPublishProposal,
   sectionSubtitle,
   sectionTitle
@@ -405,6 +406,26 @@ test("bulkActionEligible mirrors the API's per-action status gates", () => {
 
   assert.equal(bulkActionEligible("merge", proposalView({ status: "branch-pushed" })), true);
   assert.equal(bulkActionEligible("merge", proposalView({ status: "draft" })), false);
+});
+
+test("bulkActionEligible excludes a ready proposal whose publish is already queued", () => {
+  assert.equal(bulkActionEligible("publish", proposalView({ status: "ready" }), { publishPending: true }), false);
+  // The pending flag only gates publish — the other actions ignore it.
+  assert.equal(bulkActionEligible("ready", proposalView(), { publishPending: true }), true);
+});
+
+test("pendingPublishProposalIds collects proposals with a publish job still in flight", () => {
+  const ids = pendingPublishProposalIds([
+    job({ id: "j1", type: "publish_proposal", state: "created", input: { proposalId: "p-queued" } }),
+    job({ id: "j2", type: "publish_proposal", state: "active", input: { proposalId: "p-running" } }),
+    // A settled publish no longer blocks: the proposal either advanced past
+    // `ready` or the button should re-enable so the publish can be retried.
+    job({ id: "j3", type: "publish_proposal", state: "completed", input: { proposalId: "p-done" } }),
+    job({ id: "j4", type: "publish_proposal", state: "failed", input: { proposalId: "p-failed" } }),
+    // Other job types never contribute, whatever their input carries.
+    job({ id: "j5", state: "created", input: { proposalId: "p-other" } })
+  ]);
+  assert.deepEqual([...ids].sort(), ["p-queued", "p-running"]);
 });
 
 test("bulkActionEligible never offers merge for a PR-tracked proposal", () => {

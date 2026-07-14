@@ -107,8 +107,10 @@ export async function waitForJob(
 
 // Job states that are not yet terminal — a job in one of these is either still
 // queued, executing, or waiting out a blocked dependency. Mirrors the overlap
-// guard in features/scheduled-tasks/service.ts.
-const IN_FLIGHT_JOB_STATES: ReadonlySet<JobView["state"]> = new Set(["created", "retry", "active", "blocked"]);
+// guard in features/scheduled-tasks/service.ts. Exported for callers that need
+// their own in-flight dedupe outside runJobToCompletion (e.g. the proposals
+// service's one-publish-per-proposal guard).
+export const IN_FLIGHT_JOB_STATES: ReadonlySet<JobView["state"]> = new Set(["created", "retry", "active", "blocked"]);
 
 // Creates a job and bounded-waits for it to reach a terminal state, returning the
 // terminal JobView (or the last view seen if the deadline elapses first — check
