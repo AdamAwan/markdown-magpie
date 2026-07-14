@@ -1417,6 +1417,44 @@ test("enqueuePublishProposal routes a file:// destination to the local-git publi
   assert.equal(job.queueName, "publish_proposal__local_git");
 });
 
+test("requestProposalPublication reuses an in-flight publish job instead of stacking a duplicate", async () => {
+  const ctx = makeTestContext();
+  await seedGitRepository(ctx);
+  const proposal = await ctx.stores.proposals.create({
+    title: "Configure X",
+    targetPath: "configure-x.md",
+    markdown: "# Configure X\nbody",
+    rationale: "r",
+    evidence: []
+  });
+  await ctx.stores.proposals.updateStatus(proposal.id, "ready");
+  const ready = await ctx.stores.proposals.get(proposal.id);
+  assert.ok(ready);
+
+  const first = await proposals.requestProposalPublication(ctx, ready);
+  if (!first.ok) throw new Error(`expected publication to be enqueued, got ${first.code}`);
+
+  // The proposal stays `ready` until the watcher completes, so a second request
+  // (double click, bulk re-select) must land on the queued job, not enqueue a twin.
+  const second = await proposals.requestProposalPublication(ctx, ready);
+  if (!second.ok) throw new Error(`expected publication reuse, got ${second.code}`);
+  assert.equal(second.job.id, first.job.id);
+  assert.equal((await ctx.jobs.list({})).jobs.length, 1);
+
+  // Once the queued job settles, publishing is no longer in flight: a fresh
+  // request enqueues a fresh job rather than reusing the settled one.
+  await ctx.jobs.complete(first.job.id, {
+    proposalId: proposal.id,
+    branchName: "magpie/proposal-x",
+    commitSha: "a".repeat(40),
+    publishedAt: new Date().toISOString()
+  });
+  const third = await proposals.requestProposalPublication(ctx, ready);
+  if (!third.ok) throw new Error(`expected a fresh publication, got ${third.code}`);
+  assert.notEqual(third.job.id, first.job.id);
+  assert.equal((await ctx.jobs.list({})).jobs.length, 2);
+});
+
 test("requestProposalPublication fails fast without enqueuing when no git repository matches", async () => {
   const ctx = makeTestContext();
   const proposal = await ctx.stores.proposals.create({
