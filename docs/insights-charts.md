@@ -1,6 +1,6 @@
 # Insights & Charts — Specification
 
-**Status:** Implemented (C1–C8). C9 dropped — see §C9 and §10.2.
+**Status:** Implemented (C1–C8, C10). C9 dropped — see §C9 and §10.2.
 **Date:** 2026-07-06
 **Owner:** Adam
 
@@ -143,6 +143,12 @@ data. Data inventory confirmed against the schema (see the tables named below).
   chart would require a new sampling table, which §10.2 explicitly rules out for
   this work. No endpoint, store method, or component was built, and no data was
   fabricated.
+
+**C10. Answer feedback** *(Recharts stacked area + rate line, time-series)* — added later (#241)
+- **Question:** Are users rejecting the answers — and especially the answers the system was confident in?
+- **Data:** live questions' helpful/unhelpful verdicts per bucket (windowed on `feedback_at`), the `unhelpful` stack split into confident-answer rejections (`confidence` high/medium — the subset that also raises a `feedback` gap, see `docs/question-logging.md`) and the rest, plus an unhelpful-rate line. Verification re-asks excluded.
+- **Endpoint:** `GET /insights/feedback?from&to&bucket&flow` → `{ totals: FeedbackSummary, series: FeedbackBucket[] }`.
+- **Source:** `questions` (`feedback`, `feedback_at`, `confidence`, `purpose`).
 
 ## 7. Delivery phases
 

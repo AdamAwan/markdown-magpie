@@ -246,6 +246,12 @@ Records helpful/unhelpful feedback on an answer.
 
 Feedback is the answer-quality axis. Whether the answer exposed a knowledge gap is tracked separately (see below) and the two can both be set on the same question.
 
+`unhelpful` on a **confident** (high/medium) live answer additionally raises a server-side
+`feedback` gap — the user rejected an answer the system believed in, which enters gap candidacy
+the way followup misses do (see [question-logging.md](question-logging.md)). Flipping the
+feedback back to `helpful` withdraws the live feedback gap. Low/unknown-confidence answers raise
+no feedback gap (their misses already record `auto` gaps).
+
 ### `POST /api/questions/:id/gap`
 
 Manually flags a question as a knowledge gap the automatic detection missed. The optional `summary` becomes the gap summary used for clustering; when omitted it falls back to the question's existing gap summary, then to the question text.
@@ -768,6 +774,18 @@ JSONB array length); `proposals` sums the proposals the gap→PR reconciler draf
 (`details.proposalsDrafted`). A task type only contributes to the metric its runs actually
 record; the other stays zero. Source: `maintenance_runs` (`task_type`, `details` JSONB,
 `started_at`).
+
+### `GET /api/insights/feedback?from&to&bucket&flow`
+
+Answer feedback (C10). Returns `{ "totals": FeedbackSummary, "series": FeedbackBucket[] }`,
+splitting live questions' helpful/unhelpful feedback overall and per bucket, with
+`unhelpfulConfident` calling out the `unhelpful` subset whose answer was confident
+(high/medium) — the strongest quality signal (the user rejected an answer the system believed
+in; these also raise a `feedback` gap, see `POST /api/questions/:id/feedback`). Windowed and
+bucketed on `feedback_at` (when the verdict was given); a question's feedback is single-valued
+and mutable, so the series reflects each question's current verdict. Verification re-asks
+(`purpose != 'live'`) are excluded. `flow` narrows to a single flow. Source: `questions`
+(`feedback`, `feedback_at`, `confidence`).
 
 ## Type Reference
 
