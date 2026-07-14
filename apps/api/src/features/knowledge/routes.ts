@@ -59,5 +59,14 @@ export function knowledgeRoutes(ctx: AppContext): Hono {
     return c.json({ sections: ranked.map((result) => result.section), ranked });
   });
 
+  app.get("/sections/:id", requireScopes("read:knowledge"), (c) => {
+    const section = knowledgeService.getSection(ctx, c.req.param("id"));
+    if (!section) {
+      throw new HttpError(404, "section_not_found");
+    }
+
+    return c.json({ section });
+  });
+
   return app;
 }

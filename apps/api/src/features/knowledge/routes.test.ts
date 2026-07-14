@@ -80,6 +80,31 @@ test("GET /api/knowledge/documents honours limit/offset and caps limit at 200", 
   assert.equal(overLimitBody.total, 10);
 });
 
+test("GET /api/knowledge/sections/:id returns the full section", async () => {
+  const ctx = makeTestContext();
+  await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
+    documents: [{ path: "guide.md", content: "# Guide\n\n## Setup\n\nInstall steps." }]
+  });
+  const [ranked] = await ctx.stores.knowledgeIndex.search("install", 1);
+  assert.ok(ranked, "expected an indexed section to cite");
+  const app = buildApp(ctx);
+
+  const res = await app.request(`/api/knowledge/sections/${encodeURIComponent(ranked.section.id)}`);
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { section: ranked.section });
+});
+
+test("GET /api/knowledge/sections/:id returns 404 section_not_found for an unknown id", async () => {
+  const ctx = makeTestContext();
+  const app = buildApp(ctx);
+
+  const res = await app.request("/api/knowledge/sections/does-not-exist");
+
+  assert.equal(res.status, 404);
+  assert.deepEqual(await res.json(), { error: "section_not_found" });
+});
+
 test("GET /api/knowledge/repositories paginates and reports the unpaginated total", async () => {
   const ctx = makeTestContext();
   for (let index = 0; index < 3; index += 1) {

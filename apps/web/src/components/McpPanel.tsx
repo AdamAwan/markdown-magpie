@@ -105,7 +105,11 @@ const ToolItem = styled.li(({ theme }) => ({
 const TOOLS: { name: string; blurb: string }[] = [
   { name: "kb_search", blurb: "Search indexed Markdown sections by keyword." },
   { name: "kb_ask", blurb: "Ask a question and get a cited answer from the knowledge base." },
-  { name: "kb_feedback", blurb: "Flag an answer as helpful, unhelpful, or a knowledge gap." }
+  { name: "kb_citation", blurb: "Fetch the full content of cited sections — the evidence behind an answer." },
+  { name: "kb_feedback", blurb: "Flag an answer as helpful, unhelpful, or a knowledge gap." },
+  { name: "kb_flows", blurb: "List the knowledge flows a question can be routed to." },
+  { name: "kb_outline", blurb: "Propose a seed plan for a flow by exploring its sources." },
+  { name: "kb_seed", blurb: "Approve a seed plan and draft its documents into proposals." }
 ];
 
 // Read-only guide: how to point an MCP client at the deployed server and what it
