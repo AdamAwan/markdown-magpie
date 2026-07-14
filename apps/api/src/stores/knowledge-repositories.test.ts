@@ -76,6 +76,24 @@ describe("knowledge repository configuration", () => {
     ]);
   });
 
+  it("parses an internet source's fetch allowlist, normalizing and dropping junk (#242)", () => {
+    const sources = getConfiguredKnowledgeSources({
+      KNOWLEDGE_SOURCES: JSON.stringify([
+        { id: "docs", kind: "internet", url: "https://docs.x.example/start", allowedHosts: ["Docs.X.Example.", " ", 7, "docs.x.example"] },
+        { id: "ref", kind: "internet", url: "https://ref.example", allowedHosts: [] },
+        { id: "plain", kind: "internet", url: "https://plain.example", allowedHosts: "docs.x.example" }
+      ])
+    });
+
+    assert.deepEqual(sources, [
+      { id: "docs", name: "docs", kind: "internet", url: "https://docs.x.example/start", allowedHosts: ["docs.x.example"] },
+      // An empty list and a non-array both mean "not configured" — the source
+      // stays a reference-only prompt note.
+      { id: "ref", name: "ref", kind: "internet", url: "https://ref.example" },
+      { id: "plain", name: "plain", kind: "internet", url: "https://plain.example" }
+    ]);
+  });
+
   it("parses flows linking source ids to destination ids", () => {
     const sources = getConfiguredKnowledgeSources({
       KNOWLEDGE_SOURCES: JSON.stringify([{ id: "flowerbi", url: "https://github.com/example/source.git" }, { id: "agent", kind: "agent" }])

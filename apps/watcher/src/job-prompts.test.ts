@@ -132,6 +132,30 @@ describe("buildSourceGroundedPrompt", () => {
     const prompt = buildSourceGroundedPrompt(sourceGroundedJob, workspaces, [], "cli");
     assert.doesNotMatch(prompt, /Source map hints — notes from previous agents/);
   });
+
+  const fetchable = [
+    { sourceId: "i1", name: "Vendor docs", url: "https://docs.x.example/start", allowedHosts: ["docs.x.example"] }
+  ];
+
+  it("names fetchable internet sources per tier: fetch_url for tools, the web-fetch tool for cli (#242)", () => {
+    const tools = buildSourceGroundedPrompt(sourceGroundedJob, workspaces, [], "tools", [], fetchable);
+    assert.match(tools, /fetch_url tool/);
+    assert.match(tools, /Vendor docs: start at https:\/\/docs\.x\.example\/start; allowed hosts: docs\.x\.example/);
+    const cli = buildSourceGroundedPrompt(sourceGroundedJob, workspaces, [], "cli", [], fetchable);
+    assert.match(cli, /your web-fetch tool/);
+    assert.doesNotMatch(cli, /fetch_url/);
+  });
+
+  it("renders a fetch-only prompt when there are no workspaces (internet-only job, #242)", () => {
+    const prompt = buildSourceGroundedPrompt(sourceGroundedJob, [], [], "tools", [], fetchable);
+    assert.doesNotMatch(prompt, /Source repositories available/);
+    assert.match(prompt, /fetch_url tool/);
+  });
+
+  it("renders no internet block when nothing is fetchable", () => {
+    const prompt = buildSourceGroundedPrompt(sourceGroundedJob, workspaces, [], "tools");
+    assert.doesNotMatch(prompt, /Internet sources available/);
+  });
 });
 
 describe("buildAnswerOutput", () => {

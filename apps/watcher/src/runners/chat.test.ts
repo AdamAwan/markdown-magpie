@@ -1015,6 +1015,56 @@ describe("ChatRunner", () => {
     assert.deepEqual(output.mapUpdates, [{ sourceId: "s1", topic: "t", paths: ["p/"], description: "d" }]);
   });
 
+  it("dispatches a seed job with only allowlisted internet sources to the source-agent loop (#242)", async () => {
+    // An internet source the operator opted into fetching is real grounding, so
+    // the job runs the tool loop (with a fetch_url-only toolset) rather than the
+    // one-shot generative path.
+    const seedOutput = JSON.stringify({
+      title: "Vendor API",
+      targetPath: "vendor/api.md",
+      markdown: "---\ntitle: Vendor API\nstatus: draft\n---\n\n# Vendor API\n\nGrounded content.",
+      rationale: "Grounded in the vendor docs."
+    });
+    const agentModel = new MockLanguageModelV3({
+      doGenerate: {
+        content: [{ type: "text", text: seedOutput }],
+        finishReason: { unified: "stop", raw: "stop" },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined }
+        },
+        warnings: []
+      }
+    });
+    const chat = new FakeChatProvider(() => {
+      throw new Error("the chat provider must not be called on the agent path");
+    });
+    const runner = new ChatRunner(
+      "openai-compatible",
+      chat,
+      fakeApi(),
+      agentModel,
+      "/data/checkouts",
+      async () => ({
+        workspaces: [],
+        notes: [],
+        fetchable: [{ sourceId: "i1", name: "Vendor docs", url: "https://docs.x.example", allowedHosts: ["docs.x.example"] }]
+      })
+    );
+    const output = (await runner.run(
+      job("draft_seed_document", {
+        provider: "openai-compatible",
+        flowId: "f1",
+        coverage: ["vendor api"],
+        sources: [{ id: "i1", name: "Vendor docs", kind: "internet", url: "https://docs.x.example", allowedHosts: ["docs.x.example"] }]
+      }),
+      new AbortController().signal
+    )) as { title: string };
+
+    assert.equal(output.title, "Vendor API");
+    assert.equal(chat.requests.length, 0, "no one-shot generative call is made");
+  });
+
   it("keeps a seed job with only non-fs sources on the generative path", async () => {
     const seedOutput = JSON.stringify({
       title: "T",

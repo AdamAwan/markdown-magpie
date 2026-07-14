@@ -29,6 +29,25 @@ test("hashSourceDescriptors changes when a descriptor is re-pointed or re-scoped
   assert.notEqual(hashSourceDescriptors(before), hashSourceDescriptors(scoped));
 });
 
+test("hashSourceDescriptors re-arms on a fetch-allowlist change but not a reorder (#242)", () => {
+  const internet = (allowedHosts?: string[]): SourceDescriptor => ({
+    id: "i1",
+    name: "Site",
+    kind: "internet",
+    url: "https://x.example",
+    ...(allowedHosts ? { allowedHosts } : {})
+  });
+  assert.notEqual(hashSourceDescriptors([internet()]), hashSourceDescriptors([internet(["docs.x.example"])]));
+  assert.notEqual(
+    hashSourceDescriptors([internet(["docs.x.example"])]),
+    hashSourceDescriptors([internet(["docs.x.example", "ref.x.example"])])
+  );
+  assert.equal(
+    hashSourceDescriptors([internet(["a.example", "b.example"])]),
+    hashSourceDescriptors([internet(["b.example", "a.example"])])
+  );
+});
+
 test("an empty descriptor set hashes to a stable value", () => {
   assert.equal(hashSourceDescriptors([]), hashSourceDescriptors([]));
 });

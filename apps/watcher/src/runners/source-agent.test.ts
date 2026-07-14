@@ -132,6 +132,32 @@ describe("runSourceAgentJob", () => {
     assert.equal((result as { title: string }).title, "Statements Module");
   });
 
+  it("wires fetch_url for allowlisted internet sources and renders its refusals to the model (#242)", async () => {
+    // No network needed: an off-allowlist URL is refused before any fetch, and
+    // that refusal coming back as an ERROR tool result proves the fetch_url tool
+    // is wired into the loop with the source's allowlist.
+    const model = scriptedModel([
+      { toolCall: { toolName: "fetch_url", input: { url: "https://evil.example.com/x" } } },
+      {
+        // The conversation is JSON-serialised (quotes escaped), so match a
+        // quote-free fragment of the refusal.
+        text: (conversation) =>
+          conversation.includes("is not on the fetch allowlist (allowed: docs.x.example)")
+            ? OUTPUT
+            : "the fetch_url refusal was not rendered to the model"
+      }
+    ]);
+    const result = await runSourceAgentJob({
+      job: seedJob(),
+      model,
+      workspaces: [],
+      notes: [],
+      fetchable: [{ sourceId: "i1", name: "Vendor docs", url: "https://docs.x.example", allowedHosts: ["docs.x.example"] }],
+      signal: new AbortController().signal
+    });
+    assert.equal((result as { title: string }).title, "Statements Module");
+  });
+
   it("fails the job on an infrastructure fault instead of drafting un-grounded", async () => {
     // A workspace whose rootDir does not exist makes read_file hit a raw ENOENT —
     // an infrastructure fault, not model misuse. The job must reject with that
