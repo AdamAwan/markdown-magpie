@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  anchorProposalSelection,
   buildAttentionNotices,
+  bulkActionEligible,
+  bulkOutcomeMessage,
   formatJobType,
   isActiveJob,
   jobResult,
@@ -351,4 +354,87 @@ test("runPublishProposal propagates API errors without refreshing", async () => 
 
   await assert.rejects(runPublishProposal(deps, "p1"), /publish rejected/);
   assert.deepEqual(refreshes, []);
+});
+
+// --- bulk proposal actions ---
+
+type EligibilityView = Parameters<typeof bulkActionEligible>[1];
+
+function proposalView(overrides: Partial<EligibilityView> = {}): EligibilityView {
+  return { status: "draft", publication: undefined, localGitDestination: false, ...overrides };
+}
+
+test("bulkActionEligible mirrors the API's per-action status gates", () => {
+  assert.equal(bulkActionEligible("ready", proposalView()), true);
+  assert.equal(bulkActionEligible("ready", proposalView({ status: "ready" })), false);
+
+  assert.equal(bulkActionEligible("publish", proposalView({ status: "ready" })), true);
+  assert.equal(bulkActionEligible("publish", proposalView()), false);
+
+  assert.equal(bulkActionEligible("merge", proposalView({ status: "branch-pushed" })), true);
+  assert.equal(bulkActionEligible("merge", proposalView({ status: "draft" })), false);
+});
+
+test("bulkActionEligible never offers merge for a PR-tracked proposal", () => {
+  const prTracked = proposalView({
+    status: "branch-pushed",
+    publication: {
+      provider: "local-git",
+      branchName: "magpie/proposal-x",
+      commitSha: "deadbeef",
+      pullRequestUrl: "https://github.com/o/r/pull/1",
+      publishedAt: now
+    }
+  });
+  assert.equal(bulkActionEligible("merge", prTracked), false);
+});
+
+test("bulkActionEligible splits reject between local-git bin and hosted draft-reject", () => {
+  assert.equal(bulkActionEligible("reject", proposalView({ localGitDestination: true, status: "branch-pushed" })), true);
+  assert.equal(bulkActionEligible("reject", proposalView({ localGitDestination: true, status: "draft" })), false);
+  assert.equal(bulkActionEligible("reject", proposalView({ status: "draft" })), true);
+  assert.equal(bulkActionEligible("reject", proposalView({ status: "branch-pushed" })), false);
+});
+
+test("bulkOutcomeMessage tallies successes and skips by code", () => {
+  const message = bulkOutcomeMessage("merge", [
+    { id: "a", ok: true },
+    { id: "b", ok: true },
+    { id: "c", ok: false, code: "proposal_merge_tracked_by_pull_request" },
+    { id: "d", ok: false, code: "proposal_merge_tracked_by_pull_request" },
+    { id: "e", ok: false, code: "invalid_status" }
+  ]);
+  assert.equal(message.tone, "success");
+  assert.match(message.text, /Merged 2 proposals/);
+  assert.match(message.text, /Skipped 3: proposal_merge_tracked_by_pull_request ×2, invalid_status\./);
+});
+
+test("bulkOutcomeMessage reads danger when nothing succeeded", () => {
+  const message = bulkOutcomeMessage("ready", [{ id: "a", ok: false, code: "invalid_status" }]);
+  assert.equal(message.tone, "danger");
+  assert.match(message.text, /Skipped 1: invalid_status\./);
+});
+
+// --- selection anchoring ---
+
+const ids = (values: string[]) => values.map((id) => ({ id }));
+
+test("anchorProposalSelection keeps a surviving selection", () => {
+  assert.equal(anchorProposalSelection(ids(["a", "b", "c"]), ids(["a", "b", "c"]), "b"), "b");
+});
+
+test("anchorProposalSelection moves to the nearest surviving neighbour when the selection drops out", () => {
+  // b was actioned away: the next item down (c) takes over, not the top of the list.
+  assert.equal(anchorProposalSelection(ids(["a", "b", "c"]), ids(["a", "c"]), "b"), "c");
+  // Last item actioned away: fall back to the neighbour above.
+  assert.equal(anchorProposalSelection(ids(["a", "b", "c"]), ids(["a", "b"]), "c"), "b");
+  // A whole merged block around the selection disappears: the nearest survivor
+  // (e, two steps down) wins over the list head.
+  assert.equal(anchorProposalSelection(ids(["a", "b", "c", "d", "e"]), ids(["a", "e"]), "c"), "e");
+});
+
+test("anchorProposalSelection falls back to the list head when there is no anchor", () => {
+  assert.equal(anchorProposalSelection(ids([]), ids(["a", "b"]), undefined), "a");
+  assert.equal(anchorProposalSelection(ids(["x"]), ids(["a"]), "unknown-elsewhere"), "a");
+  assert.equal(anchorProposalSelection(ids(["a"]), ids([]), "a"), undefined);
 });
