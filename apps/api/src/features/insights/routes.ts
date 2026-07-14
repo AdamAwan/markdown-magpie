@@ -71,5 +71,15 @@ export function insightsRoutes(ctx: AppContext): Hono {
     return c.json({ runs: await insightsService.patrolImpact(ctx, parsed.data) });
   });
 
+  // C10 — answer feedback. Helpful/unhelpful totals plus a per-bucket trend for
+  // the unhelpful-rate series, with the unhelpful-on-confident subset called out
+  // (#241).
+  app.get("/feedback", requireScopes("read:knowledge"), async (c) => {
+    const parsed = insightsRangeQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) throw new HttpError(400, "invalid_insights_query");
+    const { totals, series } = await insightsService.answerFeedback(ctx, parsed.data);
+    return c.json({ totals, series });
+  });
+
   return app;
 }

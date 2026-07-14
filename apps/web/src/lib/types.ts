@@ -298,6 +298,8 @@ export type {
   LatencyBin,
   VerificationSummary,
   VerificationBucket,
+  FeedbackSummary,
+  FeedbackBucket,
   JobErrorBreakdown,
   DocumentFreshness,
   SourceFreshness,

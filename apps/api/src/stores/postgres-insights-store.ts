@@ -1,5 +1,6 @@
 import pg from "pg";
 import type {
+  FeedbackBucket,
   FreshnessSummary,
   GapBacklogBucket,
   JobThroughputBucket,
@@ -11,7 +12,13 @@ import type {
   VerificationBucket
 } from "@magpie/core";
 import { SCHEMA_IDENTIFIER } from "../jobs/pg-boss-broker.js";
-import type { InsightsRange, InsightsStore, JobErrorSplit, VerificationSuccess } from "./insights-store.js";
+import type {
+  AnswerFeedback,
+  InsightsRange,
+  InsightsStore,
+  JobErrorSplit,
+  VerificationSuccess
+} from "./insights-store.js";
 
 // date_trunc units, whitelisted so the bucket unit is never interpolated from
 // unvalidated input (the zod schema also constrains it to these three).
@@ -610,5 +617,76 @@ export class PostgresInsightsStore implements InsightsStore {
       findings: Number(row.findings),
       proposals: Number(row.proposals)
     }));
+  }
+
+  // Answer feedback (C10). Splits live questions' helpful/unhelpful feedback per
+  // time bucket (windowed on feedback_at — when the user weighed in), with the
+  // unhelpful-on-confident subset called out: an 'unhelpful' on a high/medium
+  // answer is the strongest quality signal (#241). A question's feedback column
+  // is single-valued and mutable (the latest verdict replaces earlier ones), so
+  // the chart reflects each question's CURRENT verdict, bucketed by when it was
+  // last given. Verification re-asks (purpose != 'live') are synthetic and never
+  // receive feedback, but are excluded anyway for symmetry with the other
+  // question-scoped aggregates. Buckets are zero-filled across the range.
+  async answerFeedback(range: InsightsRange, flowId?: string): Promise<AnswerFeedback> {
+    const unit = UNIT[range.bucket];
+    const result = await this.pool.query<{
+      bucket_start: Date;
+      helpful: string;
+      unhelpful: string;
+      unhelpful_confident: string;
+    }>(
+      `
+      WITH params AS (
+        SELECT date_trunc($3, $1::timestamptz) AS from_b,
+               date_trunc($3, $2::timestamptz) AS to_b
+      ),
+      buckets AS (
+        SELECT generate_series(
+          (SELECT from_b FROM params),
+          (SELECT to_b FROM params),
+          ('1 ' || $3)::interval
+        ) AS b
+      ),
+      f AS (
+        SELECT date_trunc($3, feedback_at) AS b,
+          count(*) FILTER (WHERE feedback = 'helpful')   AS helpful,
+          count(*) FILTER (WHERE feedback = 'unhelpful') AS unhelpful,
+          count(*) FILTER (
+            WHERE feedback = 'unhelpful' AND confidence IN ('high', 'medium')
+          ) AS unhelpful_confident
+        FROM questions
+        WHERE feedback IS NOT NULL AND feedback_at IS NOT NULL
+          AND feedback_at >= $1::timestamptz AND feedback_at <= $2::timestamptz
+          AND purpose = 'live'
+          AND ($4::text IS NULL OR flow_id = $4)
+        GROUP BY 1
+      )
+      SELECT b.b AS bucket_start,
+        coalesce(f.helpful, 0)             AS helpful,
+        coalesce(f.unhelpful, 0)           AS unhelpful,
+        coalesce(f.unhelpful_confident, 0) AS unhelpful_confident
+      FROM buckets b
+      LEFT JOIN f ON f.b = b.b
+      ORDER BY b.b
+      `,
+      [range.from.toISOString(), range.to.toISOString(), unit, flowId ?? null]
+    );
+
+    const series: FeedbackBucket[] = result.rows.map((row) => ({
+      bucketStart: row.bucket_start.toISOString(),
+      helpful: Number(row.helpful),
+      unhelpful: Number(row.unhelpful),
+      unhelpfulConfident: Number(row.unhelpful_confident)
+    }));
+    const totals = series.reduce(
+      (acc, bucket) => ({
+        helpful: acc.helpful + bucket.helpful,
+        unhelpful: acc.unhelpful + bucket.unhelpful,
+        unhelpfulConfident: acc.unhelpfulConfident + bucket.unhelpfulConfident
+      }),
+      { helpful: 0, unhelpful: 0, unhelpfulConfident: 0 }
+    );
+    return { totals, series };
   }
 }

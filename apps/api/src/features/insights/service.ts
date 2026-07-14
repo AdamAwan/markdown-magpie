@@ -9,7 +9,7 @@ import type {
 import { isJobType } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { queueDefinitionsForType } from "../../jobs/pg-boss-broker.js";
-import type { InsightsRange, JobErrorSplit, VerificationSuccess } from "../../stores/insights-store.js";
+import type { AnswerFeedback, InsightsRange, JobErrorSplit, VerificationSuccess } from "../../stores/insights-store.js";
 import type { InsightsRangeQuery, InsightsWindowQuery, JobThroughputQuery } from "./schema.js";
 
 const DEFAULT_WINDOW_DAYS = 30;
@@ -75,4 +75,10 @@ export async function freshness(ctx: AppContext): Promise<FreshnessSummary> {
 // the window. Window-only — the chart groups by task type, not by time.
 export async function patrolImpact(ctx: AppContext, query: InsightsWindowQuery): Promise<PatrolImpact[]> {
   return ctx.stores.insights.patrolImpact(resolveWindow(query));
+}
+
+// Answer feedback (C10): helpful/unhelpful totals plus a per-bucket trend, with
+// the unhelpful-on-confident subset called out (#241).
+export async function answerFeedback(ctx: AppContext, query: InsightsRangeQuery): Promise<AnswerFeedback> {
+  return ctx.stores.insights.answerFeedback(resolveRange(query), query.flow);
 }

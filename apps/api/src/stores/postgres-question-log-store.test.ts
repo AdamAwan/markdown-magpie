@@ -133,9 +133,76 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     const updated = await store.recordFeedback(recorded.id, "unhelpful");
     assert.equal(updated?.feedback, "unhelpful");
     assert.ok(updated?.feedbackAt);
+    // Unanswered (unknown confidence) — no feedback gap is raised.
+    assert.ok(!(updated?.gaps ?? []).some((gap) => gap.source === "feedback"));
 
     const fetched = await store.get(recorded.id);
     assert.equal(fetched?.feedback, "unhelpful");
+  });
+
+  it("'unhelpful' on a confident answer raises a 'feedback' gap; 'helpful' withdraws it (#241)", async () => {
+    const questionText = `test-feedback-gap-${randomUUID()}`;
+    const recorded = await store.record({
+      question: questionText,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      answer: { answer: "Set FOO=1 and restart.", confidence: "high", citations: [], gaps: [] }
+    });
+
+    const updated = await store.recordFeedback(recorded.id, "unhelpful");
+    assert.ok(
+      (updated?.gaps ?? []).some((gap) => gap.summary === questionText && gap.source === "feedback"),
+      "a feedback gap is filed under the question text"
+    );
+
+    // The gap is a real candidate, keyed on the gap row despite the confident answer.
+    const candidates = await store.listGapCandidates(500);
+    const candidate = candidates.find((c) => c.summary === questionText);
+    assert.deepEqual(candidate?.questionIds, [recorded.id]);
+
+    // A repeated verdict keeps the existing live row (and its gap id) rather
+    // than minting a duplicate.
+    const repeated = await store.recordFeedback(recorded.id, "unhelpful");
+    assert.equal((repeated?.gaps ?? []).filter((gap) => gap.source === "feedback").length, 1);
+
+    // Flipping to 'helpful' withdraws the signal.
+    const withdrawn = await store.recordFeedback(recorded.id, "helpful");
+    assert.equal(withdrawn?.feedback, "helpful");
+    assert.ok(!(withdrawn?.gaps ?? []).some((gap) => gap.source === "feedback"));
+    const after = await store.listGapCandidates(500);
+    assert.ok(!after.some((c) => c.summary === questionText));
+  });
+
+  it("'unhelpful' on a low-confidence answer raises no feedback gap", async () => {
+    const recorded = await store.record({
+      question: `test-feedback-low-${randomUUID()}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      answer: lowConfidenceAnswer()
+    });
+
+    const updated = await store.recordFeedback(recorded.id, "unhelpful");
+    assert.equal(updated?.feedback, "unhelpful");
+    assert.ok(!(updated?.gaps ?? []).some((gap) => gap.source === "feedback"));
+  });
+
+  it("re-answering preserves a feedback gap (only auto/followup rows are replaced)", async () => {
+    const questionText = `test-feedback-survives-${randomUUID()}`;
+    const recorded = await store.record({
+      question: questionText,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      answer: { answer: "Confident answer.", confidence: "high", citations: [], gaps: [] }
+    });
+    await store.recordFeedback(recorded.id, "unhelpful");
+
+    const updated = await store.updateAnswer(recorded.id, { answer: lowConfidenceAnswer() });
+
+    assert.ok(
+      (updated?.gaps ?? []).some((gap) => gap.summary === questionText && gap.source === "feedback"),
+      "the feedback gap survives the re-answer"
+    );
+    assert.ok((updated?.gaps ?? []).some((gap) => gap.source === "auto"));
   });
 
   it("records a manual gap with a provided summary", async () => {

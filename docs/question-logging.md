@@ -23,7 +23,9 @@ Each question log records:
   distinct unanswered topic is its own gap, tagged `auto` (a whole-question miss
   detected during answer synthesis), `followup` (supporting material a confident
   answer searched for during retrieval but the knowledge base did not contain),
-  `manual` (flagged by an admin), or `verification` (a merged proposal failed to
+  `manual` (flagged by an admin), `feedback` (a user marked a confident answer
+  unhelpful — see [Unhelpful feedback on a confident answer](#unhelpful-feedback-on-a-confident-answer)),
+  or `verification` (a merged proposal failed to
   close this gap — see [Gap-closure verification](#gap-closure-verification)). A
   `verification` gap may carry a `note` — the detail of why the merged document
   still did not answer the question — and, once verification has failed past the
@@ -100,6 +102,28 @@ base does not cover X" rather than fabricate. Several layers enforce this:
 The model can also mark an answer **out of scope**: when the question is unrelated to the picked flow's subject area — e.g. a question about cats asked of a product flow — it sets `outOfScope`, and the answer is returned at `unknown` confidence with **no gaps at all**. This is distinct from `isKnowledgeGap` ("this flow *should* cover the topic but the docs don't"): an off-topic question is not a gap, so it never clusters or drafts a proposal. The out-of-scope signal rides on the answer result (`outOfScope`) so the console and MCP can surface it distinctly from a low-confidence answer. This is the picked flow's counterpart to the router's `flowSelectionRequired` abstain, which fires earlier when no flow can be chosen at all.
 
 Gaps can also be flagged manually — via the **Knowledge gap** chip in the console, or the MCP `kb_feedback` tool — when the system fails to detect one automatically. A manual flag is separate from helpful/unhelpful feedback (an answer can be helpful and still expose a gap), and a manually-flagged question joins the same gap-candidate clustering and proposal workflow regardless of its answer confidence. Manual flagging adds a `manual` gap (its summary falls back to the question text) alongside any auto-detected gaps; clearing the flag removes only the manual gap and leaves auto-detected gaps intact.
+
+## Unhelpful feedback on a confident answer
+
+`unhelpful` feedback on a **confident** (high/medium) live answer is a strong quality
+signal — the user rejected an answer the system believed in — so it feeds gap candidacy
+the way followup misses do (#241). Recording the feedback raises a server-side
+**`feedback`** gap whose summary falls back to the question text (like the manual flag);
+it clusters and drafts through the same candidate workflow as every other gap source.
+The mechanics:
+
+- The gap is raised only for **confident** answers. A low/unknown-confidence answer
+  already recorded its own `auto` gaps (or was deliberately gap-less, e.g. out of
+  scope), so an unhelpful verdict there adds nothing the system does not know.
+- Like `verification`, the source is written by the API only — the `answer_question`
+  output schema stays narrow to `auto`/`manual`/`followup`.
+- A repeated `unhelpful` keeps the existing live row (and its gap id, so any cluster
+  membership survives). Flipping the feedback to `helpful` **withdraws** the live
+  feedback gap — the signal was retracted — while resolved/dismissed rows are retained
+  for audit. Re-answering the question replaces only the answer-derived (`auto` +
+  `followup`) gaps; a feedback gap survives alongside `manual`/`verification` rows.
+- The console's Insights page charts the helpful/unhelpful trend, with the
+  unhelpful-on-confident subset called out (`GET /api/insights/feedback`).
 
 ## Gap-closure verification
 
