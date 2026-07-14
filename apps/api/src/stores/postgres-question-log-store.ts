@@ -277,18 +277,80 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
   }
 
   async recordFeedback(id: string, feedback: QuestionFeedback): Promise<QuestionLog | undefined> {
-    const result = await this.pool.query(
-      `
-        UPDATE questions
-        SET feedback = $2,
-            feedback_at = now()
-        WHERE id = $1
-      `,
-      [id, feedback]
-    );
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<{
+        question: string;
+        confidence: Confidence;
+        flow_id: string | null;
+        purpose: string;
+      }>(
+        `
+          UPDATE questions
+          SET feedback = $2,
+              feedback_at = now()
+          WHERE id = $1
+          RETURNING question, confidence, flow_id, purpose
+        `,
+        [id, feedback]
+      );
 
-    if (result.rowCount !== 1) {
-      return undefined;
+      if (result.rowCount !== 1) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+
+      // 'unhelpful' on a CONFIDENT (high/medium) live answer is a strong quality
+      // signal — the user rejected an answer the system believed in — so it
+      // enters gap candidacy as a server-side 'feedback' gap (#241), the way
+      // followup misses do. The summary falls back to the question text (like
+      // the manual flag). Low/unknown answers are excluded: they already raised
+      // their own 'auto' gaps (or were deliberately gap-less, e.g. out-of-scope).
+      // Repeated 'unhelpful' keeps the existing live row — and its gap id, so any
+      // cluster membership survives — rather than minting a duplicate. Flipping
+      // to 'helpful' withdraws the signal: live feedback rows are deleted
+      // (matching the manual-flag clear), while resolved/dismissed rows stay
+      // retained for audit.
+      const row = result.rows[0]!;
+      const confident = row.confidence === "high" || row.confidence === "medium";
+      let candidatesChanged = 0;
+      if (feedback === "unhelpful") {
+        if (row.purpose === "live" && confident) {
+          const inserted = await client.query(
+            `
+              INSERT INTO question_gaps (question_id, summary, source)
+              SELECT $1, $2, 'feedback'
+              WHERE NOT EXISTS (
+                SELECT 1 FROM question_gaps
+                WHERE question_id = $1 AND source = 'feedback'
+                  AND resolved_at IS NULL AND dismissed_at IS NULL
+              )
+            `,
+            [id, row.question]
+          );
+          candidatesChanged = inserted.rowCount ?? 0;
+        }
+      } else {
+        const deleted = await client.query(
+          `
+            DELETE FROM question_gaps
+            WHERE question_id = $1 AND source = 'feedback'
+              AND resolved_at IS NULL AND dismissed_at IS NULL
+          `,
+          [id]
+        );
+        candidatesChanged = deleted.rowCount ?? 0;
+      }
+      if (candidatesChanged > 0) {
+        await bumpGapCatalog(client, row.flow_id);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
     }
 
     return this.get(id);

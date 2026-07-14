@@ -56,7 +56,7 @@ function gapDedupeKey(source: string, summary: string, note: string, resolved: b
 // skips the delete+reinsert (which would otherwise mint new gap ids and orphan
 // cluster memberships) and skips the catalog bump, so a re-answer that changed
 // nothing about the candidate gaps no longer forces the reconciler to re-run its
-// metered reshape (issue #168). Manual/verification/needs_attention gaps are not
+// metered reshape (issue #168). Manual/verification/feedback gaps are not
 // replaced by the re-answer, so they are excluded from the comparison.
 export function answerGapsUnchanged(
   existing: readonly QuestionGap[],
@@ -78,6 +78,11 @@ export function answerGapsUnchanged(
 export interface QuestionLogStore {
   record(input: QuestionLogInput): Promise<QuestionLog>;
   updateAnswer(id: string, input: QuestionLogUpdateInput): Promise<QuestionLog | undefined>;
+  // Records helpful/unhelpful feedback on a question. 'unhelpful' on a confident
+  // (high/medium) live answer also raises a server-side 'feedback' gap (#241) so
+  // the rejected answer enters gap candidacy the way followup misses do;
+  // flipping back to 'helpful' withdraws the live feedback gap (resolved and
+  // dismissed rows are retained for audit).
   recordFeedback(id: string, feedback: QuestionFeedback): Promise<QuestionLog | undefined>;
   recordManualGap(id: string, summary?: string): Promise<QuestionLog | undefined>;
   clearManualGap(id: string): Promise<QuestionLog | undefined>;
@@ -298,12 +303,17 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       confidence: input.answer.confidence,
       retrievedSectionIds: input.answer.citations.map((citation) => citation.sectionId),
       answer: input.answer,
-      // Re-answering replaces auto-detected and followup gaps but preserves any
-      // manual flag. A verification log ingests no gaps, so its existing gaps
-      // (there are none) are left as-is.
+      // Re-answering replaces the answer-derived (auto + followup) gaps but
+      // preserves everything the answer did not raise — manual, verification,
+      // and feedback rows — matching the Postgres store's targeted delete. A
+      // verification log ingests no gaps, so its existing gaps (there are none)
+      // are left as-is.
       gaps: isVerification
         ? (existing.gaps ?? [])
-        : [...(existing.gaps ?? []).filter((gap) => gap.source === "manual"), ...nextAnswerGaps],
+        : [
+            ...(existing.gaps ?? []).filter((gap) => gap.source !== "auto" && gap.source !== "followup"),
+            ...nextAnswerGaps
+          ],
       ...(flowId ? { flowId } : {})
     };
 
@@ -326,13 +336,41 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       return undefined;
     }
 
+    // 'unhelpful' on a CONFIDENT (high/medium) live answer raises a server-side
+    // 'feedback' gap (#241) — summary falls back to the question text, like the
+    // manual flag — so the rejected answer enters gap candidacy the way followup
+    // misses do. Repeated 'unhelpful' keeps the existing live row (and its gap
+    // id); flipping to 'helpful' withdraws the live row, while resolved/dismissed
+    // rows stay retained for audit. Mirrors the Postgres store.
+    const gaps = existing.gaps ?? [];
+    let nextGaps = gaps;
+    let candidatesChanged = false;
+    if (feedback === "unhelpful") {
+      const confident = existing.confidence === "high" || existing.confidence === "medium";
+      const hasLive = gaps.some((gap) => gap.source === "feedback" && !gap.resolvedAt && !gap.dismissedAt);
+      if (existing.purpose !== "verification" && confident && !hasLive) {
+        nextGaps = [...gaps, { summary: existing.question, source: "feedback" }];
+        candidatesChanged = true;
+      }
+    } else {
+      const withdrawn = gaps.filter((gap) => !(gap.source === "feedback" && !gap.resolvedAt && !gap.dismissedAt));
+      if (withdrawn.length !== gaps.length) {
+        nextGaps = withdrawn;
+        candidatesChanged = true;
+      }
+    }
+
     const updated: QuestionLog = {
       ...existing,
       feedback,
-      feedbackAt: new Date().toISOString()
+      feedbackAt: new Date().toISOString(),
+      gaps: nextGaps
     };
 
     this.logs.set(id, updated);
+    if (candidatesChanged) {
+      this.bumpCatalog(existing.flowId);
+    }
     return updated;
   }
 

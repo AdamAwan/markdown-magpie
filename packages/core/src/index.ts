@@ -181,11 +181,15 @@ export const NO_SOURCE_MATERIAL_GAP_PREFIX = "No sufficient source material foun
 // "auto"/"manual"/"followup" are the sources a live answer can raise (the model
 // or an admin). "verification" is raised server-side after a merged proposal
 // fails gap-closure verification: the triggering question was re-asked and the
-// merged doc still did not answer it. It never comes from a provider — the
-// answer_question output schema stays narrow to the first three. "Parked,
-// awaiting a human" (repeated verification failures past the retry cap) is NOT a
-// source — it is the `parkedAt` state on a verification gap (see QuestionGap).
-export type QuestionGapSource = "auto" | "manual" | "followup" | "verification";
+// merged doc still did not answer it. "feedback" is raised server-side when a
+// user marks a confident (high/medium) live answer 'unhelpful' — the user
+// rejected an answer the system believed in (#241); flipping the feedback back
+// to 'helpful' withdraws the live row. Neither server-side source ever comes
+// from a provider — the answer_question output schema stays narrow to the first
+// three. "Parked, awaiting a human" (repeated verification failures past the
+// retry cap) is NOT a source — it is the `parkedAt` state on a verification gap
+// (see QuestionGap).
+export type QuestionGapSource = "auto" | "manual" | "followup" | "verification" | "feedback";
 
 export interface QuestionGap {
   summary: string;
@@ -1582,6 +1586,22 @@ export interface VerificationSummary {
 // One time bucket of the verification-success trend (C5), tagged with its bucket
 // start so the client can plot success rate over time.
 export interface VerificationBucket extends VerificationSummary {
+  bucketStart: string;
+}
+
+// The helpful/unhelpful split of answer feedback on live questions (C10).
+// `unhelpfulConfident` is the subset of `unhelpful` whose answer was confident
+// (high/medium) — the strongest quality signal: the user rejected an answer the
+// system believed in (#241). Used both as the overall total and per time bucket.
+export interface FeedbackSummary {
+  helpful: number;
+  unhelpful: number;
+  unhelpfulConfident: number;
+}
+
+// One time bucket of the answer-feedback trend (C10), tagged with its bucket
+// start so the client can plot the unhelpful rate over time.
+export interface FeedbackBucket extends FeedbackSummary {
   bucketStart: string;
 }
 
