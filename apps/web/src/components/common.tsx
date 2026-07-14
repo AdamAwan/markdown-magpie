@@ -1,50 +1,7 @@
 import Link from "next/link";
 import styled from "@emotion/styled";
-import { Citation, ConsoleNotice } from "../lib/types";
-import { Badge, Chip } from "./ui";
-import type { StatusTone } from "../theme/theme";
-
-const noticeTone: Record<ConsoleNotice["tone"], StatusTone> = {
-  warning: "running",
-  info: "pending",
-  danger: "failed"
-};
-
-const AttentionList = styled.section(({ theme }) => ({
-  display: "grid",
-  gap: theme.space.md,
-  marginBottom: theme.space.lg
-}));
-
-const Notice = styled.article<{ $tone: StatusTone }>(({ theme, $tone }) => ({
-  display: "grid",
-  gridTemplateColumns: "minmax(0, 1fr) auto",
-  gap: theme.space.lg,
-  alignItems: "center",
-  border: `1px solid ${theme.color.status[$tone].border}`,
-  borderRadius: theme.radius.card,
-  background: theme.color.status[$tone].bg,
-  padding: `${theme.space.lg} ${theme.space.xl}`,
-  "& h2": { marginBottom: theme.space.xs }
-}));
-
-export function AttentionPanel({ notices }: { notices: ConsoleNotice[] }) {
-  return (
-    <AttentionList aria-label="System notices">
-      {notices.map((notice) => (
-        <Notice $tone={noticeTone[notice.tone]} key={notice.id}>
-          <div>
-            <h2>{notice.title}</h2>
-            <p>{notice.body}</p>
-          </div>
-          {notice.action && notice.actionLabel ? (
-            <Chip onClick={notice.action}>{notice.actionLabel}</Chip>
-          ) : null}
-        </Notice>
-      ))}
-    </AttentionList>
-  );
-}
+import { Citation } from "../lib/types";
+import { Badge } from "./ui";
 
 const NavLink = styled(Link, { shouldForwardProp: (prop) => prop !== "$active" })<{ $active: boolean }>(({ theme, $active }) => ({
   display: "grid",

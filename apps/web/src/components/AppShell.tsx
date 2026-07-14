@@ -5,16 +5,17 @@ import Image from "next/image";
 import styled from "@emotion/styled";
 import { usePathname } from "next/navigation";
 import { useAuth0 } from "@auth0/auth0-react";
-import { ConsoleSection, UiMessage } from "../lib/types";
+import { ConsoleSection } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
 import { isActiveJob, sectionSubtitle, sectionTitle } from "../lib/console";
 import { SECTION_NAV, sectionFromPath } from "../lib/sections";
-import { AttentionPanel, NavButton } from "./common";
+import { NavButton } from "./common";
 import { BuildStatus } from "./BuildStatus";
 import { useConsole } from "./ConsoleProvider";
 import { authConfiguredFromWindow } from "./AuthProvider";
+import { StatusPill } from "./StatusPill";
+import { ToastStack } from "./ToastStack";
 import { Button } from "./ui";
-import type { StatusTone } from "../theme/theme";
 
 const MOBILE = "@media (max-width: 1050px)";
 const NARROW = "@media (max-width: 700px)";
@@ -221,23 +222,6 @@ const RefreshTime = styled.span(({ theme }) => ({
   fontWeight: theme.font.weight.medium
 }));
 
-const alertTone: Record<UiMessage["tone"], StatusTone> = {
-  info: "pending",
-  success: "completed",
-  danger: "failed"
-};
-
-const Alert = styled.div<{ $tone: StatusTone }>(({ theme, $tone }) => ({
-  marginBottom: theme.space.lg,
-  border: `1px solid ${theme.color.status[$tone].border}`,
-  borderRadius: theme.radius.md,
-  background: theme.color.status[$tone].bg,
-  color: theme.color.status[$tone].fg,
-  padding: `${theme.space.lg} ${theme.space.xl}`,
-  fontSize: theme.font.size.base,
-  fontWeight: theme.font.weight.medium
-}));
-
 // Login/logout controls. This is only rendered when Auth0 is configured, since
 // useAuth0 throws without an Auth0Provider ancestor (AuthProvider omits the
 // provider entirely when auth is disabled).
@@ -286,8 +270,13 @@ export function AppShell({ children }: { children: ReactNode }) {
     attentionNotices,
     refreshing,
     lastRefreshedAt,
-    message,
-    refresh
+    notifications,
+    toasts,
+    refresh,
+    dismissToast,
+    dismissNotification,
+    clearNotifications,
+    markNotificationsRead
   } = useConsole();
 
   // URL parsing/host detection; memoised so it doesn't re-run on every render
@@ -451,6 +440,14 @@ export function AppShell({ children }: { children: ReactNode }) {
             <RefreshTime aria-live="polite">
               {lastRefreshedAt ? `Updated ${new Date(lastRefreshedAt).toLocaleTimeString()}` : "Not refreshed yet"}
             </RefreshTime>
+            <StatusPill
+              loaded={hasLoaded}
+              notices={hasLoaded ? attentionNotices : []}
+              notifications={notifications}
+              onOpen={markNotificationsRead}
+              onDismissNotification={dismissNotification}
+              onClearNotifications={clearNotifications}
+            />
             <Button variant="secondary" disabled={refreshing} onClick={() => void refresh()}>
               {refreshing ? "Refreshing" : "Refresh"}
             </Button>
@@ -458,14 +455,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           </TopActions>
         </Topbar>
 
-        {message ? (
-          <Alert $tone={alertTone[message.tone]} role="status" aria-live="polite">
-            {message.text}
-          </Alert>
-        ) : null}
-        {hasLoaded && attentionNotices.length ? <AttentionPanel notices={attentionNotices} /> : null}
-
         {children}
+
+        <ToastStack toasts={toasts} onDismiss={dismissToast} />
       </MainArea>
     </Shell>
   );

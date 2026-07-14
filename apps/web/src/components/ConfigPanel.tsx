@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import styled from "@emotion/styled";
-import { AI_PROVIDERS, AiProviderName, RuntimeConfig, UiMessage } from "../lib/types";
+import { AI_PROVIDERS, AiProviderName, RuntimeConfig, UiNotification } from "../lib/types";
 import { apiGet, apiPost, errorMessage } from "../lib/api";
 import { Badge, Button, EmptyState, Field, Select, Surface } from "./ui";
 
@@ -95,7 +95,7 @@ export function ConfigPanel({
   apiBaseUrl: string;
   config?: RuntimeConfig;
   onConfigChange: (config: RuntimeConfig) => void;
-  onMessage: (message: string, tone?: UiMessage["tone"]) => void;
+  onMessage: (message: string, tone?: UiNotification["tone"]) => void;
 }) {
   const [provider, setProvider] = useState<AiProviderName>(AI_PROVIDERS[0]);
   const [saving, setSaving] = useState(false);
@@ -130,7 +130,6 @@ export function ConfigPanel({
   async function resetData() {
     setResetting(true);
     setConfirmingReset(false);
-    onMessage("");
     try {
       const result = await apiPost<{ reindexed: number; failures: Array<{ target: string; message: string }> }>(
         "/admin/reset",
@@ -154,7 +153,6 @@ export function ConfigPanel({
     }
 
     setSaving(true);
-    onMessage("");
     try {
       const result = await apiPost<RuntimeConfig>("/config", {
         ai: {
