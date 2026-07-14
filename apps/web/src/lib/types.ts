@@ -174,13 +174,19 @@ export interface ConsoleNotice {
   action?: () => void;
 }
 
-export interface UiMessage {
+// One entry in the console's notification feed: transient action feedback
+// (queued/completed/failed messages). Each shows as a toast and is kept —
+// newest first, bounded — in the status pill's dropdown so a missed toast is
+// still recoverable. Session state only, never persisted.
+export interface UiNotification {
   id: number;
   text: string;
   tone: "info" | "success" | "danger";
+  at: string;
+  read: boolean;
 }
 
-export type JobTransitionMessage = Pick<UiMessage, "text" | "tone">;
+export type JobTransitionMessage = Pick<UiNotification, "text" | "tone">;
 
 // Mirrors the API's reconciled schedule response (apps/api/src/jobs/broker.ts
 // ScheduleView). Next-run timing is owned by pg-boss; the web reads it from

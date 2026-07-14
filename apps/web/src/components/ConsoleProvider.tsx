@@ -39,7 +39,7 @@ import {
   SourceMapEntry,
   SourceMapResponse,
   SuggestedGapCluster,
-  UiMessage,
+  UiNotification,
   WatcherView,
   WorkersResponse
 } from "../lib/types";
@@ -99,6 +99,10 @@ const SLOW_POLL_INTERVAL_MS = 30_000;
 // smaller window here.
 const PROPOSALS_LIST_LIMIT = 100;
 
+// How many notifications the status pill's Recent list keeps. Session state
+// only — enough to recover a missed toast, small enough to never need paging.
+const NOTIFICATION_LIMIT = 20;
+
 // Holds every piece of console state, the data-loading effects and the action
 // handlers that previously lived inline in the single page component. Lifting
 // them into a provider mounted by the root layout means the state and the 4s
@@ -144,12 +148,17 @@ function useConsoleController() {
   const [indexingRepo, setIndexingRepo] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | undefined>();
-  const [message, setMessage] = useState<UiMessage | undefined>();
+  // The notification feed behind the topbar status pill: newest first, capped
+  // at NOTIFICATION_LIMIT. `toasts` is the transient overlay view of the same
+  // entries — showMessage adds to both, a timeout (or manual dismiss) removes
+  // from toasts only, so the feed keeps what the toast showed.
+  const [notifications, setNotifications] = useState<UiNotification[]>([]);
+  const [toasts, setToasts] = useState<UiNotification[]>([]);
   const jobsRef = useRef<JobView[]>([]);
   // The previous proposals page, kept so a refresh can anchor the selection to
   // a dropped proposal's nearest surviving neighbour (see anchorProposalSelection).
   const proposalsRef = useRef<Proposal[]>([]);
-  const messageIdRef = useRef(0);
+  const notificationIdRef = useRef(0);
   // Holds the AbortController for the in-flight refresh. The 4s poll and a manual
   // Refresh can overlap; aborting the previous request before starting a new one
   // (and ignoring a superseded controller's results) stops a slow stale response
@@ -220,15 +229,6 @@ function useConsoleController() {
   }, [config?.knowledge?.sources]);
 
   useEffect(() => {
-    if (!message) {
-      return;
-    }
-
-    const timeout = window.setTimeout(() => setMessage(undefined), message.tone === "danger" ? 10_000 : 5_000);
-    return () => window.clearTimeout(timeout);
-  }, [message]);
-
-  useEffect(() => {
     const hasActiveWork = jobs.some(isActiveJob) || (answer?.job ? isActiveJob(answer.job) : false);
 
     if (!hasActiveWork) {
@@ -244,12 +244,44 @@ function useConsoleController() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [answer?.job?.id, answer?.job?.state, jobs]);
 
-  function showMessage(text: string, tone: UiMessage["tone"] = "info") {
-    setMessage({ id: messageIdRef.current++, text, tone });
+  function showMessage(text: string, tone: UiNotification["tone"] = "info") {
+    const notification: UiNotification = {
+      id: notificationIdRef.current++,
+      text,
+      tone,
+      at: new Date().toISOString(),
+      read: false
+    };
+    setNotifications((current) => [notification, ...current].slice(0, NOTIFICATION_LIMIT));
+    setToasts((current) => [...current, notification]);
+    // Same timings as the old inline banner. The toast is only the transient
+    // view — the notification stays in the feed for the pill's Recent list.
+    window.setTimeout(
+      () => setToasts((current) => current.filter((toast) => toast.id !== notification.id)),
+      tone === "danger" ? 10_000 : 5_000
+    );
   }
 
-  function clearMessage() {
-    setMessage(undefined);
+  function dismissToast(id: number) {
+    setToasts((current) => current.filter((toast) => toast.id !== id));
+  }
+
+  function dismissNotification(id: number) {
+    setNotifications((current) => current.filter((notification) => notification.id !== id));
+  }
+
+  function clearNotifications() {
+    setNotifications([]);
+  }
+
+  // Called when the status pill's popover opens; keeps identity stable when
+  // nothing was unread so polling re-renders don't churn state.
+  function markNotificationsRead() {
+    setNotifications((current) =>
+      current.some((notification) => !notification.read)
+        ? current.map((notification) => (notification.read ? notification : { ...notification, read: true }))
+        : current
+    );
   }
 
   // The one reusable wait helper used after every enqueue (ask, proposal draft,
@@ -262,25 +294,21 @@ function useConsoleController() {
     return waited.job;
   }
 
-  async function acceptFailedJobs(jobIds: string[]) {
-    clearMessage();
-    try {
+  async function acceptFailedJobs(jobIds: string[]) {    try {
       const results = await Promise.all(
         jobIds.map((jobId) => apiPost<{ job: JobView }>(`/jobs/${jobId}/accept-failure`, {}))
       );
       const selected = results.find((result) => result.job.id === selectedJobId);
       if (selected) setSelectedJob(selected.job);
       showMessage(`${jobIds.length} failed job${jobIds.length === 1 ? "" : "s"} accepted.`, "success");
-      await refresh({ preserveMessage: true });
+      await refresh();
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     }
   }
 
   async function selectJob(jobId: string) {
-    setSelectedJobId(jobId);
-    clearMessage();
-    try {
+    setSelectedJobId(jobId);    try {
       const result = await apiGet<{ job: JobView }>(`/jobs/${jobId}`);
       setSelectedJob(result.job);
     } catch (error) {
@@ -293,29 +321,25 @@ function useConsoleController() {
     setSelectedJob(undefined);
   }
 
-  async function cancelJob(jobId: string) {
-    clearMessage();
-    try {
+  async function cancelJob(jobId: string) {    try {
       const result = await apiPost<{ job: JobView }>(`/jobs/${jobId}/cancel`, {});
       if (selectedJobId === jobId) {
         setSelectedJob(result.job);
       }
       showMessage("Job cancelled.", "success");
-      await refresh({ preserveMessage: true });
+      await refresh();
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     }
   }
 
-  async function retryJob(jobId: string) {
-    clearMessage();
-    try {
+  async function retryJob(jobId: string) {    try {
       const result = await apiPost<{ job: JobView }>(`/jobs/${jobId}/retry`, {});
       if (selectedJobId === jobId) {
         setSelectedJob(result.job);
       }
       showMessage("Job re-queued for retry.", "success");
-      await refresh({ preserveMessage: true });
+      await refresh();
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     }
@@ -340,7 +364,7 @@ function useConsoleController() {
   // Fast tier: jobs, workers, health, stats and the small bounded lists (gaps,
   // questions, proposals, ...) that the active-job 4s poll needs to keep the
   // Jobs/Ask panels live. Never includes the slow tier's large knowledge lists.
-  async function refreshFast(options: { preserveMessage?: boolean; silent?: boolean } = {}) {
+  async function refreshFast(options: { silent?: boolean } = {}) {
     // Abort any fast refresh still in flight so its (now stale) response is
     // discarded and never overwrites the state this newer refresh is about to set.
     refreshControllerRef.current?.abort();
@@ -349,9 +373,6 @@ function useConsoleController() {
     const { signal } = controller;
 
     setRefreshing(true);
-    if (!options.silent && !options.preserveMessage) {
-      clearMessage();
-    }
     try {
       const [
         healthResult,
@@ -488,16 +509,14 @@ function useConsoleController() {
   // Used by the mount effect and the manual Refresh button: runs both tiers so
   // every panel is fully current, while the recurring pollers above only ever
   // trigger one tier at a time.
-  async function refresh(options: { preserveMessage?: boolean; silent?: boolean } = {}) {
+  async function refresh(options: { silent?: boolean } = {}) {
     await Promise.all([refreshFast(options), refreshSlow({ silent: options.silent })]);
   }
 
   // Shared by the Ask form and the "pick a flow" re-ask. `flow` is "auto" or a
   // configured flow id; the API rejects an unknown id with a 400.
   async function submitQuestion(questionText: string, flow: string) {
-    setLoading(true);
-    clearMessage();
-    try {
+    setLoading(true);    try {
       const result = await apiPost<AskResponse>("/ask", { question: questionText, flow });
       setQuestion("");
       // Bounded-wait for the queued answer; the helper returns the terminal job
@@ -511,7 +530,7 @@ function useConsoleController() {
           : `${formatJobType(job.type)} ${job.state}.`,
         job.state === "failed" ? "danger" : "info"
       );
-      await refresh({ preserveMessage: true });
+      await refresh();
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     } finally {
@@ -534,9 +553,7 @@ function useConsoleController() {
     await submitQuestion(questionText, flow);
   }
 
-  async function sendFeedback(questionId: string, feedback: Feedback) {
-    clearMessage();
-    try {
+  async function sendFeedback(questionId: string, feedback: Feedback) {    try {
       const result = await apiPost<{ question: QuestionLog }>(`/questions/${questionId}/feedback`, { feedback });
       setQuestions((current) => current.map((item) => (item.id === questionId ? result.question : item)));
     } catch (error) {
@@ -544,9 +561,7 @@ function useConsoleController() {
     }
   }
 
-  async function toggleKnowledgeGap(questionId: string, flagged: boolean) {
-    clearMessage();
-    try {
+  async function toggleKnowledgeGap(questionId: string, flagged: boolean) {    try {
       const result = flagged
         ? await apiPost<{ question: QuestionLog }>(`/questions/${questionId}/gap`, {})
         : await apiDelete<{ question: QuestionLog }>(`/questions/${questionId}/gap`);
@@ -557,9 +572,7 @@ function useConsoleController() {
   }
 
   async function draftProposal(gap: GapCandidate) {
-    setLoading(true);
-    clearMessage();
-    try {
+    setLoading(true);    try {
       const result = await apiPost<{ job?: JobView; proposal?: Proposal }>("/proposals/from-gap", {
         summary: gap.summary,
         // Draft into the flow the gap actually came from; fall back to the
@@ -581,7 +594,7 @@ function useConsoleController() {
           job.state === "failed" ? "danger" : "info"
         );
       }
-      await refresh({ preserveMessage: true });
+      await refresh();
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     } finally {
@@ -593,9 +606,7 @@ function useConsoleController() {
     if (summaries.length === 0) {
       return;
     }
-    setLoading(true);
-    clearMessage();
-    try {
+    setLoading(true);    try {
       const result = await apiPost<{ job?: JobView; proposal?: Proposal }>("/proposals/from-gaps", {
         summaries,
         // Use the cluster's own flow (clusters are per-flow); fall back to the
@@ -617,7 +628,7 @@ function useConsoleController() {
           job.state === "failed" ? "danger" : "info"
         );
       }
-      await refresh({ preserveMessage: true });
+      await refresh();
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     } finally {
@@ -626,9 +637,7 @@ function useConsoleController() {
   }
 
   async function updateProposalStatus(proposalId: string, status: Proposal["status"]) {
-    setLoading(true);
-    clearMessage();
-    try {
+    setLoading(true);    try {
       const result = await apiPost<{ proposal: Proposal; cascadeScheduled?: boolean }>(
         `/proposals/${proposalId}/status`,
         { status }
@@ -642,7 +651,7 @@ function useConsoleController() {
         showMessage("Proposal merged — resolving gaps and re-indexing in the background.", "success");
         // Merged proposals drop out of the active list and their gaps stop
         // surfacing, so pull fresh proposal and gap state.
-        await refresh({ preserveMessage: true });
+        await refresh();
       } else {
         showMessage(status === "ready" ? "Proposal marked ready for PR workflow." : "Proposal rejected.", "success");
       }
@@ -654,9 +663,7 @@ function useConsoleController() {
   }
 
   async function mergeProposal(proposalId: string) {
-    setLoading(true);
-    clearMessage();
-    try {
+    setLoading(true);    try {
       const result = await apiPost<{ proposal: Proposal; cascadeScheduled?: boolean }>(
         `/proposals/${proposalId}/merge`,
         {}
@@ -668,7 +675,7 @@ function useConsoleController() {
         "success"
       );
       // Merged proposals drop out of the active list; pull fresh proposal/gap state.
-      await refresh({ preserveMessage: true });
+      await refresh();
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     } finally {
@@ -677,9 +684,7 @@ function useConsoleController() {
   }
 
   async function rejectProposal(proposalId: string) {
-    setLoading(true);
-    clearMessage();
-    try {
+    setLoading(true);    try {
       const result = await apiPost<{ proposal: Proposal }>(`/proposals/${proposalId}/reject`, {});
       setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
       setSelectedProposalId(result.proposal.id);
@@ -688,7 +693,7 @@ function useConsoleController() {
         "success"
       );
       // Rejected proposals drop out of the active list; pull fresh state.
-      await refresh({ preserveMessage: true });
+      await refresh();
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     } finally {
@@ -697,9 +702,7 @@ function useConsoleController() {
   }
 
   async function publishProposal(proposalId: string) {
-    setLoading(true);
-    clearMessage();
-    try {
+    setLoading(true);    try {
       // Fire-and-forget enqueue (see runPublishProposal): no jump to the Jobs
       // section and no /jobs/:id/wait long-poll, so the shared `loading` flag
       // clears as soon as the job is queued instead of blocking the console for
@@ -721,13 +724,11 @@ function useConsoleController() {
     if (ids.length === 0) {
       return;
     }
-    setLoading(true);
-    clearMessage();
-    try {
+    setLoading(true);    try {
       const { results } = await apiPost<{ results: BulkProposalResult[] }>("/proposals/bulk", { action, ids });
       const outcome = bulkOutcomeMessage(action, results);
       showMessage(outcome.text, outcome.tone);
-      await refresh({ preserveMessage: true });
+      await refresh();
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     } finally {
@@ -735,9 +736,7 @@ function useConsoleController() {
     }
   }
 
-  async function saveScheduledTask(key: string, enabled: boolean, cron: string) {
-    clearMessage();
-    try {
+  async function saveScheduledTask(key: string, enabled: boolean, cron: string) {    try {
       const result = await apiPost<{ tasks: ScheduledTask[] }>(`/scheduled-tasks/${key}/settings`, { enabled, cron });
       setScheduledTasks(result.tasks);
       showMessage(enabled ? "Side-process schedule enabled." : "Side-process schedule disabled.", "success");
@@ -747,9 +746,7 @@ function useConsoleController() {
   }
 
   async function runScheduledTask(key: string) {
-    setLoading(true);
-    clearMessage();
-    try {
+    setLoading(true);    try {
       const result = await apiPost<{ job: JobView; tasks: ScheduledTask[] }>(`/scheduled-tasks/${key}/run`, {});
       setScheduledTasks(result.tasks);
       const job = await waitForJob(result.job);
@@ -759,7 +756,7 @@ function useConsoleController() {
           : `Side-process ${job.state}.`,
         job.state === "failed" ? "danger" : "success"
       );
-      await refresh({ preserveMessage: true });
+      await refresh();
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     } finally {
@@ -772,9 +769,7 @@ function useConsoleController() {
       return;
     }
 
-    setIndexingRepo(true);
-    clearMessage();
-    try {
+    setIndexingRepo(true);    try {
       const summary = await apiPost<IndexRepositoryResponse>("/knowledge/repositories/index", {
         flowId: nextFlowId.trim()
       });
@@ -782,7 +777,7 @@ function useConsoleController() {
         `Indexed ${summary.repository.name} with ${summary.documentCount} documents and ${summary.sectionCount} sections.`,
         "success"
       );
-      await refresh({ preserveMessage: true });
+      await refresh();
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     } finally {
@@ -798,9 +793,7 @@ function useConsoleController() {
   async function proposeSeedPlan(
     targetFlowId: string,
     notes: string
-  ): Promise<{ jobId: string; reused: boolean } | undefined> {
-    clearMessage();
-    try {
+  ): Promise<{ jobId: string; reused: boolean } | undefined> {    try {
       const trimmedNotes = notes.trim();
       const outcome = await apiPost<{ ok: boolean; jobId: string; reused: boolean }>(
         `/flows/${encodeURIComponent(targetFlowId)}/outline`,
@@ -812,7 +805,7 @@ function useConsoleController() {
           : "Planning — exploring the flow's sources; the plan will appear here for review when ready.",
         "info"
       );
-      await refresh({ preserveMessage: true, silent: true });
+      await refresh({ silent: true });
       return { jobId: outcome.jobId, reused: outcome.reused };
     } catch (error) {
       showMessage(errorMessage(error), "danger");
@@ -837,9 +830,7 @@ function useConsoleController() {
 
   // Save reviewer edits (charter/persona text, item fields, per-item status) to
   // a still-proposed plan.
-  async function patchSeedPlan(planId: string, patch: SeedPlanPatchBody): Promise<SeedPlan | undefined> {
-    clearMessage();
-    try {
+  async function patchSeedPlan(planId: string, patch: SeedPlanPatchBody): Promise<SeedPlan | undefined> {    try {
       const { plan } = await apiPatch<{ plan: SeedPlan }>(`/seed-plans/${encodeURIComponent(planId)}`, patch);
       showMessage("Plan edits saved.", "success");
       return plan;
@@ -851,9 +842,7 @@ function useConsoleController() {
 
   // Approve a plan: the API drafts one document per approved item straight into
   // the proposal → PR pipeline, carrying the plan's charter/persona.
-  async function approveSeedPlan(planId: string): Promise<{ plan: SeedPlan; jobIds: string[] } | undefined> {
-    clearMessage();
-    try {
+  async function approveSeedPlan(planId: string): Promise<{ plan: SeedPlan; jobIds: string[] } | undefined> {    try {
       const outcome = await apiPost<{ plan: SeedPlan; jobIds: string[] }>(
         `/seed-plans/${encodeURIComponent(planId)}/approve`,
         {}
@@ -862,7 +851,7 @@ function useConsoleController() {
         `Approved — drafting ${outcome.jobIds.length} document${outcome.jobIds.length === 1 ? "" : "s"}; drafts will appear as proposals.`,
         "success"
       );
-      await refresh({ preserveMessage: true });
+      await refresh();
       return outcome;
     } catch (error) {
       showMessage(errorMessage(error), "danger");
@@ -870,9 +859,7 @@ function useConsoleController() {
     }
   }
 
-  async function dismissSeedPlan(planId: string): Promise<SeedPlan | undefined> {
-    clearMessage();
-    try {
+  async function dismissSeedPlan(planId: string): Promise<SeedPlan | undefined> {    try {
       const { plan } = await apiPost<{ plan: SeedPlan }>(`/seed-plans/${encodeURIComponent(planId)}/dismiss`, {});
       showMessage("Plan dismissed. It will not be re-proposed until the flow's sources change.", "success");
       return plan;
@@ -916,7 +903,8 @@ function useConsoleController() {
     indexingRepo,
     refreshing,
     lastRefreshedAt,
-    message,
+    notifications,
+    toasts,
     latestJob,
     attentionNotices,
     setConfig,
@@ -927,7 +915,10 @@ function useConsoleController() {
     setAnsweredSearch,
     setQuestion,
     showMessage,
-    clearMessage,
+    dismissToast,
+    dismissNotification,
+    clearNotifications,
+    markNotificationsRead,
     toggleCitations,
     openSection,
     refresh,

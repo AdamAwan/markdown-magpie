@@ -1,4 +1,4 @@
-import { ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, JobType, JobView, KnowledgeStats, Proposal, UiMessage, WatcherView } from "./types";
+import { ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, JobType, JobView, KnowledgeStats, Proposal, UiNotification, WatcherView } from "./types";
 
 export function sectionTitle(section: ConsoleSection): string {
   if (section === "knowledge") {
@@ -189,6 +189,48 @@ export function buildAttentionNotices({
   return notices;
 }
 
+// The status pill's collapsed summary. Severity is the worst outstanding tone
+// across the persistent system notices and the *unread* notifications
+// (danger > warning > info; success feedback counts as info). The label counts
+// system state and feedback separately ("2 issues · 1 new") so the pill stays
+// honest about which kind of attention it is asking for.
+export type PillTone = "danger" | "warning" | "info" | "neutral";
+
+export interface PillSummary {
+  label: string;
+  tone: PillTone;
+}
+
+export function pillSummary(
+  notices: Array<Pick<ConsoleNotice, "tone">>,
+  notifications: Array<Pick<UiNotification, "tone" | "read">>
+): PillSummary {
+  const unread = notifications.filter((notification) => !notification.read);
+  const hasDanger =
+    notices.some((notice) => notice.tone === "danger") || unread.some((notification) => notification.tone === "danger");
+  const tone: PillTone = hasDanger
+    ? "danger"
+    : notices.some((notice) => notice.tone === "warning")
+      ? "warning"
+      : notices.length > 0 || unread.length > 0
+        ? "info"
+        : "neutral";
+
+  const parts: string[] = [];
+  if (notices.length > 0) {
+    const noun = notices.some((notice) => notice.tone === "danger")
+      ? "issue"
+      : notices.some((notice) => notice.tone === "warning")
+        ? "warning"
+        : "notice";
+    parts.push(`${notices.length} ${noun}${notices.length === 1 ? "" : "s"}`);
+  }
+  if (unread.length > 0) {
+    parts.push(`${unread.length} new`);
+  }
+  return { label: parts.length > 0 ? parts.join(" · ") : "All clear", tone };
+}
+
 // Non-terminal job states. A job is "active" (still moving towards a result)
 // until it reaches completed/failed/cancelled.
 export function isActiveJob(job: JobView): boolean {
@@ -233,8 +275,8 @@ export function formatJobType(type: string): string {
 // and the /jobs/:id/wait helper.
 export interface PublishProposalDeps {
   apiPost: (path: string, body: unknown) => Promise<{ job?: JobView }>;
-  showMessage: (text: string, tone: UiMessage["tone"]) => void;
-  refresh: (options: { preserveMessage: boolean }) => Promise<void>;
+  showMessage: (text: string, tone: UiNotification["tone"]) => void;
+  refresh: () => Promise<void>;
 }
 
 // Publication is enqueue-only on the API, and the console treats it as
@@ -246,7 +288,7 @@ export async function runPublishProposal(deps: PublishProposalDeps, proposalId: 
   if (result.job) {
     deps.showMessage(`${formatJobType(result.job.type)} queued. This page will update when it finishes.`, "info");
   }
-  await deps.refresh({ preserveMessage: true });
+  await deps.refresh();
 }
 
 // The console's bulk review actions, mirroring the API's POST /proposals/bulk
@@ -293,7 +335,7 @@ const BULK_SUCCESS_VERBS: Record<BulkProposalAction, (count: number) => string> 
 export function bulkOutcomeMessage(
   action: BulkProposalAction,
   results: BulkProposalResult[]
-): Pick<UiMessage, "text" | "tone"> {
+): Pick<UiNotification, "text" | "tone"> {
   const succeeded = results.filter((result) => result.ok).length;
   const failures = results.filter((result) => !result.ok);
   const parts: string[] = [];

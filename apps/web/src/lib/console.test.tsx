@@ -9,11 +9,12 @@ import {
   isActiveJob,
   jobResult,
   jobTransitionMessages,
+  pillSummary,
   runPublishProposal,
   sectionSubtitle,
   sectionTitle
 } from "./console";
-import type { ConsoleSection, Health, JobType, JobView, KnowledgeStats, UiMessage, WatcherView } from "./types";
+import type { ConsoleSection, Health, JobType, JobView, KnowledgeStats, UiNotification, WatcherView } from "./types";
 
 const now = "2026-06-30T12:00:00.000Z";
 
@@ -295,31 +296,62 @@ test("jobResult returns undefined when the job has no output yet", () => {
   assert.equal(jobResult(job({ id: "j2", state: "active", output: undefined })), undefined);
 });
 
+// --- status pill summary ---
+
+const unreadOf = (...tones: Array<UiNotification["tone"]>) => tones.map((tone) => ({ tone, read: false }));
+
+test("pillSummary is a neutral all-clear when nothing is outstanding", () => {
+  assert.deepEqual(pillSummary([], []), { label: "All clear", tone: "neutral" });
+  // Read notifications are history, not outstanding attention.
+  assert.deepEqual(pillSummary([], [{ tone: "danger", read: true }]), { label: "All clear", tone: "neutral" });
+});
+
+test("pillSummary takes the worst severity across notices and unread notifications", () => {
+  assert.equal(pillSummary([{ tone: "danger" }, { tone: "warning" }], []).tone, "danger");
+  assert.equal(pillSummary([{ tone: "warning" }], []).tone, "warning");
+  assert.equal(pillSummary([{ tone: "warning" }], unreadOf("danger")).tone, "danger");
+  assert.equal(pillSummary([], unreadOf("success", "info")).tone, "info");
+});
+
+test("pillSummary words the notice count by the worst notice tone", () => {
+  assert.equal(pillSummary([{ tone: "danger" }, { tone: "warning" }], []).label, "2 issues");
+  assert.equal(pillSummary([{ tone: "warning" }], []).label, "1 warning");
+  assert.equal(pillSummary([{ tone: "info" }], []).label, "1 notice");
+});
+
+test("pillSummary appends the unread count and keeps the two counts separate", () => {
+  assert.deepEqual(pillSummary([{ tone: "danger" }], unreadOf("success", "info")), {
+    label: "1 issue · 2 new",
+    tone: "danger"
+  });
+  assert.deepEqual(pillSummary([], unreadOf("success")), { label: "1 new", tone: "info" });
+});
+
 // Publication is enqueue-only and must stay fire-and-forget in the console: one
 // POST, a "queued" message, a refresh — no navigation away from the proposal and
 // no long-poll on /jobs/:id/wait holding the global loading flag for up to 25s.
 function publishHarness(response: { job?: JobView }) {
   const apiCalls: Array<{ path: string; body: unknown }> = [];
-  const messages: Array<Pick<UiMessage, "text" | "tone">> = [];
-  const refreshes: Array<{ preserveMessage: boolean }> = [];
+  const messages: Array<Pick<UiNotification, "text" | "tone">> = [];
+  let refreshes = 0;
   const deps = {
     apiPost: async (path: string, body: unknown) => {
       apiCalls.push({ path, body });
       return response;
     },
-    showMessage: (text: string, tone: UiMessage["tone"]) => {
+    showMessage: (text: string, tone: UiNotification["tone"]) => {
       messages.push({ text, tone });
     },
-    refresh: async (options: { preserveMessage: boolean }) => {
-      refreshes.push(options);
+    refresh: async () => {
+      refreshes += 1;
     }
   };
-  return { deps, apiCalls, messages, refreshes };
+  return { deps, apiCalls, messages, refreshCount: () => refreshes };
 }
 
 test("runPublishProposal enqueues once, reports the queued job, and refreshes in place", async () => {
   const queued = job({ id: "pub-1", type: "publish_proposal", state: "created" });
-  const { deps, apiCalls, messages, refreshes } = publishHarness({ job: queued });
+  const { deps, apiCalls, messages, refreshCount } = publishHarness({ job: queued });
 
   await runPublishProposal(deps, "p1");
 
@@ -328,32 +360,32 @@ test("runPublishProposal enqueues once, reports the queued job, and refreshes in
   assert.deepEqual(messages, [
     { text: "Publish Proposal queued. This page will update when it finishes.", tone: "info" }
   ]);
-  assert.deepEqual(refreshes, [{ preserveMessage: true }]);
+  assert.equal(refreshCount(), 1);
 });
 
 test("runPublishProposal still refreshes when the API returns no job", async () => {
-  const { deps, messages, refreshes } = publishHarness({});
+  const { deps, messages, refreshCount } = publishHarness({});
 
   await runPublishProposal(deps, "p1");
 
   assert.deepEqual(messages, []);
-  assert.deepEqual(refreshes, [{ preserveMessage: true }]);
+  assert.equal(refreshCount(), 1);
 });
 
 test("runPublishProposal propagates API errors without refreshing", async () => {
-  const refreshes: Array<{ preserveMessage: boolean }> = [];
+  let refreshes = 0;
   const deps = {
     apiPost: async () => {
       throw new Error("publish rejected");
     },
     showMessage: () => undefined,
-    refresh: async (options: { preserveMessage: boolean }) => {
-      refreshes.push(options);
+    refresh: async () => {
+      refreshes += 1;
     }
   };
 
   await assert.rejects(runPublishProposal(deps, "p1"), /publish rejected/);
-  assert.deepEqual(refreshes, []);
+  assert.equal(refreshes, 0);
 });
 
 // --- bulk proposal actions ---
