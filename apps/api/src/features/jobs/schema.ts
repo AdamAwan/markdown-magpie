@@ -27,7 +27,7 @@ export const heartbeatJobBodySchema = z.object({
 // Optional end to end: CLI providers report nothing, and older watchers don't
 // send the field at all. Bounded to non-negative integers so a confused
 // provider can't persist NaN/negative counts into the completion envelope.
-export const jobUsageSchema = z.object({
+const jobUsageSchema = z.object({
   inputTokens: z.number().int().nonnegative().optional(),
   outputTokens: z.number().int().nonnegative().optional(),
   totalTokens: z.number().int().nonnegative().optional()

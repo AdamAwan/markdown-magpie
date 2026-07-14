@@ -12,7 +12,9 @@ import { VerificationSuccessChart } from "../../components/insights/Verification
 import { FeedbackChart } from "../../components/insights/FeedbackChart";
 import { FreshnessChart } from "../../components/insights/FreshnessChart";
 import { PatrolImpactChart } from "../../components/insights/PatrolImpactChart";
+import { AiUsageChart } from "../../components/insights/AiUsageChart";
 import {
+  useAiUsage,
   useAnswerFeedback,
   useAnswerLatency,
   useFreshness,
@@ -34,6 +36,7 @@ export default function InsightsPage() {
   const jobErrors = useJobErrors();
   const freshness = useFreshness();
   const patrols = usePatrolImpact();
+  const aiUsage = useAiUsage();
 
   // The endpoint zero-fills every day in the window, so a non-empty array can
   // still be "nothing happened". Treat all-zero transitions as empty.
@@ -78,6 +81,9 @@ export default function InsightsPage() {
   // Patrols are empty until at least one maintenance run happened in the window.
   const patrolsEmpty = !patrols.data || patrols.data.length === 0;
 
+  // AI usage is empty until at least one AI job completed in the window.
+  const aiUsageEmpty = !aiUsage.data || aiUsage.data.length === 0;
+
   const refreshing =
     backlog.loading ||
     journey.loading ||
@@ -87,7 +93,8 @@ export default function InsightsPage() {
     feedback.loading ||
     jobErrors.loading ||
     freshness.loading ||
-    patrols.loading;
+    patrols.loading ||
+    aiUsage.loading;
   const refreshAll = () => {
     backlog.refresh();
     journey.refresh();
@@ -98,6 +105,7 @@ export default function InsightsPage() {
     jobErrors.refresh();
     freshness.refresh();
     patrols.refresh();
+    aiUsage.refresh();
   };
 
   return (
@@ -205,6 +213,17 @@ export default function InsightsPage() {
         emptyMessage="No maintenance runs in the last 30 days yet."
       >
         {patrols.data ? <PatrolImpactChart runs={patrols.data} /> : null}
+      </ChartCard>
+
+      <ChartCard
+        title="AI token usage"
+        subtitle="Provider-reported tokens per job type and provider, input and output stacked. CLI providers report no usage — their jobs show as unmetered, not free. Last 30 days."
+        loading={aiUsage.loading}
+        error={aiUsage.error}
+        empty={aiUsageEmpty}
+        emptyMessage="No AI jobs completed in the last 30 days yet."
+      >
+        {aiUsage.data ? <AiUsageChart usage={aiUsage.data} /> : null}
       </ChartCard>
     </Workbench>
   );

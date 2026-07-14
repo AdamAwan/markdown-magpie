@@ -766,8 +766,6 @@ export class PostgresInsightsStore implements InsightsStore {
             ]
           : [];
       })
-      .sort(
-        (a, b) => b.totalTokens - a.totalTokens || b.jobs - a.jobs || a.jobType.localeCompare(b.jobType)
-      );
+      .sort((a, b) => b.totalTokens - a.totalTokens || b.jobs - a.jobs || a.jobType.localeCompare(b.jobType));
   }
 }
