@@ -3,7 +3,7 @@ import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import type { LanguageModel } from "ai";
 import type { WatcherApi } from "../http-client.js";
 import { logger } from "../logger.js";
-import { fetchSourceMapEntries, hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf, stampSourceMapUpdates } from "../source-workspace.js";
+import { fetchSourceMapEntries, hasFetchableSources, hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf, stampSourceMapUpdates } from "../source-workspace.js";
 import { PROVIDER_JOB_TYPES, runGenerativeJob } from "./generative.js";
 import { runSourceAgentJob } from "./source-agent.js";
 
@@ -28,19 +28,25 @@ export class ChatRunner {
 
   async run(job: JobView, signal: AbortSignal): Promise<unknown> {
     const descriptors = sourceDescriptorsOf(job);
-    if (hasFsSources(descriptors)) {
+    // The agent loop runs whenever there is anything real to ground in: a
+    // filesystem workspace, or an operator-allowlisted internet source (#242) —
+    // a job with only fetchable internet sources gets a fetch_url-only toolset.
+    if (hasFsSources(descriptors) || hasFetchableSources(descriptors)) {
       if (this.agentModel) {
-        const { workspaces, notes } = await this.prepareWorkspaces(descriptors, { checkoutRoot: this.checkoutRoot });
+        const { workspaces, notes, fetchable } = await this.prepareWorkspaces(descriptors, { checkoutRoot: this.checkoutRoot });
         logger.info(
-          { jobId: job.id, workspaceCount: workspaces.length },
-          `${job.type}[${job.id}]: running source-agent loop over ${workspaces.length} workspace(s)`
+          { jobId: job.id, workspaceCount: workspaces.length, fetchableCount: fetchable.length },
+          `${job.type}[${job.id}]: running source-agent loop over ${workspaces.length} workspace(s) and ${fetchable.length} fetchable internet source(s)`
         );
         const mapEntries = await fetchSourceMapEntries(this.api, workspaces);
-        return stampSourceMapUpdates(await runSourceAgentJob({ job, model: this.agentModel, workspaces, notes, mapEntries, signal }), workspaces);
+        return stampSourceMapUpdates(
+          await runSourceAgentJob({ job, model: this.agentModel, workspaces, notes, mapEntries, fetchable, signal }),
+          workspaces
+        );
       }
       logger.warn(
         { jobId: job.id },
-        `${job.type}[${job.id}]: job has filesystem sources but no agent model is configured — running un-grounded via the generative path`
+        `${job.type}[${job.id}]: job has explorable sources but no agent model is configured — running un-grounded via the generative path`
       );
     }
     return runGenerativeJob({ job, model: this.chat, api: this.api, signal });

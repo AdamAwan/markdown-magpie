@@ -37,6 +37,11 @@ export function hashSourceDescriptors(sources: readonly SourceDescriptor[]): str
         .update(source.kind === "local" ? source.path : "")
         .update("\0")
         .update(source.kind === "git" || source.kind === "local" ? (source.subpath ?? "") : "")
+        .update("\0")
+        // A fetch-allowlist change (#242) changes what the executing agent can
+        // ground in, so it must re-arm the gate like any other re-scoping. The
+        // list is order-normalized here so a reordered config is not a "change".
+        .update(source.kind === "internet" ? [...(source.allowedHosts ?? [])].sort().join("\u0001") : "")
         .digest("hex")
     )
     .sort();

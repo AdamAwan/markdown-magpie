@@ -409,7 +409,8 @@ describe("CliRunner source-grounded seeding", () => {
           { sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" },
           { sourceId: "s2", name: "Docs", rootDir: "/checkouts/s2" }
         ],
-        notes: []
+        notes: [],
+        fetchable: []
       }),
       spawnOverride: fakeSpawn(calls, SEED_OUTPUT_JSON)
     });
@@ -456,7 +457,8 @@ describe("CliRunner source-grounded seeding", () => {
           { sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" },
           { sourceId: "s2", name: "Docs", rootDir: "/checkouts/s2" }
         ],
-        notes: []
+        notes: [],
+        fetchable: []
       }),
       spawnOverride: fakeSpawn(calls, SEED_OUTPUT_JSON)
     });
@@ -525,7 +527,8 @@ describe("CliRunner source-grounded seeding", () => {
       cancelGraceMs: 10,
       prepareWorkspaces: async () => ({
         workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }],
-        notes: []
+        notes: [],
+        fetchable: []
       }),
       spawnOverride: hangingSpawn
     });
@@ -546,7 +549,8 @@ describe("CliRunner source-grounded seeding", () => {
       api: fakeApi(),
       prepareWorkspaces: async () => ({
         workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }],
-        notes: []
+        notes: [],
+        fetchable: []
       }),
       spawnOverride: fakeSpawn(calls, JSON.stringify(verifyOutput))
     });
@@ -580,7 +584,8 @@ describe("CliRunner source-grounded seeding", () => {
       api: fakeApi(),
       prepareWorkspaces: async () => ({
         workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }],
-        notes: []
+        notes: [],
+        fetchable: []
       }),
       spawnOverride: fakeSpawn(calls, SEED_OUTPUT_JSON)
     });

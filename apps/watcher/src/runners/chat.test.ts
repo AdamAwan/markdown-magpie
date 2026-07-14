@@ -900,7 +900,7 @@ describe("ChatRunner", () => {
       "/data/checkouts",
       async (descriptors) => {
         preparedFor.push(...descriptors.map((descriptor) => descriptor.id));
-        return { workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }], notes: [] };
+        return { workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }], notes: [], fetchable: [] };
       }
     );
     const output = (await runner.run(
@@ -947,7 +947,7 @@ describe("ChatRunner", () => {
       "/data/checkouts",
       async (descriptors) => {
         preparedFor.push(...descriptors.map((descriptor) => descriptor.id));
-        return { workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }], notes: [] };
+        return { workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }], notes: [], fetchable: [] };
       }
     );
     const output = (await runner.run(

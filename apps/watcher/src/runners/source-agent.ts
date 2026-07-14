@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { SourceMapEntry } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { JOB_RUNNER_SYSTEM } from "@magpie/prompts";
+import { UrlFetcher, type FetchableInternetSource } from "../fetch-url.js";
 import { buildSourceGroundedPrompt, parseJobOutput } from "../job-prompts.js";
 import { logger } from "../logger.js";
 import {
@@ -28,9 +29,12 @@ export async function runSourceAgentJob(options: {
   workspaces: SourceWorkspace[];
   notes: string[];
   mapEntries?: SourceMapEntry[];
+  // Operator-allowlisted internet sources (#242); presence adds the fetch_url
+  // tool, sharing the same read budget as the filesystem tools.
+  fetchable?: FetchableInternetSource[];
   signal: AbortSignal;
 }): Promise<unknown> {
-  const { job, model, workspaces, notes, mapEntries = [], signal } = options;
+  const { job, model, workspaces, notes, mapEntries = [], fetchable = [], signal } = options;
   const budget: ToolBudget = { remainingBytes: TOTAL_READ_BUDGET_BYTES };
   // SourceToolError is the tools' whole misuse contract (bad path, budget, binary
   // file…) — render it for the model. Anything else is an infrastructure fault
@@ -53,7 +57,11 @@ export async function runSourceAgentJob(options: {
     }
   };
 
-  const tools = {
+  // Filesystem tools only when there is a workspace to explore, fetch_url only
+  // when the operator allowlisted an internet source (#242) — a job grounded in
+  // internet sources alone gets a fetch-only toolset rather than dead fs tools.
+  const fetcher = fetchable.length > 0 ? new UrlFetcher(fetchable, budget, { signal }) : undefined;
+  const fsTools = {
     list_dir: tool({
       description:
         'List a directory. Path is "<sourceId>/<relative path>"; pass "" to list the available sources.',
@@ -73,8 +81,21 @@ export async function runSourceAgentJob(options: {
       execute: ({ query, glob }) => asToolResult(() => grepWorkspaces(workspaces, query, glob))
     })
   };
+  const tools = {
+    ...(workspaces.length > 0 ? fsTools : {}),
+    ...(fetcher
+      ? {
+          fetch_url: tool({
+            description:
+              "Fetch an allowlisted internet source page over https and return its readable text. Long pages are returned in 32KB slices; re-call with offset to continue.",
+            inputSchema: z.object({ url: z.string(), offset: z.number().int().min(0).optional() }),
+            execute: ({ url, offset }) => asToolResult(() => fetcher.fetch(url, offset ?? 0))
+          })
+        }
+      : {})
+  };
 
-  const prompt = buildSourceGroundedPrompt(job, workspaces, notes, "tools", mapEntries);
+  const prompt = buildSourceGroundedPrompt(job, workspaces, notes, "tools", mapEntries, fetchable);
   const result = await generateText({
     model,
     system: JOB_RUNNER_SYSTEM.instructions,

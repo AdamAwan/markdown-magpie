@@ -48,7 +48,13 @@ function toDescriptor(source: ConfiguredKnowledgeRepository): SourceDescriptor |
       : undefined;
   }
   if (source.kind === "internet") {
-    return { id: source.id, name: source.name, kind: "internet", ...(source.url ? { url: source.url } : {}) };
+    return {
+      id: source.id,
+      name: source.name,
+      kind: "internet",
+      ...(source.url ? { url: source.url } : {}),
+      ...(source.allowedHosts && source.allowedHosts.length > 0 ? { allowedHosts: source.allowedHosts } : {})
+    };
   }
   return { id: source.id, name: source.name, kind: "agent" };
 }

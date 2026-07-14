@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { SourceDescriptor, SourceMapEntry } from "@magpie/core";
 import { ensureGitCheckout, getHeadSha } from "@magpie/git";
+import { fetchableInternetSources, type FetchableInternetSource } from "./fetch-url.js";
 import {
   correctDocumentInputSchema,
   draftMarkdownProposalInputSchema,
@@ -31,10 +32,19 @@ export interface PreparedSources {
   // Prompt lines for sources with no filesystem: internet/agent placeholders and
   // fs sources that failed to resolve (partial degradation, named explicitly).
   notes: string[];
+  // Internet sources the operator opted into fetching (non-empty allowedHosts,
+  // #242). Rendered per execution tier by the prompt builder — NOT as notes here,
+  // because what "fetchable" means differs by tier (fetch_url tool vs WebFetch vs
+  // codex's no-network sandbox).
+  fetchable: FetchableInternetSource[];
 }
 
 export function hasFsSources(descriptors: SourceDescriptor[]): boolean {
   return descriptors.some((d) => d.kind === "git" || d.kind === "local");
+}
+
+export function hasFetchableSources(descriptors: SourceDescriptor[]): boolean {
+  return fetchableInternetSources(descriptors).length > 0;
 }
 
 // The input schema of each source-grounded job type — every input that carries
@@ -90,9 +100,16 @@ export async function prepareSourceWorkspaces(
   const readHeadSha = options.headSha ?? getHeadSha;
   const workspaces: SourceWorkspace[] = [];
   const notes: string[] = [];
+  const fetchable = fetchableInternetSources(descriptors);
+  const fetchableIds = new Set(fetchable.map((source) => source.sourceId));
 
   for (const descriptor of descriptors) {
     if (descriptor.kind === "internet") {
+      // Fetchable internet sources (#242) are rendered by the prompt builder per
+      // execution tier; only the reference-only ones degrade to notes here.
+      if (fetchableIds.has(descriptor.id)) {
+        continue;
+      }
       notes.push(
         descriptor.url
           ? `Internet source "${descriptor.name}": ${descriptor.url} (reference only; not fetched).`
@@ -132,7 +149,7 @@ export async function prepareSourceWorkspaces(
   if (workspaces.length === 0 && hasFsSources(descriptors)) {
     throw new Error("no source workspace could be prepared: every filesystem-backed source failed to resolve");
   }
-  return { workspaces, notes };
+  return { workspaces, notes, fetchable };
 }
 
 function withSubpath(root: string, subpath: string | undefined): string {

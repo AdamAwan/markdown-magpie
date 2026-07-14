@@ -129,7 +129,23 @@ export class CliRunner {
       throw new Error("source-grounded run has no prepared workspace");
     }
     const mapEntries = await fetchSourceMapEntries(this.api, prepared.workspaces);
-    const prompt = buildSourceGroundedPrompt(job, prepared.workspaces, prepared.notes, "cli", mapEntries);
+    // Fetchable internet sources (#242): claude gets a domain-allowlisted
+    // WebFetch (see readOnlyArgs), so the prompt names them fetchable. codex
+    // cannot fetch — its read-only OS sandbox blocks network — so for codex the
+    // same sources degrade to the reference-only notes they always were.
+    const fetchable = this.capability === "claude" ? prepared.fetchable : [];
+    const notes =
+      this.capability === "claude"
+        ? prepared.notes
+        : [
+            ...prepared.notes,
+            ...prepared.fetchable.map((source) =>
+              source.url
+                ? `Internet source "${source.name}": ${source.url} (reference only; not fetched).`
+                : `Internet source "${source.name}": use relevant internet research as supporting material.`
+            )
+          ];
+    const prompt = buildSourceGroundedPrompt(job, prepared.workspaces, notes, "cli", mapEntries, fetchable);
     logger.info(
       { jobId: job.id, jobType: job.type, command: this.command, workspaceCount: prepared.workspaces.length, cwd: primary.rootDir },
       `${job.type}[${job.id}]: running ${this.command} CLI read-only over ${prepared.workspaces.length} source workspace(s)`
@@ -163,6 +179,18 @@ export class CliRunner {
   private readOnlyArgs(prepared: PreparedSources): string[] {
     if (this.capability === "claude") {
       const extraDirs = prepared.workspaces.slice(1).flatMap((ws) => ["--add-dir", ws.rootDir]);
+      // Fetchable internet sources (#242): WebFetch joins the toolset only when
+      // the operator allowlisted hosts, and each host becomes a
+      // `WebFetch(domain:…)` permission rule. In print mode a tool call that no
+      // rule pre-approves is DENIED (there is no interactive prompt to fall back
+      // to), so these rules are the enforcement: fetches to allowlisted domains
+      // proceed, everything else is refused. NOTE: rule spelling follows the
+      // documented permission-rule format; not yet live-verified like the flags
+      // below — flagged in the PR/issue for a live check before production use.
+      const fetchHosts = [...new Set(prepared.fetchable.flatMap((source) => source.allowedHosts))];
+      const fetchTool = fetchHosts.length > 0 ? ",WebFetch" : "";
+      const fetchAllowRules =
+        fetchHosts.length > 0 ? ["--allowedTools", ...fetchHosts.map((host) => `WebFetch(domain:${host})`)] : [];
       // --strict-mcp-config (with no --mcp-config) loads zero MCP servers: a
       // checkout may carry its own .mcp.json (this repo does — it would hand the
       // agent the KB's own kb_* tools), and the operator's user-scope servers
@@ -172,9 +200,10 @@ export class CliRunner {
       // claude v2.1.x, 2026-07-13.
       return [
         "--tools",
-        "Read,Grep,Glob",
+        `Read,Grep,Glob${fetchTool}`,
         "--disallowedTools",
         "Write,Edit,NotebookEdit,Bash",
+        ...fetchAllowRules,
         "--strict-mcp-config",
         "--setting-sources",
         "",

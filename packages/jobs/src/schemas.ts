@@ -140,7 +140,15 @@ export const summarizeGapOutputSchema = z.object({
 const sourceDescriptorSchema = z.discriminatedUnion("kind", [
   z.object({ id: z.string(), name: z.string(), kind: z.literal("git"), url: z.string(), subpath: z.string().optional() }),
   z.object({ id: z.string(), name: z.string(), kind: z.literal("local"), path: z.string(), subpath: z.string().optional() }),
-  z.object({ id: z.string(), name: z.string(), kind: z.literal("internet"), url: z.string().optional() }),
+  z.object({
+    id: z.string(),
+    name: z.string(),
+    kind: z.literal("internet"),
+    url: z.string().optional(),
+    // Fetch allowlist (#242): without it (or empty) the source is a prompt note
+    // only. Declared here or the watcher-side input parse strips it silently.
+    allowedHosts: z.array(z.string()).optional()
+  }),
   z.object({ id: z.string(), name: z.string(), kind: z.literal("agent") })
 ]);
 // Mirrors @magpie/core SourceMapUpdate — an optional, agent-contributed
