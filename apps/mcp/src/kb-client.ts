@@ -124,12 +124,26 @@ export async function getJson(path: string, options?: KbClientOptions): Promise<
   return readApiResponse(response, path);
 }
 
+// API call failure carrying the HTTP status so callers can branch on it (e.g.
+// kb_citation treats a per-section 404 as "missing", not a tool failure).
+// Internal on purpose: kb_citation's 404 branch is the only status-sensitive
+// caller, and an unused export would trip the strict dead-code gate.
+class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function readApiResponse(response: Response, path: string): Promise<unknown> {
   const text = await response.text();
   const body = text ? JSON.parse(text) : {};
 
   if (!response.ok) {
-    throw new Error(`API ${path} failed with ${response.status}: ${text}`);
+    throw new ApiError(response.status, `API ${path} failed with ${response.status}: ${text}`);
   }
 
   return body;
@@ -330,6 +344,62 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+// ── citation sections ─────────────────────────────────────────────────────────
+
+const MAX_CITATION_SECTION_IDS = 20;
+
+// Validates kb_citation's sectionIds argument: a 1–20 entry array of non-empty
+// strings, deduplicated preserving first-seen order (an answer can cite the same
+// section twice; fetching it twice buys nothing).
+function sectionIdsArgument(args: Record<string, unknown> | undefined): string[] {
+  const value = args?.sectionIds;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("sectionIds must be a non-empty array of section id strings");
+  }
+  if (value.length > MAX_CITATION_SECTION_IDS) {
+    throw new Error(`sectionIds accepts at most ${MAX_CITATION_SECTION_IDS} ids per call`);
+  }
+
+  const ids = value.map((entry) => {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      throw new Error("sectionIds entries must be non-empty strings");
+    }
+    return entry.trim();
+  });
+
+  return [...new Set(ids)];
+}
+
+// Fetches the full content of cited sections (GET /knowledge/sections/:id per
+// id, in parallel). A per-id 404 means the section was re-indexed away since
+// the answer cited it — it lands in `missing` rather than failing the call, so
+// the evidence that still resolves is returned. Any other API failure rejects.
+export async function getCitationSections(
+  args: Record<string, unknown> | undefined,
+  options?: KbClientOptions
+): Promise<{ sections: unknown[]; missing: string[] }> {
+  const sectionIds = sectionIdsArgument(args);
+
+  const resolved = await Promise.all(
+    sectionIds.map(async (id) => {
+      try {
+        const response = asObject(await getJson(`/knowledge/sections/${encodeURIComponent(id)}`, options));
+        return { id, section: response.section };
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          return { id, section: undefined };
+        }
+        throw error;
+      }
+    })
+  );
+
+  return {
+    sections: resolved.filter((entry) => entry.section !== undefined).map((entry) => entry.section),
+    missing: resolved.filter((entry) => entry.section === undefined).map((entry) => entry.id)
+  };
 }
 
 // ── feedback ────────────────────────────────────────────────────────────────

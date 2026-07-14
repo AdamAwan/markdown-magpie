@@ -12,7 +12,7 @@ process.env.ANSWER_TIMEOUT_MS = "50";
 process.env.OUTLINE_POLL_INTERVAL_MS = "1";
 process.env.OUTLINE_TIMEOUT_MS = "50";
 
-const { getJson, askQuestion, generateOutline, approveSeedPlan } = await import("./kb-client.js");
+const { getJson, askQuestion, generateOutline, approveSeedPlan, getCitationSections } = await import("./kb-client.js");
 
 // Locks the contract Task 4 added: when a token is supplied, getJson attaches a
 // single lowercase `authorization: Bearer <token>` header and nothing else.
@@ -495,6 +495,71 @@ test("approveSeedPlan POSTs the approve route and returns the enqueued job ids",
     assert.deepEqual(result, { planId: "plan-1", jobIds: ["draft-1", "draft-2"] });
     assert.equal(urls.length, 1);
     assert.ok(urls[0].endsWith("/api/seed-plans/plan-1/approve"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// ── getCitationSections ───────────────────────────────────────────────────────
+
+test("getCitationSections aggregates found sections and turns 404s into missing", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchStub: typeof fetch = async (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/api/knowledge/sections/sec-1")) {
+      return jsonResponse({ section: { id: "sec-1", heading: "Setup", content: "Full text" } });
+    }
+    return jsonResponse({ error: "section_not_found" }, 404);
+  };
+  globalThis.fetch = fetchStub;
+
+  try {
+    const result = await getCitationSections({ sectionIds: ["sec-1", "sec-2"] });
+    assert.deepEqual(result, {
+      sections: [{ id: "sec-1", heading: "Setup", content: "Full text" }],
+      missing: ["sec-2"]
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("getCitationSections dedupes ids and preserves input order", async () => {
+  const originalFetch = globalThis.fetch;
+  const requested: string[] = [];
+  const fetchStub: typeof fetch = async (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    requested.push(url);
+    const id = decodeURIComponent(url.split("/").pop() ?? "");
+    return jsonResponse({ section: { id } });
+  };
+  globalThis.fetch = fetchStub;
+
+  try {
+    const result = await getCitationSections({ sectionIds: ["b", "a", "b"] });
+    assert.deepEqual(result.sections, [{ id: "b" }, { id: "a" }]);
+    assert.equal(requested.length, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("getCitationSections rejects invalid sectionIds input", async () => {
+  await assert.rejects(() => getCitationSections({}), /sectionIds must be a non-empty array/);
+  await assert.rejects(() => getCitationSections({ sectionIds: [] }), /sectionIds must be a non-empty array/);
+  await assert.rejects(() => getCitationSections({ sectionIds: [1] }), /non-empty strings/);
+  await assert.rejects(
+    () => getCitationSections({ sectionIds: Array.from({ length: 21 }, (_, i) => `s${i}`) }),
+    /at most 20/
+  );
+});
+
+test("getCitationSections propagates non-404 API failures", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => jsonResponse({ error: "boom" }, 500)) as typeof fetch;
+
+  try {
+    await assert.rejects(() => getCitationSections({ sectionIds: ["sec-1"] }), /failed with 500/);
   } finally {
     globalThis.fetch = originalFetch;
   }
