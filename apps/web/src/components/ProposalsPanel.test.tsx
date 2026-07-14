@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Proposal } from "../lib/types";
+import type { BulkProposalAction } from "../lib/console";
+import { click, renderDom } from "../test/dom";
 import { renderMarkup } from "../test/render";
 import { ProposalPanel } from "./ProposalsPanel";
 
@@ -26,16 +28,21 @@ function branchPushed(overrides: Partial<Proposal> = {}): Proposal {
 }
 
 function render(proposal: Proposal): string {
+  return renderList([proposal], proposal);
+}
+
+function renderList(proposals: Proposal[], selectedProposal?: Proposal): string {
   return renderMarkup(
     <ProposalPanel
       loading={false}
       publishProposal={noop}
-      proposals={[proposal]}
-      selectedProposal={proposal}
+      proposals={proposals}
+      selectedProposal={selectedProposal ?? proposals[0]}
       setSelectedProposalId={() => undefined}
       updateProposalStatus={noop}
       mergeProposal={noop}
       rejectProposal={noop}
+      bulkProposalAction={noop}
     />
   );
 }
@@ -80,4 +87,105 @@ test("a proposal with provenance renders the claims and their sources", () => {
 test("a proposal without provenance renders no provenance section", () => {
   const html = render(branchPushed());
   assert.doesNotMatch(html, /Claim provenance/);
+});
+
+// --- bulk selection + action bar ---
+
+function draft(id: string, overrides: Partial<Proposal> = {}): Proposal {
+  return {
+    id,
+    title: `Draft ${id}`,
+    status: "draft",
+    targetPath: `${id}.md`,
+    markdown: `# ${id}\n`,
+    evidence: [],
+    createdAt: new Date(0).toISOString(),
+    ...overrides
+  };
+}
+
+function panelWith(
+  proposals: Proposal[],
+  bulkProposalAction: (action: BulkProposalAction, ids: string[]) => Promise<void>
+) {
+  return (
+    <ProposalPanel
+      loading={false}
+      publishProposal={noop}
+      proposals={proposals}
+      selectedProposal={proposals[0]}
+      setSelectedProposalId={() => undefined}
+      updateProposalStatus={noop}
+      mergeProposal={noop}
+      rejectProposal={noop}
+      bulkProposalAction={bulkProposalAction}
+    />
+  );
+}
+
+test("the bulk bar is absent when there are no proposals", () => {
+  const html = renderList([]);
+  assert.doesNotMatch(html, /Select all/);
+  assert.doesNotMatch(html, /Mark Ready/);
+});
+
+test("select-all counts only the selected proposals eligible per action and dispatches those ids", async () => {
+  const calls: Array<{ action: BulkProposalAction; ids: string[] }> = [];
+  const proposals = [
+    draft("d1"),
+    draft("d2"),
+    branchPushed({ id: "b1", title: "Pushed local", localGitDestination: true })
+  ];
+  const { container, unmount } = await renderDom(
+    panelWith(proposals, async (action, ids) => {
+      calls.push({ action, ids });
+    })
+  );
+
+  await click(container.querySelector<HTMLInputElement>('input[aria-label="Select all proposals"]')!);
+  const text = container.textContent ?? "";
+  assert.match(text, /3 of 3 selected/);
+  assert.match(text, /Mark Ready \(2\)/);
+  assert.match(text, /Publish \(0\)/);
+  assert.match(text, /Accept \/ Merge \(1\)/);
+
+  const readyChip = [...container.querySelectorAll("button")].find((button) =>
+    /Mark Ready \(2\)/.test(button.textContent ?? "")
+  );
+  assert.ok(readyChip);
+  await click(readyChip);
+  // Only the two eligible drafts are dispatched — the branch-pushed proposal is
+  // selected but not draft-able, so it never reaches the API as noise.
+  assert.deepEqual(calls, [{ action: "ready", ids: ["d1", "d2"] }]);
+  unmount();
+});
+
+test("a zero-eligible bulk chip is disabled", async () => {
+  const { container, unmount } = await renderDom(panelWith([draft("d1")], noop));
+  await click(container.querySelector<HTMLInputElement>('input[aria-label="Select Draft d1"]')!);
+  const publishChip = [...container.querySelectorAll("button")].find((button) =>
+    /Publish \(0\)/.test(button.textContent ?? "")
+  );
+  assert.ok(publishChip);
+  assert.equal((publishChip as HTMLButtonElement).disabled, true);
+  unmount();
+});
+
+test("a PR-tracked proposal is never counted toward Accept / Merge", async () => {
+  const prTracked = branchPushed({
+    id: "pr1",
+    title: "PR tracked",
+    status: "pr-opened",
+    publication: {
+      provider: "local-git",
+      branchName: "magpie/proposal-pr",
+      commitSha: "cafef00d",
+      pullRequestUrl: "https://github.com/o/r/pull/1",
+      publishedAt: new Date(0).toISOString()
+    }
+  });
+  const { container, unmount } = await renderDom(panelWith([prTracked], noop));
+  await click(container.querySelector<HTMLInputElement>('input[aria-label="Select all proposals"]')!);
+  assert.match(container.textContent ?? "", /Accept \/ Merge \(0\)/);
+  unmount();
 });

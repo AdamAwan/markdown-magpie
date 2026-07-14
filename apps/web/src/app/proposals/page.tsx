@@ -13,7 +13,8 @@ export default function ProposalsPage() {
     setSelectedProposalId,
     updateProposalStatus,
     mergeProposal,
-    rejectProposal
+    rejectProposal,
+    bulkProposalAction
   } = useConsole();
 
   return (
@@ -27,6 +28,7 @@ export default function ProposalsPage() {
         updateProposalStatus={updateProposalStatus}
         mergeProposal={mergeProposal}
         rejectProposal={rejectProposal}
+        bulkProposalAction={bulkProposalAction}
       />
     </Workbench>
   );

@@ -46,7 +46,17 @@ import {
 import type { SeedPlan } from "@magpie/core";
 import { apiDelete, apiGet, apiPatch, apiPost, errorMessage } from "../lib/api";
 import { knowledgeFlows } from "../lib/config";
-import { buildAttentionNotices, formatJobType, isActiveJob, jobTransitionMessages, runPublishProposal } from "../lib/console";
+import {
+  BulkProposalAction,
+  BulkProposalResult,
+  anchorProposalSelection,
+  buildAttentionNotices,
+  bulkOutcomeMessage,
+  formatJobType,
+  isActiveJob,
+  jobTransitionMessages,
+  runPublishProposal
+} from "../lib/console";
 import { sectionPath } from "../lib/sections";
 import { OTHER_DOCUMENTS_ID } from "./KnowledgePanel";
 
@@ -80,6 +90,14 @@ const KNOWLEDGE_LIST_LIMIT = 200;
 // 4s wastes bandwidth on big knowledge bases. 30s keeps the console
 // reasonably current without re-fetching on every fast-tier tick.
 const SLOW_POLL_INTERVAL_MS = 30_000;
+
+// The proposals page is a review workbench over the whole active backlog, and
+// the bulk bar's select-all must cover it — so this matches the jobs list's
+// page rather than the other fast-tier lists' 8-item windows. Proposals carry
+// their full markdown, so this is the fast tier's heaviest fetch; if it ever
+// becomes a problem the fix is a summary field-set on GET /proposals, not a
+// smaller window here.
+const PROPOSALS_LIST_LIMIT = 100;
 
 // Holds every piece of console state, the data-loading effects and the action
 // handlers that previously lived inline in the single page component. Lifting
@@ -128,6 +146,9 @@ function useConsoleController() {
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | undefined>();
   const [message, setMessage] = useState<UiMessage | undefined>();
   const jobsRef = useRef<JobView[]>([]);
+  // The previous proposals page, kept so a refresh can anchor the selection to
+  // a dropped proposal's nearest surviving neighbour (see anchorProposalSelection).
+  const proposalsRef = useRef<Proposal[]>([]);
   const messageIdRef = useRef(0);
   // Holds the AbortController for the in-flight refresh. The 4s poll and a manual
   // Refresh can overlap; aborting the previous request before starting a new one
@@ -354,7 +375,7 @@ function useConsoleController() {
         apiGet<JobsResponse>("/jobs?limit=100", { signal }),
         apiGet<{ schedules: ScheduleView[] }>("/jobs/schedules", { signal }),
         apiGet<WorkersResponse>("/workers", { signal }),
-        apiGet<{ proposals: Proposal[] }>("/proposals?limit=8", { signal }),
+        apiGet<{ proposals: Proposal[] }>(`/proposals?limit=${PROPOSALS_LIST_LIMIT}`, { signal }),
         apiGet<{ tasks: ScheduledTask[] }>("/scheduled-tasks", { signal }),
         apiGet<{ runs: MaintenanceRun[] }>("/maintenance-runs?limit=30", { signal }),
         apiGet<{ decisions: ReconciliationDecision[] }>("/reconciliations?limit=20", { signal })
@@ -379,7 +400,13 @@ function useConsoleController() {
       setScheduledTasks(scheduledTasksResult.tasks);
       setMaintenanceRuns(maintenanceRunsResult.runs);
       setReconciliationDecisions(reconciliationsResult.decisions);
-      setSelectedProposalId((current) => current ?? proposalsResult.proposals[0]?.id);
+      // Anchor rather than snap: when the selected proposal dropped off the
+      // active list (merged/rejected), keep the preview on its nearest
+      // surviving neighbour so working a backlog doesn't jump back to the top.
+      setSelectedProposalId((current) =>
+        anchorProposalSelection(proposalsRef.current, proposalsResult.proposals, current)
+      );
+      proposalsRef.current = proposalsResult.proposals;
       setLastRefreshedAt(new Date().toISOString());
 
       // The ask response is enqueue-only: the answer lands on the question log
@@ -686,6 +713,28 @@ function useConsoleController() {
     }
   }
 
+  // One review action across many proposals via POST /proposals/bulk. The whole
+  // batch produces exactly one summary message and one refresh, so mass-working
+  // a backlog doesn't re-jolt the page per proposal the way the single-item
+  // actions do.
+  async function bulkProposalAction(action: BulkProposalAction, ids: string[]) {
+    if (ids.length === 0) {
+      return;
+    }
+    setLoading(true);
+    clearMessage();
+    try {
+      const { results } = await apiPost<{ results: BulkProposalResult[] }>("/proposals/bulk", { action, ids });
+      const outcome = bulkOutcomeMessage(action, results);
+      showMessage(outcome.text, outcome.tone);
+      await refresh({ preserveMessage: true });
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function saveScheduledTask(key: string, enabled: boolean, cron: string) {
     clearMessage();
     try {
@@ -897,6 +946,7 @@ function useConsoleController() {
     mergeProposal,
     rejectProposal,
     publishProposal,
+    bulkProposalAction,
     saveScheduledTask,
     runScheduledTask,
     indexRepository,
