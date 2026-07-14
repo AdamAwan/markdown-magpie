@@ -62,8 +62,12 @@ Implications you must design around:
   `improve_document`
   (authoritative switch: `sourceGroundedInputSchema()` in
   `apps/watcher/src/source-workspace.ts`). They carry `SourceDescriptor[]` references
-  (kinds `git`/`local` resolve to filesystem workspaces; `internet`/`agent` become prompt
-  notes only), not sampled file content. The agent explores the checkout directly:
+  (kinds `git`/`local` resolve to filesystem workspaces; `agent` becomes a prompt note;
+  `internet` is a prompt note too UNLESS the operator opted it into fetching with a
+  non-empty `allowedHosts` allowlist — #242, `apps/watcher/src/fetch-url.ts`: the tool
+  loop then gets a bounded https-only `fetch_url` tool and claude CLI runs get a
+  domain-scoped WebFetch; codex stays note-only, its sandbox blocks network), not
+  sampled file content. The agent explores the checkout directly:
   - **CLI providers** (codex, claude) traverse natively; read-only is enforced in code
     (`readOnlyArgs()` in `runners/cli.ts` — e.g. `--tools Read,Grep,Glob` for claude,
     `--sandbox read-only` for codex) so operator arg config can't drop it. CLI runs are

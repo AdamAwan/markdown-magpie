@@ -32,6 +32,7 @@ vector:
 | Retrieved section content | Indexed source Markdown | Stuffed into the answer/critic context (`generative.ts` `answer()` builds context from `api.retrieve(...)`) |
 | Source-repo Markdown & git diffs | The synced source repositories | Maintenance/generative flows and the agent CLI (`apps/watcher/src/runners/cli.ts`) |
 | Gap/cluster summaries | Derived from logged questions & answers | `reconcile_gap_clusters`, `draft_markdown_proposal` |
+| Fetched web pages (allowlisted `internet` sources, #242) | Whoever controls the allowlisted site | `fetch_url` in the tool loop (`apps/watcher/src/fetch-url.ts`) / claude's domain-scoped WebFetch (`cli.ts`) |
 
 The common shape: **untrusted content in → model → generated Markdown → proposed
 PR.** A malicious source document (e.g. one that says "ignore your instructions
@@ -85,6 +86,22 @@ job output that then flows through the same review gate as any other.
 backstop for T1)
 
 This is the control that makes T1 tolerable, so it gets its own section below.
+
+### C5 — Web fetching is allowlisted, bounded, and logged (limits the T1 surface)
+
+Internet-kind sources are reference-only prompt notes unless the operator opts a
+descriptor into fetching with an explicit `allowedHosts` allowlist
+([ingestion.md](ingestion.md)). Enforcement lives in
+`apps/watcher/src/fetch-url.ts` (and, for claude CLI runs, per-domain
+`WebFetch(domain:…)` permission rules assembled in code): https only, exact
+hostname match with no wildcards, every redirect hop re-validated against the
+same allowlist, a text-only content-type gate, a hard download cap, and a log
+line for every retrieval. A fetched page is still untrusted content with the
+same T1 payoff as a malicious source document — the allowlist narrows *who* can
+reach the model that way, and C4 remains the backstop for what the content says.
+**Invariants to preserve:** fetching stays opt-in per descriptor, the allowlist
+check stays exact-host and https-only on every hop, and no fetch path is added
+that bypasses the logging.
 
 ## The mandatory-human-review invariant (C4)
 

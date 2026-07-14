@@ -448,11 +448,34 @@ their own tools under read-only enforcement assembled in code; HTTP providers
 loop — under the same `MAGPIE_AGENTIC_TIMEOUT_MS` agentic timeout as the draft jobs
 (default 600 000 ms / 10 min; the three queues expire at 900 s to leave headroom, and the
 patrol tick's bounded wait on a `verify_document` job stays pinned at 10 min so one hung
-verify cannot consume the whole maintenance envelope). `internet`/`agent` sources render
-as reference-only prompt notes; a flow with no filesystem-backed sources runs the plain
-one-shot path. `dedupe_documents` and `split_document` are **not** source-grounded — they
-compare the document against its destination neighbours. See the source-agentic grounding
-spec
+verify cannot consume the whole maintenance envelope). `agent` sources render as
+reference-only prompt notes. `internet` sources do too by default, **unless** the
+operator opted the descriptor into fetching with a non-empty `allowedHosts`
+allowlist (#242 — see [ingestion.md](ingestion.md)):
+
+- **HTTP providers** get a `fetch_url` tool alongside the filesystem tools: https
+  only, exact-hostname allowlist re-checked on every redirect hop, text-only
+  content-type gate, 2 MB download cap, HTML reduced to readable text, 32 KB
+  slices charged against the same 400 KB read budget as `read_file`, and every
+  retrieval logged (`fetch_url: fetched internet source`). A job whose only real
+  grounding is fetchable internet sources runs the tool loop with a
+  fetch-only toolset instead of the one-shot path.
+- **claude CLI** runs additionally get `WebFetch` in the hard `--tools` set, with
+  one `WebFetch(domain:<host>)` permission rule per allowlisted host — in print
+  mode anything the rules don't pre-approve is denied, so the rules are the
+  enforcement. (Rule spelling follows the documented permission-rule format; not
+  yet live-verified the way the read-only flags were.)
+- **codex CLI** cannot fetch — its read-only OS sandbox blocks network — so for
+  codex the same sources degrade to the reference-only notes they always were.
+  CLI jobs with *only* internet sources also stay on the one-shot generative path.
+
+Fetched web content is untrusted input to the drafting agent — it widens the
+prompt-injection surface the same way source-repo Markdown does (see
+[threat-model.md](threat-model.md)); the strict allowlist, fetch logging, and the
+human merge review are the controls. A flow with no filesystem-backed **and** no
+fetchable sources runs the plain one-shot path. `dedupe_documents` and
+`split_document` are **not** source-grounded — they compare the document against
+its destination neighbours. See the source-agentic grounding spec
 ([docs/superpowers/specs/2026-07-06-source-agentic-grounding-design.md](superpowers/specs/2026-07-06-source-agentic-grounding-design.md)).
 
 `verify_document` additionally accepts an optional **`citedClaims: ProvenanceClaim[]`**
