@@ -88,3 +88,19 @@ test("GET /api/insights/patrols rejects a malformed from", async () => {
   const res = await app.request("/api/insights/patrols?from=not-a-date");
   assert.equal(res.status, 400);
 });
+
+test("GET /api/insights/feedback returns zeroed totals and empty series", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/insights/feedback?bucket=day");
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), {
+    totals: { helpful: 0, unhelpful: 0, unhelpfulConfident: 0 },
+    series: []
+  });
+});
+
+test("GET /api/insights/feedback rejects a bad bucket", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/insights/feedback?bucket=fortnight");
+  assert.equal(res.status, 400);
+});

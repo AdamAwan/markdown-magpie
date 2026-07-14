@@ -806,3 +806,111 @@ test("updateAnswer bumps the catalog revision when the gaps move to a newly-deci
     "moving gaps to a new flow advances that flow's revision"
   );
 });
+
+// --- 'unhelpful' feedback on a confident answer raises a 'feedback' gap (#241) ---
+
+const confidentAnswer: AnswerResult = {
+  answer: "Set FOO=1 and restart the service.",
+  confidence: "high",
+  citations: [],
+  gaps: []
+};
+
+test("recordFeedback('unhelpful') on a confident answer raises a 'feedback' gap that enters candidacy", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({
+    question: "How do I enable FOO?",
+    chatProvider: "codex",
+    answer: confidentAnswer,
+    retrievedSectionIds: []
+  });
+  const before = await store.getGapCatalogRevision();
+
+  const updated = await store.recordFeedback(log.id, "unhelpful");
+
+  assert.equal(updated?.feedback, "unhelpful");
+  assert.deepEqual(updated?.gaps, [{ summary: "How do I enable FOO?", source: "feedback" }]);
+  assert.ok((await store.getGapCatalogRevision()) > before, "the candidate set changed, so the revision advances");
+
+  const candidates = await store.listGapCandidates(50);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0]?.summary, "How do I enable FOO?");
+  assert.deepEqual(candidates[0]?.questionIds, [log.id]);
+});
+
+test("recordFeedback('unhelpful') on a low-confidence answer raises no feedback gap", async () => {
+  const store = new InMemoryQuestionLogStore();
+  // The low answer already carries its own 'auto' gap — an unhelpful verdict on
+  // it adds nothing the system does not already know.
+  const log = await store.record({
+    question: "vaccines?",
+    chatProvider: "codex",
+    answer: lowGapAnswer,
+    retrievedSectionIds: []
+  });
+
+  const updated = await store.recordFeedback(log.id, "unhelpful");
+
+  assert.equal(updated?.feedback, "unhelpful");
+  assert.ok(!(updated?.gaps ?? []).some((gap) => gap.source === "feedback"));
+});
+
+test("repeated 'unhelpful' keeps one feedback gap; 'helpful' withdraws it", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({
+    question: "How do I enable FOO?",
+    chatProvider: "codex",
+    answer: confidentAnswer,
+    retrievedSectionIds: []
+  });
+
+  await store.recordFeedback(log.id, "unhelpful");
+  const afterFirst = await store.getGapCatalogRevision();
+  const repeated = await store.recordFeedback(log.id, "unhelpful");
+
+  assert.equal((repeated?.gaps ?? []).filter((gap) => gap.source === "feedback").length, 1);
+  assert.equal(await store.getGapCatalogRevision(), afterFirst, "a repeated verdict is a candidate no-op");
+
+  const withdrawn = await store.recordFeedback(log.id, "helpful");
+
+  assert.equal(withdrawn?.feedback, "helpful");
+  assert.ok(!(withdrawn?.gaps ?? []).some((gap) => gap.source === "feedback"));
+  assert.ok((await store.getGapCatalogRevision()) > afterFirst, "the withdrawal advances the revision");
+  assert.equal((await store.listGapCandidates(50)).length, 0);
+});
+
+test("re-answering preserves a feedback gap alongside manual rows", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({
+    question: "How do I enable FOO?",
+    chatProvider: "codex",
+    answer: confidentAnswer,
+    retrievedSectionIds: []
+  });
+  await store.recordFeedback(log.id, "unhelpful");
+
+  // A re-answer replaces only the answer-derived (auto/followup) gaps.
+  const updated = await store.updateAnswer(log.id, { answer: lowGapAnswer });
+
+  assert.ok(
+    (updated?.gaps ?? []).some((gap) => gap.source === "feedback"),
+    "the feedback gap survives the re-answer"
+  );
+  assert.ok((updated?.gaps ?? []).some((gap) => gap.source === "auto"));
+});
+
+test("recordFeedback('unhelpful') on a verification re-ask log raises nothing", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const reask = await store.record({
+    question: "vaccines?",
+    chatProvider: "codex",
+    answer: confidentAnswer,
+    retrievedSectionIds: [],
+    purpose: "verification"
+  });
+
+  const updated = await store.recordFeedback(reask.id, "unhelpful");
+
+  assert.equal(updated?.feedback, "unhelpful");
+  assert.deepEqual(updated?.gaps ?? [], []);
+});

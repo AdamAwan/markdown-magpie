@@ -63,8 +63,7 @@ export default function InsightsPage() {
   const feedbackEmpty = !feedback.data || feedback.data.totals.helpful + feedback.data.totals.unhelpful === 0;
 
   // Job errors are empty until at least one job has failed in the window.
-  const jobErrorsEmpty =
-    !jobErrors.data || jobErrors.data.byCategory.length + jobErrors.data.byType.length === 0;
+  const jobErrorsEmpty = !jobErrors.data || jobErrors.data.byCategory.length + jobErrors.data.byType.length === 0;
 
   // Freshness is a snapshot; empty only when there is nothing to classify.
   const freshnessEmpty =

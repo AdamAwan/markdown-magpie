@@ -12,7 +12,13 @@ import type {
   VerificationBucket
 } from "@magpie/core";
 import { SCHEMA_IDENTIFIER } from "../jobs/pg-boss-broker.js";
-import type { AnswerFeedback, InsightsRange, InsightsStore, JobErrorSplit, VerificationSuccess } from "./insights-store.js";
+import type {
+  AnswerFeedback,
+  InsightsRange,
+  InsightsStore,
+  JobErrorSplit,
+  VerificationSuccess
+} from "./insights-store.js";
 
 // date_trunc units, whitelisted so the bucket unit is never interpolated from
 // unvalidated input (the zod schema also constrains it to these three).

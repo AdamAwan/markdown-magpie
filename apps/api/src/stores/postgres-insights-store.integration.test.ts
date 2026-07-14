@@ -333,3 +333,43 @@ test("patrolImpact aggregates findings and proposals per task type", { skip: !ru
   assert.ok(gapToPr);
   assert.ok(gapToPr.proposals >= 4);
 });
+
+test("answerFeedback splits verdicts with the unhelpful-on-confident subset", { skip: !runIntegration }, async (t) => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  t.after(() => pool.end());
+  const store = new PostgresInsightsStore(pool, "pgboss");
+
+  // Scope every row (and the query) to a unique flow so parallel rows from other
+  // tests can never leak into the counts — and the flow filter is exercised.
+  const flowId = `insights-test-feedback-${process.pid}`;
+  const ids = [1, 2, 3, 4, 5].map((n) => `insights-test-fb-${n}`);
+  await pool.query("DELETE FROM questions WHERE id = ANY($1)", [ids]);
+  // helpful/high, unhelpful/medium (confident), unhelpful/low, unhelpful on a
+  // verification re-ask (excluded), and helpful/unknown.
+  await pool.query(
+    `INSERT INTO questions (id, question, chat_provider, asked_at, confidence, feedback, feedback_at, flow_id, purpose) VALUES
+       ($1, 'q', 'mock', now(), 'high',    'helpful',   now(), $6, 'live'),
+       ($2, 'q', 'mock', now(), 'medium',  'unhelpful', now(), $6, 'live'),
+       ($3, 'q', 'mock', now(), 'low',     'unhelpful', now(), $6, 'live'),
+       ($4, 'q', 'mock', now(), 'high',    'unhelpful', now(), $6, 'verification'),
+       ($5, 'q', 'mock', now(), 'unknown', 'helpful',   now(), $6, 'live')`,
+    [...ids, flowId]
+  );
+
+  const to = new Date();
+  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const { totals, series } = await store.answerFeedback({ from, to, bucket: "day" }, flowId);
+
+  assert.equal(totals.helpful, 2);
+  assert.equal(totals.unhelpful, 2, "the verification re-ask is excluded");
+  assert.equal(totals.unhelpfulConfident, 1, "only the medium/high unhelpful counts as confident");
+
+  const today = series.at(-1);
+  assert.ok(today);
+  assert.equal(today.helpful, 2);
+  assert.equal(today.unhelpful, 2);
+  assert.equal(today.unhelpfulConfident, 1);
+
+  // Zero-filled: every day in the window is present.
+  assert.equal(series.length, 8);
+});
