@@ -130,13 +130,44 @@ async function parseChatCompletionResponse(response: Response): Promise<ChatResp
         content?: string;
       };
     }>;
+    usage?: {
+      prompt_tokens?: unknown;
+      completion_tokens?: unknown;
+      total_tokens?: unknown;
+    };
   };
   const content = body.choices?.[0]?.message?.content?.trim();
   if (!content) {
     throw new Error("Chat provider returned no message content");
   }
 
-  return { content };
+  // Surface the OpenAI-style usage block when the provider sent one (#241).
+  // Best-effort: a missing or malformed block simply yields no usage.
+  const usage = parseUsage(body.usage);
+  return usage ? { content, usage } : { content };
+}
+
+function parseUsage(raw: { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown } | undefined):
+  | ChatResponse["usage"]
+  | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const inputTokens = asTokenCount(raw.prompt_tokens);
+  const outputTokens = asTokenCount(raw.completion_tokens);
+  const totalTokens = asTokenCount(raw.total_tokens);
+  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+    return undefined;
+  }
+  return {
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(totalTokens !== undefined ? { totalTokens } : {})
+  };
+}
+
+function asTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function trimTrailingSlash(value: string): string {

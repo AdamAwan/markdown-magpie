@@ -591,6 +591,20 @@ export interface ChatRequest {
 
 export interface ChatResponse {
   content: string;
+  // Token usage the provider reported for this completion, when it reports any
+  // (#241). API-backed providers surface the OpenAI-style usage block; CLI
+  // providers emit raw text and report nothing, so every consumer must treat
+  // this as optional.
+  usage?: AiUsage;
+}
+
+// Provider-reported token usage for one model invocation, or the sum over a
+// job's invocations (#241). All fields optional: providers report what they
+// report, and a job whose provider reports nothing carries no usage at all.
+export interface AiUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
 }
 
 export interface EmbeddingProvider {
