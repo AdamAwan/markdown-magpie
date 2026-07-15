@@ -367,8 +367,10 @@ the watcher run a job?" → `apps/watcher/src/runners/`. "what does the API expo
   check the schema first.
 - **The completion dispatcher persists before side effects.** `completeJob`
   (`apps/api/src/features/jobs/service.ts`) validates and stores the
-  `{result, executor, usage?}` envelope (`usage` = the watcher's summed
-  provider-reported token spend, #241), *then* fans out side effects (proposal
+  `{result, executor, usage?, provider?, model?}` envelope (`usage` = the watcher's summed
+  provider-reported token spend, #241; `provider`/`model` = the executing runner's
+  identity so spend can be priced per model against the operator's `AI_PRICING`
+  table, `apps/api/src/platform/ai-pricing.ts`), *then* fans out side effects (proposal
   creation, folds, source-map updates, snapshot handling). A side-effect failure returns **HTTP 500 on purpose** so the
   watcher's retrying `complete()` hits the idempotent replay branch — re-running side
   effects only, never the paid generation. Don't "fix" that 500.

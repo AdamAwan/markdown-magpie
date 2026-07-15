@@ -68,8 +68,10 @@ shows a "Development" build.
 Returns the resolved runtime configuration: API settings, storage backends (with the
 database URL masked), configured knowledge repositories, provider settings and secret
 presence (`set` / `not set`), the AI runtime (current provider plus the available
-providers), watcher settings, and retrieval settings including `retrieval.mode`
-(`hybrid` or `keyword`) and a plain-language `reason`.
+providers), the parsed `AI_PRICING` token-price table (`aiPricing.entries`, echoed
+verbatim — prices are not secrets, and this is how an operator verifies the table the
+API actually loaded), watcher settings, and retrieval settings including
+`retrieval.mode` (`hybrid` or `keyword`) and a plain-language `reason`.
 
 ### `POST /api/config`
 
@@ -640,7 +642,11 @@ Retries a `failed` job. `409 job_not_failed` if it is not failed; `404 job_not_f
 `POST /api/jobs/claim`, `POST /api/jobs/:id/heartbeat`, `POST /api/jobs/:id/complete`, and
 `POST /api/jobs/:id/fail` are driven by the watcher. Claim takes
 `{ "workerName", "capabilities": [...] }` and returns `{ "job": Job }` or `{ "job": null }`;
-fail takes a structured `error` object. See [ai-jobs.md](ai-jobs.md).
+fail takes a structured `error` object. Complete takes `{ "output", "executor"?,
+"usage"?, "provider"?, "model"? }` — usage is the run's summed provider-reported token
+spend (#241), and provider/model are the executing runner's identity so that spend can
+be priced per model; all three are best-effort telemetry (malformed values are dropped,
+never a 400). See [ai-jobs.md](ai-jobs.md).
 
 ### `GET /api/source-map?sourceIds=…`
 
