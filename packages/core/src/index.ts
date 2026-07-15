@@ -607,6 +607,19 @@ export interface AiUsage {
   totalTokens?: number;
 }
 
+// Which provider + configured model executed a job's AI work. Reported by the
+// watcher on job completion beside AiUsage so token spend can be priced: cost
+// is a function of the model, and the model name lives only in watcher env —
+// it cannot be reconstructed later from the job row. `model` is absent when
+// the watcher has no explicit model configured (a CLI provider running on its
+// own default): reporting nothing beats guessing what the CLI resolved. Like
+// usage this is best-effort telemetry — a job completed by an older watcher
+// simply carries no identity.
+export interface AiExecutionIdentity {
+  provider: string;
+  model?: string;
+}
+
 // Builds an AiUsage from raw provider-reported counts, or undefined when
 // nothing usable was reported. The single validation point for every producer
 // (the HTTP chat providers, the watcher's AI-SDK loop): a count must be a

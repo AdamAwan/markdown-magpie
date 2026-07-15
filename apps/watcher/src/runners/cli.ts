@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import type { Readable, Writable } from "node:stream";
-import type { ChatProvider, ChatRequest, ChatResponse, SourceDescriptor } from "@magpie/core";
+import type { AiExecutionIdentity, ChatProvider, ChatRequest, ChatResponse, SourceDescriptor } from "@magpie/core";
 import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import type { WatcherApi } from "../http-client.js";
 import { buildSourceGroundedPrompt, parseJobOutput } from "../job-prompts.js";
@@ -70,6 +70,10 @@ export interface CliRunnerOptions {
 // retrieve, answer, and critic-confirm flows stay identical across providers.
 export class CliRunner {
   readonly capability: Extract<JobCapability, "codex" | "claude">;
+  // Reported on every completion for cost attribution. `model` is only present
+  // when explicitly configured — an unset model env means the CLI ran on its own
+  // default, and reporting nothing beats guessing what the CLI resolved.
+  readonly aiIdentity: AiExecutionIdentity;
   private readonly command: string;
   private readonly args: string[];
   private readonly promptMode: PromptMode;
@@ -85,6 +89,7 @@ export class CliRunner {
 
   constructor(options: CliRunnerOptions) {
     this.capability = options.capability;
+    this.aiIdentity = { provider: options.capability, ...(options.model ? { model: options.model } : {}) };
     this.command = options.command;
     this.args = options.args;
     this.promptMode = options.promptMode;

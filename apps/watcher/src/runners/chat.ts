@@ -1,4 +1,4 @@
-import type { AiUsage, ChatProvider } from "@magpie/core";
+import type { AiExecutionIdentity, AiUsage, ChatProvider } from "@magpie/core";
 import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import type { LanguageModel } from "ai";
 import type { WatcherApi } from "../http-client.js";
@@ -13,15 +13,36 @@ import { runSourceAgentJob } from "./source-agent.js";
 // claimed from, so the API has already matched provider to runner. Source-grounded
 // jobs with filesystem-backed sources run the agentic tool loop over their source
 // workspaces; everything else runs the one-shot generative path.
+export interface ChatRunnerOptions {
+  // The AI-SDK model that drives the source-agent tool loop for source-grounded
+  // jobs. Without it those jobs fall back (warned) to the one-shot path.
+  agentModel?: LanguageModel;
+  // The configured model name (chat model / Azure deployment). Reported on every
+  // completion as the runner's aiIdentity so token spend can be priced per model.
+  model?: string;
+  // Root of the shared checkout volume where source workspaces are resolved.
+  checkoutRoot?: string;
+  // Test seam: substitute workspace preparation (no real checkouts in tests).
+  prepareWorkspaces?: typeof prepareSourceWorkspaces;
+}
+
 export class ChatRunner {
+  readonly aiIdentity: AiExecutionIdentity;
+  private readonly agentModel?: LanguageModel;
+  private readonly checkoutRoot: string;
+  private readonly prepareWorkspaces: typeof prepareSourceWorkspaces;
+
   constructor(
     readonly capability: Extract<JobCapability, "openai-compatible" | "azure-openai">,
     private readonly chat: ChatProvider,
     private readonly api: WatcherApi,
-    private readonly agentModel?: LanguageModel,
-    private readonly checkoutRoot: string = process.env.MAGPIE_CHECKOUT_ROOT ?? ".magpie/checkouts",
-    private readonly prepareWorkspaces: typeof prepareSourceWorkspaces = prepareSourceWorkspaces
-  ) {}
+    options: ChatRunnerOptions = {}
+  ) {
+    this.aiIdentity = { provider: capability, ...(options.model ? { model: options.model } : {}) };
+    this.agentModel = options.agentModel;
+    this.checkoutRoot = options.checkoutRoot ?? process.env.MAGPIE_CHECKOUT_ROOT ?? ".magpie/checkouts";
+    this.prepareWorkspaces = options.prepareWorkspaces ?? prepareSourceWorkspaces;
+  }
 
   supports(type: JobType): boolean {
     return PROVIDER_JOB_TYPES.has(type);

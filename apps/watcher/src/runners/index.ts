@@ -51,7 +51,7 @@ export function createConfiguredRunners(
           timeoutMs
         }),
         api,
-        openaiAgentModel
+        { agentModel: openaiAgentModel, ...optionalModel(env.OPENAI_COMPATIBLE_MODEL) }
       )
     );
   }
@@ -88,7 +88,9 @@ export function createConfiguredRunners(
           timeoutMs
         }),
         api,
-        azureAgentModel
+        // Azure's "model" for pricing purposes is the deployment name — the
+        // operator prices whatever the deployment serves.
+        { agentModel: azureAgentModel, ...optionalModel(env.AZURE_OPENAI_CHAT_DEPLOYMENT) }
       )
     );
   }
@@ -160,8 +162,10 @@ function normalizePromptMode(value: string | undefined): PromptMode {
   return value === "stdin" ? "stdin" : "arg";
 }
 
-// Only pass `model` when a non-blank value is configured, so an unset/blank env
-// var leaves the CLI on its own default model rather than passing `--model ""`.
+// Only pass `model` when a non-blank value is configured: for CLI runners an
+// unset/blank env var leaves the CLI on its own default model rather than
+// passing `--model ""`, and for every runner it keeps a blank value out of the
+// aiIdentity reported on completions.
 function optionalModel(value: string | undefined): { model: string } | Record<string, never> {
   const trimmed = value?.trim();
   return trimmed ? { model: trimmed } : {};

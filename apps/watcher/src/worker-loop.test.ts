@@ -33,7 +33,7 @@ interface FakeApiOptions {
 
 class FakeApiClient implements WatcherApiClient {
   claims: { workerName: string; capabilities: JobCapability[] }[] = [];
-  completed: { id: string; output: unknown; usage?: unknown }[] = [];
+  completed: { id: string; output: unknown; usage?: unknown; identity?: unknown }[] = [];
   failed: { id: string; error: JobError }[] = [];
   heartbeatCalls = 0;
   private readonly jobs: (JobView | undefined)[];
@@ -54,8 +54,13 @@ class FakeApiClient implements WatcherApiClient {
     return { cancelled: this.heartbeats.length ? Boolean(this.heartbeats.shift()) : false };
   }
 
-  async complete(id: string, output: unknown, usage?: unknown): Promise<void> {
-    this.completed.push({ id, output, ...(usage !== undefined ? { usage } : {}) });
+  async complete(id: string, output: unknown, usage?: unknown, identity?: unknown): Promise<void> {
+    this.completed.push({
+      id,
+      output,
+      ...(usage !== undefined ? { usage } : {}),
+      ...(identity !== undefined ? { identity } : {})
+    });
   }
 
   async fail(id: string, error: JobError): Promise<void> {
@@ -65,6 +70,9 @@ class FakeApiClient implements WatcherApiClient {
 
 class FakeRunner implements JobRunner {
   readonly capability: JobCapability = "openai-compatible";
+  // Optional so the default fake mirrors a non-AI runner (no identity stamped);
+  // the aiIdentity test opts in explicitly.
+  aiIdentity?: { provider: string; model?: string };
   ran = 0;
   lastSignal: AbortSignal | undefined;
 
@@ -146,6 +154,21 @@ describe("WorkerLoop", () => {
       id: "job-1",
       output: { answer: "ok" },
       usage: { inputTokens: 140, outputTokens: 25, totalTokens: 165 }
+    });
+  });
+
+  it("stamps the runner's aiIdentity on the completion for cost attribution", async () => {
+    // The identity rides the completion even when no usage was reported (the CLI
+    // case): it marks which model ran unmetered rather than implying it was free.
+    const api = new FakeApiClient({ jobs: [fakeJob()] });
+    const runner = new FakeRunner(async () => ({ answer: "ok" }));
+    runner.aiIdentity = { provider: "openai-compatible", model: "gpt-test" };
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", silentLogger, { pollIntervalMs: 1 });
+    await loop.tick();
+    assert.deepEqual(api.completed[0], {
+      id: "job-1",
+      output: { answer: "ok" },
+      identity: { provider: "openai-compatible", model: "gpt-test" }
     });
   });
 

@@ -86,6 +86,15 @@ describe("ChatRunner", () => {
     assert.ok(!runner.supports("publish_proposal"));
   });
 
+  it("reports its provider + configured model as aiIdentity for cost attribution", () => {
+    const withModel = new ChatRunner("openai-compatible", new FakeChatProvider(() => "{}"), fakeApi(), { model: "gpt-test" });
+    assert.deepEqual(withModel.aiIdentity, { provider: "openai-compatible", model: "gpt-test" });
+    // No configured model → identity still names the provider, with no model
+    // field (nothing trustworthy to report).
+    const withoutModel = new ChatRunner("azure-openai", new FakeChatProvider(() => "{}"), fakeApi());
+    assert.deepEqual(withoutModel.aiIdentity, { provider: "azure-openai" });
+  });
+
   it("runs buildPrompt -> chat -> parseJobOutput for sync_source_changes_generate_plan", async () => {
     // The source-sync plan job produces a MaintenancePlan; the watcher must claim it
     // (it is a provider AI job) and validate the model's plan against the contract.
@@ -892,17 +901,14 @@ describe("ChatRunner", () => {
       throw new Error("the chat provider must not be called on the agent path");
     });
     const preparedFor: string[] = [];
-    const runner = new ChatRunner(
-      "openai-compatible",
-      chat,
-      fakeApi(),
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi(), {
       agentModel,
-      "/data/checkouts",
-      async (descriptors) => {
+      checkoutRoot: "/data/checkouts",
+      prepareWorkspaces: async (descriptors) => {
         preparedFor.push(...descriptors.map((descriptor) => descriptor.id));
         return { workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }], notes: [], fetchable: [] };
       }
-    );
+    });
     const output = (await runner.run(
       job("draft_seed_document", {
         provider: "openai-compatible",
@@ -939,17 +945,14 @@ describe("ChatRunner", () => {
       throw new Error("the chat provider must not be called on the agent path");
     });
     const preparedFor: string[] = [];
-    const runner = new ChatRunner(
-      "openai-compatible",
-      chat,
-      fakeApi(),
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi(), {
       agentModel,
-      "/data/checkouts",
-      async (descriptors) => {
+      checkoutRoot: "/data/checkouts",
+      prepareWorkspaces: async (descriptors) => {
         preparedFor.push(...descriptors.map((descriptor) => descriptor.id));
         return { workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }], notes: [], fetchable: [] };
       }
-    );
+    });
     const output = (await runner.run(
       job("improve_document", {
         provider: "openai-compatible",
@@ -1039,18 +1042,15 @@ describe("ChatRunner", () => {
     const chat = new FakeChatProvider(() => {
       throw new Error("the chat provider must not be called on the agent path");
     });
-    const runner = new ChatRunner(
-      "openai-compatible",
-      chat,
-      fakeApi(),
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi(), {
       agentModel,
-      "/data/checkouts",
-      async () => ({
+      checkoutRoot: "/data/checkouts",
+      prepareWorkspaces: async () => ({
         workspaces: [],
         notes: [],
         fetchable: [{ sourceId: "i1", name: "Vendor docs", url: "https://docs.x.example", allowedHosts: ["docs.x.example"] }]
       })
-    );
+    });
     const output = (await runner.run(
       job("draft_seed_document", {
         provider: "openai-compatible",
@@ -1074,8 +1074,12 @@ describe("ChatRunner", () => {
     });
     const agentModel = new MockLanguageModelV3({});
     const chat = new FakeChatProvider(() => seedOutput);
-    const runner = new ChatRunner("openai-compatible", chat, fakeApi(), agentModel, "/data/checkouts", async () => {
-      throw new Error("workspaces must not be prepared for non-fs sources");
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi(), {
+      agentModel,
+      checkoutRoot: "/data/checkouts",
+      prepareWorkspaces: async () => {
+        throw new Error("workspaces must not be prepared for non-fs sources");
+      }
     });
     const output = (await runner.run(
       job("draft_seed_document", {

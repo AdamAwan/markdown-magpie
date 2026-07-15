@@ -128,7 +128,10 @@ export class WorkerLoop {
         this.recordOutcome(job, "cancelled", durationMs);
         return;
       }
-      await this.api.complete(job.id, output, usage);
+      // The runner's aiIdentity (provider + configured model) rides every
+      // completion it produces — even usage-less ones (CLI providers), where it
+      // marks WHICH model ran unmetered rather than implying the run was free.
+      await this.api.complete(job.id, output, usage, runner.aiIdentity);
       log.info({ durationMs, outcome: "completed" }, "job done");
       this.recordOutcome(job, "completed", durationMs);
     } catch (error) {
