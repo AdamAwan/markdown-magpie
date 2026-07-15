@@ -16,6 +16,56 @@ async function seedParkedQuestion(ctx: ReturnType<typeof makeTestContext>, summa
   return log;
 }
 
+test("GET /api/questions pages with limit/offset and reports the unpaginated total", async () => {
+  const ctx = makeTestContext();
+  for (let index = 0; index < 12; index += 1) {
+    await ctx.stores.questionLogs.record({
+      question: `Question ${index}?`,
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+  }
+  const app = buildApp(ctx);
+
+  const first = await app.request("/api/questions");
+  assert.equal(first.status, 200);
+  const firstBody = (await first.json()) as { questions: unknown[]; total: number };
+  assert.equal(firstBody.questions.length, 12, "default limit of 50 covers the whole backlog");
+  assert.equal(firstBody.total, 12);
+
+  const page = await app.request("/api/questions?limit=5&offset=10");
+  const pageBody = (await page.json()) as { questions: unknown[]; total: number };
+  assert.equal(pageBody.questions.length, 2, "the final partial page is returned");
+  assert.equal(pageBody.total, 12, "total stays unpaginated so the console can size its pager");
+});
+
+test("GET /api/questions?q= searches the whole history and pages within the matches", async () => {
+  const ctx = makeTestContext();
+  for (let index = 0; index < 6; index += 1) {
+    await ctx.stores.questionLogs.record({
+      question: index % 2 === 0 ? `How do I deploy service ${index}?` : `What is widget ${index}?`,
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+  }
+  const app = buildApp(ctx);
+
+  const res = await app.request("/api/questions?q=DEPLOY&limit=2");
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { questions: Array<{ question: string }>; total: number; matching: number };
+  assert.equal(body.questions.length, 2, "matches page at the requested limit");
+  assert.ok(
+    body.questions.every((item) => item.question.toLowerCase().includes("deploy")),
+    "only matching questions are returned (case-insensitive)"
+  );
+  assert.equal(body.matching, 3, "matching counts the filtered set for the pager");
+  assert.equal(body.total, 6, "total stays the unfiltered backlog for the sidebar badge");
+
+  const secondPage = await app.request("/api/questions?q=deploy&limit=2&offset=2");
+  const secondBody = (await secondPage.json()) as { questions: unknown[]; matching: number };
+  assert.equal(secondBody.questions.length, 1, "offset pages within the matches, not the backlog");
+});
+
 test("GET /api/questions/parked lists parked questions with their note (before /:id)", async () => {
   const ctx = makeTestContext();
   const log = await seedParkedQuestion(ctx);

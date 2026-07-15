@@ -25,8 +25,22 @@ export async function getQuestion(ctx: AppContext, id: string): Promise<Question
   return ctx.stores.questionLogs.get(id);
 }
 
-export async function listQuestions(ctx: AppContext, limit: number): Promise<QuestionLog[]> {
-  return ctx.stores.questionLogs.list(limit);
+// One page of the question list plus two unpaginated counts, so the console can
+// page through the full history (same shape as the knowledge list endpoints).
+// `search` narrows the page to questions whose text contains it: `matching` is
+// that filtered set's size (what the pager slices), while `total` stays the
+// whole live backlog (what the sidebar badge reports).
+export async function listQuestions(
+  ctx: AppContext,
+  options: { limit: number; offset: number; search?: string }
+): Promise<{ questions: QuestionLog[]; total: number; matching: number }> {
+  const search = options.search?.trim() || undefined;
+  const [questions, total, matching] = await Promise.all([
+    ctx.stores.questionLogs.list(options.limit, options.offset, search),
+    ctx.stores.questionLogs.count(),
+    search ? ctx.stores.questionLogs.count(search) : undefined
+  ]);
+  return { questions, total, matching: matching ?? total };
 }
 
 // A human re-admits a parked question to the pipeline (see the parked-gap

@@ -76,6 +76,11 @@ const GapList = styled.ul(({ theme }) => ({
 
 const OutOfScopeNote = styled.p(({ theme }) => ({ color: theme.color.status.running.fg }));
 
+const PagerNote = styled.span(({ theme }) => ({
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.sm
+}));
+
 function verificationLabel(verification: AnswerTrace["verification"]): string {
   switch (verification.status) {
     case "grounded":
@@ -182,10 +187,14 @@ export function AskPanel({
   loading,
   onAsk,
   onFeedback,
+  onPageChange,
   onReAsk,
   onToggleGap,
   question,
   questions,
+  questionsMatching,
+  questionsPage,
+  questionsPageCount,
   setAnsweredSearch,
   setAskFlow,
   setQuestion,
@@ -200,19 +209,22 @@ export function AskPanel({
   loading: boolean;
   onAsk: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onFeedback: (questionId: string, feedback: Feedback) => Promise<void>;
+  onPageChange: (page: number) => Promise<void>;
   onReAsk: (question: string, flow: string) => Promise<void>;
   onToggleGap: (questionId: string, flagged: boolean) => Promise<void>;
   question: string;
   questions: QuestionLog[];
+  questionsMatching: number;
+  questionsPage: number;
+  questionsPageCount: number;
   setAnsweredSearch: (value: string) => void;
   setAskFlow: (value: string) => void;
   setQuestion: (value: string) => void;
   toggleCitations: (questionId: string) => void;
 }) {
-  const query = answeredSearch.trim().toLowerCase();
-  const filteredQuestions = query
-    ? questions.filter((item) => item.question.toLowerCase().includes(query))
-    : questions;
+  // The search runs server-side over the whole history (GET /questions?q=), so
+  // `questions` already holds one page of the matches — no client filtering.
+  const searching = answeredSearch.trim().length > 0;
   // The ask response is enqueue-only — it carries the queued job, not an answer.
   // The answer (and its flow) land on the logged question once the watcher
   // completes the answer_question job, so recover both from the question log.
@@ -310,7 +322,7 @@ export function AskPanel({
           </form>
         </Row>
         <ScrollList>
-          {filteredQuestions.map((item) => {
+          {questions.map((item) => {
             const citations = item.answer?.citations ?? [];
             const isExpanded = expandedQuestionIds.includes(item.id);
 
@@ -382,10 +394,36 @@ export function AskPanel({
               </ListRow>
             );
           })}
-          {filteredQuestions.length === 0 ? (
-            <EmptyState>{query ? "No matching questions." : "No questions logged yet."}</EmptyState>
+          {questions.length === 0 ? (
+            <EmptyState>{searching ? "No questions match your search." : "No questions logged yet."}</EmptyState>
           ) : null}
         </ScrollList>
+        {questionsPageCount > 1 ? (
+          <Row justify="between" gap="lg">
+            <Chip
+              disabled={questionsPage === 0}
+              onClick={() => void onPageChange(questionsPage - 1)}
+              title="Show more recent questions"
+            >
+              ← Newer
+            </Chip>
+            <PagerNote>
+              Page {questionsPage + 1} of {questionsPageCount} · {questionsMatching}{" "}
+              {searching ? `match${questionsMatching === 1 ? "" : "es"}` : `question${questionsMatching === 1 ? "" : "s"}`}
+            </PagerNote>
+            <Chip
+              disabled={questionsPage >= questionsPageCount - 1}
+              onClick={() => void onPageChange(questionsPage + 1)}
+              title="Show older questions"
+            >
+              Older →
+            </Chip>
+          </Row>
+        ) : searching ? (
+          <PagerNote>
+            {questionsMatching} match{questionsMatching === 1 ? "" : "es"} across the whole history
+          </PagerNote>
+        ) : null}
       </Block>
     </>
   );

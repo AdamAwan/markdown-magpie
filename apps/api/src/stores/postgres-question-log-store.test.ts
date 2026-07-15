@@ -408,6 +408,59 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.ok(secondIndex < firstIndex, "second question should appear before first in the list");
   });
 
+  it("pages the question list with an offset and reports a live-question count", async () => {
+    const uniqueId = randomUUID();
+    const ids: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const recorded = await store.record({
+        question: `test-page-${index}-${uniqueId}`,
+        chatProvider: "codex",
+        retrievedSectionIds: []
+      });
+      ids.push(recorded.id);
+    }
+
+    // Race-safe against parallel suites inserting their own rows: assert lower
+    // bounds and page sizes rather than exact table contents.
+    assert.ok((await store.count()) >= 3, "count covers at least the rows this test created");
+    assert.equal((await store.list(2, 0)).length, 2, "limit bounds the page");
+    const all = await store.list(200);
+    assert.ok(
+      ids.every((id) => all.some((log) => log.id === id)),
+      "an offset-0 walk reaches the created rows"
+    );
+    assert.deepEqual(await store.list(200, 1_000_000), [], "an offset past the end returns an empty page");
+  });
+
+  it("searches the question text case-insensitively, matching LIKE wildcards literally", async () => {
+    // The unique token keeps this race-safe against parallel suites: only this
+    // test's rows can match it.
+    const token = `srch-${randomUUID()}`;
+    const matching = await store.record({
+      question: `How do I DEPLOY ${token}?`,
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+    await store.record({
+      question: `Unrelated widget question ${token}-other`,
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+
+    assert.equal(await store.count(`deploy ${token}`), 1);
+    const found = await store.list(50, 0, `deploy ${token}`);
+    assert.deepEqual(
+      found.map((log) => log.id),
+      [matching.id]
+    );
+    assert.deepEqual(
+      await store.list(50, 0, `deploy_${token}`),
+      [],
+      "an underscore in the term is literal, not a LIKE wildcard"
+    );
+    assert.deepEqual(await store.list(50, 0, `%${token}%`), [], "percent signs are literal too");
+  });
+
   it("resolves gaps by question id and summary", async () => {
     const uniqueId = randomUUID();
     const recorded = await store.record({
