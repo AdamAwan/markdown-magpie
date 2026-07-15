@@ -139,6 +139,15 @@ describe("CliRunner", () => {
     assert.ok(!runner.supports("publish_proposal"));
   });
 
+  it("reports its provider + configured model as aiIdentity for cost attribution", () => {
+    const withModel = new CliRunner({ capability: "claude", command: "true", args: [], promptMode: "arg", model: "my-model" });
+    assert.deepEqual(withModel.aiIdentity, { provider: "claude", model: "my-model" });
+    // No configured model → the CLI runs on its own default; the identity names
+    // only the provider rather than guessing what the CLI resolved.
+    const withoutModel = new CliRunner({ capability: "codex", command: "true", args: [], promptMode: "arg" });
+    assert.deepEqual(withoutModel.aiIdentity, { provider: "codex" });
+  });
+
   it("passes the prompt as the final arg in arg mode and parses JSON stdout", async () => {
     // The tiny Node script verifies the prompt reached the CLI, then returns
     // deterministic JSON for the runner to parse.

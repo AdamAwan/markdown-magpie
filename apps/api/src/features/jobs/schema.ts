@@ -36,10 +36,19 @@ const jobUsageSchema = z.object({
   outputTokens: z.number().int().nonnegative().optional(),
   totalTokens: z.number().int().nonnegative().optional()
 });
+// The provider + configured model that executed the run's AI work, reported by
+// the watcher beside `usage` so token spend can be priced per model (cost is a
+// function of the model, which lives only in watcher env and cannot be
+// reconstructed from the job row later). Best-effort telemetry with the same
+// rationale as usage: a malformed value is DROPPED, never a 400 — a 4xx here
+// is non-retryable on the watcher side and would discard the paid-for output.
+const identityFieldSchema = z.string().trim().min(1).optional().catch(undefined);
 export const completeJobBodySchema = z.object({
   output: z.unknown(),
   executor: z.string().trim().min(1).optional(),
-  usage: jobUsageSchema.optional().catch(undefined)
+  usage: jobUsageSchema.optional().catch(undefined),
+  provider: identityFieldSchema,
+  model: identityFieldSchema
 });
 export const failJobBodySchema = z.object({
   error: z.object({

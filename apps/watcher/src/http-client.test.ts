@@ -7,11 +7,12 @@ import { HttpWatcherApi } from "./http-client.js";
 // mix of network errors, 5xx, and a final success (or a terminal 4xx).
 type ScriptedResponse = { status: number; body?: unknown } | { networkError: true };
 
-function installScriptedFetch(script: ScriptedResponse[]): { calls: number } {
-  const state = { calls: 0 };
+function installScriptedFetch(script: ScriptedResponse[]): { calls: number; bodies: unknown[] } {
+  const state = { calls: 0, bodies: [] as unknown[] };
   const queue = [...script];
-  globalThis.fetch = (async (_url: string | URL | Request, _init?: RequestInit) => {
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
     state.calls += 1;
+    state.bodies.push(typeof init?.body === "string" ? JSON.parse(init.body) : undefined);
     const next = queue.shift();
     if (!next) throw new Error("scripted fetch exhausted");
     if ("networkError" in next) {
@@ -106,6 +107,38 @@ describe("HttpWatcherApi complete() retry", () => {
 
     await api.complete("job-1", { answer: "ok" });
     assert.equal(state.calls, 2, "expected one retry after the 503");
+  });
+
+  it("sends usage and the execution identity flat on the completion body", async () => {
+    // provider/model ride the body beside executor/usage — the flat fields the
+    // API's completeJobBodySchema expects — so token spend can be priced later.
+    const state = installScriptedFetch([{ status: 200, body: { job: { id: "job-1" } } }]);
+    const api = new HttpWatcherApi({
+      apiBaseUrl: "http://api.test",
+      workerName: "test-worker",
+      completeRetryBaseDelayMs: 1
+    });
+
+    await api.complete("job-1", { answer: "ok" }, { inputTokens: 10, outputTokens: 2 }, { provider: "openai-compatible", model: "gpt-test" });
+    assert.deepEqual(state.bodies[0], {
+      output: { answer: "ok" },
+      executor: "test-worker",
+      usage: { inputTokens: 10, outputTokens: 2 },
+      provider: "openai-compatible",
+      model: "gpt-test"
+    });
+  });
+
+  it("omits identity fields entirely when the runner reports none", async () => {
+    const state = installScriptedFetch([{ status: 200, body: { job: { id: "job-1" } } }]);
+    const api = new HttpWatcherApi({
+      apiBaseUrl: "http://api.test",
+      workerName: "test-worker",
+      completeRetryBaseDelayMs: 1
+    });
+
+    await api.complete("job-1", { answer: "ok" });
+    assert.deepEqual(state.bodies[0], { output: { answer: "ok" }, executor: "test-worker" });
   });
 
   it("retries a completion POST after a network error and succeeds", async () => {

@@ -155,8 +155,19 @@ failure *after* that point as a reason to redo the generation:
   (C11) aggregates it per (job type, provider). Optional end to end: CLI
   providers emit raw text and report nothing, so their completions carry no
   usage at all (unmetered, not zero — the chart says which).
+- **The execution identity rides the envelope too.** Each AI runner exposes an
+  `aiIdentity` — its provider plus the *configured* model name (chat model /
+  Azure deployment / CLI `--model`) — and the worker loop stamps it on every
+  completion as flat `provider`/`model` envelope fields. Token counts alone
+  cannot be priced retroactively (cost is a function of the model, which
+  otherwise lives only in watcher env), so this is what lets usage rollups
+  convert spend into money against the operator's `AI_PRICING` table (see
+  `apps/api/src/platform/ai-pricing.ts`). A CLI runner with no explicit model
+  configured reports only its provider — the CLI ran on its own default, and
+  reporting nothing beats guessing. Best-effort like usage: a malformed value
+  is dropped by the API's body schema, never a 400.
 - **Reading a completed job's output back (#184).** Because the persisted output
-  is the `{ result, executor, usage? }` envelope, any API-side consumer of
+  is the `{ result, executor, usage?, provider?, model? }` envelope, any API-side consumer of
   `runJobToCompletion` must parse it through `parseCompletedJobOutput(schema,
   job.output)` (`apps/api/src/features/jobs/service.ts`) rather than running the
   raw output schema against `JobView.output` directly — the raw parse only ever

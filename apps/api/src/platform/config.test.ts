@@ -72,6 +72,28 @@ describe("loadConfig — valid configs", () => {
     assert.equal(invalid.flowRouter.minMargin, 0.05);
   });
 
+  it("defaults AI_PRICING to an empty table and loads a valid one", () => {
+    assert.deepEqual(loadConfig(minimalEnv).aiPricing, []);
+
+    const priced = loadConfig({
+      ...minimalEnv,
+      AI_PRICING: JSON.stringify([{ provider: "openai-compatible", model: "gpt-4o-mini", inputPerMTok: 0.15, outputPerMTok: 0.6 }])
+    });
+    assert.deepEqual(priced.aiPricing, [
+      { provider: "openai-compatible", model: "gpt-4o-mini", inputPerMTok: 0.15, outputPerMTok: 0.6 }
+    ]);
+  });
+
+  it("fails boot on a malformed AI_PRICING instead of silently mispricing", () => {
+    // Pricing is deliberately NOT a fall-back-to-default knob: a bad table
+    // would quietly produce wrong monetary numbers.
+    assertThrowsNaming({ ...minimalEnv, AI_PRICING: "[{bad json" }, "AI_PRICING");
+    assertThrowsNaming(
+      { ...minimalEnv, AI_PRICING: JSON.stringify([{ provider: "openai", model: "x", inputPerMTok: 1, outputPerMTok: 1 }]) },
+      "AI_PRICING"
+    );
+  });
+
   it("defaults the gap-assignment threshold and honours a valid override", () => {
     const config = loadConfig(minimalEnv);
     assert.equal(config.gapClustering.assignThreshold, 0.84);

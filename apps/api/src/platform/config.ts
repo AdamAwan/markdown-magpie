@@ -2,6 +2,7 @@ import { z } from "zod";
 import { AI_PROVIDERS, isAiProviderName, type AiProviderName } from "@magpie/jobs";
 import { authSettingsFromEnv, isAuthRequired } from "@magpie/auth";
 import { resolveTelemetryConfig, type TelemetryConfig } from "@magpie/telemetry";
+import { parseAiPricing, type AiPricingEntry } from "./ai-pricing.js";
 import {
   getConfiguredKnowledgeDestinations,
   getConfiguredKnowledgeFlows,
@@ -64,6 +65,11 @@ export interface AppConfig {
   logStartupConfig: boolean;
   apiShutdownDrainMs: number;
   aiProvider: AiProviderName;
+  // Operator-supplied token pricing (AI_PRICING, JSON array), one entry per
+  // (provider, model) pair the watchers report on completions. Used to compute
+  // monetary cost from stored token usage at read time; empty when unset,
+  // which leaves cost reporting off. See platform/ai-pricing.ts.
+  aiPricing: AiPricingEntry[];
   storage: {
     default: StoreBackend;
     overrides: Partial<Record<StoreEnvName, StoreBackend>>;
@@ -326,9 +332,19 @@ const schema = z
     AUTH_REQUIRED: optionalString,
     AUTH0_DOMAIN: optionalString,
     AUTH0_ISSUER_BASE_URL: optionalString,
-    AUTH0_AUDIENCE: optionalString
+    AUTH0_AUDIENCE: optionalString,
+
+    AI_PRICING: optionalString
   })
   .extend(storeOverridesSchema.shape)
+  .superRefine((env, ctx) => {
+    // Pricing fails LOUD, not silent: unlike the safety-neutral tuning knobs a
+    // malformed price table would quietly produce wrong monetary numbers, so
+    // every problem fails boot with the same aggregated config error.
+    for (const message of parseAiPricing(env.AI_PRICING).errors) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["AI_PRICING"], message });
+    }
+  })
   .superRefine((env, ctx) => {
     // Auth wiring lives in @magpie/auth; we only assert coherence here so a
     // misconfigured deployment fails at boot instead of on the first request.
@@ -430,6 +446,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     logStartupConfig: parsed.LOG_STARTUP_CONFIG !== "false",
     apiShutdownDrainMs: parsed.API_SHUTDOWN_DRAIN_MS ?? 10_000,
     aiProvider: parsed.AI_PROVIDER as AiProviderName,
+    // The superRefine above already failed boot on any parse error, so only
+    // valid entries can reach here.
+    aiPricing: parseAiPricing(parsed.AI_PRICING).entries,
     storage: {
       default: parsed.STORAGE_BACKEND ?? "memory",
       overrides

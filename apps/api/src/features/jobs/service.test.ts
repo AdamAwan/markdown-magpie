@@ -123,6 +123,55 @@ test("completeJob persists watcher-reported usage on the completion envelope (#2
   assert.deepEqual((await ctx.jobs.get(withoutUsage.id))?.output, { result: output, executor: "w-1" });
 });
 
+test("a malformed identity field is dropped by the body schema, never failing the completion", async () => {
+  // provider/model are best-effort telemetry like usage: a non-string or blank
+  // value must not 400 the whole complete POST. .catch(undefined) drops it.
+  const withBadIdentity = completeJobBodySchema.parse({
+    output: { answer: "a" },
+    provider: 42,
+    model: "   "
+  });
+  assert.equal(withBadIdentity.provider, undefined);
+  assert.equal(withBadIdentity.model, undefined);
+  assert.deepEqual(withBadIdentity.output, { answer: "a" });
+
+  const withGoodIdentity = completeJobBodySchema.parse({
+    output: { answer: "a" },
+    provider: "openai-compatible",
+    model: "gpt-test"
+  });
+  assert.equal(withGoodIdentity.provider, "openai-compatible");
+  assert.equal(withGoodIdentity.model, "gpt-test");
+});
+
+test("completeJob persists the watcher-reported provider + model on the completion envelope", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+  const output = { answer: "a", confidence: "high", citations: [] };
+  assert.equal(
+    (
+      await completeJob(ctx, job.id, output, "w-1", { inputTokens: 10, outputTokens: 2 }, { provider: "openai-compatible", model: "gpt-test" })
+    ).ok,
+    true
+  );
+  assert.deepEqual((await ctx.jobs.get(job.id))?.output, {
+    result: output,
+    executor: "w-1",
+    usage: { inputTokens: 10, outputTokens: 2 },
+    provider: "openai-compatible",
+    model: "gpt-test"
+  });
+
+  // A usage-less CLI completion still records WHICH provider/model ran, so the
+  // spend shows as unmetered-on-that-model rather than invisible. No identity
+  // at all (older watcher, non-AI job) → no keys on the envelope.
+  const cliJob = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+  assert.equal((await completeJob(ctx, cliJob.id, output, "w-1", undefined, { provider: "claude" })).ok, true);
+  assert.deepEqual((await ctx.jobs.get(cliJob.id))?.output, { result: output, executor: "w-1", provider: "claude" });
+});
+
 test("a watcher drops out of the registry once silent past the active window", async () => {
   const ctx = makeTestContext();
   await claimJob(ctx, "w-stale", ["codex"]);

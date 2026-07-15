@@ -1,5 +1,5 @@
 import type { ApiTokenProvider } from "@magpie/auth";
-import type { AiUsage, SourceMapEntry } from "@magpie/core";
+import type { AiExecutionIdentity, AiUsage, SourceMapEntry } from "@magpie/core";
 import type { JobCapability, JobError, JobView } from "@magpie/jobs";
 import type { Logger } from "@magpie/logger";
 import type { EmbeddingRoute, RoutableFlow } from "@magpie/retrieval";
@@ -12,8 +12,10 @@ export interface WatcherApiClient {
   heartbeat(jobId: string): Promise<{ cancelled: boolean }>;
   // `usage` is the run's summed provider-reported token usage (#241), omitted
   // when the provider reported nothing; the API persists it on the completion
-  // envelope for the Insights AI-usage chart.
-  complete(jobId: string, output: unknown, usage?: AiUsage): Promise<void>;
+  // envelope for the Insights AI-usage chart. `identity` is the executing
+  // runner's provider + configured model, omitted for non-AI runners; the API
+  // persists it beside usage so token spend can be priced per model.
+  complete(jobId: string, output: unknown, usage?: AiUsage, identity?: AiExecutionIdentity): Promise<void>;
   fail(jobId: string, error: JobError): Promise<void>;
 }
 
@@ -205,7 +207,7 @@ export class HttpWatcherApi implements WatcherApi {
     return { cancelled: Boolean(cancelled) };
   }
 
-  async complete(jobId: string, output: unknown, usage?: AiUsage): Promise<void> {
+  async complete(jobId: string, output: unknown, usage?: AiUsage, identity?: AiExecutionIdentity): Promise<void> {
     // The output is only ever held in the runner's memory, so a dropped response
     // here must not fall straight through to worker-loop's fail() fallback (which
     // would discard it and force a full paid-for regeneration) when the failure
@@ -216,7 +218,9 @@ export class HttpWatcherApi implements WatcherApi {
         await this.post(`/api/jobs/${jobId}/complete`, {
           output,
           executor: this.workerName,
-          ...(usage ? { usage } : {})
+          ...(usage ? { usage } : {}),
+          ...(identity ? { provider: identity.provider } : {}),
+          ...(identity?.model ? { model: identity.model } : {})
         });
         return;
       } catch (error) {

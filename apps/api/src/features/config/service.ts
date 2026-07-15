@@ -59,6 +59,12 @@ export function getRuntimeConfig(ctx: AppContext) {
       provider: ctx.config.get().aiProvider,
       providers: availableProviders
     },
+    // Operator-supplied token pricing (AI_PRICING). Prices are not secrets, so
+    // the parsed entries are echoed back verbatim — the console's config view
+    // is how an operator verifies the table the API actually loaded.
+    aiPricing: {
+      entries: config.aiPricing
+    },
     retrieval: (() => {
       const { mode, reason } = retrievalMode(config);
       return {
@@ -100,6 +106,12 @@ export function logStartupConfig(ctx: AppContext): void {
   section("AI execution (queue-only; watchers run all AI)");
   add("active provider", cfg.aiRuntime.provider);
   add("selectable providers", cfg.aiRuntime.providers.map((provider) => provider.name).join(", "));
+  add(
+    "token pricing (AI_PRICING)",
+    cfg.aiPricing.entries.length > 0
+      ? cfg.aiPricing.entries.map((entry) => `${entry.provider}:${entry.model}`).join(", ")
+      : "not configured"
+  );
 
   section("Chat provider (openai-compatible)");
   add("base url", cfg.providers.openAiCompatible.baseUrl ?? "not set");
