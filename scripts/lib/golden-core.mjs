@@ -22,7 +22,11 @@ const STOPWORDS = new Set([
 // Lowercase alphanumeric tokens; hyphenated words ("on-call", "eu-west") stay
 // one token so they match the docs verbatim.
 export function tokenize(text) {
-  return (text.toLowerCase().match(/[a-z0-9][a-z0-9-]*/g) ?? []).map(lightStem);
+  return rawTokens(text).map(lightStem);
+}
+
+function rawTokens(text) {
+  return text.toLowerCase().match(/[a-z0-9][a-z0-9-]*/g) ?? [];
 }
 
 // Naive plural folding so "clusters" covers "cluster" (and vice versa). Only
@@ -31,8 +35,13 @@ function lightStem(token) {
   return token.length > 3 && token.endsWith("s") && !token.endsWith("ss") ? token.slice(0, -1) : token;
 }
 
+// Stopwords are matched against the RAW token, before plural folding — folding
+// first would let "does" slip through as the pseudo-word "doe" and poison
+// clause coverage with a token no document can contain.
 export function contentWords(text) {
-  return tokenize(text).filter((token) => !STOPWORDS.has(token));
+  return rawTokens(text)
+    .filter((token) => !STOPWORDS.has(token))
+    .map(lightStem);
 }
 
 // Clauses split ONLY on ", and " — the golden set uses that exact separator for

@@ -42,6 +42,10 @@ describe("contentWords", () => {
   it("keeps hyphenated tokens whole", () => {
     assert.deepEqual(contentWords("the on-call engineer in eu-west"), ["on-call", "engineer", "eu-west"]);
   });
+
+  it("matches stopwords before plural folding, so 'does' never becomes 'doe'", () => {
+    assert.deepEqual(contentWords("Does Aurora support single sign-on?"), ["aurora", "support", "single", "sign-on"]);
+  });
 });
 
 describe("splitClauses", () => {
