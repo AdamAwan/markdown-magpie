@@ -123,7 +123,11 @@ export interface QuestionLogStore {
   // candidates or cluster again. Returns how many gaps were newly dismissed.
   dismissGaps(gapIds: string[], reason: string): Promise<number>;
   get(id: string): Promise<QuestionLog | undefined>;
-  list(limit: number): Promise<QuestionLog[]>;
+  // One page of the question list (newest first, live questions only —
+  // verification re-asks are synthetic audit records). `count` reports the same
+  // filtered set's total so list callers can page.
+  list(limit: number, offset?: number): Promise<QuestionLog[]>;
+  count(): Promise<number>;
   listGapCandidates(limit: number): Promise<GapCandidate[]>;
   // Monotonic counter advanced whenever the unresolved candidate gaps change
   // (added, removed, or resolved). Tracked per flow so a gap change in one flow
@@ -623,13 +627,19 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     return dismissed;
   }
 
-  async list(limit: number): Promise<QuestionLog[]> {
+  async list(limit: number, offset = 0): Promise<QuestionLog[]> {
     // Only live questions surface in the console list; verification re-asks (#154)
     // are synthetic audit records, not questions a human asked.
     return [...this.logs.values()]
       .filter((log) => log.purpose !== "verification")
       .sort((left, right) => right.askedAt.localeCompare(left.askedAt))
-      .slice(0, limit);
+      .slice(offset, offset + limit);
+  }
+
+  async count(): Promise<number> {
+    // Same filter as list(): the total the pager reports must match what a full
+    // page walk would return.
+    return [...this.logs.values()].filter((log) => log.purpose !== "verification").length;
   }
 
   async reset(): Promise<void> {

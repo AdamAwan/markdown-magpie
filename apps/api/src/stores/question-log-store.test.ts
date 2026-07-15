@@ -40,6 +40,27 @@ const multiGapAnswer: AnswerResult = {
   ]
 };
 
+test("list pages with an offset and count matches list's live-question filter", async () => {
+  const store = new InMemoryQuestionLogStore();
+  for (let index = 0; index < 5; index += 1) {
+    await store.record({ question: `Question ${index}?`, chatProvider: "codex", retrievedSectionIds: [] });
+  }
+  // A verification re-ask is excluded from list(), so it must not count either —
+  // otherwise the pager would advertise a page that comes back empty.
+  await store.record({
+    question: "re-ask",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    purpose: "verification"
+  });
+
+  assert.equal(await store.count(), 5);
+  assert.equal((await store.list(2)).length, 2, "offset defaults to 0");
+  assert.equal((await store.list(2, 2)).length, 2);
+  assert.equal((await store.list(2, 4)).length, 1, "the final partial page is returned");
+  assert.deepEqual(await store.list(2, 5), [], "an offset past the end returns an empty page");
+});
+
 test("recordManualGap flags the question and stores the provided summary as a manual gap", async () => {
   const store = new InMemoryQuestionLogStore();
   const log = await store.record({ question: "How do I adopt?", chatProvider: "codex", retrievedSectionIds: [] });

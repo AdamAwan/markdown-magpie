@@ -25,8 +25,17 @@ export async function getQuestion(ctx: AppContext, id: string): Promise<Question
   return ctx.stores.questionLogs.get(id);
 }
 
-export async function listQuestions(ctx: AppContext, limit: number): Promise<QuestionLog[]> {
-  return ctx.stores.questionLogs.list(limit);
+// One page of the question list plus the unpaginated total, so the console can
+// page through the full history (same shape as the knowledge list endpoints).
+export async function listQuestions(
+  ctx: AppContext,
+  pagination: { limit: number; offset: number }
+): Promise<{ questions: QuestionLog[]; total: number }> {
+  const [questions, total] = await Promise.all([
+    ctx.stores.questionLogs.list(pagination.limit, pagination.offset),
+    ctx.stores.questionLogs.count()
+  ]);
+  return { questions, total };
 }
 
 // A human re-admits a parked question to the pipeline (see the parked-gap

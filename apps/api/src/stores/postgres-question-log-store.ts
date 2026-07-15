@@ -637,15 +637,24 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     return this.get(id);
   }
 
-  async list(limit: number): Promise<QuestionLog[]> {
+  async list(limit: number, offset = 0): Promise<QuestionLog[]> {
     // Only live questions surface in the console list; verification re-asks (#154)
     // are synthetic audit records, not questions a human asked.
     const result = await this.pool.query<QuestionRow>(
-      "SELECT * FROM questions WHERE purpose = 'live' ORDER BY asked_at DESC LIMIT $1",
-      [limit]
+      "SELECT * FROM questions WHERE purpose = 'live' ORDER BY asked_at DESC LIMIT $1 OFFSET $2",
+      [limit, offset]
     );
     const gapsByQuestion = await this.loadGaps(result.rows.map((row) => row.id));
     return result.rows.map((row) => mapQuestionRow(row, gapsByQuestion.get(row.id) ?? []));
+  }
+
+  async count(): Promise<number> {
+    // Same filter as list(): the total the pager reports must match what a full
+    // page walk would return.
+    const result = await this.pool.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM questions WHERE purpose = 'live'"
+    );
+    return result.rows[0]?.count ?? 0;
   }
 
   // Loads gap rows for the given questions in one query, grouped by question id.

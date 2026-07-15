@@ -16,6 +16,29 @@ async function seedParkedQuestion(ctx: ReturnType<typeof makeTestContext>, summa
   return log;
 }
 
+test("GET /api/questions pages with limit/offset and reports the unpaginated total", async () => {
+  const ctx = makeTestContext();
+  for (let index = 0; index < 12; index += 1) {
+    await ctx.stores.questionLogs.record({
+      question: `Question ${index}?`,
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+  }
+  const app = buildApp(ctx);
+
+  const first = await app.request("/api/questions");
+  assert.equal(first.status, 200);
+  const firstBody = (await first.json()) as { questions: unknown[]; total: number };
+  assert.equal(firstBody.questions.length, 12, "default limit of 50 covers the whole backlog");
+  assert.equal(firstBody.total, 12);
+
+  const page = await app.request("/api/questions?limit=5&offset=10");
+  const pageBody = (await page.json()) as { questions: unknown[]; total: number };
+  assert.equal(pageBody.questions.length, 2, "the final partial page is returned");
+  assert.equal(pageBody.total, 12, "total stays unpaginated so the console can size its pager");
+});
+
 test("GET /api/questions/parked lists parked questions with their note (before /:id)", async () => {
   const ctx = makeTestContext();
   const log = await seedParkedQuestion(ctx);

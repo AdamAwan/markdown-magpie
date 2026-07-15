@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
-import { parseLimit } from "../../platform/paths.js";
+import { parseLimit, parseOffset } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import * as questionsService from "./service.js";
@@ -13,7 +13,8 @@ export function questionRoutes(ctx: AppContext): Hono {
 
   app.get("/", requireScopes("read:knowledge"), async (c) => {
     const limit = parseLimit(c.req.query("limit") ?? null, 50);
-    return c.json({ questions: await questionsService.listQuestions(ctx, limit) });
+    const offset = parseOffset(c.req.query("offset") ?? null);
+    return c.json(await questionsService.listQuestions(ctx, { limit, offset }));
   });
 
   // Registered BEFORE "/:id" so "parked" is not captured as a question id.
