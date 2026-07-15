@@ -17,7 +17,7 @@
     "@magpie/logger": "file:../../packages/logger",
     "@modelcontextprotocol/express": "^2.0.0-beta.2",
     "@modelcontextprotocol/node": "^2.0.0-beta.2",
-    "@modelcontextprotocol/server": "^2.0.0-beta.3",
+    "@modelcontextprotocol/server": "^2.0.0-beta.4",
     "tsx": "^4.23.0",
     "zod": "^4.1.12"
   },
