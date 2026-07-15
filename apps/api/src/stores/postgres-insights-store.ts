@@ -1,5 +1,6 @@
 import pg from "pg";
 import type {
+  AiUsageBreakdown,
   FeedbackBucket,
   FreshnessSummary,
   GapBacklogBucket,
@@ -11,6 +12,7 @@ import type {
   PatrolImpact,
   VerificationBucket
 } from "@magpie/core";
+import { allQueueDefinitions, isAiProviderName } from "@magpie/jobs";
 import { SCHEMA_IDENTIFIER } from "../jobs/pg-boss-broker.js";
 import type {
   AnswerFeedback,
@@ -79,6 +81,20 @@ const JOURNEY_NODES: ReadonlyArray<JourneyNode> = [
   { key: "v_attention", label: "Needs attention", segment: "verify" },
   { key: "v_awaiting", label: "Awaiting check", segment: "verify" }
 ];
+
+// The provider-fanned AI work queues (C11): queue name → the (job type,
+// provider) pair the Insights AI-usage chart groups by. Derived from the
+// catalog — the same source the broker provisions queues from — so the
+// mapping can never drift from the real queue names. Dead-letter twins and
+// non-provider queues (github/local-git/maintenance) are excluded: only
+// provider work spends model tokens.
+const AI_USAGE_QUEUES: ReadonlyMap<string, { jobType: string; provider: string }> = new Map(
+  allQueueDefinitions().flatMap((queue): Array<[string, { jobType: string; provider: string }]> =>
+    !queue.deadLetter && isAiProviderName(queue.capability)
+      ? [[queue.name, { jobType: queue.type, provider: queue.capability }]]
+      : []
+  )
+);
 
 // The four confidence buckets, mapping each to its count column prefix and node.
 const JOURNEY_CONFIDENCE = [
@@ -688,5 +704,82 @@ export class PostgresInsightsStore implements InsightsStore {
       { helpful: 0, unhelpful: 0, unhelpfulConfident: 0 }
     );
     return { totals, series };
+  }
+
+  // AI token usage (C11, #241). Sums the watcher-reported usage persisted on
+  // completed jobs' `{ result, executor, usage }` envelopes, grouped per AI work
+  // queue and mapped to (job type, provider) via the catalog-derived
+  // AI_USAGE_QUEUES. `jobs` counts every completed job on the queue in the
+  // window; `jobs_with_usage` counts the subset that reported usage (CLI
+  // providers report nothing), so the chart can say how much spend is
+  // unmetered. Windowed on `created_on`, matching C2/C6's creation-time axis;
+  // completed rows stay in the partitioned `job` table until retention purges
+  // them (pg-boss v12 has no separate `archive` table). Ordered by total
+  // tokens, heaviest first.
+  //
+  // The LATERAL projects the small usage object out of `output` ONCE per row:
+  // completion envelopes carry the whole job result (drafted documents, answer
+  // traces — routinely tens of KB, TOASTed), and referencing `output->...` in
+  // each aggregate would detoast the full envelope once per expression.
+  // A row's total falls back to input+output when no totalTokens was reported,
+  // so a provider that reports only input/output still ranks by real spend.
+  async aiUsage(range: InsightsRange): Promise<AiUsageBreakdown[]> {
+    const queueNames = [...AI_USAGE_QUEUES.keys()];
+    const result = await this.pool.query<{
+      name: string;
+      jobs: string;
+      jobs_with_usage: string;
+      input_tokens: string;
+      output_tokens: string;
+      total_tokens: string;
+    }>(
+      `
+      WITH usage_rows AS (
+        SELECT j.name,
+          u.usage,
+          CASE WHEN jsonb_typeof(u.usage->'inputTokens') = 'number'
+            THEN (u.usage->>'inputTokens')::bigint ELSE 0 END AS input_tokens,
+          CASE WHEN jsonb_typeof(u.usage->'outputTokens') = 'number'
+            THEN (u.usage->>'outputTokens')::bigint ELSE 0 END AS output_tokens
+        FROM "${this.pgBossSchema}".job j
+        CROSS JOIN LATERAL (SELECT j.output->'usage' AS usage) u
+        WHERE j.state = 'completed'
+          AND j.name = ANY($3)
+          AND j.created_on >= $1::timestamptz AND j.created_on <= $2::timestamptz
+      )
+      SELECT name,
+        count(*) AS jobs,
+        count(*) FILTER (WHERE jsonb_typeof(usage) = 'object') AS jobs_with_usage,
+        coalesce(sum(input_tokens), 0) AS input_tokens,
+        coalesce(sum(output_tokens), 0) AS output_tokens,
+        coalesce(sum(
+          CASE WHEN jsonb_typeof(usage->'totalTokens') = 'number'
+            THEN (usage->>'totalTokens')::bigint
+            ELSE input_tokens + output_tokens END
+        ), 0) AS total_tokens
+      FROM usage_rows
+      GROUP BY name
+      `,
+      [range.from.toISOString(), range.to.toISOString(), queueNames]
+    );
+
+    return result.rows
+      .flatMap((row) => {
+        const queue = AI_USAGE_QUEUES.get(row.name);
+        return queue
+          ? [
+              {
+                jobType: queue.jobType,
+                provider: queue.provider,
+                jobs: Number(row.jobs),
+                jobsWithUsage: Number(row.jobs_with_usage),
+                inputTokens: Number(row.input_tokens),
+                outputTokens: Number(row.output_tokens),
+                totalTokens: Number(row.total_tokens)
+              }
+            ]
+          : [];
+      })
+      .sort((a, b) => b.totalTokens - a.totalTokens || b.jobs - a.jobs || a.jobType.localeCompare(b.jobType));
   }
 }

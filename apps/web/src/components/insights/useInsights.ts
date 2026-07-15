@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiGet, errorMessage } from "../../lib/api";
 import type {
+  AiUsageBreakdown,
   FeedbackBucket,
   FeedbackSummary,
   FreshnessSummary,
@@ -168,6 +169,17 @@ export function usePatrolImpact(): InsightsResource<PatrolImpact[]> {
   const resource = useInsightsResource<{ runs: PatrolImpact[] }>("/insights/patrols");
   return {
     data: resource.data?.runs,
+    loading: resource.loading,
+    error: resource.error,
+    refresh: resource.refresh
+  };
+}
+
+// AI token usage (last 30 days), one row per (job type, provider) pair (#241).
+export function useAiUsage(): InsightsResource<AiUsageBreakdown[]> {
+  const resource = useInsightsResource<{ usage: AiUsageBreakdown[] }>("/insights/ai-usage");
+  return {
+    data: resource.data?.usage,
     loading: resource.loading,
     error: resource.error,
     refresh: resource.refresh

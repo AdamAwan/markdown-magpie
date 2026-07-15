@@ -1,22 +1,9 @@
 "use client";
 
 import { useTheme } from "@emotion/react";
-import {
-  Area,
-  CartesianGrid,
-  ComposedChart,
-  Legend,
-  Line,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis
-} from "recharts";
+import { Area, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { GapBacklogBucket } from "../../lib/types";
-
-function shortDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
+import { shortDate } from "./format";
 
 // Open-gap backlog trend: stacked areas for the transitions that happened in
 // each bucket (opened/resolved/dismissed/parked) plus a line for the running net

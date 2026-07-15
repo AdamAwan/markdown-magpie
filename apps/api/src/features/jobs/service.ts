@@ -1,4 +1,4 @@
-import type { AnswerQuestionJobInput, AnswerQuestionJobOutput } from "@magpie/core";
+import type { AiUsage, AnswerQuestionJobInput, AnswerQuestionJobOutput } from "@magpie/core";
 import { z } from "zod";
 import { logger } from "../../logger.js";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
@@ -241,7 +241,11 @@ export async function completeJob(
   ctx: AppContext,
   jobId: string,
   output: unknown,
-  executor = "watcher"
+  executor = "watcher",
+  // The watcher's summed provider-reported token usage for the run (#241),
+  // persisted on the completion envelope beside result/executor. Optional:
+  // CLI providers and non-AI jobs report nothing.
+  usage?: AiUsage
 ): Promise<
   | { ok: false; code: "job_not_found" }
   | { ok: false; code: "invalid_output" }
@@ -290,8 +294,11 @@ export async function completeJob(
     }
     resultData = parsed.data;
     // Persist completion BEFORE the side-effect fan-out below — see the
-    // ordering rationale in this function's docstring.
-    await ctx.jobs.complete(jobId, { result: resultData, executor });
+    // ordering rationale in this function's docstring. `usage` rides the same
+    // envelope (not the job's own output) so it can never collide with the
+    // job contract's schema-stripping — the Insights AI-usage chart reads it
+    // from here (#241).
+    await ctx.jobs.complete(jobId, { result: resultData, executor, ...(usage ? { usage } : {}) });
   }
 
   try {

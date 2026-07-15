@@ -1,4 +1,4 @@
-import type { ChatProvider, ChatRequest, ChatResponse } from "@magpie/core";
+import { aiUsageFromTokenCounts, type ChatProvider, type ChatRequest, type ChatResponse } from "@magpie/core";
 import { DEFAULT_CHAT_TIMEOUT_MS, fetchWithTimeout } from "./http.js";
 
 export type ChatProviderName = "openai-compatible" | "azure-openai";
@@ -130,13 +130,31 @@ async function parseChatCompletionResponse(response: Response): Promise<ChatResp
         content?: string;
       };
     }>;
+    usage?: {
+      prompt_tokens?: unknown;
+      completion_tokens?: unknown;
+      total_tokens?: unknown;
+    };
   };
   const content = body.choices?.[0]?.message?.content?.trim();
   if (!content) {
     throw new Error("Chat provider returned no message content");
   }
 
-  return { content };
+  // Surface the OpenAI-style usage block when the provider sent one (#241).
+  // Best-effort: a missing or malformed block simply yields no usage.
+  // aiUsageFromTokenCounts is the shared validation point — it also rounds, so
+  // a fractional count from a non-conforming gateway can never reach (and be
+  // rejected by) the API's integer-only completion contract.
+  const usage =
+    body.usage && typeof body.usage === "object"
+      ? aiUsageFromTokenCounts({
+          inputTokens: body.usage.prompt_tokens,
+          outputTokens: body.usage.completion_tokens,
+          totalTokens: body.usage.total_tokens
+        })
+      : undefined;
+  return usage ? { content, usage } : { content };
 }
 
 function trimTrailingSlash(value: string): string {

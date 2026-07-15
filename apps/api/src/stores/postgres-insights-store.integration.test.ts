@@ -262,6 +262,87 @@ test("jobErrors splits failed job rows by category and job type", { skip: !runIn
   ]);
 });
 
+test("aiUsage sums completion-envelope usage per (job type, provider)", { skip: !runIntegration }, async (t) => {
+  const schema = `insights_pgboss_usage_test_${process.pid}`;
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  t.after(async () => {
+    await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await pool.end();
+  });
+  await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+  await pool.query(DDL(schema));
+
+  // Completed AI-queue rows carry the { result, executor, usage } envelope in
+  // `output` (#241); usage is absent when the provider reported nothing (CLI
+  // tiers). Non-AI queues (publish_proposal__github), failed rows, and
+  // dead-letter twins must all be ignored.
+  await pool.query(
+    `INSERT INTO "${schema}".job (name, state, created_on, output) VALUES
+       ('answer_question__openai_compatible', 'completed', now(),
+        '{"result":{},"executor":"w1","usage":{"inputTokens":100,"outputTokens":20,"totalTokens":120}}'::jsonb),
+       ('answer_question__openai_compatible', 'completed', now(),
+        '{"result":{},"executor":"w1","usage":{"inputTokens":40,"outputTokens":5,"totalTokens":45}}'::jsonb),
+       ('answer_question__claude', 'completed', now(), '{"result":{},"executor":"w2"}'::jsonb),
+       ('verify_document__openai_compatible', 'completed', now(),
+        '{"result":{},"executor":"w1","usage":{"inputTokens":7,"outputTokens":3,"totalTokens":10}}'::jsonb),
+       ('verify_document__claude', 'completed', now(),
+        '{"result":{},"executor":"w2","usage":{"inputTokens":50,"outputTokens":10}}'::jsonb),
+       ('answer_question__openai_compatible', 'failed', now(), '{"category":"provider"}'::jsonb),
+       ('answer_question__openai_compatible__dead_letter', 'completed', now(),
+        '{"result":{},"executor":"w1","usage":{"inputTokens":999,"outputTokens":999,"totalTokens":1998}}'::jsonb),
+       ('publish_proposal__github', 'completed', now(), '{"result":{},"executor":"w2"}'::jsonb)`
+  );
+
+  const store = new PostgresInsightsStore(pool, schema);
+  const to = new Date();
+  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const usage = await store.aiUsage({ from, to, bucket: "day" });
+
+  // Heaviest pair first. The verify_document__claude row reported no
+  // totalTokens, so its total falls back to input+output (60) — a provider
+  // that omits the total still ranks by real spend. The answer_question
+  // claude row completed without usage entirely, so it counts as a job but
+  // contributes no tokens.
+  assert.deepEqual(usage, [
+    {
+      jobType: "answer_question",
+      provider: "openai-compatible",
+      jobs: 2,
+      jobsWithUsage: 2,
+      inputTokens: 140,
+      outputTokens: 25,
+      totalTokens: 165
+    },
+    {
+      jobType: "verify_document",
+      provider: "claude",
+      jobs: 1,
+      jobsWithUsage: 1,
+      inputTokens: 50,
+      outputTokens: 10,
+      totalTokens: 60
+    },
+    {
+      jobType: "verify_document",
+      provider: "openai-compatible",
+      jobs: 1,
+      jobsWithUsage: 1,
+      inputTokens: 7,
+      outputTokens: 3,
+      totalTokens: 10
+    },
+    {
+      jobType: "answer_question",
+      provider: "claude",
+      jobs: 1,
+      jobsWithUsage: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0
+    }
+  ]);
+});
+
 test("freshness classifies documents by review cadence and sources by last sync", { skip: !runIntegration }, async (t) => {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   t.after(() => pool.end());

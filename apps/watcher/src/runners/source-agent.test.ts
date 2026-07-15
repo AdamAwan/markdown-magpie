@@ -110,6 +110,29 @@ describe("runSourceAgentJob", () => {
     assert.equal(model.doGenerateCalls.length, 2);
   });
 
+  it("reports the loop's aggregate token usage through onUsage (#241)", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "magpie-agent-"));
+    writeFileSync(path.join(root, "readme.md"), "statements are ingested via email and API");
+    const model = scriptedModel([
+      { toolCall: { toolName: "read_file", input: { path: "s1/readme.md" } } },
+      { text: OUTPUT }
+    ]);
+    const readings: Array<{ inputTokens?: number; outputTokens?: number }> = [];
+    await runSourceAgentJob({
+      job: seedJob(),
+      model,
+      workspaces: [{ sourceId: "s1", name: "Repo", rootDir: root }],
+      notes: [],
+      signal: new AbortController().signal,
+      onUsage: (usage) => readings.push(usage)
+    });
+    // The scripted model reports 1 input + 1 output token per turn; two turns
+    // ran, and the loop reports the aggregate once.
+    assert.equal(readings.length, 1);
+    assert.equal(readings[0].inputTokens, 2);
+    assert.equal(readings[0].outputTokens, 2);
+  });
+
   it("shows tool misuse to the model as an error result so it can recover", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "magpie-agent-"));
     writeFileSync(path.join(root, "readme.md"), "statements are ingested via email and API");

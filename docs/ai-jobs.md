@@ -144,8 +144,19 @@ failure *after* that point as a reason to redo the generation:
   `{ result, executor }` output instead of requiring (or re-validating) a fresh
   body. Crucially, that 500 cannot re-bill the generation: a retried POST hits the
   replay path, never the provider.
+- **Token usage rides the completion envelope (#241).** Runners report each
+  provider call's token usage through an optional `onUsage` callback (the chat
+  runner wraps its provider in `withUsageReporting`; the source-agent loop
+  reports `generateText`'s aggregate `totalUsage`), the worker loop sums the
+  readings (`apps/watcher/src/usage.ts`), and `complete()` sends the total. The
+  API persists it beside the output as `{ result, executor, usage }` — on the
+  envelope, not the job's own output, so it can never collide with the
+  job-contract schema-stripping — and the Insights **AI token usage** chart
+  (C11) aggregates it per (job type, provider). Optional end to end: CLI
+  providers emit raw text and report nothing, so their completions carry no
+  usage at all (unmetered, not zero — the chart says which).
 - **Reading a completed job's output back (#184).** Because the persisted output
-  is the `{ result, executor }` envelope, any API-side consumer of
+  is the `{ result, executor, usage? }` envelope, any API-side consumer of
   `runJobToCompletion` must parse it through `parseCompletedJobOutput(schema,
   job.output)` (`apps/api/src/features/jobs/service.ts`) rather than running the
   raw output schema against `JobView.output` directly — the raw parse only ever

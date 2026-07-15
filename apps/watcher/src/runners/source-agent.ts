@@ -1,6 +1,6 @@
 import { generateText, stepCountIs, tool, type LanguageModel, type ModelMessage } from "ai";
 import { z } from "zod";
-import type { SourceMapEntry } from "@magpie/core";
+import { aiUsageFromTokenCounts, type AiUsage, type SourceMapEntry } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { JOB_RUNNER_SYSTEM } from "@magpie/prompts";
 import { UrlFetcher, type FetchableInternetSource } from "../fetch-url.js";
@@ -33,8 +33,20 @@ export async function runSourceAgentJob(options: {
   // tool, sharing the same read budget as the filesystem tools.
   fetchable?: FetchableInternetSource[];
   signal: AbortSignal;
+  // Receives the loop's provider-reported token usage (#241) — the aggregate
+  // across every step, plus the forced closing turn when one runs.
+  onUsage?: (usage: AiUsage) => void;
 }): Promise<unknown> {
-  const { job, model, workspaces, notes, mapEntries = [], fetchable = [], signal } = options;
+  const { job, model, workspaces, notes, mapEntries = [], fetchable = [], signal, onUsage } = options;
+  // The AI SDK types every totalUsage field as possibly-undefined (NaN shows up
+  // for providers that don't report); the shared core sanitizer validates and
+  // rounds each count independently.
+  const reportUsage = (usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number }): void => {
+    const mapped = aiUsageFromTokenCounts(usage);
+    if (mapped && onUsage) {
+      onUsage(mapped);
+    }
+  };
   const budget: ToolBudget = { remainingBytes: TOTAL_READ_BUDGET_BYTES };
   // SourceToolError is the tools' whole misuse contract (bad path, budget, binary
   // file…) — render it for the model. Anything else is an infrastructure fault
@@ -104,6 +116,12 @@ export async function runSourceAgentJob(options: {
     stopWhen: [stepCountIs(MAX_STEPS), () => infraError !== undefined],
     abortSignal: signal
   });
+  // Report usage before the infra-fault check so the reading isn't skipped on
+  // the throw below. NOTE: usage only reaches the API on a COMPLETED job (the
+  // fail path carries no usage channel), so when the fault rethrows this
+  // reading is dropped with the run — failed runs are unmetered by design; the
+  // Insights chart reads completed rows only.
+  reportUsage(result.totalUsage);
   if (infraError !== undefined) {
     // An infrastructure fault occurred inside a tool; whatever text the loop
     // produced is ungrounded. Fail the job — never parse or force an answer.
@@ -135,6 +153,7 @@ export async function runSourceAgentJob(options: {
       }
     ];
     const forced = await generateText({ model, system: JOB_RUNNER_SYSTEM.instructions, messages, abortSignal: signal });
+    reportUsage(forced.totalUsage);
     return parseJobOutput(job, forced.text);
   }
 }

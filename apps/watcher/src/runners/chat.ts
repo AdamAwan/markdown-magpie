@@ -1,9 +1,10 @@
-import type { ChatProvider } from "@magpie/core";
+import type { AiUsage, ChatProvider } from "@magpie/core";
 import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import type { LanguageModel } from "ai";
 import type { WatcherApi } from "../http-client.js";
 import { logger } from "../logger.js";
 import { fetchSourceMapEntries, hasFetchableSources, hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf, stampSourceMapUpdates } from "../source-workspace.js";
+import { withUsageReporting } from "../usage.js";
 import { PROVIDER_JOB_TYPES, runGenerativeJob } from "./generative.js";
 import { runSourceAgentJob } from "./source-agent.js";
 
@@ -26,7 +27,7 @@ export class ChatRunner {
     return PROVIDER_JOB_TYPES.has(type);
   }
 
-  async run(job: JobView, signal: AbortSignal): Promise<unknown> {
+  async run(job: JobView, signal: AbortSignal, onUsage?: (usage: AiUsage) => void): Promise<unknown> {
     const descriptors = sourceDescriptorsOf(job);
     // The agent loop runs whenever there is anything real to ground in: a
     // filesystem workspace, or an operator-allowlisted internet source (#242) —
@@ -40,7 +41,7 @@ export class ChatRunner {
         );
         const mapEntries = await fetchSourceMapEntries(this.api, workspaces);
         return stampSourceMapUpdates(
-          await runSourceAgentJob({ job, model: this.agentModel, workspaces, notes, mapEntries, fetchable, signal }),
+          await runSourceAgentJob({ job, model: this.agentModel, workspaces, notes, mapEntries, fetchable, signal, ...(onUsage ? { onUsage } : {}) }),
           workspaces
         );
       }
@@ -49,6 +50,9 @@ export class ChatRunner {
         `${job.type}[${job.id}]: job has explorable sources but no agent model is configured — running un-grounded via the generative path`
       );
     }
-    return runGenerativeJob({ job, model: this.chat, api: this.api, signal });
+    // Every provider call a generative run makes (routing, search rounds,
+    // grounding verification, critic passes) reports through the same wrapper.
+    const model = onUsage ? withUsageReporting(this.chat, onUsage) : this.chat;
+    return runGenerativeJob({ job, model, api: this.api, signal });
   }
 }

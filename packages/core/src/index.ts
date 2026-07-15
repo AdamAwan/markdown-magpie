@@ -591,6 +591,47 @@ export interface ChatRequest {
 
 export interface ChatResponse {
   content: string;
+  // Token usage the provider reported for this completion, when it reports any
+  // (#241). API-backed providers surface the OpenAI-style usage block; CLI
+  // providers emit raw text and report nothing, so every consumer must treat
+  // this as optional.
+  usage?: AiUsage;
+}
+
+// Provider-reported token usage for one model invocation, or the sum over a
+// job's invocations (#241). All fields optional: providers report what they
+// report, and a job whose provider reports nothing carries no usage at all.
+export interface AiUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+}
+
+// Builds an AiUsage from raw provider-reported counts, or undefined when
+// nothing usable was reported. The single validation point for every producer
+// (the HTTP chat providers, the watcher's AI-SDK loop): a count must be a
+// finite non-negative number, and is rounded to an integer — the API's
+// completion contract requires integers, and a fractional count from a
+// non-conforming gateway must never be able to fail an otherwise good
+// completion. Keep this in lock-step with the API's jobUsageSchema.
+export function aiUsageFromTokenCounts(counts: {
+  inputTokens?: unknown;
+  outputTokens?: unknown;
+  totalTokens?: unknown;
+}): AiUsage | undefined {
+  const clean = (value: unknown): number | undefined =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : undefined;
+  const inputTokens = clean(counts.inputTokens);
+  const outputTokens = clean(counts.outputTokens);
+  const totalTokens = clean(counts.totalTokens);
+  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+    return undefined;
+  }
+  return {
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(totalTokens !== undefined ? { totalTokens } : {})
+  };
 }
 
 export interface EmbeddingProvider {
@@ -1645,4 +1686,22 @@ export interface PatrolImpact {
   runs: number;
   findings: number;
   proposals: number;
+}
+
+// AI token usage over the window (C11), one row per (job type, provider) pair
+// that completed at least one job carrying provider-reported usage (#241).
+// `jobs` counts every completed job of the pair in the window; `jobsWithUsage`
+// counts the subset that actually reported usage, so the chart can flag how
+// much of the pair's spend is invisible (CLI providers report nothing). Token
+// sums cover only the reporting subset; a job that reported input/output but
+// no total contributes input+output to `totalTokens`, so ranking by total
+// never under-counts a provider that omits the total field.
+export interface AiUsageBreakdown {
+  jobType: string;
+  provider: string;
+  jobs: number;
+  jobsWithUsage: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
 }

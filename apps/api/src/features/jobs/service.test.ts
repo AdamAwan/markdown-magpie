@@ -8,6 +8,7 @@ import type {
 import type { JobView } from "@magpie/jobs";
 import { answerQuestionOutputSchema } from "@magpie/jobs";
 import { makeTestContext } from "../../test-support/context.js";
+import { completeJobBodySchema } from "./schema.js";
 import {
   acceptFailedJob,
   cancelJob,
@@ -76,6 +77,50 @@ test("connected-watcher registry tracks busy/idle across the job lifecycle", asy
   assert.equal(workers[0].status, "idle");
   assert.equal(workers[0].currentJobId, undefined);
   assert.deepEqual(workers[0].capabilities, ["codex"]);
+});
+
+test("a malformed usage reading is dropped by the body schema, never failing the completion (#241)", async () => {
+  // usage is best-effort telemetry: a fractional/negative count must not 400
+  // the whole complete POST (a 4xx is non-retryable on the watcher side and
+  // would discard the paid-for output). The schema's .catch(undefined) drops
+  // the bad reading and keeps the body valid.
+  const withBadUsage = completeJobBodySchema.parse({
+    output: { answer: "a" },
+    executor: "w-1",
+    usage: { inputTokens: -5, outputTokens: 1.5 }
+  });
+  assert.equal(withBadUsage.usage, undefined);
+  assert.deepEqual(withBadUsage.output, { answer: "a" });
+
+  const withGoodUsage = completeJobBodySchema.parse({
+    output: { answer: "a" },
+    usage: { inputTokens: 10, outputTokens: 2 }
+  });
+  assert.deepEqual(withGoodUsage.usage, { inputTokens: 10, outputTokens: 2 });
+});
+
+test("completeJob persists watcher-reported usage on the completion envelope (#241)", async () => {
+  const ctx = makeTestContext();
+  const withUsage = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+  const output = { answer: "a", confidence: "high", citations: [] };
+  assert.equal(
+    (await completeJob(ctx, withUsage.id, output, "w-1", { inputTokens: 140, outputTokens: 25, totalTokens: 165 })).ok,
+    true
+  );
+  const persisted = await ctx.jobs.get(withUsage.id);
+  assert.deepEqual(persisted?.output, {
+    result: output,
+    executor: "w-1",
+    usage: { inputTokens: 140, outputTokens: 25, totalTokens: 165 }
+  });
+
+  // No reported usage → no usage key at all, so the Insights rollup's
+  // jsonb_typeof(output->'usage') = 'object' predicate cleanly skips the row.
+  const withoutUsage = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+  assert.equal((await completeJob(ctx, withoutUsage.id, output, "w-1")).ok, true);
+  assert.deepEqual((await ctx.jobs.get(withoutUsage.id))?.output, { result: output, executor: "w-1" });
 });
 
 test("a watcher drops out of the registry once silent past the active window", async () => {

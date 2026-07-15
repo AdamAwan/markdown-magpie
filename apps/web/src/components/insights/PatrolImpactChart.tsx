@@ -3,13 +3,7 @@
 import { useTheme } from "@emotion/react";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { PatrolImpact } from "../../lib/types";
-
-// Humanise a maintenance task type ("correctness_patrol" → "Correctness patrol")
-// for the axis label.
-function humanise(taskType: string): string {
-  const spaced = taskType.replaceAll("_", " ");
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
-}
+import { humanise } from "./format";
 
 // Maintenance patrol impact: grouped bars per task type showing how many runs
 // happened and what they surfaced — findings (verify-lens) and proposals drafted.

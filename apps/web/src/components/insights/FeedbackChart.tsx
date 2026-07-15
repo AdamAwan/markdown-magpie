@@ -3,10 +3,7 @@
 import { useTheme } from "@emotion/react";
 import { Area, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { FeedbackBucket } from "../../lib/types";
-
-function shortDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
+import { shortDate } from "./format";
 
 // Answer feedback: stacked areas of the helpful/unhelpful verdicts users gave
 // per bucket — the unhelpful stack split into rejections of CONFIDENT answers

@@ -1,8 +1,10 @@
+import type { AiUsage } from "@magpie/core";
 import type { Logger } from "@magpie/logger";
 import type { JobCapability, JobError, JobView } from "@magpie/jobs";
 import { recordException, recordJobDuration, recordJobFinished, runJobSpan } from "@magpie/telemetry";
 import type { WatcherApiClient } from "./http-client.js";
 import type { JobRunner } from "./runners/types.js";
+import { addAiUsage } from "./usage.js";
 
 export interface WorkerLoopOptions {
   // How long to wait between claim attempts when no job is available.
@@ -110,8 +112,14 @@ export class WorkerLoop {
     this.activeController = controller;
     const heartbeat = this.startHeartbeat(job, controller);
 
+    // The run's provider-reported token usage, summed across every model call
+    // the runner reports (#241). Stays undefined when nothing was reported
+    // (CLI providers, non-AI jobs), so the completion carries no usage field.
+    let usage: AiUsage | undefined;
     try {
-      const output = await runner.run(job, controller.signal);
+      const output = await runner.run(job, controller.signal, (reading) => {
+        usage = addAiUsage(usage, reading);
+      });
       const durationMs = Date.now() - startedAt;
       // A cancellation reaches a terminal state server-side; don't try to
       // complete a job the server already moved out from under us.
@@ -120,7 +128,7 @@ export class WorkerLoop {
         this.recordOutcome(job, "cancelled", durationMs);
         return;
       }
-      await this.api.complete(job.id, output);
+      await this.api.complete(job.id, output, usage);
       log.info({ durationMs, outcome: "completed" }, "job done");
       this.recordOutcome(job, "completed", durationMs);
     } catch (error) {

@@ -80,9 +80,9 @@ export function jobRoutes(ctx: AppContext): Hono {
       if (!result.success) return c.json({ error: "invalid_output" }, 400);
     }),
     async (c) => {
-      const { output, executor } = c.req.valid("json");
+      const { output, executor, usage } = c.req.valid("json");
       try {
-        const outcome = await jobsService.completeJob(ctx, c.req.param("id"), output, executor);
+        const outcome = await jobsService.completeJob(ctx, c.req.param("id"), output, executor, usage);
         if (!outcome.ok) {
           // side_effects_failed is a 500 ON PURPOSE: the job's output is already
           // durably persisted (completeJob persists before the side-effect

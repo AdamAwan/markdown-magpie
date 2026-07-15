@@ -219,10 +219,12 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
 15. **Source-change sync** — `source_change_sync` (~10 min) diffs source checkouts and
     turns relevant changes into a `MaintenancePlan` (via
     `sync_source_changes_generate_plan`) → proposals through the shared gate.
-16. **Insights** — 8 charts (question journey, gap backlog, job throughput, latency,
-    verification success, job errors, freshness, patrol impact) over a fixed 30-day
-    window; `apps/api/src/features/insights/` + `/insights` console page
-    (`docs/insights-charts.md`).
+16. **Insights** — 10 charts (question journey, gap backlog, job throughput, latency,
+    verification success, job errors, freshness, patrol impact, answer feedback, AI
+    token usage) over a fixed 30-day window; `apps/api/src/features/insights/` +
+    `/insights` console page (`docs/insights-charts.md`). AI token usage (#241) is
+    aggregated from the `usage` field the watcher reports on job completions — CLI
+    providers report nothing, so their jobs chart as unmetered, not free.
 17. **Rate limiting & AI capacity** — L1: per-principal fixed-window limiter with tiers
     `ask` (30/window) and `trigger` (5/window) → 429 + `Retry-After`
     (`apps/api/src/http/rate-limit.ts`; no-op when auth is off). L2: a global in-flight
@@ -319,7 +321,7 @@ apps/
 packages/
   core/       Shared domain types + provider interfaces (incl. ProvenanceClaim).
   auth/       Auth0 token validation + on-behalf-of helpers.
-  db/         SQL migrations (0001–0051; see the write-a-migration skill).
+  db/         SQL migrations (0001–0053; see the write-a-migration skill).
   git/        Git sync + PR adapters: ensureGitCheckout (blobless partial clones),
               PR status/mergeability polling, LocalGitProposalPublisher, checkout locks.
   jobs/       Job contracts: JOB_TYPES, capabilities, input/output schemas, queue
@@ -364,9 +366,10 @@ the watcher run a job?" → `apps/watcher/src/runners/`. "what does the API expo
   `provenance` have all hit this trap — if a new output field "mysteriously disappears",
   check the schema first.
 - **The completion dispatcher persists before side effects.** `completeJob`
-  (`apps/api/src/features/jobs/service.ts`) validates and stores the `{result, executor}`
-  envelope, *then* fans out side effects (proposal creation, folds, source-map updates,
-  snapshot handling). A side-effect failure returns **HTTP 500 on purpose** so the
+  (`apps/api/src/features/jobs/service.ts`) validates and stores the
+  `{result, executor, usage?}` envelope (`usage` = the watcher's summed
+  provider-reported token spend, #241), *then* fans out side effects (proposal
+  creation, folds, source-map updates, snapshot handling). A side-effect failure returns **HTTP 500 on purpose** so the
   watcher's retrying `complete()` hits the idempotent replay branch — re-running side
   effects only, never the paid generation. Don't "fix" that 500.
 - **Local-git vs GitHub flows** — a flow's publish mode is derived from its destination:
