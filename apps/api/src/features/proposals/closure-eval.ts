@@ -1,4 +1,4 @@
-import type { Citation, Confidence, Proposal } from "@magpie/core";
+import type { Citation, Confidence, KnowledgeGapSignal, Proposal } from "@magpie/core";
 
 // A gap counts as closed only when the re-asked answer is confident. "low" and
 // "unknown" never close a gap, matching the spec's deterministic test.
@@ -70,17 +70,30 @@ export interface ClosureEvaluation {
   cited: boolean;
 }
 
+// The re-ask answer fields the closure test reads. `gaps` carries the answer's
+// gap signals; only their `source` matters here (see evaluateClosure).
+export interface ClosureAnswer {
+  confidence: Confidence;
+  citations: Citation[];
+  gaps?: Array<Pick<KnowledgeGapSignal, "source">>;
+}
+
 // The deterministic closure test: a re-asked answer closes its gap iff it is
-// confident AND cites the merged document. A missing answer (the re-ask timed
-// out / no provider watcher answered) is treated as still-open — we never claim
-// a closure we could not verify.
-export function evaluateClosure(
-  answer: { confidence: Confidence; citations: Citation[] } | undefined,
-  targetPaths: Set<string>
-): ClosureEvaluation {
+// confident, cites the merged document, AND raises no whole-question ("auto")
+// gap of its own. The auto-gap guard exists because a gap-flagged answer can now
+// ship at "medium" (a substantive partial answer) instead of being forced to
+// "low" — the confidence check alone no longer implies "the question was
+// answered without declaring a gap", so the declaration is checked explicitly.
+// `followup` gaps do not block closure: they accompany confident answers by
+// design (supporting material a search came back empty for), and never blocked
+// closure before either. A missing answer (the re-ask timed out / no provider
+// watcher answered) is treated as still-open — we never claim a closure we
+// could not verify.
+export function evaluateClosure(answer: ClosureAnswer | undefined, targetPaths: Set<string>): ClosureEvaluation {
   if (!answer) {
     return { verdict: "still_open", cited: false };
   }
   const cited = citesMergedDoc(answer.citations, targetPaths);
-  return { verdict: CONFIDENT.has(answer.confidence) && cited ? "closed" : "still_open", cited };
+  const raisedGap = (answer.gaps ?? []).some((gap) => gap.source === "auto");
+  return { verdict: CONFIDENT.has(answer.confidence) && cited && !raisedGap ? "closed" : "still_open", cited };
 }

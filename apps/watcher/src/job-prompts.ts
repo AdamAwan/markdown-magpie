@@ -188,11 +188,14 @@ export function parseJobOutput(job: JobView, stdout: string): unknown {
 // Builds the answer_question output from the model's final answer text and the
 // sections the watcher accumulated across the agentic retrieval loop. Citations
 // are derived from those sections (never trusted from the model) but narrowed to
-// the ones the model says it used; a flagged knowledge gap forces low confidence
-// and emits `auto` gap signals; `followup` gaps — supporting material the model
-// searched for and did not find — are emitted even for a confident answer, but
-// only when the loop actually observed a search return nothing (grounding them to
-// real empty searches rather than model hunches).
+// the ones the model says it used; a flagged knowledge gap emits `auto` gap
+// signals and caps confidence at "medium" — a substantive partial answer (the
+// model rated itself medium/high and grounded the answer in honoured citations)
+// ships at "medium", while a gap answer with nothing behind it is forced to
+// "low"; `followup` gaps — supporting material the model searched for and did
+// not find — are emitted even for a confident answer, but only when the loop
+// actually observed a search return nothing (grounding them to real empty
+// searches rather than model hunches).
 // Shown instead of the raw model reply when the model was asked for a structured
 // answer but produced something we could not parse. Never surface the unparsed
 // text: a broken JSON envelope (e.g. an unescaped quote inside a string) would
@@ -218,7 +221,6 @@ export function buildAnswerOutput(
     (modelContent.trim().startsWith("{") ? UNPARSEABLE_ANSWER_FALLBACK : modelContent.trim());
   const { citations, attributionFailed } = selectCitations(sections, structured?.usedSectionIds ?? []);
   const citedSectionIds = citations.map((citation) => citation.sectionId);
-  const followupGaps = groundedFollowupGaps(structured, question, citedSectionIds, unsatisfiedSearches);
   // The verification outcome is a placeholder here; the grounding check in the
   // answer runner overwrites it with what actually happened (ran/skipped and why).
   const trace: AnswerTrace | undefined = loopTrace
@@ -250,10 +252,27 @@ export function buildAnswerOutput(
       structured && structured.gaps.length > 0
         ? structured.gaps
         : [`${NO_SOURCE_MATERIAL_GAP_PREFIX} ${question}`];
-    const autoGaps = summaries.map((summary) => toGapSignal(summary, question, citedSectionIds, "low", "auto"));
+    // A flagged gap no longer forces "low" across the board. A gap-flagged answer
+    // that still substantively answers the core of the question — the model rated
+    // itself medium/high, produced real answer text, and grounded it in honoured
+    // citations — ships as a partial answer at "medium": capped below "high"
+    // because a declared whole-question gap means the question is not fully
+    // answered, but not branded untrustworthy. A gap answer with nothing behind
+    // it (self-rated low/unknown, no citations, invented section ids, or empty
+    // retrieval) keeps the forced "low" so the UI signals distrust. Either way
+    // the auto gap signals are emitted, so gap clustering sees the misses.
+    const substantive =
+      structured !== undefined &&
+      (structured.confidence === "high" || structured.confidence === "medium") &&
+      answer.trim().length > 0 &&
+      citations.length > 0 &&
+      !attributionFailed;
+    const confidence: Confidence = substantive ? "medium" : "low";
+    const autoGaps = summaries.map((summary) => toGapSignal(summary, question, citedSectionIds, confidence, "auto"));
+    const followupGaps = groundedFollowupGaps(structured, question, citedSectionIds, unsatisfiedSearches, confidence);
     return {
       answer: answer || "I could not find reliable source material for this question.",
-      confidence: "low",
+      confidence,
       citations,
       gaps: [...autoGaps, ...followupGaps],
       ...(flowId ? { flowId } : {}),
@@ -266,6 +285,7 @@ export function buildAnswerOutput(
   // answer to invented section ids, cannot be trusted as grounded — it ships at
   // "low" so the UI signals distrust instead of defaulting to quiet credibility.
   const confidence: Confidence = !structured || attributionFailed ? "low" : structured.confidence;
+  const followupGaps = groundedFollowupGaps(structured, question, citedSectionIds, unsatisfiedSearches, confidence);
   return {
     answer,
     confidence,
@@ -366,18 +386,21 @@ export function applyGroundingVerdict(
 // Turns the model's followupGaps into gap signals, but only when the loop saw at
 // least one search return nothing: the model may only claim missing supporting
 // material if it actually went looking and came up empty. Each gap is stamped
-// with the answer's confidence and linked to the sections the answer used.
+// with the confidence the answer actually ships at (the caller's post-contract
+// effective confidence, not the model's raw self-rating) and linked to the
+// sections the answer used.
 function groundedFollowupGaps(
   structured: StructuredAnswer | undefined,
   question: string,
   citedSectionIds: string[],
-  unsatisfiedSearches: Set<string>
+  unsatisfiedSearches: Set<string>,
+  confidence: Confidence
 ): KnowledgeGapSignal[] {
   if (!structured || structured.followupGaps.length === 0 || unsatisfiedSearches.size === 0) {
     return [];
   }
   return structured.followupGaps.map((summary) =>
-    toGapSignal(summary, question, citedSectionIds, structured.confidence, "followup")
+    toGapSignal(summary, question, citedSectionIds, confidence, "followup")
   );
 }
 
@@ -413,10 +436,13 @@ function parseStructuredAnswer(content: string): StructuredAnswer | undefined {
   if (typeof candidate.answer !== "string" || !isConfidence(candidate.confidence)) {
     return undefined;
   }
+  // The model's raw self-rating is kept here even when isKnowledgeGap is set:
+  // buildAnswerOutput decides the shipped confidence (a substantive gap-flagged
+  // answer caps at "medium"; a no-substance one is forced to "low").
   const isKnowledgeGap = candidate.isKnowledgeGap === true;
   return {
     answer: candidate.answer,
-    confidence: isKnowledgeGap ? "low" : candidate.confidence,
+    confidence: candidate.confidence,
     isKnowledgeGap,
     outOfScope: candidate.outOfScope === true,
     gaps: toStringArray(candidate.gaps),

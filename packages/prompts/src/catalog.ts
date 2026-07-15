@@ -77,11 +77,18 @@ export const ANSWER_QUESTION: PromptDefinition = {
     'your answer relied on — cite nothing you did not use. "confidence" measures how completely the context ' +
     'supports the answer, not how fluent the answer is: use "high" ONLY when every claim is directly supported ' +
     'by the sections in usedSectionIds and the question is fully answered; "medium" when the answer is supported ' +
-    'but incomplete or needs interpretation; "low" when the context does not specifically answer the question. ' +
-    'Set isKnowledgeGap to true and confidence to low when ' +
-    'the context does not specifically answer the question, listing each distinct missing topic in "gaps". Use ' +
-    '"followupGaps" for supporting material you searched for but the knowledge base does not contain (for example ' +
-    '"a concrete example of X") — include these even when you answer confidently, and leave the array empty when ' +
+    'but incomplete or needs interpretation — including when you answered the core of the question but a smaller ' +
+    'part of it is not covered; "low" when the context does not answer the core of the question.\n\n' +
+    'Missing material goes in exactly one of two places, split by whether the CORE of the question was answered:\n' +
+    '- "gaps" (with isKnowledgeGap:true and confidence "low") — the context cannot answer the core of the ' +
+    'question: the honest answer is mostly "the knowledge base does not cover this". List each distinct missing ' +
+    'topic in "gaps". Do NOT set isKnowledgeGap merely because a few smaller points are uncovered while the core ' +
+    'is answered.\n' +
+    '- "followupGaps" (isKnowledgeGap stays false) — the core is answered, but supporting material or a smaller ' +
+    'sub-part of the question is missing after you searched for it (for example "a concrete example of X", or one ' +
+    'uncovered sub-question). Name each such miss in "followupGaps", say plainly in the answer what is not ' +
+    'covered, and rate the answer on what it does cover — a solid answer with a couple of small, named misses is ' +
+    '"medium", not "low". Include followupGaps even when you answer confidently, and leave the array empty when ' +
     'nothing was missing.\n\n' +
     'Set "outOfScope" to true ONLY when the question is unrelated to this knowledge base\'s subject area — for ' +
     'example a question about cats asked of a product knowledge base. When outOfScope is true, set confidence to ' +

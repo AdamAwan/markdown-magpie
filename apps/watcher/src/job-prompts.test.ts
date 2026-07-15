@@ -181,20 +181,90 @@ describe("buildAnswerOutput", () => {
     });
   });
 
-  it("forces low confidence and emits a gap when the model flags a knowledge gap", () => {
+  it("ships a substantive gap-flagged answer at medium, still emitting the auto gap", () => {
+    // The model answered the core of the question (self-rated medium, grounded
+    // in honoured citations) but declared a residual miss: a partial answer, not
+    // a worthless one — it ships at medium instead of being forced to low.
     const output = buildAnswerOutput(
-      JSON.stringify({ answer: "Not covered.", confidence: "high", isKnowledgeGap: true, gaps: ["no rollback docs"] }),
+      JSON.stringify({
+        answer: "Deploy with the script. Rollback is not covered by the knowledge base.",
+        confidence: "medium",
+        isKnowledgeGap: true,
+        gaps: ["no rollback docs"],
+        usedSectionIds: ["doc-1#deploy"]
+      }),
+      SECTIONS,
+      "How do I deploy and roll back?",
+      undefined
+    );
+    assert.equal(output.confidence, "medium", "a substantive partial answer is not forced to low");
+    assert.ok(output.gaps && output.gaps.length === 1, "the declared miss still feeds gap clustering");
+    assert.equal(output.gaps[0].summary, "no rollback docs");
+    assert.equal(output.gaps[0].question, "How do I deploy and roll back?");
+    assert.deepEqual(output.gaps[0].citedSectionIds, ["doc-1#deploy"]);
+    assert.equal(output.gaps[0].source, "auto");
+    assert.equal(output.gaps[0].confidence, "medium", "the gap signal carries the shipped confidence");
+    assert.equal(output.flowId, undefined);
+  });
+
+  it("caps a gap-flagged answer at medium even when the model self-rates high", () => {
+    // A declared whole-question gap contradicts "fully answered", so high is
+    // never allowed to ride along with isKnowledgeGap.
+    const output = buildAnswerOutput(
+      JSON.stringify({
+        answer: "Deploy with the script.",
+        confidence: "high",
+        isKnowledgeGap: true,
+        gaps: ["no rollback docs"],
+        usedSectionIds: ["doc-1#deploy"]
+      }),
+      SECTIONS,
+      "How do I deploy and roll back?",
+      undefined
+    );
+    assert.equal(output.confidence, "medium");
+  });
+
+  it("forces low when the model rates a gap-flagged answer low itself", () => {
+    const output = buildAnswerOutput(
+      JSON.stringify({ answer: "Not covered.", confidence: "low", isKnowledgeGap: true, gaps: ["no rollback docs"] }),
       SECTIONS,
       "How do I roll back?",
       undefined
     );
     assert.equal(output.confidence, "low");
-    assert.ok(output.gaps && output.gaps.length === 1);
-    assert.equal(output.gaps[0].summary, "no rollback docs");
-    assert.equal(output.gaps[0].question, "How do I roll back?");
-    assert.deepEqual(output.gaps[0].citedSectionIds, ["doc-1#deploy"]);
-    assert.equal(output.gaps[0].source, "auto");
-    assert.equal(output.flowId, undefined);
+    assert.equal(output.gaps?.[0].confidence, "low");
+  });
+
+  it("forces low for a gap-flagged answer attributed only to invented section ids", () => {
+    const output = buildAnswerOutput(
+      JSON.stringify({
+        answer: "Deploy with the script.",
+        confidence: "medium",
+        isKnowledgeGap: true,
+        gaps: ["no rollback docs"],
+        usedSectionIds: ["not-a-real-section"]
+      }),
+      SECTIONS,
+      "How do I deploy and roll back?",
+      undefined
+    );
+    assert.equal(output.confidence, "low", "invented attribution disqualifies the partial-answer carve-out");
+  });
+
+  it("forces low for a gap-flagged answer when retrieval found nothing", () => {
+    const output = buildAnswerOutput(
+      JSON.stringify({
+        answer: "Deploy with the script.",
+        confidence: "medium",
+        isKnowledgeGap: true,
+        gaps: ["no rollback docs"]
+      }),
+      [],
+      "How do I roll back?",
+      undefined
+    );
+    assert.equal(output.confidence, "low", "no retrieved sections means nothing grounds the partial answer");
   });
 
   it("rejects an off-topic question with no gaps when the model flags outOfScope", () => {

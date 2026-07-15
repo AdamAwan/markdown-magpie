@@ -49,6 +49,31 @@ describe("evaluateClosure", () => {
       cited: false
     });
   });
+
+  it("stays open when a confident, citing answer still declares a whole-question gap", () => {
+    // A substantive partial answer ships at medium while flagging isKnowledgeGap,
+    // so confidence alone no longer proves the question was answered gap-free —
+    // an 'auto' gap on the re-ask blocks closure explicitly.
+    assert.deepEqual(
+      evaluateClosure(
+        { confidence: "medium", citations: [cite("docs/guide.md")], gaps: [{ source: "auto" }] },
+        paths
+      ),
+      { verdict: "still_open", cited: true }
+    );
+  });
+
+  it("lets followup gaps ride along without blocking closure", () => {
+    // Followup gaps accompany confident answers by design (supporting material a
+    // search came back empty for) and never blocked closure before either.
+    assert.deepEqual(
+      evaluateClosure(
+        { confidence: "high", citations: [cite("docs/guide.md")], gaps: [{ source: "followup" }] },
+        paths
+      ),
+      { verdict: "closed", cited: true }
+    );
+  });
 });
 
 describe("proposalTargetPaths", () => {

@@ -813,12 +813,14 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     //
     // Every unresolved, undismissed gap row is a candidate — candidacy keys on
     // the gap rows, NOT on the question's confidence. Gap rows are only written
-    // when something was verifiably missing ('auto' rows only on the forced
-    // low-confidence branch, 'followup' rows only when a search observably came
-    // back empty, 'manual' rows only when an admin flags), so a question-level
-    // confidence filter adds nothing for those — and it wrongly hid 'followup'
-    // gaps raised alongside confident answers (e.g. "searched for SOC 2 docs,
-    // found none"), which are exactly the gaps that should cluster and draft.
+    // when something was verifiably missing ('auto' rows only when the model
+    // declared a whole-question gap — which ships at low, or at medium for a
+    // substantive partial answer; 'followup' rows only when a search observably
+    // came back empty, 'manual' rows only when an admin flags), so a
+    // question-level confidence filter adds nothing for those — and it wrongly
+    // hid gaps raised alongside confident answers (e.g. "searched for SOC 2
+    // docs, found none", or a medium partial answer's declared miss), which are
+    // exactly the gaps that should cluster and draft.
     const result = await this.pool.query<GapCandidateRow>(
       `
         SELECT
