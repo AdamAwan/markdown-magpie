@@ -487,7 +487,7 @@ async function planQuestion(
   });
 
   let completed = false;
-  let answer: Pick<AnswerQuestionJobOutput, "confidence" | "citations"> | undefined;
+  let answer: Pick<AnswerQuestionJobOutput, "confidence" | "citations" | "gaps"> | undefined;
   try {
     const job = await runJobToCompletion(ctx, "answer_question", input, { signal });
     // Only a job that actually reached `completed` is a content answer. A
@@ -497,7 +497,14 @@ async function planQuestion(
     if (completed) {
       const parsed = parseCompletedJobOutput(answerQuestionOutputSchema, job.output);
       if (parsed) {
-        answer = { confidence: parsed.confidence, citations: parsed.citations };
+        // `gaps` rides along for the closure test's auto-gap guard: a substantive
+        // partial answer ships at "medium" while still declaring a gap, so
+        // confidence alone no longer proves the question was answered gap-free.
+        answer = {
+          confidence: parsed.confidence,
+          citations: parsed.citations,
+          ...(parsed.gaps ? { gaps: parsed.gaps } : {})
+        };
       }
     }
   } catch (error) {
@@ -646,7 +653,7 @@ function verificationLineageResetSince(original: {
 // is the caller's already-computed citesMergedDoc result (via evaluateClosure),
 // so this never recomputes it and can't drift from the actual verdict.
 function buildVerificationDetail(
-  answer: { confidence: string; citations: Array<{ path: string }> } | undefined,
+  answer: { confidence: string; citations: Array<{ path: string }>; gaps?: Array<{ source: string }> } | undefined,
   targetPaths: Set<string>,
   cited: boolean
 ): string {
@@ -657,11 +664,16 @@ function buildVerificationDetail(
     return `Merged ${merged}, but the re-asked question did not complete (no answer to verify).`;
   }
   const citedPaths = answer.citations.map((citation) => citation.path);
+  // Names the auto-gap case explicitly: a confident, citing answer can now fail
+  // closure solely because it still declared a whole-question gap, and without
+  // this clause the note would read as if it should have closed.
+  const raisedGap = (answer.gaps ?? []).some((gap) => gap.source === "auto");
   return (
     `Merged ${merged}. Re-asking still returned confidence "${answer.confidence}"` +
     (cited
       ? " and did cite the merged doc"
       : ` and did not cite the merged doc (cited: ${citedPaths.join(", ") || "nothing"})`) +
+    (raisedGap ? " but still declared a knowledge gap" : "") +
     "; the gap is not yet closed."
   );
 }

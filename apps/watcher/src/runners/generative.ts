@@ -207,9 +207,11 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
 // Post-answer grounding check: a second model call reviews the drafted answer
 // against the retrieved pool and every unsupported claim is stripped, the answer
 // downgraded to low, and the claims recorded as gaps. Medium/high answers are
-// checked — gap, out-of-scope, and already-low answers ship distrusted anyway. An
-// unparseable verdict fails open (keeps the drafted answer) so a flaky verifier
-// cannot downgrade every answer.
+// checked — including gap-flagged partial answers, which buildAnswerOutput now
+// ships at "medium" when substantive and which carry claims worth vouching for
+// like any other medium answer; out-of-scope and already-low answers ship
+// distrusted anyway. An unparseable verdict fails open (keeps the drafted
+// answer) so a flaky verifier cannot downgrade every answer.
 //
 // Exception on both counts: an UNSTRUCTURED answer (the model ignored the JSON
 // contract and replied in prose) is always verified despite its low confidence,

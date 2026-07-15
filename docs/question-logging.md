@@ -54,7 +54,7 @@ DELETE /api/questions/:id/gap
 GET /api/gaps/candidates
 ```
 
-Gap candidates are grouped by gap summary, across the individual gaps of every question, and the reconciler's phase-1 assignment then buckets candidates by **embedding similarity within their flow**: a new gap joins the nearest active cluster whose representative embedding clears `GAP_CLUSTER_ASSIGN_THRESHOLD` (default 0.84; a conservative floor chosen by the offline sweep `npm run eval:gap-threshold` — it collapses near-identical rewordings only, and blank/out-of-range values fall back like the `FLOW_ROUTER_*` knobs), otherwise it seeds a new cluster together with any equally-close new gaps. Without an embedding provider, candidates bucket by exact summary as before; see [architecture.md](architecture.md) for the full mechanism. Answer synthesis asks the model to return structured JSON with `isKnowledgeGap` and a `gaps` array of summaries; when `isKnowledgeGap` is true, the answer is logged as low confidence and each summary becomes its own `auto` gap eligible for grouping. This means a single multi-topic question — for example "how do I set this up with React so I can export dashboards?" — records one gap per unanswered topic, so each can cluster with the same gap from other questions and become its own proposal, rather than being condensed into one summary. (The model may still return a single gap, or the legacy singular `gapSummary` string, which is wrapped into a one-element array.)
+Gap candidates are grouped by gap summary, across the individual gaps of every question, and the reconciler's phase-1 assignment then buckets candidates by **embedding similarity within their flow**: a new gap joins the nearest active cluster whose representative embedding clears `GAP_CLUSTER_ASSIGN_THRESHOLD` (default 0.84; a conservative floor chosen by the offline sweep `npm run eval:gap-threshold` — it collapses near-identical rewordings only, and blank/out-of-range values fall back like the `FLOW_ROUTER_*` knobs), otherwise it seeds a new cluster together with any equally-close new gaps. Without an embedding provider, candidates bucket by exact summary as before; see [architecture.md](architecture.md) for the full mechanism. Answer synthesis asks the model to return structured JSON with `isKnowledgeGap` and a `gaps` array of summaries; `isKnowledgeGap` is reserved for a missed **core** of the question, and each summary becomes its own `auto` gap eligible for grouping. A gap-flagged answer that still substantively answers the core (the model rated itself medium/high and grounded the answer in honoured citations) ships at `medium` — capped below `high`, since a declared gap contradicts "fully answered" — while a gap answer with nothing behind it (self-rated low, no real citations, or empty retrieval) is forced to `low`; the `auto` gaps are emitted either way. This means a single multi-topic question — for example "how do I set this up with React so I can export dashboards?" — records one gap per unanswered topic, so each can cluster with the same gap from other questions and become its own proposal, rather than being condensed into one summary. (The model may still return a single gap, or the legacy singular `gapSummary` string, which is wrapped into a one-element array.)
 
 The answer is produced by an **agentic retrieval loop** (see [ai-jobs.md](./ai-jobs.md)): after an initial retrieval the model may run bounded follow-up searches within the routed flow to pull in closely related material before answering, and it cites only the sections it actually used. When one of those follow-up searches for supporting material (e.g. "a concrete example of X") comes back empty, the model can record a `followup` gap **even on a confident, well-cited answer**. These are grounded — kept only when the loop actually observed a search return nothing — so they point at a specific missing artifact rather than a whole-question failure. `followup` gaps join the same candidate-clustering and proposal workflow as `auto` gaps.
 
@@ -95,9 +95,10 @@ base does not cover X" rather than fabricate. Several layers enforce this:
   stripped claim is recorded as an `auto` gap — so a question that tempted the model
   to fabricate (e.g. "are we SOC 2 compliant?") feeds gap clustering and can become
   a real documentation proposal. An unparseable verdict fails open (the drafted
-  answer is kept) so a flaky verifier cannot downgrade every answer; gap,
-  out-of-scope, and already-`low` answers skip the extra call because they already
-  ship distrusted.
+  answer is kept) so a flaky verifier cannot downgrade every answer; out-of-scope
+  and already-`low` answers skip the extra call because they already ship
+  distrusted, while a gap-flagged **partial** answer (which ships at `medium`) is
+  verified like any other `medium` answer.
 
 The model can also mark an answer **out of scope**: when the question is unrelated to the picked flow's subject area — e.g. a question about cats asked of a product flow — it sets `outOfScope`, and the answer is returned at `unknown` confidence with **no gaps at all**. This is distinct from `isKnowledgeGap` ("this flow *should* cover the topic but the docs don't"): an off-topic question is not a gap, so it never clusters or drafts a proposal. The out-of-scope signal rides on the answer result (`outOfScope`) so the console and MCP can surface it distinctly from a low-confidence answer. This is the picked flow's counterpart to the router's `flowSelectionRequired` abstain, which fires earlier when no flow can be chosen at all.
 
@@ -134,7 +135,11 @@ enqueues a `verify_gap_closure` job. The API then **re-asks each triggering ques
 through the normal queued `answer_question` path against the freshly re-indexed knowledge
 base, and applies a deterministic closure test: the question is *closed* only when the
 re-ask comes back with a confident answer (`high`/`medium`) that **cites one of the merged
-proposal's target documents** (a confident answer citing unrelated docs does not count).
+proposal's target documents** (a confident answer citing unrelated docs does not count)
+and **raises no `auto` gap of its own** — a substantive partial answer ships at `medium`
+while still declaring a whole-question gap, so confidence alone no longer proves the
+question was answered gap-free (`followup` gaps do not block closure; they accompany
+confident answers by design).
 The path match is done in a single path space: a proposal's target path is destination-
 root-relative and includes the destination's configured `subpath`, whereas citations are
 indexed-subtree-relative with that `subpath` stripped, so the verifier strips the subpath

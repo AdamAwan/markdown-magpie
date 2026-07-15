@@ -82,6 +82,25 @@ test("answer-question carries the grounding contract and confidence rubric", () 
   );
 });
 
+// The gaps/followupGaps split: isKnowledgeGap is reserved for a missed CORE of
+// the question, while smaller misses alongside an answered core go to
+// followupGaps and keep the answer at medium. A regression here re-teaches the
+// model to brand decent partial answers as low-confidence knowledge gaps.
+test("answer-question splits whole-question gaps from partial-coverage misses", () => {
+  const instructions = getPrompt("answer-question")?.instructions ?? "";
+  assert.match(instructions, /cannot answer the core of the\s+question/, "gaps are reserved for a missed core");
+  assert.match(
+    instructions,
+    /Do NOT set isKnowledgeGap merely because a few smaller points are uncovered/,
+    "small misses beside an answered core are not a knowledge gap"
+  );
+  assert.match(
+    instructions,
+    /a solid answer with a couple of small, named misses is\s+"medium", not "low"/,
+    "partial coverage rates medium on what it does cover"
+  );
+});
+
 test("withPersona appends the persona followed by the grounding guard", () => {
   const assembled = withPersona("BASE", "Friendly sales rep");
   assert.ok(assembled.startsWith("BASE\n\nPersona (how to look and respond):\nFriendly sales rep"));
