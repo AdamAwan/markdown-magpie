@@ -1297,6 +1297,10 @@ export async function draftFromGaps(
     destinationId,
     targetPath: overrides.targetPath?.trim() || undefined,
     gapClusterId: overrides.gapClusterId,
+    // Attribution only — lets read-time cost rollups credit this draft's spend to
+    // the flow (and its gap→PR schedule). Uses the resolved flow so the autonomous
+    // path attributes too; omitted when no flow resolved.
+    flowId: flow?.id,
     provider: ctx.config.get().aiProvider,
     expectedOutput: "markdown_proposal"
   };

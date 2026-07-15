@@ -742,6 +742,11 @@ export interface DraftMarkdownProposalJobInput {
   // and open PR — and re-publishes from the fresh base, instead of creating a new
   // proposal. Absent on a first-time draft.
   regenerateProposalId?: string;
+  // The flow this draft was routed to, carried on the job input so read-time cost
+  // rollups can attribute the drafting spend to the flow (and its gap→PR schedule)
+  // — the drafter ignores it. Absent on the unscoped/default flow or when no flow
+  // resolved. Set at enqueue in draftFromGaps.
+  flowId?: string;
   expectedOutput: "markdown_proposal";
 }
 
@@ -784,6 +789,12 @@ export interface VerifyDocumentJobInput {
   // re-derived from scratch as before. Absent/empty leaves verify behaviour
   // exactly as it was.
   citedClaims?: ProvenanceClaim[];
+  // The flow whose correctness patrol enqueued this verify, carried on the job
+  // input so read-time cost rollups can attribute the spend to the flow (and its
+  // scheduled patrol) — the verify runner itself ignores it. Optional and absent
+  // on the unscoped/default flow, mirroring the other patrol lenses
+  // (correct/dedupe/split). Set at enqueue in the patrol service.
+  flowId?: string;
 }
 
 // The verify lens's verdict for one document: "healthy" (claims empty) or
@@ -1701,20 +1712,83 @@ export interface PatrolImpact {
   proposals: number;
 }
 
-// AI token usage over the window (C11), one row per (job type, provider) pair
-// that completed at least one job carrying provider-reported usage (#241).
-// `jobs` counts every completed job of the pair in the window; `jobsWithUsage`
+// AI token usage over the window (C11), one row per (job type, provider,
+// model) triple that completed at least one job in the window (#241). `model`
+// is the configured model the watcher reported (`AiExecutionIdentity`); it is
+// absent for CLI providers running on their own default and for jobs completed
+// by an older watcher that reported no identity. Grouping by model keeps two
+// deployments of the same job type/provider priced separately when they run
+// different models.
+//
+// `jobs` counts every completed job of the triple in the window; `jobsWithUsage`
 // counts the subset that actually reported usage, so the chart can flag how
-// much of the pair's spend is invisible (CLI providers report nothing). Token
+// much of the triple's spend is invisible (CLI providers report nothing). Token
 // sums cover only the reporting subset; a job that reported input/output but
 // no total contributes input+output to `totalTokens`, so ranking by total
 // never under-counts a provider that omits the total field.
+//
+// `estimatedCost` is money, computed at read time from the token sums × the
+// operator's `AI_PRICING` table — never persisted, so re-pricing history is
+// just re-reading. It is present ONLY when a matching price entry exists (the
+// *priced* state). Its absence is deliberately ambiguous between two states the
+// caller must keep distinct and must never render as $0:
+//   - *unpriced*  — usage was reported (`jobsWithUsage > 0`) but no price entry
+//                   matches this (provider, model), so cost is unknown.
+//   - *unmetered* — no usage was reported at all (`jobsWithUsage === 0`, the
+//                   CLI-provider case), so there are no tokens to price.
 export interface AiUsageBreakdown {
   jobType: string;
   provider: string;
+  model?: string;
+  // The flow whose input carried this spend, when the rollup is grouped by flow
+  // (the per-flow cost view and per-schedule attribution). Absent on the C11
+  // rollup (which aggregates across flows) and on jobs whose input carries no
+  // flowId — `answer_question` and the fold_* jobs never do, and the patrol/draft
+  // jobs omit it on the unscoped/default flow. Read from `data->'input'->>'flowId'`.
+  flowId?: string;
   jobs: number;
   jobsWithUsage: number;
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  estimatedCost?: number;
+}
+
+// AI spend attributed to one flow over the window (the per-flow cost view),
+// aggregated from the per-(flow, job type, provider, model) rollup. `flowId` is
+// absent for the "unattributed" bucket — jobs whose input carried no flowId (see
+// AiUsageBreakdown.flowId). The three cost states from AiUsageBreakdown survive
+// the aggregation as counts, so a flow's spend is never misreported as $0:
+//   - priced    — `pricedJobs` metered jobs matched a price entry; their cost is
+//                 summed into `estimatedCost` (present iff pricedJobs > 0).
+//   - unpriced  — `jobsWithUsage - pricedJobs` metered jobs had no matching entry.
+//   - unmetered — `jobs - jobsWithUsage` jobs reported no usage (CLI providers).
+export interface AiCostByFlow {
+  flowId?: string;
+  jobs: number;
+  jobsWithUsage: number;
+  pricedJobs: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedCost?: number;
+}
+
+// Approximate AI spend attributed to one scheduled task over the window (the
+// per-schedule cost view). A scheduled task is a maintenance orchestrator that
+// fans out to a fixed set of AI job types; this sums the cost of those job types
+// filtered to the task's flow (`key` matches ScheduledTask.key). Attribution is
+// approximate: a job type is only counted here when it carries a flowId on its
+// input, and second-order work a run can trigger later (proposal folds) is not
+// attributed. The same three cost states as AiCostByFlow survive as counts, so a
+// task's spend is never misreported as $0.
+export interface AiScheduleCost {
+  key: string;
+  jobs: number;
+  jobsWithUsage: number;
+  pricedJobs: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedCost?: number;
 }

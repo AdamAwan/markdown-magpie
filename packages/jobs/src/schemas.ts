@@ -213,6 +213,10 @@ export const draftMarkdownProposalInputSchema = z.object({
   // Set when this draft regenerates an already-published proposal whose PR went
   // stale; the completion handler updates that proposal in place and re-publishes.
   regenerateProposalId: z.string().optional(),
+  // Attribution only (read back off the stored job row for per-flow / per-schedule
+  // cost); the drafter ignores it. Must be on the schema or the broker strips it.
+  // Absent on the unscoped/default flow or when the flow cannot be resolved.
+  flowId: z.string().optional(),
   expectedOutput: z.literal("markdown_proposal")
 }) satisfies z.ZodType<ProviderInput<CoreDraftMarkdownProposalJobInput>>;
 export const draftMarkdownProposalOutputSchema = z.object({
@@ -424,7 +428,11 @@ export const verifyDocumentInputSchema = z.object({
   // #214 phase 2: advisory per-claim provenance folded from the document's
   // merged proposals. The agent checks these against their cited locations
   // first; claims not listed here are re-derived from scratch as before.
-  citedClaims: z.array(provenanceClaimSchema).optional()
+  citedClaims: z.array(provenanceClaimSchema).optional(),
+  // Attribution only (read back off the stored job row for per-flow / per-schedule
+  // cost); the verify runner ignores it. Must be on the schema or the broker
+  // strips it. Absent on the unscoped/default flow.
+  flowId: z.string().optional()
 }) satisfies z.ZodType<ProviderInput<CoreVerifyDocumentJobInput>>;
 export const verifyDocumentOutputSchema = z.object({
   verdict: z.enum(["healthy", "unprovable"]),

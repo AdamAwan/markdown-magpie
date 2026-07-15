@@ -801,17 +801,46 @@ and mutable, so the series reflects each question's current verdict. Verificatio
 
 ### `GET /api/insights/ai-usage?from&to`
 
-AI token usage (C11, #241). Returns `{ "usage": AiUsageBreakdown[] }`, one row per
-(job type, provider) pair that completed at least one AI job in the window, ordered by
-`totalTokens` (heaviest first). `jobs` counts every completed job of the pair;
-`jobsWithUsage` counts the subset whose completion actually carried provider-reported
-usage — CLI providers (codex/claude) emit raw text and report nothing, so their spend is
-*unmetered*, not zero. Token sums cover only the reporting subset. Window-only (grouped by
-pair, not time), windowed on `created_on` (enqueue time, matching C2/C6). Source: pg-boss's
-`job` table — completed rows on the provider-fanned AI work queues, whose persisted
-`{ result, executor, usage }` completion envelope carries the watcher's summed
-provider-reported usage; the queue-name → (type, provider) mapping is derived from the
-`@magpie/jobs` catalog.
+AI token usage priced into cost (C11, #241). Returns `{ "usage": AiUsageBreakdown[] }`, one
+row per (job type, provider, **model**) triple that completed at least one AI job in the
+window, ordered by `totalTokens` (heaviest first). `jobs` counts every completed job of the
+triple; `jobsWithUsage` counts the subset whose completion carried provider-reported usage.
+`estimatedCost` is money, computed at read time from the token sums × the operator's
+`AI_PRICING` table (input × `inputPerMTok` + output × `outputPerMTok`, per million) — never
+persisted, so correcting a price re-values history. It is present **only** when a price entry
+matches the triple's (provider, model); its absence spans two states the caller keeps apart
+via `jobsWithUsage` and must never render as `$0`:
+- **priced** — `estimatedCost` present.
+- **unpriced** — `jobsWithUsage > 0` but no matching price entry (unknown-cost usage).
+- **unmetered** — `jobsWithUsage === 0` (CLI providers emit raw text and report nothing).
+
+Window-only (grouped by triple, not time), windowed on `created_on` (enqueue time, matching
+C2/C6). Source: pg-boss's `job` table — completed rows on the provider-fanned AI work queues,
+whose persisted `{ result, executor, usage?, provider?, model? }` completion envelope carries
+the watcher's summed usage and execution identity; the queue-name → (type, provider) mapping
+is derived from the `@magpie/jobs` catalog and `model` from `output->>'model'`.
+
+### `GET /api/insights/ai-cost/by-flow?from&to&flow`
+
+Per-flow AI cost. Returns `{ "flows": AiCostByFlow[] }` — the same rollup grouped additionally
+by the flowId on the job input (`data->'input'->>'flowId'`), aggregated to one cost summary per
+flow, ordered by `estimatedCost` (heaviest first). `flow` narrows to a single flow id (the
+shared insights flow-filter convention). Jobs whose input carries no flowId — `answer_question`
+and the `fold_*` jobs never do — form the **unattributed** bucket (`flowId` absent). The three
+cost states survive as counts: `pricedJobs` (metered jobs that matched a price entry, summed
+into `estimatedCost`), `jobsWithUsage − pricedJobs` (unpriced), `jobs − jobsWithUsage`
+(unmetered). Window-only. Flow display names are resolved by the console from config, not here.
+
+### `GET /api/insights/ai-cost/by-schedule?from&to`
+
+Per-schedule AI cost (approximate attribution). Returns `{ "schedules": AiScheduleCost[] }` —
+each scheduled task's windowed spend, summed over the AI job types its orchestrator fans out to
+(the task registry's `aiJobTypes`, derived from the enqueue sites) filtered to the task's own
+flow. `key` matches `ScheduledTask.key` so the Schedules page joins it on. Tasks that spend no
+model tokens (the GitHub snapshot refresh) are omitted. Attribution is approximate: only job
+types that carry a flowId on their input are counted, and second-order proposal folds (triggered
+by a later completion, and carrying no flowId) are not attributed. Same three-state cost fields
+as `AiCostByFlow`. Window-only.
 
 ## Type Reference
 
@@ -819,5 +848,6 @@ The response shapes referenced above (`AnswerResult`, `Citation`, `DocumentSecti
 `KnowledgeDocument`, `RepositoryRef`, `QuestionLog`, `GapCandidate`, `Proposal`,
 `ProposalPublication`, `GapBacklogBucket`, `LatencyBin`, `VerificationSummary`,
 `VerificationBucket`, `JobErrorBreakdown`, `DocumentFreshness`, `SourceFreshness`,
-`FreshnessSummary`, `PatrolImpact`, `AiUsageBreakdown`) are defined in `packages/core/src/index.ts`. The `Job`
+`FreshnessSummary`, `PatrolImpact`, `AiUsageBreakdown`, `AiCostByFlow`, `AiScheduleCost`) are
+defined in `packages/core/src/index.ts`. The `Job`
 shape (`JobView`) is defined in `packages/jobs/src/types.ts`.

@@ -25,6 +25,13 @@ export interface ScheduledTaskDefinition {
   defaultCron: string;
   jobType: JobType;
   input: unknown;
+  // The provider (AI) job types this task's orchestrator fans out to, for
+  // read-time cost attribution (the per-schedule cost view). Empty for a task
+  // that spends no model tokens (e.g. the GitHub snapshot refresh). Every listed
+  // type carries the task's flowId on its job input, so the cost rollup can filter
+  // its spend to this flow. Derived from the enqueue sites (see the template
+  // comments), NOT the job docs, so it can't drift from what actually runs.
+  aiJobTypes: JobType[];
 }
 
 // A side-process defined once and expanded to one concrete task per configured
@@ -44,6 +51,9 @@ interface FlowTaskTemplate {
   // snapshot jobs take no input today (`{}`); per-flow jobs take `{flowId}`.
   jobType: JobType;
   input(flowId: string | undefined): unknown;
+  // The provider (AI) job types the orchestrator this task triggers fans out to
+  // (for per-schedule cost attribution). See ScheduledTaskDefinition.aiJobTypes.
+  aiJobTypes: JobType[];
   // When true, this task is only meaningful for a flow that publishes to GitHub
   // (e.g. PR polling). It is NOT expanded for a local-git flow, which has no pull
   // requests and must never be offered GitHub-shaped scheduled work.
@@ -59,7 +69,12 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
       "raised from its proposals, and publishes its open proposals. Requires GITHUB_TOKEN for PR operations.",
     defaultCron: "*/10 * * * *",
     jobType: "process_gaps_to_pull_requests",
-    input: (flowId) => ({ flowId })
+    input: (flowId) => ({ flowId }),
+    // reconcileGaps enqueues the cluster-reshape critic and drafts proposals for
+    // uncovered clusters (gap-reconciler.ts). Folds are second-order (triggered by
+    // a later proposal-overlap completion, not this run) and carry no flowId, so
+    // they are not attributed here.
+    aiJobTypes: ["reconcile_gap_clusters", "draft_markdown_proposal"]
   },
   {
     baseKey: "source-change-sync",
@@ -70,7 +85,9 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
       "to match and the result lands on a review branch. Only documents the knowledge base already covers are touched.",
     defaultCron: "*/10 * * * *",
     jobType: "source_change_sync",
-    input: (flowId) => ({ flowId })
+    input: (flowId) => ({ flowId }),
+    // triggerSourceSyncRun enqueues the plan-generation job (source-sync/service.ts).
+    aiJobTypes: ["sync_source_changes_generate_plan"]
   },
   {
     baseKey: "snapshot-refresh",
@@ -84,7 +101,9 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
     input: () => ({}),
     // PR polling: only ever relevant to a GitHub flow. A local-git flow has no pull
     // requests, so this task is not expanded for it (see listScheduledTasks).
-    githubOnly: true
+    githubOnly: true,
+    // A leaf GitHub job — polls PR state, spends no model tokens.
+    aiJobTypes: []
   },
   {
     baseKey: "fix-patrol",
@@ -95,7 +114,10 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
       "The verify, dedupe, and split lenses propose corrections, consolidations, and splits.",
     defaultCron: "0 * * * *",
     jobType: "correctness_patrol",
-    input: (flowId) => ({ flowId })
+    input: (flowId) => ({ flowId }),
+    // The verify lens gates each doc, then fans into corrective / dedupe / split
+    // jobs (patrol/service.ts). All four carry the flowId on their input.
+    aiJobTypes: ["verify_document", "correct_document", "dedupe_documents", "split_document"]
   },
   {
     baseKey: "improve-patrol",
@@ -106,7 +128,10 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
       "Separate from the Correctness patrol: it proposes editorial expansion, not correctness or structural fixes.",
     defaultCron: "0 * * * *",
     jobType: "editorial_patrol",
-    input: (flowId) => ({ flowId })
+    input: (flowId) => ({ flowId }),
+    // The improve lens fans into one improve_document job per selected doc
+    // (patrol/service.ts), each carrying the flowId.
+    aiJobTypes: ["improve_document"]
   },
   {
     baseKey: "seed-bootstrap",
@@ -117,7 +142,11 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
       "sources — the plan waits on the Seed page for human review; nothing is drafted without approval.",
     defaultCron: "0 * * * *",
     jobType: "seed_bootstrap",
-    input: (flowId) => ({ flowId })
+    input: (flowId) => ({ flowId }),
+    // runSeedBootstrap enqueues the flow-outline job (seed/service.ts). The seed
+    // documents it can lead to are drafted only on human plan approval, not by
+    // this scheduled run, so they are not attributed here.
+    aiJobTypes: ["outline_flow_seed"]
   }
 ];
 
@@ -156,7 +185,8 @@ export function listScheduledTasks(ctx: AppContext): ScheduledTaskDefinition[] {
         description: template.description,
         defaultCron: template.defaultCron,
         jobType: template.jobType,
-        input: template.input(flow.id)
+        input: template.input(flow.id),
+        aiJobTypes: template.aiJobTypes
       }));
   });
 }

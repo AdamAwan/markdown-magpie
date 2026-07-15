@@ -117,3 +117,23 @@ test("GET /api/insights/ai-usage rejects a malformed from", async () => {
   const res = await app.request("/api/insights/ai-usage?from=not-a-date");
   assert.equal(res.status, 400);
 });
+
+test("GET /api/insights/ai-cost/by-flow returns an empty flows envelope under the null store", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/insights/ai-cost/by-flow?flow=flow-1");
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { flows: [] });
+});
+
+test("GET /api/insights/ai-cost/by-flow rejects a malformed from", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/insights/ai-cost/by-flow?from=not-a-date");
+  assert.equal(res.status, 400);
+});
+
+test("GET /api/insights/ai-cost/by-schedule returns an empty schedules envelope under the null store", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/insights/ai-cost/by-schedule");
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { schedules: [] });
+});
