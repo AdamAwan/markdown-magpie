@@ -40,18 +40,14 @@ export function scoreCase(caseDef, outcome, docTexts) {
   const matchedActual = actualDocs.filter((doc) => expectedDocs.includes(doc));
   checks.citationPrecision = actualDocs.length > 0 ? matchedActual.length / actualDocs.length : 1;
   checks.citationRecall =
-    expectedDocs.length > 0
-      ? expectedDocs.filter((doc) => actualDocs.includes(doc)).length / expectedDocs.length
-      : 1;
+    expectedDocs.length > 0 ? expectedDocs.filter((doc) => actualDocs.includes(doc)).length / expectedDocs.length : 1;
 
   // Groundedness only applies when the answer cites something: every factual
   // sentence must appear in a cited document. Coverage meta-statements are not
   // factual claims.
   if (actualDocs.length > 0 && typeof answer.answer === "string") {
     const citedText = normalise(actualDocs.map((doc) => docTexts.get(doc) ?? "").join(" "));
-    const factual = splitSentences(answer.answer).filter(
-      (sentence) => !sentence.startsWith(NOT_COVERED_PREFIX)
-    );
+    const factual = splitSentences(answer.answer).filter((sentence) => !sentence.startsWith(NOT_COVERED_PREFIX));
     checks.groundedness =
       factual.length > 0
         ? factual.filter((sentence) => citedText.includes(normalise(sentence))).length / factual.length

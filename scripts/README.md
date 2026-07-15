@@ -18,7 +18,18 @@ Small repo-level helpers live here. Prefer adding an npm script in the root `pac
 - `e2e-jobs.ts` drives the API and watcher through queue lifecycle smoke tests.
 - `fixtures/openai-fixture.mjs` is the deterministic OpenAI-compatible chat fixture used by the E2E stack.
 
-## Evaluation`r`n`r`n- `eval-api.ts` runs a few fixed API answer-quality checks against a live API.
+## Evaluation
+
+- `eval-golden.ts` is the golden-question regression eval (issue #241): boots the full
+  answer pipeline self-contained against the throwaway DB, asks the versioned question set
+  in `fixtures/golden-questions.json`, and fails on any regression vs
+  `fixtures/golden-baseline.json`. Run with `npm run eval:golden`
+  (`-- --update-baseline` to re-pin); see `docs/golden-eval.md`.
+- `fixtures/golden-provider.mjs` + `lib/golden-core.mjs` are the deterministic provider it
+  uses; `lib/golden-scoring.mjs` scores and compares to baseline; `fixtures/golden-kb/` is
+  the fixture knowledge base.
+- `eval-api.ts` runs a few fixed API answer-quality checks against a live API.
+- `eval-gap-threshold.ts` sweeps gap-cluster assignment thresholds over fixture embeddings.
 
 ## Presentation
 

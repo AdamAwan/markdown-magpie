@@ -230,7 +230,9 @@ function formatChecks(checks: CaseScore["checks"]): string {
 async function main(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
-    throw new Error("DATABASE_URL is not set. Run via `npm run eval:golden` (scripts/test-db.mjs provides the throwaway database).");
+    throw new Error(
+      "DATABASE_URL is not set. Run via `npm run eval:golden` (scripts/test-db.mjs provides the throwaway database)."
+    );
   }
 
   const questionSet = JSON.parse(readFileSync(questionsPath, "utf8")) as GoldenQuestionSet;
@@ -272,7 +274,11 @@ async function main(): Promise<void> {
   ];
 
   console.log(`[eval] golden provider on :${fixturePort}, API on :${apiPort}`);
-  launch("golden-provider", [path.join(fixturesDir, "golden-provider.mjs")], cleanEnv({ FIXTURE_PORT: String(fixturePort) }));
+  launch(
+    "golden-provider",
+    [path.join(fixturesDir, "golden-provider.mjs")],
+    cleanEnv({ FIXTURE_PORT: String(fixturePort) })
+  );
   await waitFor("golden provider health", BOOT_TIMEOUT_MS, async () => {
     const response = await fetch(`http://127.0.0.1:${fixturePort}/health`);
     return response.ok;
@@ -367,10 +373,7 @@ async function main(): Promise<void> {
     console.log(`${dimension.padEnd(24)} ${score.toFixed(4)}`);
   }
 
-  appendFileSync(
-    historyPath,
-    `${JSON.stringify({ at: new Date().toISOString(), ...result })}\n`
-  );
+  appendFileSync(historyPath, `${JSON.stringify({ at: new Date().toISOString(), ...result })}\n`);
 
   if (updateBaseline) {
     writeFileSync(baselinePath, `${JSON.stringify(result, null, 2)}\n`);
@@ -401,7 +404,9 @@ async function main(): Promise<void> {
   if (regressions.length > 0) {
     console.error("\n=== REGRESSIONS vs committed baseline ===");
     for (const regression of regressions) {
-      console.error(`${regression.kind} ${regression.name}: baseline ${String(regression.baseline)} -> ${String(regression.current)}`);
+      console.error(
+        `${regression.kind} ${regression.name}: baseline ${String(regression.baseline)} -> ${String(regression.current)}`
+      );
     }
     process.exitCode = 1;
     return;

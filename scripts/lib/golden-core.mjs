@@ -13,10 +13,48 @@
 // words golden questions use; anything not listed counts as a content word a
 // section must cover.
 const STOPWORDS = new Set([
-  "a", "an", "and", "are", "at", "be", "by", "can", "do", "does", "for", "from",
-  "how", "i", "in", "into", "is", "it", "my", "of", "on", "or", "our", "per",
-  "should", "that", "the", "this", "to", "was", "we", "were", "what", "when",
-  "where", "which", "who", "why", "will", "with", "you", "your"
+  "a",
+  "an",
+  "and",
+  "are",
+  "at",
+  "be",
+  "by",
+  "can",
+  "do",
+  "does",
+  "for",
+  "from",
+  "how",
+  "i",
+  "in",
+  "into",
+  "is",
+  "it",
+  "my",
+  "of",
+  "on",
+  "or",
+  "our",
+  "per",
+  "should",
+  "that",
+  "the",
+  "this",
+  "to",
+  "was",
+  "we",
+  "were",
+  "what",
+  "when",
+  "where",
+  "which",
+  "who",
+  "why",
+  "will",
+  "with",
+  "you",
+  "your"
 ]);
 
 // Lowercase alphanumeric tokens; hyphenated words ("on-call", "eu-west") stay
@@ -106,9 +144,7 @@ export function splitSentences(text) {
 // clause, in document order — the grounded raw material for an answer.
 export function groundedSentences(clause, section) {
   const words = new Set(contentWords(clause));
-  return splitSentences(section.content).filter((sentence) =>
-    tokenize(sentence).some((token) => words.has(token))
-  );
+  return splitSentences(section.content).filter((sentence) => tokenize(sentence).some((token) => words.has(token)));
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +309,11 @@ function isOffTopic(systemPrompt, question, sections) {
 export function verifyCall(userMessage) {
   const answer = extractLabelled(userMessage, "Answer under review:", "Context:");
   const context = userMessage.slice(userMessage.indexOf("Context:") + "Context:".length);
-  const sectionsText = normalise(parseSections(context).map((section) => section.content).join(" "));
+  const sectionsText = normalise(
+    parseSections(context)
+      .map((section) => section.content)
+      .join(" ")
+  );
 
   const supported = [];
   const unsupported = [];
@@ -290,8 +330,7 @@ export function verifyCall(userMessage) {
   return {
     grounded: false,
     unsupportedClaims: unsupported,
-    revisedAnswer:
-      supported.length > 0 ? supported.join(" ") : "The knowledge base does not cover this question."
+    revisedAnswer: supported.length > 0 ? supported.join(" ") : "The knowledge base does not cover this question."
   };
 }
 

@@ -113,8 +113,28 @@ describe("scoreCase", () => {
 describe("aggregate", () => {
   it("averages booleans and fractions, skipping non-applicable checks", () => {
     const dimensions = aggregate([
-      { checks: { routing: true, confidence: true, citationPrecision: 1, citationRecall: 1, groundedness: 1, content: true, behaviour: true } },
-      { checks: { routing: false, confidence: true, citationPrecision: 0.5, citationRecall: 1, groundedness: null, content: null, behaviour: false } }
+      {
+        checks: {
+          routing: true,
+          confidence: true,
+          citationPrecision: 1,
+          citationRecall: 1,
+          groundedness: 1,
+          content: true,
+          behaviour: true
+        }
+      },
+      {
+        checks: {
+          routing: false,
+          confidence: true,
+          citationPrecision: 0.5,
+          citationRecall: 1,
+          groundedness: null,
+          content: null,
+          behaviour: false
+        }
+      }
     ]);
     assert.equal(dimensions.routing_accuracy, 0.5);
     assert.equal(dimensions.confidence_calibration, 1);
@@ -133,7 +153,10 @@ describe("compareToBaseline", () => {
 
   it("flags dimension and case regressions", () => {
     const { regressions } = compareToBaseline(
-      { dimensions: { routing_accuracy: 0.8, groundedness: 0.9 }, cases: { "backup-retention": false, "known-flaky": false } },
+      {
+        dimensions: { routing_accuracy: 0.8, groundedness: 0.9 },
+        cases: { "backup-retention": false, "known-flaky": false }
+      },
       baseline
     );
     assert.deepEqual(
@@ -144,7 +167,10 @@ describe("compareToBaseline", () => {
 
   it("reports improvements without failing", () => {
     const { regressions, improvements } = compareToBaseline(
-      { dimensions: { routing_accuracy: 1, groundedness: 1 }, cases: { "backup-retention": true, "known-flaky": true } },
+      {
+        dimensions: { routing_accuracy: 1, groundedness: 1 },
+        cases: { "backup-retention": true, "known-flaky": true }
+      },
       baseline
     );
     assert.equal(regressions.length, 0);
@@ -155,10 +181,7 @@ describe("compareToBaseline", () => {
   });
 
   it("treats a missing dimension as a regression", () => {
-    const { regressions } = compareToBaseline(
-      { dimensions: { routing_accuracy: 1 }, cases: {} },
-      baseline
-    );
+    const { regressions } = compareToBaseline({ dimensions: { routing_accuracy: 1 }, cases: {} }, baseline);
     assert.ok(regressions.some((r) => r.name === "groundedness" && r.current === null));
   });
 });

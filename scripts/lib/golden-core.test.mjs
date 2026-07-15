@@ -60,7 +60,9 @@ describe("splitClauses", () => {
 
 describe("parseSections", () => {
   it("parses id, heading, and multi-line content", () => {
-    const sections = parseSections(`${RETENTION_SECTION}\n\n[section repo:limits.md:1] # API rate limits\nThe API allows 120 requests per minute.\n\nExceeding it returns 429.`);
+    const sections = parseSections(
+      `${RETENTION_SECTION}\n\n[section repo:limits.md:1] # API rate limits\nThe API allows 120 requests per minute.\n\nExceeding it returns 429.`
+    );
     assert.equal(sections.length, 2);
     assert.equal(sections[0].id, "repo:backups.md:2");
     assert.equal(sections[0].heading, "Backup retention");
@@ -99,8 +101,16 @@ describe("groundedSentences", () => {
 
 describe("routeCall", () => {
   const flows = JSON.stringify([
-    { id: "aurora", name: "Aurora Product Docs", persona: "Questions about the Aurora database product: backups, deployment." },
-    { id: "handbook", name: "Engineering Handbook", persona: "Questions about onboarding new engineers and incident response." }
+    {
+      id: "aurora",
+      name: "Aurora Product Docs",
+      persona: "Questions about the Aurora database product: backups, deployment."
+    },
+    {
+      id: "handbook",
+      name: "Engineering Handbook",
+      persona: "Questions about onboarding new engineers and incident response."
+    }
   ]);
 
   it("routes by keyword overlap", () => {
@@ -117,7 +127,10 @@ describe("routeCall", () => {
 
 describe("assessCall", () => {
   it("answers high with used section ids when the clause is fully covered", () => {
-    const reply = assessCall(ANSWER_SYSTEM, assessMessage("How long are database backups retained?", RETENTION_SECTION));
+    const reply = assessCall(
+      ANSWER_SYSTEM,
+      assessMessage("How long are database backups retained?", RETENTION_SECTION)
+    );
     assert.equal(reply.action, "answer");
     assert.equal(reply.confidence, "high");
     assert.deepEqual(reply.usedSectionIds, ["repo:backups.md:2"]);
@@ -128,7 +141,10 @@ describe("assessCall", () => {
   it("requests a search for uncovered clauses", () => {
     const reply = assessCall(
       ANSWER_SYSTEM,
-      assessMessage("How long are database backups retained, and can expired backups be restored from cold storage?", RETENTION_SECTION)
+      assessMessage(
+        "How long are database backups retained, and can expired backups be restored from cold storage?",
+        RETENTION_SECTION
+      )
     );
     assert.equal(reply.action, "search");
     assert.deepEqual(reply.queries, ["expired backup restored cold storage"]);
@@ -138,7 +154,10 @@ describe("assessCall", () => {
     const context = `${RETENTION_SECTION}\n\nYou have gathered enough context. Answer now using only the context above; do not request more searches.`;
     const reply = assessCall(
       ANSWER_SYSTEM,
-      assessMessage("How long are database backups retained, and can expired backups be restored from cold storage?", context)
+      assessMessage(
+        "How long are database backups retained, and can expired backups be restored from cold storage?",
+        context
+      )
     );
     assert.equal(reply.action, "answer");
     assert.equal(reply.confidence, "medium");
@@ -148,8 +167,12 @@ describe("assessCall", () => {
   });
 
   it("declares a knowledge gap when forced with nothing covered but the question is in-domain", () => {
-    const context = "(no context retrieved yet)\n\nYou have gathered enough context. Answer now using only the context above; do not request more searches.";
-    const reply = assessCall(ANSWER_SYSTEM, assessMessage("What is the enterprise support SLA for the Aurora database?", context));
+    const context =
+      "(no context retrieved yet)\n\nYou have gathered enough context. Answer now using only the context above; do not request more searches.";
+    const reply = assessCall(
+      ANSWER_SYSTEM,
+      assessMessage("What is the enterprise support SLA for the Aurora database?", context)
+    );
     assert.equal(reply.action, "answer");
     assert.equal(reply.isKnowledgeGap, true);
     assert.equal(reply.confidence, "low");
@@ -157,7 +180,10 @@ describe("assessCall", () => {
   });
 
   it("goes out of scope when the question matches neither persona nor context", () => {
-    const reply = assessCall(ANSWER_SYSTEM, assessMessage("Should I feed my cat wet or dry food?", "(no context retrieved yet)"));
+    const reply = assessCall(
+      ANSWER_SYSTEM,
+      assessMessage("Should I feed my cat wet or dry food?", "(no context retrieved yet)")
+    );
     assert.equal(reply.action, "answer");
     assert.equal(reply.outOfScope, true);
     assert.deepEqual(reply.gaps, []);
@@ -189,7 +215,9 @@ describe("verifyCall", () => {
 
   it("strips fabricated sentences into a revised answer", () => {
     const answer = `Aurora is not yet SOC 2 certified; a SOC 2 Type II audit is in progress. ${FABRICATED_SOC2_CLAIM}`;
-    const reply = verifyCall(`Question:\nIs Aurora SOC 2 certified?\n\nAnswer under review:\n${answer}\n\nContext:\n${context}`);
+    const reply = verifyCall(
+      `Question:\nIs Aurora SOC 2 certified?\n\nAnswer under review:\n${answer}\n\nContext:\n${context}`
+    );
     assert.equal(reply.grounded, false);
     assert.deepEqual(reply.unsupportedClaims, [FABRICATED_SOC2_CLAIM]);
     assert.ok(reply.revisedAnswer.includes("audit is in progress"));
@@ -197,7 +225,8 @@ describe("verifyCall", () => {
   });
 
   it("treats coverage meta-statements as supported", () => {
-    const answer = "How long a backup is retained: nightly database backups are retained for 35 days. The knowledge base does not cover: cold storage.";
+    const answer =
+      "How long a backup is retained: nightly database backups are retained for 35 days. The knowledge base does not cover: cold storage.";
     const reply = verifyCall(`Question:\nQ\n\nAnswer under review:\n${answer}\n\nContext:\n${RETENTION_SECTION}`);
     assert.equal(reply.grounded, true);
   });
