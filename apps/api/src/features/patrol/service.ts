@@ -108,7 +108,7 @@ const VERIFY_WAIT_BUDGET_MS = 10 * 60_000;
 // to operators rather than silently reading as full provenance coverage.
 const PROVENANCE_EVENT_CAP = 50;
 
-const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sources }) => {
+const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sources, flowId }) => {
   // #214 phase 2: fold the document's provenance event stream (its merged
   // proposals) into advisory citedClaims the verify agent checks first. An
   // empty fold omits the field entirely so the job input — and therefore the
@@ -126,6 +126,10 @@ const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sou
     content,
     sources,
     ...(citedClaims.length > 0 ? { citedClaims } : {}),
+    // Attribution only — lets the read-time cost rollups credit this verify's
+    // spend to the flow's correctness patrol. Omitted for the unscoped flow so
+    // the rendered prompt input stays byte-identical.
+    ...(flowId !== undefined ? { flowId } : {}),
     provider: ctx.config.get().aiProvider
   } satisfies VerifyDocumentJobInput & { provider: AiProviderName };
   let terminal;

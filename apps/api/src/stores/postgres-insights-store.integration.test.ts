@@ -272,46 +272,58 @@ test("aiUsage sums completion-envelope usage per (job type, provider)", { skip: 
   await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
   await pool.query(DDL(schema));
 
-  // Completed AI-queue rows carry the { result, executor, usage } envelope in
-  // `output` (#241); usage is absent when the provider reported nothing (CLI
-  // tiers). Non-AI queues (publish_proposal__github), failed rows, and
-  // dead-letter twins must all be ignored.
+  // Completed AI-queue rows carry the { result, executor, usage, model }
+  // envelope in `output` (#241, #268); usage is absent when the provider
+  // reported nothing (CLI tiers) and model is absent when the watcher had none
+  // configured. Non-AI queues (publish_proposal__github), failed rows, and
+  // dead-letter twins must all be ignored. The two openai_compatible
+  // answer_question rows share model "gpt-4o" so they group together and price
+  // as one priced row.
   await pool.query(
     `INSERT INTO "${schema}".job (name, state, created_on, output) VALUES
        ('answer_question__openai_compatible', 'completed', now(),
-        '{"result":{},"executor":"w1","usage":{"inputTokens":100,"outputTokens":20,"totalTokens":120}}'::jsonb),
+        '{"result":{},"executor":"w1","provider":"openai-compatible","model":"gpt-4o","usage":{"inputTokens":100,"outputTokens":20,"totalTokens":120}}'::jsonb),
        ('answer_question__openai_compatible', 'completed', now(),
-        '{"result":{},"executor":"w1","usage":{"inputTokens":40,"outputTokens":5,"totalTokens":45}}'::jsonb),
-       ('answer_question__claude', 'completed', now(), '{"result":{},"executor":"w2"}'::jsonb),
+        '{"result":{},"executor":"w1","provider":"openai-compatible","model":"gpt-4o","usage":{"inputTokens":40,"outputTokens":5,"totalTokens":45}}'::jsonb),
+       ('answer_question__claude', 'completed', now(), '{"result":{},"executor":"w2","provider":"claude"}'::jsonb),
        ('verify_document__openai_compatible', 'completed', now(),
-        '{"result":{},"executor":"w1","usage":{"inputTokens":7,"outputTokens":3,"totalTokens":10}}'::jsonb),
+        '{"result":{},"executor":"w1","provider":"openai-compatible","model":"gpt-4o-mini","usage":{"inputTokens":7,"outputTokens":3,"totalTokens":10}}'::jsonb),
        ('verify_document__claude', 'completed', now(),
-        '{"result":{},"executor":"w2","usage":{"inputTokens":50,"outputTokens":10}}'::jsonb),
+        '{"result":{},"executor":"w2","provider":"claude","usage":{"inputTokens":50,"outputTokens":10}}'::jsonb),
        ('answer_question__openai_compatible', 'failed', now(), '{"category":"provider"}'::jsonb),
        ('answer_question__openai_compatible__dead_letter', 'completed', now(),
-        '{"result":{},"executor":"w1","usage":{"inputTokens":999,"outputTokens":999,"totalTokens":1998}}'::jsonb),
+        '{"result":{},"executor":"w1","provider":"openai-compatible","model":"gpt-4o","usage":{"inputTokens":999,"outputTokens":999,"totalTokens":1998}}'::jsonb),
        ('publish_proposal__github', 'completed', now(), '{"result":{},"executor":"w2"}'::jsonb)`
   );
 
   const store = new PostgresInsightsStore(pool, schema);
   const to = new Date();
   const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
-  const usage = await store.aiUsage({ from, to, bucket: "day" });
+  // Only gpt-4o on openai-compatible is priced; gpt-4o-mini and the CLI rows are
+  // not, so they must come back without an estimatedCost (never priced as $0).
+  const usage = await store.aiUsage({ from, to, bucket: "day" }, [
+    { provider: "openai-compatible", model: "gpt-4o", inputPerMTok: 2.5, outputPerMTok: 10 }
+  ]);
 
-  // Heaviest pair first. The verify_document__claude row reported no
-  // totalTokens, so its total falls back to input+output (60) — a provider
-  // that omits the total still ranks by real spend. The answer_question
-  // claude row completed without usage entirely, so it counts as a job but
-  // contributes no tokens.
+  // Heaviest triple first. Three states are distinguishable:
+  //  - priced   — answer_question/openai-compatible/gpt-4o: (140×2.5 + 25×10)/1e6
+  //  - unpriced — verify_document rows: usage reported (jobsWithUsage 1) but no
+  //               matching price entry (gpt-4o-mini) or no model at all (claude,
+  //               model absent), so estimatedCost is omitted. The claude row
+  //               reported no totalTokens, so its total falls back to in+out (60).
+  //  - unmetered — answer_question/claude: no usage at all (jobsWithUsage 0), so
+  //               it counts as a job, contributes no tokens, and carries no cost.
   assert.deepEqual(usage, [
     {
       jobType: "answer_question",
       provider: "openai-compatible",
+      model: "gpt-4o",
       jobs: 2,
       jobsWithUsage: 2,
       inputTokens: 140,
       outputTokens: 25,
-      totalTokens: 165
+      totalTokens: 165,
+      estimatedCost: 0.0006
     },
     {
       jobType: "verify_document",
@@ -325,6 +337,7 @@ test("aiUsage sums completion-envelope usage per (job type, provider)", { skip: 
     {
       jobType: "verify_document",
       provider: "openai-compatible",
+      model: "gpt-4o-mini",
       jobs: 1,
       jobsWithUsage: 1,
       inputTokens: 7,

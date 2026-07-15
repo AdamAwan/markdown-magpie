@@ -84,8 +84,9 @@ export async function answerFeedback(ctx: AppContext, query: InsightsRangeQuery)
   return ctx.stores.insights.answerFeedback(resolveRange(query), query.flow);
 }
 
-// AI token usage (C11): watcher-reported token spend per (job type, provider)
-// over the window (#241). Window-only — grouped by pair, not time.
+// AI token usage (C11): watcher-reported token spend per (job type, provider,
+// model) over the window, priced into money against the operator's AI_PRICING
+// table at read time (#241). Window-only — grouped by triple, not time.
 export async function aiUsage(ctx: AppContext, query: InsightsWindowQuery): Promise<AiUsageBreakdown[]> {
-  return ctx.stores.insights.aiUsage(resolveWindow(query));
+  return ctx.stores.insights.aiUsage(resolveWindow(query), ctx.settings.aiPricing);
 }

@@ -13,6 +13,7 @@ import type {
   VerificationBucket,
   VerificationSummary
 } from "@magpie/core";
+import type { AiPricingEntry } from "../platform/ai-pricing.js";
 
 // A resolved time range for an insight query: an explicit window plus the
 // bucket granularity. The routes layer applies defaults (last 30 days, daily)
@@ -75,11 +76,13 @@ export interface InsightsStore {
   // with the unhelpful-on-confident subset called out. Source: `questions`
   // (`feedback`, `feedback_at`, `confidence`).
   answerFeedback(range: InsightsRange, flowId?: string): Promise<AnswerFeedback>;
-  // AI token usage per (job type, provider) over the window (C11, #241).
+  // AI token usage per (job type, provider, model) over the window (C11, #241).
   // Source: completed pg-boss `job` rows on the provider-fanned queues, whose
-  // `{ result, executor, usage }` completion envelope carries the watcher's
-  // summed provider-reported usage.
-  aiUsage(range: InsightsRange): Promise<AiUsageBreakdown[]>;
+  // `{ result, executor, usage, provider?, model? }` completion envelope carries
+  // the watcher's summed provider-reported usage and execution identity. The
+  // `pricing` table turns the token sums into `estimatedCost` at read time (the
+  // priced state); it is never persisted.
+  aiUsage(range: InsightsRange, pricing: AiPricingEntry[]): Promise<AiUsageBreakdown[]>;
 }
 
 // Used when the process runs without a Postgres pool (in-memory unit tests):
