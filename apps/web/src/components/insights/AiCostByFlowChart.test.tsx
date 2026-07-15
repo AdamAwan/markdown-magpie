@@ -26,7 +26,7 @@ const fixture: AiCostByFlow[] = [
   }
 ];
 
-const flowName = (flowId?: string) => (flowId ? { "flow-eng": "Engineering" }[flowId] ?? flowId : "Unattributed");
+const flowName = (flowId?: string) => (flowId ? ({ "flow-eng": "Engineering" }[flowId] ?? flowId) : "Unattributed");
 
 test("AiCostByFlowChart renders the total and flow count", () => {
   const html = renderMarkup(<AiCostByFlowChart flows={fixture} flowName={flowName} />);

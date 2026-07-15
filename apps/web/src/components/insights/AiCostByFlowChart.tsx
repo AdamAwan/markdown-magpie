@@ -49,7 +49,8 @@ export function AiCostByFlowChart({
   const data = flows.map((flow) => {
     const unpricedJobs = flow.jobsWithUsage - flow.pricedJobs;
     const unmeteredJobs = flow.jobs - flow.jobsWithUsage;
-    const costLabel = flow.estimatedCost !== undefined ? `est. cost ${formatCost(flow.estimatedCost)}` : "no priced usage";
+    const costLabel =
+      flow.estimatedCost !== undefined ? `est. cost ${formatCost(flow.estimatedCost)}` : "no priced usage";
     return {
       label: flowName(flow.flowId),
       inputTokens: flow.inputTokens,
@@ -67,7 +68,9 @@ export function AiCostByFlowChart({
     <>
       <Summary>
         <TotalCost>{anyPriced ? `Est. cost ${formatCost(totalCost)}` : "No priced usage"}</TotalCost>
-        <Coverage>across {flows.length} flow{flows.length === 1 ? "" : "s"}</Coverage>
+        <Coverage>
+          across {flows.length} flow{flows.length === 1 ? "" : "s"}
+        </Coverage>
       </Summary>
       <ResponsiveContainer width="100%" height={300}>
         <BarChart data={data} margin={{ top: 8, right: 12, bottom: 32, left: 0 }}>

@@ -166,6 +166,24 @@ failure *after* that point as a reason to redo the generation:
   configured reports only its provider — the CLI ran on its own default, and
   reporting nothing beats guessing. Best-effort like usage: a malformed value
   is dropped by the API's body schema, never a 400.
+- **Cost is priced at read time, never persisted.** The Insights rollups turn
+  the stored `usage` × the identity's model into money against the operator's
+  `AI_PRICING` table (`estimateTokenCost` in `apps/api/src/platform/ai-pricing.ts`)
+  each time they are read, so correcting a mispriced entry retroactively re-values
+  history. Three states stay distinct and never render as `$0`: **priced** (a
+  price entry matched), **unpriced** (usage reported, no matching entry), and
+  **unmetered** (no usage — the CLI case, via the existing `jobsWithUsage`
+  mechanism). Consumed by the C11 AI-usage chart, the per-flow cost view
+  (`/insights/ai-cost/by-flow`), and the per-schedule Cost column
+  (`/insights/ai-cost/by-schedule`).
+- **flowId on the input attributes spend (attribution only).** The per-flow and
+  per-schedule cost rollups read the flow off the stored job input at
+  `data->'input'->>'flowId'` (the pg-boss JobEnvelope). Most flow-scoped AI jobs
+  already carry it; `verify_document` and `draft_markdown_proposal` were extended
+  to carry it too so the correctness patrol and gap reconciler attribute
+  correctly — the field is metadata the runners ignore, absent on the unscoped
+  flow. `answer_question` and the `fold_*` jobs carry no flowId, so their spend is
+  *unattributed* in the per-flow view and excluded from per-schedule attribution.
 - **Reading a completed job's output back (#184).** Because the persisted output
   is the `{ result, executor, usage?, provider?, model? }` envelope, any API-side consumer of
   `runJobToCompletion` must parse it through `parseCompletedJobOutput(schema,

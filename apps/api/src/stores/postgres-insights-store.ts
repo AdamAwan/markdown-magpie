@@ -879,10 +879,14 @@ export class PostgresInsightsStore implements InsightsStore {
   ): AiUsageBreakdown {
     const inputTokens = Number(row.input_tokens);
     const outputTokens = Number(row.output_tokens);
-    const estimatedCost = estimateTokenCost(pricing, { provider: queue.provider, model: row.model }, {
-      inputTokens,
-      outputTokens
-    });
+    const estimatedCost = estimateTokenCost(
+      pricing,
+      { provider: queue.provider, model: row.model },
+      {
+        inputTokens,
+        outputTokens
+      }
+    );
     return {
       jobType: queue.jobType,
       provider: queue.provider,

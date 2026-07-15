@@ -80,9 +80,7 @@ export function AiUsageChart({ usage }: { usage: AiUsageBreakdown[] }) {
   return (
     <>
       <Summary>
-        <TotalCost>
-          {priced > 0 ? `Est. cost ${formatCost(totalCost)}` : "No priced usage"}
-        </TotalCost>
+        <TotalCost>{priced > 0 ? `Est. cost ${formatCost(totalCost)}` : "No priced usage"}</TotalCost>
         <Coverage>
           {priced} priced · {unpriced} unpriced · {unmetered} unmetered
         </Coverage>
