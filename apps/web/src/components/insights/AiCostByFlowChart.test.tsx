@@ -38,3 +38,17 @@ test("AiCostByFlowChart renders without throwing for empty data", () => {
   const html = renderMarkup(<AiCostByFlowChart flows={[]} flowName={flowName} />);
   assert.equal(typeof html, "string");
 });
+
+test("AiCostByFlowChart plots the priced flow's cost and footnotes flows with no priced usage", () => {
+  const html = renderMarkup(<AiCostByFlowChart flows={fixture} flowName={flowName} />);
+  assert.match(html, /Est\. cost 1\.23/);
+  // The unattributed flow has no priced usage → footnoted, not drawn empty.
+  assert.match(html, /1 flow with no priced usage/);
+});
+
+test("AiCostByFlowChart shows an empty-state CTA when no flow is priced", () => {
+  const unpricedOnly = fixture.filter((flow) => flow.estimatedCost === undefined);
+  const html = renderMarkup(<AiCostByFlowChart flows={unpricedOnly} flowName={flowName} />);
+  assert.match(html, /No priced usage/);
+  assert.match(html, /AI_PRICING/);
+});
