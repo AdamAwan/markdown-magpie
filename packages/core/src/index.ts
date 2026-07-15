@@ -607,6 +607,33 @@ export interface AiUsage {
   totalTokens?: number;
 }
 
+// Builds an AiUsage from raw provider-reported counts, or undefined when
+// nothing usable was reported. The single validation point for every producer
+// (the HTTP chat providers, the watcher's AI-SDK loop): a count must be a
+// finite non-negative number, and is rounded to an integer — the API's
+// completion contract requires integers, and a fractional count from a
+// non-conforming gateway must never be able to fail an otherwise good
+// completion. Keep this in lock-step with the API's jobUsageSchema.
+export function aiUsageFromTokenCounts(counts: {
+  inputTokens?: unknown;
+  outputTokens?: unknown;
+  totalTokens?: unknown;
+}): AiUsage | undefined {
+  const clean = (value: unknown): number | undefined =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : undefined;
+  const inputTokens = clean(counts.inputTokens);
+  const outputTokens = clean(counts.outputTokens);
+  const totalTokens = clean(counts.totalTokens);
+  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+    return undefined;
+  }
+  return {
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(totalTokens !== undefined ? { totalTokens } : {})
+  };
+}
+
 export interface EmbeddingProvider {
   embed(texts: string[]): Promise<number[][]>;
 }
@@ -1666,7 +1693,9 @@ export interface PatrolImpact {
 // `jobs` counts every completed job of the pair in the window; `jobsWithUsage`
 // counts the subset that actually reported usage, so the chart can flag how
 // much of the pair's spend is invisible (CLI providers report nothing). Token
-// sums cover only the reporting subset.
+// sums cover only the reporting subset; a job that reported input/output but
+// no total contributes input+output to `totalTokens`, so ranking by total
+// never under-counts a provider that omits the total field.
 export interface AiUsageBreakdown {
   jobType: string;
   provider: string;

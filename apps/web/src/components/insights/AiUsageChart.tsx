@@ -3,16 +3,14 @@
 import { useTheme } from "@emotion/react";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { AiUsageBreakdown } from "../../lib/types";
+import { humanise } from "./format";
 
-// Humanise a job type ("answer_question" → "Answer question") for the axis label.
-function humanise(jobType: string): string {
-  const spaced = jobType.replaceAll("_", " ");
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
-}
-
-// Compact token counts for the axis ("12400" → "12.4k").
+// Compact token counts for the axis ("12400" → "12.4K"). Hoisted: recharts
+// calls the tick formatter on every render, and Intl.NumberFormat construction
+// is expensive.
+const COMPACT = Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
 function compact(value: number): string {
-  return Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
+  return COMPACT.format(value);
 }
 
 // AI token usage: one bar per (job type, provider) pair, input and output
@@ -47,9 +45,10 @@ export function AiUsageChart({ usage }: { usage: AiUsageBreakdown[] }) {
           formatter={(value, name) =>
             typeof value === "number" ? [value.toLocaleString(), name] : [value ?? "", name]
           }
-          labelFormatter={(label) => {
-            const row = data.find((entry) => entry.label === label);
-            return row ? `${row.label} — ${row.metered} jobs metered` : String(label);
+          labelFormatter={(label, payload) => {
+            // recharts hands the hovered row's datum on the payload — no lookup.
+            const metered = (payload?.[0]?.payload as { metered?: string } | undefined)?.metered;
+            return metered ? `${String(label)} — ${metered} jobs metered` : String(label);
           }}
         />
         <Legend />

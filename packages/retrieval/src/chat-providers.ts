@@ -1,4 +1,4 @@
-import type { ChatProvider, ChatRequest, ChatResponse } from "@magpie/core";
+import { aiUsageFromTokenCounts, type ChatProvider, type ChatRequest, type ChatResponse } from "@magpie/core";
 import { DEFAULT_CHAT_TIMEOUT_MS, fetchWithTimeout } from "./http.js";
 
 export type ChatProviderName = "openai-compatible" | "azure-openai";
@@ -143,31 +143,18 @@ async function parseChatCompletionResponse(response: Response): Promise<ChatResp
 
   // Surface the OpenAI-style usage block when the provider sent one (#241).
   // Best-effort: a missing or malformed block simply yields no usage.
-  const usage = parseUsage(body.usage);
+  // aiUsageFromTokenCounts is the shared validation point — it also rounds, so
+  // a fractional count from a non-conforming gateway can never reach (and be
+  // rejected by) the API's integer-only completion contract.
+  const usage =
+    body.usage && typeof body.usage === "object"
+      ? aiUsageFromTokenCounts({
+          inputTokens: body.usage.prompt_tokens,
+          outputTokens: body.usage.completion_tokens,
+          totalTokens: body.usage.total_tokens
+        })
+      : undefined;
   return usage ? { content, usage } : { content };
-}
-
-function parseUsage(raw: { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown } | undefined):
-  | ChatResponse["usage"]
-  | undefined {
-  if (!raw || typeof raw !== "object") {
-    return undefined;
-  }
-  const inputTokens = asTokenCount(raw.prompt_tokens);
-  const outputTokens = asTokenCount(raw.completion_tokens);
-  const totalTokens = asTokenCount(raw.total_tokens);
-  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
-    return undefined;
-  }
-  return {
-    ...(inputTokens !== undefined ? { inputTokens } : {}),
-    ...(outputTokens !== undefined ? { outputTokens } : {}),
-    ...(totalTokens !== undefined ? { totalTokens } : {})
-  };
-}
-
-function asTokenCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function trimTrailingSlash(value: string): string {

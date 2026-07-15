@@ -4,6 +4,7 @@ import { useTheme } from "@emotion/react";
 import styled from "@emotion/styled";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { JobErrorBreakdown } from "../../lib/types";
+import { humanise } from "./format";
 
 const Grid = styled.div(({ theme }) => ({
   display: "grid",
@@ -20,11 +21,6 @@ const Caption = styled.h3(({ theme }) => ({
   color: theme.color.textMuted
 }));
 
-function humanise(key: string): string {
-  const spaced = key.replaceAll("_", " ");
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
-}
-
 // One horizontal bar panel: failed-job counts for a single breakdown dimension,
 // most-frequent-first (the API already orders them).
 function BreakdownPanel({ caption, rows, fill }: { caption: string; rows: JobErrorBreakdown[]; fill: string }) {
@@ -40,7 +36,12 @@ function BreakdownPanel({ caption, rows, fill }: { caption: string; rows: JobErr
       <ResponsiveContainer width="100%" height={height}>
         <BarChart data={data} layout="vertical" margin={{ top: 8, right: 12, bottom: 0, left: 12 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={theme.color.border} horizontal={false} />
-          <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12, fill: theme.color.textMuted }} tickLine={false} />
+          <XAxis
+            type="number"
+            allowDecimals={false}
+            tick={{ fontSize: 12, fill: theme.color.textMuted }}
+            tickLine={false}
+          />
           <YAxis
             type="category"
             dataKey="label"

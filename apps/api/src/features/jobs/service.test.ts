@@ -8,6 +8,7 @@ import type {
 import type { JobView } from "@magpie/jobs";
 import { answerQuestionOutputSchema } from "@magpie/jobs";
 import { makeTestContext } from "../../test-support/context.js";
+import { completeJobBodySchema } from "./schema.js";
 import {
   acceptFailedJob,
   cancelJob,
@@ -76,6 +77,26 @@ test("connected-watcher registry tracks busy/idle across the job lifecycle", asy
   assert.equal(workers[0].status, "idle");
   assert.equal(workers[0].currentJobId, undefined);
   assert.deepEqual(workers[0].capabilities, ["codex"]);
+});
+
+test("a malformed usage reading is dropped by the body schema, never failing the completion (#241)", async () => {
+  // usage is best-effort telemetry: a fractional/negative count must not 400
+  // the whole complete POST (a 4xx is non-retryable on the watcher side and
+  // would discard the paid-for output). The schema's .catch(undefined) drops
+  // the bad reading and keeps the body valid.
+  const withBadUsage = completeJobBodySchema.parse({
+    output: { answer: "a" },
+    executor: "w-1",
+    usage: { inputTokens: -5, outputTokens: 1.5 }
+  });
+  assert.equal(withBadUsage.usage, undefined);
+  assert.deepEqual(withBadUsage.output, { answer: "a" });
+
+  const withGoodUsage = completeJobBodySchema.parse({
+    output: { answer: "a" },
+    usage: { inputTokens: 10, outputTokens: 2 }
+  });
+  assert.deepEqual(withGoodUsage.usage, { inputTokens: 10, outputTokens: 2 });
 });
 
 test("completeJob persists watcher-reported usage on the completion envelope (#241)", async () => {

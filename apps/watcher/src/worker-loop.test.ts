@@ -135,6 +135,8 @@ describe("WorkerLoop", () => {
     const api = new FakeApiClient({ jobs: [fakeJob()] });
     const runner = new FakeRunner(async (_signal, onUsage) => {
       onUsage?.({ inputTokens: 100, outputTokens: 20, totalTokens: 120 });
+      // No totalTokens on this reading: its input+output (45) still counts
+      // toward the summed total, so mixed readings never understate spend.
       onUsage?.({ inputTokens: 40, outputTokens: 5 });
       return { answer: "ok" };
     });
@@ -143,7 +145,7 @@ describe("WorkerLoop", () => {
     assert.deepEqual(api.completed[0], {
       id: "job-1",
       output: { answer: "ok" },
-      usage: { inputTokens: 140, outputTokens: 25, totalTokens: 120 }
+      usage: { inputTokens: 140, outputTokens: 25, totalTokens: 165 }
     });
   });
 

@@ -1,21 +1,9 @@
 "use client";
 
 import { useTheme } from "@emotion/react";
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  Legend,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis
-} from "recharts";
+import { Area, AreaChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { JobThroughputBucket } from "../../lib/types";
-
-function shortDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
+import { shortDate } from "./format";
 
 // Job throughput & health: pg-boss jobs bucketed by day and stacked by state
 // (completed/failed/active/retry). Answers "is the queue keeping up? Is a runner

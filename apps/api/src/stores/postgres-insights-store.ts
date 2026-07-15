@@ -89,9 +89,11 @@ const JOURNEY_NODES: ReadonlyArray<JourneyNode> = [
 // non-provider queues (github/local-git/maintenance) are excluded: only
 // provider work spends model tokens.
 const AI_USAGE_QUEUES: ReadonlyMap<string, { jobType: string; provider: string }> = new Map(
-  allQueueDefinitions()
-    .filter((queue) => !queue.deadLetter && isAiProviderName(queue.capability))
-    .map((queue) => [queue.name, { jobType: queue.type, provider: queue.capability as string }])
+  allQueueDefinitions().flatMap((queue): Array<[string, { jobType: string; provider: string }]> =>
+    !queue.deadLetter && isAiProviderName(queue.capability)
+      ? [[queue.name, { jobType: queue.type, provider: queue.capability }]]
+      : []
+  )
 );
 
 // The four confidence buckets, mapping each to its count column prefix and node.
@@ -714,6 +716,13 @@ export class PostgresInsightsStore implements InsightsStore {
   // completed rows stay in the partitioned `job` table until retention purges
   // them (pg-boss v12 has no separate `archive` table). Ordered by total
   // tokens, heaviest first.
+  //
+  // The LATERAL projects the small usage object out of `output` ONCE per row:
+  // completion envelopes carry the whole job result (drafted documents, answer
+  // traces — routinely tens of KB, TOASTed), and referencing `output->...` in
+  // each aggregate would detoast the full envelope once per expression.
+  // A row's total falls back to input+output when no totalTokens was reported,
+  // so a provider that reports only input/output still ranks by real spend.
   async aiUsage(range: InsightsRange): Promise<AiUsageBreakdown[]> {
     const queueNames = [...AI_USAGE_QUEUES.keys()];
     const result = await this.pool.query<{
@@ -725,25 +734,30 @@ export class PostgresInsightsStore implements InsightsStore {
       total_tokens: string;
     }>(
       `
+      WITH usage_rows AS (
+        SELECT j.name,
+          u.usage,
+          CASE WHEN jsonb_typeof(u.usage->'inputTokens') = 'number'
+            THEN (u.usage->>'inputTokens')::bigint ELSE 0 END AS input_tokens,
+          CASE WHEN jsonb_typeof(u.usage->'outputTokens') = 'number'
+            THEN (u.usage->>'outputTokens')::bigint ELSE 0 END AS output_tokens
+        FROM "${this.pgBossSchema}".job j
+        CROSS JOIN LATERAL (SELECT j.output->'usage' AS usage) u
+        WHERE j.state = 'completed'
+          AND j.name = ANY($3)
+          AND j.created_on >= $1::timestamptz AND j.created_on <= $2::timestamptz
+      )
       SELECT name,
         count(*) AS jobs,
-        count(*) FILTER (WHERE jsonb_typeof(output->'usage') = 'object') AS jobs_with_usage,
+        count(*) FILTER (WHERE jsonb_typeof(usage) = 'object') AS jobs_with_usage,
+        coalesce(sum(input_tokens), 0) AS input_tokens,
+        coalesce(sum(output_tokens), 0) AS output_tokens,
         coalesce(sum(
-          CASE WHEN jsonb_typeof(output->'usage'->'inputTokens') = 'number'
-            THEN (output->'usage'->>'inputTokens')::bigint ELSE 0 END
-        ), 0) AS input_tokens,
-        coalesce(sum(
-          CASE WHEN jsonb_typeof(output->'usage'->'outputTokens') = 'number'
-            THEN (output->'usage'->>'outputTokens')::bigint ELSE 0 END
-        ), 0) AS output_tokens,
-        coalesce(sum(
-          CASE WHEN jsonb_typeof(output->'usage'->'totalTokens') = 'number'
-            THEN (output->'usage'->>'totalTokens')::bigint ELSE 0 END
+          CASE WHEN jsonb_typeof(usage->'totalTokens') = 'number'
+            THEN (usage->>'totalTokens')::bigint
+            ELSE input_tokens + output_tokens END
         ), 0) AS total_tokens
-      FROM "${this.pgBossSchema}".job
-      WHERE state = 'completed'
-        AND name = ANY($3)
-        AND created_on >= $1::timestamptz AND created_on <= $2::timestamptz
+      FROM usage_rows
       GROUP BY name
       `,
       [range.from.toISOString(), range.to.toISOString(), queueNames]

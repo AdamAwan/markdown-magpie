@@ -285,6 +285,8 @@ test("aiUsage sums completion-envelope usage per (job type, provider)", { skip: 
        ('answer_question__claude', 'completed', now(), '{"result":{},"executor":"w2"}'::jsonb),
        ('verify_document__openai_compatible', 'completed', now(),
         '{"result":{},"executor":"w1","usage":{"inputTokens":7,"outputTokens":3,"totalTokens":10}}'::jsonb),
+       ('verify_document__claude', 'completed', now(),
+        '{"result":{},"executor":"w2","usage":{"inputTokens":50,"outputTokens":10}}'::jsonb),
        ('answer_question__openai_compatible', 'failed', now(), '{"category":"provider"}'::jsonb),
        ('answer_question__openai_compatible__dead_letter', 'completed', now(),
         '{"result":{},"executor":"w1","usage":{"inputTokens":999,"outputTokens":999,"totalTokens":1998}}'::jsonb),
@@ -296,8 +298,11 @@ test("aiUsage sums completion-envelope usage per (job type, provider)", { skip: 
   const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
   const usage = await store.aiUsage({ from, to, bucket: "day" });
 
-  // Heaviest pair first; the claude row completed without usage, so it counts
-  // as a job but contributes no tokens.
+  // Heaviest pair first. The verify_document__claude row reported no
+  // totalTokens, so its total falls back to input+output (60) — a provider
+  // that omits the total still ranks by real spend. The answer_question
+  // claude row completed without usage entirely, so it counts as a job but
+  // contributes no tokens.
   assert.deepEqual(usage, [
     {
       jobType: "answer_question",
@@ -307,6 +312,15 @@ test("aiUsage sums completion-envelope usage per (job type, provider)", { skip: 
       inputTokens: 140,
       outputTokens: 25,
       totalTokens: 165
+    },
+    {
+      jobType: "verify_document",
+      provider: "claude",
+      jobs: 1,
+      jobsWithUsage: 1,
+      inputTokens: 50,
+      outputTokens: 10,
+      totalTokens: 60
     },
     {
       jobType: "verify_document",
