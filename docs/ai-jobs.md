@@ -288,8 +288,11 @@ For each triggering question the API **re-asks it** — recording a fresh questi
 running it through the normal queue-only `answer_question` path (flow pinned via
 `requestedFlowId`) against the now-updated index — then applies a deterministic closure
 test: the question is **closed** only when the re-ask returns a confident answer
-(`high`/`medium`) that **cites one of the merged proposal's target docs**. Outcomes, per
-proposal (`proposals.closure_status`):
+(`high`/`medium`) that **cites one of the merged proposal's target docs** and **raises no
+`auto` gap of its own** (a substantive partial answer ships at `medium` while still
+declaring a whole-question gap, so confidence alone does not prove the question was
+answered gap-free; `followup` gaps do not block closure). Outcomes, per proposal
+(`proposals.closure_status`):
 
 - **`verified_closed`** — every triggering question closed; the gaps are now resolved.
 - **`reopened`** — at least one question is still open; those gaps stay open and gain a

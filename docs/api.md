@@ -289,7 +289,7 @@ for the question. No-op (still `200`) if the question exists but is not parked.
 
 ### `GET /api/gaps/candidates?limit=<n>`
 
-Lists knowledge-gap candidates grouped by gap summary. A question is included when it is a low-confidence automatic gap **or** has been manually flagged (regardless of answer confidence). `limit` defaults to `50`.
+Lists knowledge-gap candidates grouped by gap summary. Candidacy keys on the question's unresolved gap rows, not its answer confidence: `auto` gaps (a declared whole-question miss — the answer ships at `low`, or at `medium` for a substantive partial answer), `followup` gaps (raised alongside confident answers), and `manual` flags all qualify. `limit` defaults to `50`.
 
 ```json
 { "gaps": [ GapCandidate, ... ] }
