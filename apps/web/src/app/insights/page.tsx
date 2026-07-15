@@ -216,8 +216,8 @@ export default function InsightsPage() {
       </ChartCard>
 
       <ChartCard
-        title="AI token usage"
-        subtitle="Provider-reported tokens per job type and provider, input and output stacked. CLI providers report no usage — their jobs show as unmetered, not free. Last 30 days."
+        title="AI token usage & cost"
+        subtitle="Provider-reported tokens per job type, provider, and model, input and output stacked, priced into cost against AI_PRICING at read time. CLI providers report no usage (unmetered, not free); usage with no matching price entry is unpriced, not $0. Last 30 days."
         loading={aiUsage.loading}
         error={aiUsage.error}
         empty={aiUsageEmpty}
