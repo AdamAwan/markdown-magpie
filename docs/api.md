@@ -196,15 +196,18 @@ Index counts.
 
 See [question-logging.md](question-logging.md) for the recorded fields and lifecycle.
 
-### `GET /api/questions?limit=<n>&offset=<n>`
+### `GET /api/questions?limit=<n>&offset=<n>&q=<text>`
 
 Lists question logs (newest first), paginated. `limit` defaults to `50` (capped at
-`200`), `offset` to `0`. `total` is the unpaginated count of listable (live)
-questions, so clients can page through the whole history — the console's Ask page
-uses it for its Newer/Older pager.
+`200`), `offset` to `0`. `q` (optional) narrows the list to questions whose text
+contains it — a case-insensitive literal substring, not a pattern. `total` is the
+unpaginated count of all listable (live) questions; `matching` is the count within
+the `q` filter (equal to `total` when `q` is absent), so `offset` pages within the
+matches. The console's Ask page drives its search box and Newer/Older pager off
+this: the pager walks `matching`, the sidebar badge shows `total`.
 
 ```json
-{ "questions": [ QuestionLog, ... ], "total": 123 }
+{ "questions": [ QuestionLog, ... ], "total": 123, "matching": 7 }
 ```
 
 ### `GET /api/questions/parked?limit=<n>`

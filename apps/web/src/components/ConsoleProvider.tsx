@@ -108,6 +108,21 @@ const NOTIFICATION_LIMIT = 20;
 // history; the fast tier re-fetches whichever page the operator is on.
 const QUESTIONS_PAGE_SIZE = 8;
 
+// The one place the /questions query string is built, so the fast-tier poll and
+// the pager/search fetches always agree on the page and the search filter.
+function questionsRequestPath(page: number, search: string): string {
+  const filter = search ? `&q=${encodeURIComponent(search)}` : "";
+  return `/questions?limit=${QUESTIONS_PAGE_SIZE}&offset=${page * QUESTIONS_PAGE_SIZE}${filter}`;
+}
+
+// Response of GET /questions: one page plus the unfiltered backlog size (total)
+// and the size of the set the search narrowed it to (matching).
+interface QuestionsPageResponse {
+  questions: QuestionLog[];
+  total: number;
+  matching: number;
+}
+
 // Holds every piece of console state, the data-loading effects and the action
 // handlers that previously lived inline in the single page component. Lifting
 // them into a provider mounted by the root layout means the state and the 4s
@@ -119,9 +134,13 @@ function useConsoleController() {
   const [health, setHealth] = useState<Health | undefined>();
   const [stats, setStats] = useState<KnowledgeStats>({ repositoryCount: 0, documentCount: 0, sectionCount: 0 });
   const [questions, setQuestions] = useState<QuestionLog[]>([]);
-  // Current page (0-based) and unpaginated total of the answered-questions list.
+  // Current page (0-based) of the answered-questions list, plus two unpaginated
+  // counts from GET /questions: `total` is the whole live backlog (the sidebar
+  // badge), `matching` is the set the active search narrows it to (what the
+  // pager walks — equal to total when no search is active).
   const [questionsPage, setQuestionsPage] = useState(0);
   const [questionsTotal, setQuestionsTotal] = useState(0);
+  const [questionsMatching, setQuestionsMatching] = useState(0);
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [repositories, setRepositories] = useState<RepositoryRef[]>([]);
   const [gaps, setGaps] = useState<GapCandidate[]>([]);
@@ -174,10 +193,15 @@ function useConsoleController() {
   // controller since they now run on independent schedules.
   const refreshControllerRef = useRef<AbortController | undefined>(undefined);
   const slowRefreshControllerRef = useRef<AbortController | undefined>(undefined);
-  // The answered-questions page the next refresh should fetch. A ref (mirroring
-  // the questionsPage state) because refreshFast is captured by interval timers
-  // whose closures would otherwise poll a stale page after the operator moves.
+  // The answered-questions page and search term the next refresh should fetch.
+  // Refs (mirroring the questionsPage/answeredSearch state) because refreshFast
+  // is captured by interval timers whose closures would otherwise poll a stale
+  // page or filter after the operator moves on.
   const questionsPageRef = useRef(0);
+  const answeredSearchRef = useRef("");
+  // Debounce timer for the search input, so a fast typist doesn't fire one
+  // request per keystroke.
+  const searchDebounceRef = useRef<number | undefined>(undefined);
 
   const openSection = useCallback(
     (section: ConsoleSection) => {
@@ -402,10 +426,9 @@ function useConsoleController() {
       ] = await Promise.all([
         apiGet<Health>("/health", { signal }),
         apiGet<KnowledgeStats>("/knowledge/stats", { signal }),
-        apiGet<{ questions: QuestionLog[]; total: number }>(
-          `/questions?limit=${QUESTIONS_PAGE_SIZE}&offset=${questionsPageRef.current * QUESTIONS_PAGE_SIZE}`,
-          { signal }
-        ),
+        apiGet<QuestionsPageResponse>(questionsRequestPath(questionsPageRef.current, answeredSearchRef.current), {
+          signal
+        }),
         apiGet<{ gaps: GapCandidate[] }>("/gaps/candidates?limit=8", { signal }),
         apiGet<{ clusters: SuggestedGapCluster[] }>("/gaps/clusters?limit=8", { signal }),
         apiGet<JobsResponse>("/jobs?limit=100", { signal }),
@@ -427,10 +450,11 @@ function useConsoleController() {
       setStats(statsResult);
       setQuestions(questionsResult.questions);
       setQuestionsTotal(questionsResult.total);
-      // If the backlog shrank under the operator (logs deleted) and their page no
-      // longer exists, snap back to the last real page rather than showing an
-      // empty list with a dead pager.
-      const lastQuestionsPage = Math.max(0, Math.ceil(questionsResult.total / QUESTIONS_PAGE_SIZE) - 1);
+      setQuestionsMatching(questionsResult.matching);
+      // If the matched set shrank under the operator (logs deleted, or a fresher
+      // search applied) and their page no longer exists, snap back to the last
+      // real page rather than showing an empty list with a dead pager.
+      const lastQuestionsPage = Math.max(0, Math.ceil(questionsResult.matching / QUESTIONS_PAGE_SIZE) - 1);
       if (questionsPageRef.current > lastQuestionsPage) {
         void loadQuestionsPage(lastQuestionsPage);
       }
@@ -537,26 +561,39 @@ function useConsoleController() {
   }
 
   // Pager for the Ask page's answered-questions list: fetches just the requested
-  // page rather than re-running the whole fast tier. Subsequent fast-tier polls
-  // keep whichever page the operator lands on fresh (via questionsPageRef).
+  // page (within the active search, if any) rather than re-running the whole
+  // fast tier. Subsequent fast-tier polls keep whichever page the operator lands
+  // on fresh (via questionsPageRef/answeredSearchRef).
   async function loadQuestionsPage(page: number) {
     const next = Math.max(0, page);
+    const search = answeredSearchRef.current;
     questionsPageRef.current = next;
     setQuestionsPage(next);
     try {
-      const result = await apiGet<{ questions: QuestionLog[]; total: number }>(
-        `/questions?limit=${QUESTIONS_PAGE_SIZE}&offset=${next * QUESTIONS_PAGE_SIZE}`
-      );
-      // The operator paged again (or a poll moved the page) while this request
-      // was in flight — drop the stale response.
-      if (questionsPageRef.current !== next) {
+      const result = await apiGet<QuestionsPageResponse>(questionsRequestPath(next, search));
+      // The operator paged or re-searched again (or a poll moved the page) while
+      // this request was in flight — drop the stale response.
+      if (questionsPageRef.current !== next || answeredSearchRef.current !== search) {
         return;
       }
       setQuestions(result.questions);
       setQuestionsTotal(result.total);
+      setQuestionsMatching(result.matching);
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     }
+  }
+
+  // Search over the WHOLE question history, server-side — the pager then walks
+  // the matches. The input stays responsive (state updates per keystroke) while
+  // the fetch is debounced; every search starts back at the first page.
+  function searchAnsweredQuestions(value: string) {
+    setAnsweredSearch(value);
+    answeredSearchRef.current = value.trim();
+    questionsPageRef.current = 0;
+    setQuestionsPage(0);
+    window.clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = window.setTimeout(() => void loadQuestionsPage(0), 300);
   }
 
   // Shared by the Ask form and the "pick a flow" re-ask. `flow` is "auto" or a
@@ -566,9 +603,12 @@ function useConsoleController() {
       const result = await apiPost<AskResponse>("/ask", { question: questionText, flow });
       setQuestion("");
       // A fresh question always lands at the top of the newest-first list; jump
-      // back to the first page so the operator sees it arrive.
+      // back to the first page — and drop any active search, which would
+      // otherwise hide the new question — so the operator sees it arrive.
       questionsPageRef.current = 0;
       setQuestionsPage(0);
+      answeredSearchRef.current = "";
+      setAnsweredSearch("");
       // Bounded-wait for the queued answer; the helper returns the terminal job
       // (or the still-active view if the watcher is slow), and the 4s refresh
       // polling keeps the answered-questions list updating either way.
@@ -925,7 +965,8 @@ function useConsoleController() {
     questions,
     questionsPage,
     questionsTotal,
-    questionsPageCount: Math.max(1, Math.ceil(questionsTotal / QUESTIONS_PAGE_SIZE)),
+    questionsMatching,
+    questionsPageCount: Math.max(1, Math.ceil(questionsMatching / QUESTIONS_PAGE_SIZE)),
     loadQuestionsPage,
     documents,
     repositories,
@@ -966,7 +1007,7 @@ function useConsoleController() {
     setSelectedDocumentId,
     setFlowId,
     setAskFlow,
-    setAnsweredSearch,
+    setAnsweredSearch: searchAnsweredQuestions,
     setQuestion,
     showMessage,
     dismissToast,

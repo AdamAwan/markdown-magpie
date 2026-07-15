@@ -124,10 +124,11 @@ export interface QuestionLogStore {
   dismissGaps(gapIds: string[], reason: string): Promise<number>;
   get(id: string): Promise<QuestionLog | undefined>;
   // One page of the question list (newest first, live questions only —
-  // verification re-asks are synthetic audit records). `count` reports the same
-  // filtered set's total so list callers can page.
-  list(limit: number, offset?: number): Promise<QuestionLog[]>;
-  count(): Promise<number>;
+  // verification re-asks are synthetic audit records). `search` narrows to
+  // questions whose text contains it (case-insensitive substring). `count`
+  // reports the same filtered set's total so list callers can page.
+  list(limit: number, offset?: number, search?: string): Promise<QuestionLog[]>;
+  count(search?: string): Promise<number>;
   listGapCandidates(limit: number): Promise<GapCandidate[]>;
   // Monotonic counter advanced whenever the unresolved candidate gaps change
   // (added, removed, or resolved). Tracked per flow so a gap change in one flow
@@ -627,19 +628,25 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     return dismissed;
   }
 
-  async list(limit: number, offset = 0): Promise<QuestionLog[]> {
-    // Only live questions surface in the console list; verification re-asks (#154)
-    // are synthetic audit records, not questions a human asked.
-    return [...this.logs.values()]
-      .filter((log) => log.purpose !== "verification")
+  // The shared list()/count() filter: live questions only, optionally narrowed
+  // by a case-insensitive substring of the question text.
+  private listableLogs(search?: string): QuestionLog[] {
+    const needle = search?.trim().toLowerCase();
+    return [...this.logs.values()].filter(
+      (log) => log.purpose !== "verification" && (!needle || log.question.toLowerCase().includes(needle))
+    );
+  }
+
+  async list(limit: number, offset = 0, search?: string): Promise<QuestionLog[]> {
+    return this.listableLogs(search)
       .sort((left, right) => right.askedAt.localeCompare(left.askedAt))
       .slice(offset, offset + limit);
   }
 
-  async count(): Promise<number> {
+  async count(search?: string): Promise<number> {
     // Same filter as list(): the total the pager reports must match what a full
     // page walk would return.
-    return [...this.logs.values()].filter((log) => log.purpose !== "verification").length;
+    return this.listableLogs(search).length;
   }
 
   async reset(): Promise<void> {

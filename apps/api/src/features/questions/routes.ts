@@ -14,7 +14,8 @@ export function questionRoutes(ctx: AppContext): Hono {
   app.get("/", requireScopes("read:knowledge"), async (c) => {
     const limit = parseLimit(c.req.query("limit") ?? null, 50);
     const offset = parseOffset(c.req.query("offset") ?? null);
-    return c.json(await questionsService.listQuestions(ctx, { limit, offset }));
+    const search = c.req.query("q");
+    return c.json(await questionsService.listQuestions(ctx, { limit, offset, search }));
   });
 
   // Registered BEFORE "/:id" so "parked" is not captured as a question id.

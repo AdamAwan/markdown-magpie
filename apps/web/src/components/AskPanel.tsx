@@ -192,9 +192,9 @@ export function AskPanel({
   onToggleGap,
   question,
   questions,
+  questionsMatching,
   questionsPage,
   questionsPageCount,
-  questionsTotal,
   setAnsweredSearch,
   setAskFlow,
   setQuestion,
@@ -214,18 +214,17 @@ export function AskPanel({
   onToggleGap: (questionId: string, flagged: boolean) => Promise<void>;
   question: string;
   questions: QuestionLog[];
+  questionsMatching: number;
   questionsPage: number;
   questionsPageCount: number;
-  questionsTotal: number;
   setAnsweredSearch: (value: string) => void;
   setAskFlow: (value: string) => void;
   setQuestion: (value: string) => void;
   toggleCitations: (questionId: string) => void;
 }) {
-  const query = answeredSearch.trim().toLowerCase();
-  const filteredQuestions = query
-    ? questions.filter((item) => item.question.toLowerCase().includes(query))
-    : questions;
+  // The search runs server-side over the whole history (GET /questions?q=), so
+  // `questions` already holds one page of the matches — no client filtering.
+  const searching = answeredSearch.trim().length > 0;
   // The ask response is enqueue-only — it carries the queued job, not an answer.
   // The answer (and its flow) land on the logged question once the watcher
   // completes the answer_question job, so recover both from the question log.
@@ -323,7 +322,7 @@ export function AskPanel({
           </form>
         </Row>
         <ScrollList>
-          {filteredQuestions.map((item) => {
+          {questions.map((item) => {
             const citations = item.answer?.citations ?? [];
             const isExpanded = expandedQuestionIds.includes(item.id);
 
@@ -395,8 +394,8 @@ export function AskPanel({
               </ListRow>
             );
           })}
-          {filteredQuestions.length === 0 ? (
-            <EmptyState>{query ? "No matching questions on this page." : "No questions logged yet."}</EmptyState>
+          {questions.length === 0 ? (
+            <EmptyState>{searching ? "No questions match your search." : "No questions logged yet."}</EmptyState>
           ) : null}
         </ScrollList>
         {questionsPageCount > 1 ? (
@@ -409,7 +408,8 @@ export function AskPanel({
               ← Newer
             </Chip>
             <PagerNote>
-              Page {questionsPage + 1} of {questionsPageCount} · {questionsTotal} question{questionsTotal === 1 ? "" : "s"}
+              Page {questionsPage + 1} of {questionsPageCount} · {questionsMatching}{" "}
+              {searching ? `match${questionsMatching === 1 ? "" : "es"}` : `question${questionsMatching === 1 ? "" : "s"}`}
             </PagerNote>
             <Chip
               disabled={questionsPage >= questionsPageCount - 1}
@@ -419,6 +419,10 @@ export function AskPanel({
               Older →
             </Chip>
           </Row>
+        ) : searching ? (
+          <PagerNote>
+            {questionsMatching} match{questionsMatching === 1 ? "" : "es"} across the whole history
+          </PagerNote>
         ) : null}
       </Block>
     </>

@@ -61,6 +61,28 @@ test("list pages with an offset and count matches list's live-question filter", 
   assert.deepEqual(await store.list(2, 5), [], "an offset past the end returns an empty page");
 });
 
+test("list and count narrow to a case-insensitive substring of the question text", async () => {
+  const store = new InMemoryQuestionLogStore();
+  await store.record({ question: "How do I deploy the API?", chatProvider: "codex", retrievedSectionIds: [] });
+  await store.record({ question: "Deployment rollback steps?", chatProvider: "codex", retrievedSectionIds: [] });
+  await store.record({ question: "What is a widget?", chatProvider: "codex", retrievedSectionIds: [] });
+  // Matching text on a verification re-ask stays excluded, like the base filter.
+  await store.record({
+    question: "deploy re-ask",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    purpose: "verification"
+  });
+
+  assert.equal(await store.count("DEPLOY"), 2);
+  const matches = await store.list(50, 0, "DEPLOY");
+  assert.equal(matches.length, 2);
+  assert.ok(matches.every((log) => log.question.toLowerCase().includes("deploy")));
+  assert.equal((await store.list(1, 1, "deploy")).length, 1, "offset pages within the matches");
+  assert.deepEqual(await store.list(50, 0, "no such question"), []);
+  assert.equal(await store.count("   "), 3, "a blank search means no filter");
+});
+
 test("recordManualGap flags the question and stores the provided summary as a manual gap", async () => {
   const store = new InMemoryQuestionLogStore();
   const log = await store.record({ question: "How do I adopt?", chatProvider: "codex", retrievedSectionIds: [] });

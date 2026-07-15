@@ -637,22 +637,25 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     return this.get(id);
   }
 
-  async list(limit: number, offset = 0): Promise<QuestionLog[]> {
+  async list(limit: number, offset = 0, search?: string): Promise<QuestionLog[]> {
     // Only live questions surface in the console list; verification re-asks (#154)
     // are synthetic audit records, not questions a human asked.
     const result = await this.pool.query<QuestionRow>(
-      "SELECT * FROM questions WHERE purpose = 'live' ORDER BY asked_at DESC LIMIT $1 OFFSET $2",
-      [limit, offset]
+      `SELECT * FROM questions
+       WHERE purpose = 'live' AND ($3::text IS NULL OR question ILIKE $3)
+       ORDER BY asked_at DESC LIMIT $1 OFFSET $2`,
+      [limit, offset, searchPattern(search)]
     );
     const gapsByQuestion = await this.loadGaps(result.rows.map((row) => row.id));
     return result.rows.map((row) => mapQuestionRow(row, gapsByQuestion.get(row.id) ?? []));
   }
 
-  async count(): Promise<number> {
+  async count(search?: string): Promise<number> {
     // Same filter as list(): the total the pager reports must match what a full
     // page walk would return.
     const result = await this.pool.query<{ count: number }>(
-      "SELECT count(*)::int AS count FROM questions WHERE purpose = 'live'"
+      "SELECT count(*)::int AS count FROM questions WHERE purpose = 'live' AND ($1::text IS NULL OR question ILIKE $1)",
+      [searchPattern(search)]
     );
     return result.rows[0]?.count ?? 0;
   }
@@ -966,6 +969,18 @@ function answerGapRows(answer: AnswerResult | undefined): Array<{ summary: strin
   return (answer?.gaps ?? [])
     .map((gap) => ({ summary: gap.summary.trim(), source: gap.source }))
     .filter((gap) => gap.summary.length > 0 && isSeedableGapSummary(gap.summary));
+}
+
+// ILIKE pattern for a case-insensitive substring match on the question text, or
+// null (no filter) when the search is blank. The term's own %/_/\ characters are
+// escaped so they match literally — the console's search is a plain substring,
+// not a pattern language.
+function searchPattern(search: string | undefined): string | null {
+  const trimmed = search?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return `%${trimmed.replace(/[\\%_]/g, (match) => `\\${match}`)}%`;
 }
 
 interface QuestionRow {

@@ -22,9 +22,9 @@ export default function AskPage() {
     toggleKnowledgeGap,
     question,
     questions,
+    questionsMatching,
     questionsPage,
     questionsPageCount,
-    questionsTotal,
     setAnsweredSearch,
     setQuestion,
     toggleCitations
@@ -58,9 +58,9 @@ export default function AskPage() {
             onToggleGap={toggleKnowledgeGap}
             question={question}
             questions={questions}
+            questionsMatching={questionsMatching}
             questionsPage={questionsPage}
             questionsPageCount={questionsPageCount}
-            questionsTotal={questionsTotal}
             setAnsweredSearch={setAnsweredSearch}
             setAskFlow={setAskFlow}
             setQuestion={setQuestion}

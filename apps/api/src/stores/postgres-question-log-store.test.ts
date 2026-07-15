@@ -432,6 +432,35 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.deepEqual(await store.list(200, 1_000_000), [], "an offset past the end returns an empty page");
   });
 
+  it("searches the question text case-insensitively, matching LIKE wildcards literally", async () => {
+    // The unique token keeps this race-safe against parallel suites: only this
+    // test's rows can match it.
+    const token = `srch-${randomUUID()}`;
+    const matching = await store.record({
+      question: `How do I DEPLOY ${token}?`,
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+    await store.record({
+      question: `Unrelated widget question ${token}-other`,
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+
+    assert.equal(await store.count(`deploy ${token}`), 1);
+    const found = await store.list(50, 0, `deploy ${token}`);
+    assert.deepEqual(
+      found.map((log) => log.id),
+      [matching.id]
+    );
+    assert.deepEqual(
+      await store.list(50, 0, `deploy_${token}`),
+      [],
+      "an underscore in the term is literal, not a LIKE wildcard"
+    );
+    assert.deepEqual(await store.list(50, 0, `%${token}%`), [], "percent signs are literal too");
+  });
+
   it("resolves gaps by question id and summary", async () => {
     const uniqueId = randomUUID();
     const recorded = await store.record({
