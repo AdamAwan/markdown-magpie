@@ -1773,3 +1773,22 @@ export interface AiCostByFlow {
   totalTokens: number;
   estimatedCost?: number;
 }
+
+// Approximate AI spend attributed to one scheduled task over the window (the
+// per-schedule cost view). A scheduled task is a maintenance orchestrator that
+// fans out to a fixed set of AI job types; this sums the cost of those job types
+// filtered to the task's flow (`key` matches ScheduledTask.key). Attribution is
+// approximate: a job type is only counted here when it carries a flowId on its
+// input, and second-order work a run can trigger later (proposal folds) is not
+// attributed. The same three cost states as AiCostByFlow survive as counts, so a
+// task's spend is never misreported as $0.
+export interface AiScheduleCost {
+  key: string;
+  jobs: number;
+  jobsWithUsage: number;
+  pricedJobs: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedCost?: number;
+}

@@ -103,5 +103,14 @@ export function insightsRoutes(ctx: AppContext): Hono {
     return c.json({ flows: await insightsService.aiCostByFlow(ctx, parsed.data) });
   });
 
+  // Per-schedule AI cost. Each scheduled task's approximate windowed spend, from
+  // the AI job types its orchestrator fans out to, filtered to the task's flow.
+  // Keyed by ScheduledTask.key so the Schedules page can join it on.
+  app.get("/ai-cost/by-schedule", requireScopes("read:knowledge"), async (c) => {
+    const parsed = insightsWindowQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) throw new HttpError(400, "invalid_insights_query");
+    return c.json({ schedules: await insightsService.aiCostBySchedule(ctx, parsed.data) });
+  });
+
   return app;
 }

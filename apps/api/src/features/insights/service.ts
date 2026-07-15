@@ -1,5 +1,6 @@
 import type {
   AiCostByFlow,
+  AiScheduleCost,
   AiUsageBreakdown,
   FreshnessSummary,
   GapBacklogBucket,
@@ -11,6 +12,7 @@ import type {
 import { isJobType } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { queueDefinitionsForType } from "../../jobs/pg-boss-broker.js";
+import { listScheduledTasks } from "../../scheduling/task-registry.js";
 import type { AnswerFeedback, InsightsRange, JobErrorSplit, VerificationSuccess } from "../../stores/insights-store.js";
 import { summariseAiCost } from "./cost.js";
 import type { InsightsFlowWindowQuery, InsightsRangeQuery, InsightsWindowQuery, JobThroughputQuery } from "./schema.js";
@@ -117,4 +119,21 @@ export async function aiCostByFlow(ctx: AppContext, query: InsightsFlowWindowQue
       ...summariseAiCost(flowRows)
     }))
     .sort((a, b) => (b.estimatedCost ?? 0) - (a.estimatedCost ?? 0) || b.totalTokens - a.totalTokens);
+}
+
+// Per-schedule AI cost over the window: each scheduled task's spend, approximated
+// by summing the cost of the AI job types its orchestrator fans out to
+// (task.aiJobTypes), filtered to the task's own flow. Reuses the per-flow rollup
+// — cost lives on (flow, job type, ...) rows — so no extra query. Tasks that spend
+// no model tokens (the GitHub snapshot refresh) are omitted. `key` matches
+// ScheduledTask.key so the console can join it onto the schedules table.
+export async function aiCostBySchedule(ctx: AppContext, query: InsightsWindowQuery): Promise<AiScheduleCost[]> {
+  const rows = await ctx.stores.insights.aiUsageByFlow(resolveWindow(query), ctx.settings.aiPricing);
+  return listScheduledTasks(ctx)
+    .filter((task) => task.aiJobTypes.length > 0)
+    .map((task) => {
+      const jobTypes = new Set<string>(task.aiJobTypes);
+      const matching = rows.filter((row) => row.flowId === task.flowId && jobTypes.has(row.jobType));
+      return { key: task.key, ...summariseAiCost(matching) };
+    });
 }

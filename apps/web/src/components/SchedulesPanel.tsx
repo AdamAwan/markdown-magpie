@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useState } from "react";
 import styled from "@emotion/styled";
 import { isValidCron } from "@magpie/core";
-import { ConfiguredKnowledgeFlow, ScheduledTask } from "../lib/types";
+import { AiScheduleCost, ConfiguredKnowledgeFlow, ScheduledTask } from "../lib/types";
+import { formatCost } from "./insights/format";
 import { Actions, Badge, Button, Chip, Field, Input, Surface } from "./ui";
 
 // How the schedules table is grouped: by the flow-free task type (so a shared
@@ -10,7 +11,7 @@ import { Actions, Badge, Button, Chip, Field, Input, Surface } from "./ui";
 type GroupBy = "type" | "flow";
 
 const SCHEDULE_COLUMNS =
-  "minmax(200px, 1.6fr) minmax(120px, 0.9fr) minmax(150px, 1fr) 64px minmax(170px, auto)";
+  "minmax(200px, 1.6fr) minmax(120px, 0.9fr) minmax(150px, 1fr) minmax(96px, 0.7fr) 64px minmax(170px, auto)";
 
 const Hint = styled.p(({ theme }) => ({
   margin: `0 0 ${theme.space.md}`,
@@ -195,12 +196,16 @@ const EmptyLine = styled.p(({ theme }) => ({
 }));
 
 export function SchedulesPanel({
+  costByKey,
   flows,
   loading,
   onRunTask,
   onSaveTask,
   scheduledTasks
 }: {
+  // Per-schedule AI cost over the last 30 days, keyed by ScheduledTask.key.
+  // Optional so the panel renders before the (page-local) cost fetch resolves.
+  costByKey?: Map<string, AiScheduleCost>;
   flows: ConfiguredKnowledgeFlow[];
   loading: boolean;
   onRunTask: (key: string) => Promise<void>;
@@ -220,6 +225,7 @@ export function SchedulesPanel({
     typeDescription: task.description,
     flowName: flowName(task.flowId),
     setting: task.settings,
+    cost: costByKey?.get(task.key),
     placeholder: "*/10 * * * *",
     onSave: (enabled: boolean, cron: string) => onSaveTask(task.key, enabled, cron),
     onRun: () => onRunTask(task.key)
@@ -259,6 +265,7 @@ export function SchedulesPanel({
               <span>{groupBy === "type" ? "Flow" : "Job type"}</span>
               <span>Cron</span>
               <span>Next run</span>
+              <span>Cost (30d)</span>
               <span>Status</span>
               <span />
             </TableHead>
@@ -301,6 +308,8 @@ interface ScheduleEntry {
   typeDescription?: string;
   flowName: string;
   setting: { enabled: boolean; cron: string; nextRunAt?: string };
+  // This task's AI spend over the last 30 days, when the cost fetch has resolved.
+  cost?: AiScheduleCost;
   placeholder: string;
   onSave: (enabled: boolean, cron: string) => Promise<void>;
   onRun: () => Promise<void>;
@@ -338,6 +347,35 @@ function groupEntries(entries: ScheduleEntry[], by: GroupBy): ScheduleGroup[] {
   return [...groups.values()];
 }
 
+const CostValue = styled.span<{ muted?: boolean }>(({ theme, muted }) => ({
+  fontVariantNumeric: "tabular-nums",
+  color: muted ? theme.color.textSubtle : theme.color.text,
+  cursor: "help"
+}));
+
+// One task's 30-day AI spend cell. Keeps the three cost states distinct so a
+// task is never shown as costing nothing when it actually spent unpriced or
+// CLI-unmetered tokens: a priced task shows its estimate, an unpriced/unmetered
+// one shows that word, and a task that ran no attributable AI jobs shows an em
+// dash. The tooltip breaks the job counts down. Cost is currency-agnostic — the
+// operator reads it in their AI_PRICING unit.
+function ScheduleCostCell({ cost }: { cost?: AiScheduleCost }) {
+  if (!cost || cost.jobs === 0) {
+    return <span>—</span>;
+  }
+  const unpriced = cost.jobsWithUsage - cost.pricedJobs;
+  const unmetered = cost.jobs - cost.jobsWithUsage;
+  const title = `${cost.pricedJobs} priced · ${unpriced} unpriced · ${unmetered} unmetered jobs (last 30 days)`;
+  if (cost.estimatedCost !== undefined) {
+    return <CostValue title={title}>est. {formatCost(cost.estimatedCost)}</CostValue>;
+  }
+  return (
+    <CostValue muted title={title}>
+      {cost.jobsWithUsage > 0 ? "unpriced" : "unmetered"}
+    </CostValue>
+  );
+}
+
 // A small "i" affordance whose hover/focus tooltip carries the long task
 // description, so the text appears once per group (or once per row) instead of
 // being repeated inline under every schedule.
@@ -370,6 +408,7 @@ function ScheduleRow({ entry, groupBy, loading }: { entry: ScheduleEntry; groupB
         </ScheduleName>
         <span>{setting.enabled ? <code>{setting.cron}</code> : "—"}</span>
         <span>{setting.enabled && setting.nextRunAt ? new Date(setting.nextRunAt).toLocaleString() : "—"}</span>
+        <ScheduleCostCell cost={entry.cost} />
         <Badge tone={setting.enabled ? "completed" : "pending"} title="Schedule status">
           {setting.enabled ? "On" : "Off"}
         </Badge>
