@@ -71,6 +71,32 @@ jobs:
       - name: Test
         run: npm run test:db
 
+  golden-eval:
+    name: Golden Eval
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Answer-quality regression gate (issue #241): boots the full answer
+    # pipeline (deterministic provider fixture + API + watcher) against a
+    # throwaway pgvector container, asks the golden question set, and fails
+    # on any dimension or case regression vs scripts/fixtures/
+    # golden-baseline.json. Fully deterministic — no provider credentials.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Golden eval
+        run: npm run eval:golden
+
   static:
     name: Lint and Dead Code
     runs-on: ubuntu-latest

@@ -20,6 +20,8 @@
     "dev": "npm run dev --workspaces --if-present",
     "eval:api": "node --import tsx scripts/eval-api.ts",
     "eval:gap-threshold": "node --import tsx scripts/eval-gap-threshold.ts",
+    "preeval:golden": "npm run build:libs",
+    "eval:golden": "node scripts/test-db.mjs node --import tsx scripts/eval-golden.ts",
     "e2e:jobs": "node --import tsx scripts/e2e-jobs.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

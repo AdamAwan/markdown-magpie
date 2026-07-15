@@ -395,6 +395,7 @@ npm test            # unit tests across workspaces
 npm run test:db     # Postgres-backed tests (spins up a DB via scripts/test-db.mjs)
 npm run db:migrate  # apply migrations
 npm run e2e:jobs    # queue e2e harness; eval:api / eval:gap-threshold for eval scripts
+npm run eval:golden # golden-question answer-quality regression gate (docs/golden-eval.md)
 ```
 
 To actually **launch and drive the running stack** (Postgres → migrate → API → Watcher ×2

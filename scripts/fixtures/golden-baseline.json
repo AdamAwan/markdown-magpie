@@ -1,0 +1,25 @@
+{
+  "questionSetVersion": 1,
+  "dimensions": {
+    "routing_accuracy": 1,
+    "confidence_calibration": 1,
+    "citation_precision": 1,
+    "citation_recall": 1,
+    "groundedness": 1,
+    "answer_content": 1,
+    "behaviour_compliance": 1
+  },
+  "cases": {
+    "backup-retention": true,
+    "deployment-regions": true,
+    "single-sign-on": true,
+    "api-rate-limit": true,
+    "onboarding-duration": true,
+    "incident-severity": true,
+    "partial-answer-followup-gap": true,
+    "knowledge-gap-sla": true,
+    "out-of-scope-pinned": true,
+    "unroutable-flow-selection": true,
+    "grounding-verification-strips-claims": true
+  }
+}

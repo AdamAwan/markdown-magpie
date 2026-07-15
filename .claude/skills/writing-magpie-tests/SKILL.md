@@ -77,12 +77,20 @@ DB-free, and **run through a throwaway container** so it never touches your dev 
 
 These are Node scripts (run with `tsx`), not `node:test` files:
 
+- `npm run eval:golden` (`scripts/eval-golden.ts`) — the **golden-question regression
+  eval** (#241): boots fixture provider + API + watcher against the throwaway DB, asks the
+  versioned golden set, scores routing/confidence/citations/groundedness/behaviour, and
+  fails on any regression vs the committed baseline (`-- --update-baseline` to re-pin).
+  Runs in CI on every PR. See `docs/golden-eval.md` before touching the answer pipeline.
 - `npm run e2e:jobs` (`scripts/e2e-jobs.ts`) — drives the API + watcher through the full job
   lifecycle (enqueue → claim → execute → complete). Use to smoke-test queue wiring.
 - `npm run eval:api` (`scripts/eval-api.ts`) — fixed answer-quality checks against a live API.
-- **Deterministic provider fixture:** `scripts/fixtures/openai-fixture.mjs` is an
+- **Deterministic provider fixtures:** `scripts/fixtures/openai-fixture.mjs` is an
   OpenAI-compatible stub giving repeatable responses — point the watcher's
   `OPENAI_COMPATIBLE_BASE_URL` at it instead of a real model so e2e runs are stable and free.
+  `scripts/fixtures/golden-provider.mjs` is the golden eval's smarter sibling: it speaks the
+  full answer_question protocol (routing / assess loop / grounding verification)
+  deterministically from the request text.
 
 ## Choosing unit vs integration
 
