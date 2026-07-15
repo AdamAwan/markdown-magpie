@@ -15,7 +15,7 @@ const databaseUrl = process.env.DATABASE_URL ?? "postgres://postgres:postgres@lo
 // replicate just those columns rather than standing up a full pg-boss instance.
 const DDL = (schema: string) => `
   CREATE SCHEMA "${schema}";
-  CREATE TABLE "${schema}".job (name text, state text, created_on timestamptz, completed_on timestamptz, output jsonb);
+  CREATE TABLE "${schema}".job (name text, state text, created_on timestamptz, completed_on timestamptz, output jsonb, data jsonb);
 `;
 
 test("gapBacklog buckets question_gaps by day", { skip: !runIntegration }, async (t) => {
@@ -352,6 +352,82 @@ test("aiUsage sums completion-envelope usage per (job type, provider)", { skip: 
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0
+    }
+  ]);
+});
+
+test("aiUsageByFlow groups by data->input->>flowId and prices per flow", { skip: !runIntegration }, async (t) => {
+  const schema = `insights_pgboss_flowcost_test_${process.pid}`;
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  t.after(async () => {
+    await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await pool.end();
+  });
+  await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+  await pool.query(DDL(schema));
+
+  // The flowId rides the pg-boss JobEnvelope at data->'input'->>'flowId'. Two
+  // improve_document rows share flow-a (they group + price as one), one is on
+  // flow-b, and a verify row carries no input flowId at all → the unattributed
+  // bucket, unmetered.
+  await pool.query(
+    `INSERT INTO "${schema}".job (name, state, created_on, output, data) VALUES
+       ('improve_document__openai_compatible', 'completed', now(),
+        '{"result":{},"executor":"w1","model":"gpt-4o","usage":{"inputTokens":100,"outputTokens":20,"totalTokens":120}}'::jsonb,
+        '{"type":"improve_document","input":{"flowId":"flow-a"}}'::jsonb),
+       ('improve_document__openai_compatible', 'completed', now(),
+        '{"result":{},"executor":"w1","model":"gpt-4o","usage":{"inputTokens":40,"outputTokens":5,"totalTokens":45}}'::jsonb,
+        '{"type":"improve_document","input":{"flowId":"flow-a"}}'::jsonb),
+       ('improve_document__openai_compatible', 'completed', now(),
+        '{"result":{},"executor":"w1","model":"gpt-4o","usage":{"inputTokens":10,"outputTokens":2,"totalTokens":12}}'::jsonb,
+        '{"type":"improve_document","input":{"flowId":"flow-b"}}'::jsonb),
+       ('verify_document__claude', 'completed', now(), '{"result":{},"executor":"w2"}'::jsonb,
+        '{"type":"verify_document","input":{"path":"a.md"}}'::jsonb)`
+  );
+
+  const store = new PostgresInsightsStore(pool, schema);
+  const to = new Date();
+  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const rows = await store.aiUsageByFlow({ from, to, bucket: "day" }, [
+    { provider: "openai-compatible", model: "gpt-4o", inputPerMTok: 2.5, outputPerMTok: 10 }
+  ]);
+
+  // Ordered by flow (unattributed "" first), then heaviest spend. flow-a's two
+  // rows collapse into one priced triple; the verify row is unattributed and
+  // unmetered (no flowId, no usage).
+  assert.deepEqual(rows, [
+    {
+      jobType: "verify_document",
+      provider: "claude",
+      jobs: 1,
+      jobsWithUsage: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0
+    },
+    {
+      jobType: "improve_document",
+      provider: "openai-compatible",
+      model: "gpt-4o",
+      flowId: "flow-a",
+      jobs: 2,
+      jobsWithUsage: 2,
+      inputTokens: 140,
+      outputTokens: 25,
+      totalTokens: 165,
+      estimatedCost: 0.0006
+    },
+    {
+      jobType: "improve_document",
+      provider: "openai-compatible",
+      model: "gpt-4o",
+      flowId: "flow-b",
+      jobs: 1,
+      jobsWithUsage: 1,
+      inputTokens: 10,
+      outputTokens: 2,
+      totalTokens: 12,
+      estimatedCost: 0.000045
     }
   ]);
 });

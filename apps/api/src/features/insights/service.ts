@@ -1,4 +1,5 @@
 import type {
+  AiCostByFlow,
   AiUsageBreakdown,
   FreshnessSummary,
   GapBacklogBucket,
@@ -11,7 +12,8 @@ import { isJobType } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { queueDefinitionsForType } from "../../jobs/pg-boss-broker.js";
 import type { AnswerFeedback, InsightsRange, JobErrorSplit, VerificationSuccess } from "../../stores/insights-store.js";
-import type { InsightsRangeQuery, InsightsWindowQuery, JobThroughputQuery } from "./schema.js";
+import { summariseAiCost } from "./cost.js";
+import type { InsightsFlowWindowQuery, InsightsRangeQuery, InsightsWindowQuery, JobThroughputQuery } from "./schema.js";
 
 const DEFAULT_WINDOW_DAYS = 30;
 
@@ -89,4 +91,30 @@ export async function answerFeedback(ctx: AppContext, query: InsightsRangeQuery)
 // table at read time (#241). Window-only — grouped by triple, not time.
 export async function aiUsage(ctx: AppContext, query: InsightsWindowQuery): Promise<AiUsageBreakdown[]> {
   return ctx.stores.insights.aiUsage(resolveWindow(query), ctx.settings.aiPricing);
+}
+
+// Per-flow AI cost over the window: the same rollup grouped by the flowId on the
+// job input, aggregated to one cost summary per flow. The optional `flow` query
+// param narrows to a single flow (the shared insights flow-filter convention);
+// jobs whose input carried no flowId form the unattributed bucket (flowId
+// absent). Ordered by cost, heaviest first, then tokens. Flow names are resolved
+// by the console from ctx.knowledgeConfig.flows, not here.
+export async function aiCostByFlow(ctx: AppContext, query: InsightsFlowWindowQuery): Promise<AiCostByFlow[]> {
+  const rows = await ctx.stores.insights.aiUsageByFlow(resolveWindow(query), ctx.settings.aiPricing);
+  const scoped = query.flow ? rows.filter((row) => row.flowId === query.flow) : rows;
+  const byFlow = new Map<string | undefined, AiUsageBreakdown[]>();
+  for (const row of scoped) {
+    const existing = byFlow.get(row.flowId);
+    if (existing) {
+      existing.push(row);
+    } else {
+      byFlow.set(row.flowId, [row]);
+    }
+  }
+  return [...byFlow.entries()]
+    .map(([flowId, flowRows]) => ({
+      ...(flowId !== undefined ? { flowId } : {}),
+      ...summariseAiCost(flowRows)
+    }))
+    .sort((a, b) => (b.estimatedCost ?? 0) - (a.estimatedCost ?? 0) || b.totalTokens - a.totalTokens);
 }

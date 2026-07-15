@@ -3,7 +3,12 @@ import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
 import { HttpError } from "../../http/errors.js";
 import * as insightsService from "./service.js";
-import { insightsRangeQuerySchema, insightsWindowQuerySchema, jobThroughputQuerySchema } from "./schema.js";
+import {
+  insightsFlowWindowQuerySchema,
+  insightsRangeQuerySchema,
+  insightsWindowQuerySchema,
+  jobThroughputQuerySchema
+} from "./schema.js";
 
 // Read-only aggregation endpoints powering the web console's Insights page.
 // Each returns a named-key envelope of already-bucketed, zero-filled series.
@@ -81,12 +86,21 @@ export function insightsRoutes(ctx: AppContext): Hono {
     return c.json({ totals, series });
   });
 
-  // C11 — AI token usage. Watcher-reported token spend per (job type, provider)
-  // pair over the window (#241). Window-only (grouped by pair, not time).
+  // C11 — AI token usage. Watcher-reported token spend per (job type, provider,
+  // model) triple over the window, priced from AI_PRICING (#241). Window-only
+  // (grouped by triple, not time).
   app.get("/ai-usage", requireScopes("read:knowledge"), async (c) => {
     const parsed = insightsWindowQuerySchema.safeParse(c.req.query());
     if (!parsed.success) throw new HttpError(400, "invalid_insights_query");
     return c.json({ usage: await insightsService.aiUsage(ctx, parsed.data) });
+  });
+
+  // Per-flow AI cost. The same rollup grouped by the flowId on the job input,
+  // aggregated to one cost summary per flow. `?flow=` narrows to a single flow.
+  app.get("/ai-cost/by-flow", requireScopes("read:knowledge"), async (c) => {
+    const parsed = insightsFlowWindowQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) throw new HttpError(400, "invalid_insights_query");
+    return c.json({ flows: await insightsService.aiCostByFlow(ctx, parsed.data) });
   });
 
   return app;

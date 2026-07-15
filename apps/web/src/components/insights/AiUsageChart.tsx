@@ -4,7 +4,7 @@ import { useTheme } from "@emotion/react";
 import styled from "@emotion/styled";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { AiUsageBreakdown } from "../../lib/types";
-import { humanise } from "./format";
+import { formatCost, humanise } from "./format";
 
 // Compact token counts for the axis ("12400" → "12.4K"). Hoisted: recharts
 // calls the tick formatter on every render, and Intl.NumberFormat construction
@@ -12,18 +12,6 @@ import { humanise } from "./format";
 const COMPACT = Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
 function compact(value: number): string {
   return COMPACT.format(value);
-}
-
-// Currency-agnostic cost formatter. AI_PRICING rates carry no currency symbol
-// (an openai-compatible endpoint could bill in any currency, or nothing), so
-// cost is rendered as a bare number the operator reads in their own unit. Small
-// costs need more decimals than large ones so a fraction of a cent is not shown
-// as "0".
-function formatCost(value: number): string {
-  return value.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: value < 1 ? 4 : 2
-  });
 }
 
 // One row's cost state — the three states the chart must keep distinct and must

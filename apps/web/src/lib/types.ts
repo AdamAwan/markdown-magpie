@@ -305,5 +305,6 @@ export type {
   SourceFreshness,
   FreshnessSummary,
   PatrolImpact,
-  AiUsageBreakdown
+  AiUsageBreakdown,
+  AiCostByFlow
 } from "@magpie/core";

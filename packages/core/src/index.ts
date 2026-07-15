@@ -1740,8 +1740,34 @@ export interface AiUsageBreakdown {
   jobType: string;
   provider: string;
   model?: string;
+  // The flow whose input carried this spend, when the rollup is grouped by flow
+  // (the per-flow cost view and per-schedule attribution). Absent on the C11
+  // rollup (which aggregates across flows) and on jobs whose input carries no
+  // flowId — `answer_question` and the fold_* jobs never do, and the patrol/draft
+  // jobs omit it on the unscoped/default flow. Read from `data->'input'->>'flowId'`.
+  flowId?: string;
   jobs: number;
   jobsWithUsage: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedCost?: number;
+}
+
+// AI spend attributed to one flow over the window (the per-flow cost view),
+// aggregated from the per-(flow, job type, provider, model) rollup. `flowId` is
+// absent for the "unattributed" bucket — jobs whose input carried no flowId (see
+// AiUsageBreakdown.flowId). The three cost states from AiUsageBreakdown survive
+// the aggregation as counts, so a flow's spend is never misreported as $0:
+//   - priced    — `pricedJobs` metered jobs matched a price entry; their cost is
+//                 summed into `estimatedCost` (present iff pricedJobs > 0).
+//   - unpriced  — `jobsWithUsage - pricedJobs` metered jobs had no matching entry.
+//   - unmetered — `jobs - jobsWithUsage` jobs reported no usage (CLI providers).
+export interface AiCostByFlow {
+  flowId?: string;
+  jobs: number;
+  jobsWithUsage: number;
+  pricedJobs: number;
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;

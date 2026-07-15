@@ -777,29 +777,7 @@ export class PostgresInsightsStore implements InsightsStore {
     return result.rows
       .flatMap((row) => {
         const queue = AI_USAGE_QUEUES.get(row.name);
-        if (!queue) {
-          return [];
-        }
-        const inputTokens = Number(row.input_tokens);
-        const outputTokens = Number(row.output_tokens);
-        const estimatedCost = estimateTokenCost(
-          pricing,
-          { provider: queue.provider, model: row.model },
-          { inputTokens, outputTokens }
-        );
-        return [
-          {
-            jobType: queue.jobType,
-            provider: queue.provider,
-            ...(row.model !== null ? { model: row.model } : {}),
-            jobs: Number(row.jobs),
-            jobsWithUsage: Number(row.jobs_with_usage),
-            inputTokens,
-            outputTokens,
-            totalTokens: Number(row.total_tokens),
-            ...(estimatedCost !== undefined ? { estimatedCost } : {})
-          }
-        ];
+        return queue ? [this.priceUsageRow(queue, row, null, pricing)] : [];
       })
       .sort(
         (a, b) =>
@@ -808,5 +786,114 @@ export class PostgresInsightsStore implements InsightsStore {
           a.jobType.localeCompare(b.jobType) ||
           (a.model ?? "").localeCompare(b.model ?? "")
       );
+  }
+
+  // Per-flow AI usage (the per-flow cost view + per-schedule attribution). The
+  // same rollup as aiUsage, additionally grouped by the flowId the enqueuing code
+  // stamped on the job input — `data->'input'->>'flowId'`, where `data` is the
+  // pg-boss JobEnvelope `{ type, input, traceContext }`. Rows whose input carried
+  // no flowId group under a NULL flow (the "unattributed" bucket): `answer_question`
+  // and the fold_* jobs never carry one, and the patrol/draft jobs omit it on the
+  // unscoped flow. Each returned row is one (flowId, job type, provider, model)
+  // triple with its priced estimatedCost; the service aggregates them per flow or
+  // per schedule. Ordered by flow then heaviest spend.
+  async aiUsageByFlow(range: InsightsRange, pricing: AiPricingEntry[]): Promise<AiUsageBreakdown[]> {
+    const queueNames = [...AI_USAGE_QUEUES.keys()];
+    const result = await this.pool.query<{
+      name: string;
+      model: string | null;
+      flow_id: string | null;
+      jobs: string;
+      jobs_with_usage: string;
+      input_tokens: string;
+      output_tokens: string;
+      total_tokens: string;
+    }>(
+      `
+      WITH usage_rows AS (
+        SELECT j.name,
+          u.model,
+          u.flow_id,
+          u.usage,
+          CASE WHEN jsonb_typeof(u.usage->'inputTokens') = 'number'
+            THEN (u.usage->>'inputTokens')::bigint ELSE 0 END AS input_tokens,
+          CASE WHEN jsonb_typeof(u.usage->'outputTokens') = 'number'
+            THEN (u.usage->>'outputTokens')::bigint ELSE 0 END AS output_tokens
+        FROM "${this.pgBossSchema}".job j
+        CROSS JOIN LATERAL (
+          SELECT j.output->'usage' AS usage,
+                 j.output->>'model' AS model,
+                 j.data->'input'->>'flowId' AS flow_id
+        ) u
+        WHERE j.state = 'completed'
+          AND j.name = ANY($3)
+          AND j.created_on >= $1::timestamptz AND j.created_on <= $2::timestamptz
+      )
+      SELECT name, model, flow_id,
+        count(*) AS jobs,
+        count(*) FILTER (WHERE jsonb_typeof(usage) = 'object') AS jobs_with_usage,
+        coalesce(sum(input_tokens), 0) AS input_tokens,
+        coalesce(sum(output_tokens), 0) AS output_tokens,
+        coalesce(sum(
+          CASE WHEN jsonb_typeof(usage->'totalTokens') = 'number'
+            THEN (usage->>'totalTokens')::bigint
+            ELSE input_tokens + output_tokens END
+        ), 0) AS total_tokens
+      FROM usage_rows
+      GROUP BY name, model, flow_id
+      `,
+      [range.from.toISOString(), range.to.toISOString(), queueNames]
+    );
+
+    return result.rows
+      .flatMap((row) => {
+        const queue = AI_USAGE_QUEUES.get(row.name);
+        return queue ? [this.priceUsageRow(queue, row, row.flow_id, pricing)] : [];
+      })
+      .sort(
+        (a, b) =>
+          (a.flowId ?? "").localeCompare(b.flowId ?? "") ||
+          b.totalTokens - a.totalTokens ||
+          a.jobType.localeCompare(b.jobType) ||
+          (a.model ?? "").localeCompare(b.model ?? "")
+      );
+  }
+
+  // Assemble one priced AiUsageBreakdown row from a grouped SQL row. Shared by the
+  // C11 (flow-agnostic) and per-flow rollups: cost is a function of provider +
+  // model only, so a NULL model or an unmatched (provider, model) yields no
+  // estimatedCost — the caller keeps priced/unpriced/unmetered apart via
+  // jobsWithUsage. flowId is threaded through only for the per-flow rollup.
+  private priceUsageRow(
+    queue: { jobType: string; provider: string },
+    row: {
+      model: string | null;
+      jobs: string;
+      jobs_with_usage: string;
+      input_tokens: string;
+      output_tokens: string;
+      total_tokens: string;
+    },
+    flowId: string | null,
+    pricing: AiPricingEntry[]
+  ): AiUsageBreakdown {
+    const inputTokens = Number(row.input_tokens);
+    const outputTokens = Number(row.output_tokens);
+    const estimatedCost = estimateTokenCost(pricing, { provider: queue.provider, model: row.model }, {
+      inputTokens,
+      outputTokens
+    });
+    return {
+      jobType: queue.jobType,
+      provider: queue.provider,
+      ...(row.model !== null ? { model: row.model } : {}),
+      ...(flowId !== null ? { flowId } : {}),
+      jobs: Number(row.jobs),
+      jobsWithUsage: Number(row.jobs_with_usage),
+      inputTokens,
+      outputTokens,
+      totalTokens: Number(row.total_tokens),
+      ...(estimatedCost !== undefined ? { estimatedCost } : {})
+    };
   }
 }

@@ -13,7 +13,9 @@ import { FeedbackChart } from "../../components/insights/FeedbackChart";
 import { FreshnessChart } from "../../components/insights/FreshnessChart";
 import { PatrolImpactChart } from "../../components/insights/PatrolImpactChart";
 import { AiUsageChart } from "../../components/insights/AiUsageChart";
+import { AiCostByFlowChart } from "../../components/insights/AiCostByFlowChart";
 import {
+  useAiCostByFlow,
   useAiUsage,
   useAnswerFeedback,
   useAnswerLatency,
@@ -25,6 +27,8 @@ import {
   usePatrolImpact,
   useVerificationSuccess
 } from "../../components/insights/useInsights";
+import { useConsole } from "../../components/ConsoleProvider";
+import { knowledgeFlowLabels } from "../../lib/config";
 
 export default function InsightsPage() {
   const backlog = useGapBacklog();
@@ -37,6 +41,13 @@ export default function InsightsPage() {
   const freshness = useFreshness();
   const patrols = usePatrolImpact();
   const aiUsage = useAiUsage();
+  const aiCostByFlow = useAiCostByFlow();
+  const { config } = useConsole();
+
+  // Flow id → display name for the per-flow cost chart; the unattributed bucket
+  // (jobs whose input carried no flowId) has no id and is labelled explicitly.
+  const flowLabels = knowledgeFlowLabels(config);
+  const flowName = (flowId?: string) => (flowId ? (flowLabels[flowId] ?? flowId) : "Unattributed");
 
   // The endpoint zero-fills every day in the window, so a non-empty array can
   // still be "nothing happened". Treat all-zero transitions as empty.
@@ -84,6 +95,9 @@ export default function InsightsPage() {
   // AI usage is empty until at least one AI job completed in the window.
   const aiUsageEmpty = !aiUsage.data || aiUsage.data.length === 0;
 
+  // Per-flow cost is empty until at least one AI job completed in the window.
+  const aiCostByFlowEmpty = !aiCostByFlow.data || aiCostByFlow.data.length === 0;
+
   const refreshing =
     backlog.loading ||
     journey.loading ||
@@ -94,7 +108,8 @@ export default function InsightsPage() {
     jobErrors.loading ||
     freshness.loading ||
     patrols.loading ||
-    aiUsage.loading;
+    aiUsage.loading ||
+    aiCostByFlow.loading;
   const refreshAll = () => {
     backlog.refresh();
     journey.refresh();
@@ -106,6 +121,7 @@ export default function InsightsPage() {
     freshness.refresh();
     patrols.refresh();
     aiUsage.refresh();
+    aiCostByFlow.refresh();
   };
 
   return (
@@ -224,6 +240,17 @@ export default function InsightsPage() {
         emptyMessage="No AI jobs completed in the last 30 days yet."
       >
         {aiUsage.data ? <AiUsageChart usage={aiUsage.data} /> : null}
+      </ChartCard>
+
+      <ChartCard
+        title="AI cost by flow"
+        subtitle="Estimated AI spend attributed to each flow, priced from AI_PRICING at read time. Jobs whose input carries no flow — answers and cross-flow folds — are grouped as Unattributed. Last 30 days."
+        loading={aiCostByFlow.loading}
+        error={aiCostByFlow.error}
+        empty={aiCostByFlowEmpty}
+        emptyMessage="No AI jobs completed in the last 30 days yet."
+      >
+        {aiCostByFlow.data ? <AiCostByFlowChart flows={aiCostByFlow.data} flowName={flowName} /> : null}
       </ChartCard>
     </Workbench>
   );

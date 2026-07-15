@@ -83,6 +83,11 @@ export interface InsightsStore {
   // `pricing` table turns the token sums into `estimatedCost` at read time (the
   // priced state); it is never persisted.
   aiUsage(range: InsightsRange, pricing: AiPricingEntry[]): Promise<AiUsageBreakdown[]>;
+  // The same rollup grouped additionally by the flowId on the job input
+  // (`data->'input'->>'flowId'`), one row per (flow, job type, provider, model)
+  // triple. Powers the per-flow cost view and the per-schedule attribution;
+  // rows carry an optional `flowId` (absent = unattributed).
+  aiUsageByFlow(range: InsightsRange, pricing: AiPricingEntry[]): Promise<AiUsageBreakdown[]>;
 }
 
 // Used when the process runs without a Postgres pool (in-memory unit tests):
@@ -118,6 +123,9 @@ export class NullInsightsStore implements InsightsStore {
     return { totals: { helpful: 0, unhelpful: 0, unhelpfulConfident: 0 }, series: [] };
   }
   async aiUsage(): Promise<AiUsageBreakdown[]> {
+    return [];
+  }
+  async aiUsageByFlow(): Promise<AiUsageBreakdown[]> {
     return [];
   }
 }

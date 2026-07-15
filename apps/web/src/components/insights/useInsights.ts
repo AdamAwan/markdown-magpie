@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiGet, errorMessage } from "../../lib/api";
 import type {
+  AiCostByFlow,
   AiUsageBreakdown,
   FeedbackBucket,
   FeedbackSummary,
@@ -175,11 +176,24 @@ export function usePatrolImpact(): InsightsResource<PatrolImpact[]> {
   };
 }
 
-// AI token usage (last 30 days), one row per (job type, provider) pair (#241).
+// AI token usage (last 30 days), one row per (job type, provider, model) triple,
+// priced into cost against AI_PRICING (#241).
 export function useAiUsage(): InsightsResource<AiUsageBreakdown[]> {
   const resource = useInsightsResource<{ usage: AiUsageBreakdown[] }>("/insights/ai-usage");
   return {
     data: resource.data?.usage,
+    loading: resource.loading,
+    error: resource.error,
+    refresh: resource.refresh
+  };
+}
+
+// Per-flow AI cost (last 30 days): one cost summary per flow, plus the
+// unattributed bucket (jobs whose input carried no flowId).
+export function useAiCostByFlow(): InsightsResource<AiCostByFlow[]> {
+  const resource = useInsightsResource<{ flows: AiCostByFlow[] }>("/insights/ai-cost/by-flow");
+  return {
+    data: resource.data?.flows,
     loading: resource.loading,
     error: resource.error,
     refresh: resource.refresh

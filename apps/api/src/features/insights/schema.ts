@@ -30,3 +30,13 @@ export const insightsWindowQuerySchema = z.object({
 });
 
 export type InsightsWindowQuery = z.infer<typeof insightsWindowQuerySchema>;
+
+// Window-only query plus the shared `flow` narrowing — for the per-flow AI cost
+// endpoint. `flow` filters to a single flow id (the same convention the
+// time-series endpoints use); omitted, every flow (and the unattributed bucket)
+// is returned.
+export const insightsFlowWindowQuerySchema = insightsWindowQuerySchema.extend({
+  flow: z.string().trim().min(1).optional()
+});
+
+export type InsightsFlowWindowQuery = z.infer<typeof insightsFlowWindowQuerySchema>;
