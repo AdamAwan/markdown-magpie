@@ -68,3 +68,18 @@ test("AiUsageChart surfaces the priced/unpriced/unmetered coverage", () => {
   assert.match(html, /1 unpriced/);
   assert.match(html, /1 unmetered/);
 });
+
+test("AiUsageChart footnotes unmetered rows and names unpriced pairs to price", () => {
+  const html = renderMarkup(<AiUsageChart usage={fixture} />);
+  // The unmetered claude row is footnoted, and the unpriced gpt-4o-mini triple is
+  // named so the operator knows exactly what AI_PRICING entry to add.
+  assert.match(html, /1 unmetered/);
+  assert.match(html, /gpt-4o-mini/);
+});
+
+test("AiUsageChart shows an empty-state CTA when nothing is priced", () => {
+  const unpricedOnly = fixture.filter((row) => row.estimatedCost === undefined);
+  const html = renderMarkup(<AiUsageChart usage={unpricedOnly} />);
+  assert.match(html, /No priced usage/);
+  assert.match(html, /AI_PRICING/);
+});

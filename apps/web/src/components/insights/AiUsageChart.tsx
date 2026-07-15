@@ -1,126 +1,72 @@
 "use client";
 
-import { useTheme } from "@emotion/react";
-import styled from "@emotion/styled";
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { AiUsageBreakdown } from "../../lib/types";
+import { CostBarChart, type CostBarDatum } from "./CostBarChart";
 import { formatCost, humanise } from "./format";
 
-// Compact token counts for the axis ("12400" → "12.4K"). Hoisted: recharts
-// calls the tick formatter on every render, and Intl.NumberFormat construction
-// is expensive.
-const COMPACT = Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
-function compact(value: number): string {
-  return COMPACT.format(value);
+// The bar label doubles as the recharts category key, so it must be unique per
+// row: two triples sharing a job type + provider are told apart by model.
+function label(row: AiUsageBreakdown): string {
+  return `${humanise(row.jobType)} · ${row.provider}${row.model ? ` · ${row.model}` : ""}`;
 }
 
-// One row's cost state — the three states the chart must keep distinct and must
-// never collapse to "0":
-//   priced    — usage reported and an AI_PRICING entry matched → a real cost.
-//   unpriced  — usage reported but no matching price entry → cost unknown.
-//   unmetered — no usage reported at all (CLI providers) → nothing to price.
-function costState(row: AiUsageBreakdown): "priced" | "unpriced" | "unmetered" {
-  if (row.estimatedCost !== undefined) {
-    return "priced";
-  }
-  return row.jobsWithUsage > 0 ? "unpriced" : "unmetered";
+// The (provider, model) an operator would add to AI_PRICING to price this triple.
+function pricePair(row: AiUsageBreakdown): string {
+  return `${row.provider}${row.model ? ` · ${row.model}` : ""}`;
 }
 
-const Summary = styled.div(({ theme }) => ({
-  display: "flex",
-  flexWrap: "wrap",
-  alignItems: "baseline",
-  gap: theme.space.lg,
-  marginBottom: theme.space.md,
-  fontSize: theme.font.size.sm,
-  color: theme.color.textMuted
-}));
-
-const TotalCost = styled.span(({ theme }) => ({
-  fontSize: theme.font.size.md,
-  fontWeight: theme.font.weight.semibold,
-  color: theme.color.text
-}));
-
-const Coverage = styled.span(({ theme }) => ({
-  color: theme.color.textSubtle
-}));
-
-// AI token usage priced into cost: one bar per (job type, provider, model)
-// triple, input and output tokens stacked, heaviest first (the API pre-sorts).
-// The token bars answer "what is each job type spending?"; the header total and
-// the per-bar tooltip answer "what does that cost?". Cost rides text (never a
-// series colour or a second y-axis): unpriced and unmetered triples show their
-// state in the tooltip instead of a misleading "0". (#241, monetary cost.)
+// AI spend by (job type, provider, model) triple: one horizontal bar per priced
+// triple, with cost on the axis (input-cost + output-cost stacked) and tokens in
+// the tooltip. Unmetered triples (CLI providers, no usage) drop to a footnote;
+// unpriced triples (usage reported but no AI_PRICING match) are named so the
+// operator knows exactly what to price; when nothing is priced the plot is
+// replaced by an empty-state CTA. (#241, cost now plotted, not carried in text.)
 export function AiUsageChart({ usage }: { usage: AiUsageBreakdown[] }) {
-  const theme = useTheme();
-  const data = usage.map((row) => {
-    const state = costState(row);
-    return {
-      // The label doubles as the recharts category key, so it must be unique per
-      // row: two triples sharing a job type + provider are told apart by model.
-      label: `${humanise(row.jobType)} · ${row.provider}${row.model ? ` · ${row.model}` : ""}`,
-      inputTokens: row.inputTokens,
-      outputTokens: row.outputTokens,
-      metered: `${row.jobsWithUsage}/${row.jobs}`,
-      cost:
-        state === "priced"
-          ? `est. cost ${formatCost(row.estimatedCost?.total ?? 0)}`
-          : state === "unpriced"
-            ? "unpriced — no AI_PRICING entry for this model"
-            : "unmetered — provider reported no usage"
-    };
+  const priced = usage.filter((row) => row.estimatedCost !== undefined);
+  const unpriced = usage.filter((row) => row.estimatedCost === undefined && row.jobsWithUsage > 0);
+  const unmetered = usage.filter((row) => row.jobsWithUsage === 0);
+
+  const data: CostBarDatum[] = priced.flatMap((row) => {
+    const cost = row.estimatedCost;
+    if (cost === undefined) {
+      return [];
+    }
+    return [
+      {
+        label: label(row),
+        inputCost: cost.input,
+        outputCost: cost.output,
+        costLabel: `est. cost ${formatCost(cost.total)}`,
+        tokens: `${row.inputTokens.toLocaleString()} in · ${row.outputTokens.toLocaleString()} out tokens`,
+        states: `${row.jobsWithUsage}/${row.jobs} jobs metered`
+      }
+    ];
   });
 
-  const totalCost = usage.reduce((sum, row) => sum + (row.estimatedCost?.total ?? 0), 0);
-  const priced = usage.filter((row) => costState(row) === "priced").length;
-  const unpriced = usage.filter((row) => costState(row) === "unpriced").length;
-  const unmetered = usage.filter((row) => costState(row) === "unmetered").length;
+  const total = priced.reduce((sum, row) => sum + (row.estimatedCost?.total ?? 0), 0);
+  const headerTotal = priced.length > 0 ? `Est. cost ${formatCost(total)}` : "No priced usage";
+  const coverage = `${priced.length} priced · ${unpriced.length} unpriced · ${unmetered.length} unmetered`;
+
+  const unpricedPairs = [...new Set(unpriced.map(pricePair))];
+  const footnoteParts: string[] = [];
+  if (unmetered.length > 0) {
+    footnoteParts.push(
+      `${unmetered.length} unmetered ${unmetered.length === 1 ? "category" : "categories"} — providers reported no usage`
+    );
+  }
+  if (unpricedPairs.length > 0) {
+    footnoteParts.push(`Unpriced — add an AI_PRICING entry for: ${unpricedPairs.join(", ")}`);
+  }
+  const footnote = footnoteParts.length > 0 ? footnoteParts.join(" · ") : undefined;
+
+  const emptyState =
+    priced.length === 0
+      ? `No priced usage yet. Add an AI_PRICING entry for ${
+          unpricedPairs.length > 0 ? unpricedPairs.join(", ") : "your model"
+        } to see cost here.`
+      : undefined;
 
   return (
-    <>
-      <Summary>
-        <TotalCost>{priced > 0 ? `Est. cost ${formatCost(totalCost)}` : "No priced usage"}</TotalCost>
-        <Coverage>
-          {priced} priced · {unpriced} unpriced · {unmetered} unmetered
-        </Coverage>
-      </Summary>
-      <ResponsiveContainer width="100%" height={320}>
-        <BarChart data={data} margin={{ top: 8, right: 12, bottom: 32, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke={theme.color.border} vertical={false} />
-          <XAxis
-            dataKey="label"
-            tick={{ fontSize: 11, fill: theme.color.textMuted }}
-            tickLine={false}
-            interval={0}
-            angle={-25}
-            textAnchor="end"
-          />
-          <YAxis tick={{ fontSize: 12, fill: theme.color.textMuted }} tickLine={false} tickFormatter={compact} />
-          <Tooltip
-            formatter={(value, name) =>
-              typeof value === "number" ? [value.toLocaleString(), name] : [value ?? "", name]
-            }
-            labelFormatter={(label, payload) => {
-              // recharts hands the hovered row's datum on the payload — no lookup.
-              const datum = payload?.[0]?.payload as { metered?: string; cost?: string } | undefined;
-              const parts = [String(label)];
-              if (datum?.cost) parts.push(datum.cost);
-              if (datum?.metered) parts.push(`${datum.metered} jobs metered`);
-              return parts.join(" — ");
-            }}
-          />
-          <Legend />
-          <Bar dataKey="inputTokens" name="Input tokens" stackId="tokens" fill={theme.color.status.pending.dot} />
-          <Bar
-            dataKey="outputTokens"
-            name="Output tokens"
-            stackId="tokens"
-            fill={theme.color.status.completed.dot}
-            radius={[3, 3, 0, 0]}
-          />
-        </BarChart>
-      </ResponsiveContainer>
-    </>
+    <CostBarChart data={data} headerTotal={headerTotal} coverage={coverage} footnote={footnote} emptyState={emptyState} />
   );
 }
