@@ -1729,13 +1729,26 @@ export interface PatrolImpact {
 //
 // `estimatedCost` is money, computed at read time from the token sums × the
 // operator's `AI_PRICING` table — never persisted, so re-pricing history is
-// just re-reading. It is present ONLY when a matching price entry exists (the
-// *priced* state). Its absence is deliberately ambiguous between two states the
-// caller must keep distinct and must never render as $0:
+// just re-reading. It is the `{ input, output, total }` split (see
+// AiCostEstimate) so a consumer can plot input-cost and output-cost separately;
+// `total === input + output`. It is present ONLY when a matching price entry
+// exists (the *priced* state). Its absence is deliberately ambiguous between two
+// states the caller must keep distinct and must never render as $0:
 //   - *unpriced*  — usage was reported (`jobsWithUsage > 0`) but no price entry
 //                   matches this (provider, model), so cost is unknown.
 //   - *unmetered* — no usage was reported at all (`jobsWithUsage === 0`, the
 //                   CLI-provider case), so there are no tokens to price.
+// Read-time AI spend for one priced rollup, split by token direction. Present
+// only in the *priced* state (a matched AI_PRICING entry — including a
+// legitimate zero-rate free model, which prices as a real `{ 0, 0, 0 }`).
+// `total === input + output`. Lets a cost chart stack input-cost and output-cost
+// instead of collapsing spend to a single number.
+export interface AiCostEstimate {
+  input: number;
+  output: number;
+  total: number;
+}
+
 export interface AiUsageBreakdown {
   jobType: string;
   provider: string;
@@ -1751,7 +1764,7 @@ export interface AiUsageBreakdown {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  estimatedCost?: number;
+  estimatedCost?: AiCostEstimate;
 }
 
 // AI spend attributed to one flow over the window (the per-flow cost view),
@@ -1771,7 +1784,7 @@ export interface AiCostByFlow {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  estimatedCost?: number;
+  estimatedCost?: AiCostEstimate;
 }
 
 // Approximate AI spend attributed to one scheduled task over the window (the
@@ -1790,5 +1803,5 @@ export interface AiScheduleCost {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  estimatedCost?: number;
+  estimatedCost?: AiCostEstimate;
 }

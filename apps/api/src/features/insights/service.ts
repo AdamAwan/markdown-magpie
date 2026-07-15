@@ -118,7 +118,7 @@ export async function aiCostByFlow(ctx: AppContext, query: InsightsFlowWindowQue
       ...(flowId !== undefined ? { flowId } : {}),
       ...summariseAiCost(flowRows)
     }))
-    .sort((a, b) => (b.estimatedCost ?? 0) - (a.estimatedCost ?? 0) || b.totalTokens - a.totalTokens);
+    .sort((a, b) => (b.estimatedCost?.total ?? 0) - (a.estimatedCost?.total ?? 0) || b.totalTokens - a.totalTokens);
 }
 
 // Per-schedule AI cost over the window: each scheduled task's spend, approximated

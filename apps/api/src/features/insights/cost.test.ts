@@ -15,7 +15,7 @@ test("summariseAiCost sums tokens and keeps the three cost states distinct", () 
       inputTokens: 100,
       outputTokens: 20,
       totalTokens: 120,
-      estimatedCost: 0.5
+      estimatedCost: { input: 0.3, output: 0.2, total: 0.5 }
     },
     // unpriced: usage reported but no cost — must NOT count toward pricedJobs.
     {
@@ -47,7 +47,7 @@ test("summariseAiCost sums tokens and keeps the three cost states distinct", () 
     inputTokens: 140,
     outputTokens: 30,
     totalTokens: 170,
-    estimatedCost: 0.5
+    estimatedCost: { input: 0.3, output: 0.2, total: 0.5 }
   });
 });
 

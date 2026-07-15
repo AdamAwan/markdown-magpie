@@ -305,6 +305,7 @@ export type {
   SourceFreshness,
   FreshnessSummary,
   PatrolImpact,
+  AiCostEstimate,
   AiUsageBreakdown,
   AiCostByFlow,
   AiScheduleCost

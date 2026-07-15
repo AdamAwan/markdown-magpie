@@ -150,21 +150,21 @@ data. Data inventory confirmed against the schema (see the tables named below).
 - **Endpoint:** `GET /insights/feedback?from&to&bucket&flow` → `{ totals: FeedbackSummary, series: FeedbackBucket[] }`.
 - **Source:** `questions` (`feedback`, `feedback_at`, `confidence`, `purpose`).
 
-**C11. AI token usage & cost** *(Recharts stacked bars, window-only)* — added later (#241)
-- **Question:** What is each job type costing per provider/model — e.g. what did the correctness patrol spend this week, in tokens and in money?
-- **Data:** one stacked bar (input + output tokens) per (job type, provider, **model**) triple over the window, heaviest first. Cost rides text — a header total plus a per-bar tooltip line — never a series colour or a second y-axis. `estimatedCost` is priced at read time from `AI_PRICING` (tokens × per-MTok rate) and is present only for a matched (provider, model): the chart keeps three states distinct so nothing reads as `$0` — **priced** (cost shown), **unpriced** (usage reported, no price entry), **unmetered** (CLI providers report no usage). The tooltip also reports `jobsWithUsage`/`jobs` ("jobs metered").
-- **Endpoint:** `GET /insights/ai-usage?from&to` → `{ usage: AiUsageBreakdown[] }` (`model`, `estimatedCost` optional).
+**C11. AI token usage & cost** *(Recharts horizontal cost bars, window-only)* — added later (#241)
+- **Question:** What is each job type costing per provider/model — e.g. what did the correctness patrol spend this week?
+- **Data:** one **horizontal bar per priced (job type, provider, **model**) triple**, its length the triple's spend — **input-cost + output-cost stacked** (both money, so total length = total cost), heaviest first. Cost is on the axis; **tokens ride the tooltip** (input/output/total) along with `jobsWithUsage`/`jobs` ("jobs metered"). `estimatedCost` is the `{ input, output, total }` split (`AiCostEstimate`), priced at read time from `AI_PRICING` (tokens × per-MTok rate) and present only for a matched (provider, model). The three states stay distinct so nothing reads as `$0` — **priced** (a bar), **unpriced** (usage reported, no price entry → excluded from the bars but named in a footnote so the operator knows what to price), **unmetered** (CLI providers report no usage → footnoted count). When nothing is priced the plot is replaced by an empty-state CTA naming the unpriced pairs. *(This supersedes the original design, where the bars encoded tokens and cost "rode text — never a series colour or a second y-axis"; for a cost card, cost belongs on the axis.)*
+- **Endpoint:** `GET /insights/ai-usage?from&to` → `{ usage: AiUsageBreakdown[] }` (`model`, `estimatedCost` optional; `estimatedCost` is the `{ input, output, total }` split).
 - **Source:** pg-boss `job` — completed rows on the provider-fanned AI queues; the watcher sums each run's provider-reported usage and stamps its execution identity, and the API persists both on the `{ result, executor, usage?, provider?, model? }` completion envelope. Cost is never persisted — always `stored tokens × current AI_PRICING`. No new table: the pg-boss retention window (30 days) covers the chart's window, and the queue-name → (type, provider) mapping is derived from the `@magpie/jobs` catalog.
 
-**AI cost by flow** *(Recharts stacked bars, window-only)* — added with C11 cost
+**AI cost by flow** *(Recharts horizontal cost bars, window-only)* — added with C11 cost
 - **Question:** Which flow is my AI spend going to?
-- **Data:** one stacked token bar per flow, heaviest cost first, with cost in a header total and per-bar tooltip (same three-state honesty as C11). Jobs whose input carries no flowId (`answer_question`, cross-flow `fold_*`) group as **Unattributed**. Flow display names come from `ctx.knowledgeConfig.flows`, resolved by the console.
+- **Data:** one horizontal bar per **priced** flow, its length the flow's spend (input-cost + output-cost stacked, same shared `CostBarChart` as C11), heaviest first; tokens ride the tooltip alongside the flow's priced/unpriced/unmetered job counts (same three-state honesty as C11). Flows with no priced usage are footnoted rather than drawn as empty bars, and an empty-state CTA shows when no flow is priced. Jobs whose input carries no flowId (`answer_question`, cross-flow `fold_*`) group as **Unattributed**. Flow display names come from `ctx.knowledgeConfig.flows`, resolved by the console.
 - **Endpoint:** `GET /insights/ai-cost/by-flow?from&to&flow` → `{ flows: AiCostByFlow[] }`.
 - **Source:** the same rollup as C11, additionally grouped by `data->'input'->>'flowId'` (the pg-boss JobEnvelope), aggregated to one cost summary per flow.
 
 **Per-schedule cost** *(Schedules page column, not the Insights page)* — added with C11 cost
 - **Question:** What is each scheduled maintenance task costing?
-- **Data:** a "Cost (30d)" column on the `/schedules` table showing each task's approximate spend — the AI job types its orchestrator fans out to (`aiJobTypes` in the task registry), filtered to the task's flow. Priced/unpriced/unmetered stay distinct.
+- **Data:** a "Cost (30d)" column on the `/schedules` table showing each task's approximate spend (`estimatedCost.total` of the `{ input, output, total }` split) — the AI job types its orchestrator fans out to (`aiJobTypes` in the task registry), filtered to the task's flow. Priced/unpriced/unmetered stay distinct.
 - **Endpoint:** `GET /insights/ai-cost/by-schedule?from&to` → `{ schedules: AiScheduleCost[] }`, keyed by `ScheduledTask.key`. Fetched page-locally so it stays off the console's fast poll.
 
 ## 7. Delivery phases

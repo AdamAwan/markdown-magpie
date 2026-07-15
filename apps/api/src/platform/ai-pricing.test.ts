@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { parseAiPricing } from "./ai-pricing.js";
+import { estimateTokenCost, parseAiPricing } from "./ai-pricing.js";
 
 describe("parseAiPricing", () => {
   it("treats unset/blank as no pricing configured, with no errors", () => {
@@ -81,6 +81,45 @@ describe("parseAiPricing", () => {
     assert.ok(
       result.errors.some((message) => /duplicate entry/.test(message)),
       result.errors.join("\n")
+    );
+  });
+});
+
+describe("estimateTokenCost", () => {
+  const entries = parseAiPricing(
+    JSON.stringify([{ provider: "openai-compatible", model: "m", inputPerMTok: 2, outputPerMTok: 6 }])
+  ).entries;
+
+  it("splits cost into input, output, and total", () => {
+    const cost = estimateTokenCost(
+      entries,
+      { provider: "openai-compatible", model: "m" },
+      { inputTokens: 1_000_000, outputTokens: 500_000 }
+    );
+    assert.deepEqual(cost, { input: 2, output: 3, total: 5 });
+  });
+
+  it("returns undefined for an unmatched model (unpriced, not $0)", () => {
+    assert.equal(
+      estimateTokenCost([], { provider: "openai-compatible", model: "m" }, { inputTokens: 10, outputTokens: 10 }),
+      undefined
+    );
+  });
+
+  it("returns undefined for a null model (a CLI provider's default)", () => {
+    assert.equal(
+      estimateTokenCost(entries, { provider: "openai-compatible", model: null }, { inputTokens: 10, outputTokens: 10 }),
+      undefined
+    );
+  });
+
+  it("prices a zero-rate free model as a real zero, not undefined", () => {
+    const free = parseAiPricing(
+      JSON.stringify([{ provider: "openai-compatible", model: "free", inputPerMTok: 0, outputPerMTok: 0 }])
+    ).entries;
+    assert.deepEqual(
+      estimateTokenCost(free, { provider: "openai-compatible", model: "free" }, { inputTokens: 9, outputTokens: 9 }),
+      { input: 0, output: 0, total: 0 }
     );
   });
 });

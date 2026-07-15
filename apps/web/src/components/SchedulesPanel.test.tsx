@@ -43,7 +43,7 @@ test("renders a priced task's 30-day cost, and unmetered when only CLI jobs ran"
     inputTokens: 1000,
     outputTokens: 200,
     totalTokens: 1200,
-    estimatedCost: 0.42
+    estimatedCost: { input: 0.3, output: 0.12, total: 0.42 }
   };
   const html = renderMarkup(
     <SchedulesPanel

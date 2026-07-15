@@ -323,7 +323,13 @@ test("aiUsage sums completion-envelope usage per (job type, provider)", { skip: 
       inputTokens: 140,
       outputTokens: 25,
       totalTokens: 165,
-      estimatedCost: 0.0006
+      // Same arithmetic as estimateTokenCost so the floats match bit-for-bit:
+      // input=(tokens×rate)/1e6, total=input+output. (140×2.5+25×10)/1e6 = 0.0006.
+      estimatedCost: {
+        input: (140 * 2.5) / 1_000_000,
+        output: (25 * 10) / 1_000_000,
+        total: (140 * 2.5) / 1_000_000 + (25 * 10) / 1_000_000
+      }
     },
     {
       jobType: "verify_document",
@@ -415,7 +421,11 @@ test("aiUsageByFlow groups by data->input->>flowId and prices per flow", { skip:
       inputTokens: 140,
       outputTokens: 25,
       totalTokens: 165,
-      estimatedCost: 0.0006
+      estimatedCost: {
+        input: (140 * 2.5) / 1_000_000,
+        output: (25 * 10) / 1_000_000,
+        total: (140 * 2.5) / 1_000_000 + (25 * 10) / 1_000_000
+      }
     },
     {
       jobType: "improve_document",
@@ -427,7 +437,11 @@ test("aiUsageByFlow groups by data->input->>flowId and prices per flow", { skip:
       inputTokens: 10,
       outputTokens: 2,
       totalTokens: 12,
-      estimatedCost: 0.000045
+      estimatedCost: {
+        input: (10 * 2.5) / 1_000_000,
+        output: (2 * 10) / 1_000_000,
+        total: (10 * 2.5) / 1_000_000 + (2 * 10) / 1_000_000
+      }
     }
   ]);
 });
