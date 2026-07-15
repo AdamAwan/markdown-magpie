@@ -245,7 +245,12 @@ export async function completeJob(
   // The watcher's summed provider-reported token usage for the run (#241),
   // persisted on the completion envelope beside result/executor. Optional:
   // CLI providers and non-AI jobs report nothing.
-  usage?: AiUsage
+  usage?: AiUsage,
+  // The provider + configured model that executed the run's AI work, persisted
+  // flat on the envelope beside usage so token spend can be priced per model.
+  // Optional: non-AI jobs and older watchers report nothing, and a CLI run
+  // without an explicit model config reports only the provider.
+  identity?: { provider?: string; model?: string }
 ): Promise<
   | { ok: false; code: "job_not_found" }
   | { ok: false; code: "invalid_output" }
@@ -297,8 +302,15 @@ export async function completeJob(
     // ordering rationale in this function's docstring. `usage` rides the same
     // envelope (not the job's own output) so it can never collide with the
     // job contract's schema-stripping — the Insights AI-usage chart reads it
-    // from here (#241).
-    await ctx.jobs.complete(jobId, { result: resultData, executor, ...(usage ? { usage } : {}) });
+    // from here (#241). `provider`/`model` ride the envelope the same way, so
+    // usage rollups can price token spend per model.
+    await ctx.jobs.complete(jobId, {
+      result: resultData,
+      executor,
+      ...(usage ? { usage } : {}),
+      ...(identity?.provider ? { provider: identity.provider } : {}),
+      ...(identity?.model ? { model: identity.model } : {})
+    });
   }
 
   try {
