@@ -15,7 +15,7 @@ const fixture: AiUsageBreakdown[] = [
     inputTokens: 240_000,
     outputTokens: 31_000,
     totalTokens: 271_000,
-    estimatedCost: 0.91
+    estimatedCost: { input: 0.7, output: 0.21, total: 0.91 }
   },
   {
     // Usage reported but no price entry matched: unpriced, not $0.

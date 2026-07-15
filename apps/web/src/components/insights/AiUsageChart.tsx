@@ -65,14 +65,14 @@ export function AiUsageChart({ usage }: { usage: AiUsageBreakdown[] }) {
       metered: `${row.jobsWithUsage}/${row.jobs}`,
       cost:
         state === "priced"
-          ? `est. cost ${formatCost(row.estimatedCost ?? 0)}`
+          ? `est. cost ${formatCost(row.estimatedCost?.total ?? 0)}`
           : state === "unpriced"
             ? "unpriced — no AI_PRICING entry for this model"
             : "unmetered — provider reported no usage"
     };
   });
 
-  const totalCost = usage.reduce((sum, row) => sum + (row.estimatedCost ?? 0), 0);
+  const totalCost = usage.reduce((sum, row) => sum + (row.estimatedCost?.total ?? 0), 0);
   const priced = usage.filter((row) => costState(row) === "priced").length;
   const unpriced = usage.filter((row) => costState(row) === "unpriced").length;
   const unmetered = usage.filter((row) => costState(row) === "unmetered").length;

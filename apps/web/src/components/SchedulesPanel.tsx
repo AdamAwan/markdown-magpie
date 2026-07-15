@@ -367,7 +367,7 @@ function ScheduleCostCell({ cost }: { cost?: AiScheduleCost }) {
   const unmetered = cost.jobs - cost.jobsWithUsage;
   const title = `${cost.pricedJobs} priced · ${unpriced} unpriced · ${unmetered} unmetered jobs (last 30 days)`;
   if (cost.estimatedCost !== undefined) {
-    return <CostValue title={title}>est. {formatCost(cost.estimatedCost)}</CostValue>;
+    return <CostValue title={title}>est. {formatCost(cost.estimatedCost.total)}</CostValue>;
   }
   return (
     <CostValue muted title={title}>

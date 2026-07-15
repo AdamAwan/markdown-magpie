@@ -50,7 +50,7 @@ export function AiCostByFlowChart({
     const unpricedJobs = flow.jobsWithUsage - flow.pricedJobs;
     const unmeteredJobs = flow.jobs - flow.jobsWithUsage;
     const costLabel =
-      flow.estimatedCost !== undefined ? `est. cost ${formatCost(flow.estimatedCost)}` : "no priced usage";
+      flow.estimatedCost !== undefined ? `est. cost ${formatCost(flow.estimatedCost.total)}` : "no priced usage";
     return {
       label: flowName(flow.flowId),
       inputTokens: flow.inputTokens,
@@ -61,7 +61,7 @@ export function AiCostByFlowChart({
     };
   });
 
-  const totalCost = flows.reduce((sum, flow) => sum + (flow.estimatedCost ?? 0), 0);
+  const totalCost = flows.reduce((sum, flow) => sum + (flow.estimatedCost?.total ?? 0), 0);
   const anyPriced = flows.some((flow) => flow.estimatedCost !== undefined);
 
   return (

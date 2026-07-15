@@ -13,7 +13,7 @@ const fixture: AiCostByFlow[] = [
     inputTokens: 120_000,
     outputTokens: 20_000,
     totalTokens: 140_000,
-    estimatedCost: 1.23
+    estimatedCost: { input: 0.9, output: 0.33, total: 1.23 }
   },
   {
     // Unattributed bucket: no flowId, no priced usage.

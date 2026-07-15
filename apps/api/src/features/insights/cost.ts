@@ -13,7 +13,9 @@ export function summariseAiCost(rows: AiUsageBreakdown[]): Omit<AiCostByFlow, "f
   let inputTokens = 0;
   let outputTokens = 0;
   let totalTokens = 0;
-  let estimatedCost = 0;
+  let inputCost = 0;
+  let outputCost = 0;
+  let totalCost = 0;
   let anyPriced = false;
   for (const row of rows) {
     jobs += row.jobs;
@@ -23,7 +25,9 @@ export function summariseAiCost(rows: AiUsageBreakdown[]): Omit<AiCostByFlow, "f
     totalTokens += row.totalTokens;
     if (row.estimatedCost !== undefined) {
       anyPriced = true;
-      estimatedCost += row.estimatedCost;
+      inputCost += row.estimatedCost.input;
+      outputCost += row.estimatedCost.output;
+      totalCost += row.estimatedCost.total;
       // The metered jobs of a priced triple are the ones whose cost is counted.
       pricedJobs += row.jobsWithUsage;
     }
@@ -35,6 +39,6 @@ export function summariseAiCost(rows: AiUsageBreakdown[]): Omit<AiCostByFlow, "f
     inputTokens,
     outputTokens,
     totalTokens,
-    ...(anyPriced ? { estimatedCost } : {})
+    ...(anyPriced ? { estimatedCost: { input: inputCost, output: outputCost, total: totalCost } } : {})
   };
 }
