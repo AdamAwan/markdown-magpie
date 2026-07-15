@@ -11,7 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@auth0/auth0-react": "^2.20.0",
+    "@auth0/auth0-react": "^2.21.0",
     "@dagrejs/dagre": "^3.0.0",
     "@emotion/cache": "^11.14.0",
     "@emotion/react": "^11.14.0",
