@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "description": "Golden-question regression set for the answer pipeline (issue #241). Each case is asked through POST /api/ask against the golden KB fixture (scripts/fixtures/golden-kb) with the deterministic golden provider (scripts/fixtures/golden-provider.mjs). Expectations are scored by scripts/eval-golden.ts; the committed baseline is scripts/fixtures/golden-baseline.json. Bump `version` when cases change so history rows stay comparable.",
+  "cases": [
+    {
+      "id": "backup-retention",
+      "question": "How long are database backups retained?",
+      "expect": {
+        "routing": { "mode": "routed", "flowId": "aurora" },
+        "confidence": "high",
+        "citedDocs": ["backups.md"],
+        "answerContains": ["35"],
+        "gaps": "none",
+        "verification": "grounded"
+      }
+    },
+    {
+      "id": "deployment-regions",
+      "question": "Which regions can an Aurora cluster be deployed in?",
+      "expect": {
+        "routing": { "mode": "routed", "flowId": "aurora" },
+        "confidence": "high",
+        "citedDocs": ["deployment.md"],
+        "answerContains": ["eu-west"],
+        "gaps": "none",
+        "verification": "grounded"
+      }
+    },
+    {
+      "id": "single-sign-on",
+      "question": "Does Aurora support single sign-on with SAML identity providers?",
+      "expect": {
+        "routing": { "mode": "routed", "flowId": "aurora" },
+        "confidence": "high",
+        "citedDocs": ["security.md"],
+        "answerContains": ["SAML"],
+        "gaps": "none",
+        "verification": "grounded"
+      }
+    },
+    {
+      "id": "api-rate-limit",
+      "question": "What is the rate limit for the Aurora REST API in requests per minute?",
+      "expect": {
+        "routing": { "mode": "routed", "flowId": "aurora" },
+        "confidence": "high",
+        "citedDocs": ["limits.md"],
+        "answerContains": ["120"],
+        "gaps": "none",
+        "verification": "grounded"
+      }
+    },
+    {
+      "id": "onboarding-duration",
+      "question": "How long does onboarding a new engineer take?",
+      "expect": {
+        "routing": { "mode": "routed", "flowId": "handbook" },
+        "confidence": "high",
+        "citedDocs": ["onboarding.md"],
+        "answerContains": ["five days"],
+        "gaps": "none",
+        "verification": "grounded"
+      }
+    },
+    {
+      "id": "incident-severity",
+      "question": "Which incident severity level pages the on-call engineer immediately?",
+      "expect": {
+        "routing": { "mode": "routed", "flowId": "handbook" },
+        "confidence": "high",
+        "citedDocs": ["incidents.md"],
+        "answerContains": ["sev1"],
+        "gaps": "none",
+        "verification": "grounded"
+      }
+    },
+    {
+      "id": "partial-answer-followup-gap",
+      "question": "How long are database backups retained, and can expired backups be restored from cold storage?",
+      "expect": {
+        "routing": { "mode": "routed", "flowId": "aurora" },
+        "confidence": "medium",
+        "citedDocs": ["backups.md"],
+        "answerContains": ["35"],
+        "gaps": "some",
+        "verification": "grounded"
+      }
+    },
+    {
+      "id": "knowledge-gap-sla",
+      "question": "What is the enterprise support SLA for Aurora?",
+      "expect": {
+        "routing": { "mode": "routed", "flowId": "aurora" },
+        "confidence": "low",
+        "citedDocs": [],
+        "gaps": "some",
+        "verification": "skipped"
+      }
+    },
+    {
+      "id": "out-of-scope-pinned",
+      "question": "Should I feed my cat wet or dry food?",
+      "flow": "aurora",
+      "expect": {
+        "routing": { "mode": "requested" },
+        "confidence": "unknown",
+        "citedDocs": [],
+        "outOfScope": true,
+        "gaps": "none",
+        "verification": "skipped"
+      }
+    },
+    {
+      "id": "unroutable-flow-selection",
+      "question": "Should I feed my cat wet or dry food?",
+      "expect": {
+        "routing": { "mode": "unknown" },
+        "confidence": "unknown",
+        "citedDocs": [],
+        "flowSelectionRequired": true,
+        "gaps": "none"
+      }
+    },
+    {
+      "id": "grounding-verification-strips-claims",
+      "question": "Is Aurora SOC 2 certified?",
+      "expect": {
+        "routing": { "mode": "routed", "flowId": "aurora" },
+        "confidence": "low",
+        "citedDocs": ["security.md"],
+        "answerContains": ["audit is in progress"],
+        "answerExcludes": ["fully SOC 2 certified"],
+        "gaps": "some",
+        "verification": "claims_stripped"
+      }
+    }
+  ]
+}
