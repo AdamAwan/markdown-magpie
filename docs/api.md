@@ -196,12 +196,15 @@ Index counts.
 
 See [question-logging.md](question-logging.md) for the recorded fields and lifecycle.
 
-### `GET /api/questions?limit=<n>`
+### `GET /api/questions?limit=<n>&offset=<n>`
 
-Lists question logs (newest first). `limit` defaults to `50`.
+Lists question logs (newest first), paginated. `limit` defaults to `50` (capped at
+`200`), `offset` to `0`. `total` is the unpaginated count of listable (live)
+questions, so clients can page through the whole history — the console's Ask page
+uses it for its Newer/Older pager.
 
 ```json
-{ "questions": [ QuestionLog, ... ] }
+{ "questions": [ QuestionLog, ... ], "total": 123 }
 ```
 
 ### `GET /api/questions/parked?limit=<n>`

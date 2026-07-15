@@ -76,6 +76,11 @@ const GapList = styled.ul(({ theme }) => ({
 
 const OutOfScopeNote = styled.p(({ theme }) => ({ color: theme.color.status.running.fg }));
 
+const PagerNote = styled.span(({ theme }) => ({
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.sm
+}));
+
 function verificationLabel(verification: AnswerTrace["verification"]): string {
   switch (verification.status) {
     case "grounded":
@@ -182,10 +187,14 @@ export function AskPanel({
   loading,
   onAsk,
   onFeedback,
+  onPageChange,
   onReAsk,
   onToggleGap,
   question,
   questions,
+  questionsPage,
+  questionsPageCount,
+  questionsTotal,
   setAnsweredSearch,
   setAskFlow,
   setQuestion,
@@ -200,10 +209,14 @@ export function AskPanel({
   loading: boolean;
   onAsk: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onFeedback: (questionId: string, feedback: Feedback) => Promise<void>;
+  onPageChange: (page: number) => Promise<void>;
   onReAsk: (question: string, flow: string) => Promise<void>;
   onToggleGap: (questionId: string, flagged: boolean) => Promise<void>;
   question: string;
   questions: QuestionLog[];
+  questionsPage: number;
+  questionsPageCount: number;
+  questionsTotal: number;
   setAnsweredSearch: (value: string) => void;
   setAskFlow: (value: string) => void;
   setQuestion: (value: string) => void;
@@ -383,9 +396,30 @@ export function AskPanel({
             );
           })}
           {filteredQuestions.length === 0 ? (
-            <EmptyState>{query ? "No matching questions." : "No questions logged yet."}</EmptyState>
+            <EmptyState>{query ? "No matching questions on this page." : "No questions logged yet."}</EmptyState>
           ) : null}
         </ScrollList>
+        {questionsPageCount > 1 ? (
+          <Row justify="between" gap="lg">
+            <Chip
+              disabled={questionsPage === 0}
+              onClick={() => void onPageChange(questionsPage - 1)}
+              title="Show more recent questions"
+            >
+              ← Newer
+            </Chip>
+            <PagerNote>
+              Page {questionsPage + 1} of {questionsPageCount} · {questionsTotal} question{questionsTotal === 1 ? "" : "s"}
+            </PagerNote>
+            <Chip
+              disabled={questionsPage >= questionsPageCount - 1}
+              onClick={() => void onPageChange(questionsPage + 1)}
+              title="Show older questions"
+            >
+              Older →
+            </Chip>
+          </Row>
+        ) : null}
       </Block>
     </>
   );

@@ -103,6 +103,11 @@ const PROPOSALS_LIST_LIMIT = 100;
 // only — enough to recover a missed toast, small enough to never need paging.
 const NOTIFICATION_LIMIT = 20;
 
+// Page size for the Ask page's answered-questions list. GET /api/questions is
+// paginated (limit/offset + unpaginated total) so the console can walk the whole
+// history; the fast tier re-fetches whichever page the operator is on.
+const QUESTIONS_PAGE_SIZE = 8;
+
 // Holds every piece of console state, the data-loading effects and the action
 // handlers that previously lived inline in the single page component. Lifting
 // them into a provider mounted by the root layout means the state and the 4s
@@ -114,6 +119,9 @@ function useConsoleController() {
   const [health, setHealth] = useState<Health | undefined>();
   const [stats, setStats] = useState<KnowledgeStats>({ repositoryCount: 0, documentCount: 0, sectionCount: 0 });
   const [questions, setQuestions] = useState<QuestionLog[]>([]);
+  // Current page (0-based) and unpaginated total of the answered-questions list.
+  const [questionsPage, setQuestionsPage] = useState(0);
+  const [questionsTotal, setQuestionsTotal] = useState(0);
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [repositories, setRepositories] = useState<RepositoryRef[]>([]);
   const [gaps, setGaps] = useState<GapCandidate[]>([]);
@@ -166,6 +174,10 @@ function useConsoleController() {
   // controller since they now run on independent schedules.
   const refreshControllerRef = useRef<AbortController | undefined>(undefined);
   const slowRefreshControllerRef = useRef<AbortController | undefined>(undefined);
+  // The answered-questions page the next refresh should fetch. A ref (mirroring
+  // the questionsPage state) because refreshFast is captured by interval timers
+  // whose closures would otherwise poll a stale page after the operator moves.
+  const questionsPageRef = useRef(0);
 
   const openSection = useCallback(
     (section: ConsoleSection) => {
@@ -390,7 +402,10 @@ function useConsoleController() {
       ] = await Promise.all([
         apiGet<Health>("/health", { signal }),
         apiGet<KnowledgeStats>("/knowledge/stats", { signal }),
-        apiGet<{ questions: QuestionLog[] }>("/questions?limit=8", { signal }),
+        apiGet<{ questions: QuestionLog[]; total: number }>(
+          `/questions?limit=${QUESTIONS_PAGE_SIZE}&offset=${questionsPageRef.current * QUESTIONS_PAGE_SIZE}`,
+          { signal }
+        ),
         apiGet<{ gaps: GapCandidate[] }>("/gaps/candidates?limit=8", { signal }),
         apiGet<{ clusters: SuggestedGapCluster[] }>("/gaps/clusters?limit=8", { signal }),
         apiGet<JobsResponse>("/jobs?limit=100", { signal }),
@@ -411,6 +426,14 @@ function useConsoleController() {
       setHealth(healthResult);
       setStats(statsResult);
       setQuestions(questionsResult.questions);
+      setQuestionsTotal(questionsResult.total);
+      // If the backlog shrank under the operator (logs deleted) and their page no
+      // longer exists, snap back to the last real page rather than showing an
+      // empty list with a dead pager.
+      const lastQuestionsPage = Math.max(0, Math.ceil(questionsResult.total / QUESTIONS_PAGE_SIZE) - 1);
+      if (questionsPageRef.current > lastQuestionsPage) {
+        void loadQuestionsPage(lastQuestionsPage);
+      }
       setGaps(gapsResult.gaps);
       setGapClusters(clustersResult.clusters);
       applyJobs(jobsResult.jobs, jobsRef.current.length > 0);
@@ -513,12 +536,39 @@ function useConsoleController() {
     await Promise.all([refreshFast(options), refreshSlow({ silent: options.silent })]);
   }
 
+  // Pager for the Ask page's answered-questions list: fetches just the requested
+  // page rather than re-running the whole fast tier. Subsequent fast-tier polls
+  // keep whichever page the operator lands on fresh (via questionsPageRef).
+  async function loadQuestionsPage(page: number) {
+    const next = Math.max(0, page);
+    questionsPageRef.current = next;
+    setQuestionsPage(next);
+    try {
+      const result = await apiGet<{ questions: QuestionLog[]; total: number }>(
+        `/questions?limit=${QUESTIONS_PAGE_SIZE}&offset=${next * QUESTIONS_PAGE_SIZE}`
+      );
+      // The operator paged again (or a poll moved the page) while this request
+      // was in flight — drop the stale response.
+      if (questionsPageRef.current !== next) {
+        return;
+      }
+      setQuestions(result.questions);
+      setQuestionsTotal(result.total);
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    }
+  }
+
   // Shared by the Ask form and the "pick a flow" re-ask. `flow` is "auto" or a
   // configured flow id; the API rejects an unknown id with a 400.
   async function submitQuestion(questionText: string, flow: string) {
     setLoading(true);    try {
       const result = await apiPost<AskResponse>("/ask", { question: questionText, flow });
       setQuestion("");
+      // A fresh question always lands at the top of the newest-first list; jump
+      // back to the first page so the operator sees it arrive.
+      questionsPageRef.current = 0;
+      setQuestionsPage(0);
       // Bounded-wait for the queued answer; the helper returns the terminal job
       // (or the still-active view if the watcher is slow), and the 4s refresh
       // polling keeps the answered-questions list updating either way.
@@ -873,6 +923,10 @@ function useConsoleController() {
     health,
     stats,
     questions,
+    questionsPage,
+    questionsTotal,
+    questionsPageCount: Math.max(1, Math.ceil(questionsTotal / QUESTIONS_PAGE_SIZE)),
+    loadQuestionsPage,
     documents,
     repositories,
     gaps,

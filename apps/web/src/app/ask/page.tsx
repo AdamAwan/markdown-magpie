@@ -15,12 +15,16 @@ export default function AskPage() {
     expandedQuestionIds,
     loading,
     ask,
+    loadQuestionsPage,
     reAskWithFlow,
     sendFeedback,
     setAskFlow,
     toggleKnowledgeGap,
     question,
     questions,
+    questionsPage,
+    questionsPageCount,
+    questionsTotal,
     setAnsweredSearch,
     setQuestion,
     toggleCitations
@@ -49,10 +53,14 @@ export default function AskPage() {
             loading={loading}
             onAsk={ask}
             onFeedback={sendFeedback}
+            onPageChange={loadQuestionsPage}
             onReAsk={reAskWithFlow}
             onToggleGap={toggleKnowledgeGap}
             question={question}
             questions={questions}
+            questionsPage={questionsPage}
+            questionsPageCount={questionsPageCount}
+            questionsTotal={questionsTotal}
             setAnsweredSearch={setAnsweredSearch}
             setAskFlow={setAskFlow}
             setQuestion={setQuestion}

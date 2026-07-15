@@ -258,7 +258,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const {
     health,
     stats,
-    questions,
+    questionsTotal,
     gaps,
     jobs,
     proposals,
@@ -301,7 +301,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const counts: Partial<Record<ConsoleSection, number>> = hasLoaded
     ? {
-        ask: questions.length,
+        // The unpaginated total: the questions list is paged, so the loaded
+        // page's length would under-report the backlog.
+        ask: questionsTotal,
         knowledge: stats.sectionCount,
         gaps: gaps.length,
         jobs: jobs.filter((job) => isActiveJob(job) || job.state === "failed").length,
