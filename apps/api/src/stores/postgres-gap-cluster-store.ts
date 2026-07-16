@@ -160,6 +160,17 @@ export class PostgresGapClusterStore implements GapClusterStore {
     return result.rows.map(mapMembership);
   }
 
+  async clusterIdsForGaps(gapIds: string[]): Promise<string[]> {
+    if (gapIds.length === 0) {
+      return [];
+    }
+    const result = await this.pool.query<{ cluster_id: string }>(
+      "SELECT DISTINCT cluster_id::text AS cluster_id FROM gap_cluster_memberships WHERE active AND gap_id = ANY($1::bigint[])",
+      [gapIds]
+    );
+    return result.rows.map((row) => row.cluster_id);
+  }
+
   async assignGapToCluster(clusterId: string, gapId: string, rationale?: string): Promise<void> {
     const client = await this.pool.connect();
     try {

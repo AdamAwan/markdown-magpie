@@ -30,6 +30,7 @@ import {
   KnowledgeStats,
   PromptSummary,
   Proposal,
+  QuestionDeletionReport,
   QuestionLog,
   ReconciliationDecision,
   RepositoryRef,
@@ -661,6 +662,41 @@ function useConsoleController() {
     }
   }
 
+  // Purge a logged question (e.g. one that carried sensitive info). `scrub` also
+  // cleans the downstream clusters + unpublished proposals it seeded; published
+  // proposals come back as warnings the operator must handle by hand. Requires
+  // manage:admin — the API rejects an under-scoped caller with 403. Returns
+  // whether the delete succeeded so the dialog knows to close.
+  async function deleteQuestion(questionId: string, scrub: boolean): Promise<boolean> {
+    try {
+      const report = await apiDelete<QuestionDeletionReport>(
+        `/questions/${questionId}${scrub ? "?scrub=true" : ""}`
+      );
+      // Drop it from the current page immediately; the next refresh reconciles the
+      // pager (the fast tier already snaps back off an empty page).
+      setQuestions((current) => current.filter((item) => item.id !== questionId));
+      const warnings = report.warnings ?? [];
+      if (warnings.length > 0) {
+        const list = warnings
+          .map((warning) => `“${warning.title}”${warning.pullRequestUrl ? ` (${warning.pullRequestUrl})` : ""}`)
+          .join("; ");
+        showMessage(
+          `Question deleted, but ${warnings.length} published proposal${
+            warnings.length === 1 ? "" : "s"
+          } still contain its text and must be handled manually: ${list}`,
+          "danger"
+        );
+      } else {
+        showMessage(scrub ? "Question and its downstream drafts scrubbed." : "Question deleted.", "success");
+      }
+      await refresh();
+      return true;
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return false;
+    }
+  }
+
   async function draftProposal(gap: GapCandidate) {
     setLoading(true);    try {
       const result = await apiPost<{ job?: JobView; proposal?: Proposal }>("/proposals/from-gap", {
@@ -1044,6 +1080,7 @@ function useConsoleController() {
     reAskWithFlow,
     sendFeedback,
     toggleKnowledgeGap,
+    deleteQuestion,
     draftProposal,
     draftCluster,
     updateProposalStatus,

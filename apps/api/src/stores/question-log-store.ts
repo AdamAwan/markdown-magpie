@@ -123,6 +123,19 @@ export interface QuestionLogStore {
   // candidates or cluster again. Returns how many gaps were newly dismissed.
   dismissGaps(gapIds: string[], reason: string): Promise<number>;
   get(id: string): Promise<QuestionLog | undefined>;
+  // Permanently deletes one question and everything the DB cascades from it
+  // (answer_citations, question_gaps, and via the gap FK, gap_cluster_memberships).
+  // The in-memory store removes them explicitly. Bumps the gap catalog for the
+  // question's flow when it had gaps, so the reconciler re-evaluates the (now
+  // smaller) candidate set. Returns whether a row existed. Used by the
+  // sensitive-info purge (delete-a-question); clusters and proposals are handled
+  // by the scrub service, not here.
+  delete(id: string): Promise<boolean>;
+  // The question's gap ids in the same id format cluster memberships key on
+  // (the bigint question_gaps.id as text in Postgres; the synthetic
+  // `${questionId}::${summary}` in memory). Captured before a scrub delete so it
+  // can find the clusters the question's gaps belonged to.
+  gapIdsForQuestion(id: string): Promise<string[]>;
   // One page of the question list (newest first, live questions only —
   // verification re-asks are synthetic audit records). `search` narrows to
   // questions whose text contains it (case-insensitive substring). `count`
@@ -285,6 +298,30 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
 
   async get(id: string): Promise<QuestionLog | undefined> {
     return this.logs.get(id);
+  }
+
+  async delete(id: string): Promise<boolean> {
+    const existing = this.logs.get(id);
+    if (!existing) {
+      return false;
+    }
+    this.logs.delete(id);
+    // Removing a question drops its gap rows from the candidate set; bump the
+    // flow's catalog when it had any so the reconciler re-evaluates.
+    if ((existing.gaps ?? []).length > 0) {
+      this.bumpCatalog(existing.flowId);
+    }
+    return true;
+  }
+
+  async gapIdsForQuestion(id: string): Promise<string[]> {
+    const log = this.logs.get(id);
+    if (!log) {
+      return [];
+    }
+    // Same synthetic id gapIdsForSummary emits, so ids line up with cluster
+    // memberships. Distinct so gaps sharing a summary collapse to one id.
+    return [...new Set((log.gaps ?? []).map((gap) => `${id}::${gap.summary}`))];
   }
 
   async updateAnswer(id: string, input: QuestionLogUpdateInput): Promise<QuestionLog | undefined> {

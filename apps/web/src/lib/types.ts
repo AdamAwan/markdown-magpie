@@ -31,6 +31,7 @@ export type {
 import type {
   KnowledgeDocument,
   ParkedQuestion,
+  Proposal,
   QuestionFeedback,
   RepositoryRef,
   ScheduledTaskSettings,
@@ -72,6 +73,26 @@ export interface ParkedProposalView {
 export interface ParkedView {
   questions: ParkedQuestion[];
   proposals: ParkedProposalView[];
+}
+
+// Response of DELETE /api/questions/:id (the sensitive-info purge). A published
+// proposal the scrub left untouched — the operator must handle its remote (PR /
+// branch / merged doc) by hand.
+export interface PublishedProposalWarning {
+  proposalId: string;
+  title: string;
+  status: Proposal["status"];
+  pullRequestUrl?: string;
+}
+export interface QuestionDeletionReport {
+  deleted: {
+    question: boolean;
+    gaps: number;
+    clustersDismissed: number;
+    clustersRecomputed: number;
+    proposals: number;
+  };
+  warnings: PublishedProposalWarning[];
 }
 
 // --- Web-only types (not part of the backend domain) -----------------------

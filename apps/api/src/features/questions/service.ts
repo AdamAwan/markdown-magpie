@@ -1,5 +1,35 @@
-import type { ParkedQuestion, QuestionFeedback, QuestionLog } from "@magpie/core";
+import type { ParkedQuestion, Proposal, QuestionFeedback, QuestionLog } from "@magpie/core";
 import type { AppContext } from "../../context.js";
+
+// Title/rationale we overwrite an emptied cluster with, so no question-derived
+// label survives a scrub.
+const SCRUBBED_PLACEHOLDER = "[scrubbed]";
+
+// A proposal the scrub left untouched because it is already published (a pushed
+// branch / open PR / merged doc): un-publishing is a human action, so the caller
+// surfaces these for manual handling instead of touching the remote.
+interface PublishedProposalWarning {
+  proposalId: string;
+  title: string;
+  status: Proposal["status"];
+  pullRequestUrl?: string;
+}
+
+interface QuestionDeletionReport {
+  deleted: {
+    question: boolean;
+    // Gap rows removed with the question (cascade). Zero when it had no gaps.
+    gaps: number;
+    // Emptied clusters dismissed + title-scrubbed (scrub mode only).
+    clustersDismissed: number;
+    // Still-populated clusters whose representative embedding was cleared for a
+    // lazy recompute (scrub mode only).
+    clustersRecomputed: number;
+    // Unpublished proposals hard-deleted (scrub mode only).
+    proposals: number;
+  };
+  warnings: PublishedProposalWarning[];
+}
 
 export async function recordFeedback(
   ctx: AppContext,
@@ -23,6 +53,89 @@ export async function clearManualGap(ctx: AppContext, questionId: string): Promi
 
 export async function getQuestion(ctx: AppContext, id: string): Promise<QuestionLog | undefined> {
   return ctx.stores.questionLogs.get(id);
+}
+
+// Purges a logged question that contained sensitive information. `scrub: false`
+// deletes only the question record (the DB cascade takes its citations, gaps and
+// cluster memberships). `scrub: true` also cleans the downstream artifacts the
+// question's text propagated into: the gap clusters its gaps belonged to, and the
+// proposals it seeded. Published proposals (a pushed branch / open PR / merged
+// doc) are never touched — they are returned as warnings for a human to handle.
+// Returns undefined when no such question exists (the route maps that to 404).
+export async function deleteQuestion(
+  ctx: AppContext,
+  id: string,
+  options: { scrub: boolean }
+): Promise<QuestionDeletionReport | undefined> {
+  const existing = await ctx.stores.questionLogs.get(id);
+  if (!existing) {
+    return undefined;
+  }
+
+  // Captured before deletion: the ids line up with cluster memberships (which the
+  // question delete cascades away), so the affected clusters must be resolved now.
+  const gapIds = await ctx.stores.questionLogs.gapIdsForQuestion(id);
+
+  if (!options.scrub) {
+    await ctx.stores.questionLogs.delete(id);
+    return {
+      deleted: { question: true, gaps: gapIds.length, clustersDismissed: 0, clustersRecomputed: 0, proposals: 0 },
+      warnings: []
+    };
+  }
+
+  const affectedClusterIds = await ctx.stores.gapClusters.clusterIdsForGaps(gapIds);
+  const triggeredProposals = await ctx.stores.proposals.listByTriggeringQuestionId(id);
+
+  // Delete the question (cascade removes citations/gaps/memberships in Postgres),
+  // then normalise the in-memory cluster store — a no-op in Postgres where the
+  // cascade already dropped the memberships.
+  await ctx.stores.questionLogs.delete(id);
+  await ctx.stores.gapClusters.deactivateMembershipsForGaps(gapIds);
+
+  let clustersDismissed = 0;
+  let clustersRecomputed = 0;
+  for (const clusterId of affectedClusterIds) {
+    const remaining = await ctx.stores.gapClusters.listMembershipsForCluster(clusterId);
+    if (remaining.length === 0) {
+      // The deleted question was this cluster's only source: its title/rationale
+      // may echo the sensitive gap summary, so dismiss it out of the active set
+      // and overwrite the label.
+      await ctx.stores.gapClusters.dismissCluster(clusterId, SCRUBBED_PLACEHOLDER);
+      await ctx.stores.gapClusters.updateCluster(clusterId, {
+        title: SCRUBBED_PLACEHOLDER,
+        rationale: SCRUBBED_PLACEHOLDER
+      });
+      clustersDismissed += 1;
+    } else {
+      // Other gaps still populate the cluster; clear its representative embedding
+      // so the next assignment pass recomputes the centroid without the deleted
+      // gap. The multi-gap title is left for the reconciler to re-derive.
+      await ctx.stores.gapClusters.setClusterRepresentative(clusterId, null);
+      clustersRecomputed += 1;
+    }
+  }
+
+  let proposalsDeleted = 0;
+  const warnings: PublishedProposalWarning[] = [];
+  for (const proposal of triggeredProposals) {
+    if (proposal.publication) {
+      warnings.push({
+        proposalId: proposal.id,
+        title: proposal.title,
+        status: proposal.status,
+        ...(proposal.publication.pullRequestUrl ? { pullRequestUrl: proposal.publication.pullRequestUrl } : {})
+      });
+    } else {
+      await ctx.stores.proposals.delete(proposal.id);
+      proposalsDeleted += 1;
+    }
+  }
+
+  return {
+    deleted: { question: true, gaps: gapIds.length, clustersDismissed, clustersRecomputed, proposals: proposalsDeleted },
+    warnings
+  };
 }
 
 // One page of the question list plus two unpaginated counts, so the console can

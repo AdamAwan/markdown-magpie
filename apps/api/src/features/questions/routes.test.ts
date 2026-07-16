@@ -1,7 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { Hono } from "hono";
+import type { AnswerResult } from "@magpie/core";
+import type { Principal } from "@magpie/auth";
 import { buildApp } from "../../app.js";
 import { makeTestContext } from "../../test-support/context.js";
+import { onError } from "../../http/errors.js";
+import { questionRoutes } from "./routes.js";
+
+// An answer that raises a single auto gap, so the logged question seeds a gap
+// (and can be assigned to a cluster) for the scrub tests.
+const secretGapAnswer: AnswerResult = {
+  answer: "…",
+  confidence: "low",
+  citations: [],
+  gaps: [{ summary: "secret topic", question: "q?", confidence: "low", citedSectionIds: [], source: "auto" }]
+};
 
 // Auth is disabled in the test context, so requireScopes is a pass-through and we
 // exercise the parked-gap human workflow route shapes directly (issue #158).
@@ -135,4 +149,172 @@ test("POST /api/questions/:id/gap/retry returns 404 for an unknown question", as
   const res = await app.request("/api/questions/nope/gap/retry", { method: "POST" });
   assert.equal(res.status, 404);
   assert.deepEqual(await res.json(), { error: "question_not_found" });
+});
+
+test("DELETE /api/questions/:id (no scrub) removes the question and reports it", async () => {
+  const ctx = makeTestContext();
+  const log = await ctx.stores.questionLogs.record({
+    question: "here is my API key sk-123",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    answer: secretGapAnswer
+  });
+  const app = buildApp(ctx);
+
+  const res = await app.request(`/api/questions/${log.id}`, { method: "DELETE" });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { deleted: { question: boolean; gaps: number; proposals: number }; warnings: [] };
+  assert.equal(body.deleted.question, true);
+  assert.equal(body.deleted.gaps, 1);
+  assert.equal(body.deleted.proposals, 0, "no scrub → downstream untouched");
+  assert.deepEqual(body.warnings, []);
+  assert.equal(await ctx.stores.questionLogs.get(log.id), undefined, "the question is gone");
+});
+
+test("DELETE /api/questions/:id returns 404 for an unknown question", async () => {
+  const ctx = makeTestContext();
+  const app = buildApp(ctx);
+  const res = await app.request("/api/questions/nope", { method: "DELETE" });
+  assert.equal(res.status, 404);
+  assert.deepEqual(await res.json(), { error: "question_not_found" });
+});
+
+test("DELETE ?scrub=true dismisses an emptied cluster and scrubs its label", async () => {
+  const ctx = makeTestContext();
+  const log = await ctx.stores.questionLogs.record({
+    question: "sensitive",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    answer: secretGapAnswer
+  });
+  const [gapId] = await ctx.stores.questionLogs.gapIdsForQuestion(log.id);
+  const cluster = await ctx.stores.gapClusters.createCluster({ title: "secret topic", revision: 1 });
+  await ctx.stores.gapClusters.assignGapToCluster(cluster.id, gapId!);
+  const app = buildApp(ctx);
+
+  const res = await app.request(`/api/questions/${log.id}?scrub=true`, { method: "DELETE" });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { deleted: { clustersDismissed: number; clustersRecomputed: number } };
+  assert.equal(body.deleted.clustersDismissed, 1);
+  assert.equal(body.deleted.clustersRecomputed, 0);
+
+  const after = await ctx.stores.gapClusters.getCluster(cluster.id);
+  assert.equal(after?.status, "dismissed", "an emptied cluster leaves the active set");
+  assert.equal(after?.title, "[scrubbed]", "no question-derived label survives");
+});
+
+test("DELETE ?scrub=true clears the representative of a still-populated cluster", async () => {
+  const ctx = makeTestContext();
+  const target = await ctx.stores.questionLogs.record({
+    question: "sensitive",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    answer: secretGapAnswer
+  });
+  // A second question keeps the cluster populated after the target is deleted.
+  const survivor = await ctx.stores.questionLogs.record({
+    question: "unrelated but same topic",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    answer: secretGapAnswer
+  });
+  const [targetGap] = await ctx.stores.questionLogs.gapIdsForQuestion(target.id);
+  const [survivorGap] = await ctx.stores.questionLogs.gapIdsForQuestion(survivor.id);
+  const cluster = await ctx.stores.gapClusters.createCluster({
+    title: "secret topic",
+    revision: 1,
+    representativeEmbedding: [0.1, 0.2, 0.3]
+  });
+  await ctx.stores.gapClusters.assignGapToCluster(cluster.id, targetGap!);
+  await ctx.stores.gapClusters.assignGapToCluster(cluster.id, survivorGap!);
+  const app = buildApp(ctx);
+
+  const res = await app.request(`/api/questions/${target.id}?scrub=true`, { method: "DELETE" });
+  const body = (await res.json()) as { deleted: { clustersDismissed: number; clustersRecomputed: number } };
+  assert.equal(body.deleted.clustersDismissed, 0);
+  assert.equal(body.deleted.clustersRecomputed, 1);
+
+  const after = await ctx.stores.gapClusters.getCluster(cluster.id);
+  assert.equal(after?.status, "active", "still-populated cluster stays active");
+  assert.equal(after?.representativeEmbedding, undefined, "representative cleared for lazy recompute");
+});
+
+test("DELETE ?scrub=true deletes unpublished proposals and warns on published ones", async () => {
+  const ctx = makeTestContext();
+  const log = await ctx.stores.questionLogs.record({
+    question: "sensitive",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    answer: secretGapAnswer
+  });
+  const draft = await ctx.stores.proposals.create({
+    title: "Draft doc",
+    targetPath: "draft.md",
+    markdown: "# body with the secret",
+    rationale: "r",
+    evidence: [],
+    triggeringQuestionIds: [log.id]
+  });
+  const published = await ctx.stores.proposals.create({
+    title: "Published doc",
+    targetPath: "published.md",
+    markdown: "# body",
+    rationale: "r",
+    evidence: [],
+    triggeringQuestionIds: [log.id]
+  });
+  await ctx.stores.proposals.recordPublication(published.id, {
+    provider: "local-git",
+    branchName: "magpie/proposal-x",
+    commitSha: "abc123",
+    pullRequestUrl: "https://example.com/pr/1",
+    publishedAt: new Date().toISOString()
+  });
+  const app = buildApp(ctx);
+
+  const res = await app.request(`/api/questions/${log.id}?scrub=true`, { method: "DELETE" });
+  const body = (await res.json()) as {
+    deleted: { proposals: number };
+    warnings: Array<{ proposalId: string; pullRequestUrl?: string; status: string }>;
+  };
+  assert.equal(body.deleted.proposals, 1, "the unpublished draft is deleted");
+  assert.equal(await ctx.stores.proposals.get(draft.id), undefined);
+  assert.equal(body.warnings.length, 1, "the published proposal is warned about, not deleted");
+  assert.equal(body.warnings[0]?.proposalId, published.id);
+  assert.equal(body.warnings[0]?.pullRequestUrl, "https://example.com/pr/1");
+  assert.ok(await ctx.stores.proposals.get(published.id), "the published proposal is left intact");
+});
+
+test("DELETE /api/questions/:id requires the manage:admin scope", async () => {
+  const ctx = makeTestContext();
+  const log = await ctx.stores.questionLogs.record({
+    question: "sensitive",
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
+
+  function appFor(principal: Principal): Hono {
+    const app = new Hono();
+    app.use("*", async (c, next) => {
+      c.set("authRequired", true);
+      c.set("principal", principal);
+      await next();
+    });
+    app.route("/questions", questionRoutes(ctx));
+    app.onError(onError);
+    return app;
+  }
+
+  const forbidden = await appFor({ subject: "auth0|t", scopes: ["read:knowledge"], roles: undefined, payload: {} }).request(
+    `/questions/${log.id}`,
+    { method: "DELETE" }
+  );
+  assert.equal(forbidden.status, 403, "read:knowledge is not enough to purge a question");
+  assert.ok(await ctx.stores.questionLogs.get(log.id), "the question survives a forbidden request");
+
+  const allowed = await appFor({ subject: "auth0|t", scopes: ["manage:admin"], roles: undefined, payload: {} }).request(
+    `/questions/${log.id}`,
+    { method: "DELETE" }
+  );
+  assert.equal(allowed.status, 200, "manage:admin may purge");
 });
