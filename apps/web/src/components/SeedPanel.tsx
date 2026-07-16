@@ -158,7 +158,8 @@ export function SeedPanel({
   onListPlans,
   onPatch,
   onApprove,
-  onDismiss
+  onDismiss,
+  onRevise
 }: {
   flows: Array<{ id: string; name: string }>;
   loading: boolean;
@@ -167,6 +168,7 @@ export function SeedPanel({
   onPatch: (planId: string, patch: SeedPlanPatchBody) => Promise<SeedPlan | undefined>;
   onApprove: (planId: string) => Promise<{ plan: SeedPlan; jobIds: string[] } | undefined>;
   onDismiss: (planId: string) => Promise<SeedPlan | undefined>;
+  onRevise: (planId: string, instruction: string) => Promise<{ jobId: string } | undefined>;
 }) {
   const [flowId, setFlowId] = useState("");
   const [notes, setNotes] = useState("");
@@ -179,6 +181,12 @@ export function SeedPanel({
   const [charter, setCharter] = useState("");
   const [persona, setPersona] = useState("");
   const [items, setItems] = useState<DraftSeedItem[]>([]);
+
+  // Revise-with-instruction state. reviseBaseline holds the plan's updatedAt at
+  // enqueue time so the poll can tell when the reshaped plan has landed in place.
+  const [instruction, setInstruction] = useState("");
+  const [reviseJobId, setReviseJobId] = useState<string | undefined>(undefined);
+  const [reviseBaseline, setReviseBaseline] = useState<string | undefined>(undefined);
 
   const selectedPlan = plans.find((plan) => plan.id === selectedPlanId);
 
@@ -236,6 +244,26 @@ export function SeedPanel({
     }, 5_000);
     return () => window.clearInterval(interval);
   }, [flowId, planningJobId, refreshPlans]);
+
+  // While a revision is in flight, poll for the selected plan to update in place
+  // (same plan id) and re-hydrate it once its updatedAt advances past the value
+  // captured at enqueue time.
+  useEffect(() => {
+    if (!flowId || !reviseJobId || !selectedPlanId || !reviseBaseline) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      void refreshPlans(flowId).then((next) => {
+        const landed = next?.find((plan) => plan.id === selectedPlanId);
+        if (landed && landed.updatedAt !== reviseBaseline) {
+          setReviseJobId(undefined);
+          setReviseBaseline(undefined);
+          hydrate(landed);
+        }
+      });
+    }, 5_000);
+    return () => window.clearInterval(interval);
+  }, [flowId, reviseJobId, selectedPlanId, reviseBaseline, refreshPlans]);
 
   async function propose() {
     setBusy(true);
@@ -299,8 +327,36 @@ export function SeedPanel({
     }
   }
 
+  // Reshape the plan by a natural-language instruction. Pending pane edits are
+  // saved first so they are part of what gets reshaped; then the revision is
+  // enqueued and the poll above swaps the reshaped plan in when it lands.
+  async function revise() {
+    if (!selectedPlan) return;
+    setBusy(true);
+    try {
+      const saved = await onPatch(selectedPlan.id, {
+        charter,
+        persona,
+        items: items.map(toItemPatch)
+      });
+      if (saved) {
+        setPlans((current) => current.map((plan) => (plan.id === saved.id ? saved : plan)));
+      }
+      const baseline = saved?.updatedAt ?? selectedPlan.updatedAt;
+      const outcome = await onRevise(selectedPlan.id, instruction.trim());
+      if (outcome) {
+        setReviseBaseline(baseline);
+        setReviseJobId(outcome.jobId);
+        setInstruction("");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const canPropose = Boolean(flowId) && !busy && !planningJobId;
   const reviewable = selectedPlan?.status === "proposed";
+  const canRevise = reviewable && !busy && !reviseJobId && instruction.trim().length > 0;
 
   return (
     <SeedPanelRoot>
@@ -475,6 +531,28 @@ export function SeedPanel({
               </ItemCard>
             ))}
           </ItemList>
+
+          {reviewable ? (
+            <CharterBlock>
+              <Field label="Revise with instructions">
+                <Textarea
+                  onChange={(event) => setInstruction(event.target.value)}
+                  placeholder="A sweeping change to make to this plan — e.g. “don’t mention pricing”, “merge the two API documents”, “put onboarding first”."
+                  rows={2}
+                  value={instruction}
+                />
+              </Field>
+              <Row justify="between" gap="lg">
+                <Hint>
+                  Reshapes the current plan — removing, merging, reordering, or reframing what&rsquo;s already here.
+                  Pending edits are saved first; it doesn&rsquo;t re-read the flow&rsquo;s sources.
+                </Hint>
+                <Button variant="secondary" disabled={!canRevise} onClick={() => void revise()} type="button">
+                  {reviseJobId ? "Revising…" : "Revise"}
+                </Button>
+              </Row>
+            </CharterBlock>
+          ) : null}
 
           {reviewable ? (
             <Actions>
