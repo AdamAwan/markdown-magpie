@@ -28,3 +28,10 @@ export const seedPlanPatchSchema = z.object({
 });
 // The service/provider-facing type for PATCH bodies.
 export type SeedPlanPatchBody = z.infer<typeof seedPlanPatchSchema>;
+
+// Body for revising a plan: a non-empty natural-language instruction to reshape
+// it by ("don't mention X", "merge the API docs"). Trimmed so whitespace-only
+// input is rejected.
+export const seedPlanReviseSchema = z.object({
+  instruction: z.string().trim().min(1)
+});

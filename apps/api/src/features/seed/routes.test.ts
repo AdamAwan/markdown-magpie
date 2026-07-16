@@ -166,6 +166,54 @@ test("POST /api/seed-plans/:id/approve returns jobIds; approving a dismissed pla
   assert.deepEqual(await conflict.json(), { error: "plan_not_approvable" });
 });
 
+test("POST /api/seed-plans/:id/revise enqueues a revise job on a proposed plan", async () => {
+  const ctx = flowContext();
+  const app = buildApp(ctx);
+  const plan = await proposedPlan(ctx);
+
+  const res = await app.request(`/api/seed-plans/${plan.id}/revise`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ instruction: "don't mention pricing" })
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { jobId: string };
+  assert.equal(typeof body.jobId, "string");
+  const { jobs } = await ctx.jobs.list({ type: "revise_seed_plan" });
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].id, body.jobId);
+  assert.equal((jobs[0].input as { planId: string }).planId, plan.id);
+});
+
+test("POST /api/seed-plans/:id/revise 400s on empty instruction, 404s unknown, 409s once approved", async () => {
+  const ctx = flowContext();
+  const app = buildApp(ctx);
+  const plan = await proposedPlan(ctx);
+
+  const empty = await app.request(`/api/seed-plans/${plan.id}/revise`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ instruction: "   " })
+  });
+  assert.equal(empty.status, 400);
+
+  const missing = await app.request(`/api/seed-plans/no-such-plan/revise`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ instruction: "x" })
+  });
+  assert.equal(missing.status, 404);
+
+  await ctx.stores.seedPlans.setStatus(plan.id, "approved");
+  const conflict = await app.request(`/api/seed-plans/${plan.id}/revise`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ instruction: "x" })
+  });
+  assert.equal(conflict.status, 409);
+  assert.deepEqual(await conflict.json(), { error: "plan_not_revisable" });
+});
+
 test("POST /api/seed-plans/:id/dismiss flips proposed plans and 409s otherwise", async () => {
   const ctx = flowContext();
   const app = buildApp(ctx);
