@@ -18,7 +18,19 @@ import {
 } from "@magpie/auth";
 import type { JSONWebKeySet } from "jose";
 import { z } from "zod/v4";
-import { approveQuestionnaire, approveSeedPlan, askQuestion, createQuestionnaire, generateOutline, getCitationSections, getJson, getQuestionnaire, listFlows, submitFeedback, type KbClientOptions } from "./kb-client.js";
+import {
+  approveQuestionnaire,
+  approveSeedPlan,
+  askQuestion,
+  createQuestionnaire,
+  generateOutline,
+  getCitationSections,
+  getJson,
+  getQuestionnaire,
+  listFlows,
+  submitFeedback,
+  type KbClientOptions
+} from "./kb-client.js";
 import { createMcpLogger } from "./logger.js";
 
 // ── Configuration ──────────────────────────────────────────────────────────
@@ -36,16 +48,16 @@ const SCOPES_SUPPORTED = [
 // Per-tool scope requirements enforced at the MCP boundary, mirroring the API
 // route scopes. tools/list and other methods need only a valid token.
 const TOOL_SCOPES: Record<string, string> = {
-  "kb_search": "read:knowledge",
-  "kb_flows": "read:knowledge",
-  "kb_ask": "ask:knowledge",
-  "kb_feedback": "feedback:questions",
-  "kb_outline": "manage:jobs",
-  "kb_seed": "manage:jobs",
-  "kb_citation": "read:knowledge",
-  "kb_questionnaire_create": "ask:knowledge",
-  "kb_questionnaire_get": "read:knowledge",
-  "kb_questionnaire_approve": "manage:knowledge"
+  kb_search: "read:knowledge",
+  kb_flows: "read:knowledge",
+  kb_ask: "ask:knowledge",
+  kb_feedback: "feedback:questions",
+  kb_outline: "manage:jobs",
+  kb_seed: "manage:jobs",
+  kb_citation: "read:knowledge",
+  kb_questionnaire_create: "ask:knowledge",
+  kb_questionnaire_get: "read:knowledge",
+  kb_questionnaire_approve: "manage:knowledge"
 };
 
 // Resolves the auth settings the HTTP MCP server validates inbound tokens with.
@@ -130,9 +142,7 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
         "returned by the previous kb_ask: the answer then resolves against the prior turns and " +
         "stays in the same flow.",
       inputSchema: z.object({
-        question: z.string().describe(
-          "The question to answer from indexed Markdown context."
-        ),
+        question: z.string().describe("The question to answer from indexed Markdown context."),
         flow: z
           .string()
           .optional()
@@ -175,12 +185,7 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
       description: "Search indexed Markdown sections by keyword query.",
       inputSchema: z.object({
         query: z.string().describe("The search query."),
-        limit: z
-          .number()
-          .optional()
-          .describe(
-            "Maximum number of sections to return. Defaults to the API limit."
-          )
+        limit: z.number().optional().describe("Maximum number of sections to return. Defaults to the API limit.")
       })
     },
     async ({ query, limit }) => {
@@ -202,15 +207,11 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
         "gapSummary describing the missing knowledge.",
       inputSchema: z.object({
         questionId: z.string().describe("The questionId returned by kb_ask."),
-        kind: z
-          .enum(["helpful", "unhelpful", "knowledge_gap"])
-          .describe("The kind of feedback to record."),
+        kind: z.enum(["helpful", "unhelpful", "knowledge_gap"]).describe("The kind of feedback to record."),
         gapSummary: z
           .string()
           .optional()
-          .describe(
-            "Optional summary of the missing knowledge. Only used when kind is 'knowledge_gap'."
-          )
+          .describe("Optional summary of the missing knowledge. Only used when kind is 'knowledge_gap'.")
       })
     },
     async (args) => {
@@ -289,11 +290,7 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
       inputSchema: z.object({
         name: z.string().describe("Human-readable questionnaire name (e.g. 'Q3 vendor security review')."),
         flow: z.string().describe("The flow id whose knowledge base answers the batch (from kb_flows)."),
-        questions: z
-          .array(z.string())
-          .min(1)
-          .max(500)
-          .describe("The questions to answer, one per entry (1-500).")
+        questions: z.array(z.string()).min(1).max(500).describe("The questions to answer, one per entry (1-500).")
       })
     },
     async (args) => {
@@ -403,10 +400,7 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
   // enforces the per-tool scope. On success returns the verified principal (or
   // undefined when auth is disabled) so the caller can forward the user identity
   // downstream; on failure it has already written the response.
-  async function authorize(
-    req: Request,
-    res: Response
-  ): Promise<{ ok: true; principal?: Principal } | { ok: false }> {
+  async function authorize(req: Request, res: Response): Promise<{ ok: true; principal?: Principal } | { ok: false }> {
     if (!verifier) {
       return { ok: true, principal: undefined };
     }
@@ -436,22 +430,29 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     try {
       const authorized = await authorize(req, res);
       if (!authorized.ok) {
-        logger.info({ method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - startMs }, "request completed");
+        logger.info(
+          { method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - startMs },
+          "request completed"
+        );
         return;
       }
       await connected;
       // Make the verified user available to the tool handlers so downstream API
       // calls can be made on behalf of this user.
-      await requestContext.run({ principal: authorized.principal }, () =>
-        transport.handleRequest(req, res, body)
+      await requestContext.run({ principal: authorized.principal }, () => transport.handleRequest(req, res, body));
+      logger.info(
+        { method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - startMs },
+        "request completed"
       );
-      logger.info({ method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - startMs }, "request completed");
     } catch (err) {
       if (!res.headersSent) {
         const message = err instanceof Error ? err.message : "Internal server error";
         res.status(500).json({ error: message });
       }
-      logger.error({ err, method: req.method, path: req.path, status: 500, durationMs: Date.now() - startMs }, "request error");
+      logger.error(
+        { err, method: req.method, path: req.path, status: 500, durationMs: Date.now() - startMs },
+        "request error"
+      );
     }
   };
 

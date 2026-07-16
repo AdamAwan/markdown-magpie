@@ -62,9 +62,7 @@ test("ask emits an empty flows array when no flows are configured", async () => 
 test("ask pins a caller-specified flow as requestedFlowId", async () => {
   const ctx = makeTestContext();
   ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
-  ctx.knowledgeConfig.flows = [
-    { id: "support", name: "Support", sourceIds: ["s"], destinationId: "kb" }
-  ];
+  ctx.knowledgeConfig.flows = [{ id: "support", name: "Support", sourceIds: ["s"], destinationId: "kb" }];
 
   await ask(ctx, "How do I configure X?", "support");
 
@@ -76,9 +74,7 @@ test("ask pins a caller-specified flow as requestedFlowId", async () => {
 test('ask treats absent and "auto" as routing (no requestedFlowId)', async () => {
   const ctx = makeTestContext();
   ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
-  ctx.knowledgeConfig.flows = [
-    { id: "support", name: "Support", sourceIds: ["s"], destinationId: "kb" }
-  ];
+  ctx.knowledgeConfig.flows = [{ id: "support", name: "Support", sourceIds: ["s"], destinationId: "kb" }];
 
   await ask(ctx, "How do I configure X?", "auto");
 
@@ -193,9 +189,7 @@ test("ask bounds a follow-up's prior turns to the most recent N", async () => {
 test("ask rejects an unknown flow id with a 400", async () => {
   const ctx = makeTestContext();
   ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
-  ctx.knowledgeConfig.flows = [
-    { id: "support", name: "Support", sourceIds: ["s"], destinationId: "kb" }
-  ];
+  ctx.knowledgeConfig.flows = [{ id: "support", name: "Support", sourceIds: ["s"], destinationId: "kb" }];
 
   await assert.rejects(
     () => ask(ctx, "How do I configure X?", "marketing"),

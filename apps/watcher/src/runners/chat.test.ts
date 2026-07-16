@@ -87,7 +87,9 @@ describe("ChatRunner", () => {
   });
 
   it("reports its provider + configured model as aiIdentity for cost attribution", () => {
-    const withModel = new ChatRunner("openai-compatible", new FakeChatProvider(() => "{}"), fakeApi(), { model: "gpt-test" });
+    const withModel = new ChatRunner("openai-compatible", new FakeChatProvider(() => "{}"), fakeApi(), {
+      model: "gpt-test"
+    });
     assert.deepEqual(withModel.aiIdentity, { provider: "openai-compatible", model: "gpt-test" });
     // No configured model → identity still names the provider, with no model
     // field (nothing trustworthy to report).
@@ -288,7 +290,10 @@ describe("ChatRunner", () => {
       };
     };
 
-    assert.ok(queries.some((q) => q.includes("example")), "should run the model's follow-up search");
+    assert.ok(
+      queries.some((q) => q.includes("example")),
+      "should run the model's follow-up search"
+    );
     assert.ok(
       flowsSeen.every((flowId) => flowId === "flow-b"),
       "follow-up searches stay within the routed flow"
@@ -389,7 +394,10 @@ describe("ChatRunner", () => {
       controller.signal
     );
     assert.ok(signals.length >= 1);
-    assert.ok(signals.every((signal) => signal === controller.signal), "retrieve receives the job abort signal");
+    assert.ok(
+      signals.every((signal) => signal === controller.signal),
+      "retrieve receives the job abort signal"
+    );
   });
 
   it("uses a caller-specified flow directly and skips routing", async () => {
@@ -493,7 +501,12 @@ describe("ChatRunner", () => {
       if (request.system.includes("You verify a drafted")) {
         return JSON.stringify({ grounded: true, unsupportedClaims: [] });
       }
-      return JSON.stringify({ answer: "ok", confidence: "high", isKnowledgeGap: false, usedSectionIds: ["doc-1#deploy"] });
+      return JSON.stringify({
+        answer: "ok",
+        confidence: "high",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"]
+      });
     });
     const runner = new ChatRunner("openai-compatible", chat, api);
     const output = (await runner.run(
@@ -508,8 +521,15 @@ describe("ChatRunner", () => {
       new AbortController().signal
     )) as { standaloneQuestion?: string };
 
-    assert.ok(retrieved.every((question) => question === "What about the EU?"), "unparseable condensation falls back to the raw question");
-    assert.equal(output.standaloneQuestion, undefined, "no standaloneQuestion is reported when the raw question is used");
+    assert.ok(
+      retrieved.every((question) => question === "What about the EU?"),
+      "unparseable condensation falls back to the raw question"
+    );
+    assert.equal(
+      output.standaloneQuestion,
+      undefined,
+      "no standaloneQuestion is reported when the raw question is used"
+    );
   });
 
   it("reuses the conversation's flow (sticky) and skips routing when no flow is pinned (#239)", async () => {
@@ -527,7 +547,12 @@ describe("ChatRunner", () => {
       if (request.system.includes("You verify a drafted")) {
         return JSON.stringify({ grounded: true, unsupportedClaims: [] });
       }
-      return JSON.stringify({ answer: "ok", confidence: "high", isKnowledgeGap: false, usedSectionIds: ["doc-1#deploy"] });
+      return JSON.stringify({
+        answer: "ok",
+        confidence: "high",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"]
+      });
     });
     const runner = new ChatRunner("openai-compatible", chat, api);
     const output = (await runner.run(
@@ -569,7 +594,12 @@ describe("ChatRunner", () => {
       if (request.system.includes("You verify a drafted")) {
         return JSON.stringify({ grounded: true, unsupportedClaims: [] });
       }
-      return JSON.stringify({ answer: "ok", confidence: "high", isKnowledgeGap: false, usedSectionIds: ["doc-1#deploy"] });
+      return JSON.stringify({
+        answer: "ok",
+        confidence: "high",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"]
+      });
     });
     const runner = new ChatRunner("openai-compatible", chat, api);
     const output = (await runner.run(
@@ -597,11 +627,7 @@ describe("ChatRunner", () => {
     // "sold" the answer with compliance claims (SOC 2) the context never states.
     const chat = new FakeChatProvider((request) => {
       if (request.system.includes("You verify a drafted")) {
-        assert.match(
-          request.messages[0]?.content ?? "",
-          /SOC 2 certified/,
-          "the verifier reviews the drafted answer"
-        );
+        assert.match(request.messages[0]?.content ?? "", /SOC 2 certified/, "the verifier reviews the drafted answer");
         assert.match(
           request.messages[0]?.content ?? "",
           /\[section doc-1#deploy\]/,
@@ -696,8 +722,16 @@ describe("ChatRunner", () => {
       "the cited section is shown in full"
     );
     assert.match(verifyMessage, /\[section doc-2#extra\] # Extra context/, "the uncited section's heading is shown");
-    assert.doesNotMatch(verifyMessage, /Uncited body that must not be re-sent\./, "the uncited section's body is withheld");
-    assert.match(verifyMessage, /Also retrieved \(headings only/, "uncited sections are grouped under the headings-only label");
+    assert.doesNotMatch(
+      verifyMessage,
+      /Uncited body that must not be re-sent\./,
+      "the uncited section's body is withheld"
+    );
+    assert.match(
+      verifyMessage,
+      /Also retrieved \(headings only/,
+      "uncited sections are grouped under the headings-only label"
+    );
   });
 
   it("keeps the drafted answer when the grounding verdict is unparseable (fails open)", async () => {
@@ -884,7 +918,10 @@ describe("ChatRunner", () => {
   it("runs buildPrompt -> chat -> parseJobOutput for non-answer jobs", async () => {
     const chat = new FakeChatProvider(() => JSON.stringify({ summary: "s", priority: 1, rationale: "r" }));
     const runner = new ChatRunner("openai-compatible", chat, fakeApi());
-    const output = await runner.run(job("summarize_gap", { questions: ["q"], citedSections: [] }), new AbortController().signal);
+    const output = await runner.run(
+      job("summarize_gap", { questions: ["q"], citedSections: [] }),
+      new AbortController().signal
+    );
     assert.deepEqual(output, { summary: "s", priority: 1, rationale: "r" });
   });
 
@@ -934,7 +971,12 @@ describe("ChatRunner", () => {
       controller.signal
     )) as {
       merges: Array<{ clusterIds: string[]; rationale: string; confirmed: boolean }>;
-      splits: Array<{ clusterId: string; children: Array<{ gapIds: string[] }>; rationale: string; confirmed: boolean }>;
+      splits: Array<{
+        clusterId: string;
+        children: Array<{ gapIds: string[] }>;
+        rationale: string;
+        confirmed: boolean;
+      }>;
       dismissals: Array<{ clusterId: string; rationale: string; confirmed: boolean }>;
     };
 
@@ -1003,9 +1045,15 @@ describe("ChatRunner", () => {
       if (request.system.includes("strict reviewer")) {
         return JSON.stringify({ verdicts: [{ id: "merge-0", confirmed: true }] });
       }
-      return "Here is the reshape:\n```json\n" +
-        JSON.stringify({ merges: [{ clusterIds: ["c1", "c2"], rationale: "same doc covers both" }], splits: [], dismissals: [] }) +
-        "\n```";
+      return (
+        "Here is the reshape:\n```json\n" +
+        JSON.stringify({
+          merges: [{ clusterIds: ["c1", "c2"], rationale: "same doc covers both" }],
+          splits: [],
+          dismissals: []
+        }) +
+        "\n```"
+      );
     });
     const runner = new ChatRunner("openai-compatible", chat, fakeApi());
     const output = (await runner.run(
@@ -1210,7 +1258,9 @@ describe("ChatRunner", () => {
       prepareWorkspaces: async () => ({
         workspaces: [],
         notes: [],
-        fetchable: [{ sourceId: "i1", name: "Vendor docs", url: "https://docs.x.example", allowedHosts: ["docs.x.example"] }]
+        fetchable: [
+          { sourceId: "i1", name: "Vendor docs", url: "https://docs.x.example", allowedHosts: ["docs.x.example"] }
+        ]
       })
     });
     const output = (await runner.run(
@@ -1218,7 +1268,15 @@ describe("ChatRunner", () => {
         provider: "openai-compatible",
         flowId: "f1",
         coverage: ["vendor api"],
-        sources: [{ id: "i1", name: "Vendor docs", kind: "internet", url: "https://docs.x.example", allowedHosts: ["docs.x.example"] }]
+        sources: [
+          {
+            id: "i1",
+            name: "Vendor docs",
+            kind: "internet",
+            url: "https://docs.x.example",
+            allowedHosts: ["docs.x.example"]
+          }
+        ]
       }),
       new AbortController().signal
     )) as { title: string };

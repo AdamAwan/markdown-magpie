@@ -1015,20 +1015,38 @@ test("listConversationTurns returns answered live turns oldest-first, capped and
   // An in-flight (unanswered) turn in the same conversation must be excluded.
   await store.record({ question: "Q3-inflight", chatProvider: "codex", retrievedSectionIds: [], conversationId });
   // A turn in a different conversation must be excluded.
-  const other = await store.record({ question: "OtherQ", chatProvider: "codex", retrievedSectionIds: [], conversationId: "conv-2" });
+  const other = await store.record({
+    question: "OtherQ",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    conversationId: "conv-2"
+  });
   await store.updateAnswer(other.id, { answer: confidentAnswer });
 
   const turns = await store.listConversationTurns(conversationId, 6);
-  assert.deepEqual(turns.map((turn) => turn.question), ["Q1", "Q2"], "answered turns of this conversation, oldest-first");
+  assert.deepEqual(
+    turns.map((turn) => turn.question),
+    ["Q1", "Q2"],
+    "answered turns of this conversation, oldest-first"
+  );
 
   // The cap keeps the most recent N.
   const capped = await store.listConversationTurns(conversationId, 1);
-  assert.deepEqual(capped.map((turn) => turn.question), ["Q2"], "the cap keeps the most recent turn");
+  assert.deepEqual(
+    capped.map((turn) => turn.question),
+    ["Q2"],
+    "the cap keeps the most recent turn"
+  );
 });
 
 test("updateAnswer persists the watcher's condensed standaloneQuestion", async () => {
   const store = new InMemoryQuestionLogStore();
-  const log = await store.record({ question: "What about the EU?", chatProvider: "codex", retrievedSectionIds: [], conversationId: "c" });
+  const log = await store.record({
+    question: "What about the EU?",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    conversationId: "c"
+  });
 
   const updated = await store.updateAnswer(log.id, {
     answer: confidentAnswer,

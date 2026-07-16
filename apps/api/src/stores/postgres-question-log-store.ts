@@ -13,7 +13,12 @@ import type {
   QuestionLogInput,
   QuestionLogUpdateInput
 } from "@magpie/core";
-import { answerGapsUnchanged, gapSummaryKey, isSeedableGapSummary, type QuestionLogStore } from "./question-log-store.js";
+import {
+  answerGapsUnchanged,
+  gapSummaryKey,
+  isSeedableGapSummary,
+  type QuestionLogStore
+} from "./question-log-store.js";
 import { valuesClause } from "./sql-bulk.js";
 
 export class PostgresQuestionLogStore implements QuestionLogStore {

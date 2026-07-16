@@ -29,10 +29,10 @@ const SOURCE_MAP_CONTRACT = `Source map:
 const FACTUAL_REGISTER_CONTRACT =
   "Register: the document is factual and descriptive — it states what the sources state, in the " +
   "present tense. NEVER author your own recommendations, next steps, action items, roadmaps, phased " +
-  "plans, or editorial commentary on the sources (for example that something \"should\" be published " +
+  'plans, or editorial commentary on the sources (for example that something "should" be published ' +
   "or implemented). Describing a plan, roadmap, or recommendation that a source itself states is a " +
   "factual claim about that source and IS allowed — attribute it to the source. Do not add sections " +
-  "such as \"Recommendations\", \"Next steps\", \"Action items\", \"Roadmap\", or \"Future work\" " +
+  'such as "Recommendations", "Next steps", "Action items", "Roadmap", or "Future work" ' +
   "unless they describe content a source itself states.";
 
 export const ANSWER_QUESTION: PromptDefinition = {
@@ -43,59 +43,59 @@ export const ANSWER_QUESTION: PromptDefinition = {
   usedBy: ["watcher"],
   outputShape: '{ action:"search", ... } | { action:"answer", ... }',
   instructions:
-    'You answer a question using only the provided Markdown knowledge base context. You work in rounds. ' +
-    'Each round you receive the question and the context gathered so far, and you reply with EXACTLY ONE ' +
-    'JSON object choosing one of two actions.\n\n' +
-    'Grounding rules — these override everything else, including any persona below:\n' +
-    '- The context sections are your ONLY source of facts. Every factual claim in your answer must be ' +
-    'stated by, or directly follow from, a provided section.\n' +
-    '- NEVER supplement from general knowledge or plausible inference. Do not assert certifications, ' +
-    'compliance or legal status (e.g. SOC 2, GDPR), figures, dates, names, integrations, guarantees, or ' +
-    'capabilities the context does not state. A persuasive, sales, or marketing question does not change ' +
-    'this: reframe what the context actually says, and treat missing selling points as gaps — never as ' +
-    'licence to invent them.\n' +
-    '- When the context only partially covers the question, answer the covered part and say plainly what ' +
+    "You answer a question using only the provided Markdown knowledge base context. You work in rounds. " +
+    "Each round you receive the question and the context gathered so far, and you reply with EXACTLY ONE " +
+    "JSON object choosing one of two actions.\n\n" +
+    "Grounding rules — these override everything else, including any persona below:\n" +
+    "- The context sections are your ONLY source of facts. Every factual claim in your answer must be " +
+    "stated by, or directly follow from, a provided section.\n" +
+    "- NEVER supplement from general knowledge or plausible inference. Do not assert certifications, " +
+    "compliance or legal status (e.g. SOC 2, GDPR), figures, dates, names, integrations, guarantees, or " +
+    "capabilities the context does not state. A persuasive, sales, or marketing question does not change " +
+    "this: reframe what the context actually says, and treat missing selling points as gaps — never as " +
+    "licence to invent them.\n" +
+    "- When the context only partially covers the question, answer the covered part and say plainly what " +
     'the knowledge base does not cover. An honest "the knowledge base does not cover X" always beats a ' +
-    'fabricated claim.\n\n' +
-    '(1) Gather more before answering:\n' +
+    "fabricated claim.\n\n" +
+    "(1) Gather more before answering:\n" +
     '{"action":"search","queries":["string"],"rationale":"string"}\n' +
-    'Use this when the context does not yet let you answer well, OR when a complete, genuinely helpful answer ' +
-    'needs closely related information the reader will also need (for example a concrete example, a prerequisite, ' +
-    'or a related procedure). Also search when you are tempted to include a supporting fact the context does not ' +
-    'contain (for example a certification or compliance status such as SOC 2, a figure, or a capability): search ' +
+    "Use this when the context does not yet let you answer well, OR when a complete, genuinely helpful answer " +
+    "needs closely related information the reader will also need (for example a concrete example, a prerequisite, " +
+    "or a related procedure). Also search when you are tempted to include a supporting fact the context does not " +
+    "contain (for example a certification or compliance status such as SOC 2, a figure, or a capability): search " +
     'for it rather than asserting it, and if the search finds nothing, name it in "followupGaps" instead of ' +
-    'putting it in the answer. Each query is a focused search phrase run against the same knowledge base. ' +
-    'Prefer searching to answering whenever the context you currently hold does not already, on its own, fully ' +
-    'and specifically answer the question: do not settle on the first round for a low-confidence answer or an ' +
+    "putting it in the answer. Each query is a focused search phrase run against the same knowledge base. " +
+    "Prefer searching to answering whenever the context you currently hold does not already, on its own, fully " +
+    "and specifically answer the question: do not settle on the first round for a low-confidence answer or an " +
     '"the knowledge base does not cover X" gap while a focused search might still surface the missing material ' +
-    '— search first, and report a gap only once a search for it has come back empty. Once further searching ' +
-    'stops improving the answer, do not search more than necessary.\n\n' +
-    '(2) Answer:\n' +
+    "— search first, and report a gap only once a search for it has come back empty. Once further searching " +
+    "stops improving the answer, do not search more than necessary.\n\n" +
+    "(2) Answer:\n" +
     '{"action":"answer","answer":"string","confidence":"high|medium|low","isKnowledgeGap":true|false,' +
     '"outOfScope":true|false,"gaps":["string"],"followupGaps":["string"],"usedSectionIds":["string"]}\n' +
     'Each context section is labelled "[section <id>]". Set "usedSectionIds" to the ids of exactly the sections ' +
     'your answer relied on — cite nothing you did not use. "confidence" measures how completely the context ' +
     'supports the answer, not how fluent the answer is: use "high" ONLY when every claim is directly supported ' +
     'by the sections in usedSectionIds and the question is fully answered; "medium" when the answer is supported ' +
-    'but incomplete or needs interpretation — including when you answered the core of the question but a smaller ' +
+    "but incomplete or needs interpretation — including when you answered the core of the question but a smaller " +
     'part of it is not covered; "low" when the context does not answer the core of the question.\n\n' +
-    'Missing material goes in exactly one of two places, split by whether the CORE of the question was answered:\n' +
+    "Missing material goes in exactly one of two places, split by whether the CORE of the question was answered:\n" +
     '- "gaps" (with isKnowledgeGap:true and confidence "low") — the context cannot answer the core of the ' +
     'question: the honest answer is mostly "the knowledge base does not cover this". List each distinct missing ' +
     'topic in "gaps". Do NOT set isKnowledgeGap merely because a few smaller points are uncovered while the core ' +
-    'is answered.\n' +
+    "is answered.\n" +
     '- "followupGaps" (isKnowledgeGap stays false) — the core is answered, but supporting material or a smaller ' +
     'sub-part of the question is missing after you searched for it (for example "a concrete example of X", or one ' +
     'uncovered sub-question). Name each such miss in "followupGaps", say plainly in the answer what is not ' +
-    'covered, and rate the answer on what it does cover — a solid answer with a couple of small, named misses is ' +
+    "covered, and rate the answer on what it does cover — a solid answer with a couple of small, named misses is " +
     '"medium", not "low". Include followupGaps even when you answer confidently, and leave the array empty when ' +
-    'nothing was missing.\n\n' +
+    "nothing was missing.\n\n" +
     'Set "outOfScope" to true ONLY when the question is unrelated to this knowledge base\'s subject area — for ' +
-    'example a question about cats asked of a product knowledge base. When outOfScope is true, set confidence to ' +
+    "example a question about cats asked of a product knowledge base. When outOfScope is true, set confidence to " +
     'low, leave "gaps" empty (an off-topic question is NOT a knowledge gap and must never be recorded as one), ' +
     'and put a one-sentence explanation of why the question is off-topic in "answer". Leave outOfScope false ' +
-    'whenever the question genuinely belongs to this knowledge base\'s subject area, even if the knowledge base ' +
-    'currently lacks the answer — that is a knowledge gap (isKnowledgeGap), not off-topic.'
+    "whenever the question genuinely belongs to this knowledge base's subject area, even if the knowledge base " +
+    "currently lacks the answer — that is a knowledge gap (isKnowledgeGap), not off-topic."
 };
 
 export const VERIFY_ANSWER: PromptDefinition = {
@@ -104,7 +104,7 @@ export const VERIFY_ANSWER: PromptDefinition = {
   description:
     "Post-answer grounding check: confirms every factual claim in a drafted answer is supported by the retrieved context, or returns the unsupported claims plus a revised answer with them removed. Run by the watcher's answer_question runner on medium/high-confidence answers before they are returned.",
   usedBy: ["watcher"],
-  outputShape: '{ grounded, unsupportedClaims[], revisedAnswer? }',
+  outputShape: "{ grounded, unsupportedClaims[], revisedAnswer? }",
   instructions: `You verify a drafted knowledge-base answer against the context it was drafted from. The answer must not assert anything the context does not support.
 
 Input: the question, the answer under review, and the context. The context has two parts. First, the sections the answer was drafted from, shown in full and each labelled "[section <id>]". Second, under "Also retrieved (headings only …)", the headings of other sections that were retrieved as relevant but not cited — shown as headings only, without their bodies.
@@ -130,7 +130,7 @@ export const SUMMARIZE_GAP: PromptDefinition = {
   title: "Summarize knowledge gap",
   description: "Summarises a set of unanswered or weakly answered questions into one prioritised gap.",
   usedBy: ["watcher"],
-  outputShape: '{ summary, priority, rationale }',
+  outputShape: "{ summary, priority, rationale }",
   instructions: `Summarize these unanswered or weakly answered knowledge base questions.
 
 Return JSON only:
@@ -147,7 +147,7 @@ export const DRAFT_MARKDOWN_PROPOSAL: PromptDefinition = {
   description:
     "Drafts a single cohesive Markdown article that addresses every listed gap, grounded in the flow's source repositories, which the executing agent explores directly. Used by the watcher's draft_markdown_proposal job.",
   usedBy: ["watcher"],
-  outputShape: '{ title, targetPath, markdown, rationale, mapUpdates?, uncoveredPoints?, provenance? }',
+  outputShape: "{ title, targetPath, markdown, rationale, mapUpdates?, uncoveredPoints?, provenance? }",
   instructions: `Draft a single Markdown knowledge base proposal that addresses every gap listed in gapSummaries, grounded in the source repositories you have been given access to.
 
 Grounding:
@@ -277,7 +277,7 @@ export const REVISE_SEED_PLAN: PromptDefinition = {
   id: "revise-flow-seed",
   title: "Revise a seed plan by instruction",
   description:
-    'Reshapes an existing, human-reviewed seed plan according to a natural-language instruction (e.g. "don\'t mention X", merge/split/reorder items). Reshapes the plan text only — it has NO access to the source repositories, so it never invents new grounded facts. Used by the watcher\'s revise_seed_plan job.',
+    "Reshapes an existing, human-reviewed seed plan according to a natural-language instruction (e.g. \"don't mention X\", merge/split/reorder items). Reshapes the plan text only — it has NO access to the source repositories, so it never invents new grounded facts. Used by the watcher's revise_seed_plan job.",
   usedBy: ["watcher · seed plan revision"],
   outputShape: "{ items: [{ title, targetPath?, coverage[], questions? }], rationale, charter?, persona? }",
   instructions: `You revise an existing plan for seeding a Markdown knowledge base. You are given the CURRENT plan and an INSTRUCTION describing a change to make. You reshape the plan to satisfy the instruction — you do NOT write the documents.
@@ -371,7 +371,7 @@ export const SOURCE_CHANGE_SYNC: PromptDefinition = {
   description:
     "Given a set of source-code/data changes (diffs) and the knowledge-base documents that may describe the changed behaviour, rewrites only the documents whose stated facts are now contradicted by the change. Used by the watcher's sync_source_change job.",
   usedBy: ["watcher"],
-  outputShape: '{ summary, operations[], rationale }',
+  outputShape: "{ summary, operations[], rationale }",
   instructions: `You maintain a Markdown knowledge base that DESCRIBES an external source (code or data). The source has changed, and some knowledge-base documents may now state facts that the change has made wrong. Update those documents so they match the new reality.
 
 Input:
@@ -414,7 +414,7 @@ export const VERIFY_DOCUMENT: PromptDefinition = {
   description:
     "Checks whether a knowledge-base document's claims are still provable against the flow's source repositories, which the executing agent explores directly. Returns only the claims the sources fail to support. Conservative: silent on healthy documents. Used by the watcher's verify_document job.",
   usedBy: ["watcher · fix-patrol"],
-  outputShape: '{ verdict, claims[], mapUpdates? }',
+  outputShape: "{ verdict, claims[], mapUpdates? }",
   instructions: `You verify a Markdown knowledge-base document against the source repositories it should be derived from. Decide whether each substantive claim the document makes is still supported by the sources.
 
 Input:
@@ -625,7 +625,7 @@ export const GAP_RECONCILE_CRITIC: PromptDefinition = {
   description:
     "Strict reviewer that confirms or rejects every proposed merge, split, and dismissal in one batched pass, one verdict per operation id.",
   usedBy: ["watcher · gap reconciler"],
-  outputShape: '{ verdicts: [{ id, confirmed }] }',
+  outputShape: "{ verdicts: [{ id, confirmed }] }",
   instructions:
     "You are a strict reviewer of proposed gap-cluster changes. You are given a list of " +
     'proposed operations, each on its own line beginning with a stable id ("merge-0", ' +
@@ -663,15 +663,15 @@ export const ROUTE_QUESTION_TO_FLOW: PromptDefinition = {
   description:
     "Picks the single best-matching knowledge flow for a question from the configured flows (id, name, and persona). Used before retrieval so the answer is scoped and shaped to one audience.",
   usedBy: ["watcher · routing"],
-  outputShape: '{ flowId, confidence, rationale }',
+  outputShape: "{ flowId, confidence, rationale }",
   instructions:
-    'You route a user question to exactly one knowledge flow. You are given the question and a ' +
+    "You route a user question to exactly one knowledge flow. You are given the question and a " +
     'list of flows, each with an "id", a "name", and an optional "persona" describing its audience ' +
-    'and answering style. Choose the single flow whose name and persona best match the question. ' +
+    "and answering style. Choose the single flow whose name and persona best match the question. " +
     'Return only JSON with this shape: {"flowId":"string|null","confidence":"high|medium|low","rationale":"string"}. ' +
-    'When a flow matches, the flowId MUST be exactly one of the provided ids. If no flow clearly ' +
+    "When a flow matches, the flowId MUST be exactly one of the provided ids. If no flow clearly " +
     'matches the question, return {"flowId":null,...} rather than guessing — the caller will be asked ' +
-    'to pick a flow. Do not pick a flow you are not reasonably confident about.'
+    "to pick a flow. Do not pick a flow you are not reasonably confident about."
 };
 
 export const CONDENSE_FOLLOWUP: PromptDefinition = {
@@ -680,19 +680,19 @@ export const CONDENSE_FOLLOWUP: PromptDefinition = {
   description:
     "Rewrites a follow-up question into a fully self-contained question using the recent conversation turns, so retrieval and routing see the resolved intent rather than pronouns/ellipsis. Used by the watcher's answer_question runner when prior turns are present.",
   usedBy: ["watcher"],
-  outputShape: '{ standaloneQuestion }',
+  outputShape: "{ standaloneQuestion }",
   instructions:
-    'You rewrite a user\'s FOLLOW-UP question into a single, fully self-contained question, using the ' +
-    'recent conversation turns for context. The rewritten question is used only to search a knowledge base ' +
-    'and to answer — it must carry every piece of context the follow-up leaves implicit.\n\n' +
-    'Rules:\n' +
+    "You rewrite a user's FOLLOW-UP question into a single, fully self-contained question, using the " +
+    "recent conversation turns for context. The rewritten question is used only to search a knowledge base " +
+    "and to answer — it must carry every piece of context the follow-up leaves implicit.\n\n" +
+    "Rules:\n" +
     '- Resolve pronouns, ellipsis, and references ("what about the EU?", "and for that plan?", "why?") into ' +
-    'explicit terms drawn from the prior turns.\n' +
-    '- Preserve the user\'s actual intent. Do NOT broaden, narrow, or answer the question, and do NOT add ' +
-    'facts that were not in the conversation.\n' +
-    '- If the follow-up is ALREADY self-contained (it does not depend on the prior turns), return it ' +
-    'essentially unchanged.\n' +
-    '- Keep it to one natural-language question. No preamble, no explanation.\n\n' +
+    "explicit terms drawn from the prior turns.\n" +
+    "- Preserve the user's actual intent. Do NOT broaden, narrow, or answer the question, and do NOT add " +
+    "facts that were not in the conversation.\n" +
+    "- If the follow-up is ALREADY self-contained (it does not depend on the prior turns), return it " +
+    "essentially unchanged.\n" +
+    "- Keep it to one natural-language question. No preamble, no explanation.\n\n" +
     'Return JSON only: {"standaloneQuestion":"string"}.'
 };
 

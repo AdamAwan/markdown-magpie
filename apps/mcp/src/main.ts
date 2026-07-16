@@ -1,7 +1,20 @@
 import { argv, stdin, stdout } from "node:process";
 import { fileURLToPath } from "node:url";
 import { isAuthRequired } from "@magpie/auth";
-import { approveQuestionnaire, approveSeedPlan, askQuestion, createQuestionnaire, generateOutline, getCitationSections, getJson, getQuestionnaire, listFlows, optionalStringArgument, stringArgument, submitFeedback } from "./kb-client.js";
+import {
+  approveQuestionnaire,
+  approveSeedPlan,
+  askQuestion,
+  createQuestionnaire,
+  generateOutline,
+  getCitationSections,
+  getJson,
+  getQuestionnaire,
+  listFlows,
+  optionalStringArgument,
+  stringArgument,
+  submitFeedback
+} from "./kb-client.js";
 import { createMcpLogger } from "./logger.js";
 
 type JsonRpcId = string | number | null;
@@ -401,7 +414,10 @@ export async function callTool(params: ToolCallParams): Promise<unknown> {
   if (params.name === "kb_search") {
     const query = stringArgument(params.arguments, "query");
     const limit = numberArgument(params.arguments, "limit");
-    const path = limit === undefined ? `/knowledge/search?q=${encodeURIComponent(query)}` : `/knowledge/search?q=${encodeURIComponent(query)}&limit=${limit}`;
+    const path =
+      limit === undefined
+        ? `/knowledge/search?q=${encodeURIComponent(query)}`
+        : `/knowledge/search?q=${encodeURIComponent(query)}&limit=${limit}`;
     const result = await getJson(path, { token: stdioAuthToken });
     return textResult(result);
   }

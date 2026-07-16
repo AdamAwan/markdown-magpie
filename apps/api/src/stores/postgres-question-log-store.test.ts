@@ -932,4 +932,77 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     // A pair with no matching gaps is present with an empty array.
     assert.deepEqual(batched.get(gapSummaryKey(summaryX, `flow-${uniqueId}`)), []);
   });
+
+  // --- Multi-turn conversations (#239) -------------------------------------
+
+  it("records a conversation id and lists answered turns oldest-first, capped, excluding in-flight/other conversations", async () => {
+    const conversationId = randomUUID();
+    const confident: AnswerResult = { answer: "answer text", confidence: "high", citations: [] };
+
+    const first = await store.record({
+      question: `t1-${conversationId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      conversationId
+    });
+    await store.updateAnswer(first.id, { answer: confident });
+    // The conversation id round-trips onto the log.
+    assert.equal((await store.get(first.id))?.conversationId, conversationId);
+
+    const second = await store.record({
+      question: `t2-${conversationId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      conversationId
+    });
+    await store.updateAnswer(second.id, { answer: confident });
+    // In-flight (unanswered) turn — excluded.
+    await store.record({
+      question: `t3-${conversationId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      conversationId
+    });
+    // Another conversation — excluded.
+    const other = await store.record({
+      question: `other-${conversationId}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      conversationId: randomUUID()
+    });
+    await store.updateAnswer(other.id, { answer: confident });
+
+    const turns = await store.listConversationTurns(conversationId, 6);
+    assert.deepEqual(
+      turns.map((t) => t.question),
+      [`t1-${conversationId}`, `t2-${conversationId}`],
+      "answered turns of this conversation only, oldest-first"
+    );
+
+    const capped = await store.listConversationTurns(conversationId, 1);
+    assert.deepEqual(
+      capped.map((t) => t.question),
+      [`t2-${conversationId}`],
+      "cap keeps the most recent"
+    );
+  });
+
+  it("persists the condensed standaloneQuestion and uses it for the manual-gap fallback summary", async () => {
+    const standalone = `standalone-${randomUUID()}`;
+    const log = await store.record({
+      question: `raw-${randomUUID()}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      conversationId: randomUUID()
+    });
+    await store.updateAnswer(log.id, {
+      answer: { answer: "a", confidence: "high", citations: [] },
+      standaloneQuestion: standalone
+    });
+    assert.equal((await store.get(log.id))?.standaloneQuestion, standalone);
+
+    const flagged = await store.recordManualGap(log.id);
+    const manual = (flagged?.gaps ?? []).find((gap) => gap.source === "manual");
+    assert.equal(manual?.summary, standalone, "the manual gap seeds from the condensed standalone form");
+  });
 });

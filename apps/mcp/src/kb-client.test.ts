@@ -232,15 +232,12 @@ test("askQuestion throws when the job fails without leaking payload", async () =
   });
 
   try {
-    await assert.rejects(
-      askQuestion("q"),
-      (error: Error) => {
-        assert.match(error.message, /job-1/);
-        assert.match(error.message, /failed/);
-        assert.doesNotMatch(error.message, /secret|do not surface/);
-        return true;
-      }
-    );
+    await assert.rejects(askQuestion("q"), (error: Error) => {
+      assert.match(error.message, /job-1/);
+      assert.match(error.message, /failed/);
+      assert.doesNotMatch(error.message, /secret|do not surface/);
+      return true;
+    });
   } finally {
     stub.restore();
   }
@@ -257,15 +254,12 @@ test("askQuestion throws when the job is cancelled without leaking payload", asy
   });
 
   try {
-    await assert.rejects(
-      askQuestion("q"),
-      (error: Error) => {
-        assert.match(error.message, /job-1/);
-        assert.match(error.message, /cancelled/);
-        assert.doesNotMatch(error.message, /secret|do not surface/);
-        return true;
-      }
-    );
+    await assert.rejects(askQuestion("q"), (error: Error) => {
+      assert.match(error.message, /job-1/);
+      assert.match(error.message, /cancelled/);
+      assert.doesNotMatch(error.message, /secret|do not surface/);
+      return true;
+    });
   } finally {
     stub.restore();
   }
@@ -281,15 +275,12 @@ test("askQuestion times out when the job never reaches a terminal state", async 
   });
 
   try {
-    await assert.rejects(
-      askQuestion("q"),
-      (error: Error) => {
-        assert.match(error.message, /Timed out/);
-        assert.match(error.message, /job-1/);
-        assert.match(error.message, /retry/);
-        return true;
-      }
-    );
+    await assert.rejects(askQuestion("q"), (error: Error) => {
+      assert.match(error.message, /Timed out/);
+      assert.match(error.message, /job-1/);
+      assert.match(error.message, /retry/);
+      return true;
+    });
   } finally {
     stub.restore();
   }
@@ -380,7 +371,13 @@ const persistedPlan = {
   personaProposed: false,
   items: [
     { id: "i1", status: "proposed", title: "Prompt library overview", coverage: ["what each prompt does"] },
-    { id: "i2", status: "proposed", title: "Flow personas", targetPath: "personas.md", coverage: ["the support persona"] }
+    {
+      id: "i2",
+      status: "proposed",
+      title: "Flow personas",
+      targetPath: "personas.md",
+      coverage: ["the support persona"]
+    }
   ],
   rationale: "Two non-overlapping docs cover the library and its personas.",
   outlineJobId: "job-9"
@@ -462,8 +459,7 @@ test("generateOutline throws when no persisted plan matches the completed job", 
 test("generateOutline throws when the job fails without leaking payload", async () => {
   const stub = stubOutlineFetch({
     outline: () => jsonResponse({ ok: true, jobId: "job-9" }),
-    wait: () =>
-      jsonResponse({ job: { id: "job-9", state: "failed", output: { secret: "do not surface" } } })
+    wait: () => jsonResponse({ job: { id: "job-9", state: "failed", output: { secret: "do not surface" } } })
   });
 
   try {
@@ -734,18 +730,9 @@ test("createQuestionnaire rejects invalid arguments before any API call", async 
   }) as typeof fetch;
 
   try {
-    await assert.rejects(
-      () => createQuestionnaire({ flow: "f", questions: ["q"] }),
-      /name must be a non-empty string/
-    );
-    await assert.rejects(
-      () => createQuestionnaire({ name: "n", questions: ["q"] }),
-      /flow must be a non-empty string/
-    );
-    await assert.rejects(
-      () => createQuestionnaire({ name: "n", flow: "f" }),
-      /questions must be a non-empty array/
-    );
+    await assert.rejects(() => createQuestionnaire({ flow: "f", questions: ["q"] }), /name must be a non-empty string/);
+    await assert.rejects(() => createQuestionnaire({ name: "n", questions: ["q"] }), /flow must be a non-empty string/);
+    await assert.rejects(() => createQuestionnaire({ name: "n", flow: "f" }), /questions must be a non-empty array/);
     await assert.rejects(
       () => createQuestionnaire({ name: "n", flow: "f", questions: [] }),
       /questions must be a non-empty array/
@@ -827,10 +814,7 @@ test("questionnaire calls pass API errors through with their status", async () =
   globalThis.fetch = (async () => jsonResponse({ error: "not_answered" }, 409)) as typeof fetch;
 
   try {
-    await assert.rejects(
-      () => approveQuestionnaire({ questionnaire: "qn-1", item: "item-2" }),
-      /failed with 409/
-    );
+    await assert.rejects(() => approveQuestionnaire({ questionnaire: "qn-1", item: "item-2" }), /failed with 409/);
   } finally {
     globalThis.fetch = originalFetch;
   }
