@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { promptCatalog, getPrompt, withPersona, PERSONA_GROUNDING_GUARD } from "./catalog.js";
 
-test("catalog has exactly 19 prompts", () => {
-  assert.equal(promptCatalog.length, 19);
+test("catalog has exactly 20 prompts", () => {
+  assert.equal(promptCatalog.length, 20);
 });
 
 test("catalog ids are in the fixed, documented order", () => {
@@ -16,6 +16,7 @@ test("catalog ids are in the fixed, documented order", () => {
       "draft-markdown-proposal",
       "draft-seed-document",
       "outline-flow-seed",
+      "revise-flow-seed",
       "fold-markdown-proposal",
       "fold-changeset-proposal",
       "source-change-sync",
@@ -31,6 +32,13 @@ test("catalog ids are in the fixed, documented order", () => {
       "route-question-to-flow"
     ]
   );
+});
+
+test("revise-flow-seed prompt is registered and reshape-only", () => {
+  const prompt = getPrompt("revise-flow-seed");
+  assert.ok(prompt, "REVISE_SEED_PLAN should be registered");
+  assert.match(prompt!.instructions, /reshape/i);
+  assert.match(prompt!.instructions, /NO access to the source repositories/);
 });
 
 test("all prompt ids are unique", () => {

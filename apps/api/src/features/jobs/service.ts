@@ -351,6 +351,9 @@ export async function completeJob(
     // Outline completions persist a reviewable seed plan (no-op for other job
     // types; a real store failure correctly rides the 500-replay contract below).
     await seedService.createSeedPlanFromCompletedJob(ctx, existingJob, resultData);
+    // Revise completions apply the reshaped plan in place (no-op for other job
+    // types; a real store failure rides the same 500-replay contract).
+    await seedService.reviseSeedPlanFromCompletedJob(ctx, existingJob, resultData);
     const dedupeProposal = await proposalsService.createDedupeProposalFromCompletedJob(ctx, existingJob, resultData);
     if (dedupeProposal) {
       // Dedupe reconcile is best-effort too — it gates the multi-file change and either

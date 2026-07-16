@@ -10,6 +10,8 @@ import type {
   DraftSeedDocumentJobOutput,
   OutlineFlowSeedJobInput as CoreOutlineFlowSeedJobInput,
   OutlineFlowSeedJobOutput,
+  ReviseSeedPlanJobInput as CoreReviseSeedPlanJobInput,
+  ReviseSeedPlanJobOutput,
   SeedItem,
   FoldMarkdownProposalJobInput as CoreFoldMarkdownProposalJobInput,
   FoldMarkdownProposalJobOutput,
@@ -291,6 +293,27 @@ export const outlineFlowSeedOutputSchema = z.object({
   proposedPersona: z.string().optional(),
   mapUpdates: mapUpdatesField
 }) satisfies z.ZodType<OutlineFlowSeedJobOutput>;
+
+export const reviseSeedPlanInputSchema = z.object({
+  provider: providerSchema,
+  flowId: z.string(),
+  planId: z.string(),
+  instruction: z.string(),
+  currentPlan: z.object({
+    items: z.array(seedItemSchema),
+    charter: z.string().optional(),
+    persona: z.string().optional(),
+    rationale: z.string()
+  })
+}) satisfies z.ZodType<ProviderInput<CoreReviseSeedPlanJobInput>>;
+export const reviseSeedPlanOutputSchema = z.object({
+  items: z.array(seedItemSchema),
+  rationale: z.string(),
+  // Returned only when the instruction changed them; declared so the broker does
+  // not strip them before the completion handler reads them.
+  charter: z.string().optional(),
+  persona: z.string().optional()
+}) satisfies z.ZodType<ReviseSeedPlanJobOutput>;
 
 export const foldMarkdownProposalInputSchema = z.object({
   provider: providerSchema,

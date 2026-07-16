@@ -68,6 +68,19 @@ describe("buildPrompt", () => {
     // only in the rendered input, never in the instruction text).
     assert.ok(prompt.indexOf('"kb/a.md"') > prompt.indexOf("fine-but-thin"));
   });
+
+  it("uses the revise-flow-seed instructions for a revise_seed_plan job", () => {
+    const prompt = buildPrompt(
+      job("revise_seed_plan", {
+        flowId: "f",
+        planId: "p",
+        instruction: "drop pricing",
+        currentPlan: { items: [], rationale: "r" }
+      })
+    );
+    assert.match(prompt, /reshape/i);
+    assert.match(prompt, /drop pricing/);
+  });
 });
 
 describe("buildSourceGroundedPrompt", () => {

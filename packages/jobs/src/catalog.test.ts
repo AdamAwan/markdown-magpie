@@ -13,6 +13,7 @@ import {
   draftMarkdownProposalInputSchema,
   draftSeedDocumentInputSchema,
   improveDocumentInputSchema,
+  isAiJobType,
   isInteractiveJobType,
   jobDefinition,
   jobTypesForCapability,
@@ -30,6 +31,7 @@ const EXPIRATION_SECONDS = {
   draft_markdown_proposal: 15 * 60,
   draft_seed_document: 15 * 60,
   outline_flow_seed: 10 * 60,
+  revise_seed_plan: 10 * 60,
   detect_contradiction: 10 * 60,
   suggest_consolidation: 10 * 60,
   reconcile_gap_clusters: 5 * 60,
@@ -236,6 +238,14 @@ test("outline_flow_seed routes by provider like other AI work", () => {
   assert.equal(queueNameForJob("outline_flow_seed", { provider: "codex" }), "outline_flow_seed__codex");
   assert.ok(queueNamesForCapabilities(["codex"]).includes("outline_flow_seed__codex"));
   assert.ok(!queueNamesForCapabilities(["github"]).includes("outline_flow_seed__codex"));
+});
+
+test("revise_seed_plan routes by provider and is metered but not interactive", () => {
+  const definition = jobDefinition("revise_seed_plan");
+  assert.equal(definition.requiredCapability({ provider: "codex" }), "codex");
+  assert.equal(queueNameForJob("revise_seed_plan", { provider: "codex" }), "revise_seed_plan__codex");
+  assert.ok(isAiJobType("revise_seed_plan"));
+  assert.ok(!isInteractiveJobType("revise_seed_plan"));
 });
 
 test("dedupe_documents routes by provider like other AI work", () => {

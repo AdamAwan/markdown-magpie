@@ -167,6 +167,39 @@ export class PostgresSeedPlanStore implements SeedPlanStore {
     }
   }
 
+  async revise(
+    id: string,
+    next: {
+      items: Omit<SeedPlanItem, "id" | "status" | "draftJobId">[];
+      charter?: string;
+      persona?: string;
+      rationale: string;
+    }
+  ): Promise<SeedPlan | undefined> {
+    // A whole-items replacement: fresh proposed ids like create, plus rationale
+    // and (when provided) charter/persona. COALESCE keeps the existing
+    // charter/persona when the revision did not change them.
+    const items: SeedPlanItem[] = next.items.map((item) => ({
+      ...item,
+      id: randomUUID(),
+      status: "proposed" as const
+    }));
+    const result = await this.pool.query<SeedPlanRow>(
+      `
+        UPDATE seed_plans
+        SET charter = COALESCE($2, charter),
+            persona = COALESCE($3, persona),
+            items = $4,
+            rationale = $5,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [id, next.charter ?? null, next.persona ?? null, JSON.stringify(items), next.rationale]
+    );
+    return result.rows[0] ? mapRow(result.rows[0]) : undefined;
+  }
+
   async setItemDraftJob(id: string, itemId: string, draftJobId: string): Promise<SeedPlan | undefined> {
     const client = await this.pool.connect();
     try {

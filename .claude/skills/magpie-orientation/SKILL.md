@@ -203,7 +203,11 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
     **only** drafting entry point — the raw `POST /flows/:id/seed` is gone): approval
     enqueues one `draft_seed_document` per approved item carrying the plan's run-scoped
     `charter`/`persona` + `seedPlanId` (proposal linkage), straight to proposal → PR via the
-    reconcile gate. The hourly per-flow `seed_bootstrap` maintenance job auto-proposes a
+    reconcile gate. A proposed plan can also be **revised in place** by a natural-language
+    instruction (`POST /api/seed-plans/:id/revise { instruction }` → the **non**-source-grounded
+    `revise_seed_plan` job): its completion handler reshapes the same plan's items (and
+    charter/persona when the instruction implies it) without re-exploring the sources, so
+    "don't mention X" iterates on the plan rather than re-outlining from scratch. The hourly per-flow `seed_bootstrap` maintenance job auto-proposes a
     plan for a flow with sources but < `SEED_BOOTSTRAP_MAX_DOCS` (default 3) indexed docs —
     self-quiescing guards; a dismissed plan is not re-proposed until the flow's source
     descriptors change (source-hash comparison). A flow's optional `charter` config field
@@ -259,9 +263,9 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
 26 job types in `packages/jobs/src/types.ts`; contracts in `schemas.ts`, routing in
 `catalog.ts`. AI (provider-fanned) jobs get retry 3 / backoff 15→300 s; others retry 2.
 
-**16 provider (AI) jobs** — queue `` `${type}__${provider}` ``:
+**17 provider (AI) jobs** — queue `` `${type}__${provider}` ``:
 `answer_question`, `summarize_gap`, `draft_markdown_proposal`, `draft_seed_document`,
-`outline_flow_seed`, `fold_markdown_proposal`, `fold_changeset_proposal`,
+`outline_flow_seed`, `revise_seed_plan`, `fold_markdown_proposal`, `fold_changeset_proposal`,
 `detect_contradiction`, `suggest_consolidation`, `reconcile_gap_clusters`,
 `sync_source_changes_generate_plan`, `verify_document`, `correct_document`,
 `dedupe_documents`, `split_document`, `improve_document`.

@@ -959,6 +959,24 @@ function useConsoleController() {
     }
   }
 
+  // Revise a still-proposed plan by a natural-language instruction. Enqueue-only —
+  // the reshaped plan lands in place; the panel polls listSeedPlans and re-hydrates
+  // the same plan when it updates. The revision reshapes the plan text without
+  // re-reading the flow's sources.
+  async function reviseSeedPlan(planId: string, instruction: string): Promise<{ jobId: string } | undefined> {
+    try {
+      const outcome = await apiPost<{ jobId: string }>(
+        `/seed-plans/${encodeURIComponent(planId)}/revise`,
+        { instruction }
+      );
+      showMessage("Revising the plan — it will update here when the revision lands.", "info");
+      return outcome;
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
   return {
     health,
     stats,
@@ -1040,7 +1058,8 @@ function useConsoleController() {
     listSeedPlans,
     patchSeedPlan,
     approveSeedPlan,
-    dismissSeedPlan
+    dismissSeedPlan,
+    reviseSeedPlan
   };
 }
 

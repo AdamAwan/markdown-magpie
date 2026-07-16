@@ -20,6 +20,7 @@ function render() {
       onPatch={async () => undefined}
       onApprove={async () => undefined}
       onDismiss={async () => undefined}
+      onRevise={async () => undefined}
     />
   );
 }
@@ -73,7 +74,8 @@ test("keeps the selected plan open when callback props change identity (provider
     onListPlans: async () => [plan],
     onPatch: async () => undefined,
     onApprove: async () => undefined,
-    onDismiss: async () => undefined
+    onDismiss: async () => undefined,
+    onRevise: async () => undefined
   };
   const { container, rerender, unmount } = await renderDom(<SeedPanel {...props} />);
   try {
@@ -98,10 +100,78 @@ test("keeps the selected plan open when callback props change identity (provider
         onPatch={async () => undefined}
         onApprove={async () => undefined}
         onDismiss={async () => undefined}
+        onRevise={async () => undefined}
       />
     );
 
     assert.match(container.textContent ?? "", /Review plan/, "the open review pane survives the re-render");
+  } finally {
+    unmount();
+  }
+});
+
+test("a proposed plan shows the revise instruction field, with Revise disabled until an instruction is entered", async () => {
+  const props = {
+    flows,
+    loading: false,
+    onPropose: async () => undefined,
+    onListPlans: async () => [plan],
+    onPatch: async () => undefined,
+    onApprove: async () => undefined,
+    onDismiss: async () => undefined,
+    onRevise: async () => ({ jobId: "revise-job-1" })
+  };
+  const { container, unmount } = await renderDom(<SeedPanel {...props} />);
+  try {
+    const select = container.querySelector("select");
+    assert.ok(select, "flow select renders");
+    await changeValue(select, "billing");
+    const planRow = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("1 document")
+    );
+    assert.ok(planRow, "the flow's plan is listed");
+    await click(planRow);
+
+    assert.match(container.textContent ?? "", /Revise with instructions/);
+    const instruction = container.querySelector<HTMLTextAreaElement>('textarea[placeholder*="sweeping change"]');
+    assert.ok(instruction, "the revise instruction textarea renders for a proposed plan");
+
+    // With no instruction typed, the Revise button is disabled (canRevise gates
+    // on a non-empty instruction), so nothing can be enqueued by accident.
+    const reviseButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Revise"
+    );
+    assert.ok(reviseButton, "the Revise button renders");
+    assert.equal(reviseButton.disabled, true, "Revise is disabled until an instruction is entered");
+  } finally {
+    unmount();
+  }
+});
+
+test("the revise block is hidden once a plan is no longer proposed", async () => {
+  const approved: SeedPlan = { ...plan, status: "approved" };
+  const props = {
+    flows,
+    loading: false,
+    onPropose: async () => undefined,
+    onListPlans: async () => [approved],
+    onPatch: async () => undefined,
+    onApprove: async () => undefined,
+    onDismiss: async () => undefined,
+    onRevise: async () => undefined
+  };
+  const { container, unmount } = await renderDom(<SeedPanel {...props} />);
+  try {
+    const select = container.querySelector("select");
+    assert.ok(select, "flow select renders");
+    await changeValue(select, "billing");
+    const planRow = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("1 document")
+    );
+    assert.ok(planRow, "the flow's plan is listed");
+    await click(planRow);
+    assert.match(container.textContent ?? "", /Review plan/);
+    assert.doesNotMatch(container.textContent ?? "", /Revise with instructions/);
   } finally {
     unmount();
   }

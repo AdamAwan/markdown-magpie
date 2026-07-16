@@ -1,10 +1,11 @@
 import type {
   DraftSeedDocumentJobInput,
   OutlineFlowSeedJobInput,
+  ReviseSeedPlanJobInput,
   SeedPlan,
   SeedPlanItem
 } from "@magpie/core";
-import { outlineFlowSeedOutputSchema, type JobView } from "@magpie/jobs";
+import { outlineFlowSeedOutputSchema, reviseSeedPlanOutputSchema, type JobView } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { defaultDestinationId, selectFlow } from "../../platform/repositories.js";
 import { projectSourceDescriptors } from "../../platform/source-descriptors.js";
@@ -188,6 +189,84 @@ export async function dismissSeedPlan(
   const updated = await ctx.stores.seedPlans.setStatus(planId, "dismissed");
   logger.info({ planId, flowId: plan.flowId }, "dismissed seed plan");
   return { ok: true as const, plan: updated ?? plan };
+}
+
+// Enqueue a revise_seed_plan job to reshape a still-proposed plan by a
+// natural-language instruction. Enqueue-only: the reshaped plan lands in place
+// via reviseSeedPlanFromCompletedJob. NOT source-grounded — the current plan
+// snapshot rides the input and the job never re-opens the flow's sources, so an
+// iterate ("don't mention X") is cheap and does not re-plan from scratch.
+export async function requestSeedPlanRevision(
+  ctx: AppContext,
+  planId: string,
+  instruction: string
+): Promise<{ ok: true; jobId: string } | { ok: false; code: "plan_not_found" | "plan_not_revisable" }> {
+  const plan = await ctx.stores.seedPlans.get(planId);
+  if (!plan) {
+    return { ok: false as const, code: "plan_not_found" as const };
+  }
+  if (plan.status !== "proposed") {
+    return { ok: false as const, code: "plan_not_revisable" as const };
+  }
+  const input: ReviseSeedPlanJobInput & { provider: AiProviderName } = {
+    flowId: plan.flowId,
+    planId: plan.id,
+    instruction,
+    currentPlan: {
+      items: plan.items.map((item) => ({
+        ...(item.title !== undefined ? { title: item.title } : {}),
+        ...(item.targetPath !== undefined ? { targetPath: item.targetPath } : {}),
+        coverage: item.coverage,
+        ...(item.questions !== undefined ? { questions: item.questions } : {})
+      })),
+      ...(plan.charter !== undefined ? { charter: plan.charter } : {}),
+      ...(plan.persona !== undefined ? { persona: plan.persona } : {}),
+      rationale: plan.rationale
+    },
+    provider: ctx.config.get().aiProvider
+  };
+  const job = await ctx.jobs.create("revise_seed_plan", input);
+  logger.info({ jobId: job.id, planId: plan.id, flowId: plan.flowId }, "enqueued revise_seed_plan job");
+  return { ok: true as const, jobId: job.id };
+}
+
+// Completion handler for revise_seed_plan: apply the reshaped plan in place.
+// Only while the plan is still "proposed" — a concurrent approve/dismiss wins and
+// the stale revision is dropped. Keeps the plan id, flow, origin, outlineJobId,
+// sourceHash and the charter/persona *proposed provenance flags; replaces items
+// (fresh proposed ids) and rationale, and charter/persona when the output carries
+// them.
+export async function reviseSeedPlanFromCompletedJob(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<SeedPlan | undefined> {
+  if (!job || job.type !== "revise_seed_plan") {
+    return undefined;
+  }
+  const parsed = reviseSeedPlanOutputSchema.safeParse(output);
+  if (!parsed.success) {
+    return undefined;
+  }
+  const input = job.input as Partial<ReviseSeedPlanJobInput>;
+  if (!input.planId) {
+    return undefined;
+  }
+  const plan = await ctx.stores.seedPlans.get(input.planId);
+  if (!plan || plan.status !== "proposed") {
+    if (plan) {
+      logger.info({ planId: plan.id, status: plan.status }, "revise_seed_plan completion dropped: plan no longer proposed");
+    }
+    return undefined;
+  }
+  const updated = await ctx.stores.seedPlans.revise(plan.id, {
+    items: parsed.data.items,
+    ...(parsed.data.charter !== undefined ? { charter: parsed.data.charter } : {}),
+    ...(parsed.data.persona !== undefined ? { persona: parsed.data.persona } : {}),
+    rationale: parsed.data.rationale
+  });
+  logger.info({ planId: plan.id, flowId: plan.flowId, items: updated?.items.length }, "revised seed plan in place");
+  return updated;
 }
 
 // Approve a plan: flip remaining proposed items to approved and enqueue one

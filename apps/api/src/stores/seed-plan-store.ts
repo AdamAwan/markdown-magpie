@@ -45,6 +45,19 @@ export interface SeedPlanStore {
     id: string,
     patch: { charter?: string; persona?: string; items?: SeedPlanItemPatch[] }
   ): Promise<SeedPlan | undefined>;
+  // Replaces the plan's items wholesale (fresh proposed ids, like create) and
+  // updates rationale; charter/persona are updated only when provided. Used by
+  // the revise_seed_plan completion handler; the "only while proposed" rule is
+  // enforced in the seed service.
+  revise(
+    id: string,
+    next: {
+      items: Omit<SeedPlanItem, "id" | "status" | "draftJobId">[];
+      charter?: string;
+      persona?: string;
+      rationale: string;
+    }
+  ): Promise<SeedPlan | undefined>;
   setItemDraftJob(id: string, itemId: string, draftJobId: string): Promise<SeedPlan | undefined>;
   reset(): Promise<void>;
 }
@@ -142,6 +155,31 @@ export class InMemorySeedPlanStore implements SeedPlanStore {
         const itemPatch = patchesById.get(item.id);
         return itemPatch ? patchItem(item, itemPatch) : item;
       }),
+      updatedAt: new Date().toISOString()
+    };
+    this.plans.set(id, updated);
+    return updated;
+  }
+
+  async revise(
+    id: string,
+    next: {
+      items: Omit<SeedPlanItem, "id" | "status" | "draftJobId">[];
+      charter?: string;
+      persona?: string;
+      rationale: string;
+    }
+  ): Promise<SeedPlan | undefined> {
+    const existing = this.plans.get(id);
+    if (!existing) {
+      return undefined;
+    }
+    const updated: SeedPlan = {
+      ...existing,
+      ...(next.charter !== undefined ? { charter: next.charter } : {}),
+      ...(next.persona !== undefined ? { persona: next.persona } : {}),
+      items: next.items.map((item) => ({ ...item, id: randomUUID(), status: "proposed" as const })),
+      rationale: next.rationale,
       updatedAt: new Date().toISOString()
     };
     this.plans.set(id, updated);

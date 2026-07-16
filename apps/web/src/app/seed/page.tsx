@@ -7,8 +7,16 @@ import { Surface, Workbench } from "../../components/ui";
 import { knowledgeFlows } from "../../lib/config";
 
 export default function SeedPage() {
-  const { config, loading, proposeSeedPlan, listSeedPlans, patchSeedPlan, approveSeedPlan, dismissSeedPlan } =
-    useConsole();
+  const {
+    config,
+    loading,
+    proposeSeedPlan,
+    listSeedPlans,
+    patchSeedPlan,
+    approveSeedPlan,
+    dismissSeedPlan,
+    reviseSeedPlan
+  } = useConsole();
 
   const flows = useMemo(
     () => knowledgeFlows(config).map((flow) => ({ id: flow.id, name: flow.name })),
@@ -30,6 +38,7 @@ export default function SeedPage() {
             onPatch={patchSeedPlan}
             onApprove={approveSeedPlan}
             onDismiss={dismissSeedPlan}
+            onRevise={reviseSeedPlan}
           />
         </Surface.Body>
       </Surface>

@@ -1049,6 +1049,35 @@ export interface OutlineFlowSeedJobOutput {
   mapUpdates?: SourceMapUpdate[];
 }
 
+// Input of revise_seed_plan: an existing proposed plan plus a natural-language
+// instruction to reshape it by. Deliberately carries NO sources — the revision
+// reshapes the plan text and never re-explores the source repositories (that is
+// what makes it "not from scratch"). planId is read back at completion to apply
+// the result to the right plan (the seedPlanId precedent).
+export interface ReviseSeedPlanJobInput {
+  flowId: string;
+  planId: string;
+  instruction: string;
+  currentPlan: {
+    items: SeedItem[];
+    charter?: string;
+    persona?: string;
+    rationale: string;
+  };
+}
+
+// Output of revise_seed_plan: the reshaped plan. items reuse the SeedItem shape
+// (coverage may be empty in raw model output; approval separately enforces
+// non-empty). charter/persona are returned only when the instruction changed
+// them — they must be declared here or the broker strips them before the
+// completion handler reads them.
+export interface ReviseSeedPlanJobOutput {
+  items: SeedItem[];
+  rationale: string;
+  charter?: string;
+  persona?: string;
+}
+
 // A persisted, human-reviewable document plan proposed by outline_flow_seed.
 // Item ids are stable uuids so PATCH edits and approve-replay address items
 // unambiguously.

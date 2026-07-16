@@ -109,6 +109,41 @@ describe("InMemorySeedPlanStore", () => {
     assert.equal(updated?.items[0].draftJobId, undefined);
   });
 
+  it("revise replaces items with fresh proposed ids and updates rationale/charter/persona", async () => {
+    const store = new InMemorySeedPlanStore();
+    const plan = await store.create(newPlan());
+    const oldIds = new Set(plan.items.map((item) => item.id));
+    const revised = await store.revise(plan.id, {
+      items: [{ title: "Only", coverage: ["one point"] }],
+      charter: "Narrowed charter",
+      persona: "Narrowed persona",
+      rationale: "Reshaped per instruction"
+    });
+    assert.ok(revised);
+    assert.equal(revised!.id, plan.id);
+    assert.equal(revised!.rationale, "Reshaped per instruction");
+    assert.equal(revised!.charter, "Narrowed charter");
+    assert.equal(revised!.persona, "Narrowed persona");
+    assert.equal(revised!.items.length, 1);
+    assert.equal(revised!.items[0].title, "Only");
+    assert.equal(revised!.items[0].status, "proposed");
+    assert.ok(!oldIds.has(revised!.items[0].id));
+    // Unchanged provenance flags survive the reshape.
+    assert.equal(revised!.charterProposed, true);
+    assert.equal(await store.revise("no-such-plan", { items: [], rationale: "x" }), undefined);
+  });
+
+  it("revise leaves charter/persona untouched when the revision omits them", async () => {
+    const store = new InMemorySeedPlanStore();
+    const plan = await store.create(newPlan());
+    const revised = await store.revise(plan.id, {
+      items: [{ coverage: ["c"] }],
+      rationale: "r2"
+    });
+    assert.equal(revised!.charter, plan.charter);
+    assert.equal(revised!.persona, plan.persona);
+  });
+
   it("setStatus flips the plan; get reflects every mutation", async () => {
     const store = new InMemorySeedPlanStore();
     const plan = await store.create(newPlan());

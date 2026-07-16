@@ -12,9 +12,10 @@ import {
   listSeedPlans,
   outlineFlowSeed,
   patchSeedPlan,
+  requestSeedPlanRevision,
   runSeedBootstrap
 } from "./service.js";
-import { outlineBodySchema, seedPlanPatchSchema } from "./schema.js";
+import { outlineBodySchema, seedPlanPatchSchema, seedPlanReviseSchema } from "./schema.js";
 
 // Seeding routes mounted under /api/flows: propose a plan for a flow and list
 // its plans. Drafting is driven exclusively by plan approval (see
@@ -137,6 +138,32 @@ export function seedPlanRoutes(ctx: AppContext): Hono {
     }
     return c.json({ plan: outcome.plan, jobIds: outcome.jobIds });
   });
+
+  // Revise: enqueue a revise_seed_plan job to reshape the plan by a
+  // natural-language instruction. Enqueue-only — the reshaped plan lands in
+  // place via the job's completion handler. Only while proposed (409 otherwise).
+  app.post(
+    "/:id/revise",
+    requireScopes("manage:jobs"),
+    zValidator("json", seedPlanReviseSchema, (result, c) => {
+      if (!result.success) {
+        return c.json({ error: "invalid_revise_body" }, 400);
+      }
+    }),
+    async (c) => {
+      const plan = await getSeedPlan(ctx, c.req.param("id"));
+      if (!plan) {
+        throw new HttpError(404, "plan_not_found");
+      }
+      assertCan(ctx, c, "manage", plan.flowId);
+      const { instruction } = c.req.valid("json");
+      const outcome = await requestSeedPlanRevision(ctx, plan.id, instruction);
+      if (!outcome.ok) {
+        throw new HttpError(outcome.code === "plan_not_found" ? 404 : 409, outcome.code);
+      }
+      return c.json({ jobId: outcome.jobId });
+    }
+  );
 
   app.post("/:id/dismiss", requireScopes("manage:jobs"), async (c) => {
     const plan = await getSeedPlan(ctx, c.req.param("id"));

@@ -273,6 +273,42 @@ Return JSON:
 }`
 };
 
+export const REVISE_SEED_PLAN: PromptDefinition = {
+  id: "revise-flow-seed",
+  title: "Revise a seed plan by instruction",
+  description:
+    'Reshapes an existing, human-reviewed seed plan according to a natural-language instruction (e.g. "don\'t mention X", merge/split/reorder items). Reshapes the plan text only — it has NO access to the source repositories, so it never invents new grounded facts. Used by the watcher\'s revise_seed_plan job.',
+  usedBy: ["watcher · seed plan revision"],
+  outputShape: "{ items: [{ title, targetPath?, coverage[], questions? }], rationale, charter?, persona? }",
+  instructions: `You revise an existing plan for seeding a Markdown knowledge base. You are given the CURRENT plan and an INSTRUCTION describing a change to make. You reshape the plan to satisfy the instruction — you do NOT write the documents.
+
+Input:
+- "instruction": the change to make to the plan.
+- "currentPlan": the plan to revise — { items: [{ title, targetPath?, coverage[], questions? }], charter?, persona?, rationale }.
+
+What you may change:
+- Remove, soften, or reframe coverage points; merge, split, drop, or reorder items; edit titles and target paths; add or remove motivating questions.
+- When the instruction implies it, trim or reword "charter" and/or "persona" — return them ONLY when you changed them.
+
+Hard rules:
+- You have NO access to the source repositories in this task. Do NOT invent new facts, coverage, titles, or documents that the current plan did not already contain. You may only recombine, reduce, and reframe what is already in the plan.
+- If the instruction asks for genuinely new material that would require reading the sources (e.g. "add a document about a topic the plan doesn't cover"), leave "items" unchanged and explain in "rationale" that the request needs a fresh source-grounded outline.
+- Preserve every item's grounding: never move a coverage point onto a document it does not belong to just to satisfy the instruction.
+- Return JSON only. UK English.
+
+"rationale" is a one-paragraph summary of what you changed and why (and anything you deliberately did not change).
+
+Return JSON:
+{
+  "items": [
+    { "title": "string", "targetPath": "kebab-case/path.md", "coverage": ["point"], "questions": ["string"] }
+  ],
+  "rationale": "string",
+  "charter": "string (only when you changed it)",
+  "persona": "string (only when you changed it)"
+}`
+};
+
 export const FOLD_MARKDOWN_PROPOSAL: PromptDefinition = {
   id: "fold-markdown-proposal",
   title: "Fold a rival proposal into an open one",
@@ -645,6 +681,7 @@ export const promptCatalog: PromptDefinition[] = [
   DRAFT_MARKDOWN_PROPOSAL,
   DRAFT_SEED_DOCUMENT,
   OUTLINE_FLOW_SEED,
+  REVISE_SEED_PLAN,
   FOLD_MARKDOWN_PROPOSAL,
   FOLD_CHANGESET_PROPOSAL,
   SOURCE_CHANGE_SYNC,

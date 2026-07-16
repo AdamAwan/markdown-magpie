@@ -105,6 +105,26 @@ describe("PostgresSeedPlanStore", { skip: databaseUrl ? false : "DATABASE_URL no
     assert.equal(other?.status, "proposed");
   });
 
+  it("revise replaces items with fresh ids and updates rationale/charter, keeping provenance flags", async () => {
+    const plan = await store.create(newPlan());
+    const oldIds = new Set(plan.items.map((item) => item.id));
+    const revised = await store.revise(plan.id, {
+      items: [{ title: "Only", coverage: ["one point"] }],
+      charter: "Narrowed charter",
+      rationale: "Reshaped per instruction"
+    });
+    assert.equal(revised?.id, plan.id);
+    assert.equal(revised?.rationale, "Reshaped per instruction");
+    assert.equal(revised?.charter, "Narrowed charter");
+    // Omitted persona keeps its prior value; provenance flags survive.
+    assert.equal(revised?.persona, plan.persona);
+    assert.equal(revised?.charterProposed, true);
+    assert.equal(revised?.items.length, 1);
+    assert.equal(revised?.items[0].status, "proposed");
+    assert.ok(revised && !oldIds.has(revised.items[0].id));
+    assert.equal(await store.revise(randomUUID(), { items: [], rationale: "x" }), undefined);
+  });
+
   it("setItemDraftJob records the job id on exactly that item", async () => {
     const plan = await store.create(newPlan());
     const updated = await store.setItemDraftJob(plan.id, plan.items[1].id, "draft-job-9");
