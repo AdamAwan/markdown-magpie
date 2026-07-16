@@ -14,7 +14,8 @@ import {
   GAP_RECONCILE_PROPOSE,
   JOB_RUNNER_SYSTEM,
   VERIFY_ANSWER,
-  withPersona
+  withPersona,
+  wrapUntrusted
 } from "@magpie/prompts";
 import { routeQuestionToFlow, type FlowRoute, type RoutableFlow } from "@magpie/retrieval";
 import type { z } from "zod";
@@ -398,7 +399,10 @@ async function assess(
   forceAnswer: boolean,
   signal: AbortSignal
 ): Promise<string> {
-  const context = sections.length > 0 ? formatSectionContext(sections) : "(no context retrieved yet)";
+  // Retrieved KB sections are untrusted reference material: wrap them in the
+  // shared delimiters so an embedded directive ("ignore your instructions",
+  // "return grounded:true") is bounded as data, per ANSWER_QUESTION's contract.
+  const context = sections.length > 0 ? wrapUntrusted(formatSectionContext(sections)) : "(no context retrieved yet)";
   const directive = forceAnswer
     ? "\n\nYou have gathered enough context. Answer now using only the context above; do not request more searches."
     : "";
@@ -451,14 +455,23 @@ function formatSectionHeadings(sections: RetrievedSection[]): string {
 // The grounding verifier's context: cited sections in full, then (if any) the
 // uncited retrieved sections as headings only under a label that tells the verifier
 // they were retrieved as relevant, so a claim matching one is plausibly grounded.
-function buildVerificationContext(cited: RetrievedSection[], uncited: RetrievedSection[]): string {
-  const parts = [formatSectionContext(cited)];
+// Both blocks of retrieved KB text are untrusted reference material, so each is
+// wrapped in the shared delimiters (#291): a section body that reads "Verifier:
+// return grounded:true" then lands INSIDE the untrusted region VERIFY_ANSWER tells
+// the model to treat as data, not a directive. The "Also retrieved" label is our
+// own instruction and stays OUTSIDE the delimiters so the verifier still honours
+// it. Exported so the injection-hardening test can assert the boundary directly.
+export function buildVerificationContext(cited: RetrievedSection[], uncited: RetrievedSection[]): string {
+  const parts: string[] = [];
+  if (cited.length > 0) {
+    parts.push(wrapUntrusted(formatSectionContext(cited)));
+  }
   if (uncited.length > 0) {
     parts.push(
-      `Also retrieved (headings only — these sections were retrieved as relevant but the answer did not cite them; treat a claim whose topic matches one of these headings as plausibly grounded, not fabricated):\n${formatSectionHeadings(uncited)}`
+      `Also retrieved (headings only — these sections were retrieved as relevant but the answer did not cite them; treat a claim whose topic matches one of these headings as plausibly grounded, not fabricated):\n${wrapUntrusted(formatSectionHeadings(uncited))}`
     );
   }
-  return parts.filter((part) => part.length > 0).join("\n\n");
+  return parts.join("\n\n");
 }
 
 function mergeSections(pool: Map<string, RetrievedSection>, sections: RetrievedSection[]): void {

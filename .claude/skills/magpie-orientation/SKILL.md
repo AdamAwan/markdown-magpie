@@ -349,7 +349,9 @@ packages/
   logger/     Shared structured pino logging + crash handlers.
   markdown/   Markdown parsing, frontmatter, sectioning, advisory-heading detection.
   prompts/    Shared AI prompt catalog (21 prompts, shared contract constants:
-              CONSERVATIVE_CONTRACT, SOURCE_MAP_CONTRACT, FACTUAL_REGISTER_CONTRACT).
+              CONSERVATIVE_CONTRACT, SOURCE_MAP_CONTRACT, FACTUAL_REGISTER_CONTRACT,
+              UNTRUSTED_CONTENT_CONTRACT + wrapUntrusted delimiters for prompt-injection
+              hardening — see docs/threat-model.md C6).
   retrieval/  Embeddings, RRF fusion, chat/embedding HTTP providers, LLM flow router +
               embedding flow router. (Answer orchestration itself lives in api/watcher.)
   telemetry/  OpenTelemetry wiring (traces/metrics/log-trace mixin), off by default.
