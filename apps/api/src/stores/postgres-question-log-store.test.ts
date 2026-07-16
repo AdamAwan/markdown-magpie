@@ -495,6 +495,37 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.equal(resolvedGap?.resolvedByProposalId, proposalId);
   });
 
+  it("a questionnaire item ask IS gap-candidate but stays out of the questions list", async () => {
+    const summary = `questionnaire-gap-${randomUUID()}`;
+    const gapAnswer: AnswerResult = {
+      answer: "not covered by the KB",
+      confidence: "low",
+      citations: [],
+      gaps: [{ summary, question: "test?", confidence: "low", citedSectionIds: [], source: "auto" }]
+    };
+    const recorded = await store.record({
+      question: `questionnaire-${summary}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      purpose: "questionnaire"
+    });
+
+    const completed = await store.updateAnswer(recorded.id, { answer: gapAnswer });
+    assert.equal(completed?.purpose, "questionnaire");
+    assert.ok((completed?.gaps ?? []).length > 0, "questionnaire ask ingests gap rows (unlike verification)");
+
+    // In gap candidacy: the flywheel — an unanswerable questionnaire question is a real gap.
+    const candidates = await store.listGapCandidates(1000);
+    const candidate = candidates.find((entry) => entry.summary === summary);
+    assert.ok(candidate, "questionnaire gap surfaces as a candidate");
+    assert.ok(candidate?.questionIds.includes(recorded.id));
+    assert.ok((await store.gapIdsForSummary(summary)).length > 0, "gap ids resolve for clustering");
+
+    // Out of the questions list: the worksheet is the questionnaire's surface.
+    const listed = await store.list(50, 0, `questionnaire-${summary}`);
+    assert.equal(listed.length, 0, "questionnaire logs never appear in the live questions list");
+  });
+
   it("records a verification gap with a note and surfaces it as a candidate", async () => {
     const uniqueId = randomUUID();
     const recorded = await store.record({

@@ -74,9 +74,11 @@ API_BASE_URL=http://localhost:4000 \
 #     watcher can only pick up if it isn't the one blocking. One watcher self-
 #     starves and the work times out; with verify_gap_closure that means a merged
 #     doc never verifies (it stays honestly "unverified" — the fix in #150 keeps it
-#     from being falsely reopened). Each process gets a unique registry id, so the
-#     same command is fine; the console warns while only one is connected.
-API_BASE_URL=http://localhost:4000 \
+#     from being falsely reopened). Each process gets a unique registry id, but the
+#     health server does NOT auto-increment its port — the second watcher dies with
+#     `EADDRINUSE :::4002` unless you override WATCHER_HEALTH_PORT. The console
+#     warns while only one is connected.
+WATCHER_HEALTH_PORT=4003 API_BASE_URL=http://localhost:4000 \
   AUTH_REQUIRED=false WATCHER_API_CLIENT_ID= WATCHER_API_CLIENT_SECRET= \
   MAGPIE_CHECKOUT_ROOT="$PWD/.magpie/checkouts" npm run dev:watcher                 # background
 

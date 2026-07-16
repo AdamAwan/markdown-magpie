@@ -44,7 +44,7 @@ import {
   WatcherView,
   WorkersResponse
 } from "../lib/types";
-import type { SeedPlan } from "@magpie/core";
+import type { Questionnaire, QuestionnaireSummary, SeedPlan } from "@magpie/core";
 import { apiDelete, apiGet, apiPatch, apiPost, errorMessage } from "../lib/api";
 import { knowledgeFlows } from "../lib/config";
 import {
@@ -911,6 +911,82 @@ function useConsoleController() {
     }
   }
 
+  // --- Questionnaire mode (docs/questionnaires.md) -------------------------
+
+  async function listQuestionnaires(): Promise<QuestionnaireSummary[] | undefined> {
+    try {
+      const { questionnaires } = await apiGet<{ questionnaires: QuestionnaireSummary[] }>("/questionnaires");
+      return questionnaires;
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
+  // Worksheet detail. Reading also resumes a stalled answer drip server-side,
+  // so the panel's poll doubles as restart recovery.
+  async function getQuestionnaire(id: string): Promise<Questionnaire | undefined> {
+    try {
+      const { questionnaire } = await apiGet<{ questionnaire: Questionnaire }>(
+        `/questionnaires/${encodeURIComponent(id)}`
+      );
+      return questionnaire;
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
+  async function createQuestionnaire(
+    name: string,
+    flowId: string,
+    questions: string[]
+  ): Promise<Questionnaire | undefined> {
+    try {
+      const { questionnaire } = await apiPost<{ questionnaire: Questionnaire }>("/questionnaires", {
+        name,
+        flowId,
+        questions
+      });
+      showMessage(
+        "Questionnaire created — matched items reuse prior approved answers; the rest are answering now.",
+        "info"
+      );
+      return questionnaire;
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
+  async function approveQuestionnaireItem(questionnaireId: string, itemId: string): Promise<boolean> {
+    try {
+      await apiPost<{ ok: boolean }>(
+        `/questionnaires/${encodeURIComponent(questionnaireId)}/items/${encodeURIComponent(itemId)}/approve`,
+        {}
+      );
+      showMessage("Answer approved — it joins the match corpus for future questionnaires.", "success");
+      return true;
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return false;
+    }
+  }
+
+  async function approveReusedItems(questionnaireId: string): Promise<number | undefined> {
+    try {
+      const { approved } = await apiPost<{ approved: number }>(
+        `/questionnaires/${encodeURIComponent(questionnaireId)}/approve-reused`,
+        {}
+      );
+      showMessage(`Approved ${approved} reused answer${approved === 1 ? "" : "s"}.`, "success");
+      return approved;
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
   // Propose a seed plan for a flow: enqueue the source-grounded planning job.
   // Enqueue-only — the persisted plan lands via the job's completion handler, so
   // the panel polls listSeedPlans rather than waiting on the job here. `reused`
@@ -1096,7 +1172,12 @@ function useConsoleController() {
     patchSeedPlan,
     approveSeedPlan,
     dismissSeedPlan,
-    reviseSeedPlan
+    reviseSeedPlan,
+    listQuestionnaires,
+    getQuestionnaire,
+    createQuestionnaire,
+    approveQuestionnaireItem,
+    approveReusedItems
   };
 }
 

@@ -416,6 +416,33 @@ guard that no-oped the tick (`no_sources | kb_populated | plan_pending | outline
 > The legacy raw-items `POST /api/flows/:flowId/seed` endpoint is **removed** — plan
 > approval is the only drafting entry point.
 
+## Questionnaires
+
+Bulk question batches with verbatim answer reuse — see [questionnaires.md](questionnaires.md)
+for the model (match → two-condition reuse check → drip → approve → export).
+
+### `POST /api/questionnaires`
+
+`{ "name": string, "flowId": string, "questions": string[] }` (1–500 questions). Creates the
+batch, runs matching + reuse checks inline (embeddings only), and starts the answer drip.
+Returns `201 { "questionnaire": Questionnaire }`. `404 flow_not_found` for an unknown flow;
+`ask:knowledge` scope + flow `ask` capability; `trigger` rate tier.
+
+### `GET /api/questionnaires` / `GET /api/questionnaires/:id`
+
+Summaries (with per-status counts) / the full worksheet. Reading a worksheet also resumes a
+stalled answer drip. `read:knowledge` + flow `read`; unknown or cross-flow ids read as 404.
+
+### `GET /api/questionnaires/:id/export?format=md|csv`
+
+The worksheet as a downloadable Markdown or CSV file.
+
+### `POST /api/questionnaires/:id/items/:itemId/approve` / `POST /api/questionnaires/:id/approve-reused`
+
+Approve one answered item (409 `not_answered` otherwise) or every reused item. Approval
+admits the answer into the match corpus for future questionnaires and snapshots its citation
+fingerprints. `manage:knowledge` + flow `manage`.
+
 ## Proposals
 
 See the Proposal Review and Storage sections in [ai-jobs.md](ai-jobs.md).

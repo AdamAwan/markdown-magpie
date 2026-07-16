@@ -15,6 +15,7 @@ import {
   createScheduledTaskStore,
   createInsightsStore,
   createSeedPlanStore,
+  createQuestionnaireStore,
   createSnapshotStore,
   createSourceMapStore,
   createSourceSyncStore,
@@ -53,6 +54,7 @@ export interface AppContext {
     sourceSync: ReturnType<typeof createSourceSyncStore>;
     sourceMap: ReturnType<typeof createSourceMapStore>;
     seedPlans: ReturnType<typeof createSeedPlanStore>;
+    questionnaires: ReturnType<typeof createQuestionnaireStore>;
     patrol: ReturnType<typeof createPatrolStore>;
     gapClusters: ReturnType<typeof createGapClusterStore>;
     reconciliations: ReturnType<typeof createReconciliationDecisionStore>;
@@ -145,6 +147,7 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
       sourceSync: createSourceSyncStore(config, pool),
       sourceMap: createSourceMapStore(config, pool),
       seedPlans: createSeedPlanStore(config, pool),
+      questionnaires: createQuestionnaireStore(config, pool),
       patrol: createPatrolStore(config, pool),
       gapClusters: createGapClusterStore(config, pool),
       reconciliations: createReconciliationDecisionStore(config, pool),

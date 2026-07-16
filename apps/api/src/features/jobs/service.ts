@@ -9,6 +9,7 @@ import type { WatcherTouch } from "../../stores/watcher-registry-store.js";
 import { refreshFlowSnapshotOutputSchema } from "@magpie/jobs";
 import * as proposalsService from "../proposals/service.js";
 import * as seedService from "../seed/service.js";
+import * as questionnairesService from "../questionnaires/service.js";
 import * as sourceSyncService from "../source-sync/service.js";
 import * as sourceMapService from "../source-map/service.js";
 import * as snapshotsService from "../snapshots/service.js";
@@ -315,6 +316,13 @@ export async function completeJob(
 
   try {
     await updateQuestionLogFromCompletedJob(ctx, existingJob, resultData);
+    // Questionnaire items ride the same answer_question completions: the item
+    // lookup by questionLogId inside the handler is the no-op guard for every
+    // non-questionnaire ask. Runs inside the replayable side-effect block, so a
+    // store failure here rides the 500-replay contract like its neighbours.
+    if (existingJob?.type === "answer_question" && isAnswerQuestionJobOutput(resultData)) {
+      await questionnairesService.handleQuestionnaireAnswerCompletion(ctx, existingJob, resultData);
+    }
     const draftedProposal = await proposalsService.createProposalFromCompletedJob(ctx, existingJob, resultData);
     if (draftedProposal) {
       // At-draft fold: best-effort, must never fail the draft completion itself.
@@ -547,6 +555,12 @@ export async function failJob(ctx: AppContext, jobId: string, jobError: JobError
     failedJob.state === "failed"
   ) {
     await foldService.enqueueFoldFallback(ctx, failingJob);
+  }
+  // A terminally failed answer job that belongs to a questionnaire item marks
+  // that item unanswerable (error on the worksheet) and frees its drip slot.
+  // Retryable failures are skipped — the job will run again.
+  if (failingJob?.type === "answer_question" && failedJob.state === "failed") {
+    await questionnairesService.handleQuestionnaireAnswerFailure(ctx, failingJob, jobError.message);
   }
   return failedJob;
 }

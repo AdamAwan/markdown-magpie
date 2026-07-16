@@ -225,7 +225,10 @@ is verified for them (and nothing was ever resolved).
 **Verification re-asks are synthetic (`purpose = "verification"`).** Each re-ask records an
 ordinary `answer_question` question log so the pipeline is exercised exactly as a user
 re-asking would be — but the log is stamped `purpose: "verification"` (question logs default
-to `"live"`). A verification log records its answer + citations for the audit trail, but its
+to `"live"`; questionnaire item asks are stamped `"questionnaire"` — those DO stay in gap
+candidacy, because an unanswerable questionnaire question is a real gap, but stay out of the
+questions list — see `docs/questionnaires.md`). A verification log records its answer +
+citations for the audit trail, but its
 answer's gap signals are **not** ingested and it is excluded from gap candidacy, the
 questions list, and gap clustering. Otherwise those synthetic logs would re-enter candidacy
 under a fresh question id and auto-redraft the very gap that was just parked (issue #154).

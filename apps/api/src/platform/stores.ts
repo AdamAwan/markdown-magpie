@@ -23,6 +23,8 @@ import { InMemoryScheduledTaskStore } from "../stores/scheduled-task-store.js";
 import { InMemoryPatrolStore } from "../stores/patrol-store.js";
 import { InMemorySeedPlanStore } from "../stores/seed-plan-store.js";
 import { PostgresSeedPlanStore } from "../stores/postgres-seed-plan-store.js";
+import { InMemoryQuestionnaireStore } from "../stores/questionnaire-store.js";
+import { PostgresQuestionnaireStore } from "../stores/postgres-questionnaire-store.js";
 import { InMemorySourceMapStore } from "../stores/source-map-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
 import { InMemoryWatcherRegistryStore } from "../stores/watcher-registry-store.js";
@@ -124,6 +126,19 @@ export function createSeedPlanStore(config: AppConfig, pool: pg.Pool): InMemoryS
     "SEED_PLAN_STORE",
     (pool) => new PostgresSeedPlanStore(pool),
     () => new InMemorySeedPlanStore()
+  );
+}
+
+export function createQuestionnaireStore(
+  config: AppConfig,
+  pool: pg.Pool
+): InMemoryQuestionnaireStore | PostgresQuestionnaireStore {
+  return createStore<InMemoryQuestionnaireStore | PostgresQuestionnaireStore>(
+    config,
+    pool,
+    "QUESTIONNAIRE_STORE",
+    (pool) => new PostgresQuestionnaireStore(pool),
+    () => new InMemoryQuestionnaireStore()
   );
 }
 

@@ -238,9 +238,14 @@ export interface QuestionLog {
   // must NOT re-enter gap candidacy, the questions list, or gap clustering — its
   // answer's gap signals are the merged doc's shortfall, not a fresh gap, and
   // treating it as live would auto-redraft the very gap that was just parked
-  // (see docs/question-logging.md, issue #154).
-  purpose?: "live" | "verification";
+  // (see docs/question-logging.md, issue #154). "questionnaire" is an item ask
+  // from a questionnaire batch: kept IN gap candidacy (an unanswerable
+  // questionnaire question is a real gap) but OUT of the questions list (the
+  // questionnaire worksheet is its surface) — see docs/questionnaires.md.
+  purpose?: QuestionPurpose;
 }
+
+export type QuestionPurpose = "live" | "verification" | "questionnaire";
 
 export interface QuestionLogInput {
   question: string;
@@ -248,7 +253,7 @@ export interface QuestionLogInput {
   answer?: AnswerResult;
   retrievedSectionIds: string[];
   flowId?: string;
-  purpose?: "live" | "verification";
+  purpose?: QuestionPurpose;
 }
 
 export interface QuestionLogUpdateInput {
@@ -261,6 +266,80 @@ export interface QuestionLogUpdateInput {
 }
 
 export type QuestionFeedback = "helpful" | "unhelpful";
+
+// --- Questionnaire mode (docs/questionnaires.md) -------------------------
+// A questionnaire is a named batch of questions pinned to a flow. Its item
+// history is the canonical answer store: approved items become the match
+// corpus for future questionnaires, and an answer's ongoing validity is
+// derived from the KB sections it cited (never a TTL).
+
+export type QuestionnaireItemStatus = "pending" | "answering" | "answered" | "unanswerable" | "approved";
+export type QuestionnaireItemOutcome = "reused" | "fresh" | "changed";
+
+// Why a matched item could NOT be reused verbatim. Rendered on the worksheet
+// so a wording change is always explained, never arbitrary.
+export interface QuestionnaireChangeReason {
+  kind: "section_changed" | "section_missing" | "new_content";
+  sectionId: string;
+  path: string;
+  heading: string;
+  changedAt?: string;
+}
+
+// Durable citation fingerprint snapshotted at approval — NOT backed by a FK,
+// so it survives the cited section's deletion on re-index.
+export interface QuestionnaireItemCitation {
+  sectionId: string;
+  contentHash: string;
+  path: string;
+  heading: string;
+  excerpt: string;
+}
+
+export interface QuestionnaireItem {
+  id: string;
+  questionnaireId: string;
+  position: number;
+  question: string;
+  status: QuestionnaireItemStatus;
+  outcome?: QuestionnaireItemOutcome;
+  answer?: string;
+  // For reused items: the ORIGINAL generation time, carried forward as the
+  // freshness baseline for future newcomer checks.
+  answeredAt?: string;
+  questionLogId?: string;
+  reusedFromItemId?: string;
+  changeReason?: QuestionnaireChangeReason;
+  error?: string;
+  approvedAt?: string;
+  staleAtApproval: boolean;
+  citations: QuestionnaireItemCitation[];
+}
+
+export interface Questionnaire {
+  id: string;
+  name: string;
+  flowId: string;
+  status: "open" | "completed" | "archived";
+  createdAt: string;
+  items: QuestionnaireItem[];
+}
+
+export interface QuestionnaireSummary {
+  id: string;
+  name: string;
+  flowId: string;
+  status: "open" | "completed" | "archived";
+  createdAt: string;
+  counts: {
+    total: number;
+    reused: number;
+    answered: number;
+    pending: number;
+    unanswerable: number;
+    approved: number;
+  };
+}
 
 export interface GapCandidate {
   summary: string;
