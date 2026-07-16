@@ -102,7 +102,7 @@ export async function listQuestionnaires(ctx: AppContext): Promise<Questionnaire
 // cap keeps a 200-question batch from monopolising the interactive in-flight
 // reservation that protects live asks (#240); a full AI-capacity rejection
 // stops the drip until the next completion/read resumes it.
-export async function topUpDrip(ctx: AppContext, questionnaireId: string): Promise<void> {
+async function topUpDrip(ctx: AppContext, questionnaireId: string): Promise<void> {
   const max = ctx.settings.questionnaires.maxInflight;
   while ((await ctx.stores.questionnaires.countAnswering(questionnaireId)) < max) {
     const item = await ctx.stores.questionnaires.nextPending(questionnaireId);

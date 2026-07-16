@@ -213,6 +213,16 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
     descriptors change (source-hash comparison). A flow's optional `charter` config field
     (coverage mission) is planning-scope guidance only — distinct from `persona` (voice) and
     `routingSummary` (router blurb).
+13a. **Questionnaires** — explicit bulk question batches (security questionnaires) with
+    verbatim answer reuse (`docs/questionnaires.md`). A batch is pinned to a flow; items
+    are embedding-matched against prior **approved** items (0.84 near-verbatim bar) and a
+    matched answer is reused verbatim only if (a) every cited section is byte-unchanged
+    (md5 fingerprints vs `document_sections.content_changed_at` tracking, migration 0054)
+    AND (b) retrieval finds nothing relevant newer than the answer's generation time.
+    Everything else drips through the ordinary `answer_question` job
+    (`QUESTIONNAIRE_MAX_INFLIGHT` per batch, purpose `"questionnaire"` — in gap candidacy,
+    out of the questions list). Approval admits answers to the future match corpus;
+    `/questionnaires` console page reviews/exports. No new job type.
 14. **Source map** (#215/#219/#220) — agents' own navigation hints about source repos:
     `(sourceId, topic) → paths + description`, persisted in `source_map_entries`
     (migration 0047). Source-grounded job outputs contribute optional `mapUpdates`
@@ -310,8 +320,8 @@ apps/
              source-agent.ts (bounded tool loop), maintenance.ts, publication.ts,
              refresh-flow-snapshot.ts. Capability gates in src/capabilities.ts; source
              workspaces in src/source-workspace.ts; API client in src/http-client.ts.
-  web/       Next.js (App Router) review + admin console. 14 nav sections
-             (src/lib/sections.ts): /ask, /knowledge, /gaps, /seed, /proposals,
+  web/       Next.js (App Router) review + admin console. 15 nav sections
+             (src/lib/sections.ts): /ask, /knowledge, /gaps, /seed, /questionnaires, /proposals,
              /source-map, /jobs, /activity, /insights, /schedules, /config, /dataflow,
              /prompts, /mcp (+ unlisted /reconciliations, /snapshots). UI is Emotion
              CSS-in-JS with a typed design-token theme (src/theme/) and a primitive
@@ -325,7 +335,7 @@ apps/
 packages/
   core/       Shared domain types + provider interfaces (incl. ProvenanceClaim).
   auth/       Auth0 token validation + on-behalf-of helpers.
-  db/         SQL migrations (0001–0053; see the write-a-migration skill).
+  db/         SQL migrations (0001–0055; see the write-a-migration skill).
   git/        Git sync + PR adapters: ensureGitCheckout (blobless partial clones),
               PR status/mergeability polling, LocalGitProposalPublisher, checkout locks.
   jobs/       Job contracts: JOB_TYPES, capabilities, input/output schemas, queue
