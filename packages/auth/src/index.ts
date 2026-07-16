@@ -28,16 +28,33 @@ export interface AuthSettings {
 // emits it; overridable via AUTH_ROLES_CLAIM for other deployments/namespaces.
 export const DEFAULT_ROLES_CLAIM = "https://magpie.wastedcake.com/roles";
 
+// Auth0 stamps the OAuth grant used to mint an access token in the standard `gty`
+// claim. Machine-to-machine (client-credentials) tokens carry
+// `gty: "client-credentials"`. This is the POSITIVE service-identity signal — present
+// regardless of whether a post-login Action ran — as opposed to inferring "service"
+// from an ABSENT roles claim, which a misconfigured IdP can also produce for a human
+// token (dropping flow-scoped authorization open). See docs/authorization.md.
+export const CLIENT_CREDENTIALS_GRANT_TYPE = "client-credentials";
+
+// True when the verified token was minted via the client-credentials grant, i.e. it
+// belongs to a service / machine-to-machine identity (the watcher, the MCP gateway).
+export function isClientCredentialsToken(payload: JWTPayload): boolean {
+  return payload["gty"] === CLIENT_CREDENTIALS_GRANT_TYPE;
+}
+
 export interface Principal {
   subject: string;
   scopes: string[];
   // Role names carried by the token, or absent/`undefined` when the token has no
   // roles claim at all. The distinction is load-bearing: interactive user logins run
-  // the Auth0 Action and always carry the claim (possibly an empty array), whereas
+  // the Auth0 Action and carry the claim (possibly an empty array), whereas
   // machine-to-machine (client-credentials) tokens never do. Downstream flow-scoped
-  // authorization treats an ABSENT claim as a service/legacy principal (scope-only,
-  // no flow restriction) and a PRESENT claim as a role-aware principal whose flow
-  // access is fully determined by these roles.
+  // authorization treats a PRESENT claim as a role-aware principal whose flow access
+  // is fully determined by these roles. An ABSENT claim is NOT sufficient on its own
+  // to grant the service-identity bypass — that requires the POSITIVE
+  // client-credentials marker (`isClientCredentialsToken`), so a human token whose
+  // roles claim was dropped fails CLOSED rather than open (see
+  // apps/api/src/auth/capabilities.ts).
   roles?: string[];
   payload: JWTPayload;
 }

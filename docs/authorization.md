@@ -103,20 +103,33 @@ in three cases — it returns "allowed" when:
    is inactive and behavior is byte-identical to the scope-only model.
 2. **No principal** — auth is disabled (local dev); the scope layer already handled
    it.
-3. **The token has no roles claim at all** — a **service / machine-to-machine
-   token**. Auth0's post-login Action only runs on interactive logins, so
-   client-credentials tokens (the watcher, the MCP server) never carry the claim.
-   They fall back to scope-only authorization rather than being locked out of the
-   callbacks the system depends on.
+3. **The token is a genuine service / machine-to-machine token** — identified by a
+   **positive** signal: the OAuth grant-type claim `gty: "client-credentials"` that
+   Auth0 stamps on every client-credentials access token
+   (`isClientCredentialsToken`, `packages/auth/src/index.ts`). Auth0's post-login
+   Action only runs on interactive logins, so these tokens (the watcher, the MCP
+   server) never carry the roles claim; they fall back to scope-only authorization
+   rather than being locked out of the callbacks the system depends on.
 
 Only a **role-aware principal** — roles claim *present*, even if `[]` — is held to
 the per-flow grants. A role-aware principal with no matching grant is denied
 (a `[]`-roles user sees no flow content).
 
+> **Fail closed, not open.** The service carve-out (3) is deliberately a *positive*
+> signal, **not** "the roles claim is absent." An earlier design inferred M2M purely
+> from a missing roles claim — which meant that if the Auth0 post-login Action was
+> removed, disabled, or silently dropped the claim (Auth0 drops non-URL-namespaced
+> custom claims), a **human** token would arrive with no roles claim, be
+> misclassified as a service principal, and be granted access to **every** flow with
+> flow-scoping effectively disabled. Now a token with no roles claim **and** no
+> client-credentials marker is **denied** flow-scoped access, and the event is logged
+> (`can()` warns: user-facing scopes but no roles claim while grants are configured)
+> so the IdP misconfiguration is visible rather than silently failing open.
+
 > **Turning it on.** When you configure `KNOWLEDGE_ROLE_GRANTS`, grant every human
 > role its flows, and ensure any service identity keeps working via carve-out (3)
-> — i.e. service tokens must remain client-credentials tokens without the roles
-> claim. Do not attach roles to M2M tokens.
+> — i.e. service tokens must be client-credentials tokens (they carry
+> `gty: "client-credentials"`). Do not attach roles to M2M tokens.
 
 ## Example roles
 

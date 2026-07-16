@@ -4,10 +4,12 @@ import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import type { JSONWebKeySet } from "jose";
 import {
   authSettingsFromEnv,
+  CLIENT_CREDENTIALS_GRANT_TYPE,
   createRemoteAuthVerifier,
   DEFAULT_ROLES_CLAIM,
   hasScopes,
   isAuthRequired,
+  isClientCredentialsToken,
   parseBearerToken,
   rolesFromPayload
 } from "./index.js";
@@ -125,6 +127,16 @@ test("principal.roles is undefined when the token carries no roles claim (servic
   const principal = await verifier.verify(token);
 
   assert.equal(principal.roles, undefined);
+});
+
+test("isClientCredentialsToken is a POSITIVE M2M signal via the gty grant-type claim", () => {
+  // Auth0 stamps client-credentials tokens with gty: "client-credentials".
+  assert.equal(isClientCredentialsToken({ gty: CLIENT_CREDENTIALS_GRANT_TYPE }), true);
+  // A human/interactive token has no such marker (or a different grant type).
+  assert.equal(isClientCredentialsToken({}), false);
+  assert.equal(isClientCredentialsToken({ gty: "authorization_code" }), false);
+  // Non-string gty values are not the marker.
+  assert.equal(isClientCredentialsToken({ gty: 1 }), false);
 });
 
 test("rolesFromPayload distinguishes absent, empty, and populated claims and drops non-strings", () => {
