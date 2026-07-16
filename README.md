@@ -200,11 +200,19 @@ See [docs/mcp.md](docs/mcp.md) for stdio, Streamable HTTP, auth, and client setu
 ```bash
 npm run build
 npm run lint
+npm run format        # auto-format with Prettier
 npm run format:check
 npm run typecheck
 npm test
 npm run test:db
 ```
+
+Formatting is enforced automatically. A Prettier `format:check` runs in CI
+(the Verify workflow), and a husky pre-commit hook runs `lint-staged` to
+auto-format staged files on every commit — the hook is installed by the
+`prepare` script on `npm install`. To enable blame filtering for the one-time
+bulk-format commit, run `git config blame.ignoreRevsFile .git-blame-ignore-revs`
+(GitHub applies it automatically).
 
 ## Documentation
 
