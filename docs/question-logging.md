@@ -48,11 +48,21 @@ Each question log records:
 ```bash
 GET /api/questions
 GET /api/questions/:id
+DELETE /api/questions/:id          # purge a question (manage:admin); ?scrub=true also cleans downstream
 POST /api/questions/:id/feedback
 POST /api/questions/:id/gap
 DELETE /api/questions/:id/gap
 GET /api/gaps/candidates
 ```
+
+`DELETE /api/questions/:id` is the **sensitive-info purge** (`manage:admin`). By default it
+deletes just the question row (the DB cascade takes its citations, gaps and cluster
+memberships). With `?scrub=true` it also cleans the artifacts the question's gap text
+propagated into: an emptied gap cluster is dismissed and its label overwritten, a
+still-populated one has its representative embedding cleared for lazy recompute, and the
+**unpublished** proposals the question seeded are deleted — while **published** ones (a
+pushed branch / open PR / merged doc) are reported as warnings for a human to handle, never
+touched. See [api.md](api.md) for the full request/response shape.
 
 Gap candidates are grouped by gap summary, across the individual gaps of every question, and the reconciler's phase-1 assignment then buckets candidates by **embedding similarity within their flow**: a new gap joins the nearest active cluster whose representative embedding clears `GAP_CLUSTER_ASSIGN_THRESHOLD` (default 0.84; a conservative floor chosen by the offline sweep `npm run eval:gap-threshold` — it collapses near-identical rewordings only, and blank/out-of-range values fall back like the `FLOW_ROUTER_*` knobs), otherwise it seeds a new cluster together with any equally-close new gaps. Without an embedding provider, candidates bucket by exact summary as before; see [architecture.md](architecture.md) for the full mechanism. Answer synthesis asks the model to return structured JSON with `isKnowledgeGap` and a `gaps` array of summaries; `isKnowledgeGap` is reserved for a missed **core** of the question, and each summary becomes its own `auto` gap eligible for grouping. A gap-flagged answer that still substantively answers the core (the model rated itself medium/high and grounded the answer in honoured citations) ships at `medium` — capped below `high`, since a declared gap contradicts "fully answered" — while a gap answer with nothing behind it (self-rated low, no real citations, or empty retrieval) is forced to `low`; the `auto` gaps are emitted either way. This means a single multi-topic question — for example "how do I set this up with React so I can export dashboards?" — records one gap per unanswered topic, so each can cluster with the same gap from other questions and become its own proposal, rather than being condensed into one summary. (The model may still return a single gap, or the legacy singular `gapSummary` string, which is wrapped into a one-element array.)
 

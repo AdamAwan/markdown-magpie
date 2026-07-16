@@ -45,6 +45,21 @@ function multiGapAnswer(): AnswerResult {
 describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
   const store = new PostgresQuestionLogStore(makeTestPool(databaseUrl as string));
 
+  it("delete removes the question and cascades its gaps, and is a no-op the second time", async () => {
+    const recorded = await store.record({
+      question: `test-delete-${randomUUID()}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      answer: multiGapAnswer()
+    });
+    assert.equal((await store.gapIdsForQuestion(recorded.id)).length, 2, "two gap rows before delete");
+
+    assert.equal(await store.delete(recorded.id), true);
+    assert.equal(await store.get(recorded.id), undefined, "the question row is gone");
+    assert.deepEqual(await store.gapIdsForQuestion(recorded.id), [], "its gap rows cascade-deleted");
+    assert.equal(await store.delete(recorded.id), false, "a second delete finds nothing");
+  });
+
   it("round-trips a question through record and get", async () => {
     const uniqueId = randomUUID();
     const recorded = await store.record({

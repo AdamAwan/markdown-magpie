@@ -1,4 +1,4 @@
-import { FormEvent } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import styled from "@emotion/styled";
 import { AnswerResult, AnswerTrace, AskResponse, Feedback, QuestionLog } from "../lib/types";
 import { AnswerProse } from "./AnswerProse";
@@ -177,6 +177,105 @@ function FlowSelectionPrompt({
   );
 }
 
+const ModalBackdrop = styled.div(({ theme }) => ({
+  position: "fixed",
+  inset: 0,
+  zIndex: 50,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: "rgba(23, 33, 29, 0.55)",
+  padding: theme.space.xxl
+}));
+
+const Modal = styled.div(({ theme }) => ({
+  display: "grid",
+  gap: theme.space.lg,
+  width: "min(520px, 100%)",
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.card,
+  background: theme.color.surface,
+  boxShadow: theme.shadow.card,
+  padding: theme.space.xl,
+  "& h3": { margin: 0 }
+}));
+
+const ModalQuestion = styled.p(({ theme }) => ({
+  margin: 0,
+  fontFamily: theme.font.mono,
+  fontSize: theme.font.size.sm,
+  color: theme.color.text,
+  wordBreak: "break-word"
+}));
+
+const Caveat = styled.p(({ theme }) => ({
+  margin: 0,
+  fontSize: theme.font.size.sm,
+  color: theme.color.textMuted
+}));
+
+// Two-mode confirm for purging a question that contained sensitive info. "Delete
+// question" removes just the logged record (and its cascade); "Full scrub" also
+// cleans the downstream clusters and unpublished proposals it seeded. The caveat
+// spells out what deletion cannot reach (the provider, an already-published PR).
+function DeleteQuestionDialog({
+  question,
+  busy,
+  onDelete,
+  onClose
+}: {
+  question: QuestionLog;
+  busy: boolean;
+  onDelete: (questionId: string, scrub: boolean) => Promise<boolean>;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  async function run(scrub: boolean) {
+    const ok = await onDelete(question.id, scrub);
+    if (ok) {
+      onClose();
+    }
+  }
+
+  return (
+    <ModalBackdrop onClick={onClose} role="presentation">
+      <Modal aria-label="Delete question" aria-modal="true" onClick={(event) => event.stopPropagation()} role="dialog">
+        <h3>Delete this question?</h3>
+        <ModalQuestion>{question.question}</ModalQuestion>
+        <Caveat>
+          This purges Magpie&apos;s stored copy. It cannot retract text already sent to the AI provider, nor content
+          already in a pushed branch, open PR, or merged document — a full scrub reports those so you can handle them.
+        </Caveat>
+        <Actions>
+          <Button disabled={busy} onClick={() => void run(false)}>
+            Delete question
+          </Button>
+          <Button
+            disabled={busy}
+            variant="danger"
+            onClick={() => void run(true)}
+            title="Also delete the downstream gap clusters and unpublished proposals this question seeded"
+          >
+            Full scrub
+          </Button>
+          <Button disabled={busy} variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+        </Actions>
+      </Modal>
+    </ModalBackdrop>
+  );
+}
+
 export function AskPanel({
   answer,
   answeredSearch,
@@ -186,6 +285,7 @@ export function AskPanel({
   flows,
   loading,
   onAsk,
+  onDelete,
   onFeedback,
   onPageChange,
   onReAsk,
@@ -208,6 +308,7 @@ export function AskPanel({
   flows: Array<{ id: string; name: string }>;
   loading: boolean;
   onAsk: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  onDelete: (questionId: string, scrub: boolean) => Promise<boolean>;
   onFeedback: (questionId: string, feedback: Feedback) => Promise<void>;
   onPageChange: (page: number) => Promise<void>;
   onReAsk: (question: string, flow: string) => Promise<void>;
@@ -225,6 +326,19 @@ export function AskPanel({
   // The search runs server-side over the whole history (GET /questions?q=), so
   // `questions` already holds one page of the matches — no client filtering.
   const searching = answeredSearch.trim().length > 0;
+  // The question queued for a delete confirm, and whether a delete is in flight
+  // (so the dialog's buttons disable rather than firing twice).
+  const [pendingDelete, setPendingDelete] = useState<QuestionLog | undefined>();
+  const [deleting, setDeleting] = useState(false);
+
+  async function confirmDelete(questionId: string, scrub: boolean): Promise<boolean> {
+    setDeleting(true);
+    try {
+      return await onDelete(questionId, scrub);
+    } finally {
+      setDeleting(false);
+    }
+  }
   // The ask response is enqueue-only — it carries the queued job, not an answer.
   // The answer (and its flow) land on the logged question once the watcher
   // completes the answer_question job, so recover both from the question log.
@@ -382,6 +496,12 @@ export function AskPanel({
                   >
                     Knowledge gap
                   </Chip>
+                  <Chip
+                    onClick={() => setPendingDelete(item)}
+                    title="Delete this question — e.g. if it contained sensitive information (admin only)"
+                  >
+                    Delete
+                  </Chip>
                 </Actions>
                 {isExpanded && citations.length > 0 ? (
                   <Stack gap="md">
@@ -425,6 +545,14 @@ export function AskPanel({
           </PagerNote>
         ) : null}
       </Block>
+      {pendingDelete ? (
+        <DeleteQuestionDialog
+          busy={deleting}
+          question={pendingDelete}
+          onDelete={confirmDelete}
+          onClose={() => setPendingDelete(undefined)}
+        />
+      ) : null}
     </>
   );
 }

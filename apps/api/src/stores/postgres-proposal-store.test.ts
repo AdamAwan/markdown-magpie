@@ -47,6 +47,24 @@ describe("PostgresProposalStore", { skip: databaseUrl ? false : "DATABASE_URL no
     assert.deepEqual(fetched?.provenance, provenance);
   });
 
+  it("listByTriggeringQuestionId finds proposals by array membership, and delete removes one", async () => {
+    const questionId = `q-${randomUUID()}`;
+    const created = await store.create({ ...draft(`triggered-${randomUUID()}`), triggeringQuestionIds: [questionId] });
+    const other = await store.create({ ...draft(`unrelated-${randomUUID()}`), triggeringQuestionIds: [`q-${randomUUID()}`] });
+
+    const found = await store.listByTriggeringQuestionId(questionId);
+    assert.deepEqual(
+      found.map((p) => p.id),
+      [created.id],
+      "matches only the proposal whose array contains the id"
+    );
+
+    assert.equal(await store.delete(created.id), true);
+    assert.equal(await store.get(created.id), undefined, "the row is gone");
+    assert.equal(await store.delete(created.id), false, "a second delete finds nothing");
+    assert.ok(await store.get(other.id), "unrelated proposals are untouched");
+  });
+
   // #214 phase 3: the fold rewrites the survivor's provenance event alongside
   // its content — set, replace, and clear (undefined → NULL) must round-trip.
   it("setProvenance sets, replaces, and clears the provenance column", async () => {

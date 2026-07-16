@@ -240,6 +240,30 @@ question to act on — surfaced read-only so the escalation is not invisible.
 - `404 question_not_found`.
 - `200` — `{ "question": QuestionLog }`.
 
+### `DELETE /api/questions/:id?scrub=<bool>`
+
+Purges a logged question — e.g. one that contained sensitive information. Requires the
+`manage:admin` scope (destructive and irreversible, like the config/reset endpoints).
+Two modes:
+
+- default (`scrub` omitted/false) — deletes the question row; the DB cascade takes its
+  `answer_citations`, `question_gaps` and (via the gap FK) `gap_cluster_memberships`.
+  Downstream clusters and proposals are left untouched.
+- `?scrub=true` — also cleans the artifacts the question's text propagated into: any gap
+  cluster its gaps belonged to is dismissed and its label overwritten when it empties, or
+  its representative embedding cleared (lazy recompute) when other gaps remain; every
+  **unpublished** proposal the question seeded (`triggeringQuestionIds`) is deleted, while
+  every **published** one (a pushed branch / open PR / merged doc) is left intact and
+  returned as a warning.
+
+Deleting only purges Magpie's stored copy; it cannot retract text already sent to the AI
+provider or already published to a PR — hence the warnings.
+
+- `404 question_not_found`.
+- `200` — `{ "deleted": { "question": true, "gaps": <n>, "clustersDismissed": <n>,
+  "clustersRecomputed": <n>, "proposals": <n> }, "warnings": [ { "proposalId": "...",
+  "title": "...", "status": "pr-opened", "pullRequestUrl": "..." } ] }`.
+
 ### `POST /api/questions/:id/feedback`
 
 Records helpful/unhelpful feedback on an answer.

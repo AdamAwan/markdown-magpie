@@ -15,6 +15,7 @@ export default function AskPage() {
     expandedQuestionIds,
     loading,
     ask,
+    deleteQuestion,
     loadQuestionsPage,
     reAskWithFlow,
     sendFeedback,
@@ -52,6 +53,7 @@ export default function AskPage() {
             flows={flows}
             loading={loading}
             onAsk={ask}
+            onDelete={deleteQuestion}
             onFeedback={sendFeedback}
             onPageChange={loadQuestionsPage}
             onReAsk={reAskWithFlow}

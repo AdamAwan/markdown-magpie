@@ -8,14 +8,14 @@ const SCRUBBED_PLACEHOLDER = "[scrubbed]";
 // A proposal the scrub left untouched because it is already published (a pushed
 // branch / open PR / merged doc): un-publishing is a human action, so the caller
 // surfaces these for manual handling instead of touching the remote.
-export interface PublishedProposalWarning {
+interface PublishedProposalWarning {
   proposalId: string;
   title: string;
   status: Proposal["status"];
   pullRequestUrl?: string;
 }
 
-export interface QuestionDeletionReport {
+interface QuestionDeletionReport {
   deleted: {
     question: boolean;
     // Gap rows removed with the question (cascade). Zero when it had no gaps.
