@@ -167,7 +167,7 @@ export function QuestionnairesPanel({
 
       {selected ? (
         <Stack gap="md">
-          <Row gap="sm" justify="between" wrap>
+          <Row gap="sm" justify="between">
             <h3>{selected.name}</h3>
             <Row gap="sm">
               <Button variant="secondary" onClick={() => void approveAllReused()}>
@@ -180,7 +180,7 @@ export function QuestionnairesPanel({
           <Stack gap="md">
             {selected.items.map((item) => (
               <ItemCard key={item.id}>
-                <Row gap="sm" wrap>
+                <Row gap="sm">
                   <Badge tone={itemTone(item)}>{itemLabel(item)}</Badge>
                   <strong>
                     {item.position + 1}. {item.question}
