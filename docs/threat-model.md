@@ -50,6 +50,10 @@ attack, and the payoff is influencing generated docs.
   watcher host via the agent CLI.
 - **T4 — Unreviewed publication.** Generated content reaches the source of truth
   without a human approving it.
+- **T5 — Git transport abuse.** A source/destination URL selects a dangerous git
+  transport — `ext::sh -c …` runs an arbitrary command (RCE on the watcher host),
+  `file://`/internal `http://` reach unintended local or internal resources
+  (SSRF), and a `-`-prefixed URL is misread as a git option (argument injection).
 
 ## Controls already in place
 
@@ -102,6 +106,33 @@ reach the model that way, and C4 remains the backstop for what the content says.
 **Invariants to preserve:** fetching stays opt-in per descriptor, the allowlist
 check stays exact-host and https-only on every hop, and no fetch path is added
 that bypasses the logging.
+
+### C6 — Git clone URLs are transport-allowlisted (mitigates T5)
+
+Every URL handed to `git clone`/`git fetch` is validated before it reaches a git
+subprocess (#285). `isAllowedGitCloneUrl` (`@magpie/core`) rejects any URL whose
+transport is not `https`/`http`/`ssh`/`file` — which excludes git's `ext::`/`fd::`
+remote-helper transports (the RCE vector) and the unauthenticated `git://`
+protocol — and rejects any `-`-prefixed value (argument injection). `file://` and
+bare local paths stay permitted because local-git destinations and local git
+sources are legitimately cloned that way. The guard is enforced at three layers:
+
+1. **At the API boundary.** `POST /api/jobs` validates `input` against the job's
+   `inputSchema` at creation (`apps/api/src/features/jobs/service.ts`), and the
+   source-descriptor `url` schema (`packages/jobs/src/schemas.ts`) applies
+   `isAllowedGitCloneUrl` — a malicious source URL is a 400, never persisted.
+2. **At clone time.** `ensureGitCheckout` calls `assertAllowedGitUrl`
+   (`packages/git/src/index.ts`) and inserts a `--` argv terminator before the URL
+   so it can never be read as an option.
+3. **In git itself.** Every git invocation runs with `GIT_ALLOW_PROTOCOL` set to
+   the allowlist, so git refuses a disallowed transport even for a lazy blob fetch.
+
+**Invariants to preserve:** keep `file`/`http` in the allowlist only as long as
+config legitimately needs them; never widen the set to include a remote-helper
+transport (`ext::`, `fd::`, `git://`); and keep the `--` terminator and
+`GIT_ALLOW_PROTOCOL` on every clone/fetch path. `http://` and `file://` remain
+usable, so their SSRF/local-disclosure surface is a residual risk bounded by the
+operator's own source/destination config, not by an attacker-supplied URL.
 
 ## The mandatory-human-review invariant (C4)
 

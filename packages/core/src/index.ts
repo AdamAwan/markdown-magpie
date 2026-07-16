@@ -1087,6 +1087,64 @@ export type SourceDescriptor =
   | { id: string; name: string; kind: "internet"; url?: string; allowedHosts?: string[] }
   | { id: string; name: string; kind: "agent" };
 
+// The git transports Markdown Magpie permits when cloning/fetching a checkout.
+// Mirrors the schemes the knowledge config accepts (isGitUrl in the API's
+// knowledge-repositories parser): https/http/ssh/file. `file` covers both
+// `file://` URLs and bare local filesystem paths (git's file transport) — it is
+// deliberately kept because local-git destinations and local git sources are
+// legitimately `file://` repos that are cloned and pushed to.
+//
+// Deliberately EXCLUDED: git's `ext::`/`fd::` remote-helper transports (which run
+// an arbitrary command — remote-code-execution on the watcher host) and the
+// unauthenticated `git://` protocol. Anything outside this set is refused before it
+// can reach a git subprocess, and GIT_ALLOW_PROTOCOL_VALUE is set on every git
+// invocation as an in-git backstop.
+export const ALLOWED_GIT_CLONE_PROTOCOLS = ["https", "http", "ssh", "file"] as const;
+
+// The value for git's GIT_ALLOW_PROTOCOL environment variable — a colon-separated
+// allowlist that makes git itself refuse any transport outside the set, even if a
+// URL somehow slips past isAllowedGitCloneUrl.
+export const GIT_ALLOW_PROTOCOL_VALUE = ALLOWED_GIT_CLONE_PROTOCOLS.join(":");
+
+// The scp-like ssh shorthand: `user@host:path` — a colon before any slash and no
+// `://`. Git treats it as ssh (in the allowlist). `new URL()` cannot parse it (the
+// `@` makes the "scheme" invalid), so it is recognised explicitly.
+function isScpLikeSshUrl(value: string): boolean {
+  if (value.includes("://")) {
+    return false;
+  }
+  return /^[^:/]+@[^:/]+:/.test(value);
+}
+
+// Whether `url` is safe to hand to `git clone`/`git fetch`. Rejects:
+//   - a `-`-prefixed value that git would misread as a command-line option (e.g.
+//     `--upload-pack=…` argument injection),
+//   - any URL whose transport scheme is not in ALLOWED_GIT_CLONE_PROTOCOLS — this
+//     catches `ext::sh -c …` (RCE), `git://`, and every other remote-helper
+//     transport, all of which `new URL()` parses with the helper name as scheme.
+// Accepts an allowlisted scheme, the scp-like ssh shorthand, or a bare local
+// filesystem path (git's file transport — how the config expresses `*.git` paths).
+export function isAllowedGitCloneUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (!trimmed || trimmed.startsWith("-")) {
+    return false;
+  }
+  if (isScpLikeSshUrl(trimmed)) {
+    return true;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    // No parseable scheme: a bare local filesystem path (the file transport). A
+    // remote-helper payload like `ext::sh -c …` always parses above, so it can
+    // never reach here.
+    return true;
+  }
+  const scheme = parsed.protocol.replace(/:$/, "").toLowerCase();
+  return (ALLOWED_GIT_CLONE_PROTOCOLS as readonly string[]).includes(scheme);
+}
+
 // Input to the draft_seed_document AI job: author a NEW document covering
 // `coverage`, grounded in the source repositories named by `sources`, bypassing
 // the demand-driven gap pipeline. `provider` is added at enqueue (see @magpie/jobs).

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PROPOSAL_STATUSES } from "@magpie/core";
+import { PROPOSAL_STATUSES, isAllowedGitCloneUrl } from "@magpie/core";
 import type {
   AnswerQuestionJobInput as CoreAnswerQuestionJobInput,
   AnswerQuestionJobOutput,
@@ -144,13 +144,20 @@ export const summarizeGapOutputSchema = z.object({
   rationale: z.string()
 }) satisfies z.ZodType<SummarizeGapJobOutput>;
 
+// A git source url the watcher will hand to `git clone`. Restricted to the
+// permitted transports (#285) so a caller crossing the POST /api/jobs boundary
+// cannot smuggle an `ext::sh -c …` (RCE), `git://`, or `-`-prefixed (argument
+// injection) url through a source descriptor. Mirrors the git package's clone-time
+// guard; `file://` and bare local paths stay permitted (local-git repos).
+const gitCloneUrlSchema = z.string().refine(isAllowedGitCloneUrl, { message: "url uses a disallowed git transport" });
+
 // Mirrors @magpie/core SourceDescriptor. References only — no file content.
 const sourceDescriptorSchema = z.discriminatedUnion("kind", [
   z.object({
     id: z.string(),
     name: z.string(),
     kind: z.literal("git"),
-    url: z.string(),
+    url: gitCloneUrlSchema,
     subpath: z.string().optional()
   }),
   z.object({

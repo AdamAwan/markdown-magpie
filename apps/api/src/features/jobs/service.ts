@@ -4,6 +4,7 @@ import { logger } from "../../logger.js";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
 import { jobDefinition } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
+import { HttpError } from "../../http/errors.js";
 import type { JobListFilters } from "../../jobs/broker.js";
 import type { WatcherTouch } from "../../stores/watcher-registry-store.js";
 import { refreshFlowSnapshotOutputSchema } from "@magpie/jobs";
@@ -18,7 +19,17 @@ import * as foldService from "../../scheduling/fold.js";
 import { snapshotRoot } from "../../platform/repositories.js";
 
 export async function createJob(ctx: AppContext, type: JobType, input: unknown): Promise<JobView> {
-  return ctx.jobs.create(type, input ?? {});
+  // Validate the input against the job's own contract at creation (#285). Without
+  // this an untrusted `manage:jobs` caller could persist and dispatch a malformed
+  // input — e.g. a draft/verify job whose source descriptor carries an `ext::sh`
+  // (RCE) or `-`-prefixed (argument-injection) git url, which the source-descriptor
+  // schema now rejects. Enforcing the contract here also covers the internal
+  // runJobToCompletion enqueue path, whose inputs are already built to the schema.
+  const parsed = jobDefinition(type).inputSchema.safeParse(input ?? {});
+  if (!parsed.success) {
+    throw new HttpError(400, "invalid_job_input", `Job input does not match the ${type} contract`);
+  }
+  return ctx.jobs.create(type, parsed.data);
 }
 
 export async function claimJob(
