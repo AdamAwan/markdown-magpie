@@ -32,6 +32,19 @@ export function questionRoutes(ctx: AppContext): Hono {
     return c.json({ question: log });
   });
 
+  // Purge a question that contained sensitive information. `?scrub=true` also
+  // cleans the downstream clusters and unpublished proposals it seeded (published
+  // proposals come back as warnings). Destructive and irreversible, so gated by
+  // manage:admin like the other data-wiping endpoints.
+  app.delete("/:id", requireScopes("manage:admin"), async (c) => {
+    const scrub = c.req.query("scrub") === "true";
+    const report = await questionsService.deleteQuestion(ctx, c.req.param("id"), { scrub });
+    if (!report) {
+      throw new HttpError(404, "question_not_found");
+    }
+    return c.json(report);
+  });
+
   app.post(
     "/:id/feedback",
     requireScopes("feedback:questions"),

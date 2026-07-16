@@ -69,6 +69,20 @@ export class PostgresProposalStore implements ProposalStore {
     return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
+  async listByTriggeringQuestionId(questionId: string): Promise<Proposal[]> {
+    const result = await this.pool.query<ProposalRow>(
+      "SELECT * FROM proposals WHERE $1 = ANY(triggering_question_ids) ORDER BY created_at DESC",
+      [questionId]
+    );
+    return result.rows.map(mapRow);
+  }
+
+  async delete(id: string): Promise<boolean> {
+    // ON DELETE CASCADE removes the proposal's gap_publication_actions.
+    const result = await this.pool.query("DELETE FROM proposals WHERE id = $1", [id]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
   async listByClosureStatus(closureStatus: NonNullable<Proposal["closureStatus"]>, limit: number): Promise<Proposal[]> {
     const result = await this.pool.query<ProposalRow>(
       "SELECT * FROM proposals WHERE closure_status = $2 ORDER BY created_at DESC LIMIT $1",

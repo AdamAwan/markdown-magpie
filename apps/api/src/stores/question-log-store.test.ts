@@ -40,6 +40,48 @@ const multiGapAnswer: AnswerResult = {
   ]
 };
 
+test("delete removes the question, bumps the catalog when it had gaps, and reports existence", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const withGaps = await store.record({
+    question: "vaccines?",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    answer: lowGapAnswer
+  });
+  const before = await store.getGapCatalogRevision();
+
+  assert.equal(await store.delete(withGaps.id), true);
+  assert.equal(await store.get(withGaps.id), undefined, "the question is gone");
+  assert.equal(await store.getGapCatalogRevision(), before + 1, "removing a gap bumps the candidate catalog");
+
+  assert.equal(await store.delete("nope"), false, "a missing question reports false");
+});
+
+test("delete of a gap-less question does not bump the catalog", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const plain = await store.record({ question: "hello?", chatProvider: "codex", retrievedSectionIds: [] });
+  const before = await store.getGapCatalogRevision();
+
+  assert.equal(await store.delete(plain.id), true);
+  assert.equal(await store.getGapCatalogRevision(), before, "no gaps → no candidate change");
+});
+
+test("gapIdsForQuestion returns one distinct id per gap summary, matching gapIdsForSummary", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({
+    question: "react + export?",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    answer: multiGapAnswer
+  });
+
+  const ids = await store.gapIdsForQuestion(log.id);
+  assert.equal(ids.length, 2, "one id per distinct gap summary");
+  const [bySummary] = await store.gapIdsForSummary("No React integration guidance");
+  assert.ok(ids.includes(bySummary), "ids line up with the cluster-membership id format");
+  assert.deepEqual(await store.gapIdsForQuestion("nope"), [], "unknown question → no ids");
+});
+
 test("list pages with an offset and count matches list's live-question filter", async () => {
   const store = new InMemoryQuestionLogStore();
   for (let index = 0; index < 5; index += 1) {

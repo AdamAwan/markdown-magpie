@@ -79,6 +79,11 @@ export interface GapClusterStore {
   // reconciler only loads its own flow's assigned-gap set rather than every flow's.
   listActiveMembershipsForFlow(flowId: string | undefined): Promise<GapClusterMembershipRecord[]>;
   listMembershipsForCluster(clusterId: string): Promise<GapClusterMembershipRecord[]>;
+  // Distinct ids of clusters that currently hold an active membership for any of
+  // the given gaps. Lets the sensitive-info scrub find the clusters a deleted
+  // question's gaps belonged to (captured before the gaps — and their
+  // memberships — are removed).
+  clusterIdsForGaps(gapIds: string[]): Promise<string[]>;
   // Moves a gap to `clusterId`, deactivating any other active membership it had.
   assignGapToCluster(clusterId: string, gapId: string, rationale?: string): Promise<void>;
   // Batched assignGapToCluster: moves many gaps into `clusterId` in one
@@ -239,6 +244,20 @@ export class InMemoryGapClusterStore implements GapClusterStore {
 
   async listMembershipsForCluster(clusterId: string): Promise<GapClusterMembershipRecord[]> {
     return [...this.memberships.values()].filter((m) => m.active && m.clusterId === clusterId);
+  }
+
+  async clusterIdsForGaps(gapIds: string[]): Promise<string[]> {
+    if (gapIds.length === 0) {
+      return [];
+    }
+    const gapSet = new Set(gapIds);
+    const clusterIds = new Set<string>();
+    for (const m of this.memberships.values()) {
+      if (m.active && gapSet.has(m.gapId)) {
+        clusterIds.add(m.clusterId);
+      }
+    }
+    return [...clusterIds];
   }
 
   async assignGapToCluster(clusterId: string, gapId: string, rationale?: string): Promise<void> {

@@ -204,6 +204,42 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     return mapQuestionRow(result.rows[0], gapsByQuestion.get(id) ?? []);
   }
 
+  async delete(id: string): Promise<boolean> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const existing = await client.query<{ flow_id: string | null }>("SELECT flow_id FROM questions WHERE id = $1", [
+        id
+      ]);
+      if (existing.rowCount !== 1) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      const hadGaps = await client.query("SELECT 1 FROM question_gaps WHERE question_id = $1 LIMIT 1", [id]);
+      // ON DELETE CASCADE removes answer_citations, question_gaps, and (via the
+      // gap FK) gap_cluster_memberships.
+      await client.query("DELETE FROM questions WHERE id = $1", [id]);
+      if ((hadGaps.rowCount ?? 0) > 0) {
+        await bumpGapCatalog(client, existing.rows[0].flow_id);
+      }
+      await client.query("COMMIT");
+      return true;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async gapIdsForQuestion(id: string): Promise<string[]> {
+    const result = await this.pool.query<{ id: string }>(
+      "SELECT id::text AS id FROM question_gaps WHERE question_id = $1 ORDER BY id ASC",
+      [id]
+    );
+    return result.rows.map((row) => row.id);
+  }
+
   async updateAnswer(id: string, input: QuestionLogUpdateInput): Promise<QuestionLog | undefined> {
     const existing = await this.get(id);
     if (!existing) {

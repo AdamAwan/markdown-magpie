@@ -41,6 +41,13 @@ export interface ProposalStore {
   listByClosureStatus(closureStatus: NonNullable<Proposal["closureStatus"]>, limit: number): Promise<Proposal[]>;
   get(id: string): Promise<Proposal | undefined>;
   getByJobId(jobId: string): Promise<Proposal | undefined>;
+  // Proposals whose triggeringQuestionIds array contains the id, newest first.
+  // Used by the sensitive-info scrub to find the proposals a deleted question
+  // seeded (delete the unpublished ones, warn on the published ones).
+  listByTriggeringQuestionId(questionId: string): Promise<Proposal[]>;
+  // Hard-deletes one proposal row (cascading its gap_publication_actions). Only
+  // ever called by the scrub for an unpublished (never-pushed) proposal.
+  delete(id: string): Promise<boolean>;
   // The proposal linked to a gap cluster, if any. Lets the reconciler look up one
   // cluster's proposal directly instead of scanning the whole proposal list. At
   // most one proposal links a cluster; when several exist (legacy data) the most
@@ -129,6 +136,16 @@ export class InMemoryProposalStore implements ProposalStore {
 
   async getByJobId(jobId: string): Promise<Proposal | undefined> {
     return [...this.proposals.values()].find((proposal) => proposal.jobId === jobId);
+  }
+
+  async listByTriggeringQuestionId(questionId: string): Promise<Proposal[]> {
+    return [...this.proposals.values()]
+      .filter((proposal) => (proposal.triggeringQuestionIds ?? []).includes(questionId))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  async delete(id: string): Promise<boolean> {
+    return this.proposals.delete(id);
   }
 
   async getByClusterId(gapClusterId: string): Promise<Proposal | undefined> {
