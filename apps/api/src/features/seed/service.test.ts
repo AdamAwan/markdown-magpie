@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { jobDefinition } from "@magpie/jobs";
+import type { ReviseSeedPlanJobInput } from "@magpie/core";
+import { jobDefinition, type JobView } from "@magpie/jobs";
 import { makeTestContext } from "../../test-support/context.js";
 import { completeJob } from "../jobs/service.js";
 import * as seed from "./service.js";
@@ -320,6 +321,79 @@ test("dismissSeedPlan flips proposed → dismissed; anything else → plan_not_d
   assert.equal(dismissed.plan.status, "dismissed");
   assert.deepEqual(await seed.dismissSeedPlan(ctx, plan.id), { ok: false, code: "plan_not_dismissable" });
   assert.deepEqual(await seed.dismissSeedPlan(ctx, "no-such-plan"), { ok: false, code: "plan_not_found" });
+});
+
+test("requestSeedPlanRevision enqueues a source-free revise job carrying the plan snapshot", async () => {
+  const ctx = billingFlowContext();
+  const plan = await proposedPlan(ctx);
+  const outcome = await seed.requestSeedPlanRevision(ctx, plan.id, "don't mention alerts");
+  assert.ok(outcome.ok);
+  if (!outcome.ok) throw new Error("unreachable");
+  const { jobs } = await ctx.jobs.list({ type: "revise_seed_plan" });
+  assert.equal(jobs.length, 1);
+  const parsed = jobDefinition("revise_seed_plan").inputSchema.safeParse(jobs[0].input);
+  assert.ok(parsed.success, "enqueued input should match the revise_seed_plan contract");
+  const input = jobs[0].input as ReviseSeedPlanJobInput & { provider?: string };
+  assert.equal(input.planId, plan.id);
+  assert.equal(input.flowId, "billing");
+  assert.equal(input.instruction, "don't mention alerts");
+  assert.equal(input.currentPlan.items.length, plan.items.length);
+  assert.equal(input.provider, "codex");
+  // Reshape-only: the job never re-reads sources.
+  assert.ok(!("sources" in (jobs[0].input as Record<string, unknown>)));
+  assert.equal(outcome.jobId, jobs[0].id);
+});
+
+test("requestSeedPlanRevision rejects a non-proposed plan and an unknown plan", async () => {
+  const ctx = billingFlowContext();
+  const plan = await proposedPlan(ctx);
+  await ctx.stores.seedPlans.setStatus(plan.id, "approved");
+  assert.deepEqual(await seed.requestSeedPlanRevision(ctx, plan.id, "x"), { ok: false, code: "plan_not_revisable" });
+  assert.deepEqual(await seed.requestSeedPlanRevision(ctx, "no-such-plan", "x"), { ok: false, code: "plan_not_found" });
+  assert.deepEqual((await ctx.jobs.list({ type: "revise_seed_plan" })).jobs, []);
+});
+
+function reviseJobFor(planId: string): JobView {
+  return {
+    id: "revise-job-1",
+    type: "revise_seed_plan",
+    input: { planId, flowId: "billing", instruction: "x", currentPlan: { items: [], rationale: "r" } }
+  } as unknown as JobView;
+}
+
+test("reviseSeedPlanFromCompletedJob applies items/charter to a still-proposed plan in place", async () => {
+  const ctx = billingFlowContext();
+  const plan = await proposedPlan(ctx);
+  const updated = await seed.reviseSeedPlanFromCompletedJob(ctx, reviseJobFor(plan.id), {
+    items: [{ title: "Only", coverage: ["one point"] }],
+    rationale: "Reshaped",
+    charter: "Narrowed charter"
+  });
+  assert.ok(updated);
+  if (!updated) throw new Error("unreachable");
+  assert.equal(updated.id, plan.id);
+  assert.equal(updated.items.length, 1);
+  assert.equal(updated.items[0].title, "Only");
+  assert.equal(updated.items[0].status, "proposed");
+  assert.equal(updated.rationale, "Reshaped");
+  assert.equal(updated.charter, "Narrowed charter");
+  assert.equal(updated.status, "proposed");
+});
+
+test("reviseSeedPlanFromCompletedJob ignores non-proposed plans, other types, missing plan, unparsable output", async () => {
+  const ctx = billingFlowContext();
+  const approved = await proposedPlan(ctx);
+  await ctx.stores.seedPlans.setStatus(approved.id, "approved");
+  assert.equal(
+    await seed.reviseSeedPlanFromCompletedJob(ctx, reviseJobFor(approved.id), { items: [], rationale: "r" }),
+    undefined
+  );
+  const other = { id: "j", type: "outline_flow_seed", input: {} } as unknown as JobView;
+  assert.equal(await seed.reviseSeedPlanFromCompletedJob(ctx, other, { items: [], rationale: "r" }), undefined);
+  const proposed = await proposedPlan(ctx);
+  assert.equal(await seed.reviseSeedPlanFromCompletedJob(ctx, reviseJobFor(proposed.id), { nonsense: true }), undefined);
+  assert.equal(await seed.reviseSeedPlanFromCompletedJob(ctx, reviseJobFor("no-such-plan"), { items: [], rationale: "r" }), undefined);
+  assert.equal(await seed.reviseSeedPlanFromCompletedJob(ctx, undefined, { items: [], rationale: "r" }), undefined);
 });
 
 test("runSeedBootstrap no-ops with no_sources for a flow without sources", async () => {
