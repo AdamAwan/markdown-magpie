@@ -9,8 +9,7 @@ import { afterEach, describe, it } from "node:test";
 import { diffChangedFiles, ensureGitCheckout, getHeadSha } from "./index.js";
 
 const exec = promisify(execFile);
-const git = (cwd: string, args: string[]): Promise<string> =>
-  exec("git", args, { cwd }).then((r) => r.stdout.trim());
+const git = (cwd: string, args: string[]): Promise<string> => exec("git", args, { cwd }).then((r) => r.stdout.trim());
 
 // Builds a bare remote with two commits on `main` so a range diff is available,
 // and returns the two shas plus the remote path.

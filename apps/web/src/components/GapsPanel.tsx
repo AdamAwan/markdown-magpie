@@ -211,12 +211,13 @@ export function GapClusterPanel({
         // A split inherits the flow of the cluster the gap came from, so the new
         // group still drafts to the right destination.
         const sourceFlowId = previous.find((group) => group.summaries.includes(summary))?.flowId;
-        next = [...next, { id: `local-${summary}`, title: clusterTitleFor(summary), summaries: [summary], flowId: sourceFlowId }];
+        next = [
+          ...next,
+          { id: `local-${summary}`, title: clusterTitleFor(summary), summaries: [summary], flowId: sourceFlowId }
+        ];
       } else {
         next = next.map((group) =>
-          group.id === targetId
-            ? { ...group, summaries: [...group.summaries, summary], rationale: undefined }
-            : group
+          group.id === targetId ? { ...group, summaries: [...group.summaries, summary], rationale: undefined } : group
         );
       }
       return next.filter((group) => group.summaries.length > 0);
@@ -238,9 +239,7 @@ export function GapClusterPanel({
       </Surface.Header>
       <Surface.Body>
         {edited ? (
-          <Hint title="Your groupings override the original suggestion">
-            Edited — drafting uses your groupings.
-          </Hint>
+          <Hint title="Your groupings override the original suggestion">Edited — drafting uses your groupings.</Hint>
         ) : null}
         <ScrollList>
           {groups.map((group) => (
@@ -260,9 +259,7 @@ export function GapClusterPanel({
                 </Badge>
               </Row>
               {group.rationale ? (
-                <ClusterRationale title="Why these gaps were grouped">
-                  {group.rationale}
-                </ClusterRationale>
+                <ClusterRationale title="Why these gaps were grouped">{group.rationale}</ClusterRationale>
               ) : null}
               <ClusterGaps>
                 {group.summaries.map((summary) => (
@@ -339,7 +336,10 @@ export function GapPanel({
                 <h3 style={{ flex: 1, minWidth: 0 }}>{gap.summary}</h3>
                 <Row gap="md">
                   <FlowTag flowId={gap.flowId} flowLabels={flowLabels} />
-                  <Badge tone="neutral" title={`${gap.count} question${gap.count === 1 ? "" : "s"} grouped into this gap`}>
+                  <Badge
+                    tone="neutral"
+                    title={`${gap.count} question${gap.count === 1 ? "" : "s"} grouped into this gap`}
+                  >
                     {formatQuestionCount(gap.count)}
                   </Badge>
                 </Row>

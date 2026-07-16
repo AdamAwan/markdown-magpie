@@ -146,7 +146,9 @@ test("buildAttentionNotices warns when exactly one watcher is connected", () => 
   const opened: ConsoleSection[] = [];
   const result = notices({
     health: { ok: true, service: "api" },
-    workers: [{ name: "solo", status: "idle", capabilities: ["codex", "github", "local-git", "maintenance"], lastSeenAt: now }],
+    workers: [
+      { name: "solo", status: "idle", capabilities: ["codex", "github", "local-git", "maintenance"], lastSeenAt: now }
+    ],
     openSection: (section) => opened.push(section)
   });
   const notice = result.find((n) => n.id === "single-watcher");
@@ -158,7 +160,10 @@ test("buildAttentionNotices warns when exactly one watcher is connected", () => 
 
 test("buildAttentionNotices does not warn about a single watcher once a second connects", () => {
   const result = notices({ health: { ok: true, service: "api" }, workers: readyFleet });
-  assert.equal(result.find((n) => n.id === "single-watcher"), undefined);
+  assert.equal(
+    result.find((n) => n.id === "single-watcher"),
+    undefined
+  );
 });
 
 test("buildAttentionNotices shows the no-watchers notice, not the single-watcher one, when none are connected", () => {
@@ -212,9 +217,7 @@ test("jobTransitionMessages reports active jobs that became completed or failed"
   const previous = [job({ id: "1", state: "active", type: "answer_question" })];
   const next = [job({ id: "1", state: "completed", type: "answer_question" })];
 
-  assert.deepEqual(jobTransitionMessages(previous, next), [
-    { text: "Answer Question completed.", tone: "success" }
-  ]);
+  assert.deepEqual(jobTransitionMessages(previous, next), [{ text: "Answer Question completed.", tone: "success" }]);
 
   const failedNext = [job({ id: "1", state: "failed", type: "draft_markdown_proposal" })];
   assert.deepEqual(jobTransitionMessages(previous, failedNext), [
@@ -444,7 +447,10 @@ test("bulkActionEligible never offers merge for a PR-tracked proposal", () => {
 
 test("bulkActionEligible splits reject between local-git bin and hosted draft-reject", () => {
   // Local-git can be binned at any non-terminal status (early, before publishing, or after).
-  assert.equal(bulkActionEligible("reject", proposalView({ localGitDestination: true, status: "branch-pushed" })), true);
+  assert.equal(
+    bulkActionEligible("reject", proposalView({ localGitDestination: true, status: "branch-pushed" })),
+    true
+  );
   assert.equal(bulkActionEligible("reject", proposalView({ localGitDestination: true, status: "draft" })), true);
   assert.equal(bulkActionEligible("reject", proposalView({ localGitDestination: true, status: "ready" })), true);
   assert.equal(bulkActionEligible("reject", proposalView({ localGitDestination: true, status: "merged" })), false);

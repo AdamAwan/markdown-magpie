@@ -69,10 +69,7 @@ export function principalHasCapability(
 // dropped or never emitted while flow-scoping is active. Such a token is now denied
 // (fails closed); surfacing it lets an operator notice the likely IdP misconfiguration
 // (a missing/removed Auth0 post-login Action) rather than a silent lockout.
-export function isRolelessHumanToken(
-  grants: KnowledgeRoleGrants,
-  principal: PrincipalForCheck | undefined
-): boolean {
+export function isRolelessHumanToken(grants: KnowledgeRoleGrants, principal: PrincipalForCheck | undefined): boolean {
   if (Object.keys(grants).length === 0) {
     return false; // feature inactive; nothing to flag
   }
@@ -84,12 +81,7 @@ export function isRolelessHumanToken(
 
 // Context-aware convenience: evaluates a capability for the current request using
 // the deployment's configured grants and the verified principal.
-export function can(
-  ctx: AppContext,
-  c: Context,
-  capability: KnowledgeCapability,
-  flowId: string | undefined
-): boolean {
+export function can(ctx: AppContext, c: Context, capability: KnowledgeCapability, flowId: string | undefined): boolean {
   const grants = ctx.knowledgeConfig.roleGrants;
   const principal = c.get("principal");
   const allowed = principalHasCapability(grants, principal, capability, flowId);

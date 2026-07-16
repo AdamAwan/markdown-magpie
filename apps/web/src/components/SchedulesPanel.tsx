@@ -213,7 +213,8 @@ export function SchedulesPanel({
   scheduledTasks: ScheduledTask[];
 }) {
   const [groupBy, setGroupBy] = useState<GroupBy>("type");
-  const flowName = (flowId?: string) => flows.find((flow) => flow.id === flowId)?.name ?? flowId ?? "Default knowledge base";
+  const flowName = (flowId?: string) =>
+    flows.find((flow) => flow.id === flowId)?.name ?? flowId ?? "Default knowledge base";
 
   // Each scheduled task carries both grouping axes — the flow-free task type and
   // the flow it runs for — so the table can group by either without re-parsing
@@ -403,7 +404,9 @@ function ScheduleRow({ entry, groupBy, loading }: { entry: ScheduleEntry; groupB
         <ScheduleName>
           <ScheduleTitle>
             {namesType ? entry.typeLabel : entry.flowName}
-            {namesType && entry.typeDescription ? <InfoDot label={entry.typeLabel} text={entry.typeDescription} /> : null}
+            {namesType && entry.typeDescription ? (
+              <InfoDot label={entry.typeLabel} text={entry.typeDescription} />
+            ) : null}
           </ScheduleTitle>
         </ScheduleName>
         <span>{setting.enabled ? <code>{setting.cron}</code> : "—"}</span>

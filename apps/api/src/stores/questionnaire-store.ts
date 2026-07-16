@@ -26,10 +26,7 @@ export interface QuestionnaireStore {
     embedding: number[],
     model: string
   ): Promise<{ item: QuestionnaireItem; similarity: number } | undefined>;
-  markReused(
-    itemId: string,
-    from: { itemId: string; answer: string; answeredAt: string }
-  ): Promise<void>;
+  markReused(itemId: string, from: { itemId: string; answer: string; answeredAt: string }): Promise<void>;
   // Records why a matched item could not reuse; the item STAYS pending so the
   // drip re-answers it, and the worksheet explains the wording change.
   markChanged(itemId: string, reason: QuestionnaireChangeReason): Promise<void>;
@@ -124,9 +121,7 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
   }
 
   async list(): Promise<QuestionnaireSummary[]> {
-    return [...this.questionnaires.values()]
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .map(summarize);
+    return [...this.questionnaires.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(summarize);
   }
 
   async setItemEmbeddings(items: Array<{ itemId: string; embedding: number[]; model: string }>): Promise<void> {

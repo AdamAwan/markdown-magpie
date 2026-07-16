@@ -151,7 +151,14 @@ test("completeJob persists the watcher-reported provider + model on the completi
   const output = { answer: "a", confidence: "high", citations: [] };
   assert.equal(
     (
-      await completeJob(ctx, job.id, output, "w-1", { inputTokens: 10, outputTokens: 2 }, { provider: "openai-compatible", model: "gpt-test" })
+      await completeJob(
+        ctx,
+        job.id,
+        output,
+        "w-1",
+        { inputTokens: 10, outputTokens: 2 },
+        { provider: "openai-compatible", model: "gpt-test" }
+      )
     ).ok,
     true
   );

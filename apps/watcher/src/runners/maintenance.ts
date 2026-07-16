@@ -58,7 +58,10 @@ export class MaintenanceRunner {
 
   private async runSeedBootstrap(job: JobView, signal: AbortSignal): Promise<unknown> {
     const { flowId } = seedBootstrapInputSchema.parse(job.input);
-    logger.info({ jobId: job.id, flowId }, `seed_bootstrap[${job.id}]: checking sparse-flow seeding for flow ${flowId}`);
+    logger.info(
+      { jobId: job.id, flowId },
+      `seed_bootstrap[${job.id}]: checking sparse-flow seeding for flow ${flowId}`
+    );
     const result = await this.api.runSeedBootstrap(flowId, signal);
     const output = seedBootstrapOutputSchema.parse(result);
     logger.info(
@@ -70,7 +73,10 @@ export class MaintenanceRunner {
 
   private async verifyGapClosure(job: JobView, signal: AbortSignal): Promise<unknown> {
     const { proposalId } = verifyGapClosureInputSchema.parse(job.input);
-    logger.info({ jobId: job.id, proposalId }, `verify_gap_closure[${job.id}]: verifying gap closure for proposal ${proposalId}`);
+    logger.info(
+      { jobId: job.id, proposalId },
+      `verify_gap_closure[${job.id}]: verifying gap closure for proposal ${proposalId}`
+    );
     const result = await this.api.verifyClosure(proposalId, signal);
     // The API endpoint returns the verify_gap_closure output shape; validate it
     // here so a contract drift surfaces as a job failure rather than a silent
@@ -88,7 +94,10 @@ export class MaintenanceRunner {
     if (!flowId) {
       throw new Error("process_gaps_to_pull_requests requires flowId");
     }
-    logger.info({ jobId: job.id, flowId }, `process_gaps_to_pull_requests[${job.id}]: reconciling gaps for flow ${flowId}`);
+    logger.info(
+      { jobId: job.id, flowId },
+      `process_gaps_to_pull_requests[${job.id}]: reconciling gaps for flow ${flowId}`
+    );
     await this.api.reconcileGaps(flowId, signal);
 
     // TODO(Task 8E/follow-up): reconcile endpoint returns no counts; returning
@@ -101,15 +110,24 @@ export class MaintenanceRunner {
     // The job's input schema is `{}`, but the schedule may carry a flowId for a
     // per-flow watch; read it defensively without widening the contract.
     const flowId = readFlowId(job.input);
-    logger.info({ jobId: job.id, flowId: flowId ?? null }, `source_change_sync[${job.id}]: syncing sources for flow ${flowId ?? "(all)"}`);
+    logger.info(
+      { jobId: job.id, flowId: flowId ?? null },
+      `source_change_sync[${job.id}]: syncing sources for flow ${flowId ?? "(all)"}`
+    );
     const { runIds } = await this.api.runSourceSync(flowId, signal);
-    logger.info({ jobId: job.id, runCount: runIds.length }, `source_change_sync[${job.id}]: created ${runIds.length} sync run(s)`);
+    logger.info(
+      { jobId: job.id, runCount: runIds.length },
+      `source_change_sync[${job.id}]: created ${runIds.length} sync run(s)`
+    );
     return sourceChangeSyncOutputSchema.parse({ runIds });
   }
 
   private async runFixPatrol(job: JobView, signal: AbortSignal): Promise<unknown> {
     const flowId = readFlowId(job.input);
-    logger.info({ jobId: job.id, flowId: flowId ?? null }, `correctness_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`);
+    logger.info(
+      { jobId: job.id, flowId: flowId ?? null },
+      `correctness_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`
+    );
     const { runId, selectedCount, findingCount } = await this.api.runFixPatrol(flowId, signal);
     logger.info(
       { jobId: job.id, runId, selectedCount, findingCount },
@@ -120,7 +138,10 @@ export class MaintenanceRunner {
 
   private async runImprovePatrol(job: JobView, signal: AbortSignal): Promise<unknown> {
     const flowId = readFlowId(job.input);
-    logger.info({ jobId: job.id, flowId: flowId ?? null }, `editorial_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`);
+    logger.info(
+      { jobId: job.id, flowId: flowId ?? null },
+      `editorial_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`
+    );
     const { runId, selectedCount, enqueuedCount } = await this.api.runImprovePatrol(flowId, signal);
     logger.info(
       { jobId: job.id, runId, selectedCount, enqueuedCount },

@@ -31,7 +31,11 @@ function render(proposal: Proposal, pendingPublishIds?: ReadonlySet<string>): st
   return renderList([proposal], proposal, pendingPublishIds);
 }
 
-function renderList(proposals: Proposal[], selectedProposal?: Proposal, pendingPublishIds?: ReadonlySet<string>): string {
+function renderList(
+  proposals: Proposal[],
+  selectedProposal?: Proposal,
+  pendingPublishIds?: ReadonlySet<string>
+): string {
   return renderMarkup(
     <ProposalPanel
       loading={false}

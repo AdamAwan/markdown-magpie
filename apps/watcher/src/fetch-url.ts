@@ -32,9 +32,7 @@ export function fetchableInternetSources(descriptors: readonly SourceDescriptor[
     if (descriptor.kind !== "internet") {
       continue;
     }
-    const allowedHosts = [
-      ...new Set((descriptor.allowedHosts ?? []).map(normalizeHost).filter(Boolean))
-    ];
+    const allowedHosts = [...new Set((descriptor.allowedHosts ?? []).map(normalizeHost).filter(Boolean))];
     if (allowedHosts.length === 0) {
       continue;
     }
@@ -114,13 +112,21 @@ export class UrlFetcher {
         response = await fetchImpl(current.href, {
           redirect: "manual",
           signal: this.timeoutSignal(),
-          headers: { accept: "text/html, text/*;q=0.9, application/json;q=0.8, */*;q=0.1", "user-agent": FETCH_USER_AGENT }
+          headers: {
+            accept: "text/html, text/*;q=0.9, application/json;q=0.8, */*;q=0.1",
+            "user-agent": FETCH_USER_AGENT
+          }
         });
       } catch (error) {
         // Timeouts, DNS failures, refused connections — the model picks another
         // source; the failure is logged as the operator-facing record.
-        logger.warn({ url: current.href, err: error instanceof Error ? error.message : String(error) }, "fetch_url: network failure");
-        throw new SourceToolError(`fetch failed for ${current.href}: ${error instanceof Error && error.name === "AbortError" ? `timed out after ${FETCH_TIMEOUT_MS}ms` : "network error"}`);
+        logger.warn(
+          { url: current.href, err: error instanceof Error ? error.message : String(error) },
+          "fetch_url: network failure"
+        );
+        throw new SourceToolError(
+          `fetch failed for ${current.href}: ${error instanceof Error && error.name === "AbortError" ? `timed out after ${FETCH_TIMEOUT_MS}ms` : "network error"}`
+        );
       }
 
       if (isRedirect(response.status)) {

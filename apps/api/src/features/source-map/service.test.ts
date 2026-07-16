@@ -19,7 +19,13 @@ describe("applySourceMapUpdatesFromCompletedJob (via completeJob)", () => {
   it("upserts valid mapUpdates from a completed source-grounded job", async () => {
     const ctx = makeTestContext();
     const result = await completedVerifyJob(ctx, [
-      { sourceId: "s1", topic: "event system", paths: ["src/events/"], description: "Event bus lives here", observedSha: "abc123" }
+      {
+        sourceId: "s1",
+        topic: "event system",
+        paths: ["src/events/"],
+        description: "Event bus lives here",
+        observedSha: "abc123"
+      }
     ]);
     assert.equal(result.ok, true);
     const entries = await ctx.stores.sourceMap.listBySource("s1", 10);
@@ -62,9 +68,7 @@ describe("applySourceMapUpdatesFromCompletedJob (via completeJob)", () => {
 
   it("rejects mapUpdates with an empty paths array", async () => {
     const ctx = makeTestContext();
-    const result = await completedVerifyJob(ctx, [
-      { sourceId: "s1", topic: "t", paths: [], description: "d" }
-    ]);
+    const result = await completedVerifyJob(ctx, [{ sourceId: "s1", topic: "t", paths: [], description: "d" }]);
     assert.equal(result.ok, false);
     assert.equal(result.code, "invalid_output");
     assert.deepEqual(await ctx.stores.sourceMap.listBySource("s1", 10), []);
@@ -72,9 +76,7 @@ describe("applySourceMapUpdatesFromCompletedJob (via completeJob)", () => {
 
   it("rejects mapUpdates with an empty string in paths", async () => {
     const ctx = makeTestContext();
-    const result = await completedVerifyJob(ctx, [
-      { sourceId: "s1", topic: "t", paths: [""], description: "d" }
-    ]);
+    const result = await completedVerifyJob(ctx, [{ sourceId: "s1", topic: "t", paths: [""], description: "d" }]);
     assert.equal(result.ok, false);
     assert.equal(result.code, "invalid_output");
     assert.deepEqual(await ctx.stores.sourceMap.listBySource("s1", 10), []);

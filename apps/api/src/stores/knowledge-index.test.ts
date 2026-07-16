@@ -4,11 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import type { EmbeddingProvider } from "@magpie/core";
-import {
-  InMemoryKnowledgeIndex,
-  type SectionKeywordSearch,
-  type SectionVectorSearch
-} from "./knowledge-index.js";
+import { InMemoryKnowledgeIndex, type SectionKeywordSearch, type SectionVectorSearch } from "./knowledge-index.js";
 
 const docs = [
   { path: "rollback.md", content: "# Hotfix Rollback\nRun the rollback workflow and notify the incident lead.\n" },

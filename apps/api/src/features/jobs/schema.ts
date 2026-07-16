@@ -52,7 +52,8 @@ export const completeJobBodySchema = z.object({
 });
 export const failJobBodySchema = z.object({
   error: z.object({
-    code: z.string().min(1), message: z.string().min(1),
+    code: z.string().min(1),
+    message: z.string().min(1),
     category: z.enum(["provider", "validation", "configuration", "timeout", "external", "internal"]),
     provider: z.string().optional(),
     details: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),

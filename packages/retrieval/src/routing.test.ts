@@ -28,6 +28,10 @@ test("logs at warn and is unroutable when the provider call fails", async () => 
   const route = await routeQuestionToFlow("q?", flows, failingProvider, logger);
 
   assert.deepEqual(route, { status: "unroutable" });
-  const lines = chunks.join("").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const lines = chunks
+    .join("")
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
   assert.ok(lines.some((l) => typeof l.msg === "string" && l.msg.includes("routing")));
 });

@@ -67,7 +67,10 @@ test("runJobSpan marks the span failed and records the exception when fn throws"
   const [span] = spanExporter.getFinishedSpans();
   assert.ok(span, "the job span should have ended");
   assert.equal(span.status.code, SpanStatusCode.ERROR);
-  assert.ok(span.events.some((event) => event.name === "exception"), "an exception event should be recorded");
+  assert.ok(
+    span.events.some((event) => event.name === "exception"),
+    "an exception event should be recorded"
+  );
 });
 
 test("recordException is a safe no-op when no span is active", () => {

@@ -328,8 +328,7 @@ type BulkAction = z.infer<typeof bulkProposalActionBodySchema>["action"];
 // results' unions (merge/reject/publish validation codes) plus the bulk-level
 // guards, so it stays a plain string rather than restating every member.
 type BulkOutcome =
-  | { id: string; ok: true; proposal?: Proposal; job?: JobView }
-  | { id: string; ok: false; code: string };
+  { id: string; ok: true; proposal?: Proposal; job?: JobView } | { id: string; ok: false; code: string };
 
 // The same off-request merge cascade the single-item merge routes schedule: the
 // merge is already recorded; resolving gaps and re-indexing (a git fetch) runs

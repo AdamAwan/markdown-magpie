@@ -32,10 +32,7 @@ export default function AskPage() {
   } = useConsole();
 
   const flowLabels = useMemo(() => knowledgeFlowLabels(config), [config]);
-  const flows = useMemo(
-    () => knowledgeFlows(config).map((flow) => ({ id: flow.id, name: flow.name })),
-    [config]
-  );
+  const flows = useMemo(() => knowledgeFlows(config).map((flow) => ({ id: flow.id, name: flow.name })), [config]);
 
   return (
     <Workbench>

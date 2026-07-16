@@ -55,10 +55,7 @@ describe("evaluateClosure", () => {
     // so confidence alone no longer proves the question was answered gap-free —
     // an 'auto' gap on the re-ask blocks closure explicitly.
     assert.deepEqual(
-      evaluateClosure(
-        { confidence: "medium", citations: [cite("docs/guide.md")], gaps: [{ source: "auto" }] },
-        paths
-      ),
+      evaluateClosure({ confidence: "medium", citations: [cite("docs/guide.md")], gaps: [{ source: "auto" }] }, paths),
       { verdict: "still_open", cited: true }
     );
   });
@@ -134,10 +131,10 @@ describe("evaluateClosure with a subpath destination", () => {
     const proposal = { targetPath: "kb/configure-x.md" } as Proposal;
     const targetPaths = proposalTargetPaths(proposal, "kb");
     // The re-ask cites the merged file the way retrieval sees it: subpath stripped.
-    assert.deepEqual(
-      evaluateClosure({ confidence: "high", citations: [cite("configure-x.md")] }, targetPaths),
-      { verdict: "closed", cited: true }
-    );
+    assert.deepEqual(evaluateClosure({ confidence: "high", citations: [cite("configure-x.md")] }, targetPaths), {
+      verdict: "closed",
+      cited: true
+    });
     // Regression guard: before the fix, targetPaths held "kb/configure-x.md",
     // which no citation could ever match, so verification returned still_open forever.
     assert.equal(citesMergedDoc([cite("configure-x.md")], targetPaths), true);
