@@ -78,10 +78,7 @@ const Empty = styled.div(({ theme }) => ({
   color: theme.color.textMuted
 }));
 
-function sourceLabel(
-  sourceId: string,
-  sources: ConfiguredKnowledgeRepository[] | undefined
-): string {
+function sourceLabel(sourceId: string, sources: ConfiguredKnowledgeRepository[] | undefined): string {
   return sources?.find((source) => source.id === sourceId)?.name ?? sourceId;
 }
 
@@ -101,10 +98,9 @@ export function SourceMapPanel({
         </Surface.Header>
         <Surface.Body>
           <Empty>
-            No source-map entries yet. Agents contribute navigation hints as they
-            explore source repositories for source-grounded drafting, verification,
-            and improvement jobs. Entries appear here once at least one agent has
-            reported a finding.
+            No source-map entries yet. Agents contribute navigation hints as they explore source repositories for
+            source-grounded drafting, verification, and improvement jobs. Entries appear here once at least one agent
+            has reported a finding.
           </Empty>
         </Surface.Body>
       </Surface>
@@ -136,25 +132,17 @@ export function SourceMapPanel({
                 <EntryRow key={entry.id}>
                   <TopicRow>
                     <h4>{entry.topic}</h4>
-                    {entry.observedSha ? (
-                      <Badge tone="neutral">{entry.observedSha.slice(0, 7)}</Badge>
-                    ) : null}
+                    {entry.observedSha ? <Badge tone="neutral">{entry.observedSha.slice(0, 7)}</Badge> : null}
                   </TopicRow>
-                  {entry.description ? (
-                    <Description>{entry.description}</Description>
-                  ) : null}
+                  {entry.description ? <Description>{entry.description}</Description> : null}
                   <PathList>
                     {entry.paths.map((path) => (
                       <PathBadge key={path}>{path}</PathBadge>
                     ))}
                   </PathList>
                   <Meta>
-                    <span>
-                      Updated {new Date(entry.updatedAt).toLocaleString()}
-                    </span>
-                    <span>
-                      Created {new Date(entry.createdAt).toLocaleString()}
-                    </span>
+                    <span>Updated {new Date(entry.updatedAt).toLocaleString()}</span>
+                    <span>Created {new Date(entry.createdAt).toLocaleString()}</span>
                   </Meta>
                 </EntryRow>
               ))}

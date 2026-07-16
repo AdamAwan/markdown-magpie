@@ -35,7 +35,10 @@ test("a later event supersedes an earlier one per anchor; distinct anchors both 
   const first = [claim("rollbacks are manual", "rollback"), claim("flags gate rollout", "flags")];
   const second = [claim("rollbacks are automatic", "rollback", "src/rollback.ts")];
   const folded = foldProvenanceEvents([mergedEvent("e1", first), mergedEvent("e2", second)], CONTENT);
-  assert.deepEqual(folded, [claim("flags gate rollout", "flags"), claim("rollbacks are automatic", "rollback", "src/rollback.ts")]);
+  assert.deepEqual(folded, [
+    claim("flags gate rollout", "flags"),
+    claim("rollbacks are automatic", "rollback", "src/rollback.ts")
+  ]);
 });
 
 test("claims whose anchor names a heading that no longer exists are dropped; anchor-less claims are kept", () => {
@@ -45,7 +48,10 @@ test("claims whose anchor names a heading that no longer exists are dropped; anc
     claim("general fact with no section", undefined)
   ];
   const folded = foldProvenanceEvents([mergedEvent("e1", claims)], CONTENT);
-  assert.deepEqual(folded, [claim("rollbacks are automatic", "rollback"), claim("general fact with no section", undefined)]);
+  assert.deepEqual(folded, [
+    claim("rollbacks are automatic", "rollback"),
+    claim("general fact with no section", undefined)
+  ]);
 });
 
 test("accepts both the indexer's heading-path anchor and the plain heading slug", () => {
@@ -59,7 +65,11 @@ test("accepts both the indexer's heading-path anchor and the plain heading slug"
 
 test("events without provenance contribute nothing and do not error", () => {
   const folded = foldProvenanceEvents(
-    [mergedEvent("e1", undefined), mergedEvent("e2", [claim("rollbacks are automatic", "rollback")]), mergedEvent("e3", undefined)],
+    [
+      mergedEvent("e1", undefined),
+      mergedEvent("e2", [claim("rollbacks are automatic", "rollback")]),
+      mergedEvent("e3", undefined)
+    ],
     CONTENT
   );
   assert.deepEqual(folded, [claim("rollbacks are automatic", "rollback")]);

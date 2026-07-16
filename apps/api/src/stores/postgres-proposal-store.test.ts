@@ -50,7 +50,10 @@ describe("PostgresProposalStore", { skip: databaseUrl ? false : "DATABASE_URL no
   it("listByTriggeringQuestionId finds proposals by array membership, and delete removes one", async () => {
     const questionId = `q-${randomUUID()}`;
     const created = await store.create({ ...draft(`triggered-${randomUUID()}`), triggeringQuestionIds: [questionId] });
-    const other = await store.create({ ...draft(`unrelated-${randomUUID()}`), triggeringQuestionIds: [`q-${randomUUID()}`] });
+    const other = await store.create({
+      ...draft(`unrelated-${randomUUID()}`),
+      triggeringQuestionIds: [`q-${randomUUID()}`]
+    });
 
     const found = await store.listByTriggeringQuestionId(questionId);
     assert.deepEqual(

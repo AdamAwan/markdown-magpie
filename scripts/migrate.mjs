@@ -37,9 +37,7 @@ try {
       )
     `);
 
-    const files = (await readdir(migrationsDir))
-      .filter((file) => file.endsWith(".sql"))
-      .sort();
+    const files = (await readdir(migrationsDir)).filter((file) => file.endsWith(".sql")).sort();
 
     // Fail fast before touching the database if the migration set violates the
     // naming convention (malformed name or a new duplicate sequence prefix).
@@ -108,10 +106,7 @@ async function loadEnvFile(filePath) {
 }
 
 function parseEnvValue(value) {
-  if (
-    (value.startsWith('"') && value.endsWith('"')) ||
-    (value.startsWith("'") && value.endsWith("'"))
-  ) {
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
     return value.slice(1, -1);
   }
 

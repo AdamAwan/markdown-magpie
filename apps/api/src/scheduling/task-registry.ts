@@ -173,21 +173,23 @@ export function listScheduledTasks(ctx: AppContext): ScheduledTaskDefinition[] {
   const deps = ctx.repositoryDeps();
   return expansionFlows(ctx).flatMap((flow) => {
     const isLocalGit = flowPublishMode(deps, flow.id) === "local-git";
-    return flowTaskTemplates
-      // A local-git flow is never offered GitHub-only tasks (PR polling).
-      .filter((template) => !(template.githubOnly && isLocalGit))
-      .map((template) => ({
-        key: taskKey(template.baseKey, flow.id),
-        baseKey: template.baseKey,
-        flowId: flow.id,
-        typeLabel: template.typeLabel,
-        label: `${template.typeLabel} · ${flow.name}`,
-        description: template.description,
-        defaultCron: template.defaultCron,
-        jobType: template.jobType,
-        input: template.input(flow.id),
-        aiJobTypes: template.aiJobTypes
-      }));
+    return (
+      flowTaskTemplates
+        // A local-git flow is never offered GitHub-only tasks (PR polling).
+        .filter((template) => !(template.githubOnly && isLocalGit))
+        .map((template) => ({
+          key: taskKey(template.baseKey, flow.id),
+          baseKey: template.baseKey,
+          flowId: flow.id,
+          typeLabel: template.typeLabel,
+          label: `${template.typeLabel} · ${flow.name}`,
+          description: template.description,
+          defaultCron: template.defaultCron,
+          jobType: template.jobType,
+          input: template.input(flow.id),
+          aiJobTypes: template.aiJobTypes
+        }))
+    );
   });
 }
 

@@ -133,7 +133,13 @@ export async function deleteQuestion(
   }
 
   return {
-    deleted: { question: true, gaps: gapIds.length, clustersDismissed, clustersRecomputed, proposals: proposalsDeleted },
+    deleted: {
+      question: true,
+      gaps: gapIds.length,
+      clustersDismissed,
+      clustersRecomputed,
+      proposals: proposalsDeleted
+    },
     warnings
   };
 }

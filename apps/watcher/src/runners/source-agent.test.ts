@@ -36,8 +36,7 @@ function seedJob(): JobView {
 }
 
 type ScriptedTurn =
-  | { toolCall: { toolName: string; input: unknown } }
-  | { text: string | ((conversation: string) => string) };
+  { toolCall: { toolName: string; input: unknown } } | { text: string | ((conversation: string) => string) };
 
 // One MockLanguageModelV3 doGenerate result per scripted turn: a tool-call part
 // (input is a STRINGIFIED JSON string in the V3 spec) or a final text part. A
@@ -175,7 +174,9 @@ describe("runSourceAgentJob", () => {
       model,
       workspaces: [],
       notes: [],
-      fetchable: [{ sourceId: "i1", name: "Vendor docs", url: "https://docs.x.example", allowedHosts: ["docs.x.example"] }],
+      fetchable: [
+        { sourceId: "i1", name: "Vendor docs", url: "https://docs.x.example", allowedHosts: ["docs.x.example"] }
+      ],
       signal: new AbortController().signal
     });
     assert.equal((result as { title: string }).title, "Statements Module");

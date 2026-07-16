@@ -5,10 +5,20 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import type { SourceDescriptor } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
-import { fetchSourceMapEntries, hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf, stampSourceMapUpdates } from "./source-workspace.js";
+import {
+  fetchSourceMapEntries,
+  hasFsSources,
+  prepareSourceWorkspaces,
+  sourceDescriptorsOf,
+  stampSourceMapUpdates
+} from "./source-workspace.js";
 
 const git = (over: Partial<Extract<SourceDescriptor, { kind: "git" }>> = {}): SourceDescriptor => ({
-  id: "g1", name: "Repo", kind: "git", url: "https://example.com/r.git", ...over
+  id: "g1",
+  name: "Repo",
+  kind: "git",
+  url: "https://example.com/r.git",
+  ...over
 });
 
 describe("prepareSourceWorkspaces", () => {
@@ -64,7 +74,13 @@ describe("prepareSourceWorkspaces", () => {
     const prepared = await prepareSourceWorkspaces(
       [
         { id: "l1", name: "Notes", kind: "local", path: dir },
-        { id: "i1", name: "Vendor docs", kind: "internet", url: "https://docs.x.example/start", allowedHosts: ["docs.x.example"] },
+        {
+          id: "i1",
+          name: "Vendor docs",
+          kind: "internet",
+          url: "https://docs.x.example/start",
+          allowedHosts: ["docs.x.example"]
+        },
         { id: "i2", name: "Ref only", kind: "internet", url: "https://ref.example" }
       ],
       { checkoutRoot: dir }
@@ -83,10 +99,10 @@ describe("prepareSourceWorkspaces", () => {
     const failing = async () => {
       throw new Error("clone failed");
     };
-    const prepared = await prepareSourceWorkspaces(
-      [git(), { id: "l1", name: "Notes", kind: "local", path: dir }],
-      { checkoutRoot: dir, checkout: failing }
-    );
+    const prepared = await prepareSourceWorkspaces([git(), { id: "l1", name: "Notes", kind: "local", path: dir }], {
+      checkoutRoot: dir,
+      checkout: failing
+    });
     assert.equal(prepared.workspaces.length, 1);
     assert.equal(prepared.notes.length, 1);
     assert.match(prepared.notes[0]!, /Repo.*unavailable/i);
@@ -125,7 +141,11 @@ describe("fetchSourceMapEntries", () => {
 
   it("degrades to no hints when the api is absent or the call fails", async () => {
     assert.deepEqual(await fetchSourceMapEntries(undefined, [ws]), []);
-    const failing = { sourceMapEntries: async (): Promise<never> => { throw new Error("boom"); } };
+    const failing = {
+      sourceMapEntries: async (): Promise<never> => {
+        throw new Error("boom");
+      }
+    };
     assert.deepEqual(await fetchSourceMapEntries(failing, [ws]), []);
   });
 });

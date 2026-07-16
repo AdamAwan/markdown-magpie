@@ -26,10 +26,9 @@ test("gapBacklog buckets question_gaps by day", { skip: !runIntegration }, async
   const q = "insights-test-q1";
   await pool.query("DELETE FROM question_gaps WHERE question_id = $1", [q]);
   await pool.query("DELETE FROM questions WHERE id = $1", [q]);
-  await pool.query(
-    "INSERT INTO questions (id, question, chat_provider, asked_at) VALUES ($1, 'q', 'mock', now())",
-    [q]
-  );
+  await pool.query("INSERT INTO questions (id, question, chat_provider, asked_at) VALUES ($1, 'q', 'mock', now())", [
+    q
+  ]);
   await pool.query(
     "INSERT INTO question_gaps (question_id, summary, created_at, resolved_at) VALUES ($1,'a',now(),NULL),($1,'b',now(),now())",
     [q]
@@ -135,10 +134,9 @@ test("journey builds the branching Sankey from real domain rows", { skip: !runIn
   const flow = "insights-journey-test";
   const proposalId = "insights-journey-p1";
   await pool.query("DELETE FROM proposals WHERE flow_id = $1", [flow]);
-  await pool.query(
-    "DELETE FROM question_gaps WHERE question_id IN (SELECT id FROM questions WHERE flow_id = $1)",
-    [flow]
-  );
+  await pool.query("DELETE FROM question_gaps WHERE question_id IN (SELECT id FROM questions WHERE flow_id = $1)", [
+    flow
+  ]);
   await pool.query("DELETE FROM gap_clusters WHERE flow_id = $1", [flow]);
   await pool.query("DELETE FROM questions WHERE flow_id = $1", [flow]);
 
@@ -162,10 +160,10 @@ test("journey builds the branching Sankey from real domain rows", { skip: !runIn
     "INSERT INTO gap_clusters (flow_id, title, status) VALUES ($1, 'c', 'active') RETURNING id",
     [flow]
   );
-  await pool.query(
-    "INSERT INTO gap_cluster_memberships (cluster_id, gap_id, active) VALUES ($1, $2, true)",
-    [cluster.rows[0].id, clustered.rows[0].id]
-  );
+  await pool.query("INSERT INTO gap_cluster_memberships (cluster_id, gap_id, active) VALUES ($1, $2, true)", [
+    cluster.rows[0].id,
+    clustered.rows[0].id
+  ]);
   // Two proposals off the single cluster: one merged, one still a draft. This makes
   // prop_total (2) differ from gap_clustered (1) so the boundary link can be asserted
   // to follow the gap-side count, not the proposal count.
@@ -446,47 +444,51 @@ test("aiUsageByFlow groups by data->input->>flowId and prices per flow", { skip:
   ]);
 });
 
-test("freshness classifies documents by review cadence and sources by last sync", { skip: !runIntegration }, async (t) => {
-  const pool = new pg.Pool({ connectionString: databaseUrl });
-  t.after(() => pool.end());
-  const store = new PostgresInsightsStore(pool, "pgboss");
+test(
+  "freshness classifies documents by review cadence and sources by last sync",
+  { skip: !runIntegration },
+  async (t) => {
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    t.after(() => pool.end());
+    const store = new PostgresInsightsStore(pool, "pgboss");
 
-  const repoId = "insights-test-repo";
-  await pool.query("DELETE FROM documents WHERE repository_id = $1", [repoId]);
-  await pool.query("DELETE FROM repositories WHERE id = $1", [repoId]);
-  await pool.query(
-    `INSERT INTO repositories (id, name, default_branch, local_path, provider)
+    const repoId = "insights-test-repo";
+    await pool.query("DELETE FROM documents WHERE repository_id = $1", [repoId]);
+    await pool.query("DELETE FROM repositories WHERE id = $1", [repoId]);
+    await pool.query(
+      `INSERT INTO repositories (id, name, default_branch, local_path, provider)
      VALUES ($1, 'r', 'main', '/tmp/r', 'local') ON CONFLICT (id) DO NOTHING`,
-    [repoId]
-  );
-  // fresh: verified today, 30-day cycle. due: verified 28 days ago, 30-day cycle
-  // (next review in 2 days, inside the 7-day soon-window). overdue: verified 60
-  // days ago, 30-day cycle. no-cadence doc is excluded.
-  await pool.query(
-    `INSERT INTO documents (id, repository_id, path, title, status, last_verified, review_cycle_days, content) VALUES
+      [repoId]
+    );
+    // fresh: verified today, 30-day cycle. due: verified 28 days ago, 30-day cycle
+    // (next review in 2 days, inside the 7-day soon-window). overdue: verified 60
+    // days ago, 30-day cycle. no-cadence doc is excluded.
+    await pool.query(
+      `INSERT INTO documents (id, repository_id, path, title, status, last_verified, review_cycle_days, content) VALUES
        ('insights-doc-fresh',   $1, 'a.md', 'a', 'active', current_date,             30, '#'),
        ('insights-doc-due',     $1, 'b.md', 'b', 'active', current_date - 28,        30, '#'),
        ('insights-doc-overdue', $1, 'c.md', 'c', 'active', current_date - 60,        30, '#'),
        ('insights-doc-nocycle', $1, 'd.md', 'd', 'active', current_date,           NULL, '#')`,
-    [repoId]
-  );
+      [repoId]
+    );
 
-  const sourceId = "insights-test-source";
-  await pool.query("DELETE FROM source_sync_state WHERE source_id = $1", [sourceId]);
-  await pool.query(
-    `INSERT INTO source_sync_state (flow_id, source_id, last_sha, last_checked_at) VALUES
+    const sourceId = "insights-test-source";
+    await pool.query("DELETE FROM source_sync_state WHERE source_id = $1", [sourceId]);
+    await pool.query(
+      `INSERT INTO source_sync_state (flow_id, source_id, last_sha, last_checked_at) VALUES
        ('insights-flow-a', $1, 'sha1', now()),
        ('insights-flow-b', $1, 'sha2', now() - interval '30 days')`,
-    [sourceId]
-  );
+      [sourceId]
+    );
 
-  const result = await store.freshness();
-  assert.ok(result.documents.fresh >= 1);
-  assert.ok(result.documents.due >= 1);
-  assert.ok(result.documents.overdue >= 1);
-  assert.ok(result.sources.fresh >= 1);
-  assert.ok(result.sources.stale >= 1);
-});
+    const result = await store.freshness();
+    assert.ok(result.documents.fresh >= 1);
+    assert.ok(result.documents.due >= 1);
+    assert.ok(result.documents.overdue >= 1);
+    assert.ok(result.sources.fresh >= 1);
+    assert.ok(result.sources.stale >= 1);
+  }
+);
 
 test("patrolImpact aggregates findings and proposals per task type", { skip: !runIntegration }, async (t) => {
   const pool = new pg.Pool({ connectionString: databaseUrl });

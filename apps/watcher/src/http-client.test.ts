@@ -119,7 +119,12 @@ describe("HttpWatcherApi complete() retry", () => {
       completeRetryBaseDelayMs: 1
     });
 
-    await api.complete("job-1", { answer: "ok" }, { inputTokens: 10, outputTokens: 2 }, { provider: "openai-compatible", model: "gpt-test" });
+    await api.complete(
+      "job-1",
+      { answer: "ok" },
+      { inputTokens: 10, outputTokens: 2 },
+      { provider: "openai-compatible", model: "gpt-test" }
+    );
     assert.deepEqual(state.bodies[0], {
       output: { answer: "ok" },
       executor: "test-worker",
@@ -154,12 +159,7 @@ describe("HttpWatcherApi complete() retry", () => {
   });
 
   it("gives up after exhausting retries on a persistent 5xx", async () => {
-    const state = installScriptedFetch([
-      { status: 502 },
-      { status: 502 },
-      { status: 502 },
-      { status: 502 }
-    ]);
+    const state = installScriptedFetch([{ status: 502 }, { status: 502 }, { status: 502 }, { status: 502 }]);
     const api = new HttpWatcherApi({
       apiBaseUrl: "http://api.test",
       workerName: "test-worker",

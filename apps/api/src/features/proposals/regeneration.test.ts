@@ -2,11 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Proposal } from "@magpie/core";
 import { makeTestContext } from "../../test-support/context.js";
-import {
-  createProposalFromCompletedJob,
-  maybeRegenerateStaleProposal,
-  REGENERATION_CAP
-} from "./service.js";
+import { createProposalFromCompletedJob, maybeRegenerateStaleProposal, REGENERATION_CAP } from "./service.js";
 import type { AppContext } from "../../context.js";
 
 // A published, still-open proposal with an open PR — the state a stale PR is in.

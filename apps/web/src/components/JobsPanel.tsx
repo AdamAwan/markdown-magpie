@@ -3,17 +3,7 @@ import styled from "@emotion/styled";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { JobCapability, JobState, JobType, JobView, ScheduleView, WatcherStatus, WatcherView } from "../lib/types";
 import { formatJobType, isActiveJob } from "../lib/console";
-import {
-  Actions,
-  Badge,
-  Button,
-  EmptyState,
-  Field,
-  IconButton,
-  Select,
-  Surface,
-  statusTone
-} from "./ui";
+import { Actions, Badge, Button, EmptyState, Field, IconButton, Select, Surface, statusTone } from "./ui";
 
 const JOB_STATES: JobState[] = ["created", "retry", "active", "completed", "cancelled", "failed", "blocked"];
 

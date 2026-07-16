@@ -418,8 +418,9 @@ npm run eval:golden # golden-question answer-quality regression gate (docs/golde
 ```
 
 To actually **launch and drive the running stack** (Postgres → migrate → API → Watcher ×2
-→ Web, with the local `.env` overrides needed because the committed `.env` is the prod
-config), use the **run-magpie** skill — don't re-derive the launch recipe here.
+→ Web, with the local `.env` overrides needed because your `.env` (gitignored, deploy-only —
+never committed) holds the prod config), use the **run-magpie** skill — don't re-derive the
+launch recipe here.
 
 ### Task skills
 

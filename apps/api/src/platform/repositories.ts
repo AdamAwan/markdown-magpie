@@ -159,10 +159,7 @@ export function defaultDestinationId(deps: RepositoryDeps): string | undefined {
   return deps.knowledgeConfig.destinations.length === 1 ? deps.knowledgeConfig.destinations[0].id : undefined;
 }
 
-export function selectFlow(
-  deps: RepositoryDeps,
-  flowId: string | undefined
-): ConfiguredKnowledgeFlow | undefined {
+export function selectFlow(deps: RepositoryDeps, flowId: string | undefined): ConfiguredKnowledgeFlow | undefined {
   const trimmed = flowId?.trim();
   if (trimmed) {
     return deps.knowledgeConfig.flows.find((flow) => flow.id === trimmed);
@@ -216,9 +213,7 @@ export async function findRepositoryForProposal(
     explicitMatch?.repository ??
     (repositories.length === 1
       ? repositories[0]
-      : repositories.find(
-          (repository) => normalizeRelativePath(repository.git?.relativePathFromRoot) === "."
-        ))
+      : repositories.find((repository) => normalizeRelativePath(repository.git?.relativePathFromRoot) === "."))
   );
 }
 
@@ -361,10 +356,7 @@ export function isFileUrl(url: string | undefined): url is string {
 // How a flow publishes: "local-git" when its destination is a file:// git repo
 // (push a review branch, no PR — Accept/Bin), "github" otherwise. The one predicate
 // that drives publish routing, scheduled-task gating, and the proposal UI.
-export function flowPublishMode(
-  deps: RepositoryDeps,
-  flowId: string | undefined
-): "local-git" | "github" {
+export function flowPublishMode(deps: RepositoryDeps, flowId: string | undefined): "local-git" | "github" {
   return isFileUrl(destinationForFlow(deps, flowId)?.url) ? "local-git" : "github";
 }
 
@@ -394,7 +386,6 @@ export function selectDestinationForProposal(
     });
 
   return (
-    explicitMatch ??
-    (deps.knowledgeConfig.destinations.length === 1 ? deps.knowledgeConfig.destinations[0] : undefined)
+    explicitMatch ?? (deps.knowledgeConfig.destinations.length === 1 ? deps.knowledgeConfig.destinations[0] : undefined)
   );
 }

@@ -9,10 +9,7 @@ export default function SourceMapPage() {
 
   return (
     <Workbench>
-      <SourceMapPanel
-        entries={sourceMapEntries}
-        sources={config?.knowledge?.sources}
-      />
+      <SourceMapPanel entries={sourceMapEntries} sources={config?.knowledge?.sources} />
     </Workbench>
   );
 }

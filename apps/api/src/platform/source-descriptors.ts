@@ -8,10 +8,7 @@ import type { RepositoryDeps } from "./repositories.js";
 // resolves these references to traversable workspaces. Selection rules match the
 // sampler it replaced: explicit ids filter the configured set; no ids means the
 // first three configured sources.
-export function projectSourceDescriptors(
-  deps: RepositoryDeps,
-  sourceIds: string[] | undefined
-): SourceDescriptor[] {
+export function projectSourceDescriptors(deps: RepositoryDeps, sourceIds: string[] | undefined): SourceDescriptor[] {
   const selected = selectSources(deps.knowledgeConfig.sources, sourceIds);
   const descriptors: SourceDescriptor[] = [];
   for (const source of selected) {
@@ -39,12 +36,24 @@ function selectSources(
 function toDescriptor(source: ConfiguredKnowledgeRepository): SourceDescriptor | undefined {
   if (source.kind === "git") {
     return source.url
-      ? { id: source.id, name: source.name, kind: "git", url: source.url, ...(source.subpath ? { subpath: source.subpath } : {}) }
+      ? {
+          id: source.id,
+          name: source.name,
+          kind: "git",
+          url: source.url,
+          ...(source.subpath ? { subpath: source.subpath } : {})
+        }
       : undefined;
   }
   if (source.kind === "local") {
     return source.path
-      ? { id: source.id, name: source.name, kind: "local", path: source.path, ...(source.subpath ? { subpath: source.subpath } : {}) }
+      ? {
+          id: source.id,
+          name: source.name,
+          kind: "local",
+          path: source.path,
+          ...(source.subpath ? { subpath: source.subpath } : {})
+        }
       : undefined;
   }
   if (source.kind === "internet") {

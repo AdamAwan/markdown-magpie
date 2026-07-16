@@ -255,7 +255,10 @@ export async function reviseSeedPlanFromCompletedJob(
   const plan = await ctx.stores.seedPlans.get(input.planId);
   if (!plan || plan.status !== "proposed") {
     if (plan) {
-      logger.info({ planId: plan.id, status: plan.status }, "revise_seed_plan completion dropped: plan no longer proposed");
+      logger.info(
+        { planId: plan.id, status: plan.status },
+        "revise_seed_plan completion dropped: plan no longer proposed"
+      );
     }
     return undefined;
   }

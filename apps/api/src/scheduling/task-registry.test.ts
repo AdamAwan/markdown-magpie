@@ -11,7 +11,11 @@ test("with no flows configured, no flow-scoped tasks are registered", () => {
 
   // The old un-suffixed, default, and separate-refresh keys are gone.
   assert.equal(findScheduledTask(ctx, "gaps-to-pull-requests"), undefined, "tasks are per-flow, never un-suffixed");
-  assert.equal(findScheduledTask(ctx, "gaps-to-pull-requests::default"), undefined, "there is no synthetic default flow");
+  assert.equal(
+    findScheduledTask(ctx, "gaps-to-pull-requests::default"),
+    undefined,
+    "there is no synthetic default flow"
+  );
   assert.equal(findScheduledTask(ctx, "pull-request-refresh"), undefined, "the separate refresh task stays removed");
 });
 
