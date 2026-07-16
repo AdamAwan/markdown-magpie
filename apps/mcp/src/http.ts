@@ -126,7 +126,9 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
         "By default (flow 'auto') the question is routed to the best-matching knowledge flow. " +
         "If routing cannot determine a flow, the result has flowSelectionRequired with the " +
         "available flows — call kb_ask again with `flow` set to one of those ids. Use kb_flows " +
-        "to discover flows up front.",
+        "to discover flows up front. For a multi-turn conversation, pass the `conversationId` " +
+        "returned by the previous kb_ask: the answer then resolves against the prior turns and " +
+        "stays in the same flow.",
       inputSchema: z.object({
         question: z.string().describe(
           "The question to answer from indexed Markdown context."
@@ -137,11 +139,18 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
           .describe(
             "Flow to answer within. Defaults to 'auto' (let the router decide). " +
               "Otherwise must be a flow id from kb_flows."
+          ),
+        conversationId: z
+          .string()
+          .optional()
+          .describe(
+            "Optional. The conversationId returned by a previous kb_ask, to ask a follow-up in " +
+              "the same conversation. Omit to start a new conversation (a conversationId is returned)."
           )
       })
     },
-    async ({ question, flow }) => {
-      const result = await askQuestion(question, kbOptions, flow);
+    async ({ question, flow, conversationId }) => {
+      const result = await askQuestion(question, kbOptions, flow, conversationId);
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
     }
   );

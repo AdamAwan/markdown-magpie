@@ -21,7 +21,7 @@ export function askRoutes(ctx: AppContext): Hono {
       }
     }),
     async (c) => {
-      const { question, flow } = c.req.valid("json");
+      const { question, flow, conversationId } = c.req.valid("json");
 
       // Flow-scoped ask: a role-aware end user may only ask against flows granted
       // `ask`. "auto"/absent is treated as flow-less, so only a wildcard asker can
@@ -29,10 +29,11 @@ export function askRoutes(ctx: AppContext): Hono {
       const requestedFlow = flow && flow.toLowerCase() !== "auto" ? flow : undefined;
       assertCan(ctx, c, "ask", requestedFlow);
 
-      const outcome = await askService.ask(ctx, question, flow);
+      const outcome = await askService.ask(ctx, question, flow, conversationId);
       return c.json(
         {
           questionId: outcome.questionId,
+          conversationId: outcome.conversationId,
           job: outcome.job,
           links: {
             question: apiLink(`/questions/${outcome.questionId}`),

@@ -113,6 +113,10 @@ export const answerQuestionInputSchema = z.object({
     persona: z.string().optional()
   })),
   requestedFlowId: z.string().optional(),
+  // Multi-turn conversation context (#239). Declared here so the broker does not
+  // strip it from the enqueued input (the schema-stripping gotcha).
+  priorTurns: z.array(z.object({ question: z.string(), answer: z.string() })).optional(),
+  conversationFlowId: z.string().optional(),
   expectedOutput: z.literal("answer_result")
 }) satisfies z.ZodType<ProviderInput<CoreAnswerQuestionJobInput>>;
 export const answerQuestionOutputSchema = z.object({
@@ -123,7 +127,10 @@ export const answerQuestionOutputSchema = z.object({
   flowId: z.string().optional(),
   flowSelectionRequired: flowSelectionRequiredSchema.optional(),
   outOfScope: outOfScopeSchema.optional(),
-  trace: answerTraceSchema.optional()
+  trace: answerTraceSchema.optional(),
+  // The condensed standalone form of a follow-up (#239). Declared so the broker
+  // preserves it on completion for the API to persist on the question log.
+  standaloneQuestion: z.string().optional()
 }) satisfies z.ZodType<AnswerQuestionJobOutput>;
 
 export const summarizeGapInputSchema = z.object({

@@ -226,6 +226,16 @@ export interface QuestionLog {
   // so a gap can later be attributed to the flow that produced it. Absent for
   // un-routed/legacy questions.
   flowId?: string;
+  // The conversation this question belongs to (#239). Set on every live ask (the
+  // API mints one on the first turn and threads it through follow-ups). Groups the
+  // question logs that form one multi-turn thread. Absent on legacy/synthetic logs.
+  conversationId?: string;
+  // The condensed, self-contained form of a follow-up question (#239), stored when
+  // the watcher rewrote a terse follow-up using the conversation context. Used in
+  // place of the raw question text wherever a gap summary would otherwise fall back
+  // to it, so partial follow-up text does not pollute gap clustering. Absent for
+  // first turns and questions that needed no condensation.
+  standaloneQuestion?: string;
   askedAt: string;
   answer?: AnswerResult;
   feedback?: QuestionFeedback;
@@ -254,6 +264,9 @@ export interface QuestionLogInput {
   retrievedSectionIds: string[];
   flowId?: string;
   purpose?: QuestionPurpose;
+  // The conversation this question belongs to (#239). The API supplies it on every
+  // live ask so follow-ups can be threaded and prior turns reconstructed.
+  conversationId?: string;
 }
 
 export interface QuestionLogUpdateInput {
@@ -263,6 +276,10 @@ export interface QuestionLogUpdateInput {
   // decides this after the log is first created, so it lands here, not at record
   // time. Absent when no flow was chosen.
   flowId?: string;
+  // The condensed standalone form of a follow-up question (#239), reported by the
+  // watcher on completion. Persisted so gap candidacy/clustering key off the
+  // resolved intent rather than the terse raw follow-up.
+  standaloneQuestion?: string;
 }
 
 export type QuestionFeedback = "helpful" | "unhelpful";
@@ -749,6 +766,17 @@ export interface AnswerQuestionJobInput {
   // routing and uses this flow directly. Absent means "auto" — route as usual.
   // Validated against the configured flows at the API boundary before enqueue.
   requestedFlowId?: string;
+  // Multi-turn conversation context (#239). Bounded prior Q&A turns from the same
+  // conversation, oldest-first, assembled by the API from the conversation's
+  // question logs (last N turns / char budget). Present only for a follow-up. The
+  // watcher uses these to condense the follow-up into a standalone question before
+  // routing/retrieval so pronouns and ellipsis resolve.
+  priorTurns?: Array<{ question: string; answer: string }>;
+  // The flow this conversation has already settled on (the most recent prior turn's
+  // flow). When set and no requestedFlowId is given, the watcher reuses it so
+  // routing is sticky within a thread rather than re-routing a terse follow-up to a
+  // different flow. Absent on the first turn or when the prior turn had no flow.
+  conversationFlowId?: string;
   expectedOutput: "answer_result";
 }
 
@@ -769,6 +797,12 @@ export interface AnswerQuestionJobOutput {
   // The watcher's audit trail for this answer (routing, searches, verification).
   // Persisted with the question log so the console can explain the answer.
   trace?: AnswerTrace;
+  // The condensed, self-contained form of a follow-up question (#239). Present
+  // only when the job carried priorTurns and the watcher rewrote the follow-up
+  // into a standalone question; the API persists it on the question log so gap
+  // candidacy and clustering key off the resolved intent rather than the terse
+  // raw follow-up ("what about the EU?").
+  standaloneQuestion?: string;
 }
 
 export interface SummarizeGapJobInput {

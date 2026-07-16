@@ -9,6 +9,7 @@ import {
 } from "@magpie/jobs";
 import {
   ANSWER_QUESTION,
+  CONDENSE_FOLLOWUP,
   GAP_RECONCILE_CRITIC,
   GAP_RECONCILE_PROPOSE,
   JOB_RUNNER_SYSTEM,
@@ -102,7 +103,24 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
     ...(flow.persona ? { persona: flow.persona } : {})
   }));
 
-  const { route, method } = await resolveFlow(input.requestedFlowId, input.question, flows, model, api, job.id, signal);
+  // Multi-turn conversations (#239). When the API supplied prior turns, condense
+  // the (possibly terse) follow-up into a self-contained question and use THAT for
+  // routing, retrieval, answering, and grounding — so "what about the EU?" embeds
+  // and answers as "What is the data retention policy for the EU region?". The raw
+  // follow-up stays on the question log for display; `condensed` is reported back
+  // for gap hygiene. Condensation failure falls back to the raw question, so a
+  // conversation never breaks answering.
+  const priorTurns = input.priorTurns ?? [];
+  const retrievalQuestion =
+    priorTurns.length > 0 ? await condenseFollowup(model, input.question, priorTurns, signal, job.id) : input.question;
+  const condensed = retrievalQuestion !== input.question ? retrievalQuestion : undefined;
+  const stamp = <T extends AnswerOutput>(output: T): T =>
+    condensed ? { ...output, standaloneQuestion: condensed } : output;
+
+  // Routing is sticky within a conversation: the caller's explicit pin wins, else
+  // the flow the conversation already settled on (conversationFlowId), else auto.
+  const pinnedFlowId = input.requestedFlowId ?? input.conversationFlowId;
+  const { route, method } = await resolveFlow(pinnedFlowId, retrievalQuestion, flows, model, api, job.id, signal);
 
   // The audit trail of this run, persisted with the question log so the console
   // can explain the answer: how routing went (and which router decided), what was
@@ -110,7 +128,7 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
   // verification ran.
   const routing: AnswerTrace["routing"] = {
     mode:
-      input.requestedFlowId ? "requested"
+      pinnedFlowId ? "requested"
       : route.status === "routed" ? "routed"
       : route.status === "unroutable" ? "unscoped"
       : "unknown",
@@ -122,13 +140,15 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
   // to choose one of the configured flows and re-ask.
   if (route.status === "unknown") {
     logger.debug({ jobId: job.id }, `answer_question[${job.id}]: routing unknown; requesting flow selection`);
-    return buildFlowSelectionRequiredOutput(flows, {
-      routing,
-      seedSectionCount: 0,
-      searches: [],
-      poolSectionCount: 0,
-      answerForced: false
-    });
+    return stamp(
+      buildFlowSelectionRequiredOutput(flows, {
+        routing,
+        seedSectionCount: 0,
+        searches: [],
+        poolSectionCount: 0,
+        answerForced: false
+      })
+    );
   }
 
   const flowId = route.status === "routed" ? route.flowId : undefined;
@@ -141,7 +161,7 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
   const unsatisfiedSearches = new Set<string>();
 
   logger.debug({ jobId: job.id, flowId: flowId ?? null }, `answer_question[${job.id}]: seeding retrieval for flow ${flowId ?? "(unscoped)"}`);
-  const seed = await api.retrieve(input.question, flowId, undefined, signal);
+  const seed = await api.retrieve(retrievalQuestion, flowId, undefined, signal);
   mergeSections(pool, seed);
 
   const searches: AnswerTrace["searches"] = [];
@@ -168,7 +188,7 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
   };
 
   for (let round = 0; round < MAX_SEARCH_ROUNDS && pool.size < MAX_POOL_SECTIONS; round += 1) {
-    const content = await assess(model, system, input.question, [...pool.values()], false, signal);
+    const content = await assess(model, system, retrievalQuestion, [...pool.values()], false, signal);
     const assessment = parseAssessment(content);
     if (assessment.action === "answer") {
       // A model that answers low / flags a knowledge gap on the very first round —
@@ -188,8 +208,8 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
         }
       }
       logger.debug({ jobId: job.id, round, sectionCount: pool.size }, `answer_question[${job.id}]: answered after ${round} search round(s)`);
-      const output = buildAnswerOutput(content, [...pool.values()], input.question, flowId, unsatisfiedSearches, loopTrace(false));
-      return verifyAnswerGrounding(model, output, [...pool.values()], input.question, signal, job.id);
+      const output = buildAnswerOutput(content, [...pool.values()], retrievalQuestion, flowId, unsatisfiedSearches, loopTrace(false));
+      return stamp(await verifyAnswerGrounding(model, output, [...pool.values()], retrievalQuestion, signal, job.id));
     }
 
     logger.debug({ jobId: job.id, round, queries: assessment.queries }, `answer_question[${job.id}]: running ${assessment.queries.length} follow-up search(es)`);
@@ -199,9 +219,46 @@ async function answer({ job, model, api, signal }: GenerativeJobOptions): Promis
   // Ran out of search rounds or hit the section cap: force a final answer from
   // whatever has accumulated (no further searching allowed).
   logger.debug({ jobId: job.id, sectionCount: pool.size }, `answer_question[${job.id}]: forcing final answer from ${pool.size} section(s)`);
-  const finalContent = await assess(model, system, input.question, [...pool.values()], true, signal);
-  const output = buildAnswerOutput(finalContent, [...pool.values()], input.question, flowId, unsatisfiedSearches, loopTrace(true));
-  return verifyAnswerGrounding(model, output, [...pool.values()], input.question, signal, job.id);
+  const finalContent = await assess(model, system, retrievalQuestion, [...pool.values()], true, signal);
+  const output = buildAnswerOutput(finalContent, [...pool.values()], retrievalQuestion, flowId, unsatisfiedSearches, loopTrace(true));
+  return stamp(await verifyAnswerGrounding(model, output, [...pool.values()], retrievalQuestion, signal, job.id));
+}
+
+// Condenses a follow-up into a standalone question using the recent conversation
+// turns. One provider call; on any failure (parse, empty result) it falls back to
+// the raw follow-up so answering never breaks. The turns are rendered oldest-first
+// as plain Q/A so the model sees the thread the way the user experienced it.
+async function condenseFollowup(
+  model: ChatProvider,
+  question: string,
+  priorTurns: Array<{ question: string; answer: string }>,
+  signal: AbortSignal,
+  jobId: string
+): Promise<string> {
+  const history = priorTurns.map((turn) => `Q: ${turn.question}\nA: ${turn.answer}`).join("\n\n");
+  try {
+    const response = await model.complete({
+      system: CONDENSE_FOLLOWUP.instructions,
+      messages: [
+        {
+          role: "user",
+          content: `Conversation so far:\n${history}\n\nFollow-up question:\n${question}`
+        }
+      ],
+      responseFormat: "json",
+      signal
+    });
+    const parsed = extractJson(response.content);
+    const standalone =
+      parsed && typeof parsed === "object" ? (parsed as { standaloneQuestion?: unknown }).standaloneQuestion : undefined;
+    if (typeof standalone === "string" && standalone.trim().length > 0) {
+      logger.debug({ jobId }, `answer_question[${jobId}]: condensed follow-up into a standalone question`);
+      return standalone.trim();
+    }
+  } catch (error) {
+    logger.warn({ jobId, err: error }, `answer_question[${jobId}]: follow-up condensation failed; using the raw question`);
+  }
+  return question;
 }
 
 // Post-answer grounding check: a second model call reviews the drafted answer

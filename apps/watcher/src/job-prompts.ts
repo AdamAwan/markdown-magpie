@@ -43,6 +43,11 @@ export interface AnswerOutput {
   flowSelectionRequired?: FlowSelectionRequired;
   outOfScope?: OutOfScope;
   trace?: AnswerTrace;
+  // The condensed, self-contained question a follow-up was rewritten into (#239).
+  // Set by the answer runner when it condensed a follow-up using the conversation
+  // context; the API persists it on the question log for gap hygiene. Absent when
+  // no condensation ran (first turn, or an already-standalone follow-up).
+  standaloneQuestion?: string;
 }
 
 // The loop-level portion of the trace the answer runner assembles as it goes

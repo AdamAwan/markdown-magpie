@@ -36,6 +36,10 @@ export interface AskResult {
   citations: unknown[];
   gaps?: unknown[];
   questionId?: string;
+  // The conversation this exchange belongs to (#239). Returned from POST /ask (the
+  // API mints it on the first turn). Pass it back as `conversationId` on the next
+  // kb_ask to ask a follow-up that resolves against this exchange.
+  conversationId?: string;
   // Present when "auto" routing could not determine a flow: the answer is a stock
   // note (confidence "unknown") and the caller should re-ask kb_ask with `flow`
   // set to one of these ids.
@@ -158,11 +162,21 @@ async function readApiResponse(response: Response, path: string): Promise<unknow
 export async function askQuestion(
   question: string,
   options?: KbClientOptions,
-  flow?: string
+  flow?: string,
+  conversationId?: string
 ): Promise<AskResult> {
-  const body = flow ? { question, flow } : { question };
+  const body = {
+    question,
+    ...(flow ? { flow } : {}),
+    // Attach this ask to an existing conversation (#239) when the caller threads
+    // one; omitted starts a new conversation the API mints an id for.
+    ...(conversationId ? { conversationId } : {})
+  };
   const ask = asObject(await postJson("/ask", body, options));
   const questionId = typeof ask.questionId === "string" ? ask.questionId : undefined;
+  // Echo the conversation id back to the caller (minted on the first turn, or the
+  // one it passed) so a follow-up can be threaded onto this exchange.
+  const returnedConversationId = typeof ask.conversationId === "string" ? ask.conversationId : conversationId;
   const links = readLinks(ask);
   const deadline = Date.now() + answerTimeoutMs;
 
@@ -172,7 +186,7 @@ export async function askQuestion(
       ? extractAnswer(readResult(waited))
       : await pollForAnswer(links.job, waited, deadline, options);
 
-  return { ...result, questionId };
+  return { ...result, questionId, ...(returnedConversationId ? { conversationId: returnedConversationId } : {}) };
 }
 
 // Falls back to detail polling (GET /jobs/:id) when the wait endpoint returns a

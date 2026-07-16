@@ -57,7 +57,9 @@ export const tools = [
       "Ask a question against the indexed Markdown knowledge base and return a cited answer. " +
       "By default (flow 'auto') the question is routed to the best-matching knowledge flow. " +
       "If routing cannot determine a flow, the result has flowSelectionRequired with the available " +
-      "flows — call kb_ask again with `flow` set to one of those ids. Use kb_flows to discover flows up front.",
+      "flows — call kb_ask again with `flow` set to one of those ids. Use kb_flows to discover flows up front. " +
+      "For a multi-turn conversation, pass the `conversationId` returned by the previous kb_ask as a follow-up: " +
+      "the answer then resolves against the prior turns (pronouns/ellipsis) and stays in the same flow.",
     inputSchema: {
       type: "object",
       properties: {
@@ -69,6 +71,11 @@ export const tools = [
           type: "string",
           description:
             "Flow to answer within. Defaults to 'auto' (let the router decide). Otherwise must be a flow id from kb_flows."
+        },
+        conversationId: {
+          type: "string",
+          description:
+            "Optional. The conversationId returned by a previous kb_ask, to ask a follow-up in the same conversation. Omit to start a new conversation (a conversationId is returned to thread from)."
         }
       },
       required: ["question"],
@@ -381,7 +388,8 @@ export async function callTool(params: ToolCallParams): Promise<unknown> {
   if (params.name === "kb_ask") {
     const question = stringArgument(params.arguments, "question");
     const flow = optionalStringArgument(params.arguments, "flow");
-    const answer = await askQuestion(question, { token: stdioAuthToken }, flow);
+    const conversationId = optionalStringArgument(params.arguments, "conversationId");
+    const answer = await askQuestion(question, { token: stdioAuthToken }, flow, conversationId);
     return textResult(answer);
   }
 

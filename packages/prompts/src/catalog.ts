@@ -674,9 +674,32 @@ export const ROUTE_QUESTION_TO_FLOW: PromptDefinition = {
     'to pick a flow. Do not pick a flow you are not reasonably confident about.'
 };
 
+export const CONDENSE_FOLLOWUP: PromptDefinition = {
+  id: "condense-followup",
+  title: "Condense a follow-up into a standalone question",
+  description:
+    "Rewrites a follow-up question into a fully self-contained question using the recent conversation turns, so retrieval and routing see the resolved intent rather than pronouns/ellipsis. Used by the watcher's answer_question runner when prior turns are present.",
+  usedBy: ["watcher"],
+  outputShape: '{ standaloneQuestion }',
+  instructions:
+    'You rewrite a user\'s FOLLOW-UP question into a single, fully self-contained question, using the ' +
+    'recent conversation turns for context. The rewritten question is used only to search a knowledge base ' +
+    'and to answer — it must carry every piece of context the follow-up leaves implicit.\n\n' +
+    'Rules:\n' +
+    '- Resolve pronouns, ellipsis, and references ("what about the EU?", "and for that plan?", "why?") into ' +
+    'explicit terms drawn from the prior turns.\n' +
+    '- Preserve the user\'s actual intent. Do NOT broaden, narrow, or answer the question, and do NOT add ' +
+    'facts that were not in the conversation.\n' +
+    '- If the follow-up is ALREADY self-contained (it does not depend on the prior turns), return it ' +
+    'essentially unchanged.\n' +
+    '- Keep it to one natural-language question. No preamble, no explanation.\n\n' +
+    'Return JSON only: {"standaloneQuestion":"string"}.'
+};
+
 export const promptCatalog: PromptDefinition[] = [
   ANSWER_QUESTION,
   VERIFY_ANSWER,
+  CONDENSE_FOLLOWUP,
   SUMMARIZE_GAP,
   DRAFT_MARKDOWN_PROPOSAL,
   DRAFT_SEED_DOCUMENT,
