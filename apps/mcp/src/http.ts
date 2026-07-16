@@ -18,14 +18,20 @@ import {
 } from "@magpie/auth";
 import type { JSONWebKeySet } from "jose";
 import { z } from "zod/v4";
-import { approveSeedPlan, askQuestion, generateOutline, getCitationSections, getJson, listFlows, submitFeedback, type KbClientOptions } from "./kb-client.js";
+import { approveQuestionnaire, approveSeedPlan, askQuestion, createQuestionnaire, generateOutline, getCitationSections, getJson, getQuestionnaire, listFlows, submitFeedback, type KbClientOptions } from "./kb-client.js";
 import { createMcpLogger } from "./logger.js";
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
 const port = parseInt(process.env.MCP_HTTP_PORT ?? "4001", 10);
 
-const SCOPES_SUPPORTED = ["read:knowledge", "ask:knowledge", "feedback:questions", "manage:jobs"] as const;
+const SCOPES_SUPPORTED = [
+  "read:knowledge",
+  "ask:knowledge",
+  "feedback:questions",
+  "manage:jobs",
+  "manage:knowledge"
+] as const;
 
 // Per-tool scope requirements enforced at the MCP boundary, mirroring the API
 // route scopes. tools/list and other methods need only a valid token.
@@ -36,7 +42,10 @@ const TOOL_SCOPES: Record<string, string> = {
   "kb_feedback": "feedback:questions",
   "kb_outline": "manage:jobs",
   "kb_seed": "manage:jobs",
-  "kb_citation": "read:knowledge"
+  "kb_citation": "read:knowledge",
+  "kb_questionnaire_create": "ask:knowledge",
+  "kb_questionnaire_get": "read:knowledge",
+  "kb_questionnaire_approve": "manage:knowledge"
 };
 
 // Resolves the auth settings the HTTP MCP server validates inbound tokens with.
@@ -256,6 +265,66 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     },
     async (args) => {
       const result = await getCitationSections(args, kbOptions);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.registerTool(
+    "kb_questionnaire_create",
+    {
+      description:
+        "Create a questionnaire — a named batch of questions answered against one flow's knowledge base, with " +
+        "verbatim reuse of previously approved answers when the knowledge base hasn't changed. Returns " +
+        "immediately; items may still be answering — re-read with kb_questionnaire_get until no items are " +
+        "pending/answering. Discover flow ids with kb_flows.",
+      inputSchema: z.object({
+        name: z.string().describe("Human-readable questionnaire name (e.g. 'Q3 vendor security review')."),
+        flow: z.string().describe("The flow id whose knowledge base answers the batch (from kb_flows)."),
+        questions: z
+          .array(z.string())
+          .min(1)
+          .max(500)
+          .describe("The questions to answer, one per entry (1-500).")
+      })
+    },
+    async (args) => {
+      const result = await createQuestionnaire(args, kbOptions);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.registerTool(
+    "kb_questionnaire_get",
+    {
+      description:
+        "Read a questionnaire worksheet: per-item status (reused/fresh/changed/unanswerable), answers, " +
+        "citations, and change explanations. Re-read until no items are pending/answering.",
+      inputSchema: z.object({
+        questionnaire: z.string().describe("The questionnaire id (from kb_questionnaire_create).")
+      })
+    },
+    async (args) => {
+      const result = await getQuestionnaire(args, kbOptions);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.registerTool(
+    "kb_questionnaire_approve",
+    {
+      description:
+        "Approve answers into the match corpus for future questionnaires: all reused items (default) or one " +
+        "item by id. Approval is what makes an answer reusable verbatim next time.",
+      inputSchema: z.object({
+        questionnaire: z.string().describe("The questionnaire id (from kb_questionnaire_create)."),
+        item: z
+          .string()
+          .optional()
+          .describe("Optional item id to approve one answered item instead of all reused items.")
+      })
+    },
+    async (args) => {
+      const result = await approveQuestionnaire(args, kbOptions);
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
     }
   );

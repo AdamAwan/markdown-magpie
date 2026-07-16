@@ -257,8 +257,11 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
     no grants configured, M2M tokens without a roles claim). Cross-flow ids read as 404,
     not 403 (`docs/authorization.md`).
 19. **MCP** (`apps/mcp`) — thin client over the HTTP API, stdio + Streamable-HTTP
-    transports, **seven tools**: `kb_ask`, `kb_search`, `kb_citation`, `kb_feedback`,
-    `kb_flows`, `kb_outline`, `kb_seed`. HTTP transport is its own OAuth protected resource with
+    transports, **ten tools**: `kb_ask`, `kb_search`, `kb_citation`, `kb_feedback`,
+    `kb_flows`, `kb_outline`, `kb_seed`, `kb_questionnaire_create`,
+    `kb_questionnaire_get`, `kb_questionnaire_approve` (questionnaire create is
+    deliberately non-waiting — items drip through the answer queue; clients re-read the
+    worksheet until it settles). HTTP transport is its own OAuth protected resource with
     per-tool scopes; downstream API calls use a separate M2M credential (never the user's
     token) plus on-behalf-of headers (`docs/mcp.md`).
 20. **Observability** — `@magpie/telemetry` (OpenTelemetry traces + metrics, **off by
@@ -330,7 +333,7 @@ apps/
              EmptyState, Workbench). There is NO global stylesheet — style with those
              primitives + colocated `styled` reading `p => p.theme.*`; never add a .css
              file (the only .css imports allowed are third-party React Flow styles).
-  mcp/       MCP server — a client surface over the API (seven kb_* tools, see §2.19).
+  mcp/       MCP server — a client surface over the API (ten kb_* tools, see §2.19).
              Only needed for MCP clients; skip for a normal run.
 packages/
   core/       Shared domain types + provider interfaces (incl. ProvenanceClaim).

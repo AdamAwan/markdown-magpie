@@ -12,7 +12,16 @@ process.env.ANSWER_TIMEOUT_MS = "50";
 process.env.OUTLINE_POLL_INTERVAL_MS = "1";
 process.env.OUTLINE_TIMEOUT_MS = "50";
 
-const { getJson, askQuestion, generateOutline, approveSeedPlan, getCitationSections } = await import("./kb-client.js");
+const {
+  getJson,
+  askQuestion,
+  generateOutline,
+  approveSeedPlan,
+  getCitationSections,
+  createQuestionnaire,
+  getQuestionnaire,
+  approveQuestionnaire
+} = await import("./kb-client.js");
 
 // Locks the contract Task 4 added: when a token is supplied, getJson attaches a
 // single lowercase `authorization: Bearer <token>` header and nothing else.
@@ -560,6 +569,241 @@ test("getCitationSections propagates non-404 API failures", async () => {
 
   try {
     await assert.rejects(() => getCitationSections({ sectionIds: ["sec-1"] }), /failed with 500/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// ── questionnaires ────────────────────────────────────────────────────────────
+//
+// The questionnaire tools are thin, deliberately non-waiting wrappers over the
+// questionnaire routes (docs/questionnaires.md): create returns the worksheet as
+// the API left it — items may still be pending/answering, the caller re-reads
+// with getQuestionnaire — and the view drops internal ids (questionLogId,
+// reusedFromItemId) and citation fingerprints the model has no use for, while
+// keeping the item id kb_questionnaire_approve targets.
+
+// A worksheet as the API returns it, carrying every internal field the view is
+// expected to strip: log/reuse ids, citation fingerprints and excerpts,
+// staleAtApproval, createdAt.
+const questionnaireBody = {
+  questionnaire: {
+    id: "qn-1",
+    name: "Q3 security review",
+    flowId: "magpie-support",
+    status: "open",
+    createdAt: "2026-07-16T00:00:00.000Z",
+    items: [
+      {
+        id: "item-1",
+        questionnaireId: "qn-1",
+        position: 0,
+        question: "Do you encrypt data at rest?",
+        status: "answered",
+        outcome: "reused",
+        answer: "Yes — AES-256 across all stores.",
+        answeredAt: "2026-04-01T00:00:00.000Z",
+        questionLogId: "log-1",
+        reusedFromItemId: "prior-1",
+        staleAtApproval: false,
+        citations: [
+          { sectionId: "sec-1", contentHash: "abc123", path: "security.md", heading: "Encryption", excerpt: "…" }
+        ]
+      },
+      {
+        id: "item-2",
+        questionnaireId: "qn-1",
+        position: 1,
+        question: "Do you rotate encryption keys?",
+        status: "pending",
+        outcome: "changed",
+        changeReason: {
+          kind: "section_changed",
+          sectionId: "sec-2",
+          path: "security.md",
+          heading: "Key rotation",
+          changedAt: "2026-07-01T00:00:00.000Z"
+        },
+        staleAtApproval: false,
+        citations: []
+      }
+    ]
+  }
+};
+
+// The shaped view for the worksheet above: internal ids and citation
+// fingerprints gone, item id/statuses/answers/changeReason kept.
+const questionnaireView = {
+  id: "qn-1",
+  name: "Q3 security review",
+  flowId: "magpie-support",
+  status: "open",
+  items: [
+    {
+      id: "item-1",
+      position: 0,
+      question: "Do you encrypt data at rest?",
+      status: "answered",
+      outcome: "reused",
+      answer: "Yes — AES-256 across all stores.",
+      citations: [{ path: "security.md", heading: "Encryption" }]
+    },
+    {
+      id: "item-2",
+      position: 1,
+      question: "Do you rotate encryption keys?",
+      status: "pending",
+      outcome: "changed",
+      changeReason: {
+        kind: "section_changed",
+        sectionId: "sec-2",
+        path: "security.md",
+        heading: "Key rotation",
+        changedAt: "2026-07-01T00:00:00.000Z"
+      },
+      citations: []
+    }
+  ]
+};
+
+test("createQuestionnaire POSTs name/flowId/questions and returns the shaped worksheet", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: { url: string; method?: string; body?: unknown }[] = [];
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    calls.push({
+      url: typeof input === "string" ? input : input.toString(),
+      method: init?.method,
+      body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined
+    });
+    return jsonResponse(questionnaireBody, 201);
+  }) as typeof fetch;
+
+  try {
+    const result = await createQuestionnaire({
+      name: "Q3 security review",
+      flow: "magpie-support",
+      questions: ["Do you encrypt data at rest?", "Do you rotate encryption keys?"]
+    });
+
+    assert.deepEqual(result, questionnaireView);
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].url.endsWith("/api/questionnaires"));
+    assert.equal(calls[0].method, "POST");
+    // The `flow` argument travels as the route's flowId field.
+    assert.deepEqual(calls[0].body, {
+      name: "Q3 security review",
+      flowId: "magpie-support",
+      questions: ["Do you encrypt data at rest?", "Do you rotate encryption keys?"]
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("createQuestionnaire rejects invalid arguments before any API call", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error("no API call expected");
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      () => createQuestionnaire({ flow: "f", questions: ["q"] }),
+      /name must be a non-empty string/
+    );
+    await assert.rejects(
+      () => createQuestionnaire({ name: "n", questions: ["q"] }),
+      /flow must be a non-empty string/
+    );
+    await assert.rejects(
+      () => createQuestionnaire({ name: "n", flow: "f" }),
+      /questions must be a non-empty array/
+    );
+    await assert.rejects(
+      () => createQuestionnaire({ name: "n", flow: "f", questions: [] }),
+      /questions must be a non-empty array/
+    );
+    await assert.rejects(
+      () => createQuestionnaire({ name: "n", flow: "f", questions: ["q", 2] }),
+      /questions entries must be non-empty strings/
+    );
+    await assert.rejects(
+      () => createQuestionnaire({ name: "n", flow: "f", questions: Array.from({ length: 501 }, (_, i) => `q${i}`) }),
+      /at most 500/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("getQuestionnaire GETs the worksheet and strips internal ids and fingerprints", async () => {
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+    urls.push(typeof input === "string" ? input : input.toString());
+    return jsonResponse(questionnaireBody);
+  }) as typeof fetch;
+
+  try {
+    const result = await getQuestionnaire({ questionnaire: "qn-1" });
+
+    assert.deepEqual(result, questionnaireView);
+    assert.equal(urls.length, 1);
+    assert.ok(urls[0].endsWith("/api/questionnaires/qn-1"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("approveQuestionnaire without an item bulk-approves reused items", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: { url: string; method?: string }[] = [];
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    calls.push({ url: typeof input === "string" ? input : input.toString(), method: init?.method });
+    return jsonResponse({ approved: 2 });
+  }) as typeof fetch;
+
+  try {
+    const result = await approveQuestionnaire({ questionnaire: "qn-1" });
+
+    assert.deepEqual(result, { approved: 2 });
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].url.endsWith("/api/questionnaires/qn-1/approve-reused"));
+    assert.equal(calls[0].method, "POST");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("approveQuestionnaire with an item approves that single item", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: { url: string; method?: string }[] = [];
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    calls.push({ url: typeof input === "string" ? input : input.toString(), method: init?.method });
+    return jsonResponse({ ok: true });
+  }) as typeof fetch;
+
+  try {
+    const result = await approveQuestionnaire({ questionnaire: "qn-1", item: "item-1" });
+
+    assert.deepEqual(result, { ok: true });
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].url.endsWith("/api/questionnaires/qn-1/items/item-1/approve"));
+    assert.equal(calls[0].method, "POST");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("questionnaire calls pass API errors through with their status", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => jsonResponse({ error: "not_answered" }, 409)) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      () => approveQuestionnaire({ questionnaire: "qn-1", item: "item-2" }),
+      /failed with 409/
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

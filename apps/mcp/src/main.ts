@@ -1,7 +1,7 @@
 import { argv, stdin, stdout } from "node:process";
 import { fileURLToPath } from "node:url";
 import { isAuthRequired } from "@magpie/auth";
-import { approveSeedPlan, askQuestion, generateOutline, getCitationSections, getJson, listFlows, optionalStringArgument, stringArgument, submitFeedback } from "./kb-client.js";
+import { approveQuestionnaire, approveSeedPlan, askQuestion, createQuestionnaire, generateOutline, getCitationSections, getJson, getQuestionnaire, listFlows, optionalStringArgument, stringArgument, submitFeedback } from "./kb-client.js";
 import { createMcpLogger } from "./logger.js";
 
 type JsonRpcId = string | number | null;
@@ -48,7 +48,9 @@ interface JsonSchema {
   additionalProperties?: boolean;
 }
 
-const tools = [
+// Exported so the tool list can be asserted against without spawning the
+// stdio process (see main.test.ts).
+export const tools = [
   {
     name: "kb_ask",
     description:
@@ -189,6 +191,74 @@ const tools = [
       required: ["sectionIds"],
       additionalProperties: false
     } satisfies JsonSchema
+  },
+  {
+    name: "kb_questionnaire_create",
+    description:
+      "Create a questionnaire — a named batch of questions answered against one flow's knowledge base, with " +
+      "verbatim reuse of previously approved answers when the knowledge base hasn't changed. Returns immediately; " +
+      "items may still be answering — re-read with kb_questionnaire_get until no items are pending/answering. " +
+      "Discover flow ids with kb_flows.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Human-readable questionnaire name (e.g. 'Q3 vendor security review')."
+        },
+        flow: {
+          type: "string",
+          description: "The flow id whose knowledge base answers the batch (from kb_flows)."
+        },
+        questions: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: 500,
+          description: "The questions to answer, one per entry (1-500)."
+        }
+      },
+      required: ["name", "flow", "questions"],
+      additionalProperties: false
+    } satisfies JsonSchema
+  },
+  {
+    name: "kb_questionnaire_get",
+    description:
+      "Read a questionnaire worksheet: per-item status (reused/fresh/changed/unanswerable), answers, citations, " +
+      "and change explanations. Re-read until no items are pending/answering.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        questionnaire: {
+          type: "string",
+          description: "The questionnaire id (from kb_questionnaire_create)."
+        }
+      },
+      required: ["questionnaire"],
+      additionalProperties: false
+    } satisfies JsonSchema
+  },
+  {
+    name: "kb_questionnaire_approve",
+    description:
+      "Approve answers into the match corpus for future questionnaires: all reused items (default) or one item " +
+      "by id. Approval is what makes an answer reusable verbatim next time.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        questionnaire: {
+          type: "string",
+          description: "The questionnaire id (from kb_questionnaire_create)."
+        },
+        item: {
+          type: "string",
+          description: "Optional item id to approve one answered item instead of all reused items."
+        }
+      },
+      required: ["questionnaire"],
+      additionalProperties: false
+    } satisfies JsonSchema
   }
 ];
 
@@ -305,7 +375,9 @@ async function dispatch(message: JsonRpcRequest): Promise<unknown> {
   throw new Error(`Unsupported MCP method: ${message.method}`);
 }
 
-async function callTool(params: ToolCallParams): Promise<unknown> {
+// Exported so the tool → kb-client dispatch can be exercised without spawning
+// the stdio process (see main.test.ts).
+export async function callTool(params: ToolCallParams): Promise<unknown> {
   if (params.name === "kb_ask") {
     const question = stringArgument(params.arguments, "question");
     const flow = optionalStringArgument(params.arguments, "flow");
@@ -343,6 +415,21 @@ async function callTool(params: ToolCallParams): Promise<unknown> {
 
   if (params.name === "kb_citation") {
     const result = await getCitationSections(params.arguments, { token: stdioAuthToken });
+    return textResult(result);
+  }
+
+  if (params.name === "kb_questionnaire_create") {
+    const result = await createQuestionnaire(params.arguments, { token: stdioAuthToken });
+    return textResult(result);
+  }
+
+  if (params.name === "kb_questionnaire_get") {
+    const result = await getQuestionnaire(params.arguments, { token: stdioAuthToken });
+    return textResult(result);
+  }
+
+  if (params.name === "kb_questionnaire_approve") {
+    const result = await approveQuestionnaire(params.arguments, { token: stdioAuthToken });
     return textResult(result);
   }
 
