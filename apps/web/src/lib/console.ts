@@ -1,4 +1,5 @@
 import { ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, JobType, JobView, KnowledgeStats, Proposal, UiNotification, WatcherView } from "./types";
+import { TERMINAL_PROPOSAL_STATUSES } from "@magpie/core";
 
 export function sectionTitle(section: ConsoleSection): string {
   if (section === "knowledge") {
@@ -344,8 +345,11 @@ export function bulkActionEligible(
       // Accept or hosted no-PR Mark Merged) needs a pushed branch.
       return proposal.status === "branch-pushed" && !proposal.publication?.pullRequestUrl;
     case "reject":
-      // Local-git Bin works on the pushed review branch; hosted Reject only on drafts.
-      return proposal.localGitDestination ? proposal.status === "branch-pushed" : proposal.status === "draft";
+      // Local-git Bin works on any non-terminal proposal (bin early, before publishing,
+      // or after); hosted Reject only on drafts.
+      return proposal.localGitDestination
+        ? !TERMINAL_PROPOSAL_STATUSES.includes(proposal.status)
+        : proposal.status === "draft";
   }
 }
 

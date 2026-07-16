@@ -2019,7 +2019,9 @@ test("rejectLocalProposal rejects a hosted destination", async () => {
   assert.equal(result.ok === false && result.code, "not_local_git_destination");
 });
 
-test("rejectLocalProposal rejects a proposal that is not branch-pushed", async () => {
+test("rejectLocalProposal bins a pre-publish proposal without deleting a branch", async () => {
+  // A draft local-git proposal has no pushed review branch, so it is rejected +
+  // frozen but the branch delete is skipped entirely (nothing to clean up).
   const ctx = ctxWithDestination("file:///tmp/demo-kb");
   const created = await ctx.stores.proposals.create({
     title: "Draft",
@@ -2031,8 +2033,28 @@ test("rejectLocalProposal rejects a proposal that is not branch-pushed", async (
   });
   const proposal = await ctx.stores.proposals.get(created.id);
   assert.ok(proposal);
+
+  let deleteCalls = 0;
+  const result = await proposals.rejectLocalProposal(ctx, proposal, async () => {
+    deleteCalls += 1;
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(deleteCalls, 0);
+  assert.equal((await ctx.stores.proposals.get(created.id))?.status, "rejected");
+});
+
+test("rejectLocalProposal refuses a proposal that is already terminal", async () => {
+  const url = pathToFileURL(path.join(tmpdir(), "demo-kb")).href;
+  const ctx = ctxWithDestination(url);
+  const id = await branchPushedProposal(ctx, url);
+  await ctx.stores.proposals.updateStatus(id, "merged");
+  const proposal = await ctx.stores.proposals.get(id);
+  assert.ok(proposal);
+
   const result = await proposals.rejectLocalProposal(ctx, proposal, async () => undefined);
   assert.equal(result.ok === false && result.code, "proposal_not_rejectable");
+  assert.equal((await ctx.stores.proposals.get(id))?.status, "merged");
 });
 
 test("recordPublicationFromCompletedJob supersedes a proposal when the publish was a no-op", async () => {

@@ -497,9 +497,9 @@ export function ProposalPanel({
                         Accept
                       </Chip>
                       <Chip
-                        disabled={loading || selectedProposal.status !== "branch-pushed"}
+                        disabled={loading || !bulkActionEligible("reject", selectedProposal)}
                         onClick={() => void rejectProposal(selectedProposal.id)}
-                        title="Bin: reject this proposal — delete the review branch and freeze its gap cluster so it is not re-proposed"
+                        title="Bin: reject this proposal (at any stage before it merges) — freeze its gap cluster so it is not re-proposed, and delete the review branch if one was published"
                       >
                         Bin
                       </Chip>

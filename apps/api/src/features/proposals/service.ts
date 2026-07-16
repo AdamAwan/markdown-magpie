@@ -33,7 +33,7 @@ import {
   publishProposalOutputSchema,
   splitDocumentOutputSchema
 } from "@magpie/jobs";
-import { PROPOSAL_STATUSES, resolveProposalTargetPath } from "@magpie/core";
+import { PROPOSAL_STATUSES, TERMINAL_PROPOSAL_STATUSES, resolveProposalTargetPath } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import type { ProposalListOptions } from "../../stores/proposal-store.js";
 import {
@@ -833,10 +833,13 @@ export type RejectLocalProposalResult =
       message: string;
     };
 
-// Bins (rejects) a branch-pushed local-git proposal — the local mirror of a GitHub
-// pull request closed without merging (see applyPullRequestTransition): mark the
-// proposal `rejected`, freeze its gap cluster so it is not re-drafted, and delete
-// the pushed review branch. The branch delete is injected so tests exercise the
+// Bins (rejects) a local-git proposal — the local mirror of a GitHub pull request
+// closed without merging (see applyPullRequestTransition): mark the proposal
+// `rejected` and freeze its gap cluster so it is not re-drafted. Rejection is
+// allowed from any non-terminal status, so an unwanted proposal can be binned
+// early (draft/ready) without first being published to a review branch. When a
+// review branch WAS pushed (branch-pushed), it is also deleted; otherwise there is
+// nothing to clean up. The branch delete is injected so tests exercise the
 // orchestration without shelling out. Marking rejected + freezing is the
 // authoritative state and happens first; a failed branch delete is logged but does
 // not fail the rejection (the leftover branch is stale and harmless), mirroring how
@@ -846,11 +849,11 @@ export async function rejectLocalProposal(
   proposal: Proposal,
   deleteBranch: typeof deleteLocalProposalBranch = deleteLocalProposalBranch
 ): Promise<RejectLocalProposalResult> {
-  if (proposal.status !== "branch-pushed" || !proposal.publication?.branchName) {
+  if (TERMINAL_PROPOSAL_STATUSES.includes(proposal.status)) {
     return {
       ok: false,
       code: "proposal_not_rejectable",
-      message: "Only a branch-pushed proposal with a published branch can be rejected."
+      message: "A merged, rejected, or superseded proposal cannot be rejected."
     };
   }
 
@@ -871,18 +874,21 @@ export async function rejectLocalProposal(
     await ctx.stores.gapClusters.freezeCluster(rejected.gapClusterId);
   }
 
-  try {
-    const repoPath = fileURLToPath(destination.url);
-    await deleteBranch({
-      repoPath,
-      branchName: proposal.publication.branchName,
-      defaultBranch: await resolveLocalGitTargetBranch(repoPath, destination.branch)
-    });
-  } catch (error) {
-    logger.warn(
-      { proposalId: proposal.id, err: error instanceof Error ? error.message : String(error) },
-      "reject: branch delete failed (proposal already rejected and frozen)"
-    );
+  // Only a published proposal has a review branch to delete; a draft/ready bin has none.
+  if (proposal.publication?.branchName) {
+    try {
+      const repoPath = fileURLToPath(destination.url);
+      await deleteBranch({
+        repoPath,
+        branchName: proposal.publication.branchName,
+        defaultBranch: await resolveLocalGitTargetBranch(repoPath, destination.branch)
+      });
+    } catch (error) {
+      logger.warn(
+        { proposalId: proposal.id, err: error instanceof Error ? error.message : String(error) },
+        "reject: branch delete failed (proposal already rejected and frozen)"
+      );
+    }
   }
 
   return { ok: true, proposal: rejected };
