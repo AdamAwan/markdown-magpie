@@ -254,7 +254,9 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
     `feedback:questions`) via `requireScopes`, plus **flow-scoped capabilities**
     (`read`/`manage`/`ask` per flow) mapped from IdP role names via
     `KNOWLEDGE_ROLE_GRANTS`. Fail-closed with deliberate permissive carve-outs (auth off,
-    no grants configured, M2M tokens without a roles claim). Cross-flow ids read as 404,
+    no grants configured, genuine M2M tokens — identified by the POSITIVE
+    `gty: "client-credentials"` marker, not merely an absent roles claim, so a human
+    token whose roles claim went missing fails CLOSED). Cross-flow ids read as 404,
     not 403 (`docs/authorization.md`).
 19. **MCP** (`apps/mcp`) — thin client over the HTTP API, stdio + Streamable-HTTP
     transports, **ten tools**: `kb_ask`, `kb_search`, `kb_citation`, `kb_feedback`,

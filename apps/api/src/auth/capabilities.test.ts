@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Principal } from "@magpie/auth";
-import { principalHasCapability } from "./capabilities.js";
+import { isRolelessHumanToken, principalHasCapability } from "./capabilities.js";
 import type { KnowledgeRoleGrants } from "../stores/knowledge-repositories.js";
 
 const GRANTS: KnowledgeRoleGrants = {
@@ -11,8 +11,14 @@ const GRANTS: KnowledgeRoleGrants = {
   "kb-super": { "*": ["read", "manage", "ask", "admin"] }
 };
 
-function principal(roles: string[] | undefined): Pick<Principal, "roles"> {
-  return { roles };
+function principal(roles: string[] | undefined): Pick<Principal, "roles" | "payload"> {
+  return { roles, payload: {} };
+}
+
+// A genuine machine-to-machine token: no roles claim, but carrying the POSITIVE
+// Auth0 client-credentials grant-type marker.
+function m2m(): Pick<Principal, "roles" | "payload"> {
+  return { roles: undefined, payload: { gty: "client-credentials" } };
 }
 
 test("no grants configured -> feature inactive, everything allowed", () => {
@@ -24,8 +30,32 @@ test("absent principal (auth disabled) is allowed", () => {
   assert.equal(principalHasCapability(GRANTS, undefined, "manage", "hr"), true);
 });
 
-test("service/M2M token (roles claim absent) falls back to scope-only (allowed)", () => {
-  assert.equal(principalHasCapability(GRANTS, principal(undefined), "manage", "eng"), true);
+test("genuine M2M token (client-credentials marker, no roles claim) falls back to scope-only (allowed)", () => {
+  assert.equal(principalHasCapability(GRANTS, m2m(), "manage", "eng"), true);
+});
+
+test("human token missing its roles claim is DENIED flow-scoped access (fails closed)", () => {
+  // roles claim absent AND no client-credentials marker: an interactive token whose
+  // roles claim was dropped/never emitted (IdP misconfig). It must NOT be reclassified
+  // as an all-flows service principal — it is denied rather than granted.
+  const rolelessHuman = principal(undefined);
+  assert.equal(principalHasCapability(GRANTS, rolelessHuman, "manage", "eng"), false);
+  assert.equal(principalHasCapability(GRANTS, rolelessHuman, "read", "hr"), false);
+  assert.equal(principalHasCapability(GRANTS, rolelessHuman, "ask", "hr"), false);
+});
+
+test("isRolelessHumanToken flags a roleless token lacking the M2M marker only when grants are active", () => {
+  // Only fires for a real signal an operator should act on: grants configured,
+  // roles absent, no client-credentials marker.
+  assert.equal(isRolelessHumanToken(GRANTS, principal(undefined)), true);
+  // A genuine M2M token is not flagged.
+  assert.equal(isRolelessHumanToken(GRANTS, m2m()), false);
+  // A role-aware principal (roles present) is not flagged.
+  assert.equal(isRolelessHumanToken(GRANTS, principal([])), false);
+  // No grants configured -> feature inactive, nothing to flag.
+  assert.equal(isRolelessHumanToken({}, principal(undefined)), false);
+  // No principal (auth disabled) -> nothing to flag.
+  assert.equal(isRolelessHumanToken(GRANTS, undefined), false);
 });
 
 test("role-aware principal is scoped to its flow's granted capabilities", () => {
