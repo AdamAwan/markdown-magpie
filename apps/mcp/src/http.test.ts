@@ -72,7 +72,13 @@ test("protected-resource metadata is also served under /mcp suffix", async () =>
   assert.equal(res.status, 200);
   const body = res.body as { resource: string; scopes_supported: string[] };
   assert.equal(body.resource, resourceUrl);
-  assert.deepEqual(body.scopes_supported, ["read:knowledge", "ask:knowledge", "feedback:questions", "manage:jobs"]);
+  assert.deepEqual(body.scopes_supported, [
+    "read:knowledge",
+    "ask:knowledge",
+    "feedback:questions",
+    "manage:jobs",
+    "manage:knowledge"
+  ]);
 });
 
 test("/mcp without a bearer token returns a discovery challenge", async () => {
@@ -160,6 +166,91 @@ test("tools/call kb_citation requires read:knowledge scope", async () => {
     .set("authorization", await auth.token(["ask:knowledge"]))
     .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_citation", arguments: { sectionIds: ["sec-1"] } } });
   assert.equal(res.status, 403);
+});
+
+test("tools/call kb_questionnaire_create requires ask:knowledge scope", async () => {
+  const auth = await makeTestAuth();
+  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const res = await request(app)
+    .post("/mcp")
+    .set("authorization", await auth.token(["read:knowledge"]))
+    .send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "kb_questionnaire_create", arguments: { name: "n", flow: "f", questions: ["q"] } }
+    });
+  assert.equal(res.status, 403);
+});
+
+test("tools/call kb_questionnaire_get requires read:knowledge scope", async () => {
+  const auth = await makeTestAuth();
+  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const res = await request(app)
+    .post("/mcp")
+    .set("authorization", await auth.token(["ask:knowledge"]))
+    .send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "kb_questionnaire_get", arguments: { questionnaire: "qn-1" } }
+    });
+  assert.equal(res.status, 403);
+});
+
+test("tools/call kb_questionnaire_approve requires manage:knowledge scope", async () => {
+  const auth = await makeTestAuth();
+  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  // Every other scope in the set is insufficient for the approve tool.
+  const res = await request(app)
+    .post("/mcp")
+    .set("authorization", await auth.token(["read:knowledge", "ask:knowledge", "manage:jobs"]))
+    .send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "kb_questionnaire_approve", arguments: { questionnaire: "qn-1" } }
+    });
+  assert.equal(res.status, 403);
+});
+
+test("a correctly scoped kb_questionnaire_get dispatches to the questionnaire route", async () => {
+  const auth = await makeTestAuth();
+
+  const originalFetch = globalThis.fetch;
+  let captured: string | undefined;
+  const fetchStub: typeof fetch = async (input: RequestInfo | URL) => {
+    captured = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+    return new Response(
+      JSON.stringify({
+        questionnaire: { id: "qn-1", name: "Q3 review", flowId: "magpie-support", status: "open", items: [] }
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  };
+  globalThis.fetch = fetchStub;
+
+  try {
+    const app = createHttpMcpApp(
+      testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+    );
+    const res = await request(app)
+      .post("/mcp")
+      .set("authorization", await auth.token(["read:knowledge"]))
+      .set("accept", "application/json, text/event-stream")
+      .send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "kb_questionnaire_get", arguments: { questionnaire: "qn-1" } }
+      });
+
+    assert.equal(res.status, 200);
+    assert.ok(captured, "expected the tool to call the downstream API");
+    assert.match(captured, /\/api\/questionnaires\/qn-1$/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("a valid token with the right scope passes the MCP boundary (reaches transport)", async () => {

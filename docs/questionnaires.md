@@ -71,6 +71,24 @@ Questionnaire item asks record question logs with `purpose: "questionnaire"`:
 | `POST /api/questionnaires/:id/items/:itemId/approve` | `manage:knowledge` + flow `manage` | 409 unless the item is `answered` |
 | `POST /api/questionnaires/:id/approve-reused` | `manage:knowledge` + flow `manage` | bulk-approve reused items |
 
+## MCP surface
+
+The MCP server ([docs/mcp.md](mcp.md)) exposes questionnaire mode to MCP clients as
+three thin tools over the routes above:
+
+| Tool | API call | HTTP-transport scope |
+|---|---|---|
+| `kb_questionnaire_create` | `POST /api/questionnaires` | `ask:knowledge` |
+| `kb_questionnaire_get` | `GET /api/questionnaires/:id` | `read:knowledge` |
+| `kb_questionnaire_approve` | `POST …/approve-reused`, or `POST …/items/:itemId/approve` when `item` is given | `manage:knowledge` |
+
+Create returns the initial worksheet **immediately** — reused items already carry
+answers; fresh/changed items drip through the queue, so clients re-read with
+`kb_questionnaire_get` until no items are `pending`/`answering`. The worksheet view
+keeps per-item status/outcome/answer/changeReason plus `{path, heading}` citations and
+strips internal ids and citation fingerprints (the item `id` stays — approve targets
+it). Export stays console/API-only.
+
 ## Configuration
 
 | Env | Default | Meaning |

@@ -94,6 +94,51 @@ Input: `{ "sectionIds": string[] }` — 1–20 `sectionId` values from `kb_ask` 
 
 Returns `{ "sections": [ DocumentSection, ... ], "missing": string[] }`. Each section is the **currently indexed** version (the KB may have changed since the answer was produced). Ids that no longer resolve land in `missing` instead of failing the call — the knowledge base changed; re-ask or use `kb_search`.
 
+### `kb_questionnaire_create`
+
+Creates a [questionnaire](questionnaires.md) — a named batch of questions answered against one flow's knowledge base, with verbatim reuse of previously approved answers while the KB sections they cited are unchanged.
+
+Input: `{ "name": string, "flow": string, "questions": string[] }` — 1–500 questions, one per entry; `flow` ids come from `kb_flows`.
+
+Returns the initial worksheet immediately (same shape as `kb_questionnaire_get`). **Creation is asynchronous by design**: reused items already carry answers, but fresh/changed items drip through the `answer_question` queue — a batch can be hundreds of questions, so the tool never waits. Re-read with `kb_questionnaire_get` until no items are `pending`/`answering`.
+
+### `kb_questionnaire_get`
+
+Reads a questionnaire worksheet. Input: `{ "questionnaire": string }` (the id from `kb_questionnaire_create`).
+
+Returns:
+
+```json
+{
+  "id": "string",
+  "name": "string",
+  "flowId": "string",
+  "status": "open | completed | archived",
+  "items": [
+    {
+      "id": "string",                       // pass to kb_questionnaire_approve's `item`
+      "position": 0,
+      "question": "string",
+      "status": "pending | answering | answered | unanswerable | approved",
+      "outcome": "reused | fresh | changed", // present once matched/answered
+      "answer": "string",                    // present once answered
+      "changeReason": { "kind": "section_changed | section_missing | new_content", "...": "..." },
+      "citations": [ { "path": "...", "heading": "..." } ]
+    }
+  ]
+}
+```
+
+Internal plumbing (question-log ids, reuse links, citation content fingerprints) is stripped — the worksheet carries what a reviewing model needs. Reading the worksheet also resumes a stalled answer drip server-side.
+
+### `kb_questionnaire_approve`
+
+Approves answers into the match corpus for future questionnaires — the human/agent act that makes an answer reusable verbatim next time.
+
+Input: `{ "questionnaire": string, "item"?: string }`.
+
+Without `item`, bulk-approves all reused items (`POST /api/questionnaires/:id/approve-reused`) and returns `{ "approved": number }`. With `item`, approves that single answered item (`POST /api/questionnaires/:id/items/:itemId/approve`) and returns `{ "ok": true }`; the API answers 409 unless the item's status is `answered`.
+
 ## Configuration
 
 ### Common (all transports)
@@ -145,11 +190,15 @@ Per-tool scopes:
 | Tool | Required scope |
 | --- | --- |
 | `kb_search` | `read:knowledge` |
+| `kb_flows` | `read:knowledge` |
 | `kb_ask` | `ask:knowledge` |
 | `kb_feedback` | `feedback:questions` |
 | `kb_outline` | `manage:jobs` |
 | `kb_seed` | `manage:jobs` |
 | `kb_citation` | `read:knowledge` |
+| `kb_questionnaire_create` | `ask:knowledge` |
+| `kb_questionnaire_get` | `read:knowledge` |
+| `kb_questionnaire_approve` | `manage:knowledge` |
 
 The inbound user token is validated locally and **never forwarded** to the API. The HTTP server calls the API with its own separate service token, `MCP_API_AUTH_TOKEN` (a machine-to-machine credential). Startup fails fast if `AUTH_REQUIRED=true` and this token is missing.
 
@@ -162,7 +211,7 @@ The stdio transport presents a single bearer token to the API on every call, sup
 ## Requirements
 
 - The API must be running and reachable at `API_BASE_URL`.
-- A watcher must be running to process AI jobs; otherwise `kb_ask` (`answer_question`) and `kb_outline` (`outline_flow_seed`) will time out, and `kb_seed`'s (`draft_seed_document`) jobs stay queued.
+- A watcher must be running to process AI jobs; otherwise `kb_ask` (`answer_question`) and `kb_outline` (`outline_flow_seed`) will time out, `kb_seed`'s (`draft_seed_document`) jobs stay queued, and `kb_questionnaire_create`'s fresh/changed items stay `pending`/`answering` forever.
 
 ## Running
 
