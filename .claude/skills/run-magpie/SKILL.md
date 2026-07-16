@@ -59,7 +59,7 @@ AUTH_REQUIRED=false MAGPIE_CHECKOUT_ROOT="$PWD/.magpie/checkouts" npm run dev:ap
 
 # 4. Watcher — REQUIRED for the queue-only world (answers, drafts, publishing).
 #    Clear the M2M creds so it talks to the local API with no auth header, and
-#    OVERRIDE API_BASE_URL — the committed .env points it at the PRODUCTION API,
+#    OVERRIDE API_BASE_URL — your local .env (gitignored, deploy-only) points it at the PRODUCTION API,
 #    so without the override the watcher silently polls prod and 401s every claim
 #    while local jobs sit queued forever.
 #    On startup it logs which capabilities are ready; `provider` must be ready to
