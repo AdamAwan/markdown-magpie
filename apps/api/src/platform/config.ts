@@ -160,6 +160,11 @@ export interface AppConfig {
   // boot: like the flow-router cut-offs this is a safety-neutral tuning knob
   // (a mis-tune only changes how much pre-collapsing phase 1 does).
   gapClustering: GapClusteringConfig;
+  // Questionnaire mode (docs/questionnaires.md): near-verbatim match threshold
+  // and the per-questionnaire answer-drip concurrency cap. Safety-neutral
+  // tuning knobs — a mis-tune only changes reuse frequency / drip pace, never
+  // answer correctness — so out-of-range values fall back rather than fail boot.
+  questionnaires: QuestionnaireConfig;
   watcher: {
     name?: string;
     pollIntervalMs?: number;
@@ -218,6 +223,30 @@ function resolveGapClusteringConfig(env: NodeJS.ProcessEnv): GapClusteringConfig
   const value = parseUnitFloat(env.GAP_CLUSTER_ASSIGN_THRESHOLD, GAP_CLUSTER_DEFAULT_ASSIGN_THRESHOLD);
   // A threshold of 0 would bucket every gap together; treat it as invalid.
   return { assignThreshold: value > 0 ? value : GAP_CLUSTER_DEFAULT_ASSIGN_THRESHOLD };
+}
+
+interface QuestionnaireConfig {
+  // Cosine floor for "the same question re-asked": deliberately the same
+  // conservative bar the gap-cluster assignment landed on (near-identical
+  // rewordings only with text-embedding-3-small — see the 0.84 rationale above).
+  matchThreshold: number;
+  // Items a single questionnaire keeps in the answer pipeline at once. Kept
+  // small so a 200-question batch can never monopolise the interactive
+  // in-flight reservation that protects live /api/ask traffic (#240).
+  maxInflight: number;
+}
+
+const QUESTIONNAIRE_DEFAULT_MATCH_THRESHOLD = 0.84;
+const QUESTIONNAIRE_DEFAULT_MAX_INFLIGHT = 3;
+
+function resolveQuestionnaireConfig(env: NodeJS.ProcessEnv): QuestionnaireConfig {
+  const threshold = parseUnitFloat(env.QUESTIONNAIRE_MATCH_THRESHOLD, QUESTIONNAIRE_DEFAULT_MATCH_THRESHOLD);
+  const rawInflight = Number.parseInt(env.QUESTIONNAIRE_MAX_INFLIGHT ?? "", 10);
+  return {
+    // A threshold of 0 would match every prior item; treat it as invalid.
+    matchThreshold: threshold > 0 ? threshold : QUESTIONNAIRE_DEFAULT_MATCH_THRESHOLD,
+    maxInflight: Number.isInteger(rawInflight) && rawInflight > 0 ? rawInflight : QUESTIONNAIRE_DEFAULT_MAX_INFLIGHT
+  };
 }
 
 function parseUnitFloat(raw: string | undefined, fallback: number): number {
@@ -506,6 +535,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     flowRouter: resolveFlowRouterConfig(env),
     gapClustering: resolveGapClusteringConfig(env),
+    questionnaires: resolveQuestionnaireConfig(env),
     watcher: {
       name: parsed.WATCHER_NAME,
       pollIntervalMs: parsed.WATCHER_POLL_INTERVAL_MS,

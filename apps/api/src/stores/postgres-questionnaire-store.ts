@@ -301,6 +301,16 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
     return mapItem(row, citations.get(row.id) ?? []);
   }
 
+  async itemById(itemId: string): Promise<QuestionnaireItem | undefined> {
+    const result = await this.pool.query<ItemRow>("SELECT * FROM questionnaire_items WHERE id = $1", [itemId]);
+    const row = result.rows[0];
+    if (!row) {
+      return undefined;
+    }
+    const citations = await this.loadCitations([row.id]);
+    return mapItem(row, citations.get(row.id) ?? []);
+  }
+
   async nextPending(questionnaireId: string): Promise<QuestionnaireItem | undefined> {
     const result = await this.pool.query<ItemRow>(
       `

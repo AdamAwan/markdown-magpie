@@ -40,6 +40,7 @@ export interface QuestionnaireStore {
   ): Promise<QuestionnaireItem | undefined>;
   failItem(questionLogId: string, error: string): Promise<QuestionnaireItem | undefined>;
   itemByQuestionLogId(questionLogId: string): Promise<QuestionnaireItem | undefined>;
+  itemById(itemId: string): Promise<QuestionnaireItem | undefined>;
   nextPending(questionnaireId: string): Promise<QuestionnaireItem | undefined>;
   countAnswering(questionnaireId: string): Promise<number>;
   approveItem(itemId: string, citations: QuestionnaireItemCitation[], staleAtApproval: boolean): Promise<void>;
@@ -207,6 +208,11 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
 
   async itemByQuestionLogId(questionLogId: string): Promise<QuestionnaireItem | undefined> {
     const item = await this.findByLog(questionLogId);
+    return item ? structuredClone(item) : undefined;
+  }
+
+  async itemById(itemId: string): Promise<QuestionnaireItem | undefined> {
+    const item = this.items.get(itemId);
     return item ? structuredClone(item) : undefined;
   }
 
