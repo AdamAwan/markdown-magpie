@@ -82,7 +82,9 @@ logCapabilityReadiness(process.env, capabilityRuntime);
 logger.info({ capabilities }, "advertised capabilities");
 
 if (capabilities.length === 0) {
-  logger.warn("No runner capabilities are configured; the watcher will idle. Configure a provider or GitHub credentials.");
+  logger.warn(
+    "No runner capabilities are configured; the watcher will idle. Configure a provider or GitHub credentials."
+  );
 }
 
 // Fails fast on a malformed WATCHER_HEALTH_* override rather than silently
@@ -125,7 +127,10 @@ logger.info({ watcherName }, `Markdown Magpie watcher '${watcherName}' stopped`)
 // Logs, per capability, whether each required env var is set or MISSING — never
 // the secret values themselves — so a misconfiguration is visible at startup.
 function logCapabilityReadiness(env: NodeJS.ProcessEnv, runtime: CapabilityRuntime): void {
-  logger.info({ gitAvailable: runtime.gitAvailable() }, `Git executable: ${runtime.gitAvailable() ? "available" : "MISSING"}`);
+  logger.info(
+    { gitAvailable: runtime.gitAvailable() },
+    `Git executable: ${runtime.gitAvailable() ? "available" : "MISSING"}`
+  );
   for (const gate of CAPABILITY_GATES) {
     if (gate.requiredEnv.length === 0) {
       logger.info({ capability: gate.capability }, `Capability ${pad(gate.capability)} — always available`);

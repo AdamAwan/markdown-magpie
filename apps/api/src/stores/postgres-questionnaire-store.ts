@@ -289,10 +289,9 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
   }
 
   async itemByQuestionLogId(questionLogId: string): Promise<QuestionnaireItem | undefined> {
-    const result = await this.pool.query<ItemRow>(
-      "SELECT * FROM questionnaire_items WHERE question_log_id = $1",
-      [questionLogId]
-    );
+    const result = await this.pool.query<ItemRow>("SELECT * FROM questionnaire_items WHERE question_log_id = $1", [
+      questionLogId
+    ]);
     const row = result.rows[0];
     if (!row) {
       return undefined;

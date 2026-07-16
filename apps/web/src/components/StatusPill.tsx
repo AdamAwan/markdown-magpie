@@ -251,9 +251,7 @@ export function StatusPill({
           <section>
             <GroupTitle>
               Recent
-              {notifications.length > 0 ? (
-                <ClearButton onClick={onClearNotifications}>Clear</ClearButton>
-              ) : null}
+              {notifications.length > 0 ? <ClearButton onClick={onClearNotifications}>Clear</ClearButton> : null}
             </GroupTitle>
             {notifications.length === 0 ? (
               <EmptyLine>No recent notifications.</EmptyLine>
@@ -264,7 +262,11 @@ export function StatusPill({
                     <FeedDot $tone={notificationStatusTone[notification.tone]} aria-hidden="true" />
                     <span>{notification.text}</span>
                     <time dateTime={notification.at}>{new Date(notification.at).toLocaleTimeString()}</time>
-                    <IconButton label="Dismiss notification" size="sm" onClick={() => onDismissNotification(notification.id)}>
+                    <IconButton
+                      label="Dismiss notification"
+                      size="sm"
+                      onClick={() => onDismissNotification(notification.id)}
+                    >
                       ✕
                     </IconButton>
                   </FeedItem>

@@ -1,4 +1,15 @@
-import { ConsoleNotice, ConsoleSection, Health, JobTransitionMessage, JobType, JobView, KnowledgeStats, Proposal, UiNotification, WatcherView } from "./types";
+import {
+  ConsoleNotice,
+  ConsoleSection,
+  Health,
+  JobTransitionMessage,
+  JobType,
+  JobView,
+  KnowledgeStats,
+  Proposal,
+  UiNotification,
+  WatcherView
+} from "./types";
 import { TERMINAL_PROPOSAL_STATUSES } from "@magpie/core";
 
 export function sectionTitle(section: ConsoleSection): string {
@@ -379,9 +390,7 @@ export function bulkOutcomeMessage(
       const code = failure.code ?? "error";
       byCode.set(code, (byCode.get(code) ?? 0) + 1);
     }
-    const tally = [...byCode.entries()]
-      .map(([code, count]) => (count === 1 ? code : `${code} ×${count}`))
-      .join(", ");
+    const tally = [...byCode.entries()].map(([code, count]) => (count === 1 ? code : `${code} ×${count}`)).join(", ");
     parts.push(`Skipped ${failures.length}: ${tally}.`);
   }
   return {

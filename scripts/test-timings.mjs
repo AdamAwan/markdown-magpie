@@ -40,7 +40,11 @@ function workspacePackages() {
       if (!existsSync(packageJson)) continue;
       const manifest = JSON.parse(readFileSync(packageJson, "utf8"));
       if (manifest.scripts?.test) {
-        packages.push({ name: manifest.name, path: join(pattern.slice(0, -2), entry.name), testScript: manifest.scripts.test });
+        packages.push({
+          name: manifest.name,
+          path: join(pattern.slice(0, -2), entry.name),
+          testScript: manifest.scripts.test
+        });
       }
     }
   }
@@ -78,7 +82,9 @@ const allWorkspaces = workspacePackages();
 const selected =
   requestedWorkspaces.length === 0
     ? allWorkspaces
-    : allWorkspaces.filter((workspace) => requestedWorkspaces.includes(workspace.name) || requestedWorkspaces.includes(workspace.path));
+    : allWorkspaces.filter(
+        (workspace) => requestedWorkspaces.includes(workspace.name) || requestedWorkspaces.includes(workspace.path)
+      );
 
 if (selected.length === 0) {
   console.error("No matching test workspaces found.");

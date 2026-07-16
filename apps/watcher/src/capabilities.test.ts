@@ -29,23 +29,29 @@ describe("deriveCapabilities", () => {
   });
 
   it("advertises openai-compatible only when base url, key, and model are all set", () => {
-    assert.ok(!deriveCapabilities({ OPENAI_COMPATIBLE_BASE_URL: "u", OPENAI_COMPATIBLE_API_KEY: "k" })
-      .includes("openai-compatible"));
-    assert.ok(deriveCapabilities({
-      OPENAI_COMPATIBLE_BASE_URL: "https://api.example.com/v1",
-      OPENAI_COMPATIBLE_API_KEY: "key",
-      OPENAI_COMPATIBLE_MODEL: "gpt"
-    }).includes("openai-compatible"));
+    assert.ok(
+      !deriveCapabilities({ OPENAI_COMPATIBLE_BASE_URL: "u", OPENAI_COMPATIBLE_API_KEY: "k" }).includes(
+        "openai-compatible"
+      )
+    );
+    assert.ok(
+      deriveCapabilities({
+        OPENAI_COMPATIBLE_BASE_URL: "https://api.example.com/v1",
+        OPENAI_COMPATIBLE_API_KEY: "key",
+        OPENAI_COMPATIBLE_MODEL: "gpt"
+      }).includes("openai-compatible")
+    );
   });
 
   it("advertises azure-openai only when endpoint, key, and deployment are all set", () => {
-    assert.ok(!deriveCapabilities({ AZURE_OPENAI_ENDPOINT: "e", AZURE_OPENAI_API_KEY: "k" })
-      .includes("azure-openai"));
-    assert.ok(deriveCapabilities({
-      AZURE_OPENAI_ENDPOINT: "https://az.example.com",
-      AZURE_OPENAI_API_KEY: "key",
-      AZURE_OPENAI_CHAT_DEPLOYMENT: "deploy"
-    }).includes("azure-openai"));
+    assert.ok(!deriveCapabilities({ AZURE_OPENAI_ENDPOINT: "e", AZURE_OPENAI_API_KEY: "k" }).includes("azure-openai"));
+    assert.ok(
+      deriveCapabilities({
+        AZURE_OPENAI_ENDPOINT: "https://az.example.com",
+        AZURE_OPENAI_API_KEY: "key",
+        AZURE_OPENAI_CHAT_DEPLOYMENT: "deploy"
+      }).includes("azure-openai")
+    );
   });
 
   it("advertises codex when its CLI path is configured", () => {
@@ -61,15 +67,25 @@ describe("deriveCapabilities", () => {
   it("advertises github only with a token and a full git author identity", () => {
     const runtime = { gitAvailable: () => true };
     assert.ok(!deriveCapabilities({ GITHUB_TOKEN: "tok" }, runtime).includes("github"));
-    assert.ok(!deriveCapabilities({
-      GITHUB_TOKEN: "tok",
-      MAGPIE_GIT_AUTHOR_NAME: "Magpie"
-    }, runtime).includes("github"));
-    assert.ok(deriveCapabilities({
-      GITHUB_TOKEN: "tok",
-      MAGPIE_GIT_AUTHOR_NAME: "Magpie",
-      MAGPIE_GIT_AUTHOR_EMAIL: "magpie@example.com"
-    }, runtime).includes("github"));
+    assert.ok(
+      !deriveCapabilities(
+        {
+          GITHUB_TOKEN: "tok",
+          MAGPIE_GIT_AUTHOR_NAME: "Magpie"
+        },
+        runtime
+      ).includes("github")
+    );
+    assert.ok(
+      deriveCapabilities(
+        {
+          GITHUB_TOKEN: "tok",
+          MAGPIE_GIT_AUTHOR_NAME: "Magpie",
+          MAGPIE_GIT_AUTHOR_EMAIL: "magpie@example.com"
+        },
+        runtime
+      ).includes("github")
+    );
   });
 
   it("does not advertise github when git is unavailable", () => {
@@ -94,10 +110,12 @@ describe("deriveCapabilities", () => {
   it("does not advertise local-git without a full author identity or without git", () => {
     const runtime = { gitAvailable: () => true };
     assert.ok(!deriveCapabilities({ MAGPIE_GIT_AUTHOR_NAME: "Magpie" }, runtime).includes("local-git"));
-    assert.ok(!deriveCapabilities(
-      { MAGPIE_GIT_AUTHOR_NAME: "Magpie", MAGPIE_GIT_AUTHOR_EMAIL: "magpie@example.com" },
-      { gitAvailable: () => false }
-    ).includes("local-git"));
+    assert.ok(
+      !deriveCapabilities(
+        { MAGPIE_GIT_AUTHOR_NAME: "Magpie", MAGPIE_GIT_AUTHOR_EMAIL: "magpie@example.com" },
+        { gitAvailable: () => false }
+      ).includes("local-git")
+    );
   });
 
   it("a github watcher also advertises local-git so it can publish both destination kinds", () => {

@@ -6,7 +6,14 @@ import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import type { WatcherApi } from "../http-client.js";
 import { buildSourceGroundedPrompt, parseJobOutput } from "../job-prompts.js";
 import { logger } from "../logger.js";
-import { fetchSourceMapEntries, hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf, stampSourceMapUpdates, type PreparedSources } from "../source-workspace.js";
+import {
+  fetchSourceMapEntries,
+  hasFsSources,
+  prepareSourceWorkspaces,
+  sourceDescriptorsOf,
+  stampSourceMapUpdates,
+  type PreparedSources
+} from "../source-workspace.js";
 import { PROVIDER_JOB_TYPES, runGenerativeJob } from "./generative.js";
 
 export type PromptMode = "arg" | "stdin";
@@ -125,7 +132,11 @@ export class CliRunner {
     });
   }
 
-  private async runSourceGrounded(job: JobView, descriptors: SourceDescriptor[], signal: AbortSignal): Promise<unknown> {
+  private async runSourceGrounded(
+    job: JobView,
+    descriptors: SourceDescriptor[],
+    signal: AbortSignal
+  ): Promise<unknown> {
     const prepared = await this.prepareWorkspaces(descriptors, { checkoutRoot: this.checkoutRoot });
     // prepareSourceWorkspaces throws when no fs source resolved, so a first
     // workspace always exists on this path.
@@ -152,7 +163,13 @@ export class CliRunner {
           ];
     const prompt = buildSourceGroundedPrompt(job, prepared.workspaces, notes, "cli", mapEntries, fetchable);
     logger.info(
-      { jobId: job.id, jobType: job.type, command: this.command, workspaceCount: prepared.workspaces.length, cwd: primary.rootDir },
+      {
+        jobId: job.id,
+        jobType: job.type,
+        command: this.command,
+        workspaceCount: prepared.workspaces.length,
+        cwd: primary.rootDir
+      },
       `${job.type}[${job.id}]: running ${this.command} CLI read-only over ${prepared.workspaces.length} source workspace(s)`
     );
     const content = await this.spawnCli(prompt, signal, {
@@ -252,7 +269,10 @@ export class CliRunner {
         // claude carries the system prompt on --system-prompt, so its positional
         // prompt is the messages alone; codex keeps the folded SYSTEM: block.
         const prompt = this.capability === "claude" ? renderCliMessages(request) : renderCliPrompt(request);
-        logger.debug({ jobId: job.id, jobType: job.type, command: this.command, promptMode: this.promptMode }, `${job.type}[${job.id}]: invoking ${this.command} CLI (${this.promptMode} mode)`);
+        logger.debug(
+          { jobId: job.id, jobType: job.type, command: this.command, promptMode: this.promptMode },
+          `${job.type}[${job.id}]: invoking ${this.command} CLI (${this.promptMode} mode)`
+        );
         const content = await this.spawnCli(prompt, request.signal ?? new AbortController().signal, {
           // Neutral cwd: the watcher's own cwd is a Claude Code project in dev
           // (this repo), whose CLAUDE.md / .mcp.json / .claude settings would
@@ -260,13 +280,20 @@ export class CliRunner {
           cwd: tmpdir(),
           extraArgs: this.generativeIsolationArgs(request.system)
         });
-        logger.debug({ jobId: job.id, jobType: job.type, command: this.command, outputLength: content.length }, `${job.type}[${job.id}]: ${this.command} CLI finished, ${content.length} char(s) of output`);
+        logger.debug(
+          { jobId: job.id, jobType: job.type, command: this.command, outputLength: content.length },
+          `${job.type}[${job.id}]: ${this.command} CLI finished, ${content.length} char(s) of output`
+        );
         return { content };
       }
     };
   }
 
-  private spawnCli(prompt: string, signal: AbortSignal, opts?: { cwd?: string; extraArgs?: string[]; timeoutMs?: number }): Promise<string> {
+  private spawnCli(
+    prompt: string,
+    signal: AbortSignal,
+    opts?: { cwd?: string; extraArgs?: string[]; timeoutMs?: number }
+  ): Promise<string> {
     return new Promise((resolve, reject) => {
       if (signal.aborted) {
         reject(new Error("CLI runner aborted before start"));

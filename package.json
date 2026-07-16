@@ -27,6 +27,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "prepare": "husky",
     "test": "npm run test --workspaces --if-present",
     "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
     "test:timings": "node scripts/test-timings.mjs",
@@ -43,11 +44,16 @@
     "eslint": "^10.7.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.7.0",
+    "husky": "^9.1.7",
     "knip": "^6.27.0",
+    "lint-staged": "^16.4.0",
     "prettier": "^3.9.5",
     "tsx": "^4.23.1",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.64.0"
+  },
+  "lint-staged": {
+    "*": "prettier --ignore-unknown --write"
   },
   "overrides": {
     "postcss": "^8.5.10"

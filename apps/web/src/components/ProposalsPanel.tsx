@@ -229,8 +229,7 @@ const BULK_ACTIONS: Array<{ action: BulkProposalAction; label: string; title: st
   {
     action: "reject",
     label: "Reject / Bin",
-    title:
-      "Reject the selected proposals: drafts on hosted flows, pushed review branches (Bin) on local-git flows"
+    title: "Reject the selected proposals: drafts on hosted flows, pushed review branches (Bin) on local-git flows"
   }
 ];
 
@@ -541,7 +540,10 @@ export function ProposalPanel({
                       {selectedProposal.publication.branchName}
                     </Badge>
                   ) : publishQueued ? (
-                    <Badge tone="pending" title="A publish job for this proposal is queued; this page updates when it finishes">
+                    <Badge
+                      tone="pending"
+                      title="A publish job for this proposal is queued; this page updates when it finishes"
+                    >
                       Publish queued
                     </Badge>
                   ) : (

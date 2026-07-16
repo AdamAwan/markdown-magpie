@@ -15,13 +15,18 @@ export function sourceMapRoutes(ctx: AppContext): Hono {
 
   app.get("/", requireScopes("manage:jobs"), async (c) => {
     const raw = c.req.query("sourceIds") ?? "";
-    const sourceIds = [...new Set(raw.split(",").map((id) => id.trim()).filter(Boolean))];
+    const sourceIds = [
+      ...new Set(
+        raw
+          .split(",")
+          .map((id) => id.trim())
+          .filter(Boolean)
+      )
+    ];
     if (sourceIds.length === 0) {
       return c.json({ error: "source_ids_required" }, 400);
     }
-    const lists = await Promise.all(
-      sourceIds.map((id) => ctx.stores.sourceMap.listBySource(id, PROMPT_ENTRY_LIMIT))
-    );
+    const lists = await Promise.all(sourceIds.map((id) => ctx.stores.sourceMap.listBySource(id, PROMPT_ENTRY_LIMIT)));
     return c.json({ entries: lists.flat() });
   });
 

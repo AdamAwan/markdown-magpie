@@ -105,7 +105,9 @@ function AnswerTraceBlock({ trace }: { trace: AnswerTrace }) {
       <ul>
         <li>
           Routing: {ROUTING_LABELS[trace.routing.mode]}
-          {trace.routing.mode === "routed" && trace.routing.confidence ? ` (${trace.routing.confidence} confidence)` : ""}
+          {trace.routing.mode === "routed" && trace.routing.confidence
+            ? ` (${trace.routing.confidence} confidence)`
+            : ""}
         </li>
         <li>
           Retrieval: {trace.seedSectionCount} seed section(s), {trace.poolSectionCount} in the final pool
@@ -529,7 +531,9 @@ export function AskPanel({
             </Chip>
             <PagerNote>
               Page {questionsPage + 1} of {questionsPageCount} · {questionsMatching}{" "}
-              {searching ? `match${questionsMatching === 1 ? "" : "es"}` : `question${questionsMatching === 1 ? "" : "s"}`}
+              {searching
+                ? `match${questionsMatching === 1 ? "" : "es"}`
+                : `question${questionsMatching === 1 ? "" : "s"}`}
             </PagerNote>
             <Chip
               disabled={questionsPage >= questionsPageCount - 1}

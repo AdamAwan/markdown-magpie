@@ -1150,7 +1150,9 @@ test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job"
 test("draftFromGaps projects the flow's configured sources into the enqueued input", async () => {
   const ctx = makeTestContext({
     knowledgeConfig: {
-      sources: [{ id: "handbook", name: "Handbook", kind: "git", url: "https://example.com/handbook.git", subpath: "docs" }],
+      sources: [
+        { id: "handbook", name: "Handbook", kind: "git", url: "https://example.com/handbook.git", subpath: "docs" }
+      ],
       destinations: [],
       flows: [{ id: "support", name: "Support", sourceIds: ["handbook"], destinationId: "kb" }],
       repositories: [],
@@ -1176,7 +1178,10 @@ test("draftFromGaps projects the flow's configured sources into the enqueued inp
   const input = outcome.job.input as { sources: { id: string; kind: string; url?: string; subpath?: string }[] };
   // Proves deps + the flow's sourceIds actually flow through projectSourceDescriptors —
   // a hardcoded [] would fail here.
-  assert.deepEqual(input.sources.map((s) => s.id), ["handbook"]);
+  assert.deepEqual(
+    input.sources.map((s) => s.id),
+    ["handbook"]
+  );
   assert.deepEqual(input.sources[0], {
     id: "handbook",
     name: "Handbook",
@@ -2323,7 +2328,13 @@ test("an empty or absent uncoveredPoints leaves the rationale untouched", async 
     sources: [],
     provider: "codex"
   });
-  const output = { title: "Billing", targetPath: "billing.md", markdown: "# Billing", rationale: "seed", uncoveredPoints: [] };
+  const output = {
+    title: "Billing",
+    targetPath: "billing.md",
+    markdown: "# Billing",
+    rationale: "seed",
+    uncoveredPoints: []
+  };
 
   const proposal = await proposals.createSeedProposalFromCompletedJob(ctx, job, output);
   assert.equal(proposal?.rationale, "seed");

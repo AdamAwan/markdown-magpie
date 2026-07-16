@@ -6,9 +6,24 @@ import { makeTestContext } from "../../test-support/context.js";
 describe("GET /api/source-map", () => {
   it("returns the most-recently-updated entries for the requested sources", async () => {
     const ctx = makeTestContext();
-    await ctx.stores.sourceMap.upsert({ sourceId: "s1", topic: "events", paths: ["src/events/"], description: "Event bus" });
-    await ctx.stores.sourceMap.upsert({ sourceId: "s2", topic: "specs", paths: ["Docs/Specs/"], description: "Specifications" });
-    await ctx.stores.sourceMap.upsert({ sourceId: "s3", topic: "unrelated", paths: ["x/"], description: "Not requested" });
+    await ctx.stores.sourceMap.upsert({
+      sourceId: "s1",
+      topic: "events",
+      paths: ["src/events/"],
+      description: "Event bus"
+    });
+    await ctx.stores.sourceMap.upsert({
+      sourceId: "s2",
+      topic: "specs",
+      paths: ["Docs/Specs/"],
+      description: "Specifications"
+    });
+    await ctx.stores.sourceMap.upsert({
+      sourceId: "s3",
+      topic: "unrelated",
+      paths: ["x/"],
+      description: "Not requested"
+    });
     const app = buildApp(ctx);
 
     const res = await app.request("/api/source-map?sourceIds=s1,s2");

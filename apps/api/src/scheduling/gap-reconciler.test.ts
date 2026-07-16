@@ -189,7 +189,11 @@ describe("reconcileGaps clustering", () => {
     await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
     const after = await ctx.stores.gapClusters.listActiveClusters();
 
-    assert.equal((await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length, 1, "the reshape job was enqueued");
+    assert.equal(
+      (await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length,
+      1,
+      "the reshape job was enqueued"
+    );
     assert.equal(after.length, before.length, "rejected merge left clusters unchanged");
 
     const decisions = await ctx.stores.reconciliations.list(50);
@@ -218,7 +222,10 @@ describe("reconcileGaps clustering", () => {
     assert.equal(after.length, 1, "the two clusters merged into one survivor");
     const membershipsAfter = await ctx.stores.gapClusters.listActiveMemberships();
     assert.equal(membershipsAfter.length, membershipsBefore.length, "every gap kept exactly one active membership");
-    assert.ok(membershipsAfter.every((m) => m.clusterId === after[0].id), "all gaps now belong to the survivor");
+    assert.ok(
+      membershipsAfter.every((m) => m.clusterId === after[0].id),
+      "all gaps now belong to the survivor"
+    );
 
     const decisions = await ctx.stores.reconciliations.list(50);
     const merge = decisions.find((d) => d.kind === "merge");
@@ -266,7 +273,11 @@ describe("reconcileGaps clustering", () => {
     await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
     const after = await ctx.stores.gapClusters.listActiveClusters();
 
-    assert.equal((await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length, 1, "the reshape job was enqueued");
+    assert.equal(
+      (await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length,
+      1,
+      "the reshape job was enqueued"
+    );
     assert.equal(after.length, before.length, "no reshape applied on timeout");
     assert.deepEqual(await ctx.stores.reconciliations.list(50), [], "no decision recorded when the job never ran");
   });
@@ -290,7 +301,11 @@ describe("reconcileGaps clustering", () => {
     await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
     const after = await ctx.stores.gapClusters.listActiveClusters();
 
-    assert.equal((await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length, 1, "the reshape job was enqueued");
+    assert.equal(
+      (await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length,
+      1,
+      "the reshape job was enqueued"
+    );
     assert.equal(after.length, before.length, "no reshape applied when the broker threw");
     assert.deepEqual(await ctx.stores.reconciliations.list(50), [], "no decision recorded when the reshape threw");
     // The rest of reconcileGaps still ran: each uncovered cluster got a draft job.
@@ -348,7 +363,11 @@ describe("reconcileGaps reshape composition short-circuit (#168)", () => {
 
     // A brand-new gap forms a third cluster, so the composition — and its hash —
     // changes; the reshape must run again to judge the new set.
-    const log = await ctx.stores.questionLogs.record({ question: "q3?", chatProvider: "codex", retrievedSectionIds: [] });
+    const log = await ctx.stores.questionLogs.record({
+      question: "q3?",
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
     await ctx.stores.questionLogs.recordManualGap(log.id, "Dogs");
     await reconcileGaps(ctx, undefined, deps);
 
@@ -398,7 +417,7 @@ describe("reconcileGaps autonomous drafting", () => {
     });
     const log = await ctx.stores.questionLogs.record({
       question: "How do I configure X?",
-      
+
       chatProvider: "openai-compatible",
       retrievedSectionIds: []
     });
@@ -521,7 +540,7 @@ describe("reconcileGaps autonomous drafting", () => {
 
     const log1 = await ctx.stores.questionLogs.record({
       question: "q1?",
-      
+
       chatProvider: "openai-compatible",
       retrievedSectionIds: []
     });
@@ -531,16 +550,24 @@ describe("reconcileGaps autonomous drafting", () => {
     // the cluster is "covered" before the next run (mirrors the completion path).
     const [cluster1] = await ctx.stores.gapClusters.listActiveClusters();
     const proposal1 = await ctx.stores.proposals.create({
-      title: "Topic one", targetPath: "topic-one.md", markdown: "#", rationale: "r", evidence: [],
+      title: "Topic one",
+      targetPath: "topic-one.md",
+      markdown: "#",
+      rationale: "r",
+      evidence: [],
       gapClusterId: cluster1.id
     });
     assert.ok(proposal1);
-    assert.equal((await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length, 1, "first run enqueues one draft");
+    assert.equal(
+      (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length,
+      1,
+      "first run enqueues one draft"
+    );
 
     // A new, distinct gap advances the catalog and reopens the gate.
     const log2 = await ctx.stores.questionLogs.record({
       question: "q2?",
-      
+
       chatProvider: "openai-compatible",
       retrievedSectionIds: []
     });
@@ -823,7 +850,13 @@ describe("reconcileGaps PR state from snapshot", () => {
       gaps: [],
       proposals: [{ id: proposal.id, status: "pr-opened", pullRequestUrl: "https://github.com/o/r/pull/1" }],
       pullRequests: [
-        { proposalId: proposal.id, url: "https://github.com/o/r/pull/1", merged: true, state: "closed", checkedAt: new Date().toISOString() }
+        {
+          proposalId: proposal.id,
+          url: "https://github.com/o/r/pull/1",
+          merged: true,
+          state: "closed",
+          checkedAt: new Date().toISOString()
+        }
       ]
     });
 
@@ -958,9 +991,7 @@ describe("reconcileGaps embedding-based assignment", () => {
 
     const clusters = await ctx.stores.gapClusters.listActiveClusters();
     assert.equal(clusters.length, 2, "paraphrases share a cluster; the distinct gap seeds its own");
-    const sizes = (
-      await Promise.all(clusters.map((c) => ctx.stores.gapClusters.listMembershipsForCluster(c.id)))
-    )
+    const sizes = (await Promise.all(clusters.map((c) => ctx.stores.gapClusters.listMembershipsForCluster(c.id))))
       .map((m) => m.length)
       .sort();
     assert.deepEqual(sizes, [1, 2]);
@@ -1062,10 +1093,6 @@ describe("reconcileGaps embedding-based assignment", () => {
 
     const clusters = await ctx.stores.gapClusters.listActiveClusters();
     assert.equal(clusters.length, 1, "merge left one survivor");
-    assert.equal(
-      clusters[0].representativeEmbedding,
-      undefined,
-      "survivor representative nulled for lazy recompute"
-    );
+    assert.equal(clusters[0].representativeEmbedding, undefined, "survivor representative nulled for lazy recompute");
   });
 });

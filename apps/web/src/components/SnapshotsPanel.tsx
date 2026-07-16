@@ -42,8 +42,8 @@ export function SnapshotsPanel({ snapshots }: { snapshots: FlowSnapshot[] }) {
       </Surface.Header>
       <Surface.Body>
         <Hint>
-          Per-flow data the fetch job downloads — gaps, in-flight proposals, and polled pull-request state.
-          The reconciler reads this instead of calling the host during reconciliation.
+          Per-flow data the fetch job downloads — gaps, in-flight proposals, and polled pull-request state. The
+          reconciler reads this instead of calling the host during reconciliation.
         </Hint>
         <ScrollList>
           {snapshots.map((snapshot) => (
@@ -51,9 +51,15 @@ export function SnapshotsPanel({ snapshots }: { snapshots: FlowSnapshot[] }) {
               <Row justify="between" gap="lg">
                 <h3 style={{ flex: 1, minWidth: 0 }}>{snapshot.flowName}</h3>
                 <Row gap="md">
-                  <Badge tone="neutral" title="Gaps captured">{snapshot.gaps.length} gaps</Badge>
-                  <Badge tone="neutral" title="In-flight proposals">{snapshot.proposals.length} proposals</Badge>
-                  <Badge tone="neutral" title="Open pull requests polled">{snapshot.pullRequests.length} PRs</Badge>
+                  <Badge tone="neutral" title="Gaps captured">
+                    {snapshot.gaps.length} gaps
+                  </Badge>
+                  <Badge tone="neutral" title="In-flight proposals">
+                    {snapshot.proposals.length} proposals
+                  </Badge>
+                  <Badge tone="neutral" title="Open pull requests polled">
+                    {snapshot.pullRequests.length} PRs
+                  </Badge>
                 </Row>
               </Row>
               <Path>

@@ -1,14 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { sharedTargets, decideReconciliation, openPullRequestSummaries, type OpenPullRequestSummary } from "./reconcile-gate.js";
+import {
+  sharedTargets,
+  decideReconciliation,
+  openPullRequestSummaries,
+  type OpenPullRequestSummary
+} from "./reconcile-gate.js";
 import type { ChangeIntent } from "./intent.js";
 import type { Proposal } from "@magpie/core";
 
 test("sharedTargets returns the intersection in a's order", () => {
-  assert.deepEqual(
-    sharedTargets(["kb/refunds.md", "kb/credits.md"], ["kb/credits.md", "kb/refunds.md"]),
-    ["kb/refunds.md", "kb/credits.md"]
-  );
+  assert.deepEqual(sharedTargets(["kb/refunds.md", "kb/credits.md"], ["kb/credits.md", "kb/refunds.md"]), [
+    "kb/refunds.md",
+    "kb/credits.md"
+  ]);
 });
 
 test("sharedTargets is empty when file-sets are disjoint", () => {
@@ -26,11 +31,11 @@ const intent = (targets: string[], lens: ChangeIntent["lens"] = "verify"): Chang
   evidence: [],
   rationale: "test"
 });
-const pr = (
-  proposalId: string,
-  targets: string[],
-  touchable = true
-): OpenPullRequestSummary => ({ proposalId, targets, touchable });
+const pr = (proposalId: string, targets: string[], touchable = true): OpenPullRequestSummary => ({
+  proposalId,
+  targets,
+  touchable
+});
 
 test("opens a new PR when nothing overlaps", () => {
   const d = decideReconciliation(intent(["kb/a.md"]), [pr("p1", ["kb/b.md"])]);
@@ -61,18 +66,12 @@ test("prefers the PR with the most shared targets", () => {
 });
 
 test("breaks overlap ties by proposalId ascending", () => {
-  const d = decideReconciliation(intent(["kb/a.md"]), [
-    pr("p2", ["kb/a.md"]),
-    pr("p1", ["kb/a.md"])
-  ]);
+  const d = decideReconciliation(intent(["kb/a.md"]), [pr("p2", ["kb/a.md"]), pr("p1", ["kb/a.md"])]);
   assert.deepEqual(d, { kind: "fold", intoProposalId: "p1" });
 });
 
 test("folds when a touchable and a non-touchable PR both overlap", () => {
-  const d = decideReconciliation(intent(["kb/a.md"]), [
-    pr("p1", ["kb/a.md"], false),
-    pr("p2", ["kb/a.md"], true)
-  ]);
+  const d = decideReconciliation(intent(["kb/a.md"]), [pr("p1", ["kb/a.md"], false), pr("p2", ["kb/a.md"], true)]);
   assert.deepEqual(d, { kind: "fold", intoProposalId: "p2" });
 });
 

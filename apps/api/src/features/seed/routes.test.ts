@@ -93,7 +93,10 @@ test("GET /api/flows/:flowId/seed-plans lists plans; unknown flow 404s", async (
   const res = await app.request("/api/flows/flow-x/seed-plans");
   assert.equal(res.status, 200);
   const body = (await res.json()) as { plans: { id: string }[] };
-  assert.deepEqual(body.plans.map((entry) => entry.id), [plan.id]);
+  assert.deepEqual(
+    body.plans.map((entry) => entry.id),
+    [plan.id]
+  );
 
   assert.equal((await app.request("/api/flows/missing/seed-plans")).status, 404);
 });

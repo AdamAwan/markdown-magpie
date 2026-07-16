@@ -50,12 +50,7 @@ export function principalHasCapability(
 
 // Context-aware convenience: evaluates a capability for the current request using
 // the deployment's configured grants and the verified principal.
-export function can(
-  ctx: AppContext,
-  c: Context,
-  capability: KnowledgeCapability,
-  flowId: string | undefined
-): boolean {
+export function can(ctx: AppContext, c: Context, capability: KnowledgeCapability, flowId: string | undefined): boolean {
   return principalHasCapability(ctx.knowledgeConfig.roleGrants, c.get("principal"), capability, flowId);
 }
 

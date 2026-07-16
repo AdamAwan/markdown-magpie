@@ -19,19 +19,13 @@ function tracker() {
 describe("withCheckoutLock", () => {
   it("serializes calls that share a key (the second waits for the first)", async () => {
     const { events, task } = tracker();
-    await Promise.all([
-      withCheckoutLock("repo-a", task("first", 30)),
-      withCheckoutLock("repo-a", task("second", 5))
-    ]);
+    await Promise.all([withCheckoutLock("repo-a", task("first", 30)), withCheckoutLock("repo-a", task("second", 5))]);
     assert.deepEqual(events, ["first:start", "first:end", "second:start", "second:end"]);
   });
 
   it("runs calls with different keys concurrently", async () => {
     const { events, task } = tracker();
-    await Promise.all([
-      withCheckoutLock("repo-a", task("a", 30)),
-      withCheckoutLock("repo-b", task("b", 5))
-    ]);
+    await Promise.all([withCheckoutLock("repo-a", task("a", 30)), withCheckoutLock("repo-b", task("b", 5))]);
     // Both started before either finished — they overlapped.
     assert.deepEqual(events.slice(0, 2).sort(), ["a:start", "b:start"]);
   });

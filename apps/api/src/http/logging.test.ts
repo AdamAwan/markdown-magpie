@@ -17,7 +17,11 @@ function captureLogger() {
   return {
     logger,
     lines: () =>
-      chunks.join("").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>)
+      chunks
+        .join("")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
   };
 }
 
