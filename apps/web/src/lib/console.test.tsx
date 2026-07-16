@@ -443,8 +443,13 @@ test("bulkActionEligible never offers merge for a PR-tracked proposal", () => {
 });
 
 test("bulkActionEligible splits reject between local-git bin and hosted draft-reject", () => {
+  // Local-git can be binned at any non-terminal status (early, before publishing, or after).
   assert.equal(bulkActionEligible("reject", proposalView({ localGitDestination: true, status: "branch-pushed" })), true);
-  assert.equal(bulkActionEligible("reject", proposalView({ localGitDestination: true, status: "draft" })), false);
+  assert.equal(bulkActionEligible("reject", proposalView({ localGitDestination: true, status: "draft" })), true);
+  assert.equal(bulkActionEligible("reject", proposalView({ localGitDestination: true, status: "ready" })), true);
+  assert.equal(bulkActionEligible("reject", proposalView({ localGitDestination: true, status: "merged" })), false);
+  assert.equal(bulkActionEligible("reject", proposalView({ localGitDestination: true, status: "rejected" })), false);
+  // Hosted reject stays draft-only.
   assert.equal(bulkActionEligible("reject", proposalView({ status: "draft" })), true);
   assert.equal(bulkActionEligible("reject", proposalView({ status: "branch-pushed" })), false);
 });
