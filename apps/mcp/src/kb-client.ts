@@ -608,3 +608,168 @@ function isOutlineItem(value: unknown): value is OutlineItem {
   const coverage = (value as { coverage?: unknown }).coverage;
   return Array.isArray(coverage) && coverage.every((point) => typeof point === "string");
 }
+
+// ── questionnaires ────────────────────────────────────────────────────────────
+//
+// Questionnaire mode (docs/questionnaires.md): a named batch of questions
+// answered against one flow, with verbatim reuse of previously approved
+// answers while the KB sections they cited are unchanged. These wrappers are
+// deliberately non-waiting: creation fans fresh/changed items into the
+// answer_question queue through a per-questionnaire drip, and a batch can be
+// hundreds of questions — so create/get return the worksheet as-is (items may
+// still be pending/answering) and the caller re-reads with getQuestionnaire
+// until it settles. Contrast generateOutline above, which waits: outlining is
+// a single job.
+
+// Mirrors the API route bound (createQuestionnaireSchema: 1–500 questions).
+const MAX_QUESTIONNAIRE_QUESTIONS = 500;
+
+// Validates a bounded array of non-empty strings, trimming each entry. Unlike
+// sectionIdsArgument this never dedupes: questionnaires legitimately carry
+// near-duplicate questions, and item positions must line up with the input.
+function stringArrayArgument(
+  args: Record<string, unknown> | undefined,
+  name: string,
+  maxEntries: number
+): string[] {
+  const value = args?.[name];
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${name} must be a non-empty array of strings`);
+  }
+  if (value.length > maxEntries) {
+    throw new Error(`${name} accepts at most ${maxEntries} entries per call`);
+  }
+
+  return value.map((entry) => {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      throw new Error(`${name} entries must be non-empty strings`);
+    }
+    return entry.trim();
+  });
+}
+
+// The worksheet shape the questionnaire tools return: the API's questionnaire
+// JSON with light shaping. Internal plumbing the model has no use for is
+// dropped (questionLogId, reusedFromItemId, citation contentHash/sectionId
+// fingerprints); the item id stays because approveQuestionnaire targets it.
+export interface QuestionnaireView {
+  id: string;
+  name: string;
+  flowId: string;
+  status: string;
+  items: {
+    id: string;
+    position: number;
+    question: string;
+    status: string;
+    outcome?: string;
+    answer?: string;
+    // Machine-readable reason a matched item could not be reused verbatim
+    // (which section changed/vanished/appeared) — passed through untouched.
+    changeReason?: Record<string, unknown>;
+    citations: { path: string; heading: string }[];
+  }[];
+}
+
+// Internal element alias derived from the public return type so the two never
+// drift (same pattern as OutlineItem above).
+type QuestionnaireViewItem = QuestionnaireView["items"][number];
+
+// Creates a questionnaire: POST /questionnaires. Returns immediately with the
+// initial worksheet — reused items already carry answers; fresh/changed items
+// drip through the answer queue and show up on subsequent reads.
+export async function createQuestionnaire(
+  args: Record<string, unknown> | undefined,
+  options?: KbClientOptions
+): Promise<QuestionnaireView> {
+  const name = stringArgument(args, "name");
+  const flow = stringArgument(args, "flow");
+  const questions = stringArrayArgument(args, "questions", MAX_QUESTIONNAIRE_QUESTIONS);
+  return readQuestionnaire(await postJson("/questionnaires", { name, flowId: flow, questions }, options));
+}
+
+// Reads a questionnaire worksheet: GET /questionnaires/:id. Server-side this
+// also resumes a stalled drip, so polling this endpoint is what advances a
+// questionnaire after an API restart.
+export async function getQuestionnaire(
+  args: Record<string, unknown> | undefined,
+  options?: KbClientOptions
+): Promise<QuestionnaireView> {
+  const questionnaire = stringArgument(args, "questionnaire");
+  return readQuestionnaire(await getJson(`/questionnaires/${encodeURIComponent(questionnaire)}`, options));
+}
+
+// Approves answers into the match corpus for future questionnaires: all reused
+// items by default (POST /questionnaires/:id/approve-reused → { approved }),
+// or one item by id (POST /questionnaires/:id/items/:itemId/approve → { ok }).
+// Status rules (409 unless the item is answered) are server-side.
+export async function approveQuestionnaire(
+  args: Record<string, unknown> | undefined,
+  options?: KbClientOptions
+): Promise<{ approved: number } | { ok: true }> {
+  const questionnaire = stringArgument(args, "questionnaire");
+  const item = optionalStringArgument(args, "item");
+  if (item) {
+    await postJson(
+      `/questionnaires/${encodeURIComponent(questionnaire)}/items/${encodeURIComponent(item)}/approve`,
+      {},
+      options
+    );
+    return { ok: true };
+  }
+
+  const response = asObject(
+    await postJson(`/questionnaires/${encodeURIComponent(questionnaire)}/approve-reused`, {}, options)
+  );
+  return { approved: typeof response.approved === "number" ? response.approved : 0 };
+}
+
+// Projects the API's { questionnaire } envelope into the view. Requires the
+// identity fields — they are the whole point of the response; item projection
+// degrades per-field instead (a malformed optional never hides the worksheet).
+function readQuestionnaire(value: unknown): QuestionnaireView {
+  const questionnaire = asObject(asObject(value).questionnaire);
+  const { id, name, flowId, status } = questionnaire;
+  if (
+    typeof id !== "string" ||
+    typeof name !== "string" ||
+    typeof flowId !== "string" ||
+    typeof status !== "string"
+  ) {
+    throw new Error("Questionnaire response did not include id/name/flowId/status");
+  }
+
+  const items = Array.isArray(questionnaire.items) ? questionnaire.items.map(readQuestionnaireItem) : [];
+  return { id, name, flowId, status, items };
+}
+
+function readQuestionnaireItem(value: unknown): QuestionnaireViewItem {
+  const item = asObject(value);
+  const { id, question, status } = item;
+  if (typeof id !== "string" || typeof question !== "string" || typeof status !== "string") {
+    throw new Error("Questionnaire item did not include id/question/status");
+  }
+
+  const citations = Array.isArray(item.citations)
+    ? item.citations.map((citation) => {
+        const record = asObject(citation);
+        return {
+          path: typeof record.path === "string" ? record.path : "",
+          heading: typeof record.heading === "string" ? record.heading : ""
+        };
+      })
+    : [];
+
+  return {
+    id,
+    position: typeof item.position === "number" ? item.position : 0,
+    question,
+    status,
+    ...(typeof item.outcome === "string" ? { outcome: item.outcome } : {}),
+    ...(typeof item.answer === "string" ? { answer: item.answer } : {}),
+    ...(item.changeReason && typeof item.changeReason === "object"
+      ? { changeReason: asObject(item.changeReason) }
+      : {}),
+    citations
+  };
+}
