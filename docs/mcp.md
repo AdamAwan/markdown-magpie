@@ -18,7 +18,12 @@ Uses the MCP **Streamable HTTP transport** (spec version 2025-03-26+). Runs as a
 
 ### `kb_ask`
 
-Input: `{ "question": string }`
+Input: `{ "question": string, "flow"?: string, "conversationId"?: string }`
+
+- `flow` (optional) pins the question to a flow id from `kb_flows`; defaults to `"auto"` (router decides).
+- `conversationId` (optional, #239) asks a **follow-up** in a multi-turn conversation. Pass the
+  `conversationId` returned by the previous `kb_ask`: the answer then resolves against the recent
+  turns (pronouns/ellipsis) and stays in the same flow. Omit to start a new conversation.
 
 Returns the final answer only:
 
@@ -28,7 +33,8 @@ Returns the final answer only:
   "confidence": "high | medium | low",
   "citations": [ { "documentId": "...", "sectionId": "...", "path": "...", "heading": "...", "anchor": "...", "excerpt": "..." } ],
   "gaps": [ { ... } ],   // present only when the answer exposes knowledge gaps; one entry per missing topic
-  "questionId": "string" // identifier for reporting feedback via kb_feedback
+  "questionId": "string", // identifier for reporting feedback via kb_feedback
+  "conversationId": "string" // pass back to kb_ask to thread a follow-up onto this exchange
 }
 ```
 

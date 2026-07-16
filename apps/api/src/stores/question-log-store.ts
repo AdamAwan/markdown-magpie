@@ -79,7 +79,7 @@ export function answerGapsUnchanged(
 // 'unhelpful'-feedback paths). Prefers the condensed standalone form of a follow-up
 // (#239) over the raw question text, so a terse follow-up ("what about the EU?")
 // never seeds a gap with context-free text that cannot cluster with its siblings.
-export function gapSummaryFallback(log: { question: string; standaloneQuestion?: string }): string {
+function gapSummaryFallback(log: { question: string; standaloneQuestion?: string }): string {
   const standalone = log.standaloneQuestion?.trim();
   return standalone && standalone.length > 0 ? standalone : log.question;
 }

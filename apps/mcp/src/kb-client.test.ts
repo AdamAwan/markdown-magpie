@@ -169,6 +169,33 @@ test("askQuestion returns the answer from a completed wait response", async () =
   }
 });
 
+// Multi-turn (#239): a conversationId passed in is sent on the /ask body and the
+// conversationId returned by the API is surfaced back to the caller so a follow-up
+// can thread onto the same exchange.
+test("askQuestion sends and returns conversationId for multi-turn follow-ups", async () => {
+  const originalFetch = globalThis.fetch;
+  let askBodyText = "";
+  globalThis.fetch = (async (input, init) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/api/ask")) {
+      askBodyText = typeof init?.body === "string" ? init.body : "";
+      return jsonResponse(
+        { questionId: "q-9", conversationId: "conv-42", job: { id: "job-1", state: "created" }, links: askBody.links },
+        202
+      );
+    }
+    return jsonResponse({ job: { id: "job-1", state: "completed", output: completedOutput } });
+  }) as typeof fetch;
+
+  try {
+    const result = await askQuestion("what about the EU?", undefined, undefined, "conv-42");
+    assert.equal(JSON.parse(askBodyText).conversationId, "conv-42", "the conversationId is sent on the ask body");
+    assert.equal(result.conversationId, "conv-42", "the conversationId is returned for threading follow-ups");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 // 2. 202 wait then poll: the wait link returns a non-terminal projection, so the
 // client falls back to detail polling until the job completes.
 test("askQuestion polls the detail link when the wait response is non-terminal", async () => {

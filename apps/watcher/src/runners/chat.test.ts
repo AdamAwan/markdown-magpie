@@ -430,6 +430,168 @@ describe("ChatRunner", () => {
     );
   });
 
+  it("condenses a follow-up into a standalone question, uses it for retrieval, and reports it (#239)", async () => {
+    const retrieved: string[] = [];
+    const api = fakeApi({
+      retrieve: async (question) => {
+        retrieved.push(question);
+        return SECTIONS;
+      }
+    });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("self-contained question")) {
+        assert.match(request.messages[0]?.content ?? "", /Conversation so far/, "condensation sees the prior turns");
+        return JSON.stringify({ standaloneQuestion: "What is the data retention policy for the EU region?" });
+      }
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      return JSON.stringify({
+        answer: "EU retention is 30 days.",
+        confidence: "high",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"]
+      });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "What about the EU?",
+        flows: [{ id: "flow-a", name: "Alpha" }],
+        requestedFlowId: "flow-a",
+        priorTurns: [{ question: "What is the data retention policy?", answer: "Retention is 30 days." }],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { standaloneQuestion?: string; answer: string };
+
+    assert.ok(retrieved.length > 0, "retrieval ran");
+    assert.ok(
+      retrieved.every((question) => question.includes("EU region")),
+      "retrieval uses the condensed standalone question, not the terse follow-up"
+    );
+    assert.equal(
+      output.standaloneQuestion,
+      "What is the data retention policy for the EU region?",
+      "the condensed question is reported back for the API to persist"
+    );
+  });
+
+  it("falls back to the raw follow-up (no standaloneQuestion) when condensation fails (#239)", async () => {
+    const retrieved: string[] = [];
+    const api = fakeApi({
+      retrieve: async (question) => {
+        retrieved.push(question);
+        return SECTIONS;
+      }
+    });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("self-contained question")) {
+        return "not json at all";
+      }
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      return JSON.stringify({ answer: "ok", confidence: "high", isKnowledgeGap: false, usedSectionIds: ["doc-1#deploy"] });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "What about the EU?",
+        flows: [{ id: "flow-a", name: "Alpha" }],
+        requestedFlowId: "flow-a",
+        priorTurns: [{ question: "What is the data retention policy?", answer: "Retention is 30 days." }],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { standaloneQuestion?: string };
+
+    assert.ok(retrieved.every((question) => question === "What about the EU?"), "unparseable condensation falls back to the raw question");
+    assert.equal(output.standaloneQuestion, undefined, "no standaloneQuestion is reported when the raw question is used");
+  });
+
+  it("reuses the conversation's flow (sticky) and skips routing when no flow is pinned (#239)", async () => {
+    let retrievedFlow: string | undefined = "unset";
+    const api = fakeApi({
+      retrieve: async (_question, flowId) => {
+        retrievedFlow = flowId;
+        return SECTIONS;
+      }
+    });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("self-contained question")) {
+        return JSON.stringify({ standaloneQuestion: "Standalone follow-up." });
+      }
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      return JSON.stringify({ answer: "ok", confidence: "high", isKnowledgeGap: false, usedSectionIds: ["doc-1#deploy"] });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "and for that plan?",
+        flows: [
+          { id: "flow-a", name: "Alpha" },
+          { id: "flow-b", name: "Beta" }
+        ],
+        conversationFlowId: "flow-b",
+        priorTurns: [{ question: "q", answer: "a" }],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { flowId?: string; trace?: { routing: { mode: string; flowId?: string } } };
+
+    assert.equal(retrievedFlow, "flow-b", "retrieval stays in the conversation's sticky flow");
+    assert.equal(output.flowId, "flow-b");
+    assert.ok(
+      !chat.requests.some((request) => request.system.includes("route a user question")),
+      "a sticky conversation flow skips the router"
+    );
+    assert.equal(output.trace?.routing.mode, "requested", "the sticky flow is traced as a pinned flow");
+  });
+
+  it("lets an explicit requestedFlowId override the conversation's sticky flow (#239)", async () => {
+    let retrievedFlow: string | undefined = "unset";
+    const api = fakeApi({
+      retrieve: async (_question, flowId) => {
+        retrievedFlow = flowId;
+        return SECTIONS;
+      }
+    });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("self-contained question")) {
+        return JSON.stringify({ standaloneQuestion: "Standalone follow-up." });
+      }
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      return JSON.stringify({ answer: "ok", confidence: "high", isKnowledgeGap: false, usedSectionIds: ["doc-1#deploy"] });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "and for that plan?",
+        flows: [
+          { id: "flow-a", name: "Alpha" },
+          { id: "flow-b", name: "Beta" }
+        ],
+        requestedFlowId: "flow-a",
+        conversationFlowId: "flow-b",
+        priorTurns: [{ question: "q", answer: "a" }],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { flowId?: string };
+
+    assert.equal(retrievedFlow, "flow-a", "the caller's explicit pin wins over the sticky flow");
+    assert.equal(output.flowId, "flow-a");
+  });
+
   it("strips fabricated claims, downgrades to low, and records them as gaps when the grounding check fails", async () => {
     // The fabrication scenario: retrieval returned real material, but the model
     // "sold" the answer with compliance claims (SOC 2) the context never states.

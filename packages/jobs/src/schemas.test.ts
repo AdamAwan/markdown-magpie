@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  answerQuestionInputSchema,
+  answerQuestionOutputSchema,
   draftMarkdownProposalInputSchema,
   draftMarkdownProposalOutputSchema,
   draftSeedDocumentInputSchema,
@@ -22,6 +24,31 @@ import {
   verifyDocumentOutputSchema,
   correctDocumentOutputSchema
 } from "./schemas.js";
+
+test("answer_question input preserves multi-turn conversation fields (#239)", () => {
+  // The broker validates and STRIPS undeclared fields, so priorTurns and
+  // conversationFlowId must survive a round-trip or the watcher never sees them.
+  const parsed = answerQuestionInputSchema.parse({
+    provider: "openai-compatible",
+    question: "What about the EU?",
+    flows: [{ id: "support", name: "Support" }],
+    priorTurns: [{ question: "What is the retention policy?", answer: "30 days." }],
+    conversationFlowId: "support",
+    expectedOutput: "answer_result"
+  });
+  assert.deepEqual(parsed.priorTurns, [{ question: "What is the retention policy?", answer: "30 days." }]);
+  assert.equal(parsed.conversationFlowId, "support");
+});
+
+test("answer_question output preserves the condensed standaloneQuestion (#239)", () => {
+  const parsed = answerQuestionOutputSchema.parse({
+    answer: "EU retention is 30 days.",
+    confidence: "high",
+    citations: [],
+    standaloneQuestion: "What is the data retention policy for the EU region?"
+  });
+  assert.equal(parsed.standaloneQuestion, "What is the data retention policy for the EU region?");
+});
 
 test("process_gaps_to_pull_requests input requires and preserves flowId", () => {
   assert.equal(processGapsToPullRequestsInputSchema.safeParse({}).success, false);
