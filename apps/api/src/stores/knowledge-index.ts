@@ -4,7 +4,14 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { DocumentSection, EmbeddingProvider, GitRepositoryContext, KnowledgeDocument, RankedSection, RepositoryRef } from "@magpie/core";
+import type {
+  DocumentSection,
+  EmbeddingProvider,
+  GitRepositoryContext,
+  KnowledgeDocument,
+  RankedSection,
+  RepositoryRef
+} from "@magpie/core";
 import { parseMarkdownDocument, splitIntoSections } from "@magpie/markdown";
 import { isAncestor, listChangedMarkdown, resolvePrimaryBranch, type ChangedMarkdownFile } from "@magpie/git";
 import { fuseRankings } from "@magpie/retrieval";
@@ -46,7 +53,11 @@ export interface IncrementalIndexInput {
 }
 
 export interface KnowledgePersistence {
-  saveIndexedRepository(summary: IndexedRepositorySummary, documents: KnowledgeDocument[], sections: DocumentSection[]): Promise<void>;
+  saveIndexedRepository(
+    summary: IndexedRepositorySummary,
+    documents: KnowledgeDocument[],
+    sections: DocumentSection[]
+  ): Promise<void>;
   // Persists only the documents/sections touched by an incremental reindex (plus
   // the repository's new indexed SHA) in a single transaction, leaving unchanged
   // rows untouched. Falls outside the full-index save path's whole-repo rewrite.
@@ -248,9 +259,7 @@ export class InMemoryKnowledgeIndex {
     for (let start = 0; start < markdownPaths.length; start += READ_CONCURRENCY) {
       const chunk = markdownPaths.slice(start, start + READ_CONCURRENCY);
       const results = await Promise.all(
-        chunk.map((markdownPath) =>
-          this.readDocument(repository, localPath, markdownPath, headSha)
-        )
+        chunk.map((markdownPath) => this.readDocument(repository, localPath, markdownPath, headSha))
       );
 
       for (const [offset, result] of results.entries()) {
@@ -609,22 +618,24 @@ export class InMemoryKnowledgeIndex {
     const keywordRelevanceById = new Map(keywordRanked.map((result) => [result.section.id, result.relevance]));
     const repositoryFilter = this.repositoryFilterSet(repositoryIds);
 
-    return [...new Set([...vectorIds, ...keywordIds])]
-      .map((id) => ({
-        id,
-        fused: fused.get(id) ?? 0,
-        relevance: Math.max(similarityById.get(id) ?? 0, keywordRelevanceById.get(id) ?? 0)
-      }))
-      .sort((left, right) => right.fused - left.fused)
-      .map(({ id, relevance }) => {
-        const section = this.sections.get(id);
-        return section ? { section, relevance } : undefined;
-      })
-      .filter((result): result is RankedSection => result !== undefined)
-      // Re-apply the repository filter post-fusion so a vector backend that ignores
-      // the scope (e.g. a test stub) still cannot leak sections from other flows.
-      .filter((result) => this.sectionInRepositories(result.section, repositoryFilter))
-      .slice(0, limit);
+    return (
+      [...new Set([...vectorIds, ...keywordIds])]
+        .map((id) => ({
+          id,
+          fused: fused.get(id) ?? 0,
+          relevance: Math.max(similarityById.get(id) ?? 0, keywordRelevanceById.get(id) ?? 0)
+        }))
+        .sort((left, right) => right.fused - left.fused)
+        .map(({ id, relevance }) => {
+          const section = this.sections.get(id);
+          return section ? { section, relevance } : undefined;
+        })
+        .filter((result): result is RankedSection => result !== undefined)
+        // Re-apply the repository filter post-fusion so a vector backend that ignores
+        // the scope (e.g. a test stub) still cannot leak sections from other flows.
+        .filter((result) => this.sectionInRepositories(result.section, repositoryFilter))
+        .slice(0, limit)
+    );
   }
 
   // Embeds a query, memoizing the result so byte-identical questions (after
@@ -928,9 +939,7 @@ function scoreSection(section: DocumentSection, terms: string[]): number {
 }
 
 function tokenize(value: string): string[] {
-  return [
-    ...new Set((value.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []).filter((term) => !stopwords.has(term)))
-  ];
+  return [...new Set((value.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []).filter((term) => !stopwords.has(term)))];
 }
 
 function slugify(value: string): string {
@@ -994,7 +1003,12 @@ async function detectGitContext(localPath: string): Promise<GitRepositoryContext
   const normalizedWorkTreeRoot = normalizePathForComparison(workTreeRoot);
   const relativePathFromRoot = toPosixPath(path.relative(workTreeRoot, indexedPath));
   const remoteUrl = await readGitValue(indexedPath, ["config", "--get", "remote.origin.url"]);
-  const defaultBranchRef = await readGitValue(indexedPath, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
+  const defaultBranchRef = await readGitValue(indexedPath, [
+    "symbolic-ref",
+    "--quiet",
+    "--short",
+    "refs/remotes/origin/HEAD"
+  ]);
   const defaultBranch = defaultBranchRef?.replace(/^origin\//, "");
   const status = await readGitValue(indexedPath, ["status", "--porcelain"]);
 
@@ -1021,5 +1035,8 @@ async function readGitValue(cwd: string, args: string[]): Promise<string | undef
 }
 
 function normalizePathForComparison(value: string): string {
-  return path.resolve(value).replace(/[\\/]+$/, "").toLowerCase();
+  return path
+    .resolve(value)
+    .replace(/[\\/]+$/, "")
+    .toLowerCase();
 }

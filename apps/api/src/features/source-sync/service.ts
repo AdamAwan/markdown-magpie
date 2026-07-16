@@ -10,22 +10,10 @@ import type {
   SourceSyncRunTrigger
 } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
-import {
-  syncSourceChangesGeneratePlanInputSchema,
-  syncSourceChangesGeneratePlanOutputSchema
-} from "@magpie/jobs";
-import {
-  buildGitAuthEnv,
-  diffChangedFiles,
-  ensureGitCheckout,
-  getHeadSha,
-  type SourceFileChange
-} from "@magpie/git";
+import { syncSourceChangesGeneratePlanInputSchema, syncSourceChangesGeneratePlanOutputSchema } from "@magpie/jobs";
+import { buildGitAuthEnv, diffChangedFiles, ensureGitCheckout, getHeadSha, type SourceFileChange } from "@magpie/git";
 import type { AppContext } from "../../context.js";
-import {
-  defaultDestinationId,
-  selectFlow
-} from "../../platform/repositories.js";
+import { defaultDestinationId, selectFlow } from "../../platform/repositories.js";
 import type { ConfiguredKnowledgeRepository } from "../../stores/knowledge-repositories.js";
 import { normalizeRelativePath } from "../../platform/paths.js";
 import { type AiProviderName } from "../../platform/providers.js";
@@ -84,7 +72,10 @@ export async function triggerSourceSyncRun(
   const sourceIds = flow ? flow.sourceIds : deps.knowledgeConfig.sources.map((source) => source.id);
   const sources = sourceIds
     .map((id) => deps.knowledgeConfig.sources.find((source) => source.id === id))
-    .filter((source): source is ConfiguredKnowledgeRepository => Boolean(source) && source!.kind === "git" && Boolean(source!.url));
+    .filter(
+      (source): source is ConfiguredKnowledgeRepository =>
+        Boolean(source) && source!.kind === "git" && Boolean(source!.url)
+    );
 
   const runs: SourceSyncRun[] = [];
   for (const source of sources) {
@@ -132,7 +123,10 @@ async function syncGitSource(
     // is what we react to. Reacting to the entire history on first run would be
     // noise.
     await store.setState(flowId, source.id, headSha);
-    logger.info({ sourceId: source.id, flowId: flowId ?? "default", sha: headSha.slice(0, 8) }, "source-change sync baselined");
+    logger.info(
+      { sourceId: source.id, flowId: flowId ?? "default", sha: headSha.slice(0, 8) },
+      "source-change sync baselined"
+    );
     return undefined;
   }
 
@@ -191,7 +185,11 @@ async function syncGitSource(
   }
 
   const candidateDocuments = selectCandidateDocuments(
-    await ctx.stores.knowledgeIndex.search(buildRetrievalQuery(changes), RETRIEVAL_SECTION_LIMIT, destinationId ? [destinationId] : undefined),
+    await ctx.stores.knowledgeIndex.search(
+      buildRetrievalQuery(changes),
+      RETRIEVAL_SECTION_LIMIT,
+      destinationId ? [destinationId] : undefined
+    ),
     ctx.stores.knowledgeIndex.listDocuments(),
     CANDIDATE_DOCUMENT_LIMIT
   );
@@ -211,7 +209,10 @@ async function syncGitSource(
       candidateCount: 0
     });
     await store.setState(flowId, source.id, headSha);
-    logger.info({ sourceId: source.id, changedFiles: totalChangedFileCount }, "source-change sync: changed files but no matching knowledge — skipped");
+    logger.info(
+      { sourceId: source.id, changedFiles: totalChangedFileCount },
+      "source-change sync: changed files but no matching knowledge — skipped"
+    );
     return run;
   }
 
@@ -255,7 +256,17 @@ async function syncGitSource(
     candidateCount: candidateDocuments.length
   });
   await store.setState(flowId, source.id, headSha);
-  logger.info({ sourceId: source.id, jobId: job.id, changedFiles: totalChangedFileCount, includedChangedFiles: changes.length, candidates: candidateDocuments.length, runId: run.id }, "source-change sync: enqueued plan job");
+  logger.info(
+    {
+      sourceId: source.id,
+      jobId: job.id,
+      changedFiles: totalChangedFileCount,
+      includedChangedFiles: changes.length,
+      candidates: candidateDocuments.length,
+      runId: run.id
+    },
+    "source-change sync: enqueued plan job"
+  );
   return run;
 }
 
@@ -331,7 +342,12 @@ function primaryChange(changeset: ChangesetChange[]): ChangesetChange {
   return changeset.find((change) => !change.delete && typeof change.content === "string") ?? changeset[0];
 }
 
-function sourceSyncProposalInput(run: SourceSyncRun, plan: MaintenancePlan, changeset: ChangesetChange[], job: JobView): ProposalInput {
+function sourceSyncProposalInput(
+  run: SourceSyncRun,
+  plan: MaintenancePlan,
+  changeset: ChangesetChange[],
+  job: JobView
+): ProposalInput {
   const primary = primaryChange(changeset);
   const sourceName = resolveSourceNameFromInput(job.input) ?? resolveSourceNameFallback(run.sourceId);
   const from = run.fromSha?.slice(0, 8) ?? "?";

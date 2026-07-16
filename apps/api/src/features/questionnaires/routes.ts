@@ -6,13 +6,7 @@ import { assertCan } from "../../auth/capabilities.js";
 import { HttpError } from "../../http/errors.js";
 import { rateLimit } from "../../http/rate-limit.js";
 import { exportQuestionnaire } from "./export.js";
-import {
-  approveItem,
-  approveReused,
-  createQuestionnaire,
-  getQuestionnaire,
-  listQuestionnaires
-} from "./service.js";
+import { approveItem, approveReused, createQuestionnaire, getQuestionnaire, listQuestionnaires } from "./service.js";
 import { createQuestionnaireSchema, exportQuerySchema } from "./schema.js";
 
 // Questionnaire routes, mounted at /api/questionnaires (docs/questionnaires.md).

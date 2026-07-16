@@ -67,6 +67,12 @@ export function AiUsageChart({ usage }: { usage: AiUsageBreakdown[] }) {
       : undefined;
 
   return (
-    <CostBarChart data={data} headerTotal={headerTotal} coverage={coverage} footnote={footnote} emptyState={emptyState} />
+    <CostBarChart
+      data={data}
+      headerTotal={headerTotal}
+      coverage={coverage}
+      footnote={footnote}
+      emptyState={emptyState}
+    />
   );
 }

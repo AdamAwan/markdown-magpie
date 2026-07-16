@@ -391,8 +391,14 @@ test("reviseSeedPlanFromCompletedJob ignores non-proposed plans, other types, mi
   const other = { id: "j", type: "outline_flow_seed", input: {} } as unknown as JobView;
   assert.equal(await seed.reviseSeedPlanFromCompletedJob(ctx, other, { items: [], rationale: "r" }), undefined);
   const proposed = await proposedPlan(ctx);
-  assert.equal(await seed.reviseSeedPlanFromCompletedJob(ctx, reviseJobFor(proposed.id), { nonsense: true }), undefined);
-  assert.equal(await seed.reviseSeedPlanFromCompletedJob(ctx, reviseJobFor("no-such-plan"), { items: [], rationale: "r" }), undefined);
+  assert.equal(
+    await seed.reviseSeedPlanFromCompletedJob(ctx, reviseJobFor(proposed.id), { nonsense: true }),
+    undefined
+  );
+  assert.equal(
+    await seed.reviseSeedPlanFromCompletedJob(ctx, reviseJobFor("no-such-plan"), { items: [], rationale: "r" }),
+    undefined
+  );
   assert.equal(await seed.reviseSeedPlanFromCompletedJob(ctx, undefined, { items: [], rationale: "r" }), undefined);
 });
 

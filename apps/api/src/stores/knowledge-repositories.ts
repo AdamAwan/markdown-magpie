@@ -110,9 +110,7 @@ export function getConfiguredRoleGrants(env: EnvLike = process.env): KnowledgeRo
   return grants;
 }
 
-export function getConfiguredKnowledgeRepositories(
-  env: EnvLike = process.env
-): ConfiguredKnowledgeRepository[] {
+export function getConfiguredKnowledgeRepositories(env: EnvLike = process.env): ConfiguredKnowledgeRepository[] {
   const configured = parseRepositoryList(env.KNOWLEDGE_REPOSITORIES);
   if (configured.length > 0) {
     return configured;
@@ -144,9 +142,10 @@ export function getConfiguredKnowledgeFlows(
 ): ConfiguredKnowledgeFlow[] {
   const configured = parseFlowList(env.KNOWLEDGE_FLOWS ?? env.KNOWLEDGE_FLOW);
   if (configured.length > 0) {
-    return configured.filter((flow) =>
-      flow.sourceIds.every((sourceId) => sources.some((source) => source.id === sourceId)) &&
-      destinations.some((destination) => destination.id === flow.destinationId)
+    return configured.filter(
+      (flow) =>
+        flow.sourceIds.every((sourceId) => sources.some((source) => source.id === sourceId)) &&
+        destinations.some((destination) => destination.id === flow.destinationId)
     );
   }
 
@@ -210,7 +209,8 @@ function normalizeFlowEntry(value: unknown): ConfiguredKnowledgeFlow | undefined
   }
 
   const candidate = value as Record<string, unknown>;
-  const destinationId = stringValue(candidate.destinationId) ?? stringValue(candidate.destination) ?? stringValue(candidate.kb);
+  const destinationId =
+    stringValue(candidate.destinationId) ?? stringValue(candidate.destination) ?? stringValue(candidate.kb);
   const rawSourceIds = candidate.sourceIds ?? candidate.sources ?? candidate.source;
   const sourceIds = normalizeIdList(rawSourceIds);
   if (!destinationId || sourceIds.length === 0) {
@@ -309,9 +309,7 @@ function normalizeRepositoryObject(candidate: Record<string, unknown>): Configur
     stringValue(candidate.remoteUrl) ??
     (isGitUrl(rawValue) ? rawValue : undefined) ??
     (pathIsFileUrl ? pathCandidate : undefined);
-  const pathValue = pathIsFileUrl
-    ? undefined
-    : (pathCandidate ?? (!isGitUrl(rawValue) ? rawValue : undefined));
+  const pathValue = pathIsFileUrl ? undefined : (pathCandidate ?? (!isGitUrl(rawValue) ? rawValue : undefined));
   const kind = normalizeKind(candidate.kind, candidate.type, url, pathValue, rawValue);
 
   if (kind === "agent") {
@@ -348,7 +346,9 @@ function normalizeRepositoryObject(candidate: Record<string, unknown>): Configur
       kind
     };
     const branch = stringValue(candidate.branch);
-    const subpath = normalizeSubpath(stringValue(candidate.subpath) ?? stringValue(candidate.folder) ?? stringValue(candidate.docsPath));
+    const subpath = normalizeSubpath(
+      stringValue(candidate.subpath) ?? stringValue(candidate.folder) ?? stringValue(candidate.docsPath)
+    );
     return {
       ...repository,
       ...(branch ? { branch } : {}),
@@ -361,7 +361,9 @@ function normalizeRepositoryObject(candidate: Record<string, unknown>): Configur
   }
 
   const id = stringValue(candidate.id) ?? slugFromPath(pathValue);
-  const subpath = normalizeSubpath(stringValue(candidate.subpath) ?? stringValue(candidate.folder) ?? stringValue(candidate.docsPath));
+  const subpath = normalizeSubpath(
+    stringValue(candidate.subpath) ?? stringValue(candidate.folder) ?? stringValue(candidate.docsPath)
+  );
   return {
     id,
     name: stringValue(candidate.name) ?? id,

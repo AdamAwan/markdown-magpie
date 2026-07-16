@@ -53,7 +53,15 @@ test("StatusPill opens to both groups, marks read, and wires the notice action",
   const { container, unmount } = await renderDom(
     <StatusPill
       loaded
-      notices={[notice({ id: "failed-jobs", title: "2 AI jobs failed", tone: "danger", actionLabel: "Open Jobs", action: () => (actioned += 1) })]}
+      notices={[
+        notice({
+          id: "failed-jobs",
+          title: "2 AI jobs failed",
+          tone: "danger",
+          actionLabel: "Open Jobs",
+          action: () => (actioned += 1)
+        })
+      ]}
       notifications={[notification({ id: 1, text: "Draft Proposal completed." })]}
       onOpen={() => (opened += 1)}
       onDismissNotification={noop}

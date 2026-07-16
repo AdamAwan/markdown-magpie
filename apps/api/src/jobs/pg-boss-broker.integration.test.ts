@@ -132,10 +132,10 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
     assert.deepEqual(new Set(claimed.slice(1).map((job) => job.id)), new Set([proposal.id, summary.id]));
     // Background queues keep the round-robin fairness the combined loop had:
     // the two background claims come from two different queues.
-    assert.deepEqual(new Set(claimed.slice(1).map((job) => job.queueName)), new Set([
-      "draft_markdown_proposal__codex",
-      "summarize_gap__codex"
-    ]));
+    assert.deepEqual(
+      new Set(claimed.slice(1).map((job) => job.queueName)),
+      new Set(["draft_markdown_proposal__codex", "summarize_gap__codex"])
+    );
     for (const job of claimed) {
       await broker.cancel(job.id);
     }
@@ -202,21 +202,28 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
   });
 
   await t.test("reconciles schedules idempotently and removes stale schedules", async () => {
-    const desired = [{
-      type: "source_change_sync" as const,
-      key: "task:source-change-sync::docs",
-      cron: "*/5 * * * *",
-      input: { flowId: "docs" },
-      enabled: true
-    }];
+    const desired = [
+      {
+        type: "source_change_sync" as const,
+        key: "task:source-change-sync::docs",
+        cron: "*/5 * * * *",
+        input: { flowId: "docs" },
+        enabled: true
+      }
+    ];
     await broker.reconcileSchedules(desired);
     await broker.reconcileSchedules(desired);
-    assert.deepEqual((await broker.listSchedules()).map(({ key, type, cron, enabled }) => ({ key, type, cron, enabled })), [{
-      key: "task:source-change-sync::docs",
-      type: "source_change_sync",
-      cron: "*/5 * * * *",
-      enabled: true
-    }]);
+    assert.deepEqual(
+      (await broker.listSchedules()).map(({ key, type, cron, enabled }) => ({ key, type, cron, enabled })),
+      [
+        {
+          key: "task:source-change-sync::docs",
+          type: "source_change_sync",
+          cron: "*/5 * * * *",
+          enabled: true
+        }
+      ]
+    );
 
     await broker.reconcileSchedules([]);
     assert.deepEqual(await broker.listSchedules(), []);

@@ -48,11 +48,17 @@ describe("PostgresGapClusterStore", { skip: databaseUrl ? false : "DATABASE_URL 
     await store.assignGapToCluster(inFlow.id, gapId, "in");
 
     const clusters = await store.listActiveClustersForFlow(flow);
-    assert.deepEqual(clusters.map((c) => c.id), [inFlow.id]);
+    assert.deepEqual(
+      clusters.map((c) => c.id),
+      [inFlow.id]
+    );
     assert.ok(!clusters.some((c) => c.id === otherFlow.id));
 
     const memberships = await store.listActiveMembershipsForFlow(flow);
-    assert.deepEqual(memberships.map((m) => m.gapId), [gapId]);
+    assert.deepEqual(
+      memberships.map((m) => m.gapId),
+      [gapId]
+    );
 
     // The limit bounds the scan.
     const second = await store.createCluster({ flowId: flow, title: `in2-${randomUUID()}`, revision: 1 });

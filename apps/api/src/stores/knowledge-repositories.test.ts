@@ -79,14 +79,25 @@ describe("knowledge repository configuration", () => {
   it("parses an internet source's fetch allowlist, normalizing and dropping junk (#242)", () => {
     const sources = getConfiguredKnowledgeSources({
       KNOWLEDGE_SOURCES: JSON.stringify([
-        { id: "docs", kind: "internet", url: "https://docs.x.example/start", allowedHosts: ["Docs.X.Example.", " ", 7, "docs.x.example"] },
+        {
+          id: "docs",
+          kind: "internet",
+          url: "https://docs.x.example/start",
+          allowedHosts: ["Docs.X.Example.", " ", 7, "docs.x.example"]
+        },
         { id: "ref", kind: "internet", url: "https://ref.example", allowedHosts: [] },
         { id: "plain", kind: "internet", url: "https://plain.example", allowedHosts: "docs.x.example" }
       ])
     });
 
     assert.deepEqual(sources, [
-      { id: "docs", name: "docs", kind: "internet", url: "https://docs.x.example/start", allowedHosts: ["docs.x.example"] },
+      {
+        id: "docs",
+        name: "docs",
+        kind: "internet",
+        url: "https://docs.x.example/start",
+        allowedHosts: ["docs.x.example"]
+      },
       // An empty list and a non-array both mean "not configured" — the source
       // stays a reference-only prompt note.
       { id: "ref", name: "ref", kind: "internet", url: "https://ref.example" },
@@ -96,7 +107,10 @@ describe("knowledge repository configuration", () => {
 
   it("parses flows linking source ids to destination ids", () => {
     const sources = getConfiguredKnowledgeSources({
-      KNOWLEDGE_SOURCES: JSON.stringify([{ id: "flowerbi", url: "https://github.com/example/source.git" }, { id: "agent", kind: "agent" }])
+      KNOWLEDGE_SOURCES: JSON.stringify([
+        { id: "flowerbi", url: "https://github.com/example/source.git" },
+        { id: "agent", kind: "agent" }
+      ])
     });
     const destinations = getConfiguredKnowledgeDestinations({
       KNOWLEDGE_DESTINATIONS: JSON.stringify([{ id: "flowerbi-docs", url: "https://github.com/example/docs.git" }])
@@ -104,7 +118,12 @@ describe("knowledge repository configuration", () => {
     const flows = getConfiguredKnowledgeFlows(
       {
         KNOWLEDGE_FLOWS: JSON.stringify([
-          { id: "flowerbi-flow", name: "FlowerBI Docs", sourceIds: ["flowerbi", "agent"], destinationId: "flowerbi-docs" }
+          {
+            id: "flowerbi-flow",
+            name: "FlowerBI Docs",
+            sourceIds: ["flowerbi", "agent"],
+            destinationId: "flowerbi-docs"
+          }
         ])
       },
       sources,
@@ -256,13 +275,10 @@ describe("knowledge repository configuration", () => {
   });
 
   it("resolves indexing by configured repository id", () => {
-    const selection = resolveKnowledgeRepositorySelection(
-      { repositoryId: "docs" },
-      [
-        { id: "product", name: "Product Docs", path: "knowledge-bases/product", kind: "local" },
-        { id: "docs", name: "Reference Docs", path: "../product-docs", kind: "local" }
-      ]
-    );
+    const selection = resolveKnowledgeRepositorySelection({ repositoryId: "docs" }, [
+      { id: "product", name: "Product Docs", path: "knowledge-bases/product", kind: "local" },
+      { id: "docs", name: "Reference Docs", path: "../product-docs", kind: "local" }
+    ]);
 
     assert.deepEqual(selection, {
       localPath: "../product-docs",
@@ -274,19 +290,17 @@ describe("knowledge repository configuration", () => {
   it("rejects arbitrary local paths when repositories are configured", () => {
     assert.throws(
       () =>
-        resolveKnowledgeRepositorySelection(
-          { localPath: "/etc", repositoryId: "product" },
-          [{ id: "product", name: "Product Docs", path: "knowledge-bases/product", kind: "local" }]
-        ),
+        resolveKnowledgeRepositorySelection({ localPath: "/etc", repositoryId: "product" }, [
+          { id: "product", name: "Product Docs", path: "knowledge-bases/product", kind: "local" }
+        ]),
       /localPath is not accepted/
     );
   });
 
   it("resolves configured git repositories by id without requiring a local path yet", () => {
-    const selection = resolveConfiguredRepositorySelection(
-      { repositoryId: "source" },
-      [{ id: "source", name: "Source Repo", url: "https://github.com/example/source.git", kind: "git" }]
-    );
+    const selection = resolveConfiguredRepositorySelection({ repositoryId: "source" }, [
+      { id: "source", name: "Source Repo", url: "https://github.com/example/source.git", kind: "git" }
+    ]);
 
     assert.deepEqual(selection.repository, {
       id: "source",

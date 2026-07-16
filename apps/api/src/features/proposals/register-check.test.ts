@@ -13,10 +13,7 @@ const baseInput: ProposalInput = {
 
 describe("collectAdvisoryHeadings", () => {
   it("scans the primary markdown when there is no changeset", () => {
-    assert.deepEqual(
-      collectAdvisoryHeadings("# Doc\n\n## Recommendations\n\n## Usage"),
-      ["Recommendations"]
-    );
+    assert.deepEqual(collectAdvisoryHeadings("# Doc\n\n## Recommendations\n\n## Usage"), ["Recommendations"]);
   });
 
   it("scans every changeset write and skips deletes, deduplicating across files", () => {

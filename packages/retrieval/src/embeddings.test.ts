@@ -74,10 +74,9 @@ describe("AzureOpenAIEmbeddingProvider", () => {
     let captured: { url: string; headers: any; body: any } | undefined;
     globalThis.fetch = (async (url: string, init: any) => {
       captured = { url, headers: init.headers, body: JSON.parse(init.body) };
-      return new Response(
-        JSON.stringify({ data: [{ index: 0, embedding: vectorOf(EMBEDDING_DIMENSIONS) }] }),
-        { status: 200 }
-      );
+      return new Response(JSON.stringify({ data: [{ index: 0, embedding: vectorOf(EMBEDDING_DIMENSIONS) }] }), {
+        status: 200
+      });
     }) as unknown as typeof fetch;
 
     const provider = new AzureOpenAIEmbeddingProvider({

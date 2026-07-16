@@ -77,13 +77,7 @@ describe("UrlFetcher", () => {
   it("follows redirects, re-validating every hop against the allowlist", async () => {
     const calls: string[] = [];
     const fetcher = new UrlFetcher(fetchableInternetSources([internet()]), budget(), {
-      fetchImpl: scriptedFetch(
-        [
-          { status: 301, headers: { location: "/moved" } },
-          { body: "moved content" }
-        ],
-        calls
-      )
+      fetchImpl: scriptedFetch([{ status: 301, headers: { location: "/moved" } }, { body: "moved content" }], calls)
     });
     const text = await fetcher.fetch("https://docs.example.com/old");
     assert.match(text, /\[content served from https:\/\/docs\.example\.com\/moved\]/);
@@ -142,7 +136,8 @@ describe("UrlFetcher", () => {
   });
 
   it("reduces HTML to readable text", async () => {
-    const html = "<html><head><style>.x{}</style><script>alert(1)</script></head><body><h1>Title</h1><p>Body &amp; more</p></body></html>";
+    const html =
+      "<html><head><style>.x{}</style><script>alert(1)</script></head><body><h1>Title</h1><p>Body &amp; more</p></body></html>";
     const fetcher = new UrlFetcher(fetchableInternetSources([internet()]), budget(), {
       fetchImpl: scriptedFetch([{ headers: { "content-type": "text/html; charset=utf-8" }, body: html }])
     });

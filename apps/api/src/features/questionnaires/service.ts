@@ -19,8 +19,7 @@ import { checkReuse, type ReuseCheckDeps } from "./reuse-check.js";
 // freshness is derived from the KB sections each answer cited — never a TTL.
 
 export type CreateQuestionnaireResult =
-  | { ok: true; questionnaire: Questionnaire }
-  | { ok: false; code: "flow_not_found" | "empty_questionnaire" };
+  { ok: true; questionnaire: Questionnaire } | { ok: false; code: "flow_not_found" | "empty_questionnaire" };
 
 export async function createQuestionnaire(
   ctx: AppContext,
@@ -149,8 +148,7 @@ export async function handleQuestionnaireAnswerCompletion(
   if (!item) {
     return;
   }
-  const unanswerable =
-    output.citations.length === 0 || output.confidence === "low" || output.confidence === "unknown";
+  const unanswerable = output.citations.length === 0 || output.confidence === "low" || output.confidence === "unknown";
   const citations = await snapshotCitations(ctx, output);
   await ctx.stores.questionnaires.completeItem(questionLogId, {
     answer: output.answer,
@@ -251,7 +249,10 @@ function reuseCheckDeps(ctx: AppContext, flowId: string): ReuseCheckDeps {
 // fingerprints ARE generation-time here (the answer just landed). A section the
 // fingerprint query can't resolve gets an empty hash, which can never match at
 // reuse time — again the safe direction.
-async function snapshotCitations(ctx: AppContext, output: AnswerQuestionJobOutput): Promise<QuestionnaireItemCitation[]> {
+async function snapshotCitations(
+  ctx: AppContext,
+  output: AnswerQuestionJobOutput
+): Promise<QuestionnaireItemCitation[]> {
   const fingerprints = ctx.stores.knowledge
     ? await ctx.stores.knowledge.sectionFingerprints(output.citations.map((citation) => citation.sectionId))
     : [];
@@ -265,7 +266,10 @@ async function snapshotCitations(ctx: AppContext, output: AnswerQuestionJobOutpu
   }));
 }
 
-async function isStaleAgainstCurrentSections(ctx: AppContext, citations: QuestionnaireItemCitation[]): Promise<boolean> {
+async function isStaleAgainstCurrentSections(
+  ctx: AppContext,
+  citations: QuestionnaireItemCitation[]
+): Promise<boolean> {
   if (citations.length === 0) {
     return true;
   }

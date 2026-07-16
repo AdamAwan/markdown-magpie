@@ -36,9 +36,7 @@ function worksheet(): Questionnaire {
         answer: "ISO 27001 and SOC 2.",
         answeredAt: "2026-04-12T09:00:00.000Z",
         staleAtApproval: false,
-        citations: [
-          { sectionId: "s-1", contentHash: "h", path: "certs.md", heading: "Certificates", excerpt: "…" }
-        ]
+        citations: [{ sectionId: "s-1", contentHash: "h", path: "certs.md", heading: "Certificates", excerpt: "…" }]
       },
       {
         id: "i-1",
@@ -97,13 +95,9 @@ test("loads summaries on mount and opens a worksheet with per-item badges and ch
     onList: async () => [summary()],
     onGet: async () => worksheet()
   };
-  const { container, unmount } = await renderDom(
-    <QuestionnairesPanel flows={FLOWS} loading={false} {...handlers} />
-  );
+  const { container, unmount } = await renderDom(<QuestionnairesPanel flows={FLOWS} loading={false} {...handlers} />);
   try {
-    const row = [...container.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Acme SIG Q3")
-    );
+    const row = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Acme SIG Q3"));
     assert.ok(row, "summary row renders after mount");
     assert.match(row.textContent ?? "", /1 reused \/ 3 total/);
 
@@ -133,13 +127,9 @@ test("approving an answered item calls through and refreshes the worksheet", asy
       return true;
     }
   };
-  const { container, unmount } = await renderDom(
-    <QuestionnairesPanel flows={FLOWS} loading={false} {...handlers} />
-  );
+  const { container, unmount } = await renderDom(<QuestionnairesPanel flows={FLOWS} loading={false} {...handlers} />);
   try {
-    const row = [...container.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Acme SIG Q3")
-    );
+    const row = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Acme SIG Q3"));
     assert.ok(row);
     await click(row);
     const approveButtons = [...container.querySelectorAll("button")].filter(

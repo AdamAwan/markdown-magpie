@@ -245,9 +245,7 @@ function useConsoleController() {
   }, [config, flowId]);
 
   useEffect(() => {
-    const sourceIds = (config?.knowledge?.sources ?? [])
-      .map((source) => source.id)
-      .filter(Boolean);
+    const sourceIds = (config?.knowledge?.sources ?? []).map((source) => source.id).filter(Boolean);
     if (sourceIds.length === 0) {
       setSourceMapEntries([]);
       return;
@@ -331,7 +329,8 @@ function useConsoleController() {
     return waited.job;
   }
 
-  async function acceptFailedJobs(jobIds: string[]) {    try {
+  async function acceptFailedJobs(jobIds: string[]) {
+    try {
       const results = await Promise.all(
         jobIds.map((jobId) => apiPost<{ job: JobView }>(`/jobs/${jobId}/accept-failure`, {}))
       );
@@ -345,7 +344,8 @@ function useConsoleController() {
   }
 
   async function selectJob(jobId: string) {
-    setSelectedJobId(jobId);    try {
+    setSelectedJobId(jobId);
+    try {
       const result = await apiGet<{ job: JobView }>(`/jobs/${jobId}`);
       setSelectedJob(result.job);
     } catch (error) {
@@ -358,7 +358,8 @@ function useConsoleController() {
     setSelectedJob(undefined);
   }
 
-  async function cancelJob(jobId: string) {    try {
+  async function cancelJob(jobId: string) {
+    try {
       const result = await apiPost<{ job: JobView }>(`/jobs/${jobId}/cancel`, {});
       if (selectedJobId === jobId) {
         setSelectedJob(result.job);
@@ -370,7 +371,8 @@ function useConsoleController() {
     }
   }
 
-  async function retryJob(jobId: string) {    try {
+  async function retryJob(jobId: string) {
+    try {
       const result = await apiPost<{ job: JobView }>(`/jobs/${jobId}/retry`, {});
       if (selectedJobId === jobId) {
         setSelectedJob(result.job);
@@ -600,7 +602,8 @@ function useConsoleController() {
   // Shared by the Ask form and the "pick a flow" re-ask. `flow` is "auto" or a
   // configured flow id; the API rejects an unknown id with a 400.
   async function submitQuestion(questionText: string, flow: string) {
-    setLoading(true);    try {
+    setLoading(true);
+    try {
       const result = await apiPost<AskResponse>("/ask", { question: questionText, flow });
       setQuestion("");
       // A fresh question always lands at the top of the newest-first list; jump
@@ -644,7 +647,8 @@ function useConsoleController() {
     await submitQuestion(questionText, flow);
   }
 
-  async function sendFeedback(questionId: string, feedback: Feedback) {    try {
+  async function sendFeedback(questionId: string, feedback: Feedback) {
+    try {
       const result = await apiPost<{ question: QuestionLog }>(`/questions/${questionId}/feedback`, { feedback });
       setQuestions((current) => current.map((item) => (item.id === questionId ? result.question : item)));
     } catch (error) {
@@ -652,7 +656,8 @@ function useConsoleController() {
     }
   }
 
-  async function toggleKnowledgeGap(questionId: string, flagged: boolean) {    try {
+  async function toggleKnowledgeGap(questionId: string, flagged: boolean) {
+    try {
       const result = flagged
         ? await apiPost<{ question: QuestionLog }>(`/questions/${questionId}/gap`, {})
         : await apiDelete<{ question: QuestionLog }>(`/questions/${questionId}/gap`);
@@ -669,9 +674,7 @@ function useConsoleController() {
   // whether the delete succeeded so the dialog knows to close.
   async function deleteQuestion(questionId: string, scrub: boolean): Promise<boolean> {
     try {
-      const report = await apiDelete<QuestionDeletionReport>(
-        `/questions/${questionId}${scrub ? "?scrub=true" : ""}`
-      );
+      const report = await apiDelete<QuestionDeletionReport>(`/questions/${questionId}${scrub ? "?scrub=true" : ""}`);
       // Drop it from the current page immediately; the next refresh reconciles the
       // pager (the fast tier already snaps back off an empty page).
       setQuestions((current) => current.filter((item) => item.id !== questionId));
@@ -698,7 +701,8 @@ function useConsoleController() {
   }
 
   async function draftProposal(gap: GapCandidate) {
-    setLoading(true);    try {
+    setLoading(true);
+    try {
       const result = await apiPost<{ job?: JobView; proposal?: Proposal }>("/proposals/from-gap", {
         summary: gap.summary,
         // Draft into the flow the gap actually came from; fall back to the
@@ -732,7 +736,8 @@ function useConsoleController() {
     if (summaries.length === 0) {
       return;
     }
-    setLoading(true);    try {
+    setLoading(true);
+    try {
       const result = await apiPost<{ job?: JobView; proposal?: Proposal }>("/proposals/from-gaps", {
         summaries,
         // Use the cluster's own flow (clusters are per-flow); fall back to the
@@ -763,7 +768,8 @@ function useConsoleController() {
   }
 
   async function updateProposalStatus(proposalId: string, status: Proposal["status"]) {
-    setLoading(true);    try {
+    setLoading(true);
+    try {
       const result = await apiPost<{ proposal: Proposal; cascadeScheduled?: boolean }>(
         `/proposals/${proposalId}/status`,
         { status }
@@ -789,7 +795,8 @@ function useConsoleController() {
   }
 
   async function mergeProposal(proposalId: string) {
-    setLoading(true);    try {
+    setLoading(true);
+    try {
       const result = await apiPost<{ proposal: Proposal; cascadeScheduled?: boolean }>(
         `/proposals/${proposalId}/merge`,
         {}
@@ -810,7 +817,8 @@ function useConsoleController() {
   }
 
   async function rejectProposal(proposalId: string) {
-    setLoading(true);    try {
+    setLoading(true);
+    try {
       const result = await apiPost<{ proposal: Proposal }>(`/proposals/${proposalId}/reject`, {});
       setProposals((current) => current.map((proposal) => (proposal.id === proposalId ? result.proposal : proposal)));
       setSelectedProposalId(result.proposal.id);
@@ -828,7 +836,8 @@ function useConsoleController() {
   }
 
   async function publishProposal(proposalId: string) {
-    setLoading(true);    try {
+    setLoading(true);
+    try {
       // Fire-and-forget enqueue (see runPublishProposal): no jump to the Jobs
       // section and no /jobs/:id/wait long-poll, so the shared `loading` flag
       // clears as soon as the job is queued instead of blocking the console for
@@ -850,7 +859,8 @@ function useConsoleController() {
     if (ids.length === 0) {
       return;
     }
-    setLoading(true);    try {
+    setLoading(true);
+    try {
       const { results } = await apiPost<{ results: BulkProposalResult[] }>("/proposals/bulk", { action, ids });
       const outcome = bulkOutcomeMessage(action, results);
       showMessage(outcome.text, outcome.tone);
@@ -862,7 +872,8 @@ function useConsoleController() {
     }
   }
 
-  async function saveScheduledTask(key: string, enabled: boolean, cron: string) {    try {
+  async function saveScheduledTask(key: string, enabled: boolean, cron: string) {
+    try {
       const result = await apiPost<{ tasks: ScheduledTask[] }>(`/scheduled-tasks/${key}/settings`, { enabled, cron });
       setScheduledTasks(result.tasks);
       showMessage(enabled ? "Side-process schedule enabled." : "Side-process schedule disabled.", "success");
@@ -872,7 +883,8 @@ function useConsoleController() {
   }
 
   async function runScheduledTask(key: string) {
-    setLoading(true);    try {
+    setLoading(true);
+    try {
       const result = await apiPost<{ job: JobView; tasks: ScheduledTask[] }>(`/scheduled-tasks/${key}/run`, {});
       setScheduledTasks(result.tasks);
       const job = await waitForJob(result.job);
@@ -895,7 +907,8 @@ function useConsoleController() {
       return;
     }
 
-    setIndexingRepo(true);    try {
+    setIndexingRepo(true);
+    try {
       const summary = await apiPost<IndexRepositoryResponse>("/knowledge/repositories/index", {
         flowId: nextFlowId.trim()
       });
@@ -995,7 +1008,8 @@ function useConsoleController() {
   async function proposeSeedPlan(
     targetFlowId: string,
     notes: string
-  ): Promise<{ jobId: string; reused: boolean } | undefined> {    try {
+  ): Promise<{ jobId: string; reused: boolean } | undefined> {
+    try {
       const trimmedNotes = notes.trim();
       const outcome = await apiPost<{ ok: boolean; jobId: string; reused: boolean }>(
         `/flows/${encodeURIComponent(targetFlowId)}/outline`,
@@ -1020,9 +1034,7 @@ function useConsoleController() {
   // raw outline job output.
   async function listSeedPlans(targetFlowId: string): Promise<SeedPlan[] | undefined> {
     try {
-      const { plans } = await apiGet<{ plans: SeedPlan[] }>(
-        `/flows/${encodeURIComponent(targetFlowId)}/seed-plans`
-      );
+      const { plans } = await apiGet<{ plans: SeedPlan[] }>(`/flows/${encodeURIComponent(targetFlowId)}/seed-plans`);
       return plans;
     } catch (error) {
       showMessage(errorMessage(error), "danger");
@@ -1032,7 +1044,8 @@ function useConsoleController() {
 
   // Save reviewer edits (charter/persona text, item fields, per-item status) to
   // a still-proposed plan.
-  async function patchSeedPlan(planId: string, patch: SeedPlanPatchBody): Promise<SeedPlan | undefined> {    try {
+  async function patchSeedPlan(planId: string, patch: SeedPlanPatchBody): Promise<SeedPlan | undefined> {
+    try {
       const { plan } = await apiPatch<{ plan: SeedPlan }>(`/seed-plans/${encodeURIComponent(planId)}`, patch);
       showMessage("Plan edits saved.", "success");
       return plan;
@@ -1044,7 +1057,8 @@ function useConsoleController() {
 
   // Approve a plan: the API drafts one document per approved item straight into
   // the proposal → PR pipeline, carrying the plan's charter/persona.
-  async function approveSeedPlan(planId: string): Promise<{ plan: SeedPlan; jobIds: string[] } | undefined> {    try {
+  async function approveSeedPlan(planId: string): Promise<{ plan: SeedPlan; jobIds: string[] } | undefined> {
+    try {
       const outcome = await apiPost<{ plan: SeedPlan; jobIds: string[] }>(
         `/seed-plans/${encodeURIComponent(planId)}/approve`,
         {}
@@ -1061,7 +1075,8 @@ function useConsoleController() {
     }
   }
 
-  async function dismissSeedPlan(planId: string): Promise<SeedPlan | undefined> {    try {
+  async function dismissSeedPlan(planId: string): Promise<SeedPlan | undefined> {
+    try {
       const { plan } = await apiPost<{ plan: SeedPlan }>(`/seed-plans/${encodeURIComponent(planId)}/dismiss`, {});
       showMessage("Plan dismissed. It will not be re-proposed until the flow's sources change.", "success");
       return plan;
@@ -1077,10 +1092,9 @@ function useConsoleController() {
   // re-reading the flow's sources.
   async function reviseSeedPlan(planId: string, instruction: string): Promise<{ jobId: string } | undefined> {
     try {
-      const outcome = await apiPost<{ jobId: string }>(
-        `/seed-plans/${encodeURIComponent(planId)}/revise`,
-        { instruction }
-      );
+      const outcome = await apiPost<{ jobId: string }>(`/seed-plans/${encodeURIComponent(planId)}/revise`, {
+        instruction
+      });
       showMessage("Revising the plan — it will update here when the revision lands.", "info");
       return outcome;
     } catch (error) {

@@ -12,9 +12,7 @@ function fakeCtx(): AppContext {
     stores: {
       knowledgeIndex: {
         search: async (query: string) =>
-          query.includes("has-neighbour")
-            ? [{ section: { path: "kb/b.md" } as DocumentSection, relevance: 0.9 }]
-            : [],
+          query.includes("has-neighbour") ? [{ section: { path: "kb/b.md" } as DocumentSection, relevance: 0.9 }] : [],
         listDocuments: () => [{ path: "kb/b.md", content: "# B" } as KnowledgeDocument]
       }
     }
