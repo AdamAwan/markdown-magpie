@@ -346,7 +346,7 @@ packages/
               adding or changing a job.
   logger/     Shared structured pino logging + crash handlers.
   markdown/   Markdown parsing, frontmatter, sectioning, advisory-heading detection.
-  prompts/    Shared AI prompt catalog (19 prompts, shared contract constants:
+  prompts/    Shared AI prompt catalog (21 prompts, shared contract constants:
               CONSERVATIVE_CONTRACT, SOURCE_MAP_CONTRACT, FACTUAL_REGISTER_CONTRACT).
   retrieval/  Embeddings, RRF fusion, chat/embedding HTTP providers, LLM flow router +
               embedding flow router. (Answer orchestration itself lives in api/watcher.)

@@ -43,6 +43,11 @@ export interface AnswerOutput {
   flowSelectionRequired?: FlowSelectionRequired;
   outOfScope?: OutOfScope;
   trace?: AnswerTrace;
+  // The condensed, self-contained question a follow-up was rewritten into (#239).
+  // Set by the answer runner when it condensed a follow-up using the conversation
+  // context; the API persists it on the question log for gap hygiene. Absent when
+  // no condensation ran (first turn, or an already-standalone follow-up).
+  standaloneQuestion?: string;
 }
 
 // The loop-level portion of the trace the answer runner assembles as it goes
@@ -219,8 +224,7 @@ export function buildAnswerOutput(
   // rather than the raw envelope. Genuine prose (does not start with "{") is still
   // kept verbatim so a model that ignores the contract can still be understood.
   const answer =
-    structured?.answer ??
-    (modelContent.trim().startsWith("{") ? UNPARSEABLE_ANSWER_FALLBACK : modelContent.trim());
+    structured?.answer ?? (modelContent.trim().startsWith("{") ? UNPARSEABLE_ANSWER_FALLBACK : modelContent.trim());
   const { citations, attributionFailed } = selectCitations(sections, structured?.usedSectionIds ?? []);
   const citedSectionIds = citations.map((citation) => citation.sectionId);
   // The verification outcome is a placeholder here; the grounding check in the
@@ -251,9 +255,7 @@ export function buildAnswerOutput(
 
   if (structured?.isKnowledgeGap || sections.length === 0) {
     const summaries =
-      structured && structured.gaps.length > 0
-        ? structured.gaps
-        : [`${NO_SOURCE_MATERIAL_GAP_PREFIX} ${question}`];
+      structured && structured.gaps.length > 0 ? structured.gaps : [`${NO_SOURCE_MATERIAL_GAP_PREFIX} ${question}`];
     // A flagged gap no longer forces "low" across the board. A gap-flagged answer
     // that still substantively answers the core of the question — the model rated
     // itself medium/high, produced real answer text, and grounded it in honoured
@@ -364,11 +366,7 @@ export function parseGroundingVerdict(content: string): GroundingVerdict | undef
 // unsupported claim is recorded as an auto gap — a question that tempted the model
 // to fabricate is exactly a question the knowledge base should learn to answer, so
 // the stripped claims feed gap clustering like any other weak answer.
-export function applyGroundingVerdict(
-  output: AnswerOutput,
-  verdict: GroundingVerdict,
-  question: string
-): AnswerOutput {
+export function applyGroundingVerdict(output: AnswerOutput, verdict: GroundingVerdict, question: string): AnswerOutput {
   if (verdict.grounded) {
     return output;
   }
@@ -470,7 +468,9 @@ export function forcedSearchQueries(modelContent: string, max = 3): string[] {
 
 function toStringArray(value: unknown): string[] {
   return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).map((entry) => entry.trim())
+    ? value
+        .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        .map((entry) => entry.trim())
     : [];
 }
 

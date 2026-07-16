@@ -13,7 +13,12 @@ import type {
   QuestionLogInput,
   QuestionLogUpdateInput
 } from "@magpie/core";
-import { answerGapsUnchanged, gapSummaryKey, isSeedableGapSummary, type QuestionLogStore } from "./question-log-store.js";
+import {
+  answerGapsUnchanged,
+  gapSummaryKey,
+  isSeedableGapSummary,
+  type QuestionLogStore
+} from "./question-log-store.js";
 import { valuesClause } from "./sql-bulk.js";
 
 export class PostgresQuestionLogStore implements QuestionLogStore {
@@ -155,9 +160,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       await client.query(
         `
           INSERT INTO questions (
-            id, question, confidence, answer, chat_provider, flow_id, metadata, purpose
+            id, question, confidence, answer, chat_provider, flow_id, metadata, purpose, conversation_id
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         `,
         [
           id,
@@ -170,7 +175,8 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
             answer: input.answer ?? null,
             retrievedSectionIds: input.retrievedSectionIds
           }),
-          input.purpose ?? "live"
+          input.purpose ?? "live",
+          input.conversationId ?? null
         ]
       );
 
@@ -206,6 +212,24 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
 
     const gapsByQuestion = await this.loadGaps([id]);
     return mapQuestionRow(result.rows[0], gapsByQuestion.get(id) ?? []);
+  }
+
+  async listConversationTurns(conversationId: string, limit: number): Promise<QuestionLog[]> {
+    if (limit <= 0) {
+      return [];
+    }
+    // The most recent `limit` live, answered turns, then reversed to oldest-first
+    // for prompt assembly. `answer IS NOT NULL` excludes an in-flight turn (recorded
+    // but not yet completed) so a follow-up's context is only the Q&A the user saw.
+    const result = await this.pool.query<QuestionRow>(
+      `SELECT * FROM questions
+       WHERE conversation_id = $1 AND purpose = 'live' AND answer IS NOT NULL
+       ORDER BY asked_at DESC LIMIT $2`,
+      [conversationId, limit]
+    );
+    const rows = result.rows.reverse();
+    const gapsByQuestion = await this.loadGaps(rows.map((row) => row.id));
+    return rows.map((row) => mapQuestionRow(row, gapsByQuestion.get(row.id) ?? []));
   }
 
   async delete(id: string): Promise<boolean> {
@@ -281,7 +305,10 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
               answer = $3,
               chat_provider = $4,
               metadata = $5,
-              flow_id = $6
+              flow_id = $6,
+              -- Persist the watcher's condensed standalone form for a follow-up
+              -- (#239); COALESCE keeps any prior value if a re-answer omits it.
+              standalone_question = COALESCE($7, standalone_question)
           WHERE id = $1
         `,
         [
@@ -290,7 +317,8 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           input.answer.answer,
           input.chatProvider ?? existing.chatProvider,
           JSON.stringify(metadata),
-          flowId
+          flowId,
+          input.standaloneQuestion ?? null
         ]
       );
       if (replaceGaps) {
@@ -321,6 +349,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     try {
       await client.query("BEGIN");
       const result = await client.query<{
+        // The condensed standalone form is preferred over the raw question for the
+        // feedback gap summary (#239), so a terse follow-up does not seed a
+        // context-free gap. COALESCE folds the fallback in SQL.
         question: string;
         confidence: Confidence;
         flow_id: string | null;
@@ -331,7 +362,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           SET feedback = $2,
               feedback_at = now()
           WHERE id = $1
-          RETURNING question, confidence, flow_id, purpose
+          RETURNING COALESCE(standalone_question, question) AS question, confidence, flow_id, purpose
         `,
         [id, feedback]
       );
@@ -407,7 +438,9 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           SET manual_gap = true,
               manual_gap_at = now()
           WHERE id = $1
-          RETURNING question, flow_id
+          -- Prefer the condensed standalone form over the raw follow-up text for
+          -- the fallback manual-gap summary (#239).
+          RETURNING COALESCE(standalone_question, question) AS question, flow_id
         `,
         [id]
       );
@@ -1042,6 +1075,8 @@ interface QuestionRow {
   manual_gap_at: Date | null;
   asked_at: Date;
   purpose: "live" | "verification";
+  conversation_id: string | null;
+  standalone_question: string | null;
 }
 
 interface GapCandidateRow {
@@ -1068,6 +1103,8 @@ function mapQuestionRow(row: QuestionRow, gaps: QuestionGap[]): QuestionLog {
     gaps,
     manualGap: row.manual_gap,
     manualGapAt: row.manual_gap_at?.toISOString(),
-    purpose: row.purpose
+    purpose: row.purpose,
+    ...(row.conversation_id ? { conversationId: row.conversation_id } : {}),
+    ...(row.standalone_question ? { standaloneQuestion: row.standalone_question } : {})
   };
 }

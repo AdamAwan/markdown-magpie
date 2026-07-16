@@ -273,7 +273,10 @@ export async function completeJob(
     // persisted result rather than re-validating (and requiring) `output`.
     resultData = completedJobResult(existingJob);
     if (resultData === undefined) {
-      logger.warn({ jobId, jobType: existingJob.type }, "completed job has no persisted result to replay side effects from");
+      logger.warn(
+        { jobId, jobType: existingJob.type },
+        "completed job has no persisted result to replay side effects from"
+      );
       return { ok: true, job: existingJob };
     }
   } else {
@@ -329,7 +332,10 @@ export async function completeJob(
       try {
         await foldService.reconcileDraftedProposal(ctx, draftedProposal);
       } catch (error) {
-        logger.warn({ proposalId: draftedProposal.id, err: error instanceof Error ? error.message : String(error) }, "fold check for proposal failed");
+        logger.warn(
+          { proposalId: draftedProposal.id, err: error instanceof Error ? error.message : String(error) },
+          "fold check for proposal failed"
+        );
       }
     }
     const correctiveProposal = await proposalsService.createCorrectiveProposalFromCompletedJob(
@@ -343,7 +349,10 @@ export async function completeJob(
       try {
         await foldService.reconcileCorrectiveProposal(ctx, correctiveProposal);
       } catch (error) {
-        logger.warn({ proposalId: correctiveProposal.id, err: error instanceof Error ? error.message : String(error) }, "corrective reconcile for proposal failed");
+        logger.warn(
+          { proposalId: correctiveProposal.id, err: error instanceof Error ? error.message : String(error) },
+          "corrective reconcile for proposal failed"
+        );
       }
     }
     const seedProposal = await proposalsService.createSeedProposalFromCompletedJob(ctx, existingJob, resultData);
@@ -353,7 +362,10 @@ export async function completeJob(
       try {
         await foldService.reconcileSeedProposal(ctx, seedProposal);
       } catch (error) {
-        logger.warn({ proposalId: seedProposal.id, err: error instanceof Error ? error.message : String(error) }, "seed reconcile for proposal failed");
+        logger.warn(
+          { proposalId: seedProposal.id, err: error instanceof Error ? error.message : String(error) },
+          "seed reconcile for proposal failed"
+        );
       }
     }
     // Outline completions persist a reviewable seed plan (no-op for other job
@@ -369,7 +381,10 @@ export async function completeJob(
       try {
         await foldService.reconcileDedupeProposal(ctx, dedupeProposal);
       } catch (error) {
-        logger.warn({ proposalId: dedupeProposal.id, err: error instanceof Error ? error.message : String(error) }, "dedupe reconcile for proposal failed");
+        logger.warn(
+          { proposalId: dedupeProposal.id, err: error instanceof Error ? error.message : String(error) },
+          "dedupe reconcile for proposal failed"
+        );
       }
     }
     const improveProposal = await proposalsService.createImproveProposalFromCompletedJob(ctx, existingJob, resultData);
@@ -377,7 +392,10 @@ export async function completeJob(
       try {
         await foldService.reconcileImproveProposal(ctx, improveProposal);
       } catch (error) {
-        logger.warn({ proposalId: improveProposal.id, err: error instanceof Error ? error.message : String(error) }, "improve reconcile for proposal failed");
+        logger.warn(
+          { proposalId: improveProposal.id, err: error instanceof Error ? error.message : String(error) },
+          "improve reconcile for proposal failed"
+        );
       }
     }
     const splitProposal = await proposalsService.createSplitProposalFromCompletedJob(ctx, existingJob, resultData);
@@ -386,7 +404,10 @@ export async function completeJob(
       try {
         await foldService.reconcileSplitProposal(ctx, splitProposal);
       } catch (error) {
-        logger.warn({ proposalId: splitProposal.id, err: error instanceof Error ? error.message : String(error) }, "split reconcile for proposal failed");
+        logger.warn(
+          { proposalId: splitProposal.id, err: error instanceof Error ? error.message : String(error) },
+          "split reconcile for proposal failed"
+        );
       }
     }
     await foldService.applyFoldFromCompletedJob(ctx, existingJob, resultData);
@@ -408,7 +429,10 @@ export async function completeJob(
     // side_effects_failed outcome: the route maps it to a 500, the watcher's
     // complete() retry re-POSTs, and the replay branch above re-runs only the
     // side effects from the persisted result.
-    logger.error({ jobId, jobType: existingJob.type, err: message }, "job completed but its side effects failed; a retried completion replays only the side effects");
+    logger.error(
+      { jobId, jobType: existingJob.type, err: message },
+      "job completed but its side effects failed; a retried completion replays only the side effects"
+    );
     return { ok: false, code: "side_effects_failed" };
   }
   return { ok: true, job: await ctx.jobs.get(jobId) };
@@ -472,7 +496,10 @@ async function updateQuestionLogFromCompletedJob(
     // The watcher routed the question to a flow and retrieved the cited sections;
     // record both. retrievedSectionIds is derived from the output citations by the
     // store. flowId is only set when the watcher actually chose a flow.
-    ...(typeof output.flowId === "string" ? { flowId: output.flowId } : {})
+    ...(typeof output.flowId === "string" ? { flowId: output.flowId } : {}),
+    // The condensed standalone form of a follow-up (#239), when the watcher rewrote
+    // one; persisted so gap candidacy/clustering key off the resolved intent.
+    ...(typeof output.standaloneQuestion === "string" ? { standaloneQuestion: output.standaloneQuestion } : {})
   });
 }
 

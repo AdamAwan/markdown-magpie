@@ -3,15 +3,9 @@
 // the API plumbing avoids the apiUrl/postJson/getJson/askQuestion drift that
 // comes from copy-pasting it per transport.
 
-import {
-  ON_BEHALF_OF_ROLES_HEADER,
-  ON_BEHALF_OF_SUBJECT_HEADER,
-  serializeOnBehalfRoles
-} from "@magpie/auth";
+import { ON_BEHALF_OF_ROLES_HEADER, ON_BEHALF_OF_SUBJECT_HEADER, serializeOnBehalfRoles } from "@magpie/auth";
 
-const apiBaseUrl = trimTrailingSlash(
-  (process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/api$/, "")
-);
+const apiBaseUrl = trimTrailingSlash((process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/api$/, ""));
 
 // The API always answers questions asynchronously: POST /ask enqueues an
 // answer_question job and returns 202 with { questionId, job, links }. kb_ask
@@ -36,6 +30,10 @@ export interface AskResult {
   citations: unknown[];
   gaps?: unknown[];
   questionId?: string;
+  // The conversation this exchange belongs to (#239). Returned from POST /ask (the
+  // API mints it on the first turn). Pass it back as `conversationId` on the next
+  // kb_ask to ask a follow-up that resolves against this exchange.
+  conversationId?: string;
   // Present when "auto" routing could not determine a flow: the answer is a stock
   // note (confidence "unknown") and the caller should re-ask kb_ask with `flow`
   // set to one of these ids.
@@ -95,9 +93,7 @@ function trimTrailingSlash(value: string): string {
 }
 
 function apiUrl(path: string): string {
-  return path.startsWith("/api/") || path === "/api"
-    ? `${apiBaseUrl}${path}`
-    : `${apiBaseUrl}/api${path}`;
+  return path.startsWith("/api/") || path === "/api" ? `${apiBaseUrl}${path}` : `${apiBaseUrl}/api${path}`;
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -158,11 +154,21 @@ async function readApiResponse(response: Response, path: string): Promise<unknow
 export async function askQuestion(
   question: string,
   options?: KbClientOptions,
-  flow?: string
+  flow?: string,
+  conversationId?: string
 ): Promise<AskResult> {
-  const body = flow ? { question, flow } : { question };
+  const body = {
+    question,
+    ...(flow ? { flow } : {}),
+    // Attach this ask to an existing conversation (#239) when the caller threads
+    // one; omitted starts a new conversation the API mints an id for.
+    ...(conversationId ? { conversationId } : {})
+  };
   const ask = asObject(await postJson("/ask", body, options));
   const questionId = typeof ask.questionId === "string" ? ask.questionId : undefined;
+  // Echo the conversation id back to the caller (minted on the first turn, or the
+  // one it passed) so a follow-up can be threaded onto this exchange.
+  const returnedConversationId = typeof ask.conversationId === "string" ? ask.conversationId : conversationId;
   const links = readLinks(ask);
   const deadline = Date.now() + answerTimeoutMs;
 
@@ -172,7 +178,7 @@ export async function askQuestion(
       ? extractAnswer(readResult(waited))
       : await pollForAnswer(links.job, waited, deadline, options);
 
-  return { ...result, questionId };
+  return { ...result, questionId, ...(returnedConversationId ? { conversationId: returnedConversationId } : {}) };
 }
 
 // Falls back to detail polling (GET /jobs/:id) when the wait endpoint returns a
@@ -547,11 +553,7 @@ export async function generateOutline(
 // strategy: hit the job's server-side long-poll wait endpoint once, then fall
 // back to detail polling. Turns failed/cancelled or a deadline overrun into a
 // clear error that names the job id and state but never echoes payload data.
-async function waitForOutlineJob(
-  jobId: string,
-  deadline: number,
-  options?: KbClientOptions
-): Promise<JobView> {
+async function waitForOutlineJob(jobId: string, deadline: number, options?: KbClientOptions): Promise<JobView> {
   const encoded = encodeURIComponent(jobId);
   let job = readJob(await getJson(`/jobs/${encoded}/wait`, options));
 
@@ -627,11 +629,7 @@ const MAX_QUESTIONNAIRE_QUESTIONS = 500;
 // Validates a bounded array of non-empty strings, trimming each entry. Unlike
 // sectionIdsArgument this never dedupes: questionnaires legitimately carry
 // near-duplicate questions, and item positions must line up with the input.
-function stringArrayArgument(
-  args: Record<string, unknown> | undefined,
-  name: string,
-  maxEntries: number
-): string[] {
+function stringArrayArgument(args: Record<string, unknown> | undefined, name: string, maxEntries: number): string[] {
   const value = args?.[name];
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error(`${name} must be a non-empty array of strings`);
@@ -730,12 +728,7 @@ export async function approveQuestionnaire(
 function readQuestionnaire(value: unknown): QuestionnaireView {
   const questionnaire = asObject(asObject(value).questionnaire);
   const { id, name, flowId, status } = questionnaire;
-  if (
-    typeof id !== "string" ||
-    typeof name !== "string" ||
-    typeof flowId !== "string" ||
-    typeof status !== "string"
-  ) {
+  if (typeof id !== "string" || typeof name !== "string" || typeof flowId !== "string" || typeof status !== "string") {
     throw new Error("Questionnaire response did not include id/name/flowId/status");
   }
 

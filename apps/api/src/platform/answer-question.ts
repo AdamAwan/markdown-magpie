@@ -23,13 +23,15 @@ import type { AiProviderName } from "./providers.js";
 export async function recordAnswerQuestionLog(
   ctx: AppContext,
   question: string,
-  purpose: QuestionPurpose = "live"
+  purpose: QuestionPurpose = "live",
+  conversationId?: string
 ): Promise<QuestionLog> {
   return ctx.stores.questionLogs.record({
     question,
     chatProvider: ctx.config.get().aiProvider,
     retrievedSectionIds: [],
-    purpose
+    purpose,
+    ...(conversationId ? { conversationId } : {})
   });
 }
 
@@ -38,7 +40,15 @@ export async function recordAnswerQuestionLog(
 // requestedFlowId and the configured provider.
 export function buildAnswerQuestionInput(
   ctx: AppContext,
-  options: { questionLogId: string; question: string; requestedFlowId?: string }
+  options: {
+    questionLogId: string;
+    question: string;
+    requestedFlowId?: string;
+    // Multi-turn conversation context (#239), assembled by the ask service from the
+    // conversation's prior question logs (bounded). Omitted on the first turn.
+    priorTurns?: Array<{ question: string; answer: string }>;
+    conversationFlowId?: string;
+  }
 ): AnswerQuestionJobInput & { provider: AiProviderName } {
   const flows = ctx.knowledgeConfig.flows.map((flow) => ({
     id: flow.id,
@@ -51,6 +61,8 @@ export function buildAnswerQuestionInput(
     question: options.question,
     flows,
     ...(options.requestedFlowId ? { requestedFlowId: options.requestedFlowId } : {}),
+    ...(options.priorTurns && options.priorTurns.length > 0 ? { priorTurns: options.priorTurns } : {}),
+    ...(options.conversationFlowId ? { conversationFlowId: options.conversationFlowId } : {}),
     provider: ctx.config.get().aiProvider,
     expectedOutput: "answer_result"
   };

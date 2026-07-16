@@ -75,6 +75,15 @@ export function answerGapsUnchanged(
   return existingKeys.every((key, index) => key === nextKeys[index]);
 }
 
+// The text a gap summary falls back to when none is supplied (the manual-flag and
+// 'unhelpful'-feedback paths). Prefers the condensed standalone form of a follow-up
+// (#239) over the raw question text, so a terse follow-up ("what about the EU?")
+// never seeds a gap with context-free text that cannot cluster with its siblings.
+function gapSummaryFallback(log: { question: string; standaloneQuestion?: string }): string {
+  const standalone = log.standaloneQuestion?.trim();
+  return standalone && standalone.length > 0 ? standalone : log.question;
+}
+
 export interface QuestionLogStore {
   record(input: QuestionLogInput): Promise<QuestionLog>;
   updateAnswer(id: string, input: QuestionLogUpdateInput): Promise<QuestionLog | undefined>;
@@ -123,6 +132,13 @@ export interface QuestionLogStore {
   // candidates or cluster again. Returns how many gaps were newly dismissed.
   dismissGaps(gapIds: string[], reason: string): Promise<number>;
   get(id: string): Promise<QuestionLog | undefined>;
+  // The recent ANSWERED turns of a conversation (#239), oldest-first, capped at
+  // `limit` (the most recent `limit` are returned). Only live, answered logs are
+  // included — an in-flight turn (no answer yet) and synthetic
+  // verification/questionnaire logs are excluded, so a follow-up's prior-turn
+  // context is exactly the Q&A the user has actually seen. Empty for an unknown or
+  // first-turn conversation.
+  listConversationTurns(conversationId: string, limit: number): Promise<QuestionLog[]>;
   // Permanently deletes one question and everything the DB cascades from it
   // (answer_citations, question_gaps, and via the gap FK, gap_cluster_memberships).
   // The in-memory store removes them explicitly. Bumps the gap catalog for the
@@ -286,7 +302,8 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       manualGap: false,
       askedAt: new Date().toISOString(),
       purpose: input.purpose ?? "live",
-      ...(input.flowId ? { flowId: input.flowId } : {})
+      ...(input.flowId ? { flowId: input.flowId } : {}),
+      ...(input.conversationId ? { conversationId: input.conversationId } : {})
     };
 
     this.logs.set(log.id, log);
@@ -298,6 +315,18 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
 
   async get(id: string): Promise<QuestionLog | undefined> {
     return this.logs.get(id);
+  }
+
+  async listConversationTurns(conversationId: string, limit: number): Promise<QuestionLog[]> {
+    if (limit <= 0) {
+      return [];
+    }
+    // Live, answered turns of this conversation, oldest-first, capped to the most
+    // recent `limit` (mirrors the Postgres store's tail-then-reverse ordering).
+    const turns = [...this.logs.values()]
+      .filter((log) => log.conversationId === conversationId && log.purpose === "live" && log.answer !== undefined)
+      .sort((left, right) => left.askedAt.localeCompare(right.askedAt));
+    return turns.slice(Math.max(0, turns.length - limit));
   }
 
   async delete(id: string): Promise<boolean> {
@@ -339,12 +368,17 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     // auto-redraft the parked gap.
     const isVerification = existing.purpose === "verification";
     const nextAnswerGaps = isVerification ? [] : gapsFromAnswer(input.answer);
+    // The condensed standalone form the watcher reports for a follow-up (#239).
+    // Persisted so gap candidacy/clustering key off the resolved intent; keep any
+    // value already on the log if a re-answer omits it.
+    const standaloneQuestion = input.standaloneQuestion ?? existing.standaloneQuestion;
     const updated: QuestionLog = {
       ...existing,
       chatProvider: input.chatProvider ?? existing.chatProvider,
       confidence: input.answer.confidence,
       retrievedSectionIds: input.answer.citations.map((citation) => citation.sectionId),
       answer: input.answer,
+      ...(standaloneQuestion ? { standaloneQuestion } : {}),
       // Re-answering replaces the answer-derived (auto + followup) gaps but
       // preserves everything the answer did not raise — manual, verification,
       // and feedback rows — matching the Postgres store's targeted delete. A
@@ -391,7 +425,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       const confident = existing.confidence === "high" || existing.confidence === "medium";
       const hasLive = gaps.some((gap) => gap.source === "feedback" && !gap.resolvedAt && !gap.dismissedAt);
       if (existing.purpose !== "verification" && confident && !hasLive) {
-        nextGaps = [...gaps, { summary: existing.question, source: "feedback" }];
+        nextGaps = [...gaps, { summary: gapSummaryFallback(existing), source: "feedback" }];
         candidatesChanged = true;
       }
     } else {
@@ -423,7 +457,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     }
 
     const trimmed = summary?.trim();
-    const manualGap: QuestionGap = { summary: trimmed || existing.question, source: "manual" };
+    const manualGap: QuestionGap = { summary: trimmed || gapSummaryFallback(existing), source: "manual" };
     const updated: QuestionLog = {
       ...existing,
       manualGap: true,

@@ -121,11 +121,16 @@ Response `200`:
 Answers a question from indexed Markdown context.
 
 ```json
-{ "question": "How do I rollback a hotfix?" }
+{ "question": "How do I rollback a hotfix?", "flow": "docs", "conversationId": "..." }
 ```
 
+- `flow` (optional) pins the question to a configured flow id; absent/`"auto"` lets the watcher
+  route. An unknown id is a `400 unknown_flow`.
+- `conversationId` (optional, #239) attaches a **follow-up** to a prior exchange for a multi-turn
+  conversation. Pass the `conversationId` returned by the previous ask; a malformed (non-UUID) value
+  is rejected. Absent starts a new conversation (the API mints an id and returns it either way).
 - `400 question_required` — empty or missing question.
-- `202` — `{ "questionId": "...", "job": Job, "links": { "question": "/api/questions/:id",
+- `202` — `{ "questionId": "...", "conversationId": "...", "job": Job, "links": { "question": "/api/questions/:id",
   "job": "/api/jobs/:id", "wait": "/api/jobs/:id/wait", "cancel": "/api/jobs/:id/cancel" } }`.
   An `answer_question` job is enqueued for a watcher and the question log is written immediately
   with unknown confidence. Block on `links.wait` until the job is terminal, then read the answer
@@ -134,6 +139,17 @@ Answers a question from indexed Markdown context.
   question nothing answers yields no citations), and may run bounded follow-up searches within that
   flow before answering — citing only the sections it used. See [ai-jobs.md](ai-jobs.md) and
   [question-logging.md](question-logging.md).
+
+  **Multi-turn (#239).** When `conversationId` names an existing conversation, the API reconstructs
+  the bounded recent Q&A turns (last N, each answer char-capped) and the conversation's **sticky
+  flow** (the most recent prior turn's flow), and passes both on the job input (`priorTurns`,
+  `conversationFlowId`). The watcher then **condenses** the follow-up into a self-contained question
+  — `"what about the EU?"` → `"What is the data retention policy for the EU region?"` — and uses it
+  for routing, retrieval, answering, and grounding, so terse follow-ups resolve pronouns/ellipsis and
+  retrieve well. Routing is sticky within the conversation (an explicit `flow` still overrides it).
+  Condensation happens in the watcher, never inline in the API (queue-only). The condensed standalone
+  form is stored on the question log so gap candidacy/clustering key off the resolved intent, not the
+  terse follow-up. Streaming responses remain out of scope — the `202` + `links.wait` model is unchanged.
 
 ### `GET /api/knowledge/search?q=<query>&limit=<n>`
 

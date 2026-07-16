@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  answerQuestionInputSchema,
+  answerQuestionOutputSchema,
   draftMarkdownProposalInputSchema,
   draftMarkdownProposalOutputSchema,
   draftSeedDocumentInputSchema,
@@ -22,6 +24,31 @@ import {
   verifyDocumentOutputSchema,
   correctDocumentOutputSchema
 } from "./schemas.js";
+
+test("answer_question input preserves multi-turn conversation fields (#239)", () => {
+  // The broker validates and STRIPS undeclared fields, so priorTurns and
+  // conversationFlowId must survive a round-trip or the watcher never sees them.
+  const parsed = answerQuestionInputSchema.parse({
+    provider: "openai-compatible",
+    question: "What about the EU?",
+    flows: [{ id: "support", name: "Support" }],
+    priorTurns: [{ question: "What is the retention policy?", answer: "30 days." }],
+    conversationFlowId: "support",
+    expectedOutput: "answer_result"
+  });
+  assert.deepEqual(parsed.priorTurns, [{ question: "What is the retention policy?", answer: "30 days." }]);
+  assert.equal(parsed.conversationFlowId, "support");
+});
+
+test("answer_question output preserves the condensed standaloneQuestion (#239)", () => {
+  const parsed = answerQuestionOutputSchema.parse({
+    answer: "EU retention is 30 days.",
+    confidence: "high",
+    citations: [],
+    standaloneQuestion: "What is the data retention policy for the EU region?"
+  });
+  assert.equal(parsed.standaloneQuestion, "What is the data retention policy for the EU region?");
+});
 
 test("process_gaps_to_pull_requests input requires and preserves flowId", () => {
   assert.equal(processGapsToPullRequestsInputSchema.safeParse({}).success, false);
@@ -74,7 +101,10 @@ test("verify_document input requires sources", () => {
 test("verify_document output rejects an unknown verdict and accepts healthy/unprovable", () => {
   assert.equal(verifyDocumentOutputSchema.safeParse({ verdict: "healthy", claims: [] }).success, true);
   assert.equal(
-    verifyDocumentOutputSchema.safeParse({ verdict: "unprovable", claims: [{ claim: "5 days", reason: "source says 7" }] }).success,
+    verifyDocumentOutputSchema.safeParse({
+      verdict: "unprovable",
+      claims: [{ claim: "5 days", reason: "source says 7" }]
+    }).success,
     true
   );
   assert.equal(verifyDocumentOutputSchema.safeParse({ verdict: "maybe", claims: [] }).success, false);
@@ -204,7 +234,9 @@ test("improve_document schemas round-trip explicit improve and no-op outputs", (
       rationale: "Added source-backed partial refund coverage."
     }).success
   );
-  assert.ok(improveDocumentOutputSchema.safeParse({ improved: false, rationale: "No clear source-backed addition." }).success);
+  assert.ok(
+    improveDocumentOutputSchema.safeParse({ improved: false, rationale: "No clear source-backed addition." }).success
+  );
   assert.ok(!improveDocumentOutputSchema.safeParse({ improved: true, rationale: "missing markdown" }).success);
 });
 
@@ -245,12 +277,43 @@ test.describe("source map updates on source-grounded outputs", () => {
   };
 
   test("accepts outputs carrying mapUpdates on all five source-grounded jobs", () => {
-    assert.equal(verifyDocumentOutputSchema.safeParse({ verdict: "healthy", claims: [], mapUpdates: [update] }).success, true);
-    assert.equal(correctDocumentOutputSchema.safeParse({ markdown: "# d", rationale: "r", mapUpdates: [update] }).success, true);
-    assert.equal(draftSeedDocumentOutputSchema.safeParse({ title: "t", targetPath: "p.md", markdown: "# d", rationale: "r", mapUpdates: [update] }).success, true);
-    assert.equal(draftMarkdownProposalOutputSchema.safeParse({ title: "t", targetPath: "p.md", markdown: "# d", rationale: "r", mapUpdates: [update] }).success, true);
-    assert.equal(improveDocumentOutputSchema.safeParse({ improved: false, rationale: "r", mapUpdates: [update] }).success, true);
-    assert.equal(improveDocumentOutputSchema.safeParse({ improved: true, markdown: "# d", rationale: "r", mapUpdates: [update] }).success, true);
+    assert.equal(
+      verifyDocumentOutputSchema.safeParse({ verdict: "healthy", claims: [], mapUpdates: [update] }).success,
+      true
+    );
+    assert.equal(
+      correctDocumentOutputSchema.safeParse({ markdown: "# d", rationale: "r", mapUpdates: [update] }).success,
+      true
+    );
+    assert.equal(
+      draftSeedDocumentOutputSchema.safeParse({
+        title: "t",
+        targetPath: "p.md",
+        markdown: "# d",
+        rationale: "r",
+        mapUpdates: [update]
+      }).success,
+      true
+    );
+    assert.equal(
+      draftMarkdownProposalOutputSchema.safeParse({
+        title: "t",
+        targetPath: "p.md",
+        markdown: "# d",
+        rationale: "r",
+        mapUpdates: [update]
+      }).success,
+      true
+    );
+    assert.equal(
+      improveDocumentOutputSchema.safeParse({ improved: false, rationale: "r", mapUpdates: [update] }).success,
+      true
+    );
+    assert.equal(
+      improveDocumentOutputSchema.safeParse({ improved: true, markdown: "# d", rationale: "r", mapUpdates: [update] })
+        .success,
+      true
+    );
   });
 
   test("still accepts outputs without mapUpdates", () => {
@@ -347,14 +410,19 @@ test("rewrite output schemas keep the provenance field (broker-strip protection)
   const corrected = correctDocumentOutputSchema.safeParse({ markdown: "# d", rationale: "r", provenance });
   assert.ok(corrected.success);
   assert.deepEqual(corrected.success ? corrected.data.provenance : undefined, provenance);
-  assert.ok(correctDocumentOutputSchema.safeParse({ markdown: "# d", rationale: "r" }).success, "provenance stays optional");
-  // improve_document carries it on the improved: true branch only.
-  const improved = improveDocumentOutputSchema.safeParse({ improved: true, markdown: "# d", rationale: "r", provenance });
-  assert.ok(improved.success);
-  assert.deepEqual(
-    improved.success && improved.data.improved ? improved.data.provenance : undefined,
-    provenance
+  assert.ok(
+    correctDocumentOutputSchema.safeParse({ markdown: "# d", rationale: "r" }).success,
+    "provenance stays optional"
   );
+  // improve_document carries it on the improved: true branch only.
+  const improved = improveDocumentOutputSchema.safeParse({
+    improved: true,
+    markdown: "# d",
+    rationale: "r",
+    provenance
+  });
+  assert.ok(improved.success);
+  assert.deepEqual(improved.success && improved.data.improved ? improved.data.provenance : undefined, provenance);
   assert.ok(improveDocumentOutputSchema.safeParse({ improved: true, markdown: "# d", rationale: "r" }).success);
   // A no-op improvement grounds no new claims: the non-strict false branch
   // strips a stray provenance field rather than rejecting the output.

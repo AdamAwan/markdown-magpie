@@ -999,3 +999,89 @@ test("recordFeedback('unhelpful') on a verification re-ask log raises nothing", 
   assert.equal(updated?.feedback, "unhelpful");
   assert.deepEqual(updated?.gaps ?? [], []);
 });
+
+// --- Multi-turn conversations (#239) ---------------------------------------
+
+test("listConversationTurns returns answered live turns oldest-first, capped and excluding in-flight/other conversations", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const conversationId = "conv-1";
+
+  // Two answered turns in the conversation, oldest first.
+  const first = await store.record({ question: "Q1", chatProvider: "codex", retrievedSectionIds: [], conversationId });
+  await store.updateAnswer(first.id, { answer: confidentAnswer });
+  const second = await store.record({ question: "Q2", chatProvider: "codex", retrievedSectionIds: [], conversationId });
+  await store.updateAnswer(second.id, { answer: confidentAnswer });
+
+  // An in-flight (unanswered) turn in the same conversation must be excluded.
+  await store.record({ question: "Q3-inflight", chatProvider: "codex", retrievedSectionIds: [], conversationId });
+  // A turn in a different conversation must be excluded.
+  const other = await store.record({
+    question: "OtherQ",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    conversationId: "conv-2"
+  });
+  await store.updateAnswer(other.id, { answer: confidentAnswer });
+
+  const turns = await store.listConversationTurns(conversationId, 6);
+  assert.deepEqual(
+    turns.map((turn) => turn.question),
+    ["Q1", "Q2"],
+    "answered turns of this conversation, oldest-first"
+  );
+
+  // The cap keeps the most recent N.
+  const capped = await store.listConversationTurns(conversationId, 1);
+  assert.deepEqual(
+    capped.map((turn) => turn.question),
+    ["Q2"],
+    "the cap keeps the most recent turn"
+  );
+});
+
+test("updateAnswer persists the watcher's condensed standaloneQuestion", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({
+    question: "What about the EU?",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    conversationId: "c"
+  });
+
+  const updated = await store.updateAnswer(log.id, {
+    answer: confidentAnswer,
+    standaloneQuestion: "What is the data retention policy for the EU region?"
+  });
+
+  assert.equal(updated?.standaloneQuestion, "What is the data retention policy for the EU region?");
+});
+
+test("a manual gap on a follow-up falls back to the condensed standalone form, not the terse question", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({ question: "What about the EU?", chatProvider: "codex", retrievedSectionIds: [] });
+  await store.updateAnswer(log.id, {
+    answer: confidentAnswer,
+    standaloneQuestion: "What is the data retention policy for the EU region?"
+  });
+
+  const flagged = await store.recordManualGap(log.id);
+  const manual = (flagged?.gaps ?? []).find((gap) => gap.source === "manual");
+  assert.equal(
+    manual?.summary,
+    "What is the data retention policy for the EU region?",
+    "the gap seeds from the self-contained form so it can cluster with siblings"
+  );
+});
+
+test("an 'unhelpful' feedback gap on a follow-up falls back to the condensed standalone form", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({ question: "and the EU?", chatProvider: "codex", retrievedSectionIds: [] });
+  await store.updateAnswer(log.id, {
+    answer: confidentAnswer,
+    standaloneQuestion: "What is the data retention policy for the EU region?"
+  });
+
+  const rated = await store.recordFeedback(log.id, "unhelpful");
+  const feedbackGap = (rated?.gaps ?? []).find((gap) => gap.source === "feedback");
+  assert.equal(feedbackGap?.summary, "What is the data retention policy for the EU region?");
+});

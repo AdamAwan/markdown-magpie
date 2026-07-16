@@ -34,6 +34,8 @@ Each question log records:
   first-class *state* on a verification gap, not a distinct source.
 - Helpful or unhelpful feedback, when submitted.
 - Manual knowledge-gap flag, when set.
+- Conversation id and standalone question (#239), for multi-turn conversations —
+  see [Multi-turn conversations](#multi-turn-conversations) below.
 - Answer trace — the watcher's audit trail of how the answer was produced: the
   routing decision, every follow-up search the model requested with its hit count
   (empty searches are what ground `followup` gaps), whether the final answer was
@@ -135,6 +137,36 @@ The mechanics:
   `followup`) gaps; a feedback gap survives alongside `manual`/`verification` rows.
 - The console's Insights page charts the helpful/unhelpful trend, with the
   unhelpful-on-confident subset called out (`GET /api/insights/feedback`).
+
+## Multi-turn conversations
+
+`POST /api/ask` (and MCP `kb_ask`) accept an optional `conversationId` (#239). The API mints one
+on the first ask and returns it; a client attaches a follow-up by passing it back. Conversations
+are stored on the question log itself — `questions.conversation_id` groups the turns of one thread
+(migration 0056) — so no separate conversation table exists.
+
+On a follow-up, the API reconstructs bounded prior context **before** enqueueing: the recent
+answered live turns (last N, oldest-first, each answer char-capped) and the conversation's **sticky
+flow** (the most recent prior turn's flow). Both ride the `answer_question` job input (`priorTurns`,
+`conversationFlowId`). Assembly happens in the API; no chat/generative call is made inline
+(queue-only).
+
+The watcher **condenses** the follow-up into a self-contained question using those prior turns —
+`"what about the EU?"` → `"What is the data retention policy for the EU region?"` — and uses the
+condensed form for routing, retrieval, answering, and grounding. Routing is sticky within the
+conversation: the sticky flow is used unless the caller pins a `flow` explicitly. Condensation is a
+single provider call in the watcher's answer loop that fails safe — on any error it falls back to the
+raw follow-up, so a conversation never breaks answering.
+
+**Gap hygiene.** The raw follow-up text (`"what about the EU?"`) is not self-contained, so logging it
+verbatim would pollute gap candidacy and clustering. Instead the watcher reports the condensed
+standalone form on completion; it is persisted on the question log (`questions.standalone_question`)
+and every place a gap summary would otherwise fall back to the raw question text — the `manual` and
+`feedback` gap fallbacks — uses the standalone form when present. Follow-ups stay `purpose: "live"`
+(they are real user questions that belong in the questions list and gap candidacy); only the *text
+used for gaps* changes, not the log's status.
+
+Streaming responses are out of scope: the `202` + `links.wait` model is unchanged.
 
 ## Gap-closure verification
 
