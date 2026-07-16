@@ -120,12 +120,20 @@ question / cluster / proposal stores which are independent). Order:
 
 ## Web
 
-In the Ask panel's **"Answered questions"** list, add a **Delete** action per row,
-rendered only when the signed-in user holds `manage:admin`. It opens a small
-confirm dialog with two actions — **Delete question** and **Full scrub** — plus
-the non-goal caveat. After a full scrub, if `warnings` is non-empty, show them
-(with PR links) so the admin knows what still needs manual handling. On success
-the row is removed from the list and the page refetched.
+In the Ask panel's **"Answered questions"** list, add a **Delete** action per row.
+It opens a small confirm dialog with two actions — **Delete question** and **Full
+scrub** — plus the non-goal caveat. After a full scrub, if `warnings` is
+non-empty, show them (with PR links) so the admin knows what still needs manual
+handling. On success the row is removed from the list and the page refetched.
+
+**Access control is server-side only.** The console has no client-side scope
+state (auth can be disabled entirely, and it is a single-tenant admin console),
+and existing `manage:admin` actions — the whole Config page — are shown to every
+operator and enforced by the API, not hidden client-side. The Delete action
+follows that established pattern: it is always rendered, and the API's
+`manage:admin` gate rejects an under-scoped caller with `403` (surfaced as an
+error toast). Client-side gating would require decoding the access token's scopes,
+which the web app does not do for any other action.
 
 ## Testing
 
