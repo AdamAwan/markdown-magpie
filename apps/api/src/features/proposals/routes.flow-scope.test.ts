@@ -20,6 +20,17 @@ function principal(roles: string[] | undefined): Principal {
   };
 }
 
+// A genuine machine-to-machine token: no roles claim, but carrying the POSITIVE
+// Auth0 client-credentials marker (gty) that identifies a service identity.
+function m2m(): Principal {
+  return {
+    subject: "svc@clients",
+    scopes: ["read:knowledge", "manage:knowledge"],
+    roles: undefined,
+    payload: { gty: "client-credentials" }
+  };
+}
+
 function appFor(ctx: AppContext, who: Principal): Hono {
   const app = new Hono();
   app.use("*", async (c, next) => {
@@ -80,12 +91,20 @@ describe("proposal routes flow scoping", () => {
     assert.equal(res.status, 200);
   });
 
-  it("lets a service/M2M principal (no roles claim) see every flow", async () => {
+  it("lets a genuine service/M2M principal (client-credentials marker) see every flow", async () => {
+    const { ctx } = await seedTwoFlows();
+    const res = await appFor(ctx, m2m()).request("/proposals");
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { proposals: unknown[] };
+    assert.equal(body.proposals.length, 2);
+  });
+
+  it("hides every flow from a human token missing its roles claim (fails closed)", async () => {
     const { ctx } = await seedTwoFlows();
     const res = await appFor(ctx, principal(undefined)).request("/proposals");
     assert.equal(res.status, 200);
     const body = (await res.json()) as { proposals: unknown[] };
-    assert.equal(body.proposals.length, 2);
+    assert.equal(body.proposals.length, 0);
   });
 
   it("is inactive when no grants are configured (role-aware principal sees all)", async () => {

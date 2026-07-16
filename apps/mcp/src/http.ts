@@ -416,8 +416,8 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
       throw error;
     }
 
-    const requiredScope = requiredToolScope(req);
-    if (requiredScope && !hasScopes(principal, [requiredScope])) {
+    const requiredScopes = requiredToolScopes(req.body);
+    if (requiredScopes.length > 0 && !hasScopes(principal, requiredScopes)) {
       res.status(403).json({ error: "forbidden" });
       return { ok: false };
     }
@@ -479,22 +479,34 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
   return app;
 }
 
-// Extracts the scope required for a `tools/call` request from the parsed
-// JSON-RPC body. Other methods (initialize, tools/list, ping, ...) need only a
-// valid token, so they map to no scope.
-function requiredToolScope(req: Request): string | undefined {
-  const body: unknown = req.body;
-  if (!body || typeof body !== "object") {
+// Computes the scopes a parsed JSON-RPC body requires. A body may be a single
+// message OR a JSON-RPC batch (array) — the SDK dispatches every element of a
+// batch, so we must inspect each one and require the UNION of their per-tool
+// scopes (a token missing any is rejected). Other methods (initialize,
+// tools/list, ping, ...) need only a valid token, so they contribute no scope.
+// Returning the union to `hasScopes` (which requires all) enforces the strictest
+// combination across the batch. Single-object bodies are the one-element case.
+function requiredToolScopes(body: unknown): string[] {
+  const messages = Array.isArray(body) ? body : [body];
+  const scopes = new Set<string>();
+  for (const message of messages) {
+    const scope = toolScopeForMessage(message);
+    if (scope) {
+      scopes.add(scope);
+    }
+  }
+  return [...scopes];
+}
+
+// Extracts the per-tool scope required by a single JSON-RPC message, or
+// undefined when the message is not a scoped `tools/call`.
+function toolScopeForMessage(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
     return undefined;
   }
 
-  const message = body as { method?: unknown; params?: unknown };
-  if (message.method !== "tools/call") {
-    return undefined;
-  }
-
-  const params = message.params;
-  if (!params || typeof params !== "object") {
+  const { method, params } = message as { method?: unknown; params?: unknown };
+  if (method !== "tools/call" || !params || typeof params !== "object") {
     return undefined;
   }
 

@@ -25,7 +25,8 @@ import {
   SOURCE_CHANGE_SYNC,
   SPLIT_DOCUMENT,
   SUMMARIZE_GAP,
-  VERIFY_DOCUMENT
+  VERIFY_DOCUMENT,
+  wrapUntrusted
 } from "@magpie/prompts";
 import type { FetchableInternetSource } from "./fetch-url.js";
 import type { RetrievedSection } from "./http-client.js";
@@ -98,17 +99,30 @@ const JOB_INSTRUCTIONS: Partial<Record<JobType, string>> = {
   improve_document: IMPROVE_DOCUMENT.instructions
 };
 
+// Job types whose `input` is a genuine instruction to the model rather than
+// untrusted reference material, so the injection delimiters would misframe it.
+// revise_seed_plan's input carries the requester's own "instruction" field (a
+// directive the model MUST follow) alongside the plan it reshapes, so its input
+// is rendered plain; every other job's input is untrusted content (#291).
+const PLAINTEXT_INPUT_JOB_TYPES: ReadonlySet<JobType> = new Set<JobType>(["revise_seed_plan"]);
+
 // Per-job prompt for the generic chat path: the task instructions followed by
-// the job's input embedded as JSON. Source-grounded jobs (whose inputs carry
-// `sources` descriptors) render through buildSourceGroundedPrompt on the agentic
-// paths instead; the old shared-corpus leading block this function once rendered
-// died with the corpus pipeline.
+// the job's input embedded as JSON. The input carries untrusted reference
+// material (document-under-review content, diffs, neighbours, cited claims,
+// questions), so it is wrapped in the shared untrusted-data delimiters (#291) —
+// the model treats it as data, never as instructions — except for the job types
+// whose input is itself a directive (PLAINTEXT_INPUT_JOB_TYPES). Source-grounded
+// jobs (whose inputs carry `sources` descriptors) render through
+// buildSourceGroundedPrompt on the agentic paths instead; the old shared-corpus
+// leading block this function once rendered died with the corpus pipeline.
 export function buildPrompt(job: JobView): string {
   const instructions = JOB_INSTRUCTIONS[job.type];
   if (!instructions) {
-    return `${GENERIC_JOB.instructions}\n\nJob:\n${JSON.stringify({ type: job.type, input: job.input }, null, 2)}`;
+    return `${GENERIC_JOB.instructions}\n\nJob:\n${wrapUntrusted(JSON.stringify({ type: job.type, input: job.input }, null, 2))}`;
   }
-  return `${instructions}\n\nInput:\n${JSON.stringify(job.input, null, 2)}`;
+  const input = JSON.stringify(job.input, null, 2);
+  const rendered = PLAINTEXT_INPUT_JOB_TYPES.has(job.type) ? input : wrapUntrusted(input);
+  return `${instructions}\n\nInput:\n${rendered}`;
 }
 
 // Prompt for source-grounded jobs on the agentic paths. The instructions come
@@ -165,7 +179,11 @@ export function buildSourceGroundedPrompt(
           .join("\n")}\n`
       : "";
   const input = omitInputKeys(job.input, ["sources"]);
-  return `${repoBlock}${fetchBlock}${noteBlock}${mapBlock}\n${instructions}\n\nInput:\n${JSON.stringify(input, null, 2)}`;
+  // The rendered input carries untrusted reference material (document content,
+  // diffs, neighbours, cited claims); wrap it in the shared delimiters (#291) so
+  // the source-grounded instructions' untrusted-content contract has a concrete
+  // boundary to point at, on both the CLI and tool-loop tiers.
+  return `${repoBlock}${fetchBlock}${noteBlock}${mapBlock}\n${instructions}\n\nInput:\n${wrapUntrusted(JSON.stringify(input, null, 2))}`;
 }
 
 // A shallow copy of a job input without the named keys. Used by the

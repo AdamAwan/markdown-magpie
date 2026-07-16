@@ -2,7 +2,7 @@ import { generateText, stepCountIs, tool, type LanguageModel, type ModelMessage 
 import { z } from "zod";
 import { aiUsageFromTokenCounts, type AiUsage, type SourceMapEntry } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
-import { JOB_RUNNER_SYSTEM } from "@magpie/prompts";
+import { JOB_RUNNER_SYSTEM, wrapUntrusted } from "@magpie/prompts";
 import { UrlFetcher, type FetchableInternetSource } from "../fetch-url.js";
 import { buildSourceGroundedPrompt, parseJobOutput } from "../job-prompts.js";
 import { logger } from "../logger.js";
@@ -62,6 +62,14 @@ export async function runSourceAgentJob(options: {
       throw error;
     }
   };
+  // File and web content the agent reads is untrusted reference material (#291):
+  // wrap successful results in the shared delimiters so an injected directive in a
+  // source file or fetched page is bounded as data, per the untrusted-content
+  // contract in the job instructions. A SourceToolError still surfaces as a plain
+  // "ERROR: …" string (wrapUntrusted never runs when the read throws), so the
+  // model's misuse-correction contract is unchanged.
+  const asContent = (run: () => Promise<string>): Promise<string> =>
+    asToolResult(async () => wrapUntrusted(await run()));
 
   // Filesystem tools only when there is a workspace to explore, fetch_url only
   // when the operator allowlisted an internet source (#242) — a job grounded in
@@ -77,13 +85,13 @@ export async function runSourceAgentJob(options: {
       description:
         'Read a text file. Path is "<sourceId>/<relative path>". Large files are returned in 32KB slices; re-call with offset to continue.',
       inputSchema: z.object({ path: z.string(), offset: z.number().int().min(0).optional() }),
-      execute: ({ path: requested, offset }) => asToolResult(() => readFile(workspaces, requested, budget, offset ?? 0))
+      execute: ({ path: requested, offset }) => asContent(() => readFile(workspaces, requested, budget, offset ?? 0))
     }),
     grep: tool({
       description:
         'Search file contents across all sources for a literal, case-insensitive text string (not a regular expression). Optional glob filters paths (e.g. "s1/docs/**").',
       inputSchema: z.object({ query: z.string(), glob: z.string().optional() }),
-      execute: ({ query, glob }) => asToolResult(() => grepWorkspaces(workspaces, query, glob))
+      execute: ({ query, glob }) => asContent(() => grepWorkspaces(workspaces, query, glob))
     })
   };
   const tools = {
@@ -94,7 +102,7 @@ export async function runSourceAgentJob(options: {
             description:
               "Fetch an allowlisted internet source page over https and return its readable text. Long pages are returned in 32KB slices; re-call with offset to continue.",
             inputSchema: z.object({ url: z.string(), offset: z.number().int().min(0).optional() }),
-            execute: ({ url, offset }) => asToolResult(() => fetcher.fetch(url, offset ?? 0))
+            execute: ({ url, offset }) => asContent(() => fetcher.fetch(url, offset ?? 0))
           })
         }
       : {})

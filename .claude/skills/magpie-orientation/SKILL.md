@@ -254,7 +254,9 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
     `feedback:questions`) via `requireScopes`, plus **flow-scoped capabilities**
     (`read`/`manage`/`ask` per flow) mapped from IdP role names via
     `KNOWLEDGE_ROLE_GRANTS`. Fail-closed with deliberate permissive carve-outs (auth off,
-    no grants configured, M2M tokens without a roles claim). Cross-flow ids read as 404,
+    no grants configured, genuine M2M tokens — identified by the POSITIVE
+    `gty: "client-credentials"` marker, not merely an absent roles claim, so a human
+    token whose roles claim went missing fails CLOSED). Cross-flow ids read as 404,
     not 403 (`docs/authorization.md`).
 19. **MCP** (`apps/mcp`) — thin client over the HTTP API, stdio + Streamable-HTTP
     transports, **ten tools**: `kb_ask`, `kb_search`, `kb_citation`, `kb_feedback`,
@@ -347,7 +349,9 @@ packages/
   logger/     Shared structured pino logging + crash handlers.
   markdown/   Markdown parsing, frontmatter, sectioning, advisory-heading detection.
   prompts/    Shared AI prompt catalog (21 prompts, shared contract constants:
-              CONSERVATIVE_CONTRACT, SOURCE_MAP_CONTRACT, FACTUAL_REGISTER_CONTRACT).
+              CONSERVATIVE_CONTRACT, SOURCE_MAP_CONTRACT, FACTUAL_REGISTER_CONTRACT,
+              UNTRUSTED_CONTENT_CONTRACT + wrapUntrusted delimiters for prompt-injection
+              hardening — see docs/threat-model.md C6).
   retrieval/  Embeddings, RRF fusion, chat/embedding HTTP providers, LLM flow router +
               embedding flow router. (Answer orchestration itself lives in api/watcher.)
   telemetry/  OpenTelemetry wiring (traces/metrics/log-trace mixin), off by default.

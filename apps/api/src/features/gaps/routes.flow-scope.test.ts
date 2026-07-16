@@ -20,6 +20,17 @@ function principal(roles: string[] | undefined): Principal {
   };
 }
 
+// A genuine machine-to-machine token: no roles claim, but carrying the POSITIVE
+// Auth0 client-credentials marker (gty) that identifies a service identity.
+function m2m(): Principal {
+  return {
+    subject: "svc@clients",
+    scopes: ["read:knowledge", "manage:knowledge", "manage:jobs"],
+    roles: undefined,
+    payload: { gty: "client-credentials" }
+  };
+}
+
 function appFor(ctx: AppContext, who: Principal): Hono {
   const app = new Hono();
   app.use("*", async (c, next) => {
@@ -77,13 +88,23 @@ describe("gap routes flow scoping", () => {
     assert.equal(res.status, 403);
   });
 
-  it("lets a service/M2M principal (no roles claim) reconcile any flow", async () => {
+  it("lets a genuine service/M2M principal (client-credentials marker) reconcile any flow", async () => {
+    const ctx = twoFlowCtx();
+    const res = await appFor(ctx, m2m()).request("/gaps/reconcile", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ flowId: "eng" })
+    });
+    assert.equal(res.status, 200);
+  });
+
+  it("forbids a human token missing its roles claim (fails closed, not treated as M2M)", async () => {
     const ctx = twoFlowCtx();
     const res = await appFor(ctx, principal(undefined)).request("/gaps/reconcile", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ flowId: "eng" })
     });
-    assert.equal(res.status, 200);
+    assert.equal(res.status, 403);
   });
 });

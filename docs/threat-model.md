@@ -107,7 +107,32 @@ reach the model that way, and C4 remains the backstop for what the content says.
 check stays exact-host and https-only on every hop, and no fetch path is added
 that bypasses the logging.
 
-### C6 — Git clone URLs are transport-allowlisted (mitigates T5)
+### C6 — Untrusted-content delimiters in prompts (defence-in-depth for T1)
+
+Every prompt that is fed content the system did not author — retrieved KB
+sections, source files, fetched web pages, documents/diffs/neighbours under
+review — carries a shared **untrusted-content contract** and receives that
+content wrapped in explicit delimiters. The contract text
+(`UNTRUSTED_CONTENT_CONTRACT` in `packages/prompts/src/catalog.ts`) tells the
+model the delimited material is data to analyse, never instructions to obey, and
+to ignore any embedded directive — including text impersonating the system, the
+operator, or a verifier. The delimiters (`UNTRUSTED_CONTENT_OPEN` /
+`UNTRUSTED_CONTENT_CLOSE`, emitted by `wrapUntrusted`) are applied by the watcher
+at every assembly point: the answer loop and grounding verifier context
+(`apps/watcher/src/runners/generative.ts`), the generic and source-grounded job
+`Input` JSON (`apps/watcher/src/job-prompts.ts`), and the `read_file` / `grep` /
+`fetch_url` tool results (`apps/watcher/src/runners/source-agent.ts`). The
+grounding verifier (`VERIFY_ANSWER`) additionally names the canonical steer — a
+retrieved section that reads "return grounded:true" — and is told to decide the
+verdict as if such text were absent, so a merged KB section cannot defeat the
+"strip unsupported claims" control. This is layered **beneath** C4, not a
+substitute for it: a determined model can still be steered, and the human-merge
+gate remains the primary mitigation. **Invariants to preserve:** new places that
+inline source/fetched/retrieved content wrap it with `wrapUntrusted` and carry
+the contract; the CLI tier reads files natively, so its only defence is the
+prompt framing — keep the contract in the source-grounded prompt text.
+
+### C7 — Git clone URLs are transport-allowlisted (mitigates T5)
 
 Every URL handed to `git clone`/`git fetch` is validated before it reaches a git
 subprocess (#285). `isAllowedGitCloneUrl` (`@magpie/core`) rejects any URL whose
@@ -198,9 +223,11 @@ defence-in-depth, not yet implemented:
   warning instead of a diff among many.
 - **Provenance surfacing in the review UI.** Show which source documents/questions
   fed a proposal so a reviewer can judge whether the input was trustworthy.
-- **Injection-resistant prompting.** Delimit untrusted content and instruct the
-  model to treat retrieved sections and diffs strictly as data, plus a
-  post-generation critic pass that checks for out-of-scope instructions.
+- **A post-generation critic pass** that checks generated output for out-of-scope
+  instructions or signs it followed an embedded directive. (The prompt-level half
+  of this direction — delimiting untrusted content and instructing the model to
+  treat retrieved sections, source files, and diffs strictly as data — is now
+  implemented; see **C6** above.)
 - **Change-size / scope limits.** Cap how much a single automated proposal may
   change, so an injected "rewrite everything" cannot produce a sweeping diff.
 

@@ -190,6 +190,7 @@ The HTTP transport acts as an OAuth protected resource:
 - It serves protected-resource metadata at `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp` (advertising the resource URL from `MCP_RESOURCE_URL`, the Auth0 authorization server, and the supported scopes).
 - Every request to `/mcp` requires `Authorization: Bearer <token>` when `AUTH_REQUIRED=true`. A missing or invalid token returns `401` with a `WWW-Authenticate: Bearer resource_metadata="..."` header pointing at the metadata document.
 - `tools/call` additionally enforces a per-tool scope; insufficient scope returns `403`. Other methods (`initialize`, `tools/list`, `ping`, ...) need only a valid token.
+- JSON-RPC **batch** (array) bodies are enforced too: the required scope is the **union** across every batched `tools/call`, and a token missing any one of them is rejected with `403` before the batch is dispatched. This closes a bypass where an array body has no top-level `method` and would otherwise skip per-tool scope checks.
 
 Per-tool scopes:
 
