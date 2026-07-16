@@ -50,6 +50,12 @@ export function AiCostByFlowChart({
     priced.length === 0 ? "No priced usage yet. Configure AI_PRICING to attribute spend to flows." : undefined;
 
   return (
-    <CostBarChart data={data} headerTotal={headerTotal} coverage={coverage} footnote={footnote} emptyState={emptyState} />
+    <CostBarChart
+      data={data}
+      headerTotal={headerTotal}
+      coverage={coverage}
+      footnote={footnote}
+      emptyState={emptyState}
+    />
   );
 }

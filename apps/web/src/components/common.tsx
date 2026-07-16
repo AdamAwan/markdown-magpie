@@ -3,25 +3,27 @@ import styled from "@emotion/styled";
 import { Citation } from "../lib/types";
 import { Badge } from "./ui";
 
-const NavLink = styled(Link, { shouldForwardProp: (prop) => prop !== "$active" })<{ $active: boolean }>(({ theme, $active }) => ({
-  display: "grid",
-  gridTemplateColumns: "24px minmax(0, 1fr) auto",
-  alignItems: "center",
-  gap: theme.space.md,
-  minHeight: "40px",
-  width: "100%",
-  border: `1px solid ${$active ? theme.color.border : "transparent"}`,
-  borderRadius: theme.radius.md,
-  background: $active ? theme.color.surface : "transparent",
-  color: $active ? theme.color.text : theme.color.textMuted,
-  padding: theme.space.md,
-  textAlign: "left",
-  fontSize: theme.font.size.base,
-  fontWeight: theme.font.weight.semibold,
-  textDecoration: "none",
-  transition: "background 120ms ease, color 120ms ease",
-  "&:hover": { background: theme.color.surface, color: theme.color.text }
-}));
+const NavLink = styled(Link, { shouldForwardProp: (prop) => prop !== "$active" })<{ $active: boolean }>(
+  ({ theme, $active }) => ({
+    display: "grid",
+    gridTemplateColumns: "24px minmax(0, 1fr) auto",
+    alignItems: "center",
+    gap: theme.space.md,
+    minHeight: "40px",
+    width: "100%",
+    border: `1px solid ${$active ? theme.color.border : "transparent"}`,
+    borderRadius: theme.radius.md,
+    background: $active ? theme.color.surface : "transparent",
+    color: $active ? theme.color.text : theme.color.textMuted,
+    padding: theme.space.md,
+    textAlign: "left",
+    fontSize: theme.font.size.base,
+    fontWeight: theme.font.weight.semibold,
+    textDecoration: "none",
+    transition: "background 120ms ease, color 120ms ease",
+    "&:hover": { background: theme.color.surface, color: theme.color.text }
+  })
+);
 
 const NavGlyph = styled.span(({ theme }) => ({
   display: "inline-grid",
@@ -49,12 +51,7 @@ export function NavButton({
   href: string;
 }) {
   return (
-    <NavLink
-      $active={active}
-      href={href}
-      title={`Open ${label}`}
-      aria-current={active ? "page" : undefined}
-    >
+    <NavLink $active={active} href={href} title={`Open ${label}`} aria-current={active ? "page" : undefined}>
       <NavGlyph>{glyph}</NavGlyph>
       <span>{label}</span>
       {count === undefined ? null : (
@@ -100,9 +97,7 @@ export function CitationRow({ citation }: { citation: Citation }) {
       <CitationTop>
         <strong>{citation.heading}</strong>
         <code>{citation.sectionId}</code>
-        <CitationRelevance title="Retrieval relevance">
-          {Math.round(citation.relevance * 100)}%
-        </CitationRelevance>
+        <CitationRelevance title="Retrieval relevance">{Math.round(citation.relevance * 100)}%</CitationRelevance>
       </CitationTop>
       <span>
         {citation.path}

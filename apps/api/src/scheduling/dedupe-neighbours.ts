@@ -31,7 +31,9 @@ export async function dedupeNeighbours(
     }
   }
 
-  const contentByPath = new Map(ctx.stores.knowledgeIndex.listDocuments().map((document) => [document.path, document.content]));
+  const contentByPath = new Map(
+    ctx.stores.knowledgeIndex.listDocuments().map((document) => [document.path, document.content])
+  );
 
   return [...bestByPath.entries()]
     .filter(([, score]) => score >= DEDUPE_SIMILARITY_THRESHOLD)

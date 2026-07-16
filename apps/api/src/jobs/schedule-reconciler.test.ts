@@ -14,8 +14,14 @@ async function scheduledKeys(ctx: ReturnType<typeof makeTestContext>) {
 
 test("reconcile does not build schedules when no flows are configured", async () => {
   const ctx = makeTestContext();
-  await ctx.stores.scheduledTasks.updateSettings("gaps-to-pull-requests::default", { enabled: true, cron: "*/10 * * * *" });
-  await ctx.stores.scheduledTasks.updateSettings("source-change-sync::default", { enabled: true, cron: "*/10 * * * *" });
+  await ctx.stores.scheduledTasks.updateSettings("gaps-to-pull-requests::default", {
+    enabled: true,
+    cron: "*/10 * * * *"
+  });
+  await ctx.stores.scheduledTasks.updateSettings("source-change-sync::default", {
+    enabled: true,
+    cron: "*/10 * * * *"
+  });
   await ctx.stores.scheduledTasks.updateSettings("snapshot-refresh::default", { enabled: true, cron: "*/5 * * * *" });
 
   await reconcileSchedules(ctx);
@@ -62,8 +68,11 @@ test("reconcile expands schedules per configured flow", async () => {
 
   await reconcileSchedules(ctx);
 
-  assert.deepEqual(await scheduledKeys(ctx), [
-    { type: "source_change_sync", key: "task:source-change-sync::alpha", cron: "0 2 * * *" },
-    { type: "source_change_sync", key: "task:source-change-sync::beta", cron: "*/10 * * * *" }
-  ].sort((left, right) => left.key.localeCompare(right.key)));
+  assert.deepEqual(
+    await scheduledKeys(ctx),
+    [
+      { type: "source_change_sync", key: "task:source-change-sync::alpha", cron: "0 2 * * *" },
+      { type: "source_change_sync", key: "task:source-change-sync::beta", cron: "*/10 * * * *" }
+    ].sort((left, right) => left.key.localeCompare(right.key))
+  );
 });

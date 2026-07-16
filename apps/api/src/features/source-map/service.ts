@@ -76,7 +76,13 @@ export async function applySourceMapUpdatesFromCompletedJob(
     const reason = rejectReason(update, allowedSourceIds);
     if (reason) {
       logger.warn(
-        { jobId: job.id, jobType: job.type, sourceId: update.sourceId, topic: update.topic.slice(0, MAX_TOPIC_LENGTH), reason },
+        {
+          jobId: job.id,
+          jobType: job.type,
+          sourceId: update.sourceId,
+          topic: update.topic.slice(0, MAX_TOPIC_LENGTH),
+          reason
+        },
         "source map: dropping malformed update"
       );
       continue;

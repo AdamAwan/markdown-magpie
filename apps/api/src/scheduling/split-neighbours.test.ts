@@ -34,7 +34,10 @@ test("splitNeighbours keeps related docs above its looser threshold and excludes
     ]
   });
   const neighbours = await splitNeighbours(ctx, doc, ["docs"]);
-  assert.deepEqual(neighbours.map((n) => n.path), ["kb/ops.md"]);
+  assert.deepEqual(
+    neighbours.map((n) => n.path),
+    ["kb/ops.md"]
+  );
   assert.deepEqual(neighbours, [{ path: "kb/ops.md", content: "# Ops" }]);
 });
 
@@ -43,7 +46,10 @@ test("splitNeighbours caps the neighbour set at five documents", async () => {
   const ctx = fakeCtx({ ranked, documents: ranked.map((r) => ({ path: r.path, content: r.path })) });
   const neighbours = await splitNeighbours(ctx, doc, undefined);
   assert.equal(neighbours.length, 5);
-  assert.deepEqual(neighbours.map((n) => n.path), ["kb/n0.md", "kb/n1.md", "kb/n2.md", "kb/n3.md", "kb/n4.md"]);
+  assert.deepEqual(
+    neighbours.map((n) => n.path),
+    ["kb/n0.md", "kb/n1.md", "kb/n2.md", "kb/n3.md", "kb/n4.md"]
+  );
 });
 
 test("splitNeighbours returns an empty set when nothing clears the bar", async () => {

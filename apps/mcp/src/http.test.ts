@@ -99,7 +99,9 @@ test("the discovery challenge points at the resource origin metadata url", async
 
 test("/mcp with an invalid bearer token returns a discovery challenge", async () => {
   const auth = await makeTestAuth();
-  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
   const res = await request(app)
     .post("/mcp")
     .set("authorization", "Bearer not-a-real-token")
@@ -110,7 +112,9 @@ test("/mcp with an invalid bearer token returns a discovery challenge", async ()
 
 test("tools/call kb_search requires read:knowledge scope", async () => {
   const auth = await makeTestAuth();
-  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
   const res = await request(app)
     .post("/mcp")
     .set("authorization", await auth.token(["ask:knowledge"]))
@@ -120,7 +124,9 @@ test("tools/call kb_search requires read:knowledge scope", async () => {
 
 test("tools/call kb_ask requires ask:knowledge scope", async () => {
   const auth = await makeTestAuth();
-  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
   const res = await request(app)
     .post("/mcp")
     .set("authorization", await auth.token(["read:knowledge"]))
@@ -130,27 +136,43 @@ test("tools/call kb_ask requires ask:knowledge scope", async () => {
 
 test("tools/call kb_feedback requires feedback:questions scope", async () => {
   const auth = await makeTestAuth();
-  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
   const res = await request(app)
     .post("/mcp")
     .set("authorization", await auth.token(["read:knowledge"]))
-    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_feedback", arguments: { questionId: "q", kind: "helpful" } } });
+    .send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "kb_feedback", arguments: { questionId: "q", kind: "helpful" } }
+    });
   assert.equal(res.status, 403);
 });
 
 test("tools/call kb_outline requires manage:jobs scope", async () => {
   const auth = await makeTestAuth();
-  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
   const res = await request(app)
     .post("/mcp")
     .set("authorization", await auth.token(["read:knowledge"]))
-    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_outline", arguments: { flow: "f", notes: "prompt library" } } });
+    .send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "kb_outline", arguments: { flow: "f", notes: "prompt library" } }
+    });
   assert.equal(res.status, 403);
 });
 
 test("tools/call kb_seed requires manage:jobs scope", async () => {
   const auth = await makeTestAuth();
-  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
   const res = await request(app)
     .post("/mcp")
     .set("authorization", await auth.token(["read:knowledge"]))
@@ -160,17 +182,26 @@ test("tools/call kb_seed requires manage:jobs scope", async () => {
 
 test("tools/call kb_citation requires read:knowledge scope", async () => {
   const auth = await makeTestAuth();
-  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
   const res = await request(app)
     .post("/mcp")
     .set("authorization", await auth.token(["ask:knowledge"]))
-    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_citation", arguments: { sectionIds: ["sec-1"] } } });
+    .send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "kb_citation", arguments: { sectionIds: ["sec-1"] } }
+    });
   assert.equal(res.status, 403);
 });
 
 test("tools/call kb_questionnaire_create requires ask:knowledge scope", async () => {
   const auth = await makeTestAuth();
-  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
   const res = await request(app)
     .post("/mcp")
     .set("authorization", await auth.token(["read:knowledge"]))
@@ -185,7 +216,9 @@ test("tools/call kb_questionnaire_create requires ask:knowledge scope", async ()
 
 test("tools/call kb_questionnaire_get requires read:knowledge scope", async () => {
   const auth = await makeTestAuth();
-  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
   const res = await request(app)
     .post("/mcp")
     .set("authorization", await auth.token(["ask:knowledge"]))
@@ -200,7 +233,9 @@ test("tools/call kb_questionnaire_get requires read:knowledge scope", async () =
 
 test("tools/call kb_questionnaire_approve requires manage:knowledge scope", async () => {
   const auth = await makeTestAuth();
-  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
   // Every other scope in the set is insufficient for the approve tool.
   const res = await request(app)
     .post("/mcp")
@@ -255,7 +290,9 @@ test("a correctly scoped kb_questionnaire_get dispatches to the questionnaire ro
 
 test("a valid token with the right scope passes the MCP boundary (reaches transport)", async () => {
   const auth = await makeTestAuth();
-  const app = createHttpMcpApp(testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } }));
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
   // tools/list needs only a valid token (no per-tool scope); it should pass the
   // auth boundary and be handled by the MCP transport (status < 401).
   const res = await request(app)

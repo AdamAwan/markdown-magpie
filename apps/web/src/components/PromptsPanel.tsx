@@ -47,7 +47,8 @@ const STAGES: { id: string; step: string; title: string; blurb: string; promptId
     id: "maintain",
     step: "4",
     title: "Maintain the knowledge base",
-    blurb: "Patrols check existing documents and fix, de-duplicate, split, or expand them so the base stays correct and tidy as it grows.",
+    blurb:
+      "Patrols check existing documents and fix, de-duplicate, split, or expand them so the base stays correct and tidy as it grows.",
     promptIds: ["verify-document", "correct-document", "dedupe-documents", "split-document", "improve-document"]
   },
   {
@@ -217,13 +218,7 @@ const FlowPersona = styled.div(({ theme }) => ({
 // into the pipeline stages above to make the flow of a question legible. Also
 // lists each configured flow's persona — the snippet appended to the base answer
 // prompt when that flow answers a question (configured in KNOWLEDGE_FLOWS).
-export function PromptsPanel({
-  prompts,
-  flows
-}: {
-  prompts: PromptSummary[];
-  flows: ConfiguredKnowledgeFlow[];
-}) {
+export function PromptsPanel({ prompts, flows }: { prompts: PromptSummary[]; flows: ConfiguredKnowledgeFlow[] }) {
   if (prompts.length === 0) {
     return <PromptEmpty>No prompts are registered.</PromptEmpty>;
   }
@@ -323,9 +318,9 @@ function FlowPersonasCard({ flows }: { flows: ConfiguredKnowledgeFlow[] }) {
         <PersonaAssemblyLabel>How the prompt is assembled</PersonaAssemblyLabel>
         <PromptInstructions>{ASSEMBLY_EXAMPLE}</PromptInstructions>
         <PromptOutput>
-          The persona is appended verbatim by <code>withPersona()</code>, followed by a fixed grounding guard
-          (a persona shapes tone and framing only — it never adds facts the context does not contain) — so the
-          same base instructions are reused for every flow.
+          The persona is appended verbatim by <code>withPersona()</code>, followed by a fixed grounding guard (a persona
+          shapes tone and framing only — it never adds facts the context does not contain) — so the same base
+          instructions are reused for every flow.
         </PromptOutput>
       </PersonaAssembly>
       <FlowPersonaList>

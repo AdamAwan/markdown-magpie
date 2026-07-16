@@ -95,6 +95,9 @@ function isAdvisoryHeading(text: string): boolean {
   // Normalise to space-separated lowercase words so terms match as whole
   // words/phrases: "Stepwise processing" must not match "next step", while
   // "Phase 1 roadmap" must match "roadmap".
-  const words = ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
+  const words = ` ${text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()} `;
   return ADVISORY_HEADING_TERMS.some((term) => words.includes(` ${term} `));
 }

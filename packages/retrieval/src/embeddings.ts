@@ -127,16 +127,15 @@ async function parseEmbeddingResponse(response: Response, expectedCount: number)
     ordered.sort((left, right) => (left.index as number) - (right.index as number));
   }
 
-  return ordered
-    .map((entry) => {
-      const vector = entry.embedding;
-      if (!vector || vector.length !== EMBEDDING_DIMENSIONS) {
-        throw new Error(
-          `Embedding provider returned a ${vector?.length ?? 0}-dim vector; expected ${EMBEDDING_DIMENSIONS}`
-        );
-      }
-      return vector;
-    });
+  return ordered.map((entry) => {
+    const vector = entry.embedding;
+    if (!vector || vector.length !== EMBEDDING_DIMENSIONS) {
+      throw new Error(
+        `Embedding provider returned a ${vector?.length ?? 0}-dim vector; expected ${EMBEDDING_DIMENSIONS}`
+      );
+    }
+    return vector;
+  });
 }
 
 function trimTrailingSlash(value: string): string {

@@ -44,11 +44,7 @@ interface BulkResult {
   job?: { id: string; type: string };
 }
 
-async function postBulk(
-  app: Hono,
-  action: string,
-  ids: string[]
-): Promise<{ status: number; results: BulkResult[] }> {
+async function postBulk(app: Hono, action: string, ids: string[]): Promise<{ status: number; results: BulkResult[] }> {
   const res = await app.request("/proposals/bulk", {
     method: "POST",
     headers: { "content-type": "application/json" },

@@ -18,10 +18,7 @@ export default function QuestionnairesPage() {
     approveReusedItems
   } = useConsole();
 
-  const flows = useMemo(
-    () => knowledgeFlows(config).map((flow) => ({ id: flow.id, name: flow.name })),
-    [config]
-  );
+  const flows = useMemo(() => knowledgeFlows(config).map((flow) => ({ id: flow.id, name: flow.name })), [config]);
 
   return (
     <Workbench>
@@ -38,7 +35,9 @@ export default function QuestionnairesPage() {
             onCreate={createQuestionnaire}
             onApproveItem={approveQuestionnaireItem}
             onApproveReused={approveReusedItems}
-            exportHref={(id, format) => resolveApiUrl(`/questionnaires/${encodeURIComponent(id)}/export?format=${format}`)}
+            exportHref={(id, format) =>
+              resolveApiUrl(`/questionnaires/${encodeURIComponent(id)}/export?format=${format}`)
+            }
           />
         </Surface.Body>
       </Surface>

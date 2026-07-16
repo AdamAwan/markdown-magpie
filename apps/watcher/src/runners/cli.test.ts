@@ -140,7 +140,13 @@ describe("CliRunner", () => {
   });
 
   it("reports its provider + configured model as aiIdentity for cost attribution", () => {
-    const withModel = new CliRunner({ capability: "claude", command: "true", args: [], promptMode: "arg", model: "my-model" });
+    const withModel = new CliRunner({
+      capability: "claude",
+      command: "true",
+      args: [],
+      promptMode: "arg",
+      model: "my-model"
+    });
     assert.deepEqual(withModel.aiIdentity, { provider: "claude", model: "my-model" });
     // No configured model → the CLI runs on its own default; the identity names
     // only the provider rather than guessing what the CLI resolved.
@@ -499,7 +505,12 @@ describe("CliRunner source-grounded seeding", () => {
         workspaces: [{ sourceId: "s1", name: "Repo", rootDir: "/checkouts/s1" }],
         notes: [],
         fetchable: [
-          { sourceId: "i1", name: "Vendor docs", url: "https://docs.x.example/start", allowedHosts: ["docs.x.example", "ref.x.example"] }
+          {
+            sourceId: "i1",
+            name: "Vendor docs",
+            url: "https://docs.x.example/start",
+            allowedHosts: ["docs.x.example", "ref.x.example"]
+          }
         ]
       }),
       spawnOverride: fakeSpawn(calls, SEED_OUTPUT_JSON)
@@ -543,7 +554,10 @@ describe("CliRunner source-grounded seeding", () => {
     // codex's read-only OS sandbox blocks network, so no fetch affordance is
     // promised: the source renders as the reference-only note it always was.
     const promptArg = call.args.at(-1) ?? "";
-    assert.match(promptArg, /Internet source "Vendor docs": https:\/\/docs\.x\.example\/start \(reference only; not fetched\)\./);
+    assert.match(
+      promptArg,
+      /Internet source "Vendor docs": https:\/\/docs\.x\.example\/start \(reference only; not fetched\)\./
+    );
     assert.doesNotMatch(promptArg, /web-fetch tool/);
     assert.ok(!call.args.includes("--allowedTools"));
   });

@@ -50,7 +50,13 @@ describe("InMemorySourceMapStore", () => {
 
   it("treats an empty-string observedSha as absent, matching the Postgres store", async () => {
     const store = new InMemorySourceMapStore();
-    const created = await store.upsert({ sourceId: "s1", topic: "t", paths: ["a/"], description: "d", observedSha: "" });
+    const created = await store.upsert({
+      sourceId: "s1",
+      topic: "t",
+      paths: ["a/"],
+      description: "d",
+      observedSha: ""
+    });
     assert.equal(created.observedSha, undefined);
     const [entry] = await store.listBySource("s1", 10);
     assert.equal(entry.observedSha, undefined);

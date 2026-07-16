@@ -100,7 +100,7 @@ describe("buildSourceGroundedPrompt", () => {
     const prompt = buildSourceGroundedPrompt(
       sourceGroundedJob,
       workspaces,
-      ["Source \"X\" is unavailable (gone)."],
+      ['Source "X" is unavailable (gone).'],
       "cli"
     );
     assert.match(prompt, /Product repo/);
@@ -135,9 +135,7 @@ describe("buildSourceGroundedPrompt", () => {
     const prompt = buildSourceGroundedPrompt(sourceGroundedJob, workspaces, [], "cli", [mapEntry]);
     assert.ok(prompt.includes("Source map hints"));
     assert.ok(prompt.includes("unverified"));
-    assert.ok(
-      prompt.includes("- [s1] event system: Products/Common/UserActivity/ — User-activity events live here")
-    );
+    assert.ok(prompt.includes("- [s1] event system: Products/Common/UserActivity/ — User-activity events live here"));
     assert.ok(prompt.indexOf("Source map hints") > prompt.indexOf("Source repositories available"));
   });
 
@@ -304,7 +302,13 @@ describe("buildAnswerOutput", () => {
   it("does not fall through to an auto gap for an off-topic question with empty retrieval", () => {
     // Empty retrieval would normally force an auto gap; outOfScope must pre-empt it.
     const output = buildAnswerOutput(
-      JSON.stringify({ answer: "Off topic.", confidence: "low", isKnowledgeGap: true, outOfScope: true, gaps: ["cats"] }),
+      JSON.stringify({
+        answer: "Off topic.",
+        confidence: "low",
+        isKnowledgeGap: true,
+        outOfScope: true,
+        gaps: ["cats"]
+      }),
       [],
       "Do cats purr?",
       undefined
@@ -439,7 +443,13 @@ describe("forcedSearchQueries", () => {
   it("does not force a search for an off-topic question", () => {
     assert.deepEqual(
       forcedSearchQueries(
-        JSON.stringify({ answer: "Off topic.", confidence: "low", isKnowledgeGap: true, outOfScope: true, gaps: ["cats"] })
+        JSON.stringify({
+          answer: "Off topic.",
+          confidence: "low",
+          isKnowledgeGap: true,
+          outOfScope: true,
+          gaps: ["cats"]
+        })
       ),
       []
     );

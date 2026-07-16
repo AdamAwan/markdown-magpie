@@ -3,7 +3,14 @@ import type { JobCapability, JobType, JobView } from "@magpie/jobs";
 import type { LanguageModel } from "ai";
 import type { WatcherApi } from "../http-client.js";
 import { logger } from "../logger.js";
-import { fetchSourceMapEntries, hasFetchableSources, hasFsSources, prepareSourceWorkspaces, sourceDescriptorsOf, stampSourceMapUpdates } from "../source-workspace.js";
+import {
+  fetchSourceMapEntries,
+  hasFetchableSources,
+  hasFsSources,
+  prepareSourceWorkspaces,
+  sourceDescriptorsOf,
+  stampSourceMapUpdates
+} from "../source-workspace.js";
 import { withUsageReporting } from "../usage.js";
 import { PROVIDER_JOB_TYPES, runGenerativeJob } from "./generative.js";
 import { runSourceAgentJob } from "./source-agent.js";
@@ -55,14 +62,25 @@ export class ChatRunner {
     // a job with only fetchable internet sources gets a fetch_url-only toolset.
     if (hasFsSources(descriptors) || hasFetchableSources(descriptors)) {
       if (this.agentModel) {
-        const { workspaces, notes, fetchable } = await this.prepareWorkspaces(descriptors, { checkoutRoot: this.checkoutRoot });
+        const { workspaces, notes, fetchable } = await this.prepareWorkspaces(descriptors, {
+          checkoutRoot: this.checkoutRoot
+        });
         logger.info(
           { jobId: job.id, workspaceCount: workspaces.length, fetchableCount: fetchable.length },
           `${job.type}[${job.id}]: running source-agent loop over ${workspaces.length} workspace(s) and ${fetchable.length} fetchable internet source(s)`
         );
         const mapEntries = await fetchSourceMapEntries(this.api, workspaces);
         return stampSourceMapUpdates(
-          await runSourceAgentJob({ job, model: this.agentModel, workspaces, notes, mapEntries, fetchable, signal, ...(onUsage ? { onUsage } : {}) }),
+          await runSourceAgentJob({
+            job,
+            model: this.agentModel,
+            workspaces,
+            notes,
+            mapEntries,
+            fetchable,
+            signal,
+            ...(onUsage ? { onUsage } : {})
+          }),
           workspaces
         );
       }

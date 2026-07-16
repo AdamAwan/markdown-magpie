@@ -188,11 +188,14 @@ export function stampSourceMapUpdates(output: unknown, workspaces: SourceWorkspa
   if (typeof output !== "object" || output === null || !("mapUpdates" in output) || !Array.isArray(output.mapUpdates)) {
     return output;
   }
-  const shaBySource = new Map(
-    workspaces.flatMap((ws) => (ws.headSha ? [[ws.sourceId, ws.headSha] as const] : []))
-  );
+  const shaBySource = new Map(workspaces.flatMap((ws) => (ws.headSha ? [[ws.sourceId, ws.headSha] as const] : [])));
   const mapUpdates = output.mapUpdates.map((update: unknown) => {
-    if (typeof update !== "object" || update === null || !("sourceId" in update) || typeof update.sourceId !== "string") {
+    if (
+      typeof update !== "object" ||
+      update === null ||
+      !("sourceId" in update) ||
+      typeof update.sourceId !== "string"
+    ) {
       return update;
     }
     const stripped = Object.fromEntries(Object.entries(update).filter(([key]) => key !== "observedSha"));

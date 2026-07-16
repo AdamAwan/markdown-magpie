@@ -1367,10 +1367,7 @@ function foldUncoveredPointsIntoRationale(
 // #214: drafts must report per-claim provenance. Absence is tolerated (the
 // field is optional end-to-end; review + the verify patrol enforce quality)
 // but warned, so silent regressions in drafter behaviour are operator-visible.
-function warnMissingProvenance(
-  job: JobView,
-  output: { targetPath: string; provenance?: ProvenanceClaim[] }
-): void {
+function warnMissingProvenance(job: JobView, output: { targetPath: string; provenance?: ProvenanceClaim[] }): void {
   if (!output.provenance || output.provenance.length === 0) {
     logger.warn(
       { jobId: job.id, jobType: job.type, targetPath: output.targetPath },
@@ -1426,7 +1423,10 @@ export async function createProposalFromCompletedJob(
     flagAdvisoryDraft(
       {
         ...withReport,
-        targetPath: resolveProposalTargetPath(destinationSubpath(ctx.repositoryDeps(), input.destinationId), output.title),
+        targetPath: resolveProposalTargetPath(
+          destinationSubpath(ctx.repositoryDeps(), input.destinationId),
+          output.title
+        ),
         evidence: input.evidence ?? [],
         gapSummary: input.gapSummaries ? joinGapSummaries(input.gapSummaries) : undefined,
         triggeringQuestionIds: input.triggeringQuestionIds,

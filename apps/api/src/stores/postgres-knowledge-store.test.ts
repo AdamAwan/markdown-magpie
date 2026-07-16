@@ -19,7 +19,9 @@ describe("PostgresKnowledgeStore re-index pruning", { skip: databaseUrl ? false 
   it("removes documents absent from the new source set", async () => {
     const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
     const repositoryId = `prune-test-${Date.now()}`;
-    const summary = (paths: string[]): { summary: IndexedRepositorySummary; documents: KnowledgeDocument[]; sections: DocumentSection[] } => {
+    const summary = (
+      paths: string[]
+    ): { summary: IndexedRepositorySummary; documents: KnowledgeDocument[]; sections: DocumentSection[] } => {
       const documents: KnowledgeDocument[] = paths.map((path) => ({
         id: `${repositoryId}:${path}`,
         repositoryId,
@@ -61,71 +63,83 @@ describe("PostgresKnowledgeStore re-index pruning", { skip: databaseUrl ? false 
     await store.saveIndexedRepository(second.summary, second.documents, second.sections);
 
     const loaded = await store.loadAll();
-    const paths = loaded.documents.filter((document) => document.repositoryId === repositoryId).map((document) => document.path);
+    const paths = loaded.documents
+      .filter((document) => document.repositoryId === repositoryId)
+      .map((document) => document.path);
     assert.deepEqual(paths.sort(), ["keep.md"]);
   });
 });
 
-describe("PostgresKnowledgeStore content change tracking", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
-  it("moves content_changed_at only for sections whose content actually changed", async () => {
-    const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
-    const repositoryId = `changed-at-test-${Date.now()}`;
-    const build = (
-      sectionBodies: [string, string]
-    ): { summary: IndexedRepositorySummary; documents: KnowledgeDocument[]; sections: DocumentSection[] } => {
-      const document: KnowledgeDocument = {
-        id: `${repositoryId}:doc.md`,
-        repositoryId,
-        path: "doc.md",
-        metadata: { title: "Doc", status: "draft", tags: [], relatedDocs: [] },
-        content: `# Doc\n${sectionBodies.join("\n")}\n`
+describe(
+  "PostgresKnowledgeStore content change tracking",
+  { skip: databaseUrl ? false : "DATABASE_URL not set" },
+  () => {
+    it("moves content_changed_at only for sections whose content actually changed", async () => {
+      const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
+      const repositoryId = `changed-at-test-${Date.now()}`;
+      const build = (
+        sectionBodies: [string, string]
+      ): { summary: IndexedRepositorySummary; documents: KnowledgeDocument[]; sections: DocumentSection[] } => {
+        const document: KnowledgeDocument = {
+          id: `${repositoryId}:doc.md`,
+          repositoryId,
+          path: "doc.md",
+          metadata: { title: "Doc", status: "draft", tags: [], relatedDocs: [] },
+          content: `# Doc\n${sectionBodies.join("\n")}\n`
+        };
+        const sections: DocumentSection[] = sectionBodies.map((body, ordinal) => ({
+          id: `${document.id}:${ordinal}`,
+          documentId: document.id,
+          path: document.path,
+          heading: `Section ${ordinal}`,
+          headingPath: [`Section ${ordinal}`],
+          anchor: String(ordinal),
+          content: body,
+          ordinal
+        }));
+        return {
+          summary: {
+            repository: {
+              id: repositoryId,
+              name: repositoryId,
+              defaultBranch: "main",
+              localPath: "/tmp",
+              provider: "local"
+            },
+            documentCount: 1,
+            sectionCount: sections.length
+          },
+          documents: [document],
+          sections
+        };
       };
-      const sections: DocumentSection[] = sectionBodies.map((body, ordinal) => ({
-        id: `${document.id}:${ordinal}`,
-        documentId: document.id,
-        path: document.path,
-        heading: `Section ${ordinal}`,
-        headingPath: [`Section ${ordinal}`],
-        anchor: String(ordinal),
-        content: body,
-        ordinal
-      }));
-      return {
-        summary: {
-          repository: { id: repositoryId, name: repositoryId, defaultBranch: "main", localPath: "/tmp", provider: "local" },
-          documentCount: 1,
-          sectionCount: sections.length
-        },
-        documents: [document],
-        sections
-      };
-    };
 
-    const first = build(["alpha body", "beta body"]);
-    await store.saveIndexedRepository(first.summary, first.documents, first.sections);
-    const before = await store.sectionFingerprints(first.sections.map((section) => section.id));
-    assert.equal(before.length, 2);
+      const first = build(["alpha body", "beta body"]);
+      await store.saveIndexedRepository(first.summary, first.documents, first.sections);
+      const before = await store.sectionFingerprints(first.sections.map((section) => section.id));
+      assert.equal(before.length, 2);
 
-    // Re-index with only section 1 edited: section 0's timestamp must hold.
-    const second = build(["alpha body", "beta body EDITED"]);
-    await store.saveIndexedRepository(second.summary, second.documents, second.sections);
-    const after = await store.sectionFingerprints(second.sections.map((section) => section.id));
-    const byId = new Map(after.map((fingerprint) => [fingerprint.sectionId, fingerprint]));
-    const beforeById = new Map(before.map((fingerprint) => [fingerprint.sectionId, fingerprint]));
+      // Re-index with only section 1 edited: section 0's timestamp must hold.
+      const second = build(["alpha body", "beta body EDITED"]);
+      await store.saveIndexedRepository(second.summary, second.documents, second.sections);
+      const after = await store.sectionFingerprints(second.sections.map((section) => section.id));
+      const byId = new Map(after.map((fingerprint) => [fingerprint.sectionId, fingerprint]));
+      const beforeById = new Map(before.map((fingerprint) => [fingerprint.sectionId, fingerprint]));
 
-    const unchangedId = `${repositoryId}:doc.md:0`;
-    const editedId = `${repositoryId}:doc.md:1`;
-    assert.equal(byId.get(unchangedId)?.contentChangedAt, beforeById.get(unchangedId)?.contentChangedAt);
-    assert.equal(byId.get(unchangedId)?.contentHash, beforeById.get(unchangedId)?.contentHash);
-    assert.ok((byId.get(editedId)?.contentChangedAt ?? "") > (beforeById.get(editedId)?.contentChangedAt ?? ""));
-    assert.notEqual(byId.get(editedId)?.contentHash, beforeById.get(editedId)?.contentHash);
+      const unchangedId = `${repositoryId}:doc.md:0`;
+      const editedId = `${repositoryId}:doc.md:1`;
+      assert.equal(byId.get(unchangedId)?.contentChangedAt, beforeById.get(unchangedId)?.contentChangedAt);
+      assert.equal(byId.get(unchangedId)?.contentHash, beforeById.get(unchangedId)?.contentHash);
+      assert.ok((byId.get(editedId)?.contentChangedAt ?? "") > (beforeById.get(editedId)?.contentChangedAt ?? ""));
+      assert.notEqual(byId.get(editedId)?.contentHash, beforeById.get(editedId)?.contentHash);
 
-    // Unknown ids are simply absent — callers treat absence as "changed".
-    const sparse = await store.sectionFingerprints([unchangedId, "no-such-section"]);
-    assert.equal(sparse.length, 1);
-    assert.equal(sparse[0].sectionId, unchangedId);
-  });
-});
+      // Unknown ids are simply absent — callers treat absence as "changed".
+      const sparse = await store.sectionFingerprints([unchangedId, "no-such-section"]);
+      assert.equal(sparse.length, 1);
+      assert.equal(sparse[0].sectionId, unchangedId);
+    });
+  }
+);
 
 describe("PostgresKnowledgeStore keyword search", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
   it("ranks sections by full-text relevance and respects the repository scope", async () => {
@@ -174,7 +188,11 @@ describe("PostgresKnowledgeStore keyword search", { skip: databaseUrl ? false : 
     };
 
     const primary = buildRepo(repositoryId, [
-      { path: "rollback.md", heading: "Hotfix Rollback", content: "Run the rollback workflow and notify the incident lead." },
+      {
+        path: "rollback.md",
+        heading: "Hotfix Rollback",
+        content: "Run the rollback workflow and notify the incident lead."
+      },
       { path: "felines.md", heading: "Grooming", content: "Sticky residue is removed with oil before bathing." }
     ]);
     const otherRepo = buildRepo(otherRepositoryId, [
@@ -188,7 +206,10 @@ describe("PostgresKnowledgeStore keyword search", { skip: databaseUrl ? false : 
     assert.ok(scoped.length >= 1, "expected at least one keyword hit");
     assert.equal(scoped[0].id, `${repositoryId}:rollback.md:0`);
     assert.ok(scoped[0].relevance > 0 && scoped[0].relevance <= 1);
-    assert.ok(scoped.every((hit) => hit.id.startsWith(`${repositoryId}:`)), "scope must exclude the other repository");
+    assert.ok(
+      scoped.every((hit) => hit.id.startsWith(`${repositoryId}:`)),
+      "scope must exclude the other repository"
+    );
 
     const empty = await store.searchByKeyword("   ", 10, [repositoryId]);
     assert.deepEqual(empty, []);
@@ -275,276 +296,306 @@ describe("PostgresKnowledgeStore applyIncrementalIndex", { skip: databaseUrl ? f
   });
 });
 
-describe("PostgresKnowledgeStore embedding carry-forward", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
-  // A 1536-dim unit vector: the schema's embedding column is vector(1536).
-  const vector = (seed: number): number[] => {
-    const v = new Array<number>(1536).fill(0);
-    v[0] = seed;
-    return v;
-  };
-
-  const buildDoc = (
-    repositoryId: string,
-    p: string,
-    sectionContents: string[]
-  ): { document: KnowledgeDocument; sections: DocumentSection[] } => {
-    const document: KnowledgeDocument = {
-      id: `${repositoryId}:${p}`,
-      repositoryId,
-      path: p,
-      metadata: { title: p, status: "draft", tags: [], relatedDocs: [] },
-      content: sectionContents.join("\n")
+describe(
+  "PostgresKnowledgeStore embedding carry-forward",
+  { skip: databaseUrl ? false : "DATABASE_URL not set" },
+  () => {
+    // A 1536-dim unit vector: the schema's embedding column is vector(1536).
+    const vector = (seed: number): number[] => {
+      const v = new Array<number>(1536).fill(0);
+      v[0] = seed;
+      return v;
     };
-    const sections: DocumentSection[] = sectionContents.map((content, ordinal) => ({
-      id: `${document.id}:${ordinal}`,
-      documentId: document.id,
-      path: p,
-      heading: `${p}#${ordinal}`,
-      headingPath: [p],
-      anchor: String(ordinal),
-      content,
-      ordinal
-    }));
-    return { document, sections };
-  };
 
-  const repositoryRef = (repositoryId: string): IndexedRepositorySummary["repository"] => ({
-    id: repositoryId,
-    name: repositoryId,
-    defaultBranch: "main",
-    localPath: "/tmp",
-    provider: "local"
-  });
+    const buildDoc = (
+      repositoryId: string,
+      p: string,
+      sectionContents: string[]
+    ): { document: KnowledgeDocument; sections: DocumentSection[] } => {
+      const document: KnowledgeDocument = {
+        id: `${repositoryId}:${p}`,
+        repositoryId,
+        path: p,
+        metadata: { title: p, status: "draft", tags: [], relatedDocs: [] },
+        content: sectionContents.join("\n")
+      };
+      const sections: DocumentSection[] = sectionContents.map((content, ordinal) => ({
+        id: `${document.id}:${ordinal}`,
+        documentId: document.id,
+        path: p,
+        heading: `${p}#${ordinal}`,
+        headingPath: [p],
+        anchor: String(ordinal),
+        content,
+        ordinal
+      }));
+      return { document, sections };
+    };
 
-  it("keeps embeddings for unchanged sections and resets only changed ones on full re-index", async () => {
-    const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
-    const repositoryId = `carry-full-${Date.now()}`;
-    const repository = repositoryRef(repositoryId);
-
-    const first = buildDoc(repositoryId, "doc.md", ["alpha", "bravo", "charlie"]);
-    await store.saveIndexedRepository(
-      { repository, documentCount: 1, sectionCount: first.sections.length },
-      [first.document],
-      first.sections
-    );
-
-    // Embed all three sections, then confirm none are pending.
-    await store.saveSectionEmbeddings(first.sections.map((s) => ({ id: s.id, embedding: vector(1) })));
-    assert.equal(await store.countSectionsNeedingEmbedding(repositoryId), 0);
-
-    // Re-index the same doc with only the middle section's content changed.
-    const second = buildDoc(repositoryId, "doc.md", ["alpha", "bravo CHANGED", "charlie"]);
-    await store.saveIndexedRepository(
-      { repository, documentCount: 1, sectionCount: second.sections.length },
-      [second.document],
-      second.sections
-    );
-
-    // Exactly the changed section (ordinal 1) is now missing its embedding; the
-    // two unchanged sections carried their vectors forward.
-    const pending = await store.listSectionsNeedingEmbedding(10, repositoryId);
-    assert.deepEqual(
-      pending.map((s) => s.id),
-      [`${repositoryId}:doc.md:1`]
-    );
-  });
-
-  it("carries embeddings forward for untouched sections on incremental re-index", async () => {
-    const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
-    const repositoryId = `carry-incr-${Date.now()}`;
-    const repository = repositoryRef(repositoryId);
-
-    const seed = buildDoc(repositoryId, "doc.md", ["one", "two", "three"]);
-    await store.saveIndexedRepository(
-      { repository, documentCount: 1, sectionCount: seed.sections.length, commitSha: "sha-1" },
-      [seed.document],
-      seed.sections
-    );
-    await store.saveSectionEmbeddings(seed.sections.map((s) => ({ id: s.id, embedding: vector(2) })));
-    assert.equal(await store.countSectionsNeedingEmbedding(repositoryId), 0);
-
-    // Incremental: the doc changes so its last section's text differs, and a
-    // fourth section is appended. Sections 0 and 1 are byte-identical.
-    const changed = buildDoc(repositoryId, "doc.md", ["one", "two", "three CHANGED", "four"]);
-    await store.applyIncrementalIndex({
-      repository,
-      commitSha: "sha-2",
-      upsertedDocuments: [changed.document],
-      upsertedSections: changed.sections,
-      deletedDocumentIds: []
+    const repositoryRef = (repositoryId: string): IndexedRepositorySummary["repository"] => ({
+      id: repositoryId,
+      name: repositoryId,
+      defaultBranch: "main",
+      localPath: "/tmp",
+      provider: "local"
     });
 
-    // Only the changed section (ordinal 2) and the brand-new one (ordinal 3) need
-    // embedding; ordinals 0 and 1 kept their vectors.
-    const pending = await store.listSectionsNeedingEmbedding(10, repositoryId);
-    assert.deepEqual(
-      pending.map((s) => s.id).sort(),
-      [`${repositoryId}:doc.md:2`, `${repositoryId}:doc.md:3`]
-    );
-  });
+    it("keeps embeddings for unchanged sections and resets only changed ones on full re-index", async () => {
+      const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
+      const repositoryId = `carry-full-${Date.now()}`;
+      const repository = repositoryRef(repositoryId);
 
-  it("carries the embedding_model stamp forward with the vector and clears both on change", async () => {
-    const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string), "openai-compatible:model-a");
-    const repositoryId = `carry-model-${Date.now()}`;
-    const repository = repositoryRef(repositoryId);
+      const first = buildDoc(repositoryId, "doc.md", ["alpha", "bravo", "charlie"]);
+      await store.saveIndexedRepository(
+        { repository, documentCount: 1, sectionCount: first.sections.length },
+        [first.document],
+        first.sections
+      );
 
-    const first = buildDoc(repositoryId, "doc.md", ["alpha", "bravo"]);
-    await store.saveIndexedRepository(
-      { repository, documentCount: 1, sectionCount: first.sections.length },
-      [first.document],
-      first.sections
-    );
-    await store.saveSectionEmbeddings(first.sections.map((s) => ({ id: s.id, embedding: vector(1) })));
-    assert.equal(await store.countSectionsNeedingEmbedding(repositoryId), 0);
+      // Embed all three sections, then confirm none are pending.
+      await store.saveSectionEmbeddings(first.sections.map((s) => ({ id: s.id, embedding: vector(1) })));
+      assert.equal(await store.countSectionsNeedingEmbedding(repositoryId), 0);
 
-    // Re-index with only the second section changed: the first keeps its vector
-    // AND its model stamp (so it still isn't pending), the second resets both.
-    const second = buildDoc(repositoryId, "doc.md", ["alpha", "bravo CHANGED"]);
-    await store.saveIndexedRepository(
-      { repository, documentCount: 1, sectionCount: second.sections.length },
-      [second.document],
-      second.sections
-    );
-    const pending = await store.listSectionsNeedingEmbedding(10, repositoryId);
-    assert.deepEqual(
-      pending.map((s) => s.id),
-      [`${repositoryId}:doc.md:1`]
-    );
-  });
+      // Re-index the same doc with only the middle section's content changed.
+      const second = buildDoc(repositoryId, "doc.md", ["alpha", "bravo CHANGED", "charlie"]);
+      await store.saveIndexedRepository(
+        { repository, documentCount: 1, sectionCount: second.sections.length },
+        [second.document],
+        second.sections
+      );
 
-  it("deletes sections dropped from a shrinking document", async () => {
-    const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
-    const repositoryId = `carry-shrink-${Date.now()}`;
-    const repository = repositoryRef(repositoryId);
+      // Exactly the changed section (ordinal 1) is now missing its embedding; the
+      // two unchanged sections carried their vectors forward.
+      const pending = await store.listSectionsNeedingEmbedding(10, repositoryId);
+      assert.deepEqual(
+        pending.map((s) => s.id),
+        [`${repositoryId}:doc.md:1`]
+      );
+    });
 
-    const before = buildDoc(repositoryId, "doc.md", ["s0", "s1", "s2"]);
-    await store.saveIndexedRepository(
-      { repository, documentCount: 1, sectionCount: before.sections.length },
-      [before.document],
-      before.sections
-    );
+    it("carries embeddings forward for untouched sections on incremental re-index", async () => {
+      const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
+      const repositoryId = `carry-incr-${Date.now()}`;
+      const repository = repositoryRef(repositoryId);
 
-    // Re-index with only the first section remaining.
-    const after = buildDoc(repositoryId, "doc.md", ["s0"]);
-    await store.saveIndexedRepository(
-      { repository, documentCount: 1, sectionCount: after.sections.length },
-      [after.document],
-      after.sections
-    );
+      const seed = buildDoc(repositoryId, "doc.md", ["one", "two", "three"]);
+      await store.saveIndexedRepository(
+        { repository, documentCount: 1, sectionCount: seed.sections.length, commitSha: "sha-1" },
+        [seed.document],
+        seed.sections
+      );
+      await store.saveSectionEmbeddings(seed.sections.map((s) => ({ id: s.id, embedding: vector(2) })));
+      assert.equal(await store.countSectionsNeedingEmbedding(repositoryId), 0);
 
-    const loaded = await store.loadAll();
-    const ids = loaded.sections
-      .filter((s) => s.documentId === `${repositoryId}:doc.md`)
-      .map((s) => s.id)
-      .sort();
-    assert.deepEqual(ids, [`${repositoryId}:doc.md:0`]);
-  });
-});
+      // Incremental: the doc changes so its last section's text differs, and a
+      // fourth section is appended. Sections 0 and 1 are byte-identical.
+      const changed = buildDoc(repositoryId, "doc.md", ["one", "two", "three CHANGED", "four"]);
+      await store.applyIncrementalIndex({
+        repository,
+        commitSha: "sha-2",
+        upsertedDocuments: [changed.document],
+        upsertedSections: changed.sections,
+        deletedDocumentIds: []
+      });
 
-describe("PostgresKnowledgeStore embedding-model versioning", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
-  const MODEL_A = "openai-compatible:model-a";
-  const MODEL_B = "openai-compatible:model-b";
+      // Only the changed section (ordinal 2) and the brand-new one (ordinal 3) need
+      // embedding; ordinals 0 and 1 kept their vectors.
+      const pending = await store.listSectionsNeedingEmbedding(10, repositoryId);
+      assert.deepEqual(pending.map((s) => s.id).sort(), [`${repositoryId}:doc.md:2`, `${repositoryId}:doc.md:3`]);
+    });
 
-  const vector = (seed: number): number[] => {
-    const v = new Array<number>(1536).fill(0);
-    v[0] = seed;
-    return v;
-  };
+    it("carries the embedding_model stamp forward with the vector and clears both on change", async () => {
+      const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string), "openai-compatible:model-a");
+      const repositoryId = `carry-model-${Date.now()}`;
+      const repository = repositoryRef(repositoryId);
 
-  const seedRepo = async (store: PostgresKnowledgeStore, repositoryId: string): Promise<{ sectionId: string }> => {
-    const document: KnowledgeDocument = {
-      id: `${repositoryId}:doc.md`,
-      repositoryId,
-      path: "doc.md",
-      metadata: { title: "doc.md", status: "draft", tags: [], relatedDocs: [] },
-      content: "# doc\nbody\n"
+      const first = buildDoc(repositoryId, "doc.md", ["alpha", "bravo"]);
+      await store.saveIndexedRepository(
+        { repository, documentCount: 1, sectionCount: first.sections.length },
+        [first.document],
+        first.sections
+      );
+      await store.saveSectionEmbeddings(first.sections.map((s) => ({ id: s.id, embedding: vector(1) })));
+      assert.equal(await store.countSectionsNeedingEmbedding(repositoryId), 0);
+
+      // Re-index with only the second section changed: the first keeps its vector
+      // AND its model stamp (so it still isn't pending), the second resets both.
+      const second = buildDoc(repositoryId, "doc.md", ["alpha", "bravo CHANGED"]);
+      await store.saveIndexedRepository(
+        { repository, documentCount: 1, sectionCount: second.sections.length },
+        [second.document],
+        second.sections
+      );
+      const pending = await store.listSectionsNeedingEmbedding(10, repositoryId);
+      assert.deepEqual(
+        pending.map((s) => s.id),
+        [`${repositoryId}:doc.md:1`]
+      );
+    });
+
+    it("deletes sections dropped from a shrinking document", async () => {
+      const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
+      const repositoryId = `carry-shrink-${Date.now()}`;
+      const repository = repositoryRef(repositoryId);
+
+      const before = buildDoc(repositoryId, "doc.md", ["s0", "s1", "s2"]);
+      await store.saveIndexedRepository(
+        { repository, documentCount: 1, sectionCount: before.sections.length },
+        [before.document],
+        before.sections
+      );
+
+      // Re-index with only the first section remaining.
+      const after = buildDoc(repositoryId, "doc.md", ["s0"]);
+      await store.saveIndexedRepository(
+        { repository, documentCount: 1, sectionCount: after.sections.length },
+        [after.document],
+        after.sections
+      );
+
+      const loaded = await store.loadAll();
+      const ids = loaded.sections
+        .filter((s) => s.documentId === `${repositoryId}:doc.md`)
+        .map((s) => s.id)
+        .sort();
+      assert.deepEqual(ids, [`${repositoryId}:doc.md:0`]);
+    });
+  }
+);
+
+describe(
+  "PostgresKnowledgeStore embedding-model versioning",
+  { skip: databaseUrl ? false : "DATABASE_URL not set" },
+  () => {
+    const MODEL_A = "openai-compatible:model-a";
+    const MODEL_B = "openai-compatible:model-b";
+
+    const vector = (seed: number): number[] => {
+      const v = new Array<number>(1536).fill(0);
+      v[0] = seed;
+      return v;
     };
-    const section: DocumentSection = {
-      id: `${document.id}:0`,
-      documentId: document.id,
-      path: "doc.md",
-      heading: "doc",
-      headingPath: ["doc"],
-      anchor: "0",
-      content: "body",
-      ordinal: 0
+
+    const seedRepo = async (store: PostgresKnowledgeStore, repositoryId: string): Promise<{ sectionId: string }> => {
+      const document: KnowledgeDocument = {
+        id: `${repositoryId}:doc.md`,
+        repositoryId,
+        path: "doc.md",
+        metadata: { title: "doc.md", status: "draft", tags: [], relatedDocs: [] },
+        content: "# doc\nbody\n"
+      };
+      const section: DocumentSection = {
+        id: `${document.id}:0`,
+        documentId: document.id,
+        path: "doc.md",
+        heading: "doc",
+        headingPath: ["doc"],
+        anchor: "0",
+        content: "body",
+        ordinal: 0
+      };
+      await store.saveIndexedRepository(
+        {
+          repository: {
+            id: repositoryId,
+            name: repositoryId,
+            defaultBranch: "main",
+            localPath: "/tmp",
+            provider: "local"
+          },
+          documentCount: 1,
+          sectionCount: 1
+        },
+        [document],
+        [section]
+      );
+      return { sectionId: section.id };
     };
-    await store.saveIndexedRepository(
-      {
-        repository: { id: repositoryId, name: repositoryId, defaultBranch: "main", localPath: "/tmp", provider: "local" },
-        documentCount: 1,
-        sectionCount: 1
-      },
-      [document],
-      [section]
-    );
-    return { sectionId: section.id };
-  };
 
-  it("vector search only matches vectors produced by the configured model", async () => {
-    const pool = makeTestPool(databaseUrl as string);
-    const storeA = new PostgresKnowledgeStore(pool, MODEL_A);
-    const repositoryId = `model-guard-${Date.now()}`;
-    const { sectionId } = await seedRepo(storeA, repositoryId);
-    await storeA.saveSectionEmbeddings([{ id: sectionId, embedding: vector(1) }]);
+    it("vector search only matches vectors produced by the configured model", async () => {
+      const pool = makeTestPool(databaseUrl as string);
+      const storeA = new PostgresKnowledgeStore(pool, MODEL_A);
+      const repositoryId = `model-guard-${Date.now()}`;
+      const { sectionId } = await seedRepo(storeA, repositoryId);
+      await storeA.saveSectionEmbeddings([{ id: sectionId, embedding: vector(1) }]);
 
-    // Same model: the vector is comparable and the section is found.
-    const sameModel = await storeA.searchByEmbedding(vector(1), 10, [repositoryId]);
-    assert.deepEqual(sameModel.map((hit) => hit.id), [sectionId]);
+      // Same model: the vector is comparable and the section is found.
+      const sameModel = await storeA.searchByEmbedding(vector(1), 10, [repositoryId]);
+      assert.deepEqual(
+        sameModel.map((hit) => hit.id),
+        [sectionId]
+      );
 
-    // A store configured with a different model must not see model-a vectors.
-    const storeB = new PostgresKnowledgeStore(pool, MODEL_B);
-    const otherModel = await storeB.searchByEmbedding(vector(1), 10, [repositoryId]);
-    assert.deepEqual(otherModel, []);
+      // A store configured with a different model must not see model-a vectors.
+      const storeB = new PostgresKnowledgeStore(pool, MODEL_B);
+      const otherModel = await storeB.searchByEmbedding(vector(1), 10, [repositoryId]);
+      assert.deepEqual(otherModel, []);
 
-    // An unversioned store (no embeddings configured) keeps the legacy
-    // behaviour of matching every stored vector.
-    const unversioned = new PostgresKnowledgeStore(pool);
-    const legacy = await unversioned.searchByEmbedding(vector(1), 10, [repositoryId]);
-    assert.deepEqual(legacy.map((hit) => hit.id), [sectionId]);
-  });
+      // An unversioned store (no embeddings configured) keeps the legacy
+      // behaviour of matching every stored vector.
+      const unversioned = new PostgresKnowledgeStore(pool);
+      const legacy = await unversioned.searchByEmbedding(vector(1), 10, [repositoryId]);
+      assert.deepEqual(
+        legacy.map((hit) => hit.id),
+        [sectionId]
+      );
+    });
 
-  it("treats a model mismatch as needing re-embedding, and re-embedding restores search", async () => {
-    const pool = makeTestPool(databaseUrl as string);
-    const storeA = new PostgresKnowledgeStore(pool, MODEL_A);
-    const repositoryId = `model-reembed-${Date.now()}`;
-    const { sectionId } = await seedRepo(storeA, repositoryId);
-    await storeA.saveSectionEmbeddings([{ id: sectionId, embedding: vector(1) }]);
-    assert.equal(await storeA.countSectionsNeedingEmbedding(repositoryId), 0);
+    it("treats a model mismatch as needing re-embedding, and re-embedding restores search", async () => {
+      const pool = makeTestPool(databaseUrl as string);
+      const storeA = new PostgresKnowledgeStore(pool, MODEL_A);
+      const repositoryId = `model-reembed-${Date.now()}`;
+      const { sectionId } = await seedRepo(storeA, repositoryId);
+      await storeA.saveSectionEmbeddings([{ id: sectionId, embedding: vector(1) }]);
+      assert.equal(await storeA.countSectionsNeedingEmbedding(repositoryId), 0);
 
-    // Under model B the stored vector is stale: the section is pending again.
-    const storeB = new PostgresKnowledgeStore(pool, MODEL_B);
-    assert.equal(await storeB.countSectionsNeedingEmbedding(repositoryId), 1);
-    const pending = await storeB.listSectionsNeedingEmbedding(10, repositoryId);
-    assert.deepEqual(pending.map((s) => s.id), [sectionId]);
+      // Under model B the stored vector is stale: the section is pending again.
+      const storeB = new PostgresKnowledgeStore(pool, MODEL_B);
+      assert.equal(await storeB.countSectionsNeedingEmbedding(repositoryId), 1);
+      const pending = await storeB.listSectionsNeedingEmbedding(10, repositoryId);
+      assert.deepEqual(
+        pending.map((s) => s.id),
+        [sectionId]
+      );
 
-    // Re-embedding under model B clears the backlog and makes the section
-    // visible to model-B vector search again.
-    await storeB.saveSectionEmbeddings([{ id: sectionId, embedding: vector(2) }]);
-    assert.equal(await storeB.countSectionsNeedingEmbedding(repositoryId), 0);
-    const hits = await storeB.searchByEmbedding(vector(2), 10, [repositoryId]);
-    assert.deepEqual(hits.map((hit) => hit.id), [sectionId]);
-  });
+      // Re-embedding under model B clears the backlog and makes the section
+      // visible to model-B vector search again.
+      await storeB.saveSectionEmbeddings([{ id: sectionId, embedding: vector(2) }]);
+      assert.equal(await storeB.countSectionsNeedingEmbedding(repositoryId), 0);
+      const hits = await storeB.searchByEmbedding(vector(2), 10, [repositoryId]);
+      assert.deepEqual(
+        hits.map((hit) => hit.id),
+        [sectionId]
+      );
+    });
 
-  it("adopts pre-versioning vectors under the configured model instead of re-embedding", async () => {
-    const pool = makeTestPool(databaseUrl as string);
-    // An unversioned store writes a NULL-stamped vector, exactly like data
-    // saved before the embedding_model column existed.
-    const unversioned = new PostgresKnowledgeStore(pool);
-    const repositoryId = `model-adopt-${Date.now()}`;
-    const { sectionId } = await seedRepo(unversioned, repositoryId);
-    await unversioned.saveSectionEmbeddings([{ id: sectionId, embedding: vector(3) }]);
+    it("adopts pre-versioning vectors under the configured model instead of re-embedding", async () => {
+      const pool = makeTestPool(databaseUrl as string);
+      // An unversioned store writes a NULL-stamped vector, exactly like data
+      // saved before the embedding_model column existed.
+      const unversioned = new PostgresKnowledgeStore(pool);
+      const repositoryId = `model-adopt-${Date.now()}`;
+      const { sectionId } = await seedRepo(unversioned, repositoryId);
+      await unversioned.saveSectionEmbeddings([{ id: sectionId, embedding: vector(3) }]);
 
-    const storeA = new PostgresKnowledgeStore(pool, MODEL_A);
-    assert.equal(await storeA.countSectionsNeedingEmbedding(repositoryId), 1, "unadopted legacy vector reads as stale");
+      const storeA = new PostgresKnowledgeStore(pool, MODEL_A);
+      assert.equal(
+        await storeA.countSectionsNeedingEmbedding(repositoryId),
+        1,
+        "unadopted legacy vector reads as stale"
+      );
 
-    const adopted = await storeA.adoptUnversionedEmbeddings();
-    assert.ok(adopted >= 1, "at least this test's legacy vector is adopted");
-    assert.equal(await storeA.countSectionsNeedingEmbedding(repositoryId), 0, "adoption avoids a re-embed");
-    const hits = await storeA.searchByEmbedding(vector(3), 10, [repositoryId]);
-    assert.deepEqual(hits.map((hit) => hit.id), [sectionId]);
+      const adopted = await storeA.adoptUnversionedEmbeddings();
+      assert.ok(adopted >= 1, "at least this test's legacy vector is adopted");
+      assert.equal(await storeA.countSectionsNeedingEmbedding(repositoryId), 0, "adoption avoids a re-embed");
+      const hits = await storeA.searchByEmbedding(vector(3), 10, [repositoryId]);
+      assert.deepEqual(
+        hits.map((hit) => hit.id),
+        [sectionId]
+      );
 
-    // Adoption on an unversioned store is a no-op by definition.
-    assert.equal(await unversioned.adoptUnversionedEmbeddings(), 0);
-  });
-});
+      // Adoption on an unversioned store is a no-op by definition.
+      assert.equal(await unversioned.adoptUnversionedEmbeddings(), 0);
+    });
+  }
+);

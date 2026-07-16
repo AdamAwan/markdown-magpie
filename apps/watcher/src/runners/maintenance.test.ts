@@ -98,7 +98,10 @@ describe("MaintenanceRunner", () => {
       }
     });
     const runner = new MaintenanceRunner(api);
-    const output = (await runner.run(job("correctness_patrol", { flowId: "billing" }), new AbortController().signal)) as {
+    const output = (await runner.run(
+      job("correctness_patrol", { flowId: "billing" }),
+      new AbortController().signal
+    )) as {
       runId: string;
       selectedCount: number;
       findingCount: number;
@@ -222,10 +225,7 @@ describe("MaintenanceRunner", () => {
     // Input parsing now goes through verifyGapClosureInputSchema.parse, so a
     // missing proposalId rejects with a ZodError naming the offending field
     // rather than a hand-rolled message.
-    await assert.rejects(
-      () => runner.run(job("verify_gap_closure", {}), new AbortController().signal),
-      /proposalId/
-    );
+    await assert.rejects(() => runner.run(job("verify_gap_closure", {}), new AbortController().signal), /proposalId/);
   });
 
   it("POSTs the seed-bootstrap endpoint with the flowId and returns schema-valid output", async () => {
@@ -249,10 +249,7 @@ describe("MaintenanceRunner", () => {
       }
     });
     const runner = new MaintenanceRunner(api);
-    await assert.rejects(
-      () => runner.run(job("seed_bootstrap", {}), new AbortController().signal),
-      /flowId/
-    );
+    await assert.rejects(() => runner.run(job("seed_bootstrap", {}), new AbortController().signal), /flowId/);
   });
 
   it("rejects job types it does not handle", async () => {

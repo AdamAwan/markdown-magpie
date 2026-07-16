@@ -3,10 +3,7 @@ import { test } from "node:test";
 import { MAINTENANCE_LENSES, type ChangeIntent } from "./intent.js";
 
 test("the six maintenance lenses are declared", () => {
-  assert.deepEqual(
-    [...MAINTENANCE_LENSES].sort(),
-    ["complete", "dedupe", "gap", "source-sync", "split", "verify"]
-  );
+  assert.deepEqual([...MAINTENANCE_LENSES].sort(), ["complete", "dedupe", "gap", "source-sync", "split", "verify"]);
 });
 
 test("a ChangeIntent carries lens, targets, evidence and rationale", () => {
