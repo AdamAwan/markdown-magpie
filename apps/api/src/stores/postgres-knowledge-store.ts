@@ -23,6 +23,15 @@ const SECTION_INSERT_CHUNK = 1000;
 // the 65535 bind-parameter cap while still cutting round-trips drastically.
 const EMBEDDING_UPDATE_CHUNK = 1000;
 
+// A section's identity at a moment in time: the md5 of (heading, content) plus
+// when that pair last changed. Produced only by sectionFingerprints (below) so
+// the hash expression can't fork between writers and readers.
+export interface SectionFingerprint {
+  sectionId: string;
+  contentHash: string;
+  contentChangedAt: string;
+}
+
 export class PostgresKnowledgeStore
   implements KnowledgePersistence, SectionVectorSearch, SectionKeywordSearch, EmbeddingPersistence
 {
@@ -257,6 +266,12 @@ export class PostgresKnowledgeStore
                   AND document_sections.heading = EXCLUDED.heading
                 THEN document_sections.embedding_model
                 ELSE NULL
+              END,
+              content_changed_at = CASE
+                WHEN document_sections.content = EXCLUDED.content
+                  AND document_sections.heading = EXCLUDED.heading
+                THEN document_sections.content_changed_at
+                ELSE now()
               END
         `,
         batch.flatMap((section) => [
@@ -271,6 +286,30 @@ export class PostgresKnowledgeStore
         ])
       );
     }
+  }
+
+  // Point-in-time identity of sections, for questionnaire answer-reuse checks:
+  // the hash expression is the single source of truth for "byte-identical" —
+  // snapshot (at item approval) and check (at reuse time) both call this method,
+  // so the two sides can never drift. Ids with no row are simply absent; callers
+  // treat absence as "changed" (the safe direction).
+  async sectionFingerprints(sectionIds: string[]): Promise<SectionFingerprint[]> {
+    if (sectionIds.length === 0) {
+      return [];
+    }
+    const result = await this.pool.query<{ id: string; hash: string; changed_at: Date }>(
+      `
+        SELECT id, md5(heading || E'\\x1f' || content) AS hash, content_changed_at AS changed_at
+        FROM document_sections
+        WHERE id = ANY($1::text[])
+      `,
+      [sectionIds]
+    );
+    return result.rows.map((row) => ({
+      sectionId: row.id,
+      contentHash: row.hash,
+      contentChangedAt: row.changed_at.toISOString()
+    }));
   }
 
   async loadAll(): Promise<LoadedKnowledge> {

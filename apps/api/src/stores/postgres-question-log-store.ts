@@ -34,7 +34,10 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         JOIN questions q ON q.id = qg.question_id
         WHERE qg.resolved_at IS NULL
           AND qg.dismissed_at IS NULL
-          AND q.purpose = 'live'
+          -- Gap-candidate purposes: live asks and questionnaire item asks (an
+          -- unanswerable questionnaire question is a real gap). Verification
+          -- re-asks stay excluded (#154).
+          AND q.purpose IN ('live', 'questionnaire')
           -- Exclude EVERY gap of a parked question (question-level, matching
           -- candidacy) so a parked escalation — or its sibling auto row — can
           -- never be swept into a cluster where an AI dismissal discharges it (#158).
@@ -84,7 +87,8 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         SELECT p.summary AS summary, p.flow AS flow, qg.id::text AS id
         FROM pairs p
         JOIN question_gaps qg ON qg.summary = p.summary AND qg.resolved_at IS NULL AND qg.dismissed_at IS NULL
-        JOIN questions q ON q.id = qg.question_id AND coalesce(q.flow_id, '') = p.flow AND q.purpose = 'live'
+        JOIN questions q ON q.id = qg.question_id AND coalesce(q.flow_id, '') = p.flow
+          AND q.purpose IN ('live', 'questionnaire')
         -- Exclude every gap of a parked question, matching gapIdsForSummary/candidacy (#158).
         WHERE qg.question_id NOT IN (
           SELECT question_id FROM question_gaps
@@ -847,8 +851,10 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           JOIN questions q ON q.id = qg.question_id
           WHERE qg.resolved_at IS NULL AND qg.dismissed_at IS NULL
             -- Verification re-ask logs (#154) are synthetic; their gap signals are
-            -- the merged doc's shortfall, never a fresh candidate.
-            AND q.purpose = 'live'
+            -- the merged doc's shortfall, never a fresh candidate. Questionnaire
+            -- item asks ARE candidates — an unanswerable questionnaire question
+            -- is a real gap (docs/questionnaires.md).
+            AND q.purpose IN ('live', 'questionnaire')
             -- A question with a live PARKED gap hit the verification retry cap: it
             -- awaits a human, so park the WHOLE question (all its gap rows,
             -- including the sibling auto/manual gap) out of the candidate set so

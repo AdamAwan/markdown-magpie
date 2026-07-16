@@ -66,6 +66,67 @@ describe("PostgresKnowledgeStore re-index pruning", { skip: databaseUrl ? false 
   });
 });
 
+describe("PostgresKnowledgeStore content change tracking", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
+  it("moves content_changed_at only for sections whose content actually changed", async () => {
+    const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));
+    const repositoryId = `changed-at-test-${Date.now()}`;
+    const build = (
+      sectionBodies: [string, string]
+    ): { summary: IndexedRepositorySummary; documents: KnowledgeDocument[]; sections: DocumentSection[] } => {
+      const document: KnowledgeDocument = {
+        id: `${repositoryId}:doc.md`,
+        repositoryId,
+        path: "doc.md",
+        metadata: { title: "Doc", status: "draft", tags: [], relatedDocs: [] },
+        content: `# Doc\n${sectionBodies.join("\n")}\n`
+      };
+      const sections: DocumentSection[] = sectionBodies.map((body, ordinal) => ({
+        id: `${document.id}:${ordinal}`,
+        documentId: document.id,
+        path: document.path,
+        heading: `Section ${ordinal}`,
+        headingPath: [`Section ${ordinal}`],
+        anchor: String(ordinal),
+        content: body,
+        ordinal
+      }));
+      return {
+        summary: {
+          repository: { id: repositoryId, name: repositoryId, defaultBranch: "main", localPath: "/tmp", provider: "local" },
+          documentCount: 1,
+          sectionCount: sections.length
+        },
+        documents: [document],
+        sections
+      };
+    };
+
+    const first = build(["alpha body", "beta body"]);
+    await store.saveIndexedRepository(first.summary, first.documents, first.sections);
+    const before = await store.sectionFingerprints(first.sections.map((section) => section.id));
+    assert.equal(before.length, 2);
+
+    // Re-index with only section 1 edited: section 0's timestamp must hold.
+    const second = build(["alpha body", "beta body EDITED"]);
+    await store.saveIndexedRepository(second.summary, second.documents, second.sections);
+    const after = await store.sectionFingerprints(second.sections.map((section) => section.id));
+    const byId = new Map(after.map((fingerprint) => [fingerprint.sectionId, fingerprint]));
+    const beforeById = new Map(before.map((fingerprint) => [fingerprint.sectionId, fingerprint]));
+
+    const unchangedId = `${repositoryId}:doc.md:0`;
+    const editedId = `${repositoryId}:doc.md:1`;
+    assert.equal(byId.get(unchangedId)?.contentChangedAt, beforeById.get(unchangedId)?.contentChangedAt);
+    assert.equal(byId.get(unchangedId)?.contentHash, beforeById.get(unchangedId)?.contentHash);
+    assert.ok((byId.get(editedId)?.contentChangedAt ?? "") > (beforeById.get(editedId)?.contentChangedAt ?? ""));
+    assert.notEqual(byId.get(editedId)?.contentHash, beforeById.get(editedId)?.contentHash);
+
+    // Unknown ids are simply absent — callers treat absence as "changed".
+    const sparse = await store.sectionFingerprints([unchangedId, "no-such-section"]);
+    assert.equal(sparse.length, 1);
+    assert.equal(sparse[0].sectionId, unchangedId);
+  });
+});
+
 describe("PostgresKnowledgeStore keyword search", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
   it("ranks sections by full-text relevance and respects the repository scope", async () => {
     const store = new PostgresKnowledgeStore(makeTestPool(databaseUrl as string));

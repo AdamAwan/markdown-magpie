@@ -1,4 +1,4 @@
-import type { AnswerQuestionJobInput, QuestionLog } from "@magpie/core";
+import type { AnswerQuestionJobInput, QuestionLog, QuestionPurpose } from "@magpie/core";
 import type { AppContext } from "../context.js";
 import type { AiProviderName } from "./providers.js";
 
@@ -18,11 +18,12 @@ import type { AiProviderName } from "./providers.js";
 // so the log is recorded without them; completion fills them in. `purpose`
 // defaults to "live"; the gap-closure re-ask path passes "verification" so the
 // synthetic log stays out of gap candidacy, the questions list, and clustering
-// (#154).
+// (#154); questionnaire item asks pass "questionnaire" (in candidacy, out of
+// the questions list — docs/questionnaires.md).
 export async function recordAnswerQuestionLog(
   ctx: AppContext,
   question: string,
-  purpose: "live" | "verification" = "live"
+  purpose: QuestionPurpose = "live"
 ): Promise<QuestionLog> {
   return ctx.stores.questionLogs.record({
     question,
