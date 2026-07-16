@@ -288,6 +288,66 @@ test("a correctly scoped kb_questionnaire_get dispatches to the questionnaire ro
   }
 });
 
+test("a batched tools/call for a scoped tool is rejected when the token lacks that scope", async () => {
+  const auth = await makeTestAuth();
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
+  // The exploit: a JSON-RPC batch (array) body has no top-level `.method`, so a
+  // single-object scope check would see nothing and let it through. kb_seed
+  // needs manage:jobs; this token holds only read:knowledge.
+  const res = await request(app)
+    .post("/mcp")
+    .set("authorization", await auth.token(["read:knowledge"]))
+    .set("accept", "application/json, text/event-stream")
+    .send([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_seed", arguments: { plan: "plan-1" } } }
+    ]);
+  assert.equal(res.status, 403);
+});
+
+test("a batched tools/call is authorized against the union of every batched tool's scope", async () => {
+  const auth = await makeTestAuth();
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
+  // The batch mixes a read-only call with a manage:jobs call. A token holding
+  // only read:knowledge satisfies the first but not the union, so it is rejected.
+  const res = await request(app)
+    .post("/mcp")
+    .set("authorization", await auth.token(["read:knowledge"]))
+    .set("accept", "application/json, text/event-stream")
+    .send([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_search", arguments: { query: "hi" } } },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "kb_seed", arguments: { plan: "plan-1" } } }
+    ]);
+  assert.equal(res.status, 403);
+});
+
+test("a batched tools/call passes when the token satisfies every batched tool's scope", async () => {
+  const auth = await makeTestAuth();
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
+  // read:knowledge covers both kb_search and kb_citation, so the batch passes the
+  // auth boundary and is handled by the transport (status < 401/403).
+  const res = await request(app)
+    .post("/mcp")
+    .set("authorization", await auth.token(["read:knowledge"]))
+    .set("accept", "application/json, text/event-stream")
+    .send([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_search", arguments: { query: "hi" } } },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "kb_citation", arguments: { sectionIds: ["s-1"] } }
+      }
+    ]);
+  assert.notEqual(res.status, 401);
+  assert.notEqual(res.status, 403);
+});
+
 test("a valid token with the right scope passes the MCP boundary (reaches transport)", async () => {
   const auth = await makeTestAuth();
   const app = createHttpMcpApp(
