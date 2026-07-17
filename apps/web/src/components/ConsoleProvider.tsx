@@ -45,7 +45,7 @@ import {
   WorkersResponse
 } from "../lib/types";
 import type { Questionnaire, QuestionnaireSummary, SeedPlan } from "@magpie/core";
-import { apiDelete, apiGet, apiPatch, apiPost, errorMessage } from "../lib/api";
+import { apiDelete, apiDownload, apiGet, apiPatch, apiPost, errorMessage } from "../lib/api";
 import { knowledgeFlows } from "../lib/config";
 import {
   BulkProposalAction,
@@ -986,6 +986,17 @@ function useConsoleController() {
     }
   }
 
+  // Download a worksheet export. Goes through apiDownload so the request carries
+  // the bearer token — a plain <a href> navigation would omit it and 401 under
+  // Auth0.
+  async function exportQuestionnaire(id: string, format: "md" | "csv"): Promise<void> {
+    try {
+      await apiDownload(`/questionnaires/${encodeURIComponent(id)}/export?format=${format}`, `${id}.${format}`);
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    }
+  }
+
   async function approveReusedItems(questionnaireId: string): Promise<number | undefined> {
     try {
       const { approved } = await apiPost<{ approved: number }>(
@@ -1191,7 +1202,8 @@ function useConsoleController() {
     getQuestionnaire,
     createQuestionnaire,
     approveQuestionnaireItem,
-    approveReusedItems
+    approveReusedItems,
+    exportQuestionnaire
   };
 }
 
