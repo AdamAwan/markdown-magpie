@@ -991,10 +991,7 @@ function useConsoleController() {
   // Auth0.
   async function exportQuestionnaire(id: string, format: "md" | "csv"): Promise<void> {
     try {
-      await apiDownload(
-        `/questionnaires/${encodeURIComponent(id)}/export?format=${format}`,
-        `${id}.${format}`
-      );
+      await apiDownload(`/questionnaires/${encodeURIComponent(id)}/export?format=${format}`, `${id}.${format}`);
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     }
