@@ -22,11 +22,20 @@ const CHROME = process.env.CHROME_PATH ?? "C:/Program Files/Google/Chrome/Applic
 
 // ---- theme tokens (mirrors apps/web/src/theme/theme.ts) -------------------
 const T = {
-  text: "#17211d", muted: "#5b6962", subtle: "#8a948f",
-  page: "#f5f7f2", surface: "#ffffff", surfaceMuted: "#f6f8f3",
-  border: "#e4e8e0", borderStrong: "#cbd3cb",
-  accent: "#285f74", accentBg: "#e5f1f4", accentBorder: "#b7d0d8", brandAccent: "#62702f",
-  primary: "#20322b", primaryText: "#ffffff",
+  text: "#17211d",
+  muted: "#5b6962",
+  subtle: "#8a948f",
+  page: "#f5f7f2",
+  surface: "#ffffff",
+  surfaceMuted: "#f6f8f3",
+  border: "#e4e8e0",
+  borderStrong: "#cbd3cb",
+  accent: "#285f74",
+  accentBg: "#e5f1f4",
+  accentBorder: "#b7d0d8",
+  brandAccent: "#62702f",
+  primary: "#20322b",
+  primaryText: "#ffffff",
   ok: { fg: "#3d6b43", bg: "#eef6ec", bd: "#bcd6bd" },
   amber: { fg: "#7a5d24", bg: "#faf5e9", bd: "#d8c496" },
   blue: { fg: "#2d5775", bg: "#f2f7fb", bd: "#c4d3e0" },
@@ -170,19 +179,36 @@ const questionnairesBody = `
     ${stat("12", "Total")}${stat("4", "Approved")}${stat("7", "Awaiting approval")}${stat("0", "In progress")}${stat("1", "Unanswerable")}${stat("6", "Reused")}
   </div>
   <div style="display:grid;gap:12px">
-    ${qItem("ok", "reused", 1,
+    ${qItem(
+      "ok",
+      "reused",
+      1,
       "Do you support single sign-on (SSO / SAML)?",
       "Yes. Magpie signs in through Auth0, so it works with any OIDC provider — Google, Microsoft Entra, Okta and more — and SAML single sign-on with SCIM provisioning is supported. Console access can be locked to your identity provider.",
-      "magpie-sales/authentication-and-sso.md — SSO &amp; provisioning", "", false)}
-    ${qItem("amber", "changed", 2,
+      "magpie-sales/authentication-and-sso.md — SSO &amp; provisioning",
+      "",
+      false
+    )}
+    ${qItem(
+      "amber",
+      "changed",
+      2,
       "Where is customer data stored, and is it encrypted in transit and at rest?",
       "All knowledge lives in your own Git repositories and Postgres — self-hosted, so nothing leaves your infrastructure. Traffic is TLS-encrypted in transit; encryption at rest is inherited from your database and disk.",
       "security/data-handling.md — Storage &amp; encryption",
-      "Re-answered: cited section “Storage &amp; encryption” changed on 2026-07-14.", false)}
-    ${qItem("neutral", "answered", 3,
+      "Re-answered: cited section “Storage &amp; encryption” changed on 2026-07-14.",
+      false
+    )}
+    ${qItem(
+      "neutral",
+      "answered",
+      3,
       "What is your data retention and deletion policy?",
       "The knowledge base is plain Markdown in Git, so retention and deletion follow your repository policy — remove a document and it leaves the index on the next re-index, with full history preserved in Git.",
-      "security/data-handling.md — Retention &amp; deletion", "", true)}
+      "security/data-handling.md — Retention &amp; deletion",
+      "",
+      true
+    )}
   </div>
 </section>`;
 
@@ -319,11 +345,19 @@ const seedPlanBody = `
 // through confidence, into gaps, and down the fix funnel to verified. Laid out
 // programmatically — node heights and ribbon widths are proportional to counts.
 const sankeySvg = (() => {
-  const SCALE = 0.235, GAP = 12, NW = 13;
+  const SCALE = 0.235,
+    GAP = 12,
+    NW = 13;
   const cols = [
     [{ k: "q", l: "Questions asked", c: 1240, col: T.accent }],
-    [{ k: "hi", l: "High confidence", c: 1010, col: T.ok.fg }, { k: "lo", l: "Low confidence", c: 230, col: T.amber.fg }],
-    [{ k: "ans", l: "Answered · no gap", c: 1144, col: T.ok.fg }, { k: "gap", l: "Gaps raised", c: 96, col: T.accent }],
+    [
+      { k: "hi", l: "High confidence", c: 1010, col: T.ok.fg },
+      { k: "lo", l: "Low confidence", c: 230, col: T.amber.fg }
+    ],
+    [
+      { k: "ans", l: "Answered · no gap", c: 1144, col: T.ok.fg },
+      { k: "gap", l: "Gaps raised", c: 96, col: T.accent }
+    ],
     [{ k: "prop", l: "Proposals", c: 71, col: T.accent }],
     [{ k: "merged", l: "Merged", c: 63, col: T.ok.fg }],
     [{ k: "ver", l: "Verified closed", c: 40, col: T.ok.fg }]
@@ -345,27 +379,54 @@ const sankeySvg = (() => {
     nodes[k].y1 = nodes.gap.y0 + nodes[k].c * SCALE;
   }
   const links = [
-    { f: "q", t: "hi", c: 1010 }, { f: "q", t: "lo", c: 230 },
-    { f: "hi", t: "ans", c: 990 }, { f: "hi", t: "gap", c: 20 },
-    { f: "lo", t: "ans", c: 154 }, { f: "lo", t: "gap", c: 76 },
-    { f: "gap", t: "prop", c: 71 }, { f: "prop", t: "merged", c: 63 }, { f: "merged", t: "ver", c: 40 }
+    { f: "q", t: "hi", c: 1010 },
+    { f: "q", t: "lo", c: 230 },
+    { f: "hi", t: "ans", c: 990 },
+    { f: "hi", t: "gap", c: 20 },
+    { f: "lo", t: "ans", c: 154 },
+    { f: "lo", t: "gap", c: 76 },
+    { f: "gap", t: "prop", c: 71 },
+    { f: "prop", t: "merged", c: 63 },
+    { f: "merged", t: "ver", c: 40 }
   ];
-  const outOff = {}, inOff = {};
-  const ribbons = links.map(({ f, t, c }) => {
-    const s = nodes[f], d = nodes[t], w = c * SCALE;
-    const so = outOff[f] ?? 0, di = inOff[t] ?? 0;
-    outOff[f] = so + w; inOff[t] = di + w;
-    const xs = s.x + NW, xt = d.x, xm = (xs + xt) / 2;
-    const a = s.y0 + so, b = a + w, e = d.y0 + di, g = e + w;
-    return `<path d="M${xs},${a} C${xm},${a} ${xm},${e} ${xt},${e} L${xt},${g} C${xm},${g} ${xm},${b} ${xs},${b} Z" fill="${T.accent}" opacity="0.15"/>`;
-  }).join("");
-  const rects = Object.values(nodes).map((n) => `<rect x="${n.x}" y="${n.y0}" width="${NW}" height="${(n.y1 - n.y0).toFixed(1)}" rx="2" fill="${n.col}"/>`).join("");
-  const labels = Object.values(nodes).map((n) => {
-    const cy = (n.y0 + n.y1) / 2, left = n.k === "q";
-    const lx = left ? n.x - 9 : n.x + NW + 9, anchor = left ? "end" : "start";
-    return `<text x="${lx}" y="${cy - 2}" text-anchor="${anchor}" font-size="15" font-weight="600" fill="${T.text}">${n.l}</text>` +
-      `<text x="${lx}" y="${cy + 15}" text-anchor="${anchor}" font-size="13" fill="${T.muted}">${n.c.toLocaleString()}</text>`;
-  }).join("");
+  const outOff = {},
+    inOff = {};
+  const ribbons = links
+    .map(({ f, t, c }) => {
+      const s = nodes[f],
+        d = nodes[t],
+        w = c * SCALE;
+      const so = outOff[f] ?? 0,
+        di = inOff[t] ?? 0;
+      outOff[f] = so + w;
+      inOff[t] = di + w;
+      const xs = s.x + NW,
+        xt = d.x,
+        xm = (xs + xt) / 2;
+      const a = s.y0 + so,
+        b = a + w,
+        e = d.y0 + di,
+        g = e + w;
+      return `<path d="M${xs},${a} C${xm},${a} ${xm},${e} ${xt},${e} L${xt},${g} C${xm},${g} ${xm},${b} ${xs},${b} Z" fill="${T.accent}" opacity="0.15"/>`;
+    })
+    .join("");
+  const rects = Object.values(nodes)
+    .map(
+      (n) => `<rect x="${n.x}" y="${n.y0}" width="${NW}" height="${(n.y1 - n.y0).toFixed(1)}" rx="2" fill="${n.col}"/>`
+    )
+    .join("");
+  const labels = Object.values(nodes)
+    .map((n) => {
+      const cy = (n.y0 + n.y1) / 2,
+        left = n.k === "q";
+      const lx = left ? n.x - 9 : n.x + NW + 9,
+        anchor = left ? "end" : "start";
+      return (
+        `<text x="${lx}" y="${cy - 2}" text-anchor="${anchor}" font-size="15" font-weight="600" fill="${T.text}">${n.l}</text>` +
+        `<text x="${lx}" y="${cy + 15}" text-anchor="${anchor}" font-size="13" fill="${T.muted}">${n.c.toLocaleString()}</text>`
+      );
+    })
+    .join("");
   return `<svg viewBox="0 0 1400 372" width="100%" style="display:block">${ribbons}${rects}${labels}</svg>`;
 })();
 
@@ -410,9 +471,15 @@ for (const [name, [html, w, h]] of Object.entries(pages)) {
   const result = spawnSync(
     CHROME,
     [
-      "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run",
-      "--no-default-browser-check", "--force-color-profile=srgb", "--force-device-scale-factor=2",
-      `--window-size=${w},${h}`, `--screenshot=${shot}`,
+      "--headless=new",
+      "--disable-gpu",
+      "--hide-scrollbars",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--force-color-profile=srgb",
+      "--force-device-scale-factor=2",
+      `--window-size=${w},${h}`,
+      `--screenshot=${shot}`,
       `file:///${resolve(file).replaceAll("\\", "/")}`
     ],
     { encoding: "utf8" }
