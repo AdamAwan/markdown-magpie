@@ -128,6 +128,7 @@ Returns:
       "status": "pending | answering | answered | unanswerable | approved",
       "outcome": "reused | adapted | merged | fresh | changed", // present once matched/answered; changed is legacy (QUESTIONNAIRE_RECONCILE_ENABLED=0) only
       "answer": "string",                    // present once answered
+      "confidence": "high | medium | low | unknown", // present once answered; a review badge, not a suppressor
       "changeReason": { "kind": "section_changed | section_missing | new_content", "...": "..." },
       "citations": [ { "path": "...", "heading": "..." } ]
     }

@@ -125,10 +125,9 @@ three thin tools over the routes above:
 Create returns the initial worksheet **immediately** — fast-path-reused items already
 carry answers; everything else (fresh/adapted/merged/changed) drips through the queue,
 so clients re-read with `kb_questionnaire_get` until no items are `pending`/`answering`.
-The worksheet view keeps per-item status/outcome/answer/changeReason plus
+The worksheet view keeps per-item status/outcome/answer/confidence/changeReason plus
 `{path, heading}` citations and strips internal ids and citation fingerprints (the item
-`id` stays — approve targets it). `confidence` is not currently surfaced over MCP (API-
-and console-only). Export stays console/API-only.
+`id` stays — approve targets it). Export stays console/API-only.
 
 ## Configuration
 
