@@ -450,21 +450,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 14 CHEAP & YOURS -->
-  <section class="slide light" data-title="Cheap & yours">
-    <div class="wrap">
-      <div class="kicker">…and it's cheap, and it's yours</div>
-      <h2>No lock-in. Runs on what you already pay for.</h2>
-      <div class="pillars" style="margin-top:24px">
-        <div class="pillar"><div class="ic">🔌</div><div><h3>Vendor-neutral</h3><p>Swap chat, embedding, git &amp; execution providers — Azure OpenAI, Anthropic, OpenAI-compatible, local. No model lock-in.</p></div></div>
-        <div class="pillar"><div class="ic">🧩</div><div><h3>MCP-native</h3><p>Knowledge lands inside the tools people already use, instead of being one more tab nobody opens.</p></div></div>
-        <div class="pillar"><div class="ic">💸</div><div><h3>Bring your own agent</h3><p>A watcher lets Claude Code / Codex run the AI jobs under subscriptions you already hold — flat-rate seats become KB compute.</p></div></div>
-        <div class="pillar"><div class="ic">📄</div><div><h3>Just Markdown + Git</h3><p>The whole knowledge base is plain files in a repo. Portable, forkable, future-proof — no black box.</p></div></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- 15 WIDE APPLICATIONS -->
+  <!-- 14 WIDE APPLICATIONS -->
   <section class="slide light" data-title="Applications">
     <div class="wrap">
       <div class="kicker">Wide applications</div>
@@ -485,7 +471,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 16 EASY SETUP -->
+  <!-- 15 EASY SETUP -->
   <section class="slide light" data-title="Easy setup">
     <div class="wrap">
       <div class="kicker">Easy to set up</div>
@@ -499,7 +485,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 17 SEED -->
+  <!-- 16 SEED -->
   <section class="slide light" data-title="Seed">
     <div class="wrap split rev">
       ${frame(A("seed-plan"), { tall: true, label: "localhost:3000 — Seed · proposed plan", pos: "top" })}
@@ -517,7 +503,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 18 THE LOOP -->
+  <!-- 17 THE LOOP -->
   <section class="slide ink" data-title="The loop">
     <div class="wrap" style="text-align:center">
       <div class="kicker">The whole thing, in one loop</div>
@@ -541,27 +527,27 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 19 CTA -->
+  <!-- 18 CTA -->
   <section class="slide ink" data-title="Call to action">
     <div class="wrap">
       <div class="brand"><img src="${A("icon")}" alt=""/><span class="nm">Markdown Magpie</span></div>
       <div class="kicker">The ask</div>
-      <h1 style="max-width:14ch">Pick one source.<br/>Let it run.</h1>
-      <p class="big-quote" style="max-width:36ch;color:#cfe6dd">A cited, self-maintaining knowledge base — one that won't <span class="neg">lie</span>, <span class="neg">leak</span>, or <span class="neg">rot</span> — built on the source you already have.</p>
+      <h1 style="max-width:16ch">Start with security questionnaires.</h1>
+      <p class="big-quote" style="max-width:38ch;color:#cfe6dd">The clearest first win: grounded, cited, consistent answers to the SIGs and vendor security reviews we fill in by hand today.</p>
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin:30px 0 2px">
         <span class="recap">⚖️ Won't <b>lie</b></span>
         <span class="recap">🛡️ Won't <b>leak</b></span>
         <span class="recap">♻️ Won't <b>rot</b></span>
-        <span class="recap">💸 Cheap &amp; yours</span>
+        <span class="recap">🔌 No lock-in</span>
       </div>
-      <p class="footnote" style="margin-top:26px">The obvious first pilot: a cited KB over the <b style="color:#eef2ec">Product Code</b>. Point Magpie at the repo, let Seed draft the starter pages, and review the first PRs — we can stand it up this week.</p>
+      <p class="footnote" style="margin-top:26px">Point Magpie at the product code, security docs &amp; policies; let Seed draft the answer library; and review the first PRs. Every answer cited, reused across questionnaires, and defensible — we can stand it up this quarter.</p>
     </div>
   </section>
 
 </div>
 
 <a class="exit" href="/">Back to login</a>
-<div class="hud"><span id="counter">1 / 19</span> · <b id="hud-title">Title</b></div>
+<div class="hud"><span id="counter">1 / 18</span> · <b id="hud-title">Title</b></div>
 <div class="hint">← → navigate &nbsp;·&nbsp; <b>O</b> overview &nbsp;·&nbsp; <b>F</b> fullscreen</div>
 
 <div class="overlay" id="overlay"><div class="grid" id="grid"></div></div>
