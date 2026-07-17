@@ -315,6 +315,39 @@ const seedPlanBody = `
   </div>
 </section>`;
 
+// Insights (slide 13): the pipeline-health dashboard — KPI tiles, the open-gap
+// backlog trend, and the verification-success gauge. The real page also has a
+// question-journey Sankey and throughput/latency charts; this legible subset
+// stands in for it. Numbers are illustrative.
+const insightsBody = `
+<section class="surface">
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px">
+    ${stat("1,240", "Questions asked")}${stat("82%", "High confidence")}${stat("63", "Gaps merged")}${stat("64%", "Verified closed")}
+  </div>
+  <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:16px">
+    <div style="border:1px solid ${T.border};border-radius:12px;padding:16px 18px">
+      <div style="font-size:15px;font-weight:600">Open-gap backlog</div>
+      <div style="font-size:12.5px;color:${T.muted};margin-bottom:14px">Net-open gaps · last 30 days</div>
+      <svg viewBox="0 0 440 150" width="100%" height="150" preserveAspectRatio="none" style="display:block">
+        <line x1="0" y1="149" x2="440" y2="149" stroke="${T.border}" stroke-width="1"/>
+        <path d="M0,126 C60,120 100,42 150,34 C210,26 250,72 300,96 C360,124 410,128 440,128 L440,150 L0,150 Z" fill="${T.accentBg}"/>
+        <path d="M0,126 C60,120 100,42 150,34 C210,26 250,72 300,96 C360,124 410,128 440,128" fill="none" stroke="${T.accent}" stroke-width="3"/>
+      </svg>
+      <div style="font-size:12.5px;color:${T.subtle};margin-top:12px">Spiked mid-June — now trending down as the loop keeps up.</div>
+    </div>
+    <div style="border:1px solid ${T.border};border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;align-items:center">
+      <div style="font-size:15px;font-weight:600;align-self:flex-start;margin-bottom:8px">Verification success</div>
+      <svg viewBox="0 0 130 130" width="140" height="140">
+        <circle cx="65" cy="65" r="50" fill="none" stroke="${T.border}" stroke-width="15"/>
+        <circle cx="65" cy="65" r="50" fill="none" stroke="${T.ok.fg}" stroke-width="15" stroke-linecap="round" stroke-dasharray="201 314" transform="rotate(-90 65 65)"/>
+        <text x="65" y="63" text-anchor="middle" font-size="27" font-weight="700" fill="${T.text}">64%</text>
+        <text x="65" y="83" text-anchor="middle" font-size="12" fill="${T.muted}">closed</text>
+      </svg>
+      <div style="font-size:12px;color:${T.subtle};text-align:center;margin-top:8px">Merged proposals whose gap-closure check confirmed the fix.</div>
+    </div>
+  </div>
+</section>`;
+
 // name -> [full html, cssWidth, cssHeight]. Height ~matches the deck frame's
 // crop band at that width so there is little wasted space.
 const pages = {
@@ -327,7 +360,8 @@ const pages = {
   "demo-pr": [ghPage(demoPr), 760, 460],
   "demo-merged": [page("Proposals · merged & re-indexed", demoMergedBody), 760, 340],
   "demo-payoff": [page("Ask · now answered", demoPayoffBody), 900, 480],
-  "seed-plan": [page("Seed · proposed plan", seedPlanBody), 900, 720]
+  "seed-plan": [page("Seed · proposed plan", seedPlanBody), 900, 720],
+  insights: [page("Insights · pipeline health", insightsBody), 940, 470]
 };
 
 await mkdir(TMP, { recursive: true });

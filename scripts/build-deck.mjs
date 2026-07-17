@@ -423,7 +423,25 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 13 CHEAP & YOURS -->
+  <!-- 13 INSIGHTS -->
+  <section class="slide light" data-title="Insights">
+    <div class="wrap split">
+      <div>
+        <div class="kicker">Insights</div>
+        <h2>See the whole pipeline — and prove it's working.</h2>
+        <ul class="feat">
+          <li><span class="b">1</span><div><b>Every question's journey</b> <span>— from confidence, to gap, to clustered, to merged fix.</span></div></li>
+          <li><span class="b">2</span><div><b>Backlog &amp; throughput</b> <span>— is the loop keeping up? The 30-day trends say so.</span></div></li>
+          <li><span class="b">3</span><div><b>Verification</b> <span>— what share of merged fixes actually closed the gap.</span></div></li>
+          <li><span class="b">4</span><div><b>Latency &amp; feedback</b> <span>— how fast answers land, and where quality dips.</span></div></li>
+        </ul>
+        <p class="footnote">You don't have to take the loop on faith — you can watch it work.</p>
+      </div>
+      ${frame(A("insights"), { auto: true, label: "localhost:3000 — Insights · pipeline health", pos: "top" })}
+    </div>
+  </section>
+
+  <!-- 14 CHEAP & YOURS -->
   <section class="slide light" data-title="Cheap & yours">
     <div class="wrap">
       <div class="kicker">…and it's cheap, and it's yours</div>
@@ -437,7 +455,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 14 WIDE APPLICATIONS -->
+  <!-- 15 WIDE APPLICATIONS -->
   <section class="slide light" data-title="Applications">
     <div class="wrap">
       <div class="kicker">Wide applications</div>
@@ -458,7 +476,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 15 EASY SETUP -->
+  <!-- 16 EASY SETUP -->
   <section class="slide light" data-title="Easy setup">
     <div class="wrap">
       <div class="kicker">Easy to set up</div>
@@ -472,7 +490,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 16 SEED -->
+  <!-- 17 SEED -->
   <section class="slide light" data-title="Seed">
     <div class="wrap split rev">
       ${frame(A("seed-plan"), { tall: true, label: "localhost:3000 — Seed · proposed plan", pos: "top" })}
@@ -490,7 +508,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 17 CTA -->
+  <!-- 18 CTA -->
   <section class="slide ink" data-title="Call to action">
     <div class="wrap">
       <div class="brand"><img src="${A("icon")}" alt=""/><span class="nm">Markdown Magpie</span></div>
@@ -503,7 +521,7 @@ const HTML = `<!doctype html>
 </div>
 
 <a class="exit" href="/">Back to login</a>
-<div class="hud"><span id="counter">1 / 17</span> · <b id="hud-title">Title</b></div>
+<div class="hud"><span id="counter">1 / 18</span> · <b id="hud-title">Title</b></div>
 <div class="hint">← → navigate &nbsp;·&nbsp; <b>O</b> overview &nbsp;·&nbsp; <b>F</b> fullscreen</div>
 
 <div class="overlay" id="overlay"><div class="grid" id="grid"></div></div>
