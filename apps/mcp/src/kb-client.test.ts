@@ -625,6 +625,7 @@ const questionnaireBody = {
         status: "answered",
         outcome: "reused",
         answer: "Yes — AES-256 across all stores.",
+        confidence: "high",
         answeredAt: "2026-04-01T00:00:00.000Z",
         questionLogId: "log-1",
         reusedFromItemId: "prior-1",
@@ -655,7 +656,7 @@ const questionnaireBody = {
 };
 
 // The shaped view for the worksheet above: internal ids and citation
-// fingerprints gone, item id/statuses/answers/changeReason kept.
+// fingerprints gone, item id/statuses/answers/confidence/changeReason kept.
 const questionnaireView = {
   id: "qn-1",
   name: "Q3 security review",
@@ -669,6 +670,7 @@ const questionnaireView = {
       status: "answered",
       outcome: "reused",
       answer: "Yes — AES-256 across all stores.",
+      confidence: "high",
       citations: [{ path: "security.md", heading: "Encryption" }]
     },
     {

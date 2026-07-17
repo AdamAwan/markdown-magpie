@@ -662,6 +662,9 @@ export interface QuestionnaireView {
     status: string;
     outcome?: string;
     answer?: string;
+    // Self-reported answer confidence (high | medium | low | unknown),
+    // snapshotted onto the item — a display/review badge, not a suppressor.
+    confidence?: string;
     // Machine-readable reason a matched item could not be reused verbatim
     // (which section changed/vanished/appeared) — passed through untouched.
     changeReason?: Record<string, unknown>;
@@ -760,6 +763,7 @@ function readQuestionnaireItem(value: unknown): QuestionnaireViewItem {
     status,
     ...(typeof item.outcome === "string" ? { outcome: item.outcome } : {}),
     ...(typeof item.answer === "string" ? { answer: item.answer } : {}),
+    ...(typeof item.confidence === "string" ? { confidence: item.confidence } : {}),
     ...(item.changeReason && typeof item.changeReason === "object"
       ? { changeReason: asObject(item.changeReason) }
       : {}),
