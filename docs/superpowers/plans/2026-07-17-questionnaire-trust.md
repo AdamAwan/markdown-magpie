@@ -52,7 +52,7 @@
 
 # PHASE A — Show, don't suppress
 
-### Task A1: Migration — per-item confidence column
+### Task 1: [Phase A] Migration — per-item confidence column
 
 **Files:**
 - Create: `packages/db/migrations/0057_questionnaire_item_confidence.sql`
@@ -91,7 +91,7 @@ git commit -m "feat(db): add questionnaire_items.confidence (0057)"
 
 ---
 
-### Task A2: Snapshot confidence + redefine `unanswerable` as ungrounded
+### Task 2: [Phase A] Snapshot confidence + redefine `unanswerable` as ungrounded
 
 **Files:**
 - Modify: `packages/core/src/index.ts` (`QuestionnaireItem`, ~lines 316–334)
@@ -238,7 +238,7 @@ git commit -m "feat(questionnaires): snapshot confidence; unanswerable means ung
 
 ---
 
-### Task A3: Export shows grounded answers with a confidence badge
+### Task 3: [Phase A] Export shows grounded answers with a confidence badge
 
 **Files:**
 - Modify: `apps/api/src/features/questionnaires/export.ts`
@@ -356,7 +356,7 @@ git commit -m "feat(questionnaires): export shows grounded answers with confiden
 
 ---
 
-### Task A4: Console badge (worksheet UI)
+### Task 4: [Phase A] Console badge (worksheet UI)
 
 **Files:**
 - Modify: `apps/web/src/components/QuestionnairesPanel.tsx`
@@ -400,7 +400,7 @@ git commit -m "feat(web): questionnaire worksheet shows confidence badge"
 
 # PHASE B — Reconciliation reuse
 
-### Task B1: Migration — widen outcome, add basis + candidate stash
+### Task 5: [Phase B] Migration — widen outcome, add basis + candidate stash
 
 **Files:**
 - Create: `packages/db/migrations/0058_questionnaire_reconcile.sql`
@@ -447,7 +447,7 @@ git commit -m "feat(db): widen questionnaire outcome + basis/candidate columns (
 
 ---
 
-### Task B2: Core types — outcome, verdict, candidates
+### Task 6: [Phase B] Core types — outcome, verdict, candidates
 
 **Files:**
 - Modify: `packages/core/src/index.ts`
@@ -504,7 +504,7 @@ git commit -m "feat(core): reconcile verdict + candidate types on answer job I/O
 
 ---
 
-### Task B3: Job zod schemas — or the broker strips it
+### Task 7: [Phase B] Job zod schemas — or the broker strips it
 
 **Files:**
 - Modify: `packages/jobs/src/schemas.ts`
@@ -577,7 +577,7 @@ git commit -m "feat(jobs): answer schema round-trips candidates + reuse verdict"
 
 ---
 
-### Task B4: Store — top-N match, basis writes, verdict completion
+### Task 8: [Phase B] Store — top-N match, basis writes, verdict completion
 
 **Files:**
 - Modify: `apps/api/src/stores/questionnaire-store.ts` (interface + in-memory impl)
@@ -737,7 +737,7 @@ git commit -m "feat(questionnaires): store top-N match, basis provenance, verdic
 
 ---
 
-### Task B5: Config — reconcile knobs
+### Task 9: [Phase B] Config — reconcile knobs
 
 **Files:**
 - Modify: `apps/api/src/platform/config.ts`
@@ -777,7 +777,7 @@ git commit -m "feat(config): QUESTIONNAIRE_RECONCILE_CANDIDATES + _ENABLED"
 
 ---
 
-### Task B6: Match phase — top-N, fast-path, drip priming, verdict mapping
+### Task 10: [Phase B] Match phase — top-N, fast-path, drip priming, verdict mapping
 
 **Files:**
 - Create: `apps/api/src/features/questionnaires/reconcile.ts`
@@ -919,7 +919,7 @@ git commit -m "feat(questionnaires): top-N match, fast-path, candidate-primed dr
 
 ---
 
-### Task B7: Watcher — reconcile step in `answer()`
+### Task 11: [Phase B] Watcher — reconcile step in `answer()`
 
 **Files:**
 - Modify: `packages/prompts/src/catalog.ts` (add `RECONCILE_ANSWER`)
@@ -1009,7 +1009,7 @@ git commit -m "feat(watcher): reconcile answer_question against candidate prior 
 
 ---
 
-### Task B8: End-to-end regression (the QA#4 shape)
+### Task 12: [Phase B] End-to-end regression (the QA#4 shape)
 
 **Files:**
 - Test: `apps/api/src/features/questionnaires/service.test.ts`
