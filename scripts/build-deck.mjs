@@ -408,7 +408,7 @@ const HTML = `<!doctype html>
   <!-- 12 QUESTIONNAIRES -->
   <section class="slide light" data-title="Questionnaires">
     <div class="wrap split rev">
-      ${frame(A("questionnaires"), { tall: true, label: "localhost:3000 — Questionnaires · batch answers", pos: "top" })}
+      ${frame(A("questionnaires"), { tall: true, label: "localhost:3000 — Questionnaires · security review", pos: "top" })}
       <div>
         <div class="kicker">Whole workflows, not just single answers</div>
         <h2>Answer a whole questionnaire from the knowledge base.</h2>

@@ -140,42 +140,49 @@ competitive landscape summary give a defensible, cited comparison — without
 inventing win/loss numbers the knowledge base does not hold.</pre>
 </section>`;
 
-const qRow = (name, reused, total, sel) =>
-  `<div class="between" style="padding:13px 14px;border-radius:10px;${sel ? `background:${T.surfaceMuted};border:1px solid ${T.border}` : `border-bottom:1px solid ${T.border}`}">
-     <div class="row"><strong style="font-size:16px">${name}</strong>${badge("neutral", "magpie-sales")}
-       <span style="font-size:14.5px;color:${T.muted}">${reused} reused / ${total} total</span></div>
-     ${badge("ok", "complete")}</div>`;
+// Stat tile for the questionnaire run-detail header (latest UI).
+const stat = (n, label) =>
+  `<div style="border:1px solid ${T.border};border-radius:10px;padding:11px 14px;background:${T.surface}">
+     <div style="font-size:24px;font-weight:700;letter-spacing:-.02em;line-height:1.1">${n}</div>
+     <div style="font-size:12px;color:${T.muted};margin-top:3px">${label}</div></div>`;
 
-const qItem = (tone, label, n, q, answer, cite, note) =>
-  `<article style="border:1px solid ${T.border};border-radius:12px;padding:17px 20px;display:grid;gap:9px">
-     <div class="row" style="align-items:flex-start">${badge(tone, label)}<strong style="font-size:16px;line-height:1.35">${n}. ${q}</strong></div>
-     <p class="answer" style="font-size:15px">${answer}</p>
-     ${note ? `<div style="font-size:13.5px;color:${T.muted}">${note}</div>` : ""}
-     <div style="font-size:13px;color:${T.subtle}">↳ ${cite}</div>
+// One answered questionnaire item — badge + question + answer + citation, with an
+// optional change note and Approve action, matching the run-detail layout.
+const qItem = (tone, label, n, q, answer, cite, note, approve) =>
+  `<article style="border:1px solid ${T.border};border-radius:12px;padding:16px 20px;display:grid;gap:9px">
+     <div class="row" style="align-items:flex-start">${badge(tone, label)}<strong style="font-size:15.5px;line-height:1.35">${n}. ${q}</strong></div>
+     <p class="answer" style="font-size:14.5px">${answer}</p>
+     ${note ? `<div style="font-size:13px;color:${T.muted}">${note}</div>` : ""}
+     <div style="font-size:12.5px;color:${T.subtle}">↳ ${cite}</div>
+     ${approve ? `<div style="margin-top:2px"><span class="btnS">Approve</span></div>` : ""}
    </article>`;
 
+// Latest UI: the run-detail page — breadcrumb, title + flow + export actions, a
+// stat-tile row, then the answered items. Example: a vendor security review, whose
+// first answer reuses the SSO page the demo (slides 8-11) just created.
 const questionnairesBody = `
+<div style="font-size:13.5px;color:${T.accent};margin-bottom:10px">&larr; Questionnaires</div>
 <section class="surface">
-  <div class="sh"><h2>Questionnaire runs</h2></div>
-  <div style="display:grid;gap:6px;margin-bottom:20px">
-    ${qRow("Sales QA #3", 3, 14, true)}
-    ${qRow("Sales QA #2", 0, 14)}
-    ${qRow("Sales QA #1", 0, 14)}
+  <div class="between" style="margin-bottom:18px">
+    <div class="row"><h2 style="font-size:20px">Acme Corp — Vendor Security Review</h2>${badge("neutral", "magpie-sales")}</div>
+    <div class="row"><span class="btnS">Approve all reused</span><span class="mono">Export .md</span><span class="mono">Export .csv</span></div></div>
+  <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:22px">
+    ${stat("12", "Total")}${stat("4", "Approved")}${stat("7", "Awaiting approval")}${stat("0", "In progress")}${stat("1", "Unanswerable")}${stat("6", "Reused")}
   </div>
-  <div class="between" style="margin-bottom:14px">
-    <h2 style="font-size:18px;font-weight:600">Sales QA #3</h2>
-    <div class="row"><span class="btnS">Approve all reused</span>
-      <span class="mono">Export .md</span><span class="mono">Export .csv</span></div></div>
   <div style="display:grid;gap:12px">
-    ${qItem("amber", "changed", 1,
-      "When a prospect claims Magpie is “too pricey for what we'd get out of it”, how should we respond?",
-      "Validate the budget concern, then reframe: Magpie replaces manual synchronization and error resolution — if each developer saves a few hours a month, the payback quickly outweighs the subscription cost.",
-      "markdown-magpie-sales-playbook.md — Handling Price Objections",
-      "Re-answered: new relevant content appeared — “Handling Price Objections” on 2026-07-15.")}
-    ${qItem("ok", "reused", 2,
-      "What is the single biggest differentiator versus a generic AI chatbot?",
-      "Grounded, cited answers: every response links back to source Markdown (file, heading, commit), so buyers can trust and audit it — a generic chatbot cannot.",
-      "competitive-landscape-differentiation.md — Summary", "")}
+    ${qItem("ok", "reused", 1,
+      "Do you support single sign-on (SSO / SAML)?",
+      "Yes. Magpie signs in through Auth0, so it works with any OIDC provider — Google, Microsoft Entra, Okta and more — and SAML single sign-on with SCIM provisioning is supported. Console access can be locked to your identity provider.",
+      "magpie-sales/authentication-and-sso.md — SSO &amp; provisioning", "", false)}
+    ${qItem("amber", "changed", 2,
+      "Where is customer data stored, and is it encrypted in transit and at rest?",
+      "All knowledge lives in your own Git repositories and Postgres — self-hosted, so nothing leaves your infrastructure. Traffic is TLS-encrypted in transit; encryption at rest is inherited from your database and disk.",
+      "security/data-handling.md — Storage &amp; encryption",
+      "Re-answered: cited section “Storage &amp; encryption” changed on 2026-07-14.", false)}
+    ${qItem("neutral", "answered", 3,
+      "What is your data retention and deletion policy?",
+      "The knowledge base is plain Markdown in Git, so retention and deletion follow your repository policy — remove a document and it leaves the index on the next re-index, with full history preserved in Git.",
+      "security/data-handling.md — Retention &amp; deletion", "", true)}
   </div>
 </section>`;
 
@@ -278,7 +285,7 @@ const pages = {
   ask: [page("Ask · cited answer", askBody), 900, 640],
   gaps: [page("Gaps · weak answers → proposals", gapsBody), 900, 560],
   proposals: [page("Proposals · human review", proposalsBody), 900, 560],
-  questionnaires: [page("Questionnaires · batch answers", questionnairesBody), 900, 900],
+  questionnaires: [page("Questionnaire", questionnairesBody), 940, 700],
   "demo-cluster": [page("Gaps · cluster forming", demoClusterBody), 760, 520],
   "demo-draft": [page("Proposals · drafted fix", demoDraftBody), 760, 470],
   "demo-pr": [ghPage(demoPr), 760, 460],
