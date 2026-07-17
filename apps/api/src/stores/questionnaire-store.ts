@@ -70,7 +70,11 @@ export interface QuestionnaireStore {
   listReusedUnapproved(questionnaireId: string): Promise<QuestionnaireItem[]>;
 }
 
-interface StoredItem extends QuestionnaireItem {
+// Exported (not just for internal use) so tests can assert on
+// completion-time provenance (basisItemIds) that QuestionnaireItem doesn't
+// expose publicly — completeItem/itemById still declare the narrower
+// QuestionnaireItem return type per the store contract.
+export interface StoredItem extends QuestionnaireItem {
   embedding?: number[];
   embeddingModel?: string;
   // Candidate ids stashed by the reconciler (mirrors reconcile_candidate_ids).
@@ -261,12 +265,11 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
     if (result.outcome) {
       item.outcome = result.outcome;
     }
-    if (result.basisItemIds && result.basisItemIds.length > 0) {
-      item.basisItemIds = result.basisItemIds;
-      if (result.basisItemIds.length === 1) {
-        item.reusedFromItemId = result.basisItemIds[0];
-      }
-    }
+    // Reconcile provenance to exactly what this completion says — a fresh
+    // re-answer (no/empty/multi basis) must clear any prior reuse pointer
+    // rather than leaving it stale from an earlier completion.
+    item.basisItemIds = result.basisItemIds ?? [];
+    item.reusedFromItemId = result.basisItemIds && result.basisItemIds.length === 1 ? result.basisItemIds[0] : undefined;
     return structuredClone(item);
   }
 

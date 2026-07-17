@@ -341,9 +341,11 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
       return undefined;
     }
     await this.replaceCitations(row.id, result.citations);
-    if (result.basisItemIds && result.basisItemIds.length > 0) {
-      await this.replaceBasis(row.id, result.basisItemIds);
-    }
+    // Reconcile basis to exactly what this completion says — a fresh
+    // re-answer (no/empty basis) must clear any prior basis rows rather than
+    // leaving them stale from an earlier completion. replaceBasis DELETEs
+    // unconditionally and only re-INSERTs when the array is non-empty.
+    await this.replaceBasis(row.id, result.basisItemIds ?? []);
     return mapItem(row, result.citations);
   }
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { InMemoryQuestionnaireStore } from "./questionnaire-store.js";
+import { InMemoryQuestionnaireStore, type StoredItem } from "./questionnaire-store.js";
 
 describe("InMemoryQuestionnaireStore", () => {
   describe("matchApprovedTopN", () => {
@@ -98,6 +98,48 @@ describe("InMemoryQuestionnaireStore", () => {
 
       assert.equal(completed?.outcome, "adapted");
       assert.equal(completed?.reusedFromItemId, "basis-z");
+    });
+
+    it("clears stale reusedFromItemId and basisItemIds on a fresh re-answer with no basis", async () => {
+      const store = new InMemoryQuestionnaireStore();
+      const created = await store.create({
+        name: "re-answered questionnaire",
+        flowId: "flow-reanswer",
+        questions: ["q0"]
+      });
+      const item = created.items[0];
+
+      // First completion: a single-source reuse, so reusedFromItemId and
+      // basisItemIds both get set.
+      const firstLog = "log-reanswer-1";
+      await store.markAnswering(item.id, firstLog);
+      const first = (await store.completeItem(firstLog, {
+        answer: "Adapted from a single prior answer.",
+        answeredAt: new Date().toISOString(),
+        citations: [],
+        unanswerable: false,
+        confidence: "high",
+        outcome: "adapted",
+        basisItemIds: ["basis-z"]
+      })) as StoredItem;
+      assert.equal(first.reusedFromItemId, "basis-z");
+      assert.deepEqual(first.basisItemIds, ["basis-z"]);
+
+      // Second completion for the SAME item: a fresh re-answer with no
+      // outcome/basisItemIds. Provenance must be fully reconciled to this
+      // completion — not left stale from the earlier reuse.
+      const secondLog = "log-reanswer-2";
+      await store.markAnswering(item.id, secondLog);
+      const second = (await store.completeItem(secondLog, {
+        answer: "A brand new fresh answer, not reused from anything.",
+        answeredAt: new Date().toISOString(),
+        citations: [],
+        unanswerable: false,
+        confidence: "medium"
+      })) as StoredItem;
+
+      assert.equal(second.reusedFromItemId, undefined, "stale reused-from pointer must be cleared");
+      assert.deepEqual(second.basisItemIds, [], "stale basis must be cleared");
     });
   });
 
