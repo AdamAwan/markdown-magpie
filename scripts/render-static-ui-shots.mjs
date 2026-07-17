@@ -279,6 +279,42 @@ const ghPage = (body) => `<!doctype html><html><head><meta charset="utf-8"/>
 <style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:-apple-system,"Segoe UI",Inter,sans-serif;
   background:#fff;color:#1f2328;padding:26px 30px;-webkit-font-smoothing:antialiased;}</style></head><body>${body}</body></html>`;
 
+// A seed plan (slide 16): the planning agent explores a flow's sources and
+// proposes a charter + one document per topic, each drafted into review on
+// approval. Example: seeding a Magpie Support KB from the Magpie source.
+const seedDoc = (title, bullets) =>
+  `<article style="border:1px solid ${T.border};border-radius:12px;padding:15px 18px">
+     <div class="between" style="margin-bottom:8px"><strong style="font-size:15.5px">${title}</strong>${badge("blue", "proposed")}</div>
+     <ul style="margin:0;padding-left:18px;color:${T.muted};font-size:13.5px;line-height:1.7">${bullets.map((b) => `<li>${b}</li>`).join("")}</ul>
+   </article>`;
+
+const seedPlanBody = `
+<div style="font-size:13.5px;color:${T.accent};margin-bottom:10px">&larr; Seed</div>
+<section class="surface">
+  <div class="between" style="margin-bottom:16px">
+    <div class="row"><h2 style="font-size:20px">Review plan</h2>${badge("neutral", "Magpie Support")}<span class="pill" style="font-size:12.5px">6 documents</span></div>
+    <span class="btnP">Approve plan</span></div>
+  <div style="border:1px solid ${T.border};border-radius:10px;padding:14px 16px;margin-bottom:18px;background:${T.surfaceMuted}">
+    <div style="font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:${T.subtle};font-weight:700;margin-bottom:6px">Charter — what this knowledge base should cover</div>
+    <p style="font-size:14px;line-height:1.55;color:${T.text};margin:0">From the Markdown Magpie source, this plan proposes six pages covering the queue-only AI model, the knowledge loop, hybrid retrieval and operations — grounded in the code, ready to review before a word is drafted.</p>
+  </div>
+  <div style="display:grid;gap:12px">
+    ${seedDoc("The Knowledge Loop: Ask → Gap → Draft → Review", [
+      "How low-confidence answers &amp; feedback become gap candidates",
+      "How gaps cluster and draft into grounded proposals",
+      "How proposals publish as PRs and re-index on merge"
+    ])}
+    ${seedDoc("Hybrid Retrieval: Keyword + Vector Search", [
+      "When embeddings are computed and stored for a flow",
+      "How keyword and vector results are fused and ranked"
+    ])}
+    ${seedDoc("Deploying &amp; Operating Magpie", [
+      "Services: API, watcher, web and Postgres",
+      "Queue-only execution and the watcher's job runners"
+    ])}
+  </div>
+</section>`;
+
 // name -> [full html, cssWidth, cssHeight]. Height ~matches the deck frame's
 // crop band at that width so there is little wasted space.
 const pages = {
@@ -290,7 +326,8 @@ const pages = {
   "demo-draft": [page("Proposals · drafted fix", demoDraftBody), 760, 470],
   "demo-pr": [ghPage(demoPr), 760, 460],
   "demo-merged": [page("Proposals · merged & re-indexed", demoMergedBody), 760, 340],
-  "demo-payoff": [page("Ask · now answered", demoPayoffBody), 900, 480]
+  "demo-payoff": [page("Ask · now answered", demoPayoffBody), 900, 480],
+  "seed-plan": [page("Seed · proposed plan", seedPlanBody), 900, 720]
 };
 
 await mkdir(TMP, { recursive: true });

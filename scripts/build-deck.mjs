@@ -468,18 +468,29 @@ const HTML = `<!doctype html>
         <div class="step"><div class="n">2</div><h3>Name a destination</h3><p>A repo where the curated knowledge base lives and PRs are raised.</p></div>
         <div class="step"><div class="n">3</div><h3>Let the loop run</h3><p>It indexes, answers, finds gaps, drafts fixes — you review. That's it.</p></div>
       </div>
-      <div class="card" style="margin-top:20px;display:flex;gap:16px;align-items:flex-start">
-        <div class="ic" style="flex:0 0 auto">🌱</div>
-        <div>
-          <h3 style="margin:0 0 5px;font-size:clamp(18px,2vw,23px)">Starting from empty? Seed it.</h3>
-          <p style="margin:0;color:var(--muted);font-size:clamp(14px,1.5vw,17px);line-height:1.5">Point <b>Seed</b> at a flow and it explores your sources, proposes an outline of pages to write, and drafts each one as a reviewable PR — a grounded starter knowledge base before anyone's even asked a question.</p>
-        </div>
-      </div>
       <p class="footnote">No bespoke pipeline per use case — the same loop you just saw, configured in a few lines.</p>
     </div>
   </section>
 
-  <!-- 16 CTA -->
+  <!-- 16 SEED -->
+  <section class="slide light" data-title="Seed">
+    <div class="wrap split rev">
+      ${frame(A("seed-plan"), { tall: true, label: "localhost:3000 — Seed · proposed plan", pos: "top" })}
+      <div>
+        <div class="kicker">Cold start</div>
+        <h2>No questions yet? Seed the whole KB.</h2>
+        <ul class="feat">
+          <li><span class="b">1</span><div><b>Point Seed at a flow</b> <span>— it explores your source repositories, no topic needed.</span></div></li>
+          <li><span class="b">2</span><div><b>It proposes a full plan</b> <span>— a charter plus a page for every topic it finds in the sources.</span></div></li>
+          <li><span class="b">3</span><div><b>Review &amp; edit</b> <span>— trim, rename or reshape the plan before a word is written.</span></div></li>
+          <li><span class="b">✓</span><div><b>Approve → drafts as PRs</b> <span>— every page is drafted and raised for review, just like the loop.</span></div></li>
+        </ul>
+        <p class="footnote">A grounded starter knowledge base in one pass — before anyone's asked a thing.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 17 CTA -->
   <section class="slide ink" data-title="Call to action">
     <div class="wrap">
       <div class="brand"><img src="${A("icon")}" alt=""/><span class="nm">Markdown Magpie</span></div>
@@ -492,7 +503,7 @@ const HTML = `<!doctype html>
 </div>
 
 <a class="exit" href="/">Back to login</a>
-<div class="hud"><span id="counter">1 / 16</span> · <b id="hud-title">Title</b></div>
+<div class="hud"><span id="counter">1 / 17</span> · <b id="hud-title">Title</b></div>
 <div class="hint">← → navigate &nbsp;·&nbsp; <b>O</b> overview &nbsp;·&nbsp; <b>F</b> fullscreen</div>
 
 <div class="overlay" id="overlay"><div class="grid" id="grid"></div></div>

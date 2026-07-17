@@ -57,7 +57,7 @@ the deck stays a single self-contained file. Images come from two places:
 - `assets/opt/` — every deck image, all rendered by `scripts/render-static-ui-shots.mjs`:
   the product shots (`ask`, `gaps`, `proposals`, `questionnaires`) on slides 5–7 & 12, the
   demo mock-ups (`demo-cluster`, `demo-draft`, `demo-pr`, `demo-merged`, `demo-payoff`) on
-  slides 9–11, plus the `icon`. These are **content-focused mock-ups**: one console surface
+  slides 9–11, the `seed-plan` shot on slide 16, plus the `icon`. These are **content-focused mock-ups**: one console surface
   each — deliberately without the sidebar/topbar chrome so the content fills the deck's
   browser frame — styled from the theme tokens (`apps/web/src/theme/theme.ts`). Product-shot
   content is real (pulled from the live KB); the demo content is a scripted scenario. They
