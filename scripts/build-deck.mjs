@@ -94,7 +94,7 @@ const HTML = `<!doctype html>
   .recap b{color:#e8917f;font-weight:700;}
 
   /* circular loop diagram */
-  .loop{position:relative;width:min(452px,47vh);aspect-ratio:1;margin:clamp(10px,3vh,30px) auto 0;}
+  .loop{position:relative;width:min(412px,43vh);aspect-ratio:1;margin:clamp(52px,8vh,78px) auto clamp(20px,4vh,40px);}
   .loop svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;}
   .loop .nd{position:absolute;transform:translate(-50%,-50%);width:min(196px,25vw);text-align:center;
     background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.15);border-radius:14px;padding:12px 12px;backdrop-filter:blur(2px);}
