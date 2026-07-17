@@ -12,7 +12,7 @@ interface QuestionnairesPanelProps {
   onCreate: (name: string, flowId: string, questions: string[]) => Promise<Questionnaire | undefined>;
   onApproveItem: (questionnaireId: string, itemId: string) => Promise<boolean>;
   onApproveReused: (questionnaireId: string) => Promise<number | undefined>;
-  exportHref: (id: string, format: "md" | "csv") => string;
+  onExport: (id: string, format: "md" | "csv") => Promise<void>;
 }
 
 const POLL_INTERVAL_MS = 5_000;
@@ -28,7 +28,7 @@ export function QuestionnairesPanel({
   onCreate,
   onApproveItem,
   onApproveReused,
-  exportHref
+  onExport
 }: QuestionnairesPanelProps) {
   const [summaries, setSummaries] = useState<QuestionnaireSummary[]>([]);
   const [selected, setSelected] = useState<Questionnaire | undefined>(undefined);
@@ -173,8 +173,12 @@ export function QuestionnairesPanel({
               <Button variant="secondary" onClick={() => void approveAllReused()}>
                 Approve all reused
               </Button>
-              <ExportLink href={exportHref(selected.id, "md")}>Export .md</ExportLink>
-              <ExportLink href={exportHref(selected.id, "csv")}>Export .csv</ExportLink>
+              <ExportButton type="button" onClick={() => void onExport(selected.id, "md")}>
+                Export .md
+              </ExportButton>
+              <ExportButton type="button" onClick={() => void onExport(selected.id, "csv")}>
+                Export .csv
+              </ExportButton>
             </Row>
           </Row>
           <Stack gap="md">
@@ -302,10 +306,14 @@ const CitationList = styled.ul(({ theme }) => ({
   fontSize: theme.font.size.sm
 }));
 
-const ExportLink = styled.a(({ theme }) => ({
+const ExportButton = styled.button(({ theme }) => ({
   alignSelf: "center",
+  border: "none",
+  background: "transparent",
+  padding: 0,
   color: theme.color.accent,
   fontSize: theme.font.size.sm,
+  cursor: "pointer",
   textDecoration: "none",
   "&:hover": { textDecoration: "underline" }
 }));

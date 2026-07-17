@@ -78,7 +78,7 @@ function noopHandlers() {
     onCreate: async () => undefined,
     onApproveItem: async () => false,
     onApproveReused: async () => undefined,
-    exportHref: (id: string, format: "md" | "csv") => `/api/questionnaires/${id}/export?format=${format}`
+    onExport: async (_id: string, _format: "md" | "csv") => {}
   };
 }
 
@@ -111,6 +111,36 @@ test("loads summaries on mount and opens a worksheet with per-item badges and ch
     assert.match(text, /certs\.md — Certificates/, "citations render");
     assert.match(text, /Approve all reused/);
     assert.match(text, /Export \.md/);
+  } finally {
+    unmount();
+  }
+});
+
+test("export buttons call through with the questionnaire id and format", async () => {
+  const exports: Array<[string, string]> = [];
+  const handlers = {
+    ...noopHandlers(),
+    onList: async () => [summary()],
+    onGet: async () => worksheet(),
+    onExport: async (id: string, format: "md" | "csv") => {
+      exports.push([id, format]);
+    }
+  };
+  const { container, unmount } = await renderDom(<QuestionnairesPanel flows={FLOWS} loading={false} {...handlers} />);
+  try {
+    const row = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Acme SIG Q3"));
+    assert.ok(row);
+    await click(row);
+    const exportButtons = [...container.querySelectorAll("button")].filter((button) =>
+      button.textContent?.startsWith("Export .")
+    );
+    assert.equal(exportButtons.length, 2, "both export buttons render");
+    await click(exportButtons[0]);
+    await click(exportButtons[1]);
+    assert.deepEqual(exports, [
+      ["qn-1", "md"],
+      ["qn-1", "csv"]
+    ]);
   } finally {
     unmount();
   }

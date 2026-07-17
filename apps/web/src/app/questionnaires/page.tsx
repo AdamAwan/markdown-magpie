@@ -4,7 +4,6 @@ import { useMemo } from "react";
 import { QuestionnairesPanel } from "../../components/QuestionnairesPanel";
 import { useConsole } from "../../components/ConsoleProvider";
 import { Surface, Workbench } from "../../components/ui";
-import { resolveApiUrl } from "../../lib/api";
 import { knowledgeFlows } from "../../lib/config";
 
 export default function QuestionnairesPage() {
@@ -15,7 +14,8 @@ export default function QuestionnairesPage() {
     getQuestionnaire,
     createQuestionnaire,
     approveQuestionnaireItem,
-    approveReusedItems
+    approveReusedItems,
+    exportQuestionnaire
   } = useConsole();
 
   const flows = useMemo(() => knowledgeFlows(config).map((flow) => ({ id: flow.id, name: flow.name })), [config]);
@@ -35,9 +35,7 @@ export default function QuestionnairesPage() {
             onCreate={createQuestionnaire}
             onApproveItem={approveQuestionnaireItem}
             onApproveReused={approveReusedItems}
-            exportHref={(id, format) =>
-              resolveApiUrl(`/questionnaires/${encodeURIComponent(id)}/export?format=${format}`)
-            }
+            onExport={exportQuestionnaire}
           />
         </Surface.Body>
       </Surface>
