@@ -266,7 +266,7 @@ const HTML = `<!doctype html>
       <div class="cards" style="margin-top:26px">
         <div class="card"><div class="ic">⚖️</div><h3>Won't <span class="neg">lie</span></h3><p>Every answer cites file, heading &amp; commit, logs its own confidence, and says "I don't know" rather than guessing.</p><span class="chip">grounded · cited · abstains</span></div>
         <div class="card"><div class="ic">🛡️</div><h3>Won't <span class="neg">leak</span></h3><p>Raw material never reaches end users. Every change to the knowledge is a reviewed Git pull request with full history.</p><span class="chip">curated · PR-gated · audited</span></div>
-        <div class="card"><div class="ic">♻️</div><h3>Won't <span class="neg">rot</span></h3><p>It finds its own gaps, drafts fixes, raises PRs. Crunch consolidates, de-dupes &amp; flags contradictions.</p><span class="chip">self-improves · self-prunes</span></div>
+        <div class="card"><div class="ic">♻️</div><h3>Won't <span class="neg">rot</span></h3><p>It finds its own gaps, drafts fixes, raises PRs. Scheduled maintenance patrols de-dupe, split &amp; verify — flagging contradictions.</p><span class="chip">self-improves · self-prunes</span></div>
       </div>
     </div>
   </section>
@@ -316,7 +316,7 @@ const HTML = `<!doctype html>
         <ul class="feat">
           <li><span class="b">①</span><div><b>Detects its own gaps</b> <span>— clusters low-confidence answers &amp; unhelpful feedback into themes.</span></div></li>
           <li><span class="b">②</span><div><b>Drafts grounded fixes</b> <span>— writes proposed Markdown with evidence &amp; a rationale, ready for review.</span></div></li>
-          <li><span class="b">③</span><div><b>Crunch prunes</b> <span>— consolidates duplicates, flags contradictions &amp; stale docs.</span></div></li>
+          <li><span class="b">③</span><div><b>Maintenance patrols prune</b> <span>— scheduled fix &amp; improve patrols de-dupe, split &amp; verify docs, flagging contradictions &amp; stale content.</span></div></li>
         </ul>
         <p class="footnote"><b>Usage is the maintenance signal.</b> The more it's asked, the faster it finds and fills its own weak spots.</p>
       </div>
