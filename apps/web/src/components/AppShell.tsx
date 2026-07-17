@@ -121,9 +121,12 @@ const SideNav = styled.nav<{ $open: boolean }>(({ theme, $open }) => ({
   display: "grid",
   gap: theme.space.xs,
   // Take the height left below the brand and scroll internally if the section
-  // list is taller than the viewport, so no nav item is ever clipped.
+  // list is taller than the viewport, so no nav item is ever clipped. Pack the
+  // items to the top (grid's default align-content stretches the rows, which
+  // spread the items out across a tall viewport).
   flex: "1 1 auto",
   minHeight: 0,
+  alignContent: "start",
   overflowY: "auto",
   [MOBILE]: $open
     ? {
