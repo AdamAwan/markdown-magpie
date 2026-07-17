@@ -315,36 +315,72 @@ const seedPlanBody = `
   </div>
 </section>`;
 
-// Insights (slide 13): the pipeline-health dashboard — KPI tiles, the open-gap
-// backlog trend, and the verification-success gauge. The real page also has a
-// question-journey Sankey and throughput/latency charts; this legible subset
-// stands in for it. Numbers are illustrative.
+// The "question journey" Sankey (the signature Insights visual): questions flow
+// through confidence, into gaps, and down the fix funnel to verified. Laid out
+// programmatically — node heights and ribbon widths are proportional to counts.
+const sankeySvg = (() => {
+  const SCALE = 0.235, GAP = 12, NW = 13;
+  const cols = [
+    [{ k: "q", l: "Questions asked", c: 1240, col: T.accent }],
+    [{ k: "hi", l: "High confidence", c: 1010, col: T.ok.fg }, { k: "lo", l: "Low confidence", c: 230, col: T.amber.fg }],
+    [{ k: "ans", l: "Answered · no gap", c: 1144, col: T.ok.fg }, { k: "gap", l: "Gaps raised", c: 96, col: T.accent }],
+    [{ k: "prop", l: "Proposals", c: 71, col: T.accent }],
+    [{ k: "merged", l: "Merged", c: 63, col: T.ok.fg }],
+    [{ k: "ver", l: "Verified closed", c: 40, col: T.ok.fg }]
+  ];
+  const colX = [170, 405, 650, 885, 1065, 1235];
+  const TOP = 46;
+  const nodes = {};
+  cols.forEach((col, ci) => {
+    let y = TOP;
+    for (const n of col) {
+      const h = Math.max(6, n.c * SCALE);
+      nodes[n.k] = { ...n, x: colX[ci], y0: y, y1: y + h };
+      y += h + GAP;
+    }
+  });
+  // Keep the fix funnel (proposals → merged → verified) aligned with the Gaps node.
+  for (const k of ["prop", "merged", "ver"]) {
+    nodes[k].y0 = nodes.gap.y0;
+    nodes[k].y1 = nodes.gap.y0 + nodes[k].c * SCALE;
+  }
+  const links = [
+    { f: "q", t: "hi", c: 1010 }, { f: "q", t: "lo", c: 230 },
+    { f: "hi", t: "ans", c: 990 }, { f: "hi", t: "gap", c: 20 },
+    { f: "lo", t: "ans", c: 154 }, { f: "lo", t: "gap", c: 76 },
+    { f: "gap", t: "prop", c: 71 }, { f: "prop", t: "merged", c: 63 }, { f: "merged", t: "ver", c: 40 }
+  ];
+  const outOff = {}, inOff = {};
+  const ribbons = links.map(({ f, t, c }) => {
+    const s = nodes[f], d = nodes[t], w = c * SCALE;
+    const so = outOff[f] ?? 0, di = inOff[t] ?? 0;
+    outOff[f] = so + w; inOff[t] = di + w;
+    const xs = s.x + NW, xt = d.x, xm = (xs + xt) / 2;
+    const a = s.y0 + so, b = a + w, e = d.y0 + di, g = e + w;
+    return `<path d="M${xs},${a} C${xm},${a} ${xm},${e} ${xt},${e} L${xt},${g} C${xm},${g} ${xm},${b} ${xs},${b} Z" fill="${T.accent}" opacity="0.15"/>`;
+  }).join("");
+  const rects = Object.values(nodes).map((n) => `<rect x="${n.x}" y="${n.y0}" width="${NW}" height="${(n.y1 - n.y0).toFixed(1)}" rx="2" fill="${n.col}"/>`).join("");
+  const labels = Object.values(nodes).map((n) => {
+    const cy = (n.y0 + n.y1) / 2, left = n.k === "q";
+    const lx = left ? n.x - 9 : n.x + NW + 9, anchor = left ? "end" : "start";
+    return `<text x="${lx}" y="${cy - 2}" text-anchor="${anchor}" font-size="15" font-weight="600" fill="${T.text}">${n.l}</text>` +
+      `<text x="${lx}" y="${cy + 15}" text-anchor="${anchor}" font-size="13" fill="${T.muted}">${n.c.toLocaleString()}</text>`;
+  }).join("");
+  return `<svg viewBox="0 0 1400 372" width="100%" style="display:block">${ribbons}${rects}${labels}</svg>`;
+})();
+
+// Insights (slide 13): the pipeline-health dashboard — the question-journey
+// Sankey, KPI + cost tiles, the open-gap backlog trend and the verification gauge.
+// Numbers are illustrative.
 const insightsBody = `
 <section class="surface">
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px">
-    ${stat("1,240", "Questions asked")}${stat("82%", "High confidence")}${stat("63", "Gaps merged")}${stat("64%", "Verified closed")}
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px">
+    ${stat("1,240", "Questions asked")}${stat("82%", "High confidence")}${stat("$38", "AI spend · 30d")}${stat("$0.03", "Cost / answer")}${stat("64%", "Verified closed")}
   </div>
-  <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:16px">
-    <div style="border:1px solid ${T.border};border-radius:12px;padding:16px 18px">
-      <div style="font-size:15px;font-weight:600">Open-gap backlog</div>
-      <div style="font-size:12.5px;color:${T.muted};margin-bottom:14px">Net-open gaps · last 30 days</div>
-      <svg viewBox="0 0 440 150" width="100%" height="150" preserveAspectRatio="none" style="display:block">
-        <line x1="0" y1="149" x2="440" y2="149" stroke="${T.border}" stroke-width="1"/>
-        <path d="M0,126 C60,120 100,42 150,34 C210,26 250,72 300,96 C360,124 410,128 440,128 L440,150 L0,150 Z" fill="${T.accentBg}"/>
-        <path d="M0,126 C60,120 100,42 150,34 C210,26 250,72 300,96 C360,124 410,128 440,128" fill="none" stroke="${T.accent}" stroke-width="3"/>
-      </svg>
-      <div style="font-size:12.5px;color:${T.subtle};margin-top:12px">Spiked mid-June — now trending down as the loop keeps up.</div>
-    </div>
-    <div style="border:1px solid ${T.border};border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;align-items:center">
-      <div style="font-size:15px;font-weight:600;align-self:flex-start;margin-bottom:8px">Verification success</div>
-      <svg viewBox="0 0 130 130" width="140" height="140">
-        <circle cx="65" cy="65" r="50" fill="none" stroke="${T.border}" stroke-width="15"/>
-        <circle cx="65" cy="65" r="50" fill="none" stroke="${T.ok.fg}" stroke-width="15" stroke-linecap="round" stroke-dasharray="201 314" transform="rotate(-90 65 65)"/>
-        <text x="65" y="63" text-anchor="middle" font-size="27" font-weight="700" fill="${T.text}">64%</text>
-        <text x="65" y="83" text-anchor="middle" font-size="12" fill="${T.muted}">closed</text>
-      </svg>
-      <div style="font-size:12px;color:${T.subtle};text-align:center;margin-top:8px">Merged proposals whose gap-closure check confirmed the fix.</div>
-    </div>
+  <div style="border:1px solid ${T.border};border-radius:12px;padding:16px 20px 20px">
+    <div style="font-size:15px;font-weight:600">Question journey</div>
+    <div style="font-size:12.5px;color:${T.muted};margin-bottom:6px">Where volume flows — and leaks — at each branch · last 30 days</div>
+    ${sankeySvg}
   </div>
 </section>`;
 
@@ -361,7 +397,7 @@ const pages = {
   "demo-merged": [page("Proposals · merged & re-indexed", demoMergedBody), 760, 340],
   "demo-payoff": [page("Ask · now answered", demoPayoffBody), 900, 480],
   "seed-plan": [page("Seed · proposed plan", seedPlanBody), 900, 720],
-  insights: [page("Insights · pipeline health", insightsBody), 940, 470]
+  insights: [page("Insights · pipeline health", insightsBody), 1400, 600]
 };
 
 await mkdir(TMP, { recursive: true });

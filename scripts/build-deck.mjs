@@ -425,19 +425,11 @@ const HTML = `<!doctype html>
 
   <!-- 13 INSIGHTS -->
   <section class="slide light" data-title="Insights">
-    <div class="wrap split">
-      <div>
-        <div class="kicker">Insights</div>
-        <h2>See the whole pipeline — and prove it's working.</h2>
-        <ul class="feat">
-          <li><span class="b">1</span><div><b>Every question's journey</b> <span>— from confidence, to gap, to clustered, to merged fix.</span></div></li>
-          <li><span class="b">2</span><div><b>Backlog &amp; throughput</b> <span>— is the loop keeping up? The 30-day trends say so.</span></div></li>
-          <li><span class="b">3</span><div><b>Verification</b> <span>— what share of merged fixes actually closed the gap.</span></div></li>
-          <li><span class="b">4</span><div><b>Latency &amp; feedback</b> <span>— how fast answers land, and where quality dips.</span></div></li>
-        </ul>
-        <p class="footnote">You don't have to take the loop on faith — you can watch it work.</p>
-      </div>
-      ${frame(A("insights"), { auto: true, label: "localhost:3000 — Insights · pipeline health", pos: "top" })}
+    <div class="wrap">
+      <div class="kicker">Insights · prove it's working</div>
+      <h2 style="margin:0 0 .5em">Watch the whole pipeline — and what it costs.</h2>
+      ${frame(A("insights"), { tall: true, label: "localhost:3000 — Insights · pipeline health" })}
+      <p class="footnote">Every question's journey — where the volume flows and where it leaks — plus the verified-close rate and the AI spend behind it. You don't take the loop on faith; you watch it work.</p>
     </div>
   </section>
 
