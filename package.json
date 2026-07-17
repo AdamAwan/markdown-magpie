@@ -27,6 +27,8 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "verify": "npm run format:check && npm run lint && npm run deadcode && npm run typecheck",
+    "verify:fix": "npm run format && npm run lint:fix",
     "prepare": "husky",
     "test": "npm run test --workspaces --if-present",
     "test:scripts": "node --test \"scripts/**/*.test.mjs\"",

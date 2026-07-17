@@ -4,8 +4,25 @@ import { useEffect, useRef, useState } from "react";
 import styled from "@emotion/styled";
 import { ConsoleNotice, UiNotification } from "../lib/types";
 import { PillTone, pillSummary } from "../lib/console";
+import { StatusRow } from "./common";
+import { BuildStatus } from "./BuildStatus";
 import { Chip, IconButton } from "./ui";
 import type { StatusTone } from "../theme/theme";
+
+// The compact live-status the topbar surfaces from the sidebar. Shaped by
+// AppShell from the console health + runtime config so this component stays
+// decoupled from the config types. Not exported: AppShell builds the object
+// structurally against the `system` prop, so nothing imports the type.
+interface SystemStatus {
+  apiOnline: boolean;
+  provider: string;
+  retrieval: string;
+  retrievalReason?: string;
+  chatModel?: string;
+  chatHost?: string;
+  embeddingModel?: string;
+  embeddingHost?: string;
+}
 
 // The pill's semantic tones on the theme's status palette. "neutral" keeps the
 // completed-green dot so the healthy state still reads as a positive signal.
@@ -106,6 +123,16 @@ const ClearButton = styled.button(({ theme }) => ({
   "&:focus-visible": { outline: `3px solid ${theme.color.accentBg}`, outlineOffset: "2px" }
 }));
 
+const StatusRows = styled.div(({ theme }) => ({ display: "grid", gap: theme.space.md }));
+
+const SystemDot = styled.span<{ $offline: boolean }>(({ theme, $offline }) => ({
+  width: "8px",
+  height: "8px",
+  flexShrink: 0,
+  borderRadius: "999px",
+  background: $offline ? theme.color.status.failed.dot : theme.color.status.completed.dot
+}));
+
 const NoticeList = styled.div(({ theme }) => ({ display: "grid", gap: theme.space.md }));
 
 const NoticeItem = styled.article<{ $tone: StatusTone }>(({ theme, $tone }) => ({
@@ -157,6 +184,9 @@ interface StatusPillProps {
   loaded: boolean;
   notices: ConsoleNotice[];
   notifications: UiNotification[];
+  /** Live system/model status, relocated here from the sidebar. Omitted (e.g.
+   * before the first refresh) hides the System group. */
+  system?: SystemStatus;
   /** Called when the popover opens — the provider marks notifications read. */
   onOpen: () => void;
   onDismissNotification: (id: number) => void;
@@ -171,6 +201,7 @@ export function StatusPill({
   loaded,
   notices,
   notifications,
+  system,
   onOpen,
   onDismissNotification,
   onClearNotifications
@@ -228,6 +259,37 @@ export function StatusPill({
       </Pill>
       {open ? (
         <Popover role="dialog" aria-label="Notifications">
+          {system ? (
+            <section>
+              <GroupTitle>System</GroupTitle>
+              <StatusRows>
+                <StatusRow
+                  label="API"
+                  value={system.apiOnline ? "Online" : "Offline"}
+                  leading={<SystemDot $offline={!system.apiOnline} aria-hidden="true" />}
+                />
+                <StatusRow label="Provider" value={system.provider} />
+                {system.chatModel ? (
+                  <StatusRow
+                    label="Chat"
+                    value={system.chatHost ? `${system.chatModel} (${system.chatHost})` : system.chatModel}
+                  />
+                ) : null}
+                {system.embeddingModel ? (
+                  <StatusRow
+                    label="Embedding"
+                    value={
+                      system.embeddingHost
+                        ? `${system.embeddingModel} (${system.embeddingHost})`
+                        : system.embeddingModel
+                    }
+                  />
+                ) : null}
+                <StatusRow label="Retrieval" value={system.retrieval} title={system.retrievalReason} />
+                <BuildStatus />
+              </StatusRows>
+            </section>
+          ) : null}
           <section>
             <GroupTitle>Needs attention</GroupTitle>
             {notices.length === 0 ? (

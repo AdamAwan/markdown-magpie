@@ -7,3 +7,6 @@ package-lock.json
 apps/web/public/**
 presentation/**
 **/*.md
+# Local, gitignored agent settings — not in CI's checkout, so keep prettier's
+# view aligned with CI (`npm run verify` runs `prettier --check .`).
+**/.claude/settings.local.json
