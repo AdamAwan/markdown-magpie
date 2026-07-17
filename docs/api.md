@@ -660,13 +660,19 @@ maintenance jobs. Job states: `created`, `retry`, `active`, `completed`, `cancel
 
 ### `POST /api/jobs`
 
-Creates a job.
+Creates a job. Requires the `manage:jobs` scope.
 
 ```json
 { "type": "draft_markdown_proposal", "input": { ... } }
 ```
 
-- `400 invalid_job` — unknown/missing type or invalid input.
+`input` is validated against the job type's own `inputSchema` at creation (#285),
+so a payload that does not match the contract — including a source descriptor whose
+git `url` uses a disallowed transport (`ext::`, `git://`) or a `-`-prefixed value —
+is rejected before it is persisted or dispatched.
+
+- `400 invalid_job` — unknown/missing type, or a body that is not `{ type, input }`.
+- `400 invalid_job_input` — `input` failed the job type's `inputSchema`.
 - `202` — `{ "job": Job }`.
 
 ### `GET /api/jobs`

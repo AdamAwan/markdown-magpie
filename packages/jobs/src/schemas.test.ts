@@ -66,6 +66,41 @@ test("verify_document input round-trips path/content/sources with a provider", (
   assert.equal(ok.success, true);
 });
 
+test("git source descriptor rejects RCE / injection transports (#285)", () => {
+  const withSourceUrl = (url: string) => ({
+    provider: "codex" as const,
+    path: "kb/refunds.md",
+    content: "Refunds take 5 days.",
+    sources: [{ id: "src-1", name: "Evil", kind: "git", url }]
+  });
+  for (const url of [
+    "ext::sh -c 'touch /tmp/pwned'",
+    "--upload-pack=touch /tmp/pwned",
+    "git://internal.example.com/repo.git",
+    "fd::17/repo"
+  ]) {
+    assert.equal(verifyDocumentInputSchema.safeParse(withSourceUrl(url)).success, false, `expected reject: ${url}`);
+  }
+});
+
+test("git source descriptor accepts the allowlisted transports (#285)", () => {
+  const withSourceUrl = (url: string) => ({
+    provider: "codex" as const,
+    path: "kb/refunds.md",
+    content: "Refunds take 5 days.",
+    sources: [{ id: "src-1", name: "Repo", kind: "git", url }]
+  });
+  for (const url of [
+    "https://example.com/repo.git",
+    "ssh://git@example.com/repo.git",
+    "git@example.com:owner/repo.git",
+    "file:///srv/knowledge/repo.git",
+    "/srv/knowledge/repo.git"
+  ]) {
+    assert.equal(verifyDocumentInputSchema.safeParse(withSourceUrl(url)).success, true, `expected accept: ${url}`);
+  }
+});
+
 test("verify_document input accepts and round-trips optional citedClaims", () => {
   const base = {
     provider: "codex",

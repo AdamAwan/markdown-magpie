@@ -1,12 +1,14 @@
-import type {
-  CreatePullRequestRequest,
-  CreatePullRequestResponse,
-  PublishChangesetRequest,
-  PublishProposalBranchRequest,
-  PublishProposalBranchResponse,
-  PullRequestProvider,
-  RepositoryRef,
-  ReviewDecision
+import {
+  GIT_ALLOW_PROTOCOL_VALUE,
+  isAllowedGitCloneUrl,
+  type CreatePullRequestRequest,
+  type CreatePullRequestResponse,
+  type PublishChangesetRequest,
+  type PublishProposalBranchRequest,
+  type PublishProposalBranchResponse,
+  type PullRequestProvider,
+  type RepositoryRef,
+  type ReviewDecision
 } from "@magpie/core";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -100,7 +102,24 @@ export class LocalRepositorySyncProvider implements RepositorySyncProvider {
   }
 }
 
+// Rejects a checkout URL whose git transport is not in the allowlist, or that git
+// would misread as a command-line option (leading "-"). This is the single guard
+// for #285: it blocks `ext::sh -c …` RCE, `git://`/other remote-helper transports,
+// and `--upload-pack=…` argument injection before the URL reaches any git
+// subprocess. Legit `https`/`http`/`ssh`/`file`/scp-like/bare-path URLs pass. The
+// argv also gets a `--` terminator and GIT_ALLOW_PROTOCOL is set on every git call
+// as defence in depth.
+export function assertAllowedGitUrl(url: string): void {
+  if (!isAllowedGitCloneUrl(url)) {
+    throw new Error(
+      `Refusing git checkout url with a disallowed transport or leading "-": ${JSON.stringify(url)}. ` +
+        `Allowed transports: ${GIT_ALLOW_PROTOCOL_VALUE.replaceAll(":", ", ")}, scp-like ssh, or a local path.`
+    );
+  }
+}
+
 export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<GitCheckoutResult> {
+  assertAllowedGitUrl(request.url);
   const localPath = path.join(request.checkoutRoot, safeCheckoutName(request.id));
   await mkdir(request.checkoutRoot, { recursive: true });
   const authEnv = buildGitAuthEnv(request.url);
@@ -166,7 +185,13 @@ async function cloneCheckout(
 
   if (partialCloneEnabled()) {
     try {
-      await git(request.checkoutRoot, ["clone", "--filter=blob:none", ...baseArgs, request.url, localPath], authEnv);
+      await git(
+        request.checkoutRoot,
+        // `--` terminates option parsing so a `-`-prefixed url can never be read as
+        // a git option (belt-and-braces alongside assertAllowedGitUrl above).
+        ["clone", "--filter=blob:none", ...baseArgs, "--", request.url, localPath],
+        authEnv
+      );
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : "partial clone failed";
@@ -183,7 +208,7 @@ async function cloneCheckout(
     }
   }
 
-  await git(request.checkoutRoot, ["clone", ...baseArgs, request.url, localPath], authEnv);
+  await git(request.checkoutRoot, ["clone", ...baseArgs, "--", request.url, localPath], authEnv);
 }
 
 // True when a `--filter=blob:none` clone failed because the remote/host doesn't
@@ -1258,7 +1283,12 @@ async function git(cwd: string, args: string[], env?: Partial<NodeJS.ProcessEnv>
     try {
       const result = await execFileAsync("git", args, {
         cwd,
-        env: env ? { ...process.env, ...env } : process.env,
+        // GIT_ALLOW_PROTOCOL is set on EVERY git invocation as an in-git backstop
+        // for #285: git itself refuses any transport outside the allowlist (notably
+        // the `ext::` RCE helper), even for a lazy blob fetch on an already-cloned
+        // repo. Placed after process.env so it wins over any operator value, and
+        // before `env` (which only ever carries GIT_CONFIG_* auth, never this key).
+        env: { ...process.env, GIT_ALLOW_PROTOCOL: GIT_ALLOW_PROTOCOL_VALUE, ...(env ?? {}) },
         timeout: GIT_SUBPROCESS_TIMEOUT_MS,
         maxBuffer: GIT_SUBPROCESS_MAX_BUFFER
       });
