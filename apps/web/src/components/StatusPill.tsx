@@ -11,8 +11,9 @@ import type { StatusTone } from "../theme/theme";
 
 // The compact live-status the topbar surfaces from the sidebar. Shaped by
 // AppShell from the console health + runtime config so this component stays
-// decoupled from the config types.
-export interface SystemStatus {
+// decoupled from the config types. Not exported: AppShell builds the object
+// structurally against the `system` prop, so nothing imports the type.
+interface SystemStatus {
   apiOnline: boolean;
   provider: string;
   retrieval: string;
