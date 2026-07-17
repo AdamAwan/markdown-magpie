@@ -24,5 +24,10 @@ Both live under `.claude/skills/`. Don't re-derive what they cover.
 - **No hacky workarounds** — fix the root cause the best way.
 - **Validate as you go** (`npm run build`, `npm test`, `npm run typecheck`, `npm run lint`)
   — don't batch a large change and validate once.
+- **Run `npm run verify` before every push.** It runs the same gates as CI's non-DB jobs
+  — `format:check` (prettier), `lint` (eslint), `deadcode` (knip), `typecheck` — and CI
+  fails on any of them. `npm run verify:fix` auto-fixes the prettier/eslint ones; knip has
+  no autofix, so remove the unused export/import/dep it reports (a common trip: an `export`
+  on a symbol only used within its own file — drop the `export`). Don't push red.
 - **Commit and push little and often.**
 - **Update documentation** alongside code changes.
