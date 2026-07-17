@@ -508,3 +508,60 @@ test("completion copies the basis item's answer and citations VERBATIM for a reu
   // so the item must NOT be marked unanswerable.
   assert.equal(finalItem?.status, "answered");
 });
+
+// --- Task 12: end-to-end regression (the QA#4 shape) ----------------------
+//
+// QA#4 (docs/superpowers/specs/2026-07-17-questionnaire-trust-design.md): a
+// re-index changed content hashes under a still-correct approved answer, so
+// the deterministic fast-path's fingerprint check could never confirm reuse
+// and every match was vetoed as "new_content" — zero reuse, despite the
+// answer still being right. This drives the full pipeline end-to-end: match
+// phase stashes the single unconfirmable candidate for reconcile (never
+// vetoes, never fast-path-reuses), and the watcher's reconcile verdict is
+// what ultimately produces the verbatim reuse.
+test("end-to-end regression (QA#4 shape): a single candidate the fast-path can't confirm is reconciled to a verbatim reused answer", async () => {
+  const ctx = embeddingAxisContext();
+  const approvedId = await createApprovedDonor(ctx, {
+    question: "Do you hold ISO 27001 certification?",
+    answer: "Yes, we hold ISO 27001."
+  });
+  const approvedItem = await ctx.stores.questionnaires.itemById(approvedId);
+  assert.ok(approvedItem?.answer);
+
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "QA#4 regression",
+    flowId: "security",
+    questions: ["Are you ISO certified?"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const itemId = created.questionnaire.items[0].id;
+
+  // Fast-path declined at create time: no Postgres knowledge store means
+  // checkReuse can never verify the cited section's fingerprint, so the
+  // match is stashed as a reconcile candidate rather than markReused (or
+  // vetoed via the legacy markChanged path).
+  assert.deepEqual(await ctx.stores.questionnaires.reconcileCandidateIds(itemId), [approvedId]);
+  const primed = await ctx.stores.questionnaires.itemById(itemId);
+  assert.equal(primed?.reusedFromItemId, undefined);
+  assert.equal(primed?.status, "answering");
+
+  // The watcher's reconcile step (answer_question, candidate-primed) later
+  // decides — against the current KB — that the candidate is still good and
+  // returns a "reused" verdict.
+  const job = await jobForLog(ctx, primed?.questionLogId);
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, {
+    // Deliberately different from the approved answer, to prove the stored
+    // result is the basis's VERBATIM content, never the model's echo.
+    answer: "A model echo that must NOT be trusted.",
+    confidence: "high",
+    citations: [],
+    reuse: { verdict: "reused", basisItemIds: [approvedId] }
+  });
+
+  const finalItem = await ctx.stores.questionnaires.itemById(itemId);
+  assert.equal(finalItem?.outcome, "reused");
+  assert.equal(finalItem?.status, "answered");
+  assert.equal(finalItem?.answer, approvedItem?.answer);
+  assert.deepEqual(finalItem?.citations, approvedItem?.citations);
+});
