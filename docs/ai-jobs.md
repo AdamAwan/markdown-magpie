@@ -694,10 +694,20 @@ code (`apps/watcher/src/runners/cli.ts`), after the operator-configured
   --skip-git-repo-check` (it has no system-prompt flag, so its prompt keeps the folded
   `SYSTEM:` block).
 - **Source-grounded runs** keep the read-only explore toolset (`--tools Read,Grep,Glob`
-  plus disallowed write tools for claude; `--sandbox read-only` for codex) and, for
-  claude, also get `--strict-mcp-config` and `--setting-sources ""` — a source checkout
-  may carry its own `.mcp.json` (this repo does) or committed `.claude` settings, and
-  neither may reach the agent.
+  plus disallowed write tools for claude; `--sandbox read-only` for codex) and also run
+  from a **neutral working directory** (the OS temp dir), never from an untrusted source
+  checkout. This is the memory-file neutralization: a checkout may commit a root memory
+  file (`CLAUDE.md` for claude, `AGENTS.md` for codex) that a CLI loads from its cwd as
+  higher-trust project guidance, so no checkout is ever the cwd. The checkouts are reached
+  read-only instead — for claude, each workspace (the primary included) is mounted with a
+  repeated `--add-dir <dir>`, which is a tool-access root, not a project/memory root; for
+  codex, read-only reads are not confined to cwd, so the prompt lists every workspace path.
+  claude also gets `--strict-mcp-config` and `--setting-sources ""` — a source checkout may
+  carry its own `.mcp.json` (this repo does) or committed `.claude` settings, and neither
+  may reach the agent — plus `--system-prompt` carrying the job-runner instructions, so the
+  CLI's interactive persona is replaced rather than left as the top-level instruction (codex
+  has no system-prompt flag; its source-grounded prompt carries the untrusted-content
+  contract in the task instructions instead).
 
 Defence in depth on the answer side: an `answer_question` reply that ignores the
 structured JSON contract (plain prose) is always grounding-verified despite its low
