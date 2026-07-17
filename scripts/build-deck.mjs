@@ -93,6 +93,20 @@ const HTML = `<!doctype html>
     color:#eef2ec;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);border-radius:99px;padding:9px 17px;}
   .recap b{color:#e8917f;font-weight:700;}
 
+  /* circular loop diagram */
+  .loop{position:relative;width:min(452px,47vh);aspect-ratio:1;margin:clamp(10px,3vh,30px) auto 0;}
+  .loop svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;}
+  .loop .nd{position:absolute;transform:translate(-50%,-50%);width:min(196px,25vw);text-align:center;
+    background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.15);border-radius:14px;padding:12px 12px;backdrop-filter:blur(2px);}
+  .loop .nd .ic{font-size:22px;line-height:1;}
+  .loop .nd b{display:block;font-size:clamp(14px,1.5vw,17px);margin:6px 0 3px;color:#eef2ec;}
+  .loop .nd small{font-size:clamp(11px,1.15vw,12.5px);color:#aebcb4;line-height:1.35;display:block;}
+  .loop .nd--n{top:5%;left:50%;} .loop .nd--e{top:50%;left:95%;}
+  .loop .nd--s{top:95%;left:50%;} .loop .nd--w{top:50%;left:5%;}
+  .loop .hub{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;width:150px;}
+  .loop .hub img{width:44px;height:44px;border-radius:11px;}
+  .loop .hub b{display:block;font-size:13.5px;color:#9fd3e2;font-weight:700;margin-top:8px;line-height:1.3;}
+
   /* split layout */
   .split{display:grid;grid-template-columns:0.92fr 1.08fr;gap:clamp(22px,3vw,48px);align-items:center;}
   .split.rev{grid-template-columns:1.08fr .92fr;}
@@ -503,7 +517,31 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 18 CTA -->
+  <!-- 18 THE LOOP -->
+  <section class="slide ink" data-title="The loop">
+    <div class="wrap" style="text-align:center">
+      <div class="kicker">The whole thing, in one loop</div>
+      <h2 style="margin:0 0 .1em">It gets smarter every time it's asked.</h2>
+      <div class="loop">
+        <svg viewBox="0 0 100 100" aria-hidden="true">
+          <circle cx="50" cy="50" r="45" fill="none" stroke="var(--accent-2)" stroke-width="0.7" stroke-opacity="0.55" stroke-dasharray="1.4 3"/>
+          <g fill="var(--accent-2)">
+            <g transform="translate(81.8,18.2) rotate(45)"><path d="M-3,-3.3 L3.6,0 L-3,3.3 Z"/></g>
+            <g transform="translate(81.8,81.8) rotate(135)"><path d="M-3,-3.3 L3.6,0 L-3,3.3 Z"/></g>
+            <g transform="translate(18.2,81.8) rotate(225)"><path d="M-3,-3.3 L3.6,0 L-3,3.3 Z"/></g>
+            <g transform="translate(18.2,18.2) rotate(315)"><path d="M-3,-3.3 L3.6,0 L-3,3.3 Z"/></g>
+          </g>
+        </svg>
+        <div class="nd nd--n"><div class="ic">💬</div><b>Ask</b><small>In the app — or in Claude, Codex &amp; co. over MCP.</small></div>
+        <div class="nd nd--e"><div class="ic">⚖️</div><b>Cited answer</b><small>Grounded in your sources, with a confidence score.</small></div>
+        <div class="nd nd--s"><div class="ic">🔍</div><b>Gap surfaces</b><small>Low-confidence &amp; unhelpful answers become tracked gaps.</small></div>
+        <div class="nd nd--w"><div class="ic">♻️</div><b>Improve</b><small>Cluster → draft → review → merge → re-index.</small></div>
+        <div class="hub"><img src="${A("icon")}" alt=""/><b>smarter<br/>every ask</b></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 19 CTA -->
   <section class="slide ink" data-title="Call to action">
     <div class="wrap">
       <div class="brand"><img src="${A("icon")}" alt=""/><span class="nm">Markdown Magpie</span></div>
@@ -523,7 +561,7 @@ const HTML = `<!doctype html>
 </div>
 
 <a class="exit" href="/">Back to login</a>
-<div class="hud"><span id="counter">1 / 18</span> · <b id="hud-title">Title</b></div>
+<div class="hud"><span id="counter">1 / 19</span> · <b id="hud-title">Title</b></div>
 <div class="hint">← → navigate &nbsp;·&nbsp; <b>O</b> overview &nbsp;·&nbsp; <b>F</b> fullscreen</div>
 
 <div class="overlay" id="overlay"><div class="grid" id="grid"></div></div>
