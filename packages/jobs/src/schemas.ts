@@ -100,6 +100,17 @@ const answerTraceSchema = z.object({
     unsupportedClaims: z.array(z.string()).optional()
   })
 });
+const answerCandidateSchema = z.object({
+  itemId: z.string(),
+  question: z.string(),
+  answer: z.string()
+});
+
+const reconcileResultSchema = z.object({
+  verdict: z.enum(["reused", "adapted", "merged", "fresh"]),
+  basisItemIds: z.array(z.string())
+});
+
 export const answerQuestionInputSchema = z.object({
   provider: providerSchema,
   questionLogId: z.string().optional(),
@@ -116,6 +127,10 @@ export const answerQuestionInputSchema = z.object({
   // strip it from the enqueued input (the schema-stripping gotcha).
   priorTurns: z.array(z.object({ question: z.string(), answer: z.string() })).optional(),
   conversationFlowId: z.string().optional(),
+  // Prior approved items the watcher's reconciler can reuse/adapt/merge from
+  // instead of answering fresh (questionnaire trust). Declared so the broker
+  // preserves them from the enqueued input.
+  candidates: z.array(answerCandidateSchema).optional(),
   expectedOutput: z.literal("answer_result")
 }) satisfies z.ZodType<ProviderInput<CoreAnswerQuestionJobInput>>;
 export const answerQuestionOutputSchema = z.object({
@@ -129,7 +144,11 @@ export const answerQuestionOutputSchema = z.object({
   trace: answerTraceSchema.optional(),
   // The condensed standalone form of a follow-up (#239). Declared so the broker
   // preserves it on completion for the API to persist on the question log.
-  standaloneQuestion: z.string().optional()
+  standaloneQuestion: z.string().optional(),
+  // The reconciler's verdict when the job was given candidates to reconcile
+  // against (questionnaire trust). Declared so the broker preserves it on
+  // completion for the API to persist.
+  reuse: reconcileResultSchema.optional()
 }) satisfies z.ZodType<AnswerQuestionJobOutput>;
 
 export const summarizeGapInputSchema = z.object({
