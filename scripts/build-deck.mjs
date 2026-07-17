@@ -89,6 +89,9 @@ const HTML = `<!doctype html>
   .chip{display:inline-block;margin-top:14px;font-size:12px;font-weight:600;color:var(--accent);
     background:var(--accent-soft);padding:4px 11px;border-radius:99px;}
   .ink .chip{color:var(--accent-2);background:rgba(74,163,189,.14);}
+  .recap{display:inline-flex;align-items:center;gap:8px;font-size:clamp(13px,1.45vw,16.5px);font-weight:600;
+    color:#eef2ec;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);border-radius:99px;padding:9px 17px;}
+  .recap b{color:#e8917f;font-weight:700;}
 
   /* split layout */
   .split{display:grid;grid-template-columns:0.92fr 1.08fr;gap:clamp(22px,3vw,48px);align-items:center;}
@@ -504,9 +507,16 @@ const HTML = `<!doctype html>
   <section class="slide ink" data-title="Call to action">
     <div class="wrap">
       <div class="brand"><img src="${A("icon")}" alt=""/><span class="nm">Markdown Magpie</span></div>
-      <h1 style="max-width:18ch">Pick one source. Let it run.</h1>
-      <p class="big-quote" style="max-width:30ch;color:#cfe6dd">Knowledge that won't lie, won't leak, and won't rot — built on the source you already have.</p>
-      <p class="footnote">Let's choose a first pilot — questions over the Product Code is the obvious one — and stand up a cited, self-maintaining KB.</p>
+      <div class="kicker">The ask</div>
+      <h1 style="max-width:14ch">Pick one source.<br/>Let it run.</h1>
+      <p class="big-quote" style="max-width:36ch;color:#cfe6dd">A cited, self-maintaining knowledge base — one that won't <span class="neg">lie</span>, <span class="neg">leak</span>, or <span class="neg">rot</span> — built on the source you already have.</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin:30px 0 2px">
+        <span class="recap">⚖️ Won't <b>lie</b></span>
+        <span class="recap">🛡️ Won't <b>leak</b></span>
+        <span class="recap">♻️ Won't <b>rot</b></span>
+        <span class="recap">💸 Cheap &amp; yours</span>
+      </div>
+      <p class="footnote" style="margin-top:26px">The obvious first pilot: a cited KB over the <b style="color:#eef2ec">Product Code</b>. Point Magpie at the repo, let Seed draft the starter pages, and review the first PRs — we can stand it up this week.</p>
     </div>
   </section>
 
