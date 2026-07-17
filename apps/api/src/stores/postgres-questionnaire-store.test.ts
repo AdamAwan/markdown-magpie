@@ -187,4 +187,105 @@ describe("PostgresQuestionnaireStore", { skip: databaseUrl ? false : "DATABASE_U
     );
     assert.ok(fetched?.items[0].approvedAt);
   });
+
+  it("matchApprovedTopN returns candidates ordered by similarity and respects limit", async () => {
+    const flowId = `flow-${randomUUID()}`;
+    const created = await store.create({
+      name: `topN ${randomUUID()}`,
+      flowId,
+      questions: ["closest", "middle", "farthest"]
+    });
+    const [closest, middle, farthest] = created.items;
+
+    for (const item of [closest, middle, farthest]) {
+      const log = `log-${randomUUID()}`;
+      await store.markAnswering(item.id, log);
+      await store.completeItem(log, {
+        answer: "answer",
+        answeredAt: new Date().toISOString(),
+        citations: [citation(`sec-${item.id}`)],
+        unanswerable: false,
+        confidence: "high"
+      });
+      await store.approveItem(item.id, [citation(`sec-${item.id}`)], false);
+    }
+
+    // Two axes blended at a fixed ratio give a deterministic, strictly ordered
+    // similarity relative to axis 0 without relying on floating-point ties.
+    function blended(primary: number, secondary: number, secondaryWeight: number): number[] {
+      const vector = new Array<number>(1536).fill(0);
+      vector[primary] = 1;
+      vector[secondary] = secondaryWeight;
+      return vector;
+    }
+
+    await store.setItemEmbeddings([
+      { itemId: closest.id, embedding: axisEmbedding(0), model: "topn-model" },
+      { itemId: middle.id, embedding: blended(0, 1, 1), model: "topn-model" },
+      { itemId: farthest.id, embedding: axisEmbedding(1), model: "topn-model" }
+    ]);
+
+    const query = axisEmbedding(0);
+    const top2 = await store.matchApprovedTopN(flowId, query, "topn-model", 2);
+    assert.equal(top2.length, 2);
+    assert.deepEqual(
+      top2.map((candidate) => candidate.item.id),
+      [closest.id, middle.id]
+    );
+    assert.ok(top2[0].similarity > top2[1].similarity);
+    assert.equal(top2[0].item.citations[0]?.sectionId, `sec-${closest.id}`);
+
+    const all = await store.matchApprovedTopN(flowId, query, "topn-model", 10);
+    assert.deepEqual(
+      all.map((candidate) => candidate.item.id),
+      [closest.id, middle.id, farthest.id]
+    );
+  });
+
+  it("stashes and reads back reconcile candidate ids", async () => {
+    const created = await store.create({ name: `stash ${randomUUID()}`, flowId: "flow-a", questions: ["q0"] });
+    const item = created.items[0];
+
+    assert.deepEqual(await store.reconcileCandidateIds(item.id), []);
+
+    await store.setReconcileCandidates(item.id, ["cand-1", "cand-2"]);
+    assert.deepEqual(await store.reconcileCandidateIds(item.id), ["cand-1", "cand-2"]);
+  });
+
+  it("completeItem records outcome and basis provenance, setting reusedFromItemId only for a single basis", async () => {
+    const created = await store.create({
+      name: `verdict ${randomUUID()}`,
+      flowId: "flow-a",
+      questions: ["merged", "adapted"]
+    });
+    const [mergedItem, adaptedItem] = created.items;
+
+    const mergedLog = `log-${randomUUID()}`;
+    await store.markAnswering(mergedItem.id, mergedLog);
+    const merged = await store.completeItem(mergedLog, {
+      answer: "Merged from two prior answers.",
+      answeredAt: new Date().toISOString(),
+      citations: [],
+      unanswerable: false,
+      confidence: "medium",
+      outcome: "merged",
+      basisItemIds: ["basis-x", "basis-y"]
+    });
+    assert.equal(merged?.outcome, "merged");
+    assert.equal(merged?.reusedFromItemId, undefined, "multi-source basis has no single reused-from item");
+
+    const adaptedLog = `log-${randomUUID()}`;
+    await store.markAnswering(adaptedItem.id, adaptedLog);
+    const adapted = await store.completeItem(adaptedLog, {
+      answer: "Adapted from a single prior answer.",
+      answeredAt: new Date().toISOString(),
+      citations: [],
+      unanswerable: false,
+      confidence: "high",
+      outcome: "adapted",
+      basisItemIds: ["basis-z"]
+    });
+    assert.equal(adapted?.outcome, "adapted");
+    assert.equal(adapted?.reusedFromItemId, "basis-z");
+  });
 });

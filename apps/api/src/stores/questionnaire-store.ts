@@ -5,6 +5,7 @@ import type {
   QuestionnaireChangeReason,
   QuestionnaireItem,
   QuestionnaireItemCitation,
+  QuestionnaireItemOutcome,
   QuestionnaireSummary
 } from "@magpie/core";
 
@@ -27,6 +28,19 @@ export interface QuestionnaireStore {
     embedding: number[],
     model: string
   ): Promise<{ item: QuestionnaireItem; similarity: number } | undefined>;
+  // Top-N nearest approved prior items in the flow (same embedding model),
+  // ordered by descending similarity. Feeds the reconciler's candidate set —
+  // unlike matchApproved this doesn't stop at the single closest match.
+  matchApprovedTopN(
+    flowId: string,
+    embedding: number[],
+    model: string,
+    limit: number
+  ): Promise<Array<{ item: QuestionnaireItem; similarity: number }>>;
+  // Stash the candidate item ids the reconciler was offered, so a later
+  // answer_question completion can be primed with the same candidate set.
+  setReconcileCandidates(itemId: string, basisItemIds: string[]): Promise<void>;
+  reconcileCandidateIds(itemId: string): Promise<string[]>;
   markReused(itemId: string, from: { itemId: string; answer: string; answeredAt: string }): Promise<void>;
   // Records why a matched item could not reuse; the item STAYS pending so the
   // drip re-answers it, and the worksheet explains the wording change.
@@ -40,6 +54,11 @@ export interface QuestionnaireStore {
       citations: QuestionnaireItemCitation[];
       unanswerable: boolean;
       confidence: Confidence;
+      // Reconciliation verdict + the approved items it drew on. Persisted as
+      // the item's outcome/provenance; omitted (fresh, no basis) when the
+      // answer wasn't reconciled against prior approved items.
+      outcome?: QuestionnaireItemOutcome;
+      basisItemIds?: string[];
     }
   ): Promise<QuestionnaireItem | undefined>;
   failItem(questionLogId: string, error: string): Promise<QuestionnaireItem | undefined>;
@@ -54,6 +73,10 @@ export interface QuestionnaireStore {
 interface StoredItem extends QuestionnaireItem {
   embedding?: number[];
   embeddingModel?: string;
+  // Candidate ids stashed by the reconciler (mirrors reconcile_candidate_ids).
+  reconcileCandidateIds?: string[];
+  // Provenance recorded at completion time (mirrors questionnaire_item_basis).
+  basisItemIds?: string[];
 }
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -159,6 +182,35 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
     return best;
   }
 
+  async matchApprovedTopN(
+    flowId: string,
+    embedding: number[],
+    model: string,
+    limit: number
+  ): Promise<Array<{ item: QuestionnaireItem; similarity: number }>> {
+    const candidates: Array<{ item: QuestionnaireItem; similarity: number }> = [];
+    for (const item of this.items.values()) {
+      const questionnaire = this.questionnaires.get(item.questionnaireId);
+      if (!questionnaire || questionnaire.flowId !== flowId) continue;
+      if (item.status !== "approved" || !item.embedding || item.embeddingModel !== model) continue;
+      const similarity = cosineSimilarity(item.embedding, embedding);
+      candidates.push({ item: structuredClone(item), similarity });
+    }
+    candidates.sort((a, b) => b.similarity - a.similarity);
+    return candidates.slice(0, limit);
+  }
+
+  async setReconcileCandidates(itemId: string, basisItemIds: string[]): Promise<void> {
+    const item = this.items.get(itemId);
+    if (!item) return;
+    item.reconcileCandidateIds = basisItemIds;
+  }
+
+  async reconcileCandidateIds(itemId: string): Promise<string[]> {
+    const item = this.items.get(itemId);
+    return item?.reconcileCandidateIds ?? [];
+  }
+
   async markReused(itemId: string, from: { itemId: string; answer: string; answeredAt: string }): Promise<void> {
     const item = this.items.get(itemId);
     if (!item) return;
@@ -195,6 +247,8 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
       citations: QuestionnaireItemCitation[];
       unanswerable: boolean;
       confidence: Confidence;
+      outcome?: QuestionnaireItemOutcome;
+      basisItemIds?: string[];
     }
   ): Promise<QuestionnaireItem | undefined> {
     const item = await this.findByLog(questionLogId);
@@ -204,6 +258,15 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
     item.answeredAt = result.answeredAt;
     item.citations = result.citations;
     item.confidence = result.confidence;
+    if (result.outcome) {
+      item.outcome = result.outcome;
+    }
+    if (result.basisItemIds && result.basisItemIds.length > 0) {
+      item.basisItemIds = result.basisItemIds;
+      if (result.basisItemIds.length === 1) {
+        item.reusedFromItemId = result.basisItemIds[0];
+      }
+    }
     return structuredClone(item);
   }
 
