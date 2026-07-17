@@ -122,7 +122,7 @@ export function QuestionnaireDetail({
                 {item.position + 1}. {item.question}
               </strong>
             </Row>
-            {item.answer ? <AnswerText>{item.answer}</AnswerText> : null}
+            {item.answer && item.status !== "unanswerable" ? <AnswerText>{item.answer}</AnswerText> : null}
             {item.status === "unanswerable" ? (
               <ReasonText>
                 {item.error

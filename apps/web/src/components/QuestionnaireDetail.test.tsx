@@ -193,9 +193,11 @@ function lowConfidenceWorksheet(): Questionnaire {
         questionnaireId: "qn-2",
         position: 1,
         question: "Do you have a bug bounty?",
-        // A grounded-but-uncertain answer can still carry status "unanswerable" under
-        // the pre-reconciliation backend; the worksheet must show the answer text
-        // regardless, rather than gating render on status (show-don't-suppress).
+        // Post-Phase-A, a truly unanswerable item (no citations) must NOT
+        // render its answer text — even if the model produced an ungrounded
+        // guess — because it sits right next to the "could not answer this"
+        // reason and would contradict the Markdown export, which blanks
+        // unanswerable items to "_No answer available._" (show, don't leak).
         status: "unanswerable",
         outcome: "fresh",
         answer: "We have an informal bug bounty via email.",
@@ -207,7 +209,7 @@ function lowConfidenceWorksheet(): Questionnaire {
   };
 }
 
-test("renders a low-confidence badge and always shows the answer, even for unanswerable items", async () => {
+test("renders a low-confidence badge and its answer for a grounded answered item, but suppresses the answer text for an unanswerable item", async () => {
   const { container, unmount } = await renderDom(
     <QuestionnaireDetail {...props({ onGet: async () => lowConfidenceWorksheet() })} />
   );
@@ -215,12 +217,16 @@ test("renders a low-confidence badge and always shows the answer, even for unans
     const text = container.textContent ?? "";
     const badgeSpans = [...container.querySelectorAll("span")].filter((el) => el.textContent === "low confidence");
     assert.equal(badgeSpans.length, 2, "both the low- and unknown-confidence items get a badge");
+    // Grounded low-confidence answer (status "answered"): shows its answer, with the badge.
     assert.match(text, /We aim to respond within 4 hours\./);
-    assert.match(
+    // Truly unanswerable item: the ungrounded guess must NOT render, and the
+    // "could not answer" reason takes its place instead.
+    assert.doesNotMatch(
       text,
       /We have an informal bug bounty via email\./,
-      "answer renders even though status is unanswerable"
+      "ungrounded answer text must not render for an unanswerable item"
     );
+    assert.match(text, /logged as a knowledge gap/);
   } finally {
     unmount();
   }
