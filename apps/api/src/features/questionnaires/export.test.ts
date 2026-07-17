@@ -102,3 +102,27 @@ test("csv carries a confidence column", () => {
   assert.match(csv.split("\r\n")[0]!, /confidence/);
   assert.match(csv, /medium/);
 });
+
+test("markdown shows a provenance line for adapted and merged outcomes", () => {
+  const q = questionnaire([
+    item({
+      position: 0,
+      question: "Adapted Q",
+      status: "answered",
+      answer: "Adapted answer.",
+      confidence: "high",
+      outcome: "adapted"
+    }),
+    item({
+      position: 1,
+      question: "Merged Q",
+      status: "answered",
+      answer: "Merged answer.",
+      confidence: "high",
+      outcome: "merged"
+    })
+  ]);
+  const md = exportQuestionnaire(q, "md");
+  assert.match(md, /Source: adapted from a prior approved answer/);
+  assert.match(md, /Source: merged from prior approved answers/);
+});

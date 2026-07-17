@@ -26,17 +26,14 @@ function toMarkdown(questionnaire: Questionnaire): string {
   return lines.join("\n");
 }
 
-// NOTE: the task-3 brief's provenanceLine also switches on "adapted" and
-// "merged" outcomes, but QuestionnaireItemOutcome (packages/core) is
-// currently only "reused" | "fresh" | "changed" — those values arrive in a
-// later task. Adding those case labels now fails tsc (TS2678: string
-// literal not comparable to the outcome union), so they're deliberately
-// omitted here rather than worked around with a cast. Extend this switch
-// when QuestionnaireItemOutcome widens to include them.
 function provenanceLine(item: QuestionnaireItem): string | undefined {
   switch (item.outcome) {
     case "reused":
       return "Source: reused from a prior approved answer";
+    case "adapted":
+      return "Source: adapted from a prior approved answer";
+    case "merged":
+      return "Source: merged from prior approved answers";
     default:
       return undefined;
   }
