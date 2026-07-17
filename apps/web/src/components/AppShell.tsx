@@ -10,7 +10,6 @@ import { extractModelInfo } from "../lib/config";
 import { isActiveJob, sectionSubtitle, sectionTitle } from "../lib/console";
 import { SECTION_NAV, sectionFromPath } from "../lib/sections";
 import { NavButton } from "./common";
-import { BuildStatus } from "./BuildStatus";
 import { useConsole } from "./ConsoleProvider";
 import { authConfiguredFromWindow } from "./AuthProvider";
 import { StatusPill } from "./StatusPill";
@@ -31,12 +30,18 @@ const Sidebar = styled.aside(({ theme }) => ({
   position: "sticky",
   top: 0,
   height: "100vh",
+  // Flex column so the brand stays put and the nav takes the remaining height
+  // and scrolls internally — the sidebar can never clip its own content on a
+  // short viewport (the old fixed-height block pushed the status off-screen).
+  display: "flex",
+  flexDirection: "column",
   borderRight: `1px solid ${theme.color.border}`,
   background: theme.color.surfaceMuted,
   padding: "18px 14px",
   [MOBILE]: {
     position: "static",
     height: "auto",
+    display: "block",
     borderRight: 0,
     borderBottom: `1px solid ${theme.color.border}`,
     padding: "10px 14px"
@@ -115,6 +120,11 @@ const MenuToggleIcon = styled.span({
 const SideNav = styled.nav<{ $open: boolean }>(({ theme, $open }) => ({
   display: "grid",
   gap: theme.space.xs,
+  // Take the height left below the brand and scroll internally if the section
+  // list is taller than the viewport, so no nav item is ever clipped.
+  flex: "1 1 auto",
+  minHeight: 0,
+  overflowY: "auto",
   [MOBILE]: $open
     ? {
         display: "grid",
@@ -132,57 +142,6 @@ const NavDivider = styled.div(({ theme }) => ({
   height: "1px",
   margin: `${theme.space.sm} ${theme.space.md}`,
   background: theme.color.border
-}));
-
-const SideStatus = styled.div(({ theme }) => ({
-  display: "grid",
-  gap: theme.space.xl,
-  marginTop: "22px",
-  borderTop: `1px solid ${theme.color.border}`,
-  padding: "16px 8px 0",
-  [MOBILE]: { display: "none" }
-}));
-
-const StatusGroup = styled.div(({ theme }) => ({ display: "grid", gap: theme.space.md }));
-
-const StatusGroupTitle = styled.p(({ theme }) => ({
-  margin: 0,
-  color: theme.color.textSubtle,
-  fontSize: "10px",
-  fontWeight: theme.font.weight.semibold,
-  letterSpacing: "0.06em",
-  textTransform: "uppercase"
-}));
-
-const StatusLine = styled.div(({ theme }) => ({
-  display: "flex",
-  flexDirection: "column",
-  gap: theme.space.xs,
-  color: theme.color.textMuted,
-  fontSize: theme.font.size.sm,
-  fontWeight: theme.font.weight.medium,
-  "& > span:first-of-type": {
-    color: theme.color.textMuted,
-    fontSize: "10px",
-    fontWeight: theme.font.weight.semibold,
-    textTransform: "uppercase"
-  },
-  "& > span:last-of-type": {
-    display: "flex",
-    alignItems: "center",
-    gap: theme.space.sm,
-    color: theme.color.text,
-    fontWeight: theme.font.weight.medium
-  }
-}));
-
-const Dot = styled.span<{ $offline?: boolean }>(({ theme, $offline }) => ({
-  display: "inline-block",
-  width: "9px",
-  height: "9px",
-  marginRight: "5px",
-  borderRadius: "999px",
-  background: $offline ? theme.color.status.failed.dot : theme.color.status.completed.dot
 }));
 
 const MainArea = styled.main(({ theme }) => ({
@@ -247,10 +206,11 @@ function AuthActions() {
   );
 }
 
-// Shared console chrome: sidebar (brand, nav, live status) and the topbar. It is
-// rendered once by the root layout and wraps the active section route as
-// `children`, deriving the active section from the URL so a refresh highlights
-// the right nav entry and shows the right title.
+// Shared console chrome: the sidebar (brand + section nav) and the topbar
+// (title + live status/notification popover). It is rendered once by the root
+// layout and wraps the active section route as `children`, deriving the active
+// section from the URL so a refresh highlights the right nav entry and shows
+// the right title.
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const activeSection = sectionFromPath(pathname);
@@ -266,7 +226,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     maintenanceRuns,
     prompts,
     config,
-    latestJob,
     attentionNotices,
     refreshing,
     lastRefreshedAt,
@@ -314,6 +273,22 @@ export function AppShell({ children }: { children: ReactNode }) {
       }
     : {};
 
+  // Live system/model status, surfaced in the topbar notification popover (it
+  // used to live in a sidebar block that got clipped off short viewports).
+  // Undefined until the first refresh lands, which hides the System group.
+  const systemStatus = hasLoaded
+    ? {
+        apiOnline: Boolean(health?.ok),
+        provider: config?.aiRuntime.provider ?? "not set",
+        retrieval: config?.retrieval.mode === "hybrid" ? "Hybrid (semantic + keyword)" : "Keyword only",
+        retrievalReason: config?.retrieval.reason,
+        chatModel: modelInfo.chatModel,
+        chatHost: modelInfo.chatHost,
+        embeddingModel: modelInfo.embeddingModel,
+        embeddingHost: modelInfo.embeddingHost
+      }
+    : undefined;
+
   return (
     <Shell>
       <Sidebar>
@@ -351,82 +326,13 @@ export function AppShell({ children }: { children: ReactNode }) {
               <NavButton
                 active={activeSection === entry.section}
                 count={counts[entry.section]}
-                glyph={entry.glyph}
+                icon={entry.icon}
                 label={entry.label}
                 href={entry.path}
               />
             </Fragment>
           ))}
         </SideNav>
-        <SideStatus>
-          <StatusGroup>
-            <StatusGroupTitle>System</StatusGroupTitle>
-            <StatusLine>
-              <span>API</span>
-              <span>
-                <Dot $offline={!health?.ok} />
-                {health?.ok ? "Online" : "Offline"}
-              </span>
-            </StatusLine>
-            <StatusLine>
-              <span>Documents</span>
-              <span>{stats.documentCount}</span>
-            </StatusLine>
-            <StatusLine>
-              <span>Sections</span>
-              <span>{stats.sectionCount}</span>
-            </StatusLine>
-            <StatusLine>
-              <span>Latest Job</span>
-              <span>
-                {latestJob ? <Dot $offline={latestJob.state === "failed"} /> : null}
-                {latestJob ? latestJob.state : "None"}
-              </span>
-            </StatusLine>
-          </StatusGroup>
-
-          <StatusGroup>
-            <StatusGroupTitle>Model</StatusGroupTitle>
-            <StatusLine>
-              <span>Provider</span>
-              <span>{config?.aiRuntime.provider ?? "not set"}</span>
-            </StatusLine>
-            {modelInfo.chatModel && (
-              <StatusLine>
-                <span>Chat</span>
-                <span title={modelInfo.chatHost || undefined}>
-                  {modelInfo.chatModel}
-                  {modelInfo.chatHost && ` (${modelInfo.chatHost})`}
-                </span>
-              </StatusLine>
-            )}
-            {modelInfo.embeddingModel && (
-              <StatusLine>
-                <span>Embedding</span>
-                <span title={modelInfo.embeddingHost || undefined}>
-                  {modelInfo.embeddingModel}
-                  {modelInfo.embeddingHost && ` (${modelInfo.embeddingHost})`}
-                </span>
-              </StatusLine>
-            )}
-            <StatusLine>
-              <span>Retrieval</span>
-              <span title={config?.retrieval.reason}>
-                {config?.retrieval.mode === "hybrid" ? "Hybrid (semantic + keyword)" : "Keyword only"}
-              </span>
-            </StatusLine>
-          </StatusGroup>
-
-          <StatusGroup>
-            <StatusGroupTitle>Session</StatusGroupTitle>
-            <StatusLine>
-              <span>Updated</span>
-              <span>{lastRefreshedAt ? new Date(lastRefreshedAt).toLocaleTimeString() : "Never"}</span>
-            </StatusLine>
-          </StatusGroup>
-
-          <BuildStatus />
-        </SideStatus>
       </Sidebar>
 
       <MainArea>
@@ -444,6 +350,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               loaded={hasLoaded}
               notices={hasLoaded ? attentionNotices : []}
               notifications={notifications}
+              system={systemStatus}
               onOpen={markNotificationsRead}
               onDismissNotification={dismissNotification}
               onClearNotifications={clearNotifications}

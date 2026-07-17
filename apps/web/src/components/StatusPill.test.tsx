@@ -19,6 +19,16 @@ function notification(overrides: Partial<UiNotification> & Pick<UiNotification, 
 const noop = () => undefined;
 const handlers = { onOpen: noop, onDismissNotification: noop, onClearNotifications: noop };
 
+const system = {
+  apiOnline: true,
+  provider: "openai-compatible",
+  retrieval: "Hybrid (semantic + keyword)",
+  chatModel: "deepseek-chat",
+  chatHost: "DeepSeek",
+  embeddingModel: "text-embedding-3-small",
+  embeddingHost: "OpenAI"
+};
+
 test("StatusPill shows a neutral placeholder until the first refresh lands", () => {
   const html = renderMarkup(<StatusPill loaded={false} notices={[]} notifications={[]} {...handlers} />);
   assert.match(html, /Checking status/);
@@ -117,6 +127,30 @@ test("StatusPill dismisses and clears notifications, and closes on Escape", asyn
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     });
     assert.equal(container.querySelector('[role="dialog"]'), null, "Escape closes the popover");
+  } finally {
+    unmount();
+  }
+});
+
+test("StatusPill omits the System group until status is provided", () => {
+  const html = renderMarkup(<StatusPill loaded notices={[]} notifications={[]} {...handlers} />);
+  assert.doesNotMatch(html, /System/);
+});
+
+test("StatusPill surfaces the relocated system status in the popover", async () => {
+  const { container, unmount } = await renderDom(
+    <StatusPill loaded notices={[]} notifications={[]} system={system} {...handlers} />
+  );
+  try {
+    await click(container.querySelector("button[aria-haspopup]") as HTMLElement);
+    const dialog = container.querySelector('[role="dialog"]');
+    assert.ok(dialog, "popover opens");
+    const text = dialog!.textContent ?? "";
+    assert.match(text, /System/);
+    assert.match(text, /Online/);
+    assert.match(text, /openai-compatible/);
+    assert.match(text, /deepseek-chat \(DeepSeek\)/);
+    assert.match(text, /Hybrid \(semantic \+ keyword\)/);
   } finally {
     unmount();
   }

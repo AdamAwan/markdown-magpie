@@ -1,9 +1,29 @@
+import {
+  Activity,
+  BookOpen,
+  CalendarClock,
+  ChartColumn,
+  CircleDashed,
+  ClipboardList,
+  GitPullRequest,
+  ListChecks,
+  MessageCircleQuestion,
+  MessageSquareText,
+  Plug,
+  Settings,
+  Sprout,
+  Waypoints,
+  Workflow,
+  type LucideIcon
+} from "lucide-react";
 import { ConsoleSection } from "./types";
 
 export interface SectionNav {
   section: ConsoleSection;
   path: string;
-  glyph: string;
+  // The nav icon for this section (a lucide line icon). Replaces the old
+  // hand-typed letter glyphs so the sidebar reads as icons, not abbreviations.
+  icon: LucideIcon;
   label: string;
   // Sidebar grouping: entries sharing a group render together, with a divider
   // between groups. Entries are listed in display order.
@@ -14,21 +34,21 @@ export interface SectionNav {
 // and sidebar presentation. Routing, nav highlighting and the topbar title all
 // derive the active section from the URL via this table.
 export const SECTION_NAV: SectionNav[] = [
-  { section: "ask", path: "/ask", glyph: "Q", label: "Ask", group: 1 },
-  { section: "knowledge", path: "/knowledge", glyph: "K", label: "Knowledge", group: 1 },
-  { section: "gaps", path: "/gaps", glyph: "G", label: "Gaps", group: 1 },
-  { section: "seed", path: "/seed", glyph: "Se", label: "Seed", group: 1 },
-  { section: "questionnaires", path: "/questionnaires", glyph: "Qn", label: "Questionnaires", group: 1 },
-  { section: "proposals", path: "/proposals", glyph: "P", label: "Proposals", group: 1 },
-  { section: "source-map", path: "/source-map", glyph: "Sm", label: "Source Map", group: 1 },
-  { section: "jobs", path: "/jobs", glyph: "J", label: "Jobs", group: 2 },
-  { section: "activity", path: "/activity", glyph: "A", label: "Activity", group: 2 },
-  { section: "insights", path: "/insights", glyph: "I", label: "Insights", group: 2 },
-  { section: "schedules", path: "/schedules", glyph: "Sc", label: "Schedules", group: 2 },
-  { section: "config", path: "/config", glyph: "C", label: "Config", group: 2 },
-  { section: "dataflow", path: "/dataflow", glyph: "D", label: "Data Flow", group: 3 },
-  { section: "prompts", path: "/prompts", glyph: "Pr", label: "Prompts", group: 3 },
-  { section: "mcp", path: "/mcp", glyph: "M", label: "Connect (MCP)", group: 3 }
+  { section: "ask", path: "/ask", icon: MessageCircleQuestion, label: "Ask", group: 1 },
+  { section: "knowledge", path: "/knowledge", icon: BookOpen, label: "Knowledge", group: 1 },
+  { section: "gaps", path: "/gaps", icon: CircleDashed, label: "Gaps", group: 1 },
+  { section: "seed", path: "/seed", icon: Sprout, label: "Seed", group: 1 },
+  { section: "questionnaires", path: "/questionnaires", icon: ClipboardList, label: "Questionnaires", group: 1 },
+  { section: "proposals", path: "/proposals", icon: GitPullRequest, label: "Proposals", group: 1 },
+  { section: "source-map", path: "/source-map", icon: Waypoints, label: "Source Map", group: 1 },
+  { section: "jobs", path: "/jobs", icon: ListChecks, label: "Jobs", group: 2 },
+  { section: "activity", path: "/activity", icon: Activity, label: "Activity", group: 2 },
+  { section: "insights", path: "/insights", icon: ChartColumn, label: "Insights", group: 2 },
+  { section: "schedules", path: "/schedules", icon: CalendarClock, label: "Schedules", group: 2 },
+  { section: "config", path: "/config", icon: Settings, label: "Config", group: 2 },
+  { section: "dataflow", path: "/dataflow", icon: Workflow, label: "Data Flow", group: 3 },
+  { section: "prompts", path: "/prompts", icon: MessageSquareText, label: "Prompts", group: 3 },
+  { section: "mcp", path: "/mcp", icon: Plug, label: "Connect (MCP)", group: 3 }
 ];
 
 const DEFAULT_SECTION: ConsoleSection = "ask";

@@ -1,5 +1,7 @@
+import { ReactNode } from "react";
 import Link from "next/link";
 import styled from "@emotion/styled";
+import type { LucideIcon } from "lucide-react";
 import { Citation } from "../lib/types";
 import { Badge } from "./ui";
 
@@ -25,34 +27,34 @@ const NavLink = styled(Link, { shouldForwardProp: (prop) => prop !== "$active" }
   })
 );
 
-const NavGlyph = styled.span(({ theme }) => ({
+// Wraps the nav icon so it sits centred in the 24px leading column. The icon
+// inherits the link's colour (`currentColor`), so it tints with the active and
+// hover states rather than carrying its own fixed accent.
+const NavGlyph = styled.span({
   display: "inline-grid",
   width: "24px",
   height: "24px",
-  placeItems: "center",
-  border: `1px solid ${theme.color.border}`,
-  borderRadius: theme.radius.sm,
-  color: theme.color.accent,
-  fontSize: theme.font.size.sm,
-  fontWeight: theme.font.weight.bold
-}));
+  placeItems: "center"
+});
 
 export function NavButton({
   active,
   count,
-  glyph,
+  icon: Icon,
   label,
   href
 }: {
   active: boolean;
   count?: number;
-  glyph: string;
+  icon: LucideIcon;
   label: string;
   href: string;
 }) {
   return (
     <NavLink $active={active} href={href} title={`Open ${label}`} aria-current={active ? "page" : undefined}>
-      <NavGlyph>{glyph}</NavGlyph>
+      <NavGlyph>
+        <Icon size={17} strokeWidth={2} aria-hidden="true" />
+      </NavGlyph>
       <span>{label}</span>
       {count === undefined ? null : (
         <Badge tone="neutral" title={`${count} ${label.toLowerCase()} item${count === 1 ? "" : "s"}`}>
@@ -153,5 +155,57 @@ export function ContextValue({ label, value }: { label: string; value: string })
       <span>{label}</span>
       <strong>{value}</strong>
     </ContextCard>
+  );
+}
+
+// A single compact status line: muted label on the left, value on the right,
+// the value truncating with an ellipsis so long model names/hosts never wrap or
+// overflow their container. Shared by the topbar status popover's System group
+// and the Build sub-block so the two render identically.
+const StatusRowWrap = styled.div(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: theme.space.lg,
+  fontSize: theme.font.size.sm,
+  "& > span:first-of-type": {
+    flexShrink: 0,
+    color: theme.color.textMuted,
+    fontWeight: theme.font.weight.semibold
+  }
+}));
+
+const StatusRowValue = styled.span(({ theme }) => ({
+  display: "flex",
+  alignItems: "center",
+  gap: theme.space.sm,
+  minWidth: 0,
+  overflow: "hidden",
+  color: theme.color.text,
+  fontWeight: theme.font.weight.medium,
+  whiteSpace: "nowrap",
+  "& > span": { overflow: "hidden", textOverflow: "ellipsis" }
+}));
+
+export function StatusRow({
+  label,
+  value,
+  leading,
+  title
+}: {
+  label: string;
+  value: string;
+  // Optional leading adornment (e.g. a coloured status dot).
+  leading?: ReactNode;
+  title?: string;
+}) {
+  return (
+    <StatusRowWrap>
+      <span>{label}</span>
+      <StatusRowValue title={title ?? value}>
+        {leading}
+        <span>{value}</span>
+      </StatusRowValue>
+    </StatusRowWrap>
   );
 }
