@@ -168,6 +168,70 @@ test("export buttons call the authed export handler with the format", async () =
   }
 });
 
+function lowConfidenceWorksheet(): Questionnaire {
+  return {
+    id: "qn-2",
+    name: "Acme Uncertainty QN",
+    flowId: "security",
+    status: "open",
+    createdAt: "2026-07-16T00:00:00.000Z",
+    items: [
+      {
+        id: "j-0",
+        questionnaireId: "qn-2",
+        position: 0,
+        question: "What is your incident response SLA?",
+        status: "answered",
+        outcome: "fresh",
+        answer: "We aim to respond within 4 hours.",
+        confidence: "low",
+        staleAtApproval: false,
+        citations: []
+      },
+      {
+        id: "j-1",
+        questionnaireId: "qn-2",
+        position: 1,
+        question: "Do you have a bug bounty?",
+        // Post-Phase-A, a truly unanswerable item (no citations) must NOT
+        // render its answer text — even if the model produced an ungrounded
+        // guess — because it sits right next to the "could not answer this"
+        // reason and would contradict the Markdown export, which blanks
+        // unanswerable items to "_No answer available._" (show, don't leak).
+        status: "unanswerable",
+        outcome: "fresh",
+        answer: "We have an informal bug bounty via email.",
+        confidence: "unknown",
+        staleAtApproval: false,
+        citations: []
+      }
+    ]
+  };
+}
+
+test("renders a low-confidence badge and its answer for a grounded answered item, but suppresses the answer text for an unanswerable item", async () => {
+  const { container, unmount } = await renderDom(
+    <QuestionnaireDetail {...props({ onGet: async () => lowConfidenceWorksheet() })} />
+  );
+  try {
+    const text = container.textContent ?? "";
+    const badgeSpans = [...container.querySelectorAll("span")].filter((el) => el.textContent === "low confidence");
+    assert.equal(badgeSpans.length, 2, "both the low- and unknown-confidence items get a badge");
+    // Grounded low-confidence answer (status "answered"): shows its answer, with the badge.
+    assert.match(text, /We aim to respond within 4 hours\./);
+    // Truly unanswerable item: the ungrounded guess must NOT render, and the
+    // "could not answer" reason takes its place instead.
+    assert.doesNotMatch(
+      text,
+      /We have an informal bug bounty via email\./,
+      "ungrounded answer text must not render for an unanswerable item"
+    );
+    assert.match(text, /logged as a knowledge gap/);
+  } finally {
+    unmount();
+  }
+});
+
 test("an unknown id shows a not-found state with the back link", async () => {
   const { container, unmount } = await renderDom(<QuestionnaireDetail {...props({ onGet: async () => undefined })} />);
   try {

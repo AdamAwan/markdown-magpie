@@ -167,6 +167,26 @@ Return JSON:
 }`
 };
 
+export const RECONCILE_ANSWER: PromptDefinition = {
+  id: "reconcile-answer",
+  title: "Reconcile a question against prior approved answers",
+  description:
+    "Decides whether a new question can be satisfied by prior APPROVED answers to similar questions — reused verbatim, adapted from one, or merged from several — against the current retrieved knowledge-base sections, or must be answered fresh. Run by the watcher's answer_question runner when the job carries reuse candidates (questionnaire trust).",
+  usedBy: ["watcher"],
+  outputShape: '{ verdict:"reused"|"adapted"|"merged"|"fresh", basisItemIds[], answer }',
+  instructions: [
+    "You are reconciling a new question against prior APPROVED answers to similar questions.",
+    "You are given the candidate answers and the current knowledge-base sections retrieved for the question.",
+    "Prefer to satisfy the question from the candidates if they are still fully supported by the current sections.",
+    'Reply as JSON with { "verdict": one of "reused"|"adapted"|"merged"|"fresh", "basisItemIds": string[], "answer": string }.',
+    '- reused: exactly one candidate is still fully correct and complete → set basisItemIds:[thatId], answer:"".',
+    "- adapted: one candidate is close but needs edits → basisItemIds:[thatId], answer:<edited>.",
+    "- merged: several combine → basisItemIds:[ids...], answer:<merged>.",
+    '- fresh: none are usable → basisItemIds:[], answer:"" (the normal answer flow will run).',
+    UNTRUSTED_CONTENT_CONTRACT
+  ].join("\n")
+};
+
 export const SUMMARIZE_GAP: PromptDefinition = {
   id: "summarize-gap",
   title: "Summarize knowledge gap",
@@ -752,6 +772,7 @@ export const CONDENSE_FOLLOWUP: PromptDefinition = {
 export const promptCatalog: PromptDefinition[] = [
   ANSWER_QUESTION,
   VERIFY_ANSWER,
+  RECONCILE_ANSWER,
   CONDENSE_FOLLOWUP,
   SUMMARIZE_GAP,
   DRAFT_MARKDOWN_PROPOSAL,

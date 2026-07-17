@@ -80,7 +80,8 @@ describe("PostgresQuestionnaireStore", { skip: databaseUrl ? false : "DATABASE_U
       answer: "We hold ISO 27001.",
       answeredAt,
       citations: [citation("sec-1")],
-      unanswerable: false
+      unanswerable: false,
+      confidence: "high"
     });
     assert.equal(completed?.status, "answered");
     assert.equal(completed?.citations[0]?.sectionId, "sec-1");
@@ -105,7 +106,8 @@ describe("PostgresQuestionnaireStore", { skip: databaseUrl ? false : "DATABASE_U
       answer: "ISO 27001 and SOC 2.",
       answeredAt: new Date().toISOString(),
       citations: [citation("sec-cert")],
-      unanswerable: false
+      unanswerable: false,
+      confidence: "high"
     });
     await store.setItemEmbeddings([{ itemId: item.id, embedding: axisEmbedding(3), model: "test-model" }]);
 
@@ -171,7 +173,8 @@ describe("PostgresQuestionnaireStore", { skip: databaseUrl ? false : "DATABASE_U
       answer: "answer",
       answeredAt: new Date().toISOString(),
       citations: [citation("sec-old")],
-      unanswerable: false
+      unanswerable: false,
+      confidence: "high"
     });
 
     await store.approveItem(item.id, [citation("sec-new")], true);
@@ -183,5 +186,152 @@ describe("PostgresQuestionnaireStore", { skip: databaseUrl ? false : "DATABASE_U
       ["sec-new"]
     );
     assert.ok(fetched?.items[0].approvedAt);
+  });
+
+  it("matchApprovedTopN returns candidates ordered by similarity and respects limit", async () => {
+    const flowId = `flow-${randomUUID()}`;
+    const created = await store.create({
+      name: `topN ${randomUUID()}`,
+      flowId,
+      questions: ["closest", "middle", "farthest"]
+    });
+    const [closest, middle, farthest] = created.items;
+
+    for (const item of [closest, middle, farthest]) {
+      const log = `log-${randomUUID()}`;
+      await store.markAnswering(item.id, log);
+      await store.completeItem(log, {
+        answer: "answer",
+        answeredAt: new Date().toISOString(),
+        citations: [citation(`sec-${item.id}`)],
+        unanswerable: false,
+        confidence: "high"
+      });
+      await store.approveItem(item.id, [citation(`sec-${item.id}`)], false);
+    }
+
+    // Two axes blended at a fixed ratio give a deterministic, strictly ordered
+    // similarity relative to axis 0 without relying on floating-point ties.
+    function blended(primary: number, secondary: number, secondaryWeight: number): number[] {
+      const vector = new Array<number>(1536).fill(0);
+      vector[primary] = 1;
+      vector[secondary] = secondaryWeight;
+      return vector;
+    }
+
+    await store.setItemEmbeddings([
+      { itemId: closest.id, embedding: axisEmbedding(0), model: "topn-model" },
+      { itemId: middle.id, embedding: blended(0, 1, 1), model: "topn-model" },
+      { itemId: farthest.id, embedding: axisEmbedding(1), model: "topn-model" }
+    ]);
+
+    const query = axisEmbedding(0);
+    const top2 = await store.matchApprovedTopN(flowId, query, "topn-model", 2);
+    assert.equal(top2.length, 2);
+    assert.deepEqual(
+      top2.map((candidate) => candidate.item.id),
+      [closest.id, middle.id]
+    );
+    assert.ok(top2[0].similarity > top2[1].similarity);
+    assert.equal(top2[0].item.citations[0]?.sectionId, `sec-${closest.id}`);
+
+    const all = await store.matchApprovedTopN(flowId, query, "topn-model", 10);
+    assert.deepEqual(
+      all.map((candidate) => candidate.item.id),
+      [closest.id, middle.id, farthest.id]
+    );
+  });
+
+  it("stashes and reads back reconcile candidate ids", async () => {
+    const created = await store.create({ name: `stash ${randomUUID()}`, flowId: "flow-a", questions: ["q0"] });
+    const item = created.items[0];
+
+    assert.deepEqual(await store.reconcileCandidateIds(item.id), []);
+
+    await store.setReconcileCandidates(item.id, ["cand-1", "cand-2"]);
+    assert.deepEqual(await store.reconcileCandidateIds(item.id), ["cand-1", "cand-2"]);
+  });
+
+  it("completeItem records outcome and basis provenance, setting reusedFromItemId only for a single basis", async () => {
+    // Basis ids must reference REAL questionnaire_items rows —
+    // reused_from_item_id carries a foreign key (migration 0055). Extra
+    // questions serve as concrete basis items.
+    const created = await store.create({
+      name: `verdict ${randomUUID()}`,
+      flowId: "flow-a",
+      questions: ["merged", "adapted", "basis-one", "basis-two"]
+    });
+    const [mergedItem, adaptedItem, basisOne, basisTwo] = created.items;
+
+    const mergedLog = `log-${randomUUID()}`;
+    await store.markAnswering(mergedItem.id, mergedLog);
+    const merged = await store.completeItem(mergedLog, {
+      answer: "Merged from two prior answers.",
+      answeredAt: new Date().toISOString(),
+      citations: [],
+      unanswerable: false,
+      confidence: "medium",
+      outcome: "merged",
+      basisItemIds: [basisOne.id, basisTwo.id]
+    });
+    assert.equal(merged?.outcome, "merged");
+    assert.equal(merged?.reusedFromItemId, undefined, "multi-source basis has no single reused-from item");
+
+    const adaptedLog = `log-${randomUUID()}`;
+    await store.markAnswering(adaptedItem.id, adaptedLog);
+    const adapted = await store.completeItem(adaptedLog, {
+      answer: "Adapted from a single prior answer.",
+      answeredAt: new Date().toISOString(),
+      citations: [],
+      unanswerable: false,
+      confidence: "high",
+      outcome: "adapted",
+      basisItemIds: [basisOne.id]
+    });
+    assert.equal(adapted?.outcome, "adapted");
+    assert.equal(adapted?.reusedFromItemId, basisOne.id);
+  });
+
+  it("completeItem reconciles the questionnaire_item_basis table on re-answer, clearing stale basis rows", async () => {
+    // A second question serves as the real basis item (reused_from_item_id FK).
+    const created = await store.create({
+      name: `basis-clear ${randomUUID()}`,
+      flowId: "flow-a",
+      questions: ["q0", "basis-donor"]
+    });
+    const [item, donor] = created.items;
+
+    // First completion: a single-source reuse — a basis_item_id row gets
+    // inserted and reused_from_item_id is set from the single basis id.
+    const firstLog = `log-${randomUUID()}`;
+    await store.markAnswering(item.id, firstLog);
+    const first = await store.completeItem(firstLog, {
+      answer: "Adapted from a single prior answer.",
+      answeredAt: new Date().toISOString(),
+      citations: [],
+      unanswerable: false,
+      confidence: "high",
+      outcome: "adapted",
+      basisItemIds: [donor.id]
+    });
+    assert.equal(first?.outcome, "adapted");
+    assert.equal(first?.reusedFromItemId, donor.id);
+    assert.deepEqual(await store.basisItemIds(item.id), [donor.id]);
+
+    // Second completion for the SAME item's question_log_id lineage: a fresh
+    // re-answer with no outcome/basisItemIds. The Postgres clearing path
+    // (replaceBasis) must DELETE the stale rows, not leave them stranded.
+    const secondLog = `log-${randomUUID()}`;
+    await store.markAnswering(item.id, secondLog);
+    const second = await store.completeItem(secondLog, {
+      answer: "A brand new fresh answer, not reused from anything.",
+      answeredAt: new Date().toISOString(),
+      citations: [],
+      unanswerable: false,
+      confidence: "medium"
+    });
+
+    assert.deepEqual(await store.basisItemIds(item.id), [], "stale basis rows must be cleared");
+    assert.equal(second?.reusedFromItemId, undefined, "stale reused-from pointer must be cleared");
   });
 });

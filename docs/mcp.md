@@ -106,7 +106,7 @@ Creates a [questionnaire](questionnaires.md) — a named batch of questions answ
 
 Input: `{ "name": string, "flow": string, "questions": string[] }` — 1–500 questions, one per entry; `flow` ids come from `kb_flows`.
 
-Returns the initial worksheet immediately (same shape as `kb_questionnaire_get`). **Creation is asynchronous by design**: reused items already carry answers, but fresh/changed items drip through the `answer_question` queue — a batch can be hundreds of questions, so the tool never waits. Re-read with `kb_questionnaire_get` until no items are `pending`/`answering`.
+Returns the initial worksheet immediately (same shape as `kb_questionnaire_get`). **Creation is asynchronous by design**: items the deterministic fast-path already confirmed reusable carry answers immediately; everything else (fresh/adapted/merged/changed) drips through the `answer_question` queue — a batch can be hundreds of questions, so the tool never waits. Re-read with `kb_questionnaire_get` until no items are `pending`/`answering`.
 
 ### `kb_questionnaire_get`
 
@@ -126,7 +126,7 @@ Returns:
       "position": 0,
       "question": "string",
       "status": "pending | answering | answered | unanswerable | approved",
-      "outcome": "reused | fresh | changed", // present once matched/answered
+      "outcome": "reused | adapted | merged | fresh | changed", // present once matched/answered; changed is legacy (QUESTIONNAIRE_RECONCILE_ENABLED=0) only
       "answer": "string",                    // present once answered
       "changeReason": { "kind": "section_changed | section_missing | new_content", "...": "..." },
       "citations": [ { "path": "...", "heading": "..." } ]

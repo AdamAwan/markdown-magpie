@@ -157,6 +157,81 @@ describe("ChatRunner", () => {
     assert.equal(output.citations.length, 1);
   });
 
+  it("reconciles to a reused verdict and short-circuits full synthesis when a candidate still holds", async () => {
+    // Questionnaire trust: when the job is primed with candidate prior answers, the
+    // runner reconciles against the live KB before any synthesis. A "reused" verdict
+    // returns empty answer text (the API copies the real answer verbatim by id),
+    // citations derived from the seed sections, high confidence, and reuse metadata —
+    // and must NOT run the agentic answer loop or grounding verifier.
+    let synthesised = false;
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("reconciling a new question")) {
+        return JSON.stringify({ verdict: "reused", basisItemIds: ["i1"], answer: "" });
+      }
+      // Any answer/verify call means full synthesis ran — the short-circuit failed.
+      synthesised = true;
+      return JSON.stringify({ answer: "freshly synthesised", confidence: "high", isKnowledgeGap: false });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-a", name: "Alpha" }],
+        requestedFlowId: "flow-a",
+        candidates: [{ itemId: "i1", question: "How do I deploy the app?", answer: "Run the deploy script." }],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as {
+      reuse?: { verdict: string; basisItemIds: string[] };
+      answer: string;
+      confidence: string;
+      citations: unknown[];
+    };
+
+    assert.equal(output.reuse?.verdict, "reused");
+    assert.deepEqual(output.reuse?.basisItemIds, ["i1"]);
+    assert.equal(output.answer, "", "reused text is left empty for the API to copy verbatim by id");
+    assert.equal(output.confidence, "high");
+    assert.equal(output.citations.length, 1, "citations are derived from the seed sections");
+    assert.equal(synthesised, false, "full answer synthesis is short-circuited on a reused verdict");
+  });
+
+  it("stamps reuse:fresh and runs the normal synthesis when no candidate holds", async () => {
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("reconciling a new question")) {
+        return JSON.stringify({ verdict: "fresh", basisItemIds: [], answer: "" });
+      }
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      return JSON.stringify({
+        answer: "Run the deploy script.",
+        confidence: "high",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"]
+      });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi());
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-a", name: "Alpha" }],
+        requestedFlowId: "flow-a",
+        candidates: [{ itemId: "i1", question: "an unrelated prior question", answer: "an unrelated prior answer" }],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { reuse?: { verdict: string; basisItemIds: string[] }; answer: string; confidence: string };
+
+    assert.equal(output.reuse?.verdict, "fresh");
+    assert.deepEqual(output.reuse?.basisItemIds, []);
+    assert.equal(output.answer, "Run the deploy script.", "the normal synthesis answer ships on a fresh verdict");
+    assert.equal(output.confidence, "high");
+  });
+
   it("routes via the embedding router without billing a chat routing call", async () => {
     let retrievedFlow: string | undefined = "unset";
     const api = fakeApi({

@@ -38,6 +38,106 @@ function confidentOutput(): AnswerQuestionJobOutput {
   return { answer: "We hold ISO 27001.", confidence: "high", citations: [citation], flowId: "security" };
 }
 
+type Ctx = ReturnType<typeof flowContext>;
+
+// Deterministic axis assignment so the fake embedder can control which
+// questions "match": any question containing ISO lands on axis 0, SOC2 on
+// axis 1, everything else on axis 2 — kept apart so unrelated questions never
+// accidentally collide.
+function axisForText(text: string): number {
+  if (text.includes("ISO")) return 0;
+  if (text.includes("SOC2")) return 1;
+  return 2;
+}
+
+function axisVector(text: string): number[] {
+  const vector = new Array<number>(3).fill(0);
+  vector[axisForText(text)] = 1;
+  return vector;
+}
+
+// A flow context with a configured (fake) embedding provider, so the match
+// phase's `if (embedding && model)` guard is satisfied and matchApprovedTopN
+// has real vectors to compare.
+function embeddingAxisContext(): Ctx {
+  const ctx = flowContext();
+  ctx.settings.embeddings.openAiCompatible = {
+    embeddingBaseUrl: "http://embeddings.test",
+    embeddingApiKey: "test-key",
+    embeddingModel: "test-model"
+  };
+  ctx.providers.embedding = {
+    async embed(texts: string[]): Promise<number[][]> {
+      return texts.map((text) => axisVector(text));
+    }
+  };
+  return ctx;
+}
+
+async function jobForLog(ctx: Ctx, logId: string | undefined) {
+  const { jobs } = await ctx.jobs.list({ type: "answer_question" });
+  return jobs.find((job) => (job.input as { questionLogId?: string }).questionLogId === logId);
+}
+
+// Creates, answers, and approves a questionnaire item so it becomes an
+// approved match-corpus entry (embedding stamped via the real approval-time
+// backfill). Requires ctx to have a configured embedding provider.
+async function createApprovedDonor(ctx: Ctx, opts: { question: string; answer: string }): Promise<string> {
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "donor pool",
+    flowId: "security",
+    questions: [opts.question]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const itemId = created.questionnaire.items[0].id;
+  const item = await ctx.stores.questionnaires.itemById(itemId);
+  const job = await jobForLog(ctx, item?.questionLogId);
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, {
+    answer: opts.answer,
+    confidence: "high",
+    citations: [
+      {
+        documentId: "docs:certs.md",
+        sectionId: `sec-${itemId}`,
+        path: "certs.md",
+        heading: "Certificates",
+        anchor: "0",
+        excerpt: opts.answer,
+        relevance: 0.9
+      }
+    ]
+  });
+  const approved = await questionnaires.approveItem(ctx, created.questionnaire.id, itemId);
+  assert.deepEqual(approved, { ok: true });
+  return itemId;
+}
+
+// Creates and answers (but does not approve) a questionnaire item — enough to
+// serve as a reuse "basis" item for the completion-mapping tests, which read
+// basis.answer/citations directly rather than through the match corpus.
+async function createAnsweredItem(
+  ctx: Ctx,
+  opts: { question: string; answer: string; citation: Citation }
+): Promise<string> {
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "basis pool",
+    flowId: "security",
+    questions: [opts.question]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const itemId = created.questionnaire.items[0].id;
+  const item = await ctx.stores.questionnaires.itemById(itemId);
+  const job = await jobForLog(ctx, item?.questionLogId);
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, {
+    answer: opts.answer,
+    confidence: "high",
+    citations: [opts.citation]
+  });
+  return itemId;
+}
+
 test("createQuestionnaire rejects unknown flows and empty question lists", async () => {
   const ctx = flowContext();
   const unknownFlow = await questionnaires.createQuestionnaire(ctx, {
@@ -190,4 +290,410 @@ test("approveReused bulk-approves only reused items", async () => {
   // No reused items exist (fresh path) → nothing approved.
   const outcome = await questionnaires.approveReused(ctx, created.questionnaire.id);
   assert.deepEqual(outcome, { approved: 0 });
+});
+
+test("low-confidence answer WITH citations is answered (shown), not suppressed", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "Trust",
+    flowId: "security",
+    questions: ["q0"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const { jobs } = await ctx.jobs.list({ type: "answer_question" });
+  const logId = (jobs[0]!.input as { questionLogId: string }).questionLogId;
+
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, jobs[0], {
+    answer: "A grounded but hedged answer.",
+    confidence: "low",
+    citations: [
+      { documentId: "d", sectionId: "s1", path: "p.md", heading: "H", anchor: "h", excerpt: "e", relevance: 0.5 }
+    ]
+  });
+
+  const item = await ctx.stores.questionnaires.itemByQuestionLogId(logId);
+  assert.equal(item?.status, "answered");
+  assert.equal(item?.confidence, "low");
+  assert.equal(item?.answer, "A grounded but hedged answer.");
+});
+
+test("answer with ZERO citations is unanswerable regardless of confidence", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "Trust2",
+    flowId: "security",
+    questions: ["q0"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const { jobs } = await ctx.jobs.list({ type: "answer_question" });
+  const logId = (jobs[0]!.input as { questionLogId: string }).questionLogId;
+
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, jobs[0], {
+    answer: "Ungrounded guess.",
+    confidence: "high",
+    citations: []
+  });
+
+  const item = await ctx.stores.questionnaires.itemByQuestionLogId(logId);
+  assert.equal(item?.status, "unanswerable");
+});
+
+// --- Task 10: top-N match phase, fast-path, candidate-primed drip ---------
+
+test("top-N match: no candidate above threshold leaves the item to answer fresh", async () => {
+  const ctx = embeddingAxisContext();
+  await createApprovedDonor(ctx, { question: "Are you SOC2 certified?", answer: "Yes, SOC2 Type II." });
+
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "query",
+    flowId: "security",
+    questions: ["Do you hold ISO certifications?"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const itemId = created.questionnaire.items[0].id;
+
+  // Orthogonal axis (ISO vs SOC2) => similarity 0, below threshold => 0
+  // candidates => the drip answers it fresh, same as today's "no match" path.
+  assert.deepEqual(await ctx.stores.questionnaires.reconcileCandidateIds(itemId), []);
+  const item = await ctx.stores.questionnaires.itemById(itemId);
+  assert.equal(item?.status, "answering");
+  assert.equal(item?.outcome, "fresh");
+});
+
+test("top-N match: exactly one candidate above threshold is stashed for reconcile, not vetoed", async () => {
+  const ctx = embeddingAxisContext();
+  const donorId = await createApprovedDonor(ctx, {
+    question: "Do you hold ISO 27001 certification?",
+    answer: "Yes, we hold ISO 27001."
+  });
+
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "query",
+    flowId: "security",
+    questions: ["Are you ISO certified?"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const itemId = created.questionnaire.items[0].id;
+
+  // No Postgres knowledge store in unit tests => checkReuse can never confirm
+  // reuse (deps.fingerprints always []) => the single match is never fast-path
+  // reusable => it must be stashed as a reconcile candidate, NOT vetoed via
+  // the legacy markChanged path.
+  assert.deepEqual(await ctx.stores.questionnaires.reconcileCandidateIds(itemId), [donorId]);
+  const item = await ctx.stores.questionnaires.itemById(itemId);
+  assert.equal(item?.changeReason, undefined);
+  assert.equal(item?.reusedFromItemId, undefined);
+
+  const job = await jobForLog(ctx, item?.questionLogId);
+  const input = job?.input as { candidates?: Array<{ itemId: string; question: string; answer: string }> };
+  assert.deepEqual(input.candidates, [
+    { itemId: donorId, question: "Do you hold ISO 27001 certification?", answer: "Yes, we hold ISO 27001." }
+  ]);
+});
+
+test("top-N match: two-plus candidates are all stashed and primed into the drip", async () => {
+  const ctx = embeddingAxisContext();
+  const donor1 = await createApprovedDonor(ctx, { question: "ISO cert question A", answer: "Answer A" });
+  const donor2 = await createApprovedDonor(ctx, { question: "ISO cert question B", answer: "Answer B" });
+
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "query",
+    flowId: "security",
+    questions: ["ISO cert question C"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const itemId = created.questionnaire.items[0].id;
+
+  const candidateIds = await ctx.stores.questionnaires.reconcileCandidateIds(itemId);
+  assert.deepEqual(new Set(candidateIds), new Set([donor1, donor2]));
+
+  const item = await ctx.stores.questionnaires.itemById(itemId);
+  const job = await jobForLog(ctx, item?.questionLogId);
+  const input = job?.input as { candidates?: Array<{ itemId: string }> };
+  assert.equal(input.candidates?.length, 2);
+});
+
+test("match phase preserves the legacy veto behavior when reconcileEnabled is false", async () => {
+  const ctx = embeddingAxisContext();
+  await createApprovedDonor(ctx, {
+    question: "Do you hold ISO 27001 certification?",
+    answer: "Yes, we hold ISO 27001."
+  });
+  ctx.settings.questionnaires.reconcileEnabled = false;
+
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "query",
+    flowId: "security",
+    questions: ["Are you ISO certified?"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const itemId = created.questionnaire.items[0].id;
+
+  // The OLD single-match veto path: matchApproved + checkReuse -> markChanged
+  // (never reused, since checkReuse can't confirm reuse without a knowledge
+  // store) — no reconcile-candidate stash at all.
+  assert.deepEqual(await ctx.stores.questionnaires.reconcileCandidateIds(itemId), []);
+  const item = await ctx.stores.questionnaires.itemById(itemId);
+  assert.equal(item?.outcome, "changed");
+  assert.ok(item?.changeReason);
+});
+
+// --- Task 10: completion verdict mapping ----------------------------------
+
+test("completion maps a merged verdict onto the item outcome and basis", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "target",
+    flowId: "security",
+    questions: ["q0"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const targetItemId = created.questionnaire.items[0].id;
+  const targetItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  const job = await jobForLog(ctx, targetItem?.questionLogId);
+
+  // Basis ids must be REAL items — reused_from_item_id carries an FK, and the
+  // completion drops ids that don't resolve (see the FK-safe filter test).
+  const basisA = await createApprovedDonor(ctx, { question: "Merged source A?", answer: "Source A answer." });
+  const basisB = await createApprovedDonor(ctx, { question: "Merged source B?", answer: "Source B answer." });
+
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, {
+    answer: "A synthesized answer drawing on two priors.",
+    confidence: "high",
+    citations: [
+      { documentId: "d", sectionId: "s1", path: "p.md", heading: "H", anchor: "h", excerpt: "e", relevance: 0.9 }
+    ],
+    reuse: { verdict: "merged", basisItemIds: [basisA, basisB] }
+  });
+
+  const finalItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  assert.equal(finalItem?.outcome, "merged");
+  assert.deepEqual(new Set(await ctx.stores.questionnaires.basisItemIds(targetItemId)), new Set([basisA, basisB]));
+  assert.equal(finalItem?.answer, "A synthesized answer drawing on two priors.");
+});
+
+test("completion drops model-returned basis ids that aren't real items (FK-safe)", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "filter",
+    flowId: "security",
+    questions: ["q0"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const targetItemId = created.questionnaire.items[0].id;
+  const targetItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  const job = await jobForLog(ctx, targetItem?.questionLogId);
+
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, {
+    answer: "An adapted answer whose basis id the model hallucinated.",
+    confidence: "high",
+    citations: [
+      { documentId: "d", sectionId: "s1", path: "p.md", heading: "H", anchor: "h", excerpt: "e", relevance: 0.9 }
+    ],
+    reuse: { verdict: "adapted", basisItemIds: ["not-a-real-item"] }
+  });
+
+  const finalItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  assert.equal(finalItem?.outcome, "adapted");
+  assert.equal(finalItem?.reusedFromItemId, undefined, "a non-existent basis id must not become reused_from_item_id");
+  assert.deepEqual(await ctx.stores.questionnaires.basisItemIds(targetItemId), []);
+});
+
+test("completion copies the basis item's answer and citations VERBATIM for a reused verdict", async () => {
+  const ctx = flowContext();
+  const basisId = await createAnsweredItem(ctx, {
+    question: "What certs do you hold?",
+    answer: "We hold ISO 27001.",
+    citation: {
+      documentId: "docs:certs.md",
+      sectionId: "docs:certs.md:0",
+      path: "certs.md",
+      heading: "Certificates",
+      anchor: "0",
+      excerpt: "ISO 27001",
+      relevance: 0.9
+    }
+  });
+  const basis = await ctx.stores.questionnaires.itemById(basisId);
+  assert.ok(basis?.answer);
+  assert.ok(basis && basis.citations.length > 0);
+
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "target",
+    flowId: "security",
+    questions: ["Do you hold ISO certifications?"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const targetItemId = created.questionnaire.items[0].id;
+  const targetItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  const job = await jobForLog(ctx, targetItem?.questionLogId);
+
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, {
+    // Deliberately different from (and weaker than) the basis, to prove the
+    // stored result is the basis's VERBATIM content, never the model's echo.
+    answer: "A model echo that must NOT be trusted.",
+    confidence: "high",
+    citations: [],
+    reuse: { verdict: "reused", basisItemIds: [basisId] }
+  });
+
+  const finalItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  assert.equal(finalItem?.outcome, "reused");
+  assert.equal(finalItem?.answer, basis?.answer);
+  assert.deepEqual(finalItem?.citations, basis?.citations);
+  // Citations came from the basis (non-empty), not the output's empty list —
+  // so the item must NOT be marked unanswerable.
+  assert.equal(finalItem?.status, "answered");
+});
+
+// --- Task 12: end-to-end regression (the QA#4 shape) ----------------------
+//
+// QA#4 (docs/superpowers/specs/2026-07-17-questionnaire-trust-design.md): a
+// re-index changed content hashes under a still-correct approved answer, so
+// the deterministic fast-path's fingerprint check could never confirm reuse
+// and every match was vetoed as "new_content" — zero reuse, despite the
+// answer still being right. This drives the full pipeline end-to-end: match
+// phase stashes the single unconfirmable candidate for reconcile (never
+// vetoes, never fast-path-reuses), and the watcher's reconcile verdict is
+// what ultimately produces the verbatim reuse.
+test("end-to-end regression (QA#4 shape): a single candidate the fast-path can't confirm is reconciled to a verbatim reused answer", async () => {
+  const ctx = embeddingAxisContext();
+  const approvedId = await createApprovedDonor(ctx, {
+    question: "Do you hold ISO 27001 certification?",
+    answer: "Yes, we hold ISO 27001."
+  });
+  const approvedItem = await ctx.stores.questionnaires.itemById(approvedId);
+  assert.ok(approvedItem?.answer);
+
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "QA#4 regression",
+    flowId: "security",
+    questions: ["Are you ISO certified?"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const itemId = created.questionnaire.items[0].id;
+
+  // Fast-path declined at create time: no Postgres knowledge store means
+  // checkReuse can never verify the cited section's fingerprint, so the
+  // match is stashed as a reconcile candidate rather than markReused (or
+  // vetoed via the legacy markChanged path).
+  assert.deepEqual(await ctx.stores.questionnaires.reconcileCandidateIds(itemId), [approvedId]);
+  const primed = await ctx.stores.questionnaires.itemById(itemId);
+  assert.equal(primed?.reusedFromItemId, undefined);
+  assert.equal(primed?.status, "answering");
+
+  // The watcher's reconcile step (answer_question, candidate-primed) later
+  // decides — against the current KB — that the candidate is still good and
+  // returns a "reused" verdict.
+  const job = await jobForLog(ctx, primed?.questionLogId);
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, {
+    // Deliberately different from the approved answer, to prove the stored
+    // result is the basis's VERBATIM content, never the model's echo.
+    answer: "A model echo that must NOT be trusted.",
+    confidence: "high",
+    citations: [],
+    reuse: { verdict: "reused", basisItemIds: [approvedId] }
+  });
+
+  const finalItem = await ctx.stores.questionnaires.itemById(itemId);
+  assert.equal(finalItem?.outcome, "reused");
+  assert.equal(finalItem?.status, "answered");
+  assert.equal(finalItem?.answer, approvedItem?.answer);
+  assert.deepEqual(finalItem?.citations, approvedItem?.citations);
+});
+
+// --- Whole-branch review fixes ---------------------------------------------
+
+test("a reused verdict carries forward the basis item's ORIGINAL answeredAt, not completion time", async () => {
+  const ctx = flowContext();
+  const basisId = await createAnsweredItem(ctx, {
+    question: "What certs do you hold?",
+    answer: "We hold ISO 27001.",
+    citation: {
+      documentId: "docs:certs.md",
+      sectionId: "docs:certs.md:0",
+      path: "certs.md",
+      heading: "Certificates",
+      anchor: "0",
+      excerpt: "ISO 27001",
+      relevance: 0.9
+    }
+  });
+  // Backdate the basis's answeredAt directly through the store (bypassing the
+  // service, which always stamps "now") so the carry-forward assertion below
+  // can't pass by coincidence of two completions landing in the same instant.
+  const basis = await ctx.stores.questionnaires.itemById(basisId);
+  assert.ok(basis);
+  const originalAnsweredAt = "2020-01-01T00:00:00.000Z";
+  await ctx.stores.questionnaires.completeItem(basis!.questionLogId!, {
+    answer: basis!.answer!,
+    answeredAt: originalAnsweredAt,
+    citations: basis!.citations,
+    unanswerable: false,
+    confidence: "high"
+  });
+
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "target",
+    flowId: "security",
+    questions: ["Do you hold ISO certifications?"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const targetItemId = created.questionnaire.items[0].id;
+  const targetItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  const job = await jobForLog(ctx, targetItem?.questionLogId);
+
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, {
+    answer: "",
+    confidence: "high",
+    citations: [],
+    reuse: { verdict: "reused", basisItemIds: [basisId] }
+  });
+
+  const finalItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  assert.equal(finalItem?.outcome, "reused");
+  // The freshness baseline for the NEXT questionnaire's newcomer check is the
+  // basis's original generation time, exactly like the fast-path's markReused
+  // — never the time this reuse completion happened to run.
+  assert.equal(finalItem?.answeredAt, originalAnsweredAt);
+});
+
+test("a reused verdict whose basis is unresolvable degrades to unanswerable, not a blank answered row", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "target",
+    flowId: "security",
+    questions: ["Do you hold ISO certifications?"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const targetItemId = created.questionnaire.items[0].id;
+  const targetItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  const job = await jobForLog(ctx, targetItem?.questionLogId);
+
+  // The watcher sends an empty answer for a reused verdict (the API is
+  // expected to fill it in from the basis); here the basis id doesn't
+  // resolve to any known item, so the reuse can't be honored.
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, {
+    answer: "",
+    confidence: "high",
+    citations: [],
+    reuse: { verdict: "reused", basisItemIds: ["item-does-not-exist"] }
+  });
+
+  const finalItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  assert.equal(finalItem?.status, "unanswerable");
+  assert.notEqual(finalItem?.outcome, "reused");
+  assert.deepEqual(await ctx.stores.questionnaires.basisItemIds(targetItemId), []);
 });

@@ -2,7 +2,7 @@ import type { Questionnaire, QuestionnaireItem } from "@magpie/core";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import styled from "@emotion/styled";
-import { Actions, Badge, Button, EmptyState, Row, Stack } from "./ui";
+import { Actions, Badge, Button, EmptyState, Row, Stack, statusTone } from "./ui";
 import { StatBanner, type Stat } from "./StatBanner";
 import { changeReasonText, itemLabel, itemTone } from "./questionnaireItems";
 
@@ -115,6 +115,9 @@ export function QuestionnaireDetail({
           <ItemCard key={item.id}>
             <Row gap="sm">
               <Badge tone={itemTone(item)}>{itemLabel(item)}</Badge>
+              {item.confidence === "low" || item.confidence === "unknown" ? (
+                <Badge tone={statusTone(item.confidence)}>low confidence</Badge>
+              ) : null}
               <strong>
                 {item.position + 1}. {item.question}
               </strong>

@@ -13,6 +13,7 @@ import {
   GAP_RECONCILE_CRITIC,
   GAP_RECONCILE_PROPOSE,
   JOB_RUNNER_SYSTEM,
+  RECONCILE_ANSWER,
   VERIFY_ANSWER,
   withPersona,
   wrapUntrusted
@@ -31,12 +32,15 @@ import {
   forcedSearchQueries,
   parseGroundingVerdict,
   parseJobOutput,
+  parseReconcileVerdict,
+  selectCitations,
   UNPARSEABLE_ANSWER_FALLBACK,
   withVerification,
   type AnswerLoopTrace,
-  type AnswerOutput
+  type AnswerOutput,
+  type ReconcileDecision
 } from "../job-prompts.js";
-import type { AnswerTrace } from "@magpie/core";
+import type { AnswerCandidate, AnswerTrace } from "@magpie/core";
 
 export interface GenerativeJobOptions {
   job: JobView;
@@ -96,8 +100,123 @@ export async function runGenerativeJob(options: GenerativeJobOptions): Promise<u
 const MAX_SEARCH_ROUNDS = 3;
 const MAX_POOL_SECTIONS = 15;
 
-async function answer({ job, model, api, signal }: GenerativeJobOptions): Promise<unknown> {
-  const input = answerQuestionInputSchema.parse(job.input);
+type AnswerQuestionInput = z.infer<typeof answerQuestionInputSchema>;
+
+// Entry point for the answer_question runner. When the job carries candidate prior
+// answers (questionnaire trust), it first reconciles the question against them; a
+// reuse verdict short-circuits before any synthesis. Otherwise — and on a fresh
+// verdict — it runs the normal agentic answer flow unchanged.
+async function answer(options: GenerativeJobOptions): Promise<unknown> {
+  const input = answerQuestionInputSchema.parse(options.job.input);
+  if (input.candidates && input.candidates.length > 0) {
+    return reconcileOrAnswer(options, input, input.candidates);
+  }
+  return answerCore(options, input);
+}
+
+// The reconcile step (the ONLY place the watcher runs the model for reuse). It
+// resolves the flow, does one seed retrieval, and asks the model to decide
+// reused/adapted/merged/fresh against the live KB. A reuse verdict returns a built
+// output directly; fresh (or an unparseable, fail-open verdict) falls through to the
+// normal answer flow, whose output is stamped with reuse:{verdict:"fresh"} so the
+// API always sees a decision when it primed candidates.
+async function reconcileOrAnswer(
+  options: GenerativeJobOptions,
+  input: AnswerQuestionInput,
+  candidates: AnswerCandidate[]
+): Promise<unknown> {
+  const { job, model, api, signal } = options;
+  const flows: RoutableFlow[] = input.flows.map((flow) => ({
+    id: flow.id,
+    name: flow.name,
+    ...(flow.persona ? { persona: flow.persona } : {})
+  }));
+  const pinnedFlowId = input.requestedFlowId ?? input.conversationFlowId;
+  const { route } = await resolveFlow(pinnedFlowId, input.question, flows, model, api, job.id, signal);
+  const flowId = route.status === "routed" ? route.flowId : undefined;
+
+  logger.debug(
+    { jobId: job.id, flowId: flowId ?? null, candidateCount: candidates.length },
+    `answer_question[${job.id}]: reconciling against ${candidates.length} candidate(s)`
+  );
+  const seed = await api.retrieve(input.question, flowId, undefined, signal);
+  const decision = await reconcileWithCandidates(model, input.question, candidates, seed, signal);
+
+  if (decision && decision.verdict !== "fresh") {
+    logger.debug(
+      { jobId: job.id, verdict: decision.verdict, basisItemIds: decision.basisItemIds },
+      `answer_question[${job.id}]: reconciled to ${decision.verdict} from ${decision.basisItemIds.length} candidate(s)`
+    );
+    return buildReconciledOutput(decision, seed, flowId);
+  }
+
+  logger.debug(
+    { jobId: job.id },
+    `answer_question[${job.id}]: reconcile returned fresh; running the normal answer flow`
+  );
+  const output = await answerCore(options, input);
+  return { ...output, reuse: { verdict: "fresh", basisItemIds: [] } };
+}
+
+// One reconcile model call. The candidate prior answers and the retrieved sections
+// are both untrusted reference material (RECONCILE_ANSWER carries the untrusted
+// contract), so each is wrapped in the shared delimiters. Fails open via
+// parseReconcileVerdict — an unparseable reply yields undefined.
+async function reconcileWithCandidates(
+  model: ChatProvider,
+  question: string,
+  candidates: AnswerCandidate[],
+  sections: RetrievedSection[],
+  signal: AbortSignal
+): Promise<ReconcileDecision | undefined> {
+  const candidateBlock = candidates
+    .map((candidate) => `Candidate ${candidate.itemId}:\nQ: ${candidate.question}\nA: ${candidate.answer}`)
+    .join("\n\n");
+  const context =
+    sections.length > 0
+      ? wrapUntrusted(formatSectionContext(sections))
+      : "(no current knowledge-base sections retrieved)";
+  const response = await model.complete({
+    system: RECONCILE_ANSWER.instructions,
+    messages: [
+      {
+        role: "user",
+        content: `Question:\n${question}\n\nCandidate prior answers:\n${wrapUntrusted(candidateBlock)}\n\nCurrent knowledge-base sections:\n${context}`
+      }
+    ],
+    responseFormat: "json",
+    signal
+  });
+  return parseReconcileVerdict(response.content);
+}
+
+// Builds the answer_question output for a reuse verdict. The answer text is the
+// model's for adapted/merged and empty for reused (the API copies the real answer
+// verbatim by id). Citations are derived in code from the seed sections — never
+// from the model — like every other answer path; confidence is high because the
+// answer rests on a prior APPROVED item still supported by the live KB.
+function buildReconciledOutput(
+  decision: ReconcileDecision,
+  sections: RetrievedSection[],
+  flowId: string | undefined
+): AnswerOutput {
+  const { citations } = selectCitations(sections, []);
+  return {
+    answer: decision.verdict === "reused" ? "" : decision.answer,
+    confidence: "high",
+    citations,
+    ...(flowId ? { flowId } : {}),
+    reuse: { verdict: decision.verdict, basisItemIds: decision.basisItemIds }
+  };
+}
+
+// The normal agentic answer flow (route -> seed retrieval -> assess/search rounds ->
+// answer -> grounding check). Unchanged from before the reconcile step existed; the
+// caller parses the input and passes it in.
+async function answerCore(
+  { job, model, api, signal }: GenerativeJobOptions,
+  input: AnswerQuestionInput
+): Promise<AnswerOutput> {
   const flows: RoutableFlow[] = input.flows.map((flow) => ({
     id: flow.id,
     name: flow.name,

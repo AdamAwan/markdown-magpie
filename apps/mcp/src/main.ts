@@ -245,8 +245,8 @@ export const tools = [
   {
     name: "kb_questionnaire_get",
     description:
-      "Read a questionnaire worksheet: per-item status (reused/fresh/changed/unanswerable), answers, citations, " +
-      "and change explanations. Re-read until no items are pending/answering.",
+      "Read a questionnaire worksheet: per-item status, outcome (reused/adapted/merged/fresh/changed/unanswerable), " +
+      "answers, citations, and change explanations. Re-read until no items are pending/answering.",
     inputSchema: {
       type: "object",
       properties: {

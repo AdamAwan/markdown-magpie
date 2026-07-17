@@ -5,6 +5,7 @@ import type {
   FlowSelectionRequired,
   KnowledgeGapSignal,
   OutOfScope,
+  ReconcileResult,
   SourceMapEntry
 } from "@magpie/core";
 import { NO_SOURCE_MATERIAL_GAP_PREFIX } from "@magpie/core";
@@ -49,6 +50,11 @@ export interface AnswerOutput {
   // context; the API persists it on the question log for gap hygiene. Absent when
   // no condensation ran (first turn, or an already-standalone follow-up).
   standaloneQuestion?: string;
+  // The reconciler's verdict when the job carried candidate prior answers to reuse
+  // (questionnaire trust). Set by the answer runner: on a reuse verdict the runner
+  // builds the output directly, and on a fresh verdict it stamps this onto the
+  // normal answer flow's output. Absent when the job carried no candidates.
+  reuse?: ReconcileResult;
 }
 
 // The loop-level portion of the trace the answer runner assembles as it goes
@@ -332,7 +338,7 @@ export function withVerification(output: AnswerOutput, verification: AnswerTrace
 // (or none that were retrieved) so a real answer never loses its attribution —
 // but naming ONLY ids that were never retrieved is a broken attribution
 // (`attributionFailed`), which the caller treats as untrustworthy and downgrades.
-function selectCitations(
+export function selectCitations(
   sections: RetrievedSection[],
   usedSectionIds: string[]
 ): { citations: Citation[]; attributionFailed: boolean } {
@@ -379,6 +385,45 @@ export function parseGroundingVerdict(content: string): GroundingVerdict | undef
     grounded: candidate.grounded,
     unsupportedClaims: toStringArray(candidate.unsupportedClaims),
     ...(revisedAnswer ? { revisedAnswer } : {})
+  };
+}
+
+// The reconciler's decision plus the answer text the model produced for it. The
+// verdict/basisItemIds become the output's `reuse` metadata; `answer` is the model's
+// text for an adapted/merged verdict (empty for reused — the API copies the real
+// answer verbatim by id).
+export type ReconcileDecision = ReconcileResult & { answer: string };
+
+// Parses the reconcile-answer model reply into a decision. Mirrors
+// parseGroundingVerdict: anything without one of the four known verdicts is
+// unusable and returns undefined so the caller fails open — falling through to the
+// normal answer flow rather than trusting a malformed reuse decision.
+export function parseReconcileVerdict(raw: string): ReconcileDecision | undefined {
+  let parsed: unknown;
+  try {
+    parsed = extractJson(raw);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return undefined;
+  }
+  const candidate = parsed as { verdict?: unknown; basisItemIds?: unknown; answer?: unknown };
+  if (
+    candidate.verdict !== "reused" &&
+    candidate.verdict !== "adapted" &&
+    candidate.verdict !== "merged" &&
+    candidate.verdict !== "fresh"
+  ) {
+    return undefined;
+  }
+  const basisItemIds = Array.isArray(candidate.basisItemIds)
+    ? candidate.basisItemIds.filter((id): id is string => typeof id === "string")
+    : [];
+  return {
+    verdict: candidate.verdict,
+    basisItemIds,
+    answer: typeof candidate.answer === "string" ? candidate.answer : ""
   };
 }
 

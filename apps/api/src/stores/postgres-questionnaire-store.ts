@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import type {
+  Confidence,
   Questionnaire,
   QuestionnaireChangeReason,
   QuestionnaireItem,
@@ -31,6 +32,7 @@ interface ItemRow {
   status: QuestionnaireItemStatus;
   outcome: QuestionnaireItemOutcome | null;
   answer: string | null;
+  confidence: string | null;
   answered_at: Date | null;
   question_log_id: string | null;
   reused_from_item_id: string | null;
@@ -58,6 +60,7 @@ function mapItem(row: ItemRow, citations: QuestionnaireItemCitation[]): Question
     status: row.status,
     ...(row.outcome !== null ? { outcome: row.outcome } : {}),
     ...(row.answer !== null ? { answer: row.answer } : {}),
+    ...(row.confidence !== null ? { confidence: row.confidence as Confidence } : {}),
     ...(row.answered_at !== null ? { answeredAt: row.answered_at.toISOString() } : {}),
     ...(row.question_log_id !== null ? { questionLogId: row.question_log_id } : {}),
     ...(row.reused_from_item_id !== null ? { reusedFromItemId: row.reused_from_item_id } : {}),
@@ -129,7 +132,7 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
     }
     const items = await this.pool.query<ItemRow>(
       `
-        SELECT id, questionnaire_id, position, question, status, outcome, answer, answered_at,
+        SELECT id, questionnaire_id, position, question, status, outcome, answer, confidence, answered_at,
                question_log_id, reused_from_item_id, change_reason, error, approved_at, stale_at_approval
         FROM questionnaire_items WHERE questionnaire_id = $1 ORDER BY position ASC
       `,
@@ -204,7 +207,7 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
   ): Promise<{ item: QuestionnaireItem; similarity: number } | undefined> {
     const result = await this.pool.query<ItemRow & { similarity: number }>(
       `
-        SELECT i.id, i.questionnaire_id, i.position, i.question, i.status, i.outcome, i.answer,
+        SELECT i.id, i.questionnaire_id, i.position, i.question, i.status, i.outcome, i.answer, i.confidence,
                i.answered_at, i.question_log_id, i.reused_from_item_id, i.change_reason, i.error,
                i.approved_at, i.stale_at_approval,
                1 - (i.question_embedding <=> $3::vector) AS similarity
@@ -225,6 +228,51 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
     }
     const citations = await this.loadCitations([row.id]);
     return { item: mapItem(row, citations.get(row.id) ?? []), similarity: row.similarity };
+  }
+
+  async matchApprovedTopN(
+    flowId: string,
+    embedding: number[],
+    model: string,
+    limit: number
+  ): Promise<Array<{ item: QuestionnaireItem; similarity: number }>> {
+    const result = await this.pool.query<ItemRow & { similarity: number }>(
+      `
+        SELECT i.id, i.questionnaire_id, i.position, i.question, i.status, i.outcome, i.answer, i.confidence,
+               i.answered_at, i.question_log_id, i.reused_from_item_id, i.change_reason, i.error,
+               i.approved_at, i.stale_at_approval,
+               1 - (i.question_embedding <=> $3::vector) AS similarity
+        FROM questionnaire_items i
+        JOIN questionnaires q ON q.id = i.questionnaire_id
+        WHERE q.flow_id = $1
+          AND i.status = 'approved'
+          AND i.embedding_model = $2
+          AND i.question_embedding IS NOT NULL
+        ORDER BY i.question_embedding <=> $3::vector
+        LIMIT $4
+      `,
+      [flowId, model, toVectorLiteral(embedding), limit]
+    );
+    const citations = await this.loadCitations(result.rows.map((row) => row.id));
+    return result.rows.map((row) => ({
+      item: mapItem(row, citations.get(row.id) ?? []),
+      similarity: row.similarity
+    }));
+  }
+
+  async setReconcileCandidates(itemId: string, basisItemIds: string[]): Promise<void> {
+    await this.pool.query("UPDATE questionnaire_items SET reconcile_candidate_ids = $2 WHERE id = $1", [
+      itemId,
+      JSON.stringify(basisItemIds)
+    ]);
+  }
+
+  async reconcileCandidateIds(itemId: string): Promise<string[]> {
+    const result = await this.pool.query<{ reconcile_candidate_ids: string[] | null }>(
+      "SELECT reconcile_candidate_ids FROM questionnaire_items WHERE id = $1",
+      [itemId]
+    );
+    return result.rows[0]?.reconcile_candidate_ids ?? [];
   }
 
   async markReused(itemId: string, from: { itemId: string; answer: string; answeredAt: string }): Promise<void> {
@@ -260,22 +308,44 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
 
   async completeItem(
     questionLogId: string,
-    result: { answer: string; answeredAt: string; citations: QuestionnaireItemCitation[]; unanswerable: boolean }
+    result: {
+      answer: string;
+      answeredAt: string;
+      citations: QuestionnaireItemCitation[];
+      unanswerable: boolean;
+      confidence: Confidence;
+      outcome?: QuestionnaireItemOutcome;
+      basisItemIds?: string[];
+    }
   ): Promise<QuestionnaireItem | undefined> {
     const updated = await this.pool.query<ItemRow>(
       `
         UPDATE questionnaire_items
-        SET status = $2, answer = $3, answered_at = $4
+        SET status = $2, answer = $3, answered_at = $4, confidence = $5,
+            outcome = COALESCE($6, outcome), reused_from_item_id = $7
         WHERE question_log_id = $1
         RETURNING *
       `,
-      [questionLogId, result.unanswerable ? "unanswerable" : "answered", result.answer, result.answeredAt]
+      [
+        questionLogId,
+        result.unanswerable ? "unanswerable" : "answered",
+        result.answer,
+        result.answeredAt,
+        result.confidence,
+        result.outcome ?? null,
+        result.basisItemIds && result.basisItemIds.length === 1 ? result.basisItemIds[0] : null
+      ]
     );
     const row = updated.rows[0];
     if (!row) {
       return undefined;
     }
     await this.replaceCitations(row.id, result.citations);
+    // Reconcile basis to exactly what this completion says — a fresh
+    // re-answer (no/empty basis) must clear any prior basis rows rather than
+    // leaving them stale from an earlier completion. replaceBasis DELETEs
+    // unconditionally and only re-INSERTs when the array is non-empty.
+    await this.replaceBasis(row.id, result.basisItemIds ?? []);
     return mapItem(row, result.citations);
   }
 
@@ -308,6 +378,14 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
     }
     const citations = await this.loadCitations([row.id]);
     return mapItem(row, citations.get(row.id) ?? []);
+  }
+
+  async basisItemIds(itemId: string): Promise<string[]> {
+    const result = await this.pool.query<{ basis_item_id: string }>(
+      "SELECT basis_item_id FROM questionnaire_item_basis WHERE item_id = $1 ORDER BY basis_item_id",
+      [itemId]
+    );
+    return result.rows.map((row) => row.basis_item_id);
   }
 
   async nextPending(questionnaireId: string): Promise<QuestionnaireItem | undefined> {
@@ -373,6 +451,30 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
       map.set(row.item_id, bucket);
     }
     return map;
+  }
+
+  private async replaceBasis(itemId: string, basisItemIds: string[]): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM questionnaire_item_basis WHERE item_id = $1", [itemId]);
+      if (basisItemIds.length > 0) {
+        await client.query(
+          `
+            INSERT INTO questionnaire_item_basis (item_id, basis_item_id)
+            VALUES ${valuesClause(basisItemIds.length, 2)}
+            ON CONFLICT DO NOTHING
+          `,
+          basisItemIds.flatMap((basisItemId) => [itemId, basisItemId])
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   private async replaceCitations(itemId: string, citations: QuestionnaireItemCitation[]): Promise<void> {

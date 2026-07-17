@@ -1,8 +1,10 @@
 import type {
+  AnswerCandidate,
   AnswerQuestionJobOutput,
   Questionnaire,
   QuestionnaireItem,
   QuestionnaireItemCitation,
+  QuestionnaireItemOutcome,
   QuestionnaireSummary
 } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
@@ -12,6 +14,7 @@ import { assertAiCapacity } from "../../platform/ai-capacity.js";
 import { buildAnswerQuestionInput, recordAnswerQuestionLog } from "../../platform/answer-question.js";
 import { embeddingModelId } from "../../platform/providers.js";
 import { retrieve } from "../retrieve/service.js";
+import { isFastPathReusable } from "./reconcile.js";
 import { checkReuse, type ReuseCheckDeps } from "./reuse-check.js";
 
 // Questionnaire mode (docs/questionnaires.md): explicit bulk batches with
@@ -49,6 +52,34 @@ export async function createQuestionnaire(
       const deps = reuseCheckDeps(ctx, input.flowId);
       const threshold = ctx.settings.questionnaires.matchThreshold;
       for (const [index, item] of created.items.entries()) {
+        if (ctx.settings.questionnaires.reconcileEnabled) {
+          const k = ctx.settings.questionnaires.reconcileCandidates;
+          const candidates = await ctx.stores.questionnaires.matchApprovedTopN(input.flowId, vectors[index], model, k);
+          const above = candidates.filter((c) => c.similarity >= threshold);
+          if (above.length === 0) {
+            continue; // fresh via drip
+          }
+          if (above.length === 1) {
+            const decision = await checkReuse(deps, above[0]!.item, item.question);
+            if (isFastPathReusable(1, decision)) {
+              await ctx.stores.questionnaires.markReused(item.id, {
+                itemId: above[0]!.item.id,
+                answer: above[0]!.item.answer ?? "",
+                // The ORIGINAL generation time carries forward — the freshness
+                // baseline for the next questionnaire's newcomer check.
+                answeredAt: above[0]!.item.answeredAt ?? ""
+              });
+              continue;
+            }
+          }
+          // 2+ candidates, or a single changed one → reconcile: stash
+          // candidate ids for the drip to prime the answer_question job.
+          await ctx.stores.questionnaires.setReconcileCandidates(
+            item.id,
+            above.map((c) => c.item.id)
+          );
+          continue;
+        }
         const match = await ctx.stores.questionnaires.matchApproved(input.flowId, vectors[index], model);
         if (!match || match.similarity < threshold) {
           continue;
@@ -123,10 +154,17 @@ async function topUpDrip(ctx: AppContext, questionnaireId: string): Promise<void
     // recovered by the failure path's retry action, whereas the reverse order
     // could double-enqueue an item on a crash between the two writes.
     await ctx.stores.questionnaires.markAnswering(item.id, log.id);
+    const candidateIds = await ctx.stores.questionnaires.reconcileCandidateIds(item.id);
+    const candidates: AnswerCandidate[] = (
+      await Promise.all(candidateIds.map((id) => ctx.stores.questionnaires.itemById(id)))
+    )
+      .filter((c): c is NonNullable<typeof c> => c !== undefined && Boolean(c.answer))
+      .map((c) => ({ itemId: c.id, question: c.question, answer: c.answer ?? "" }));
     const input = buildAnswerQuestionInput(ctx, {
       questionLogId: log.id,
       question: item.question,
-      requestedFlowId: questionnaire.flowId
+      requestedFlowId: questionnaire.flowId,
+      ...(candidates.length > 0 ? { candidates } : {})
     });
     await ctx.jobs.create("answer_question", input);
   }
@@ -148,13 +186,55 @@ export async function handleQuestionnaireAnswerCompletion(
   if (!item) {
     return;
   }
-  const unanswerable = output.citations.length === 0 || output.confidence === "low" || output.confidence === "unknown";
-  const citations = await snapshotCitations(ctx, output);
+  // Ungrounded (no citations) is the only "no answer" case. Low/medium/unknown
+  // confidence WITH citations is a shown draft, not a suppression — the badge
+  // and human approval carry the trust (see 2026-07-17-questionnaire-trust-design).
+  let outcome: QuestionnaireItemOutcome | undefined;
+  let basisItemIds: string[] | undefined;
+  let answer = output.answer;
+  let citations = await snapshotCitations(ctx, output);
+  let answeredAt = new Date().toISOString();
+  if (output.reuse) {
+    if (output.reuse.verdict === "reused") {
+      // Trust guarantee: copy the approved answer + its citations VERBATIM by
+      // id, never the model's echo.
+      const basisId = output.reuse.basisItemIds[0];
+      const basis = basisId ? await ctx.stores.questionnaires.itemById(basisId) : undefined;
+      if (basis?.answer) {
+        answer = basis.answer;
+        citations = basis.citations;
+        // The ORIGINAL generation time carries forward — the freshness
+        // baseline for the next questionnaire's newcomer check (matches the
+        // fast-path's markReused, which does the same).
+        answeredAt = basis.answeredAt ?? answeredAt;
+        outcome = output.reuse.verdict;
+        basisItemIds = [basis.id];
+      }
+      // A "reused" verdict that can't be honored (no basis id, basis not
+      // found, or basis has no answer) degrades to a fresh, ungrounded
+      // completion — citations stays [] (from output.citations, which the
+      // watcher sends empty for reused) so the item lands unanswerable
+      // instead of a blank "answered" row with a phantom reuse outcome.
+    } else {
+      outcome = output.reuse.verdict; // adapted | merged | fresh
+      // Keep only basis ids that resolve to real items. A model-returned id
+      // that isn't a real questionnaire item would violate the
+      // reused_from_item_id foreign key and wedge job completion; drop it and
+      // keep the (still valid) model answer with whatever provenance survives.
+      const resolved = await Promise.all(output.reuse.basisItemIds.map((id) => ctx.stores.questionnaires.itemById(id)));
+      basisItemIds = resolved
+        .filter((basis): basis is NonNullable<typeof basis> => basis !== undefined)
+        .map((basis) => basis.id);
+    }
+  }
   await ctx.stores.questionnaires.completeItem(questionLogId, {
-    answer: output.answer,
-    answeredAt: new Date().toISOString(),
+    answer,
+    answeredAt,
     citations,
-    unanswerable
+    unanswerable: citations.length === 0,
+    confidence: output.confidence,
+    ...(outcome ? { outcome } : {}),
+    ...(basisItemIds ? { basisItemIds } : {})
   });
   await topUpDrip(ctx, item.questionnaireId);
 }

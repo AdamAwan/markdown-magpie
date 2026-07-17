@@ -291,7 +291,27 @@ export type QuestionFeedback = "helpful" | "unhelpful";
 // derived from the KB sections it cited (never a TTL).
 
 export type QuestionnaireItemStatus = "pending" | "answering" | "answered" | "unanswerable" | "approved";
-export type QuestionnaireItemOutcome = "reused" | "fresh" | "changed";
+export type QuestionnaireItemOutcome = "reused" | "fresh" | "changed" | "adapted" | "merged";
+
+// Reconciliation verdict for a candidate reuse decision (questionnaire trust,
+// docs/questionnaires.md). Distinct from QuestionnaireItemOutcome: the verdict
+// is the reconciler's decision about *how* an answer was produced from prior
+// approved items, before it is persisted as the item's outcome.
+export type ReconcileVerdict = "reused" | "adapted" | "merged" | "fresh";
+
+// A prior approved item offered to the reconciler as a candidate for reuse.
+export interface AnswerCandidate {
+  itemId: string;
+  question: string;
+  answer: string;
+}
+
+// The reconciler's verdict plus which prior items it drew on ("reused" from
+// verbatim, "adapted" from one, "merged" from several; empty for "fresh").
+export interface ReconcileResult {
+  verdict: ReconcileVerdict;
+  basisItemIds: string[];
+}
 
 // Why a matched item could NOT be reused verbatim. Rendered on the worksheet
 // so a wording change is always explained, never arbitrary.
@@ -321,6 +341,7 @@ export interface QuestionnaireItem {
   status: QuestionnaireItemStatus;
   outcome?: QuestionnaireItemOutcome;
   answer?: string;
+  confidence?: Confidence;
   // For reused items: the ORIGINAL generation time, carried forward as the
   // freshness baseline for future newcomer checks.
   answeredAt?: string;
@@ -777,6 +798,11 @@ export interface AnswerQuestionJobInput {
   // routing is sticky within a thread rather than re-routing a terse follow-up to a
   // different flow. Absent on the first turn or when the prior turn had no flow.
   conversationFlowId?: string;
+  // Prior approved items the watcher's reconciler can reuse/adapt/merge from
+  // instead of answering fresh (questionnaire trust, docs/questionnaires.md).
+  // Absent for non-questionnaire questions and for questionnaires with no
+  // approved match candidates.
+  candidates?: AnswerCandidate[];
   expectedOutput: "answer_result";
 }
 
@@ -803,6 +829,10 @@ export interface AnswerQuestionJobOutput {
   // candidacy and clustering key off the resolved intent rather than the terse
   // raw follow-up ("what about the EU?").
   standaloneQuestion?: string;
+  // The reconciler's verdict when the job was given candidates to reconcile
+  // against. Present only when input.candidates was non-empty; the API uses
+  // this to set the questionnaire item's outcome and basis items.
+  reuse?: ReconcileResult;
 }
 
 export interface SummarizeGapJobInput {

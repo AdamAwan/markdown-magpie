@@ -1,4 +1,4 @@
-import type { AnswerQuestionJobInput, QuestionLog, QuestionPurpose } from "@magpie/core";
+import type { AnswerCandidate, AnswerQuestionJobInput, QuestionLog, QuestionPurpose } from "@magpie/core";
 import type { AppContext } from "../context.js";
 import type { AiProviderName } from "./providers.js";
 
@@ -48,6 +48,10 @@ export function buildAnswerQuestionInput(
     // conversation's prior question logs (bounded). Omitted on the first turn.
     priorTurns?: Array<{ question: string; answer: string }>;
     conversationFlowId?: string;
+    // Prior approved items the watcher's reconciler can reuse/adapt/merge from
+    // (questionnaire trust, docs/questionnaires.md). Absent for non-questionnaire
+    // questions and for questionnaires with no approved match candidates.
+    candidates?: AnswerCandidate[];
   }
 ): AnswerQuestionJobInput & { provider: AiProviderName } {
   const flows = ctx.knowledgeConfig.flows.map((flow) => ({
@@ -63,6 +67,7 @@ export function buildAnswerQuestionInput(
     ...(options.requestedFlowId ? { requestedFlowId: options.requestedFlowId } : {}),
     ...(options.priorTurns && options.priorTurns.length > 0 ? { priorTurns: options.priorTurns } : {}),
     ...(options.conversationFlowId ? { conversationFlowId: options.conversationFlowId } : {}),
+    ...(options.candidates ? { candidates: options.candidates } : {}),
     provider: ctx.config.get().aiProvider,
     expectedOutput: "answer_result"
   };
