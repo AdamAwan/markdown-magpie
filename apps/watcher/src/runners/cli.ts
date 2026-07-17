@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import type { AiExecutionIdentity, ChatProvider, ChatRequest, ChatResponse, SourceDescriptor } from "@magpie/core";
 import type { JobCapability, JobType, JobView } from "@magpie/jobs";
+import { JOB_RUNNER_SYSTEM } from "@magpie/prompts";
 import type { WatcherApi } from "../http-client.js";
 import { buildSourceGroundedPrompt, parseJobOutput } from "../job-prompts.js";
 import { logger } from "../logger.js";
@@ -162,18 +163,30 @@ export class CliRunner {
             )
           ];
     const prompt = buildSourceGroundedPrompt(job, prepared.workspaces, notes, "cli", mapEntries, fetchable);
+    // Neutral working directory (#280): the CLI must NOT run with its cwd set to
+    // an untrusted source checkout. The MCP/settings flags in readOnlyArgs
+    // neutralize a repo-committed `.mcp.json` / `.claude/settings.json`, but a
+    // checkout-root memory file (`CLAUDE.md` for claude, `AGENTS.md` for codex)
+    // is loaded from cwd as higher-trust project guidance and would steer the
+    // run. Running from a neutral tmpdir removes that auto-load: the checkouts are
+    // reached read-only as mounted directories (claude: a `--add-dir` each — added
+    // dirs are tool-access roots, not memory/project roots; codex: read-only reads
+    // aren't confined to cwd, and the prompt lists every workspace path) with no
+    // source memory file at cwd for either CLI to treat as guidance.
+    const neutralCwd = tmpdir();
     logger.info(
       {
         jobId: job.id,
         jobType: job.type,
         command: this.command,
         workspaceCount: prepared.workspaces.length,
-        cwd: primary.rootDir
+        primaryWorkspace: primary.rootDir,
+        cwd: neutralCwd
       },
       `${job.type}[${job.id}]: running ${this.command} CLI read-only over ${prepared.workspaces.length} source workspace(s)`
     );
     const content = await this.spawnCli(prompt, signal, {
-      cwd: primary.rootDir,
+      cwd: neutralCwd,
       extraArgs: this.readOnlyArgs(prepared),
       timeoutMs: this.agenticTimeoutMs
     });
@@ -188,19 +201,26 @@ export class CliRunner {
   //   hard-removes every other tool from the model's toolset. `--allowedTools` is
   //   NOT sufficient — it only pre-approves, and Bash still executed in a live
   //   test. `--disallowedTools Write,Edit,NotebookEdit,Bash` is defence in depth
-  //   on top of --tools. Extra workspaces need a repeated `--add-dir <dir>` each.
+  //   on top of --tools. EVERY workspace (including the primary) is granted with a
+  //   repeated `--add-dir <dir>` — the run's cwd is a neutral tmpdir (#280), not a
+  //   checkout, so no source-repo CLAUDE.md loads as project memory.
   // - codex (spellings verified LIVE via `codex exec --help` on codex-cli 0.142.3,
   //   2026-07-06): `--sandbox read-only` is the explicit spelling (the default, but
   //   ~/.codex/config.toml can override it, so pass it always).
   //   `--skip-git-repo-check` because codex exec refuses to run in a non-git
-  //   directory and local-kind source workspaces need not be git repos. Read-only
-  //   mode does not confine reads to cwd, so extra workspaces need no flags —
+  //   directory and the neutral tmpdir cwd (#280) is not a git repo. Read-only
+  //   mode does not confine reads to cwd, so the workspaces need no flags —
   //   they are listed in the prompt. NOTE: codex read-only is enforced by an OS
   //   sandbox (Landlock/seatbelt); a deploy platform lacking it silently downgrades
   //   write protection — flagged in the PR as needing a deploy-environment check.
   private readOnlyArgs(prepared: PreparedSources): string[] {
     if (this.capability === "claude") {
-      const extraDirs = prepared.workspaces.slice(1).flatMap((ws) => ["--add-dir", ws.rootDir]);
+      // Every workspace is mounted via `--add-dir` (#280): the run's cwd is a
+      // neutral tmpdir (see runSourceGrounded), so NO checkout — not even the
+      // primary — is the working directory, and none of their root CLAUDE.md
+      // files load as project memory. `--add-dir` grants the read-only tools
+      // access to each checkout without treating it as a project/memory root.
+      const workspaceDirs = prepared.workspaces.flatMap((ws) => ["--add-dir", ws.rootDir]);
       // Fetchable internet sources (#242): WebFetch joins the toolset only when
       // the operator allowlisted hosts, and each host becomes a
       // `WebFetch(domain:…)` permission rule. In print mode a tool call that no
@@ -219,7 +239,12 @@ export class CliRunner {
       // must not leak in either. --setting-sources "" skips user/project
       // settings entirely, so a source repo's committed .claude/settings.json
       // (hooks — arbitrary command execution) is inert. Both verified live on
-      // claude v2.1.x, 2026-07-13.
+      // claude v2.1.x, 2026-07-13. --system-prompt makes the job-runner
+      // instructions THE system prompt (#280): the source-grounded path had no
+      // system prompt before, so the CLI booted with its own interactive persona
+      // as the top-level instruction; replacing it with the job-runner system
+      // message (which carries the untrusted-content contract) is the same
+      // hardening the one-shot generative path already applies.
       return [
         "--tools",
         `Read,Grep,Glob${fetchTool}`,
@@ -229,9 +254,16 @@ export class CliRunner {
         "--strict-mcp-config",
         "--setting-sources",
         "",
-        ...extraDirs
+        "--system-prompt",
+        JOB_RUNNER_SYSTEM.instructions,
+        ...workspaceDirs
       ];
     }
+    // codex has no --system-prompt flag; its source-grounded prompt keeps the
+    // task instructions (which carry the untrusted-content contract). The neutral
+    // tmpdir cwd (see runSourceGrounded) is what neutralizes a checkout-root
+    // AGENTS.md here — read-only reads aren't confined to cwd, so codex still
+    // reaches every workspace path listed in the prompt.
     return ["--sandbox", "read-only", "--skip-git-repo-check"];
   }
 
