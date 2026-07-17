@@ -5,20 +5,15 @@ import { join } from "node:path";
 
 const ROOT = process.cwd();
 const OPT = join(ROOT, "presentation/assets/opt");
-const EXAMPLE = join(ROOT, "presentation/assets/example");
 
+const mimeOf = (f) => (/\.png$/i.test(f) ? "image/png" : "image/jpeg");
 const img = {};
+// All deck imagery — product shots (slides 5-7, 12) and the demo mock-ups
+// (slides 9-11) — is rendered by scripts/render-static-ui-shots.mjs straight into
+// opt/ (PNG for the shots, a JPEG for the logo), inlined by its real MIME type.
 for (const f of readdirSync(OPT)) {
   const key = f.replace(/\.(jpg|jpeg|png)$/i, "");
   const b64 = readFileSync(join(OPT, f)).toString("base64");
-  img[key] = `data:image/jpeg;base64,${b64}`;
-}
-// Demo screenshots (slides 8–10). Kept at native format/resolution rather than
-// downscaled into opt/, because they are text-heavy captures that must stay legible.
-const mimeOf = (f) => (/\.png$/i.test(f) ? "image/png" : "image/jpeg");
-for (const f of readdirSync(EXAMPLE)) {
-  const key = f.replace(/\.(jpg|jpeg|png)$/i, "");
-  const b64 = readFileSync(join(EXAMPLE, f)).toString("base64");
   img[key] = `data:${mimeOf(f)};base64,${b64}`;
 }
 const A = (k) => img[k] ?? "";
@@ -94,6 +89,23 @@ const HTML = `<!doctype html>
   .chip{display:inline-block;margin-top:14px;font-size:12px;font-weight:600;color:var(--accent);
     background:var(--accent-soft);padding:4px 11px;border-radius:99px;}
   .ink .chip{color:var(--accent-2);background:rgba(74,163,189,.14);}
+  .recap{display:inline-flex;align-items:center;gap:8px;font-size:clamp(13px,1.45vw,16.5px);font-weight:600;
+    color:#eef2ec;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);border-radius:99px;padding:9px 17px;}
+  .recap b{color:#e8917f;font-weight:700;}
+
+  /* circular loop diagram */
+  .loop{position:relative;width:min(412px,43vh);aspect-ratio:1;margin:clamp(52px,8vh,78px) auto clamp(20px,4vh,40px);}
+  .loop svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;}
+  .loop .nd{position:absolute;transform:translate(-50%,-50%);width:min(196px,25vw);text-align:center;
+    background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.15);border-radius:14px;padding:12px 12px;backdrop-filter:blur(2px);}
+  .loop .nd .ic{font-size:22px;line-height:1;}
+  .loop .nd b{display:block;font-size:clamp(14px,1.5vw,17px);margin:6px 0 3px;color:#eef2ec;}
+  .loop .nd small{font-size:clamp(11px,1.15vw,12.5px);color:#aebcb4;line-height:1.35;display:block;}
+  .loop .nd--n{top:5%;left:50%;} .loop .nd--e{top:50%;left:95%;}
+  .loop .nd--s{top:95%;left:50%;} .loop .nd--w{top:50%;left:5%;}
+  .loop .hub{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;width:150px;}
+  .loop .hub img{width:44px;height:44px;border-radius:11px;}
+  .loop .hub b{display:block;font-size:13.5px;color:#9fd3e2;font-weight:700;margin-top:8px;line-height:1.3;}
 
   /* split layout */
   .split{display:grid;grid-template-columns:0.92fr 1.08fr;gap:clamp(22px,3vw,48px);align-items:center;}
@@ -263,7 +275,7 @@ const HTML = `<!doctype html>
       <div class="cards" style="margin-top:26px">
         <div class="card"><div class="ic">⚖️</div><h3>Won't <span class="neg">lie</span></h3><p>Every answer cites file, heading &amp; commit, logs its own confidence, and says "I don't know" rather than guessing.</p><span class="chip">grounded · cited · abstains</span></div>
         <div class="card"><div class="ic">🛡️</div><h3>Won't <span class="neg">leak</span></h3><p>Raw material never reaches end users. Every change to the knowledge is a reviewed Git pull request with full history.</p><span class="chip">curated · PR-gated · audited</span></div>
-        <div class="card"><div class="ic">♻️</div><h3>Won't <span class="neg">rot</span></h3><p>It finds its own gaps, drafts fixes, raises PRs. Crunch consolidates, de-dupes &amp; flags contradictions.</p><span class="chip">self-improves · self-prunes</span></div>
+        <div class="card"><div class="ic">♻️</div><h3>Won't <span class="neg">rot</span></h3><p>It finds its own gaps, drafts fixes, raises PRs. Scheduled maintenance patrols de-dupe, split &amp; verify — flagging contradictions.</p><span class="chip">self-improves · self-prunes</span></div>
       </div>
     </div>
   </section>
@@ -278,23 +290,25 @@ const HTML = `<!doctype html>
           <li><span class="b">1</span><div><b>Every claim is cited</b> <span>— back to the exact file, heading and commit it came from.</span></div></li>
           <li><span class="b">2</span><div><b>Confidence is scored &amp; shown</b> <span>— a HIGH/LOW badge on every answer, not buried.</span></div></li>
           <li><span class="b">3</span><div><b>It abstains</b> <span>— if the source doesn't cover it, it says so instead of inventing an answer.</span></div></li>
+          <li><span class="b">4</span><div><b>Follow-ups keep the thread</b> <span>— multi-turn conversation carries the context and its citations forward.</span></div></li>
         </ul>
         <p class="footnote">Ask something it can't support and you get an honest "not enough here" — which becomes a tracked gap (see "won't rot").</p>
       </div>
-      ${frame(A("02-ask-cited"), { label: "localhost:3000 — Ask · cited answer", pos: "top" })}
+      ${frame(A("ask"), { label: "localhost:3000 — Ask · cited answer", pos: "top" })}
     </div>
   </section>
 
   <!-- 6 WON'T LEAK -->
   <section class="slide light" data-title="Won't leak">
     <div class="wrap split rev">
-      ${frame(A("04-proposal"), { label: "localhost:3000 — Proposals · human review", pos: "top" })}
+      ${frame(A("proposals"), { label: "localhost:3000 — Proposals · human review", pos: "top" })}
       <div>
         <div class="kicker">Won't leak</div>
         <h2>The raw material stays behind the wall.</h2>
         <ul class="feat">
           <li><span class="b">✓</span><div><b>Users never touch the source</b> <span>— no code, internal docs or restricted folders. Just the curated answer.</span></div></li>
           <li><span class="b">✓</span><div><b>Every change is a reviewed PR</b> <span>— an admin approves it, exactly like a code review, before it ships.</span></div></li>
+          <li><span class="b">✓</span><div><b>Hardened against injection</b> <span>— untrusted source text is delimited before the model sees it, and MCP tokens are scoped per tool.</span></div></li>
           <li><span class="b">✓</span><div><b>Full audit &amp; history</b> <span>— diffable, reversible, attributable. It's just Git.</span></div></li>
         </ul>
         <p class="footnote">This is what makes it safe to point at sensitive corpora that you could never hand to a generic chatbot.</p>
@@ -311,11 +325,11 @@ const HTML = `<!doctype html>
         <ul class="feat">
           <li><span class="b">①</span><div><b>Detects its own gaps</b> <span>— clusters low-confidence answers &amp; unhelpful feedback into themes.</span></div></li>
           <li><span class="b">②</span><div><b>Drafts grounded fixes</b> <span>— writes proposed Markdown with evidence &amp; a rationale, ready for review.</span></div></li>
-          <li><span class="b">③</span><div><b>Crunch prunes</b> <span>— consolidates duplicates, flags contradictions &amp; stale docs.</span></div></li>
+          <li><span class="b">③</span><div><b>Maintenance patrols prune</b> <span>— scheduled fix &amp; improve patrols de-dupe, split &amp; verify docs, flagging contradictions &amp; stale content.</span></div></li>
         </ul>
         <p class="footnote"><b>Usage is the maintenance signal.</b> The more it's asked, the faster it finds and fills its own weak spots.</p>
       </div>
-      ${frame(A("03-gaps"), { label: "localhost:3000 — Gaps · weak answers → proposals", pos: "top" })}
+      ${frame(A("gaps"), { label: "localhost:3000 — Gaps · weak answers → proposals", pos: "top" })}
     </div>
   </section>
 
@@ -325,16 +339,29 @@ const HTML = `<!doctype html>
       <div class="kicker">Demo · part 1 — in Claude</div>
       <h2 style="margin:.1em 0 0">It meets people where they already work.</h2>
       <div class="mcpshots">
-        <figure class="mcpshot">
-          <img src="${A("mcp-high-confidence")}" alt="kb_ask answering FlowerBI's key features with high confidence"/>
-          <figcaption><span class="badge hi">HIGH</span>Ask what's covered — a cited answer, straight inside the chat.</figcaption>
-        </figure>
-        <figure class="mcpshot">
-          <img src="${A("mcp-low-confidence-2")}" alt="kb_ask abstaining and flagging a knowledge gap"/>
-          <figcaption><span class="badge lo">LOW</span>Ask what's missing — it abstains honestly and flags a knowledge gap.</figcaption>
-        </figure>
+        <div class="chat">
+          <div class="turn"><div class="role">You · in Claude</div><div class="you">What guarantees does Markdown Magpie make about its answers?</div></div>
+          <div class="turn"><span class="tool">→ kb_ask · flow: magpie-sales</span></div>
+          <div class="turn">
+            <div class="role">Answer <span class="badge hi">HIGH</span></div>
+            <div class="ans">It grounds every response in indexed Markdown — citations to the exact file, heading &amp; commit, a scored confidence, and it flags a gap rather than guessing.</div>
+            <div class="cites">
+              <div class="cite"><span class="pth">…-internal-knowledge-base-obje.md</span> › Won't Lie (Grounded Answers)</div>
+              <div class="cite"><span class="pth">competitive-landscape-differentiation.md</span> › Summary</div>
+            </div>
+          </div>
+        </div>
+        <div class="chat">
+          <div class="turn"><div class="role">You · in Claude</div><div class="you">Does Markdown Magpie support single sign-on (SSO / SAML)?</div></div>
+          <div class="turn"><span class="tool">→ kb_ask · flow: magpie-sales</span></div>
+          <div class="turn">
+            <div class="role">Answer <span class="badge lo">LOW</span></div>
+            <div class="ans">The knowledge base doesn't cover how sign-in or SSO works yet — so it abstains and logs a gap rather than guessing.</div>
+            <div class="live"><span class="dot"></span>knowledge gap logged</div>
+          </div>
+        </div>
       </div>
-      <p class="footnote">Same engine, exposed as MCP tools (<span class="mono">kb_ask</span>, <span class="mono">kb_search</span>, <span class="mono">kb_feedback</span>) — so the knowledge shows up in Claude, Codex, or any agent, and every weak answer feeds back as a gap.</p>
+      <p class="footnote">Same engine, exposed as MCP tools (<span class="mono">kb_ask</span>, <span class="mono">kb_search</span>, <span class="mono">kb_citation</span>, <span class="mono">kb_flows</span>, <span class="mono">kb_questionnaire_*</span>) over a hosted OAuth endpoint — so the knowledge shows up in Claude, Codex, or any agent, and every weak answer feeds back as a gap.</p>
     </div>
   </section>
 
@@ -345,12 +372,12 @@ const HTML = `<!doctype html>
       <h2>That gap becomes a reviewed improvement.</h2>
       <div class="demoduo">
         <figure>
-          <figcaption><span class="n">1</span><span><b>Cluster the gaps</b> — weak answers group into themes.</span></figcaption>
-          ${frame(A("web-gap-cluster"), { auto: true, label: "localhost:3000 — Gaps · suggested clusters" })}
+          <figcaption><span class="n">1</span><span><b>Cluster the gap</b> — the SSO questions group into one theme.</span></figcaption>
+          ${frame(A("demo-cluster"), { auto: true, label: "localhost:3000 — Gaps · authentication cluster" })}
         </figure>
         <figure>
-          <figcaption><span class="n">2</span><span><b>Draft a fix</b> — grounded Markdown with a rationale.</span></figcaption>
-          ${frame(A("web-proposal"), { auto: true, label: "localhost:3000 — Proposals · drafted fix" })}
+          <figcaption><span class="n">2</span><span><b>Draft a fix</b> — a grounded SSO page, with a rationale.</span></figcaption>
+          ${frame(A("demo-draft"), { auto: true, label: "localhost:3000 — Proposals · drafted fix" })}
         </figure>
       </div>
       <p class="footnote">It detects its own weak spots and drafts the fix — you never start from a blank page.</p>
@@ -364,12 +391,12 @@ const HTML = `<!doctype html>
       <h2>Reviewed like code, then merged in.</h2>
       <div class="demoduo">
         <figure>
-          <figcaption><span class="n">3</span><span><b>Raise PRs</b> — each fix is a reviewable pull request.</span></figcaption>
-          ${frame(A("web-raised-prs"), { auto: true, label: "github.com — Pull requests" })}
+          <figcaption><span class="n">3</span><span><b>Raise a PR</b> — the fix is a reviewable pull request.</span></figcaption>
+          ${frame(A("demo-pr"), { auto: true, label: "github.com — Pull request #142" })}
         </figure>
         <figure>
-          <figcaption><span class="n">4</span><span><b>Merge &amp; re-index</b> — approved, merged, re-indexed.</span></figcaption>
-          ${frame(A("web-merged-in"), { auto: true, label: "localhost:3000 — Knowledge Console · re-indexed" })}
+          <figcaption><span class="n">4</span><span><b>Merge &amp; re-index</b> — approved, merged, gaps resolved.</span></figcaption>
+          ${frame(A("demo-merged"), { auto: true, label: "localhost:3000 — Proposals · merged & re-indexed" })}
         </figure>
       </div>
       <p class="footnote">Every change is a Git PR an admin approves — diffable, reversible, attributable. The raw source never leaves the wall.</p>
@@ -387,29 +414,43 @@ const HTML = `<!doctype html>
           <li><span class="b">✓</span><div><b>No engineer wrote that page</b> <span>— the loop drafted it from real usage.</span></div></li>
           <li><span class="b">✓</span><div><b>It still went through review</b> <span>before it ever shipped to a user.</span></div></li>
         </ul>
-        <p class="footnote">All real: captured against a live FlowerBI knowledge base while building these slides.</p>
+        <p class="footnote">One thread, end to end — the SSO gap from part 1, filled by the loop and reviewed before it shipped.</p>
       </div>
       <figure class="payoff">
-        <img src="${A("mcp-result-of-learning")}" alt="kb_ask now returning a full example FlowerBI star schema after the gap was filled"/>
+        <img src="${A("demo-payoff")}" alt="kb_ask now answering the SSO question with high confidence, cited to the newly-merged authentication page"/>
       </figure>
     </div>
   </section>
 
-  <!-- 12 CHEAP & YOURS -->
-  <section class="slide light" data-title="Cheap & yours">
-    <div class="wrap">
-      <div class="kicker">…and it's cheap, and it's yours</div>
-      <h2>No lock-in. Runs on what you already pay for.</h2>
-      <div class="pillars" style="margin-top:24px">
-        <div class="pillar"><div class="ic">🔌</div><div><h3>Vendor-neutral</h3><p>Swap chat, embedding, git &amp; execution providers — Azure OpenAI, Anthropic, OpenAI-compatible, local. No model lock-in.</p></div></div>
-        <div class="pillar"><div class="ic">🧩</div><div><h3>MCP-native</h3><p>Knowledge lands inside the tools people already use, instead of being one more tab nobody opens.</p></div></div>
-        <div class="pillar"><div class="ic">💸</div><div><h3>Bring your own agent</h3><p>A watcher lets Claude Code / Codex run the AI jobs under subscriptions you already hold — flat-rate seats become KB compute.</p></div></div>
-        <div class="pillar"><div class="ic">📄</div><div><h3>Just Markdown + Git</h3><p>The whole knowledge base is plain files in a repo. Portable, forkable, future-proof — no black box.</p></div></div>
+  <!-- 12 QUESTIONNAIRES -->
+  <section class="slide light" data-title="Questionnaires">
+    <div class="wrap split rev">
+      ${frame(A("questionnaires"), { tall: true, label: "localhost:3000 — Questionnaires · security review", pos: "top" })}
+      <div>
+        <div class="kicker">Whole workflows, not just single answers</div>
+        <h2>Answer a whole questionnaire from the knowledge base.</h2>
+        <ul class="feat">
+          <li><span class="b">1</span><div><b>Paste a batch</b> <span>— a security review, an RFP, a SIG — one question per line.</span></div></li>
+          <li><span class="b">2</span><div><b>Reuse past answers</b> <span>— prior approved answers return instantly; only genuinely new questions are freshly grounded.</span></div></li>
+          <li><span class="b">3</span><div><b>See what changed</b> <span>— when a cited source moved, it re-answers and tells you exactly why.</span></div></li>
+          <li><span class="b">✓</span><div><b>Approve &amp; export</b> <span>— sign answers into the reuse corpus, export to Markdown or CSV.</span></div></li>
+        </ul>
+        <p class="footnote">The same grounded, cited engine — pointed at an entire worksheet instead of one question.</p>
       </div>
     </div>
   </section>
 
-  <!-- 13 WIDE APPLICATIONS -->
+  <!-- 13 INSIGHTS -->
+  <section class="slide light" data-title="Insights">
+    <div class="wrap">
+      <div class="kicker">Insights · prove it's working</div>
+      <h2 style="margin:0 0 .5em">Watch the whole pipeline — and what it costs.</h2>
+      ${frame(A("insights"), { tall: true, label: "localhost:3000 — Insights · pipeline health" })}
+      <p class="footnote">Every question's journey — where the volume flows and where it leaks — plus the verified-close rate and the AI spend behind it. You don't take the loop on faith; you watch it work.</p>
+    </div>
+  </section>
+
+  <!-- 14 WIDE APPLICATIONS -->
   <section class="slide light" data-title="Applications">
     <div class="wrap">
       <div class="kicker">Wide applications</div>
@@ -430,7 +471,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 14 EASY SETUP -->
+  <!-- 15 EASY SETUP -->
   <section class="slide light" data-title="Easy setup">
     <div class="wrap">
       <div class="kicker">Easy to set up</div>
@@ -444,20 +485,69 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 15 CTA -->
+  <!-- 16 SEED -->
+  <section class="slide light" data-title="Seed">
+    <div class="wrap split rev">
+      ${frame(A("seed-plan"), { tall: true, label: "localhost:3000 — Seed · proposed plan", pos: "top" })}
+      <div>
+        <div class="kicker">Cold start</div>
+        <h2>No questions yet? Seed the whole KB.</h2>
+        <ul class="feat">
+          <li><span class="b">1</span><div><b>Point Seed at a flow</b> <span>— it explores your source repositories, no topic needed.</span></div></li>
+          <li><span class="b">2</span><div><b>It proposes a full plan</b> <span>— a charter plus a page for every topic it finds in the sources.</span></div></li>
+          <li><span class="b">3</span><div><b>Review &amp; edit</b> <span>— trim, rename or reshape the plan before a word is written.</span></div></li>
+          <li><span class="b">✓</span><div><b>Approve → drafts as PRs</b> <span>— every page is drafted and raised for review, just like the loop.</span></div></li>
+        </ul>
+        <p class="footnote">A grounded starter knowledge base in one pass — before anyone's asked a thing.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 17 THE LOOP -->
+  <section class="slide ink" data-title="The loop">
+    <div class="wrap" style="text-align:center">
+      <div class="kicker">The whole thing, in one loop</div>
+      <h2 style="margin:0 0 .1em">It gets smarter every time it's asked.</h2>
+      <div class="loop">
+        <svg viewBox="0 0 100 100" aria-hidden="true">
+          <circle cx="50" cy="50" r="45" fill="none" stroke="var(--accent-2)" stroke-width="0.7" stroke-opacity="0.55" stroke-dasharray="1.4 3"/>
+          <g fill="var(--accent-2)">
+            <g transform="translate(81.8,18.2) rotate(45)"><path d="M-3,-3.3 L3.6,0 L-3,3.3 Z"/></g>
+            <g transform="translate(81.8,81.8) rotate(135)"><path d="M-3,-3.3 L3.6,0 L-3,3.3 Z"/></g>
+            <g transform="translate(18.2,81.8) rotate(225)"><path d="M-3,-3.3 L3.6,0 L-3,3.3 Z"/></g>
+            <g transform="translate(18.2,18.2) rotate(315)"><path d="M-3,-3.3 L3.6,0 L-3,3.3 Z"/></g>
+          </g>
+        </svg>
+        <div class="nd nd--n"><div class="ic">💬</div><b>Ask</b><small>In the app — or in Claude, Codex &amp; co. over MCP.</small></div>
+        <div class="nd nd--e"><div class="ic">⚖️</div><b>Cited answer</b><small>Grounded in your sources, with a confidence score.</small></div>
+        <div class="nd nd--s"><div class="ic">🔍</div><b>Gap surfaces</b><small>Low-confidence &amp; unhelpful answers become tracked gaps.</small></div>
+        <div class="nd nd--w"><div class="ic">♻️</div><b>Improve</b><small>Cluster → draft → review → merge → re-index.</small></div>
+        <div class="hub"><img src="${A("icon")}" alt=""/><b>smarter<br/>every ask</b></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 18 CTA -->
   <section class="slide ink" data-title="Call to action">
     <div class="wrap">
       <div class="brand"><img src="${A("icon")}" alt=""/><span class="nm">Markdown Magpie</span></div>
-      <h1 style="max-width:18ch">Pick one source. Let it run.</h1>
-      <p class="big-quote" style="max-width:30ch;color:#cfe6dd">Knowledge that won't lie, won't leak, and won't rot — built on the source you already have.</p>
-      <p class="footnote">Let's choose a first pilot — questions over the Product Code is the obvious one — and stand up a cited, self-maintaining KB.</p>
+      <div class="kicker">The ask</div>
+      <h1 style="max-width:16ch">Start with security questionnaires.</h1>
+      <p class="big-quote" style="max-width:38ch;color:#cfe6dd">The clearest first win: grounded, cited, consistent answers to the SIGs and vendor security reviews we fill in by hand today.</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin:30px 0 2px">
+        <span class="recap">⚖️ Won't <b>lie</b></span>
+        <span class="recap">🛡️ Won't <b>leak</b></span>
+        <span class="recap">♻️ Won't <b>rot</b></span>
+        <span class="recap">🔌 No lock-in</span>
+      </div>
+      <p class="footnote" style="margin-top:26px">Point Magpie at the product code, security docs &amp; policies; let Seed draft the answer library; and review the first PRs. Every answer cited, reused across questionnaires, and defensible — we can stand it up this quarter.</p>
     </div>
   </section>
 
 </div>
 
 <a class="exit" href="/">Back to login</a>
-<div class="hud"><span id="counter">1 / 13</span> · <b id="hud-title">Title</b></div>
+<div class="hud"><span id="counter">1 / 18</span> · <b id="hud-title">Title</b></div>
 <div class="hint">← → navigate &nbsp;·&nbsp; <b>O</b> overview &nbsp;·&nbsp; <b>F</b> fullscreen</div>
 
 <div class="overlay" id="overlay"><div class="grid" id="grid"></div></div>

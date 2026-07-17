@@ -1,141 +1,470 @@
+// Renders the console product screenshots used by the pitch deck (slides 5-7 +
+// the Questionnaires slide). Each shot is a deterministic, self-contained mock-up
+// of one *content surface* from the current Knowledge Console — deliberately
+// stripped of the sidebar / topbar chrome so the meaningful content (the cited
+// answer, the gap cluster, the proposal, the questionnaire items) fills the deck's
+// browser frame and stays legible. The frame's URL bar supplies the app context.
+//
+// Styling derives from apps/web/src/theme/theme.ts (the design-token source of
+// truth — the app itself moved to Emotion CSS-in-JS in PR #147). The *content* is
+// real: questions, answers, citations, gap clusters, proposal titles and
+// questionnaire runs were taken from the live knowledge base.
+//
+// Captured at 2x device scale so text is crisp when the frame downscales it.
 import { mkdir, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const ROOT = process.cwd();
-const OUT = join(ROOT, "presentation/assets");
+const OUT = join(ROOT, "presentation/assets/opt");
 const TMP = join(ROOT, "tmp/static-ui-shots");
 const CHROME = process.env.CHROME_PATH ?? "C:/Program Files/Google/Chrome/Application/chrome.exe";
-const css = readFileSync(join(ROOT, "apps/web/src/app/styles.css"), "utf8");
-const logo = resolve(ROOT, "apps/web/public/magpie.jpeg").replaceAll("\\", "/");
 
-const nav = [
-  ["ask", "Q", "Ask", "2"],
-  ["knowledge", "K", "Knowledge", "18"],
-  ["gaps", "G", "Gaps", "3"],
-  ["proposals", "P", "Proposals", "2"],
-  ["jobs", "J", "Jobs", "1"],
-  ["crunch", "Cr", "Crunch", "0"],
-  ["config", "C", "Config", ""],
-  ["dataflow", "D", "Data Flow", ""],
-  ["prompts", "Pr", "Prompts", ""],
-  ["mcp", "M", "Connect (MCP)", ""]
-];
-
-const titles = {
-  ask: ["Ask", "Ask questions against curated Markdown and get cited answers."],
-  gaps: ["Gaps", "Cluster weak answers and draft grounded improvements."],
-  proposals: ["Proposals", "Review generated Markdown before it reaches Git."],
-  knowledge: ["Knowledge", "Browse configured flows, repositories, and indexed documents."],
-  dataflow: ["Data Flow", "Inspect how questions, retrieval, jobs, and reviews move through the system."],
-  config: ["Config", "Switch execution modes and inspect provider configuration."]
+// ---- theme tokens (mirrors apps/web/src/theme/theme.ts) -------------------
+const T = {
+  text: "#17211d",
+  muted: "#5b6962",
+  subtle: "#8a948f",
+  page: "#f5f7f2",
+  surface: "#ffffff",
+  surfaceMuted: "#f6f8f3",
+  border: "#e4e8e0",
+  borderStrong: "#cbd3cb",
+  accent: "#285f74",
+  accentBg: "#e5f1f4",
+  accentBorder: "#b7d0d8",
+  brandAccent: "#62702f",
+  primary: "#20322b",
+  primaryText: "#ffffff",
+  ok: { fg: "#3d6b43", bg: "#eef6ec", bd: "#bcd6bd" },
+  amber: { fg: "#7a5d24", bg: "#faf5e9", bd: "#d8c496" },
+  blue: { fg: "#2d5775", bg: "#f2f7fb", bd: "#c4d3e0" },
+  neutral: { fg: "#5b6962", bg: "#f6f8f3", bd: "#e0e5db" }
 };
 
-function shell(section, body) {
-  const [title, subtitle] = titles[section];
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Markdown Magpie ${title}</title>
-<style>${css}
-body{background:#f5f7f2;}
-.staticOnly .surface{box-shadow:none;}
-.brandLogo{object-fit:cover;}
-.mockDiagram{display:grid;gap:14px;}
-.mockFlow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:stretch;}
-.mockNode{border:1px solid #d9ded6;background:#fff;padding:16px;min-height:92px;display:grid;gap:8px;align-content:center;}
-.mockNode strong{font-size:15px;}
-.mockArrow{display:grid;place-items:center;color:#285f74;font-weight:900;}
-.mockCycle{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;}
-.mockCycle .mockNode{border-color:#b8c8d9;background:#f1f6fb;}
-.answerCrop{width:940px;margin:30px auto;}
-</style>
-</head>
-<body>
-<div class="appShell staticOnly">
-  <aside class="sidebar">
-    <div class="brand">
-      <img class="brandLogo" src="file:///${logo}" alt="" width="40" height="40"/>
-      <div class="brandText"><span>Markdown Magpie</span><strong>Knowledge Console</strong></div>
-    </div>
-    <nav class="sideNav" aria-label="Console sections">
-      ${nav.map(([id, glyph, label, count], index) => `${index === 4 || index === 7 ? '<div class="navDivider"></div>' : ""}<a class="${id === section ? "navButton active" : "navButton"}"><span class="navGlyph">${glyph}</span><span>${label}</span>${count ? `<span class="pill">${count}</span>` : ""}</a>`).join("")}
-    </nav>
-    <div class="sideStatus">
-      <div class="statusGroup">
-        <p class="statusGroupTitle">System</p>
-        <div class="statusLine"><span>API</span><span><span class="dot"></span>Online</span></div>
-        <div class="statusLine"><span>Documents</span><span>18</span></div>
-        <div class="statusLine"><span>Sections</span><span>72</span></div>
-      </div>
-      <div class="statusGroup">
-        <p class="statusGroupTitle">Model</p>
-        <div class="statusLine"><span>Mode</span><span>direct</span></div>
-        <div class="statusLine"><span>Chat</span><span>openai-compatible</span></div>
-        <div class="statusLine"><span>Retrieval</span><span>Hybrid</span></div>
-      </div>
-    </div>
-  </aside>
-  <main class="main">
-    <header class="topbar">
-      <div><p class="eyebrow">Markdown Magpie</p><h1>${title}</h1><p>${subtitle}</p></div>
-      <div class="topActions"><span class="refreshTime">Updated 09:30:00</span><button class="button secondary">Refresh</button></div>
-    </header>
-    ${body}
-  </main>
-</div>
-</body>
-</html>`;
+const badge = (tone, label) => {
+  const c = T[tone] ?? T.ok;
+  return `<span class="badge" style="color:${c.fg};background:${c.bg};border-color:${c.bd}">${label}</span>`;
+};
+
+// Content-only page: a padded console-page background holding one surface stack.
+// Larger type than the live app (this is a presentation crop, not the full UI).
+function page(eyebrow, body) {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:Inter,ui-sans-serif,system-ui,"Segoe UI",sans-serif;background:${T.page};color:${T.text};
+    -webkit-font-smoothing:antialiased;padding:26px 30px;}
+  .eyebrow{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:${T.brandAccent};font-weight:700;margin-bottom:14px;}
+  .surface{background:${T.surface};border:1px solid ${T.border};border-radius:14px;box-shadow:0 1px 2px rgba(23,33,29,.05);
+    padding:22px 26px;margin-bottom:16px;}
+  .sh{display:flex;align-items:center;gap:11px;margin-bottom:16px;}
+  .sh h2{font-size:19px;font-weight:600;letter-spacing:-.01em;}
+  .pill{font-size:13px;color:${T.muted};background:${T.surfaceMuted};border:1px solid ${T.border};border-radius:99px;padding:3px 11px;}
+  .badge{display:inline-block;font-size:13px;font-weight:600;border:1px solid;border-radius:99px;padding:3px 11px;letter-spacing:.01em;}
+  .fpill{font-size:13px;color:${T.accent};background:${T.accentBg};border:1px solid ${T.accentBorder};border-radius:99px;padding:3px 12px;font-weight:600;}
+  .btnP{display:inline-block;background:${T.primary};color:${T.primaryText};border-radius:9px;padding:11px 20px;font-size:15px;font-weight:600;}
+  .btnS{display:inline-block;background:${T.surface};color:${T.text};border:1px solid ${T.borderStrong};border-radius:9px;padding:9px 15px;font-size:14px;font-weight:500;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:14px;color:${T.accent};}
+  .path{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:${T.subtle};}
+  .answer{font-size:17px;line-height:1.62;color:${T.text};}
+  .row{display:flex;align-items:center;gap:10px;}
+  .between{display:flex;align-items:center;justify-content:space-between;gap:14px;}
+</style></head><body>
+  <div class="eyebrow">${eyebrow}</div>
+  ${body}
+</body></html>`;
 }
 
-const answerBlock = `<div class="answerBlock">
-  <div class="resultHeader"><div class="rowMeta"><span class="status high">high</span><span class="pill flowPill">Product Support</span></div><code>q-1842</code></div>
-  <p>The core package is deliberately thin. It depends on the workspace libraries for Markdown parsing, retrieval, Git publishing, prompts, and shared domain types, so each answer can be traced back to repository source material.</p>
-  <div class="citationStack">
-    <div class="citation"><div class="citationTop"><strong>Runtime dependencies</strong><code>core/package#dependencies</code></div><span>packages/core/package.json#dependencies</span><p>The core package keeps runtime dependencies small and composes behavior through shared packages.</p></div>
-    <div class="citation"><div class="citationTop"><strong>Retrieval exports</strong><code>retrieval/index#exports</code></div><span>packages/retrieval/src/index.ts</span><p>Retrieval, answer synthesis, and routing helpers are exported as shared workspace modules.</p></div>
-  </div>
-</div>`;
+// ---- fixtures (real content) ----------------------------------------------
+const cite = (heading, path, rel) =>
+  `<div class="between" style="border:1px solid ${T.border};border-radius:10px;padding:12px 15px">
+     <div><div style="font-size:15px;font-weight:600">${heading}</div><div class="path" style="margin-top:3px">${path}</div></div>
+     <span class="mono" style="color:${T.muted}">${rel}</span></div>`;
 
+const askBody = `
+<section class="surface">
+  <div class="between" style="align-items:flex-start;margin-bottom:14px">
+    <h2 style="font-size:20px;max-width:74%;line-height:1.3">What guarantees does Markdown Magpie make about its answers — how does it avoid making things up?</h2>
+    <div class="row"><span class="fpill">Magpie Sales</span>${badge("ok", "HIGH")}</div></div>
+  <p class="answer">Markdown Magpie prevents made-up answers by <b>grounding every response in its indexed Markdown</b>.
+    Every answer carries <b>citations</b> back to the exact file, heading and commit, plus a scored
+    <b>confidence level</b> from retrieval relevance. When confidence is low it flags a <b>knowledge gap</b>
+    instead of guessing.</p>
+  <div style="margin:20px 0 10px;font-size:14px;color:${T.muted};font-weight:600">3 citations</div>
+  <div style="display:grid;gap:10px">
+    ${cite("1. Won't Lie (Grounded Answers)", "handling-…-internal-knowledge-base-obje.md", "70%")}
+    ${cite("7. “How can we trust that Magpie’s answers are accurate?”", "handling-customer-objections-in-the-magpie-sales-process.md", "68%")}
+    ${cite("Summary", "competitive-landscape-differentiation.md", "67%")}
+  </div>
+  <div style="margin-top:18px;border-top:1px solid ${T.border};padding-top:14px;font-size:14.5px;color:${T.muted}">
+    <div style="font-weight:600;color:${T.text};margin-bottom:7px">How this was answered</div>
+    <div>· Routing: flow pinned by the caller</div>
+    <div>· Retrieval: 5 seed sections, 3 in the final pool</div>
+    <div>· Grounding verification: ran — every claim supported by the retrieved context</div>
+  </div>
+</section>`;
+
+const clusterGap = (g) =>
+  `<li style="display:flex;justify-content:space-between;gap:14px;padding:11px 0;border-top:1px solid ${T.border};font-size:15px">
+     <span>${g}</span><span class="btnS" style="padding:5px 11px;font-size:13px;white-space:nowrap">Move to…</span></li>`;
+
+const gapsBody = `
+<section class="surface">
+  <div class="sh"><h2>Suggested clusters</h2><span class="pill">6</span></div>
+  <article style="border:1px solid ${T.border};border-radius:12px;padding:18px 20px">
+    <div class="between" style="margin-bottom:8px">
+      <strong style="font-size:17px">Date grouping &amp; period aggregation in FlowerBI</strong>
+      <div class="row"><span class="fpill">FlowerBI KB</span><span class="pill">4 gaps</span></div></div>
+    <p style="font-size:15px;color:${T.muted}">These questions all ask how to bucket or aggregate data by time period in FlowerBI.</p>
+    <ul style="list-style:none;margin-top:6px">
+      ${clusterGap("How to group records by week using FlowerBI's query syntax or date truncation")}
+      ${clusterGap("How to group records by month using FlowerBI's query syntax or date truncation")}
+      ${clusterGap("Whether FlowerBI supports built-in date period aggregation (day, week, month)")}
+      ${clusterGap("How to group or bucket dates (e.g. by year, month, day) in FlowerBI queries")}
+    </ul>
+    <div style="margin-top:16px"><span class="btnP">Draft proposal</span></div>
+  </article>
+</section>`;
+
+const proposalsBody = `
+<section class="surface">
+  <div class="between" style="align-items:flex-start;margin-bottom:12px">
+    <div><h2 style="font-size:20px">Competitive Win/Loss Intelligence</h2>
+      <div class="path" style="margin-top:4px">magpie-sales/competitive-win-loss-intelligence.md</div></div>
+    ${badge("blue", "pr-opened")}</div>
+  <p style="font-size:16px;line-height:1.6;color:${T.muted};margin-bottom:16px">Addresses the gap
+    <i>“Win/loss data against specific competitors”</i> and the triggering question
+    <i>“Which competitor do we lose to most often, and why?”</i> — describing what the sources
+    <i>do</i> contain before drawing conclusions.</p>
+  <div class="row" style="margin-bottom:16px;flex-wrap:wrap">
+    <span class="btnS">Mark Ready</span><span class="btnS">Publish branch</span>
+    <span class="btnS">Accept / Merge</span><span class="fpill">PR #128 open</span></div>
+  <pre style="background:${T.surfaceMuted};border:1px solid ${T.border};border-radius:10px;padding:18px 20px;
+    font-family:ui-monospace,Menlo,monospace;font-size:14px;line-height:1.65;color:${T.text};white-space:pre-wrap"># Competitive Win/Loss Intelligence
+
+## What the sources cover
+The positioning framework ("won't lie, won't leak, won't rot") and the
+competitive landscape summary give a defensible, cited comparison — without
+inventing win/loss numbers the knowledge base does not hold.</pre>
+</section>`;
+
+// Stat tile for the questionnaire run-detail header (latest UI).
+const stat = (n, label) =>
+  `<div style="border:1px solid ${T.border};border-radius:10px;padding:11px 14px;background:${T.surface}">
+     <div style="font-size:24px;font-weight:700;letter-spacing:-.02em;line-height:1.1">${n}</div>
+     <div style="font-size:12px;color:${T.muted};margin-top:3px">${label}</div></div>`;
+
+// One answered questionnaire item — badge + question + answer + citation, with an
+// optional change note and Approve action, matching the run-detail layout.
+const qItem = (tone, label, n, q, answer, cite, note, approve) =>
+  `<article style="border:1px solid ${T.border};border-radius:12px;padding:16px 20px;display:grid;gap:9px">
+     <div class="row" style="align-items:flex-start">${badge(tone, label)}<strong style="font-size:15.5px;line-height:1.35">${n}. ${q}</strong></div>
+     <p class="answer" style="font-size:14.5px">${answer}</p>
+     ${note ? `<div style="font-size:13px;color:${T.muted}">${note}</div>` : ""}
+     <div style="font-size:12.5px;color:${T.subtle}">↳ ${cite}</div>
+     ${approve ? `<div style="margin-top:2px"><span class="btnS">Approve</span></div>` : ""}
+   </article>`;
+
+// Latest UI: the run-detail page — breadcrumb, title + flow + export actions, a
+// stat-tile row, then the answered items. Example: a vendor security review, whose
+// first answer reuses the SSO page the demo (slides 8-11) just created.
+const questionnairesBody = `
+<div style="font-size:13.5px;color:${T.accent};margin-bottom:10px">&larr; Questionnaires</div>
+<section class="surface">
+  <div class="between" style="margin-bottom:18px">
+    <div class="row"><h2 style="font-size:20px">Acme Corp — Vendor Security Review</h2>${badge("neutral", "magpie-sales")}</div>
+    <div class="row"><span class="btnS">Approve all reused</span><span class="mono">Export .md</span><span class="mono">Export .csv</span></div></div>
+  <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:22px">
+    ${stat("12", "Total")}${stat("4", "Approved")}${stat("7", "Awaiting approval")}${stat("0", "In progress")}${stat("1", "Unanswerable")}${stat("6", "Reused")}
+  </div>
+  <div style="display:grid;gap:12px">
+    ${qItem(
+      "ok",
+      "reused",
+      1,
+      "Do you support single sign-on (SSO / SAML)?",
+      "Yes. Magpie signs in through Auth0, so it works with any OIDC provider — Google, Microsoft Entra, Okta and more — and SAML single sign-on with SCIM provisioning is supported. Console access can be locked to your identity provider.",
+      "magpie-sales/authentication-and-sso.md — SSO &amp; provisioning",
+      "",
+      false
+    )}
+    ${qItem(
+      "amber",
+      "changed",
+      2,
+      "Where is customer data stored, and is it encrypted in transit and at rest?",
+      "All knowledge lives in your own Git repositories and Postgres — self-hosted, so nothing leaves your infrastructure. Traffic is TLS-encrypted in transit; encryption at rest is inherited from your database and disk.",
+      "security/data-handling.md — Storage &amp; encryption",
+      "Re-answered: cited section “Storage &amp; encryption” changed on 2026-07-14.",
+      false
+    )}
+    ${qItem(
+      "neutral",
+      "answered",
+      3,
+      "What is your data retention and deletion policy?",
+      "The knowledge base is plain Markdown in Git, so retention and deletion follow your repository policy — remove a document and it leaves the index on the next re-index, with full history preserved in Git.",
+      "security/data-handling.md — Retention &amp; deletion",
+      "",
+      true
+    )}
+  </div>
+</section>`;
+
+// ---- demo: one coherent thread ------------------------------------------
+// The whole demo (deck slides 8-11) follows a single scenario: the single sign-on
+// (SSO) question that comes back as a LOW gap in slide 8's transcript is
+// clustered, drafted, PR'd, merged & re-indexed, then re-asked and answered.
+
+const demoClusterBody = `
+<section class="surface">
+  <div class="sh"><h2>Suggested clusters</h2><span class="pill">1 new</span></div>
+  <article style="border:1px solid ${T.border};border-radius:12px;padding:18px 20px">
+    <div class="between" style="margin-bottom:8px">
+      <strong style="font-size:17px">Authentication &amp; SSO</strong>
+      <div class="row"><span class="fpill">Magpie Sales</span><span class="pill">3 gaps</span></div></div>
+    <p style="font-size:15px;color:${T.muted}">People keep asking how sign-in works and whether single sign-on is supported — the knowledge base doesn't say yet.</p>
+    <ul style="list-style:none;margin-top:6px">
+      ${clusterGap("Does Markdown Magpie support single sign-on (SSO / SAML)?")}
+      ${clusterGap("Which identity providers can we use?")}
+      ${clusterGap("Can we lock console access to our own IdP?")}
+    </ul>
+    <div style="margin-top:16px"><span class="btnP">Draft proposal</span></div>
+  </article>
+</section>`;
+
+const demoDraftBody = `
+<section class="surface">
+  <div class="between" style="align-items:flex-start;margin-bottom:12px">
+    <div><h2 style="font-size:20px">Authentication &amp; Single Sign-On</h2>
+      <div class="path" style="margin-top:4px">magpie-sales/authentication-and-sso.md</div></div>
+    ${badge("ok", "ready")}</div>
+  <p style="font-size:16px;line-height:1.6;color:${T.muted};margin-bottom:16px">Drafted from the
+    <b>Authentication &amp; SSO</b> gap — explains how sign-in works and which providers are supported,
+    grounded in the deployment docs.</p>
+  <pre style="background:${T.surfaceMuted};border:1px solid ${T.border};border-radius:10px;padding:18px 20px;
+    font-family:ui-monospace,Menlo,monospace;font-size:14px;line-height:1.65;color:${T.text};white-space:pre-wrap"># Authentication &amp; Single Sign-On
+
+## Sign-in
+Magpie authenticates through Auth0, so it works with any OIDC identity
+provider — Google, Microsoft Entra, Okta and more.
+
+## SSO &amp; provisioning
+SAML single sign-on and SCIM provisioning are supported, and console
+access can be locked to your organisation's identity provider.</pre>
+</section>`;
+
+const demoMergedBody = `
+<section class="surface">
+  <div class="between" style="align-items:flex-start;margin-bottom:16px">
+    <div><h2 style="font-size:20px">Authentication &amp; Single Sign-On</h2>
+      <div class="path" style="margin-top:4px">magpie-sales/authentication-and-sso.md</div></div>
+    ${badge("ok", "merged")}</div>
+  <div style="display:grid;gap:12px;font-size:15.5px">
+    <div class="row"><span style="color:${T.ok.fg};font-weight:700">✓</span> Merged PR #142 into <span class="mono">main</span></div>
+    <div class="row"><span style="color:${T.ok.fg};font-weight:700">✓</span> Re-indexed 4 sections into Magpie Sales</div>
+    <div class="row"><span style="color:${T.ok.fg};font-weight:700">✓</span> Resolved 3 gaps in the Authentication &amp; SSO cluster</div>
+  </div>
+</section>`;
+
+const demoPayoffBody = `
+<section class="surface">
+  <div class="between" style="align-items:flex-start;margin-bottom:14px">
+    <h2 style="font-size:20px;max-width:74%;line-height:1.3">Does Markdown Magpie support single sign-on (SSO / SAML)?</h2>
+    <div class="row"><span class="fpill">Magpie Sales</span>${badge("ok", "HIGH")}</div></div>
+  <p class="answer"><b>Yes.</b> Magpie signs in through Auth0, so it works with any OIDC provider — Google, Microsoft
+    Entra, Okta and more — and <b>SAML single sign-on</b> with SCIM provisioning is supported. Console access can be
+    locked to your own identity provider.</p>
+  <div style="margin:20px 0 10px;font-size:14px;color:${T.muted};font-weight:600">1 citation</div>
+  ${cite("Authentication &amp; Single Sign-On", "magpie-sales/authentication-and-sso.md", "92%")}
+  <div style="margin-top:16px;font-size:15px;color:${T.ok.fg};font-weight:600">↳ Answered from a page that didn't exist an hour ago.</div>
+</section>`;
+
+// A GitHub-styled pull-request mock (slide 10). Uses GitHub's palette, not the
+// console theme — it is deliberately a different surface (the PR review view).
+const demoPr = `
+<div style="font-size:24px;font-weight:400;line-height:1.3;margin-bottom:10px;color:#1f2328">
+  Add authentication &amp; SSO page <span style="color:#59636e;font-weight:300">#142</span></div>
+<div style="display:inline-flex;align-items:center;gap:7px;background:#1a7f37;color:#fff;font-size:14px;font-weight:600;border-radius:99px;padding:6px 15px;margin-bottom:16px">● Open</div>
+<div style="color:#59636e;font-size:15px;margin-bottom:20px"><b style="color:#1f2328">magpie-bot</b> wants to merge 1 commit into
+  <span style="font-family:ui-monospace,Menlo,monospace">main</span> from
+  <span style="font-family:ui-monospace,Menlo,monospace">magpie/authentication-and-sso</span></div>
+<div style="border:1px solid #d1d9e0;border-radius:10px;overflow:hidden;margin-bottom:20px">
+  <div style="background:#f6f8fa;border-bottom:1px solid #d1d9e0;padding:10px 15px;font-size:14px;color:#59636e">1 changed file</div>
+  <div style="display:flex;justify-content:space-between;padding:12px 15px;font-size:14px;font-family:ui-monospace,Menlo,monospace">
+    <span>magpie-sales/authentication-and-sso.md</span><span><span style="color:#1a7f37;font-weight:600">+38</span> <span style="color:#59636e">−0</span></span></div></div>
+<div style="border:1px solid #d1d9e0;border-radius:12px;padding:18px 20px">
+  <div style="display:flex;align-items:center;gap:11px;color:#1f2328;font-size:16px;font-weight:600;margin-bottom:6px">
+    <span style="width:24px;height:24px;border-radius:50%;background:#1a7f37;color:#fff;display:grid;place-items:center;font-size:14px">✓</span>
+    1 approval · No conflicts with the base branch</div>
+  <p style="color:#59636e;font-size:14px;margin:0 0 16px 35px">Merging resolves 3 open knowledge gaps and re-indexes the destination.</p>
+  <span style="display:inline-block;background:#1f883d;color:#fff;font-size:15px;font-weight:600;border-radius:8px;padding:10px 18px;margin-left:35px">Merge pull request</span></div>`;
+
+const ghPage = (body) => `<!doctype html><html><head><meta charset="utf-8"/>
+<style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:-apple-system,"Segoe UI",Inter,sans-serif;
+  background:#fff;color:#1f2328;padding:26px 30px;-webkit-font-smoothing:antialiased;}</style></head><body>${body}</body></html>`;
+
+// A seed plan (slide 16): the planning agent explores a flow's sources and
+// proposes a charter + one document per topic, each drafted into review on
+// approval. Example: seeding a Magpie Support KB from the Magpie source.
+const seedDoc = (title, bullets) =>
+  `<article style="border:1px solid ${T.border};border-radius:12px;padding:15px 18px">
+     <div class="between" style="margin-bottom:8px"><strong style="font-size:15.5px">${title}</strong>${badge("blue", "proposed")}</div>
+     <ul style="margin:0;padding-left:18px;color:${T.muted};font-size:13.5px;line-height:1.7">${bullets.map((b) => `<li>${b}</li>`).join("")}</ul>
+   </article>`;
+
+const seedPlanBody = `
+<div style="font-size:13.5px;color:${T.accent};margin-bottom:10px">&larr; Seed</div>
+<section class="surface">
+  <div class="between" style="margin-bottom:16px">
+    <div class="row"><h2 style="font-size:20px">Review plan</h2>${badge("neutral", "Magpie Support")}<span class="pill" style="font-size:12.5px">6 documents</span></div>
+    <span class="btnP">Approve plan</span></div>
+  <div style="border:1px solid ${T.border};border-radius:10px;padding:14px 16px;margin-bottom:18px;background:${T.surfaceMuted}">
+    <div style="font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:${T.subtle};font-weight:700;margin-bottom:6px">Charter — what this knowledge base should cover</div>
+    <p style="font-size:14px;line-height:1.55;color:${T.text};margin:0">From the Markdown Magpie source, this plan proposes six pages covering the queue-only AI model, the knowledge loop, hybrid retrieval and operations — grounded in the code, ready to review before a word is drafted.</p>
+  </div>
+  <div style="display:grid;gap:12px">
+    ${seedDoc("The Knowledge Loop: Ask → Gap → Draft → Review", [
+      "How low-confidence answers &amp; feedback become gap candidates",
+      "How gaps cluster and draft into grounded proposals",
+      "How proposals publish as PRs and re-index on merge"
+    ])}
+    ${seedDoc("Hybrid Retrieval: Keyword + Vector Search", [
+      "When embeddings are computed and stored for a flow",
+      "How keyword and vector results are fused and ranked"
+    ])}
+    ${seedDoc("Deploying &amp; Operating Magpie", [
+      "Services: API, watcher, web and Postgres",
+      "Queue-only execution and the watcher's job runners"
+    ])}
+  </div>
+</section>`;
+
+// The "question journey" Sankey (the signature Insights visual): questions flow
+// through confidence, into gaps, and down the fix funnel to verified. Laid out
+// programmatically — node heights and ribbon widths are proportional to counts.
+const sankeySvg = (() => {
+  const SCALE = 0.235,
+    GAP = 12,
+    NW = 13;
+  const cols = [
+    [{ k: "q", l: "Questions asked", c: 1240, col: T.accent }],
+    [
+      { k: "hi", l: "High confidence", c: 1010, col: T.ok.fg },
+      { k: "lo", l: "Low confidence", c: 230, col: T.amber.fg }
+    ],
+    [
+      { k: "ans", l: "Answered · no gap", c: 1144, col: T.ok.fg },
+      { k: "gap", l: "Gaps raised", c: 96, col: T.accent }
+    ],
+    [{ k: "prop", l: "Proposals", c: 71, col: T.accent }],
+    [{ k: "merged", l: "Merged", c: 63, col: T.ok.fg }],
+    [{ k: "ver", l: "Verified closed", c: 40, col: T.ok.fg }]
+  ];
+  const colX = [170, 405, 650, 885, 1065, 1235];
+  const TOP = 46;
+  const nodes = {};
+  cols.forEach((col, ci) => {
+    let y = TOP;
+    for (const n of col) {
+      const h = Math.max(6, n.c * SCALE);
+      nodes[n.k] = { ...n, x: colX[ci], y0: y, y1: y + h };
+      y += h + GAP;
+    }
+  });
+  // Keep the fix funnel (proposals → merged → verified) aligned with the Gaps node.
+  for (const k of ["prop", "merged", "ver"]) {
+    nodes[k].y0 = nodes.gap.y0;
+    nodes[k].y1 = nodes.gap.y0 + nodes[k].c * SCALE;
+  }
+  const links = [
+    { f: "q", t: "hi", c: 1010 },
+    { f: "q", t: "lo", c: 230 },
+    { f: "hi", t: "ans", c: 990 },
+    { f: "hi", t: "gap", c: 20 },
+    { f: "lo", t: "ans", c: 154 },
+    { f: "lo", t: "gap", c: 76 },
+    { f: "gap", t: "prop", c: 71 },
+    { f: "prop", t: "merged", c: 63 },
+    { f: "merged", t: "ver", c: 40 }
+  ];
+  const outOff = {},
+    inOff = {};
+  const ribbons = links
+    .map(({ f, t, c }) => {
+      const s = nodes[f],
+        d = nodes[t],
+        w = c * SCALE;
+      const so = outOff[f] ?? 0,
+        di = inOff[t] ?? 0;
+      outOff[f] = so + w;
+      inOff[t] = di + w;
+      const xs = s.x + NW,
+        xt = d.x,
+        xm = (xs + xt) / 2;
+      const a = s.y0 + so,
+        b = a + w,
+        e = d.y0 + di,
+        g = e + w;
+      return `<path d="M${xs},${a} C${xm},${a} ${xm},${e} ${xt},${e} L${xt},${g} C${xm},${g} ${xm},${b} ${xs},${b} Z" fill="${T.accent}" opacity="0.15"/>`;
+    })
+    .join("");
+  const rects = Object.values(nodes)
+    .map(
+      (n) => `<rect x="${n.x}" y="${n.y0}" width="${NW}" height="${(n.y1 - n.y0).toFixed(1)}" rx="2" fill="${n.col}"/>`
+    )
+    .join("");
+  const labels = Object.values(nodes)
+    .map((n) => {
+      const cy = (n.y0 + n.y1) / 2,
+        left = n.k === "q";
+      const lx = left ? n.x - 9 : n.x + NW + 9,
+        anchor = left ? "end" : "start";
+      return (
+        `<text x="${lx}" y="${cy - 2}" text-anchor="${anchor}" font-size="15" font-weight="600" fill="${T.text}">${n.l}</text>` +
+        `<text x="${lx}" y="${cy + 15}" text-anchor="${anchor}" font-size="13" fill="${T.muted}">${n.c.toLocaleString()}</text>`
+      );
+    })
+    .join("");
+  return `<svg viewBox="0 0 1400 372" width="100%" style="display:block">${ribbons}${rects}${labels}</svg>`;
+})();
+
+// Insights (slide 13): the pipeline-health dashboard — the question-journey
+// Sankey, KPI + cost tiles, the open-gap backlog trend and the verification gauge.
+// Numbers are illustrative.
+const insightsBody = `
+<section class="surface">
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px">
+    ${stat("1,240", "Questions asked")}${stat("82%", "High confidence")}${stat("$38", "AI spend · 30d")}${stat("$0.03", "Cost / answer")}${stat("64%", "Verified closed")}
+  </div>
+  <div style="border:1px solid ${T.border};border-radius:12px;padding:16px 20px 20px">
+    <div style="font-size:15px;font-weight:600">Question journey</div>
+    <div style="font-size:12.5px;color:${T.muted};margin-bottom:6px">Where volume flows — and leaks — at each branch · last 30 days</div>
+    ${sankeySvg}
+  </div>
+</section>`;
+
+// name -> [full html, cssWidth, cssHeight]. Height ~matches the deck frame's
+// crop band at that width so there is little wasted space.
 const pages = {
-  "02-ask-cited": shell(
-    "ask",
-    `<div class="workbench"><section class="surface"><div class="surfaceHeader"><h2>Ask</h2></div><div class="surfaceBody"><form class="questionForm"><label class="field"><span>Question</span><textarea>What external dependencies does the core package have?</textarea></label><button class="button">Ask</button></form>${answerBlock}</div></section><section class="surface"><div class="surfaceHeader"><h2>Answered questions</h2><span class="pill">2</span></div><div class="surfaceBody"><article class="row"><div class="rowTop"><h3>Which review path publishes a drafted knowledge fix?</h3><div class="rowMeta"><span class="pill flowPill">Product Support</span><span class="status medium">medium</span></div></div><p>A drafted fix is promoted to ready, published as a branch or pull request, then marked merged after review.</p></article></div></section></div>`
-  ),
-  "03-gaps": shell(
-    "gaps",
-    `<div class="workbench"><section class="surface"><div class="surfaceHeader"><h2>Suggested Clusters</h2><span class="pill">2</span></div><div class="surfaceBody"><article class="clusterCard"><div class="rowTop"><input class="clusterTitle" value="Source sync and indexing gaps"/><span class="pill flowPill">Product Support</span><span class="pill">2 gaps</span></div><p class="clusterRationale">These questions ask how new source material becomes searchable knowledge.</p><ul class="clusterGaps"><li><span>Explain how source repository changes are synchronized into indexed Markdown sections</span><select><option>Move to...</option></select></li><li><span>Document the operational checklist for publishing generated proposal branches</span><select><option>Move to...</option></select></li></ul><div class="rowActions"><button class="chip">Draft Proposal</button></div></article><article class="clusterCard"><div class="rowTop"><input class="clusterTitle" value="Scheduled cleanup behavior"/><span class="pill flowPill">Product Support</span><span class="pill">1 gap</span></div><p class="clusterRationale">These questions are about cleanup, consolidation, and stale content.</p></article></div></section><section class="surface"><div class="surfaceHeader"><h2>Gap Candidates</h2><span class="pill">3</span></div><div class="surfaceBody"><article class="row"><div class="rowTop"><h3>Clarify when automated crunch runs should consolidate duplicate knowledge pages</h3><span class="pill flowPill">Product Support</span><span class="pill">2 questions</span></div><p>q-1660, q-1788</p><div class="rowActions"><button class="chip">Draft Proposal</button></div></article></div></section></div>`
-  ),
-  "04-proposal": shell(
-    "proposals",
-    `<section class="surface"><div class="surfaceHeader"><h2>Proposals</h2><span class="pill">2</span></div><div class="surfaceBody"><div class="proposalGrid"><div class="list scrollList"><button class="proposalItem selected"><span>Document source sync and re-index workflow</span><small class="path">architecture/source-sync.md</small></button><button class="proposalItem"><span>Clarify scheduled crunch cleanup</span><small class="path">operations/crunch.md</small></button></div><div class="proposalPreview"><div class="rowTop"><div><h3>Document source sync and re-index workflow</h3><p class="path">architecture/source-sync.md</p></div><span class="status ready">ready</span></div><p>Several users asked how source changes become indexed knowledge. This draft adds the missing operational explanation and links it to review.</p><div class="rowActions"><button class="chip selected">Mark Ready</button><button class="chip selected">Publish Branch</button><button class="chip selected">Mark Merged</button><span class="pill">Branch publish available</span></div><pre># Source Sync and Re-indexing\n\nSource repositories are parsed into sections, embedded when hybrid retrieval is enabled, and written into the destination index.\n\n## Review path\n\nWhen a gap is detected, Markdown Magpie drafts a focused update. A reviewer marks it ready, publishes a branch, and merges it through the normal Git workflow.</pre></div></div></div></section>`
-  ),
-  "05-knowledge": shell(
-    "knowledge",
-    `<section class="surface"><div class="surfaceHeader"><h2>Knowledge Flows</h2><button class="button">Index KB</button></div><div class="surfaceBody"><div class="flowWorkspace"><nav class="flowSidebar"><button class="flowSidebarItem selected"><span class="flowSidebarName">Product Support</span><span class="flowSidebarMeta">1 source -> Product Knowledge Base · 2 docs</span></button><button class="flowSidebarItem"><span class="flowSidebarName">Internal Enablement</span><span class="flowSidebarMeta">2 sources -> Enablement KB · 8 docs</span></button></nav><section class="flowDetail"><div class="flowDetailHead"><div><h3>Product Support</h3><div class="flowPipe"><div class="flowNodeGroup"><span class="flowNode git">Product Code</span></div><span class="flowArrow">-&gt;</span><span class="flowNode destination">Product Knowledge Base</span></div></div><button class="button">Index KB</button></div><div class="flowSection"><h4 class="flowSectionTitle">Indexed documents</h4><div class="flowDocs"><div class="flowDocList"><div class="flowDocGroup"><div class="folderHeader"><span>architecture</span><small>1</small></div><div class="flowDocRow selected"><button class="flowDocSelect"><span>Knowledge Loop Architecture</span><small>knowledge-loop.md</small></button><span class="status good">good</span></div></div><div class="flowDocGroup"><div class="folderHeader"><span>operations</span><small>1</small></div><div class="flowDocRow"><button class="flowDocSelect"><span>Review Workflow</span><small>review-workflow.md</small></button><span class="status ready">ready</span></div></div></div><article class="flowDocReader"><div class="rowTop"><div><h3>Knowledge Loop Architecture</h3><p class="path">architecture/knowledge-loop.md</p></div><button class="button secondary">Open full</button></div><div class="rowActions"><span class="pill">product-docs</span><span class="pill">Platform</span><span class="pill">architecture</span></div><pre class="markdownViewer"># Knowledge Loop Architecture\n\nMarkdown Magpie keeps a curated destination knowledge base in Git.\n\n## Answering\n\nQuestions retrieve indexed Markdown sections, synthesize a cited answer, and log confidence.</pre></article></div></div></section></div></div></section>`
-  ),
-  "06-dataflow": shell(
-    "dataflow",
-    `<section class="surface"><div class="surfaceHeader"><h2>Data Flow Architecture</h2></div><div class="surfaceBody dataFlowPanel"><div class="flowTabs"><button class="flowTab active">Overview</button><button class="flowTab">Ask Flow</button><button class="flowTab">Continuous Improvement Cycle</button><button class="flowTab">Queue Architecture</button><button class="flowTab">Automation & Crunch</button></div><div class="flowDiagram"><div class="mockDiagram"><div class="mockFlow"><div class="mockNode"><strong>Git Markdown Repository</strong><span>Source material</span></div><div class="mockNode"><strong>Parse & Index</strong><span>Sections and embeddings</span></div><div class="mockNode"><strong>Postgres Index</strong><span>Searchable knowledge</span></div><div class="mockNode"><strong>Cited Answer</strong><span>Web and MCP</span></div></div><div class="mockCycle"><div class="mockNode"><strong>Learn</strong><span>Low confidence and feedback become gap candidates.</span></div><div class="mockNode"><strong>Generate</strong><span>Draft Markdown with evidence and rationale.</span></div><div class="mockNode"><strong>Review</strong><span>Publish PRs, merge, resolve gaps, re-index.</span></div></div></div></div><div class="flowLegend"><h3>System Components</h3><div class="legendItems"><div class="legendItem"><div class="legendBox" style="background:#fbfcfa;border:2px solid #285f74"></div><span>Source (Git)</span></div><div class="legendItem"><div class="legendBox" style="background:#e8f1f7"></div><span>Processing</span></div><div class="legendItem"><div class="legendBox" style="background:#f0f4f0;border:2px solid #3d6b43"></div><span>Storage</span></div></div></div></div></section>`
-  ),
-  "07-config": shell(
-    "config",
-    `<section class="surface"><div class="surfaceHeader"><h2>Runtime Config</h2><span class="pill">http://localhost:3001</span></div><div class="surfaceBody"><div class="runtimeEditor"><div class="configControl"><span>Execution</span><div class="segmented"><button class="segment active">direct</button><button class="segment">queue</button></div></div><label class="configControl"><span>Provider</span><select><option>OpenAI-compatible</option><option>Azure OpenAI</option><option>Mock</option></select></label><button class="button">Apply</button></div><div class="configStack"><section class="configGroup"><h3>Knowledge</h3><dl><div class="configRow"><dt>repositoryPath</dt><dd>knowledge-bases/product</dd></div><div class="configRow"><dt>checkoutRoot</dt><dd>tmp/checkouts</dd></div></dl></section><section class="configGroup"><h3>Retrieval</h3><dl><div class="configRow"><dt>mode</dt><dd>hybrid</dd></div><div class="configRow"><dt>embeddingProvider</dt><dd>openai-compatible</dd></div></dl></section><section class="configGroup"><h3>Watcher</h3><dl><div class="configRow"><dt>enabled</dt><dd>true</dd></div><div class="configRow"><dt>mode</dt><dd>queue</dd></div></dl></section></div></div></section>`
-  ),
-  "08-answer-card": `<!doctype html><html><head><meta charset="utf-8"/><style>${css}body{background:#f5f7f2;padding:30px}.answerCrop{width:980px;margin:0 auto;border:1px solid #d9ded6;background:#fff;padding:18px}</style></head><body><div class="answerCrop">${answerBlock}</div></body></html>`,
-  "09-improvement-cycle": shell(
-    "dataflow",
-    `<section class="surface"><div class="surfaceHeader"><h2>Data Flow Architecture</h2></div><div class="surfaceBody dataFlowPanel"><div class="flowTabs"><button class="flowTab">Overview</button><button class="flowTab">Ask Flow</button><button class="flowTab active">Continuous Improvement Cycle</button><button class="flowTab">Queue Architecture</button><button class="flowTab">Automation & Crunch</button></div><div class="flowDiagram"><div class="mockCycle"><div class="mockNode"><strong>Gap Detection</strong><span>Low confidence, user feedback, and manual flags are grouped into candidates.</span></div><div class="mockNode"><strong>Human Path</strong><span>Reviewer selects a cluster, generates a proposal, edits Markdown, and approves.</span></div><div class="mockNode"><strong>Automated Path</strong><span>Scheduled jobs draft uncovered clusters and promote ready fixes.</span></div><div class="mockNode"><strong>Publish PR</strong><span>Ready proposals become branches or pull requests.</span></div><div class="mockNode"><strong>Merge Outcome</strong><span>Merged fixes resolve gaps; closed PRs are marked rejected.</span></div><div class="mockNode"><strong>Re-index</strong><span>The updated knowledge base feeds the next answer.</span></div></div></div><div class="flowLegend"><h3>Cycle state</h3><div class="legendItems"><div class="legendItem"><div class="legendBox" style="background:#f1f6fb"></div><span>Detect</span></div><div class="legendItem"><div class="legendBox" style="background:#fef9f0;border:2px solid #8b5a00"></div><span>Draft</span></div><div class="legendItem"><div class="legendBox" style="background:#f0f8ee;border:2px solid #3d6b43"></div><span>Resolve</span></div></div></div></div></section>`
-  )
+  ask: [page("Ask · cited answer", askBody), 900, 640],
+  gaps: [page("Gaps · weak answers → proposals", gapsBody), 900, 560],
+  proposals: [page("Proposals · human review", proposalsBody), 900, 560],
+  questionnaires: [page("Questionnaire", questionnairesBody), 940, 700],
+  "demo-cluster": [page("Gaps · cluster forming", demoClusterBody), 760, 520],
+  "demo-draft": [page("Proposals · drafted fix", demoDraftBody), 760, 470],
+  "demo-pr": [ghPage(demoPr), 760, 460],
+  "demo-merged": [page("Proposals · merged & re-indexed", demoMergedBody), 760, 340],
+  "demo-payoff": [page("Ask · now answered", demoPayoffBody), 900, 480],
+  "seed-plan": [page("Seed · proposed plan", seedPlanBody), 900, 720],
+  insights: [page("Insights · pipeline health", insightsBody), 1400, 600]
 };
 
 await mkdir(TMP, { recursive: true });
 await mkdir(OUT, { recursive: true });
 
-for (const [name, html] of Object.entries(pages)) {
+for (const [name, [html, w, h]] of Object.entries(pages)) {
   const file = join(TMP, `${name}.html`);
   const shot = join(OUT, `${name}.png`);
   await writeFile(file, html);
@@ -147,14 +476,14 @@ for (const [name, html] of Object.entries(pages)) {
       "--hide-scrollbars",
       "--no-first-run",
       "--no-default-browser-check",
-      "--window-size=1440,900",
+      "--force-color-profile=srgb",
+      "--force-device-scale-factor=2",
+      `--window-size=${w},${h}`,
       `--screenshot=${shot}`,
       `file:///${resolve(file).replaceAll("\\", "/")}`
     ],
     { encoding: "utf8" }
   );
-  if (result.status !== 0) {
-    throw new Error(result.stderr || `Chrome failed for ${name}`);
-  }
-  console.log(`saved ${shot}`);
+  if (result.status !== 0) throw new Error(result.stderr || `Chrome failed for ${name}`);
+  console.log(`saved ${shot} (${w}x${h} @2x)`);
 }
