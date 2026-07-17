@@ -7,15 +7,18 @@ const ROOT = process.cwd();
 const OPT = join(ROOT, "presentation/assets/opt");
 const EXAMPLE = join(ROOT, "presentation/assets/example");
 
+const mimeOf = (f) => (/\.png$/i.test(f) ? "image/png" : "image/jpeg");
 const img = {};
+// Console product shots. Rendered by scripts/render-static-ui-shots.mjs straight
+// into opt/ (PNG for the current shots, legacy JPEGs for older ones), inlined by
+// their real MIME type.
 for (const f of readdirSync(OPT)) {
   const key = f.replace(/\.(jpg|jpeg|png)$/i, "");
   const b64 = readFileSync(join(OPT, f)).toString("base64");
-  img[key] = `data:image/jpeg;base64,${b64}`;
+  img[key] = `data:${mimeOf(f)};base64,${b64}`;
 }
-// Demo screenshots (slides 8–10). Kept at native format/resolution rather than
-// downscaled into opt/, because they are text-heavy captures that must stay legible.
-const mimeOf = (f) => (/\.png$/i.test(f) ? "image/png" : "image/jpeg");
+// Demo screenshots (slides 9–11). Kept at native format/resolution rather than
+// downscaled, because they are text-heavy captures that must stay legible.
 for (const f of readdirSync(EXAMPLE)) {
   const key = f.replace(/\.(jpg|jpeg|png)$/i, "");
   const b64 = readFileSync(join(EXAMPLE, f)).toString("base64");
@@ -278,23 +281,25 @@ const HTML = `<!doctype html>
           <li><span class="b">1</span><div><b>Every claim is cited</b> <span>— back to the exact file, heading and commit it came from.</span></div></li>
           <li><span class="b">2</span><div><b>Confidence is scored &amp; shown</b> <span>— a HIGH/LOW badge on every answer, not buried.</span></div></li>
           <li><span class="b">3</span><div><b>It abstains</b> <span>— if the source doesn't cover it, it says so instead of inventing an answer.</span></div></li>
+          <li><span class="b">4</span><div><b>Follow-ups keep the thread</b> <span>— multi-turn conversation carries the context and its citations forward.</span></div></li>
         </ul>
         <p class="footnote">Ask something it can't support and you get an honest "not enough here" — which becomes a tracked gap (see "won't rot").</p>
       </div>
-      ${frame(A("02-ask-cited"), { label: "localhost:3000 — Ask · cited answer", pos: "top" })}
+      ${frame(A("ask"), { label: "localhost:3000 — Ask · cited answer", pos: "top" })}
     </div>
   </section>
 
   <!-- 6 WON'T LEAK -->
   <section class="slide light" data-title="Won't leak">
     <div class="wrap split rev">
-      ${frame(A("04-proposal"), { label: "localhost:3000 — Proposals · human review", pos: "top" })}
+      ${frame(A("proposals"), { label: "localhost:3000 — Proposals · human review", pos: "top" })}
       <div>
         <div class="kicker">Won't leak</div>
         <h2>The raw material stays behind the wall.</h2>
         <ul class="feat">
           <li><span class="b">✓</span><div><b>Users never touch the source</b> <span>— no code, internal docs or restricted folders. Just the curated answer.</span></div></li>
           <li><span class="b">✓</span><div><b>Every change is a reviewed PR</b> <span>— an admin approves it, exactly like a code review, before it ships.</span></div></li>
+          <li><span class="b">✓</span><div><b>Hardened against injection</b> <span>— untrusted source text is delimited before the model sees it, and MCP tokens are scoped per tool.</span></div></li>
           <li><span class="b">✓</span><div><b>Full audit &amp; history</b> <span>— diffable, reversible, attributable. It's just Git.</span></div></li>
         </ul>
         <p class="footnote">This is what makes it safe to point at sensitive corpora that you could never hand to a generic chatbot.</p>
@@ -315,7 +320,7 @@ const HTML = `<!doctype html>
         </ul>
         <p class="footnote"><b>Usage is the maintenance signal.</b> The more it's asked, the faster it finds and fills its own weak spots.</p>
       </div>
-      ${frame(A("03-gaps"), { label: "localhost:3000 — Gaps · weak answers → proposals", pos: "top" })}
+      ${frame(A("gaps"), { label: "localhost:3000 — Gaps · weak answers → proposals", pos: "top" })}
     </div>
   </section>
 
@@ -325,16 +330,29 @@ const HTML = `<!doctype html>
       <div class="kicker">Demo · part 1 — in Claude</div>
       <h2 style="margin:.1em 0 0">It meets people where they already work.</h2>
       <div class="mcpshots">
-        <figure class="mcpshot">
-          <img src="${A("mcp-high-confidence")}" alt="kb_ask answering FlowerBI's key features with high confidence"/>
-          <figcaption><span class="badge hi">HIGH</span>Ask what's covered — a cited answer, straight inside the chat.</figcaption>
-        </figure>
-        <figure class="mcpshot">
-          <img src="${A("mcp-low-confidence-2")}" alt="kb_ask abstaining and flagging a knowledge gap"/>
-          <figcaption><span class="badge lo">LOW</span>Ask what's missing — it abstains honestly and flags a knowledge gap.</figcaption>
-        </figure>
+        <div class="chat">
+          <div class="turn"><div class="role">You · in Claude</div><div class="you">What guarantees does Markdown Magpie make about its answers?</div></div>
+          <div class="turn"><span class="tool">→ kb_ask · flow: magpie-sales</span></div>
+          <div class="turn">
+            <div class="role">Answer <span class="badge hi">HIGH</span></div>
+            <div class="ans">It grounds every response in indexed Markdown — citations to the exact file, heading &amp; commit, a scored confidence, and it flags a gap rather than guessing.</div>
+            <div class="cites">
+              <div class="cite"><span class="pth">…-internal-knowledge-base-obje.md</span> › Won't Lie (Grounded Answers)</div>
+              <div class="cite"><span class="pth">competitive-landscape-differentiation.md</span> › Summary</div>
+            </div>
+          </div>
+        </div>
+        <div class="chat">
+          <div class="turn"><div class="role">You · in Claude</div><div class="you">How much does it cost per seat — what's the enterprise pricing?</div></div>
+          <div class="turn"><span class="tool">→ kb_ask · flow: magpie-sales</span></div>
+          <div class="turn">
+            <div class="role">Answer <span class="badge lo">LOW</span></div>
+            <div class="ans">Open-source and self-hosted, so there's no per-seat cost — but the sources don't hold enterprise pricing tiers, so it abstains instead of inventing them.</div>
+            <div class="live"><span class="dot"></span>knowledge gap logged</div>
+          </div>
+        </div>
       </div>
-      <p class="footnote">Same engine, exposed as MCP tools (<span class="mono">kb_ask</span>, <span class="mono">kb_search</span>, <span class="mono">kb_feedback</span>) — so the knowledge shows up in Claude, Codex, or any agent, and every weak answer feeds back as a gap.</p>
+      <p class="footnote">Same engine, exposed as MCP tools (<span class="mono">kb_ask</span>, <span class="mono">kb_search</span>, <span class="mono">kb_citation</span>, <span class="mono">kb_flows</span>, <span class="mono">kb_questionnaire_*</span>) over a hosted OAuth endpoint — so the knowledge shows up in Claude, Codex, or any agent, and every weak answer feeds back as a gap.</p>
     </div>
   </section>
 
@@ -395,7 +413,25 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 12 CHEAP & YOURS -->
+  <!-- 12 QUESTIONNAIRES -->
+  <section class="slide light" data-title="Questionnaires">
+    <div class="wrap split rev">
+      ${frame(A("questionnaires"), { tall: true, label: "localhost:3000 — Questionnaires · batch answers", pos: "top" })}
+      <div>
+        <div class="kicker">Whole workflows, not just single answers</div>
+        <h2>Answer a whole questionnaire from the knowledge base.</h2>
+        <ul class="feat">
+          <li><span class="b">1</span><div><b>Paste a batch</b> <span>— a security review, an RFP, a SIG — one question per line.</span></div></li>
+          <li><span class="b">2</span><div><b>Reuse past answers</b> <span>— prior approved answers return instantly; only genuinely new questions are freshly grounded.</span></div></li>
+          <li><span class="b">3</span><div><b>See what changed</b> <span>— when a cited source moved, it re-answers and tells you exactly why.</span></div></li>
+          <li><span class="b">✓</span><div><b>Approve &amp; export</b> <span>— sign answers into the reuse corpus, export to Markdown or CSV.</span></div></li>
+        </ul>
+        <p class="footnote">The same grounded, cited engine — pointed at an entire worksheet instead of one question.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13 CHEAP & YOURS -->
   <section class="slide light" data-title="Cheap & yours">
     <div class="wrap">
       <div class="kicker">…and it's cheap, and it's yours</div>
@@ -409,7 +445,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 13 WIDE APPLICATIONS -->
+  <!-- 14 WIDE APPLICATIONS -->
   <section class="slide light" data-title="Applications">
     <div class="wrap">
       <div class="kicker">Wide applications</div>
@@ -430,7 +466,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 14 EASY SETUP -->
+  <!-- 15 EASY SETUP -->
   <section class="slide light" data-title="Easy setup">
     <div class="wrap">
       <div class="kicker">Easy to set up</div>
@@ -444,7 +480,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 15 CTA -->
+  <!-- 16 CTA -->
   <section class="slide ink" data-title="Call to action">
     <div class="wrap">
       <div class="brand"><img src="${A("icon")}" alt=""/><span class="nm">Markdown Magpie</span></div>
@@ -457,7 +493,7 @@ const HTML = `<!doctype html>
 </div>
 
 <a class="exit" href="/">Back to login</a>
-<div class="hud"><span id="counter">1 / 13</span> · <b id="hud-title">Title</b></div>
+<div class="hud"><span id="counter">1 / 16</span> · <b id="hud-title">Title</b></div>
 <div class="hint">← → navigate &nbsp;·&nbsp; <b>O</b> overview &nbsp;·&nbsp; <b>F</b> fullscreen</div>
 
 <div class="overlay" id="overlay"><div class="grid" id="grid"></div></div>

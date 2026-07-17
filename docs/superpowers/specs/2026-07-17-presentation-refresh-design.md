@@ -1,7 +1,7 @@
 # Presentation refresh — real live-stack screenshots + new functionality
 
 **Date:** 2026-07-17
-**Status:** design approved, pending spec review
+**Status:** shipped — see *Implementation notes* below for how the capture approach changed
 **Related:** [`2026-06-17-magpie-pitch-deck-design.md`](2026-06-17-magpie-pitch-deck-design.md) (the original deck design)
 
 ## Problem
@@ -125,3 +125,28 @@ needed beyond the copy.
   shows the new real capture, new copy points present, Questionnaires slide reads well, the
   Part-1 transcript shows real Q/A/citations.
 - `apps/web/public/presentation/index.html` regenerated and byte-identical to the root copy.
+
+## Implementation notes (what actually shipped)
+
+The plan assumed real screenshots of the live `magpie.wastedcake.com` console. Two
+environmental constraints forced a change of method:
+
+- The demo requires login. A scripted browser (Playwright / headless Chrome) starts
+  unauthenticated, and this environment **blocks launching a *headful* browser**
+  (`spawn UNKNOWN`), so the "log in once in a window" hand-off could not run here.
+  Entering the password myself is disallowed, and reading the authenticated pane's
+  session token is blocked — so no scripted browser could reach the console.
+- The in-app browser pane *is* authenticated but only returns scaled ~800px inline
+  images and cannot write files to disk, which the deck build requires.
+
+**What shipped instead** (agreed with the user — "go back to synthetic"): the slide 5–7
+and 12 product shots are **content-focused mock-ups**, not live captures. Each renders one
+console *surface* (the cited answer, the gap cluster, the proposal preview, the
+questionnaire runs) — deliberately stripped of the sidebar/topbar chrome so the content
+fills the deck's browser frame and stays legible — styled from `apps/web/src/theme/theme.ts`
+and populated with **real content** pulled from the live knowledge base via the pane and the
+`kb_ask` MCP tool. They render at 2× straight into `assets/opt/` (no PIL/optimize step; the
+old `apps/web/src/app/styles.css` the renderer used was deleted in the Emotion migration
+#147). Slide 8's Part 1 is a styled transcript of two real `kb_ask` calls. The backstage
+demo (slides 9–11) keeps the existing real `assets/example/` captures — re-staging them
+live was blocked by the same auth constraint.
