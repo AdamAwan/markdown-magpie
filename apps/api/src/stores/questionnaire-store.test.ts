@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { InMemoryQuestionnaireStore, type StoredItem } from "./questionnaire-store.js";
+import { InMemoryQuestionnaireStore } from "./questionnaire-store.js";
 
 describe("InMemoryQuestionnaireStore", () => {
   describe("matchApprovedTopN", () => {
@@ -113,7 +113,7 @@ describe("InMemoryQuestionnaireStore", () => {
       // basisItemIds both get set.
       const firstLog = "log-reanswer-1";
       await store.markAnswering(item.id, firstLog);
-      const first = (await store.completeItem(firstLog, {
+      const first = await store.completeItem(firstLog, {
         answer: "Adapted from a single prior answer.",
         answeredAt: new Date().toISOString(),
         citations: [],
@@ -121,25 +121,25 @@ describe("InMemoryQuestionnaireStore", () => {
         confidence: "high",
         outcome: "adapted",
         basisItemIds: ["basis-z"]
-      })) as StoredItem;
-      assert.equal(first.reusedFromItemId, "basis-z");
-      assert.deepEqual(first.basisItemIds, ["basis-z"]);
+      });
+      assert.equal(first?.reusedFromItemId, "basis-z");
+      assert.deepEqual(await store.basisItemIds(item.id), ["basis-z"]);
 
       // Second completion for the SAME item: a fresh re-answer with no
       // outcome/basisItemIds. Provenance must be fully reconciled to this
       // completion — not left stale from the earlier reuse.
       const secondLog = "log-reanswer-2";
       await store.markAnswering(item.id, secondLog);
-      const second = (await store.completeItem(secondLog, {
+      const second = await store.completeItem(secondLog, {
         answer: "A brand new fresh answer, not reused from anything.",
         answeredAt: new Date().toISOString(),
         citations: [],
         unanswerable: false,
         confidence: "medium"
-      })) as StoredItem;
+      });
 
-      assert.equal(second.reusedFromItemId, undefined, "stale reused-from pointer must be cleared");
-      assert.deepEqual(second.basisItemIds, [], "stale basis must be cleared");
+      assert.equal(second?.reusedFromItemId, undefined, "stale reused-from pointer must be cleared");
+      assert.deepEqual(await store.basisItemIds(item.id), [], "stale basis must be cleared");
     });
   });
 

@@ -288,4 +288,42 @@ describe("PostgresQuestionnaireStore", { skip: databaseUrl ? false : "DATABASE_U
     assert.equal(adapted?.outcome, "adapted");
     assert.equal(adapted?.reusedFromItemId, "basis-z");
   });
+
+  it("completeItem reconciles the questionnaire_item_basis table on re-answer, clearing stale basis rows", async () => {
+    const created = await store.create({ name: `basis-clear ${randomUUID()}`, flowId: "flow-a", questions: ["q0"] });
+    const item = created.items[0];
+
+    // First completion: a single-source reuse — a basis_item_id row gets
+    // inserted and reused_from_item_id is set from the single basis id.
+    const firstLog = `log-${randomUUID()}`;
+    await store.markAnswering(item.id, firstLog);
+    const first = await store.completeItem(firstLog, {
+      answer: "Adapted from a single prior answer.",
+      answeredAt: new Date().toISOString(),
+      citations: [],
+      unanswerable: false,
+      confidence: "high",
+      outcome: "adapted",
+      basisItemIds: ["basis-a"]
+    });
+    assert.equal(first?.outcome, "adapted");
+    assert.equal(first?.reusedFromItemId, "basis-a");
+    assert.deepEqual(await store.basisItemIds(item.id), ["basis-a"]);
+
+    // Second completion for the SAME item's question_log_id lineage: a fresh
+    // re-answer with no outcome/basisItemIds. The Postgres clearing path
+    // (replaceBasis) must DELETE the stale rows, not leave them stranded.
+    const secondLog = `log-${randomUUID()}`;
+    await store.markAnswering(item.id, secondLog);
+    const second = await store.completeItem(secondLog, {
+      answer: "A brand new fresh answer, not reused from anything.",
+      answeredAt: new Date().toISOString(),
+      citations: [],
+      unanswerable: false,
+      confidence: "medium"
+    });
+
+    assert.deepEqual(await store.basisItemIds(item.id), [], "stale basis rows must be cleared");
+    assert.equal(second?.reusedFromItemId, undefined, "stale reused-from pointer must be cleared");
+  });
 });

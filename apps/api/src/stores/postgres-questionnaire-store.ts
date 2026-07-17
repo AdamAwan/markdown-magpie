@@ -380,6 +380,14 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
     return mapItem(row, citations.get(row.id) ?? []);
   }
 
+  async basisItemIds(itemId: string): Promise<string[]> {
+    const result = await this.pool.query<{ basis_item_id: string }>(
+      "SELECT basis_item_id FROM questionnaire_item_basis WHERE item_id = $1 ORDER BY basis_item_id",
+      [itemId]
+    );
+    return result.rows.map((row) => row.basis_item_id);
+  }
+
   async nextPending(questionnaireId: string): Promise<QuestionnaireItem | undefined> {
     const result = await this.pool.query<ItemRow>(
       `

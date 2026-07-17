@@ -64,17 +64,20 @@ export interface QuestionnaireStore {
   failItem(questionLogId: string, error: string): Promise<QuestionnaireItem | undefined>;
   itemByQuestionLogId(questionLogId: string): Promise<QuestionnaireItem | undefined>;
   itemById(itemId: string): Promise<QuestionnaireItem | undefined>;
+  // Provenance recorded at completion time (mirrors questionnaire_item_basis /
+  // StoredItem.basisItemIds). Public read accessor so callers/tests can
+  // verify basis without reaching into store internals.
+  basisItemIds(itemId: string): Promise<string[]>;
   nextPending(questionnaireId: string): Promise<QuestionnaireItem | undefined>;
   countAnswering(questionnaireId: string): Promise<number>;
   approveItem(itemId: string, citations: QuestionnaireItemCitation[], staleAtApproval: boolean): Promise<void>;
   listReusedUnapproved(questionnaireId: string): Promise<QuestionnaireItem[]>;
 }
 
-// Exported (not just for internal use) so tests can assert on
-// completion-time provenance (basisItemIds) that QuestionnaireItem doesn't
-// expose publicly — completeItem/itemById still declare the narrower
-// QuestionnaireItem return type per the store contract.
-export interface StoredItem extends QuestionnaireItem {
+// Internal storage shape — completion-time provenance (basisItemIds) and the
+// reconciler's candidate stash live here, not on the public QuestionnaireItem.
+// Read them back through the store contract (basisItemIds, reconcileCandidateIds).
+interface StoredItem extends QuestionnaireItem {
   embedding?: number[];
   embeddingModel?: string;
   // Candidate ids stashed by the reconciler (mirrors reconcile_candidate_ids).
@@ -289,6 +292,11 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
   async itemById(itemId: string): Promise<QuestionnaireItem | undefined> {
     const item = this.items.get(itemId);
     return item ? structuredClone(item) : undefined;
+  }
+
+  async basisItemIds(itemId: string): Promise<string[]> {
+    const item = this.items.get(itemId);
+    return item?.basisItemIds ?? [];
   }
 
   async nextPending(questionnaireId: string): Promise<QuestionnaireItem | undefined> {
