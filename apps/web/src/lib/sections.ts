@@ -38,6 +38,19 @@ export function sectionPath(section: ConsoleSection): string {
   return SECTION_NAV.find((entry) => entry.section === section)?.path ?? DEFAULT_SECTION_PATH;
 }
 
+// Resolve the active section from the URL. Detail routes nest under a section
+// (e.g. /questionnaires/<id>), so match by longest path prefix rather than
+// exact equality — otherwise a detail URL would fall through to the default
+// section and mis-highlight the sidebar. A prefix must end at a path boundary
+// so /source-map never captures a hypothetical /source sibling.
 export function sectionFromPath(pathname: string): ConsoleSection {
-  return SECTION_NAV.find((entry) => entry.path === pathname)?.section ?? DEFAULT_SECTION;
+  let best: SectionNav | undefined;
+  for (const entry of SECTION_NAV) {
+    if (pathname === entry.path || pathname.startsWith(`${entry.path}/`)) {
+      if (!best || entry.path.length > best.path.length) {
+        best = entry;
+      }
+    }
+  }
+  return best?.section ?? DEFAULT_SECTION;
 }
