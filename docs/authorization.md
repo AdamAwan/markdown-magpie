@@ -152,6 +152,21 @@ capability layer rather than a risky scope rename.
 as flow-less, so only a **wildcard** asker (`"*": ["ask"]`) can let the watcher
 auto-route; a single-flow asker must name their flow.
 
+The two watcher-callback endpoints on the answering path enforce the **same `ask`
+gate**, so a role-aware user can't reach cross-flow content by calling them directly
+instead of `/ask`:
+
+- `POST /api/retrieve` requires `ask` on the requested `flowId`. An **absent
+  `flowId`** is the unscoped all-flows search — the flow-less/wildcard case, so only a
+  wildcard asker may run it (a single-flow asker must name their flow). Without this,
+  the endpoint returned indexed section **content** for any flow, or searched every
+  repository unscoped.
+- `POST /api/route` is free routing across the caller-supplied candidate flows — the
+  same flow-less case as `flow: "auto"`, so it requires a **wildcard** asker.
+
+The watcher itself is unaffected: its M2M token hits carve-out (3), and deployments
+with no grants configured behave exactly as before.
+
 ### MCP: acting as the end user (on-behalf-of delegation)
 
 The HTTP MCP server verifies the end user's token at its own edge, but calls the

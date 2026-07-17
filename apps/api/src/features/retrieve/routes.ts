@@ -3,6 +3,7 @@ import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
+import { assertCan } from "../../auth/capabilities.js";
 import { rateLimit } from "../../http/rate-limit.js";
 import * as retrieveService from "./service.js";
 
@@ -26,6 +27,13 @@ export function retrieveRoutes(ctx: AppContext): Hono {
     }),
     async (c) => {
       const { question, flowId, limit } = c.req.valid("json");
+
+      // Flow-scoped retrieval: mirror /api/ask so a role-aware user can only pull
+      // section content for a flow they hold `ask` on. An absent flowId is the
+      // unscoped (all-flows) search, treated as the flow-less/wildcard case — only a
+      // `*` asker (or a genuine service principal, e.g. the watcher) may run it.
+      assertCan(ctx, c, "ask", flowId);
+
       const result = await retrieveService.retrieve(ctx, {
         question,
         ...(flowId ? { flowId } : {}),

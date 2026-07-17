@@ -3,6 +3,7 @@ import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
+import { assertCan } from "../../auth/capabilities.js";
 import { rateLimit } from "../../http/rate-limit.js";
 import * as routeService from "./service.js";
 
@@ -36,6 +37,14 @@ export function routeRoutes(ctx: AppContext): Hono {
     }),
     async (c) => {
       const { question, flows } = c.req.valid("json");
+
+      // Free flow routing across the caller-supplied candidates is exactly the
+      // flow-less case of /api/ask ("auto"/absent): only a wildcard `ask` asker may
+      // let the router pick a flow for them. A single-flow asker must name their flow
+      // (via /api/ask or /api/retrieve). Genuine service principals (the watcher) keep
+      // routing via the existing client-credentials carve-out.
+      assertCan(ctx, c, "ask", undefined);
+
       const result = await routeService.route(ctx, { question, flows });
       return c.json(result);
     }
