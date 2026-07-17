@@ -253,12 +253,15 @@ describe("PostgresQuestionnaireStore", { skip: databaseUrl ? false : "DATABASE_U
   });
 
   it("completeItem records outcome and basis provenance, setting reusedFromItemId only for a single basis", async () => {
+    // Basis ids must reference REAL questionnaire_items rows —
+    // reused_from_item_id carries a foreign key (migration 0055). Extra
+    // questions serve as concrete basis items.
     const created = await store.create({
       name: `verdict ${randomUUID()}`,
       flowId: "flow-a",
-      questions: ["merged", "adapted"]
+      questions: ["merged", "adapted", "basis-one", "basis-two"]
     });
-    const [mergedItem, adaptedItem] = created.items;
+    const [mergedItem, adaptedItem, basisOne, basisTwo] = created.items;
 
     const mergedLog = `log-${randomUUID()}`;
     await store.markAnswering(mergedItem.id, mergedLog);
@@ -269,7 +272,7 @@ describe("PostgresQuestionnaireStore", { skip: databaseUrl ? false : "DATABASE_U
       unanswerable: false,
       confidence: "medium",
       outcome: "merged",
-      basisItemIds: ["basis-x", "basis-y"]
+      basisItemIds: [basisOne.id, basisTwo.id]
     });
     assert.equal(merged?.outcome, "merged");
     assert.equal(merged?.reusedFromItemId, undefined, "multi-source basis has no single reused-from item");
@@ -283,15 +286,20 @@ describe("PostgresQuestionnaireStore", { skip: databaseUrl ? false : "DATABASE_U
       unanswerable: false,
       confidence: "high",
       outcome: "adapted",
-      basisItemIds: ["basis-z"]
+      basisItemIds: [basisOne.id]
     });
     assert.equal(adapted?.outcome, "adapted");
-    assert.equal(adapted?.reusedFromItemId, "basis-z");
+    assert.equal(adapted?.reusedFromItemId, basisOne.id);
   });
 
   it("completeItem reconciles the questionnaire_item_basis table on re-answer, clearing stale basis rows", async () => {
-    const created = await store.create({ name: `basis-clear ${randomUUID()}`, flowId: "flow-a", questions: ["q0"] });
-    const item = created.items[0];
+    // A second question serves as the real basis item (reused_from_item_id FK).
+    const created = await store.create({
+      name: `basis-clear ${randomUUID()}`,
+      flowId: "flow-a",
+      questions: ["q0", "basis-donor"]
+    });
+    const [item, donor] = created.items;
 
     // First completion: a single-source reuse — a basis_item_id row gets
     // inserted and reused_from_item_id is set from the single basis id.
@@ -304,11 +312,11 @@ describe("PostgresQuestionnaireStore", { skip: databaseUrl ? false : "DATABASE_U
       unanswerable: false,
       confidence: "high",
       outcome: "adapted",
-      basisItemIds: ["basis-a"]
+      basisItemIds: [donor.id]
     });
     assert.equal(first?.outcome, "adapted");
-    assert.equal(first?.reusedFromItemId, "basis-a");
-    assert.deepEqual(await store.basisItemIds(item.id), ["basis-a"]);
+    assert.equal(first?.reusedFromItemId, donor.id);
+    assert.deepEqual(await store.basisItemIds(item.id), [donor.id]);
 
     // Second completion for the SAME item's question_log_id lineage: a fresh
     // re-answer with no outcome/basisItemIds. The Postgres clearing path

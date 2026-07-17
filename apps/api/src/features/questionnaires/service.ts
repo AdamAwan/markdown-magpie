@@ -208,7 +208,7 @@ export async function handleQuestionnaireAnswerCompletion(
         // fast-path's markReused, which does the same).
         answeredAt = basis.answeredAt ?? answeredAt;
         outcome = output.reuse.verdict;
-        basisItemIds = output.reuse.basisItemIds;
+        basisItemIds = [basis.id];
       }
       // A "reused" verdict that can't be honored (no basis id, basis not
       // found, or basis has no answer) degrades to a fresh, ungrounded
@@ -217,7 +217,14 @@ export async function handleQuestionnaireAnswerCompletion(
       // instead of a blank "answered" row with a phantom reuse outcome.
     } else {
       outcome = output.reuse.verdict; // adapted | merged | fresh
-      basisItemIds = output.reuse.basisItemIds;
+      // Keep only basis ids that resolve to real items. A model-returned id
+      // that isn't a real questionnaire item would violate the
+      // reused_from_item_id foreign key and wedge job completion; drop it and
+      // keep the (still valid) model answer with whatever provenance survives.
+      const resolved = await Promise.all(output.reuse.basisItemIds.map((id) => ctx.stores.questionnaires.itemById(id)));
+      basisItemIds = resolved
+        .filter((basis): basis is NonNullable<typeof basis> => basis !== undefined)
+        .map((basis) => basis.id);
     }
   }
   await ctx.stores.questionnaires.completeItem(questionLogId, {

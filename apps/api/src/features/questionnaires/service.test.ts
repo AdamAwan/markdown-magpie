@@ -459,19 +459,52 @@ test("completion maps a merged verdict onto the item outcome and basis", async (
   const targetItem = await ctx.stores.questionnaires.itemById(targetItemId);
   const job = await jobForLog(ctx, targetItem?.questionLogId);
 
+  // Basis ids must be REAL items — reused_from_item_id carries an FK, and the
+  // completion drops ids that don't resolve (see the FK-safe filter test).
+  const basisA = await createApprovedDonor(ctx, { question: "Merged source A?", answer: "Source A answer." });
+  const basisB = await createApprovedDonor(ctx, { question: "Merged source B?", answer: "Source B answer." });
+
   await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, {
     answer: "A synthesized answer drawing on two priors.",
     confidence: "high",
     citations: [
       { documentId: "d", sectionId: "s1", path: "p.md", heading: "H", anchor: "h", excerpt: "e", relevance: 0.9 }
     ],
-    reuse: { verdict: "merged", basisItemIds: ["item-x", "item-y"] }
+    reuse: { verdict: "merged", basisItemIds: [basisA, basisB] }
   });
 
   const finalItem = await ctx.stores.questionnaires.itemById(targetItemId);
   assert.equal(finalItem?.outcome, "merged");
-  assert.deepEqual(await ctx.stores.questionnaires.basisItemIds(targetItemId), ["item-x", "item-y"]);
+  assert.deepEqual(new Set(await ctx.stores.questionnaires.basisItemIds(targetItemId)), new Set([basisA, basisB]));
   assert.equal(finalItem?.answer, "A synthesized answer drawing on two priors.");
+});
+
+test("completion drops model-returned basis ids that aren't real items (FK-safe)", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "filter",
+    flowId: "security",
+    questions: ["q0"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const targetItemId = created.questionnaire.items[0].id;
+  const targetItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  const job = await jobForLog(ctx, targetItem?.questionLogId);
+
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, {
+    answer: "An adapted answer whose basis id the model hallucinated.",
+    confidence: "high",
+    citations: [
+      { documentId: "d", sectionId: "s1", path: "p.md", heading: "H", anchor: "h", excerpt: "e", relevance: 0.9 }
+    ],
+    reuse: { verdict: "adapted", basisItemIds: ["not-a-real-item"] }
+  });
+
+  const finalItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  assert.equal(finalItem?.outcome, "adapted");
+  assert.equal(finalItem?.reusedFromItemId, undefined, "a non-existent basis id must not become reused_from_item_id");
+  assert.deepEqual(await ctx.stores.questionnaires.basisItemIds(targetItemId), []);
 });
 
 test("completion copies the basis item's answer and citations VERBATIM for a reused verdict", async () => {
