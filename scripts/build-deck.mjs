@@ -5,23 +5,15 @@ import { join } from "node:path";
 
 const ROOT = process.cwd();
 const OPT = join(ROOT, "presentation/assets/opt");
-const EXAMPLE = join(ROOT, "presentation/assets/example");
 
 const mimeOf = (f) => (/\.png$/i.test(f) ? "image/png" : "image/jpeg");
 const img = {};
-// Console product shots. Rendered by scripts/render-static-ui-shots.mjs straight
-// into opt/ (PNG for the current shots, legacy JPEGs for older ones), inlined by
-// their real MIME type.
+// All deck imagery — product shots (slides 5-7, 12) and the demo mock-ups
+// (slides 9-11) — is rendered by scripts/render-static-ui-shots.mjs straight into
+// opt/ (PNG for the shots, a JPEG for the logo), inlined by its real MIME type.
 for (const f of readdirSync(OPT)) {
   const key = f.replace(/\.(jpg|jpeg|png)$/i, "");
   const b64 = readFileSync(join(OPT, f)).toString("base64");
-  img[key] = `data:${mimeOf(f)};base64,${b64}`;
-}
-// Demo screenshots (slides 9–11). Kept at native format/resolution rather than
-// downscaled, because they are text-heavy captures that must stay legible.
-for (const f of readdirSync(EXAMPLE)) {
-  const key = f.replace(/\.(jpg|jpeg|png)$/i, "");
-  const b64 = readFileSync(join(EXAMPLE, f)).toString("base64");
   img[key] = `data:${mimeOf(f)};base64,${b64}`;
 }
 const A = (k) => img[k] ?? "";
@@ -343,11 +335,11 @@ const HTML = `<!doctype html>
           </div>
         </div>
         <div class="chat">
-          <div class="turn"><div class="role">You · in Claude</div><div class="you">How much does it cost per seat — what's the enterprise pricing?</div></div>
+          <div class="turn"><div class="role">You · in Claude</div><div class="you">Does Markdown Magpie support single sign-on (SSO / SAML)?</div></div>
           <div class="turn"><span class="tool">→ kb_ask · flow: magpie-sales</span></div>
           <div class="turn">
             <div class="role">Answer <span class="badge lo">LOW</span></div>
-            <div class="ans">Open-source and self-hosted, so there's no per-seat cost — but the sources don't hold enterprise pricing tiers, so it abstains instead of inventing them.</div>
+            <div class="ans">The knowledge base doesn't cover how sign-in or SSO works yet — so it abstains and logs a gap rather than guessing.</div>
             <div class="live"><span class="dot"></span>knowledge gap logged</div>
           </div>
         </div>
@@ -363,12 +355,12 @@ const HTML = `<!doctype html>
       <h2>That gap becomes a reviewed improvement.</h2>
       <div class="demoduo">
         <figure>
-          <figcaption><span class="n">1</span><span><b>Cluster the gaps</b> — weak answers group into themes.</span></figcaption>
-          ${frame(A("web-gap-cluster"), { auto: true, label: "localhost:3000 — Gaps · suggested clusters" })}
+          <figcaption><span class="n">1</span><span><b>Cluster the gap</b> — the SSO questions group into one theme.</span></figcaption>
+          ${frame(A("demo-cluster"), { auto: true, label: "localhost:3000 — Gaps · authentication cluster" })}
         </figure>
         <figure>
-          <figcaption><span class="n">2</span><span><b>Draft a fix</b> — grounded Markdown with a rationale.</span></figcaption>
-          ${frame(A("web-proposal"), { auto: true, label: "localhost:3000 — Proposals · drafted fix" })}
+          <figcaption><span class="n">2</span><span><b>Draft a fix</b> — a grounded SSO page, with a rationale.</span></figcaption>
+          ${frame(A("demo-draft"), { auto: true, label: "localhost:3000 — Proposals · drafted fix" })}
         </figure>
       </div>
       <p class="footnote">It detects its own weak spots and drafts the fix — you never start from a blank page.</p>
@@ -382,12 +374,12 @@ const HTML = `<!doctype html>
       <h2>Reviewed like code, then merged in.</h2>
       <div class="demoduo">
         <figure>
-          <figcaption><span class="n">3</span><span><b>Raise PRs</b> — each fix is a reviewable pull request.</span></figcaption>
-          ${frame(A("web-raised-prs"), { auto: true, label: "github.com — Pull requests" })}
+          <figcaption><span class="n">3</span><span><b>Raise a PR</b> — the fix is a reviewable pull request.</span></figcaption>
+          ${frame(A("demo-pr"), { auto: true, label: "github.com — Pull request #142" })}
         </figure>
         <figure>
-          <figcaption><span class="n">4</span><span><b>Merge &amp; re-index</b> — approved, merged, re-indexed.</span></figcaption>
-          ${frame(A("web-merged-in"), { auto: true, label: "localhost:3000 — Knowledge Console · re-indexed" })}
+          <figcaption><span class="n">4</span><span><b>Merge &amp; re-index</b> — approved, merged, gaps resolved.</span></figcaption>
+          ${frame(A("demo-merged"), { auto: true, label: "localhost:3000 — Proposals · merged & re-indexed" })}
         </figure>
       </div>
       <p class="footnote">Every change is a Git PR an admin approves — diffable, reversible, attributable. The raw source never leaves the wall.</p>
@@ -405,10 +397,10 @@ const HTML = `<!doctype html>
           <li><span class="b">✓</span><div><b>No engineer wrote that page</b> <span>— the loop drafted it from real usage.</span></div></li>
           <li><span class="b">✓</span><div><b>It still went through review</b> <span>before it ever shipped to a user.</span></div></li>
         </ul>
-        <p class="footnote">All real: captured against a live FlowerBI knowledge base while building these slides.</p>
+        <p class="footnote">One thread, end to end — the SSO gap from part 1, filled by the loop and reviewed before it shipped.</p>
       </div>
       <figure class="payoff">
-        <img src="${A("mcp-result-of-learning")}" alt="kb_ask now returning a full example FlowerBI star schema after the gap was filled"/>
+        <img src="${A("demo-payoff")}" alt="kb_ask now answering the SSO question with high confidence, cited to the newly-merged authentication page"/>
       </figure>
     </div>
   </section>
@@ -475,6 +467,13 @@ const HTML = `<!doctype html>
         <div class="step"><div class="n">1</div><h3>Name a source</h3><p>Give it a Git repo (or several) of source material to learn from.</p></div>
         <div class="step"><div class="n">2</div><h3>Name a destination</h3><p>A repo where the curated knowledge base lives and PRs are raised.</p></div>
         <div class="step"><div class="n">3</div><h3>Let the loop run</h3><p>It indexes, answers, finds gaps, drafts fixes — you review. That's it.</p></div>
+      </div>
+      <div class="card" style="margin-top:20px;display:flex;gap:16px;align-items:flex-start">
+        <div class="ic" style="flex:0 0 auto">🌱</div>
+        <div>
+          <h3 style="margin:0 0 5px;font-size:clamp(18px,2vw,23px)">Starting from empty? Seed it.</h3>
+          <p style="margin:0;color:var(--muted);font-size:clamp(14px,1.5vw,17px);line-height:1.5">Point <b>Seed</b> at a flow and it explores your sources, proposes an outline of pages to write, and drafts each one as a reviewable PR — a grounded starter knowledge base before anyone's even asked a question.</p>
+        </div>
       </div>
       <p class="footnote">No bespoke pipeline per use case — the same loop you just saw, configured in a few lines.</p>
     </div>

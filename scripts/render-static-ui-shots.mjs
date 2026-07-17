@@ -179,22 +179,120 @@ const questionnairesBody = `
   </div>
 </section>`;
 
-// name -> [eyebrow, body, cssWidth, cssHeight]. Height ~matches the deck frame's
+// ---- demo: one coherent thread ------------------------------------------
+// The whole demo (deck slides 8-11) follows a single scenario: the single sign-on
+// (SSO) question that comes back as a LOW gap in slide 8's transcript is
+// clustered, drafted, PR'd, merged & re-indexed, then re-asked and answered.
+
+const demoClusterBody = `
+<section class="surface">
+  <div class="sh"><h2>Suggested clusters</h2><span class="pill">1 new</span></div>
+  <article style="border:1px solid ${T.border};border-radius:12px;padding:18px 20px">
+    <div class="between" style="margin-bottom:8px">
+      <strong style="font-size:17px">Authentication &amp; SSO</strong>
+      <div class="row"><span class="fpill">Magpie Sales</span><span class="pill">3 gaps</span></div></div>
+    <p style="font-size:15px;color:${T.muted}">People keep asking how sign-in works and whether single sign-on is supported — the knowledge base doesn't say yet.</p>
+    <ul style="list-style:none;margin-top:6px">
+      ${clusterGap("Does Markdown Magpie support single sign-on (SSO / SAML)?")}
+      ${clusterGap("Which identity providers can we use?")}
+      ${clusterGap("Can we lock console access to our own IdP?")}
+    </ul>
+    <div style="margin-top:16px"><span class="btnP">Draft proposal</span></div>
+  </article>
+</section>`;
+
+const demoDraftBody = `
+<section class="surface">
+  <div class="between" style="align-items:flex-start;margin-bottom:12px">
+    <div><h2 style="font-size:20px">Authentication &amp; Single Sign-On</h2>
+      <div class="path" style="margin-top:4px">magpie-sales/authentication-and-sso.md</div></div>
+    ${badge("ok", "ready")}</div>
+  <p style="font-size:16px;line-height:1.6;color:${T.muted};margin-bottom:16px">Drafted from the
+    <b>Authentication &amp; SSO</b> gap — explains how sign-in works and which providers are supported,
+    grounded in the deployment docs.</p>
+  <pre style="background:${T.surfaceMuted};border:1px solid ${T.border};border-radius:10px;padding:18px 20px;
+    font-family:ui-monospace,Menlo,monospace;font-size:14px;line-height:1.65;color:${T.text};white-space:pre-wrap"># Authentication &amp; Single Sign-On
+
+## Sign-in
+Magpie authenticates through Auth0, so it works with any OIDC identity
+provider — Google, Microsoft Entra, Okta and more.
+
+## SSO &amp; provisioning
+SAML single sign-on and SCIM provisioning are supported, and console
+access can be locked to your organisation's identity provider.</pre>
+</section>`;
+
+const demoMergedBody = `
+<section class="surface">
+  <div class="between" style="align-items:flex-start;margin-bottom:16px">
+    <div><h2 style="font-size:20px">Authentication &amp; Single Sign-On</h2>
+      <div class="path" style="margin-top:4px">magpie-sales/authentication-and-sso.md</div></div>
+    ${badge("ok", "merged")}</div>
+  <div style="display:grid;gap:12px;font-size:15.5px">
+    <div class="row"><span style="color:${T.ok.fg};font-weight:700">✓</span> Merged PR #142 into <span class="mono">main</span></div>
+    <div class="row"><span style="color:${T.ok.fg};font-weight:700">✓</span> Re-indexed 4 sections into Magpie Sales</div>
+    <div class="row"><span style="color:${T.ok.fg};font-weight:700">✓</span> Resolved 3 gaps in the Authentication &amp; SSO cluster</div>
+  </div>
+</section>`;
+
+const demoPayoffBody = `
+<section class="surface">
+  <div class="between" style="align-items:flex-start;margin-bottom:14px">
+    <h2 style="font-size:20px;max-width:74%;line-height:1.3">Does Markdown Magpie support single sign-on (SSO / SAML)?</h2>
+    <div class="row"><span class="fpill">Magpie Sales</span>${badge("ok", "HIGH")}</div></div>
+  <p class="answer"><b>Yes.</b> Magpie signs in through Auth0, so it works with any OIDC provider — Google, Microsoft
+    Entra, Okta and more — and <b>SAML single sign-on</b> with SCIM provisioning is supported. Console access can be
+    locked to your own identity provider.</p>
+  <div style="margin:20px 0 10px;font-size:14px;color:${T.muted};font-weight:600">1 citation</div>
+  ${cite("Authentication &amp; Single Sign-On", "magpie-sales/authentication-and-sso.md", "92%")}
+  <div style="margin-top:16px;font-size:15px;color:${T.ok.fg};font-weight:600">↳ Answered from a page that didn't exist an hour ago.</div>
+</section>`;
+
+// A GitHub-styled pull-request mock (slide 10). Uses GitHub's palette, not the
+// console theme — it is deliberately a different surface (the PR review view).
+const demoPr = `
+<div style="font-size:24px;font-weight:400;line-height:1.3;margin-bottom:10px;color:#1f2328">
+  Add authentication &amp; SSO page <span style="color:#59636e;font-weight:300">#142</span></div>
+<div style="display:inline-flex;align-items:center;gap:7px;background:#1a7f37;color:#fff;font-size:14px;font-weight:600;border-radius:99px;padding:6px 15px;margin-bottom:16px">● Open</div>
+<div style="color:#59636e;font-size:15px;margin-bottom:20px"><b style="color:#1f2328">magpie-bot</b> wants to merge 1 commit into
+  <span style="font-family:ui-monospace,Menlo,monospace">main</span> from
+  <span style="font-family:ui-monospace,Menlo,monospace">magpie/authentication-and-sso</span></div>
+<div style="border:1px solid #d1d9e0;border-radius:10px;overflow:hidden;margin-bottom:20px">
+  <div style="background:#f6f8fa;border-bottom:1px solid #d1d9e0;padding:10px 15px;font-size:14px;color:#59636e">1 changed file</div>
+  <div style="display:flex;justify-content:space-between;padding:12px 15px;font-size:14px;font-family:ui-monospace,Menlo,monospace">
+    <span>magpie-sales/authentication-and-sso.md</span><span><span style="color:#1a7f37;font-weight:600">+38</span> <span style="color:#59636e">−0</span></span></div></div>
+<div style="border:1px solid #d1d9e0;border-radius:12px;padding:18px 20px">
+  <div style="display:flex;align-items:center;gap:11px;color:#1f2328;font-size:16px;font-weight:600;margin-bottom:6px">
+    <span style="width:24px;height:24px;border-radius:50%;background:#1a7f37;color:#fff;display:grid;place-items:center;font-size:14px">✓</span>
+    1 approval · No conflicts with the base branch</div>
+  <p style="color:#59636e;font-size:14px;margin:0 0 16px 35px">Merging resolves 3 open knowledge gaps and re-indexes the destination.</p>
+  <span style="display:inline-block;background:#1f883d;color:#fff;font-size:15px;font-weight:600;border-radius:8px;padding:10px 18px;margin-left:35px">Merge pull request</span></div>`;
+
+const ghPage = (body) => `<!doctype html><html><head><meta charset="utf-8"/>
+<style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:-apple-system,"Segoe UI",Inter,sans-serif;
+  background:#fff;color:#1f2328;padding:26px 30px;-webkit-font-smoothing:antialiased;}</style></head><body>${body}</body></html>`;
+
+// name -> [full html, cssWidth, cssHeight]. Height ~matches the deck frame's
 // crop band at that width so there is little wasted space.
 const pages = {
-  ask: ["Ask · cited answer", askBody, 900, 640],
-  gaps: ["Gaps · weak answers → proposals", gapsBody, 900, 560],
-  proposals: ["Proposals · human review", proposalsBody, 900, 560],
-  questionnaires: ["Questionnaires · batch answers", questionnairesBody, 900, 900]
+  ask: [page("Ask · cited answer", askBody), 900, 640],
+  gaps: [page("Gaps · weak answers → proposals", gapsBody), 900, 560],
+  proposals: [page("Proposals · human review", proposalsBody), 900, 560],
+  questionnaires: [page("Questionnaires · batch answers", questionnairesBody), 900, 900],
+  "demo-cluster": [page("Gaps · cluster forming", demoClusterBody), 760, 520],
+  "demo-draft": [page("Proposals · drafted fix", demoDraftBody), 760, 470],
+  "demo-pr": [ghPage(demoPr), 760, 460],
+  "demo-merged": [page("Proposals · merged & re-indexed", demoMergedBody), 760, 340],
+  "demo-payoff": [page("Ask · now answered", demoPayoffBody), 900, 480]
 };
 
 await mkdir(TMP, { recursive: true });
 await mkdir(OUT, { recursive: true });
 
-for (const [name, [eyebrow, body, w, h]] of Object.entries(pages)) {
+for (const [name, [html, w, h]] of Object.entries(pages)) {
   const file = join(TMP, `${name}.html`);
   const shot = join(OUT, `${name}.png`);
-  await writeFile(file, page(eyebrow, body));
+  await writeFile(file, html);
   const result = spawnSync(
     CHROME,
     [
