@@ -4,12 +4,11 @@ import { useParams } from "next/navigation";
 import { QuestionnaireDetail } from "../../../components/QuestionnaireDetail";
 import { useConsole } from "../../../components/ConsoleProvider";
 import { Surface, Workbench } from "../../../components/ui";
-import { resolveApiUrl } from "../../../lib/api";
 
 export default function QuestionnaireDetailPage() {
   const params = useParams<{ id: string }>();
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
-  const { getQuestionnaire, approveQuestionnaireItem, approveReusedItems } = useConsole();
+  const { getQuestionnaire, approveQuestionnaireItem, approveReusedItems, exportQuestionnaire } = useConsole();
 
   return (
     <Workbench>
@@ -24,9 +23,7 @@ export default function QuestionnaireDetailPage() {
             onGet={getQuestionnaire}
             onApproveItem={approveQuestionnaireItem}
             onApproveReused={approveReusedItems}
-            exportHref={(questionnaireId, format) =>
-              resolveApiUrl(`/questionnaires/${encodeURIComponent(questionnaireId)}/export?format=${format}`)
-            }
+            onExport={exportQuestionnaire}
           />
         </Surface.Body>
       </Surface>

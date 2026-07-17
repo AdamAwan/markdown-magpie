@@ -74,7 +74,7 @@ function noopHandlers() {
     onGet: async () => worksheet(),
     onApproveItem: async () => false,
     onApproveReused: async () => undefined,
-    exportHref: (id: string, format: "md" | "csv") => `/api/questionnaires/${id}/export?format=${format}`
+    onExport: async () => {}
   };
 }
 
@@ -142,6 +142,27 @@ test("only answered items are approvable and approve calls through", async () =>
     assert.equal(approveButtons.length, 2, "both answered items are approvable");
     await click(approveButtons[0]);
     assert.deepEqual(approvals, ["i-0"]);
+  } finally {
+    unmount();
+  }
+});
+
+test("export buttons call the authed export handler with the format", async () => {
+  const exports: Array<[string, string]> = [];
+  const { container, unmount } = await renderDom(
+    <QuestionnaireDetail
+      {...props({
+        onExport: async (id: string, format: "md" | "csv") => {
+          exports.push([id, format]);
+        }
+      })}
+    />
+  );
+  try {
+    const md = [...container.querySelectorAll("button")].find((b) => b.textContent === "Export .md");
+    assert.ok(md, "export .md button renders");
+    await click(md);
+    assert.deepEqual(exports, [["qn-1", "md"]]);
   } finally {
     unmount();
   }

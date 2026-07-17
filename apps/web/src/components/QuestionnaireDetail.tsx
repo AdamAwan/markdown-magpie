@@ -12,7 +12,9 @@ interface QuestionnaireDetailProps {
   onGet: (id: string) => Promise<Questionnaire | undefined>;
   onApproveItem: (questionnaireId: string, itemId: string) => Promise<boolean>;
   onApproveReused: (questionnaireId: string) => Promise<number | undefined>;
-  exportHref: (id: string, format: "md" | "csv") => string;
+  // Downloads through the console's authed apiDownload (a plain <a href> omits
+  // the bearer token and 401s under Auth0 — see ConsoleProvider.exportQuestionnaire).
+  onExport: (id: string, format: "md" | "csv") => Promise<void>;
 }
 
 const POLL_INTERVAL_MS = 5_000;
@@ -27,7 +29,7 @@ export function QuestionnaireDetail({
   onGet,
   onApproveItem,
   onApproveReused,
-  exportHref
+  onExport
 }: QuestionnaireDetailProps) {
   const [questionnaire, setQuestionnaire] = useState<Questionnaire | undefined>(undefined);
   // Distinguishes "still loading" from "loaded, but no such questionnaire" so a
@@ -97,8 +99,12 @@ export function QuestionnaireDetail({
           <Button variant="secondary" onClick={() => void approveAllReused()}>
             Approve all reused
           </Button>
-          <ExportLink href={exportHref(questionnaire.id, "md")}>Export .md</ExportLink>
-          <ExportLink href={exportHref(questionnaire.id, "csv")}>Export .csv</ExportLink>
+          <ExportButton type="button" onClick={() => void onExport(questionnaire.id, "md")}>
+            Export .md
+          </ExportButton>
+          <ExportButton type="button" onClick={() => void onExport(questionnaire.id, "csv")}>
+            Export .csv
+          </ExportButton>
         </Row>
       </Row>
 
@@ -201,10 +207,14 @@ const CitationList = styled.ul(({ theme }) => ({
   fontSize: theme.font.size.sm
 }));
 
-const ExportLink = styled.a(({ theme }) => ({
+const ExportButton = styled.button(({ theme }) => ({
   alignSelf: "center",
+  border: "none",
+  background: "transparent",
+  padding: 0,
   color: theme.color.accent,
   fontSize: theme.font.size.sm,
+  cursor: "pointer",
   textDecoration: "none",
   "&:hover": { textDecoration: "underline" }
 }));

@@ -144,13 +144,16 @@ export function buildSourceGroundedPrompt(
   const workspaceLines = workspaces
     .map((ws) =>
       mode === "cli"
-        ? `- ${ws.name}: ${ws.rootDir}${workspaces.indexOf(ws) === 0 ? " (your working directory)" : ""}`
+        ? // The CLI agent runs from a neutral working directory (#280), not inside
+          // any checkout, so each source is named by its absolute mounted path
+          // rather than one being flagged as the cwd.
+          `- ${ws.name}: ${ws.rootDir}`
         : `- ${ws.name}: address paths as "${ws.sourceId}/<relative path>" in list_dir/read_file/grep`
     )
     .join("\n");
   const access =
     mode === "cli"
-      ? "Source repositories available (read-only; explore with your file tools):"
+      ? "Source repositories available (read-only; explore these paths with your file tools):"
       : "Source repositories available through your tools (list_dir, read_file, grep):";
   // A job can be grounded in fetchable internet sources alone (#242); render the
   // repository block only when there is a repository to explore.
