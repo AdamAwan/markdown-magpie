@@ -55,6 +55,11 @@ describe("loadConfig — valid configs", () => {
     // Abstain-biased flow-router defaults.
     assert.equal(config.flowRouter.minTopScore, 0.25);
     assert.equal(config.flowRouter.minMargin, 0.05);
+    // Questionnaire defaults.
+    assert.equal(config.questionnaires.matchThreshold, 0.84);
+    assert.equal(config.questionnaires.maxInflight, 3);
+    assert.equal(config.questionnaires.reconcileCandidates, 3);
+    assert.equal(config.questionnaires.reconcileEnabled, true);
   });
 
   it("honours FLOW_ROUTER_* overrides and falls back to defaults on invalid/out-of-range values", () => {
@@ -110,6 +115,31 @@ describe("loadConfig — valid configs", () => {
       assert.equal(
         config.gapClustering.assignThreshold,
         0.84,
+        `value ${JSON.stringify(bad)} must fall back to the default`
+      );
+    }
+  });
+
+  it("honours QUESTIONNAIRE_RECONCILE_CANDIDATES and QUESTIONNAIRE_RECONCILE_ENABLED overrides", () => {
+    const overridden = loadConfig({
+      ...minimalEnv,
+      QUESTIONNAIRE_RECONCILE_CANDIDATES: "5",
+      QUESTIONNAIRE_RECONCILE_ENABLED: "1"
+    });
+    assert.equal(overridden.questionnaires.reconcileCandidates, 5);
+    assert.equal(overridden.questionnaires.reconcileEnabled, true);
+
+    // QUESTIONNAIRE_RECONCILE_ENABLED=0 disables reconciliation.
+    const disabled = loadConfig({ ...minimalEnv, QUESTIONNAIRE_RECONCILE_ENABLED: "0" });
+    assert.equal(disabled.questionnaires.reconcileEnabled, false);
+  });
+
+  it("falls back on out-of-range or non-numeric reconcile candidates", () => {
+    for (const bad of ["0", "-1", "abc", ""]) {
+      const config = loadConfig({ ...minimalEnv, QUESTIONNAIRE_RECONCILE_CANDIDATES: bad });
+      assert.equal(
+        config.questionnaires.reconcileCandidates,
+        3,
         `value ${JSON.stringify(bad)} must fall back to the default`
       );
     }

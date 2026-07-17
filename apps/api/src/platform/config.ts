@@ -234,18 +234,27 @@ interface QuestionnaireConfig {
   // small so a 200-question batch can never monopolise the interactive
   // in-flight reservation that protects live /api/ask traffic (#240).
   maxInflight: number;
+  // top-N approved answers fed to the reconcile step, default 3
+  reconcileCandidates: number;
+  // off falls back to the deterministic-veto path, default true
+  reconcileEnabled: boolean;
 }
 
 const QUESTIONNAIRE_DEFAULT_MATCH_THRESHOLD = 0.84;
 const QUESTIONNAIRE_DEFAULT_MAX_INFLIGHT = 3;
+const QUESTIONNAIRE_DEFAULT_RECONCILE_CANDIDATES = 3;
 
 function resolveQuestionnaireConfig(env: NodeJS.ProcessEnv): QuestionnaireConfig {
   const threshold = parseUnitFloat(env.QUESTIONNAIRE_MATCH_THRESHOLD, QUESTIONNAIRE_DEFAULT_MATCH_THRESHOLD);
   const rawInflight = Number.parseInt(env.QUESTIONNAIRE_MAX_INFLIGHT ?? "", 10);
+  const rawCandidates = Number.parseInt(env.QUESTIONNAIRE_RECONCILE_CANDIDATES ?? "", 10);
   return {
     // A threshold of 0 would match every prior item; treat it as invalid.
     matchThreshold: threshold > 0 ? threshold : QUESTIONNAIRE_DEFAULT_MATCH_THRESHOLD,
-    maxInflight: Number.isInteger(rawInflight) && rawInflight > 0 ? rawInflight : QUESTIONNAIRE_DEFAULT_MAX_INFLIGHT
+    maxInflight: Number.isInteger(rawInflight) && rawInflight > 0 ? rawInflight : QUESTIONNAIRE_DEFAULT_MAX_INFLIGHT,
+    reconcileCandidates: Number.isInteger(rawCandidates) && rawCandidates > 0
+      ? rawCandidates : QUESTIONNAIRE_DEFAULT_RECONCILE_CANDIDATES,
+    reconcileEnabled: env.QUESTIONNAIRE_RECONCILE_ENABLED !== "0"
   };
 }
 
