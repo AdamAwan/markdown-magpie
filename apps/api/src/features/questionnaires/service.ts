@@ -198,22 +198,36 @@ export async function handleQuestionnaireAnswerCompletion(
   let basisItemIds: string[] | undefined;
   let answer = output.answer;
   let citations = await snapshotCitations(ctx, output);
+  let answeredAt = new Date().toISOString();
   if (output.reuse) {
-    outcome = output.reuse.verdict; // reused | adapted | merged | fresh
-    basisItemIds = output.reuse.basisItemIds;
-    if (output.reuse.verdict === "reused" && basisItemIds[0]) {
+    if (output.reuse.verdict === "reused") {
       // Trust guarantee: copy the approved answer + its citations VERBATIM by
       // id, never the model's echo.
-      const basis = await ctx.stores.questionnaires.itemById(basisItemIds[0]);
+      const basisId = output.reuse.basisItemIds[0];
+      const basis = basisId ? await ctx.stores.questionnaires.itemById(basisId) : undefined;
       if (basis?.answer) {
         answer = basis.answer;
         citations = basis.citations;
+        // The ORIGINAL generation time carries forward — the freshness
+        // baseline for the next questionnaire's newcomer check (matches the
+        // fast-path's markReused, which does the same).
+        answeredAt = basis.answeredAt ?? answeredAt;
+        outcome = output.reuse.verdict;
+        basisItemIds = output.reuse.basisItemIds;
       }
+      // A "reused" verdict that can't be honored (no basis id, basis not
+      // found, or basis has no answer) degrades to a fresh, ungrounded
+      // completion — citations stays [] (from output.citations, which the
+      // watcher sends empty for reused) so the item lands unanswerable
+      // instead of a blank "answered" row with a phantom reuse outcome.
+    } else {
+      outcome = output.reuse.verdict; // adapted | merged | fresh
+      basisItemIds = output.reuse.basisItemIds;
     }
   }
   await ctx.stores.questionnaires.completeItem(questionLogId, {
     answer,
-    answeredAt: new Date().toISOString(),
+    answeredAt,
     citations,
     unanswerable: citations.length === 0,
     confidence: output.confidence,

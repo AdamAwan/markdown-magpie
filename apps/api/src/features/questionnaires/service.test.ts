@@ -565,3 +565,89 @@ test("end-to-end regression (QA#4 shape): a single candidate the fast-path can't
   assert.equal(finalItem?.answer, approvedItem?.answer);
   assert.deepEqual(finalItem?.citations, approvedItem?.citations);
 });
+
+// --- Whole-branch review fixes ---------------------------------------------
+
+test("a reused verdict carries forward the basis item's ORIGINAL answeredAt, not completion time", async () => {
+  const ctx = flowContext();
+  const basisId = await createAnsweredItem(ctx, {
+    question: "What certs do you hold?",
+    answer: "We hold ISO 27001.",
+    citation: {
+      documentId: "docs:certs.md",
+      sectionId: "docs:certs.md:0",
+      path: "certs.md",
+      heading: "Certificates",
+      anchor: "0",
+      excerpt: "ISO 27001",
+      relevance: 0.9
+    }
+  });
+  // Backdate the basis's answeredAt directly through the store (bypassing the
+  // service, which always stamps "now") so the carry-forward assertion below
+  // can't pass by coincidence of two completions landing in the same instant.
+  const basis = await ctx.stores.questionnaires.itemById(basisId);
+  assert.ok(basis);
+  const originalAnsweredAt = "2020-01-01T00:00:00.000Z";
+  await ctx.stores.questionnaires.completeItem(basis!.questionLogId!, {
+    answer: basis!.answer!,
+    answeredAt: originalAnsweredAt,
+    citations: basis!.citations,
+    unanswerable: false,
+    confidence: "high"
+  });
+
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "target",
+    flowId: "security",
+    questions: ["Do you hold ISO certifications?"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const targetItemId = created.questionnaire.items[0].id;
+  const targetItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  const job = await jobForLog(ctx, targetItem?.questionLogId);
+
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, {
+    answer: "",
+    confidence: "high",
+    citations: [],
+    reuse: { verdict: "reused", basisItemIds: [basisId] }
+  });
+
+  const finalItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  assert.equal(finalItem?.outcome, "reused");
+  // The freshness baseline for the NEXT questionnaire's newcomer check is the
+  // basis's original generation time, exactly like the fast-path's markReused
+  // — never the time this reuse completion happened to run.
+  assert.equal(finalItem?.answeredAt, originalAnsweredAt);
+});
+
+test("a reused verdict whose basis is unresolvable degrades to unanswerable, not a blank answered row", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "target",
+    flowId: "security",
+    questions: ["Do you hold ISO certifications?"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const targetItemId = created.questionnaire.items[0].id;
+  const targetItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  const job = await jobForLog(ctx, targetItem?.questionLogId);
+
+  // The watcher sends an empty answer for a reused verdict (the API is
+  // expected to fill it in from the basis); here the basis id doesn't
+  // resolve to any known item, so the reuse can't be honored.
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, {
+    answer: "",
+    confidence: "high",
+    citations: [],
+    reuse: { verdict: "reused", basisItemIds: ["item-does-not-exist"] }
+  });
+
+  const finalItem = await ctx.stores.questionnaires.itemById(targetItemId);
+  assert.equal(finalItem?.status, "unanswerable");
+  assert.notEqual(finalItem?.outcome, "reused");
+  assert.deepEqual(await ctx.stores.questionnaires.basisItemIds(targetItemId), []);
+});
