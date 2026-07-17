@@ -54,12 +54,7 @@ export async function createQuestionnaire(
       for (const [index, item] of created.items.entries()) {
         if (ctx.settings.questionnaires.reconcileEnabled) {
           const k = ctx.settings.questionnaires.reconcileCandidates;
-          const candidates = await ctx.stores.questionnaires.matchApprovedTopN(
-            input.flowId,
-            vectors[index],
-            model,
-            k
-          );
+          const candidates = await ctx.stores.questionnaires.matchApprovedTopN(input.flowId, vectors[index], model, k);
           const above = candidates.filter((c) => c.similarity >= threshold);
           if (above.length === 0) {
             continue; // fresh via drip

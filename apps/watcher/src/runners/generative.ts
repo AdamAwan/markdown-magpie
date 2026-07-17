@@ -173,7 +173,9 @@ async function reconcileWithCandidates(
     .map((candidate) => `Candidate ${candidate.itemId}:\nQ: ${candidate.question}\nA: ${candidate.answer}`)
     .join("\n\n");
   const context =
-    sections.length > 0 ? wrapUntrusted(formatSectionContext(sections)) : "(no current knowledge-base sections retrieved)";
+    sections.length > 0
+      ? wrapUntrusted(formatSectionContext(sections))
+      : "(no current knowledge-base sections retrieved)";
   const response = await model.complete({
     system: RECONCILE_ANSWER.instructions,
     messages: [

@@ -272,7 +272,8 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
     // re-answer (no/empty/multi basis) must clear any prior reuse pointer
     // rather than leaving it stale from an earlier completion.
     item.basisItemIds = result.basisItemIds ?? [];
-    item.reusedFromItemId = result.basisItemIds && result.basisItemIds.length === 1 ? result.basisItemIds[0] : undefined;
+    item.reusedFromItemId =
+      result.basisItemIds && result.basisItemIds.length === 1 ? result.basisItemIds[0] : undefined;
     return structuredClone(item);
   }
 

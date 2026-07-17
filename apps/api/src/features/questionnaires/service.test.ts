@@ -116,7 +116,10 @@ async function createApprovedDonor(ctx: Ctx, opts: { question: string; answer: s
 // Creates and answers (but does not approve) a questionnaire item — enough to
 // serve as a reuse "basis" item for the completion-mapping tests, which read
 // basis.answer/citations directly rather than through the match corpus.
-async function createAnsweredItem(ctx: Ctx, opts: { question: string; answer: string; citation: Citation }): Promise<string> {
+async function createAnsweredItem(
+  ctx: Ctx,
+  opts: { question: string; answer: string; citation: Citation }
+): Promise<string> {
   const created = await questionnaires.createQuestionnaire(ctx, {
     name: "basis pool",
     flowId: "security",
@@ -292,7 +295,9 @@ test("approveReused bulk-approves only reused items", async () => {
 test("low-confidence answer WITH citations is answered (shown), not suppressed", async () => {
   const ctx = flowContext();
   const created = await questionnaires.createQuestionnaire(ctx, {
-    name: "Trust", flowId: "security", questions: ["q0"]
+    name: "Trust",
+    flowId: "security",
+    questions: ["q0"]
   });
   assert.ok(created.ok);
   if (!created.ok) throw new Error("unreachable");
@@ -302,7 +307,9 @@ test("low-confidence answer WITH citations is answered (shown), not suppressed",
   await questionnaires.handleQuestionnaireAnswerCompletion(ctx, jobs[0], {
     answer: "A grounded but hedged answer.",
     confidence: "low",
-    citations: [{ documentId: "d", sectionId: "s1", path: "p.md", heading: "H", anchor: "h", excerpt: "e", relevance: 0.5 }]
+    citations: [
+      { documentId: "d", sectionId: "s1", path: "p.md", heading: "H", anchor: "h", excerpt: "e", relevance: 0.5 }
+    ]
   });
 
   const item = await ctx.stores.questionnaires.itemByQuestionLogId(logId);
@@ -314,7 +321,9 @@ test("low-confidence answer WITH citations is answered (shown), not suppressed",
 test("answer with ZERO citations is unanswerable regardless of confidence", async () => {
   const ctx = flowContext();
   const created = await questionnaires.createQuestionnaire(ctx, {
-    name: "Trust2", flowId: "security", questions: ["q0"]
+    name: "Trust2",
+    flowId: "security",
+    questions: ["q0"]
   });
   assert.ok(created.ok);
   if (!created.ok) throw new Error("unreachable");
@@ -322,7 +331,9 @@ test("answer with ZERO citations is unanswerable regardless of confidence", asyn
   const logId = (jobs[0]!.input as { questionLogId: string }).questionLogId;
 
   await questionnaires.handleQuestionnaireAnswerCompletion(ctx, jobs[0], {
-    answer: "Ungrounded guess.", confidence: "high", citations: []
+    answer: "Ungrounded guess.",
+    confidence: "high",
+    citations: []
   });
 
   const item = await ctx.stores.questionnaires.itemByQuestionLogId(logId);
@@ -451,7 +462,9 @@ test("completion maps a merged verdict onto the item outcome and basis", async (
   await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, {
     answer: "A synthesized answer drawing on two priors.",
     confidence: "high",
-    citations: [{ documentId: "d", sectionId: "s1", path: "p.md", heading: "H", anchor: "h", excerpt: "e", relevance: 0.9 }],
+    citations: [
+      { documentId: "d", sectionId: "s1", path: "p.md", heading: "H", anchor: "h", excerpt: "e", relevance: 0.9 }
+    ],
     reuse: { verdict: "merged", basisItemIds: ["item-x", "item-y"] }
   });
 

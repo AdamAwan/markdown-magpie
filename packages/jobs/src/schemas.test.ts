@@ -547,7 +547,9 @@ test("draft_seed_document input keeps charter/persona/seedPlanId (input read-bac
 
 test("answer input schema preserves candidates", () => {
   const parsed = answerQuestionInputSchema.parse({
-    question: "q", flows: [{ id: "f", name: "F" }], provider: "openai-compatible",
+    question: "q",
+    flows: [{ id: "f", name: "F" }],
+    provider: "openai-compatible",
     expectedOutput: "answer_result",
     candidates: [{ itemId: "i1", question: "q0", answer: "a0" }]
   });
@@ -556,7 +558,9 @@ test("answer input schema preserves candidates", () => {
 
 test("answer output schema preserves the reuse verdict", () => {
   const parsed = answerQuestionOutputSchema.parse({
-    answer: "a", confidence: "high", citations: [],
+    answer: "a",
+    confidence: "high",
+    citations: [],
     reuse: { verdict: "merged", basisItemIds: ["i1", "i2"] }
   });
   assert.equal((parsed as { reuse?: { verdict: string } }).reuse?.verdict, "merged");

@@ -252,8 +252,8 @@ function resolveQuestionnaireConfig(env: NodeJS.ProcessEnv): QuestionnaireConfig
     // A threshold of 0 would match every prior item; treat it as invalid.
     matchThreshold: threshold > 0 ? threshold : QUESTIONNAIRE_DEFAULT_MATCH_THRESHOLD,
     maxInflight: Number.isInteger(rawInflight) && rawInflight > 0 ? rawInflight : QUESTIONNAIRE_DEFAULT_MAX_INFLIGHT,
-    reconcileCandidates: Number.isInteger(rawCandidates) && rawCandidates > 0
-      ? rawCandidates : QUESTIONNAIRE_DEFAULT_RECONCILE_CANDIDATES,
+    reconcileCandidates:
+      Number.isInteger(rawCandidates) && rawCandidates > 0 ? rawCandidates : QUESTIONNAIRE_DEFAULT_RECONCILE_CANDIDATES,
     reconcileEnabled: env.QUESTIONNAIRE_RECONCILE_ENABLED !== "0"
   };
 }
