@@ -66,18 +66,24 @@ Reuse verbatim with **no LLM call** iff *all* hold:
 This is today's reuse condition, restricted to the unambiguous single-candidate case. Outcome
 `reused`; the stored approved answer is copied **verbatim by id** (never re-emitted by a model).
 
-### 1.3 Reconcile job (queued) — everything else
+### 1.3 Reconcile via `answer_question` — everything else
 
 Any other matched case — multiple candidates, or a single candidate whose sources changed or
-have newer relevant content — enqueues a **reconcile job** instead of a fresh re-answer.
+have newer relevant content — is answered by the **existing `answer_question` job**, primed
+with the candidates, rather than by a new job type. `answer_question` gains an optional
+`candidates` input (each: a prior approved answer plus the **current** text of its cited
+sections); when present, the runner is told to *satisfy from the candidates if it honestly can
+and search the KB only if it must*, and its output carries an optional `verdict` + provenance.
+When `candidates` is absent the job behaves exactly as today, so the live-ask and gap-reask
+callers are untouched.
 
-Queue-only compliance: like `answer_question`, the API enqueues; the watcher claims it, calls
-back into the API for scoped context (the candidate answers plus the **current** text of their
-cited sections) and for retrieval, invokes the provider, and posts the result back. No inline
-chat call is added to the API.
+Folding this into `answer_question` (rather than a parallel job) keeps a **single ask path**:
+the same candidate-priming and grounded reuse can later benefit the general Ask flow — a live
+ask could reuse an approved answer verbatim instead of re-deriving it — with no second code
+path to maintain. Queue-only is preserved: the API enqueues; the watcher claims, calls back for
+scoped context (candidates + live section text + retrieval), invokes the provider, and posts
+back. No inline chat call is added.
 
-The runner primes the model with the candidates and their live cited-section text, and
-instructs: *satisfy from the candidates if you honestly can; search the KB only if you must.*
 Structured output verdict:
 
 | Verdict | Meaning | Answer text source | Provenance | Typical cost |
@@ -139,7 +145,7 @@ flywheel still captures low-confidence items.
 create → embed items (inline) → matchApprovedTopN
   ├─ 0 candidates ───────────────► answer_question (fresh)
   ├─ 1 candidate, sources clean ─► reuse verbatim (fast-path, no model)   outcome=reused
-  └─ else ───────────────────────► reconcile job (queued)
+  └─ else ───────────────────────► answer_question (primed with candidates)
                                       └─ verdict → reused | adapted | merged | fresh
 completion → snapshot answer + citations + confidence + basis → item
 ```
@@ -148,14 +154,14 @@ completion → snapshot answer + citations + confidence + basis → item
 
 - `matchApprovedTopN` (store) — pure SQL top-k; testable against Postgres fixtures.
 - `fastPathReusable(candidate, fingerprints, hits)` (pure) — the §1.2 predicate.
-- Reconcile runner (watcher) — provider call with candidates+live sources; deterministic via
-  fixture provider (see writing-magpie-tests).
+- `answer_question` runner (watcher) — extended to accept `candidates`+live sources and emit a
+  verdict; deterministic via fixture provider (see writing-magpie-tests). No new job type.
 - Completion handler — maps verdict → item fields + basis rows; pure given job output.
 - Export renderer — pure `(Questionnaire) → string`; already isolated in `export.ts`.
 
 ## Error handling / edge cases
 
-- Reconcile job fails terminally → `failItem` (`unanswerable` + error), as today.
+- The `answer_question` job fails terminally → `failItem` (`unanswerable` + error), as today.
 - Malformed/invalid verdict → validation retry; on repeated failure, fall through to a fresh
   `answer_question` (safe, never a wedged item).
 - `reused` verdict naming a basis id that is no longer approved → treat as `fresh` (the corpus
@@ -189,11 +195,15 @@ completion → snapshot answer + citations + confidence + basis → item
   future home for this, but it is **not** built in this pass.
 - Fuzzy multi-tier matching below the near-verbatim threshold.
 - Changing the embedding model or retrieval algorithm.
+- Wiring candidate-priming into the **live** Ask path. The mechanism is deliberately built on
+  the shared `answer_question` job so this becomes a small future step, but this pass drives it
+  only from questionnaires.
 
 ## Rollout
 
 1. Migration: widen `outcome` CHECK; add `confidence`; add `questionnaire_item_basis`.
-2. New queued job type + watcher capability (see add-a-job-type skill).
+2. Extend `answer_question` I/O (optional `candidates` input; optional `verdict`/provenance
+   output) + runner logic. No new job type or capability.
 3. Match/fast-path/reconcile wiring behind `QUESTIONNAIRE_RECONCILE_ENABLED`.
 4. Show-don't-suppress gate + export/console rendering (shippable independently, and the
    higher-trust quick win).
