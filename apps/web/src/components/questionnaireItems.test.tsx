@@ -39,13 +39,21 @@ test("changeReasonText explains each re-answer kind", () => {
   assert.match(
     changeReasonText(
       item({
-        changeReason: { kind: "section_changed", sectionId: "s", path: "data.md", heading: "Data", changedAt: "2026-06-03T00:00:00Z" }
+        changeReason: {
+          kind: "section_changed",
+          sectionId: "s",
+          path: "data.md",
+          heading: "Data",
+          changedAt: "2026-06-03T00:00:00Z"
+        }
       })
     ),
     /cited section “Data” changed on 2026-06-03\./
   );
   assert.match(
-    changeReasonText(item({ changeReason: { kind: "section_missing", sectionId: "s", path: "data.md", heading: "Data" } })),
+    changeReasonText(
+      item({ changeReason: { kind: "section_missing", sectionId: "s", path: "data.md", heading: "Data" } })
+    ),
     /no longer exists/
   );
   assert.match(

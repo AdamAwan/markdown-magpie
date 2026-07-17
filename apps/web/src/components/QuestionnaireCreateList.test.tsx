@@ -45,7 +45,9 @@ test("loads summaries on mount and opens one on row click", async () => {
     onList: async () => [summary()],
     onOpen: (id: string) => opened.push(id)
   };
-  const { container, unmount } = await renderDom(<QuestionnaireCreateList flows={FLOWS} loading={false} {...handlers} />);
+  const { container, unmount } = await renderDom(
+    <QuestionnaireCreateList flows={FLOWS} loading={false} {...handlers} />
+  );
   try {
     const row = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Acme SIG Q3"));
     assert.ok(row, "summary row renders after mount");
