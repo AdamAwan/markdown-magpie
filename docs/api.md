@@ -435,14 +435,16 @@ guard that no-oped the tick (`no_sources | kb_populated | plan_pending | outline
 ## Questionnaires
 
 Bulk question batches with verbatim answer reuse — see [questionnaires.md](questionnaires.md)
-for the model (match → two-condition reuse check → drip → approve → export).
+for the model (match top-N → deterministic fast-path or reconcile → drip → approve → export).
 
 ### `POST /api/questionnaires`
 
 `{ "name": string, "flowId": string, "questions": string[] }` (1–500 questions). Creates the
-batch, runs matching + reuse checks inline (embeddings only), and starts the answer drip.
-Returns `201 { "questionnaire": Questionnaire }`. `404 flow_not_found` for an unknown flow;
-`ask:knowledge` scope + flow `ask` capability; `trigger` rate tier.
+batch, runs matching + the deterministic fast-path check inline (embeddings only — any
+candidate the fast-path can't confirm is instead primed into the answer drip for
+reconciliation), and starts the answer drip. Returns `201 { "questionnaire": Questionnaire }`.
+`404 flow_not_found` for an unknown flow; `ask:knowledge` scope + flow `ask` capability;
+`trigger` rate tier.
 
 ### `GET /api/questionnaires` / `GET /api/questionnaires/:id`
 
