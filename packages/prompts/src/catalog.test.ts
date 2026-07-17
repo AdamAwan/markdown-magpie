@@ -11,8 +11,8 @@ import {
   UNTRUSTED_CONTENT_CONTRACT
 } from "./catalog.js";
 
-test("catalog has exactly 21 prompts", () => {
-  assert.equal(promptCatalog.length, 21);
+test("catalog has exactly 22 prompts", () => {
+  assert.equal(promptCatalog.length, 22);
 });
 
 test("catalog ids are in the fixed, documented order", () => {
@@ -21,6 +21,7 @@ test("catalog ids are in the fixed, documented order", () => {
     [
       "answer-question",
       "verify-answer",
+      "reconcile-answer",
       "condense-followup",
       "summarize-gap",
       "draft-markdown-proposal",
@@ -278,6 +279,7 @@ test("the untrusted-content contract names the delimiters and forbids obeying em
 const UNTRUSTED_CONTENT_PROMPT_IDS = [
   "answer-question",
   "verify-answer",
+  "reconcile-answer",
   "draft-markdown-proposal",
   "draft-seed-document",
   "outline-flow-seed",
