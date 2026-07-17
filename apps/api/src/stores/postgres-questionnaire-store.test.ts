@@ -80,7 +80,8 @@ describe("PostgresQuestionnaireStore", { skip: databaseUrl ? false : "DATABASE_U
       answer: "We hold ISO 27001.",
       answeredAt,
       citations: [citation("sec-1")],
-      unanswerable: false
+      unanswerable: false,
+      confidence: "high"
     });
     assert.equal(completed?.status, "answered");
     assert.equal(completed?.citations[0]?.sectionId, "sec-1");
@@ -105,7 +106,8 @@ describe("PostgresQuestionnaireStore", { skip: databaseUrl ? false : "DATABASE_U
       answer: "ISO 27001 and SOC 2.",
       answeredAt: new Date().toISOString(),
       citations: [citation("sec-cert")],
-      unanswerable: false
+      unanswerable: false,
+      confidence: "high"
     });
     await store.setItemEmbeddings([{ itemId: item.id, embedding: axisEmbedding(3), model: "test-model" }]);
 
@@ -171,7 +173,8 @@ describe("PostgresQuestionnaireStore", { skip: databaseUrl ? false : "DATABASE_U
       answer: "answer",
       answeredAt: new Date().toISOString(),
       citations: [citation("sec-old")],
-      unanswerable: false
+      unanswerable: false,
+      confidence: "high"
     });
 
     await store.approveItem(item.id, [citation("sec-new")], true);

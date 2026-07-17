@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import type {
+  Confidence,
   Questionnaire,
   QuestionnaireChangeReason,
   QuestionnaireItem,
@@ -31,6 +32,7 @@ interface ItemRow {
   status: QuestionnaireItemStatus;
   outcome: QuestionnaireItemOutcome | null;
   answer: string | null;
+  confidence: string | null;
   answered_at: Date | null;
   question_log_id: string | null;
   reused_from_item_id: string | null;
@@ -58,6 +60,7 @@ function mapItem(row: ItemRow, citations: QuestionnaireItemCitation[]): Question
     status: row.status,
     ...(row.outcome !== null ? { outcome: row.outcome } : {}),
     ...(row.answer !== null ? { answer: row.answer } : {}),
+    ...(row.confidence !== null ? { confidence: row.confidence as Confidence } : {}),
     ...(row.answered_at !== null ? { answeredAt: row.answered_at.toISOString() } : {}),
     ...(row.question_log_id !== null ? { questionLogId: row.question_log_id } : {}),
     ...(row.reused_from_item_id !== null ? { reusedFromItemId: row.reused_from_item_id } : {}),
@@ -129,7 +132,7 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
     }
     const items = await this.pool.query<ItemRow>(
       `
-        SELECT id, questionnaire_id, position, question, status, outcome, answer, answered_at,
+        SELECT id, questionnaire_id, position, question, status, outcome, answer, confidence, answered_at,
                question_log_id, reused_from_item_id, change_reason, error, approved_at, stale_at_approval
         FROM questionnaire_items WHERE questionnaire_id = $1 ORDER BY position ASC
       `,
@@ -204,7 +207,7 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
   ): Promise<{ item: QuestionnaireItem; similarity: number } | undefined> {
     const result = await this.pool.query<ItemRow & { similarity: number }>(
       `
-        SELECT i.id, i.questionnaire_id, i.position, i.question, i.status, i.outcome, i.answer,
+        SELECT i.id, i.questionnaire_id, i.position, i.question, i.status, i.outcome, i.answer, i.confidence,
                i.answered_at, i.question_log_id, i.reused_from_item_id, i.change_reason, i.error,
                i.approved_at, i.stale_at_approval,
                1 - (i.question_embedding <=> $3::vector) AS similarity
@@ -260,16 +263,28 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
 
   async completeItem(
     questionLogId: string,
-    result: { answer: string; answeredAt: string; citations: QuestionnaireItemCitation[]; unanswerable: boolean }
+    result: {
+      answer: string;
+      answeredAt: string;
+      citations: QuestionnaireItemCitation[];
+      unanswerable: boolean;
+      confidence: Confidence;
+    }
   ): Promise<QuestionnaireItem | undefined> {
     const updated = await this.pool.query<ItemRow>(
       `
         UPDATE questionnaire_items
-        SET status = $2, answer = $3, answered_at = $4
+        SET status = $2, answer = $3, answered_at = $4, confidence = $5
         WHERE question_log_id = $1
         RETURNING *
       `,
-      [questionLogId, result.unanswerable ? "unanswerable" : "answered", result.answer, result.answeredAt]
+      [
+        questionLogId,
+        result.unanswerable ? "unanswerable" : "answered",
+        result.answer,
+        result.answeredAt,
+        result.confidence
+      ]
     );
     const row = updated.rows[0];
     if (!row) {

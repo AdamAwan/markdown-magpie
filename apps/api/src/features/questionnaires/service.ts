@@ -148,13 +148,17 @@ export async function handleQuestionnaireAnswerCompletion(
   if (!item) {
     return;
   }
-  const unanswerable = output.citations.length === 0 || output.confidence === "low" || output.confidence === "unknown";
+  // Ungrounded (no citations) is the only "no answer" case. Low/medium/unknown
+  // confidence WITH citations is a shown draft, not a suppression — the badge
+  // and human approval carry the trust (see 2026-07-17-questionnaire-trust-design).
+  const unanswerable = output.citations.length === 0;
   const citations = await snapshotCitations(ctx, output);
   await ctx.stores.questionnaires.completeItem(questionLogId, {
     answer: output.answer,
     answeredAt: new Date().toISOString(),
     citations,
-    unanswerable
+    unanswerable,
+    confidence: output.confidence
   });
   await topUpDrip(ctx, item.questionnaireId);
 }

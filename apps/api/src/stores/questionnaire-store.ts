@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  Confidence,
   Questionnaire,
   QuestionnaireChangeReason,
   QuestionnaireItem,
@@ -33,7 +34,13 @@ export interface QuestionnaireStore {
   markAnswering(itemId: string, questionLogId: string): Promise<void>;
   completeItem(
     questionLogId: string,
-    result: { answer: string; answeredAt: string; citations: QuestionnaireItemCitation[]; unanswerable: boolean }
+    result: {
+      answer: string;
+      answeredAt: string;
+      citations: QuestionnaireItemCitation[];
+      unanswerable: boolean;
+      confidence: Confidence;
+    }
   ): Promise<QuestionnaireItem | undefined>;
   failItem(questionLogId: string, error: string): Promise<QuestionnaireItem | undefined>;
   itemByQuestionLogId(questionLogId: string): Promise<QuestionnaireItem | undefined>;
@@ -182,7 +189,13 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
 
   async completeItem(
     questionLogId: string,
-    result: { answer: string; answeredAt: string; citations: QuestionnaireItemCitation[]; unanswerable: boolean }
+    result: {
+      answer: string;
+      answeredAt: string;
+      citations: QuestionnaireItemCitation[];
+      unanswerable: boolean;
+      confidence: Confidence;
+    }
   ): Promise<QuestionnaireItem | undefined> {
     const item = await this.findByLog(questionLogId);
     if (!item) return undefined;
@@ -190,6 +203,7 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
     item.answer = result.answer;
     item.answeredAt = result.answeredAt;
     item.citations = result.citations;
+    item.confidence = result.confidence;
     return structuredClone(item);
   }
 

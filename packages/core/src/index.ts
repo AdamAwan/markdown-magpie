@@ -321,6 +321,7 @@ export interface QuestionnaireItem {
   status: QuestionnaireItemStatus;
   outcome?: QuestionnaireItemOutcome;
   answer?: string;
+  confidence?: Confidence;
   // For reused items: the ORIGINAL generation time, carried forward as the
   // freshness baseline for future newcomer checks.
   answeredAt?: string;

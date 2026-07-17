@@ -191,3 +191,43 @@ test("approveReused bulk-approves only reused items", async () => {
   const outcome = await questionnaires.approveReused(ctx, created.questionnaire.id);
   assert.deepEqual(outcome, { approved: 0 });
 });
+
+test("low-confidence answer WITH citations is answered (shown), not suppressed", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "Trust", flowId: "security", questions: ["q0"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const { jobs } = await ctx.jobs.list({ type: "answer_question" });
+  const logId = (jobs[0]!.input as { questionLogId: string }).questionLogId;
+
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, jobs[0], {
+    answer: "A grounded but hedged answer.",
+    confidence: "low",
+    citations: [{ documentId: "d", sectionId: "s1", path: "p.md", heading: "H", anchor: "h", excerpt: "e", relevance: 0.5 }]
+  });
+
+  const item = await ctx.stores.questionnaires.itemByQuestionLogId(logId);
+  assert.equal(item?.status, "answered");
+  assert.equal(item?.confidence, "low");
+  assert.equal(item?.answer, "A grounded but hedged answer.");
+});
+
+test("answer with ZERO citations is unanswerable regardless of confidence", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "Trust2", flowId: "security", questions: ["q0"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const { jobs } = await ctx.jobs.list({ type: "answer_question" });
+  const logId = (jobs[0]!.input as { questionLogId: string }).questionLogId;
+
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, jobs[0], {
+    answer: "Ungrounded guess.", confidence: "high", citations: []
+  });
+
+  const item = await ctx.stores.questionnaires.itemByQuestionLogId(logId);
+  assert.equal(item?.status, "unanswerable");
+});
