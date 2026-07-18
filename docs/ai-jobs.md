@@ -708,6 +708,19 @@ code (`apps/watcher/src/runners/cli.ts`), after the operator-configured
   CLI's interactive persona is replaced rather than left as the top-level instruction (codex
   has no system-prompt flag; its source-grounded prompt carries the untrusted-content
   contract in the task instructions instead).
+- **Minimal child environment.** Every spawn (both paths) passes an explicit `env`
+  allowlist instead of letting the child inherit the watcher's full `process.env`. Without
+  it the CLI would hold every secret the watcher holds — all provider keys, `GITHUB_TOKEN`,
+  `DATABASE_URL`, the M2M secret — even though it needs only its own provider credential;
+  codex's read-only sandbox still permits reading env, so a prompt-injected run could read
+  them out. The child receives non-secret operational vars (`PATH`, `HOME`, locale, temp,
+  proxy/CA settings, Windows essentials) plus only the calling CLI's own credential
+  (`ANTHROPIC_*` / `CLAUDE_CONFIG_DIR` for claude; `OPENAI_API_KEY` / `OPENAI_BASE_URL` /
+  `CODEX_HOME` for codex — matched by exact name, so a different provider's key such as
+  `OPENAI_COMPATIBLE_API_KEY` is never swept in). Set `MAGPIE_CLI_ENV_PASSTHROUGH` (a
+  comma/space-separated list of variable names) to forward extra vars — Bedrock/Vertex
+  credentials, a nonstandard credential var, or additional proxy config — without a code
+  change.
 
 Defence in depth on the answer side: an `answer_question` reply that ignores the
 structured JSON contract (plain prose) is always grounding-verified despite its low

@@ -46,8 +46,110 @@ export interface SpawnedCli {
 export type CliSpawn = (
   command: string,
   args: readonly string[],
-  options: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string }
+  options: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string; env?: NodeJS.ProcessEnv }
 ) => SpawnedCli;
+
+// Environment allowlist for spawned agent CLIs (#290c). A child spawned with no
+// `env` inherits the watcher's ENTIRE process.env — every provider key,
+// GITHUB_TOKEN, DATABASE_URL, the M2M secret. codex's read-only sandbox still
+// permits reading env/files, so a prompt-injected run could read those out; the
+// claude path blocks Bash, but defense-in-depth says the child should never hold
+// secrets it does not need in the first place. So each spawn passes an explicit
+// minimal env: non-secret operational vars any process needs, plus only the
+// calling CLI's own provider credential. Everything else is dropped.
+//
+// Name matching is case-insensitive so Windows' `Path`/`SystemRoot` casing and
+// the lowercase `http_proxy` convention are both covered.
+
+// Non-secret operational vars any spawned process legitimately needs. None is a
+// credential — the watcher's secrets are deliberately absent from this list.
+const BASE_ENV_ALLOWLIST: readonly string[] = [
+  "PATH",
+  "HOME",
+  // locale / formatting
+  "LANG",
+  "LANGUAGE",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LC_MESSAGES",
+  "TZ",
+  // temp dirs
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "TERM",
+  // POSIX identity some tools read to resolve config paths
+  "USER",
+  "LOGNAME",
+  // Windows essentials — a spawned process (and node itself) needs these to run
+  "SYSTEMROOT",
+  "SYSTEMDRIVE",
+  "WINDIR",
+  "COMSPEC",
+  "PATHEXT",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "PROGRAMDATA",
+  "NUMBER_OF_PROCESSORS",
+  "PROCESSOR_ARCHITECTURE",
+  // outbound proxy / custom CA — a networked CLI cannot reach its provider without these
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "ALL_PROXY",
+  "NODE_EXTRA_CA_CERTS",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "REQUESTS_CA_BUNDLE",
+  "CURL_CA_BUNDLE"
+];
+
+// Each CLI's OWN provider credential(s). Deliberately exact names, NOT a prefix:
+// `OPENAI_*` would sweep in OPENAI_COMPATIBLE_API_KEY (the chat runner's key — a
+// different provider's secret). Enterprise auth paths (Bedrock/Vertex AWS or
+// Google creds) and any nonstandard credential var are forwarded through
+// MAGPIE_CLI_ENV_PASSTHROUGH rather than enumerated here.
+const CREDENTIAL_ALLOWLIST: Record<"codex" | "claude", readonly string[]> = {
+  claude: [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_HEADERS",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CONFIG_DIR"
+  ],
+  codex: ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORGANIZATION", "OPENAI_ORG_ID", "CODEX_HOME"]
+};
+
+// Operator escape hatch: extra var NAMES (comma/space separated) to forward to
+// every CLI child — Bedrock/Vertex creds, a nonstandard credential var, extra
+// proxy config — without a code change.
+const ENV_PASSTHROUGH_VAR = "MAGPIE_CLI_ENV_PASSTHROUGH";
+
+// Builds the minimal env a spawned CLI child receives, from `sourceEnv` (the
+// watcher's process.env in production). Exported for direct unit testing.
+export function buildChildEnv(capability: "codex" | "claude", sourceEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const extra = (sourceEnv[ENV_PASSTHROUGH_VAR] ?? "")
+    .split(/[,\s]+/)
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const allowed = new Set(
+    [...BASE_ENV_ALLOWLIST, ...CREDENTIAL_ALLOWLIST[capability], ...extra].map((name) => name.toUpperCase())
+  );
+  const childEnv: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(sourceEnv)) {
+    if (value !== undefined && allowed.has(name.toUpperCase())) {
+      childEnv[name] = value;
+    }
+  }
+  return childEnv;
+}
 
 export interface CliRunnerOptions {
   capability: Extract<JobCapability, "codex" | "claude">;
@@ -72,6 +174,10 @@ export interface CliRunnerOptions {
   prepareWorkspaces?: typeof prepareSourceWorkspaces;
   // Test seam: capture/fake process spawning.
   spawnOverride?: CliSpawn;
+  // Source env the spawned child's minimal allowlist is drawn from (#290c).
+  // Defaults to the watcher's process.env; a test seam overrides it to assert the
+  // allowlist without mutating global process state.
+  spawnEnv?: NodeJS.ProcessEnv;
 }
 
 // Runs generative jobs via an external CLI agent (codex / claude). The CLI is
@@ -95,6 +201,7 @@ export class CliRunner {
   private readonly buildPromptOverride?: (job: JobView) => string;
   private readonly prepareWorkspaces: typeof prepareSourceWorkspaces;
   private readonly spawnFn: CliSpawn;
+  private readonly spawnEnv: NodeJS.ProcessEnv;
 
   constructor(options: CliRunnerOptions) {
     this.capability = options.capability;
@@ -111,6 +218,7 @@ export class CliRunner {
     this.buildPromptOverride = options.buildPromptOverride;
     this.prepareWorkspaces = options.prepareWorkspaces ?? prepareSourceWorkspaces;
     this.spawnFn = options.spawnOverride ?? spawn;
+    this.spawnEnv = options.spawnEnv ?? process.env;
   }
 
   supports(type: JobType): boolean {
@@ -354,7 +462,13 @@ export class CliRunner {
       const modelArgs = this.model ? ["--model", this.model] : [];
       const baseArgs = [...this.args, ...modelArgs, ...extraArgs, ...terminator];
       const args = this.promptMode === "arg" ? [...baseArgs, prompt] : baseArgs;
-      const spawnOptions: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string } = { stdio: ["pipe", "pipe", "pipe"] };
+      // Minimal env allowlist (#290c): the child never inherits the watcher's
+      // full process.env — only non-secret operational vars and this CLI's own
+      // provider credential.
+      const spawnOptions: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string; env: NodeJS.ProcessEnv } = {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: buildChildEnv(this.capability, this.spawnEnv)
+      };
       if (opts?.cwd !== undefined) {
         spawnOptions.cwd = opts.cwd;
       }
