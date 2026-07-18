@@ -311,6 +311,32 @@ export class PgBossJobBroker implements JobBroker {
     return this.mutate(id, (queueName) => this.boss.fail(queueName, id, error));
   }
 
+  // Fail straight to terminal `failed` + dead-letter, skipping remaining retries
+  // (#288d). Done in two steps under the same locate()/mutate() precedent
+  // countInFlight uses for scoped SQL (guarded by SCHEMA_IDENTIFIER in the
+  // constructor):
+  //   1. Zero this ONE row's retry_limit via our own scoped UPDATE, pruned to the
+  //      partition by the name predicate.
+  //   2. Call boss.fail — pg-boss's own failJobsBody then evaluates
+  //      `retry_count < retry_limit(=0)` as false and routes the job to terminal
+  //      `failed` + the dead-letter queue, reusing its state transition verbatim.
+  //
+  // GOTCHA — do NOT "simplify" step 1 to `boss.updateJob(id, { retryLimit: 0 })`.
+  // pg-boss self-guards updateJob to jobs that are NOT yet active, so it is a
+  // silent no-op on the active row a completing job is in, and the job would then
+  // retry instead of terminal-failing. The raw UPDATE here is OUR sql, unguarded,
+  // so it legally updates the active row. boss.fail no-ops on an already-terminal
+  // row (its `state < 'completed'` guard), so failTerminal is a safe no-op there
+  // too — protecting the completion-replay contract.
+  async failTerminal(id: string, error: JobError): Promise<JobView> {
+    return this.mutate(id, async (queueName) => {
+      await this.boss
+        .getDb()
+        .executeSql(`UPDATE "${this.schema}".job SET retry_limit = 0 WHERE name = $1 AND id = $2`, [queueName, id]);
+      await this.boss.fail(queueName, id, error);
+    });
+  }
+
   async cancel(id: string): Promise<JobView> {
     return this.mutate(id, (queueName) => this.boss.cancel(queueName, id));
   }

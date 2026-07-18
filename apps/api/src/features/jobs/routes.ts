@@ -95,6 +95,9 @@ export function jobRoutes(ctx: AppContext): Hono {
           // transient side-effect failure self-healing. If retries exhaust and
           // the watcher falls back to fail(), pg-boss no-ops the fail on the
           // completed row, so the output still survives.
+          // repair_enqueued and invalid_output both map to 400: a deterministic
+          // 4xx is final on the watcher side (it won't locally re-POST), so for a
+          // repair the API's own active->retry is the sole re-dispatch (#288d).
           const status =
             outcome.code === "job_not_found"
               ? 404

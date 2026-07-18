@@ -193,6 +193,39 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
     await broker.cancel(exhausted.id);
   });
 
+  await t.test("failTerminal fails to terminal + dead-letter on the first invalid output (#288d)", async () => {
+    // The backstop: a claimed (active) provider job that terminal-fails goes
+    // straight to `failed` (retryCount unchanged) despite retries remaining, is
+    // not re-claimable, and lands a dead-letter row.
+    const job = await broker.create("answer_question", codexAnswer("terminal"));
+    const claimed = await broker.claim("codex-worker", ["codex"]);
+    assert.equal(claimed?.id, job.id);
+    assert.equal(claimed?.retryCount, 0);
+
+    const failed = await broker.failTerminal(job.id, providerError);
+    assert.equal(failed.state, "failed");
+    assert.equal(failed.retryCount, 0);
+
+    // No retry was scheduled: the job is not re-claimable.
+    assert.equal(await broker.claim("codex-worker", ["codex"]), undefined);
+
+    // A dead-letter row exists for the partition's dead-letter queue.
+    const dl = await pool.query<{ c: number }>(`SELECT count(*)::int AS c FROM "${schema}".job WHERE name = $1`, [
+      "answer_question__codex__dead_letter"
+    ]);
+    assert.ok((dl.rows[0]?.c ?? 0) >= 1, "a dead-letter row exists");
+
+    // failTerminal on an already-completed job is a no-op (protects the replay
+    // contract): the completed output and state survive untouched.
+    const completed = await broker.create("answer_question", codexAnswer("completed"));
+    await broker.claim("codex-worker", ["codex"]);
+    const output = { result: { answer: "a" }, executor: "w" };
+    await broker.complete(completed.id, output);
+    const afterTerminal = await broker.failTerminal(completed.id, providerError);
+    assert.equal(afterTerminal.state, "completed");
+    assert.deepEqual(afterTerminal.output, output);
+  });
+
   await t.test("filters lists and resets jobs", async () => {
     await broker.create("answer_question", codexAnswer("listed"));
     await broker.create("refresh_flow_snapshot", {});

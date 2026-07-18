@@ -183,6 +183,27 @@ export class FakeJobBroker implements JobBroker {
     return updated;
   }
 
+  // Straight to terminal `failed`, skipping remaining retries (#288d): retryCount
+  // is preserved (only the state and error/failedAt change), mirroring the real
+  // broker's retry_limit=0 + fail path. A no-op on an already-terminal job, like
+  // fail() — protecting the completion-replay contract.
+  async failTerminal(id: string, error: JobError): Promise<JobView> {
+    const job = this.getExisting(id);
+    if (TERMINAL_JOB_STATES.has(job.state)) {
+      return job;
+    }
+    const now = new Date().toISOString();
+    const failed: JobView = {
+      ...job,
+      state: "failed",
+      error,
+      failedAt: now,
+      updatedAt: now
+    };
+    this.jobs.set(id, failed);
+    return failed;
+  }
+
   async cancel(id: string): Promise<JobView> {
     const job = this.getExisting(id);
     // Mirrors pg-boss's cancelJobs SQL (`WHERE state < 'completed'`): cancelling a

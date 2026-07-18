@@ -40,6 +40,8 @@ import { DEFAULT_PGBOSS_SCHEMA, PgBossJobBroker } from "./jobs/pg-boss-broker.js
 import { backfillGapClusters } from "./scheduling/gap-backfill.js";
 import type { JobAcceptanceStore } from "./stores/job-acceptance-store.js";
 import { PostgresJobAcceptanceStore } from "./stores/postgres-job-acceptance-store.js";
+import type { JobRepairContextStore } from "./stores/job-repair-context-store.js";
+import { PostgresJobRepairContextStore } from "./stores/postgres-job-repair-context-store.js";
 import type { RateLimitStore } from "./stores/rate-limit-store.js";
 import { PostgresRateLimitStore } from "./stores/postgres-rate-limit-store.js";
 
@@ -64,6 +66,8 @@ export interface AppContext {
     watchers: ReturnType<typeof createWatcherRegistryStore>;
     insights: InsightsStore;
     jobAcceptances: JobAcceptanceStore;
+    // Out-of-band repair state for the schema-invalid-output repair path (#288d).
+    jobRepairContexts: JobRepairContextStore;
     rateLimit: RateLimitStore;
   };
   jobs: JobBroker;
@@ -160,6 +164,7 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
       watchers: createWatcherRegistryStore(config, pool),
       insights: createInsightsStore(pool, pgBossSchema),
       jobAcceptances: new PostgresJobAcceptanceStore(pool),
+      jobRepairContexts: new PostgresJobRepairContextStore(pool),
       rateLimit: new PostgresRateLimitStore(pool)
     },
     jobs,

@@ -278,6 +278,23 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
 26 job types in `packages/jobs/src/types.ts`; contracts in `schemas.ts`, routing in
 `catalog.ts`. AI (provider-fanned) jobs get retry 3 / backoff 15→300 s; others retry 2.
 
+**Retry vs. terminal-fail on invalid output (#288d).** That retry budget is for
+*transient* failures. A **schema-invalid** completion is deterministic — it would
+reproduce on every retry — so it does NOT spend the budget blindly. For a
+**repairable** job type (the reshape-style provider jobs, flagged
+`repairable` in the catalog / `isRepairableJobType`), the first invalid output
+gets **one informed repair**: the prior output + Zod issues are stashed in the
+`job_repair_contexts` store keyed by job id, the SAME job is re-dispatched
+(`active→retry`, preserving every waiter + the question-log linkage), and the
+watcher runs a single-shot reshape (`runRepairReprompt`, no retrieval/agent loop;
+`answer_question` also enforces a citation-subset guard). Everything else — a
+non-repairable (source-grounded/agentic/patch-emitting) type, repair disabled
+(`MAGPIE_JOB_REPAIR_ENABLED=false`), or a repair run that is invalid *again* —
+**terminal-fails immediately** (`JobBroker.failTerminal`: straight to `failed` +
+dead-letter). Net: original + at most one repair, then terminal — no blind paid
+retries. Each decision emits a `job_repair` event; a successful completion warns
+on any undeclared fields the `z.object` output schema stripped.
+
 **17 provider (AI) jobs** — queue `` `${type}__${provider}` ``:
 `answer_question`, `summarize_gap`, `draft_markdown_proposal`, `draft_seed_document`,
 `outline_flow_seed`, `revise_seed_plan`, `fold_markdown_proposal`, `fold_changeset_proposal`,

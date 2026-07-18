@@ -113,6 +113,11 @@ export interface AppConfig {
     waitPollMs: number;
     runToCompletionTimeoutMs?: number;
     scheduleTimezone: string;
+    // Whether a schema-invalid completion of a repairable provider job gets one
+    // informed repair-reprompt before terminal-failing (#288d). On by default;
+    // MAGPIE_JOB_REPAIR_ENABLED=false makes every schema-invalid output take the
+    // immediate terminal-fail backstop instead. Mirrors rateLimit.enabled.
+    repairEnabled: boolean;
   };
   // Per-principal request throttling and a global cap on concurrent metered AI
   // work. Enforced by the API's rate-limit middleware (L1) and enqueue-time
@@ -350,6 +355,7 @@ const schema = z
     JOB_WAIT_POLL_MS: optionalPositiveInt,
     JOB_RUN_TO_COMPLETION_TIMEOUT_MS: optionalPositiveInt,
     JOB_SCHEDULE_TIMEZONE: optionalString,
+    MAGPIE_JOB_REPAIR_ENABLED: optionalString,
 
     RATE_LIMIT_ENABLED: optionalString,
     RATE_LIMIT_WINDOW_MS: optionalPositiveInt,
@@ -528,7 +534,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       waitTimeoutMs: parsed.JOB_WAIT_TIMEOUT_MS ?? 25_000,
       waitPollMs: parsed.JOB_WAIT_POLL_MS ?? 250,
       runToCompletionTimeoutMs: parsed.JOB_RUN_TO_COMPLETION_TIMEOUT_MS,
-      scheduleTimezone: parsed.JOB_SCHEDULE_TIMEZONE ?? "UTC"
+      scheduleTimezone: parsed.JOB_SCHEDULE_TIMEZONE ?? "UTC",
+      // On unless explicitly disabled, matching rateLimit.enabled's fail-safe default.
+      repairEnabled: parsed.MAGPIE_JOB_REPAIR_ENABLED !== "false"
     },
     rateLimit: {
       // On unless explicitly disabled (RATE_LIMIT_ENABLED=false), matching the

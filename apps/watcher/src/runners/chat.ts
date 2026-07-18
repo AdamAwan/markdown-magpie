@@ -13,6 +13,7 @@ import {
 } from "../source-workspace.js";
 import { withUsageReporting } from "../usage.js";
 import { PROVIDER_JOB_TYPES, runGenerativeJob } from "./generative.js";
+import { runRepairReprompt } from "./repair.js";
 import { runSourceAgentJob } from "./source-agent.js";
 
 // Runs AI jobs through an OpenAI-compatible or Azure OpenAI chat provider. The
@@ -56,6 +57,15 @@ export class ChatRunner {
   }
 
   async run(job: JobView, signal: AbortSignal, onUsage?: (usage: AiUsage) => void): Promise<unknown> {
+    // Repair-reprompt (#288d): a re-claimed job carrying repair context runs a
+    // single-shot reshape of its prior output — no retrieval, no agent loop —
+    // through this runner's own completion primitive. Checked first so it
+    // short-circuits every normal path (source-grounded types are never
+    // repairable, so this never intercepts an agentic run).
+    if (job.repair) {
+      const repairModel = onUsage ? withUsageReporting(this.chat, onUsage) : this.chat;
+      return runRepairReprompt({ job, model: repairModel, signal });
+    }
     const descriptors = sourceDescriptorsOf(job);
     // The agent loop runs whenever there is anything real to ground in: a
     // filesystem workspace, or an operator-allowlisted internet source (#242) —

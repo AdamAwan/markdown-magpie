@@ -2,7 +2,7 @@ import type { AiUsage, AnswerQuestionJobInput, AnswerQuestionJobOutput } from "@
 import { z } from "zod";
 import { logger } from "../../logger.js";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
-import { jobDefinition } from "@magpie/jobs";
+import { isRepairableJobType, jobDefinition } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { HttpError } from "../../http/errors.js";
 import type { JobListFilters } from "../../jobs/broker.js";
@@ -47,6 +47,15 @@ export async function claimJob(
     status: job ? "busy" : "idle",
     currentJobId: job?.id
   });
+  if (!job) return undefined;
+  // Attach out-of-band repair context (#288d) when this claim is a re-dispatch of
+  // a job undergoing one informed repair: the provider runner sees `job.repair`
+  // and runs a single-shot reshape instead of the normal job. Mirrors the other
+  // JobView decoration patterns (decorateJobs) — a broker read plus a store lookup.
+  const repair = await ctx.stores.jobRepairContexts.get(job.id);
+  if (repair) {
+    return { ...job, repair: { attempt: repair.attempt, priorOutput: repair.priorOutput, issues: repair.issues } };
+  }
   return job;
 }
 
@@ -266,6 +275,12 @@ export async function completeJob(
 ): Promise<
   | { ok: false; code: "job_not_found" }
   | { ok: false; code: "invalid_output" }
+  // A schema-invalid output that was routed to one informed repair instead of
+  // terminal-failing (#288d): the SAME job was moved active->retry and will be
+  // re-dispatched carrying its repair context. The route maps this to 400 (the
+  // watcher treats a deterministic 4xx as final, so pg-boss's retry is the sole
+  // re-dispatch).
+  | { ok: false; code: "repair_enqueued" }
   | { ok: false; code: "job_cancelled" }
   | { ok: false; code: "side_effects_failed" }
   | { ok: true; job: JobView | undefined }
@@ -293,26 +308,53 @@ export async function completeJob(
   } else {
     const parsed = jobDefinition(existingJob.type).outputSchema.safeParse(output);
     if (!parsed.success) {
-      // A schema-invalid output still spends the job's normal retry budget
-      // (#161's leg (b)). A deterministic prompt/schema mismatch reproduces on
-      // retry and so wastes 2 more paid generations, but there is no low-risk way
-      // to make pg-boss skip straight to a terminal `failed` here: `fail()`'s
-      // public API always decides retry-vs-terminal from `retryCount`/`retryLimit`
-      // (see `failJobsById` in pg-boss's plans.js), and forcing "terminal now"
-      // would mean reaching into pg-boss internals not exposed by `JobBroker`
-      // (or double-calling fail() to burn the budget, which is not meaningfully
-      // safer). A cheap "repair reprompt" would fix this properly but is out of
-      // scope for this change.
-      await ctx.jobs.fail(jobId, {
-        code: "invalid_output",
-        message: "Watcher output did not match the job contract",
-        category: "validation"
-      });
-      // No-ops unless this is a fold job (single-file or multi-file).
-      await foldService.enqueueFoldFallback(ctx, existingJob);
-      return { ok: false, code: "invalid_output" };
+      // Schema-invalid output. Either route it to ONE informed repair (a
+      // repairable type, repair enabled, no prior repair context) or take the
+      // terminal-fail backstop (#288d) — no more blind paid retries. See
+      // decideRepairOrTerminal for the full decision table.
+      return handleInvalidOutput(ctx, existingJob, output, parsed.error, executor);
     }
     resultData = parsed.data;
+    // Output schemas are z.object, so a valid parse STRIPPED any undeclared keys.
+    // Surface the strip (never fail on it) so a watcher shipping fields the job
+    // contract doesn't declare is observable rather than silent (#288d).
+    const strippedKeys = strippedOutputKeyPaths(output, resultData);
+    if (strippedKeys.length > 0) {
+      logger.warn(
+        { jobId, jobType: existingJob.type, strippedKeys },
+        "watcher output carried undeclared fields stripped to the job contract"
+      );
+    }
+    // Repair-run success handling (#288d): when a repair context exists, this
+    // completion is the repaired output. Enforce the per-type safety guard BEFORE
+    // persisting completion — a guard failure must terminal-fail, not complete.
+    const repairContext = await ctx.stores.jobRepairContexts.get(jobId);
+    if (repairContext && !passesRepairSafetyGuard(existingJob.type, repairContext.priorOutput, resultData)) {
+      await failJob(
+        ctx,
+        jobId,
+        {
+          code: "repair_guard_failed",
+          message: "Repaired output failed the per-type safety guard",
+          category: "validation",
+          ...(executor ? { executor } : {})
+        },
+        { terminal: true }
+      );
+      await ctx.stores.jobRepairContexts.delete(jobId);
+      logger.info(
+        {
+          event: "job_repair",
+          decision: "failed",
+          jobId,
+          jobType: existingJob.type,
+          ...(providerOf(existingJob) ? { provider: providerOf(existingJob) } : {}),
+          attempt: repairContext.attempt
+        },
+        "repaired output failed the safety guard; failing terminally"
+      );
+      return { ok: false, code: "invalid_output" };
+    }
     // Persist completion BEFORE the side-effect fan-out below — see the
     // ordering rationale in this function's docstring. `usage` rides the same
     // envelope (not the job's own output) so it can never collide with the
@@ -326,6 +368,24 @@ export async function completeJob(
       ...(identity?.provider ? { provider: identity.provider } : {}),
       ...(identity?.model ? { model: identity.model } : {})
     });
+    // The repaired output is valid and safe: delete the context (the "one repair"
+    // counter) and emit the success event. Deletion is idempotent, so a later
+    // side-effect-failure replay (which re-enters via the completed-state branch)
+    // is unaffected.
+    if (repairContext) {
+      await ctx.stores.jobRepairContexts.delete(jobId);
+      logger.info(
+        {
+          event: "job_repair",
+          decision: "succeeded",
+          jobId,
+          jobType: existingJob.type,
+          ...(providerOf(existingJob) ? { provider: providerOf(existingJob) } : {}),
+          attempt: repairContext.attempt
+        },
+        "repaired output passed the job contract; completing normally"
+      );
+    }
   }
 
   try {
@@ -447,6 +507,144 @@ export async function completeJob(
     return { ok: false, code: "side_effects_failed" };
   }
   return { ok: true, job: await ctx.jobs.get(jobId) };
+}
+
+// THE REPAIR DECISION (#288d). A schema-invalid watcher output is either routed
+// to ONE informed repair or taken straight to the terminal-fail backstop. See
+// the interaction table in the issue; this helper encodes it:
+//   - repairable type + repair enabled + NO prior context -> persist context,
+//     plain fail() -> pg-boss active->retry (one informed repair). NO retryLimit
+//     manipulation and NO admission control: the job already holds its capacity
+//     slot (sub-item a), so the fail->retry must not re-charge admission.
+//   - everything else (non-repairable type, repair disabled, or a repair run that
+//     produced invalid output AGAIN — signalled by a prior context row) -> the
+//     terminal-fail backstop (failTerminal): terminal `failed` + dead-letter,
+//     zero further paid generations. A prior context is deleted so nothing loops.
+async function handleInvalidOutput(
+  ctx: AppContext,
+  job: JobView,
+  rawOutput: unknown,
+  error: z.ZodError,
+  executor: string
+): Promise<{ ok: false; code: "invalid_output" | "repair_enqueued" }> {
+  const jobId = job.id;
+  const provider = providerOf(job);
+  const issues = error.issues.map((issue) => ({ path: issue.path.map(String).join("."), message: issue.message }));
+  const priorContext = await ctx.stores.jobRepairContexts.get(jobId);
+
+  const offerRepair = ctx.settings.jobs.repairEnabled && isRepairableJobType(job.type) && !priorContext;
+  if (offerRepair) {
+    // The counter IS the presence of this row: a repair run always carries it, so
+    // a second schema-invalid output falls through to the terminal branch below.
+    await ctx.stores.jobRepairContexts.put({ jobId, targetType: job.type, priorOutput: rawOutput, issues, attempt: 1 });
+    // Plain fail() only — pg-boss moves the SAME job active->retry (retryCount is
+    // bumped at re-claim, not here). Not routed through createIfAdmitted: the job
+    // is already in flight and holds the slot the original admission reserved, so
+    // re-admitting would double-charge and could 429 mid-repair.
+    await ctx.jobs.fail(jobId, {
+      code: "invalid_output_repairable",
+      message: "Watcher output did not match the job contract; enqueued for one informed repair",
+      category: "validation",
+      ...(executor ? { executor } : {})
+    });
+    logger.info(
+      {
+        event: "job_repair",
+        decision: "enqueued",
+        jobId,
+        jobType: job.type,
+        ...(provider ? { provider } : {}),
+        attempt: 1,
+        issueCount: issues.length
+      },
+      "schema-invalid output enqueued for one informed repair"
+    );
+    return { ok: false, code: "repair_enqueued" };
+  }
+
+  // Terminal-fail backstop. failJob(terminal) runs failTerminal AND the existing
+  // terminal side-effects (fold fallback for fold jobs, questionnaire-item failure
+  // for answer_question), which all key on the resulting `failed` state.
+  await failJob(
+    ctx,
+    jobId,
+    {
+      code: "invalid_output",
+      message: "Watcher output did not match the job contract",
+      category: "validation",
+      ...(executor ? { executor } : {})
+    },
+    { terminal: true }
+  );
+  if (priorContext) {
+    await ctx.stores.jobRepairContexts.delete(jobId);
+    logger.info(
+      {
+        event: "job_repair",
+        decision: "failed",
+        jobId,
+        jobType: job.type,
+        ...(provider ? { provider } : {}),
+        attempt: priorContext.attempt,
+        issueCount: issues.length
+      },
+      "repaired output was still schema-invalid; failing terminally"
+    );
+  }
+  return { ok: false, code: "invalid_output" };
+}
+
+// The per-type safety guard a repaired output must pass (#288d). For
+// answer_question, citations are derived in code from retrieved sections and must
+// never be fabricated by the model: the repaired output's citation sectionIds
+// must be a SUBSET of the prior output's (drop/keep allowed, never add). Any other
+// type has no extra guard. A guard failure ⇒ treat as invalid ⇒ terminal-fail.
+function passesRepairSafetyGuard(type: JobType, priorOutput: unknown, repairedOutput: unknown): boolean {
+  if (type !== "answer_question") {
+    return true;
+  }
+  const allowed = new Set(citationSectionIds(priorOutput));
+  return citationSectionIds(repairedOutput).every((sectionId) => allowed.has(sectionId));
+}
+
+function citationSectionIds(output: unknown): string[] {
+  if (!isPlainObject(output)) return [];
+  const citations = output.citations;
+  if (!Array.isArray(citations)) return [];
+  return citations.flatMap((citation) =>
+    isPlainObject(citation) && typeof citation.sectionId === "string" ? [citation.sectionId] : []
+  );
+}
+
+// The provider a provider-routed job runs under (input.provider), for the
+// structured job_repair event. Undefined for non-provider inputs.
+function providerOf(job: JobView): string | undefined {
+  return isPlainObject(job.input) && typeof job.input.provider === "string" ? job.input.provider : undefined;
+}
+
+// The dotted key paths present in `raw` but absent in `kept` after a z.object
+// parse stripped unknown keys (#288d). Walks plain objects recursively; ARRAYS
+// ARE TREATED AS LEAVES — element-level strips inside arrays are not reported
+// (pairing raw/kept array elements positionally against a possibly-reordered or
+// resized array is out of scope; object-level strips are what the warning surfaces).
+export function strippedOutputKeyPaths(raw: unknown, kept: unknown, prefix = ""): string[] {
+  if (!isPlainObject(raw) || !isPlainObject(kept)) {
+    return [];
+  }
+  const paths: string[] = [];
+  for (const [key, rawValue] of Object.entries(raw)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (!(key in kept)) {
+      paths.push(path);
+    } else {
+      paths.push(...strippedOutputKeyPaths(rawValue, kept[key], path));
+    }
+  }
+  return paths;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // The persisted output of a job completed through this dispatcher: completeJob
@@ -572,9 +770,21 @@ async function handleRefreshFlowSnapshotCompletion(
 
 // Marks a job failed. When an enqueue-only planning job fails terminally, its
 // linked run is failed too so it does not hang in a "running" state.
-export async function failJob(ctx: AppContext, jobId: string, jobError: JobError): Promise<JobView | undefined> {
+//
+// `terminal` (#288d) forces the job straight to terminal `failed` + dead-letter
+// via failTerminal, skipping any remaining retries — used by the completion
+// dispatcher for a reproducible contract violation (schema-invalid output) so it
+// burns zero further paid generations. All downstream side-effects below key on
+// `failedJob.state === "failed"`, so they fire identically whether the terminal
+// state was reached by retry-exhaustion or by this backstop.
+export async function failJob(
+  ctx: AppContext,
+  jobId: string,
+  jobError: JobError,
+  { terminal = false }: { terminal?: boolean } = {}
+): Promise<JobView | undefined> {
   const failingJob = await ctx.jobs.get(jobId);
-  const failedJob = await ctx.jobs.fail(jobId, jobError);
+  const failedJob = terminal ? await ctx.jobs.failTerminal(jobId, jobError) : await ctx.jobs.fail(jobId, jobError);
   // A failure (retryable or terminal) also frees the watcher to poll again.
   if (jobError.executor) {
     await touchWatcher(ctx, { name: jobError.executor, status: "idle" });
