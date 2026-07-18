@@ -75,7 +75,7 @@ function embeddingAxisContext(): Ctx {
 }
 
 async function jobForLog(ctx: Ctx, logId: string | undefined) {
-  const { jobs } = await ctx.jobs.list({ type: "answer_question" });
+  const { jobs } = await ctx.jobs.list({ type: "answer_question_batch" });
   return jobs.find((job) => (job.input as { questionLogId?: string }).questionLogId === logId);
 }
 
@@ -166,7 +166,7 @@ test("createQuestionnaire drips up to maxInflight answer jobs, flow-pinned with 
   if (!result.ok) throw new Error("unreachable");
 
   const max = ctx.settings.questionnaires.maxInflight;
-  const { jobs } = await ctx.jobs.list({ type: "answer_question" });
+  const { jobs } = await ctx.jobs.list({ type: "answer_question_batch" });
   assert.equal(jobs.length, max, `exactly ${max} items in flight`);
   for (const job of jobs) {
     const input = job.input as { requestedFlowId?: string; questionLogId?: string };
@@ -193,7 +193,7 @@ test("completion advances the drip; unconfident/uncited answers mark items unans
   const id = created.questionnaire.id;
   const max = ctx.settings.questionnaires.maxInflight;
 
-  const { jobs } = await ctx.jobs.list({ type: "answer_question" });
+  const { jobs } = await ctx.jobs.list({ type: "answer_question_batch" });
   const [first, second] = jobs;
 
   await questionnaires.handleQuestionnaireAnswerCompletion(ctx, first, confidentOutput());
@@ -202,7 +202,7 @@ test("completion advances the drip; unconfident/uncited answers mark items unans
   assert.equal(answered?.answer, "We hold ISO 27001.");
   assert.equal(answered?.outcome, "fresh");
   // Slot freed → the 4th item was enqueued.
-  const after = await ctx.jobs.list({ type: "answer_question" });
+  const after = await ctx.jobs.list({ type: "answer_question_batch" });
   assert.equal(after.jobs.length, Math.min(4, max + 1));
 
   // Low-confidence output → unanswerable (the gap flywheel's entry point).
@@ -238,7 +238,7 @@ test("drip stops and reverts the item + log when the atomic gate rejects at capa
   if (!created.ok) throw new Error("unreachable");
 
   // No answer_question job was enqueued (the gate rejected), and the drip paused.
-  assert.equal((await ctx.jobs.list({ type: "answer_question" })).total, 0, "no drip job enqueued at capacity");
+  assert.equal((await ctx.jobs.list({ type: "answer_question_batch" })).total, 0, "no drip job enqueued at capacity");
 
   // Every item is back to pending (none stuck in "answering"), and no orphaned
   // question log was left behind.
@@ -251,6 +251,29 @@ test("drip stops and reverts the item + log when the atomic gate rejects at capa
   assert.equal(await ctx.stores.questionLogs.count(), 0, "the drip's question log was deleted");
 });
 
+test("legacy answer_question questionnaire jobs still route through completion (deploy drain, #288c)", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "drain",
+    flowId: "security",
+    questions: ["q0"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+
+  // The drip now enqueues answer_question_batch, but an answer_question job for
+  // the SAME questionnaire item could still be in flight across a deploy. Simulate
+  // it by taking the real drip job and stamping the legacy type — the completion
+  // hook must still mark the item (the questionLogId→item lookup is the guard).
+  const { jobs } = await ctx.jobs.list({ type: "answer_question_batch" });
+  const legacyJob = { ...jobs[0]!, type: "answer_question" as const };
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, legacyJob, confidentOutput());
+
+  const fetched = await questionnaires.getQuestionnaire(ctx, created.questionnaire.id);
+  assert.equal(fetched?.items[0]?.status, "answered");
+  assert.equal(fetched?.items[0]?.answer, "We hold ISO 27001.");
+});
+
 test("a terminal job failure marks the item unanswerable with the error", async () => {
   const ctx = flowContext();
   const created = await questionnaires.createQuestionnaire(ctx, {
@@ -261,7 +284,7 @@ test("a terminal job failure marks the item unanswerable with the error", async 
   assert.ok(created.ok);
   if (!created.ok) throw new Error("unreachable");
 
-  const { jobs } = await ctx.jobs.list({ type: "answer_question" });
+  const { jobs } = await ctx.jobs.list({ type: "answer_question_batch" });
   await questionnaires.handleQuestionnaireAnswerFailure(ctx, jobs[0], "provider exploded");
   const fetched = await questionnaires.getQuestionnaire(ctx, created.questionnaire.id);
   assert.equal(fetched?.items[0].status, "unanswerable");
@@ -293,7 +316,7 @@ test("approval requires an answered item and admits it to the match corpus", asy
   const early = await questionnaires.approveItem(ctx, id, itemId);
   assert.deepEqual(early, { ok: false, code: "not_answered" });
 
-  const { jobs } = await ctx.jobs.list({ type: "answer_question" });
+  const { jobs } = await ctx.jobs.list({ type: "answer_question_batch" });
   await questionnaires.handleQuestionnaireAnswerCompletion(ctx, jobs[0], confidentOutput());
   const approved = await questionnaires.approveItem(ctx, id, itemId);
   assert.deepEqual(approved, { ok: true });
@@ -337,7 +360,7 @@ test("low-confidence answer WITH citations is answered (shown), not suppressed",
   });
   assert.ok(created.ok);
   if (!created.ok) throw new Error("unreachable");
-  const { jobs } = await ctx.jobs.list({ type: "answer_question" });
+  const { jobs } = await ctx.jobs.list({ type: "answer_question_batch" });
   const logId = (jobs[0]!.input as { questionLogId: string }).questionLogId;
 
   await questionnaires.handleQuestionnaireAnswerCompletion(ctx, jobs[0], {
@@ -363,7 +386,7 @@ test("answer with ZERO citations is unanswerable regardless of confidence", asyn
   });
   assert.ok(created.ok);
   if (!created.ok) throw new Error("unreachable");
-  const { jobs } = await ctx.jobs.list({ type: "answer_question" });
+  const { jobs } = await ctx.jobs.list({ type: "answer_question_batch" });
   const logId = (jobs[0]!.input as { questionLogId: string }).questionLogId;
 
   await questionnaires.handleQuestionnaireAnswerCompletion(ctx, jobs[0], {

@@ -34,7 +34,7 @@ test("POST /api/questionnaires creates a batch and starts the drip", async () =>
   assert.equal(body.questionnaire.name, "Acme SIG Q3");
   assert.equal(body.questionnaire.items.length, 2);
 
-  const { jobs } = await ctx.jobs.list({ type: "answer_question" });
+  const { jobs } = await ctx.jobs.list({ type: "answer_question_batch" });
   assert.equal(jobs.length, 2, "both items fit inside the drip cap");
 });
 

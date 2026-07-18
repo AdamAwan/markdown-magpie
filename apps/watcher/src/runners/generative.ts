@@ -68,7 +68,11 @@ type ProposedDismissal = { clusterId: string; rationale: string };
 
 export async function runGenerativeJob(options: GenerativeJobOptions): Promise<unknown> {
   const { job } = options;
-  if (job.type === "answer_question") {
+  // answer_question_batch (questionnaire drip, #288c) shares the answer contract
+  // and provider routing with answer_question, so it runs the identical answer
+  // handler — no new runner or capability. PROVIDER_JOB_TYPES is derived from the
+  // catalog, so the Chat/CLI runners auto-claim it.
+  if (job.type === "answer_question" || job.type === "answer_question_batch") {
     return answer(options);
   }
   if (job.type === "reconcile_gap_clusters") {

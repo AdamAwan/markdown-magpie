@@ -84,6 +84,32 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
     assert.equal(await broker.countInFlight(["draft_markdown_proposal"]), 0);
   });
 
+  await t.test("countInFlight isolates answer_question from answer_question_batch (#288c)", async () => {
+    // The whole point of the batch type: countInFlight tallies each job type by
+    // its own queue name, so questionnaire batch jobs never inflate the live-ask
+    // count and vice-versa. INTERACTIVE_AI_JOB_TYPES excludes the batch type, so
+    // the interactive reserve never sees questionnaire load.
+    assert.equal(await broker.countInFlight(["answer_question"]), 0);
+    assert.equal(await broker.countInFlight(["answer_question_batch"]), 0);
+
+    await broker.create("answer_question", codexAnswer("live-1"));
+    await broker.create("answer_question_batch", codexAnswer("batch-1"));
+    await broker.create("answer_question_batch", openAiAnswer("batch-2"));
+
+    // Each type counts only its own jobs.
+    assert.equal(await broker.countInFlight(["answer_question"]), 1, "batch jobs do not count as live asks");
+    assert.equal(await broker.countInFlight(["answer_question_batch"]), 2, "live asks do not count as batch");
+
+    // The interactive lane (answer_question + outline_flow_seed) excludes batch.
+    assert.equal(
+      await broker.countInFlight(["answer_question", "outline_flow_seed"]),
+      1,
+      "the interactive reserve never sees questionnaire batch load"
+    );
+    // Asked together, both are tallied — the global AI ceiling counts every class.
+    assert.equal(await broker.countInFlight(["answer_question", "answer_question_batch"]), 3);
+  });
+
   await t.test("isolates providers and claims same-queue jobs FIFO", async () => {
     const first = await broker.create("answer_question", codexAnswer("first"));
     const second = await broker.create("answer_question", codexAnswer("second"));

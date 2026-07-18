@@ -2,6 +2,7 @@ import type { ZodType } from "zod";
 
 export const JOB_TYPES = [
   "answer_question",
+  "answer_question_batch",
   "summarize_gap",
   "draft_markdown_proposal",
   "draft_seed_document",

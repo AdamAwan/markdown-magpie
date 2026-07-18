@@ -219,10 +219,12 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
     matched answer is reused verbatim only if (a) every cited section is byte-unchanged
     (md5 fingerprints vs `document_sections.content_changed_at` tracking, migration 0054)
     AND (b) retrieval finds nothing relevant newer than the answer's generation time.
-    Everything else drips through the ordinary `answer_question` job
-    (`QUESTIONNAIRE_MAX_INFLIGHT` per batch, purpose `"questionnaire"` — in gap candidacy,
-    out of the questions list). Approval admits answers to the future match corpus;
-    `/questionnaires` console page reviews/exports. No new job type.
+    Everything else drips through the questionnaire's own `answer_question_batch` job
+    (#288c — same answer handler as `answer_question` but a distinct, non-interactive
+    type so a bulk batch can't erode the live-ask reserve; `QUESTIONNAIRE_MAX_INFLIGHT`
+    per batch is now a secondary bound, purpose `"questionnaire"` — in gap candidacy, out
+    of the questions list). Approval admits answers to the future match corpus;
+    `/questionnaires` console page reviews/exports.
 14. **Source map** (#215/#219/#220) — agents' own navigation hints about source repos:
     `(sourceId, topic) → paths + description`, persisted in `source_map_entries`
     (migration 0047). Source-grounded job outputs contribute optional `mapUpdates`
@@ -275,8 +277,9 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
 
 ## 3. Job catalog cheat sheet
 
-26 job types in `packages/jobs/src/types.ts`; contracts in `schemas.ts`, routing in
-`catalog.ts`. AI (provider-fanned) jobs get retry 3 / backoff 15→300 s; others retry 2.
+27 job types in `packages/jobs/src/types.ts`; contracts in `schemas.ts`, routing in
+`catalog.ts`. AI (provider-fanned) jobs get retry 3 / backoff 15→300 s; others retry 2
+(maintenance-class AI — `AI_JOB_TYPES − INTERACTIVE_AI_JOB_TYPES` — also drops to retry 2).
 
 **Retry vs. terminal-fail on invalid output (#288d).** That retry budget is for
 *transient* failures. A **schema-invalid** completion is deterministic — it would
@@ -295,12 +298,15 @@ dead-letter). Net: original + at most one repair, then terminal — no blind pai
 retries. Each decision emits a `job_repair` event; a successful completion warns
 on any undeclared fields the `z.object` output schema stripped.
 
-**17 provider (AI) jobs** — queue `` `${type}__${provider}` ``:
-`answer_question`, `summarize_gap`, `draft_markdown_proposal`, `draft_seed_document`,
-`outline_flow_seed`, `revise_seed_plan`, `fold_markdown_proposal`, `fold_changeset_proposal`,
-`detect_contradiction`, `suggest_consolidation`, `reconcile_gap_clusters`,
-`sync_source_changes_generate_plan`, `verify_document`, `correct_document`,
-`dedupe_documents`, `split_document`, `improve_document`.
+**18 provider (AI) jobs** — queue `` `${type}__${provider}` ``:
+`answer_question`, `answer_question_batch`, `summarize_gap`, `draft_markdown_proposal`,
+`draft_seed_document`, `outline_flow_seed`, `revise_seed_plan`, `fold_markdown_proposal`,
+`fold_changeset_proposal`, `detect_contradiction`, `suggest_consolidation`,
+`reconcile_gap_clusters`, `sync_source_changes_generate_plan`, `verify_document`,
+`correct_document`, `dedupe_documents`, `split_document`, `improve_document`.
+`answer_question_batch` (#288c) is the questionnaire drip's own type: same answer handler
+as `answer_question`, but metered-yet-**non-interactive** so a bulk batch can't 429 a
+live ask via the interactive reserve.
 
 **10 non-provider jobs**:
 
