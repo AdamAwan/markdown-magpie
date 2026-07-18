@@ -28,6 +28,7 @@ const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
 const FOURTEEN_DAYS_SECONDS = 14 * 24 * 60 * 60;
 const EXPIRATION_SECONDS = {
   answer_question: 5 * 60,
+  answer_question_batch: 5 * 60,
   summarize_gap: 10 * 60,
   draft_markdown_proposal: 15 * 60,
   draft_seed_document: 15 * 60,
@@ -148,6 +149,28 @@ test("repairable is exactly the reshape-style provider set (#288d)", () => {
   ] as const) {
     assert.equal(isRepairableJobType(type), false, type);
   }
+});
+
+test("answer_question_batch is metered, non-interactive, repairable AI work (#288c)", () => {
+  const definition = jobDefinition("answer_question_batch");
+  // Provider-routed, same partitioned queue shape as answer_question.
+  assert.equal(definition.requiredCapability({ provider: "codex" }), "codex");
+  assert.equal(queueNameForJob("answer_question_batch", { provider: "codex" }), "answer_question_batch__codex");
+  // Metered (counted by the global AI cap) but NOT interactive — this is the
+  // crux: it can never satisfy the reserve condition, so a bulk questionnaire
+  // can never 429 a live /api/ask via the interactive reserve.
+  assert.ok(isAiJobType("answer_question_batch"));
+  assert.ok((AI_JOB_TYPES as readonly string[]).includes("answer_question_batch"));
+  assert.equal(isInteractiveJobType("answer_question_batch"), false);
+  assert.ok(!(INTERACTIVE_AI_JOB_TYPES as readonly string[]).includes("answer_question_batch"));
+  // Because it is AI but not interactive, (#288b) classes it maintenance ⇒
+  // retryLimit 2 falls out automatically (batch answers aren't user-facing).
+  assert.equal(definition.policy.retryLimit, 2);
+  // Shares the answer contract, so it is repairable like answer_question.
+  assert.ok(isRepairableJobType("answer_question_batch"));
+  // Reuses the exact answer input/output schemas.
+  assert.equal(definition.inputSchema, answerQuestionInputSchema);
+  assert.equal(definition.outputSchema, answerQuestionOutputSchema);
 });
 
 test("codex capability can only claim codex-partitioned AI work", () => {

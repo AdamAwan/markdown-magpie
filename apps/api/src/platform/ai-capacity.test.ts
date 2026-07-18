@@ -27,6 +27,18 @@ function enqueueMaintenanceJob(ctx: AppContext): Promise<unknown> {
   });
 }
 
+// Enqueues a valid in-flight questionnaire-batch AI job (#288c) — metered/counted
+// toward the global ceiling like any AI job, but NON-interactive, so it never
+// counts toward the interactive reserve. Reuses the answer contract.
+function enqueueBatchJob(ctx: AppContext): Promise<unknown> {
+  return ctx.jobs.create("answer_question_batch", {
+    provider: "codex",
+    question: "q",
+    flows: [],
+    expectedOutput: "answer_result"
+  });
+}
+
 function assertBlocked(ctx: AppContext): Promise<void> {
   return assert.rejects(
     () => assertAiCapacity(ctx),
@@ -101,6 +113,37 @@ describe("assertAiCapacity", () => {
     await enqueueInteractiveJob(ctx);
     await enqueueInteractiveJob(ctx); // at the ceiling; unclamped reserve would still admit
 
+    await assertBlocked(ctx);
+  });
+
+  it("a questionnaire batch cannot 429 a live ask via the interactive reserve (#288c acceptance)", async () => {
+    const ctx = makeTestContext();
+    ctx.settings.rateLimit.aiMaxInflightJobs = 6;
+    ctx.settings.rateLimit.aiInteractiveReservedJobs = 5;
+
+    // Two 3-item questionnaire batches fill the global ceiling…
+    for (let i = 0; i < 6; i += 1) {
+      await enqueueBatchJob(ctx);
+    }
+    // …but they are answer_question_batch (non-interactive), so interactiveInFlight
+    // is 0 < reserve and a live /api/ask is STILL admitted. On pre-#288c code these
+    // were answer_question (interactive) and would have occupied the reserve, 429-ing
+    // the ask. This assertion fails on pre-#288c code — the acceptance regression.
+    await assertAiCapacity(ctx);
+  });
+
+  it("five live asks with the global ceiling full still 429 (control for #288c)", async () => {
+    const ctx = makeTestContext();
+    ctx.settings.rateLimit.aiMaxInflightJobs = 6;
+    ctx.settings.rateLimit.aiInteractiveReservedJobs = 5;
+
+    // The reserve genuinely fills with live interactive asks, and a batch tops the
+    // global ceiling off — so the sixth live ask is correctly shed. This proves the
+    // batch reclassification did not simply disable admission control.
+    for (let i = 0; i < 5; i += 1) {
+      await enqueueInteractiveJob(ctx);
+    }
+    await enqueueBatchJob(ctx); // global now 6 (full); reserve holds 5 interactive
     await assertBlocked(ctx);
   });
 

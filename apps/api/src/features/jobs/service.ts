@@ -34,6 +34,18 @@ export class MaintenanceShedError extends Error {
   }
 }
 
+// answer_question (live /api/ask) and answer_question_batch (the questionnaire
+// drip, #288c) share the IDENTICAL answer contract. Everything that routes an
+// answer for questionnaire/question-log purposes — the question-log writeback,
+// the questionnaire completion/failure hooks, and the repaired-output citation
+// guard — treats them alike; the question log's purpose / the item lookup by
+// questionLogId is the real discriminator. Accepting both also drains any legacy
+// answer_question questionnaire jobs still in flight across a deploy window. The
+// live-ask-only paths (ask/gap-closure re-ask enqueue) stay narrow on purpose.
+function isAnswerJobType(type: JobType): boolean {
+  return type === "answer_question" || type === "answer_question_batch";
+}
+
 export async function createJob(ctx: AppContext, type: JobType, input: unknown): Promise<JobView> {
   // Validate the input against the job's own contract at creation (#285). Without
   // this an untrusted `manage:jobs` caller could persist and dispatch a malformed
@@ -432,7 +444,7 @@ export async function completeJob(
     // lookup by questionLogId inside the handler is the no-op guard for every
     // non-questionnaire ask. Runs inside the replayable side-effect block, so a
     // store failure here rides the 500-replay contract like its neighbours.
-    if (existingJob?.type === "answer_question" && isAnswerQuestionJobOutput(resultData)) {
+    if (isAnswerJobType(existingJob.type) && isAnswerQuestionJobOutput(resultData)) {
       await questionnairesService.handleQuestionnaireAnswerCompletion(ctx, existingJob, resultData);
     }
     const draftedProposal = await proposalsService.createProposalFromCompletedJob(ctx, existingJob, resultData);
@@ -633,12 +645,13 @@ async function handleInvalidOutput(
 }
 
 // The per-type safety guard a repaired output must pass (#288d). For
-// answer_question, citations are derived in code from retrieved sections and must
-// never be fabricated by the model: the repaired output's citation sectionIds
-// must be a SUBSET of the prior output's (drop/keep allowed, never add). Any other
-// type has no extra guard. A guard failure ⇒ treat as invalid ⇒ terminal-fail.
+// the answer contract (answer_question and answer_question_batch, #288c),
+// citations are derived in code from retrieved sections and must never be
+// fabricated by the model: the repaired output's citation sectionIds must be a
+// SUBSET of the prior output's (drop/keep allowed, never add). Any other type has
+// no extra guard. A guard failure ⇒ treat as invalid ⇒ terminal-fail.
 function passesRepairSafetyGuard(type: JobType, priorOutput: unknown, repairedOutput: unknown): boolean {
-  if (type !== "answer_question") {
+  if (!isAnswerJobType(type)) {
     return true;
   }
   const allowed = new Set(citationSectionIds(priorOutput));
@@ -724,7 +737,7 @@ async function updateQuestionLogFromCompletedJob(
   job: JobView | undefined,
   output: unknown
 ): Promise<void> {
-  if (!job || job.type !== "answer_question" || !isAnswerQuestionJobOutput(output)) {
+  if (!job || !isAnswerJobType(job.type) || !isAnswerQuestionJobOutput(output)) {
     return;
   }
 
@@ -845,7 +858,7 @@ export async function failJob(
   // A terminally failed answer job that belongs to a questionnaire item marks
   // that item unanswerable (error on the worksheet) and frees its drip slot.
   // Retryable failures are skipped — the job will run again.
-  if (failingJob?.type === "answer_question" && failedJob.state === "failed") {
+  if (failingJob && isAnswerJobType(failingJob.type) && failedJob.state === "failed") {
     await questionnairesService.handleQuestionnaireAnswerFailure(ctx, failingJob, jobError.message);
   }
   return failedJob;

@@ -38,10 +38,12 @@ timestamp guess.
    freshness baseline for future checks.
 4. **Reconcile** — any other matched case (multiple candidates, or a single candidate
    whose fast-path check couldn't confirm it) is **not** vetoed. It is answered by the
-   same `answer_question` job, primed with the candidate answers (and the current text of
+   questionnaire's own `answer_question_batch` job (#288c — same answer handler, prompts,
+   and grounding as a live ask; a distinct job type only so capacity accounting can hold
+   it apart from live asks), primed with the candidate answers (and the current text of
    their cited sections); the model decides — against live sources — whether to reuse,
    adapt, merge, or answer fresh. This is the only place the watcher calls a model for
-   reuse; no separate job type exists. Verdicts:
+   reuse. Verdicts:
 
    | Verdict | Meaning | Answer text source |
    |---|---|---|
@@ -54,12 +56,17 @@ timestamp guess.
    behaviour: any match that fails the fast-path check is badged **changed** and
    re-answered fresh, with a machine-readable reason (which section changed / vanished /
    appeared, and when) shown on the worksheet, instead of going through reconcile.
-5. **Answer**: items with no usable candidate go through the ordinary `answer_question`
-   job — same queue, watcher, prompts, and grounding verification as a live ask; no
-   questionnaire-specific AI path exists. Items **drip** into the queue
-   (`QUESTIONNAIRE_MAX_INFLIGHT`, default 3 per questionnaire) so a big batch can't crowd
-   out live asks. Drip state is derived, not timer-held: every completion, failure, and
-   worksheet read tops it back up, so an API restart can never wedge a questionnaire.
+5. **Answer**: items with no usable candidate go through the `answer_question_batch` job
+   — the same watcher answer handler, prompts, and grounding verification as a live ask,
+   but its own job type/queue (#288c). That reclassification is the **primary** protection
+   against a bulk batch crowding out live asks: `answer_question_batch` is metered
+   (globally capped) but **not** interactive, so it admits under `nonInteractiveAiCapacity`
+   (`limit − reserved`) and can never erode the interactive reserve that guards
+   `/api/ask`. The per-questionnaire drip (`QUESTIONNAIRE_MAX_INFLIGHT`, default 3) is now
+   a **secondary** bound — it limits a single batch's concurrency, but the type
+   reclassification is what keeps the reserve safe. Drip state is derived, not timer-held:
+   every completion, failure, and worksheet read tops it back up, so an API restart can
+   never wedge a questionnaire.
 6. **Review, approve, export** (console `/questionnaires`): items are badged
    **reused / adapted / merged / fresh / changed / unanswerable** (`changed` only arises
    under the legacy veto path). Each answered item also carries a **confidence** signal

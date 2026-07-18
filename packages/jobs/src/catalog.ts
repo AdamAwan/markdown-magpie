@@ -41,6 +41,14 @@ const BASE_POLICY = {
 // API's AI capacity gate reserves interactive headroom at enqueue time. Declared
 // here (above `policy`) so retry classification (#288b) can key off it at
 // definition time; re-exported and asserted equal in catalog.test.ts.
+//
+// Questionnaire answers ride their OWN job type — answer_question_batch (#288c) —
+// which is metered (in AI_JOB_TYPES, counted by the global cap) but DELIBERATELY
+// NOT interactive: it is absent here so it can never satisfy the reserve
+// condition and thus can never 429 a live /api/ask via the interactive lane. A
+// bulk questionnaire is admitted through nonInteractiveAiCapacity (limit -
+// reserved), which always leaves the interactive reserve free — the whole point
+// of splitting the batch off from the live-ask type.
 export const INTERACTIVE_AI_JOB_TYPES = ["answer_question", "outline_flow_seed"] as const satisfies readonly JobType[];
 
 const interactiveJobTypes = new Set<JobType>(INTERACTIVE_AI_JOB_TYPES);
@@ -69,6 +77,10 @@ function policy(providerWork: boolean, maintenanceAi: boolean, expireInSeconds: 
 // `define` and `isRepairableJobType`.
 const REPAIRABLE_JOB_TYPES = new Set<JobType>([
   "answer_question",
+  // answer_question_batch shares the answer contract, so a schema-invalid batch
+  // answer gets the same one informed repair (and the same citation-subset guard)
+  // as a live answer before terminal-failing (#288c/#288d).
+  "answer_question_batch",
   "summarize_gap",
   "detect_contradiction",
   "suggest_consolidation",
@@ -128,6 +140,20 @@ function define(
 const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
   answer_question: define(
     "answer_question",
+    "provider",
+    schemas.answerQuestionInputSchema,
+    schemas.answerQuestionOutputSchema,
+    5 * 60
+  ),
+  // Questionnaire-drip answers (#288c). Identical answer contract, provider
+  // routing, and expiry to answer_question — the watcher routes both to the same
+  // answer handler — but a SEPARATE job type/queue so countInFlight tallies it
+  // apart from live asks. It is in AI_JOB_TYPES (metered, globally capped) but not
+  // INTERACTIVE_AI_JOB_TYPES, so (#288b)'s policy classes it maintenance ⇒
+  // retryLimit 2, and it admits through nonInteractiveAiCapacity — a bulk batch
+  // can never erode the interactive reserve protecting /api/ask.
+  answer_question_batch: define(
+    "answer_question_batch",
     "provider",
     schemas.answerQuestionInputSchema,
     schemas.answerQuestionOutputSchema,
@@ -336,6 +362,7 @@ export function queueNameForJob(type: JobType, input: unknown): string {
 // work (see the API's global concurrency cap) without re-deriving the list.
 export const AI_JOB_TYPES = [
   "answer_question",
+  "answer_question_batch",
   "summarize_gap",
   "draft_markdown_proposal",
   "draft_seed_document",

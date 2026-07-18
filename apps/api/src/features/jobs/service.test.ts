@@ -1226,6 +1226,29 @@ test("(vi) with repair disabled by config, a repairable invalid output terminal-
   assert.equal(await ctx.stores.jobRepairContexts.get(job.id), undefined);
 });
 
+test("(c) answer_question_batch is repairable and enforces the citation-subset guard (#288c)", async () => {
+  const ctx = makeTestContext();
+  // A schema-invalid batch output must take the SAME one informed repair as
+  // answer_question, not immediate terminal-fail (it shares the answer contract).
+  const job = await ctx.jobs.create("answer_question_batch", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+  const first = await completeJob(ctx, job.id, { answer: "a", citations: [{ sectionId: "s1" }] });
+  assert.deepEqual(first, { ok: false, code: "repair_enqueued" });
+  assert.equal((await getJob(ctx, job.id))?.state, "retry");
+  const context = await ctx.stores.jobRepairContexts.get(job.id);
+  assert.equal(context?.targetType, "answer_question_batch");
+
+  // Re-dispatch the repair, then feed a schema-valid repaired output that ADDS a
+  // citation absent from the prior output — the answer-contract citation guard
+  // must reject it and terminal-fail, exactly as for answer_question.
+  await claimJob(ctx, "worker", ["codex"]);
+  const repaired = { answer: "fixed", confidence: "high" as const, citations: [fullCitation("s2")] };
+  const result = await completeJob(ctx, job.id, repaired);
+  assert.deepEqual(result, { ok: false, code: "invalid_output" });
+  assert.equal((await getJob(ctx, job.id))?.state, "failed");
+  assert.equal(await ctx.stores.jobRepairContexts.get(job.id), undefined);
+});
+
 test("(vii) an extra undeclared field succeeds, is stripped from the stored result, and warns", async () => {
   const ctx = makeTestContext();
   const warn = mock.method(logger, "warn");

@@ -10,7 +10,7 @@ import type {
 import type { JobView } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { logger } from "../../logger.js";
-import { aiInflightCapacity, assertAiCapacity } from "../../platform/ai-capacity.js";
+import { assertAiCapacity, nonInteractiveAiCapacity } from "../../platform/ai-capacity.js";
 import { buildAnswerQuestionInput, recordAnswerQuestionLog } from "../../platform/answer-question.js";
 import { embeddingModelId } from "../../platform/providers.js";
 import { retrieve } from "../retrieve/service.js";
@@ -166,15 +166,21 @@ async function topUpDrip(ctx: AppContext, questionnaireId: string): Promise<void
       requestedFlowId: questionnaire.flowId,
       ...(candidates.length > 0 ? { candidates } : {})
     });
-    // Adopt the atomic admission primitive (#288a): count + enqueue under the
-    // broker lock so a questionnaire drip can never overshoot the AI ceiling even
-    // when concurrent asks race it. When rate limiting is disabled, enqueue plain.
-    const capacity = aiInflightCapacity(ctx);
+    // Enqueue the questionnaire's OWN job type (#288c): answer_question_batch is
+    // metered/globally-capped but NOT interactive, so a bulk batch counts toward
+    // the ceiling without ever occupying the interactive reserve that protects
+    // live /api/ask. Admission goes through the STRICTER nonInteractiveAiCapacity
+    // (limit - reserved), which leaves that reserve free — this reclassification
+    // is the primary protection; the per-questionnaire maxInflight above is now a
+    // secondary bound on a single batch. Adopt the atomic admission primitive
+    // (#288a): count + enqueue under the broker lock so the drip can never
+    // overshoot even when concurrent asks race it. Rate limiting off → plain.
+    const capacity = nonInteractiveAiCapacity(ctx);
     if (!capacity) {
-      await ctx.jobs.create("answer_question", input);
+      await ctx.jobs.create("answer_question_batch", input);
       continue;
     }
-    const result = await ctx.jobs.createIfAdmitted("answer_question", input, capacity);
+    const result = await ctx.jobs.createIfAdmitted("answer_question_batch", input, capacity);
     if (!result.admitted) {
       // Non-admission at the atomic gate: undo this iteration's writes so nothing
       // is orphaned — revert the item off "answering" back to pending (the drip
@@ -319,7 +325,12 @@ export async function approveReused(ctx: AppContext, questionnaireId: string): P
 // --- internals -----------------------------------------------------------
 
 function answerJobQuestionLogId(job: JobView | undefined): string | undefined {
-  if (!job || job.type !== "answer_question") {
+  // Accept BOTH the live answer type and the questionnaire batch type (#288c):
+  // the drip now enqueues answer_question_batch, but any legacy answer_question
+  // questionnaire job already in flight across a deploy must still route. The
+  // questionLogId → item lookup in the callers is the real discriminator, so
+  // accepting both is safe for every non-questionnaire ask.
+  if (!job || (job.type !== "answer_question" && job.type !== "answer_question_batch")) {
     return undefined;
   }
   const input = job.input as { questionLogId?: unknown };

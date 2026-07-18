@@ -52,15 +52,24 @@ a load-shedding optimization, not the authoritative gate. Both paths count AI
 jobs in flight (states `created | retry | active`, across every provider queue)
 via `broker.countInFlight`, aggregate SQL over pg-boss's job table, and share the
 same class-aware block rule and the same `aiInflightCapacity` policy. The
-questionnaire drip adopts the same primitive: on non-admission it reverts the
-item to pending and deletes its log, then pauses (the derived-state model resumes
-it on the next read/completion).
+questionnaire drip adopts the same primitive but enqueues its OWN job type,
+`answer_question_batch`, under the **non-interactive** policy
+(`nonInteractiveAiCapacity`, #288c): batch answers are metered/globally-capped
+but never occupy the interactive reserve, so a bulk questionnaire cannot erode the
+headroom that protects live `/api/ask`. On non-admission it reverts the item to
+pending and deletes its log, then pauses (the derived-state model resumes it on
+the next read/completion).
 
 The check is **class-aware** (#240). AI job types split into an *interactive*
 class — a live caller is waiting: `answer_question` (including gap-closure
 verification re-asks) and `outline_flow_seed`; see `INTERACTIVE_AI_JOB_TYPES` in
 `packages/jobs/src/catalog.ts` — and everything else, the maintenance fan-out
-(patrol scans, drafting, gap summaries, …). An interactive enqueue is rejected
+(patrol scans, drafting, gap summaries, …) plus the questionnaire batch
+(`answer_question_batch`, #288c). The batch type is in `AI_JOB_TYPES` (so the
+global ceiling counts it) but deliberately **absent** from
+`INTERACTIVE_AI_JOB_TYPES`, so it can never satisfy the reserve condition — a
+questionnaire drip therefore cannot 429 a live ask via the interactive lane. An
+interactive enqueue is rejected
 with `429 { "error": "ai_capacity" }` + `Retry-After` only when **both** hold:
 
 1. in-flight interactive jobs ≥ `AI_INTERACTIVE_RESERVED_JOBS` (the reserve is
@@ -116,17 +125,18 @@ reproduces on every retry, so spending the full 3-attempt budget on it burns pai
 generations for nothing. `completeJob` handles it in two layers:
 
 - **Repair-reprompt.** For a **repairable** job type (the reshape-style provider
-  jobs — `answer_question`, `summarize_gap`, `detect_contradiction`,
-  `suggest_consolidation`, `reconcile_gap_clusters`, `outline_flow_seed`,
-  `revise_seed_plan`), the first schema-invalid output is routed to **one informed
+  jobs — `answer_question`, `answer_question_batch`, `summarize_gap`,
+  `detect_contradiction`, `suggest_consolidation`, `reconcile_gap_clusters`,
+  `outline_flow_seed`, `revise_seed_plan`), the first schema-invalid output is routed to **one informed
   repair**: the prior output + the exact Zod contract violations are stashed in a
   repair-context store keyed by the job id, and the **same** job is re-dispatched
   (pg-boss `active→retry`, so every waiter and the question-log linkage still
   resolve under the original id). When the watcher re-claims it, its provider
   runner runs a single-shot reshape (one model call, no retrieval, no agent loop).
-  `answer_question` additionally enforces a citation-subset safety guard — a
-  repaired output may drop citations but never add one the prior output didn't
-  cite (citations are derived in code, never fabricated by the model).
+  the answer-contract types (`answer_question` and `answer_question_batch`)
+  additionally enforce a citation-subset safety guard — a repaired output may drop
+  citations but never add one the prior output didn't cite (citations are derived
+  in code, never fabricated by the model).
 - **Terminal-fail backstop.** Anything not eligible for repair — a non-repairable
   (source-grounded / agentic / patch-emitting) type, repair disabled by config, a
   failed safety guard, or a repair run that is *still* schema-invalid — fails

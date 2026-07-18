@@ -157,6 +157,38 @@ describe("ChatRunner", () => {
     assert.equal(output.citations.length, 1);
   });
 
+  it("routes an answer_question_batch job to the same answer handler as answer_question (#288c)", async () => {
+    // The questionnaire-drip type shares the answer contract and must produce the
+    // identical answer output — the watcher short-circuits it to the answer runner.
+    const api = fakeApi({ retrieve: async () => SECTIONS });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("route a user question")) {
+        return JSON.stringify({ flowId: "flow-b", confidence: "high" });
+      }
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      return JSON.stringify({ answer: "Run the deploy script.", confidence: "high", isKnowledgeGap: false });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    const output = (await runner.run(
+      job("answer_question_batch", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [
+          { id: "flow-a", name: "Alpha" },
+          { id: "flow-b", name: "Beta" }
+        ],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as { citations: unknown[]; flowId?: string; answer: string };
+
+    assert.equal(output.flowId, "flow-b");
+    assert.equal(output.answer, "Run the deploy script.");
+    assert.equal(output.citations.length, 1);
+  });
+
   it("reconciles to a reused verdict and short-circuits full synthesis when a candidate still holds", async () => {
     // Questionnaire trust: when the job is primed with candidate prior answers, the
     // runner reconciles against the live KB before any synthesis. A "reused" verdict
