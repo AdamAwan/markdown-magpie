@@ -7,16 +7,20 @@ import { assertCan } from "../../auth/capabilities.js";
 import { rateLimit } from "../../http/rate-limit.js";
 import * as routeService from "./service.js";
 
+// Per-item and array bounds so a caller can't push an unbounded candidate set (or
+// unbounded per-flow strings) past the global body cap (#293); a real config has a
+// handful of flows with short ids/names and a sentence-long persona.
 const routeBodySchema = z.object({
-  question: z.string().trim().min(1),
+  question: z.string().trim().min(1).max(4000),
   flows: z
     .array(
       z.object({
-        id: z.string().min(1),
-        name: z.string().min(1),
-        persona: z.string().optional()
+        id: z.string().min(1).max(200),
+        name: z.string().min(1).max(200),
+        persona: z.string().max(2000).optional()
       })
     )
+    .max(200)
     .default([])
 });
 

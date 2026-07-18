@@ -96,4 +96,18 @@ describe("route routes flow scoping", () => {
     const res = await post(appFor(ctx, principal(["anyone"])));
     assert.equal(res.status, 200);
   });
+
+  // Body validation runs before capability evaluation, so an oversized candidate
+  // set (or per-flow string) is rejected with 400 rather than bounded only by the
+  // global 4 MB body cap (#293).
+  it("rejects an oversized flows array with 400", async () => {
+    const app = appFor(twoFlowCtx(), principal(["anyone"]));
+    const flows = Array.from({ length: 201 }, (_, i) => ({ id: `f${i}`, name: `F${i}` }));
+    const res = await app.request("/route", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ question: "q", flows })
+    });
+    assert.equal(res.status, 400);
+  });
 });

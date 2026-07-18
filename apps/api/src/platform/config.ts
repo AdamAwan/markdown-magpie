@@ -135,6 +135,11 @@ export interface AppConfig {
     // Max requests per principal per window for the expensive manual-trigger tier
     // (source-sync/patrol/scheduled-task run, repository index).
     triggerPerWindow: number;
+    // When a request has no principal, the limiter falls back to a per-client-IP
+    // key. Set true only when the API sits behind a trusted reverse proxy so the
+    // left-most `X-Forwarded-For` entry is the real client; otherwise the raw
+    // socket peer (the proxy) is used, since the header is client-spoofable.
+    trustForwardedFor: boolean;
     // Global ceiling on in-flight (created|retry|active) AI jobs. New AI work is
     // rejected at enqueue with 429 once this many are already in flight.
     aiMaxInflightJobs: number;
@@ -372,6 +377,7 @@ const schema = z
     RATE_LIMIT_WINDOW_MS: optionalPositiveInt,
     RATE_LIMIT_ASK_PER_WINDOW: optionalPositiveInt,
     RATE_LIMIT_TRIGGER_PER_WINDOW: optionalPositiveInt,
+    RATE_LIMIT_TRUST_FORWARDED_FOR: optionalString,
     AI_MAX_INFLIGHT_JOBS: optionalPositiveInt,
     AI_INTERACTIVE_RESERVED_JOBS: optionalNonNegativeInt,
     MAINTENANCE_MAX_AI_JOBS_PER_TICK: optionalPositiveInt,
@@ -558,6 +564,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       windowMs: parsed.RATE_LIMIT_WINDOW_MS ?? 60_000,
       askPerWindow: parsed.RATE_LIMIT_ASK_PER_WINDOW ?? 30,
       triggerPerWindow: parsed.RATE_LIMIT_TRIGGER_PER_WINDOW ?? 5,
+      // Off by default: without a trusted proxy the socket peer is the honest key.
+      trustForwardedFor: parsed.RATE_LIMIT_TRUST_FORWARDED_FOR === "true",
       aiMaxInflightJobs: parsed.AI_MAX_INFLIGHT_JOBS ?? 20,
       aiInteractiveReservedJobs: parsed.AI_INTERACTIVE_RESERVED_JOBS ?? 5,
       // Default 12 <= limit - reserved (20 - 5 = 15), so one tick can never fill

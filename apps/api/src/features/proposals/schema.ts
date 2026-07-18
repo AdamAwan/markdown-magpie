@@ -12,11 +12,14 @@ export const bulkProposalActionBodySchema = z.object({
   ids: z.array(z.string()).min(1).max(100)
 });
 
+// Per-string and per-array bounds so a bulk draft can't smuggle unbounded gap
+// summaries / id lists past the global body cap (#293). Summaries are free text
+// (a sentence or two); ids and paths are short identifiers.
 export const draftFromGapsBodySchema = z.object({
-  summary: z.string().optional(),
-  summaries: z.array(z.string()).optional(),
-  targetPath: z.string().optional(),
-  flowId: z.string().optional(),
-  sourceIds: z.array(z.string()).optional(),
-  destinationId: z.string().optional()
+  summary: z.string().max(2000).optional(),
+  summaries: z.array(z.string().max(2000)).max(200).optional(),
+  targetPath: z.string().max(1024).optional(),
+  flowId: z.string().max(200).optional(),
+  sourceIds: z.array(z.string().max(200)).max(200).optional(),
+  destinationId: z.string().max(200).optional()
 });
