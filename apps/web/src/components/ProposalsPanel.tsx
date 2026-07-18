@@ -1,7 +1,7 @@
 import styled from "@emotion/styled";
 import { useMemo, useState } from "react";
 import { Proposal } from "../lib/types";
-import { shortSha } from "../lib/format";
+import { isHttpUrl, shortSha } from "../lib/format";
 import { BulkProposalAction, bulkActionEligible } from "../lib/console";
 import { ContextValue } from "./common";
 import type { StatusTone } from "../theme/theme";
@@ -416,7 +416,7 @@ export function ProposalPanel({
                         <ClusterGaps>
                           {selectedProposal.draftContext.openPullRequests.map((pr, index) => (
                             <li key={pr.url ?? `${pr.title}-${index}`}>
-                              {pr.url ? (
+                              {pr.url && isHttpUrl(pr.url) ? (
                                 <a href={pr.url} target="_blank" rel="noreferrer">
                                   {pr.title}
                                 </a>

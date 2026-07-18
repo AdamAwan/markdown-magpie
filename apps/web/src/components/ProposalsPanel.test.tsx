@@ -94,6 +94,37 @@ test("a proposal without provenance renders no provenance section", () => {
   assert.doesNotMatch(html, /Claim provenance/);
 });
 
+// --- draft context: in-flight PR links (#294c) ---
+
+function draftContextOverride(url: string | undefined) {
+  return {
+    draftContext: {
+      gapSummaries: [],
+      sourceFiles: [],
+      evidenceCount: 0,
+      openPullRequests: [{ title: "In-flight work", url, status: "pr-opened" as const }]
+    }
+  };
+}
+
+test("an in-flight PR with an http(s) url renders as a clickable anchor", () => {
+  const html = render(branchPushed(draftContextOverride("https://github.com/o/r/pull/2")));
+  assert.match(html, /<a href="https:\/\/github\.com\/o\/r\/pull\/2"[^>]*>In-flight work<\/a>/);
+});
+
+test("an in-flight PR with a javascript: url renders as plain text, never an anchor", () => {
+  const html = render(branchPushed(draftContextOverride("javascript:alert(1)")));
+  assert.doesNotMatch(html, /javascript:alert/);
+  assert.doesNotMatch(html, /<a[^>]*>In-flight work<\/a>/);
+  assert.match(html, />In-flight work</);
+});
+
+test("an in-flight PR with a data: url renders as plain text, never an anchor", () => {
+  const html = render(branchPushed(draftContextOverride("data:text/html,<script>alert(1)</script>")));
+  assert.doesNotMatch(html, /<a[^>]*>In-flight work<\/a>/);
+  assert.match(html, />In-flight work</);
+});
+
 // --- bulk selection + action bar ---
 
 function draft(id: string, overrides: Partial<Proposal> = {}): Proposal {
