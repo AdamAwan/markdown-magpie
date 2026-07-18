@@ -36,6 +36,39 @@ test("emits a JSON line with message and bound base fields", () => {
   assert.equal(line.level, 30); // pino numeric level for info
 });
 
+test("redacts common secret keys while leaving other fields intact", () => {
+  const sink = captureSink();
+  const logger = createLogger({ level: "info", destination: sink.stream });
+
+  logger.info(
+    {
+      req: { headers: { authorization: "Bearer super-secret" } },
+      creds: {
+        apiKey: "sk-live-abc",
+        token: "tok-123",
+        githubToken: "ghp_xyz",
+        password: "hunter2",
+        client_secret: "cs-789"
+      },
+      keep: "visible"
+    },
+    "handled request"
+  );
+
+  const [line] = sink.lines();
+  const req = line.req as { headers: { authorization: string } };
+  const creds = line.creds as Record<string, string>;
+  assert.equal(req.headers.authorization, "[Redacted]");
+  assert.equal(creds.apiKey, "[Redacted]");
+  assert.equal(creds.token, "[Redacted]");
+  assert.equal(creds.githubToken, "[Redacted]");
+  assert.equal(creds.password, "[Redacted]");
+  assert.equal(creds.client_secret, "[Redacted]");
+  // Non-secret fields pass through untouched.
+  assert.equal(line.keep, "visible");
+  assert.equal(line.msg, "handled request");
+});
+
 test("filters lines below the configured level", () => {
   const sink = captureSink();
   const logger = createLogger({ level: "warn", destination: sink.stream });
