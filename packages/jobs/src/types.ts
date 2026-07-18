@@ -50,6 +50,20 @@ export interface JobError {
   executor?: string;
 }
 
+// Out-of-band repair state for a schema-invalid provider job that is getting one
+// informed repair (#288d). Stored in a store keyed by job id — NEVER in the
+// domain inputSchema — and attached to the JobView at claim time so the watcher's
+// provider runner can reshape the prior output instead of re-running the full job.
+// `attempt` is always 1: repair-of-a-repair is structurally impossible (a repair
+// run already carries a context row, so a second invalid output terminal-fails).
+export interface JobRepairContext {
+  attempt: number;
+  // The exact (schema-invalid) output the prior run produced, for the reshape.
+  priorOutput: unknown;
+  // The Zod contract violations the reshape must fix (path + message per issue).
+  issues: Array<{ path: string; message: string }>;
+}
+
 export interface JobView<TInput = unknown, TOutput = unknown> {
   id: string;
   type: JobType;
@@ -57,6 +71,11 @@ export interface JobView<TInput = unknown, TOutput = unknown> {
   deadLetter: boolean;
   state: JobState;
   input: TInput;
+  // Present only on a re-claimed job that is undergoing one informed repair
+  // (#288d): the watcher's provider runner sees this and runs a single-shot
+  // reshape of `repair.priorOutput` against the job contract instead of the
+  // normal job. Attached by the API's claimJob from the repair-context store.
+  repair?: JobRepairContext;
   // The W3C trace context (traceparent/tracestate) captured by the API when the
   // job was enqueued, when telemetry is enabled. Absent for jobs enqueued outside
   // a trace (e.g. scheduled fires) or in a build with telemetry off. The watcher
@@ -101,6 +120,13 @@ export interface JobDefinition<TInput = unknown, TOutput = unknown> {
   // (e.g. [github, local-git] for publish_proposal). Drives queue provisioning and
   // the console's capability→job-type coverage map.
   readonly capabilities: readonly JobCapability[];
+  // Whether a schema-invalid completion of this job type is eligible for one
+  // informed repair-reprompt before terminal-failing (#288d). Enabled only for
+  // reshape-style types that rework already-present material with no risk of
+  // fabricating grounded/verifiable content; source-grounded / agentic /
+  // patch-emitting types stay false (a context-free reshape could invent
+  // grounding). Defaults to false in `define`.
+  readonly repairable: boolean;
   readonly requiredCapability: (input: TInput) => JobCapability;
   readonly queueName: (input: TInput) => string;
 }

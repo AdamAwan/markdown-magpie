@@ -79,6 +79,14 @@ export interface JobBroker {
   heartbeat(id: string): Promise<JobView>;
   complete(id: string, output: unknown): Promise<JobView>;
   fail(id: string, error: JobError): Promise<JobView>;
+  // Fail a job straight to the terminal `failed` state, skipping any remaining
+  // retries, recording the error and routing it to the dead-letter queue exactly
+  // as retry-exhaustion would (#288d). Used as the backstop for a reproducible
+  // contract violation (schema-invalid watcher output) so it burns zero further
+  // paid generations instead of spending the full retry budget. A no-op on a job
+  // already in a terminal state, mirroring `fail` (protects the completion-replay
+  // contract).
+  failTerminal(id: string, error: JobError): Promise<JobView>;
   cancel(id: string): Promise<JobView>;
   retry(id: string): Promise<JobView>;
   get(id: string): Promise<JobView | undefined>;

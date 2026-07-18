@@ -34,7 +34,7 @@ import type {
   SourceMapUpdate,
   ProvenanceClaim
 } from "@magpie/core";
-import { AI_PROVIDERS, type AiProviderName, type JobError } from "./types.js";
+import { AI_PROVIDERS, type AiProviderName, type JobError, type JobRepairContext } from "./types.js";
 
 type ProviderInput<T> = T & { provider: AiProviderName };
 
@@ -720,3 +720,14 @@ export const crosslinkPullRequestsOutputSchema = z.object({
   commented: z.array(z.string()),
   linkedAt: z.string()
 });
+
+// Out-of-band repair context for a schema-invalid provider job getting one
+// informed repair (#288d). Persisted in the job-repair-context store keyed by job
+// id — NOT in any domain inputSchema — and attached to the JobView at claim time
+// (see JobRepairContext in types.ts). Kept here so the store and the API share
+// one validated shape.
+export const jobRepairContextSchema = z.object({
+  attempt: z.number().int().positive(),
+  priorOutput: z.unknown(),
+  issues: z.array(z.object({ path: z.string(), message: z.string() }))
+}) satisfies z.ZodType<JobRepairContext>;

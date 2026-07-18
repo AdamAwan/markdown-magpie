@@ -42,6 +42,24 @@ function policy(providerWork: boolean, expireInSeconds: number): Readonly<JobPol
   });
 }
 
+// The reshape-style provider jobs whose schema-invalid output may be repaired
+// once (#288d): they rework material already present in the job input/prior
+// output, so a single-shot reshape can fix a contract violation without any risk
+// of fabricating grounded or verifiable content. Every other type — the
+// source-grounded/agentic/patch-emitting ones — is deliberately absent so it
+// takes the immediate terminal-fail backstop instead (a context-free reshape
+// could invent grounding / observedSha). Kept as a set here, consumed by
+// `define` and `isRepairableJobType`.
+const REPAIRABLE_JOB_TYPES = new Set<JobType>([
+  "answer_question",
+  "summarize_gap",
+  "detect_contradiction",
+  "suggest_consolidation",
+  "reconcile_gap_clusters",
+  "outline_flow_seed",
+  "revise_seed_plan"
+]);
+
 function define(
   type: JobType,
   spec: CapabilitySpec,
@@ -81,6 +99,7 @@ function define(
     outputSchema,
     policy: policy(providerWork, expireInSeconds),
     capabilities,
+    repairable: REPAIRABLE_JOB_TYPES.has(type),
     requiredCapability,
     queueName
   });
@@ -321,6 +340,13 @@ const aiJobTypes = new Set<JobType>(AI_JOB_TYPES);
 // AI_JOB_TYPES, the single source of truth above.
 export function isAiJobType(type: JobType): boolean {
   return aiJobTypes.has(type);
+}
+
+// Whether a schema-invalid completion of this job type is eligible for one
+// informed repair-reprompt before terminal-failing (#288d). Reads the definition
+// so REPAIRABLE_JOB_TYPES stays the single source of truth.
+export function isRepairableJobType(type: JobType): boolean {
+  return jobDefinition(type).repairable;
 }
 
 // The interactive class of AI work: jobs a live caller is waiting on right now —

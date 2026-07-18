@@ -16,6 +16,7 @@ import {
   type PreparedSources
 } from "../source-workspace.js";
 import { PROVIDER_JOB_TYPES, runGenerativeJob } from "./generative.js";
+import { runRepairReprompt } from "./repair.js";
 
 export type PromptMode = "arg" | "stdin";
 
@@ -117,6 +118,13 @@ export class CliRunner {
   }
 
   async run(job: JobView, signal: AbortSignal): Promise<unknown> {
+    // Repair-reprompt (#288d): a re-claimed job carrying repair context runs a
+    // single-shot reshape of its prior output through the CLI adapted to the same
+    // complete() contract — no checkout, no agent loop. answer_question fans out
+    // over all providers, so the CLI runners need this branch too.
+    if (job.repair) {
+      return runRepairReprompt({ job, model: this.modelFor(job), signal });
+    }
     // Source-grounded jobs never go through the ChatProvider adapter — the CLI
     // itself is the whole agent, exploring the checkout with its native tools.
     const descriptors = sourceDescriptorsOf(job);

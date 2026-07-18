@@ -769,6 +769,26 @@ export const CONDENSE_FOLLOWUP: PromptDefinition = {
     'Return JSON only: {"standaloneQuestion":"string"}.'
 };
 
+export const REPAIR_OUTPUT: PromptDefinition = {
+  id: "repair-output",
+  title: "Repair a schema-invalid job output",
+  description:
+    "Single-shot reshape of a prior job output that failed its JSON contract (#288d). Given the prior JSON and the exact contract violations, returns corrected JSON changing only what is necessary — inventing nothing, and preserving citations verbatim.",
+  usedBy: ["watcher"],
+  outputShape: "JSON (the job's own output contract)",
+  instructions:
+    "You repair a JSON document that failed its schema contract. You are given the exact JSON a previous " +
+    "step produced and a list of contract violations (each with a field path and a message). Return a " +
+    "corrected JSON document that fixes every listed violation.\n\n" +
+    "Rules:\n" +
+    "- Change ONLY what is necessary to satisfy the contract. Preserve every other field EXACTLY as given.\n" +
+    "- Preserve citations, section ids, and any evidence/provenance references VERBATIM — never add, drop, " +
+    "or alter a citation to satisfy the schema.\n" +
+    "- Invent nothing. Do not add facts, claims, or values that were not in the prior output; if a required " +
+    "field is genuinely absent, use the most conservative empty-but-valid value the contract allows.\n" +
+    "- Return ONLY the corrected JSON document — no prose, no explanation, no code fence."
+};
+
 export const promptCatalog: PromptDefinition[] = [
   ANSWER_QUESTION,
   VERIFY_ANSWER,
@@ -791,6 +811,7 @@ export const promptCatalog: PromptDefinition[] = [
   GAP_RECONCILE_CRITIC,
   GENERIC_JOB,
   JOB_RUNNER_SYSTEM,
+  REPAIR_OUTPUT,
   ROUTE_QUESTION_TO_FLOW
 ];
 
