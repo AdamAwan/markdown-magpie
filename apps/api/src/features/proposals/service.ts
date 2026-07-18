@@ -173,6 +173,44 @@ async function isVerifyGapClosureInFlight(ctx: AppContext, proposalId: string): 
   );
 }
 
+// True when a verify_gap_closure job for this proposal exists in ANY state —
+// queued, running, or already terminal (completed / failed / cancelled).
+// Distinct from isVerifyGapClosureInFlight, which counts only non-terminal
+// states: for the durable-cascade marker below we care whether the post-merge
+// cascade ever succeeded in *enqueuing* verification at all, not whether it is
+// running right now. A verify job that terminally failed exhausted its OWN retry
+// budget — that is the verify job's concern, not an orphaned cascade to re-drive.
+async function hasAnyVerifyGapClosureJob(ctx: AppContext, proposalId: string): Promise<boolean> {
+  const { jobs } = await ctx.jobs.list({ type: "verify_gap_closure", limit: 200 });
+  return jobs.some((job) => jobProposalId(job.input) === proposalId);
+}
+
+// True when a merged proposal's post-merge cascade has NOT durably completed:
+// it is merged, still carries triggering questions to verify, has no closure
+// verdict yet, and no verify_gap_closure job has ever been enqueued for it. This
+// is the orphaned-merge marker (#282). Merge status is persisted synchronously,
+// but the cascade that enqueues verify_gap_closure runs either in the
+// fire-and-forget BackgroundRunner (manual / local-git merges — lost on an API
+// restart) or inside the replayable completeJob side-effect block (GitHub
+// PR-poll — where committing status=merged BEFORE the cascade defeats the
+// 500-replay guard that keys on status). Either can be interrupted after the
+// merge is recorded but before verification is enqueued, leaving the proposal
+// permanently `merged` with unset closureStatus and its gaps never verified.
+//
+// Both the reconciler sweep and the replay-safe PR transition key on this marker
+// to re-drive runMergeCascade (which is itself idempotent), rather than on the
+// proposal status the transition guard mutates. Keying on job existence (not
+// in-flight) means a proposal whose verify job already landed is never re-swept.
+export async function mergeCascadeIncomplete(ctx: AppContext, proposal: Proposal): Promise<boolean> {
+  if (proposal.status !== "merged" || proposal.closureStatus) {
+    return false;
+  }
+  if ((proposal.triggeringQuestionIds ?? []).length === 0) {
+    return false;
+  }
+  return !(await hasAnyVerifyGapClosureJob(ctx, proposal.id));
+}
+
 // The work that must happen once a proposal is merged, shared by the manual
 // "Mark merged" endpoint and the pull-request poller: re-index the destination
 // knowledge base, then verify (rather than assume) that the merge closed its

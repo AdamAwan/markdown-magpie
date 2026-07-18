@@ -912,6 +912,7 @@ describe("reconcileGaps audit", () => {
       pendingPublicationActions: 0,
       pullRequestsChecked: 0,
       pullRequestTransitions: 0,
+      mergedCascadesRecovered: 0,
       overlapsDetected: 0,
       clustersCreated: 0,
       mergeDecisions: 0,

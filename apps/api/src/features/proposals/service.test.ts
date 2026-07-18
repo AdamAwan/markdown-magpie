@@ -208,6 +208,58 @@ test("runMergeCascade skips verification when reindexing fails", async () => {
   assert.equal(reloaded?.closureStatus, undefined, "closureStatus remains unset after reindex failure");
 });
 
+// #282: the orphaned-merge marker that both the reconciler sweep and the
+// replay-safe PR transition key on, so a cascade lost before it enqueued
+// verification is re-driven rather than orphaned forever.
+test("mergeCascadeIncomplete is true for a merged proposal whose cascade never enqueued verification", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  // Merged + has triggers + no closureStatus + no verify job: the orphan shape.
+  assert.equal(await proposals.mergeCascadeIncomplete(ctx, merged), true);
+});
+
+test("mergeCascadeIncomplete is false once a verify_gap_closure job exists for the proposal", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  await ctx.jobs.create("verify_gap_closure", { proposalId: merged.id });
+  // A verify job in ANY state means the cascade durably did its job.
+  assert.equal(await proposals.mergeCascadeIncomplete(ctx, merged), false);
+});
+
+test("mergeCascadeIncomplete is false once closure has been recorded", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  await ctx.stores.proposals.setClosureStatus(merged.id, "verified_closed");
+  const verified = await ctx.stores.proposals.get(merged.id);
+  assert.ok(verified);
+  assert.equal(await proposals.mergeCascadeIncomplete(ctx, verified), false);
+});
+
+test("mergeCascadeIncomplete is false for a merged proposal with no triggering questions", async () => {
+  const ctx = makeTestContext();
+  const proposal = await ctx.stores.proposals.create({
+    title: "Seeded doc",
+    targetPath: "seed.md",
+    markdown: "# Seed",
+    rationale: "r",
+    evidence: []
+  });
+  await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+  const merged = await ctx.stores.proposals.get(proposal.id);
+  assert.ok(merged);
+  assert.equal(await proposals.mergeCascadeIncomplete(ctx, merged), false);
+});
+
+test("mergeCascadeIncomplete is false for a proposal that is not merged", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  // Roll it back to a pre-merge status: nothing to recover.
+  await ctx.stores.proposals.updateStatus(merged.id, "pr-opened");
+  const reopened = await ctx.stores.proposals.get(merged.id);
+  assert.ok(reopened);
+  assert.equal(await proposals.mergeCascadeIncomplete(ctx, reopened), false);
+});
+
 test("verifyGapClosure marks verified_closed and resolves the gap when the re-ask cites the merged doc", async () => {
   const ctx = makeTestContext();
   const { merged } = await mergedProposalWithGap(ctx);
