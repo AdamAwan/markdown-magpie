@@ -46,6 +46,11 @@ test("POST /api/questionnaires 404s an unknown flow and 400s an empty body", asy
 
   const invalid = await createRequest(app, { name: "x", flowId: "security", questions: [] });
   assert.equal(invalid.status, 400);
+
+  // An oversized single question is rejected before it becomes a row + embedding
+  // (#293) rather than being bounded only by the global 4 MB body cap.
+  const huge = await createRequest(app, { name: "x", flowId: "security", questions: ["a".repeat(4001)] });
+  assert.equal(huge.status, 400);
 });
 
 test("GET list and worksheet detail round-trip; unknown ids 404", async () => {

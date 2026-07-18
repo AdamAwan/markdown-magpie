@@ -13,6 +13,15 @@ endpoints. It keys a **fixed-window counter** on the authenticated principal
 "rate_limited" }` plus a `Retry-After` header. Successful requests carry the
 standard `RateLimit-Limit` / `RateLimit-Remaining` / `RateLimit-Reset` headers.
 
+When a request has **no principal** — auth disabled (local dev), or a route that
+somehow became reachable without one — the limiter does **not** bypass: it falls
+back to a per-client-IP key (`anon:ip:<addr>`), so an unauthenticated route is
+still throttled rather than silently unlimited (#293). The client IP is the raw
+socket peer by default; set `RATE_LIMIT_TRUST_FORWARDED_FOR=true` only behind a
+trusted reverse proxy to instead key on the left-most `X-Forwarded-For` entry (the
+header is client-spoofable, so it is ignored unless you opt in). When no IP can be
+resolved at all, anonymous traffic collapses to one shared `anon:unknown` bucket.
+
 Two tiers, each with its own per-window budget:
 
 | Tier      | Endpoints                                                                                                   | Default limit |
@@ -20,9 +29,9 @@ Two tiers, each with its own per-window budget:
 | `ask`     | `POST /api/ask`, `POST /api/retrieve`                                                                        | 30 / window   |
 | `trigger` | `POST /api/source-sync/run`, `POST /api/fix-patrol/run`, `POST /api/fix-patrol/improve/run`, `POST /api/scheduled-tasks/:key/run`, `POST /api/knowledge/repositories/index` | 5 / window    |
 
-The limiter can only attribute a request to a caller when auth is on, so it
-**no-ops when auth is disabled** (local dev) — there is no principal to key on.
-The global AI cap (L2) still protects metered work in that case.
+With auth disabled (local dev) there is no principal, so requests are attributed
+to the client IP via the anonymous fallback described above rather than passing
+unthrottled. The global AI cap (L2) still protects metered work in that case too.
 
 ## L2 — global in-flight AI-job cap
 
@@ -212,6 +221,7 @@ auth-disabled local dev.
 | `RATE_LIMIT_WINDOW_MS`          | `60000` | Fixed-window width shared by both request tiers.               |
 | `RATE_LIMIT_ASK_PER_WINDOW`     | `30`    | Ask-tier requests per principal per window.                    |
 | `RATE_LIMIT_TRIGGER_PER_WINDOW` | `5`     | Trigger-tier requests per principal per window.                |
+| `RATE_LIMIT_TRUST_FORWARDED_FOR` | `false` | When a request has no principal, key the fallback on the left-most `X-Forwarded-For` entry instead of the raw socket peer. Enable **only** behind a trusted reverse proxy (the header is client-spoofable). |
 | `AI_MAX_INFLIGHT_JOBS`          | `20`    | Global ceiling on concurrent in-flight AI jobs.                |
 | `AI_INTERACTIVE_RESERVED_JOBS`  | `5`     | In-flight slots reserved for interactive AI jobs (`0` disables the reserve; clamped to the ceiling). |
 | `MAINTENANCE_MAX_AI_JOBS_PER_TICK` | `12` | Max AI jobs one maintenance fan-out tick may enqueue (L3 per-tick budget, #288b). Kept ≤ `AI_MAX_INFLIGHT_JOBS − AI_INTERACTIVE_RESERVED_JOBS`. |
@@ -230,7 +240,7 @@ the API logs to Loki and query by field).
 | ------------------- | ------------------------------------------------ |
 | `decision`          | `"allowed"` (level `debug`) or `"blocked"` (`warn`) |
 | `tier`              | `"ask"` or `"trigger"`                            |
-| `subject`           | the principal the limit was applied to           |
+| `subject`           | the bucket the limit was applied to — a principal subject, or an anonymous fallback key (`anon:ip:<addr>` / `anon:unknown`) |
 | `limit` / `count` / `remaining` | budget and usage in the current window |
 | `windowMs`          | window width                                     |
 | `retryAfterSeconds` | present on blocked events                        |
