@@ -15,6 +15,7 @@ import {
   improveDocumentInputSchema,
   isAiJobType,
   isInteractiveJobType,
+  isRepairableJobType,
   jobDefinition,
   jobTypesForCapability,
   jobTypesWithoutCapabilities,
@@ -99,6 +100,36 @@ test("the interactive class is exactly the caller-waited subset of AI work", () 
   assert.equal(isInteractiveJobType("verify_document"), false);
   assert.equal(isInteractiveJobType("draft_markdown_proposal"), false);
   assert.equal(isInteractiveJobType("publish_proposal"), false);
+});
+
+test("repairable is exactly the reshape-style provider set (#288d)", () => {
+  for (const type of [
+    "answer_question",
+    "summarize_gap",
+    "detect_contradiction",
+    "suggest_consolidation",
+    "reconcile_gap_clusters",
+    "outline_flow_seed",
+    "revise_seed_plan"
+  ] as const) {
+    assert.ok(isRepairableJobType(type), type);
+    assert.equal(jobDefinition(type).repairable, true, type);
+  }
+  // Source-grounded / agentic / patch-emitting types stay on the immediate
+  // terminal-fail path: a context-free reshape could invent grounding.
+  for (const type of [
+    "verify_document",
+    "correct_document",
+    "improve_document",
+    "draft_markdown_proposal",
+    "draft_seed_document",
+    "split_document",
+    "dedupe_documents",
+    "fold_markdown_proposal",
+    "fold_changeset_proposal"
+  ] as const) {
+    assert.equal(isRepairableJobType(type), false, type);
+  }
 });
 
 test("codex capability can only claim codex-partitioned AI work", () => {

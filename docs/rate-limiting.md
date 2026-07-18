@@ -88,6 +88,39 @@ on exhaustion.
 > into their fan-out (passing a non-interactive capacity to the same primitive and
 > lock) is the planned #288(b) follow-up.
 
+## Schema-invalid watcher output — repair then terminal-fail (#288d)
+
+The retry budget above is for **transient** failures (a provider blip, a timeout).
+A **schema-invalid** completion is a *deterministic* contract violation: it
+reproduces on every retry, so spending the full 3-attempt budget on it burns paid
+generations for nothing. `completeJob` handles it in two layers:
+
+- **Repair-reprompt.** For a **repairable** job type (the reshape-style provider
+  jobs — `answer_question`, `summarize_gap`, `detect_contradiction`,
+  `suggest_consolidation`, `reconcile_gap_clusters`, `outline_flow_seed`,
+  `revise_seed_plan`), the first schema-invalid output is routed to **one informed
+  repair**: the prior output + the exact Zod contract violations are stashed in a
+  repair-context store keyed by the job id, and the **same** job is re-dispatched
+  (pg-boss `active→retry`, so every waiter and the question-log linkage still
+  resolve under the original id). When the watcher re-claims it, its provider
+  runner runs a single-shot reshape (one model call, no retrieval, no agent loop).
+  `answer_question` additionally enforces a citation-subset safety guard — a
+  repaired output may drop citations but never add one the prior output didn't
+  cite (citations are derived in code, never fabricated by the model).
+- **Terminal-fail backstop.** Anything not eligible for repair — a non-repairable
+  (source-grounded / agentic / patch-emitting) type, repair disabled by config, a
+  failed safety guard, or a repair run that is *still* schema-invalid — fails
+  **terminally** on the spot (`JobBroker.failTerminal`: straight to `failed` +
+  dead-letter, skipping remaining retries). Net paid generations for a
+  deterministic failure: the original + at most **one** informed repair, then
+  terminal — never a blind 3× retry.
+
+Each decision emits a structured `job_repair` event (`decision`:
+`enqueued` | `succeeded` | `failed`). A successful completion also warns
+(`"watcher output carried undeclared fields stripped to the job contract"`) when
+the output carried fields the job contract doesn't declare — surfacing the silent
+`z.object` strip without failing on it.
+
 ## Storage
 
 Counters live in Postgres (`rate_limit_counters`, migration
@@ -108,6 +141,7 @@ auth-disabled local dev.
 | `RATE_LIMIT_TRIGGER_PER_WINDOW` | `5`     | Trigger-tier requests per principal per window.                |
 | `AI_MAX_INFLIGHT_JOBS`          | `20`    | Global ceiling on concurrent in-flight AI jobs.                |
 | `AI_INTERACTIVE_RESERVED_JOBS`  | `5`     | In-flight slots reserved for interactive AI jobs (`0` disables the reserve; clamped to the ceiling). |
+| `MAGPIE_JOB_REPAIR_ENABLED`     | `true`  | One informed repair-reprompt for a schema-invalid repairable output before terminal-fail (#288d); `false` ⇒ immediate terminal-fail. |
 
 ## Observability (Grafana)
 

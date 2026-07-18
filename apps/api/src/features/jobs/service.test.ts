@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import type {
   AnswerQuestionJobOutput,
@@ -8,6 +8,8 @@ import type {
 import type { JobView } from "@magpie/jobs";
 import { answerQuestionOutputSchema } from "@magpie/jobs";
 import { makeTestContext } from "../../test-support/context.js";
+import { logger } from "../../logger.js";
+import type { AppContext } from "../../context.js";
 import { completeJobBodySchema } from "./schema.js";
 import {
   acceptFailedJob,
@@ -22,6 +24,7 @@ import {
   projectJob,
   retryJob,
   runJobToCompletion,
+  strippedOutputKeyPaths,
   waitForJob
 } from "./service.js";
 
@@ -853,8 +856,10 @@ test("completeJob validates catalog output and rejects completion after cancella
   const ctx = makeTestContext();
   const invalid = await ctx.jobs.create("answer_question", answerInput());
   await claimJob(ctx, "worker", ["codex"]);
+  // answer_question is repairable (#288d): a first schema-invalid output is routed
+  // to one informed repair (repair_enqueued) with the SAME job moved to retry.
   const invalidResult = await completeJob(ctx, invalid.id, { answer: "missing contract fields" });
-  assert.deepEqual(invalidResult, { ok: false, code: "invalid_output" });
+  assert.deepEqual(invalidResult, { ok: false, code: "repair_enqueued" });
   assert.equal((await getJob(ctx, invalid.id))?.state, "retry");
 
   const cancelled = await ctx.jobs.create("answer_question", answerInput());
@@ -994,4 +999,228 @@ test("parseCompletedJobOutput returns undefined when neither shape validates", (
   assert.equal(parseCompletedJobOutput(answerQuestionOutputSchema, { result: { nope: true } }), undefined);
   assert.equal(parseCompletedJobOutput(answerQuestionOutputSchema, { nope: true }), undefined);
   assert.equal(parseCompletedJobOutput(answerQuestionOutputSchema, undefined), undefined);
+});
+
+// ---------------------------------------------------------------------------
+// #288d — terminal-fail backstop + repair-reprompt on schema-invalid output
+// ---------------------------------------------------------------------------
+
+const fullCitation = (sectionId: string) => ({
+  documentId: "d",
+  sectionId,
+  path: "p",
+  heading: "h",
+  anchor: "a",
+  excerpt: "e",
+  relevance: 1
+});
+
+// The job_repair structured events captured from logger.info during a test.
+function repairEvents(info: ReturnType<typeof mock.method>): Array<Record<string, unknown>> {
+  return info.mock.calls
+    .map((call) => call.arguments[0])
+    .filter(
+      (arg): arg is Record<string, unknown> =>
+        typeof arg === "object" && arg !== null && (arg as { event?: unknown }).event === "job_repair"
+    );
+}
+
+// A repairable answer_question that has already had its one repair enqueued: it is
+// re-claimed (active, repair context attached) and ready for the repaired output.
+async function enqueueAnswerRepair(
+  ctx: AppContext,
+  priorInvalidOutput: unknown,
+  input: Record<string, unknown> = {}
+): Promise<string> {
+  const job = await ctx.jobs.create("answer_question", { ...answerInput(), ...input });
+  await claimJob(ctx, "worker", ["codex"]);
+  const first = await completeJob(ctx, job.id, priorInvalidOutput);
+  assert.deepEqual(first, { ok: false, code: "repair_enqueued" });
+  // Re-dispatch: the fake broker left the job in retry; re-claim to run the repair.
+  await claimJob(ctx, "worker", ["codex"]);
+  return job.id;
+}
+
+test("(i) schema-invalid output on a NON-repairable type terminal-fails and fires terminal side-effects", async () => {
+  const ctx = makeTestContext();
+  const rival = await ctx.stores.proposals.create({
+    title: "Rival",
+    targetPath: "kb/x.md",
+    markdown: "# r",
+    rationale: "r",
+    evidence: []
+  });
+  const job = await ctx.jobs.create("fold_markdown_proposal", {
+    provider: "codex" as const,
+    survivorProposalId: "surv",
+    rivalProposalId: rival.id,
+    targetPath: "kb/x.md",
+    survivorMarkdown: "# s",
+    rivalMarkdown: "# r",
+    rivalGapSummaries: [],
+    rivalEvidence: [],
+    expectedOutput: "folded_markdown" as const
+  });
+  await claimJob(ctx, "worker", ["codex"]);
+
+  const result = await completeJob(ctx, job.id, { not: "a valid fold output" });
+  assert.deepEqual(result, { ok: false, code: "invalid_output" });
+
+  const failed = await getJob(ctx, job.id);
+  assert.equal(failed?.state, "failed");
+  assert.equal(failed?.retryCount, 0);
+  // Terminal side-effect: the fold fallback enqueued the rival to publish.
+  const actions = await ctx.stores.gapClusters.listPendingPublicationActions();
+  assert.equal(actions.length, 1);
+  assert.equal(actions[0].proposalId, rival.id);
+  // No repair context is ever written for a non-repairable type.
+  assert.equal(await ctx.stores.jobRepairContexts.get(job.id), undefined);
+});
+
+test("(ii) schema-invalid output on a REPAIRABLE type persists context and enqueues one repair", async () => {
+  const ctx = makeTestContext();
+  const info = mock.method(logger, "info");
+  const job = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+
+  const invalidOutput = { answer: "partial", citations: [{ sectionId: "s1" }] };
+  const result = await completeJob(ctx, job.id, invalidOutput);
+  assert.deepEqual(result, { ok: false, code: "repair_enqueued" });
+
+  assert.equal((await getJob(ctx, job.id))?.state, "retry");
+  const context = await ctx.stores.jobRepairContexts.get(job.id);
+  assert.ok(context);
+  assert.equal(context!.targetType, "answer_question");
+  assert.equal(context!.attempt, 1);
+  assert.deepEqual(context!.priorOutput, invalidOutput);
+  assert.ok(context!.issues.length > 0);
+
+  const events = repairEvents(info);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].decision, "enqueued");
+  assert.equal(events[0].jobId, job.id);
+});
+
+test("(iii) a repaired run with valid output completes, fans out side-effects, and deletes the context", async () => {
+  const ctx = makeTestContext();
+  const log = await ctx.stores.questionLogs.record({
+    question: "How?",
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
+  const jobId = await enqueueAnswerRepair(
+    ctx,
+    { answer: "partial", citations: [fullCitation("s1")] },
+    {
+      questionLogId: log.id
+    }
+  );
+
+  const info = mock.method(logger, "info");
+  const repaired = { answer: "fixed", confidence: "high" as const, citations: [fullCitation("s1")] };
+  const result = await completeJob(ctx, jobId, repaired);
+  assert.equal(result.ok, true);
+
+  assert.equal((await getJob(ctx, jobId))?.state, "completed");
+  // Context deleted (the one-repair counter is cleared).
+  assert.equal(await ctx.stores.jobRepairContexts.get(jobId), undefined);
+  // Side-effect fired: the answer was written to the question log.
+  assert.equal((await ctx.stores.questionLogs.get(log.id))?.answer?.answer, "fixed");
+
+  const events = repairEvents(info);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].decision, "succeeded");
+});
+
+test("(iv) a repaired run that is still schema-invalid terminal-fails and deletes the context", async () => {
+  const ctx = makeTestContext();
+  const jobId = await enqueueAnswerRepair(ctx, { answer: "partial", citations: [{ sectionId: "s1" }] });
+
+  const info = mock.method(logger, "info");
+  const result = await completeJob(ctx, jobId, { still: "invalid" });
+  assert.deepEqual(result, { ok: false, code: "invalid_output" });
+
+  assert.equal((await getJob(ctx, jobId))?.state, "failed");
+  assert.equal(await ctx.stores.jobRepairContexts.get(jobId), undefined);
+
+  const events = repairEvents(info);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].decision, "failed");
+});
+
+test("(v) an answer_question repair that adds a citation not in the prior output terminal-fails", async () => {
+  const ctx = makeTestContext();
+  // Prior citations: only s1.
+  const jobId = await enqueueAnswerRepair(ctx, { answer: "a", citations: [{ sectionId: "s1" }] });
+
+  // Repaired output is schema-valid but ADDS s2 — the citation subset guard fails.
+  const repaired = { answer: "fixed", confidence: "high" as const, citations: [fullCitation("s2")] };
+  const result = await completeJob(ctx, jobId, repaired);
+  assert.deepEqual(result, { ok: false, code: "invalid_output" });
+  assert.equal((await getJob(ctx, jobId))?.state, "failed");
+  assert.equal(await ctx.stores.jobRepairContexts.get(jobId), undefined);
+});
+
+test("(vi) with repair disabled by config, a repairable invalid output terminal-fails immediately", async () => {
+  const base = makeTestContext();
+  const ctx: AppContext = {
+    ...base,
+    settings: { ...base.settings, jobs: { ...base.settings.jobs, repairEnabled: false } }
+  };
+  const job = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+
+  const result = await completeJob(ctx, job.id, { answer: "partial", citations: [{ sectionId: "s1" }] });
+  assert.deepEqual(result, { ok: false, code: "invalid_output" });
+  assert.equal((await getJob(ctx, job.id))?.state, "failed");
+  assert.equal(await ctx.stores.jobRepairContexts.get(job.id), undefined);
+});
+
+test("(vii) an extra undeclared field succeeds, is stripped from the stored result, and warns", async () => {
+  const ctx = makeTestContext();
+  const warn = mock.method(logger, "warn");
+  const job = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+
+  const result = await completeJob(ctx, job.id, {
+    answer: "ok",
+    confidence: "high",
+    citations: [],
+    bogusField: { nested: 1 }
+  });
+  assert.equal(result.ok, true);
+
+  const stored = await getJob(ctx, job.id);
+  assert.ok(!JSON.stringify(stored?.output).includes("bogusField"), "undeclared field stripped from storage");
+  assert.ok(JSON.stringify(stored?.output).includes('"answer"'), "declared fields survive");
+
+  const stripWarnings = warn.mock.calls
+    .map((call) => call.arguments[0])
+    .filter(
+      (arg): arg is Record<string, unknown> =>
+        typeof arg === "object" && arg !== null && Array.isArray((arg as { strippedKeys?: unknown }).strippedKeys)
+    );
+  assert.equal(stripWarnings.length, 1);
+  assert.deepEqual(stripWarnings[0].strippedKeys, ["bogusField"]);
+});
+
+test("(viii) failJob without terminal still retries; a first transient provider failure goes to retry", async () => {
+  const ctx = makeTestContext();
+  const job = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+
+  const failed = await failJob(ctx, job.id, {
+    code: "provider_error",
+    message: "transient",
+    category: "provider"
+  });
+  assert.equal(failed?.state, "retry");
+});
+
+test("strippedOutputKeyPaths reports object-level strips (nested) and treats arrays as leaves", () => {
+  assert.deepEqual(strippedOutputKeyPaths({ a: 1, b: 2 }, { a: 1 }), ["b"]);
+  assert.deepEqual(strippedOutputKeyPaths({ a: { x: 1, y: 2 } }, { a: { x: 1 } }), ["a.y"]);
+  // Arrays are leaves: an element-level difference is not walked/reported.
+  assert.deepEqual(strippedOutputKeyPaths({ a: [{ x: 1, y: 2 }] }, { a: [{ x: 1 }] }), []);
+  assert.deepEqual(strippedOutputKeyPaths({ a: 1 }, { a: 1 }), []);
 });

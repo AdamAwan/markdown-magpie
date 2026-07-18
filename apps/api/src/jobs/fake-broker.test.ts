@@ -143,3 +143,49 @@ test("cancel is a no-op once a job has already completed", async () => {
   assert.deepEqual(cancelled.output, output);
   assert.equal((await broker.get(created.id))?.state, "completed");
 });
+
+// #288d terminal-fail backstop: failTerminal drives an in-flight job straight to
+// terminal `failed` (skipping remaining retries) with retryCount preserved, and
+// is a no-op on an already-terminal job (protecting the completion-replay contract).
+test("failTerminal fails an active/created/retry job straight to failed, preserving retryCount", async () => {
+  for (const prep of ["created", "active", "retry"] as const) {
+    const broker = new FakeJobBroker();
+    const job = await broker.create("answer_question", validAnswerInput);
+    if (prep === "active") {
+      await broker.claim("w", ["codex"]);
+    } else if (prep === "retry") {
+      await broker.claim("w", ["codex"]);
+      await broker.fail(job.id, testError); // active -> retry, retryCount 0->1
+    }
+    const retryCountBefore = (await broker.get(job.id))!.retryCount;
+    const failed = await broker.failTerminal(job.id, testError);
+    assert.equal(failed.state, "failed", `prep=${prep}`);
+    assert.deepEqual(failed.error, testError, `prep=${prep}`);
+    assert.equal(failed.retryCount, retryCountBefore, `prep=${prep}: retryCount preserved`);
+    assert.ok(failed.failedAt, `prep=${prep}: failedAt set`);
+  }
+});
+
+test("failTerminal is a no-op on an already-terminal job", async () => {
+  for (const terminal of ["completed", "cancelled", "failed"] as const) {
+    const broker = new FakeJobBroker();
+    const job = await broker.create("answer_question", validAnswerInput);
+    await broker.claim("w", ["codex"]);
+    if (terminal === "completed") {
+      await broker.complete(job.id, { answer: "a", confidence: "high", citations: [] });
+    } else if (terminal === "cancelled") {
+      await broker.cancel(job.id);
+    } else {
+      // Exhaust retries to reach terminal failed.
+      for (let i = 0; i < 5; i += 1) await broker.fail(job.id, testError);
+    }
+    const before = await broker.get(job.id);
+    const after = await broker.failTerminal(job.id, {
+      code: "other",
+      message: "should not overwrite",
+      category: "validation"
+    });
+    assert.equal(after.state, terminal, `terminal=${terminal} preserved`);
+    assert.deepEqual(after, before, `terminal=${terminal}: unchanged`);
+  }
+});
