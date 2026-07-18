@@ -4,6 +4,7 @@ import { EmotionRegistry } from "../theme/EmotionRegistry";
 import { ConsoleProvider } from "../components/ConsoleProvider";
 import { AppShell } from "../components/AppShell";
 import { AuthProvider } from "../components/AuthProvider";
+import { serializeRuntimeConfig } from "../lib/runtimeConfig";
 
 // Render at request time so the env reads below resolve against the running
 // container's environment, not whatever was set during `next build`. This is
@@ -32,12 +33,16 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           Inject the runtime API base URL (read by lib/api.ts) via next/script so it
           runs before hydration. Using a raw <script> here makes React warn that the
           tag won't execute on the client; next/script is the App Router-supported way.
+
+          serializeRuntimeConfig (not raw JSON.stringify) is used because this string is
+          injected as literal HTML via dangerouslySetInnerHTML: an unescaped config value
+          containing "</script>" would terminate the tag early and inject markup/script.
         */}
         <Script
           id="magpie-runtime-config"
           strategy="beforeInteractive"
           dangerouslySetInnerHTML={{
-            __html: `window.__MAGPIE_CONFIG__=${JSON.stringify(runtimeConfig)};`
+            __html: `window.__MAGPIE_CONFIG__=${serializeRuntimeConfig(runtimeConfig)};`
           }}
         />
         <EmotionRegistry>
