@@ -8,7 +8,7 @@ import { after, describe, it } from "node:test";
 import { JOB_TYPES, jobDefinition, type JobView, type JobType } from "@magpie/jobs";
 import { JOB_RUNNER_SYSTEM } from "@magpie/prompts";
 import type { RetrievedSection, WatcherApi } from "../http-client.js";
-import { CliRunner, type CliSpawn, type SpawnedCli } from "./cli.js";
+import { buildChildEnv, CliRunner, type CliSpawn, type SpawnedCli } from "./cli.js";
 
 function job(type: JobView["type"], input: unknown): JobView {
   return {
@@ -104,6 +104,7 @@ interface SpawnCall {
   command: string;
   args: string[];
   cwd?: string;
+  env?: NodeJS.ProcessEnv;
 }
 
 // Scripted stand-in for a spawned CLI: real streams so the runner's data
@@ -121,7 +122,12 @@ class FakeChild extends EventEmitter implements SpawnedCli {
 // clean exit — no real process involved.
 function fakeSpawn(calls: SpawnCall[], stdout: string): CliSpawn {
   return (command, args, options) => {
-    calls.push({ command, args: [...args], ...(options.cwd !== undefined ? { cwd: options.cwd } : {}) });
+    calls.push({
+      command,
+      args: [...args],
+      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+      ...(options.env !== undefined ? { env: options.env } : {})
+    });
     const child = new FakeChild();
     setImmediate(() => {
       child.stdout.emit("data", Buffer.from(stdout));
@@ -380,6 +386,41 @@ describe("CliRunner", () => {
     // codex has no system-prompt flag, so its prompt keeps the folded SYSTEM: block.
     assert.match(call.args.at(-1) ?? "", /^SYSTEM:/);
     assert.equal(call.args.at(-2), "--");
+  });
+
+  it("spawns the CLI child with a minimal env allowlist, not the watcher's secrets (#290c)", async () => {
+    const calls: SpawnCall[] = [];
+    const runner = new CliRunner({
+      capability: "claude",
+      command: "claude",
+      args: ["-p"],
+      promptMode: "arg",
+      spawnOverride: fakeSpawn(calls, RESULT_JSON),
+      // A watcher-shaped env: its own provider credential alongside secrets the
+      // child has no business seeing.
+      spawnEnv: {
+        PATH: "/usr/bin",
+        HOME: "/home/watcher",
+        ANTHROPIC_API_KEY: "sk-ant-secret",
+        DATABASE_URL: "postgres://secret",
+        GITHUB_TOKEN: "ghp_secret",
+        MAGPIE_M2M_SECRET: "m2m-secret",
+        OPENAI_COMPATIBLE_API_KEY: "sk-other-provider"
+      }
+    });
+    await runner.run(SUMMARIZE, new AbortController().signal);
+
+    const childEnv = calls[0]!.env!;
+    // The CLI's own credential and the operational vars pass through…
+    assert.equal(childEnv.ANTHROPIC_API_KEY, "sk-ant-secret");
+    assert.equal(childEnv.PATH, "/usr/bin");
+    assert.equal(childEnv.HOME, "/home/watcher");
+    // …but none of the watcher's unrelated secrets — including a DIFFERENT
+    // provider's key — reach the child.
+    assert.ok(!("DATABASE_URL" in childEnv));
+    assert.ok(!("GITHUB_TOKEN" in childEnv));
+    assert.ok(!("MAGPIE_M2M_SECRET" in childEnv));
+    assert.ok(!("OPENAI_COMPATIBLE_API_KEY" in childEnv));
   });
 
   it("rejects when the CLI exits non-zero, including stderr", async () => {
@@ -786,5 +827,72 @@ describe("CliRunner source-grounded seeding", () => {
     assert.notEqual(call.cwd, checkoutDir);
     assert.equal(call.cwd, tmpdir());
     assert.match(call.args.at(-1) ?? "", new RegExp(checkoutDir.replace(/\\/g, "\\\\")));
+  });
+});
+
+describe("buildChildEnv (#290c)", () => {
+  const watcherEnv: NodeJS.ProcessEnv = {
+    PATH: "/usr/bin",
+    HOME: "/home/watcher",
+    HTTPS_PROXY: "http://proxy:8080",
+    NODE_EXTRA_CA_CERTS: "/etc/ca.pem",
+    ANTHROPIC_API_KEY: "sk-ant",
+    OPENAI_API_KEY: "sk-openai",
+    OPENAI_COMPATIBLE_API_KEY: "sk-compat",
+    AZURE_OPENAI_API_KEY: "azure-key",
+    DATABASE_URL: "postgres://secret",
+    GITHUB_TOKEN: "ghp_secret",
+    MAGPIE_M2M_SECRET: "m2m",
+    CLAUDE_CLI_ARGS: "-p"
+  };
+
+  it("forwards operational vars and only the claude credential for claude", () => {
+    const env = buildChildEnv("claude", watcherEnv);
+    assert.equal(env.PATH, "/usr/bin");
+    assert.equal(env.HOME, "/home/watcher");
+    assert.equal(env.HTTPS_PROXY, "http://proxy:8080");
+    assert.equal(env.NODE_EXTRA_CA_CERTS, "/etc/ca.pem");
+    assert.equal(env.ANTHROPIC_API_KEY, "sk-ant");
+    // The codex/chat/other-provider keys and every unrelated secret are dropped.
+    for (const dropped of [
+      "OPENAI_API_KEY",
+      "OPENAI_COMPATIBLE_API_KEY",
+      "AZURE_OPENAI_API_KEY",
+      "DATABASE_URL",
+      "GITHUB_TOKEN",
+      "MAGPIE_M2M_SECRET",
+      "CLAUDE_CLI_ARGS"
+    ]) {
+      assert.ok(!(dropped in env), `${dropped} should not reach the child`);
+    }
+  });
+
+  it("forwards only the codex credential for codex (not the chat OPENAI_COMPATIBLE key)", () => {
+    const env = buildChildEnv("codex", watcherEnv);
+    assert.equal(env.OPENAI_API_KEY, "sk-openai");
+    // A prefix match would have leaked the chat runner's key; exact names do not.
+    assert.ok(!("OPENAI_COMPATIBLE_API_KEY" in env));
+    assert.ok(!("ANTHROPIC_API_KEY" in env));
+    assert.ok(!("GITHUB_TOKEN" in env));
+  });
+
+  it("matches allowlisted names case-insensitively (Windows Path / lowercase proxy)", () => {
+    const env = buildChildEnv("claude", { Path: "C:\\bin", http_proxy: "http://p:1", SECRET_THING: "no" });
+    assert.equal(env.Path, "C:\\bin");
+    assert.equal(env.http_proxy, "http://p:1");
+    assert.ok(!("SECRET_THING" in env));
+  });
+
+  it("forwards extra vars named in MAGPIE_CLI_ENV_PASSTHROUGH, nothing else", () => {
+    const env = buildChildEnv("codex", {
+      PATH: "/usr/bin",
+      MAGPIE_CLI_ENV_PASSTHROUGH: "AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY",
+      AWS_ACCESS_KEY_ID: "akid",
+      AWS_SECRET_ACCESS_KEY: "secret",
+      UNLISTED: "dropped"
+    });
+    assert.equal(env.AWS_ACCESS_KEY_ID, "akid");
+    assert.equal(env.AWS_SECRET_ACCESS_KEY, "secret");
+    assert.ok(!("UNLISTED" in env));
   });
 });
