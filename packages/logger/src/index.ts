@@ -21,12 +21,28 @@ interface LoggerOptions {
   mixin?: () => Record<string, unknown>;
 }
 
+// Default redaction paths — a defense-in-depth safety net so a future call site
+// that logs an object carrying a credential (headers, a provider key, a token)
+// never emits it verbatim to the sink (and onward to Loki). No current caller
+// logs these; this guards against regressions. `*.<key>` matches that key at any
+// object nested one level under the log line (pino's leading-wildcard syntax),
+// which covers the common `logger.info({ req }, ...)` / `{ err }` shapes.
+const REDACT_PATHS = [
+  "*.authorization",
+  "req.headers.authorization",
+  "*.apiKey",
+  "*.token",
+  "*.githubToken",
+  "*.password",
+  "*.client_secret"
+];
+
 // A thin wrapper over pino. Configuration is passed in by the caller (apps read
 // env at their composition root) so this package never touches process.env.
 export function createLogger(opts: LoggerOptions = {}): Logger {
   const { level = "info", pretty = false, base, destination, mixin } = opts;
   // Omit `base` when unset so pino keeps its default base (pid, hostname).
-  const options: pino.LoggerOptions = { level, base, mixin };
+  const options: pino.LoggerOptions = { level, base, mixin, redact: REDACT_PATHS };
 
   if (destination !== undefined) {
     // Explicit sink: raw JSON, no transport. Used by tests and the stdio MCP
