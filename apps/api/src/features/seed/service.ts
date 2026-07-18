@@ -13,6 +13,7 @@ import { hashSourceDescriptors } from "../../scheduling/patrol-hash.js";
 import { sameFlowOpenProposals } from "../../scheduling/flow.js";
 import { listExistingDocuments } from "../retrieve/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
+import { createFanoutBudget, type FanoutBudget } from "../../platform/maintenance-fanout.js";
 import { logger } from "../../logger.js";
 import type { SeedPlanPatchBody } from "./schema.js";
 
@@ -24,7 +25,12 @@ import type { SeedPlanPatchBody } from "./schema.js";
 // plan. Enqueue-only: the proposal lands later via
 // createSeedProposalFromCompletedJob (a completion handler in the proposals
 // service).
-async function draftSeedItem(ctx: AppContext, plan: SeedPlan, item: SeedPlanItem): Promise<string> {
+async function draftSeedItem(
+  ctx: AppContext,
+  plan: SeedPlan,
+  item: SeedPlanItem,
+  budget: FanoutBudget
+): Promise<string | undefined> {
   const deps = ctx.repositoryDeps();
   const flow = selectFlow(deps, plan.flowId);
   const input: DraftSeedDocumentJobInput & { provider: AiProviderName } = {
@@ -40,12 +46,22 @@ async function draftSeedItem(ctx: AppContext, plan: SeedPlan, item: SeedPlanItem
     seedPlanId: plan.id,
     provider: ctx.config.get().aiProvider
   };
-  const job = await ctx.jobs.create("draft_seed_document", input);
+  // draft_seed_document is maintenance-class AI, so its batch fan-out admits
+  // through the fan-out budget (#288b). A shed leaves the item without a draftJobId;
+  // approval is replay-safe, so a later re-approve drafts the remainder.
+  const admission = await budget.admit("draft_seed_document", input);
+  if (!admission.ok) {
+    logger.info(
+      { flowId: plan.flowId, planId: plan.id, reason: admission.reason },
+      "draft_seed_document deferred by maintenance fan-out budget; re-approve to draft the remainder"
+    );
+    return undefined;
+  }
   logger.info(
-    { jobId: job.id, flowId: plan.flowId, planId: plan.id, targetPath: input.targetPath ?? "auto" },
+    { jobId: admission.job.id, flowId: plan.flowId, planId: plan.id, targetPath: input.targetPath ?? "auto" },
     "enqueued draft_seed_document job"
   );
-  return job.id;
+  return admission.job.id;
 }
 
 // Find an in-flight (non-terminal) outline job for this flow so a second
@@ -301,15 +317,24 @@ export async function approveSeedPlan(
       .map((item) => ({ id: item.id, status: "approved" as const }))
   });
   await ctx.stores.seedPlans.setStatus(plan.id, "approved");
+  // One fan-out budget for this approval's draft batch (#288b). A big plan can't
+  // enqueue past the per-tick budget or the global non-interactive ceiling in one
+  // approve; a shed stops the batch and the replay-safe re-approve resumes it.
+  const budget = createFanoutBudget(ctx, "approve_seed_plan", plan.flowId);
   const jobIds: string[] = [];
   for (const item of toDraft) {
     if (item.draftJobId) {
       continue;
     }
-    const jobId = await draftSeedItem(ctx, { ...plan, status: "approved" }, item);
+    const jobId = await draftSeedItem(ctx, { ...plan, status: "approved" }, item, budget);
+    if (!jobId) {
+      // Budget/capacity exhausted for this approval — defer the rest to a re-approve.
+      break;
+    }
     await ctx.stores.seedPlans.setItemDraftJob(plan.id, item.id, jobId);
     jobIds.push(jobId);
   }
+  budget.finish();
   const updated = await ctx.stores.seedPlans.get(plan.id);
   logger.info(
     { planId: plan.id, flowId: plan.flowId, enqueued: jobIds.length },

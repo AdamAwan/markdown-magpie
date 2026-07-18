@@ -22,6 +22,7 @@ import { runDedupeLens, type DedupeDocumentFn } from "../../scheduling/dedupe-le
 import { runSplitLens, type SplitDocumentFn } from "../../scheduling/split-lens.js";
 import { parseCompletedJobOutput, runJobToCompletion } from "../jobs/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
+import { createFanoutBudget, type FanoutBudget } from "../../platform/maintenance-fanout.js";
 import { logger } from "../../logger.js";
 
 // Cursor knobs (tunable). batchSize bounds per-tick cost; randomCount is the
@@ -108,102 +109,137 @@ const VERIFY_WAIT_BUDGET_MS = 10 * 60_000;
 // to operators rather than silently reading as full provenance coverage.
 const PROVENANCE_EVENT_CAP = 50;
 
-const defaultVerifyDocument: VerifyDocumentFn = async (ctx, { path, content, sources, flowId }) => {
-  // #214 phase 2: fold the document's provenance event stream (its merged
-  // proposals) into advisory citedClaims the verify agent checks first. An
-  // empty fold omits the field entirely so the job input — and therefore the
-  // rendered prompt — is byte-identical to a pre-provenance verify.
-  const events = await ctx.stores.proposals.listMergedByTargetPath(path, PROVENANCE_EVENT_CAP);
-  if (events.length === PROVENANCE_EVENT_CAP) {
-    logger.warn(
-      { path, cap: PROVENANCE_EVENT_CAP },
-      "verify lens: provenance event cap reached; events beyond the oldest 50 merges were ignored"
-    );
-  }
-  const citedClaims = foldProvenanceEvents(events, content);
-  const input = {
-    path,
-    content,
-    sources,
-    ...(citedClaims.length > 0 ? { citedClaims } : {}),
-    // Attribution only — lets the read-time cost rollups credit this verify's
-    // spend to the flow's correctness patrol. Omitted for the unscoped flow so
-    // the rendered prompt input stays byte-identical.
-    ...(flowId !== undefined ? { flowId } : {}),
-    provider: ctx.config.get().aiProvider
-  } satisfies VerifyDocumentJobInput & { provider: AiProviderName };
-  let terminal;
-  try {
-    terminal = await runJobToCompletion(ctx, "verify_document", input, {
-      reuseKey: verifyDocumentReuseKey,
-      deadlineMs: Math.min(VERIFY_WAIT_BUDGET_MS, ctx.settings.jobs.runToCompletionTimeoutMs ?? VERIFY_WAIT_BUDGET_MS)
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "verify job failed";
-    logger.warn({ path, err: message }, "verify lens: verify_document could not run");
-    return undefined;
-  }
-  if (terminal.state !== "completed") {
-    return undefined;
-  }
-  return parseCompletedJobOutput(verifyDocumentOutputSchema, terminal.output);
-};
+// Default verify: enqueue a verify_document AI job THROUGH the fan-out budget and
+// bounded-wait for it. A shed (budget/capacity) makes runJobToCompletion throw
+// MaintenanceShedError, which runVerifyLens catches like any other verify failure
+// — so the doc is simply not in `checkedPaths` and stays re-checkable next tick.
+function makeDefaultVerifyDocument(budget: FanoutBudget): VerifyDocumentFn {
+  return async (ctx, { path, content, sources, flowId }) => {
+    // #214 phase 2: fold the document's provenance event stream (its merged
+    // proposals) into advisory citedClaims the verify agent checks first. An
+    // empty fold omits the field entirely so the job input — and therefore the
+    // rendered prompt — is byte-identical to a pre-provenance verify.
+    const events = await ctx.stores.proposals.listMergedByTargetPath(path, PROVENANCE_EVENT_CAP);
+    if (events.length === PROVENANCE_EVENT_CAP) {
+      logger.warn(
+        { path, cap: PROVENANCE_EVENT_CAP },
+        "verify lens: provenance event cap reached; events beyond the oldest 50 merges were ignored"
+      );
+    }
+    const citedClaims = foldProvenanceEvents(events, content);
+    const input = {
+      path,
+      content,
+      sources,
+      ...(citedClaims.length > 0 ? { citedClaims } : {}),
+      // Attribution only — lets the read-time cost rollups credit this verify's
+      // spend to the flow's correctness patrol. Omitted for the unscoped flow so
+      // the rendered prompt input stays byte-identical.
+      ...(flowId !== undefined ? { flowId } : {}),
+      provider: ctx.config.get().aiProvider
+    } satisfies VerifyDocumentJobInput & { provider: AiProviderName };
+    let terminal;
+    try {
+      terminal = await runJobToCompletion(ctx, "verify_document", input, {
+        reuseKey: verifyDocumentReuseKey,
+        deadlineMs: Math.min(
+          VERIFY_WAIT_BUDGET_MS,
+          ctx.settings.jobs.runToCompletionTimeoutMs ?? VERIFY_WAIT_BUDGET_MS
+        ),
+        admission: { budget }
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "verify job failed";
+      logger.warn({ path, err: message }, "verify lens: verify_document could not run");
+      return undefined;
+    }
+    if (terminal.state !== "completed") {
+      return undefined;
+    }
+    return parseCompletedJobOutput(verifyDocumentOutputSchema, terminal.output);
+  };
+}
 
 // Runs the corrective repair for one document. The default enqueues a
 // correct_document AI job (enqueue-only — the corrective proposal is drafted and
 // gated later, on job completion, via completeJob); tests inject a spy/fake.
 export type CorrectDocumentFn = (ctx: AppContext, input: CorrectDocumentJobInput) => Promise<void>;
 
-const defaultCorrectDocument: CorrectDocumentFn = async (ctx, input) => {
-  await ctx.jobs.create("correct_document", {
-    path: input.path,
-    content: input.content,
-    claims: input.claims,
-    sources: input.sources,
-    destinationId: input.destinationId,
-    flowId: input.flowId,
-    provider: ctx.config.get().aiProvider
-  } satisfies CorrectDocumentJobInput & { provider: AiProviderName });
-};
+// Records a shed path so the caller can leave the doc re-checkable (not stamp it
+// as checked). The enqueue-only lenses call the *Document Fns for their effect,
+// not their return value, so a shed is signalled out-of-band via this shared set.
+function makeDefaultCorrectDocument(budget: FanoutBudget, deferredPaths: Set<string>): CorrectDocumentFn {
+  return async (ctx, input) => {
+    const admission = await budget.admit("correct_document", {
+      path: input.path,
+      content: input.content,
+      claims: input.claims,
+      sources: input.sources,
+      destinationId: input.destinationId,
+      flowId: input.flowId,
+      provider: ctx.config.get().aiProvider
+    } satisfies CorrectDocumentJobInput & { provider: AiProviderName });
+    if (!admission.ok) {
+      deferredPaths.add(input.path);
+    }
+  };
+}
 
-// Default dedupe: enqueue a dedupe_documents AI job (enqueue-only — the corrective
-// proposal is drafted and gated later, on job completion). Tests inject a spy/fake.
-const defaultDedupeDocument: DedupeDocumentFn = async (ctx, input) => {
-  await ctx.jobs.create("dedupe_documents", {
-    path: input.path,
-    content: input.content,
-    neighbours: input.neighbours,
-    destinationId: input.destinationId,
-    flowId: input.flowId,
-    provider: ctx.config.get().aiProvider
-  } satisfies DedupeDocumentsJobInput & { provider: AiProviderName });
-};
+// Default dedupe: enqueue a dedupe_documents AI job through the budget. Tests
+// inject a spy/fake.
+function makeDefaultDedupeDocument(budget: FanoutBudget, deferredPaths: Set<string>): DedupeDocumentFn {
+  return async (ctx, input) => {
+    const admission = await budget.admit("dedupe_documents", {
+      path: input.path,
+      content: input.content,
+      neighbours: input.neighbours,
+      destinationId: input.destinationId,
+      flowId: input.flowId,
+      provider: ctx.config.get().aiProvider
+    } satisfies DedupeDocumentsJobInput & { provider: AiProviderName });
+    if (!admission.ok) {
+      deferredPaths.add(input.path);
+    }
+  };
+}
 
-// Default split: enqueue a split_document AI job (enqueue-only - the corrective
-// proposal is drafted and gated later, on job completion).
-const defaultSplitDocument: SplitDocumentFn = async (ctx, input) => {
-  await ctx.jobs.create("split_document", {
-    path: input.path,
-    content: input.content,
-    neighbours: input.neighbours,
-    destinationId: input.destinationId,
-    flowId: input.flowId,
-    provider: ctx.config.get().aiProvider
-  } satisfies SplitDocumentJobInput & { provider: AiProviderName });
-};
+// Default split: enqueue a split_document AI job through the budget.
+function makeDefaultSplitDocument(budget: FanoutBudget, deferredPaths: Set<string>): SplitDocumentFn {
+  return async (ctx, input) => {
+    const admission = await budget.admit("split_document", {
+      path: input.path,
+      content: input.content,
+      neighbours: input.neighbours,
+      destinationId: input.destinationId,
+      flowId: input.flowId,
+      provider: ctx.config.get().aiProvider
+    } satisfies SplitDocumentJobInput & { provider: AiProviderName });
+    if (!admission.ok) {
+      deferredPaths.add(input.path);
+    }
+  };
+}
 
 export type ImproveDocumentFn = (ctx: AppContext, input: ImproveDocumentJobInput) => Promise<void>;
 
-const defaultImproveDocument: ImproveDocumentFn = async (ctx, input) => {
-  await ctx.jobs.create("improve_document", {
-    path: input.path,
-    content: input.content,
-    sources: input.sources,
-    destinationId: input.destinationId,
-    flowId: input.flowId,
-    provider: ctx.config.get().aiProvider
-  } satisfies ImproveDocumentJobInput & { provider: AiProviderName });
-};
+// Default improve: enqueue an improve_document AI job through the budget. On a
+// shed the path is recorded so runImprovePatrol leaves the doc unstamped (thus
+// re-checkable), mirroring an enqueue failure.
+function makeDefaultImproveDocument(budget: FanoutBudget, deferredPaths: Set<string>): ImproveDocumentFn {
+  return async (ctx, input) => {
+    const admission = await budget.admit("improve_document", {
+      path: input.path,
+      content: input.content,
+      sources: input.sources,
+      destinationId: input.destinationId,
+      flowId: input.flowId,
+      provider: ctx.config.get().aiProvider
+    } satisfies ImproveDocumentJobInput & { provider: AiProviderName });
+    if (!admission.ok) {
+      deferredPaths.add(input.path);
+    }
+  };
+}
 
 function verifyFindingIntentTraces(findings: VerifyFinding[], flowId: string | undefined): ChangeIntentTrace[] {
   const createdAt = new Date().toISOString();
@@ -265,12 +301,20 @@ export async function runFixPatrol(
     correctDocument?: CorrectDocumentFn;
     dedupeDocument?: DedupeDocumentFn;
     splitDocument?: SplitDocumentFn;
+    // Injected so a test can pin the per-tick fan-out budget; production creates
+    // one per tick (#288b). The default* enqueue closures admit through it.
+    budget?: FanoutBudget;
   } = {}
 ): Promise<FixPatrolOutcome> {
-  const verifyDocument = deps.verifyDocument ?? defaultVerifyDocument;
-  const correctDocument = deps.correctDocument ?? defaultCorrectDocument;
-  const dedupeDocument = deps.dedupeDocument ?? defaultDedupeDocument;
-  const splitDocument = deps.splitDocument ?? defaultSplitDocument;
+  // One fan-out budget for the whole tick, gating every metered enqueue (verify +
+  // correct/dedupe/split). deferredPaths collects docs whose enqueue-only fan-out
+  // was shed so they are left unstamped (re-checkable) rather than gated.
+  const budget = deps.budget ?? createFanoutBudget(ctx, "correctness_patrol", options.flowId);
+  const deferredPaths = new Set<string>();
+  const verifyDocument = deps.verifyDocument ?? makeDefaultVerifyDocument(budget);
+  const correctDocument = deps.correctDocument ?? makeDefaultCorrectDocument(budget, deferredPaths);
+  const dedupeDocument = deps.dedupeDocument ?? makeDefaultDedupeDocument(budget, deferredPaths);
+  const splitDocument = deps.splitDocument ?? makeDefaultSplitDocument(budget, deferredPaths);
   const scope = resolveScope(ctx, options.flowId);
   if (!scope.ok) {
     return scope;
@@ -379,11 +423,20 @@ export async function runFixPatrol(
   // content/source hash ONLY for docs the verify lens actually checked this tick —
   // so a doc whose verify failed (or was gated/covered) keeps its prior verified
   // hash (or none) and stays re-checkable rather than being gated on an unverified
-  // state. See buildPatrolStamps.
+  // state. See buildPatrolStamps. A doc whose corrective/dedupe/split enqueue was
+  // shed by the fan-out budget (deferredPaths) is pulled back out of the checked
+  // set the same way: leaving it unstamped keeps its fan-out re-checkable next tick
+  // instead of gating a doc whose corrective work never got enqueued.
+  const stampedChecked = new Set(checkedPaths);
+  for (const path of deferredPaths) {
+    stampedChecked.delete(path);
+  }
   await ctx.stores.patrol.stampChecked(
     options.flowId,
-    buildPatrolStamps(selected, new Set(checkedPaths), contentHashByPath, sourcesHash)
+    buildPatrolStamps(selected, stampedChecked, contentHashByPath, sourcesHash)
   );
+  budget.finish();
+  const fanout = budget.snapshot();
 
   const run = await ctx.stores.maintenanceRuns.record({
     taskType: "correctness_patrol",
@@ -402,7 +455,8 @@ export async function runFixPatrol(
       skipped,
       gated,
       findings,
-      intentTraces: verifyFindingIntentTraces(findings, options.flowId)
+      intentTraces: verifyFindingIntentTraces(findings, options.flowId),
+      fanout
     }
   });
   logger.info(
@@ -434,9 +488,11 @@ export async function runFixPatrol(
 export async function runImprovePatrol(
   ctx: AppContext,
   options: { flowId?: string; trigger: MaintenanceRun["trigger"] },
-  deps: { improveDocument?: ImproveDocumentFn } = {}
+  deps: { improveDocument?: ImproveDocumentFn; budget?: FanoutBudget } = {}
 ): Promise<ImprovePatrolOutcome> {
-  const improveDocument = deps.improveDocument ?? defaultImproveDocument;
+  const budget = deps.budget ?? createFanoutBudget(ctx, "editorial_patrol", options.flowId);
+  const deferredPaths = new Set<string>();
+  const improveDocument = deps.improveDocument ?? makeDefaultImproveDocument(budget, deferredPaths);
   const scope = resolveScope(ctx, options.flowId);
   if (!scope.ok) {
     return scope;
@@ -493,6 +549,11 @@ export async function runImprovePatrol(
         destinationId: document.repositoryId,
         flowId: options.flowId
       });
+      // A fan-out shed leaves the doc in deferredPaths — treat it exactly like a
+      // failed enqueue: unrecorded, so it stays re-checkable next tick.
+      if (deferredPaths.has(document.path)) {
+        continue;
+      }
       // The scan was enqueued, so this doc was processed this tick: record its hash so
       // an unchanged doc is gated next time. A failed enqueue leaves it unrecorded and
       // thus re-checkable.
@@ -503,6 +564,8 @@ export async function runImprovePatrol(
       logger.warn({ path: document.path, err: message }, "improve-patrol: skipping document");
     }
   }
+  budget.finish();
+  const fanout = budget.snapshot();
 
   await ctx.stores.patrol.stampChecked(
     options.flowId,
@@ -519,7 +582,15 @@ export async function runImprovePatrol(
       `${enqueuedCount} improve scan${enqueuedCount === 1 ? "" : "s"}` +
       (gated > 0 ? ` · ${gated} unchanged` : "") +
       (skipped > 0 ? ` · ${skipped} covered by open PRs` : ""),
-    details: { universeCount: universe.length, selectedCount: selected.length, selected, skipped, gated, enqueuedCount }
+    details: {
+      universeCount: universe.length,
+      selectedCount: selected.length,
+      selected,
+      skipped,
+      gated,
+      enqueuedCount,
+      fanout
+    }
   });
   logger.info(
     {

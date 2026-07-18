@@ -60,6 +60,28 @@ describe("loadConfig — valid configs", () => {
     assert.equal(config.questionnaires.maxInflight, 3);
     assert.equal(config.questionnaires.reconcileCandidates, 3);
     assert.equal(config.questionnaires.reconcileEnabled, true);
+    // Rate-limit / AI capacity defaults, incl. the maintenance fan-out knobs (#288b).
+    assert.equal(config.rateLimit.enabled, true);
+    assert.equal(config.rateLimit.aiMaxInflightJobs, 20);
+    assert.equal(config.rateLimit.aiInteractiveReservedJobs, 5);
+    // Default 12 <= the maintenance ceiling (limit - reserved = 15).
+    assert.equal(config.rateLimit.maintenanceMaxAiJobsPerTick, 12);
+    assert.equal(config.rateLimit.maintenanceFanoutAlertDeferred, 20);
+  });
+
+  it("honours the maintenance fan-out overrides (#288b)", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      MAINTENANCE_MAX_AI_JOBS_PER_TICK: "4",
+      MAINTENANCE_FANOUT_ALERT_DEFERRED: "50"
+    });
+    assert.equal(config.rateLimit.maintenanceMaxAiJobsPerTick, 4);
+    assert.equal(config.rateLimit.maintenanceFanoutAlertDeferred, 50);
+  });
+
+  it("rejects a non-positive maintenance fan-out budget rather than silently defaulting", () => {
+    assertThrowsNaming({ ...minimalEnv, MAINTENANCE_MAX_AI_JOBS_PER_TICK: "0" }, "MAINTENANCE_MAX_AI_JOBS_PER_TICK");
+    assertThrowsNaming({ ...minimalEnv, MAINTENANCE_FANOUT_ALERT_DEFERRED: "-1" }, "MAINTENANCE_FANOUT_ALERT_DEFERRED");
   });
 
   it("honours FLOW_ROUTER_* overrides and falls back to defaults on invalid/out-of-range values", () => {

@@ -25,6 +25,7 @@ import {
 } from "./gap-assignment.js";
 import { selectRetainingChildOnSplit, selectSurvivingClusterOnMerge } from "./gap-reconciler-lineage.js";
 import { sharedTargets } from "./reconcile-gate.js";
+import { createFanoutBudget, type FanoutBudget, type FanoutBudgetCounts } from "../platform/maintenance-fanout.js";
 
 export interface ReconcilerDeps {
   // Injected so unit tests stay offline. Defaults to the real GitHub lookup.
@@ -76,6 +77,10 @@ interface GapReconcileRunDetails extends Record<string, unknown> {
   // judged at the last reshape (issue #168). Distinct from skippedModelWork, which
   // covers the whole clustering step being gated out by an unchanged revision.
   reshapeSkipped: boolean;
+  // The per-tick maintenance fan-out budget summary (#288b): how many AI enqueues
+  // this tick attempted, admitted, and shed (by budget vs capacity). Undefined on
+  // a tick that never reached the model work (revision gate short-circuit).
+  fanout?: FanoutBudgetCounts;
 }
 
 // Resolved cluster->flow lookups, reused across a single run so each cluster's
@@ -106,10 +111,15 @@ export async function reconcileGaps(
   // manual "Run now" path, since both funnel through here. Only the run that holds
   // the lock records a MaintenanceRun; a skipped overlapping run did no work.
   const result = await withFlowRunLock(ctx.pool, "process_gaps_to_pull_requests", flowId, async () => {
+    // One fan-out budget for the whole tick, created AFTER the run lock so a
+    // skipped overlapping run spends nothing. Every metered enqueue this tick (the
+    // reshape job and the autonomous cluster drafts) admits through it (#288b).
+    const budget = createFanoutBudget(ctx, "process_gaps_to_pull_requests", flowId);
     let details: GapReconcileRunDetails | undefined;
     try {
-      details = await reconcileGapsInner(ctx, flowId, deps);
+      details = await reconcileGapsInner(ctx, flowId, deps, budget);
     } catch (error) {
+      budget.finish();
       await ctx.stores.maintenanceRuns.record({
         taskType: "process_gaps_to_pull_requests",
         flowId,
@@ -117,17 +127,18 @@ export async function reconcileGaps(
         status: "failed",
         summary: `reconcile failed for flow ${flowId ?? "(default)"}`,
         error: error instanceof Error ? error.message : String(error),
-        details: details ?? {}
+        details: { ...(details ?? {}), fanout: budget.snapshot() }
       });
       throw error;
     }
+    budget.finish();
     await ctx.stores.maintenanceRuns.record({
       taskType: "process_gaps_to_pull_requests",
       flowId,
       trigger: "scheduled",
       status: "completed",
       summary: `reconciled flow ${flowId ?? "(default)"}`,
-      details: details ?? {}
+      details: { ...details, fanout: budget.snapshot() }
     });
   });
   if (!result.acquired) {
@@ -141,7 +152,8 @@ export async function reconcileGaps(
 async function reconcileGapsInner(
   ctx: AppContext,
   flowId: string | undefined,
-  deps: ReconcilerDeps = DEFAULT_DEPS
+  deps: ReconcilerDeps = DEFAULT_DEPS,
+  budget: FanoutBudget
 ): Promise<GapReconcileRunDetails> {
   const flowLabel = flowId ?? "default";
   const clusterFlowCache: ClusterFlowCache = new Map();
@@ -198,7 +210,7 @@ async function reconcileGapsInner(
       { flowLabel, processed, catalogRevision },
       "gap reconciler: gap catalog advanced; reconciling clusters"
     );
-    const clustering = await reconcileClusters(ctx, flowId);
+    const clustering = await reconcileClusters(ctx, flowId, budget);
     details.clustersCreated = clustering.clustersCreated;
     details.mergeDecisions = clustering.mergeDecisions;
     details.splitDecisions = clustering.splitDecisions;
@@ -412,7 +424,8 @@ async function freezeClusterForProposal(ctx: AppContext, proposal: Proposal): Pr
 // changes. Everything is filtered to `flowId` so a reshape can never mix flows.
 async function reconcileClusters(
   ctx: AppContext,
-  flowId: string | undefined
+  flowId: string | undefined,
+  budget: FanoutBudget
 ): Promise<
   Pick<
     GapReconcileRunDetails,
@@ -501,7 +514,7 @@ async function reconcileClusters(
         "gap reconciler: active cluster composition unchanged since last reshape; skipping propose→critic"
       );
     }
-    const reshape = details.reshapeSkipped ? undefined : await requestReshape(ctx, active, flowId, flowLabel);
+    const reshape = details.reshapeSkipped ? undefined : await requestReshape(ctx, active, flowId, flowLabel, budget);
     if (reshape) {
       // 3) Apply only the critic-confirmed changes, recording every decision
       // (confirmed or not) so it's inspectable in the UI, not just in the logs.
@@ -598,7 +611,7 @@ async function reconcileClusters(
   // so a fresh cluster becomes a pull request autonomously instead of waiting for
   // a manual trigger. This is the autonomous gap->PR step the on-demand pipeline
   // used to do.
-  const draftOutcome = await draftProposalsForUncoveredClusters(ctx, flowId);
+  const draftOutcome = await draftProposalsForUncoveredClusters(ctx, flowId, budget);
   details.proposalsDrafted = draftOutcome.drafted;
   details.draftsDeferred = draftOutcome.deferred > 0;
   return details;
@@ -820,7 +833,8 @@ const MAX_DRAFTS_PER_TICK = 10;
 // and how many uncovered clusters were left undrafted by the cap (deferred).
 async function draftProposalsForUncoveredClusters(
   ctx: AppContext,
-  flowId: string | undefined
+  flowId: string | undefined,
+  budget: FanoutBudget
 ): Promise<{ drafted: number; deferred: number }> {
   const active = await ctx.stores.gapClusters.listActiveClustersForFlow(flowId);
   const proposals = await ctx.stores.proposals.list(500);
@@ -838,7 +852,7 @@ async function draftProposalsForUncoveredClusters(
 
   const uncovered = active.filter((cluster) => !coveredClusterIds.has(cluster.id));
   const toDraft = uncovered.slice(0, MAX_DRAFTS_PER_TICK);
-  const deferred = uncovered.length - toDraft.length;
+  let deferred = uncovered.length - toDraft.length;
   if (deferred > 0) {
     // Loud on purpose: reaching the cap means reshape did not collapse the singleton
     // set the way it should have — the fan-out signature. Surface it so it's alertable.
@@ -855,14 +869,34 @@ async function draftProposalsForUncoveredClusters(
   }
 
   let drafted = 0;
+  // Deferred = the cap overflow above PLUS any cluster the outer fan-out budget
+  // sheds (budget/capacity). Once the budget sheds, every remaining cluster this
+  // tick is deferred too — the shed persists for the tick — so we stop attempting
+  // and count the rest. draftsDeferred > 0 holds the processed revision, so the
+  // next tick re-enters and drafts the remainder (reshape is composition-hash-
+  // skipped on re-entry, so deferral spends no extra model work).
+  let budgetShed = false;
   for (const cluster of toDraft) {
+    if (budgetShed) {
+      deferred += 1;
+      continue;
+    }
     try {
-      const outcome = await gapsService.draftFromCluster(ctx, cluster.id, {});
+      const outcome = await gapsService.draftFromCluster(ctx, cluster.id, {}, { budget });
       if (outcome.ok) {
         drafted += 1;
         logger.info(
           { flowId: flowId ?? "default", clusterId: cluster.id, clusterTitle: cluster.title, jobId: outcome.job.id },
           "gap reconciler: enqueued draft for cluster"
+        );
+      } else if (outcome.code === "capacity") {
+        // Not a real drafting failure — the tick's fan-out budget/admission is
+        // spent. Defer this cluster and every remaining one to a later tick.
+        budgetShed = true;
+        deferred += 1;
+        logger.warn(
+          { flowId: flowId ?? "default", clusterId: cluster.id },
+          "gap reconciler: fan-out budget/capacity exhausted; deferring remaining cluster drafts to a later tick"
         );
       } else {
         logger.warn(
@@ -985,7 +1019,8 @@ async function requestReshape(
   ctx: AppContext,
   active: GapClusterRecord[],
   flowId: string | undefined,
-  flowLabel: string
+  flowLabel: string,
+  budget: FanoutBudget
 ): Promise<Reshape | undefined> {
   // Attach scope grounding per cluster (persona + best retrieval relevance + closest
   // snippets, via inline retrieval against the flow's destination) so the model can
@@ -1011,7 +1046,11 @@ async function requestReshape(
   let terminal;
   try {
     terminal = await runJobToCompletion(ctx, "reconcile_gap_clusters", input, {
-      reuseKey: reconcileGapClustersReuseKey
+      reuseKey: reconcileGapClustersReuseKey,
+      // A reuseKey hit waits on the in-flight reshape (no budget spent); only a
+      // genuine enqueue admits through the fan-out budget. A shed throws and is
+      // caught below as "skip reshape this run" (#288b).
+      admission: { budget }
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "reshape job failed";

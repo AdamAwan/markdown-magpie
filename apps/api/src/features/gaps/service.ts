@@ -1,5 +1,6 @@
 import type { GapCandidate, PersistedGapCluster } from "@magpie/core";
 import type { AppContext } from "../../context.js";
+import type { FanoutBudget } from "../../platform/maintenance-fanout.js";
 import { collectOpenPullRequestContext, draftFromGaps } from "../proposals/service.js";
 import { reconcileGaps as runReconcileGaps } from "../../scheduling/gap-reconciler.js";
 
@@ -56,7 +57,11 @@ export async function listClusters(ctx: AppContext, limit: number): Promise<Pers
 export async function draftFromCluster(
   ctx: AppContext,
   clusterId: string,
-  overrides: { targetPath?: string; destinationId?: string }
+  overrides: { targetPath?: string; destinationId?: string },
+  // The maintenance fan-out budget (#288b), passed only by the reconciler's
+  // autonomous drafting path. When present the draft enqueue admits through it and
+  // a shed returns { ok:false, code:"capacity" }; the on-demand path omits it.
+  admission?: { budget: FanoutBudget }
 ) {
   const cluster = await ctx.stores.gapClusters.getCluster(clusterId);
   if (!cluster || cluster.status !== "active") {
@@ -78,7 +83,8 @@ export async function draftFromCluster(
     targetPath: overrides.targetPath,
     destinationId: overrides.destinationId,
     openPullRequests,
-    gapClusterId: clusterId
+    gapClusterId: clusterId,
+    ...(admission ? { admission } : {})
   });
   if (!outcome.ok) {
     return outcome;

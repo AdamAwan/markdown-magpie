@@ -47,6 +47,7 @@ import {
 } from "../../platform/repositories.js";
 import { projectSourceDescriptors } from "../../platform/source-descriptors.js";
 import { type AiProviderName } from "../../platform/providers.js";
+import type { FanoutBudget } from "../../platform/maintenance-fanout.js";
 import { buildAnswerQuestionInput, recordAnswerQuestionLog } from "../../platform/answer-question.js";
 import { logger } from "../../logger.js";
 import { advisoryNote, collectAdvisoryHeadings, flagAdvisoryDraft } from "./register-check.js";
@@ -1252,6 +1253,11 @@ export async function draftFromGaps(
     // The cluster this draft belongs to, threaded onto the job so the completed
     // proposal links back to it. Absent on the on-demand path.
     gapClusterId?: string;
+    // The maintenance fan-out budget (#288b). Present only on the autonomous
+    // gap→PR path (the reconciler): the draft enqueue admits through it, and a
+    // shed returns { ok:false, code:"capacity" } so the caller defers the cluster.
+    // Absent on the on-demand HTTP path, which enqueues unconditionally.
+    admission?: { budget: FanoutBudget };
   } = {}
 ) {
   const uniqueRequested = [...new Set(rawSummaries.map((value) => value.trim()).filter((value) => value.length > 0))];
@@ -1349,10 +1355,22 @@ export async function draftFromGaps(
     expectedOutput: "markdown_proposal"
   };
 
-  const job = await ctx.jobs.create("draft_markdown_proposal", {
+  const jobInput = {
     ...input,
     triggeringQuestionIds: questionIds
-  });
+  };
+  // Autonomous (reconciler) path: admit through the fan-out budget; a shed defers
+  // this cluster to a later tick. On-demand HTTP path: enqueue unconditionally.
+  if (overrides.admission) {
+    const result = await overrides.admission.budget.admit("draft_markdown_proposal", jobInput);
+    if (!result.ok) {
+      logger.info({ label, reason: result.reason }, "draft_markdown_proposal deferred by maintenance fan-out budget");
+      return { ok: false as const, code: "capacity" as const };
+    }
+    logger.info({ jobId: result.job.id, label }, "enqueued draft_markdown_proposal job");
+    return { ok: true as const, job: result.job };
+  }
+  const job = await ctx.jobs.create("draft_markdown_proposal", jobInput);
 
   logger.info({ jobId: job.id, label }, "enqueued draft_markdown_proposal job");
   return { ok: true as const, job };

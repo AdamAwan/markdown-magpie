@@ -639,6 +639,53 @@ describe("reconcileGaps autonomous drafting", () => {
       "once drafting fully drains, the revision advances and the gate closes"
     );
   });
+
+  it("holds the processed revision when the fan-out budget/capacity sheds drafting (#288b)", async () => {
+    const ctx = makeTestContext();
+    // Every atomic admission this tick is rejected (global ceiling full): the
+    // reshape is skipped and every cluster draft is shed by capacity.
+    ctx.jobs.createIfAdmitted = async () => ({ admitted: false, inFlight: 99 });
+
+    for (let i = 0; i < 3; i += 1) {
+      const log = await ctx.stores.questionLogs.record({
+        question: `q${i}?`,
+        chatProvider: "codex",
+        retrievedSectionIds: []
+      });
+      await ctx.stores.questionLogs.recordManualGap(log.id, `Distinct topic ${i}`);
+    }
+
+    await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
+
+    // Clustering still ran (no AI), but not one draft was admitted.
+    assert.ok((await ctx.stores.gapClusters.listActiveClusters()).length >= 1, "clusters were created without AI");
+    assert.equal(
+      (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length,
+      0,
+      "all drafts shed by capacity"
+    );
+
+    // draftsDeferred > 0 holds the processed revision so the next tick re-enters.
+    const catalogRevision = await ctx.stores.questionLogs.getGapCatalogRevision(undefined);
+    assert.notEqual(
+      await ctx.stores.gapClusters.getProcessedRevision(undefined),
+      catalogRevision,
+      "a capacity-shed drafting tick holds the processed revision so a later tick retries"
+    );
+
+    // The tick records the fan-out shedding for the audit.
+    const runs = await ctx.stores.maintenanceRuns.list({ taskType: "process_gaps_to_pull_requests", limit: 10 });
+    const fanout = (runs[0].details as { fanout?: { rejectedByCapacity: number } }).fanout;
+    assert.ok((fanout?.rejectedByCapacity ?? 0) > 0, "capacity rejections are counted in the fan-out summary");
+
+    // With capacity restored, a later tick drains the deferred drafts and advances.
+    delete (ctx.jobs as { createIfAdmitted?: unknown }).createIfAdmitted;
+    await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
+    assert.ok(
+      (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length >= 1,
+      "the deferred drafts drain once capacity frees up"
+    );
+  });
 });
 
 describe("reconcileGaps in-flight draft coverage", () => {
@@ -922,7 +969,18 @@ describe("reconcileGaps audit", () => {
       proposalsDrafted: 0,
       publicationActionsDrained: 0,
       skippedModelWork: true,
-      reshapeSkipped: false
+      reshapeSkipped: false,
+      // The per-tick fan-out budget summary (#288b): nothing enqueued this no-op tick.
+      fanout: {
+        taskType: "process_gaps_to_pull_requests",
+        flowId: "default",
+        attempted: 0,
+        enqueued: 0,
+        deferredByBudget: 0,
+        rejectedByCapacity: 0,
+        budget: 12,
+        runaway: false
+      }
     });
   });
 

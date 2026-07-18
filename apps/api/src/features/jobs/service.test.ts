@@ -25,8 +25,10 @@ import {
   retryJob,
   runJobToCompletion,
   strippedOutputKeyPaths,
-  waitForJob
+  waitForJob,
+  MaintenanceShedError
 } from "./service.js";
+import { createFanoutBudget } from "../../platform/maintenance-fanout.js";
 
 const answerInput = (provider: "codex" | "openai-compatible" = "codex") => ({
   provider,
@@ -339,6 +341,54 @@ test("runJobToCompletion creates a new job when no in-flight job matches reuseKe
   // The two requests hash to different reuseKeys (different provider), so the
   // second call must not reuse the first job — it enqueues its own.
   assert.equal((await listJobs(ctx, { type: "answer_question" })).total, 2);
+});
+
+test("runJobToCompletion with an admission budget sheds a new create → throws, enqueues nothing (#288b)", async () => {
+  const ctx = makeTestContext();
+  // A per-tick budget of 0 sheds the very first create with budget_exhausted.
+  ctx.settings.rateLimit.maintenanceMaxAiJobsPerTick = 0;
+  const budget = createFanoutBudget(ctx, "process_gaps_to_pull_requests", undefined);
+
+  await assert.rejects(
+    () =>
+      runJobToCompletion(ctx, "reconcile_gap_clusters", { clusters: [], provider: "codex" }, { admission: { budget } }),
+    (error: unknown) => {
+      assert.ok(error instanceof MaintenanceShedError);
+      assert.equal(error.reason, "budget_exhausted");
+      assert.equal(error.jobType, "reconcile_gap_clusters");
+      return true;
+    }
+  );
+  // Nothing was enqueued — a shed is a pure no-op on the queue.
+  assert.equal((await listJobs(ctx, { type: "reconcile_gap_clusters" })).total, 0);
+  assert.equal(budget.snapshot().enqueued, 0);
+  assert.equal(budget.snapshot().deferredByBudget, 1);
+});
+
+test("runJobToCompletion admission runs only on create — a reuseKey hit spends no budget (#288b)", async () => {
+  const ctx = makeTestContext();
+  // Budget 0 would shed any create; the reuse path must never consult it.
+  ctx.settings.rateLimit.maintenanceMaxAiJobsPerTick = 0;
+  const budget = createFanoutBudget(ctx, "process_gaps_to_pull_requests", undefined);
+
+  const preexisting = await ctx.jobs.create("reconcile_gap_clusters", { clusters: [], provider: "codex" });
+  await claimJob(ctx, "worker", ["codex"]); // in-flight (active), so it is reusable
+
+  // reuseKey matches the in-flight job, so runJobToCompletion waits on it instead
+  // of creating — admission is bypassed entirely. The job never completes, so the
+  // bounded wait times out and the orphan is cancelled (existing #162 behaviour).
+  const result = await runJobToCompletion(
+    ctx,
+    "reconcile_gap_clusters",
+    { clusters: [], provider: "codex" },
+    { reuseKey: () => "shared", admission: { budget } }
+  );
+
+  assert.equal(result.id, preexisting.id);
+  // No budget/capacity was spent, and no second job was enqueued.
+  assert.equal(budget.snapshot().attempted, 0);
+  assert.equal(budget.snapshot().enqueued, 0);
+  assert.equal((await listJobs(ctx, { type: "reconcile_gap_clusters" })).total, 1);
 });
 
 test("display projection recursively redacts secrets without mutating stored input", () => {

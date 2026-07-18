@@ -17,6 +17,7 @@ import { defaultDestinationId, selectFlow } from "../../platform/repositories.js
 import type { ConfiguredKnowledgeRepository } from "../../stores/knowledge-repositories.js";
 import { normalizeRelativePath } from "../../platform/paths.js";
 import { type AiProviderName } from "../../platform/providers.js";
+import { createFanoutBudget, type FanoutBudget } from "../../platform/maintenance-fanout.js";
 import type { ProposalInput } from "../../stores/proposal-store.js";
 import * as foldService from "../../scheduling/fold.js";
 import { logger } from "../../logger.js";
@@ -77,10 +78,14 @@ export async function triggerSourceSyncRun(
         Boolean(source) && source!.kind === "git" && Boolean(source!.url)
     );
 
+  // One fan-out budget for the whole tick: every source's plan-generation enqueue
+  // (metered AI) admits through it, so a many-source flow can't fan out past the
+  // per-tick budget or the global non-interactive ceiling (#288b).
+  const budget = createFanoutBudget(ctx, "source_change_sync", flowId);
   const runs: SourceSyncRun[] = [];
   for (const source of sources) {
     try {
-      const run = await syncGitSource(ctx, { flowId, destinationId, source, trigger: options.trigger });
+      const run = await syncGitSource(ctx, { flowId, destinationId, source, trigger: options.trigger, budget });
       if (run) {
         runs.push(run);
       }
@@ -89,6 +94,7 @@ export async function triggerSourceSyncRun(
       logger.warn({ sourceId: source.id, flowId: flowId ?? "default", err: message }, "source-change sync failed");
     }
   }
+  budget.finish();
 
   return runs;
 }
@@ -100,9 +106,10 @@ async function syncGitSource(
     destinationId: string | undefined;
     source: ConfiguredKnowledgeRepository;
     trigger: SourceSyncRunTrigger;
+    budget: FanoutBudget;
   }
 ): Promise<SourceSyncRun | undefined> {
-  const { flowId, destinationId, source, trigger } = args;
+  const { flowId, destinationId, source, trigger, budget } = args;
   const store = ctx.stores.sourceSync;
 
   const checkout = await ensureGitCheckout({
@@ -242,7 +249,19 @@ async function syncGitSource(
     provider: ctx.config.get().aiProvider
   } satisfies SourceChangeSyncJobInput & { provider: AiProviderName };
 
-  const job = await ctx.jobs.create("sync_source_changes_generate_plan", input);
+  // Admit the plan-generation enqueue through the tick's fan-out budget (#288b).
+  // A shed DEFERS this source: no run is recorded and the baseline is NOT advanced,
+  // so the next tick re-diffs the same commit and retries — the sheddable,
+  // re-enterable deferral the patrols/reconciler use.
+  const admission = await budget.admit("sync_source_changes_generate_plan", input);
+  if (!admission.ok) {
+    logger.info(
+      { sourceId: source.id, flowId: flowId ?? "default", reason: admission.reason },
+      "source-change sync: plan job deferred by maintenance fan-out budget; baseline held, will retry next tick"
+    );
+    return undefined;
+  }
+  const job = admission.job;
   const run = await store.createRun({
     flowId,
     destinationId,

@@ -32,10 +32,27 @@ const BASE_POLICY = {
   deleteAfterSeconds: 30 * DAY
 } as const;
 
-function policy(providerWork: boolean, expireInSeconds: number): Readonly<JobPolicy> {
+// The interactive class of AI work: jobs a live caller is waiting on right now —
+// POST /api/ask (answer_question, including verify_gap_closure's re-asks, which
+// a blocked orchestrator bounded-waits on) and the console's flow outline
+// (outline_flow_seed). Every other AI_JOB_TYPES member is maintenance fan-out
+// that nobody is sitting in front of. This split drives the two QoS levers for
+// #240: brokers probe interactive queues first when a watcher claims, and the
+// API's AI capacity gate reserves interactive headroom at enqueue time. Declared
+// here (above `policy`) so retry classification (#288b) can key off it at
+// definition time; re-exported and asserted equal in catalog.test.ts.
+export const INTERACTIVE_AI_JOB_TYPES = ["answer_question", "outline_flow_seed"] as const satisfies readonly JobType[];
+
+const interactiveJobTypes = new Set<JobType>(INTERACTIVE_AI_JOB_TYPES);
+
+function policy(providerWork: boolean, maintenanceAi: boolean, expireInSeconds: number): Readonly<JobPolicy> {
   return Object.freeze({
     ...BASE_POLICY,
-    retryLimit: providerWork ? 3 : 2,
+    // Retry budget (#288b): interactive AI keeps 3 (a live caller is waiting, and
+    // a transient blip should not surface as a hard failure); maintenance AI drops
+    // to 2 so a runaway patrol cannot multiply metered generations 3x on retries;
+    // non-provider work stays 2.
+    retryLimit: providerWork ? (maintenanceAi ? 2 : 3) : 2,
     retryDelay: providerWork ? 15 : 30,
     retryDelayMax: providerWork ? 300 : 600,
     expireInSeconds
@@ -74,6 +91,9 @@ function define(
   const field = providerWork ? "provider" : fanOut ? spec.field : undefined;
   const fallback = fanOut ? spec.default : undefined;
   const multi = capabilities.length > 1;
+  // Maintenance AI = provider-routed work that is NOT interactive. Drives the
+  // retry-2 budget (#288b). Non-provider work is never maintenance AI.
+  const maintenanceAi = providerWork && !interactiveJobTypes.has(type);
 
   const requiredCapability = (input: unknown): JobCapability => {
     if (field === undefined) {
@@ -97,7 +117,7 @@ function define(
     type,
     inputSchema,
     outputSchema,
-    policy: policy(providerWork, expireInSeconds),
+    policy: policy(providerWork, maintenanceAi, expireInSeconds),
     capabilities,
     repairable: REPAIRABLE_JOB_TYPES.has(type),
     requiredCapability,
@@ -348,17 +368,6 @@ export function isAiJobType(type: JobType): boolean {
 export function isRepairableJobType(type: JobType): boolean {
   return jobDefinition(type).repairable;
 }
-
-// The interactive class of AI work: jobs a live caller is waiting on right now —
-// POST /api/ask (answer_question, including verify_gap_closure's re-asks, which
-// a blocked orchestrator bounded-waits on) and the console's flow outline
-// (outline_flow_seed). Every other AI_JOB_TYPES member is maintenance fan-out
-// that nobody is sitting in front of. This split drives the two QoS levers for
-// #240: brokers probe interactive queues first when a watcher claims, and the
-// API's AI capacity gate reserves interactive headroom at enqueue time.
-export const INTERACTIVE_AI_JOB_TYPES = ["answer_question", "outline_flow_seed"] as const satisfies readonly JobType[];
-
-const interactiveJobTypes = new Set<JobType>(INTERACTIVE_AI_JOB_TYPES);
 
 // Whether a job type belongs to the interactive class above. Used by brokers to
 // order queue probes during claim, so it must stay a pure catalog fact.
