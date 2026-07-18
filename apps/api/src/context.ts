@@ -132,6 +132,9 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
   const pgBossSchema = DEFAULT_PGBOSS_SCHEMA;
   const jobs: JobBroker = new PgBossJobBroker({
     connectionString: databaseUrl,
+    // The shared process-wide pool; createIfAdmitted checks out a dedicated client
+    // from it to hold the admission advisory lock. No new pool is created.
+    pool,
     schema: pgBossSchema,
     scheduleTimezone: config.jobs.scheduleTimezone
   });

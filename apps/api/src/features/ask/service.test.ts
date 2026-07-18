@@ -186,6 +186,44 @@ test("ask bounds a follow-up's prior turns to the most recent N", async () => {
   assert.equal(input.priorTurns.at(-1)?.question, "Q8", "the newest retained turn is last, oldest-first");
 });
 
+test("ask at saturation deletes the just-recorded log and throws 429 (no orphan)", async () => {
+  const ctx = makeTestContext();
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
+  // A single global slot, no reserve headroom — the first ask fills it, the
+  // second must be shed at the atomic gate.
+  ctx.settings.rateLimit.aiMaxInflightJobs = 1;
+  ctx.settings.rateLimit.aiInteractiveReservedJobs = 0;
+
+  await ask(ctx, "first question"); // occupies the only slot
+
+  const before = await ctx.stores.questionLogs.count();
+  await assert.rejects(
+    () => ask(ctx, "second question"),
+    (error: unknown) => {
+      assert.ok(error instanceof HttpError);
+      assert.equal(error.status, 429);
+      assert.equal(error.code, "ai_capacity");
+      assert.ok(error.headers?.["Retry-After"]);
+      return true;
+    }
+  );
+
+  // The rejected ask left no orphaned log and enqueued no second job.
+  assert.equal(await ctx.stores.questionLogs.count(), before, "the rejected ask's log was deleted");
+  assert.equal((await ctx.jobs.list({ type: "answer_question" })).total, 1, "no second job was enqueued");
+});
+
+test("ask returns the job created by the atomic admission gate", async () => {
+  const ctx = makeTestContext();
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
+  ctx.settings.rateLimit.aiMaxInflightJobs = 5;
+
+  const outcome = await ask(ctx, "How do I configure X?");
+  const { jobs } = await ctx.jobs.list({ type: "answer_question" });
+  assert.equal(jobs.length, 1);
+  assert.equal(outcome.job.id, jobs[0].id, "the returned job is the one createIfAdmitted enqueued");
+});
+
 test("ask rejects an unknown flow id with a 400", async () => {
   const ctx = makeTestContext();
   ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });

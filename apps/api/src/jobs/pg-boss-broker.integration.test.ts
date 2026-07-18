@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { JobError } from "@magpie/jobs";
+import type { JobError, JobType } from "@magpie/jobs";
 import { Pool } from "pg";
 import { PgBossJobBroker } from "./pg-boss-broker.js";
 
@@ -33,8 +33,10 @@ const providerError: JobError = {
 };
 
 test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegration }, async (t) => {
+  const pool = new Pool({ connectionString: databaseUrl });
   const broker = new PgBossJobBroker({
     connectionString: databaseUrl,
+    pool,
     schema,
     queuePolicyOverrides: {
       retryLimit: 1,
@@ -47,7 +49,6 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
   t.after(async () => {
     await broker.reset();
     await broker.stop();
-    const pool = new Pool({ connectionString: databaseUrl });
     try {
       await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
     } finally {
@@ -231,4 +232,96 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
 
   await broker.reset();
   assert.equal((await broker.list({})).total, 0);
+});
+
+// The atomic admission primitive (#288a). A separate schema keeps its own
+// throwaway state; each sub-test resets first.
+test("createIfAdmitted enforces the in-flight ceiling atomically", { skip: !runIntegration }, async (t) => {
+  const admissionSchema = `${schema}_admit`;
+  const pool = new Pool({ connectionString: databaseUrl });
+  const broker = new PgBossJobBroker({ connectionString: databaseUrl, pool, schema: admissionSchema });
+  // AI_JOB_TYPES / INTERACTIVE_AI_JOB_TYPES kept literal here so the reserve
+  // semantics under test are pinned to the real job classes.
+  const globalTypes: JobType[] = ["answer_question", "summarize_gap"];
+  const interactiveTypes: JobType[] = ["answer_question"];
+
+  t.before(() => broker.start());
+  t.beforeEach(() => broker.reset());
+  t.after(async () => {
+    await broker.reset();
+    await broker.stop();
+    try {
+      await pool.query(`DROP SCHEMA IF EXISTS "${admissionSchema}" CASCADE`);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  await t.test("admits up to the limit, rejects beyond it, and creates no row when rejected", async () => {
+    const capacity = { types: globalTypes, limit: 2 };
+
+    const first = await broker.createIfAdmitted("answer_question", codexAnswer("a1"), capacity);
+    const second = await broker.createIfAdmitted("answer_question", openAiAnswer("a2"), capacity);
+    assert.equal(first.admitted, true);
+    assert.equal(second.admitted, true);
+    assert.equal(await broker.countInFlight(globalTypes), 2);
+
+    const third = await broker.createIfAdmitted("answer_question", codexAnswer("a3"), capacity);
+    assert.equal(third.admitted, false);
+    assert.equal(third.job, undefined);
+    assert.equal(third.inFlight, 2);
+    // Rejection enqueued nothing — still exactly 2 in flight.
+    assert.equal(await broker.countInFlight(globalTypes), 2);
+
+    // Freeing a slot lets the next admission through.
+    await broker.complete(first.job!.id, { answer: "done", confidence: "high", citations: [] });
+    const fourth = await broker.createIfAdmitted("answer_question", codexAnswer("a4"), capacity);
+    assert.equal(fourth.admitted, true);
+    assert.equal(await broker.countInFlight(globalTypes), 2);
+  });
+
+  await t.test("reserve lets interactive work in while the global lane is full, then rejects", async () => {
+    const capacity = {
+      types: globalTypes,
+      limit: 2,
+      reserve: { types: interactiveTypes, reserved: 1 }
+    };
+
+    // Two maintenance jobs fill the global ceiling but touch none of the reserve.
+    await broker.create("summarize_gap", {
+      provider: "codex",
+      questions: ["q1"],
+      citedSections: [],
+      expectedOutput: "gap_summary"
+    });
+    await broker.create("summarize_gap", {
+      provider: "codex",
+      questions: ["q2"],
+      citedSections: [],
+      expectedOutput: "gap_summary"
+    });
+    assert.equal(await broker.countInFlight(globalTypes), 2);
+
+    // An interactive ask still admits via the reserve (reserveInFlight 0 < 1).
+    const viaReserve = await broker.createIfAdmitted("answer_question", codexAnswer("live"), capacity);
+    assert.equal(viaReserve.admitted, true);
+    assert.equal(viaReserve.reserveInFlight, 0);
+
+    // Now the reserve is occupied and the global lane is over the ceiling: reject.
+    const rejected = await broker.createIfAdmitted("answer_question", openAiAnswer("live2"), capacity);
+    assert.equal(rejected.admitted, false);
+    assert.equal(rejected.reserveInFlight, 1);
+    assert.ok(rejected.inFlight >= 2);
+  });
+
+  await t.test("50 concurrent admissions at limit 10 admit exactly 10 — no overshoot", async () => {
+    const capacity = { types: globalTypes, limit: 10 };
+    const attempts = Array.from({ length: 50 }, (_unused, index) =>
+      broker.createIfAdmitted("answer_question", codexAnswer(`race-${index}`), capacity)
+    );
+    const results = await Promise.all(attempts);
+    const admitted = results.filter((result) => result.admitted).length;
+    assert.equal(admitted, 10, "exactly the ceiling admitted");
+    assert.equal(await broker.countInFlight(globalTypes), 10, "no overshoot in the durable count");
+  });
 });

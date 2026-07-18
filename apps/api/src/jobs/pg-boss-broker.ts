@@ -12,8 +12,16 @@ import {
 } from "@magpie/jobs";
 import { CronExpressionParser } from "cron-parser";
 import { injectTraceContext, type TraceCarrier } from "@magpie/telemetry";
+import type pg from "pg";
 import { PgBoss, type ConstructorOptions, type JobWithMetadata, type UpdateQueueOptions } from "pg-boss";
-import type { DesiredSchedule, JobBroker, JobListFilters, ScheduleView } from "./broker.js";
+import type {
+  AdmissionResult,
+  DesiredSchedule,
+  InFlightCapacity,
+  JobBroker,
+  JobListFilters,
+  ScheduleView
+} from "./broker.js";
 import { logger } from "../logger.js";
 
 interface JobEnvelope {
@@ -27,6 +35,11 @@ interface JobEnvelope {
 
 export interface PgBossJobBrokerOptions {
   connectionString: string;
+  // The shared process-wide Postgres pool. createIfAdmitted checks out one
+  // dedicated client from it to hold an advisory transaction lock across the
+  // count+enqueue critical section (pg-boss's own pooled connection can't be
+  // pinned for that). The same schema/database as connectionString.
+  pool: pg.Pool;
   schema?: string;
   queuePolicyOverrides?: PgBossQueuePolicyOverrides;
   // Timezone applied to scheduled (cron) jobs. Defaults to UTC.
@@ -76,6 +89,16 @@ export function queueDefinitionsForType(type: JobType): QueueDefinition[] {
 // occupying capacity right now (queued, awaiting retry, or executing).
 const IN_FLIGHT_STATES = ["created", "retry", "active"] as const;
 
+// The single advisory-lock key ALL AI admission control shares (#288 a and b).
+// createIfAdmitted takes this lock for its count+enqueue critical section, so
+// every admission decision — interactive asks (a) and maintenance fan-out (b)
+// alike — is serialized against the same key and their global in-flight counts
+// stay mutually exclusive cluster-wide. A fixed constant (not derived from the
+// capacity) is deliberate: distinct capacities must still contend for the one
+// lock, or two concurrent lanes could each admit up to the ceiling. Chosen to
+// not collide with the migrator's advisory key (scripts/migrate.mjs).
+const AI_ADMISSION_LOCK_KEY = 288_2882_0001n;
+
 // pg-boss's default schema when ConstructorOptions.schema is unset. countInFlight
 // queries the job table directly (pg-boss's public API has no count), so it needs
 // the schema name; guarded by SCHEMA_IDENTIFIER since it is interpolated into SQL.
@@ -84,6 +107,7 @@ export const SCHEMA_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export class PgBossJobBroker implements JobBroker {
   private readonly boss: PgBoss;
+  private readonly pool: pg.Pool;
   private readonly schema: string;
   private readonly queuePolicyOverrides: PgBossQueuePolicyOverrides;
   private readonly scheduleTimezone: string;
@@ -96,6 +120,7 @@ export class PgBossJobBroker implements JobBroker {
       throw new Error(`Invalid pg-boss schema name: "${schema}"`);
     }
     this.schema = schema;
+    this.pool = options.pool;
     const bossOptions: ConstructorOptions = {
       connectionString: options.connectionString,
       schema: options.schema,
@@ -135,6 +160,15 @@ export class PgBossJobBroker implements JobBroker {
   }
 
   async create(type: JobType, input: unknown): Promise<JobView> {
+    const { queueName, id } = await this.enqueue(type, input);
+    return this.requireJob(queueName, id);
+  }
+
+  // The single typed enqueue path: validate against the job's input schema, route
+  // to the provider/destination-fanned queue, and send with the active trace
+  // context. Factored out so create() and createIfAdmitted() cannot drift on
+  // validation, queue routing, or trace propagation.
+  private async enqueue(type: JobType, input: unknown): Promise<{ queueName: string; id: string }> {
     const definition = jobDefinition(type);
     const parsed = definition.inputSchema.safeParse(input);
     if (!parsed.success) {
@@ -151,7 +185,73 @@ export class PgBossJobBroker implements JobBroker {
     if (!id) {
       throw new Error(`pg-boss did not create job type "${type}"`);
     }
-    return this.requireJob(queueName, id);
+    return { queueName, id };
+  }
+
+  // Atomic count+enqueue under a cluster-wide advisory lock — the fix for the
+  // admission-control TOCTOU (#288a). A dedicated pool client holds
+  // pg_advisory_xact_lock for the whole transaction so no two admissions run
+  // their count concurrently: whoever holds the lock counts, decides, and (if
+  // admitted) enqueues before the next admission can even count.
+  async createIfAdmitted(type: JobType, input: unknown, capacity: InFlightCapacity): Promise<AdmissionResult> {
+    const globalNames = this.inFlightQueueNames(capacity.types);
+    const reserveNames = capacity.reserve ? this.inFlightQueueNames(capacity.reserve.types) : [];
+
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Serialize all admissions on one key. This is a transaction-scoped lock:
+      // it releases automatically at COMMIT/ROLLBACK, so no explicit unlock path
+      // can leak it on an error.
+      await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [AI_ADMISSION_LOCK_KEY.toString()]);
+
+      // We rely on READ COMMITTED (Postgres's default) here — do NOT raise this
+      // transaction to REPEATABLE READ. Under READ COMMITTED each statement takes
+      // a fresh snapshot, so this count (issued after we hold the lock) sees every
+      // row pg-boss committed before now, including sends from earlier admissions.
+      // REPEATABLE READ would freeze the snapshot at BEGIN and miss them, defeating
+      // the whole point. The WHERE already restricts to global queues; the FILTERs
+      // split out the global total and the reserve-lane subset in one pass.
+      const counts = await client.query<{ global: number; reserve: number }>(
+        `SELECT count(*) FILTER (WHERE name = ANY($1))::int AS global,
+                count(*) FILTER (WHERE name = ANY($2))::int AS reserve
+           FROM "${this.schema}".job
+          WHERE state = ANY($3) AND name = ANY($1)`,
+        [globalNames, reserveNames, [...IN_FLIGHT_STATES]]
+      );
+      const inFlight = Number(counts.rows[0]?.global ?? 0);
+      const reserveInFlight = Number(counts.rows[0]?.reserve ?? 0);
+
+      // Byte-for-byte the ai-capacity.ts decision: an interactive request is shed
+      // only when BOTH its reserved lane is full AND the global ceiling is reached.
+      const blocked = capacity.reserve
+        ? reserveInFlight >= capacity.reserve.reserved && inFlight >= capacity.limit
+        : inFlight >= capacity.limit;
+      if (blocked) {
+        await client.query("COMMIT"); // release the lock; nothing was enqueued
+        return { admitted: false, inFlight, ...(capacity.reserve ? { reserveInFlight } : {}) };
+      }
+
+      // boss.send commits the new row on pg-boss's OWN connection before our
+      // COMMIT below releases the lock, so the next admission (which must wait for
+      // the lock) counts it. That ordering is exactly what makes count+enqueue one
+      // indivisible critical section — the row is durable and visible before any
+      // competing admission can observe an in-flight count.
+      const { queueName, id } = await this.enqueue(type, input);
+      const job = await this.requireJob(queueName, id);
+      await client.query("COMMIT");
+      return { admitted: true, job, inFlight, ...(capacity.reserve ? { reserveInFlight } : {}) };
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // A rollback failure (e.g. a dead connection) must not mask the original
+        // error; release() below still returns the client to the pool.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async claim(workerName: string, capabilities: Parameters<JobBroker["claim"]>[1]): Promise<JobView | undefined> {
@@ -274,10 +374,7 @@ export class PgBossJobBroker implements JobBroker {
   // relevant partitions. Dead-letter queues are excluded (a dead-lettered job is
   // finished work, not in flight).
   async countInFlight(types: JobType[]): Promise<number> {
-    const queueNames = types
-      .flatMap((type) => queueDefinitionsForType(type))
-      .filter((queue) => !queue.deadLetter)
-      .map((queue) => queue.name);
+    const queueNames = this.inFlightQueueNames(types);
     if (queueNames.length === 0) {
       return 0;
     }
@@ -288,6 +385,18 @@ export class PgBossJobBroker implements JobBroker {
       [queueNames, [...IN_FLIGHT_STATES]]
     );
     return Number(result.rows[0]?.count ?? 0);
+  }
+
+  // The in-flight work queues the given job types fan out to (provider/destination
+  // fan-out per the catalog), excluding dead-letter queues (a dead-lettered job is
+  // finished work, not in flight). Shared by countInFlight (the cheap pre-check)
+  // and createIfAdmitted (the atomic count), so both scope to the exact same
+  // partitions — they must never disagree on which queues count.
+  private inFlightQueueNames(types: JobType[]): string[] {
+    return types
+      .flatMap((type) => queueDefinitionsForType(type))
+      .filter((queue) => !queue.deadLetter)
+      .map((queue) => queue.name);
   }
 
   async reconcileSchedules(desired: DesiredSchedule[]): Promise<void> {
