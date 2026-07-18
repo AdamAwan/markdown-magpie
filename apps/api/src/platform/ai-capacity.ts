@@ -15,6 +15,12 @@ import { logger } from "../logger.js";
 // but can never occupy the reserve, so a patrol burst can no longer push
 // /api/ask into 429.
 //
+// Maintenance fan-out is now ALSO admission-controlled (#288b): it admits through
+// the same atomic primitive but under the STRICTER nonInteractiveAiCapacity below
+// — rejected once the global count reaches `limit - reserved`, so the interactive
+// reserve is always left free. Both policies share one limit/reserved computation
+// (aiCapacityBounds) so the two classes can never drift apart.
+//
 // The enqueue path itself is now ATOMIC (#288a): POST /api/ask admits through
 // JobBroker.createIfAdmitted, which counts and enqueues under one advisory lock,
 // so concurrent asks can no longer overshoot the ceiling. assertAiCapacity below
@@ -22,12 +28,11 @@ import { logger } from "../logger.js";
 // rejects a saturated system before any log row is written) — see
 // docs/rate-limiting.md.
 
-// The capacity envelope for interactive AI admission, or undefined when rate
-// limiting is disabled (a pass-through — no ceiling to enforce). The limit/
-// reserved math is centralised here so a non-interactive variant (#288b will add
-// `nonInteractiveAiCapacity`, returning `{ types: [...AI_JOB_TYPES], limit: limit
-// - reserved }`) can be added cleanly alongside it.
-export function aiInflightCapacity(ctx: AppContext): InFlightCapacity | undefined {
+// The shared limit/reserved math for BOTH admission policies (interactive and
+// non-interactive), or undefined when rate limiting is disabled (a pass-through —
+// no ceiling to enforce). Centralised here so the two builders below can never
+// drift on how the ceiling and the reserve are derived from config.
+function aiCapacityBounds(ctx: AppContext): { limit: number; reserved: number } | undefined {
   const settings = ctx.settings.rateLimit;
   if (!settings.enabled) {
     return undefined;
@@ -36,10 +41,39 @@ export function aiInflightCapacity(ctx: AppContext): InFlightCapacity | undefine
   // A reserve above the ceiling would make interactive admission unbounded (both
   // conditions could never hold together), so clamp it to the ceiling.
   const reserved = Math.min(settings.aiInteractiveReservedJobs, limit);
+  return { limit, reserved };
+}
+
+// The capacity envelope for interactive AI admission, or undefined when rate
+// limiting is disabled. An interactive enqueue is shed only when its reserved
+// lane is full AND the global ceiling is reached (see the reserve rule).
+export function aiInflightCapacity(ctx: AppContext): InFlightCapacity | undefined {
+  const bounds = aiCapacityBounds(ctx);
+  if (!bounds) {
+    return undefined;
+  }
   return {
     types: [...AI_JOB_TYPES],
-    limit,
-    reserve: { types: [...INTERACTIVE_AI_JOB_TYPES], reserved }
+    limit: bounds.limit,
+    reserve: { types: [...INTERACTIVE_AI_JOB_TYPES], reserved: bounds.reserved }
+  };
+}
+
+// Non-interactive (maintenance + questionnaire batch) admission policy: strictly
+// under the global ceiling, always leaving the interactive reserve free. Rejects
+// iff inFlight >= limit - reserved. There is no `reserve` lane — the reserve is
+// carved out by lowering the effective limit — so createIfAdmitted's block rule
+// reduces to the simple `inFlight >= capacity.limit`. Returns undefined when rate
+// limiting is disabled (a pass-through). This IS the maintenance admission rule
+// (#288b); sub-item (c) reuses it for the questionnaire answer batch.
+export function nonInteractiveAiCapacity(ctx: AppContext): InFlightCapacity | undefined {
+  const bounds = aiCapacityBounds(ctx);
+  if (!bounds) {
+    return undefined;
+  }
+  return {
+    types: [...AI_JOB_TYPES],
+    limit: Math.max(0, bounds.limit - bounds.reserved)
   };
 }
 

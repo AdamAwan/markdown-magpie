@@ -617,6 +617,85 @@ test("a provenance change busts the verify reuse key; identical claims still reu
   assert.equal(afterIdenticalClaims.jobs.length, 1, "identical folded claims ⇒ same reuse key ⇒ job reused");
 });
 
+// A verify spy that marks every document unprovable, so each selected doc yields
+// one corrective enqueue that must pass through the fan-out budget.
+const UNPROVABLE_VERIFY: VerifyDocumentFn = async () => ({
+  verdict: "unprovable",
+  claims: [{ claim: "stale", reason: "no source" }]
+});
+
+test("the fan-out budget caps corrective enqueues per tick and leaves deferred docs re-checkable (#288b)", async () => {
+  const ctx = makeTestContext();
+  // Budget of 2, but five docs each produce a finding → three corrections deferred.
+  ctx.settings.rateLimit.maintenanceMaxAiJobsPerTick = 2;
+  await indexDocs(ctx, ["a.md", "b.md", "c.md", "d.md", "e.md"]);
+
+  const outcome = await patrol.runFixPatrol(
+    ctx,
+    { trigger: "scheduled" },
+    { verifyDocument: UNPROVABLE_VERIFY, dedupeDocument: async () => {}, splitDocument: async () => {} }
+  );
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  assert.equal(outcome.selectedCount, 5, "all five docs were selected");
+
+  // Only two correct_document jobs were admitted this tick.
+  assert.equal((await ctx.jobs.list({ type: "correct_document" })).total, 2);
+
+  // The three deferred docs are NOT stamped with a fresh content hash, so they stay
+  // re-checkable; only the two whose correction was enqueued carry a hash.
+  const cursor = await ctx.stores.patrol.listCursor(undefined);
+  assert.equal(cursor.length, 5, "every selected doc still rotates in the cursor");
+  assert.equal(cursor.filter((entry) => entry.contentHash).length, 2, "only the 2 corrected docs are stamped checked");
+
+  // The tick records the fan-out summary for the audit.
+  const run = await ctx.stores.maintenanceRuns.get(outcome.runId);
+  const fanout = (run?.details as { fanout?: { enqueued: number; deferredByBudget: number; budget: number } }).fanout;
+  assert.equal(fanout?.enqueued, 2);
+  assert.equal(fanout?.deferredByBudget, 3);
+  assert.equal(fanout?.budget, 2);
+});
+
+test("a capacity rejection skips the doc without failing the tick (#288b)", async () => {
+  const ctx = makeTestContext();
+  // Force the atomic admission to reject every maintenance enqueue.
+  ctx.jobs.createIfAdmitted = async () => ({ admitted: false, inFlight: 99 });
+  await indexDocs(ctx, ["a.md", "b.md"]);
+
+  const outcome = await patrol.runFixPatrol(
+    ctx,
+    { trigger: "scheduled" },
+    { verifyDocument: UNPROVABLE_VERIFY, dedupeDocument: async () => {}, splitDocument: async () => {} }
+  );
+  // The tick still completes cleanly — a capacity shed is a deferral, not a failure.
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  assert.equal((await ctx.jobs.list({ type: "correct_document" })).total, 0, "no correction was admitted");
+  // Nothing got a fresh hash, so all docs stay re-checkable next tick.
+  const cursor = await ctx.stores.patrol.listCursor(undefined);
+  assert.equal(cursor.filter((entry) => entry.contentHash).length, 0);
+  const run = await ctx.stores.maintenanceRuns.get(outcome.runId);
+  const fanout = (run?.details as { fanout?: { rejectedByCapacity: number } }).fanout;
+  assert.equal(fanout?.rejectedByCapacity, 2);
+});
+
+test("runImprovePatrol defers an improve scan past the budget without stamping the doc (#288b)", async () => {
+  const ctx = makeTestContext();
+  // The editorial batch selects 2 docs; a budget of 1 defers one of them.
+  ctx.settings.rateLimit.maintenanceMaxAiJobsPerTick = 1;
+  await indexDocs(ctx, ["a.md", "b.md"]);
+
+  const outcome = await patrol.runImprovePatrol(ctx, { trigger: "scheduled" }, {});
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  assert.equal(outcome.selectedCount, 2);
+  assert.equal(outcome.enqueuedCount, 1, "only one improve scan fit the budget");
+  assert.equal((await ctx.jobs.list({ type: "improve_document" })).total, 1);
+  // The deferred doc is unstamped (re-checkable); only the enqueued one carries a hash.
+  const cursor = await ctx.stores.patrol.listCursor(undefined, "improve");
+  assert.equal(cursor.filter((entry) => entry.contentHash).length, 1);
+});
+
 test("runFixPatrol skips a document already covered by an open same-flow proposal", async () => {
   const ctx = makeTestContext();
   await indexDocs(ctx, ["covered.md", "free.md"]);

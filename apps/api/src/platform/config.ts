@@ -145,6 +145,17 @@ export interface AppConfig {
     // 0 disables the reserve (pre-#240 behaviour); values above the ceiling are
     // clamped to it at the gate.
     aiInteractiveReservedJobs: number;
+    // The most AI jobs a single maintenance fan-out tick (a patrol/reconciler
+    // run) may enqueue (#288b). A per-tick budget layered UNDER the global
+    // admission ceiling: even with capacity free, one tick can enqueue at most
+    // this many before deferring the rest to a later tick. Kept <= the maintenance
+    // ceiling (limit - reserved) so one tick can never fill it. Only meaningful
+    // while RATE_LIMIT_ENABLED (the master switch), like the rest of this object.
+    maintenanceMaxAiJobsPerTick: number;
+    // When a single fan-out tick defers/rejects at least this many enqueues, the
+    // `maintenance_fanout` event is flagged `runaway` and escalated — the proactive
+    // signal that a patrol is fanning out far past its budget (#288b).
+    maintenanceFanoutAlertDeferred: number;
   };
   // Sparse-flow seed bootstrap (SEED_BOOTSTRAP_MAX_DOCS): a flow whose indexed
   // destination has fewer than this many documents counts as "near-empty" and is
@@ -363,6 +374,8 @@ const schema = z
     RATE_LIMIT_TRIGGER_PER_WINDOW: optionalPositiveInt,
     AI_MAX_INFLIGHT_JOBS: optionalPositiveInt,
     AI_INTERACTIVE_RESERVED_JOBS: optionalNonNegativeInt,
+    MAINTENANCE_MAX_AI_JOBS_PER_TICK: optionalPositiveInt,
+    MAINTENANCE_FANOUT_ALERT_DEFERRED: optionalPositiveInt,
     SEED_BOOTSTRAP_MAX_DOCS: optionalPositiveInt,
 
     WATCHER_NAME: optionalString,
@@ -546,7 +559,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       askPerWindow: parsed.RATE_LIMIT_ASK_PER_WINDOW ?? 30,
       triggerPerWindow: parsed.RATE_LIMIT_TRIGGER_PER_WINDOW ?? 5,
       aiMaxInflightJobs: parsed.AI_MAX_INFLIGHT_JOBS ?? 20,
-      aiInteractiveReservedJobs: parsed.AI_INTERACTIVE_RESERVED_JOBS ?? 5
+      aiInteractiveReservedJobs: parsed.AI_INTERACTIVE_RESERVED_JOBS ?? 5,
+      // Default 12 <= limit - reserved (20 - 5 = 15), so one tick can never fill
+      // the maintenance ceiling on its own.
+      maintenanceMaxAiJobsPerTick: parsed.MAINTENANCE_MAX_AI_JOBS_PER_TICK ?? 12,
+      maintenanceFanoutAlertDeferred: parsed.MAINTENANCE_FANOUT_ALERT_DEFERRED ?? 20
     },
     seeding: {
       bootstrapMaxDocs: parsed.SEED_BOOTSTRAP_MAX_DOCS ?? 3

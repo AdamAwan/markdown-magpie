@@ -73,13 +73,31 @@ test("every job type is unique and has schemas and a valid policy", () => {
   }
 });
 
-test("provider work retries three times and non-provider work retries twice", () => {
-  for (const type of ["answer_question", "reconcile_gap_clusters"] as const) {
+test("interactive AI retries three times; maintenance AI and non-provider work retry twice (#288b)", () => {
+  // Interactive AI (a live caller is waiting) keeps the retry-3 budget: a
+  // transient blip should not surface as a hard failure to /api/ask or the
+  // console outline.
+  for (const type of INTERACTIVE_AI_JOB_TYPES) {
     const policy = jobDefinition(type).policy;
-    assert.equal(policy.retryLimit, 3);
-    assert.equal(policy.retryDelay, 15);
-    assert.equal(policy.retryDelayMax, 300);
+    assert.equal(policy.retryLimit, 3, type);
+    assert.equal(policy.retryDelay, 15, type);
+    assert.equal(policy.retryDelayMax, 300, type);
   }
+  // Maintenance AI drops to retry-2 (#288b) so a runaway patrol cannot triple its
+  // metered generations on retries — but keeps the AI backoff cadence (15→300s).
+  for (const type of AI_JOB_TYPES) {
+    if ((INTERACTIVE_AI_JOB_TYPES as readonly string[]).includes(type)) {
+      continue;
+    }
+    const policy = jobDefinition(type).policy;
+    assert.equal(policy.retryLimit, 2, type);
+    assert.equal(policy.retryDelay, 15, type);
+    assert.equal(policy.retryDelayMax, 300, type);
+  }
+  // Sample the maintenance-AI change explicitly: reconcile_gap_clusters was
+  // retry-3 before #288b and is now retry-2.
+  assert.equal(jobDefinition("reconcile_gap_clusters").policy.retryLimit, 2);
+  // Non-provider work stays retry-2 with the slower non-AI backoff cadence.
   for (const type of ["process_gaps_to_pull_requests", "refresh_flow_snapshot"] as const) {
     const policy = jobDefinition(type).policy;
     assert.equal(policy.retryLimit, 2);

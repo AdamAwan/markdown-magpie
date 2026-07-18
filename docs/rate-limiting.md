@@ -81,12 +81,32 @@ that were already enqueued and then fail are unaffected — they retry under
 pg-boss's existing policy (AI jobs: 3 attempts, 15s→300s backoff) and dead-letter
 on exhaustion.
 
-> Scope note: the atomic L2 gate is enforced at the `POST /api/ask` enqueue and
-> at the questionnaire drip's enqueue — both direct AI-job creators — through the
-> reusable `createIfAdmitted` primitive. The manual maintenance triggers are
-> protected by the L1 `trigger` tier today; extending the atomic in-flight cap
-> into their fan-out (passing a non-interactive capacity to the same primitive and
-> lock) is the planned #288(b) follow-up.
+> Scope note: the atomic L2 gate is enforced at the `POST /api/ask` enqueue, at
+> the questionnaire drip's enqueue, **and at every maintenance fan-out enqueue**
+> (#288b) — all through the reusable `createIfAdmitted` primitive and the one
+> shared advisory lock, so interactive and maintenance admissions contend on a
+> single mutually-exclusive count. Maintenance fan-out admits under the *stricter*
+> non-interactive policy below; the manual triggers themselves remain protected by
+> the L1 `trigger` tier.
+
+### Maintenance fan-out is admission-controlled too (#288b)
+
+Maintenance fan-out (the hourly patrols, the gap→PR reconciler, source-change
+sync, the seed-plan draft batch) no longer enqueues AI work uncapped. Every
+maintenance AI enqueue admits through the same atomic primitive, but under the
+**non-interactive** policy (`nonInteractiveAiCapacity` in `ai-capacity.ts`):
+strictly under the global ceiling, always leaving the interactive reserve free.
+It rejects iff
+
+    in-flight AI jobs (any class) ≥ AI_MAX_INFLIGHT_JOBS − AI_INTERACTIVE_RESERVED_JOBS
+
+(the reserve is carved out by lowering the effective limit, so there is no
+separate reserve lane — the block rule reduces to `inFlight ≥ limit`). Because
+this shares the interactive gate's lock and count, maintenance already could not
+429 a live ask; this makes it a **cost** bound too — maintenance never runs the
+global count past `limit − reserved`. `outline_flow_seed` is interactive-class and
+is deliberately left on the interactive path, so a maintenance shed never starves
+a flow outline.
 
 ## Schema-invalid watcher output — repair then terminal-fail (#288d)
 
@@ -121,6 +141,49 @@ Each decision emits a structured `job_repair` event (`decision`:
 the output carried fields the job contract doesn't declare — surfacing the silent
 `z.object` strip without failing on it.
 
+## L3 — per-tick maintenance fan-out budget (#288b)
+
+Global admission (L2) bounds *concurrent* cost, but a single maintenance tick can
+still churn: one patrol/reconciler run that fans out to hundreds of documents
+would admit-then-defer in a tight loop, and pg-boss's retries would multiply the
+survivors. L3 adds a **per-tick fan-out budget** layered *under* the L2 ceiling.
+
+A `FanoutBudget` (`apps/api/src/platform/maintenance-fanout.ts`) is created once
+per tick — after the run lock, so a skipped overlapping run spends nothing — and
+threaded to every maintenance AI enqueue site (the patrol lenses, the reconciler's
+reshape + cluster drafting, source-change sync, the seed-plan draft batch). Each
+enqueue calls `budget.admit(type, input)`, which:
+
+1. consults a **local per-tick counter** first (free — no I/O): once
+   `MAINTENANCE_MAX_AI_JOBS_PER_TICK` jobs have been admitted this tick, further
+   admits return `{ ok: false, reason: "budget_exhausted" }`;
+2. otherwise makes the **one atomic** `createIfAdmitted` round-trip under the
+   non-interactive policy; a global-ceiling rejection returns `{ ok: false, reason:
+   "capacity" }`.
+
+The budget is the single place the `class: non-interactive` rule + the budget
+live — no site re-derives it. When rate limiting is disabled the admission step is
+a plain `ctx.jobs.create` pass-through, so local dev keeps enqueueing while still
+honouring the per-tick budget.
+
+**Defer-and-re-enter shedding.** On any `{ ok: false }` the site *defers* that unit
+of work exactly like the pre-existing `MAX_DRAFTS_PER_TICK` cap: the patrols leave
+the doc unstamped (not gated → re-selected next tick), the reconciler holds the
+processed revision so the next tick re-drafts the remainder, source-change sync
+holds the source baseline, and the seed-plan approve batch (replay-safe) resumes on
+re-approve. Maintenance is sheddable and idempotent, so a deferred tick costs
+nothing and simply re-enters later. The default budget (12) is `≤ limit − reserved`
+(20 − 5 = 15), so one tick can never fill the maintenance ceiling by itself.
+
+**Retry budget.** Maintenance AI job types now retry **2×** instead of 3× (the
+interactive types — `answer_question`, `outline_flow_seed` — keep 3×); the split
+is a catalog constant derived from `AI_JOB_TYPES − INTERACTIVE_AI_JOB_TYPES` in
+`packages/jobs/src/catalog.ts`, so a runaway patrol can't triple its metered spend
+on retries.
+
+The `*__dead_letter` queues remain the failure-runaway signal; a proactive
+queue-depth alarm is a noted follow-up, not built here.
+
 ## Storage
 
 Counters live in Postgres (`rate_limit_counters`, migration
@@ -141,6 +204,8 @@ auth-disabled local dev.
 | `RATE_LIMIT_TRIGGER_PER_WINDOW` | `5`     | Trigger-tier requests per principal per window.                |
 | `AI_MAX_INFLIGHT_JOBS`          | `20`    | Global ceiling on concurrent in-flight AI jobs.                |
 | `AI_INTERACTIVE_RESERVED_JOBS`  | `5`     | In-flight slots reserved for interactive AI jobs (`0` disables the reserve; clamped to the ceiling). |
+| `MAINTENANCE_MAX_AI_JOBS_PER_TICK` | `12` | Max AI jobs one maintenance fan-out tick may enqueue (L3 per-tick budget, #288b). Kept ≤ `AI_MAX_INFLIGHT_JOBS − AI_INTERACTIVE_RESERVED_JOBS`. |
+| `MAINTENANCE_FANOUT_ALERT_DEFERRED` | `20` | When a tick defers/rejects ≥ this many enqueues, its `maintenance_fanout` event is flagged `runaway` and escalated (#288b). |
 | `MAGPIE_JOB_REPAIR_ENABLED`     | `true`  | One informed repair-reprompt for a schema-invalid repairable output before terminal-fail (#288d); `false` ⇒ immediate terminal-fail. |
 
 ## Observability (Grafana)
@@ -169,7 +234,21 @@ the API logs to Loki and query by field).
 | `interactiveInFlight` / `reserved` | interactive-class in-flight jobs vs. the reserved headroom |
 | `retryAfterSeconds` | present on blocked events                        |
 
-> `allowed` decisions log at `debug`, so to graph request-vs-limit volume (not
+**L3 event** — `event: "maintenance_fanout"` (one per maintenance tick, #288b)
+
+| Field                                    | Notes                                                             |
+| ---------------------------------------- | ----------------------------------------------------------------- |
+| `decision`                               | `"ok"` (`debug`) or `"capped"` (`warn`, when any shedding occurred) |
+| `taskType` / `flowId`                    | the tick's task and flow (`"default"` for the unrouted flow)      |
+| `attempted` / `enqueued`                 | admits attempted vs. actually enqueued this tick                  |
+| `deferredByBudget` / `rejectedByCapacity`| shed by the local per-tick budget vs. the global admission ceiling |
+| `budget`                                 | the per-tick budget in force (`MAINTENANCE_MAX_AI_JOBS_PER_TICK`) |
+| `runaway`                                | `true` (message escalated) once `deferredByBudget + rejectedByCapacity ≥ MAINTENANCE_FANOUT_ALERT_DEFERRED` |
+
+The same counters are also persisted onto the tick's `MaintenanceRun.details.fanout`
+for the Schedules audit.
+
+> `allowed`/`ok` decisions log at `debug`, so to graph request-vs-limit volume (not
 > just rejections) run the API at `LOG_LEVEL=debug`. Rejections are always
 > visible at the default `info` level via the `warn` lines.
 

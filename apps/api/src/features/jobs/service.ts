@@ -17,6 +17,22 @@ import * as snapshotsService from "../snapshots/service.js";
 import { applyPullRequestTransition } from "../../scheduling/gap-reconciler.js";
 import * as foldService from "../../scheduling/fold.js";
 import { snapshotRoot } from "../../platform/repositories.js";
+import type { FanoutBudget } from "../../platform/maintenance-fanout.js";
+
+// Thrown by runJobToCompletion when the maintenance fan-out budget/admission
+// sheds the create it was about to make (#288b). Both bounded-wait callers
+// (requestReshape, defaultVerifyDocument) already treat a throw as "skip this
+// run", so a shed simply defers the unit of work to a later tick. Never thrown on
+// a reuseKey hit — reusing an in-flight job spends no budget/capacity.
+export class MaintenanceShedError extends Error {
+  constructor(
+    readonly jobType: JobType,
+    readonly reason: "budget_exhausted" | "capacity"
+  ) {
+    super(`maintenance fan-out shed ${jobType} (${reason})`);
+    this.name = "MaintenanceShedError";
+  }
+}
 
 export async function createJob(ctx: AppContext, type: JobType, input: unknown): Promise<JobView> {
   // Validate the input against the job's own contract at creation (#285). Without
@@ -157,13 +173,23 @@ export const IN_FLIGHT_JOB_STATES: ReadonlySet<JobView["state"]> = new Set(["cre
 // end the bounded wait the same way — the orphaned job is cancelled and the
 // non-terminal view returned — so the caller can unwind instead of running on in
 // parallel with the retry that abort triggered (#195).
+// `admission`, when supplied, routes any NEW job creation through the maintenance
+// fan-out budget (#288b): a reuseKey hit is returned untouched (reuse spends no
+// budget/capacity), but a genuine create must be admitted first — a shed throws
+// MaintenanceShedError, which the caller catches as "skip this run".
 export async function runJobToCompletion(
   ctx: AppContext,
   type: JobType,
   input: unknown,
-  options: { deadlineMs?: number; pollMs?: number; reuseKey?: (input: unknown) => string; signal?: AbortSignal } = {}
+  options: {
+    deadlineMs?: number;
+    pollMs?: number;
+    reuseKey?: (input: unknown) => string;
+    signal?: AbortSignal;
+    admission?: { budget: FanoutBudget };
+  } = {}
 ): Promise<JobView> {
-  const job = await acquireJob(ctx, type, input, options.reuseKey);
+  const job = await acquireJob(ctx, type, input, options.reuseKey, options.admission);
   const deadlineMs =
     options.deadlineMs ??
     ctx.settings.jobs.runToCompletionTimeoutMs ??
@@ -185,7 +211,8 @@ async function acquireJob(
   ctx: AppContext,
   type: JobType,
   input: unknown,
-  reuseKey?: (input: unknown) => string
+  reuseKey?: (input: unknown) => string,
+  admission?: { budget: FanoutBudget }
 ): Promise<JobView> {
   if (reuseKey) {
     const key = reuseKey(input);
@@ -193,7 +220,18 @@ async function acquireJob(
     const existing = jobs.find(
       (candidate) => IN_FLIGHT_JOB_STATES.has(candidate.state) && reuseKey(candidate.input) === key
     );
+    // Reuse spends NO budget/capacity: an in-flight job already holds its slot, so
+    // waiting on it must never re-charge admission (#288b).
     if (existing) return existing;
+  }
+  // No reusable job — this is a genuine create. Under a fan-out budget it must be
+  // admitted first; a shed throws MaintenanceShedError (the caller skips this run).
+  if (admission) {
+    const result = await admission.budget.admit(type, input);
+    if (!result.ok) {
+      throw new MaintenanceShedError(type, result.reason);
+    }
+    return result.job;
   }
   return createJob(ctx, type, input);
 }
