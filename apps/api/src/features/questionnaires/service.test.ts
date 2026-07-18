@@ -215,6 +215,42 @@ test("completion advances the drip; unconfident/uncited answers mark items unans
   assert.equal(fetched?.items.filter((item) => item.status === "unanswerable").length, 1);
 });
 
+test("drip stops and reverts the item + log when the atomic gate rejects at capacity", async () => {
+  const ctx = flowContext();
+  // The global AI ceiling is already fully occupied by out-of-band jobs, and
+  // there is no interactive reserve headroom — so the very first drip admission
+  // is shed at the atomic gate.
+  ctx.settings.rateLimit.aiMaxInflightJobs = 1;
+  ctx.settings.rateLimit.aiInteractiveReservedJobs = 0;
+  await ctx.jobs.create("summarize_gap", {
+    provider: "codex",
+    questions: ["saturating"],
+    citedSections: [],
+    expectedOutput: "gap_summary"
+  });
+
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "saturated",
+    flowId: "security",
+    questions: ["q0", "q1"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+
+  // No answer_question job was enqueued (the gate rejected), and the drip paused.
+  assert.equal((await ctx.jobs.list({ type: "answer_question" })).total, 0, "no drip job enqueued at capacity");
+
+  // Every item is back to pending (none stuck in "answering"), and no orphaned
+  // question log was left behind.
+  const fetched = await ctx.stores.questionnaires.get(created.questionnaire.id);
+  assert.ok(fetched);
+  assert.ok(
+    fetched.items.every((item) => item.status === "pending"),
+    "the optimistically-marked item was reverted to pending"
+  );
+  assert.equal(await ctx.stores.questionLogs.count(), 0, "the drip's question log was deleted");
+});
+
 test("a terminal job failure marks the item unanswerable with the error", async () => {
   const ctx = flowContext();
   const created = await questionnaires.createQuestionnaire(ctx, {

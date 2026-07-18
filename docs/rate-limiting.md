@@ -26,12 +26,35 @@ The global AI cap (L2) still protects metered work in that case.
 
 ## L2 — global in-flight AI-job cap
 
-Admission control on concurrent metered work. Before the ask service enqueues an
-`answer_question` job — and crucially **before it records the question log**, so
-a rejection never orphans state — it calls `assertAiCapacity`
-(`apps/api/src/platform/ai-capacity.ts`). That counts the AI jobs currently in
-flight (states `created | retry | active`, across every provider queue) via
-`broker.countInFlight`, aggregate SQL counts over pg-boss's job table.
+Admission control on concurrent metered work, enforced **atomically** at enqueue
+time (#288a). The ask service admits an `answer_question` through
+`JobBroker.createIfAdmitted` (`apps/api/src/jobs/pg-boss-broker.ts`): it counts
+the in-flight AI jobs and enqueues the new one **under a single cluster-wide
+advisory lock** (`pg_advisory_xact_lock`, one fixed key shared by all AI
+admission control), so the count and the send are one indivisible critical
+section. Two concurrent `POST /api/ask` calls can therefore no longer both read
+"19 in flight" and both enqueue — the losing caller counts *after* the winner's
+row is committed and is shed. The lock relies on Postgres's default READ
+COMMITTED isolation so the post-lock count sees every row prior admissions
+committed.
+
+The atomic gate replaces an earlier check-then-act race (`countInFlight` read,
+then a separate `create()`), which under concurrency could overshoot the ceiling.
+The **residual bound** is only the documented reserve headroom: because an
+interactive ask may be admitted via the reserve even when the global lane is full,
+interactive in-flight work can reach at most `AI_MAX_INFLIGHT_JOBS +
+AI_INTERACTIVE_RESERVED_JOBS` — by design, not overshoot.
+
+A cheap, non-atomic pre-check (`assertAiCapacity` in
+`apps/api/src/platform/ai-capacity.ts`) still runs **before the question log is
+recorded**, so an already-saturated system sheds load before writing any state —
+a load-shedding optimization, not the authoritative gate. Both paths count AI
+jobs in flight (states `created | retry | active`, across every provider queue)
+via `broker.countInFlight`, aggregate SQL over pg-boss's job table, and share the
+same class-aware block rule and the same `aiInflightCapacity` policy. The
+questionnaire drip adopts the same primitive: on non-admission it reverts the
+item to pending and deletes its log, then pauses (the derived-state model resumes
+it on the next read/completion).
 
 The check is **class-aware** (#240). AI job types split into an *interactive*
 class — a live caller is waiting: `answer_question` (including gap-closure
@@ -58,10 +81,12 @@ that were already enqueued and then fail are unaffected — they retry under
 pg-boss's existing policy (AI jobs: 3 attempts, 15s→300s backoff) and dead-letter
 on exhaustion.
 
-> Scope note: L2 is enforced at the `POST /api/ask` enqueue, the direct
-> AI-job creator. The manual maintenance triggers are protected by the L1
-> `trigger` tier today; extending the in-flight cap into their fan-out is a
-> planned follow-up.
+> Scope note: the atomic L2 gate is enforced at the `POST /api/ask` enqueue and
+> at the questionnaire drip's enqueue — both direct AI-job creators — through the
+> reusable `createIfAdmitted` primitive. The manual maintenance triggers are
+> protected by the L1 `trigger` tier today; extending the atomic in-flight cap
+> into their fan-out (passing a non-interactive capacity to the same primitive and
+> lock) is the planned #288(b) follow-up.
 
 ## Storage
 

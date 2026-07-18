@@ -46,6 +46,11 @@ export interface QuestionnaireStore {
   // drip re-answers it, and the worksheet explains the wording change.
   markChanged(itemId: string, reason: QuestionnaireChangeReason): Promise<void>;
   markAnswering(itemId: string, questionLogId: string): Promise<void>;
+  // Reverses markAnswering: returns the item to "pending" and clears its
+  // question_log_id. Used when the atomic AI-admission gate rejects the enqueue
+  // after the item was optimistically marked answering (#288a) — the drip
+  // re-answers it on a later pass. Idempotent; a no-op for an unknown item.
+  revertAnswering(itemId: string): Promise<void>;
   completeItem(
     questionLogId: string,
     result: {
@@ -244,6 +249,13 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
     if (!item.outcome) {
       item.outcome = "fresh";
     }
+  }
+
+  async revertAnswering(itemId: string): Promise<void> {
+    const item = this.items.get(itemId);
+    if (!item) return;
+    item.status = "pending";
+    item.questionLogId = undefined;
   }
 
   async completeItem(

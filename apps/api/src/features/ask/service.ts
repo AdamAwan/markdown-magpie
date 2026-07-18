@@ -3,7 +3,8 @@ import type { JobView } from "@magpie/jobs";
 import type { QuestionLog } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import { HttpError } from "../../http/errors.js";
-import { assertAiCapacity } from "../../platform/ai-capacity.js";
+import { logger } from "../../logger.js";
+import { aiCapacityError, aiInflightCapacity, assertAiCapacity } from "../../platform/ai-capacity.js";
 import { buildAnswerQuestionInput, recordAnswerQuestionLog } from "../../platform/answer-question.js";
 
 interface AskResult {
@@ -52,8 +53,9 @@ export async function ask(
   // Assemble prior-turn context BEFORE recording this turn's log, so the new
   // (answer-less) row can never appear in its own prior context.
   const { priorTurns, conversationFlowId } = await assembleConversationContext(ctx, conversationId);
-  // Enforce the global in-flight AI-job ceiling BEFORE recording the question log
-  // below, so a rejection at capacity never leaves an orphaned log with no job.
+  // Cheap pre-check BEFORE recording the question log: a system that is already
+  // saturated sheds load before any log row is written (no churn). This is a
+  // load-shedding optimization, not the authoritative gate.
   await assertAiCapacity(ctx);
   const log = await recordAnswerQuestionLog(ctx, question, "live", conversation);
   const input = buildAnswerQuestionInput(ctx, {
@@ -65,8 +67,29 @@ export async function ask(
     // back to the conversation's established flow when the caller left it to "auto".
     ...(!requestedFlowId && conversationFlowId ? { conversationFlowId } : {})
   });
-  const job = await ctx.jobs.create("answer_question", input);
-  return { questionId: log.id, conversationId: conversation, job };
+  // Authoritative, race-free admission: count + enqueue atomically under the
+  // broker's advisory lock (#288a) so concurrent asks can't overshoot the
+  // ceiling. When rate limiting is disabled there is no ceiling — enqueue plainly.
+  const capacity = aiInflightCapacity(ctx);
+  if (!capacity) {
+    const job = await ctx.jobs.create("answer_question", input);
+    return { questionId: log.id, conversationId: conversation, job };
+  }
+  const result = await ctx.jobs.createIfAdmitted("answer_question", input, capacity);
+  if (!result.admitted) {
+    // Compensate: the log was recorded before the atomic gate rejected, so delete
+    // it — a rejection must never leave an orphaned, answer-less log. Best-effort;
+    // a failed cleanup is logged, not fatal to the (already-failing) request.
+    await ctx.stores.questionLogs.delete(log.id).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn({ err: message, questionLogId: log.id }, "failed to delete question log after ai capacity rejection");
+    });
+    throw aiCapacityError(ctx, { inFlight: result.inFlight, reserveInFlight: result.reserveInFlight ?? 0 });
+  }
+  if (!result.job) {
+    throw new Error("createIfAdmitted admitted an answer_question job without returning it");
+  }
+  return { questionId: log.id, conversationId: conversation, job: result.job };
 }
 
 // Reconstructs the bounded prior-turn context for a follow-up: the recent answered

@@ -24,6 +24,31 @@ export interface ScheduleView {
   nextRunAt?: string;
 }
 
+// The capacity envelope handed to createIfAdmitted: the in-flight ceiling to
+// enforce, plus an optional reserved sub-lane. `types` are the job types counted
+// toward the global figure; when `reserve` is present its `types` MUST be a
+// subset of `types` (the reserve lane is a slice of the same global pool), and
+// `reserved` slots are protected for that lane even when the global ceiling is
+// otherwise full. This is the class-aware shape ai-capacity.ts builds from the
+// interactive reserve (#240); admission control primitives consume it directly.
+export interface InFlightCapacity {
+  types: JobType[]; // counted for the global figure
+  limit: number;
+  reserve?: { types: JobType[]; reserved: number }; // reserve.types must be a subset of types
+}
+
+// The outcome of an atomic admission attempt. `job` is present iff `admitted`.
+// `inFlight` and `reserveInFlight` are the counts observed UNDER THE LOCK at the
+// moment the decision was made — the caller uses them to build an accurate 429
+// (and callers/tests assert on them). `reserveInFlight` is populated only when a
+// reserve lane was supplied.
+export interface AdmissionResult {
+  admitted: boolean;
+  job?: JobView; // present iff admitted
+  inFlight: number; // global count observed under the lock
+  reserveInFlight?: number; // reserve-lane count, when a reserve was given
+}
+
 export interface JobBroker {
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -31,6 +56,20 @@ export interface JobBroker {
   // the broker as up from this without issuing a query.
   isStarted(): boolean;
   create(type: JobType, input: unknown): Promise<JobView>;
+  // Atomically count in-flight jobs and, only if that leaves capacity, enqueue —
+  // both under a single cluster-wide advisory lock, so concurrent callers can no
+  // longer overshoot the ceiling via a check-then-act race (the TOCTOU that
+  // countInFlight + a separate create() suffers). Returns whether the job was
+  // admitted, the just-created JobView when it was, and the in-flight counts
+  // observed under the lock. This is the reusable admission-control primitive for
+  // #288: sub-item (a) gates POST /api/ask through it, and sub-item (b) will pass
+  // its own (non-interactive) capacity to admission-control maintenance fan-out —
+  // sharing one lock key so the global count stays mutually exclusive. The block
+  // rule (evaluated in JS from the observed counts) is:
+  //   blocked = capacity.reserve
+  //     ? (reserveInFlight >= capacity.reserve.reserved && inFlight >= capacity.limit)
+  //     : (inFlight >= capacity.limit)
+  createIfAdmitted(type: JobType, input: unknown, capacity: InFlightCapacity): Promise<AdmissionResult>;
   // Hand the next runnable job to a watcher. Contract: queues holding
   // interactive-class jobs (INTERACTIVE_AI_JOB_TYPES — a live caller is waiting)
   // are offered before background/maintenance queues, so an answer_question is

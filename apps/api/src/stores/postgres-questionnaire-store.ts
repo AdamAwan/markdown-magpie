@@ -306,6 +306,14 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
     );
   }
 
+  async revertAnswering(itemId: string): Promise<void> {
+    // Mirror of markAnswering: return the item to pending and clear its log
+    // pointer so the drip can re-answer it after the atomic gate rejected (#288a).
+    await this.pool.query("UPDATE questionnaire_items SET status = 'pending', question_log_id = NULL WHERE id = $1", [
+      itemId
+    ]);
+  }
+
   async completeItem(
     questionLogId: string,
     result: {

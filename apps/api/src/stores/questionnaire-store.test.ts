@@ -141,6 +141,23 @@ describe("InMemoryQuestionnaireStore", () => {
       assert.equal(second?.reusedFromItemId, undefined, "stale reused-from pointer must be cleared");
       assert.deepEqual(await store.basisItemIds(item.id), [], "stale basis must be cleared");
     });
+
+    it("revertAnswering returns an item to pending and clears its question log id", async () => {
+      const store = new InMemoryQuestionnaireStore();
+      const created = await store.create({ name: "reverted", flowId: "flow-revert", questions: ["q0"] });
+      const item = created.items[0];
+      await store.markAnswering(item.id, "log-revert");
+      assert.equal((await store.itemById(item.id))?.status, "answering");
+      assert.equal((await store.itemById(item.id))?.questionLogId, "log-revert");
+
+      await store.revertAnswering(item.id);
+
+      const reverted = await store.itemById(item.id);
+      assert.equal(reverted?.status, "pending", "item is back to pending for the drip to retry");
+      assert.equal(reverted?.questionLogId, undefined, "the stale log pointer is cleared");
+      // nextPending sees it again.
+      assert.equal((await store.nextPending(created.id))?.id, item.id);
+    });
   });
 
   describe("reconcile candidate stash", () => {

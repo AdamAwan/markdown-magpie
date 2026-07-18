@@ -11,7 +11,14 @@ import {
 } from "@magpie/jobs";
 import { CronExpressionParser } from "cron-parser";
 import { injectTraceContext } from "@magpie/telemetry";
-import type { DesiredSchedule, JobBroker, JobListFilters, ScheduleView } from "./broker.js";
+import type {
+  AdmissionResult,
+  DesiredSchedule,
+  InFlightCapacity,
+  JobBroker,
+  JobListFilters,
+  ScheduleView
+} from "./broker.js";
 
 // Job states pg-boss treats as finished (`state >= 'completed'` in its own enum
 // ordering) — see cancel()'s comment for why this matters.
@@ -68,6 +75,23 @@ export class FakeJobBroker implements JobBroker {
 
     this.jobs.set(job.id, job);
     return job;
+  }
+
+  // Single-process mirror of the real broker's atomic admission: no lock is
+  // needed because JS runs this to completion without interleaving. Counts the
+  // in-memory jobs with the same in-flight states, applies the IDENTICAL block
+  // rule, and create()s only when admitted.
+  async createIfAdmitted(type: JobType, input: unknown, capacity: InFlightCapacity): Promise<AdmissionResult> {
+    const inFlight = this.countInFlightSync(capacity.types);
+    const reserveInFlight = capacity.reserve ? this.countInFlightSync(capacity.reserve.types) : 0;
+    const blocked = capacity.reserve
+      ? reserveInFlight >= capacity.reserve.reserved && inFlight >= capacity.limit
+      : inFlight >= capacity.limit;
+    if (blocked) {
+      return { admitted: false, inFlight, ...(capacity.reserve ? { reserveInFlight } : {}) };
+    }
+    const job = await this.create(type, input);
+    return { admitted: true, job, inFlight, ...(capacity.reserve ? { reserveInFlight } : {}) };
   }
 
   async claim(workerName: string, capabilities: JobCapability[]): Promise<JobView | undefined> {
@@ -228,6 +252,12 @@ export class FakeJobBroker implements JobBroker {
   }
 
   async countInFlight(types: JobType[]): Promise<number> {
+    return this.countInFlightSync(types);
+  }
+
+  // Shared by countInFlight and createIfAdmitted so both apply the identical
+  // in-flight-state predicate — they must never disagree on what counts.
+  private countInFlightSync(types: JobType[]): number {
     const wanted = new Set(types);
     let count = 0;
     for (const job of this.jobs.values()) {

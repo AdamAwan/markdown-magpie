@@ -10,7 +10,7 @@ import type {
 import type { JobView } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { logger } from "../../logger.js";
-import { assertAiCapacity } from "../../platform/ai-capacity.js";
+import { aiInflightCapacity, assertAiCapacity } from "../../platform/ai-capacity.js";
 import { buildAnswerQuestionInput, recordAnswerQuestionLog } from "../../platform/answer-question.js";
 import { embeddingModelId } from "../../platform/providers.js";
 import { retrieve } from "../retrieve/service.js";
@@ -166,7 +166,28 @@ async function topUpDrip(ctx: AppContext, questionnaireId: string): Promise<void
       requestedFlowId: questionnaire.flowId,
       ...(candidates.length > 0 ? { candidates } : {})
     });
-    await ctx.jobs.create("answer_question", input);
+    // Adopt the atomic admission primitive (#288a): count + enqueue under the
+    // broker lock so a questionnaire drip can never overshoot the AI ceiling even
+    // when concurrent asks race it. When rate limiting is disabled, enqueue plain.
+    const capacity = aiInflightCapacity(ctx);
+    if (!capacity) {
+      await ctx.jobs.create("answer_question", input);
+      continue;
+    }
+    const result = await ctx.jobs.createIfAdmitted("answer_question", input, capacity);
+    if (!result.admitted) {
+      // Non-admission at the atomic gate: undo this iteration's writes so nothing
+      // is orphaned — revert the item off "answering" back to pending (the drip
+      // re-answers it later) and delete the just-recorded log — then pause. Drip
+      // state is derived, so the next read/completion resumes it.
+      await ctx.stores.questionnaires.revertAnswering(item.id);
+      await ctx.stores.questionLogs.delete(log.id).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn({ err: message, questionLogId: log.id }, "failed to delete question log after drip rejection");
+      });
+      logger.info({ questionnaireId }, "questionnaire drip paused: AI capacity exhausted at admission");
+      return;
+    }
   }
 }
 
