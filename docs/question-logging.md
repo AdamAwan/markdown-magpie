@@ -275,6 +275,30 @@ no-op), and `verifyGapClosure` itself short-circuits once a proposal already car
 second `still_open` row for the same failure, double-counting it against
 `CLOSURE_RETRY_CAP`.
 
+**The cascade is also durable, not just idempotent (#282).** The merge status is
+persisted synchronously, but the cascade that enqueues `verify_gap_closure` runs off the
+request thread — in the fire-and-forget in-process background runner (manual / local-git
+merges) or inside the replayable `completeJob` side-effect block (GitHub PR-poll). Either
+can be interrupted after the merge is recorded but before verification is enqueued (an API
+restart, or an enqueue that throws), which would otherwise strand a proposal permanently
+`merged` with unset `closureStatus` and its gaps never verified — after which the
+reconciler keeps re-drafting proposals for questions already answered. Two backstops
+prevent that permanent orphan, both keyed on the durable *cascade-done marker*
+(`mergeCascadeIncomplete`: `merged` + triggering questions + no `closureStatus` + **no
+`verify_gap_closure` job in any state**) rather than on the proposal status the transition
+guard mutates:
+
+- **Replay-safe PR transition.** `applyPullRequestTransition` re-drives `runMergeCascade`
+  when a `completeJob` replay re-invokes it against an already-`merged` proposal whose
+  cascade never completed. Keying the guard only on `status === "pr-opened"` (as before)
+  let the 500-replay idempotency contract be defeated by the guard's own status write — the
+  cascade was dropped forever. Re-driving is a no-op once the verify job has landed.
+- **Reconciler sweep.** Each `process_gaps_to_pull_requests` tick sweeps this flow's
+  `merged`-but-uncascaded proposals and re-drives their cascade (recorded in the run
+  details as `mergedCascadesRecovered`), recovering any orphan the fast path lost —
+  including rows orphaned before this backstop existed. `runMergeCascade` is idempotent, so
+  a proposal is swept at most once.
+
 ### Operational requirement: run at least two watchers
 
 Gap-closure verification is a *maintenance orchestrator*: the watcher that claims the

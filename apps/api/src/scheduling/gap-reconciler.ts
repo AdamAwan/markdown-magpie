@@ -59,6 +59,9 @@ interface GapReconcileRunDetails extends Record<string, unknown> {
   pendingPublicationActions: number;
   pullRequestsChecked: number;
   pullRequestTransitions: number;
+  // Orphaned post-merge cascades this tick re-drove: proposals left `merged` with
+  // their gaps never verified because the fast cascade path was lost (#282).
+  mergedCascadesRecovered: number;
   overlapsDetected: number;
   clustersCreated: number;
   mergeDecisions: number;
@@ -148,6 +151,7 @@ async function reconcileGapsInner(
     pendingPublicationActions: 0,
     pullRequestsChecked: 0,
     pullRequestTransitions: 0,
+    mergedCascadesRecovered: 0,
     overlapsDetected: 0,
     clustersCreated: 0,
     mergeDecisions: 0,
@@ -164,6 +168,11 @@ async function reconcileGapsInner(
   const prState = await refreshOpenPullRequests(ctx, flowId, deps, clusterFlowCache);
   details.pullRequestsChecked = prState.checked;
   details.pullRequestTransitions = prState.transitions;
+
+  // (b2) Orphaned-merge sweep — re-drive any post-merge cascade this flow lost
+  // before it enqueued verification (#282). Runs every tick, independent of the
+  // gap-catalog revision gate, since an orphan can exist with no gap changes.
+  details.mergedCascadesRecovered = await sweepUnverifiedMergedProposals(ctx, flowId, clusterFlowCache);
 
   details.overlapsDetected = await detectOverlaps(ctx, flowId, clusterFlowCache);
 
@@ -279,29 +288,61 @@ async function refreshOpenPullRequests(
 // pass and the refresh_flow_snapshot completion handler. Kept here and shared so the
 // two paths can never drift: merged ⇒ updateStatus("merged") + runMergeCascade +
 // freeze the cluster; a close-without-merge ⇒ updateStatus("rejected") + freeze.
-// Idempotent by guarding on the proposal's CURRENT status: only a still-open
-// (pr-opened) proposal is transitioned, so re-applying the same reading — e.g.
-// re-completing a refresh_flow_snapshot job — is a no-op and never runs the cascade
-// twice. (updateStatus itself returns the proposal even when nothing changed, so the
-// guard, not its return value, is what makes this safe.)
+//
+// Replay-safe by design (#282). The first observation of a merge transitions a
+// still-open (pr-opened) proposal; re-applying the SAME reading — e.g. re-completing
+// a refresh_flow_snapshot job — is a no-op for the status write. But the status write
+// alone is not the whole transition: runMergeCascade (which enqueues verify_gap_closure)
+// can throw before it lands, and on the GitHub path that throw surfaces as
+// side_effects_failed → HTTP 500 → the watcher retries complete() → this handler
+// replays with the proposal already `merged`. Guarding the WHOLE transition on
+// `status === "pr-opened"` would then drop the cascade forever — the 500-replay
+// idempotency contract defeated by the guard's own status mutation. So the merged
+// branch also re-drives an already-merged proposal whose cascade never durably
+// completed (mergeCascadeIncomplete), keying idempotency on the cascade-done marker
+// rather than on the mutated status. runMergeCascade is itself idempotent, so a
+// proposal whose verify job already landed is a no-op.
 export async function applyPullRequestTransition(
   ctx: AppContext,
   proposalId: string,
   status: { merged: boolean; state: "open" | "closed" }
 ): Promise<boolean> {
   const current = await ctx.stores.proposals.get(proposalId);
-  if (!current || current.status !== "pr-opened") {
+  if (!current) {
     return false;
   }
   if (status.merged) {
-    const merged = await ctx.stores.proposals.updateStatus(proposalId, "merged");
-    if (merged) {
-      logger.info({ proposalId }, "gap reconciler: proposal merged; running cascade and freezing its cluster");
-      await proposalsService.runMergeCascade(ctx, merged);
-      await freezeClusterForProposal(ctx, merged);
+    // First observation: transition pr-opened → merged, run the cascade, freeze.
+    if (current.status === "pr-opened") {
+      const merged = await ctx.stores.proposals.updateStatus(proposalId, "merged");
+      if (merged) {
+        logger.info({ proposalId }, "gap reconciler: proposal merged; running cascade and freezing its cluster");
+        await proposalsService.runMergeCascade(ctx, merged);
+        await freezeClusterForProposal(ctx, merged);
+        return true;
+      }
+      return false;
+    }
+    // Replay: the merge already landed on a prior attempt, but that attempt's
+    // cascade may have thrown before enqueuing verification (e.g. completeJob's
+    // side-effect block failed and the watcher's complete() retry is replaying
+    // this handler). Re-drive the interrupted cascade so verification runs — a
+    // no-op once it has (mergeCascadeIncomplete is false). The cluster was frozen
+    // on the first pass; freezing is idempotent, so re-apply it defensively.
+    if (await proposalsService.mergeCascadeIncomplete(ctx, current)) {
+      logger.info(
+        { proposalId },
+        "gap reconciler: re-driving interrupted merge cascade for an already-merged proposal (replay; #282)"
+      );
+      await proposalsService.runMergeCascade(ctx, current);
+      await freezeClusterForProposal(ctx, current);
       return true;
     }
+    return false;
   } else if (status.state === "closed") {
+    if (current.status !== "pr-opened") {
+      return false;
+    }
     const rejected = await ctx.stores.proposals.updateStatus(proposalId, "rejected");
     if (rejected) {
       logger.info(
@@ -313,6 +354,51 @@ export async function applyPullRequestTransition(
     }
   }
   return false;
+}
+
+// Backstop for orphaned post-merge cascades (#282). A merge records status=merged
+// synchronously, but the cascade that enqueues verify_gap_closure runs either in
+// the fire-and-forget BackgroundRunner (manual / local-git merges, lost on an API
+// restart) or inside the replayable completeJob side-effect block (GitHub PR-poll).
+// Either can be interrupted after the merge is persisted but before verification is
+// enqueued, leaving a proposal permanently `merged` with unset closureStatus and its
+// gaps never verified — after which the reconciler keeps re-drafting proposals for
+// questions that were already answered. This sweep re-drives runMergeCascade for any
+// of this flow's merged-but-uncascaded proposals so verification eventually runs even
+// when the fast path was lost. Idempotent: mergeCascadeIncomplete is false once a
+// verify_gap_closure job exists, so a proposal is swept at most once. Best-effort per
+// proposal — a re-drive failure is logged and retried on the next tick rather than
+// aborting the reconcile.
+async function sweepUnverifiedMergedProposals(
+  ctx: AppContext,
+  flowId: string | undefined,
+  cache: ClusterFlowCache
+): Promise<number> {
+  const merged = await ctx.stores.proposals.list(200, { status: "merged" });
+  let recovered = 0;
+  for (const proposal of merged) {
+    if (!sameFlow(await proposalFlowId(ctx, proposal, cache), flowId)) {
+      continue;
+    }
+    if (!(await proposalsService.mergeCascadeIncomplete(ctx, proposal))) {
+      continue;
+    }
+    logger.warn(
+      { flowLabel: flowId ?? "default", proposalId: proposal.id },
+      "gap reconciler: recovering orphaned post-merge cascade (merged but never verified); re-driving merge cascade (#282)"
+    );
+    try {
+      await proposalsService.runMergeCascade(ctx, proposal);
+      recovered += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "merge cascade recovery failed";
+      logger.warn(
+        { proposalId: proposal.id, err: message },
+        "gap reconciler: orphaned merge cascade recovery failed; will retry next tick"
+      );
+    }
+  }
+  return recovered;
 }
 
 async function freezeClusterForProposal(ctx: AppContext, proposal: Proposal): Promise<void> {
