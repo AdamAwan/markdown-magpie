@@ -72,6 +72,14 @@ export function AuthProvider({ children, config }: { children: ReactNode; config
       domain={config.domain}
       clientId={config.clientId}
       authorizationParams={{ audience: config.audience, redirect_uri: redirectUri, scope: REQUESTED_SCOPE }}
+      // Caches access tokens (including manage:admin) in localStorage, so they're
+      // readable by any future XSS on this origin. Accepted trade-off for now: the
+      // console renders AI Markdown via react-markdown without rehype-raw, ships
+      // strong security headers, and exposes no NEXT_PUBLIC_* secrets, while the
+      // alternatives are worse UX — an in-memory cache forces re-login on every
+      // reload, and hidden-iframe silent SSO is broken by third-party-cookie
+      // blocking in Safari/Chrome. The proper fix is a Backend-for-Frontend that
+      // keeps tokens off the browser entirely; tracked as #316.
       cacheLocation="localstorage"
       useRefreshTokens
     >
