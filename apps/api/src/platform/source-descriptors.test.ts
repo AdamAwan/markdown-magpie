@@ -44,6 +44,15 @@ describe("projectSourceDescriptors", () => {
     ]);
   });
 
+  it("carries a git source's tokenEnv override onto the descriptor", () => {
+    const deps = depsWith([
+      { id: "g", name: "Repo", kind: "git", url: "https://example.com/r.git", tokenEnv: "ACME_PAT" }
+    ]);
+    assert.deepEqual(projectSourceDescriptors(deps, ["g"]), [
+      { id: "g", name: "Repo", kind: "git", url: "https://example.com/r.git", tokenEnv: "ACME_PAT" }
+    ]);
+  });
+
   it("skips a git source with no resolvable url and a local source with no path", () => {
     const deps = depsWith([
       { id: "bad-git", name: "x", kind: "git" },

@@ -2030,6 +2030,31 @@ test("list attaches localGitDestination", async () => {
   assert.equal(listed.localGitDestination, true);
 });
 
+test("list attaches destinationTokenEnv when the destination overrides its PAT", async () => {
+  const ctx = makeTestContext({
+    knowledgeConfig: {
+      sources: [],
+      destinations: [
+        { id: "demo", name: "Demo", url: "https://github.com/acme/docs.git", kind: "git", tokenEnv: "ACME_PAT" }
+      ],
+      flows: [],
+      repositories: [],
+      roleGrants: {},
+      checkoutRoot: ".magpie/checkouts"
+    }
+  });
+  await branchPushedProposal(ctx, "https://github.com/acme/docs.git");
+  const [listed] = await proposals.list(ctx, 10);
+  assert.equal(listed.destinationTokenEnv, "ACME_PAT");
+});
+
+test("list omits destinationTokenEnv when the destination uses the host default", async () => {
+  const ctx = ctxWithDestination("https://github.com/acme/docs.git");
+  await branchPushedProposal(ctx, "https://github.com/acme/docs.git");
+  const [listed] = await proposals.list(ctx, 10);
+  assert.equal(listed.destinationTokenEnv, undefined);
+});
+
 // --- local-git reject (Bin) ------------------------------------------------
 
 test("rejectLocalProposal marks rejected and deletes the review branch", async () => {

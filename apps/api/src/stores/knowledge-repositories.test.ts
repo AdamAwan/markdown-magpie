@@ -54,6 +54,37 @@ describe("knowledge repository configuration", () => {
     ]);
   });
 
+  it("parses a per-repository tokenEnv override on git repositories", () => {
+    const sources = getConfiguredKnowledgeSources({
+      KNOWLEDGE_SOURCES: JSON.stringify([
+        { id: "acme", url: "https://github.com/acme/private.git", tokenEnv: "ACME_GITHUB_PAT" },
+        // The tokenEnvVar alias is accepted too.
+        { id: "beta", url: "https://github.com/beta/private.git", tokenEnvVar: "BETA_PAT" },
+        // A plain source carries no tokenEnv.
+        { id: "public", url: "https://github.com/public/repo.git" }
+      ])
+    });
+
+    assert.deepEqual(sources, [
+      {
+        id: "acme",
+        name: "acme",
+        url: "https://github.com/acme/private.git",
+        kind: "git",
+        tokenEnv: "ACME_GITHUB_PAT"
+      },
+      { id: "beta", name: "beta", url: "https://github.com/beta/private.git", kind: "git", tokenEnv: "BETA_PAT" },
+      { id: "public", name: "public", url: "https://github.com/public/repo.git", kind: "git" }
+    ]);
+  });
+
+  it("ignores tokenEnv on non-git (local) repositories", () => {
+    const sources = getConfiguredKnowledgeSources({
+      KNOWLEDGE_SOURCES: JSON.stringify([{ id: "docs", path: "knowledge-bases/docs", tokenEnv: "IGNORED" }])
+    });
+    assert.deepEqual(sources, [{ id: "docs", name: "docs", path: "knowledge-bases/docs", kind: "local" }]);
+  });
+
   it("allows multiple source kinds including agent knowledge and git subpaths", () => {
     const sources = getConfiguredKnowledgeSources({
       KNOWLEDGE_SOURCES: JSON.stringify([
