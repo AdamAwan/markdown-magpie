@@ -14,6 +14,12 @@ export interface ConfiguredKnowledgeRepository {
   // https. Absent/empty means the source stays a prompt-note reference — fetch
   // access is strictly operator opt-in.
   allowedHosts?: string[];
+  // git repositories only: the NAME of an environment variable holding a PAT that
+  // overrides the host-default token (GITHUB_TOKEN / AZURE_DEVOPS_PAT) for this
+  // repository — e.g. a repo held by a different account. Only the name is stored
+  // here (never the secret); the process running git resolves the token from its
+  // own environment. Absent means "use the host default".
+  tokenEnv?: string;
 }
 
 export interface ConfiguredKnowledgeFlow {
@@ -349,10 +355,14 @@ function normalizeRepositoryObject(candidate: Record<string, unknown>): Configur
     const subpath = normalizeSubpath(
       stringValue(candidate.subpath) ?? stringValue(candidate.folder) ?? stringValue(candidate.docsPath)
     );
+    // Accept `tokenEnv` (or the `tokenEnvVar` alias) — the NAME of an env var
+    // holding a PAT that overrides the host default for this repo.
+    const tokenEnv = stringValue(candidate.tokenEnv) ?? stringValue(candidate.tokenEnvVar);
     return {
       ...repository,
       ...(branch ? { branch } : {}),
-      ...(subpath ? { subpath } : {})
+      ...(subpath ? { subpath } : {}),
+      ...(tokenEnv ? { tokenEnv } : {})
     };
   }
 

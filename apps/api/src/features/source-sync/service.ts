@@ -116,7 +116,8 @@ async function syncGitSource(
     id: source.id,
     url: source.url!,
     branch: source.branch,
-    checkoutRoot: ctx.knowledgeConfig.checkoutRoot
+    checkoutRoot: ctx.knowledgeConfig.checkoutRoot,
+    ...(source.tokenEnv ? { tokenEnv: source.tokenEnv } : {})
   });
   const headSha = await getHeadSha(checkout.localPath);
   if (!headSha) {
@@ -151,7 +152,7 @@ async function syncGitSource(
     // With a blobless partial clone, diffing last_sha..HEAD lazily fetches the OLD
     // blobs of changed files from origin; thread the same auth the checkout used so
     // private sources don't break (and a fetch failure surfaces as an error).
-    authEnv: buildGitAuthEnv(source.url!)
+    authEnv: buildGitAuthEnv(source.url!, source.tokenEnv)
   });
   // The TRUE number of files the commit touched (recorded on the run so nothing is
   // silently lost), and the (possibly truncated) subset we actually materialize and

@@ -540,6 +540,12 @@ export interface Proposal {
   // true when this proposal's destination is a local-git (file://) repository, so
   // the UI offers a real "Merge" instead of the hosted "Mark Merged".
   localGitDestination?: boolean;
+  // Computed by the API when serving proposals (NOT persisted): the NAME of the
+  // env var holding this proposal's destination PAT override, when the destination
+  // configured one. The watcher's PR-poll and comment jobs read it to authenticate
+  // GitHub API calls for a repo held by a different account. Absent when the
+  // destination uses the host-default token.
+  destinationTokenEnv?: string;
   // The outcome of gap-closure verification, set after the proposal merged and its
   // triggering questions were re-asked. Absent until a verification has run.
   // 'verified_closed' = the merged doc now answers every triggering question;

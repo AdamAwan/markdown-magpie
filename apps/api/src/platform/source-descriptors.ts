@@ -41,7 +41,10 @@ function toDescriptor(source: ConfiguredKnowledgeRepository): SourceDescriptor |
           name: source.name,
           kind: "git",
           url: source.url,
-          ...(source.subpath ? { subpath: source.subpath } : {})
+          ...(source.subpath ? { subpath: source.subpath } : {}),
+          // Carry the per-source PAT env var NAME (not the secret) so the watcher
+          // clones a source held by a different account with its own token.
+          ...(source.tokenEnv ? { tokenEnv: source.tokenEnv } : {})
         }
       : undefined;
   }
