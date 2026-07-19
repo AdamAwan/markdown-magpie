@@ -25,6 +25,7 @@ import {
 } from "./gap-assignment.js";
 import { selectRetainingChildOnSplit, selectSurvivingClusterOnMerge } from "./gap-reconciler-lineage.js";
 import { sharedTargets } from "./reconcile-gate.js";
+import { selectDestinationForProposal } from "../platform/repositories.js";
 import { createFanoutBudget, type FanoutBudget, type FanoutBudgetCounts } from "../platform/maintenance-fanout.js";
 
 export interface ReconcilerDeps {
@@ -1347,12 +1348,22 @@ async function detectOverlaps(ctx: AppContext, flowId: string | undefined, cache
       }
       await ctx.stores.prCrosslinks.record({ flowId, proposalA: a.id, proposalB: b.id, targets });
       detected += 1;
+      // Each PR authenticates with its own destination's PAT override when set —
+      // the two linked PRs can live in different repositories/accounts.
+      const tokenEnvA = selectDestinationForProposal(ctx.repositoryDeps(), {
+        targetPath: a.targetPath,
+        ...(flowId ? { flowId } : {})
+      })?.tokenEnv;
+      const tokenEnvB = selectDestinationForProposal(ctx.repositoryDeps(), {
+        targetPath: b.targetPath,
+        ...(flowId ? { flowId } : {})
+      })?.tokenEnv;
       await ctx.jobs.create("crosslink_pull_requests", {
         ...(flowId ? { flowId } : {}),
         targets,
         pullRequests: [
-          { proposalId: a.id, pullRequestUrl: a.pullRequestUrl },
-          { proposalId: b.id, pullRequestUrl: b.pullRequestUrl }
+          { proposalId: a.id, pullRequestUrl: a.pullRequestUrl, ...(tokenEnvA ? { tokenEnv: tokenEnvA } : {}) },
+          { proposalId: b.id, pullRequestUrl: b.pullRequestUrl, ...(tokenEnvB ? { tokenEnv: tokenEnvB } : {}) }
         ]
       });
       logger.info(

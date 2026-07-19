@@ -4,6 +4,7 @@ import type { JobView } from "@magpie/jobs";
 import { foldChangesetProposalOutputSchema, foldMarkdownProposalOutputSchema } from "@magpie/jobs";
 import type { AppContext } from "../context.js";
 import { enqueuePublishProposal, splitGapSummaries } from "../features/proposals/service.js";
+import { selectDestinationForProposal } from "../platform/repositories.js";
 import type { ChangeIntent } from "./intent.js";
 import { decideReconciliation, openPullRequestSummaries, sharedTargets } from "./reconcile-gate.js";
 import { proposalFlowId, sameFlowOpenProposals } from "./flow.js";
@@ -402,12 +403,14 @@ export async function applyFoldFromCompletedJob(
 
   const pullRequestUrl = survivor.publication?.pullRequestUrl;
   if (pullRequestUrl) {
+    const tokenEnv = selectDestinationForProposal(ctx.repositoryDeps(), survivor)?.tokenEnv;
     await ctx.jobs.create("comment_pull_request", {
       pullRequestUrl,
       body:
         `🪶 **Magpie:** folded "${rival.title}" into this PR — it covered overlapping gaps on ` +
         `\`${survivor.targetPath}\`. This PR has been updated to include that material. ` +
-        "_(automated fold-on-overlap)_"
+        "_(automated fold-on-overlap)_",
+      ...(tokenEnv ? { tokenEnv } : {})
     });
   }
   logger.info(
@@ -471,11 +474,13 @@ export async function applyChangesetFoldFromCompletedJob(
 
   const pullRequestUrl = survivor.publication?.pullRequestUrl;
   if (pullRequestUrl) {
+    const tokenEnv = selectDestinationForProposal(ctx.repositoryDeps(), survivor)?.tokenEnv;
     await ctx.jobs.create("comment_pull_request", {
       pullRequestUrl,
       body:
         `🪶 **Magpie:** folded "${rival.title}" into this PR — it reconciles overlapping documents. ` +
-        "This PR has been updated to include that material. _(automated fold-on-overlap)_"
+        "This PR has been updated to include that material. _(automated fold-on-overlap)_",
+      ...(tokenEnv ? { tokenEnv } : {})
     });
   }
   logger.info(

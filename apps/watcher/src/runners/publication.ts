@@ -36,7 +36,11 @@ export interface PublicationDeps {
   publishProposal(request: PublishProposalBranchRequest): Promise<PublishProposalBranchResponse>;
   publishChangeset(request: PublishChangesetRequest): Promise<PublishProposalBranchResponse>;
   raisePullRequest(request: RaisePullRequestRequest): Promise<RaisedPullRequest | undefined>;
-  commentOnPullRequest(request: { pullRequestUrl: string; body: string }): Promise<string | undefined>;
+  commentOnPullRequest(request: {
+    pullRequestUrl: string;
+    body: string;
+    tokenEnv?: string;
+  }): Promise<string | undefined>;
 }
 
 // Real git-backed deps used in production.
@@ -66,7 +70,8 @@ export async function preparePublicationRepository(
     id: repository.id,
     url: remoteUrl,
     checkoutRoot,
-    branch: repository.defaultBranch
+    branch: repository.defaultBranch,
+    ...(repository.tokenEnv ? { tokenEnv: repository.tokenEnv } : {})
   });
   const relativePath = repository.git?.relativePathFromRoot;
   const indexedPath =
@@ -105,7 +110,11 @@ const repositorySchema = z.object({
   localPath: z.string(),
   remoteUrl: z.string().optional(),
   defaultBranch: z.string(),
-  git: gitContextSchema.optional()
+  git: gitContextSchema.optional(),
+  // The per-repository PAT env var NAME (not the secret) from the credential-free
+  // execution context. The watcher resolves the actual token from its own env when
+  // it clones/pushes and opens the PR for a repo held by a different account.
+  tokenEnv: z.string().optional()
 });
 const changesetChangeSchema = z.object({
   path: z.string(),
@@ -265,7 +274,8 @@ export class PublicationRunner {
           headBranch: publication.branchName,
           baseBranch,
           title: `docs: ${proposal.title}`,
-          body: buildPullRequestBody(proposal)
+          body: buildPullRequestBody(proposal),
+          ...(repository.tokenEnv ? { tokenEnv: repository.tokenEnv } : {})
         });
         pullRequestUrl = raised?.url;
         if (pullRequestUrl) {
@@ -305,7 +315,11 @@ export class PublicationRunner {
       const body =
         `🔗 **Magpie:** this PR overlaps ${other.pullRequestUrl} — both edit ${files}. ` +
         "They may be consolidated. _(automated overlap detection)_";
-      const url = await this.deps.commentOnPullRequest({ pullRequestUrl: self.pullRequestUrl, body });
+      const url = await this.deps.commentOnPullRequest({
+        pullRequestUrl: self.pullRequestUrl,
+        body,
+        ...(self.tokenEnv ? { tokenEnv: self.tokenEnv } : {})
+      });
       if (url) {
         commented.push(url);
       }
@@ -314,8 +328,12 @@ export class PublicationRunner {
   }
 
   private async commentPullRequest(job: JobView): Promise<unknown> {
-    const { pullRequestUrl, body } = commentPullRequestInputSchema.parse(job.input);
-    const commentUrl = await this.deps.commentOnPullRequest({ pullRequestUrl, body });
+    const { pullRequestUrl, body, tokenEnv } = commentPullRequestInputSchema.parse(job.input);
+    const commentUrl = await this.deps.commentOnPullRequest({
+      pullRequestUrl,
+      body,
+      ...(tokenEnv ? { tokenEnv } : {})
+    });
     return commentPullRequestOutputSchema.parse(commentUrl ? { commentUrl } : {});
   }
 }
@@ -341,6 +359,7 @@ function toRepositoryRef(repository: PublishRepository): RepositoryRef {
     localPath: repository.localPath,
     provider: "github",
     ...(repository.remoteUrl ? { remoteUrl: repository.remoteUrl } : {}),
+    ...(repository.tokenEnv ? { tokenEnv: repository.tokenEnv } : {}),
     ...(repository.git
       ? {
           git: {

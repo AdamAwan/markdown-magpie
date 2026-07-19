@@ -124,7 +124,14 @@ export async function prepareSourceWorkspaces(
     try {
       const repoRoot =
         descriptor.kind === "git"
-          ? (await checkout({ id: descriptor.id, url: descriptor.url, checkoutRoot: options.checkoutRoot })).localPath
+          ? (
+              await checkout({
+                id: descriptor.id,
+                url: descriptor.url,
+                checkoutRoot: options.checkoutRoot,
+                ...(descriptor.tokenEnv ? { tokenEnv: descriptor.tokenEnv } : {})
+              })
+            ).localPath
           : descriptor.path;
       const rootDir = withSubpath(repoRoot, descriptor.subpath);
       if (!existsSync(rootDir)) {

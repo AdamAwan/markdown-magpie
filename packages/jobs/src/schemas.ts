@@ -388,7 +388,11 @@ export const foldMarkdownProposalOutputSchema = z.object({
 // PRs, and a folded-away rival never has one.
 export const commentPullRequestInputSchema = z.object({
   pullRequestUrl: z.string(),
-  body: z.string()
+  body: z.string(),
+  // The destination's PAT env var NAME when it overrides the host default, so the
+  // watcher comments on a PR in a repo held by a different account with its own
+  // token. Absent means "use GITHUB_TOKEN".
+  tokenEnv: z.string().optional()
 });
 export const commentPullRequestOutputSchema = z.object({
   commentUrl: z.string().optional()
@@ -714,7 +718,12 @@ export const verifyGapClosureOutputSchema = z.object({
 export const crosslinkPullRequestsInputSchema = z.object({
   flowId: z.string().optional(),
   targets: z.array(z.string()),
-  pullRequests: z.array(z.object({ proposalId: z.string(), pullRequestUrl: z.string() })).length(2)
+  // Each PR carries its own destination PAT env var NAME (when overridden), since
+  // the two linked PRs can live in different repositories/accounts. Absent means
+  // "use GITHUB_TOKEN" for that PR's comment.
+  pullRequests: z
+    .array(z.object({ proposalId: z.string(), pullRequestUrl: z.string(), tokenEnv: z.string().optional() }))
+    .length(2)
 });
 export const crosslinkPullRequestsOutputSchema = z.object({
   commented: z.array(z.string()),
