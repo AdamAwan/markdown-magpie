@@ -10,6 +10,13 @@ export interface RepositoryRef {
   localPath: string;
   provider: "local" | "github" | "gitlab" | "azure-devops";
   git?: GitRepositoryContext;
+  // The NAME of an environment variable holding a per-repository PAT that
+  // overrides the host-default token (GITHUB_TOKEN / AZURE_DEVOPS_PAT) for this
+  // repository's git operations and host API calls — e.g. a destination repo held
+  // by a different account. Only the NAME travels (never the secret), so it can
+  // ride the credential-free execution context; each process resolves the actual
+  // token from its own environment. Absent means "use the host default".
+  tokenEnv?: string;
 }
 
 export interface GitRepositoryContext {
@@ -533,6 +540,12 @@ export interface Proposal {
   // true when this proposal's destination is a local-git (file://) repository, so
   // the UI offers a real "Merge" instead of the hosted "Mark Merged".
   localGitDestination?: boolean;
+  // Computed by the API when serving proposals (NOT persisted): the NAME of the
+  // env var holding this proposal's destination PAT override, when the destination
+  // configured one. The watcher's PR-poll and comment jobs read it to authenticate
+  // GitHub API calls for a repo held by a different account. Absent when the
+  // destination uses the host-default token.
+  destinationTokenEnv?: string;
   // The outcome of gap-closure verification, set after the proposal merged and its
   // triggering questions were re-asked. Absent until a verification has run.
   // 'verified_closed' = the merged doc now answers every triggering question;
@@ -1111,8 +1124,13 @@ export interface SourceMapUpdate {
 // they render as prompt notes, as does the agent kind. Fetched web content is
 // untrusted input to the drafting agent (docs/threat-model.md), which is why
 // fetching is strictly opt-in per descriptor.
+// `tokenEnv` (git sources) is the NAME of an environment variable holding a
+// per-source PAT that overrides the host-default token when cloning/fetching this
+// source — e.g. a source repo held by a different account. Only the name travels
+// on the descriptor (never the secret), so it is safe in job payloads and stored
+// job rows; the executing process resolves the token from its own environment.
 export type SourceDescriptor =
-  | { id: string; name: string; kind: "git"; url: string; subpath?: string }
+  | { id: string; name: string; kind: "git"; url: string; subpath?: string; tokenEnv?: string }
   | { id: string; name: string; kind: "local"; path: string; subpath?: string }
   | { id: string; name: string; kind: "internet"; url?: string; allowedHosts?: string[] }
   | { id: string; name: string; kind: "agent" };

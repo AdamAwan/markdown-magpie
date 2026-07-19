@@ -43,6 +43,9 @@ export interface ProposalExecutionContext {
 export interface OpenPullRequestRef {
   proposalId: string;
   pullRequestUrl: string;
+  // The destination's PAT env var NAME when it overrides the host default, so the
+  // refresh runner polls a repo held by a different account with its own token.
+  tokenEnv?: string;
 }
 
 // The full surface the runners and loop use. The loop only needs WatcherApiClient;
@@ -332,11 +335,19 @@ export class HttpWatcherApi implements WatcherApi {
 
   async listOpenPullRequests(signal?: AbortSignal): Promise<OpenPullRequestRef[]> {
     const { proposals } = await this.get<{
-      proposals: Array<{ id: string; publication?: { pullRequestUrl?: string } }>;
+      proposals: Array<{ id: string; publication?: { pullRequestUrl?: string }; destinationTokenEnv?: string }>;
     }>("/api/proposals?status=pr-opened", signal);
     return proposals.flatMap((proposal) => {
       const pullRequestUrl = proposal.publication?.pullRequestUrl;
-      return pullRequestUrl ? [{ proposalId: proposal.id, pullRequestUrl }] : [];
+      return pullRequestUrl
+        ? [
+            {
+              proposalId: proposal.id,
+              pullRequestUrl,
+              ...(proposal.destinationTokenEnv ? { tokenEnv: proposal.destinationTokenEnv } : {})
+            }
+          ]
+        : [];
     });
   }
 

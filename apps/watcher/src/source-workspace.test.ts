@@ -36,6 +36,19 @@ describe("prepareSourceWorkspaces", () => {
     assert.deepEqual(prepared.notes, []);
   });
 
+  it("threads a git source's tokenEnv override to the checkout", async () => {
+    const checkoutRoot = mkdtempSync(path.join(tmpdir(), "magpie-ws-"));
+    const cloned = path.join(checkoutRoot, "g1");
+    mkdirSync(cloned, { recursive: true });
+    let seenTokenEnv: string | undefined = "unset";
+    const checkout = async (req: { id: string; url: string; checkoutRoot: string; tokenEnv?: string }) => {
+      seenTokenEnv = req.tokenEnv;
+      return { localPath: cloned, remoteUrl: req.url };
+    };
+    await prepareSourceWorkspaces([git({ tokenEnv: "ACME_PAT" })], { checkoutRoot, checkout });
+    assert.equal(seenTokenEnv, "ACME_PAT");
+  });
+
   it("captures the checkout head sha on the workspace", async () => {
     const checkoutRoot = mkdtempSync(path.join(tmpdir(), "magpie-ws-"));
     const cloned = path.join(checkoutRoot, "g1");

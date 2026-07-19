@@ -50,7 +50,7 @@ export class RefreshFlowSnapshotRunner {
       signal.throwIfAborted();
       let status: { merged: boolean; state: "open" | "closed"; mergeable: PullRequestMergeability } | undefined;
       try {
-        status = await this.fetchPullRequestStatus(pr.pullRequestUrl);
+        status = await this.fetchPullRequestStatus(pr.pullRequestUrl, pr.tokenEnv);
       } catch (error) {
         const message = error instanceof Error ? error.message : "pull request lookup failed";
         logger.warn(
@@ -68,7 +68,7 @@ export class RefreshFlowSnapshotRunner {
       let reviewDecision: ReviewDecision | undefined;
       if (status.state === "open" && !status.merged) {
         try {
-          reviewDecision = await this.fetchPullRequestReviewDecision(pr.pullRequestUrl);
+          reviewDecision = await this.fetchPullRequestReviewDecision(pr.pullRequestUrl, pr.tokenEnv);
         } catch (error) {
           const message = error instanceof Error ? error.message : "review decision lookup failed";
           logger.warn(

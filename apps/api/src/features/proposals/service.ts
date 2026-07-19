@@ -56,12 +56,25 @@ type PublishProposalJobOutput = z.infer<typeof publishProposalOutputSchema>;
 
 export async function list(ctx: AppContext, limit: number, options?: ProposalListOptions): Promise<Proposal[]> {
   const proposals = await ctx.stores.proposals.list(limit, options);
-  return proposals.map((proposal) => ({ ...proposal, localGitDestination: isLocalGitDestination(ctx, proposal) }));
+  return proposals.map((proposal) => serveProposal(ctx, proposal));
 }
 
 export async function get(ctx: AppContext, id: string): Promise<Proposal | undefined> {
   const proposal = await ctx.stores.proposals.get(id);
-  return proposal ? { ...proposal, localGitDestination: isLocalGitDestination(ctx, proposal) } : undefined;
+  return proposal ? serveProposal(ctx, proposal) : undefined;
+}
+
+// Attaches the API-computed (non-persisted) view fields to a proposal before it is
+// served: whether its destination is local-git, and the destination's PAT env var
+// name when it overrides the host default (so the watcher's PR-poll/comment jobs
+// authenticate a repo held by another account).
+function serveProposal(ctx: AppContext, proposal: Proposal): Proposal {
+  const tokenEnv = selectDestinationForProposal(ctx.repositoryDeps(), proposal)?.tokenEnv;
+  return {
+    ...proposal,
+    localGitDestination: isLocalGitDestination(ctx, proposal),
+    ...(tokenEnv ? { destinationTokenEnv: tokenEnv } : {})
+  };
 }
 
 export async function updateStatus(
@@ -964,7 +977,11 @@ async function resolvePublishRepository(
     };
   }
 
-  return { ok: true, repository };
+  // Carry the destination's per-repo PAT env var NAME onto the ref (the index does
+  // not track it), so the execution context tells the watcher which token to use
+  // when it pushes the branch and opens the PR for a repo held by another account.
+  const tokenEnv = selectDestinationForProposal(ctx.repositoryDeps(), proposal)?.tokenEnv;
+  return { ok: true, repository: tokenEnv ? { ...repository, tokenEnv } : repository };
 }
 
 // Enqueues a publish_proposal job for a "ready" proposal after re-running the
@@ -1125,7 +1142,10 @@ export async function enqueuePublishProposal(
   return job;
 }
 
-type ExecutionContextRepository = Pick<RepositoryRef, "id" | "localPath" | "remoteUrl" | "defaultBranch" | "git">;
+type ExecutionContextRepository = Pick<
+  RepositoryRef,
+  "id" | "localPath" | "remoteUrl" | "defaultBranch" | "git" | "tokenEnv"
+>;
 
 // The non-generative, credential-free view the Task 7 publication runner fetches
 // before executing git: the proposal record plus exactly the repository fields it
@@ -1149,8 +1169,8 @@ export async function getProposalExecutionContext(
     return resolved;
   }
 
-  const { id, localPath, remoteUrl, defaultBranch, git } = resolved.repository;
-  return { ok: true, proposal, repository: { id, localPath, remoteUrl, defaultBranch, git } };
+  const { id, localPath, remoteUrl, defaultBranch, git, tokenEnv } = resolved.repository;
+  return { ok: true, proposal, repository: { id, localPath, remoteUrl, defaultBranch, git, tokenEnv } };
 }
 
 // Drafts ONE proposal from one or more gap candidates. The reviewer (via the

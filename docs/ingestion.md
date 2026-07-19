@@ -34,6 +34,27 @@ Remote git sources and destinations are cloned or fast-forward pulled into `MAGP
 during API startup.
 Use `subpath` when the useful folder is inside the checkout, such as a `docs` directory.
 
+### Per-repository PAT overrides
+
+By default every HTTPS git operation authenticates with the host-matched default token
+(`GITHUB_TOKEN` for github.com, `AZURE_DEVOPS_PAT` for Azure DevOps). A source or
+destination held by a **different account** can override that default with its own PAT by
+adding a `tokenEnv` field — the **name** of an environment variable holding the token:
+
+```env
+KNOWLEDGE_DESTINATIONS=[{"id":"ops","name":"Ops","url":"https://github.com/other-org/ops-docs.git","tokenEnv":"OPS_DOCS_PAT"}]
+OPS_DOCS_PAT=ghp_...
+```
+
+Only the env var **name** is stored in config and carried through job payloads and the
+credential-free execution context — the secret itself never travels. Whichever process
+runs git resolves the token from its **own** environment, so set the referenced variable on
+**both** the API and the watcher. The override applies to clone/fetch/push for the repo
+**and** to its GitHub PR create / comment / poll / review calls. It also works for
+GitHub Enterprise / self-hosted HTTPS remotes that have no host default. SSH remotes and
+credential-embedded URLs authenticate on their own and ignore `tokenEnv`. (`tokenEnv` is
+honoured on `git` repositories only; it is ignored on `local`/`internet`/`agent` sources.)
+
 `KNOWLEDGE_REPOSITORIES` and `KNOWLEDGE_REPO_PATH` remain accepted as compatibility fallbacks when
 the explicit source/destination variables are unset.
 

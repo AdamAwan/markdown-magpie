@@ -104,6 +104,36 @@ describe("PublicationRunner", () => {
     assert.equal(parsed.pullRequestUrl, "https://github.com/acme/docs/pull/7");
   });
 
+  it("threads the destination tokenEnv from the execution context to prepare and PR creation", async () => {
+    const contextWithToken: ProposalExecutionContext = {
+      proposal: PROPOSAL_CONTEXT.proposal,
+      repository: { ...REPOSITORY, tokenEnv: "ACME_PAT" }
+    };
+    let preparedTokenEnv: string | undefined = "unset";
+    let prTokenEnv: string | undefined = "unset";
+    const runner = new PublicationRunner(fakeApi({ proposalExecutionContext: async () => contextWithToken }), {
+      prepareRepository: async (repository) => {
+        preparedTokenEnv = repository.tokenEnv;
+        return repository;
+      },
+      publishProposal: async (request) => ({
+        branchName: request.branchName,
+        commitSha: "abc123",
+        remoteUrl: REPOSITORY.remoteUrl
+      }),
+      publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
+      raisePullRequest: async (request) => {
+        prTokenEnv = request.tokenEnv;
+        return { url: "https://github.com/acme/docs/pull/7", number: 7 };
+      },
+      commentOnPullRequest: async () => undefined
+    });
+
+    await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), new AbortController().signal);
+    assert.equal(preparedTokenEnv, "ACME_PAT");
+    assert.equal(prTokenEnv, "ACME_PAT");
+  });
+
   it("publishes a changeset proposal via publishChangeset, not the single-file path", async () => {
     let changesetCall: { branchName: string; changes: unknown } | undefined;
     let singleFileCalled = false;

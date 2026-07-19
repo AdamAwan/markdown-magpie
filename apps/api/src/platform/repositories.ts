@@ -84,7 +84,8 @@ export async function resolveConfiguredRepositoryLocalPath(
       id: repository.id,
       url: repository.url,
       branch: repository.branch,
-      checkoutRoot: checkoutRootPath
+      checkoutRoot: checkoutRootPath,
+      ...(repository.tokenEnv ? { tokenEnv: repository.tokenEnv } : {})
     });
     localPath = checkout.localPath;
   } else if (repository.path) {
