@@ -10,6 +10,13 @@ export interface RepositoryRef {
   localPath: string;
   provider: "local" | "github" | "gitlab" | "azure-devops";
   git?: GitRepositoryContext;
+  // The NAME of an environment variable holding a per-repository PAT that
+  // overrides the host-default token (GITHUB_TOKEN / AZURE_DEVOPS_PAT) for this
+  // repository's git operations and host API calls — e.g. a destination repo held
+  // by a different account. Only the NAME travels (never the secret), so it can
+  // ride the credential-free execution context; each process resolves the actual
+  // token from its own environment. Absent means "use the host default".
+  tokenEnv?: string;
 }
 
 export interface GitRepositoryContext {
@@ -1111,8 +1118,13 @@ export interface SourceMapUpdate {
 // they render as prompt notes, as does the agent kind. Fetched web content is
 // untrusted input to the drafting agent (docs/threat-model.md), which is why
 // fetching is strictly opt-in per descriptor.
+// `tokenEnv` (git sources) is the NAME of an environment variable holding a
+// per-source PAT that overrides the host-default token when cloning/fetching this
+// source — e.g. a source repo held by a different account. Only the name travels
+// on the descriptor (never the secret), so it is safe in job payloads and stored
+// job rows; the executing process resolves the token from its own environment.
 export type SourceDescriptor =
-  | { id: string; name: string; kind: "git"; url: string; subpath?: string }
+  | { id: string; name: string; kind: "git"; url: string; subpath?: string; tokenEnv?: string }
   | { id: string; name: string; kind: "local"; path: string; subpath?: string }
   | { id: string; name: string; kind: "internet"; url?: string; allowedHosts?: string[] }
   | { id: string; name: string; kind: "agent" };

@@ -86,6 +86,11 @@ export interface GitCheckoutRequest {
   url: string;
   checkoutRoot: string;
   branch?: string;
+  // The NAME of an env var holding a per-repository PAT that overrides the
+  // host-default token for this checkout's clone/fetch/reset. Resolved from the
+  // current process env; absent means "use the host default" (GITHUB_TOKEN /
+  // AZURE_DEVOPS_PAT).
+  tokenEnv?: string;
 }
 
 export interface GitCheckoutResult {
@@ -122,7 +127,7 @@ export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<Gi
   assertAllowedGitUrl(request.url);
   const localPath = path.join(request.checkoutRoot, safeCheckoutName(request.id));
   await mkdir(request.checkoutRoot, { recursive: true });
-  const authEnv = buildGitAuthEnv(request.url);
+  const authEnv = buildGitAuthEnv(request.url, request.tokenEnv);
 
   // Serialize all mutating git against this checkout: the api and the watcher both
   // clone/fetch/reset the same working trees, and the api fires this from several
@@ -512,6 +517,9 @@ export interface RaisePullRequestRequest {
   baseBranch: string;
   title: string;
   body: string;
+  // Name of an env var holding a per-repository PAT that overrides GITHUB_TOKEN
+  // for this PR's creation. Absent means "use GITHUB_TOKEN".
+  tokenEnv?: string;
 }
 
 export interface RaisedPullRequest {
@@ -529,7 +537,7 @@ export async function raisePullRequest(request: RaisePullRequestRequest): Promis
     return undefined;
   }
 
-  const token = process.env.GITHUB_TOKEN?.trim();
+  const token = resolveGithubToken(request.tokenEnv);
   if (!token) {
     return undefined;
   }
@@ -658,14 +666,15 @@ export interface PullRequestPoll {
 // or the PR can no longer be found. Throws only on an unexpected API error.
 export async function fetchPullRequestStatusCached(
   pullRequestUrl: string | undefined,
-  etag?: string
+  etag?: string,
+  tokenEnv?: string
 ): Promise<PullRequestPoll> {
   const ref = parseGitHubPullRequestUrl(pullRequestUrl);
   if (!ref) {
     return { notModified: false };
   }
 
-  const token = process.env.GITHUB_TOKEN?.trim();
+  const token = resolveGithubToken(tokenEnv);
   if (!token) {
     return { notModified: false };
   }
@@ -715,9 +724,10 @@ export async function fetchPullRequestStatusCached(
 // Unconditional read, for callers that have no cached ETag. Returns undefined in
 // all the skip cases above. Kept as the simple shape the live PR-state fallback uses.
 export async function fetchPullRequestStatus(
-  pullRequestUrl: string | undefined
+  pullRequestUrl: string | undefined,
+  tokenEnv?: string
 ): Promise<PullRequestStatus | undefined> {
-  return (await fetchPullRequestStatusCached(pullRequestUrl)).status;
+  return (await fetchPullRequestStatusCached(pullRequestUrl, undefined, tokenEnv)).status;
 }
 
 // Reads a pull request's review decision. GitHub's GraphQL reviewDecision is the
@@ -729,10 +739,11 @@ export async function fetchPullRequestStatus(
 // and on any lookup error, so callers treat "couldn't determine" uniformly — an
 // undetermined decision leaves the PR touchable.
 export async function fetchPullRequestReviewDecision(
-  pullRequestUrl: string | undefined
+  pullRequestUrl: string | undefined,
+  tokenEnv?: string
 ): Promise<ReviewDecision | undefined> {
   const ref = parseGitHubPullRequestUrl(pullRequestUrl);
-  const token = process.env.GITHUB_TOKEN?.trim();
+  const token = resolveGithubToken(tokenEnv);
   if (!ref || !token) {
     return undefined;
   }
@@ -918,7 +929,7 @@ export class LocalGitProposalPublisher {
   ): Promise<PublishProposalBranchResponse> {
     const targetPath = resolveTargetPath(request.repository, request.targetPath);
     const remoteUrl = await ensureRemote(root);
-    const authEnv = buildGitAuthEnv(remoteUrl);
+    const authEnv = buildGitAuthEnv(remoteUrl, request.repository.tokenEnv);
 
     const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", request.branchName], authEnv);
     const branchExists = Boolean(remoteBranch.trim());
@@ -1020,7 +1031,7 @@ export class LocalGitProposalPublisher {
     root: string
   ): Promise<PublishProposalBranchResponse> {
     const remoteUrl = await ensureRemote(root);
-    const authEnv = buildGitAuthEnv(remoteUrl);
+    const authEnv = buildGitAuthEnv(remoteUrl, request.repository.tokenEnv);
     const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", request.branchName], authEnv);
     const branchExists = Boolean(remoteBranch.trim());
 
@@ -1314,8 +1325,8 @@ async function tryGit(cwd: string, args: string[], env?: Partial<NodeJS.ProcessE
 // URL — so it can't leak into the command line that git() echoes back in error
 // messages (which are surfaced to the UI). Returns {} when no token applies, so
 // public repos, SSH remotes, and credential-embedded URLs keep working unchanged.
-export function buildGitAuthEnv(remoteUrl: string | undefined): Partial<NodeJS.ProcessEnv> {
-  const header = buildAuthHeader(remoteUrl);
+export function buildGitAuthEnv(remoteUrl: string | undefined, tokenEnv?: string): Partial<NodeJS.ProcessEnv> {
+  const header = buildAuthHeader(remoteUrl, tokenEnv);
   if (!header) {
     return {};
   }
@@ -1326,7 +1337,30 @@ export function buildGitAuthEnv(remoteUrl: string | undefined): Partial<NodeJS.P
   };
 }
 
-function buildAuthHeader(remoteUrl: string | undefined): string | undefined {
+// Resolves the actual PAT for a repository. When a `tokenEnv` name is configured
+// and that env var is set in THIS process, its value overrides the host default —
+// this is how a source/destination held by a different account uses its own PAT.
+// Only the env var NAME is ever passed around (in job payloads / execution
+// contexts); the secret itself is read here, from the local process, and never
+// travels. Returns undefined when the named var is unset/blank, so resolution
+// falls back to the host default rather than sending an empty credential.
+function resolveOverrideToken(tokenEnv: string | undefined): string | undefined {
+  const name = tokenEnv?.trim();
+  if (!name) {
+    return undefined;
+  }
+  return process.env[name]?.trim() || undefined;
+}
+
+// The token the GitHub REST/GraphQL calls (PR create/comment/poll) authenticate
+// with: the per-repository override when configured and set, else the ambient
+// GITHUB_TOKEN. Returns undefined when neither is available, so callers degrade
+// to a branch-only publish / no-op poll exactly as they did before overrides.
+function resolveGithubToken(tokenEnv: string | undefined): string | undefined {
+  return resolveOverrideToken(tokenEnv) ?? process.env.GITHUB_TOKEN?.trim() ?? undefined;
+}
+
+function buildAuthHeader(remoteUrl: string | undefined, tokenEnv?: string): string | undefined {
   if (!remoteUrl?.trim()) {
     return undefined;
   }
@@ -1347,17 +1381,22 @@ function buildAuthHeader(remoteUrl: string | undefined): string | undefined {
     return undefined;
   }
 
+  const override = resolveOverrideToken(tokenEnv);
   const host = parsed.hostname.toLowerCase();
-  if (host === "github.com" || host.endsWith(".github.com")) {
-    const token = process.env.GITHUB_TOKEN?.trim();
-    return token ? basicAuthHeader("x-access-token", token) : undefined;
-  }
   if (host === "dev.azure.com" || host.endsWith(".visualstudio.com")) {
-    const pat = process.env.AZURE_DEVOPS_PAT?.trim();
+    // Azure DevOps expects the PAT as the basic-auth password with a "pat" user.
+    const pat = override ?? process.env.AZURE_DEVOPS_PAT?.trim();
     return pat ? basicAuthHeader("pat", pat) : undefined;
   }
-
-  return undefined;
+  if (host === "github.com" || host.endsWith(".github.com")) {
+    const token = override ?? process.env.GITHUB_TOKEN?.trim();
+    return token ? basicAuthHeader("x-access-token", token) : undefined;
+  }
+  // Any other host (e.g. GitHub Enterprise / self-hosted): with no per-repo
+  // override there is no ambient credential to apply, as before. A configured
+  // override token IS applied, using the GitHub-style x-access-token basic scheme,
+  // so a private enterprise remote can authenticate with its own PAT.
+  return override ? basicAuthHeader("x-access-token", override) : undefined;
 }
 
 function basicAuthHeader(username: string, secret: string): string {
@@ -1402,6 +1441,9 @@ function safeCheckoutName(value: string): string {
 export interface CommentOnPullRequestRequest {
   pullRequestUrl: string;
   body: string;
+  // Name of an env var holding a per-repository PAT that overrides GITHUB_TOKEN
+  // for this comment. Absent means "use GITHUB_TOKEN".
+  tokenEnv?: string;
 }
 
 // Post a comment on a pull request. GitHub treats PR comments as issue comments,
@@ -1413,7 +1455,7 @@ export async function commentOnPullRequest(request: CommentOnPullRequestRequest)
   if (!target) {
     return undefined;
   }
-  const token = process.env.GITHUB_TOKEN?.trim();
+  const token = resolveGithubToken(request.tokenEnv);
   if (!token) {
     return undefined;
   }
