@@ -1,150 +1,263 @@
 # MCP Server
 
-`@magpie/mcp` (`apps/mcp`) is a thin [Model Context Protocol](https://modelcontextprotocol.io) server that lets AI agents and MCP-aware clients ask questions against the indexed Markdown knowledge base. It is a client surface over the HTTP API — it holds no state of its own and proxies every request to the API at `API_BASE_URL`.
+> **Status:** living spec (as-built). Source of truth for the `@magpie/mcp` server —
+> the two MCP transports it speaks, its posture as a thin client over the HTTP API, how
+> auth gates each call, and the contract of every exposed `kb_*` tool. Follows the
+> [spec conventions](./README.md#conventions).
+
+## Purpose
+
+Let AI agents and MCP-aware clients reach the indexed Markdown knowledge base — ask cited
+questions, search sections, propose/approve seed plans, run questionnaires, and report
+feedback — over the [Model Context Protocol](https://modelcontextprotocol.io). The server
+(`apps/mcp`) is a **client surface over the HTTP API**: it holds no knowledge state, runs
+no generative or embedding work of its own, and proxies every request to the API at
+`API_BASE_URL`. All generative answering therefore stays queue-only
+([ai-jobs.md](./ai-jobs.md)); the MCP server only enqueues via the API and waits.
+
+## Architecture & execution model
+
+- **M1** — The MCP server MUST hold no knowledge state and MUST NOT talk to the database
+  or call a model provider. Every tool call proxies to the HTTP API at `API_BASE_URL`; the
+  server is a stateless client surface, so all behaviour it exposes is the API's behaviour
+  re-shaped for MCP clients.
+- **M2** — `kb_ask` MUST be asynchronous end-to-end (never an inline answer): the server
+  `POST`s `/api/ask`, which records the question and enqueues an `answer_question` job and
+  returns **202** with `{questionId, job, links}`. The server then waits on the job via
+  `GET /api/jobs/:id/wait` — a server-side long-poll that returns **200** with the terminal
+  job or **202** with the current projection when its wait limit expires — and falls back
+  to polling `GET /api/jobs/:id` every `ANSWER_POLL_INTERVAL_MS` while the job is
+  non-terminal (`created | retry | active`) until it terminates or `ANSWER_TIMEOUT_MS`
+  elapses.
+- **M3** — On `completed`, the terminal job `output` is the envelope `{result, executor}`
+  and the answer fields live in `result`; the server returns only the answer payload
+  (below) plus `questionId`/`conversationId`. Terminal states are
+  `completed | cancelled | failed`. On `failed`/`cancelled` or timeout, `kb_ask` MUST raise
+  an error naming the job id and state and MUST NOT echo payload data. Internal details —
+  job identifiers, retrieval context, provider names, status links — are never surfaced to
+  the client.
+- **M4** — `kb_outline` follows the same enqueue-then-wait shape against the source-grounded
+  `outline_flow_seed` job, polling `OUTLINE_POLL_INTERVAL_MS` up to `OUTLINE_TIMEOUT_MS`,
+  and returns the **persisted plan** the completion created. On `failed`/`cancelled`/timeout
+  it raises an error naming the job id and state with no payload echoed.
 
 ## Transports
 
-The server supports two standard MCP transports:
+- **M5** — The server MUST offer two standard MCP transports from the same tool set: the
+  **stdio transport** (`apps/mcp/dist/main.js`, launched as a subprocess) and the
+  **Streamable HTTP transport** (`apps/mcp/dist/http.js`, a long-lived network server).
+- **M6** — **stdio framing.** Each JSON-RPC message is a single line of UTF-8 JSON
+  terminated by a newline, with no embedded newlines (per the
+  [MCP transports spec](https://modelcontextprotocol.io/docs/concepts/transports)). The
+  client exchanges messages over stdin/stdout; all logging goes to **stderr** so it never
+  corrupts the framed channel.
+- **M7** — **Streamable HTTP** (spec version 2025-03-26+) runs on a configurable port.
+  Clients send JSON-RPC requests via HTTP `POST` to `/mcp` and receive JSON or
+  Server-Sent Events (SSE). It is built on the official `@modelcontextprotocol/server` SDK
+  and supports both stateful and stateless modes. A health check is served at `/health`.
 
-### stdio (local subprocess)
+## Authentication & authorization
 
-Uses the MCP **stdio transport**: each JSON-RPC message is a single line of UTF-8 JSON terminated by a newline, with no embedded newlines (per the [MCP transports spec](https://modelcontextprotocol.io/docs/concepts/transports)). The client launches the server as a subprocess and exchanges messages over stdin/stdout. Logging goes to stderr.
+- **M8** — Auth **fails closed** and is shared with the API via the `@magpie/auth` package:
+  it is required unless an operator explicitly sets `AUTH_REQUIRED=false`. Any other or
+  unset value keeps auth required. When enabled, Auth0-issued tokens are validated locally
+  against the Auth0 JWKS — see the [Auth0 design](superpowers/specs/2026-06-18-auth0-mcp-gating-design.md).
+- **M9** — **stdio auth.** The stdio transport presents a single bearer token
+  (`MCP_AUTH_TOKEN`) to the API on every call. When `AUTH_REQUIRED=true` and the token is
+  missing, the server MUST fail fast at startup with a non-zero exit
+  (`resolveStdioAuthToken`).
+- **M10** — **HTTP transport is an OAuth protected resource.** It serves protected-resource
+  metadata at `/.well-known/oauth-protected-resource` and
+  `/.well-known/oauth-protected-resource/mcp` (advertising the resource URL from
+  `MCP_RESOURCE_URL`, the Auth0 authorization server, and the supported scopes). Every
+  request to `/mcp` requires `Authorization: Bearer <token>` when `AUTH_REQUIRED=true`; a
+  missing or invalid token returns **401** with a
+  `WWW-Authenticate: Bearer resource_metadata="..."` header pointing at the metadata
+  document. Methods other than `tools/call` (`initialize`, `tools/list`, `ping`, …) need
+  only a valid token.
+- **M11** — **Per-tool scope.** `tools/call` additionally enforces the required scope for
+  the named tool (table below); insufficient scope returns **403**. JSON-RPC **batch**
+  (array) bodies are enforced too: the required scope is the **union** across every batched
+  `tools/call`, and a token missing any one of them is rejected with **403** before the
+  batch is dispatched — closing a bypass where an array body has no top-level `method` and
+  would otherwise skip per-tool checks.
+- **M12** — **Service credential, not token passthrough.** The inbound user token is
+  validated locally and MUST NOT be forwarded to the API. The HTTP server calls the API
+  with its **own** service credential and fails fast at startup (when `AUTH_REQUIRED=true`)
+  if none is configured.
+  > ⚠️ Corrected against code: the service credential is **either** an auto-refreshing
+  > client-credentials pair `MCP_API_CLIENT_ID` + `MCP_API_CLIENT_SECRET` (preferred — it
+  > survives the ~24h Auth0 token lifetime) **or** a static `MCP_API_AUTH_TOKEN`. Startup
+  > fails fast only when `AUTH_REQUIRED=true` **and both are absent** (`http.ts` main). The
+  > earlier spec wording ("required … fails fast otherwise", naming only
+  > `MCP_API_AUTH_TOKEN`) understated the client-credentials path.
+- **M13** — **On-behalf-of delegation.** So the API's per-flow authorization applies to the
+  real user rather than the shared service identity, the HTTP server forwards the verified
+  user's `subject` and `roles` as `x-on-behalf-of-*` headers alongside the service token.
+  The API honors them only when the MCP's M2M application holds the `act:on-behalf-of`
+  permission — grant it on the API in Auth0 to activate per-user enforcement on the MCP
+  surface. See
+  [authorization.md](authorization.md#mcp-acting-as-the-end-user-on-behalf-of-delegation).
 
-### Streamable HTTP (network)
+Per-tool scopes (mirrors the API route scopes; enforced at the MCP boundary in
+`apps/mcp/src/http.ts`):
 
-Uses the MCP **Streamable HTTP transport** (spec version 2025-03-26+). Runs as a long-lived HTTP server on a configurable port. Clients send JSON-RPC requests via HTTP POST and receive responses via JSON or Server-Sent Events (SSE). This transport is built on the official `@modelcontextprotocol/server` SDK and supports both stateful and stateless modes.
+| Tool | Required scope |
+| --- | --- |
+| `kb_search` | `read:knowledge` |
+| `kb_flows` | `read:knowledge` |
+| `kb_citation` | `read:knowledge` |
+| `kb_ask` | `ask:knowledge` |
+| `kb_questionnaire_create` | `ask:knowledge` |
+| `kb_questionnaire_get` | `read:knowledge` |
+| `kb_feedback` | `feedback:questions` |
+| `kb_outline` | `manage:jobs` |
+| `kb_seed` | `manage:jobs` |
+| `kb_questionnaire_approve` | `manage:knowledge` |
 
-## Tools
+## Exposed tools
+
+The server exposes exactly these ten `kb_*` tools (verified against the `tools` array and
+the `callTool` dispatch in `apps/mcp/src/main.ts`). This table is the quick reference; the
+non-obvious behavioural contracts are numbered below.
+
+| Tool | Input | Proxies to | Purpose |
+| --- | --- | --- | --- |
+| `kb_ask` | `{question, flow?, conversationId?}` | `POST /api/ask` → job wait | Cited answer for a question (async job). |
+| `kb_search` | `{query, limit?}` | `GET /knowledge/search` | Keyword-matched indexed sections. |
+| `kb_flows` | `{}` | `GET /flows` | List routable flows `{id, name}`. |
+| `kb_feedback` | `{questionId, kind, gapSummary?}` | feedback route | Record answer-quality / gap feedback. |
+| `kb_outline` | `{flow, notes?}` | `POST /flows/:id/outline` → job wait | Propose a source-grounded seed plan. |
+| `kb_seed` | `{plan}` | `POST /seed-plans/:id/approve` | Approve a plan → draft docs into the PR pipeline. |
+| `kb_citation` | `{sectionIds[1..20]}` | citation route | Full text of cited sections. |
+| `kb_questionnaire_create` | `{name, flow, questions[1..500]}` | questionnaire route | Create a batched-answer questionnaire. |
+| `kb_questionnaire_get` | `{questionnaire}` | questionnaire route | Read a questionnaire worksheet. |
+| `kb_questionnaire_approve` | `{questionnaire, item?}` | approve route(s) | Approve answers into the match corpus. |
 
 ### `kb_ask`
 
-Input: `{ "question": string, "flow"?: string, "conversationId"?: string }`
+- **M14** — Input `{question, flow?, conversationId?}`. `flow` (optional) pins the question
+  to a flow id from `kb_flows`; it defaults to `"auto"` (the router decides). If routing
+  cannot determine a flow the result carries `flowSelectionRequired` with the available
+  flows — the caller re-invokes with `flow` set to one of those ids.
+- **M15** — `conversationId` (optional) asks a **follow-up** in a multi-turn conversation.
+  Passing the `conversationId` returned by a previous `kb_ask` resolves the answer against
+  the recent turns (pronouns/ellipsis) and keeps it in the same flow; omitting it starts a
+  new conversation. A `conversationId` is always returned to thread from.
+- **M16** — Returns the final answer only:
 
-- `flow` (optional) pins the question to a flow id from `kb_flows`; defaults to `"auto"` (router decides).
-- `conversationId` (optional, #239) asks a **follow-up** in a multi-turn conversation. Pass the
-  `conversationId` returned by the previous `kb_ask`: the answer then resolves against the recent
-  turns (pronouns/ellipsis) and stays in the same flow. Omit to start a new conversation.
+  ```json
+  {
+    "answer": "string",
+    "confidence": "high | medium | low",
+    "citations": [ { "documentId": "...", "sectionId": "...", "path": "...", "heading": "...", "anchor": "...", "excerpt": "..." } ],
+    "gaps": [ { "...": "..." } ],   // present only when the answer exposes knowledge gaps; one entry per missing topic
+    "questionId": "string",          // identifier for reporting feedback via kb_feedback
+    "conversationId": "string"       // pass back to kb_ask to thread a follow-up onto this exchange
+  }
+  ```
 
-Returns the final answer only:
-
-```json
-{
-  "answer": "string",
-  "confidence": "high | medium | low",
-  "citations": [ { "documentId": "...", "sectionId": "...", "path": "...", "heading": "...", "anchor": "...", "excerpt": "..." } ],
-  "gaps": [ { ... } ],   // present only when the answer exposes knowledge gaps; one entry per missing topic
-  "questionId": "string", // identifier for reporting feedback via kb_feedback
-  "conversationId": "string" // pass back to kb_ask to thread a follow-up onto this exchange
-}
-```
-
-Answers are always produced asynchronously by a durable job:
-
-1. `POST /api/ask` records the question and enqueues an `answer_question` job, returning **202** with `{ questionId, job, links }` — no inline answer.
-2. The server waits on the job via `GET /api/jobs/:id/wait`. The wait endpoint long-polls server-side and returns **200** with the terminal job, or **202** with the current projection when its wait limit expires.
-3. If the wait returns a non-terminal job (state `created`, `retry`, or `active`), the server falls back to polling the detail endpoint `GET /api/jobs/:id` every `ANSWER_POLL_INTERVAL_MS` until the job reaches a terminal state or `ANSWER_TIMEOUT_MS` elapses.
-
-Job states are `created | retry | active` (non-terminal) and `completed | cancelled | failed` (terminal). On `completed`, the terminal job `output` is the envelope `{ result, executor }`; the answer fields live in `result`. On `failed`/`cancelled`, or if the timeout is exceeded, `kb_ask` raises an error naming the job id and state (no payload data is echoed).
-
-The client receives only the answer payload above plus the `questionId`. Internal details — job identifiers, retrieval context, provider names, and status links — are not exposed to the client.
+  The async job mechanics behind this payload are M2–M3.
 
 ### `kb_search`
 
-Input: `{ "query": string, "limit"?: number }`
-
-Returns indexed Markdown sections matching the keyword query.
+- **M17** — Input `{query, limit?}`. Returns indexed Markdown sections matching the keyword
+  query; `limit` (clamped to 1–200) caps the count, defaulting to the API limit when
+  omitted.
 
 ### `kb_flows`
 
-Input: `{}`
-
-Lists the knowledge flows a question can be routed to. Returns `{ "flows": [ { "id": string, "name": string }, ... ] }`; use an id as the `flow` argument to `kb_ask` or `kb_outline`.
+- **M18** — Input `{}`. Lists the knowledge flows a question can be routed to:
+  `{"flows": [{"id": string, "name": string}, ...]}`. Use an id as the `flow` argument to
+  `kb_ask` or `kb_outline`.
 
 ### `kb_feedback`
 
-Reports feedback on a previously asked question, using the `questionId` returned by `kb_ask`.
-
-Input:
-
-```json
-{
-  "questionId": "string",
-  "kind": "helpful | unhelpful | knowledge_gap",
-  "gapSummary": "string"   // optional; only used when kind is "knowledge_gap"
-}
-```
-
-`helpful` / `unhelpful` record answer-quality feedback. `knowledge_gap` flags the question as a knowledge gap the system missed (the optional `gapSummary` describes the missing knowledge); this is independent of helpful/unhelpful and feeds the same gap-candidate clustering as automatic detection.
+- **M19** — Input `{questionId, kind, gapSummary?}` where `kind` is
+  `helpful | unhelpful | knowledge_gap`. `helpful`/`unhelpful` record answer-quality
+  feedback. `knowledge_gap` flags a gap the system missed (optional `gapSummary` describes
+  the missing knowledge) and feeds the same gap-candidate clustering as automatic detection
+  ([gaps-and-maintenance.md](./gaps-and-maintenance.md)) — independent of helpful/unhelpful.
 
 ### `kb_outline`
 
-Proposes a seed plan for a flow by exploring its source repositories — **no topic needed**. It enqueues the source-grounded `outline_flow_seed` job, waits for it, then returns the **persisted plan** its completion created. It **only proposes** — nothing is drafted; the plan waits behind the review gate. Approve it with `kb_seed`, or review/edit it in the console.
-
-Input: `{ "flow": string, "notes"?: string }` (`notes` is an optional steer for this run).
-
-Returns `{ "planId": string, "charter"?: string, "charterProposed": boolean, "persona"?: string, "personaProposed": boolean, "items": SeedItem[], "rationale"?: string }`, where each `SeedItem` is `{ title?, targetPath?, coverage: string[], questions?: string[] }`. The `*Proposed` flags record that the charter/persona came from the model because the flow config lacked one — copy the value into `KNOWLEDGE_FLOWS` to make it permanent. On `failed`/`cancelled`, or if the timeout is exceeded, `kb_outline` raises an error naming the job id and state (no payload data is echoed).
+- **M20** — Input `{flow, notes?}` (`notes` is an optional steer for this run). Proposes a
+  seed plan for a flow by exploring its source repositories — **no topic needed**. It only
+  **proposes**: nothing is drafted, and the plan waits behind the review gate. Approve it
+  with `kb_seed` or edit it in the console. Mechanics are M4.
+- **M21** — Returns the persisted plan
+  `{planId, charter?, charterProposed, persona?, personaProposed, items: SeedItem[], rationale?}`,
+  where each `SeedItem` is `{title?, targetPath?, coverage: string[], questions?: string[]}`.
+  The `*Proposed` flags record that the charter/persona came from the model because the
+  flow config lacked one — copy the value into `KNOWLEDGE_FLOWS` to make it permanent.
 
 ### `kb_seed`
 
-Approves a seed plan (from `kb_outline` or the console): drafts one document per approved item straight into the proposal → pull-request pipeline, carrying the plan's run-scoped charter/persona. Edit or partially dismiss items in the console first if needed.
-
-Input: `{ "plan": string }` — the plan id (from `kb_outline`'s `planId`, or the console).
-
-Returns `{ "planId": string, "jobIds": string[] }` — one enqueued `draft_seed_document` job per approved item. See [ai-jobs.md](ai-jobs.md#seeding-a-flow) for the full seeding flow.
+- **M22** — Input `{plan}` — the plan id (from `kb_outline`'s `planId`, or the console).
+  Approving drafts one document per approved item straight into the proposal → pull-request
+  pipeline, carrying the plan's run-scoped charter/persona. Returns
+  `{planId, jobIds: string[]}` — one enqueued `draft_seed_document` job per approved item.
+  See [ai-jobs.md](ai-jobs.md#seeding-a-flow) for the full seeding flow.
 
 ### `kb_citation`
 
-Fetches the full content of cited sections so end users can see the evidence behind an answer.
-
-Input: `{ "sectionIds": string[] }` — 1–20 `sectionId` values from `kb_ask` citations (or `kb_search` results).
-
-Returns `{ "sections": [ DocumentSection, ... ], "missing": string[] }`. Each section is the **currently indexed** version (the KB may have changed since the answer was produced). Ids that no longer resolve land in `missing` instead of failing the call — the knowledge base changed; re-ask or use `kb_search`.
+- **M23** — Input `{sectionIds}` — 1–20 `sectionId` values from `kb_ask` citations (or
+  `kb_search` results). Returns `{sections: DocumentSection[], missing: string[]}`. Each
+  section is the **currently indexed** version (the KB may have changed since the answer was
+  produced); ids that no longer resolve land in `missing` rather than failing the call — the
+  knowledge base changed, so re-ask or use `kb_search`.
 
 ### `kb_questionnaire_create`
 
-Creates a [questionnaire](questionnaires.md) — a named batch of questions answered against one flow's knowledge base, with verbatim reuse of previously approved answers while the KB sections they cited are unchanged.
-
-Input: `{ "name": string, "flow": string, "questions": string[] }` — 1–500 questions, one per entry; `flow` ids come from `kb_flows`.
-
-Returns the initial worksheet immediately (same shape as `kb_questionnaire_get`). **Creation is asynchronous by design**: items the deterministic fast-path already confirmed reusable carry answers immediately; everything else (fresh/adapted/merged/changed) drips through the `answer_question` queue — a batch can be hundreds of questions, so the tool never waits. Re-read with `kb_questionnaire_get` until no items are `pending`/`answering`.
+- **M24** — Input `{name, flow, questions}` — 1–500 questions, one per entry; `flow` ids
+  come from `kb_flows`. Creates a [questionnaire](questionnaires.md): a named batch answered
+  against one flow's knowledge base with verbatim reuse of previously approved answers while
+  the KB sections they cited are unchanged.
+- **M25** — Creation is **asynchronous by design**: the tool returns the initial worksheet
+  immediately (same shape as `kb_questionnaire_get`). Items the deterministic fast-path
+  already confirmed reusable carry answers immediately; everything else
+  (fresh/adapted/merged/changed) drips through the `answer_question` queue. The tool never
+  waits — re-read with `kb_questionnaire_get` until no items are `pending`/`answering`.
 
 ### `kb_questionnaire_get`
 
-Reads a questionnaire worksheet. Input: `{ "questionnaire": string }` (the id from `kb_questionnaire_create`).
+- **M26** — Input `{questionnaire}` (the id from `kb_questionnaire_create`). Returns the
+  worksheet:
 
-Returns:
+  ```json
+  {
+    "id": "string",
+    "name": "string",
+    "flowId": "string",
+    "status": "open | completed | archived",
+    "items": [
+      {
+        "id": "string",                       // pass to kb_questionnaire_approve's `item`
+        "position": 0,
+        "question": "string",
+        "status": "pending | answering | answered | unanswerable | approved",
+        "outcome": "reused | adapted | merged | fresh | changed", // present once matched/answered; changed is legacy (QUESTIONNAIRE_RECONCILE_ENABLED=0) only
+        "answer": "string",                    // present once answered
+        "confidence": "high | medium | low | unknown", // present once answered; a review badge, not a suppressor
+        "changeReason": { "kind": "section_changed | section_missing | new_content", "...": "..." },
+        "citations": [ { "path": "...", "heading": "..." } ]
+      }
+    ]
+  }
+  ```
 
-```json
-{
-  "id": "string",
-  "name": "string",
-  "flowId": "string",
-  "status": "open | completed | archived",
-  "items": [
-    {
-      "id": "string",                       // pass to kb_questionnaire_approve's `item`
-      "position": 0,
-      "question": "string",
-      "status": "pending | answering | answered | unanswerable | approved",
-      "outcome": "reused | adapted | merged | fresh | changed", // present once matched/answered; changed is legacy (QUESTIONNAIRE_RECONCILE_ENABLED=0) only
-      "answer": "string",                    // present once answered
-      "confidence": "high | medium | low | unknown", // present once answered; a review badge, not a suppressor
-      "changeReason": { "kind": "section_changed | section_missing | new_content", "...": "..." },
-      "citations": [ { "path": "...", "heading": "..." } ]
-    }
-  ]
-}
-```
-
-Internal plumbing (question-log ids, reuse links, citation content fingerprints) is stripped — the worksheet carries what a reviewing model needs. Reading the worksheet also resumes a stalled answer drip server-side.
+  Internal plumbing (question-log ids, reuse links, citation content fingerprints) is
+  stripped — the worksheet carries what a reviewing model needs. Reading the worksheet also
+  **resumes a stalled answer drip** server-side.
 
 ### `kb_questionnaire_approve`
 
-Approves answers into the match corpus for future questionnaires — the human/agent act that makes an answer reusable verbatim next time.
-
-Input: `{ "questionnaire": string, "item"?: string }`.
-
-Without `item`, bulk-approves all reused items (`POST /api/questionnaires/:id/approve-reused`) and returns `{ "approved": number }`. With `item`, approves that single answered item (`POST /api/questionnaires/:id/items/:itemId/approve`) and returns `{ "ok": true }`; the API answers 409 unless the item's status is `answered`.
+- **M27** — Input `{questionnaire, item?}`. Approving an answer into the match corpus is the
+  human/agent act that makes it reusable verbatim next time. Without `item`, bulk-approves
+  all reused items (`POST /api/questionnaires/:id/approve-reused`) and returns
+  `{approved: number}`. With `item`, approves that single answered item
+  (`POST /api/questionnaires/:id/items/:itemId/approve`) and returns `{ok: true}`; the API
+  answers **409** unless the item's status is `answered`.
 
 ## Configuration
 
@@ -165,11 +278,14 @@ Without `item`, bulk-approves all reused items (`POST /api/questionnaires/:id/ap
 | `MCP_HTTP_PORT` | `4001` | Port the HTTP server listens on. |
 | `MCP_HTTP_HOST` | `127.0.0.1` | Host interface to bind to (set `0.0.0.0` to expose on all interfaces). |
 | `MCP_RESOURCE_URL` | `http://localhost:<port>/mcp` | Public URL of the `/mcp` endpoint, advertised in the OAuth protected-resource metadata. |
-| `MCP_API_AUTH_TOKEN` | — | Service token used for downstream API calls. Required when `AUTH_REQUIRED=true` (the server fails fast at startup otherwise). |
+| `MCP_API_AUTH_TOKEN` | — | Static service token for downstream API calls. Accepted as an alternative to the client-credentials pair below (see M12). |
+| `MCP_API_CLIENT_ID` / `MCP_API_CLIENT_SECRET` | — | Preferred auto-refreshing client-credentials pair for downstream API calls (M12). When set, tokens are minted at the Auth0 issuer's `oauth/token` for the API audience. |
 
 ### Auth variables (both transports)
 
-Auth **fails closed** and is shared with the API via the `@magpie/auth` package: it is required unless `AUTH_REQUIRED=false` is set explicitly. These variables must be configured whenever auth is enabled (i.e. unless you have opted out); the [Authentication](#authentication) section below explains how they are used.
+Auth **fails closed** and is shared with the API via the `@magpie/auth` package: it is
+required unless `AUTH_REQUIRED=false` is set explicitly. These variables must be configured
+whenever auth is enabled (see [Authentication & authorization](#authentication--authorization)).
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -180,46 +296,13 @@ Auth **fails closed** and is shared with the API via the `@magpie/auth` package:
 | `AUTH0_JWKS_URI` | `https://<domain>/.well-known/jwks.json` | Optional JWKS endpoint override (derived from the trailing-slash-normalised issuer when unset). |
 | `MCP_AUTH_TOKEN` | — | stdio only: bearer token presented to the API. Required unless `AUTH_REQUIRED=false` (the stdio server fails fast at startup otherwise). |
 
-## Authentication
-
-Authentication **fails closed**: both transports require Auth0-issued tokens unless an operator explicitly sets `AUTH_REQUIRED=false`. Only when explicitly disabled do the transports run unauthenticated for local development. When enabled, tokens are validated locally against the Auth0 JWKS — see the [Auth0 design](superpowers/specs/2026-06-18-auth0-mcp-gating-design.md) for the full model.
-
-### Streamable HTTP
-
-The HTTP transport acts as an OAuth protected resource:
-
-- It serves protected-resource metadata at `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp` (advertising the resource URL from `MCP_RESOURCE_URL`, the Auth0 authorization server, and the supported scopes).
-- Every request to `/mcp` requires `Authorization: Bearer <token>` when `AUTH_REQUIRED=true`. A missing or invalid token returns `401` with a `WWW-Authenticate: Bearer resource_metadata="..."` header pointing at the metadata document.
-- `tools/call` additionally enforces a per-tool scope; insufficient scope returns `403`. Other methods (`initialize`, `tools/list`, `ping`, ...) need only a valid token.
-- JSON-RPC **batch** (array) bodies are enforced too: the required scope is the **union** across every batched `tools/call`, and a token missing any one of them is rejected with `403` before the batch is dispatched. This closes a bypass where an array body has no top-level `method` and would otherwise skip per-tool scope checks.
-
-Per-tool scopes:
-
-| Tool | Required scope |
-| --- | --- |
-| `kb_search` | `read:knowledge` |
-| `kb_flows` | `read:knowledge` |
-| `kb_ask` | `ask:knowledge` |
-| `kb_feedback` | `feedback:questions` |
-| `kb_outline` | `manage:jobs` |
-| `kb_seed` | `manage:jobs` |
-| `kb_citation` | `read:knowledge` |
-| `kb_questionnaire_create` | `ask:knowledge` |
-| `kb_questionnaire_get` | `read:knowledge` |
-| `kb_questionnaire_approve` | `manage:knowledge` |
-
-The inbound user token is validated locally and **never forwarded** to the API. The HTTP server calls the API with its own separate service token, `MCP_API_AUTH_TOKEN` (a machine-to-machine credential). Startup fails fast if `AUTH_REQUIRED=true` and this token is missing.
-
-**On-behalf-of delegation.** So the API's per-flow authorization can apply to the real user (not the shared service identity), the HTTP server forwards the verified user's `subject` and `roles` as `x-on-behalf-of-*` headers alongside the service token. The API honors them only when the MCP's M2M application holds the `act:on-behalf-of` permission — grant it on the API in Auth0 to activate per-user enforcement on the MCP surface. See [authorization.md](authorization.md#mcp-acting-as-the-end-user-on-behalf-of-delegation).
-
-### stdio
-
-The stdio transport presents a single bearer token to the API on every call, supplied via `MCP_AUTH_TOKEN`. When `AUTH_REQUIRED=true` and the token is missing, the server fails fast at startup with a non-zero exit.
-
 ## Requirements
 
 - The API must be running and reachable at `API_BASE_URL`.
-- A watcher must be running to process AI jobs; otherwise `kb_ask` (`answer_question`) and `kb_outline` (`outline_flow_seed`) will time out, `kb_seed`'s (`draft_seed_document`) jobs stay queued, and `kb_questionnaire_create`'s fresh/changed items stay `pending`/`answering` forever.
+- A watcher must be running to process AI jobs; otherwise `kb_ask` (`answer_question`) and
+  `kb_outline` (`outline_flow_seed`) will time out, `kb_seed`'s (`draft_seed_document`) jobs
+  stay queued, and `kb_questionnaire_create`'s fresh/changed items stay
+  `pending`/`answering` forever.
 
 ## Running
 
@@ -249,9 +332,10 @@ Under Docker Compose, the HTTP server is available via the `mcp-http` profile:
 docker compose --profile mcp-http up -d mcp-http
 ```
 
-The server listens on port 4001 by default. The MCP endpoint is at `http://localhost:4001/mcp` and a health check is at `http://localhost:4001/health`.
+The server listens on port 4001 by default. The MCP endpoint is at
+`http://localhost:4001/mcp` and a health check is at `http://localhost:4001/health`.
 
-## Connecting Clients
+## Connecting clients
 
 ### Claude Code (stdio)
 
@@ -269,7 +353,9 @@ A project-scoped `.mcp.json` at the repository root registers the server with Cl
 }
 ```
 
-Build first (`npm run build`) so `apps/mcp/dist/main.js` exists, ensure the API and a watcher are running, then start Claude Code from the repository root and approve the server when prompted.
+Build first (`npm run build`) so `apps/mcp/dist/main.js` exists, ensure the API and a
+watcher are running, then start Claude Code from the repository root and approve the server
+when prompted.
 
 ### Hermes Agent (Streamable HTTP)
 
@@ -282,8 +368,42 @@ mcp_servers:
     timeout: 180
 ```
 
-Restart Hermes Agent. Tools will appear as `mcp_markdown-magpie_kb_ask`, `mcp_markdown-magpie_kb_search`, and `mcp_markdown-magpie_kb_feedback`.
+Restart Hermes Agent. Tools appear as `mcp_markdown-magpie_kb_ask`,
+`mcp_markdown-magpie_kb_search`, `mcp_markdown-magpie_kb_feedback`, etc.
 
-### Any MCP Client (Streamable HTTP)
+### Any MCP client (Streamable HTTP)
 
-Point the client at `http://<host>:4001/mcp`. The server implements the MCP Streamable HTTP transport and is compatible with any spec-compliant client (Claude Desktop, VS Code, Continue, etc.).
+Point the client at `http://<host>:4001/mcp`. The server implements the MCP Streamable HTTP
+transport and is compatible with any spec-compliant client (Claude Desktop, VS Code,
+Continue, etc.).
+
+## Code map
+
+| Concern | Code |
+| --- | --- |
+| stdio transport: framing, JSON-RPC dispatch, tool declarations, `callTool` | `apps/mcp/src/main.ts` |
+| stdio auth guard (`resolveStdioAuthToken`) | `apps/mcp/src/main.ts` |
+| Streamable HTTP app: OAuth protected-resource metadata, per-tool/batch scope gate, `/mcp`, `/health` | `apps/mcp/src/http.ts` |
+| HTTP service credential (client-credentials or static token) + on-behalf-of headers | `apps/mcp/src/http.ts` |
+| API proxy client: `askQuestion`, `listFlows`, `getJson`/`postJson`, job wait/poll, `submitFeedback`, `generateOutline`, `approveSeedPlan`, `getCitationSections`, questionnaire calls | `apps/mcp/src/kb-client.ts` |
+| Logger (stderr sink for stdio) | `apps/mcp/src/logger.ts` |
+
+## Tests (behavioural contract)
+
+`apps/mcp/src/main.test.ts` (tool list + `callTool` dispatch, stdio auth guard),
+`apps/mcp/src/http.test.ts` (transport, OAuth metadata, per-tool and batch-union scope
+gating, service credential), `apps/mcp/src/kb-client.test.ts` (API proxying, job
+wait/poll fallback, per-tool payload shaping), `apps/mcp/src/logger.test.ts`.
+
+## Provenance (design history)
+
+Consolidates, and supersedes as a behavioural description:
+`docs/superpowers/specs/2026-06-18-auth0-mcp-gating-design.md` (auth fail-closed, OAuth
+protected-resource, per-tool/batch scope, on-behalf-of delegation),
+`2026-07-14-mcp-citation-tool-design.md` (`kb_citation`),
+`2026-06-13-manual-knowledge-gap-feedback-design.md` (`kb_feedback` knowledge-gap kind),
+`2026-07-03-flow-seeding-design.md` and `2026-07-09-self-seeding-flows-design.md`
+(`kb_outline`/`kb_seed` and the source-grounded plan),
+`2026-07-16-revise-seed-plan-design.md` (persisted, reviewable seed plans),
+`2026-07-16-questionnaire-mode-design.md` and `2026-07-17-questionnaire-trust-design.md`
+(`kb_questionnaire_*` batch answering, reuse, and approval).

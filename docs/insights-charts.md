@@ -1,18 +1,11 @@
-# Insights & Charts — Specification
+# Insights & Charts
 
-**Status:** Implemented (C1–C8, C10, C11). C9 dropped — see §C9 and §10.2.
-**Date:** 2026-07-06
-**Owner:** Adam
+> **Status:** living spec (as-built). Source of truth for the web console's **Insights**
+> page — the charts that visualise the health and progress of Magpie's
+> knowledge-maintenance pipeline, the API aggregation endpoints behind them, and the data
+> source for each. Follows the [spec conventions](./README.md#conventions).
 
-## 1. Goal
-
-Add a dedicated **Insights** page to the web app that visualises the health and
-progress of Magpie's knowledge-maintenance pipeline. Today the UI is table- and
-list-oriented (Jobs, Gaps, Proposals, Activity, Reconciliations). None of it
-shows *trends over time*, *funnel conversion*, *distributions*, or *success
-rates* — exactly the questions an operator most wants answered.
-
-## 2. Why these visuals (framing)
+## Purpose
 
 Magpie is a **pipeline**, not a metrics dashboard:
 
@@ -20,186 +13,220 @@ Magpie is a **pipeline**, not a metrics dashboard:
 question → gap → cluster → proposal → PR → merged → verified-closed
 ```
 
-…driven by an async job queue (`ai_jobs`) with scheduled patrols on a cadence.
-So the highest-value visuals are **flow/funnel** and **health-over-time**, not
-vanity KPIs. The charts below all answer a concrete operator question ("is the
-backlog growing?", "are merged proposals actually closing the gap?", "what's
-breaking?").
+…driven by an async job queue (`ai_jobs` / pg-boss) with scheduled patrols on a cadence.
+The rest of the console is table- and list-oriented (Jobs, Gaps, Proposals, Activity,
+Reconciliations); none of it shows *trends over time*, *funnel conversion*,
+*distributions*, or *success rates* — exactly the questions an operator most wants
+answered. The Insights page fills that gap. The highest-value visuals are **flow/funnel**
+and **health-over-time**, not vanity KPIs: every chart answers a concrete operator
+question ("is the backlog growing?", "are merged proposals actually closing the gap?",
+"what's this costing?", "what's breaking?").
 
-## 3. Decisions (locked)
+## Platform & execution model
 
-| Decision | Choice | Rationale |
-|---|---|---|
-| Charting library | **Recharts** for quantitative charts | React-19 / Next-16 friendly, SVG, themeable via Emotion, low adoption cost, declarative. Avoids pulling in the MUI ecosystem just for charts. |
-| Flow diagram | **Reuse `@xyflow/react` (React Flow) + dagre** | Already a dependency; keeps the funnel visually consistent with existing graph views; no new Sankey dependency. |
-| Scope | **All 9 charts**, delivered in 3 tiers | Tier 1 first to prove the stack, then 2 and 3. |
-| Data source | **New API aggregation endpoints** | The charts need server-side SQL rollups; the current endpoints return row lists, not aggregates. |
-| UI placement | **Single dedicated Insights page** | All charts on one dashboard route; existing pages unchanged. |
+- **IC1** — Insights is a **single dedicated route**, `apps/web/src/app/insights/page.tsx`
+  (`"use client"`), leaving existing pages unchanged. It fetches its own aggregates
+  **page-locally on mount** through the `useInsights` hooks (→ the shared `apiGet<T>`
+  client in `apps/web/src/lib/api.ts`) with a **manual refresh** button — deliberately
+  **not** through `ConsoleProvider`, so the heavier, slower-moving aggregates stay off the
+  console's fast (~4s) global poll. There is **no** background polling of Insights in v1.
+- **IC2** — Aggregation is server-side. Each chart is backed by one endpoint under
+  `apps/api/src/features/insights/` (`insightsRoutes(ctx)`, registered in
+  `apps/api/src/app.ts` as `api.route("/insights", …)`). The SQL rollups live in a store,
+  `apps/api/src/stores/postgres-insights-store.ts` (parametrised SQL, `date_trunc`
+  time-binning, `::` casts), fronted by the `insights-store.ts` interface; `service.ts`
+  resolves query params into a concrete range and delegates. Response types are declared
+  once in `@magpie/core` (`packages/core/src/index.ts`) — mirrored web-side in
+  `apps/web/src/lib/types.ts` — and every endpoint returns a **named-key envelope**
+  (`{ series }`, `{ nodes, links }`, `{ totals, series }`, `{ usage }`, …), never a bare
+  array.
+- **IC3** — Every Insights endpoint is a read endpoint guarded with
+  `requireScopes("read:knowledge")`, matching sibling read routes. An invalid query throws
+  `400 invalid_insights_query`.
+- **IC4** — **Shared query conventions.** Time-series endpoints accept
+  `?from=<ISO>&to=<ISO>&bucket=day|week|month`; the window defaults to the **last 30 days**
+  and `to` to now. Endpoints over a flow-carrying entity accept an optional `?flow=<flowId>`.
+  All returned timestamps are ISO strings and all counts integers, and **empty buckets are
+  zero-filled server-side** so the client renders continuous series. The **v1 UI uses a
+  fixed "last 30 days" window** with no range picker (the params exist on the API for
+  later); performance is on-demand SQL, to be optimised (caching / materialised views) only
+  if needed.
+- **IC5** — Quantitative charts use **Recharts** (React-19 / Next-16 friendly, SVG,
+  Emotion-themeable) — chosen over pulling in the MUI ecosystem just for charts. Chart
+  components live in `apps/web/src/components/insights/` (one `*Chart.tsx` per chart, plus
+  the shared `ChartCard`, `CostBarChart`, `format.ts`, and `useInsights.ts`).
+  > ⚠️ Two original design decisions are superseded by the as-built code — kept here so the
+  > drift is explicit: (a) the original spec placed chart components under
+  > `apps/web/src/components/charts/`; they actually live under `components/insights/`.
+  > (b) the question-journey diagram was originally specced as **React Flow (`@xyflow/react`)
+  > + dagre**; it is now a **Recharts `<Sankey>`** (see IC6). A stale
+  > `import "@xyflow/react/dist/style.css"` remains at the top of `page.tsx` — harmless dead
+  > import, safe to remove.
 
-## 4. Architecture
+## The charts
 
-- **New API feature module** `apps/api/src/features/insights/` following the
-  existing Hono pattern: `routes.ts` exports `insightsRoutes(ctx): Hono`,
-  registered in `apps/api/src/app.ts` via `api.route("/insights", …)`.
-- **Aggregation lives in a store** `apps/api/src/stores/postgres-insights-store.ts`
-  using `pg.Pool` and parametrized SQL (`$1`, `::int` casts, `date_trunc` for
-  time-binning) — mirroring the aggregation style already in
-  `postgres-question-log-store.ts` (`listGapCandidates`).
-- **Response types** declared once in `@magpie/core` (`packages/core/src/index.ts`)
-  and imported by both API and web. Every endpoint returns a named-key envelope,
-  e.g. `c.json({ series: [...] })`.
-- **Web**: new route `apps/web/src/app/insights/page.tsx` (`"use client"`). It
-  fetches via the shared `apiGet<T>` client in `apps/web/src/lib/api.ts`.
-  Chart components live in `apps/web/src/components/charts/`.
-- **Auth**: all read endpoints guarded with `requireScopes("read:knowledge")`,
-  matching sibling read routes.
+Each chart is independently shippable: one endpoint + one component + tests. The table is
+the per-chart reference; the numbered clauses below carry the non-obvious behavioural rules.
 
-### Data-fetching approach (decided)
+| # | Chart (component) | Operator question | Type | Endpoint | Source data |
+| --- | --- | --- | --- | --- | --- |
+| C1 | Question journey (`QuestionJourneyChart`) | What path does a question take, and where does volume leak? | Recharts **Sankey** | `GET /insights/journey?from&to&flow` → `{ nodes, links }` | `questions`, `question_gaps`, `gap_cluster_memberships`, `proposals` |
+| C2 | Job throughput & health (`JobThroughputChart`) | Is the queue keeping up? Is a runner failing? | Recharts stacked area | `GET /insights/jobs/throughput?from&to&bucket&type` → `{ series }` | pg-boss `job` bucketed by time, stacked by state |
+| C3 | Open-gap backlog (`GapBacklogChart`) | Is knowledge debt growing or shrinking? | Recharts line/area | `GET /insights/gaps/backlog?from&to&bucket&flow` → `{ series }` | `question_gaps` (+ `questions` for flow/park) |
+| C4 | Answer latency (`LatencyHistogramChart`) | How long do answers take, end to end? | Recharts bar (histogram) | `GET /insights/answers/latency?from&to` → `{ bins }` | pg-boss `job` — completed `answer_question` durations |
+| C5 | Verification success (`VerificationSuccessChart`) | Do merged proposals actually close the gap? | Recharts **donut** (+ trend series) | `GET /insights/verification/success?from&to&bucket` → `{ totals, series }` | `gap_closure_verification` |
+| C6 | Job error breakdown (`JobErrorBreakdownChart`) | What's breaking, and in which job type? | Recharts bar | `GET /insights/jobs/errors?from&to` → `{ byCategory, byType }` | pg-boss `job` (failed rows, error metadata) |
+| C7 | Knowledge-base freshness (`FreshnessChart`) | How much of the KB is overdue for review? | Recharts bar | `GET /insights/freshness` → `{ documents, sources }` | `documents`, `source_sync_state` |
+| C8 | Maintenance patrol impact (`PatrolImpactChart`) | Are the patrols finding and fixing things? | Recharts bar | `GET /insights/patrols?from&to` → `{ runs }` | `maintenance_runs` (`task_type`, `details` JSONB, timestamps) |
+| ~~C9~~ | Worker utilisation | Are workers saturated or idle? | *(dropped)* | *(not built)* | *(no durable heartbeat samples — see IC14)* |
+| C10 | Answer feedback (`FeedbackChart`) | Are users rejecting answers — especially confident ones? | Recharts stacked area + rate line | `GET /insights/feedback?from&to&bucket&flow` → `{ totals, series }` | `questions` (`feedback`, `feedback_at`, `confidence`, `purpose`) |
+| C11 | AI token usage & cost (`AiUsageChart` / `CostBarChart`) | What is each job type costing per provider/model? | Recharts horizontal cost bars | `GET /insights/ai-usage?from&to` → `{ usage }` | pg-boss `job` — completed AI-queue rows, watcher-reported usage |
+| — | AI cost by flow (`AiCostByFlowChart` / `CostBarChart`) | Which flow is my AI spend going to? | Recharts horizontal cost bars | `GET /insights/ai-cost/by-flow?from&to&flow` → `{ flows }` | same rollup as C11, grouped by input `flowId` |
+| — | Per-schedule cost (Schedules page column) | What is each scheduled task costing? | `/schedules` table column | `GET /insights/ai-cost/by-schedule?from&to` → `{ schedules }` | same rollup as C11, per task's `aiJobTypes` × flow |
 
-The Insights page fetches its own data on mount via `apiGet` — **not** through
-`ConsoleProvider` — with a manual refresh button. This keeps the heavier,
-slower-moving aggregates out of the global 4s poll. No background polling in v1.
+### Behavioural rules
 
-## 5. Shared query conventions
+- **IC6 — Question journey (C1).** The Sankey renders the `{ nodes, links }` graph across
+  four segments: **answer** (questions split by `confidence`, then no-gap vs gap-raised) →
+  **gap** (dismissed / parked / open / clustered) → **proposal** (in-progress / rejected /
+  superseded / merged) → **verify** (verified-closed / reopened / needs-attention /
+  awaiting). Link widths are real counts, and the **unit of flow shifts** question → gap →
+  proposal across the graph (labelled on the chart). Each unit shift MUST be carried on the
+  *link* at a segment boundary, not inside a node: the `clustered → proposals` link carries
+  the gap-side count (clustered gaps handed off), so the "Clustered" node stays internally
+  conserved (a Sankey node is sized by `max(in, out)`) rather than ballooning to the
+  proposal total. The shift to `prop_total` surfaces at "Proposals drafted", where the
+  outgoing status arms sum. Proposals are windowed independently on their own `created_at`,
+  so that total is **not** conserved against clustered gaps — by design. This replaces the
+  earlier linear gap-to-merge funnel: a strict superset that also shows disposition, not
+  just drop-off.
+- **IC7 — Job throughput (C2).** pg-boss `job` rows bucketed by time and stacked by state
+  (completed / failed / active / retry). The optional `?type=` filter resolves a
+  `@magpie/jobs` job type to the pg-boss **queue names** its work lands in (via
+  `queueDefinitionsForType`, including dead-letter queues); an **unknown** type resolves to
+  an empty queue list, which the store treats as "match nothing" — an explicit empty series
+  rather than a silently-ignored filter.
+- **IC8 — Open-gap backlog (C3).** Gap lifecycle transitions per bucket (open / resolved /
+  parked / dismissed) from `question_gaps` timestamps (`created_at`, `resolved_at`,
+  `dismissed_at`, `parked_at`), with a running net-open total; joined to `questions` for
+  the flow filter.
+- **IC9 — Answer latency (C4).** As-built, C4 is the **end-to-end answer-job latency
+  histogram**: it bins the duration (`completed_on − created_on`) of **completed
+  `answer_question` pg-boss jobs** over the window into fixed `LATENCY_BINS`, zero-filling
+  empty bins. The endpoint is `GET /insights/answers/latency`.
+  > ⚠️ The original C4 design was a **gap-resolution** latency histogram (days from gap
+  > `created_at` → proposal `merged_at`) at `GET /insights/gaps/latency`. The shipped chart
+  > measures answer-job latency instead and lives at `/answers/latency`. This clause
+  > documents the as-built behaviour; the original framing is retired.
+- **IC10 — Verification success (C5).** `gap_closure_verification` rows split by verdict —
+  `closed` (the merged doc now answers the re-asked question) vs `still_open`. The endpoint
+  returns both the **overall totals** across the window and a **per-bucket `series`** for a
+  trend; the shipped component renders the totals as a **donut** (Recharts `Pie` with an
+  inner radius). Endpoint is `GET /insights/verification/success` (not `/insights/verification`).
+- **IC11 — Job error breakdown (C6).** Failed pg-boss `job` rows over the window, split
+  `byCategory` (provider / validation / timeout / external / internal) and `byType` (job
+  type). Window-only — no time axis, so no `bucket`.
+- **IC12 — KB freshness (C7).** A **point-in-time snapshot** taking no params: active
+  `documents` bucketed by review-cycle compliance (fresh / due / overdue via
+  `last_verified` + `review_cycle_days`) and `source_sync_state` sources bucketed by
+  last-sync recency.
+- **IC13 — Patrol impact (C8).** Per-`task_type` run / finding / proposal counts from
+  `maintenance_runs` (`details` JSONB) over the window. Window-only — grouped by task type,
+  not time.
+- **IC14 — Worker utilisation (C9) is DROPPED and MUST NOT be fabricated.** A
+  busy-ratio-over-time chart needs a durable time-series of heartbeat samples. The only
+  heartbeat store is `watcher_registrations` (migration `0025_watcher_registry.sql`), which
+  the API **upserts** one row per watcher on every claim/heartbeat and prunes on read — it
+  holds each watcher's *latest* `last_seen_at` / `current_job_id`, not a sample history. A
+  new sampling table was explicitly ruled out for this work, so no endpoint, store method,
+  or component was built and no data was invented.
+- **IC15 — Answer feedback (C10, #241).** Live questions' helpful / unhelpful verdicts per
+  bucket, **windowed on `feedback_at`**, with the `unhelpful` stack split into
+  **confident-answer rejections** (`confidence` high/medium — the subset that also raises a
+  `feedback` gap, see [question-logging.md](./question-logging.md)) vs the rest, plus an
+  unhelpful-**rate** line. Verification re-asks are **excluded** (filtered on `purpose`).
+- **IC16 — AI token usage & cost (C11, #241).** One **horizontal bar per priced
+  `(job type, provider, model)` triple**, length = the triple's spend, with **input-cost
+  and output-cost stacked** (both money, so total length = total cost), heaviest first.
+  **Cost is on the axis; tokens ride the tooltip** (input / output / total) alongside
+  `jobsWithUsage` / `jobs`. The three cost states stay **distinct so nothing reads as `$0`**:
+  **priced** (matched `AI_PRICING` entry → a bar), **unpriced** (usage reported but no price
+  entry → excluded from bars, named in a footnote), **unmetered** (CLI providers report no
+  usage → footnoted count). When nothing is priced, the plot is replaced by an empty-state
+  CTA naming the unpriced pairs. `estimatedCost` is the `{ input, output, total }` split
+  (`AiCostEstimate`), **priced at read time** (tokens × per-MTok `AI_PRICING` rate, via
+  `summariseAiCost` + `apps/api/src/platform/ai-pricing.ts`, resolved from
+  `ctx.settings.aiPricing`) and present only for a matched `(provider, model)`. **Cost is
+  never persisted** — always `stored tokens × current AI_PRICING`. The watcher sums each
+  run's provider-reported usage and stamps its execution identity; the API persists both on
+  the `{ result, executor, usage?, provider?, model? }` completion envelope. **No new
+  table**: the pg-boss retention window (30 days) covers the chart's window, and the queue-
+  name → `(type, provider)` mapping is derived from the `@magpie/jobs` catalog.
+  > This supersedes the original C11 design, where the bars encoded **tokens** and cost
+  > "rode text — never a series colour or a second y-axis". For a cost card, cost belongs on
+  > the axis; see the 2026-07-15 redesign in Provenance.
+- **IC17 — AI cost by flow.** The same rollup grouped by `data->'input'->>'flowId'` (the
+  pg-boss `JobEnvelope`), aggregated to one cost summary per flow, drawn with the **shared
+  `CostBarChart`** and the same three-state honesty as IC16 (unpriced flows footnoted,
+  empty-state CTA when none priced). Jobs whose input carries **no `flowId`**
+  (`answer_question`, cross-flow `fold_*`) group as **Unattributed**. Flow display names are
+  resolved **by the console** from `ctx.knowledgeConfig.flows`, not the API. `?flow=`
+  narrows to a single flow. Ordered by cost then tokens, heaviest first.
+- **IC18 — Per-schedule cost.** A **"Cost (30d)" column on the `/schedules` page**
+  (`SchedulesPanel`) — *not* the Insights page — showing each task's approximate spend
+  (`estimatedCost.total`). It reuses the per-flow rollup, summing the AI job types the task's
+  orchestrator fans out to (`aiJobTypes` in the task registry) filtered to the task's own
+  flow (so no extra query); tasks that spend no model tokens (e.g. the GitHub snapshot
+  refresh) are omitted. The envelope is **keyed by `ScheduledTask.key`** so the console
+  joins it onto the schedules table, and is fetched page-locally so it stays off the
+  console's fast poll.
 
-- **Time range**: endpoints accept `?from=<ISO>&to=<ISO>&bucket=day|week|month`
-  (default: last 30 days, `bucket=day`). Bucketing via `date_trunc($bucket, ts)`.
-  **v1 UI uses a fixed "last 30 days" window** — no range picker; the params
-  exist on the API for later.
-- **Flow filter**: optional `?flow=<flowId>` where the entity carries a flow.
-- All timestamps returned as ISO strings; all counts as integers.
-- Empty buckets are zero-filled server-side so the client renders continuous
-  series.
+## Code map
 
-## 6. The charts
+| Concern | Code |
+| --- | --- |
+| Insights page shell + page-local fetch | `apps/web/src/app/insights/page.tsx`, `apps/web/src/components/insights/useInsights.ts`, `apps/web/src/lib/api.ts` |
+| Chart components | `apps/web/src/components/insights/*Chart.tsx`, plus `ChartCard.tsx`, `CostBarChart.tsx`, `format.ts` |
+| Per-schedule cost column | `apps/web/src/components/SchedulesPanel.tsx`, `apps/web/src/app/schedules/page.tsx` |
+| API routes + param schemas | `apps/api/src/features/insights/{routes,schema}.ts`, registered in `apps/api/src/app.ts` |
+| Service (range resolution, delegation) | `apps/api/src/features/insights/service.ts` |
+| Cost pricing (pure, DB-free) | `apps/api/src/features/insights/cost.ts` (`summariseAiCost`), `apps/api/src/platform/ai-pricing.ts`, `AI_PRICING` in `apps/api/src/platform/config.ts` |
+| SQL rollups (store) | `apps/api/src/stores/postgres-insights-store.ts`, interface `apps/api/src/stores/insights-store.ts` |
+| Response/DTO types | `@magpie/core` (`packages/core/src/index.ts`); web mirror `apps/web/src/lib/types.ts` |
+| Job-type → queue-name mapping | `apps/api/src/jobs/pg-boss-broker.ts` (`queueDefinitionsForType`), `@magpie/jobs` catalog |
+| Scheduled-task fan-out (`aiJobTypes`) | `apps/api/src/scheduling/task-registry.ts` (`listScheduledTasks`) |
 
-Each entry: the operator question, the chart type, the endpoint, and the source
-data. Data inventory confirmed against the schema (see the tables named below).
+## Tests (behavioural contract)
 
-### Tier 1 — the pipeline story
+- **API:** `apps/api/src/features/insights/routes.test.ts` (Hono app — envelope shape and
+  param validation), `apps/api/src/features/insights/cost.test.ts` (the pure `summariseAiCost`
+  reduction and three-state cost accounting), and
+  `apps/api/src/stores/postgres-insights-store.integration.test.ts` (the SQL rollups against
+  seeded data, gated by `RUN_PG_INTEGRATION=1`).
+- **Web:** one colocated `node:test` `.test.tsx` per chart under
+  `apps/web/src/components/insights/` — `AiCostByFlowChart`, `AiUsageChart`, `CostBarChart`,
+  `FeedbackChart`, `FreshnessChart`, `GapBacklogChart`, `JobErrorBreakdownChart`,
+  `JobThroughputChart`, `LatencyHistogramChart`, `PatrolImpactChart`,
+  `QuestionJourneyChart`, `VerificationSuccessChart` — each rendering the component with
+  fixture data and asserting it renders and shows the expected labels / empty-states.
+  Per-schedule cost is covered by `apps/web/src/components/SchedulesPanel.test.tsx`.
 
-**C1. Question journey** *(Recharts Sankey)*
-- **Question:** What path does a question take, and where does volume leak at each branch — answered confidently, dismissed, parked, rejected, reopened?
-- **Segments:** answer (questions split by `confidence`, then no-gap vs gap-raised) → gap (dismissed / parked / open / clustered) → proposal (in-progress / rejected / superseded / merged) → verify (verified-closed / reopened / needs-attention / awaiting). Link widths are real counts; the unit shifts question → gap → proposal across the graph (labelled on the chart). Each unit shift is carried on the *link* at a segment boundary, not inside a node: the `clustered → proposals` link carries the gap-side count (clustered gaps handed off), so the "Clustered" node stays internally conserved (a Sankey node is sized by `max(in, out)`) instead of ballooning to the proposal total. The shift to `prop_total` surfaces at "Proposals drafted", where the outgoing status arms sum. Proposals are windowed independently on their own `created_at`, so that total is not conserved against clustered gaps by design.
-- **Endpoint:** `GET /insights/journey?from&to&flow` → `{ nodes: JourneyNode[], links: JourneyLink[] }`.
-- **Source:** `questions` (`asked_at`, `confidence`), `question_gaps` (terminal timestamps), `gap_cluster_memberships` (`active`), `proposals` (`status`, `closure_status`). Replaces the earlier linear gap-to-merge funnel — a strict superset that also shows disposition, not just drop-off.
+## Provenance (design history)
 
-**C2. Job throughput & health** *(Recharts stacked area, time-series)*
-- **Question:** Is the queue keeping up? Is a runner failing?
-- **Series:** `ai_jobs` bucketed by time, stacked by state (completed / failed / active / retry).
-- **Endpoint:** `GET /insights/jobs/throughput?from&to&bucket&type` → `{ series: JobThroughputBucket[] }`.
-- **Source:** `ai_jobs` (`created_at`, `started_at`, `completed_at`, `failedAt`, `state`, `type`).
+Consolidates, and supersedes as a behavioural description:
 
-**C3. Open-gap backlog trend** *(Recharts line/area, time-series)*
-- **Question:** Is knowledge debt growing or shrinking?
-- **Series:** count of gaps in each state (open / resolved / parked / dismissed) per bucket.
-- **Endpoint:** `GET /insights/gaps/backlog?from&to&bucket&flow` → `{ series: GapBacklogBucket[] }`.
-- **Source:** `question_gaps` (`created_at`, `resolved_at`, `dismissed_at`, `parked_at`).
+- `docs/superpowers/specs/2026-07-06-question-journey-sankey-design.md` — the branching
+  question-journey Sankey (C1/IC6), which replaced the original linear React-Flow funnel.
+- `docs/superpowers/specs/2026-07-15-ai-cost-chart-redesign-design.md` — the AI-cost card
+  redesign (IC16/IC17): cost on the axis with input/output stacked, tokens in the tooltip,
+  and the priced / unpriced / unmetered three-state honesty; supersedes the original
+  tokens-on-bars framing.
+- `docs/superpowers/specs/2026-06-13-manual-knowledge-gap-feedback-design.md` — the
+  `feedback` gap source that the answer-feedback chart's confident-rejection subset keys off
+  (IC15).
 
-### Tier 2 — quality & latency
-
-**C4. Gap-resolution latency histogram** *(Recharts bar)*
-- **Question:** How long do gaps take to close? Where's the slow tail?
-- **Data:** distribution of days from gap `created_at` → proposal `merged_at`, binned.
-- **Endpoint:** `GET /insights/gaps/latency?from&to&flow` → `{ bins: LatencyBin[] }`.
-- **Source:** `question_gaps`, `proposals`.
-
-**C5. Verification success rate** *(Recharts donut + trend)*
-- **Question:** Do merged proposals actually close the gap they targeted?
-- **Data:** `gap_closure_verification` verdict split (closed vs still_open), overall and over time.
-- **Endpoint:** `GET /insights/verification?from&to&bucket` → `{ totals: {...}, series: VerificationBucket[] }`.
-- **Source:** `gap_closure_verification` (`verdict`, `confidence`, `created_at`).
-
-**C6. Job error breakdown** *(Recharts bar)*
-- **Question:** What's breaking, and in which job type?
-- **Data:** failed-job counts grouped by `error.category` (provider / validation / timeout / external / internal) and by job type.
-- **Endpoint:** `GET /insights/jobs/errors?from&to` → `{ byCategory: [...], byType: [...] }`.
-- **Source:** `ai_jobs` (failed rows, error metadata).
-
-### Tier 3 — freshness & operations
-
-**C7. Knowledge-base freshness** *(Recharts bar)*
-- **Question:** How much of the KB is overdue for review? Which sources are stale?
-- **Data:** documents bucketed by review-cycle compliance (fresh / due / overdue via `last_verified` + `review_cycle_days`); sources not synced in N days.
-- **Endpoint:** `GET /insights/freshness` → `{ documents: {...}, sources: {...} }`.
-- **Source:** `documents`, `source_sync_state`.
-
-**C8. Maintenance patrol impact** *(Recharts)*
-- **Question:** Are the patrols finding and fixing things?
-- **Data:** coverage per run and findings→proposals conversion for correctness/editorial patrols.
-- **Endpoint:** `GET /insights/patrols?from&to` → `{ runs: PatrolImpact[] }`.
-- **Source:** `maintenance_runs` (`task_type`, `details` JSONB, timestamps).
-
-**C9. Worker utilisation** *(Recharts, time-series)* — **DROPPED (no durable heartbeat samples)**
-- **Question:** Are workers saturated or idle?
-- **Data:** busy ratio per worker over time (fraction of samples with an active job).
-- **Endpoint (not built):** `GET /insights/workers?from&to&bucket` → `{ series: WorkerUtilBucket[] }`.
-- **Source:** watcher/worker heartbeat data (`lastSeenAt`, `currentJobId`).
-- **Decision (resolved):** dropped per the locked conditional. The only heartbeat
-  store is `watcher_registrations` (migration `0025_watcher_registry.sql`), which
-  the API **upserts** one row per watcher on every claim/heartbeat and prunes stale
-  rows on read — it holds only each watcher's *latest* `last_seen_at` /
-  `current_job_id`, not a durable time-series of samples. A busy-ratio-over-time
-  chart would require a new sampling table, which §10.2 explicitly rules out for
-  this work. No endpoint, store method, or component was built, and no data was
-  fabricated.
-
-**C10. Answer feedback** *(Recharts stacked area + rate line, time-series)* — added later (#241)
-- **Question:** Are users rejecting the answers — and especially the answers the system was confident in?
-- **Data:** live questions' helpful/unhelpful verdicts per bucket (windowed on `feedback_at`), the `unhelpful` stack split into confident-answer rejections (`confidence` high/medium — the subset that also raises a `feedback` gap, see `docs/question-logging.md`) and the rest, plus an unhelpful-rate line. Verification re-asks excluded.
-- **Endpoint:** `GET /insights/feedback?from&to&bucket&flow` → `{ totals: FeedbackSummary, series: FeedbackBucket[] }`.
-- **Source:** `questions` (`feedback`, `feedback_at`, `confidence`, `purpose`).
-
-**C11. AI token usage & cost** *(Recharts horizontal cost bars, window-only)* — added later (#241)
-- **Question:** What is each job type costing per provider/model — e.g. what did the correctness patrol spend this week?
-- **Data:** one **horizontal bar per priced (job type, provider, **model**) triple**, its length the triple's spend — **input-cost + output-cost stacked** (both money, so total length = total cost), heaviest first. Cost is on the axis; **tokens ride the tooltip** (input/output/total) along with `jobsWithUsage`/`jobs` ("jobs metered"). `estimatedCost` is the `{ input, output, total }` split (`AiCostEstimate`), priced at read time from `AI_PRICING` (tokens × per-MTok rate) and present only for a matched (provider, model). The three states stay distinct so nothing reads as `$0` — **priced** (a bar), **unpriced** (usage reported, no price entry → excluded from the bars but named in a footnote so the operator knows what to price), **unmetered** (CLI providers report no usage → footnoted count). When nothing is priced the plot is replaced by an empty-state CTA naming the unpriced pairs. *(This supersedes the original design, where the bars encoded tokens and cost "rode text — never a series colour or a second y-axis"; for a cost card, cost belongs on the axis.)*
-- **Endpoint:** `GET /insights/ai-usage?from&to` → `{ usage: AiUsageBreakdown[] }` (`model`, `estimatedCost` optional; `estimatedCost` is the `{ input, output, total }` split).
-- **Source:** pg-boss `job` — completed rows on the provider-fanned AI queues; the watcher sums each run's provider-reported usage and stamps its execution identity, and the API persists both on the `{ result, executor, usage?, provider?, model? }` completion envelope. Cost is never persisted — always `stored tokens × current AI_PRICING`. No new table: the pg-boss retention window (30 days) covers the chart's window, and the queue-name → (type, provider) mapping is derived from the `@magpie/jobs` catalog.
-
-**AI cost by flow** *(Recharts horizontal cost bars, window-only)* — added with C11 cost
-- **Question:** Which flow is my AI spend going to?
-- **Data:** one horizontal bar per **priced** flow, its length the flow's spend (input-cost + output-cost stacked, same shared `CostBarChart` as C11), heaviest first; tokens ride the tooltip alongside the flow's priced/unpriced/unmetered job counts (same three-state honesty as C11). Flows with no priced usage are footnoted rather than drawn as empty bars, and an empty-state CTA shows when no flow is priced. Jobs whose input carries no flowId (`answer_question`, cross-flow `fold_*`) group as **Unattributed**. Flow display names come from `ctx.knowledgeConfig.flows`, resolved by the console.
-- **Endpoint:** `GET /insights/ai-cost/by-flow?from&to&flow` → `{ flows: AiCostByFlow[] }`.
-- **Source:** the same rollup as C11, additionally grouped by `data->'input'->>'flowId'` (the pg-boss JobEnvelope), aggregated to one cost summary per flow.
-
-**Per-schedule cost** *(Schedules page column, not the Insights page)* — added with C11 cost
-- **Question:** What is each scheduled maintenance task costing?
-- **Data:** a "Cost (30d)" column on the `/schedules` table showing each task's approximate spend (`estimatedCost.total` of the `{ input, output, total }` split) — the AI job types its orchestrator fans out to (`aiJobTypes` in the task registry), filtered to the task's flow. Priced/unpriced/unmetered stay distinct.
-- **Endpoint:** `GET /insights/ai-cost/by-schedule?from&to` → `{ schedules: AiScheduleCost[] }`, keyed by `ScheduledTask.key`. Fetched page-locally so it stays off the console's fast poll.
-
-## 7. Delivery phases
-
-1. **Phase 1 (Tier 1):** insights feature module + store scaffolding, `@magpie/core`
-   types, Insights page shell with page-local fetching, C2 (throughput —
-   proves Recharts + Next 16 SSR), then C3 and C1 (funnel via React Flow).
-2. **Phase 2 (Tier 2):** C4, C5, C6.
-3. **Phase 3 (Tier 3):** C7, C8, C9.
-
-Each chart is independently shippable: one endpoint + one component + tests.
-
-## 8. Testing
-
-- **API:** endpoint tests beside the code (`postgres-insights-store.integration.test.ts`,
-  gated by `RUN_PG_INTEGRATION=1`) for the SQL rollups against seeded data;
-  a unit test in the Hono app (`buildApp(makeTestContext())`) for envelope shape
-  and param validation, following `apps/api/src/app.test.ts`.
-- **Web:** component tests under `apps/web` (`node:test` + `.test.tsx`) rendering
-  each chart with fixture series and asserting it renders without error and shows
-  expected labels/empty-states.
-
-## 9. Documentation
-
-- Update `docs/api.md` with the new `/insights/*` endpoints.
-- Add an "Insights" section to the web/app docs describing each chart and its
-  source data.
-
-## 10. Resolved decisions
-
-1. **Data-fetch model:** page-local fetch on mount + manual refresh, not via
-   `ConsoleProvider`. (See §4.)
-2. **Worker utilisation (C9):** conditional — if the watcher doesn't already
-   persist heartbeat samples durably, drop the chart; no new sampling table. (See C9.)
-3. **Time window:** fixed "last 30 days" in v1; no range picker. (See §5.)
-4. **Performance:** on-demand SQL for v1; optimise (caching / materialised
-   views) later only if needed.
-```
+This file was itself the original **Insights & Charts** design (2026-07-06, tiers C1–C11,
+C9 dropped); it has been elevated in place to the as-built living-spec shape. Where the
+shipped code diverged from that design — chart directory, the Sankey library, the C4 latency
+semantics and endpoint, and the C5/C11 endpoint names — the `> ⚠️` notes above record the
+as-built truth.
