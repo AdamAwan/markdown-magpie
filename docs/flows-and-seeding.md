@@ -14,11 +14,14 @@ approves it, and approval drafts each item into a proposal that publishes like a
 ## Flow config model
 
 - **F1** — A flow (`ConfiguredKnowledgeFlow`) has `id`, `name`, `sourceIds[]`,
-  `destinationId`, and three optional authored fields with distinct roles:
-  `persona` (answer voice, appended to the answer prompt), `routingSummary` (topical
-  scope, used **only** for embedding-based routing via `/api/route` — not a voice), and
-  `charter` (coverage mission, consumed by seed planning only — never injected into answer
-  prompts or router text).
+  `destinationId`, and three optional authored fields with distinct **primary** roles:
+  `persona` (answer voice — appended to the answer prompt, and **also** part of the flow's
+  router embedding text), `routingSummary` (topical scope — the signal for embedding-based
+  routing via `/api/route`; not a voice), and `charter` (coverage mission — consumed by
+  seed planning only, never injected into answer prompts or router text). All three are
+  additionally forwarded to the `outline_flow_seed` seed-planning agent as authoring
+  context, so "primary role" is about where each field's authored intent *lives*, not the
+  only place it is read.
 - **F2** — There is **no `mode` field**. Publish mode is *derived* from the destination:
   a `file://` destination URL is `local-git`, otherwise `github`.
 - **F3** — The system **never writes flow config**. A model-proposed charter/persona is
@@ -141,3 +144,11 @@ embedding algorithm those fields feed) is specified in [retrieval.md](./retrieva
 > `POST /api/flows/:flowId/seed` endpoint is removed (a test asserts 404); ③ interactive
 > AI job types are exactly `answer_question` and `outline_flow_seed` — `draft_seed_document`
 > / `revise_seed_plan` / `seed_bootstrap` are not interactive.
+>
+> **Drift found on review (2026-07-20):** ④ F1 previously said `routingSummary` was used
+> "only" for routing and framed `persona` as answer-prompt-only. Both overclaimed: the
+> flow router's embedding text is `[name, routingSummary, persona]`
+> (`apps/api/src/features/route/service.ts:40`), so `persona` also feeds routing, and
+> `persona`/`routingSummary`/`charter` are **all** passed to the `outline_flow_seed`
+> job as seed-planning context (`apps/api/src/features/seed/service.ts:104-106`). F1
+> now states primary roles without the false exclusivity.
