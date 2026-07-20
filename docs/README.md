@@ -41,7 +41,7 @@ one area of code:
   tagged `> ⚠️ NOT YET IMPLEMENTED` with a one-line note. No untagged clause may be
   aspirational — an untagged clause is a claim about current behaviour and must be true.
 
-`retrieval.md` (in progress) is intended as the reference example of this shape.
+See [`retrieval.md`](./retrieval.md) for the reference example of this shape.
 
 ## The spec set
 
@@ -60,7 +60,7 @@ several subsystems.
 | Spec | Subsystem | Primary code |
 | --- | --- | --- |
 | [ingestion.md](./ingestion.md) | Markdown ingestion & indexing | `apps/api` stores, `packages/markdown` |
-| retrieval.md *(in progress)* | Retrieval & answering (agentic loop, hybrid search, flow routing) | `apps/api/src/features/{ask,retrieve,route}`, `packages/retrieval` |
+| [retrieval.md](./retrieval.md) | Retrieval & answering (agentic loop, hybrid search, flow routing) | `apps/api/src/features/{ask,retrieve,route}`, `packages/retrieval` |
 | gaps-and-maintenance.md *(planned)* | Knowledge gaps, clustering, the reconciler & patrols | `apps/api/src/scheduling`, `question-logging.md` |
 | proposals-and-publishing.md *(planned)* | Draft → reconcile gate → provenance → publish → stale-PR regen | `apps/api/src/features/proposals`, `packages/git` |
 | source-sync.md *(planned)* | Source-change sync to proposals | `apps/api/src/features/source-sync` |
@@ -84,7 +84,7 @@ Elevating the existing docs into this shape is in progress. `retrieval.md` is th
 reference exemplar; the checklist below tracks the rest.
 
 - [x] Spec index & conventions (this file)
-- [ ] `retrieval.md` — exemplar (as-built, code-mapped) — *in progress*
+- [x] `retrieval.md` — exemplar (as-built, code-mapped)
 - [ ] `gaps-and-maintenance.md` — extract from `architecture.md`
 - [ ] `proposals-and-publishing.md` — extract from `architecture.md`
 - [ ] `source-sync.md` — consolidate the 3 design docs
