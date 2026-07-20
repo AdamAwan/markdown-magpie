@@ -1,29 +1,172 @@
 # HTTP API Reference
 
-The API is a plain Node HTTP server. It listens on `PORT` (default `4000`), and all API
-endpoints are served under `/api`. In local development the API base URL is
-`http://localhost:4000/api`.
+> **Status:** living spec (as-built). Source of truth for the HTTP surface of `apps/api` —
+> the cross-cutting request/response rules every endpoint obeys, and the full endpoint
+> catalog. Follows the [spec conventions](./README.md#conventions).
 
-## Conventions
+## Purpose
 
-- All requests and responses are JSON (`content-type: application/json`).
-- CORS defaults to open (`access-control-allow-origin: *`), and `OPTIONS` preflight
-  requests return `204`. Set `CORS_ALLOWED_ORIGINS` to a comma-separated allow-list
-  (e.g. the web origin) to restrict which origins may call the API in production.
-- Every response carries standard security headers (`X-Content-Type-Options: nosniff`,
-  `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy`, and `Strict-Transport-Security`).
-  HSTS is only honoured by browsers over HTTPS; TLS termination is assumed to happen
-  upstream (the same headers are also emitted by the MCP HTTP server and the web app).
-- Errors return a JSON body with an `error` code, e.g. `{ "error": "question_required" }`.
-  Some errors add a human-readable `message`. An uncaught failure returns `500` with
-  `{ "error": "internal_error", "message": "..." }`.
-- List endpoints accept a `limit` query parameter. It is clamped to between `1` and `200`.
+Give every client — the web console, the MCP server, the watcher, and operator scripts —
+one authoritative contract for talking to the API. The API is the system's only writer of
+record: it owns Postgres, enqueues all generative work, and exposes pure retrieval/routing
+callbacks the watcher calls back into. This spec numbers the **cross-cutting normative
+rules** (auth, errors, validation, pagination, CORS, rate limits, the enqueue-and-202
+pattern, service-principal callbacks) as clauses `API1…`, then catalogs the endpoints as
+reference tables/sections — a per-endpoint clause id would be noise for a surface this
+large, so endpoints stay as reference and the *rules that govern all of them* carry the
+stable ids.
+
+The API is a [Hono](https://hono.dev) app served under `/api`. It listens on `PORT`
+(default `4000`); in local development the base URL is `http://localhost:4000/api`.
+
+> ⚠️ Drift corrected: earlier revisions of this doc described the API as "a plain Node HTTP
+> server." It is a Hono app (`apps/api/src/app.ts`), fronted by `@hono/node-server`. The
+> observable JSON contract is unchanged, but the framing was stale.
+
+## Cross-cutting rules
+
+### Transport & conventions
+
+- **API1** — All requests and responses are JSON (`content-type: application/json`).
+  Every API path is mounted under `/api`. Feature modules each own one prefix and declare
+  relative paths internally; the mount map is [`app.ts`](../apps/api/src/app.ts) (see
+  [Mount map](#mount-map) below).
+- **API2** — An absent or empty request body deserialises to `{}` (all fields optional),
+  but a body that is **present yet unparseable** is a client error: `400 invalid_json`
+  (`apps/api/src/http/body.ts`), never silently swallowed into `{}`.
+- **API3** — Request bodies are capped at **4 MiB**; an oversized body is rejected with
+  `413 payload_too_large` before any handler runs (`bodyLimit` in `app.ts`).
+
+### Authentication & authorization
+
+- **API4** — When auth is enabled (`settings.auth.required`), every `/api/*` route except
+  the public liveness/readiness/version probes (API5) sits behind `requireAuth`, which
+  verifies an OIDC **Bearer** token (`Authorization: Bearer <jwt>`). A missing/invalid
+  token is `401 unauthorized`. When auth is disabled (local dev), requests pass through
+  with no principal.
+- **API5** — `GET /api/health`, `GET /api/ready`, and `GET /api/version` are **public** —
+  registered *before* the auth middleware so orchestrator probes need no token.
+- **API6** — Endpoints declare required **scopes** via `requireScopes(...)`, which **fails
+  closed**: a principal-absent request is allowed only when auth was *explicitly* disabled;
+  otherwise it is `401`. A principal lacking the scope is `403 forbidden`. The scope set:
+
+  | Scope | Grants |
+  | --- | --- |
+  | `read:knowledge` | Read-only reads (lists, snapshots, insights, workers, prompts, reconciliations) |
+  | `ask:knowledge` | Ask / retrieve / route / questionnaire creation |
+  | `feedback:questions` | Record answer feedback / gap flags on questions |
+  | `manage:knowledge` | Mutating knowledge ops (questionnaire approval, indexing where required) |
+  | `manage:jobs` | Enqueue/manage jobs, run maintenance triggers, watcher callbacks |
+  | `manage:admin` | Runtime config read/switch and the destructive reset |
+
+- **API7** — Scope is coarse; **flow-scoped capability** authorization (`assertCan(ctx, c,
+  capability, flow)`, `apps/api/src/auth/capabilities.ts`) is the fine grain. Capabilities
+  are `ask` / `read` / `manage` / `admin`, checked per flow. A flow-less/`"auto"` request
+  is the wildcard case: only a `*`-scoped principal (or a genuine service principal, e.g.
+  the watcher) may run it unpinned; a single-flow principal must name their flow. A flow
+  the caller cannot see reads as **404** (never a cross-flow-enumerating 403).
+- **API8** — **On-behalf-of delegation.** A trusted gateway holding `act:on-behalf-of`
+  (the MCP service) MAY forward a verified end-user identity via the
+  `X-On-Behalf-Of-Subject` / `X-On-Behalf-Of-Roles` headers; the API then authorizes as
+  that user (`resolveEffectivePrincipal`). A no-op for every other caller. See
+  [authorization.md](./authorization.md).
+
+### Errors
+
+- **API9** — Errors return a JSON body with an `error` code, e.g.
+  `{ "error": "question_required" }`; some add a human-readable `message`
+  (`{ "error": code, "message": "…" }`). `HttpError` (`apps/api/src/http/errors.ts`)
+  carries the status, code, optional message, and optional extra response headers (e.g.
+  `Retry-After`). An uncaught failure is logged server-side and returned as
+  `500 { "error": "internal_error" }` — internal detail is never leaked.
+- **API10** — **Validation** is standardised on `@hono/zod-validator`
+  (`zValidator("json", schema, hook)`) with schemas in `features/*/schema.ts`; simpler
+  routes use the `readJsonBody` helper. Both converge on the same failure shape: a
+  malformed body is `400 invalid_json` (the global `onError` translates Hono's
+  `HTTPException` for unparseable JSON into the standard `{ error }` shape), and a
+  schema-invalid body returns the route's own `400 <code>` (e.g. `question_required`,
+  `invalid_job_input`).
+
+### Pagination, CORS, headers, rate limits
+
+- **API11** — **Pagination.** List endpoints accept a `limit` query parameter, clamped to
+  `1…200` (`parseLimit`, defaulting per-route). Paginated lists also accept `offset`
+  (default `0`). Where a text filter narrows a list, `total` is the unfiltered live count
+  and `matching` the count within the filter, so `offset` pages within the matches.
+- **API12** — **CORS.** Defaults to open (`access-control-allow-origin: *`); `OPTIONS`
+  preflight returns `204`. Set `CORS_ALLOWED_ORIGINS` (comma-separated) to restrict origins
+  in production. Allowed methods are `GET, POST, DELETE, OPTIONS`; allowed request headers
+  `content-type, authorization`.
+- **API13** — **Security headers.** Every response carries `X-Content-Type-Options:
+  nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy`, and
+  `Strict-Transport-Security` (`secureHeaders`, run before CORS so they cover the
+  short-circuited preflight). HSTS is only honoured by browsers over HTTPS; TLS termination
+  is assumed upstream. The MCP HTTP server and web app emit the same headers.
+- **API14** — **Rate limiting.** Two tiers throttle traffic: `ask` (cheap-but-metered ask
+  traffic) and `trigger` (expensive manual maintenance triggers). Every response on a
+  limited route carries `RateLimit-Limit` / `RateLimit-Remaining` / `RateLimit-Reset`; an
+  over-limit request is `429 rate_limited` with a `Retry-After` header. Limiting keys on
+  the authenticated subject, falling back to client IP (or a shared `anon` bucket) so an
+  unauthenticated route is still throttled. Disabled when `settings.rateLimit.enabled` is
+  false. See [rate-limiting.md](./rate-limiting.md).
+
+### Queue-only work & service-principal callbacks
+
+- **API15** — **Enqueue-and-202.** Generative (chat) AI work is never run inline in a
+  request — the API enqueues a job and returns **202** with `{ job, links }` (embeddings
+  are the sanctioned inline exception; see [ai-jobs.md](./ai-jobs.md)). `links` always
+  offers `job`/`wait`/`cancel` (`/api/jobs/:id[/wait|/cancel]`) plus a route-specific
+  resource link. The client blocks on `links.wait` until the job is terminal, then reads
+  the result from the resource link. Enqueue-only routes are **idempotent while queued**:
+  a repeat request for a resource with a job already in flight reuses that job rather than
+  enqueueing a duplicate.
+- **API16** — **Service-principal callbacks.** The watcher (a service principal, or a
+  `manage:jobs` holder) calls back into the API for the scoped context a job needs and to
+  record results. These are ordinary HTTP endpoints, not a side channel: the pure
+  retrieval/routing callbacks (`POST /api/retrieve`, `POST /api/route`), the job
+  lifecycle callbacks (`claim` / `heartbeat` / `complete` / `fail`), the maintenance
+  orchestration triggers (`/api/fix-patrol/*`, `/api/source-sync/run`,
+  `/api/scheduled-tasks/:key/run`), and the closure callback
+  (`/api/proposals/:id/verify-closure`). The watcher itself has **no database access**.
+
+## Mount map
+
+Verified against [`apps/api/src/app.ts`](../apps/api/src/app.ts). Each prefix is one
+feature module under `apps/api/src/features/<name>/routes.ts`.
+
+| Prefix | Module | Surface |
+| --- | --- | --- |
+| `/health`, `/ready`, `/version` | (inline in `app.ts`) | Public probes (API5) |
+| `/config`, `/admin` | `config` | Runtime config read/switch, destructive reset |
+| `/ask` | `ask` | Enqueue an answer (202) |
+| `/retrieve`, `/route` | `retrieve`, `route` | Pure watcher callbacks (see [retrieval.md](./retrieval.md)) |
+| `/knowledge` | `knowledge` | Search, sections, indexing, repos/documents/stats |
+| `/questions` | `questions` | Question logs, parked queue, feedback, gap flags |
+| `/gaps` | `gaps` | Gap candidates, clusters, reconcile |
+| `/questionnaires` | `questionnaires` | Bulk question batches |
+| `/flows`, `/seed-plans` | `seed` | Seeding plans (outline → approve) |
+| `/proposals` | `proposals` | Draft/review/publish/merge/verify |
+| `/source-sync` | `source-sync` | Source-change sync runs |
+| `/source-map` | `source-map` | Navigation hints for source-grounded jobs |
+| `/fix-patrol` | `patrol` | Correctness/editorial patrol triggers |
+| `/maintenance-runs` | `maintenance-runs` | Run history |
+| `/scheduled-tasks` | `scheduled-tasks` | Schedule list, settings, run-now |
+| `/jobs` | `jobs` | Job CRUD + watcher lifecycle callbacks |
+| `/workers` | `workers` | Connected-watcher registry |
+| `/prompts` | `prompts` | Static prompt catalog |
+| `/snapshots` | `snapshots` | Per-flow fetched snapshots |
+| `/reconciliations` | `reconciliations` | Reconciler clustering decisions |
+| `/insights` | `insights` | Read-only aggregation series |
+
+---
+
+# Endpoint catalog
 
 ## Health & Config
 
 ### `GET /api/health`
 
-Liveness check. Public — served before the auth middleware.
+Liveness check. Public (API5).
 
 ```json
 { "ok": true, "service": "markdown-magpie-api" }
@@ -33,9 +176,9 @@ Liveness check. Public — served before the auth middleware.
 
 Deep readiness check, in contrast to `/health`'s shallow liveness. Verifies the running
 process can actually serve traffic: Postgres is reachable (`SELECT 1` via the shared
-connection pool) and the pg-boss job broker has started. Public — served before the auth
-middleware, so orchestrator probes need no token. Returns `200` when ready and `503`
-otherwise, with a body reporting each dependency:
+connection pool) and the pg-boss job broker has started. Public (API5), so orchestrator
+probes need no token. Returns `200` when ready and `503` otherwise, with a body reporting
+each dependency:
 
 ```json
 { "ready": true, "checks": { "database": true, "broker": true } }
@@ -47,13 +190,12 @@ no Postgres dependency, so `database` is reported `true`.
 
 ### `GET /api/version`
 
-Identity of the running build, so clients can tell which commit is live. Public, like
-`/health`. The values are baked into the container image at build time (see the
-Dockerfile `ARG`s and `.github/workflows/publish-image.yml`): `sha` is the deployed
-commit's short SHA, `commitMessage` its subject line, and `committedAt` the commit's
-committer date (i.e. the merge time) as an ISO-8601 string. All three are `null` when
-the image was built without those args (local development), in which case the console
-shows a "Development" build.
+Identity of the running build, so clients can tell which commit is live. Public (API5).
+The values are baked into the container image at build time (see the Dockerfile `ARG`s and
+`.github/workflows/publish-image.yml`): `sha` is the deployed commit's short SHA,
+`commitMessage` its subject line, and `committedAt` the commit's committer date (i.e. the
+merge time) as an ISO-8601 string. All three are `null` when the image was built without
+those args (local development), in which case the console shows a "Development" build.
 
 ```json
 {
@@ -63,19 +205,19 @@ shows a "Development" build.
 }
 ```
 
-### `GET /api/config`
+### `GET /api/config` · `POST /api/config`
 
-Returns the resolved runtime configuration: API settings, storage backends (with the
+Scope `manage:admin`.
+
+`GET` returns the resolved runtime configuration: API settings, storage backends (with the
 database URL masked), configured knowledge repositories, provider settings and secret
 presence (`set` / `not set`), the AI runtime (current provider plus the available
 providers), the parsed `AI_PRICING` token-price table (`aiPricing.entries`, echoed
-verbatim — prices are not secrets, and this is how an operator verifies the table the
-API actually loaded), watcher settings, and retrieval settings including
-`retrieval.mode` (`hybrid` or `keyword`) and a plain-language `reason`.
+verbatim — prices are not secrets, and this is how an operator verifies the table the API
+actually loaded), watcher settings, and retrieval settings including `retrieval.mode`
+(`hybrid` or `keyword`) and a plain-language `reason`.
 
-### `POST /api/config`
-
-Switches the active AI provider at runtime. Accepts either a flat or nested shape:
+`POST` switches the active AI provider at runtime. Accepts either a flat or nested shape:
 
 ```json
 { "aiProvider": "openai-compatible" }
@@ -85,7 +227,7 @@ Switches the active AI provider at runtime. Accepts either a flat or nested shap
 { "ai": { "provider": "openai-compatible" } }
 ```
 
-- `200` — returns the updated config (same shape as `GET /api/config`).
+- `200` — returns the updated config (same shape as `GET`).
 - `400 valid_ai_provider_required` — provider missing or unrecognised.
 - `400 unsupported_ai_provider` — the provider is not configured by environment variables.
 
@@ -93,11 +235,20 @@ See [chat-providers.md](chat-providers.md) for provider configuration.
 
 ### `POST /api/admin/reset`
 
-Resets the application to its fresh-from-`.env` state. Intended for demos.
+Resets the application to its fresh-from-`.env` state. Intended for demos. Requires the
+`manage:admin` scope **and** the `admin` capability (`assertCan(ctx, c, "admin",
+undefined)`) — `admin` is only ever granted on the `*` flow (a super-admin role), so a
+routine admin cannot erase everyone's knowledge base by scope alone.
 
-**Warning:** This endpoint is unauthenticated and destructive. It is a demo aid and must not be exposed in a production deployment.
+> ⚠️ Drift corrected: earlier revisions of this doc claimed this endpoint is
+> "unauthenticated." That is stale — it sits behind `requireAuth` and now requires
+> `manage:admin` + the `admin` capability (`apps/api/src/features/config/routes.ts`). It
+> remains **destructive** and should still not be casually exposed in production.
 
-Clears all questions (and their citations), proposals, gap clusters, jobs, and the indexed knowledge (sections, documents, repositories); resets the runtime AI provider to the `.env` default; then re-syncs the configured git checkouts and re-indexes the configured knowledge sources.
+Clears all questions (and their citations), proposals, gap clusters, jobs, and the indexed
+knowledge (sections, documents, repositories); resets the runtime AI provider to the
+`.env` default; then re-syncs the configured git checkouts and re-indexes the configured
+knowledge sources.
 
 Request body: none.
 
@@ -112,55 +263,80 @@ Response `200`:
 }
 ```
 
-`failures` lists any configured source that could not be re-indexed (`{ "target": "<flow or repository id>", "message": "<reason>" }`); the clear still completes fully even if re-indexing a source fails.
+`failures` lists any configured source that could not be re-indexed (`{ "target": "<flow
+or repository id>", "message": "<reason>" }`); the clear still completes fully even if
+re-indexing a source fails.
 
 ## Knowledge
 
 ### `POST /api/ask`
 
+Scope `ask:knowledge`, rate tier `ask`, flow-scoped via `assertCan(…, "ask", flow)`.
 Answers a question from indexed Markdown context.
 
 ```json
 { "question": "How do I rollback a hotfix?", "flow": "docs", "conversationId": "..." }
 ```
 
-- `flow` (optional) pins the question to a configured flow id; absent/`"auto"` lets the watcher
-  route. An unknown id is a `400 unknown_flow`.
-- `conversationId` (optional, #239) attaches a **follow-up** to a prior exchange for a multi-turn
-  conversation. Pass the `conversationId` returned by the previous ask; a malformed (non-UUID) value
-  is rejected. Absent starts a new conversation (the API mints an id and returns it either way).
+- `flow` (optional) pins the question to a configured flow id; absent/`"auto"` lets the
+  watcher route. An unknown id is a `400 unknown_flow`.
+- `conversationId` (optional, #239) attaches a **follow-up** to a prior exchange for a
+  multi-turn conversation. Pass the `conversationId` returned by the previous ask; a
+  malformed (non-UUID) value is rejected. Absent starts a new conversation (the API mints
+  an id and returns it either way).
 - `400 question_required` — empty or missing question.
-- `202` — `{ "questionId": "...", "conversationId": "...", "job": Job, "links": { "question": "/api/questions/:id",
-  "job": "/api/jobs/:id", "wait": "/api/jobs/:id/wait", "cancel": "/api/jobs/:id/cancel" } }`.
-  An `answer_question` job is enqueued for a watcher and the question log is written immediately
-  with unknown confidence. Block on `links.wait` until the job is terminal, then read the answer
-  from `links.question`. The watcher answers via an agentic retrieval loop: it routes the question
-  to a flow, retrieves scoped context (weak matches below a relevance floor are dropped, so a
-  question nothing answers yields no citations), and may run bounded follow-up searches within that
-  flow before answering — citing only the sections it used. See [ai-jobs.md](ai-jobs.md) and
-  [question-logging.md](question-logging.md).
+- `202` — `{ "questionId": "...", "conversationId": "...", "job": Job, "links": {
+  "question": "/api/questions/:id", "job": "/api/jobs/:id", "wait": "/api/jobs/:id/wait",
+  "cancel": "/api/jobs/:id/cancel" } }`. An `answer_question` job is enqueued for a watcher
+  and the question log is written immediately with unknown confidence (API15). Block on
+  `links.wait` until the job is terminal, then read the answer from `links.question`. The
+  watcher answers via an agentic retrieval loop: it routes the question to a flow, retrieves
+  scoped context (weak matches below a relevance floor are dropped, so a question nothing
+  answers yields no citations), and may run bounded follow-up searches within that flow
+  before answering — citing only the sections it used. See [retrieval.md](./retrieval.md),
+  [ai-jobs.md](ai-jobs.md), and [question-logging.md](question-logging.md).
 
-  **Multi-turn (#239).** When `conversationId` names an existing conversation, the API reconstructs
-  the bounded recent Q&A turns (last N, each answer char-capped) and the conversation's **sticky
-  flow** (the most recent prior turn's flow), and passes both on the job input (`priorTurns`,
-  `conversationFlowId`). The watcher then **condenses** the follow-up into a self-contained question
-  — `"what about the EU?"` → `"What is the data retention policy for the EU region?"` — and uses it
-  for routing, retrieval, answering, and grounding, so terse follow-ups resolve pronouns/ellipsis and
-  retrieve well. Routing is sticky within the conversation (an explicit `flow` still overrides it).
-  Condensation happens in the watcher, never inline in the API (queue-only). The condensed standalone
-  form is stored on the question log so gap candidacy/clustering key off the resolved intent, not the
-  terse follow-up. Streaming responses remain out of scope — the `202` + `links.wait` model is unchanged.
+  **Multi-turn (#239).** When `conversationId` names an existing conversation, the API
+  reconstructs the bounded recent Q&A turns (last N, each answer char-capped) and the
+  conversation's **sticky flow** (the most recent prior turn's flow), and passes both on
+  the job input (`priorTurns`, `conversationFlowId`). The watcher then **condenses** the
+  follow-up into a self-contained question — `"what about the EU?"` → `"What is the data
+  retention policy for the EU region?"` — and uses it for routing, retrieval, answering, and
+  grounding, so terse follow-ups resolve pronouns/ellipsis and retrieve well. Routing is
+  sticky within the conversation (an explicit `flow` still overrides it). Condensation
+  happens in the watcher, never inline in the API (queue-only). The condensed standalone
+  form is stored on the question log so gap candidacy/clustering key off the resolved
+  intent, not the terse follow-up. Streaming responses remain out of scope — the `202` +
+  `links.wait` model is unchanged.
+
+### `POST /api/retrieve` · `POST /api/route`
+
+Watcher callbacks (API16), scope `ask:knowledge`, rate tier `ask`, flow-scoped via
+`assertCan(…, "ask", flow)`. Both are **pure** — no model call beyond query-time embeddings,
+no side effects — the watcher's only reach into retrieval/routing. Full behaviour is
+specified in [retrieval.md](./retrieval.md#http-endpoints).
+
+- `POST /api/retrieve` — `{ question, flowId?, limit?≤50 }` → `{ "sections": [
+  DocumentSection, ... ] }`, or `422 { "error": "unknown_flow" }`. Applies the relevance
+  floor; an empty result is a knowledge gap, not a weak answer.
+- `POST /api/route` — `{ question, flows[] }` → `{ "status": "routed", flowId, confidence,
+  margin }` or `{ "status": "abstain" }`. Embedding-first; the `routingSummary` is resolved
+  server-side from live config, never trusted from the body.
 
 ### `GET /api/knowledge/search?q=<query>&limit=<n>`
 
-Searches indexed sections. `limit` defaults to `5`. When hybrid retrieval is active (Postgres + embeddings configured), results are ranked by Reciprocal Rank Fusion of pgvector nearest-neighbour and keyword scores; otherwise keyword scoring is used. Each result carries a `[0,1]` relevance score.
+Searches indexed sections. `limit` defaults to `5`. When hybrid retrieval is active
+(Postgres + embeddings configured), results are ranked by Reciprocal Rank Fusion of
+pgvector nearest-neighbour and keyword scores; otherwise keyword scoring is used. Each
+result carries a `[0,1]` relevance score.
 
 - `400 query_required` — missing `q`.
 - `200` — `{ "sections": [ DocumentSection, ... ] }`.
 
 ### `GET /api/knowledge/sections/:id`
 
-Resolves one indexed section in full — the lookup behind MCP's `kb_citation`, which expands a citation's excerpt into the complete evidence passage.
+Resolves one indexed section in full — the lookup behind MCP's `kb_citation`, which
+expands a citation's excerpt into the complete evidence passage.
 
 - `404 section_not_found` — the id is not in the index (e.g. the section was re-indexed away).
 - `200` — `{ "section": DocumentSection }`.
@@ -174,12 +350,12 @@ Indexes the destination KB for a configured flow. See [ingestion.md](ingestion.m
 ```
 
 `flowId` must match an entry in `KNOWLEDGE_FLOWS`. The API indexes that flow's destination
-repository/folder, which is the curated KB used by `/ask` and MCP. `repositoryId` remains accepted
-as a direct destination ID for compatibility. Arbitrary `localPath` values are rejected while
-configured destinations exist.
+repository/folder, which is the curated KB used by `/ask` and MCP. `repositoryId` remains
+accepted as a direct destination ID for compatibility. Arbitrary `localPath` values are
+rejected while configured destinations exist.
 
-For older single-repository deployments, `KNOWLEDGE_REPOSITORIES` and `KNOWLEDGE_REPO_PATH` are
-still used as fallbacks when `KNOWLEDGE_SOURCES` / `KNOWLEDGE_DESTINATIONS` are unset.
+For older single-repository deployments, `KNOWLEDGE_REPOSITORIES` and `KNOWLEDGE_REPO_PATH`
+are still used as fallbacks when `KNOWLEDGE_SOURCES` / `KNOWLEDGE_DESTINATIONS` are unset.
 
 - `400 configured_repository_required` — multiple repositories are configured and no valid ID was supplied.
 - `400 local_path_not_allowed` — a client attempted to submit an arbitrary server path.
@@ -212,17 +388,18 @@ Index counts.
 
 ## Questions & Gaps
 
-See [question-logging.md](question-logging.md) for the recorded fields and lifecycle.
+See [question-logging.md](question-logging.md) for the recorded fields and lifecycle, and
+[gaps-and-maintenance.md](./gaps-and-maintenance.md) for the gap subsystem.
 
 ### `GET /api/questions?limit=<n>&offset=<n>&q=<text>`
 
-Lists question logs (newest first), paginated. `limit` defaults to `50` (capped at
-`200`), `offset` to `0`. `q` (optional) narrows the list to questions whose text
-contains it — a case-insensitive literal substring, not a pattern. `total` is the
-unpaginated count of all listable (live) questions; `matching` is the count within
-the `q` filter (equal to `total` when `q` is absent), so `offset` pages within the
-matches. The console's Ask page drives its search box and Newer/Older pager off
-this: the pager walks `matching`, the sidebar badge shows `total`.
+Lists question logs (newest first), paginated (API11). `limit` defaults to `50` (capped at
+`200`), `offset` to `0`. `q` (optional) narrows the list to questions whose text contains
+it — a case-insensitive literal substring, not a pattern. `total` is the unpaginated count
+of all listable (live) questions; `matching` is the count within the `q` filter (equal to
+`total` when `q` is absent), so `offset` pages within the matches. The console's Ask page
+drives its search box and Newer/Older pager off this: the pager walks `matching`, the
+sidebar badge shows `total`.
 
 ```json
 { "questions": [ QuestionLog, ... ], "total": 123, "matching": 7 }
@@ -230,10 +407,10 @@ this: the pager walks `matching`, the sidebar badge shows `total`.
 
 ### `GET /api/questions/parked?limit=<n>`
 
-Lists questions **parked awaiting a human** — their gap-closure verification failed
-past the retry cap, so they are frozen from auto-redrafting (see
-[question-logging.md](./question-logging.md)). `limit` defaults to `50`. Registered
-before `/:id`, so `parked` is never read as a question id.
+Lists questions **parked awaiting a human** — their gap-closure verification failed past
+the retry cap, so they are frozen from auto-redrafting (see
+[question-logging.md](./question-logging.md)). `limit` defaults to `50`. Registered before
+`/:id`, so `parked` is never read as a question id.
 
 ```json
 {
@@ -259,8 +436,8 @@ question to act on — surfaced read-only so the escalation is not invisible.
 ### `DELETE /api/questions/:id?scrub=<bool>`
 
 Purges a logged question — e.g. one that contained sensitive information. Requires the
-`manage:admin` scope (destructive and irreversible, like the config/reset endpoints).
-Two modes:
+`manage:admin` scope (destructive and irreversible, like the config/reset endpoints). Two
+modes:
 
 - default (`scrub` omitted/false) — deletes the question row; the DB cascade takes its
   `answer_citations`, `question_gaps` and (via the gap FK) `gap_cluster_memberships`.
@@ -282,7 +459,7 @@ provider or already published to a PR — hence the warnings.
 
 ### `POST /api/questions/:id/feedback`
 
-Records helpful/unhelpful feedback on an answer.
+Scope `feedback:questions`. Records helpful/unhelpful feedback on an answer.
 
 ```json
 { "feedback": "helpful" }
@@ -292,17 +469,20 @@ Records helpful/unhelpful feedback on an answer.
 - `404 question_not_found`.
 - `200` — `{ "question": QuestionLog }`.
 
-Feedback is the answer-quality axis. Whether the answer exposed a knowledge gap is tracked separately (see below) and the two can both be set on the same question.
+Feedback is the answer-quality axis. Whether the answer exposed a knowledge gap is tracked
+separately (see below) and the two can both be set on the same question.
 
 `unhelpful` on a **confident** (high/medium) live answer additionally raises a server-side
-`feedback` gap — the user rejected an answer the system believed in, which enters gap candidacy
-the way followup misses do (see [question-logging.md](question-logging.md)). Flipping the
-feedback back to `helpful` withdraws the live feedback gap. Low/unknown-confidence answers raise
-no feedback gap (their misses already record `auto` gaps).
+`feedback` gap — the user rejected an answer the system believed in, which enters gap
+candidacy the way followup misses do (see [question-logging.md](question-logging.md)).
+Flipping the feedback back to `helpful` withdraws the live feedback gap. Low/unknown-
+confidence answers raise no feedback gap (their misses already record `auto` gaps).
 
 ### `POST /api/questions/:id/gap`
 
-Manually flags a question as a knowledge gap the automatic detection missed. The optional `summary` becomes the gap summary used for clustering; when omitted it falls back to the question's existing gap summary, then to the question text.
+Scope `feedback:questions`. Manually flags a question as a knowledge gap the automatic
+detection missed. The optional `summary` becomes the gap summary used for clustering; when
+omitted it falls back to the question's existing gap summary, then to the question text.
 
 ```json
 { "summary": "Adoption process is undocumented" }
@@ -313,31 +493,39 @@ Manually flags a question as a knowledge gap the automatic detection missed. The
 
 ### `DELETE /api/questions/:id/gap`
 
-Clears the manual knowledge-gap flag. Any automatically-detected `gap_summary` is left intact, so un-flagging never removes a gap the system found on its own.
+Scope `feedback:questions`. Clears the manual knowledge-gap flag. Any automatically-detected
+`gap_summary` is left intact, so un-flagging never removes a gap the system found on its
+own.
 
 - `404 question_not_found`.
 - `200` — `{ "question": QuestionLog }`.
 
 ### `POST /api/questions/:id/gap/retry`
 
-Human **retry** on a parked question: re-admits it to the draft pipeline with a fresh
-retry budget (ends the failed verification lineage; re-files the gap with its note when
-the underlying gap is gone). No-op (still `200`) if the question exists but is not parked.
+Scope `feedback:questions`. Human **retry** on a parked question: re-admits it to the draft
+pipeline with a fresh retry budget (ends the failed verification lineage; re-files the gap
+with its note when the underlying gap is gone). No-op (still `200`) if the question exists
+but is not parked.
 
 - `404 question_not_found`.
 - `200` — `{ "question": QuestionLog }`.
 
 ### `POST /api/questions/:id/gap/dismiss`
 
-Human **dismiss** on a parked question: abandons the topic by dismissing every live gap
-for the question. No-op (still `200`) if the question exists but is not parked.
+Scope `feedback:questions`. Human **dismiss** on a parked question: abandons the topic by
+dismissing every live gap for the question. No-op (still `200`) if the question exists but
+is not parked.
 
 - `404 question_not_found`.
 - `200` — `{ "question": QuestionLog }`.
 
 ### `GET /api/gaps/candidates?limit=<n>`
 
-Lists knowledge-gap candidates grouped by gap summary. Candidacy keys on the question's unresolved gap rows, not its answer confidence: `auto` gaps (a declared whole-question miss — the answer ships at `low`, or at `medium` for a substantive partial answer), `followup` gaps (raised alongside confident answers), and `manual` flags all qualify. `limit` defaults to `50`.
+Lists knowledge-gap candidates grouped by gap summary. Candidacy keys on the question's
+unresolved gap rows, not its answer confidence: `auto` gaps (a declared whole-question
+miss — the answer ships at `low`, or at `medium` for a substantive partial answer),
+`followup` gaps (raised alongside confident answers), and `manual` flags all qualify.
+`limit` defaults to `50`.
 
 ```json
 { "gaps": [ GapCandidate, ... ] }
@@ -345,27 +533,35 @@ Lists knowledge-gap candidates grouped by gap summary. Candidacy keys on the que
 
 ### `GET /api/gaps/clusters?limit=<n>`
 
-Returns the **persisted** gap clusters the reconciler maintains — sets of related gaps that a single
-proposal could resolve (e.g. "do cats like cheese?", "is cheese bad for cats?" and "what if a cat
-eats lots of cheese?" form one cluster). This is a fast read straight from the store with **no model
-call**: clustering happens in the background reconciler, not on this request. Only `active` clusters
-are returned. `limit` defaults to `50`.
+Returns the **persisted** gap clusters the reconciler maintains — sets of related gaps that
+a single proposal could resolve (e.g. "do cats like cheese?", "is cheese bad for cats?" and
+"what if a cat eats lots of cheese?" form one cluster). This is a fast read straight from
+the store with **no model call**: clustering happens in the background reconciler, not on
+this request. Only `active` clusters are returned. `limit` defaults to `50`.
 
 ```json
 { "clusters": [ PersistedGapCluster, ... ] }
 ```
 
-Each `PersistedGapCluster` has `{ id, title, summaries, questionIds, count, rationale?, flowId?,
-status, proposalId?, proposalStatus?, lastReconciledAt }`:
+Each `PersistedGapCluster` has `{ id, title, summaries, questionIds, count, rationale?,
+flowId?, status, proposalId?, proposalStatus?, lastReconciledAt }`:
 
 - `status` — always `"active"` for clusters returned here (frozen clusters are historical and omitted).
 - `proposalId` / `proposalStatus` — the proposal linked to the cluster, if one has been drafted.
 - `lastReconciledAt` — when the reconciler last touched the cluster.
 
+### `POST /api/gaps/reconcile`
+
+Scope `manage:jobs`, rate tier `trigger`. Drives one reconcile pass for a flow (holds the
+Postgres advisory lock, clusters, reshapes, drafts). Body `{ "flowId": string }` (required).
+The `process_gaps_to_pull_requests` maintenance job POSTs here on its ~10-minute cron. See
+[gaps-and-maintenance.md](./gaps-and-maintenance.md#the-reconciler).
+
 ### `POST /api/gaps/clusters/:id/proposal`
 
-Manually drafts one proposal for a persisted cluster, links the proposal to the cluster, and queues
-it for publication. The cluster's own flow routes the draft, so the body is optional:
+Scope `manage:jobs`. Manually drafts one proposal for a persisted cluster, links the
+proposal to the cluster, and queues it for publication. The cluster's own flow routes the
+draft, so the body is optional:
 
 ```json
 { "targetPath": "optional/path.md", "destinationId": "optional-destination" }
@@ -380,8 +576,9 @@ the watcher completes the `draft_markdown_proposal` job.
 ## Seeding (plans)
 
 Seeding is plan-centric — see the Seeding section in [ai-jobs.md](ai-jobs.md#seeding-a-flow)
-for the full lifecycle. All seeding routes require the `manage:jobs` scope plus `manage` on
-the plan's flow; unknown/cross-flow ids read as `404`.
+and [flows-and-seeding.md](./flows-and-seeding.md) for the full lifecycle. All seeding
+routes require the `manage:jobs` scope plus `manage` on the plan's flow; unknown/cross-flow
+ids read as `404` (API7).
 
 ### `POST /api/flows/:flowId/outline`
 
@@ -423,11 +620,11 @@ sources change.
 ### `POST /api/flows/:flowId/seed-bootstrap/run`
 
 Thin orchestration endpoint the maintenance watcher's `seed_bootstrap` runner POSTs (rate
-limited on the trigger tier). Checks the sparse-flow guards and, when they all pass,
-enqueues an auto-origin planning run. Returns
-`{ "enqueued": boolean, "reason"?: string, "outlineJobId"?: string }` — `reason` names the
-guard that no-oped the tick (`no_sources | kb_populated | plan_pending | outline_in_flight
-| seed_proposals_open | dismissed_unchanged`).
+limited on the `trigger` tier). Checks the sparse-flow guards and, when they all pass,
+enqueues an auto-origin planning run. Returns `{ "enqueued": boolean, "reason"?: string,
+"outlineJobId"?: string }` — `reason` names the guard that no-oped the tick (`no_sources |
+kb_populated | plan_pending | outline_in_flight | seed_proposals_open |
+dismissed_unchanged`).
 
 > The legacy raw-items `POST /api/flows/:flowId/seed` endpoint is **removed** — plan
 > approval is the only drafting entry point.
@@ -442,8 +639,8 @@ for the model (match top-N → deterministic fast-path or reconcile → drip →
 `{ "name": string, "flowId": string, "questions": string[] }` (1–500 questions). Creates the
 batch, runs matching + the deterministic fast-path check inline (embeddings only — any
 candidate the fast-path can't confirm is instead primed into the answer drip for
-reconciliation), and starts the answer drip. Returns `201 { "questionnaire": Questionnaire }`.
-`404 flow_not_found` for an unknown flow; `ask:knowledge` scope + flow `ask` capability;
+reconciliation), and starts the answer drip. Returns `201 { "questionnaire": Questionnaire
+}`. `404 flow_not_found` for an unknown flow; `ask:knowledge` scope + flow `ask` capability;
 `trigger` rate tier.
 
 ### `GET /api/questionnaires` / `GET /api/questionnaires/:id`
@@ -463,18 +660,20 @@ fingerprints. `manage:knowledge` + flow `manage`.
 
 ## Proposals
 
-See the Proposal Review and Storage sections in [ai-jobs.md](ai-jobs.md).
+See the Proposal Review and Storage sections in [ai-jobs.md](ai-jobs.md) and
+[gaps-and-maintenance.md](./gaps-and-maintenance.md). Proposal routes are flow-scoped
+(API7): an id the caller cannot read reports `proposal_not_found`; readable but lacking
+`manage` on the flow reports `forbidden`.
 
 ### `GET /api/proposals?limit=<n>&status=<status>`
 
 Lists proposals, newest first. `limit` defaults to `50`.
 
-By default the list is the active inbox: it omits the **settled** statuses
-(`merged`, `rejected`, `superseded`) so nothing terminal lingers there with no
-available action. Pass `status=<status>` to fetch exactly one status instead —
-including the settled ones — so history stays reachable (e.g. `status=superseded`
-to audit what was folded away). An unrecognised `status` is ignored and the
-default inbox is returned.
+By default the list is the active inbox: it omits the **settled** statuses (`merged`,
+`rejected`, `superseded`) so nothing terminal lingers there with no available action. Pass
+`status=<status>` to fetch exactly one status instead — including the settled ones — so
+history stays reachable (e.g. `status=superseded` to audit what was folded away). An
+unrecognised `status` is ignored and the default inbox is returned.
 
 ```json
 { "proposals": [ Proposal, ... ] }
@@ -482,12 +681,12 @@ default inbox is returned.
 
 ### `POST /api/proposals/from-gap` &nbsp;·&nbsp; `POST /api/proposals/from-gaps`
 
-Drafts **one** `draft_markdown_proposal` from one or more known gap candidates. Use `from-gaps`
-with a `summaries` array to draft a single proposal that covers a confirmed cluster of related
-gaps; `from-gap` with a single `summary` remains for the one-gap case. Both routes accept either
-field — `summary` and `summaries` are merged and de-duplicated — so a cluster of three cheese gaps
-produces a single proposal instead of three near-identical ones. Evidence and triggering questions
-are unioned across every gap in the request.
+Drafts **one** `draft_markdown_proposal` from one or more known gap candidates. Use
+`from-gaps` with a `summaries` array to draft a single proposal that covers a confirmed
+cluster of related gaps; `from-gap` with a single `summary` remains for the one-gap case.
+Both routes accept either field — `summary` and `summaries` are merged and de-duplicated —
+so a cluster of three cheese gaps produces a single proposal instead of three near-identical
+ones. Evidence and triggering questions are unioned across every gap in the request.
 
 ```json
 {
@@ -501,19 +700,19 @@ are unioned across every gap in the request.
 }
 ```
 
-`sourceIds` and `destinationId` are optional. At least one summary must match an existing gap
-candidate. When omitted, proposal jobs use the configured sources by default and the only
-configured destination when one exists.
+`sourceIds` and `destinationId` are optional. At least one summary must match an existing
+gap candidate. When omitted, proposal jobs use the configured sources by default and the
+only configured destination when one exists.
 
 The proposal's location is owned by the system, not the caller: the file lands at
 `<destination docs subpath>/<title-slug>.md` (repository root when the destination has no
 configured subpath). This keeps every proposal's folder structure consistent on its branch.
-A `targetPath` field in the request body is accepted for backward compatibility but no longer
-determines where the file is written.
+A `targetPath` field in the request body is accepted for backward compatibility but no
+longer determines where the file is written.
 
 Drafting is **enqueue-only**: the route records the request and enqueues a
-`draft_markdown_proposal` job; the watcher runs the generative work and the proposal is created
-later by the job-completion path. The route never drafts inline.
+`draft_markdown_proposal` job; the watcher runs the generative work and the proposal is
+created later by the job-completion path. The route never drafts inline.
 
 - `400 gap_summary_required` — empty or missing summary.
 - `404 gap_candidate_not_found` — no candidate matches the summary.
@@ -536,20 +735,20 @@ Each id composes the matching single-item behaviour:
 
 - `ready` — `draft → ready`; any other status reports `invalid_status`.
 - `publish` — enqueue-only publication of a `ready` proposal (the same pre-flight and
-  `publish_proposal` job as `POST /:id/publish`); the per-id result carries the `job`. Like the
-  single route, a proposal whose publish is already in flight reuses that job rather than
-  enqueueing a duplicate.
+  `publish_proposal` job as `POST /:id/publish`); the per-id result carries the `job`. Like
+  the single route, a proposal whose publish is already in flight reuses that job rather
+  than enqueueing a duplicate.
 - `merge` — local-git `branch-pushed` proposals git-merge exactly like `POST /:id/merge`;
   hosted `branch-pushed` proposals without a pull request take the manual no-PR merge of
   `POST /:id/status`. A proposal with a live pull request reports
   `proposal_merge_tracked_by_pull_request` (its merge is owned by the PR poller). The merge
   cascade is scheduled once per newly-merged id — a retried batch cannot re-run it.
-- `reject` — local-git `branch-pushed` proposals are binned like `POST /:id/reject`;
-  hosted `draft` proposals are marked `rejected`.
+- `reject` — local-git `branch-pushed` proposals are binned like `POST /:id/reject`; hosted
+  `draft` proposals are marked `rejected`.
 
 Per-id auth mirrors the single routes: an id the caller cannot read reports
-`proposal_not_found` (no cross-flow enumeration); readable but lacking `manage` on the
-flow reports `forbidden`.
+`proposal_not_found` (no cross-flow enumeration); readable but lacking `manage` on the flow
+reports `forbidden`.
 
 - `400 valid_bulk_action_required` — malformed body (unknown action, 0 or >100 ids).
 - `200` — `{ "results": [ { "id": string, "ok": boolean, "code"?: string, "proposal"?: Proposal, "job"?: Job }, ... ] }`.
@@ -571,67 +770,70 @@ Sets the proposal status directly. Valid values: `draft`, `ready`, `branch-pushe
 The `pr-opened → merged` transition is **owned by the PR poller** (the
 `refresh_flow_snapshot` job feeds `applyPullRequestTransition`), which marks a proposal
 merged only once its real pull request has merged in git — running the merge cascade
-(re-index, then enqueue gap-closure verification — see `verify-closure` below) and
-freezing its cluster. Hand-asserting `merged` on a proposal that has an open pull request
-is therefore rejected. Manually setting `merged` remains available only as the no-PR
-fallback: a proposal `branch-pushed` without a pull request to poll (e.g. a deployment
-with no `GITHUB_TOKEN`, or a local-git destination), which nothing auto-transitions.
+(re-index, then enqueue gap-closure verification — see `verify-closure` below) and freezing
+its cluster. Hand-asserting `merged` on a proposal that has an open pull request is
+therefore rejected. Manually setting `merged` remains available only as the no-PR fallback:
+a proposal `branch-pushed` without a pull request to poll (e.g. a deployment with no
+`GITHUB_TOKEN`, or a local-git destination), which nothing auto-transitions.
 
 - `400 valid_proposal_status_required`.
 - `404 proposal_not_found`.
 - `409 proposal_merge_tracked_by_pull_request` — the proposal has an open pull request; it
   will be marked merged automatically when that PR merges.
-- `200` — `{ "proposal": Proposal }` (plus `"cascadeScheduled": true` when the new status is
-  `merged`).
+- `200` — `{ "proposal": Proposal }` (plus `"cascadeScheduled": true` when the new status is `merged`).
 
 ### `POST /api/proposals/:id/merge`
 
 **Demo/local only.** Merges a `branch-pushed` proposal whose destination is a local-git
 (`file://`) repository: runs `git merge` of the pushed `magpie/proposal-*` branch into the
-destination's default branch (directly in that repository's working tree), marks the proposal
-`merged`, and schedules the re-index cascade in the background. Hosted (GitHub) destinations do
-not use this route — their PR merge is detected by the `refresh_flow_snapshot` poller.
+destination's default branch (directly in that repository's working tree), marks the
+proposal `merged`, and schedules the re-index cascade in the background. Hosted (GitHub)
+destinations do not use this route — their PR merge is detected by the `refresh_flow_snapshot`
+poller.
 
 - Request body: none.
 - `404 proposal_not_found`.
 - `409 proposal_not_mergeable` — not `branch-pushed`, or no published branch recorded.
 - `409 not_local_git_destination` — the destination is not a `file://` repository.
-- `409 merge_conflict` — the merge could not be applied; the proposal stays `branch-pushed` and
-  the git message is returned.
+- `409 merge_conflict` — the merge could not be applied; the proposal stays `branch-pushed`
+  and the git message is returned.
 - `200` — `{ "proposal": Proposal, "cascadeScheduled": true }`.
 
 ### `POST /api/proposals/:id/verify-closure`
 
-**Watcher callback** (scope `manage:jobs`). The maintenance runner POSTs here when it claims
-a `verify_gap_closure` job (enqueued by the merge cascade for any merged proposal that had
-triggering questions). The API re-asks each triggering question through the queued
+**Watcher callback** (API16, scope `manage:jobs`). The maintenance runner POSTs here when it
+claims a `verify_gap_closure` job (enqueued by the merge cascade for any merged proposal
+that had triggering questions). The API re-asks each triggering question through the queued
 `answer_question` path against the freshly re-indexed knowledge base and applies the
 deterministic closure test — a confident (`high`/`medium`) answer that cites one of the
 proposal's target docs. Gaps are resolved only when **every** triggering question closes;
 otherwise they are reopened (with the verification detail as a `note`), or flagged
 `needs_attention` after repeated failures. The outcome is persisted to
 `proposals.closure_status` and each re-ask to `gap_closure_verification`. See
-[ai-jobs.md](ai-jobs.md) and [question-logging.md](question-logging.md).
+[gaps-and-maintenance.md](./gaps-and-maintenance.md), [ai-jobs.md](ai-jobs.md), and
+[question-logging.md](question-logging.md).
 
 - Request body: none.
 - `404 proposal_not_found`.
+- `503 gap_closure_verification_incomplete` — the inner re-ask could not complete (needs a
+  second watcher); the job retries rather than recording a false `still_open` verdict.
 - `200` — `{ "proposalId": string, "closureStatus": "verified_closed" | "reopened" | "needs_attention", "perQuestion": [ { "questionId": string, "reaskedQuestionId": string | null, "verdict": "closed" | "still_open" } ] }`.
 
 ### `POST /api/proposals/:id/publish`
 
-Publication is **enqueue-only**: the route validates the repository pre-flight (the same checks the
-old synchronous publisher ran) and then enqueues a `publish_proposal` job. The git work — committing
-the Markdown to a new `magpie/proposal-*` branch, pushing it, and opening a pull request — happens in
-the watcher publication runner, which fetches `GET /api/proposals/:id/execution-context` and records
-the result back via job completion. Invalid publishes still fail fast with the same status codes
-before any job is created.
+Publication is **enqueue-only**: the route validates the repository pre-flight (the same
+checks the old synchronous publisher ran) and then enqueues a `publish_proposal` job. The
+git work — committing the Markdown to a new `magpie/proposal-*` branch, pushing it, and
+opening a pull request — happens in the watcher publication runner, which fetches
+`GET /api/proposals/:id/execution-context` and records the result back via job completion.
+Invalid publishes still fail fast with the same status codes before any job is created.
 
-Publication is **idempotent while queued**: the proposal record stays `ready` until the watcher
-completes, so a repeated publish request (double click, bulk re-select, replayed completion side
-effect) returns the in-flight `publish_proposal` job for the proposal instead of enqueueing a
-duplicate. A new job is only created once the previous one settles (completed, failed, or
-cancelled). The console mirrors this by disabling Publish and showing "Publish queued" while a
-publish job for the proposal is in flight.
+Publication is **idempotent while queued** (API15): the proposal record stays `ready` until
+the watcher completes, so a repeated publish request (double click, bulk re-select, replayed
+completion side effect) returns the in-flight `publish_proposal` job for the proposal instead
+of enqueueing a duplicate. A new job is only created once the previous one settles (completed,
+failed, or cancelled). The console mirrors this by disabling Publish and showing "Publish
+queued" while a publish job for the proposal is in flight.
 
 - `404 proposal_not_found`.
 - `409 proposal_not_ready` — only `ready` proposals can be published.
@@ -641,22 +843,22 @@ publish job for the proposal is in flight.
 
 ### `GET /api/proposals/:id/execution-context`
 
-The non-generative, credential-free context the watcher publication runner fetches before executing
-git. Returns the proposal record plus the resolved repository config it needs to push a branch and
-open a PR (`id`, `localPath`, `remoteUrl`, `defaultBranch`, `git`). Never returns credentials. Runs
-the same repository resolution + validation as the publish path.
+The non-generative, credential-free context the watcher publication runner fetches before
+executing git. Returns the proposal record plus the resolved repository config it needs to
+push a branch and open a PR (`id`, `localPath`, `remoteUrl`, `defaultBranch`, `git`). Never
+returns credentials. Runs the same repository resolution + validation as the publish path.
 
 - `404 proposal_not_found`.
 - `409 proposal_repository_not_found` — no indexed repository matches the target path.
 - `409 proposal_repository_not_git` — the matched repository is not a Git checkout.
 - `200` — `{ "proposal": Proposal, "repository": { "id", "localPath", "remoteUrl"?, "defaultBranch", "git"? } }`.
 
-## Jobs
+## Jobs & workers
 
 Generative (chat) AI work runs through the pg-boss queue; embeddings are computed inline by
-the API. The full job contract — payload shapes, job states, the client flow, the watcher
-model, and provider configuration — lives in [ai-jobs.md](ai-jobs.md). Job types include
-`answer_question`, `summarize_gap`, `draft_markdown_proposal`, `publish_proposal`, and the
+the API (API15). The full job contract — payload shapes, job states, the client flow, the
+watcher model, and provider configuration — lives in [ai-jobs.md](ai-jobs.md). Job types
+include `answer_question`, `draft_markdown_proposal`, `publish_proposal`, and the
 maintenance jobs. Job states: `created`, `retry`, `active`, `completed`, `cancelled`,
 `failed`, `blocked`.
 
@@ -668,10 +870,10 @@ Creates a job. Requires the `manage:jobs` scope.
 { "type": "draft_markdown_proposal", "input": { ... } }
 ```
 
-`input` is validated against the job type's own `inputSchema` at creation (#285),
-so a payload that does not match the contract — including a source descriptor whose
-git `url` uses a disallowed transport (`ext::`, `git://`) or a `-`-prefixed value —
-is rejected before it is persisted or dispatched.
+`input` is validated against the job type's own `inputSchema` at creation (#285), so a
+payload that does not match the contract — including a source descriptor whose git `url`
+uses a disallowed transport (`ext::`, `git://`) or a `-`-prefixed value — is rejected
+before it is persisted or dispatched.
 
 - `400 invalid_job` — unknown/missing type, or a body that is not `{ type, input }`.
 - `400 invalid_job_input` — `input` failed the job type's `inputSchema`.
@@ -694,8 +896,8 @@ Lists jobs. Optional query: `type`, `state`, `createdAfter`, `limit` (default 10
 ### `GET /api/jobs/:id/wait`
 
 Long-polls until the job is terminal. `200` with `{ "job": Job }` once terminal; `202` with
-the current `{ "job": Job }` while still running — re-issue to keep waiting (`JOB_WAIT_TIMEOUT_MS`
-bounds each call, `JOB_WAIT_POLL_MS` the server poll cadence).
+the current `{ "job": Job }` while still running — re-issue to keep waiting
+(`JOB_WAIT_TIMEOUT_MS` bounds each call, `JOB_WAIT_POLL_MS` the server poll cadence).
 
 - `404 job_not_found`.
 
@@ -715,20 +917,27 @@ Retries a `failed` job. `409 job_not_failed` if it is not failed; `404 job_not_f
 ### Watcher-only endpoints
 
 `POST /api/jobs/claim`, `POST /api/jobs/:id/heartbeat`, `POST /api/jobs/:id/complete`, and
-`POST /api/jobs/:id/fail` are driven by the watcher. Claim takes
-`{ "workerName", "capabilities": [...] }` and returns `{ "job": Job }` or `{ "job": null }`;
-fail takes a structured `error` object. Complete takes `{ "output", "executor"?,
-"usage"?, "provider"?, "model"? }` — usage is the run's summed provider-reported token
-spend (#241), and provider/model are the executing runner's identity so that spend can
-be priced per model; all three are best-effort telemetry (malformed values are dropped,
-never a 400). See [ai-jobs.md](ai-jobs.md).
+`POST /api/jobs/:id/fail` are driven by the watcher (API16). Claim takes `{ "workerName",
+"capabilities": [...] }` and returns `{ "job": Job }` or `{ "job": null }`; fail takes a
+structured `error` object. Complete takes `{ "output", "executor"?, "usage"?, "provider"?,
+"model"? }` — usage is the run's summed provider-reported token spend (#241), and
+provider/model are the executing runner's identity so that spend can be priced per model;
+all three are best-effort telemetry (malformed values are dropped, never a 400). See
+[ai-jobs.md](ai-jobs.md).
+
+### `GET /api/workers`
+
+Scope `read:knowledge`. The connected-watcher view behind the Jobs screen's Workers panel —
+read-only (the registry is populated as a side effect of the watcher's own claim/heartbeat
+calls). Returns `{ "workers": [...], "uncoveredJobTypes": [...] }`, where `uncoveredJobTypes`
+is the fleet's capability gap (job types no connected watcher can run), computed server-side
+so the console needn't ship the job catalog to the browser.
 
 ### `GET /api/source-map?sourceIds=…`
 
-Retrieves navigation hints for source-grounded job execution. Query parameter `sourceIds`
-is required and accepts a comma-separated list of source IDs to fetch hints for.
-
-Scope: `manage:jobs`. Read cap: 100 entries per requested source per request.
+Scope `manage:jobs`. Retrieves navigation hints for source-grounded job execution. Query
+parameter `sourceIds` is required and accepts a comma-separated list of source IDs to fetch
+hints for. Read cap: 100 entries per requested source per request.
 
 **Response (200):**
 
@@ -750,63 +959,133 @@ Scope: `manage:jobs`. Read cap: 100 entries per requested source per request.
 }
 ```
 
-`consensusCount` is how many agents have independently contributed the same
-topic → paths mapping (capped at 5) — a credibility signal, not currency.
+`consensusCount` is how many agents have independently contributed the same topic → paths
+mapping (capped at 5) — a credibility signal, not currency.
 
 **Error cases:**
 
 - `400 missing_source_ids` — `sourceIds` query parameter is missing.
 - `400 invalid_source_ids` — `sourceIds` is malformed (e.g. not comma-separated).
 
+## Maintenance & scheduling
+
+The scheduled-task model, the patrols, and the reconciler are specified in
+[gaps-and-maintenance.md](./gaps-and-maintenance.md); source-sync in
+[source-sync.md](./source-sync.md). These HTTP endpoints are the orchestration triggers the
+maintenance watcher POSTs on its crons (API16) plus the read-only run/decision history.
+
+> **Naming note (intentional, not drift):** the patrol job types were renamed
+> (`fix_patrol` → `correctness_patrol`, `improve_patrol` → `editorial_patrol`), but the HTTP
+> surface is still `/api/fix-patrol/*`. Both facts are true — do not "fix" the path to match
+> the job type.
+
+### `POST /api/fix-patrol/run` · `POST /api/fix-patrol/improve/run`
+
+Scope `manage:jobs`, rate tier `trigger`. Thin orchestration endpoints the maintenance
+watcher's `correctness_patrol` / `editorial_patrol` runners POST. `run` selects the next
+batch of documents, runs the verify lens over them, advances the cursor, and records a
+maintenance run with its findings, returning `{ "runId", "selectedCount", "findingCount" }`.
+`improve/run` fans one `improve_document` job per selected doc, returning `{ "runId",
+"selectedCount", "enqueuedCount" }`. Body optional (`{ "flowId"? }`); an absent flowId
+patrols the default (unscoped) flow. `400 <code>` on a guard failure.
+
+### `POST /api/source-sync/run` · `GET /api/source-sync/runs` · `GET /api/source-sync/runs/:id`
+
+`run` (scope `manage:jobs`, rate tier `trigger`) is the orchestration endpoint the
+`source_change_sync` runner POSTs: the heavy gather (checkout/diff/candidate retrieval) and
+the generative step (an enqueued AI job the API bounded-waits on) run here. Body optional
+(`{ "flowId"? }`); an absent flowId watches every configured git source. Returns
+`{ "runIds": string[] }`. `runs` / `runs/:id` (scope `read:knowledge`) are the read-only run
+history (`404 source_sync_run_not_found`).
+
+### `GET /api/maintenance-runs?limit=<n>&taskType=<t>&flowId=<f>`
+
+Scope `read:knowledge`. Read-only run history for the scheduled maintenance tasks, surfaced
+on the Schedules page. Newest-first; `limit` defaults to `30`. Optional `taskType` (one of
+`correctness_patrol`, `editorial_patrol`, `process_gaps_to_pull_requests`; an unknown value
+is ignored) and `flowId` filters. Returns `{ "runs": [ ... ] }`.
+
+### `GET /api/scheduled-tasks` · `POST /api/scheduled-tasks/:key/settings` · `POST /api/scheduled-tasks/:key/run`
+
+- `GET` (scope `read:knowledge`) — the registered scheduled tasks with their current
+  enabled/cron state: `{ "tasks": [ ScheduledTask, ... ] }`.
+- `POST /:key/settings` (scope `manage:jobs`) — updates a task's `{ enabled?, cron? }`.
+  `400 valid_cron_required` when `cron` is not a standard 5-field expression;
+  `404 <code>` for an unknown key. Returns the refreshed task list.
+- `POST /:key/run` (scope `manage:jobs`, rate tier `trigger`) — fires the task's orchestrator
+  job now. `202` with `{ "job", "links": { job, wait }, "tasks" }`;
+  `409 already_running` when a job for the task is already in flight; `404 <code>` for an
+  unknown key.
+
+### `GET /api/reconciliations?limit=<n>`
+
+Scope `read:knowledge`. The reconciler's recent clustering decisions (merges/splits) with
+the model's rationale and the critic's verdict — most recent first, across all flows.
+`limit` defaults to `50`. Returns `{ "decisions": [ ... ] }`.
+
+### `GET /api/snapshots` · `GET /api/snapshots/:flowId`
+
+Scope `read:knowledge`. Every flow's latest downloaded snapshot (gaps, in-flight proposals,
+polled PR state) so a reviewer can see the context the fetch job assembled. `GET /` returns
+`{ "snapshots": [ ... ] }`; `GET /:flowId` returns one flow's `{ "snapshot": ... }`
+(`404 snapshot_not_found`). The un-routed/default flow is addressed as `default`.
+
+### `GET /api/prompts`
+
+Scope `read:knowledge`. Serves the static, build-time prompt catalog (`@magpie/prompts`)
+verbatim: `{ "prompts": promptCatalog }`. Reads no stores.
+
 ## Insights
 
 Read-only aggregation endpoints powering the web console's Insights page. All require the
-`read:knowledge` scope and return a named-key JSON envelope of already-bucketed, **zero-filled**
-series (every bucket in the window is present even when its counts are `0`, so clients render a
-continuous line without gap-filling). Time params are shared: `?from=<ISO>&to=<ISO>&bucket=day|week|month`,
-defaulting to the last 30 days with `bucket=day`; `flow` narrows to a single flow where supported.
-Response shapes live in `packages/core/src/index.ts`.
+`read:knowledge` scope and return a named-key JSON envelope of already-bucketed,
+**zero-filled** series (every bucket in the window is present even when its counts are `0`,
+so clients render a continuous line without gap-filling). Time params are shared:
+`?from=<ISO>&to=<ISO>&bucket=day|week|month`, defaulting to the last 30 days with
+`bucket=day`; `flow` narrows to a single flow where supported. Response shapes live in
+`packages/core/src/index.ts`. See [insights-charts.md](./insights-charts.md).
 
 ### `GET /api/insights/gaps/backlog?from&to&bucket&flow`
 
-Open-gap backlog trend. Buckets `question_gaps` by `date_trunc(bucket, ...)`, counting each lifecycle
-transition (`opened`/`resolved`/`dismissed`/`parked`) per bucket plus the running net-open total.
-`flow` narrows to a single flow.
+Open-gap backlog trend. Buckets `question_gaps` by `date_trunc(bucket, ...)`, counting each
+lifecycle transition (`opened`/`resolved`/`dismissed`/`parked`) per bucket plus the running
+net-open total. `flow` narrows to a single flow.
 
 ```json
 { "series": [ GapBacklogBucket, ... ] }
 ```
 
-`GapBacklogBucket` = `{ bucketStart, opened, resolved, dismissed, parked, openTotal }`. `openTotal`
-is the cumulative net (opened − closed) **within the requested window** — it does not carry a
-baseline of gaps opened before `from`.
+`GapBacklogBucket` = `{ bucketStart, opened, resolved, dismissed, parked, openTotal }`.
+`openTotal` is the cumulative net (opened − closed) **within the requested window** — it
+does not carry a baseline of gaps opened before `from`.
 
 ### `GET /api/insights/journey?from&to&flow`
 
-Branching question-journey Sankey: a `{ nodes, links }` graph of the path a question takes over
-the window — from being asked (split by `questions.confidence`) through gaps, clusters, proposals,
-and merge/verification — where each link's `value` is a real count and the branches show where
-volume leaks at each stage. Four segments, each windowed on its own entry timestamp: **answer**
-(questions on `questions.asked_at`, each confidence into "no gap" or into the gap segment),
-**gap** (gaps on `question_gaps.created_at`, partitioned into dismissed / parked / clustered /
-open by their terminal columns and an active `gap_cluster_memberships` row), **proposal**
-(proposals on `proposals.created_at`, split by `status` into in-progress / rejected / superseded /
-merged), and **verify** (merged proposals split by `closure_status`). The unit of flow shifts
-question → gap → proposal at the segment boundaries; each segment is internally conserved. Only
-positive-value links (and the nodes they reference) are returned.
+Branching question-journey Sankey: a `{ nodes, links }` graph of the path a question takes
+over the window — from being asked (split by `questions.confidence`) through gaps, clusters,
+proposals, and merge/verification — where each link's `value` is a real count and the
+branches show where volume leaks at each stage. Four segments, each windowed on its own entry
+timestamp: **answer** (questions on `questions.asked_at`, each confidence into "no gap" or
+into the gap segment), **gap** (gaps on `question_gaps.created_at`, partitioned into
+dismissed / parked / clustered / open by their terminal columns and an active
+`gap_cluster_memberships` row), **proposal** (proposals on `proposals.created_at`, split by
+`status` into in-progress / rejected / superseded / merged), and **verify** (merged proposals
+split by `closure_status`). The unit of flow shifts question → gap → proposal at the segment
+boundaries; each segment is internally conserved. Only positive-value links (and the nodes
+they reference) are returned.
 
 - `400 invalid_insights_query` — malformed query.
 - `200` — `{ "nodes": JourneyNode[], "links": JourneyLink[] }` (`JourneySankey`).
 
 ### `GET /api/insights/jobs/throughput?from&to&bucket&type`
 
-Job throughput & health. Buckets pg-boss jobs by their `created_on` timestamp and splits them into
-`completed` / `failed` / `active` / `retry` counts per bucket. pg-boss v12 keeps every job — live and
-finished — in the partitioned `"<schema>".job` table until retention purges it (there is no separate
-`archive` table), so the rollup reads `job` alone. `active` folds
-pg-boss's `created` (queued) and `active` (executing) states together. `type`, when given, narrows to
-a single job type (resolved server-side to that type's pg-boss queue names); an unknown type matches
-nothing.
+Job throughput & health. Buckets pg-boss jobs by their `created_on` timestamp and splits them
+into `completed` / `failed` / `active` / `retry` counts per bucket. pg-boss v12 keeps every
+job — live and finished — in the partitioned `"<schema>".job` table until retention purges it
+(there is no separate `archive` table), so the rollup reads `job` alone. `active` folds
+pg-boss's `created` (queued) and `active` (executing) states together. `type`, when given,
+narrows to a single job type (resolved server-side to that type's pg-boss queue names); an
+unknown type matches nothing.
 
 ```json
 { "series": [ JobThroughputBucket, ... ] }
@@ -816,31 +1095,29 @@ nothing.
 
 ### `GET /api/insights/answers/latency?from&to`
 
-Answer-latency histogram (C4). Bins completed answers by how long they took end to end
-into fixed latency ranges. Returns `{ "bins": LatencyBin[] }` (7 fixed bins, `0–5s`
-through `5m+`, always present and zero-filled). Binned by latency range, not time, so it
-takes only the window bounds. Source: pg-boss's own `job` table — completed
-`answer_question` job rows (`state = 'completed'`), latency = `completed_on - created_on`,
-windowed on `created_on`.
+Answer-latency histogram (C4). Bins completed answers by how long they took end to end into
+fixed latency ranges. Returns `{ "bins": LatencyBin[] }` (7 fixed bins, `0–5s` through `5m+`,
+always present and zero-filled). Binned by latency range, not time, so it takes only the
+window bounds. Source: pg-boss's own `job` table — completed `answer_question` job rows
+(`state = 'completed'`), latency = `completed_on - created_on`, windowed on `created_on`.
 
 ### `GET /api/insights/verification/success?from&to&bucket`
 
-Verification success rate (C5). Returns
-`{ "totals": VerificationSummary, "series": VerificationBucket[] }`, splitting gap-closure
-verification outcomes into `closed` vs `stillOpen` overall and per bucket. Source: the
-`gap_closure_verification` table (`verdict` ∈ `closed` / `still_open`, `created_at`).
+Verification success rate (C5). Returns `{ "totals": VerificationSummary, "series":
+VerificationBucket[] }`, splitting gap-closure verification outcomes into `closed` vs
+`stillOpen` overall and per bucket. Source: the `gap_closure_verification` table (`verdict`
+∈ `closed` / `still_open`, `created_at`).
 
 ### `GET /api/insights/jobs/errors?from&to`
 
-Job error breakdown (C6). Returns
-`{ "byCategory": JobErrorBreakdown[], "byType": JobErrorBreakdown[] }`, counting failed jobs
-over the window split by error category and by job type (both ordered most-frequent-first).
-Window-only (no time axis). Source: pg-boss's `job` table — failed rows
-(`state = 'failed'`), windowed on `created_on` (enqueue time, matching C2's creation-time
-axis — not failure time). The `JobError` payload pg-boss stores in the
-job's `output` JSONB column supplies the category (`output->>'category'`, falling back to
-`unknown`); the queue `name` supplies the job type after its `__<capability>` fan-out suffix
-is stripped (`split_part(name, '__', 1)`).
+Job error breakdown (C6). Returns `{ "byCategory": JobErrorBreakdown[], "byType":
+JobErrorBreakdown[] }`, counting failed jobs over the window split by error category and by
+job type (both ordered most-frequent-first). Window-only (no time axis). Source: pg-boss's
+`job` table — failed rows (`state = 'failed'`), windowed on `created_on` (enqueue time,
+matching C2's creation-time axis — not failure time). The `JobError` payload pg-boss stores
+in the job's `output` JSONB column supplies the category (`output->>'category'`, falling back
+to `unknown`); the queue `name` supplies the job type after its `__<capability>` fan-out
+suffix is stripped (`split_part(name, '__', 1)`).
 
 ### `GET /api/insights/freshness`
 
@@ -885,6 +1162,7 @@ triple; `jobsWithUsage` counts the subset whose completion carried provider-repo
 persisted, so correcting a price re-values history. It is present **only** when a price entry
 matches the triple's (provider, model); its absence spans two states the caller keeps apart
 via `jobsWithUsage` and must never render as `$0`:
+
 - **priced** — `estimatedCost` present.
 - **unpriced** — `jobsWithUsage > 0` but no matching price entry (unknown-cost usage).
 - **unmetered** — `jobsWithUsage === 0` (CLI providers emit raw text and report nothing).
@@ -898,8 +1176,8 @@ is derived from the `@magpie/jobs` catalog and `model` from `output->>'model'`.
 ### `GET /api/insights/ai-cost/by-flow?from&to&flow`
 
 Per-flow AI cost. Returns `{ "flows": AiCostByFlow[] }` — the same rollup grouped additionally
-by the flowId on the job input (`data->'input'->>'flowId'`), aggregated to one cost summary per
-flow, ordered by `estimatedCost` (heaviest first). `flow` narrows to a single flow id (the
+by the flowId on the job input (`data->'input'->>'flowId'`), aggregated to one cost summary
+per flow, ordered by `estimatedCost` (heaviest first). `flow` narrows to a single flow id (the
 shared insights flow-filter convention). Jobs whose input carries no flowId — `answer_question`
 and the `fold_*` jobs never do — form the **unattributed** bucket (`flowId` absent). The three
 cost states survive as counts: `pricedJobs` (metered jobs that matched a price entry, summed
@@ -909,13 +1187,13 @@ into `estimatedCost`), `jobsWithUsage − pricedJobs` (unpriced), `jobs − jobs
 ### `GET /api/insights/ai-cost/by-schedule?from&to`
 
 Per-schedule AI cost (approximate attribution). Returns `{ "schedules": AiScheduleCost[] }` —
-each scheduled task's windowed spend, summed over the AI job types its orchestrator fans out to
-(the task registry's `aiJobTypes`, derived from the enqueue sites) filtered to the task's own
-flow. `key` matches `ScheduledTask.key` so the Schedules page joins it on. Tasks that spend no
-model tokens (the GitHub snapshot refresh) are omitted. Attribution is approximate: only job
-types that carry a flowId on their input are counted, and second-order proposal folds (triggered
-by a later completion, and carrying no flowId) are not attributed. Same three-state cost fields
-as `AiCostByFlow`. Window-only.
+each scheduled task's windowed spend, summed over the AI job types its orchestrator fans out
+to (the task registry's `aiJobTypes`, derived from the enqueue sites) filtered to the task's
+own flow. `key` matches `ScheduledTask.key` so the Schedules page joins it on. Tasks that
+spend no model tokens (the GitHub snapshot refresh) are omitted. Attribution is approximate:
+only job types that carry a flowId on their input are counted, and second-order proposal folds
+(triggered by a later completion, and carrying no flowId) are not attributed. Same three-state
+cost fields as `AiCostByFlow`. Window-only.
 
 ## Type Reference
 
@@ -924,5 +1202,50 @@ The response shapes referenced above (`AnswerResult`, `Citation`, `DocumentSecti
 `ProposalPublication`, `GapBacklogBucket`, `LatencyBin`, `VerificationSummary`,
 `VerificationBucket`, `JobErrorBreakdown`, `DocumentFreshness`, `SourceFreshness`,
 `FreshnessSummary`, `PatrolImpact`, `AiUsageBreakdown`, `AiCostByFlow`, `AiScheduleCost`) are
-defined in `packages/core/src/index.ts`. The `Job`
-shape (`JobView`) is defined in `packages/jobs/src/types.ts`.
+defined in `packages/core/src/index.ts`. The `Job` shape (`JobView`) is defined in
+`packages/jobs/src/types.ts`.
+
+## Code map
+
+| Concern | Code |
+| --- | --- |
+| App assembly & mount map | `apps/api/src/app.ts` |
+| Endpoint modules | `apps/api/src/features/<name>/routes.ts` (+ `service.ts`, `schema.ts`) |
+| Error model & `onError` | `apps/api/src/http/errors.ts` |
+| JSON body reading (`invalid_json`) | `apps/api/src/http/body.ts` |
+| Rate limiting & `RateLimit-*` headers | `apps/api/src/http/rate-limit.ts` |
+| Request logging | `apps/api/src/http/logging.ts` |
+| Auth middleware, scopes, delegation | `apps/api/src/auth/middleware.ts` |
+| Flow-scoped capability checks (`assertCan`) | `apps/api/src/auth/capabilities.ts` |
+| Limit/offset/link helpers | `apps/api/src/platform/paths.ts` |
+| CORS / body-limit / security headers | `apps/api/src/app.ts` (Hono middleware) |
+| Response types | `packages/core/src/index.ts`, `packages/jobs/src/types.ts` |
+
+## Tests (behavioural contract)
+
+Representative route-level tests (`apps/api/src/features/**/routes*.test.ts`):
+`ask` (via `service.test.ts` + `retrieve/route` flow-scope tests),
+`retrieve/routes.flow-scope.test.ts`, `route/routes.flow-scope.test.ts`,
+`knowledge/routes.test.ts`, `questions/routes.test.ts`, `gaps/routes.test.ts`,
+`gaps/routes.flow-scope.test.ts`, `questionnaires/routes.test.ts`, `seed/routes.test.ts`,
+`proposals/routes.{bulk,flow-scope,merge,merge-guard,merge-idempotency,validation}.test.ts`,
+`jobs/routes.test.ts`, `source-map/routes.test.ts`, `source-sync/routes.test.ts`,
+`snapshots/routes.test.ts`, `scheduled-tasks/routes.test.ts`, `insights/routes.test.ts`,
+`config/routes.flow-scope.test.ts`. Cross-cutting HTTP concerns:
+`apps/api/src/http/{errors,logging,rate-limit}.test.ts`.
+
+## Provenance (design history)
+
+Consolidates, and supersedes as a behavioural description:
+`docs/superpowers/specs/2026-06-16-api-decomposition-design.md` (the routes→service→schema
+per-feature decomposition and one-prefix-per-module mount model),
+`2026-06-30-request-validation-standardization-design.md` (the `zValidator` canonical
+adapter and the `HTTPException` → `400 invalid_json` translation in `onError`),
+`2026-06-30-api-startup-config-validation-design.md` (config-validation-at-boot backing the
+`/api/config` surface). Endpoint-specific behaviour is provenance-linked from the subsystem
+specs cross-referenced above ([retrieval.md](./retrieval.md),
+[gaps-and-maintenance.md](./gaps-and-maintenance.md),
+[proposals-and-publishing.md](./proposals-and-publishing.md),
+[source-sync.md](./source-sync.md), [flows-and-seeding.md](./flows-and-seeding.md),
+[insights-charts.md](./insights-charts.md), [ai-jobs.md](./ai-jobs.md),
+[rate-limiting.md](./rate-limiting.md), [authorization.md](./authorization.md)).
