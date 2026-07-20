@@ -65,8 +65,9 @@ maintenance job, per flow, per source.
   and entries per source.
 - **S10** — Source maps are **internal navigation metadata only**: fetched by the watcher
   through the scoped-context callback `GET /api/source-map` (`manage:jobs`) and injected
-  into source-grounded prompts marked "unverified — verify against the repository." They
-  MUST NOT appear in answer retrieval or any user-facing output.
+  into source-grounded prompts framed as unverified hints to be verified against the
+  repository before being relied on. They MUST NOT appear in answer retrieval or any
+  user-facing output.
 
 ## Job contracts
 
@@ -106,6 +107,7 @@ maintenance job, per flow, per source.
 | Source-map store & routes | `apps/api/src/stores/{source-map-store,source-map-consensus}.ts`, `apps/api/src/features/source-map/{service,routes}.ts` |
 | Watcher runner & agent | `apps/watcher/src/runners/{maintenance,source-agent}.ts`, `apps/watcher/src/{source-workspace,source-tools}.ts` |
 | Reconcile hand-off | `apps/api/src/scheduling/fold.ts` (`reconcileSourceSyncProposal`) |
+| Schedule registration (`*/10 * * * *`) | `apps/api/src/scheduling/task-registry.ts` (`defaultCron` on the `source-change-sync` template) |
 | Job contracts | `packages/jobs/src/{schemas,catalog}.ts` |
 
 ## Tests (behavioural contract)
