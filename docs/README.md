@@ -86,10 +86,10 @@ reference exemplar; the checklist below tracks the rest.
 - [x] Spec index & conventions (this file)
 - [x] `retrieval.md` — exemplar (as-built, code-mapped)
 - [x] `gaps-and-maintenance.md` — extracted from `architecture.md` (as-built, code-mapped)
-- [ ] `proposals-and-publishing.md` — extract from `architecture.md`
-- [ ] `source-sync.md` — consolidate the 3 design docs
-- [ ] `flows-and-seeding.md` — consolidate the seeding design docs
-- [ ] `observability.md` — extract from `architecture.md`
+- [x] `proposals-and-publishing.md` — extracted from `architecture.md` (as-built, code-mapped)
+- [x] `source-sync.md` — consolidated the source-sync design docs (as-built, code-mapped)
+- [x] `flows-and-seeding.md` — consolidated the seeding design docs (as-built, code-mapped)
+- [x] `observability.md` — extracted from `architecture.md` (as-built, code-mapped)
 - [ ] Convert existing living docs (`ingestion`, `ai-jobs`, `api`, `mcp`,
       `authorization`, `rate-limiting`, `questionnaires`, `insights-charts`,
       `threat-model`) to the clause-ID + code-map convention
