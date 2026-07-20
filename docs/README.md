@@ -61,22 +61,22 @@ several subsystems.
 | --- | --- | --- |
 | [ingestion.md](./ingestion.md) | Markdown ingestion & indexing | `apps/api` stores, `packages/markdown` |
 | [retrieval.md](./retrieval.md) | Retrieval & answering (agentic loop, hybrid search, flow routing) | `apps/api/src/features/{ask,retrieve,route}`, `packages/retrieval` |
-| gaps-and-maintenance.md *(planned)* | Knowledge gaps, clustering, the reconciler & patrols | `apps/api/src/scheduling`, `question-logging.md` |
-| proposals-and-publishing.md *(planned)* | Draft → reconcile gate → provenance → publish → stale-PR regen | `apps/api/src/features/proposals`, `packages/git` |
-| source-sync.md *(planned)* | Source-change sync to proposals | `apps/api/src/features/source-sync` |
-| flows-and-seeding.md *(planned)* | Flows, seed plans, self-seeding | `apps/api/src/features/{seed,config}` |
+| [gaps-and-maintenance.md](./gaps-and-maintenance.md) | Knowledge gaps, clustering, the reconciler & patrols | `apps/api/src/scheduling`, `question-logging.md` |
+| [proposals-and-publishing.md](./proposals-and-publishing.md) | Draft → reconcile gate → provenance → publish → stale-PR regen | `apps/api/src/features/proposals`, `packages/git` |
+| [source-sync.md](./source-sync.md) | Source-change sync to proposals | `apps/api/src/features/source-sync` |
+| [flows-and-seeding.md](./flows-and-seeding.md) | Flows, seed plans, self-seeding | `apps/api/src/features/{seed,config}` |
 | [questionnaires.md](./questionnaires.md) | Questionnaire mode & trust | `apps/api/src/features/questionnaires` |
 | [ai-jobs.md](./ai-jobs.md) | Queue-only AI job contract & capability model | `packages/jobs`, `apps/watcher` |
 | [api.md](./api.md) | HTTP API reference | `apps/api/src/**/routes.ts` |
 | [mcp.md](./mcp.md) | MCP server | `apps/mcp` |
 | [authorization.md](./authorization.md) | AuthN/Z & delegation | `packages/auth`, `apps/api/src/auth` |
 | [rate-limiting.md](./rate-limiting.md) | Rate limits & AI cost controls | `apps/api/src/http`, `apps/api/src/platform` |
-| observability.md *(planned)* | Logging, tracing, metrics, health | `packages/{logger,telemetry}` |
+| [observability.md](./observability.md) | Logging, tracing, metrics, health | `packages/{logger,telemetry}` |
 | [insights-charts.md](./insights-charts.md) | Insights & charts | `apps/web` insights, `apps/api` insights |
 | [threat-model.md](./threat-model.md) | Prompt-injection threat model & the review gate | cross-cutting |
 
-Rows without a link are specs not yet elevated from `architecture.md` / the design
-archive — see the migration checklist below.
+Every row is now linked; the migration checklist below records how the set was elevated.
+To add or update one of these specs, invoke the **`write-a-product-spec`** skill.
 
 ## Migration status
 
