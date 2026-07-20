@@ -1,616 +1,127 @@
-# AI Job Contract
+# AI Job Contract & Capability Model
 
-Generative (chat) AI work is represented as jobs on a pg-boss queue in Postgres so
-Markdown Magpie can use hosted model APIs or external tools such as Codex and Claude
-Code. The API enqueues these jobs; a watcher claims and completes them. The API never
-runs a *chat* model inline.
+> **Status:** living spec (as-built). Source of truth for how Markdown Magpie represents
+> generative AI work as queued jobs, how watchers claim and complete them by capability,
+> and the completion/usage/repair contract around a job. Follows the
+> [spec conventions](./README.md#conventions).
 
-Embeddings are the exception: the API computes them inline (it holds an embedding
-provider) for both indexing and query-time retrieval — they are not watcher jobs. See
-the note on CLI providers below; embeddings are configured separately through
-OpenAI-compatible or Azure embedding endpoints.
+## Purpose
+
+Keep every *chat*/generative model call out of the request path and behind a durable queue,
+so Markdown Magpie can drive hosted model APIs or local CLI tools (Codex, Claude Code)
+interchangeably, survive restarts, meter and price spend, and never pay twice for the same
+generation. The API enqueues typed jobs onto a pg-boss queue in Postgres; a capability-matched
+watcher claims one, runs a provider, and posts a validated result back. Embeddings are the
+sole inline exception. The domain *workflows* that enqueue these jobs live in their own
+specs — retrieval ([retrieval.md](./retrieval.md)), gaps/patrols/reconciler
+([gaps-and-maintenance.md](./gaps-and-maintenance.md)), proposals/publishing, seeding — this
+spec owns the **contract** they all share.
+
+## Boundaries & execution model
+
+- **J1** — The API MUST NOT call a *chat*/generative model inline. All generative work is
+  represented as a job: the API enqueues, a watcher claims and completes it. Every
+  job-backed endpoint returns **202** with the created job, never a synchronous generation.
+- **J2** — **Embeddings are the sanctioned inline exception.** The API holds an embedding
+  provider and computes embeddings synchronously for indexing and for query-time retrieval,
+  routing, and gap clustering. There is no `embed_*` job type; embeddings are configured
+  separately from the chat provider (OpenAI-compatible or Azure embedding endpoints).
+- **J3** — The watcher has **no database access**. It talks to the API only: claim a job,
+  run a provider adapter, complete or fail, poll again — one job at a time. This keeps
+  Codex, Claude Code, and hosted APIs behind the same contract.
+- **J4** — Jobs and schedules are owned entirely by **pg-boss** (the `JobBroker`), which
+  manages its own Postgres tables, claiming, retries, and overlap protection so multiple
+  watchers can safely poll the same queues. The legacy custom job table and its
+  queue-selection override are removed. Storage backend is `STORAGE_BACKEND=postgres`.
 
 ## Job states
 
-A job moves through these states (mirroring pg-boss):
-
-`created` → `active` → `completed` (terminal). Other states: `retry` (queued for
-another attempt after a recoverable failure), `failed` (terminal, retries
-exhausted), `cancelled` (terminal, cancelled by an operator), `blocked` (waiting
-on a dependency / singleton key).
+- **J5** — A job moves through pg-boss states: `created` → `active` → `completed`
+  (terminal). Other states: `retry` (queued for another attempt after a recoverable
+  failure), `failed` (terminal, retries exhausted, dead-lettered), `cancelled` (terminal,
+  operator-cancelled), and `blocked` (waiting on a dependency / singleton key — surfaced
+  when pg-boss marks a `created`/`retry` row `blocked`). `JobView.output` is populated only
+  in the `completed` state; `error` only in `retry`/`failed`.
 
 ## Client flow
 
-The standard request/await pattern for any job-backed endpoint:
-
-1. `POST` the work — the API returns **`202`** with the created job and links.
-2. `GET /api/jobs/:id/wait` — long-polls. Returns **`200`** once the job is
-   terminal, or **`202`** if it is still running (re-issue the call to keep
-   waiting; `JOB_WAIT_TIMEOUT_MS` bounds each call, `JOB_WAIT_POLL_MS` the
-   server-side poll cadence).
-3. `GET /api/jobs/:id` — fetch the job snapshot at any time without blocking.
-
-## Endpoints
-
-### `POST /api/jobs`
-
-Creates a job. Returns `202` with `{ "job": JobView }`.
-
-```json
-{
-  "type": "draft_markdown_proposal",
-  "input": {
-    "gapSummary": "No hotfix rollback procedure is documented",
-    "triggeringQuestions": ["How do I rollback a hotfix?"],
-    "evidence": [],
-    "expectedOutput": "markdown_proposal"
-  }
-}
-```
-
-### `GET /api/jobs` / `GET /api/jobs/:id` / `GET /api/jobs/:id/wait`
-
-List jobs (filter by `type`, `state`, `createdAfter`, with `limit`/`offset`),
-fetch one, or block until one is terminal (see **Client flow** above).
-
-### `GET /api/jobs/schedules`
-
-Lists the registered pg-boss cron schedules.
-
-### `POST /api/jobs/:id/cancel` / `POST /api/jobs/:id/retry`
-
-Cancel a job (terminal), or retry a `failed` job (returns `409` if the job is
-not in a failed state).
-
-### `POST /api/jobs/:id/accept-failure`
-
-Acknowledges a failed job without changing its queue state. Accepted failures remain
-available for inspection and retry, but no longer trigger the console warning.
-
-### Watcher-only endpoints
-
-The watcher drives a job through these; operators rarely call them directly:
-
-- `POST /api/jobs/claim` — claim the next claimable job matching the worker's
-  capabilities: `{ "workerName": "local-dev-watcher", "capabilities": ["openai-compatible", "maintenance"] }`.
-  Returns `{ "job": JobView }` or `{ "job": null }`. Queues holding
-  **interactive-class** jobs (`INTERACTIVE_AI_JOB_TYPES`: `answer_question`,
-  `outline_flow_seed` — a live caller is waiting) are offered before the
-  background/maintenance queues, so an ask is never queued behind earlier patrol
-  fan-out for a free watcher (#240); background queues are served round-robin,
-  oldest-first within a queue.
-- `POST /api/jobs/:id/heartbeat` — keep a long-running claim alive; the response
-  flags `cancelled` so the watcher can abort.
-- `POST /api/jobs/:id/complete` — `{ "output": { ... }, "executor": "..." }`.
-- `POST /api/jobs/:id/fail` — a structured error:
-
-```json
-{
-  "error": {
-    "code": "provider_timeout",
-    "message": "Provider timed out",
-    "category": "timeout"
-  }
-}
-```
-
-- `POST /api/retrieve` / `POST /api/route` — answer-path callbacks the watcher makes
-  while running an `answer_question` job: `retrieve` returns scoped context for a flow,
-  and `route` cheaply picks the flow by embedding similarity (the API embeds the
-  question + flow texts inline), abstaining on a low-margin score so the watcher falls
-  back to the chat router. Both keep embeddings/retrieval inside the API — the watcher
-  is HTTP-only. See [question-logging.md](./question-logging.md) → Queued Answers.
-- `GET /api/source-map?sourceIds=…` — retrieve per-source navigation hints for the
-  watcher at workspace preparation. Query parameter `sourceIds` accepts a comma-separated
-  list of source IDs (e.g. `?sourceIds=agent,flowerbi`). Returns `{ "entries": SourceMapEntry[] }`,
-  the ≤100 most-recently-updated entries per requested source (scope: `manage:jobs`,
-  capped at 100 reads per requested source per request). Returns `400` if `sourceIds` is
-  missing or malformed.
-
-## Completion is never re-billed (#161)
-
-A provider generation is the expensive part of a job; everything after it (question
-log updates, drafting a `Proposal` row, fold reconciliation, source-sync plan
-attachment, ...) is cheap, idempotent bookkeeping keyed on the job's id. Two failure
-points used to throw a finished, paid-for generation away and force pg-boss to redo
-the *entire* job:
-
-- **API-side.** `completeJob` (`apps/api/src/features/jobs/service.ts`) used to run
-  every side-effect handler *before* persisting the job's output. A side effect
-  throwing (e.g. a transient DB error while drafting the proposal) landed in the
-  catch-all, which called `ctx.jobs.fail(..., "completion_failed")` — since the job
-  had never reached pg-boss's terminal `completed` state, that queued a full retry
-  (`retryLimit: 3`, see `packages/jobs/src/catalog.ts`), redoing the provider call
-  for output that already existed in memory.
-- **Watcher-side.** `WorkerLoop.execute` (`apps/watcher/src/worker-loop.ts`) ran the
-  provider call, then POSTed the result via `api.complete()`. If that single POST
-  failed (a network blip, the API mid-restart), the catch fell straight through to
-  `api.fail(..., "runner_failed")`, discarding the in-memory output the same way.
-
-Both are fixed by making sure the job reaches `completed` (pg-boss's retry-proof
-terminal state) as early and as reliably as possible, and by never treating a
-failure *after* that point as a reason to redo the generation:
-
-- **`completeJob` now persists first, fans out second.** The validated output is
-  saved via `ctx.jobs.complete()` *before* any side effect runs. pg-boss's `fail()`
-  only ever retries a job that hasn't reached `completed` (`state < 'completed'`),
-  and its `complete()` is a no-op on a job that already has — so once persistence
-  succeeds, nothing downstream can trigger a regeneration, no matter what fails
-  next. A side-effect failure is logged (`logger.error`) and the endpoint replies
-  **`500` with code `side_effects_failed`** — but the job is **not** failed: it did
-  complete. Because every side-effect handler is idempotent on jobId, retrying the
-  bookkeeping is just POSTing the same completion again — `completeJob` detects the
-  job is already `completed` and replays the fan-out from the persisted
-  `{ result, executor }` output instead of requiring (or re-validating) a fresh
-  body. Crucially, that 500 cannot re-bill the generation: a retried POST hits the
-  replay path, never the provider.
-- **Token usage rides the completion envelope (#241).** Runners report each
-  provider call's token usage through an optional `onUsage` callback (the chat
-  runner wraps its provider in `withUsageReporting`; the source-agent loop
-  reports `generateText`'s aggregate `totalUsage`), the worker loop sums the
-  readings (`apps/watcher/src/usage.ts`), and `complete()` sends the total. The
-  API persists it beside the output as `{ result, executor, usage }` — on the
-  envelope, not the job's own output, so it can never collide with the
-  job-contract schema-stripping — and the Insights **AI token usage** chart
-  (C11) aggregates it per (job type, provider). Optional end to end: CLI
-  providers emit raw text and report nothing, so their completions carry no
-  usage at all (unmetered, not zero — the chart says which).
-- **The execution identity rides the envelope too.** Each AI runner exposes an
-  `aiIdentity` — its provider plus the *configured* model name (chat model /
-  Azure deployment / CLI `--model`) — and the worker loop stamps it on every
-  completion as flat `provider`/`model` envelope fields. Token counts alone
-  cannot be priced retroactively (cost is a function of the model, which
-  otherwise lives only in watcher env), so this is what lets usage rollups
-  convert spend into money against the operator's `AI_PRICING` table (see
-  `apps/api/src/platform/ai-pricing.ts`). A CLI runner with no explicit model
-  configured reports only its provider — the CLI ran on its own default, and
-  reporting nothing beats guessing. Best-effort like usage: a malformed value
-  is dropped by the API's body schema, never a 400.
-- **Cost is priced at read time, never persisted.** The Insights rollups turn
-  the stored `usage` × the identity's model into money against the operator's
-  `AI_PRICING` table (`estimateTokenCost` in `apps/api/src/platform/ai-pricing.ts`)
-  each time they are read, so correcting a mispriced entry retroactively re-values
-  history. Three states stay distinct and never render as `$0`: **priced** (a
-  price entry matched), **unpriced** (usage reported, no matching entry), and
-  **unmetered** (no usage — the CLI case, via the existing `jobsWithUsage`
-  mechanism). Consumed by the C11 AI-usage chart, the per-flow cost view
-  (`/insights/ai-cost/by-flow`), and the per-schedule Cost column
-  (`/insights/ai-cost/by-schedule`).
-- **flowId on the input attributes spend (attribution only).** The per-flow and
-  per-schedule cost rollups read the flow off the stored job input at
-  `data->'input'->>'flowId'` (the pg-boss JobEnvelope). Most flow-scoped AI jobs
-  already carry it; `verify_document` and `draft_markdown_proposal` were extended
-  to carry it too so the correctness patrol and gap reconciler attribute
-  correctly — the field is metadata the runners ignore, absent on the unscoped
-  flow. `answer_question` and the `fold_*` jobs carry no flowId, so their spend is
-  *unattributed* in the per-flow view and excluded from per-schedule attribution.
-- **Reading a completed job's output back (#184).** Because the persisted output
-  is the `{ result, executor, usage?, provider?, model? }` envelope, any API-side consumer of
-  `runJobToCompletion` must parse it through `parseCompletedJobOutput(schema,
-  job.output)` (`apps/api/src/features/jobs/service.ts`) rather than running the
-  raw output schema against `JobView.output` directly — the raw parse only ever
-  succeeds against test fakes that complete without the envelope, and silently
-  discards real watcher results. The gap reshape, the patrol verify lens, and
-  gap-closure re-asks all read through this helper.
-- **The watcher retries the `complete()` POST itself.** `HttpWatcherApi.complete()`
-  (`apps/watcher/src/http-client.ts`) retries a failed completion POST a few times
-  with backoff before giving up, but only for a network error or a `5xx` — a `4xx`
-  (e.g. `invalid_output`, `job_not_found`) is a deterministic contract failure no
-  amount of retrying fixes, so those still fall straight through to `api.fail()`.
-  This is safe because `POST /:id/complete` is idempotent on the API side (above).
-  The two mechanisms compose into **self-healing side effects**: a transient
-  side-effect failure surfaces as a retryable `500 side_effects_failed`, the
-  watcher re-POSTs with backoff, and the replay branch re-runs only the side
-  effects. If the retries exhaust, the watcher's `api.fail()` fallback is a
-  harmless no-op on the completed row (pg-boss's `state < 'completed'` guard), so
-  the terminal state is still a completed job whose output survives — the
-  side-effect failure stays in the logs and a later manual re-POST of `/complete`
-  can still replay the bookkeeping.
-- **Schema-invalid output** (`invalid_output`) is unchanged: it still fails the job
-  through the normal retry budget. There is no cheap, low-risk way to force pg-boss
-  to skip straight to a terminal `failed` state for this one failure category
-  without reaching into pg-boss internals the public `fail()`/`cancel()` API
-  doesn't expose (see the code comment in `completeJob`) — a from-scratch "repair
-  reprompt" would fix this properly but is out of scope here.
-
-## Proposal Review
-
-Gap candidates can be turned into proposal jobs:
-
-```json
-POST /api/proposals/from-gap
-{
-  "summary": "No source material found for: How do I trim claws?",
-  "destinationId": "cats-docs"
-}
-```
-
-The API enqueues a `draft_markdown_proposal` job with the triggering questions and any available evidence citations.
-Like seeding, gap drafting is **source-grounded**: the job carries `sources: SourceDescriptor[]` (references to the
-flow's configured sources), not an inline file sample — the API no longer samples source files at enqueue time. The
-watcher resolves git/local descriptors to read-only workspaces and the agent explores them directly (CLI tier traverses
-the checkout with its own tools; HTTP tier runs the bounded `list_dir`/`read_file`/`grep` tool loop), using the same
-`MAGPIE_AGENTIC_TIMEOUT_MS` agentic timeout as seeding. Both the demand-driven `draftFromGaps` path and the stale-PR
-regeneration path project descriptors this way.
-When the watcher completes that job, the API stores the generated Markdown proposal for review. The proposal's
-file location is derived from the destination — `<destination docs subpath>/<title-slug>.md` — so it is consistent
-across providers; any `targetPath` returned by the provider is not used to place the file.
-
-Drafts are register-constrained (#213): every content-producing prompt (gap drafts, seed
-drafts, both folds, source-sync rewrites, corrective rewrites, improve growth) carries a
-shared factual-register contract — documents state what the sources state, and never
-author their own recommendations, next steps, action items, roadmaps, or editorial
-commentary (describing a plan a *source itself states* remains allowed). Points the
-sources do not cover are **omitted from the document body** and reported in the draft
-output's optional `uncoveredPoints` field; the API logs a warning and folds them into
-the proposal's rationale so the reviewer sees what could not be supported. As a
-backstop, the API runs an advisory-heading check (`findAdvisoryHeadings` in
-`@magpie/markdown`) over every draft/rewrite/fold output it consumes: a draft containing
-headings like "Recommendations", "Next steps", "Action items", "Roadmap" or "Future
-work" is **flagged, never failed** — a structured log warning plus a "Register check:"
-note on the proposal rationale — because a document may legitimately describe a roadmap
-its source states. At the two fold appliers (`applyFoldFromCompletedJob`,
-`applyChangesetFoldFromCompletedJob` in `apps/api/src/scheduling/fold.ts`) the check is
-**log-only**: a fold rewrites markdown, not rationale, so the surviving proposal's
-original draft-time rationale note (if any) survives the fold untouched. `dedupe_documents`
-and `split_document` outputs are **deliberately not checked**: they reorganise existing KB
-content rather than author anything new, so any advisory heading present already pre-dates
-the proposal.
-
-Drafts also carry **per-claim provenance** (#214): both draft outputs
-(`draft_markdown_proposal`, `draft_seed_document`) include an optional
-`provenance: ProvenanceClaim[]` field — each substantive claim in the drafted markdown
-with the source id + repo-relative path(s) that ground it. The document **body contains no
-repository paths or source names** (the old inline "(see …)" citations leaked into answers
-served by `answer_question`); citations live only in the structured field. The API persists
-it on the proposal (`proposals.provenance`, migration 0049) where it follows event-log
-semantics: a **merged** proposal's row is the permanent provenance event for its target
-path. Reviewers see the map in the PR body ("Claim provenance" section, rendered by the
-watcher's publication runner) and in the console's proposal view. A draft that omits the
-field is warned about but still published — quality is enforced by review and (phase 2)
-the verify patrol, never by rejecting drafts. Legacy inline citations in already-published
-documents are cleaned up organically by the verify→correct patrol, which flags them as
-formatting defects.
-
-The **rewrite jobs are provenance events for their own diffs** too (#214 phase 3):
-`correct_document` and the `improved: true` branch of `improve_document` carry the same
-optional `provenance` field — the claims their rewrite introduces or materially changes,
-cited in the structured field instead of the prose rationale — persisted onto the
-corrective/improve proposal by the completion handlers (an `improved: false` no-op grounds
-no new claims and never warns). `fold_markdown_proposal` receives both parents' provenance
-(`survivorProvenance`/`rivalProvenance` on its input) and returns the merged document's
-re-anchored `provenance`; the fold applier rewrites the survivor's provenance event with
-the folded content (`ProposalStore.setProvenance` — the only post-create provenance
-write), falling back to concatenating both parents' claims (with a log warning) when the
-fold output carries none. **Documented limitation:** `dedupe_documents` and
-`split_document` changesets carry no per-claim provenance — their PRs describe the
-content move, `git blame` through the move reaches the pre-move provenance events, and
-phase 2's anchor-staleness guard makes the verify patrol fall back to full re-derivation
-for restructured sections. (The changeset fold accordingly concatenates the parents'
-claims onto the survivor rather than dropping them.) Revisit only if verify's fallback
-rate on moved documents proves noisy in practice. Design:
-[the claim-provenance spec](superpowers/specs/2026-07-08-claim-provenance-design.md).
-
-```bash
-curl -s http://localhost:4000/api/proposals
-```
-
-A proposal moves through a status lifecycle: `draft`, `ready`, `branch-pushed`, `pr-opened`,
-`merged`, `rejected`. Update it directly:
-
-```bash
-POST /api/proposals/:id/status
-{ "status": "ready" }
-```
-
-### Gap-closure verification (`verify_gap_closure`)
-
-A merge no longer *blindly* resolves the gaps a proposal was drafted to close. When a
-proposal is marked `merged` (the PR poller for a hosted destination, or the console's
-Merge action for a local-git one), the merge cascade re-indexes the destination and, if
-the proposal had triggering questions, enqueues a **`verify_gap_closure`** maintenance job
-`{ proposalId }`. A maintenance watcher claims it and POSTs
-`POST /api/proposals/:id/verify-closure`; the orchestration lives in the API because it
-needs DB access.
-
-For each triggering question the API **re-asks it** — recording a fresh question log and
-running it through the normal queue-only `answer_question` path (flow pinned via
-`requestedFlowId`) against the now-updated index — then applies a deterministic closure
-test: the question is **closed** only when the re-ask returns a confident answer
-(`high`/`medium`) that **cites one of the merged proposal's target docs** and **raises no
-`auto` gap of its own** (a substantive partial answer ships at `medium` while still
-declaring a whole-question gap, so confidence alone does not prove the question was
-answered gap-free; `followup` gaps do not block closure). Outcomes, per proposal
-(`proposals.closure_status`):
-
-- **`verified_closed`** — every triggering question closed; the gaps are now resolved.
-- **`reopened`** — at least one question is still open; those gaps stay open and gain a
-  `verification`-source row carrying the failure detail as a `note`, so they re-draft. That
-  note is fed to the next `draft_markdown_proposal` as `resubmissionNotes`, so the drafter
-  sees why the previous merge fell short and addresses the specific shortfall.
-- **`needs_attention`** — a question has failed verification twice (`CLOSURE_RETRY_CAP`);
-  its `verification` gap is stamped `parkedAt`, a first-class "awaiting a human" state (not
-  a source) that parks the whole question from auto-redrafting. A human retries or dismisses
-  it from the console's Parked questions panel (see [question-logging.md](question-logging.md)).
-
-The re-asks run **concurrently** and — critically — an incomplete re-ask is not a verdict.
-A re-ask that never reaches a `completed` answer (no provider watcher was free before its
-deadline) makes `verifyGapClosure` throw; the endpoint returns `503` and the
-`verify_gap_closure` job retries, rather than the API recording a false `still_open` that
-would wrongly reopen/park a correctly-merged doc. Because the claiming watcher blocks in
-this callback while it waits on the re-asks, **verification needs a second watcher free to
-answer them** — on a single-watcher deployment it never completes and the proposal reads
-honestly as *unverified* (see [question-logging.md](question-logging.md)); the console
-warns when only one watcher is connected.
-
-Every re-ask is recorded in `gap_closure_verification` (verdict, confidence, whether it
-cited a merged doc, detail). Clusterless / seed proposals have no triggering questions and
-skip verification. The only generative step is the enqueued `answer_question` re-ask, so
-queue-only holds. See [question-logging.md](question-logging.md) for the gap sources.
-
-Once a proposal is `ready` and its target path maps to an indexed Git checkout, it can be
-published:
-
-```bash
-POST /api/proposals/:id/publish
-```
-
-Publication is enqueue-only. The API validates the repository pre-flight and enqueues a
-`publish_proposal` job, returning `202` with the queued job. The watcher publication runner fetches
-`GET /api/proposals/:id/execution-context` (the proposal plus a credential-free repository config),
-commits the Markdown to a new `magpie/proposal-*` branch and pushes it. For a GitHub destination it
-then opens a pull request; for a local-git (`file://`) destination it stops at the pushed branch (no
-PR to open) and the console's **Accept** (merge) / **Bin** (reject) actions complete the review. It
-reports the result back via job completion — which records the branch, commit SHA, and (for GitHub)
-PR URL on the proposal. Invalid publishes fail fast with the same `404`/`409` codes before any job is
-created.
-
-### Local-git flows (`file://` destinations)
-
-A flow whose destination resolves to a `file://` git repo publishes without any GitHub ceremony. A
-destination is recognized as local-git however its `file://` URL is written in `KNOWLEDGE_DESTINATIONS`
-(bare string, `path`, or `url`). For such a flow:
-
-- Publishing routes to `publish_proposal__local_git` (push a review branch, no PR).
-- The console shows **Accept** (`POST /api/proposals/:id/merge` — merge the branch into the default
-  branch, resolve gaps, re-index) and **Bin** (`POST /api/proposals/:id/reject` — mark `rejected`,
-  freeze the gap cluster so it is not re-drafted, and delete the review branch). Bin is the local
-  mirror of a GitHub pull request closed without merging.
-- The github-only `refresh_flow_snapshot` PR-poll task is **not** scheduled for a local-git flow, and
-  `crosslink_pull_requests` / `comment_pull_request` never fire (they only act on `pr-opened`
-  proposals, which a local-git flow never reaches).
-
-## Seeding a flow
-
-The demand-driven pipeline above (question → gap → cluster → proposal) is how knowledge
-*evolves* from real usage. To **bootstrap** a new flow — or add a whole new area of knowledge
-to an existing one — seeding is **self-seeding**: planning starts from the flow's *sources*,
-not from a human-typed topic, and every plan waits behind a human review gate before anything
-is drafted.
-
-### Planning (`outline_flow_seed`)
-
-```json
-POST /api/flows/:flowId/outline
-{ "notes": "optional freeform steer for this run" }
-```
-
-There is **no topic**. The endpoint enqueues an `outline_flow_seed` job whose input carries
-`sources: SourceDescriptor[]` (the flow's configured sources), the flow's whole existing
-document inventory (path + title, unscored), and the flow's optional `persona`, `charter`
-and `routingSummary` from `KNOWLEDGE_FLOWS`, plus `origin: "manual" | "auto"` recording what
-triggered the run. It is one of the **source-grounded** job set: the watcher resolves the
-git/local descriptors to read-only workspaces and the agent explores them directly (CLI
-providers traverse natively; HTTP providers use the bounded tool loop), then proposes a
-complete, non-overlapping document plan for the whole flow — fitted to the existing docs,
-scoped by the `charter` when configured. When the flow lacks a charter (or persona) the
-model **proposes** one (`proposedCharter` / `proposedPersona` on the output); the system
-never writes flow config — the console shows the proposal with a copy-to-config hint, and
-the value is carried run-scoped on the plan. Outline outputs may also contribute source-map
-`mapUpdates` like the other source-grounded jobs.
-
-On completion the API persists a **seed plan** (`seed_plans` table, status `proposed`,
-idempotent on the outline job id); a fresh proposed plan supersedes an older still-proposed
-one for the same flow. The endpoint reuses an in-flight outline job for the flow rather than
-double-planning (`{ jobId, reused: true }`), requires the `manage:jobs` scope (and `manage`
-on the target flow), and returns the enqueued job id.
-
-### Review and approval (the human gate)
-
-Plans are reviewed on the console's **Seed** page or via the API:
-
-- `GET /api/flows/:flowId/seed-plans` — the flow's plans, newest first.
-- `GET /api/seed-plans/:id`, `PATCH /api/seed-plans/:id` — read and edit (charter/persona
-  text, per-item fields, per-item approve/dismiss). Editing is only allowed while the plan
-  is `proposed` (409 otherwise).
-- `POST /api/seed-plans/:id/approve` — flips the plan to `approved` and enqueues one
-  `draft_seed_document` per non-dismissed item, carrying the plan's run-scoped
-  `charter`/`persona` and `seedPlanId`. Replay-safe: items that already recorded a
-  `draftJobId` are skipped, so re-approving after a mid-loop failure completes the
-  remainder. Rejects with `coverage_required` when an approvable item has no coverage.
-- `POST /api/seed-plans/:id/dismiss` — a sticky human "no" (see the bootstrap below).
-
-**Plan approval is the only drafting entry point** — the old raw-items
-`POST /api/flows/:flowId/seed` endpoint is gone.
-
-### Drafting (`draft_seed_document`)
-
-Each approved item drafts through a `draft_seed_document` AI job, grounded in the flow's
-source repositories exactly as before (source-grounded workspaces; CLI native traversal or
-the HTTP bounded tool loop; `MAGPIE_AGENTIC_TIMEOUT_MS` default 600 000 ms — keep it below
-the 900 s queue expiration; a job whose filesystem sources all fail to resolve fails loudly).
-The input now also carries the plan's `charter` (bounds scope), `persona` (shapes voice) and
-`seedPlanId` — read back at completion to stamp the proposal's `seedPlanId` so the plan view
-can show per-item drafting/publication progress.
-
-Coverage points the sources do not support are omitted from the authored document and come
-back in `uncoveredPoints`, folded into the proposal rationale (see the register constraint
-above). Per-claim citations come back in `provenance` and are persisted on the proposal. On
-completion the API creates a clusterless proposal carrying the flow's id first-class and
-reconciles it through the shared gate: a seed doc that overlaps an open PR on the same path
-folds into it, otherwise it self-publishes as its own PR. Seeding still ends at a reviewable
-pull request — the same human gate as everything else.
-
-### Sparse-flow bootstrap (`seed_bootstrap`)
-
-A per-flow scheduled task (`seed-bootstrap`, hourly by default) makes seeding
-self-starting: the maintenance watcher POSTs the thin
-`POST /api/flows/:flowId/seed-bootstrap/run` endpoint, which checks guards cheapest-first
-and **no-ops** (reporting the reason) unless all hold: the flow has ≥1 source; the indexed
-destination has fewer than `SEED_BOOTSTRAP_MAX_DOCS` documents (default 3); no `proposed`
-plan is pending; no outline job is in flight; no open seed-originated proposals exist for
-the flow; and the latest `dismissed` plan's source hash differs from the flow's current
-sources (dismissal is sticky per source config — a human "no" is only re-litigated when the
-sources change). When every guard passes it enqueues `outline_flow_seed` with
-`origin: "auto"` and returns immediately — unlike the patrol orchestrators it never
-bounded-waits; the plan lands via the completion handler and waits for human review.
-
-### MCP
-
-Over MCP the two steps are `kb_outline` → `kb_seed`: `kb_outline` (flow + optional `notes`)
-enqueues the planning run, waits for it, and returns the **persisted plan**
-(`planId`, `charter`/`persona` with proposed flags, `items`, `rationale`); `kb_seed`
-approves a plan by id and returns the enqueued draft job ids. Editing or partially
-dismissing items happens in the console.
-
-## Patrol child jobs (`verify_document` / `correct_document` / `improve_document`)
-
-The hourly patrols (`correctness_patrol` / `editorial_patrol` — see
-[architecture.md](architecture.md) for the scheduled-task table) fan out into three
-provider jobs, one document at a time: `verify_document` decides whether a doc's claims
-are still supported by the flow's sources, `correct_document` repairs the claims verify
-flagged, and `improve_document` grows a healthy-but-thin doc. All three are
-**source-grounded** the same way as `draft_seed_document` and `draft_markdown_proposal`:
-each input carries the document (`path`, `content` — plus the flagged `claims` for
-correct) and `sources: SourceDescriptor[]` — references to the flow's configured sources,
-projected at enqueue time, never inline file content. The watcher resolves the git/local
-descriptors to read-only workspaces on the shared checkout volume and the executing agent
-explores them directly — CLI providers (`claude`, `codex`) traverse the checkout with
-their own tools under read-only enforcement assembled in code; HTTP providers
-(`openai-compatible`, `azure-openai`) run the bounded `list_dir`/`read_file`/`grep` tool
-loop — under the same `MAGPIE_AGENTIC_TIMEOUT_MS` agentic timeout as the draft jobs
-(default 600 000 ms / 10 min; the three queues expire at 900 s to leave headroom, and the
-patrol tick's bounded wait on a `verify_document` job stays pinned at 10 min so one hung
-verify cannot consume the whole maintenance envelope). `agent` sources render as
-reference-only prompt notes. `internet` sources do too by default, **unless** the
-operator opted the descriptor into fetching with a non-empty `allowedHosts`
-allowlist (#242 — see [ingestion.md](ingestion.md)):
-
-- **HTTP providers** get a `fetch_url` tool alongside the filesystem tools: https
-  only, exact-hostname allowlist re-checked on every redirect hop, text-only
-  content-type gate, 2 MB download cap, HTML reduced to readable text, 32 KB
-  slices charged against the same 400 KB read budget as `read_file`, and every
-  retrieval logged (`fetch_url: fetched internet source`). A job whose only real
-  grounding is fetchable internet sources runs the tool loop with a
-  fetch-only toolset instead of the one-shot path.
-- **claude CLI** runs additionally get `WebFetch` in the hard `--tools` set, with
-  one `WebFetch(domain:<host>)` permission rule per allowlisted host — in print
-  mode anything the rules don't pre-approve is denied, so the rules are the
-  enforcement. (Rule spelling follows the documented permission-rule format; not
-  yet live-verified the way the read-only flags were.)
-- **codex CLI** cannot fetch — its read-only OS sandbox blocks network — so for
-  codex the same sources degrade to the reference-only notes they always were.
-  CLI jobs with *only* internet sources also stay on the one-shot generative path.
-
-Fetched web content is untrusted input to the drafting agent — it widens the
-prompt-injection surface the same way source-repo Markdown does (see
-[threat-model.md](threat-model.md)); the strict allowlist, fetch logging, and the
-human merge review are the controls. A flow with no filesystem-backed **and** no
-fetchable sources runs the plain one-shot path. `dedupe_documents` and
-`split_document` are **not** source-grounded — they compare the document against
-its destination neighbours. See the source-agentic grounding spec
-([docs/superpowers/specs/2026-07-06-source-agentic-grounding-design.md](superpowers/specs/2026-07-06-source-agentic-grounding-design.md)).
-
-`verify_document` additionally accepts an optional **`citedClaims: ProvenanceClaim[]`**
-(#214 phase 2): the document's per-claim provenance, folded at enqueue time from its
-merged proposals (the event log captured in phase 1 — see the provenance paragraph in the
-draft-jobs section above). The patrol's default verify path reads the merged-proposal
-stream for the document (`listMergedByTargetPath`, capped at the oldest 50 events with an
-operator-visible warning beyond that), folds it so later merges supersede earlier ones per
-claim anchor, and **drops claims whose section anchor no longer exists in the current
-document content** — a stale anchor falls back to full re-derivation rather than risking a
-false "cited support changed" verdict. The agent checks each cited claim against its cited
-location first and flags moved/vanished support with a `cited support changed:` reason;
-claims without provenance are re-derived exactly as before. The field is **advisory**: the
-agent still explores the sources and trusts them over the fold, and an absent/empty fold
-leaves the job input — and the rendered prompt — byte-identical to a pre-provenance
-verify. The verify reuse key incorporates a hash of the folded claims, so a merge that
-changes a document's provenance without touching its body never reuses a stale verdict.
-
-## Source map (agent navigation hints)
-
-Agents working on source-grounded jobs need lightweight navigation metadata to orient
-themselves in large source codebases. The source map is a per-source store of topic-indexed
-navigation hints maintained by the agents themselves: each entry pairs a topic with one or
-more file paths and a one-line description, unique on `(source_id, topic)`.
-
-**Read path.** At workspace preparation for any source-grounded job, the watcher fetches
-the source map via `GET /api/source-map?sourceIds=…` (scope: `manage:jobs`) and renders
-it to the agent prompt after the repository list, framed as unverified hints that the agent
-may update if they are outdated or incomplete. The map is a best-effort fetch — it is
-rendered only for sources that successfully respond — and the job never fails if the fetch
-times out or returns partial results.
-
-**Write path.** The six source-grounded job types — `draft_seed_document`, `draft_markdown_proposal`,
-`outline_flow_seed`, `verify_document`, `correct_document`, and `improve_document` — accept an
-optional `mapUpdates`
-field in their output: an array of updates to the source map, keyed by `(source_id, topic)`.
-Each update has the following shape:
-
-```
-{ "sourceId": string, "topic": string, "paths": string[], "description": string, "observedSha"?: string }
-```
-
-- `sourceId` — id of the source the hint belongs to.
-- `topic` — short label for what the path(s) cover (max 120 chars).
-- `paths` — one or more file/directory paths relevant to the topic (max 8, each ≤260 chars).
-- `description` — one-line summary (max 240 chars).
-- `observedSha` — stamped by the watcher, never trusted from the model; absent for non-git sources.
-
-The completion dispatcher applies these updates best-effort: each update is merged into the store
-(upsert by source+topic) and persisted to Postgres. Updates are capped at 20 per job; beyond
-that limit they are dropped with a log warning. A per-source cap of 200 entries is enforced
-with oldest-updated eviction: when the cap is reached, the least-recently-updated entry for
-that source is evicted to make room for the new one. Malformed updates (invalid source_id,
-oversized topic/paths/description) are dropped with a structured log warning and never cause
-the job to fail.
-
-**`observed_sha`.** Each source map entry records the Git HEAD SHA of the source at the time
-the entry was written, stamped by the watcher during workspace preparation. This value is
-always taken from the checkout HEAD, never trusted from the agent — any `observed_sha` values
-supplied by the model are overwritten. Entries from non-git sources keep `observed_sha` null.
-
-**`consensusCount`.** Each entry carries a consensus count (credibility, distinct from the
-`observed_sha` currency signal). On upsert, the new hint's paths are compared to the existing
-entry's via Jaccard similarity: an overlap above 0.5 means an agent independently agreed, so
-the count increments (capped at 5); an overlap at or below 0.5 is a contradicting hint and
-resets the count to 1, as does a first-seen `(source_id, topic)`. The count is computed
-atomically (the write takes a row lock) so concurrent job completions can't lose an increment.
-Higher counts mean more agents agree; surfacing/filtering hints by it is a follow-up (#219).
-
-**Boundaries.** The source map is strictly internal metadata and **never** enters answer
-retrieval, user-facing output, or the indexed knowledge base. Staleness invalidation via
-source-change-sync (e.g. detecting that the HEAD SHA no longer matches and pruning stale
-entries) is a follow-up tracked in #215 and not implemented in this phase.
-
-## Watcher Model
-
-The watcher has no direct database access. It talks to the API only:
-
-1. Claim a job.
-2. Run a provider-specific adapter.
-3. Complete or fail the job.
-4. Poll again.
-
-This keeps Codex, Claude Code, and hosted APIs behind the same contract.
-
-### Capabilities
-
-A watcher advertises a **capability** for each provider whose credentials are
-present in its environment (see `apps/watcher/src/capabilities.ts`), plus
-`maintenance` (always available). The API only routes a job to a capability a
-running watcher actually offers, so a job stays queued until a capable watcher is
-running. Capability → required env:
+- **J6** — The standard request/await pattern for any job-backed endpoint is: (1) `POST` the
+  work → **202** with the created job and links; (2) `GET /api/jobs/:id/wait` long-polls,
+  returning **200** once the job is terminal or **202** if still running (re-issue to keep
+  waiting; `JOB_WAIT_TIMEOUT_MS` bounds each call, `JOB_WAIT_POLL_MS` the server poll
+  cadence); (3) `GET /api/jobs/:id` fetches a snapshot at any time without blocking.
+
+## The job catalog
+
+- **J7** — The job catalog (`packages/jobs/src/catalog.ts`, keyed to `JOB_TYPES` in
+  `types.ts`) is the **single source of truth** for every job type's input/output schema,
+  routing capability, queue name, policy, and repairability. Nothing outside the catalog may
+  hand-maintain a parallel list of job types, queues, or capabilities. Input/output shapes
+  live in `packages/jobs/src/schemas.ts` and MUST validate at enqueue (J20) and at
+  completion (J24).
+- **J8** — Each type routes one of three ways: a **bare capability** (one statically-named
+  queue), **`provider`** (fans out over the four AI providers, keyed off `input.provider`,
+  metered), or a **fan-out spec** (fans out over an explicit capability set keyed off an
+  input field, with an optional default). The concrete queue name is `type` for a
+  single-capability job and `type__capability` (dashes → underscores) when it fans out;
+  every work queue also provisions a `__dead_letter` sibling.
+
+| Job type | Routing | Expiry | Runner | Metered (AI) | Interactive | Repairable |
+| --- | --- | --- | --- | --- | --- | --- |
+| `answer_question` | provider | 5 min | generative (chat/CLI) | ✓ | ✓ | ✓ |
+| `answer_question_batch` | provider | 5 min | generative (chat/CLI) | ✓ | — | ✓ |
+| `summarize_gap` | provider | 10 min | generative | ✓ | — | ✓ |
+| `draft_markdown_proposal` | provider | 15 min | source-grounded | ✓ | — | — |
+| `draft_seed_document` | provider | 15 min | source-grounded | ✓ | — | — |
+| `outline_flow_seed` | provider | 10 min | source-grounded | ✓ | ✓ | ✓ |
+| `revise_seed_plan` | provider | 10 min | generative | ✓ | — | ✓ |
+| `fold_markdown_proposal` | provider | 15 min | generative | ✓ | — | — |
+| `detect_contradiction` | provider | 10 min | generative | ✓ | — | ✓ |
+| `suggest_consolidation` | provider | 10 min | generative | ✓ | — | ✓ |
+| `reconcile_gap_clusters` | provider | 5 min | generative | ✓ | — | ✓ |
+| `sync_source_changes_generate_plan` | provider | 60 min | source-grounded | ✓ | — | — |
+| `verify_document` | provider | 15 min | source-grounded | ✓ | — | — |
+| `correct_document` | provider | 15 min | source-grounded | ✓ | — | — |
+| `dedupe_documents` | provider | 10 min | generative | ✓ | — | — |
+| `split_document` | provider | 10 min | generative | ✓ | — | — |
+| `improve_document` | provider | 15 min | source-grounded | ✓ | — | — |
+| `fold_changeset_proposal` | provider | 15 min | generative | ✓ | — | — |
+| `refresh_flow_snapshot` | github | 5 min | refresh-snapshot | — | — | — |
+| `process_gaps_to_pull_requests` | maintenance | 60 min | maintenance | — | — | — |
+| `source_change_sync` | maintenance | 60 min | maintenance | — | — | — |
+| `correctness_patrol` | maintenance | 60 min | maintenance | — | — | — |
+| `editorial_patrol` | maintenance | 60 min | maintenance | — | — | — |
+| `verify_gap_closure` | maintenance | 60 min | maintenance | — | — | — |
+| `seed_bootstrap` | maintenance | 60 min | maintenance | — | — | — |
+| `publish_proposal` | {github, local-git} by `destination` | 15 min | publication | — | — | — |
+| `crosslink_pull_requests` | github | 10 min | publication | — | — | — |
+| `comment_pull_request` | github | 10 min | publication | — | — | — |
+
+- **J9** — `AI_JOB_TYPES` (the 18 `provider`-routed rows above) is the metered set: every
+  type whose work is a chat/generative provider call. `isAiJobType` reads it so cost
+  controls can count in-flight AI work without re-deriving the list.
+- **J10** — **Interactive class.** `INTERACTIVE_AI_JOB_TYPES = {answer_question,
+  outline_flow_seed}` names the AI jobs a live caller is waiting on right now (a `/api/ask`
+  answer — including a `verify_gap_closure` re-ask a blocked orchestrator bounded-waits on —
+  and a console flow outline). `answer_question_batch` (questionnaire drip) shares the answer
+  contract but is **deliberately not interactive**, so a bulk questionnaire can never erode
+  the interactive reserve protecting `/api/ask`. This split drives the claim-side lane order
+  (J17) and the AI capacity gate's interactive reserve (see
+  [rate-limiting.md](./rate-limiting.md)).
+- **J11** — **Retry budget** (per `catalog.ts` `policy`): interactive provider AI keeps
+  `retryLimit 3` (a live caller is waiting; a transient blip should not surface as a hard
+  fail); maintenance/non-interactive provider AI drops to `2` so a runaway patrol cannot
+  triple its metered generations on retries; non-provider work is `2`. Provider work uses
+  `retryDelay 15 / retryDelayMax 300`; non-provider `30 / 600`. All queues share
+  `heartbeatSeconds 60`, `retentionSeconds 14d`, `deleteAfterSeconds 30d`, `retryBackoff`.
+
+## Capabilities & routing
+
+- **J12** — A watcher advertises a **capability** for each provider whose credentials are
+  present in its environment, plus `maintenance` (always available). The runner factory
+  consults the **same readiness gates** as the advertisement, so a capability is advertised
+  on claim if and only if a runner can actually execute it — there is deliberately no `mock`
+  capability. Secrets are tested only for presence, never logged.
 
 | Capability | Required env |
 | --- | --- |
@@ -619,133 +130,344 @@ running. Capability → required env:
 | `codex` | `CODEX_CLI_PATH` (defaults to `codex` on `PATH`) |
 | `claude` | `CLAUDE_CLI_PATH` (defaults to `claude` on `PATH`) |
 | `local-git` | `MAGPIE_GIT_AUTHOR_NAME`, `MAGPIE_GIT_AUTHOR_EMAIL` (git on `PATH`; **no** token) |
-| `github` | `GITHUB_TOKEN`, `MAGPIE_GIT_AUTHOR_NAME`, `MAGPIE_GIT_AUTHOR_EMAIL` |
+| `github` | `GITHUB_TOKEN`, `MAGPIE_GIT_AUTHOR_NAME`, `MAGPIE_GIT_AUTHOR_EMAIL` (git on `PATH`) |
 | `maintenance` | (none) |
 
-`publish_proposal` fans out over `{github, local-git}` by destination: a `file://`
-destination routes to `publish_proposal__local_git` (branch push only — a token-less
-watcher can serve it, and the console's Merge action takes over from there), anything
-else to `publish_proposal__github` (push **and** open a PR). A `github`-credentialed
-watcher also satisfies `local-git` (it has git + author), so it publishes to both.
+- **J13** — The API MUST route a job only to a capability a running watcher actually offers,
+  so a job stays queued until a capable watcher exists. The console's coverage banner is
+  driven from `jobTypesWithoutCapabilities` (a type is covered if **any** of its
+  capabilities is available), so it can never drift from the catalog.
+- **J14** — `AI_PROVIDER` is mandatory on a watcher and names the single chat provider its
+  work routes to (`openai-compatible`, `azure-openai`, `codex`, or `claude`); the watcher
+  MUST carry the matching credentials. CLI providers cover the whole non-embedding LLM job
+  contract; embeddings remain configured separately (J2).
+- **J15** — `publish_proposal` fans out over `{github, local-git}` by `input.destination`: a
+  `file://` destination routes to `publish_proposal__local_git` (branch push only — a
+  token-less watcher serves it, and the console's Accept/merge takes over), anything else to
+  `publish_proposal__github` (push **and** open a PR). Enqueues omitting `destination`
+  default to `github` (legacy-compatible). A `github`-credentialed watcher also satisfies
+  `local-git` (it has git + author), so it publishes to both. Publishing and its status
+  lifecycle are specified in proposals-and-publishing (see [architecture.md](./architecture.md)).
+- **J16** — Runner ↔ job-type support is derived, not hand-mapped: the chat and CLI runners
+  support exactly `PROVIDER_JOB_TYPES` (derived from the catalog), the maintenance runner
+  the six `maintenance` orchestrators, the publication runner `publish_proposal` +
+  `crosslink_pull_requests` + `comment_pull_request`, and the refresh runner
+  `refresh_flow_snapshot`. The worker loop fails a job loudly if no runner supports its type.
 
-## AI Providers
+## Claiming
 
-`AI_PROVIDER` is mandatory and names the chat provider work is routed to
-(`openai-compatible`, `azure-openai`, `codex`, or `claude`). The watcher must
-carry the credentials matching that provider. The watcher can also run a local
-CLI (Codex / Claude Code) as the provider. CLI providers cover the non-embedding
-LLM job contract; embeddings remain configured separately through OpenAI-compatible
-or Azure embedding endpoints.
+- **J17** — On claim, the broker probes the worker's **interactive** queues (J10) first —
+  in fixed order — so a freed watcher picks up an `answer_question` ahead of patrol fan-out
+  enqueued earlier (#240). Only then does it serve **background** queues **round-robin,
+  oldest-first within a queue**, advancing a fairness cursor so no single busy queue (e.g. a
+  patrol's `verify_document` fan-out) starves its siblings. `POST /api/jobs/claim` carries
+  `{workerName, capabilities}` and returns `{job}` or `{job: null}`.
 
-OpenAI-compatible API watcher:
+## Completion contract — a generation is never re-billed (#161)
 
-```bash
-AI_PROVIDER=openai-compatible \
-OPENAI_COMPATIBLE_BASE_URL=https://api.openai.com/v1 \
-OPENAI_COMPATIBLE_API_KEY=... \
-OPENAI_COMPATIBLE_MODEL=... \
-npm run dev:watcher
-```
+A provider generation is the expensive part of a job; everything after it (question-log
+updates, drafting a proposal row, fold reconciliation, source-sync plan attachment) is cheap,
+idempotent bookkeeping keyed on the job id. Two failure points used to throw a finished,
+paid-for generation away and force pg-boss to redo the whole job; both are closed:
 
-Codex-style command:
+- **J18** — **`completeJob` persists first, fans out second.** The validated output is saved
+  via the broker's `complete()` *before* any side effect runs. pg-boss's `fail()` only ever
+  retries a job that has not reached `completed`, and its `complete()` is a no-op on one that
+  has — so once persistence succeeds, nothing downstream can trigger a regeneration. A
+  side-effect failure is logged and the endpoint replies **500 `side_effects_failed`**, but
+  the job is **not** failed: it did complete.
+- **J19** — **Side effects are self-healing on replay.** Every side-effect handler is
+  idempotent on jobId, so a retried completion POST hits the **replay branch**: `completeJob`
+  detects the job is already `completed` and re-runs only the fan-out from the persisted
+  `{result, executor}` envelope, without requiring or re-validating a fresh body. That 500
+  can never re-bill the generation — the replay path never reaches the provider.
+- **J20** — Enqueue-time validation: `createJob` validates `input` against the job's own
+  contract before persisting (#285), so a `manage:jobs` caller cannot dispatch a malformed
+  input (e.g. a source descriptor smuggling an executable). The pg-boss broker re-validates
+  on the single typed `enqueue` path shared by `create` and `createIfAdmitted`.
+- **J21** — **The watcher retries `complete()` itself.** `HttpWatcherApi.complete()` retries
+  a failed completion POST a few times with backoff for a **network error or 5xx** only — a
+  `4xx` (e.g. `invalid_output`, `job_not_found`) is a deterministic contract failure retries
+  cannot fix and falls straight through to `api.fail()`. Composed with J18–J19 this yields
+  self-healing side effects; if the retries exhaust, `api.fail()` is a harmless no-op on the
+  completed row, so the output survives and a later manual re-POST of `/complete` can still
+  replay the bookkeeping.
+- **J22** — **Reading a completed job's output back (#184).** Because the persisted output is
+  the `{result, executor, usage?, provider?, model?}` envelope, any API-side consumer of
+  `runJobToCompletion` MUST parse it through `parseCompletedJobOutput(schema, job.output)`,
+  never run the raw output schema against `JobView.output` directly — the raw parse only
+  succeeds against envelope-less test fakes and silently discards real watcher results. Gap
+  reshape, the patrol verify lens, and gap-closure re-asks all read through this helper.
 
-```bash
-AI_PROVIDER=codex \
-CODEX_CLI_PATH=codex \
-CODEX_CLI_ARGS=exec \
-CODEX_CLI_PROMPT_MODE=arg \
-npm run dev:watcher
-```
+## Token usage, execution identity & cost (#241)
 
-Claude-style command:
+- **J23** — **Usage rides the completion envelope.** Runners report each provider call's
+  token usage through an optional `onUsage` callback (the chat runner wraps its provider in
+  `withUsageReporting`; the source-agent loop reports `generateText`'s aggregate
+  `totalUsage`), the worker loop sums the readings, and `complete()` sends the total. The API
+  persists it beside the output as `{result, executor, usage}` — on the **envelope**, not the
+  job's own output, so it can never collide with schema-stripping. CLI providers emit raw
+  text and report nothing, so their completions carry **no** usage (unmetered, not zero).
+- **J24** — **Valid output strips undeclared keys, never fails on them.** Output schemas are
+  `z.object`, so a valid parse strips fields the contract does not declare; the strip is
+  logged (never a failure) so a watcher shipping extra fields is observable.
+- **J25** — **Execution identity rides the envelope too.** Each AI runner exposes an
+  `aiIdentity` — its provider plus the *configured* model (chat model / Azure deployment /
+  CLI `--model`) — and the worker loop stamps flat `provider`/`model` envelope fields on
+  every completion. A CLI runner with no explicit model reports only its provider (it ran on
+  its own default). This is what lets usage rollups price spend against the operator's
+  `AI_PRICING` table; a malformed value is dropped by the body schema, never a 400.
+- **J26** — **Cost is priced at read time, never persisted.** Insights rollups turn stored
+  `usage` × the identity's model into money via `estimateTokenCost` each time they are read,
+  so correcting a mispriced entry retroactively re-values history. Three states stay distinct
+  and never render as `$0`: **priced**, **unpriced** (usage reported, no matching price), and
+  **unmetered** (no usage — the CLI case). Consumed by the C11 AI-usage chart and the
+  per-flow / per-schedule cost views ([insights-charts.md](./insights-charts.md)).
+- **J27** — **`flowId` on the input attributes spend (attribution only).** Per-flow and
+  per-schedule cost rollups read the flow off the stored job input at
+  `data->'input'->>'flowId'`. Most flow-scoped AI jobs carry it; `verify_document` and
+  `draft_markdown_proposal` were extended to carry it for the patrol and reconciler.
+  `answer_question` and the `fold_*` jobs carry no flowId, so their spend is unattributed in
+  the per-flow view and excluded from per-schedule attribution. The field is metadata the
+  runners ignore.
 
-```bash
-AI_PROVIDER=claude \
-CLAUDE_CLI_PATH=claude \
-CLAUDE_CLI_ARGS=-p \
-CLAUDE_CLI_PROMPT_MODE=arg \
-npm run dev:watcher
-```
+## Schema-invalid output & one informed repair (#288d)
 
-Prompt mode can be:
+- **J28** — When completion output fails its contract, the job takes one of two paths per
+  `decideRepairOrTerminal`: (a) a **repairable** type with repair enabled and no prior repair
+  context is offered **one** informed repair; (b) everything else takes the **terminal-fail
+  backstop** — no more blind, paid retries.
+- **J29** — **The repair path** persists a `JobRepairContext` (`{attempt: 1, priorOutput,
+  issues}`) in a store keyed by job id — never in the domain input schema — then plain
+  `fail()`s so pg-boss moves the **same** job `active → retry`. It is **not** routed through
+  admission control: the job already holds the capacity slot its original admission reserved,
+  so re-admitting would double-charge or 429 mid-repair. On re-claim, `claimJob` attaches the
+  context to the `JobView`; the chat/CLI runner sees `job.repair` and runs a **single-shot
+  reshape** of `priorOutput` against the contract (`runRepairReprompt` — no retrieval, no
+  agent loop) via the `REPAIR_OUTPUT` prompt. Repair-of-a-repair is structurally impossible
+  (a second invalid output finds a prior context and terminal-fails).
+- **J30** — **Repairable types** are the reshape-style ones that rework material already in
+  the input/prior output with no risk of fabricating grounded content: `answer_question`,
+  `answer_question_batch`, `summarize_gap`, `detect_contradiction`, `suggest_consolidation`,
+  `reconcile_gap_clusters`, `outline_flow_seed`, `revise_seed_plan`. Source-grounded /
+  agentic / patch-emitting types are deliberately **not** repairable (a context-free reshape
+  could invent grounding or an `observedSha`). `isRepairableJobType` reads the catalog so the
+  set never drifts.
+- **J31** — A repaired answer-contract output MUST pass a **safety guard** before completing:
+  its citation `sectionId`s must be a **subset** of the prior output's (drop/keep allowed,
+  never add), because citations are derived in code from retrieved sections and must never be
+  model-fabricated. A guard failure terminal-fails.
+- **J32** — **The terminal-fail backstop** (`failTerminal`) zeroes the one row's
+  `retry_limit` via a scoped `UPDATE` (pg-boss self-guards `updateJob` to non-active rows, so
+  the raw SQL is required to touch the active row), then `fail()`s — pg-boss routes it to
+  terminal `failed` + dead-letter. `failTerminal` no-ops on an already-terminal row,
+  protecting the completion-replay contract (J19).
+  > ⚠️ **Drift corrected (as-built).** An earlier version of this doc stated schema-invalid
+  > output "still fails the job through the normal retry budget" and that a "repair reprompt
+  > would fix this properly but is out of scope here." That is now **stale**: the informed
+  > repair (#288d, J28–J32) is implemented and gated by `settings.jobs.repairEnabled`. The
+  > only unchanged case is a **non-repairable** type or a **second** invalid output, which
+  > takes the terminal-fail backstop instead of the old blind retry budget.
 
-- `arg`: append the prompt as the final process argument.
-- `stdin`: send the prompt through standard input.
+## HTTP endpoints
 
-The agent must return JSON matching the job output schema. The watcher extracts and validates JSON before completing the job.
+- **J33** — Operator/console surface (`manage:jobs` unless noted): `POST /api/jobs` (create
+  → 202 `{job}`); `GET /api/jobs` (list, filter by `type`/`state`/`createdAfter`,
+  `limit`/`offset`, scope `read:knowledge`); `GET /api/jobs/:id`, `GET /api/jobs/:id/wait`
+  (scope `read:knowledge`, 200/202 per J6); `GET /api/jobs/schedules` (registered pg-boss
+  crons); `POST /api/jobs/:id/cancel` (terminal); `POST /api/jobs/:id/retry` (409
+  `job_not_failed` unless the job is `failed`); `POST /api/jobs/:id/accept-failure`
+  (acknowledge a failure without changing queue state — it stays inspectable/retryable but
+  stops warning).
+- **J34** — Watcher-only surface (operators rarely call directly): `POST /api/jobs/claim`
+  (J17); `POST /api/jobs/:id/heartbeat` (keep a claim alive; the response flags `cancelled`
+  so the runner aborts); `POST /api/jobs/:id/complete` (`{output, executor, usage?,
+  provider?, model?}` → the envelope of J18–J25; 500 `side_effects_failed`, 404
+  `job_not_found`, 409 `job_cancelled`, 400 `invalid_output`/`repair_enqueued`); `POST
+  /api/jobs/:id/fail` (a structured `{error: {code, message, category}}`).
+- **J35** — Answer-path callbacks the watcher makes while running `answer_question`:
+  `POST /api/retrieve` (scoped context for a flow) and `POST /api/route` (embedding-similarity
+  flow pick, abstaining on a low margin so the watcher falls back to the chat router). Both
+  keep embeddings/retrieval **inside the API** — the watcher is HTTP-only. Specified in
+  [retrieval.md](./retrieval.md).
 
-### CLI environment isolation
+## Watcher runtime & CLI isolation
 
-A local agent CLI boots as a full interactive assistant by default — its own system
-prompt and persona, the complete toolset, and whatever MCP servers, settings, hooks, and
-project memory (CLAUDE.md) the operator's environment or the working directory carries.
-Left unisolated, a one-shot completion run can behave like a chat session (one incident:
-a `claude -p` answer job replied by asking the reader to grant it MCP tool permissions,
-and that chatter shipped as the answer). The runner therefore assembles isolation args in
-code (`apps/watcher/src/runners/cli.ts`), after the operator-configured
-`CODEX_CLI_ARGS` / `CLAUDE_CLI_ARGS`, so configuration cannot drop them:
+- **J36** — The worker loop runs **one job at a time**: claim → dispatch to the supporting
+  runner under an `AbortController` → heartbeat on half the job's window (aborting the runner
+  if the server reports the job cancelled) → report the single terminal outcome (complete or
+  fail). A claim/transition error is logged and backed off, never crashes the process; a
+  server-side cancellation is not re-reported as a failure. The job runs inside a span
+  parented on the enqueueing request's `traceContext` carried across the queue.
+- **J37** — **CLI environment isolation.** A local agent CLI boots as a full interactive
+  assistant by default (its own persona, full toolset, and whatever MCP servers, settings,
+  hooks, and `CLAUDE.md`/`AGENTS.md` the environment or cwd carries). The runner assembles
+  isolation args **in code** (`runners/cli.ts`), **after** the operator-configured
+  `*_CLI_ARGS`, so configuration cannot drop them:
+  - **One-shot generative runs** execute in a neutral working directory (OS temp dir) with,
+    for claude, `--tools ""`, `--strict-mcp-config`, `--setting-sources ""`, and a
+    `--system-prompt` carrying the job-runner instructions (replacing the interactive
+    persona); codex gets `--sandbox read-only --skip-git-repo-check` and keeps its folded
+    `SYSTEM:` block (no system-prompt flag).
+  - **Source-grounded runs** keep a read-only explore toolset (claude: `--tools Read,Grep,Glob`
+    plus disallowed write tools; codex: `--sandbox read-only`) and also run from a **neutral
+    cwd**, never an untrusted checkout — the memory-file neutralisation. Checkouts are reached
+    read-only via repeated `--add-dir` (claude, a tool-access root not a memory root) or the
+    prompt path list (codex). claude also gets `--strict-mcp-config`, `--setting-sources ""`,
+    and the `--system-prompt`.
+  - **Minimal child environment.** Every spawn passes an explicit `env` allowlist instead of
+    inheriting the watcher's full `process.env`: non-secret operational vars plus only the
+    calling CLI's own credential (`ANTHROPIC_*`/`CLAUDE_CONFIG_DIR` for claude;
+    `OPENAI_API_KEY`/`OPENAI_BASE_URL`/`CODEX_HOME` for codex, matched by exact name so a
+    different provider's key is never swept in). `MAGPIE_CLI_ENV_PASSTHROUGH` forwards extra
+    named vars without a code change.
+- **J38** — Defence in depth on the answer side: an `answer_question` reply that ignores the
+  structured JSON contract (plain prose) is always grounding-verified despite its low
+  confidence and **fails closed** — if the verifier cannot vouch for the prose, the safe
+  fallback answer ships instead of the raw text.
+- **J39** — **Prompt mode.** `*_CLI_PROMPT_MODE` is `arg` (append the prompt as the final
+  process argument) or `stdin` (send it on standard input). The agent MUST return JSON
+  matching the job's output schema; the watcher extracts and validates JSON before completing.
+- **J40** — **Provider adapters (`AgentRunner`).** Provider support stays behind adapters
+  that normalise every provider to the same internal job contract, keep prompts and output
+  schemas provider-neutral, validate provider output before completing, prefer OpenAI-compatible
+  `/chat/completions` for broad coverage, keep credentials in env (never in job payloads),
+  bound external calls with timeouts, and fail with readable errors. One conformance smoke
+  test per provider shape (answer, gap summary, proposal).
 
-- **One-shot generative runs** execute in a neutral working directory (the OS temp dir —
-  no host-project CLAUDE.md / `.mcp.json` / `.claude` settings) with, for claude,
-  `--tools ""` (no tools), `--strict-mcp-config` (no MCP servers),
-  `--setting-sources ""` (no user/project settings, hooks, or plugins), and
-  `--system-prompt` carrying the job-runner instructions so they replace the CLI's
-  interactive persona instead of riding as user text. codex gets `--sandbox read-only
-  --skip-git-repo-check` (it has no system-prompt flag, so its prompt keeps the folded
-  `SYSTEM:` block).
-- **Source-grounded runs** keep the read-only explore toolset (`--tools Read,Grep,Glob`
-  plus disallowed write tools for claude; `--sandbox read-only` for codex) and also run
-  from a **neutral working directory** (the OS temp dir), never from an untrusted source
-  checkout. This is the memory-file neutralization: a checkout may commit a root memory
-  file (`CLAUDE.md` for claude, `AGENTS.md` for codex) that a CLI loads from its cwd as
-  higher-trust project guidance, so no checkout is ever the cwd. The checkouts are reached
-  read-only instead — for claude, each workspace (the primary included) is mounted with a
-  repeated `--add-dir <dir>`, which is a tool-access root, not a project/memory root; for
-  codex, read-only reads are not confined to cwd, so the prompt lists every workspace path.
-  claude also gets `--strict-mcp-config` and `--setting-sources ""` — a source checkout may
-  carry its own `.mcp.json` (this repo does) or committed `.claude` settings, and neither
-  may reach the agent — plus `--system-prompt` carrying the job-runner instructions, so the
-  CLI's interactive persona is replaced rather than left as the top-level instruction (codex
-  has no system-prompt flag; its source-grounded prompt carries the untrusted-content
-  contract in the task instructions instead).
-- **Minimal child environment.** Every spawn (both paths) passes an explicit `env`
-  allowlist instead of letting the child inherit the watcher's full `process.env`. Without
-  it the CLI would hold every secret the watcher holds — all provider keys, `GITHUB_TOKEN`,
-  `DATABASE_URL`, the M2M secret — even though it needs only its own provider credential;
-  codex's read-only sandbox still permits reading env, so a prompt-injected run could read
-  them out. The child receives non-secret operational vars (`PATH`, `HOME`, locale, temp,
-  proxy/CA settings, Windows essentials) plus only the calling CLI's own credential
-  (`ANTHROPIC_*` / `CLAUDE_CONFIG_DIR` for claude; `OPENAI_API_KEY` / `OPENAI_BASE_URL` /
-  `CODEX_HOME` for codex — matched by exact name, so a different provider's key such as
-  `OPENAI_COMPATIBLE_API_KEY` is never swept in). Set `MAGPIE_CLI_ENV_PASSTHROUGH` (a
-  comma/space-separated list of variable names) to forward extra vars — Bedrock/Vertex
-  credentials, a nonstandard credential var, or additional proxy config — without a code
-  change.
+## Source-grounded jobs & their I/O
 
-Defence in depth on the answer side: an `answer_question` reply that ignores the
-structured JSON contract (plain prose) is always grounding-verified despite its low
-confidence, and fails closed — if the verifier cannot vouch for the prose, the safe
-fallback answer ships instead of the raw text.
+- **J41** — The **source-grounded** job set — `draft_markdown_proposal`, `draft_seed_document`,
+  `outline_flow_seed`, `verify_document`, `correct_document`, `improve_document` (and the
+  source-sync plan job) — carries `sources: SourceDescriptor[]` (references to the flow's
+  configured sources, projected at enqueue time), **never** inline file content. The watcher
+  resolves git/local descriptors to **read-only workspaces** on the shared checkout volume;
+  the executing agent explores them directly — CLI providers (`codex`, `claude`) traverse the
+  checkout with their own tools under the in-code read-only enforcement (J37); HTTP providers
+  (`openai-compatible`, `azure-openai`) run the bounded `list_dir`/`read_file`/`grep` tool
+  loop — under `MAGPIE_AGENTIC_TIMEOUT_MS` (default 600 000 ms; queues expire at 900 s for
+  headroom). A job whose filesystem sources all fail to resolve fails loudly. `dedupe_documents`
+  and `split_document` are **not** source-grounded (they compare a doc against its
+  destination neighbours). A job with no filesystem-backed and no fetchable source runs the
+  plain one-shot generative path. Full detail:
+  [source-agentic grounding design](superpowers/specs/2026-07-06-source-agentic-grounding-design.md).
+- **J42** — `agent` sources render as reference-only prompt notes; `internet` sources do too
+  **unless** the operator opted the descriptor into fetching with a non-empty `allowedHosts`
+  allowlist (#242). HTTP providers then get a `fetch_url` tool (https only, exact-hostname
+  allowlist re-checked per redirect, text-only, 2 MB cap, HTML→text, 32 KB slices on the same
+  400 KB read budget as `read_file`, every retrieval logged); claude CLI additionally gets
+  `WebFetch` with one `WebFetch(domain:<host>)` rule per allowlisted host; codex CLI **cannot
+  fetch** (its read-only OS sandbox blocks network), so those sources degrade to reference
+  notes. Fetched web content is untrusted input to the drafting agent — the allowlist, fetch
+  logging, and human merge review are the controls ([threat-model.md](./threat-model.md)).
+- **J43** — **Register constraint (#213).** Every content-producing prompt (gap drafts, seed
+  drafts, both folds, source-sync rewrites, corrective rewrites, improve growth) carries a
+  shared factual-register contract: documents state what the sources state and never author
+  their own recommendations, next steps, action items, roadmaps, or editorial commentary
+  (describing a plan a *source itself* states remains allowed). Unsupported points are omitted
+  from the body and returned in the output's optional `uncoveredPoints`, which the API folds
+  into the proposal rationale. As a backstop the API runs an advisory-heading check
+  (`findAdvisoryHeadings`) over every draft/rewrite/fold output it consumes: an advisory
+  heading is **flagged, never failed** (a log warning + a "Register check:" rationale note).
+  The two fold appliers check log-only; `dedupe_documents`/`split_document` are not checked
+  (they reorganise existing content).
+- **J44** — **Per-claim provenance (#214).** Both draft outputs
+  (`draft_markdown_proposal`, `draft_seed_document`) include an optional
+  `provenance: ProvenanceClaim[]` — each substantive claim with the source id + repo-relative
+  path(s) that ground it. The document **body contains no repository paths or source names**
+  (inline citations leaked into served answers); citations live only in the structured field.
+  The API persists it on the proposal (`proposals.provenance`, migration 0049) with event-log
+  semantics. `correct_document` and the `improved: true` branch of `improve_document` carry
+  the same field (the claims their rewrite introduces/changes); `fold_markdown_proposal`
+  receives both parents' provenance and returns the re-anchored merged set.
+  `verify_document` additionally accepts an optional `citedClaims: ProvenanceClaim[]` folded
+  from a document's merged proposals, dropping claims whose section anchor no longer exists
+  (falling back to full re-derivation). A draft that omits provenance is warned about but
+  still published — quality is enforced by review, never by rejecting drafts.
+  `dedupe_documents`/`split_document` changesets carry no per-claim provenance by design.
 
-## Provider Compatibility Practice
+## Source map (agent navigation hints)
 
-Provider support should stay behind `AgentRunner` adapters:
+- **J45** — The source map is a per-source store of topic-indexed navigation hints
+  maintained by the agents themselves, unique on `(source_id, topic)`, strictly **internal
+  metadata** that never enters answer retrieval, user-facing output, or the indexed KB.
+- **J46** — **Read path.** At workspace preparation for any source-grounded job the watcher
+  fetches `GET /api/source-map?sourceIds=…` (scope `manage:jobs`; comma-separated ids; the
+  ≤100 most-recently-updated entries per source, capped 100 reads per source per request; 400
+  on missing/malformed `sourceIds`) and renders the hints to the prompt as **unverified**,
+  framed as updatable. The fetch is best-effort — rendered only for sources that respond, and
+  the job never fails on a timeout/partial result.
+- **J47** — **Write path.** The six source-grounded job types accept an optional `mapUpdates`
+  output field (`{sourceId, topic (≤120), paths (≤8, each ≤260), description (≤240),
+  observedSha?}`). The completion dispatcher applies them best-effort: upsert by
+  `(source_id, topic)`, capped 20 per job (excess dropped with a warning), per-source cap 200
+  with oldest-updated eviction; malformed updates are dropped with a structured warning and
+  never fail the job.
+- **J48** — `observed_sha` is always the checkout HEAD stamped by the watcher during
+  workspace preparation, **never** trusted from the model (agent-supplied values are
+  overwritten; null for non-git sources). The generative fallback path stamps against an
+  **empty** workspace set, which strips `observedSha` from every update, so a job that never
+  observed a checkout cannot smuggle one. Each entry also carries a `consensusCount`
+  (credibility): on upsert, Jaccard overlap of paths > 0.5 increments (capped 5), ≤ 0.5 (or
+  first-seen) resets to 1; computed atomically under a row lock.
 
-- Normalize every provider to the same internal job contract.
-- Keep prompts and output schemas provider-neutral.
-- Validate provider output before completing jobs.
-- Prefer OpenAI-compatible `/chat/completions` support for broad API coverage.
-- Keep provider credentials in environment variables, never in job payloads.
-- Use timeouts around external calls and mark jobs failed with readable errors.
-- Add one conformance smoke test per provider shape: answer job, gap summary job, and proposal job.
+## Key constants
 
-## Storage
+| Constant | Default | Where |
+| --- | --- | --- |
+| `MAGPIE_AGENTIC_TIMEOUT_MS` | 600 000 ms (10 min) | `apps/watcher/src/runners/index.ts` |
+| `AGENT_API_TIMEOUT_MS` / `AGENT_CLI_TIMEOUT_MS` | 120 000 ms | `apps/watcher/src/runners/index.ts` |
+| default heartbeat interval | 30 000 ms (half the 60 s policy) | `apps/watcher/src/worker-loop.ts` |
+| queue `heartbeatSeconds` | 60 | `packages/jobs/src/catalog.ts` (`BASE_POLICY`) |
+| interactive vs maintenance `retryLimit` | 3 vs 2 | `packages/jobs/src/catalog.ts` (`policy`) |
+| `AI_ADMISSION_LOCK_KEY` | fixed advisory key | `apps/api/src/jobs/pg-boss-broker.ts` |
+| `LOCATE_CONCURRENCY` | 8 | `apps/api/src/jobs/pg-boss-broker.ts` |
 
-Use `STORAGE_BACKEND=postgres` for local development and deployments. Optional backend
-overrides: `SOURCE_MAP_STORE` selects the storage backend for the source map (useful for
-testing or alternate implementations; defaults to postgres when not set).
+## Code map
 
-Jobs and schedules are owned entirely by pg-boss (the `JobBroker`), which manages its own
-Postgres tables. The legacy custom job table and its queue-selection override have been
-removed. pg-boss handles claiming, retries, and overlap protection so multiple watchers can
-safely poll the same queues once the API is running against a real database.
+| Concern | Code |
+| --- | --- |
+| Job contract (types, catalog, I/O schemas) | `packages/jobs/src/{types,catalog,schemas}.ts` |
+| pg-boss broker (enqueue, claim, complete/fail, dead-letter, admission) | `apps/api/src/jobs/{broker,pg-boss-broker}.ts`, fake: `apps/api/src/jobs/fake-broker.ts` |
+| Schedule reconciliation | `apps/api/src/jobs/schedule-reconciler.ts` |
+| Jobs feature (routes, persist-first complete, replay, repair, `parseCompletedJobOutput`) | `apps/api/src/features/jobs/{routes,service,schema}.ts` |
+| AI capacity gate (interactive reserve) | `apps/api/src/platform/ai-capacity.ts` (see [rate-limiting.md](./rate-limiting.md)) |
+| Cost pricing (read-time) | `apps/api/src/platform/ai-pricing.ts` |
+| Worker loop (claim/execute/heartbeat/usage) | `apps/watcher/src/worker-loop.ts`, `apps/watcher/src/usage.ts` |
+| Runner factory + capability gates | `apps/watcher/src/runners/index.ts`, `apps/watcher/src/capabilities.ts` |
+| Chat / CLI runners + isolation | `apps/watcher/src/runners/{chat,cli}.ts` |
+| Generative loop, repair reshape | `apps/watcher/src/runners/{generative,repair}.ts`, `apps/watcher/src/job-prompts.ts` |
+| Source-grounded agent + workspaces + fetch | `apps/watcher/src/runners/source-agent.ts`, `apps/watcher/src/{source-workspace,source-tools,fetch-url}.ts` |
+| Maintenance / publication / refresh runners | `apps/watcher/src/runners/{maintenance,publication,refresh-flow-snapshot}.ts` |
+| Watcher HTTP client (complete retry) | `apps/watcher/src/http-client.ts` |
+| Source-map store + route | `apps/api/src/features/source-map/routes.ts`, `apps/api/src/stores/{source-map-store,postgres-source-map-store,source-map-consensus}.ts` |
+
+## Tests (behavioural contract)
+
+`packages/jobs/src/{catalog,schemas}.test.ts`,
+`apps/api/src/jobs/{fake-broker,pg-boss-broker,pg-boss-broker.integration,schedule-reconciler}.test.ts`,
+`apps/api/src/features/jobs/{routes,service,fold-dispatch}.test.ts`,
+`apps/watcher/src/{worker-loop,capabilities,config,http-client,usage,job-prompts,source-tools,source-workspace,fetch-url,health-server}.test.ts`,
+`apps/watcher/src/runners/{chat,cli,generative,maintenance,publication,publication-comment,publication-crosslink,refresh-flow-snapshot,repair,source-agent}.test.ts`,
+`apps/api/src/features/source-map/routes.test.ts`,
+`apps/api/src/stores/{source-map-store,postgres-source-map-store}.test.ts`.
+
+## Provenance (design history)
+
+Consolidates, and supersedes as a behavioural description:
+`docs/superpowers/specs/2026-06-19-queue-only-pg-boss-design.md` (the queue-only pg-boss
+model — the API stops running AI inline and watchers claim by capability),
+`2026-06-22-jobs-knowledge-layout-design.md` and `2026-06-22-jobs-separate-panels-design.md`
+(the Jobs console surface),
+`2026-06-23-watcher-git-readiness-and-checkout-design.md` and
+`2026-07-01-watcher-startup-config-validation-design.md` (capability readiness gates and
+watcher startup validation),
+`2026-07-03-local-git-publish-and-watcher-coverage-banner-design.md` (the `local-git`
+publish capability, `publish_proposal` fan-out, and coverage banner),
+`2026-07-06-source-agentic-grounding-design.md` (source-grounded workspaces, the tool loop,
+`mapUpdates`, and `#242` internet fetching),
+`2026-07-15-ai-cost-chart-redesign-design.md` (`#241` usage/identity envelope and read-time
+pricing). The completion re-billing fix (`#161`/`#184`/`#241`), the interactive claim lane
+(`#240`), and the informed-repair contract (`#288d`) are as-built in code (J18–J32) ahead of
+a dedicated design record; the earlier "repair reprompt is out of scope" note is superseded
+(see the J32 drift marker).

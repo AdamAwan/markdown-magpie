@@ -80,8 +80,8 @@ archive — see the migration checklist below.
 
 ## Migration status
 
-Elevating the existing docs into this shape is in progress. `retrieval.md` is the
-reference exemplar; the checklist below tracks the rest.
+The whole doc set has been elevated into the living-spec shape. `retrieval.md` is the
+reference exemplar; the checklist below is the record of that migration.
 
 - [x] Spec index & conventions (this file)
 - [x] `retrieval.md` — exemplar (as-built, code-mapped)
@@ -90,7 +90,7 @@ reference exemplar; the checklist below tracks the rest.
 - [x] `source-sync.md` — consolidated the source-sync design docs (as-built, code-mapped)
 - [x] `flows-and-seeding.md` — consolidated the seeding design docs (as-built, code-mapped)
 - [x] `observability.md` — extracted from `architecture.md` (as-built, code-mapped)
-- [ ] Convert existing living docs (`ingestion`, `ai-jobs`, `api`, `mcp`,
+- [x] Converted the existing living docs (`ingestion`, `ai-jobs`, `api`, `mcp`,
       `authorization`, `rate-limiting`, `questionnaires`, `insights-charts`,
       `threat-model`) to the clause-ID + code-map convention
-- [ ] Slim `architecture.md` to overview + pipeline, delegating detail to subsystem specs
+- [x] Slimmed `architecture.md` to overview + pipeline, delegating detail to subsystem specs
