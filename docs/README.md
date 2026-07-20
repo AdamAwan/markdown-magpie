@@ -85,7 +85,7 @@ reference exemplar; the checklist below tracks the rest.
 
 - [x] Spec index & conventions (this file)
 - [x] `retrieval.md` — exemplar (as-built, code-mapped)
-- [ ] `gaps-and-maintenance.md` — extract from `architecture.md`
+- [x] `gaps-and-maintenance.md` — extracted from `architecture.md` (as-built, code-mapped)
 - [ ] `proposals-and-publishing.md` — extract from `architecture.md`
 - [ ] `source-sync.md` — consolidate the 3 design docs
 - [ ] `flows-and-seeding.md` — consolidate the seeding design docs
