@@ -55,6 +55,15 @@ several subsystems.
   primary question → answer → gap → proposal → publish → verify-closure flow. Delegates
   subsystem detail to the specs below.
 
+### Guides (consuming Magpie)
+
+Task-oriented how-tos for developers building *on top of* a running Magpie, rather than
+subsystem specs of Magpie itself.
+
+- **[integrating-magpie.md](./integrating-magpie.md)** — integrate Magpie into another
+  application (e.g. give a chatbot knowledge): the answer vs. retrieval patterns, over MCP
+  or raw HTTP, with auth and operational notes. Points into the reference specs below.
+
 ### Subsystem specs
 
 | Spec | Subsystem | Primary code |
