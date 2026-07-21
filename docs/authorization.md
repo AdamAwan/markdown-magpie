@@ -143,8 +143,12 @@ in three deliberately-permissive cases.
   removed, disabled, or dropped a non-URL-namespaced claim) and MUST be **denied**
   flow-scoped access — never reclassified as an all-flows service principal, which
   would fail flow-scoping **open**. The event SHOULD be surfaced: `can()` logs a
-  warning via `isRolelessHumanToken` (user-facing scopes but no roles claim while
-  grants are configured) so the IdP misconfiguration is visible rather than silent.
+  warning via `isRolelessHumanToken` — true when grants are configured and the
+  principal has **no roles claim and no client-credentials marker** — so the IdP
+  misconfiguration is visible rather than silent. (Such a token necessarily already
+  cleared the route's scope gate, hence the warning message's "user-facing scopes"
+  framing; the predicate itself tests grants + absent-roles + not-client-credentials,
+  not scopes.)
 
 > **Fail closed, not open.** An earlier design inferred M2M purely from a missing
 > roles claim; if the post-login Action was removed or silently dropped the claim, a
