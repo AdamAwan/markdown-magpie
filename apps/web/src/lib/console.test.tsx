@@ -11,6 +11,7 @@ import {
   jobTransitionMessages,
   pillSummary,
   pendingPublishProposalIds,
+  resolveSelectedJob,
   runPublishProposal,
   sectionSubtitle,
   sectionTitle
@@ -501,4 +502,35 @@ test("anchorProposalSelection falls back to the list head when there is no ancho
   assert.equal(anchorProposalSelection(ids([]), ids(["a", "b"]), undefined), "a");
   assert.equal(anchorProposalSelection(ids(["x"]), ids(["a"]), "unknown-elsewhere"), "a");
   assert.equal(anchorProposalSelection(ids(["a"]), ids([]), "a"), undefined);
+});
+
+test("resolveSelectedJob shows nothing when no job is selected", () => {
+  const jobs = [job({ id: "a" }), job({ id: "b" })];
+  assert.equal(resolveSelectedJob(jobs, undefined, undefined), undefined);
+});
+
+test("resolveSelectedJob tracks the selection through the live jobs list", () => {
+  // The poll re-fetches the list every 4s; the selected job's fresh entry (here
+  // flipped to completed) must be what the detail pane shows, not a stale copy.
+  const jobs = [job({ id: "a", state: "active" }), job({ id: "b", state: "completed" })];
+  assert.equal(resolveSelectedJob(jobs, "a", undefined)?.state, "active");
+  assert.equal(resolveSelectedJob(jobs, "b", undefined)?.id, "b");
+});
+
+test("resolveSelectedJob never reverts to a stale detail from a previous selection", () => {
+  // Regression: the operator has clicked b, but a detail fetched for an earlier
+  // click on a is still around. The pane must stay on b (from the list), never
+  // jump back to a.
+  const jobs = [job({ id: "a" }), job({ id: "b" })];
+  const staleDetail = job({ id: "a" });
+  assert.equal(resolveSelectedJob(jobs, "b", staleDetail)?.id, "b");
+});
+
+test("resolveSelectedJob falls back to the fetched detail only for an off-page selection", () => {
+  // A job older than the loaded page isn't in `jobs`; its fetched detail carries
+  // the pane. A detail for a different id than the selection is ignored.
+  const jobs = [job({ id: "a" }), job({ id: "b" })];
+  const offPageDetail = job({ id: "old" });
+  assert.equal(resolveSelectedJob(jobs, "old", offPageDetail)?.id, "old");
+  assert.equal(resolveSelectedJob(jobs, "old", job({ id: "other" })), undefined);
 });

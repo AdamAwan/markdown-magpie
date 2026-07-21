@@ -56,6 +56,7 @@ import {
   formatJobType,
   isActiveJob,
   jobTransitionMessages,
+  resolveSelectedJob,
   runPublishProposal
 } from "../lib/console";
 import { sectionPath } from "../lib/sections";
@@ -151,7 +152,11 @@ function useConsoleController() {
   const [workers, setWorkers] = useState<WatcherView[]>([]);
   const [uncoveredJobTypes, setUncoveredJobTypes] = useState<JobType[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string | undefined>();
-  const [selectedJob, setSelectedJob] = useState<JobView | undefined>();
+  // The full `/jobs/:id` detail for the current selection, used ONLY as a
+  // fallback when the selected job sits off the loaded jobs page. The pane the
+  // operator actually reads is `selectedJob` below — derived from the live list
+  // so the 4s poll can never revert it to a stale selection.
+  const [selectedJobDetail, setSelectedJobDetail] = useState<JobView | undefined>();
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
   const [maintenanceRuns, setMaintenanceRuns] = useState<MaintenanceRun[]>([]);
@@ -214,6 +219,15 @@ function useConsoleController() {
   const latestJob = useMemo(
     () => [...jobs].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0],
     [jobs]
+  );
+  // The job the Jobs-panel detail pane shows. Derived from the live jobs list
+  // (kept fresh by the 4s poll) rather than a separate copy, so selecting a job
+  // pins the pane to it: the poll refreshes the list, the memo re-derives, and
+  // the pane tracks that job's state changes without ever jumping to a different
+  // one. See resolveSelectedJob for the off-page fallback and stale-detail guard.
+  const selectedJob = useMemo(
+    () => resolveSelectedJob(jobs, selectedJobId, selectedJobDetail),
+    [jobs, selectedJobId, selectedJobDetail]
   );
   const attentionNotices = useMemo(
     () => buildAttentionNotices({ health, jobs, openSection, stats, workers, uncoveredJobTypes }),
@@ -335,7 +349,7 @@ function useConsoleController() {
         jobIds.map((jobId) => apiPost<{ job: JobView }>(`/jobs/${jobId}/accept-failure`, {}))
       );
       const selected = results.find((result) => result.job.id === selectedJobId);
-      if (selected) setSelectedJob(selected.job);
+      if (selected) setSelectedJobDetail(selected.job);
       showMessage(`${jobIds.length} failed job${jobIds.length === 1 ? "" : "s"} accepted.`, "success");
       await refresh();
     } catch (error) {
@@ -344,10 +358,14 @@ function useConsoleController() {
   }
 
   async function selectJob(jobId: string) {
+    // Selecting is instant: `selectedJob` derives from the already-loaded jobs
+    // list, so the pane locks onto the click immediately. The fetch below only
+    // refreshes the off-page detail fallback (a selection older than the loaded
+    // page won't be in the list), and never overwrites a newer selection.
     setSelectedJobId(jobId);
     try {
       const result = await apiGet<{ job: JobView }>(`/jobs/${jobId}`);
-      setSelectedJob(result.job);
+      setSelectedJobDetail(result.job);
     } catch (error) {
       showMessage(errorMessage(error), "danger");
     }
@@ -355,14 +373,14 @@ function useConsoleController() {
 
   function clearSelectedJob() {
     setSelectedJobId(undefined);
-    setSelectedJob(undefined);
+    setSelectedJobDetail(undefined);
   }
 
   async function cancelJob(jobId: string) {
     try {
       const result = await apiPost<{ job: JobView }>(`/jobs/${jobId}/cancel`, {});
       if (selectedJobId === jobId) {
-        setSelectedJob(result.job);
+        setSelectedJobDetail(result.job);
       }
       showMessage("Job cancelled.", "success");
       await refresh();
@@ -375,7 +393,7 @@ function useConsoleController() {
     try {
       const result = await apiPost<{ job: JobView }>(`/jobs/${jobId}/retry`, {});
       if (selectedJobId === jobId) {
-        setSelectedJob(result.job);
+        setSelectedJobDetail(result.job);
       }
       showMessage("Job re-queued for retry.", "success");
       await refresh();
@@ -488,13 +506,9 @@ function useConsoleController() {
         current ? { ...current, job: jobsResult.jobs.find((job) => job.id === current.job.id) ?? current.job } : current
       );
 
-      // Keep the Jobs-panel detail pane current while the operator has a job open.
-      if (selectedJobId) {
-        const fresh = jobsResult.jobs.find((job) => job.id === selectedJobId);
-        if (fresh) {
-          setSelectedJob(fresh);
-        }
-      }
+      // The Jobs-panel detail pane derives from `jobs` (see the selectedJob memo),
+      // so refreshing the list above already re-derives the open job — no stale
+      // imperative copy to keep in sync here.
     } catch (error) {
       // A superseded/aborted refresh raising AbortError is expected — stay quiet.
       if (signal.aborted) {
