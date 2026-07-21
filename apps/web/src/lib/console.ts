@@ -249,6 +249,26 @@ export function isActiveJob(job: JobView): boolean {
   return job.state === "created" || job.state === "retry" || job.state === "active" || job.state === "blocked";
 }
 
+// The job the Jobs-panel detail pane should show, derived from the live jobs
+// list rather than held as a separate copy. When a job is selected we always
+// prefer its entry in the freshly-polled `jobs` list (so the detail tracks state
+// changes automatically), falling back to a separately-fetched detail only when
+// the selection sits off the loaded page. Deriving it this way — instead of an
+// imperative `setSelectedJob` inside the 4s poll — is what keeps the pane pinned
+// to the job the operator clicked: the poll can never revert it to a stale
+// selection, and a leftover `detail` from a previous click is ignored because it
+// no longer matches `selectedJobId`.
+export function resolveSelectedJob(
+  jobs: JobView[],
+  selectedJobId: string | undefined,
+  detail: JobView | undefined
+): JobView | undefined {
+  if (!selectedJobId) {
+    return undefined;
+  }
+  return jobs.find((job) => job.id === selectedJobId) ?? (detail?.id === selectedJobId ? detail : undefined);
+}
+
 export function jobTransitionMessages(previousJobs: JobView[], nextJobs: JobView[]): JobTransitionMessage[] {
   const previousById = new Map(previousJobs.map((job) => [job.id, job]));
 
