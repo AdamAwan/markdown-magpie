@@ -13,14 +13,14 @@
   "dependencies": {
     "@magpie/logger": "file:../logger",
     "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/exporter-metrics-otlp-http": "^0.220.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.220.0",
-    "@opentelemetry/instrumentation-http": "^0.220.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "^0.221.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.221.0",
+    "@opentelemetry/instrumentation-http": "^0.221.0",
     "@opentelemetry/instrumentation-pg": "^0.72.0",
     "@opentelemetry/instrumentation-undici": "^0.30.0",
     "@opentelemetry/resources": "^2.8.0",
     "@opentelemetry/sdk-metrics": "^2.8.0",
-    "@opentelemetry/sdk-node": "^0.220.0",
+    "@opentelemetry/sdk-node": "^0.221.0",
     "@opentelemetry/semantic-conventions": "^1.43.0"
   },
   "devDependencies": {
