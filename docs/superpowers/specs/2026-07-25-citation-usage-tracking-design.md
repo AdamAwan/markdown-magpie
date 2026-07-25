@@ -15,10 +15,13 @@ The data exists in principle — every answer records its citations — but it i
 usable as a usage record:
 
 - `answer_citations` is explicitly **write-only audit data** (see
-  `0008_citation_section_cascade.sql`) and it is keyed on `section_id` with
-  `ON DELETE CASCADE`. Section ids are `"<documentId>:<ordinal>"`, so *any*
-  re-index that inserts or removes a section in a document renumbers the tail and
-  the old rows cascade away. A KB that gets edited loses its own citation history.
+  `0008_citation_section_cascade.sql`), keyed on `section_id` =
+  `"<documentId>:<ordinal>"`, which a re-index renumbers. It fails in both
+  directions: rows **vanish** (the FK cascades, so deleting a document — or
+  shrinking one past a cited ordinal — takes its history with it) and surviving
+  rows silently **re-point** (insert a section above a cited one and the ordinals
+  shift beneath the row, which then claims a different heading, so an aggregate
+  would credit the usage to the wrong section).
 - Deleting a logged question (the privacy scrub) also cascades its citations away.
 
 So a durable, section-identity-keyed usage record is needed alongside the audit

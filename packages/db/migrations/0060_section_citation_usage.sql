@@ -3,10 +3,16 @@
 -- trim of the knowledge base has evidence for what is and is not earning its keep.
 --
 -- Why not just aggregate answer_citations? That table is write-only audit data
--- keyed on section_id (= "<documentId>:<ordinal>") with ON DELETE CASCADE
--- (0008_citation_section_cascade.sql): any re-index that adds or removes a
--- section renumbers its siblings and cascades the old rows away, and the question
--- scrub cascades them too. A KB that gets edited would lose its own usage history.
+-- keyed on section_id (= "<documentId>:<ordinal>"), which a re-index renumbers,
+-- and it fails in BOTH directions:
+--   - Rows vanish. The section_id FK cascades (0008_citation_section_cascade.sql),
+--     so deleting a document — or shrinking one past a cited ordinal — takes its
+--     citation history with it. The question scrub cascades them too.
+--   - Rows silently re-point. Insert a section above a cited one and the ordinals
+--     shift beneath the surviving rows: the citation now claims a DIFFERENT
+--     heading, and an aggregate would credit the usage to the wrong section.
+-- Either way a knowledge base that gets edited cannot answer "what is being used?"
+-- from its own audit trail.
 --
 -- The key is therefore (document_id, anchor) — the same durable section identity
 -- the claim-provenance fold re-anchors against — and there are deliberately NO

@@ -119,10 +119,13 @@ Gaps can also be flagged manually — via the **Knowledge gap** chip in the cons
 
 ## Citation usage
 
-Every answer records its citations, but those rows are **write-only audit data**: they are
-keyed on the section id (`"<documentId>:<ordinal>"`) with `ON DELETE CASCADE`, so any
-re-index that adds or removes a section renumbers its siblings and cascades the history
-away, and the question purge cascades it too. To answer "which parts of the knowledge base
+Every answer records its citations, but those rows are **write-only audit data** keyed on
+the section id (`"<documentId>:<ordinal>"`), which a re-index renumbers — and they fail in
+both directions. Rows *vanish* (the section-id FK cascades, so deleting a document, or
+shrinking one past a cited ordinal, takes its citation history with it — as does the
+question purge), and surviving rows silently *re-point*: insert a section above a cited one
+and the ordinals shift beneath the row, which then claims a different heading. To answer
+"which parts of the knowledge base
 are actually being used?" — the question you need when deciding what to trim — Magpie keeps
 a separate **durable counter** per section (`section_citation_usage`, migration 0060).
 
