@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   AnswerResult,
+  Citation,
   GapCandidate,
   ParkedQuestion,
   QuestionFeedback,
@@ -8,7 +9,8 @@ import type {
   QuestionGapSource,
   QuestionLog,
   QuestionLogInput,
-  QuestionLogUpdateInput
+  QuestionLogUpdateInput,
+  SectionCitationUsage
 } from "@magpie/core";
 import { NO_SOURCE_MATERIAL_GAP_PREFIX } from "@magpie/core";
 
@@ -188,7 +190,40 @@ export interface QuestionLogStore {
   // reconciler to prune resolved gaps out of active clusters, and by the draft
   // path to scope a proposal to a cluster's still-open gaps only.
   listUnresolvedGapIds(gapIds: string[]): Promise<string[]>;
+  // Durable per-section citation usage: how often each knowledge section has been
+  // cited by an answer, keyed on the (documentId, anchor) identity that survives a
+  // re-index (spec 2026-07-25-citation-usage-tracking). Feeds the citation-usage
+  // report, which ranks the knowledge base from least- to most-used so a human can
+  // see what a trim would actually cost. Verification re-asks are excluded — the
+  // system checking its own work is not usage.
+  listSectionCitationUsage(): Promise<SectionCitationUsage[]>;
   reset(): Promise<void>;
+}
+
+// The counted (documentId, anchor) pairs of one answer's citations, deduped. A
+// single answer citing the same section twice (two ordinals sharing an anchor is
+// impossible within a document, but a defensive dedupe keeps the counter honest)
+// counts once — the unit is "a question cited this section", not "a citation row".
+export function citationUsageKeys(citations: readonly Citation[]): Citation[] {
+  const seen = new Set<string>();
+  const unique: Citation[] = [];
+  for (const citation of citations) {
+    const key = `${citation.documentId} ${citation.anchor}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(citation);
+  }
+  return unique;
+}
+
+// Verification re-asks (#154) are the system re-checking a merged document, not
+// somebody using the knowledge base — counting them would let maintenance
+// manufacture usage for the documents it just wrote. Live and questionnaire asks
+// both count.
+export function countsAsCitationUsage(purpose: string | undefined): boolean {
+  return purpose !== "verification";
 }
 
 export class InMemoryQuestionLogStore implements QuestionLogStore {
@@ -723,6 +758,48 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
   async reset(): Promise<void> {
     this.logs.clear();
     this.gapCatalogRevision.clear();
+  }
+
+  // Derived from the logs this store holds rather than from a counter table: with
+  // no re-index to survive (the whole store dies with the process) the aggregate
+  // and its source are the same thing. The Postgres store keeps a durable table
+  // instead — see the class comment there — but both report the same shape and the
+  // same rule: one count per (question, section), verification re-asks excluded.
+  async listSectionCitationUsage(): Promise<SectionCitationUsage[]> {
+    const usage = new Map<string, SectionCitationUsage>();
+    for (const log of this.logs.values()) {
+      if (!countsAsCitationUsage(log.purpose)) {
+        continue;
+      }
+      for (const citation of citationUsageKeys(log.answer?.citations ?? [])) {
+        const key = `${citation.documentId} ${citation.anchor}`;
+        const existing = usage.get(key);
+        if (!existing) {
+          usage.set(key, {
+            documentId: citation.documentId,
+            anchor: citation.anchor,
+            path: citation.path,
+            heading: citation.heading,
+            citationCount: 1,
+            firstCitedAt: log.askedAt,
+            lastCitedAt: log.askedAt
+          });
+          continue;
+        }
+        existing.citationCount += 1;
+        if (log.askedAt < existing.firstCitedAt) {
+          existing.firstCitedAt = log.askedAt;
+        }
+        if (log.askedAt > existing.lastCitedAt) {
+          // The labels track the most recent citation, matching the Postgres
+          // upsert: a renamed path/heading shows as it was last seen.
+          existing.lastCitedAt = log.askedAt;
+          existing.path = citation.path;
+          existing.heading = citation.heading;
+        }
+      }
+    }
+    return [...usage.values()];
   }
 
   async listGapCandidates(limit: number): Promise<GapCandidate[]> {

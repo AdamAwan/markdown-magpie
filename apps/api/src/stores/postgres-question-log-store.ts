@@ -11,10 +11,13 @@ import type {
   QuestionGapSource,
   QuestionLog,
   QuestionLogInput,
-  QuestionLogUpdateInput
+  QuestionLogUpdateInput,
+  SectionCitationUsage
 } from "@magpie/core";
 import {
   answerGapsUnchanged,
+  citationUsageKeys,
+  countsAsCitationUsage,
   gapSummaryKey,
   isSeedableGapSummary,
   type QuestionLogStore
@@ -186,7 +189,13 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         await bumpGapCatalog(client, input.flowId ?? null);
       }
 
-      await insertCitationRows(client, id, input.answer?.citations ?? [], { onConflictUpdate: true });
+      const citations = input.answer?.citations ?? [];
+      // A fresh row has no prior citations, so the "already cited" set is empty —
+      // every cited section counts once. record() is only re-entered for a new id.
+      if (countsAsCitationUsage(input.purpose)) {
+        await bumpSectionCitationUsage(client, citations, new Set());
+      }
+      await insertCitationRows(client, id, citations, { onConflictUpdate: true });
 
       await client.query("COMMIT");
     } catch (error) {
@@ -328,6 +337,13 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         await insertGapRows(client, id, nextGapRows);
         // The candidate set changed, so advance the revision for the reconciler.
         await bumpGapCatalog(client, flowId);
+      }
+      // Count the durable usage BEFORE the rewrite, against the pairs this
+      // question was already citing, so a replayed or repaired completion that
+      // re-answers with the same citations adds nothing (#spec
+      // 2026-07-25-citation-usage-tracking).
+      if (countsAsCitationUsage(existing.purpose)) {
+        await bumpSectionCitationUsage(client, input.answer.citations, await citedSectionKeys(client, id));
       }
       await client.query("DELETE FROM answer_citations WHERE question_id = $1", [id]);
 
@@ -872,11 +888,44 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     }
   }
 
+  // Durable per-section citation usage. Read from its own table rather than
+  // aggregated from answer_citations: those rows cascade away with their section
+  // on re-index (0008) and with their question on a scrub, so they cannot carry a
+  // usage history. Rows here outlive both, which is the point — a section that was
+  // cited 40 times and then deleted must still show up in the report.
+  async listSectionCitationUsage(): Promise<SectionCitationUsage[]> {
+    const result = await this.pool.query<{
+      document_id: string;
+      anchor: string;
+      path: string;
+      heading: string;
+      citation_count: number;
+      first_cited_at: Date;
+      last_cited_at: Date;
+    }>(
+      `SELECT document_id, anchor, path, heading, citation_count, first_cited_at, last_cited_at
+       FROM section_citation_usage`
+    );
+    return result.rows.map((row) => ({
+      documentId: row.document_id,
+      anchor: row.anchor,
+      path: row.path,
+      heading: row.heading,
+      citationCount: Number(row.citation_count),
+      firstCitedAt: row.first_cited_at.toISOString(),
+      lastCitedAt: row.last_cited_at.toISOString()
+    }));
+  }
+
   async reset(): Promise<void> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       await client.query("DELETE FROM answer_citations");
+      // The admin reset wipes the question history the counters were derived
+      // from, so the counters go with it — durability is against a re-index and a
+      // scrub, not against "erase everything".
+      await client.query("DELETE FROM section_citation_usage");
       await client.query("DELETE FROM question_gaps");
       await client.query("DELETE FROM questions");
       await client.query("COMMIT");
@@ -1019,6 +1068,71 @@ async function insertCitationRows(
       citation.excerpt
     ])
   );
+}
+
+// Bumps the durable per-section citation counters for the sections this question
+// is citing for the FIRST time (spec 2026-07-25-citation-usage-tracking). Runs in
+// the same transaction as the answer_citations rewrite, and takes the pairs the
+// question was ALREADY citing so the increment is a delta:
+//
+//   - a re-answer with identical citations counts nothing (job repair and the
+//     idempotent completion replay both re-run this path),
+//   - a re-answer that cites something new counts only the new sections.
+//
+// The unit is "a distinct question cited this section", keyed on the durable
+// (document_id, anchor) identity — never section_id, which a re-index renumbers.
+// path/heading refresh on every increment so a row stays readable after its
+// section leaves the index.
+async function bumpSectionCitationUsage(
+  client: pg.PoolClient,
+  citations: Citation[],
+  alreadyCited: ReadonlySet<string>
+): Promise<void> {
+  const fresh = citationUsageKeys(citations).filter(
+    (citation) => !alreadyCited.has(citationUsageKey(citation.documentId, citation.anchor))
+  );
+  if (fresh.length === 0) {
+    return;
+  }
+
+  await client.query(
+    `
+      INSERT INTO section_citation_usage (
+        document_id, anchor, path, heading, citation_count, first_cited_at, last_cited_at
+      )
+      VALUES ${valuesClause(fresh.length, 4, ["1", "now()", "now()"])}
+      ON CONFLICT (document_id, anchor) DO UPDATE
+      SET citation_count = section_citation_usage.citation_count + 1,
+          last_cited_at = now(),
+          path = EXCLUDED.path,
+          heading = EXCLUDED.heading
+    `,
+    fresh.flatMap((citation) => [citation.documentId, citation.anchor, citation.path, citation.heading])
+  );
+}
+
+// The (document_id, anchor) pairs a question is already recorded as citing. Read
+// inside the transaction, BEFORE the citation rows are rewritten, so
+// bumpSectionCitationUsage can count only what is genuinely new.
+async function citedSectionKeys(client: pg.PoolClient, questionId: string): Promise<Set<string>> {
+  const result = await client.query<{ document_id: string | null; anchor: string | null }>(
+    "SELECT document_id, anchor FROM answer_citations WHERE question_id = $1",
+    [questionId]
+  );
+  const keys = new Set<string>();
+  for (const row of result.rows) {
+    // document_id/anchor are nullable (added by 0002 to a pre-existing table);
+    // a legacy row without them cannot be matched, so it simply doesn't suppress
+    // a count.
+    if (row.document_id && row.anchor) {
+      keys.add(citationUsageKey(row.document_id, row.anchor));
+    }
+  }
+  return keys;
+}
+
+function citationUsageKey(documentId: string, anchor: string): string {
+  return `${documentId} ${anchor}`;
 }
 
 // Advances the monotonic gap-catalog revision for one flow ('' is the

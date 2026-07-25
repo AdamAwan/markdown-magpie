@@ -1006,3 +1006,148 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.equal(manual?.summary, standalone, "the manual gap seeds from the condensed standalone form");
   });
 });
+
+// --- durable per-section citation usage (spec 2026-07-25-citation-usage-tracking) ---
+
+describe(
+  "PostgresQuestionLogStore section citation usage",
+  { skip: databaseUrl ? false : "DATABASE_URL not set" },
+  () => {
+    const pool = makeTestPool(databaseUrl as string);
+    const store = new PostgresQuestionLogStore(pool);
+
+    // A citation row is FK'd to document_sections, so usage tests need a real
+    // repository → document → sections chain to cite.
+    async function seedDocument(documentId: string, anchors: string[]): Promise<void> {
+      const repositoryId = `${documentId}-repo`;
+      await pool.query(
+        `INSERT INTO repositories (id, name, default_branch, local_path, provider)
+       VALUES ($1, 'usage-test', 'main', '/tmp/usage-test', 'local') ON CONFLICT (id) DO NOTHING`,
+        [repositoryId]
+      );
+      await pool.query(
+        `INSERT INTO documents (id, repository_id, path, title, content)
+       VALUES ($1, $2, 'guide.md', 'Guide', '#') ON CONFLICT (id) DO NOTHING`,
+        [documentId, repositoryId]
+      );
+      for (const [ordinal, anchor] of anchors.entries()) {
+        await pool.query(
+          `INSERT INTO document_sections (id, document_id, path, heading, heading_path, anchor, ordinal, content)
+         VALUES ($1, $2, 'guide.md', $3, ARRAY[$3], $3, $4, 'body') ON CONFLICT (id) DO NOTHING`,
+          [`${documentId}:${ordinal}`, documentId, anchor, ordinal]
+        );
+      }
+    }
+
+    function answerCiting(documentId: string, anchors: string[]): AnswerResult {
+      return {
+        answer: "Set FOO=1.",
+        confidence: "high",
+        citations: anchors.map((anchor, ordinal) => ({
+          documentId,
+          sectionId: `${documentId}:${ordinal}`,
+          path: "guide.md",
+          heading: anchor,
+          anchor,
+          excerpt: "…",
+          relevance: 0.9
+        })),
+        gaps: []
+      };
+    }
+
+    async function usageFor(documentId: string): Promise<Array<[string, number]>> {
+      const rows = await store.listSectionCitationUsage();
+      return rows
+        .filter((row) => row.documentId === documentId)
+        .sort((left, right) => left.anchor.localeCompare(right.anchor))
+        .map((row) => [row.anchor, row.citationCount]);
+    }
+
+    it("counts each (question, section) once and survives a re-index that drops the cited sections", async () => {
+      const documentId = `usage-doc-${randomUUID()}`;
+      await seedDocument(documentId, ["setup", "faq"]);
+
+      const first = await store.record({
+        question: `usage-a-${randomUUID()}`,
+        chatProvider: "codex",
+        retrievedSectionIds: []
+      });
+      await store.updateAnswer(first.id, { answer: answerCiting(documentId, ["setup", "faq"]) });
+      assert.deepEqual(await usageFor(documentId), [
+        ["faq", 1],
+        ["setup", 1]
+      ]);
+
+      // A replayed/repaired completion re-answers the same question with the same
+      // citations: the delta is empty, so nothing is counted twice.
+      await store.updateAnswer(first.id, { answer: answerCiting(documentId, ["setup", "faq"]) });
+      assert.deepEqual(await usageFor(documentId), [
+        ["faq", 1],
+        ["setup", 1]
+      ]);
+
+      const second = await store.record({
+        question: `usage-b-${randomUUID()}`,
+        chatProvider: "codex",
+        retrievedSectionIds: []
+      });
+      await store.updateAnswer(second.id, { answer: answerCiting(documentId, ["setup"]) });
+      assert.deepEqual(await usageFor(documentId), [
+        ["faq", 1],
+        ["setup", 2]
+      ]);
+
+      // The point of the durable table: a re-index replaces the document's sections,
+      // cascading answer_citations away (0008). The usage record must not go with it.
+      await pool.query("DELETE FROM document_sections WHERE document_id = $1", [documentId]);
+      assert.equal(
+        (await pool.query("SELECT 1 FROM answer_citations WHERE question_id = $1", [first.id])).rowCount,
+        0,
+        "the audit rows cascade away with their sections"
+      );
+      assert.deepEqual(await usageFor(documentId), [
+        ["faq", 1],
+        ["setup", 2]
+      ]);
+
+      // Same for a scrubbed question: usage holds no question ids, so it is
+      // unaffected by the purge.
+      await store.delete(first.id);
+      await store.delete(second.id);
+      assert.deepEqual(await usageFor(documentId), [
+        ["faq", 1],
+        ["setup", 2]
+      ]);
+    });
+
+    it("does not count verification re-asks", async () => {
+      const documentId = `usage-verify-doc-${randomUUID()}`;
+      await seedDocument(documentId, ["setup"]);
+
+      const reask = await store.record({
+        question: `usage-verify-${randomUUID()}`,
+        chatProvider: "codex",
+        retrievedSectionIds: [],
+        purpose: "verification"
+      });
+      await store.updateAnswer(reask.id, { answer: answerCiting(documentId, ["setup"]) });
+
+      assert.deepEqual(await usageFor(documentId), [], "maintenance cannot manufacture usage for what it wrote");
+    });
+
+    it("counts citations supplied at record() time", async () => {
+      const documentId = `usage-record-doc-${randomUUID()}`;
+      await seedDocument(documentId, ["setup"]);
+
+      await store.record({
+        question: `usage-record-${randomUUID()}`,
+        chatProvider: "codex",
+        retrievedSectionIds: [],
+        answer: answerCiting(documentId, ["setup"])
+      });
+
+      assert.deepEqual(await usageFor(documentId), [["setup", 1]]);
+    });
+  }
+);

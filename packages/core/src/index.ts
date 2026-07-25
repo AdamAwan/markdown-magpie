@@ -79,6 +79,24 @@ export interface Citation {
   relevance: number;
 }
 
+// How often one knowledge section has been cited by an answer, keyed on the
+// durable (documentId, anchor) section identity rather than the ordinal-derived
+// sectionId (which a re-index renumbers). Aggregate only — it holds no question
+// ids and no question text — so it survives both a re-index and a question scrub,
+// and answers "what is this knowledge base actually using?" when trimming it.
+export interface SectionCitationUsage {
+  documentId: string;
+  anchor: string;
+  /** Latest observed document path for the section — display only. */
+  path: string;
+  /** Latest observed heading for the section — display only. */
+  heading: string;
+  /** Distinct answered questions that have cited this section. */
+  citationCount: number;
+  firstCitedAt: string;
+  lastCitedAt: string;
+}
+
 // When the router cannot decide which flow a question belongs to (and the caller
 // asked for "auto" rather than naming a flow), the answer is withheld and the
 // caller is asked to pick one of these flows and re-ask. Carried on the answer

@@ -741,6 +741,15 @@ export class InMemoryKnowledgeIndex {
     return this.sections.get(id);
   }
 
+  // Every indexed section, ordered (path, ordinal). The citation-usage report
+  // joins this against the durable usage counters so a section that has NEVER
+  // been cited still appears — the absence of a counter row is the finding.
+  listSections(): DocumentSection[] {
+    return [...this.sections.values()].sort(
+      (left, right) => left.path.localeCompare(right.path) || left.ordinal - right.ordinal
+    );
+  }
+
   listRepositories(options?: { limit?: number; offset?: number }): RepositoryRef[] {
     const sorted = [...this.repositories.values()].sort((left, right) => left.name.localeCompare(right.name));
     return paginate(sorted, options);

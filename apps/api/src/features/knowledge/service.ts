@@ -1,6 +1,7 @@
 import type { DocumentSection } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import { resolveIndexSelection } from "../../platform/repositories.js";
+import { buildCitationUsageReport, type CitationUsageOptions, type CitationUsageReport } from "./citation-usage.js";
 
 export function knowledgeRepositoryErrorCode(message: string): string {
   if (message === "local_path_required") {
@@ -97,6 +98,22 @@ export function listDocuments(
     documents: ctx.stores.knowledgeIndex.listDocuments(pagination),
     total: ctx.stores.knowledgeIndex.countDocuments()
   };
+}
+
+// The citation-usage report: the durable per-section citation counters joined
+// against the live index, so never-cited sections show up as the zeroes they are
+// (spec 2026-07-25-citation-usage-tracking). Read-only — nothing acts on it; it
+// exists so a human trimming the knowledge base can see what a cut would cost.
+export async function citationUsage(ctx: AppContext, options: CitationUsageOptions): Promise<CitationUsageReport> {
+  const usage = await ctx.stores.questionLogs.listSectionCitationUsage();
+  return buildCitationUsageReport(
+    {
+      documents: ctx.stores.knowledgeIndex.listDocuments(),
+      sections: ctx.stores.knowledgeIndex.listSections(),
+      usage
+    },
+    options
+  );
 }
 
 export function stats(ctx: AppContext): ReturnType<AppContext["stores"]["knowledgeIndex"]["getStats"]> {
