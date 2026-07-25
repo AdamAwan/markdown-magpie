@@ -135,6 +135,11 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
    `followup` (confident answer, empty follow-up search), `manual` (flagged), and
    `verification` (merged proposal failed to close). Verification re-asks are tagged
    `purpose: "verification"` so they never become gap candidates (`docs/question-logging.md`).
+   Citations also bump a **durable per-section usage counter** (`section_citation_usage`,
+   migration 0060) keyed on `(documentId, anchor)` — `answer_citations` cascades away on
+   re-index, so it cannot carry a usage history. One count per (question, section),
+   verification re-asks excluded; surfaced by `GET /api/knowledge/citation-usage` and the
+   console's Knowledge → Citation usage panel so a KB trim has evidence behind it.
 6. **Gap clustering** — two phases. Phase 1 is **embedding bucketing** (#216): each gap
    summary is embedded and assigned, within its flow, to the nearest cluster whose stored
    centroid clears `GAP_CLUSTER_ASSIGN_THRESHOLD` (default 0.84 — deliberately
@@ -363,7 +368,7 @@ apps/
 packages/
   core/       Shared domain types + provider interfaces (incl. ProvenanceClaim).
   auth/       Auth0 token validation + on-behalf-of helpers.
-  db/         SQL migrations (0001–0055; see the write-a-migration skill).
+  db/         SQL migrations (0001–0060; see the write-a-migration skill).
   git/        Git sync + PR adapters: ensureGitCheckout (blobless partial clones),
               PR status/mergeability polling, LocalGitProposalPublisher, checkout locks.
   jobs/       Job contracts: JOB_TYPES, capabilities, input/output schemas, queue

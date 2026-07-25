@@ -18,7 +18,8 @@ Each question log records:
 - Retrieved section IDs.
 - Flow the question was routed to, when known.
 - Answer result.
-- Citations.
+- Citations. Each one also bumps a durable per-section usage counter — see
+  [Citation usage](#citation-usage).
 - Gaps, when present. A single question can record several gaps — each
   distinct unanswered topic is its own gap, tagged `auto` (a whole-question miss
   detected during answer synthesis), `followup` (supporting material a confident
@@ -115,6 +116,39 @@ base does not cover X" rather than fabricate. Several layers enforce this:
 The model can also mark an answer **out of scope**: when the question is unrelated to the picked flow's subject area — e.g. a question about cats asked of a product flow — it sets `outOfScope`, and the answer is returned at `unknown` confidence with **no gaps at all**. This is distinct from `isKnowledgeGap` ("this flow *should* cover the topic but the docs don't"): an off-topic question is not a gap, so it never clusters or drafts a proposal. The out-of-scope signal rides on the answer result (`outOfScope`) so the console and MCP can surface it distinctly from a low-confidence answer. This is the picked flow's counterpart to the router's `flowSelectionRequired` abstain, which fires earlier when no flow can be chosen at all.
 
 Gaps can also be flagged manually — via the **Knowledge gap** chip in the console, or the MCP `kb_feedback` tool — when the system fails to detect one automatically. A manual flag is separate from helpful/unhelpful feedback (an answer can be helpful and still expose a gap), and a manually-flagged question joins the same gap-candidate clustering and proposal workflow regardless of its answer confidence. Manual flagging adds a `manual` gap (its summary falls back to the question text) alongside any auto-detected gaps; clearing the flag removes only the manual gap and leaves auto-detected gaps intact.
+
+## Citation usage
+
+Every answer records its citations, but those rows are **write-only audit data**: they are
+keyed on the section id (`"<documentId>:<ordinal>"`) with `ON DELETE CASCADE`, so any
+re-index that adds or removes a section renumbers its siblings and cascades the history
+away, and the question purge cascades it too. To answer "which parts of the knowledge base
+are actually being used?" — the question you need when deciding what to trim — Magpie keeps
+a separate **durable counter** per section (`section_citation_usage`, migration 0060).
+
+- **Key.** `(documentId, anchor)` — the same durable section identity the claim-provenance
+  fold re-anchors against, rather than the ordinal-derived section id. A renamed heading or
+  a moved file starts a new counter, because the cited passage's identity genuinely changed.
+- **Unit.** One count per **(question, section)** pair, applied when the answer's citations
+  are recorded. Re-answering a question (the job-repair path, the idempotent completion
+  replay) counts only the sections it was not already citing, so a replay adds nothing and a
+  re-answer that cites something new counts only the new sections.
+- **What counts.** `live` and `questionnaire` asks. **`verification` re-asks do not** — the
+  system re-checking its own merge must not manufacture usage for the document it just
+  wrote. Verbatim questionnaire reuse mints no question, so it does not increment either;
+  the basis item's original ask was already counted.
+- **No decrements.** A section that stopped being cited keeps its count and ages out via
+  `lastCitedAt`. "Used 40 times, last in January" is the trim signal.
+- **Aggregate only.** The counters hold no question ids and no question text, so the
+  sensitive-info purge has nothing to purge here and the record survives it. The admin
+  reset does clear them, along with the history they came from.
+
+`GET /api/knowledge/citation-usage` joins the counters against the live index so
+never-cited sections appear as the zeroes they are, ranks least-used first, and keeps
+counters whose section is gone (flagged `indexed: false` — "we deleted something people
+were using" is a finding, not noise). The console renders it as the **Citation usage**
+panel on the Knowledge page, at section or document granularity. Nothing acts on these
+numbers: they inform a human decision, they do not drive one.
 
 ## Unhelpful feedback on a confident answer
 

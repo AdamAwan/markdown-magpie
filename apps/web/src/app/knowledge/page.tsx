@@ -1,5 +1,6 @@
 "use client";
 
+import { CitationUsagePanel } from "../../components/CitationUsagePanel";
 import { useConsole } from "../../components/ConsoleProvider";
 import { FlowsPanel, RepositoryContextPanel } from "../../components/KnowledgePanel";
 import { Badge, Surface, Workbench } from "../../components/ui";
@@ -42,6 +43,7 @@ export default function KnowledgePage() {
           />
         </Surface.Body>
       </Surface>
+      <CitationUsagePanel />
       <RepositoryContextPanel repositories={repositories} />
     </Workbench>
   );

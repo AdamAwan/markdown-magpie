@@ -123,3 +123,69 @@ test("GET /api/knowledge/repositories paginates and reports the unpaginated tota
   assert.equal(body.repositories.length, 2);
   assert.equal(body.total, 3);
 });
+
+// --- citation usage (spec 2026-07-25-citation-usage-tracking) ---
+
+test("GET /api/knowledge/citation-usage ranks least-used first and marks never-cited sections", async () => {
+  const ctx = makeTestContext();
+  await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
+    repositoryId: "kb",
+    documents: [
+      { path: "busy.md", content: "# Busy\n\nBody." },
+      { path: "cold.md", content: "# Cold\n\nBody." }
+    ]
+  });
+  const busy = ctx.stores.knowledgeIndex.listSections().find((section) => section.path === "busy.md");
+  assert.ok(busy, "the indexed section to cite");
+
+  const log = await ctx.stores.questionLogs.record({
+    question: "how do I do the busy thing?",
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
+  await ctx.stores.questionLogs.updateAnswer(log.id, {
+    answer: {
+      answer: "Like this.",
+      confidence: "high",
+      citations: [
+        {
+          documentId: busy.documentId,
+          sectionId: busy.id,
+          path: busy.path,
+          heading: busy.heading,
+          anchor: busy.anchor,
+          excerpt: "…",
+          relevance: 0.9
+        }
+      ]
+    }
+  });
+
+  const res = await buildApp(ctx).request("/api/knowledge/citation-usage?group=document");
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    summary: { indexedDocuments: number; uncitedDocuments: number; totalCitations: number };
+    rows: Array<{ path: string; citationCount: number; indexed: boolean }>;
+    total: number;
+  };
+
+  assert.deepEqual(
+    body.rows.map((row) => [row.path, row.citationCount]),
+    [
+      ["cold.md", 0],
+      ["busy.md", 1]
+    ],
+    "never-cited documents lead the trim ranking"
+  );
+  assert.equal(body.summary.indexedDocuments, 2);
+  assert.equal(body.summary.uncitedDocuments, 1);
+  assert.equal(body.summary.totalCitations, 1);
+  assert.equal(body.total, 2);
+});
+
+test("GET /api/knowledge/citation-usage rejects an unknown group or sort", async () => {
+  const app = buildApp(makeTestContext());
+
+  assert.equal((await app.request("/api/knowledge/citation-usage?group=flow")).status, 400);
+  assert.equal((await app.request("/api/knowledge/citation-usage?sort=random")).status, 400);
+});

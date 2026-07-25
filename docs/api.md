@@ -386,6 +386,44 @@ Index counts.
 { "repositoryCount": 1, "documentCount": 12, "sectionCount": 84 }
 ```
 
+### `GET /api/knowledge/citation-usage`
+
+How often each part of the knowledge base has actually been cited by an answer, so a
+knowledge-base trim has evidence behind it. See
+[question-logging.md](question-logging.md#citation-usage) for what counts as a use.
+
+| query | default | meaning |
+| --- | --- | --- |
+| `group` | `section` | `section` or `document`. The document rollup is the trim unit — files are what get deleted. |
+| `sort` | `least` | `least` (never-cited first, then coldest), `most`, or `recent`. |
+| `limit` / `offset` | `50` / `0` | Page over the ranked set; `total` is the unpaginated count. |
+| `repositoryId` | — | Narrow to one indexed destination. |
+
+- `400 invalid_group` / `400 invalid_sort` — unrecognised value.
+- `200` —
+
+```json
+{
+  "summary": {
+    "indexedSections": 84, "citedSections": 31, "uncitedSections": 53,
+    "indexedDocuments": 12, "citedDocuments": 7, "uncitedDocuments": 5,
+    "totalCitations": 96, "unindexedUsageRows": 2
+  },
+  "rows": [
+    { "key": "kb:onboarding.md", "documentId": "kb:onboarding.md", "path": "onboarding.md",
+      "label": "Onboarding", "citationCount": 0, "indexed": true,
+      "citedSectionCount": 0, "sectionCount": 6 }
+  ],
+  "total": 12
+}
+```
+
+A row's `citationCount` counts distinct questions, not answer writes. `indexed: false`
+marks a counter whose section is no longer in the index — a renamed heading, or cited
+content that has since been removed; `unindexedUsageRows` totals them. Section rows carry
+`anchor` and the section heading as `label`; document rows carry `citedSectionCount` /
+`sectionCount` and the document title.
+
 ## Questions & Gaps
 
 See [question-logging.md](question-logging.md) for the recorded fields and lifecycle, and
