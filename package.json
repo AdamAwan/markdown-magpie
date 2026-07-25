@@ -58,7 +58,10 @@
     "*": "prettier --ignore-unknown --write"
   },
   "overrides": {
-    "postcss": "^8.5.10"
+    "@hono/node-server": "^2.0.11",
+    "minimatch": "^10.0.3",
+    "postcss": "^8.5.18",
+    "sharp": "^0.35.0"
   },
   "engines": {
     "node": ">=22.13"
