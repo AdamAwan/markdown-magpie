@@ -249,6 +249,42 @@ export interface KnowledgeRepositoriesResponse {
   total: number;
 }
 
+// `/knowledge/citation-usage` — how often each section (or document) has been
+// cited by an answer, ranked least-used first, so a knowledge-base trim has
+// evidence behind it. A row with citationCount 0 has never been cited; a row with
+// `indexed: false` is a counter whose section is no longer in the index (a renamed
+// heading, or something deleted that people were using).
+export interface CitationUsageRow {
+  key: string;
+  documentId: string;
+  anchor?: string;
+  path: string;
+  label: string;
+  citationCount: number;
+  firstCitedAt?: string;
+  lastCitedAt?: string;
+  indexed: boolean;
+  citedSectionCount?: number;
+  sectionCount?: number;
+}
+
+export interface CitationUsageSummary {
+  indexedSections: number;
+  citedSections: number;
+  uncitedSections: number;
+  indexedDocuments: number;
+  citedDocuments: number;
+  uncitedDocuments: number;
+  totalCitations: number;
+  unindexedUsageRows: number;
+}
+
+export interface CitationUsageResponse {
+  summary: CitationUsageSummary;
+  rows: CitationUsageRow[];
+  total: number;
+}
+
 // The scheduled-task list response enriches the stored settings with the next
 // run time from the reconciled pg-boss schedule. `lastRunAt`/`runningSince` are
 // gone server-side (no API tick loop maintains them), so they are not modelled.

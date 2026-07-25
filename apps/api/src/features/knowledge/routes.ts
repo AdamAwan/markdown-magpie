@@ -45,6 +45,30 @@ export function knowledgeRoutes(ctx: AppContext): Hono {
 
   app.get("/stats", requireScopes("read:knowledge"), (c) => c.json(knowledgeService.stats(ctx)));
 
+  // Citation-usage report — how often each section/document has been cited by an
+  // answer, ranked least-used first by default so a knowledge-base trim has
+  // evidence behind it. Read-only; nothing acts on these numbers.
+  app.get("/citation-usage", requireScopes("read:knowledge"), async (c) => {
+    const group = c.req.query("group") ?? "section";
+    const sort = c.req.query("sort") ?? "least";
+    if (group !== "section" && group !== "document") {
+      throw new HttpError(400, "invalid_group");
+    }
+    if (sort !== "least" && sort !== "most" && sort !== "recent") {
+      throw new HttpError(400, "invalid_sort");
+    }
+
+    return c.json(
+      await knowledgeService.citationUsage(ctx, {
+        group,
+        sort,
+        limit: parseLimit(c.req.query("limit") ?? null, 50),
+        offset: parseOffset(c.req.query("offset") ?? null),
+        ...(c.req.query("repositoryId") ? { repositoryId: c.req.query("repositoryId") } : {})
+      })
+    );
+  });
+
   app.get("/flows", requireScopes("read:knowledge"), (c) => c.json({ flows: knowledgeService.listFlows(ctx) }));
 
   app.get("/search", requireScopes("read:knowledge"), async (c) => {

@@ -1085,3 +1085,89 @@ test("an 'unhelpful' feedback gap on a follow-up falls back to the condensed sta
   const feedbackGap = (rated?.gaps ?? []).find((gap) => gap.source === "feedback");
   assert.equal(feedbackGap?.summary, "What is the data retention policy for the EU region?");
 });
+
+// --- durable per-section citation usage (spec 2026-07-25-citation-usage-tracking) ---
+
+function citedAnswer(sections: Array<{ anchor: string; heading?: string }>): AnswerResult {
+  return {
+    answer: "Set FOO=1.",
+    confidence: "high",
+    citations: sections.map(({ anchor, heading }, index) => ({
+      documentId: "kb:guide.md",
+      sectionId: `kb:guide.md:${index}`,
+      path: "guide.md",
+      heading: heading ?? anchor,
+      anchor,
+      excerpt: "…",
+      relevance: 0.9
+    })),
+    gaps: []
+  };
+}
+
+test("citation usage counts one per (question, section) and tracks first/last citation", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const first = await store.record({ question: "a?", chatProvider: "codex", retrievedSectionIds: [] });
+  await store.updateAnswer(first.id, { answer: citedAnswer([{ anchor: "setup" }, { anchor: "faq" }]) });
+  const second = await store.record({ question: "b?", chatProvider: "codex", retrievedSectionIds: [] });
+  await store.updateAnswer(second.id, { answer: citedAnswer([{ anchor: "setup" }]) });
+
+  const usage = (await store.listSectionCitationUsage()).sort((left, right) => left.anchor.localeCompare(right.anchor));
+
+  assert.deepEqual(
+    usage.map((row) => [row.anchor, row.citationCount]),
+    [
+      ["faq", 1],
+      ["setup", 2]
+    ]
+  );
+  const setup = usage.find((row) => row.anchor === "setup");
+  assert.ok(setup && setup.firstCitedAt <= setup.lastCitedAt);
+});
+
+test("re-answering the same question does not double-count its citations", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({ question: "a?", chatProvider: "codex", retrievedSectionIds: [] });
+  await store.updateAnswer(log.id, { answer: citedAnswer([{ anchor: "setup" }]) });
+  await store.updateAnswer(log.id, { answer: citedAnswer([{ anchor: "setup" }]) });
+
+  const usage = await store.listSectionCitationUsage();
+  assert.deepEqual(
+    usage.map((row) => [row.anchor, row.citationCount]),
+    [["setup", 1]],
+    "the unit is a question citing a section, not an answer write"
+  );
+});
+
+test("verification re-asks never count as citation usage", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const reask = await store.record({
+    question: "did the merge close it?",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    purpose: "verification"
+  });
+  await store.updateAnswer(reask.id, { answer: citedAnswer([{ anchor: "setup" }]) });
+
+  assert.deepEqual(
+    await store.listSectionCitationUsage(),
+    [],
+    "the system re-checking its own merge must not manufacture usage"
+  );
+});
+
+test("questionnaire asks count as citation usage", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const item = await store.record({
+    question: "Do you encrypt at rest?",
+    chatProvider: "codex",
+    retrievedSectionIds: [],
+    purpose: "questionnaire"
+  });
+  await store.updateAnswer(item.id, { answer: citedAnswer([{ anchor: "encryption" }]) });
+
+  assert.deepEqual(
+    (await store.listSectionCitationUsage()).map((row) => [row.anchor, row.citationCount]),
+    [["encryption", 1]]
+  );
+});
