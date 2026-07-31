@@ -101,3 +101,29 @@ test("approve endpoints enforce answered-state; export streams markdown and csv"
   const bad = await app.request(`/api/questionnaires/${questionnaire.id}/export?format=xlsx`);
   assert.equal(bad.status, 400);
 });
+
+test("POST /api/questionnaires accepts and echoes an answering direction", async () => {
+  const ctx = flowContext();
+  const app = buildApp(ctx);
+  const res = await createRequest(app, {
+    name: "Directed",
+    flowId: "security",
+    questions: ["Where is data stored?"],
+    direction: "Where ambiguous, assume the company and not the product."
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { questionnaire: Questionnaire };
+  assert.equal(body.questionnaire.direction, "Where ambiguous, assume the company and not the product.");
+});
+
+test("POST /api/questionnaires rejects an over-long direction", async () => {
+  const ctx = flowContext();
+  const app = buildApp(ctx);
+  const res = await createRequest(app, {
+    name: "Directed",
+    flowId: "security",
+    questions: ["q"],
+    direction: "x".repeat(2001)
+  });
+  assert.equal(res.status, 400);
+});
