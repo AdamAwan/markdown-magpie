@@ -1,5 +1,11 @@
 import type { DocumentMetadata, DocumentSection, KnowledgeDocument } from "@magpie/core";
 export { findAdvisoryHeadings } from "./advisory.js";
+export {
+  hasConflictMarker,
+  insertConflictMarker,
+  stripConflictMarker,
+  type ConflictMarkerArgs
+} from "./conflict-marker.js";
 
 export interface ParsedMarkdown {
   metadata: DocumentMetadata;
