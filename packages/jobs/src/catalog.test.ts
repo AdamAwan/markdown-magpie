@@ -21,7 +21,8 @@ import {
   jobTypesWithoutCapabilities,
   queueNameForJob,
   queueNamesForCapabilities,
-  verifyDocumentInputSchema
+  verifyDocumentInputSchema,
+  verifyDocumentOutputSchema
 } from "./index.js";
 
 const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
@@ -34,7 +35,6 @@ const EXPIRATION_SECONDS = {
   draft_seed_document: 15 * 60,
   outline_flow_seed: 10 * 60,
   revise_seed_plan: 10 * 60,
-  detect_contradiction: 10 * 60,
   suggest_consolidation: 10 * 60,
   reconcile_gap_clusters: 5 * 60,
   sync_source_changes_generate_plan: 60 * 60,
@@ -125,7 +125,6 @@ test("repairable is exactly the reshape-style provider set (#288d)", () => {
   for (const type of [
     "answer_question",
     "summarize_gap",
-    "detect_contradiction",
     "suggest_consolidation",
     "reconcile_gap_clusters",
     "outline_flow_seed",
@@ -616,4 +615,61 @@ test("fold_markdown_proposal is a provider AI job; comment_pull_request is githu
   assert.equal(jobDefinition("fold_markdown_proposal").requiredCapability({ provider: "codex" }), "codex");
   assert.equal(queueNameForJob("fold_markdown_proposal", { provider: "codex" }), "fold_markdown_proposal__codex");
   assert.equal(jobDefinition("comment_pull_request").requiredCapability({}), "github");
+});
+
+test("verify_document output carries source conflicts and resolutions", () => {
+  const parsed = verifyDocumentOutputSchema.parse({
+    verdict: "healthy",
+    claims: [],
+    conflicts: [
+      {
+        topic: "log retention period",
+        summary: "One source states 1 year, another enforces 60 days.",
+        anchor: "retention",
+        claim: "Logs are retained for 1 year.",
+        positions: [
+          { sourceId: "policy", path: "security/logging.md", statement: "retained for 1 year" },
+          { sourceId: "ingest", path: "src/retention.ts", statement: "RETENTION_DAYS = 60" }
+        ]
+      }
+    ],
+    resolvedConflicts: [{ id: "c1", agreedStatement: "Logs are retained for 60 days." }]
+  });
+  // The broker strips undeclared output fields, so this pins that both survive.
+  assert.equal(parsed.conflicts?.[0]?.positions.length, 2);
+  assert.equal(parsed.resolvedConflicts?.[0]?.id, "c1");
+});
+
+test("a conflict needs at least two positions", () => {
+  // One position is an unprovable claim, not a conflict — accepting it would
+  // route a correctable defect into the register where nothing ever fixes it.
+  const parsed = verifyDocumentOutputSchema.safeParse({
+    verdict: "healthy",
+    claims: [],
+    conflicts: [
+      {
+        topic: "t",
+        summary: "s",
+        anchor: "a",
+        claim: "c",
+        positions: [{ sourceId: "policy", path: "p.md", statement: "x" }]
+      }
+    ]
+  });
+  assert.equal(parsed.success, false);
+});
+
+test("verify_document input accepts knownConflicts", () => {
+  const parsed = verifyDocumentInputSchema.safeParse({
+    provider: "openai-compatible",
+    path: "kb/a.md",
+    content: "# A",
+    sources: [],
+    knownConflicts: [{ id: "c1", topic: "log retention", summary: "sources disagree" }]
+  });
+  assert.equal(parsed.success, true);
+});
+
+test("detect_contradiction is gone", () => {
+  assert.ok(!(JOB_TYPES as readonly string[]).includes("detect_contradiction"));
 });

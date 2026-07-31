@@ -32,7 +32,11 @@ import type {
   ImproveDocumentJobOutput,
   ChangesetChange,
   SourceMapUpdate,
-  ProvenanceClaim
+  ProvenanceClaim,
+  SourceConflictPosition,
+  DetectedSourceConflict,
+  KnownSourceConflict,
+  ResolvedSourceConflict
 } from "@magpie/core";
 import { AI_PROVIDERS, type AiProviderName, type JobError, type JobRepairContext } from "./types.js";
 
@@ -398,14 +402,6 @@ export const commentPullRequestOutputSchema = z.object({
   commentUrl: z.string().optional()
 });
 
-export const detectContradictionInputSchema = z.object({
-  provider: providerSchema,
-  documents: z.array(documentSchema)
-});
-export const detectContradictionOutputSchema = z.object({
-  contradictions: z.array(z.object({ summary: z.string(), paths: z.array(z.string()).min(2) }))
-});
-
 export const suggestConsolidationInputSchema = z.object({
   provider: providerSchema,
   documents: z.array(documentSchema)
@@ -501,6 +497,35 @@ export const syncSourceChangesGeneratePlanOutputSchema = z.object({
   rationale: z.string()
 }) satisfies z.ZodType<MaintenancePlan>;
 
+const sourceConflictPositionSchema = z.object({
+  sourceId: z.string(),
+  path: z.string(),
+  statement: z.string(),
+  lines: z.string().optional()
+}) satisfies z.ZodType<SourceConflictPosition>;
+
+const detectedSourceConflictSchema = z.object({
+  topic: z.string(),
+  summary: z.string(),
+  anchor: z.string(),
+  claim: z.string(),
+  // Fewer than two positions is not a conflict — it is an unprovable claim.
+  // Accepting one would route a correctable defect into the register, where
+  // nothing ever fixes it, and would leave the document annotated forever.
+  positions: z.array(sourceConflictPositionSchema).min(2)
+}) satisfies z.ZodType<DetectedSourceConflict>;
+
+const knownSourceConflictSchema = z.object({
+  id: z.string(),
+  topic: z.string(),
+  summary: z.string()
+}) satisfies z.ZodType<KnownSourceConflict>;
+
+const resolvedSourceConflictSchema = z.object({
+  id: z.string(),
+  agreedStatement: z.string()
+}) satisfies z.ZodType<ResolvedSourceConflict>;
+
 export const verifyDocumentInputSchema = z.object({
   provider: providerSchema,
   path: z.string(),
@@ -513,11 +538,19 @@ export const verifyDocumentInputSchema = z.object({
   // Attribution only (read back off the stored job row for per-flow / per-schedule
   // cost); the verify runner ignores it. Must be on the schema or the broker
   // strips it. Absent on the unscoped/default flow.
-  flowId: z.string().optional()
+  flowId: z.string().optional(),
+  // The document's open conflicts, so the agent reports each as still-conflicted
+  // or resolved rather than re-raising it as novel (which would re-annotate).
+  knownConflicts: z.array(knownSourceConflictSchema).optional()
 }) satisfies z.ZodType<ProviderInput<CoreVerifyDocumentJobInput>>;
 export const verifyDocumentOutputSchema = z.object({
   verdict: z.enum(["healthy", "unprovable"]),
   claims: z.array(z.object({ claim: z.string(), reason: z.string() })),
+  // Disagreements between the SOURCES themselves. Kept separate from `claims`
+  // because they route to the conflict register, never to correct_document —
+  // correcting one would silently pick a winner between two sources.
+  conflicts: z.array(detectedSourceConflictSchema).optional(),
+  resolvedConflicts: z.array(resolvedSourceConflictSchema).optional(),
   mapUpdates: mapUpdatesField
 }) satisfies z.ZodType<VerifyDocumentJobOutput>;
 

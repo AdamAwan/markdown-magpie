@@ -947,6 +947,52 @@ export interface UnprovableClaim {
   reason: string;
 }
 
+// One side of a source conflict: what a specific source location actually says.
+export interface SourceConflictPosition {
+  sourceId: string;
+  path: string;
+  statement: string;
+  // Optional "L10-L20" hint, same convention as ProvenanceClaim source locations.
+  lines?: string;
+}
+
+// A disagreement between two or more source locations about a fact a knowledge-base
+// document asserts — within one source or across several. Deliberately distinct
+// from an UnprovableClaim: there the sources AGREE the document is wrong and a
+// correction is possible; here the sources disagree with EACH OTHER, so any
+// correction would pick a winner between two sources — an authority Magpie does
+// not have. Conflicts are recorded for humans to fix at the source and are never
+// routed into correct_document.
+export interface DetectedSourceConflict {
+  topic: string;
+  summary: string;
+  // Slugified heading path of the document section the conflicting claim lives
+  // under — the same (documentId, anchor) section identity claim provenance and
+  // citation-usage tracking use, so the marker lands in the right section.
+  anchor: string;
+  claim: string;
+  positions: SourceConflictPosition[];
+}
+
+// An already-recorded open conflict handed back to the verify agent as advisory
+// input (the citedClaims precedent) so it re-checks known disagreements and
+// reports them as known rather than as novel findings.
+export interface KnownSourceConflict {
+  id: string;
+  topic: string;
+  summary: string;
+}
+
+// A known conflict the agent found the sources now agree on, with the statement
+// they agree on (the ground truth the repair needs). Resolution requires this
+// POSITIVE signal: the verify prompt runs under CONSERVATIVE_CONTRACT, so agent
+// silence is the default behaviour, not evidence — auto-resolving on "not
+// reported this tick" would close conflicts that are still live.
+export interface ResolvedSourceConflict {
+  id: string;
+  agreedStatement: string;
+}
+
 // Input to the verify_document AI job: one knowledge-base document plus references
 // to the flow's configured sources to check it against. The executing agent
 // explores those checkouts directly (see the source-agentic grounding spec);
@@ -969,13 +1015,26 @@ export interface VerifyDocumentJobInput {
   // on the unscoped/default flow, mirroring the other patrol lenses
   // (correct/dedupe/split). Set at enqueue in the patrol service.
   flowId?: string;
+  // The document's currently-open source conflicts, so the agent re-checks each
+  // one and reports it still-conflicted or resolved instead of re-raising it as
+  // novel. Absent/empty leaves the rendered prompt byte-identical to a
+  // pre-conflict verify.
+  knownConflicts?: KnownSourceConflict[];
 }
 
 // The verify lens's verdict for one document: "healthy" (claims empty) or
 // "unprovable" with the specific claims the sources fail to support.
+//
+// `verdict` describes THE DOCUMENT's health, so it stays two-valued: a document
+// can carry a stale claim and a source conflict at once, and each claim lands in
+// exactly one of `claims`/`conflicts`. A document whose only finding is a
+// conflict is "healthy" with a non-empty `conflicts` — there is nothing to
+// correct, because the disagreement is in the sources.
 export interface VerifyDocumentJobOutput {
   verdict: "healthy" | "unprovable";
   claims: UnprovableClaim[];
+  conflicts?: DetectedSourceConflict[];
+  resolvedConflicts?: ResolvedSourceConflict[];
   mapUpdates?: SourceMapUpdate[];
 }
 

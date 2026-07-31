@@ -82,7 +82,6 @@ const REPAIRABLE_JOB_TYPES = new Set<JobType>([
   // as a live answer before terminal-failing (#288c/#288d).
   "answer_question_batch",
   "summarize_gap",
-  "detect_contradiction",
   "suggest_consolidation",
   "reconcile_gap_clusters",
   "outline_flow_seed",
@@ -200,13 +199,6 @@ const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
     schemas.foldMarkdownProposalInputSchema,
     schemas.foldMarkdownProposalOutputSchema,
     15 * 60
-  ),
-  detect_contradiction: define(
-    "detect_contradiction",
-    "provider",
-    schemas.detectContradictionInputSchema,
-    schemas.detectContradictionOutputSchema,
-    10 * 60
   ),
   suggest_consolidation: define(
     "suggest_consolidation",
@@ -369,7 +361,6 @@ export const AI_JOB_TYPES = [
   "outline_flow_seed",
   "revise_seed_plan",
   "fold_markdown_proposal",
-  "detect_contradiction",
   "suggest_consolidation",
   "reconcile_gap_clusters",
   "sync_source_changes_generate_plan",

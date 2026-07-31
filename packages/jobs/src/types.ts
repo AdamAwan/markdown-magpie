@@ -9,7 +9,6 @@ export const JOB_TYPES = [
   "outline_flow_seed",
   "revise_seed_plan",
   "fold_markdown_proposal",
-  "detect_contradiction",
   "suggest_consolidation",
   "reconcile_gap_clusters",
   "sync_source_changes_generate_plan",
