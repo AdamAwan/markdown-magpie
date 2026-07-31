@@ -23,6 +23,7 @@ import { runSplitLens, type SplitDocumentFn } from "../../scheduling/split-lens.
 import { parseCompletedJobOutput, runJobToCompletion } from "../jobs/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
 import { createFanoutBudget, type FanoutBudget } from "../../platform/maintenance-fanout.js";
+import { annotateConflict, repairResolvedConflict } from "./conflict-annotation.js";
 import { logger } from "../../logger.js";
 
 // Cursor knobs (tunable). batchSize bounds per-tick cost; randomCount is the
@@ -41,6 +42,8 @@ export type FixPatrolOutcome =
       selectedCount: number;
       selected: string[];
       findings: VerifyFinding[];
+      conflictCount: number;
+      resolvedConflictCount: number;
     }
   | { ok: false; code: "unknown_flow" };
 export type ImprovePatrolOutcome =
@@ -87,7 +90,15 @@ function verifyDocumentReuseKey(input: unknown): string {
   if (!parsed.success) {
     return "unknown";
   }
-  return `${parsed.data.provider}:${parsed.data.path}:${hashSourceDescriptors(parsed.data.sources)}:${hashProvenanceClaims(parsed.data.citedClaims ?? [])}`;
+  // The known-conflict ids matter for the same reason the claims hash does: a
+  // verify told about a different set of open conflicts is different work, and
+  // reusing across that change would return a verdict computed without the
+  // conflicts the job was meant to re-check (so none of them could resolve).
+  const conflictIds = (parsed.data.knownConflicts ?? [])
+    .map((conflict) => conflict.id)
+    .sort()
+    .join(",");
+  return `${parsed.data.provider}:${parsed.data.path}:${hashSourceDescriptors(parsed.data.sources)}:${hashProvenanceClaims(parsed.data.citedClaims ?? [])}:${conflictIds}`;
 }
 
 // Default verify: enqueue a verify_document AI job and bounded-wait for the watcher
@@ -114,7 +125,7 @@ const PROVENANCE_EVENT_CAP = 50;
 // MaintenanceShedError, which runVerifyLens catches like any other verify failure
 // — so the doc is simply not in `checkedPaths` and stays re-checkable next tick.
 function makeDefaultVerifyDocument(budget: FanoutBudget): VerifyDocumentFn {
-  return async (ctx, { path, content, sources, flowId }) => {
+  return async (ctx, { path, content, sources, flowId, knownConflicts }) => {
     // #214 phase 2: fold the document's provenance event stream (its merged
     // proposals) into advisory citedClaims the verify agent checks first. An
     // empty fold omits the field entirely so the job input — and therefore the
@@ -132,6 +143,9 @@ function makeDefaultVerifyDocument(budget: FanoutBudget): VerifyDocumentFn {
       content,
       sources,
       ...(citedClaims.length > 0 ? { citedClaims } : {}),
+      // The lens supplies the document's open conflicts (it owns conflict
+      // routing); pass them straight through.
+      ...(knownConflicts && knownConflicts.length > 0 ? { knownConflicts } : {}),
       // Attribution only — lets the read-time cost rollups credit this verify's
       // spend to the flow's correctness patrol. Omitted for the unscoped flow so
       // the rendered prompt input stays byte-identical.
@@ -360,8 +374,21 @@ export async function runFixPatrol(
   // are stamped below, unchanged ones with their existing hash preserved). Note that
   // pre-migration cursor rows hold corpus-based hashes, so every doc re-checks once
   // after deploy (intended: one full re-verify under grounded exploration).
+  //
+  // Documents with an OPEN source conflict are exempt. The gate re-arms on
+  // document content or source *configuration* only — a source-content change
+  // deliberately does not bust it (see hashSourceDescriptors). Once a conflicted
+  // document is annotated, its body and its descriptors are both stable, so the
+  // gate would skip it on every future tick: the policy or the code gets fixed
+  // out in the sources and Magpie never looks again, leaving the conflict open
+  // forever. The exemption is self-limiting — it applies only to the documents
+  // where a source-content change is precisely the awaited event.
   const contentHashByPath = new Map(actionableDocuments.map((doc) => [doc.path, hashDocumentContent(doc.content)]));
+  const conflictedPaths = new Set(await ctx.stores.sourceConflicts.listOpenPaths(options.flowId));
   const toCheck = actionableDocuments.filter((doc) => {
+    if (conflictedPaths.has(doc.path)) {
+      return true;
+    }
     const prior = priorByPath.get(doc.path);
     return !(prior?.contentHash === contentHashByPath.get(doc.path) && prior?.sourcesHash === sourcesHash);
   });
@@ -370,12 +397,60 @@ export async function runFixPatrol(
   // Run the verify lens over the documents that actually need checking this tick.
   const selectedSet = new Set(toCheck.map((doc) => doc.path));
   const selectedDocuments = toCheck.map((doc) => ({ path: doc.path, content: doc.content }));
-  const { findings, checkedPaths } = await runVerifyLens(ctx, {
+  const { findings, checkedPaths, conflicts, resolved } = await runVerifyLens(ctx, {
     flowId: options.flowId,
     documents: selectedDocuments,
     sources,
     verifyDocument
   });
+
+  // Source conflicts: record each one and, when it is new, annotate the document
+  // so it stops silently asserting a disputed value. These never become
+  // corrective proposals — no correction can settle a disagreement between two
+  // sources without Magpie choosing a winner.
+  for (const conflict of conflicts) {
+    const document = documents.find((doc) => doc.path === conflict.path);
+    if (!document) {
+      continue;
+    }
+    try {
+      await annotateConflict(ctx, {
+        flowId: options.flowId,
+        conflict,
+        content: document.content,
+        destinationId: document.repositoryId
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "annotation failed";
+      logger.warn({ path: conflict.path, err: message }, "fix-patrol: conflict annotation failed");
+    }
+  }
+
+  // Conflicts the agent reported the sources now agree on: close the register
+  // entry and repair the document through the ordinary corrective path.
+  let repairedCount = 0;
+  for (const entry of resolved) {
+    const document = documents.find((doc) => doc.path === entry.path);
+    if (!document) {
+      continue;
+    }
+    try {
+      const repaired = await repairResolvedConflict(ctx, {
+        flowId: options.flowId,
+        resolved: entry,
+        content: document.content,
+        destinationId: document.repositoryId,
+        sources,
+        correctDocument
+      });
+      if (repaired) {
+        repairedCount += 1;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "repair failed";
+      logger.warn({ path: entry.path, err: message }, "fix-patrol: conflict repair failed");
+    }
+  }
 
   // Each unprovable finding becomes a corrective proposal: enqueue a correct_document
   // job grounded in the same source material the verify lens saw. Enqueue-only — the
@@ -446,6 +521,8 @@ export async function runFixPatrol(
     summary:
       `checked ${checkedPaths.length}/${universe.length} doc${checkedPaths.length === 1 ? "" : "s"} · ` +
       `${findings.length} finding${findings.length === 1 ? "" : "s"}` +
+      (conflicts.length > 0 ? ` · ${conflicts.length} source conflict${conflicts.length === 1 ? "" : "s"}` : "") +
+      (repairedCount > 0 ? ` · ${repairedCount} conflict${repairedCount === 1 ? "" : "s"} resolved` : "") +
       (gated > 0 ? ` · ${gated} unchanged` : "") +
       (skipped > 0 ? ` · ${skipped} covered by open PRs` : ""),
     details: {
@@ -455,6 +532,8 @@ export async function runFixPatrol(
       skipped,
       gated,
       findings,
+      conflicts,
+      resolvedConflicts: repairedCount,
       intentTraces: verifyFindingIntentTraces(findings, options.flowId),
       fanout
     }
@@ -468,6 +547,8 @@ export async function runFixPatrol(
       gated,
       universe: universe.length,
       findings: findings.length,
+      conflicts: conflicts.length,
+      conflictsResolved: repairedCount,
       dedupeScans,
       splitScans,
       skipped,
@@ -481,7 +562,9 @@ export async function runFixPatrol(
     universeCount: universe.length,
     selectedCount: selected.length,
     selected,
-    findings
+    findings,
+    conflictCount: conflicts.length,
+    resolvedConflictCount: repairedCount
   };
 }
 

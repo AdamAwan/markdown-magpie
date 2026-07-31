@@ -76,13 +76,25 @@ export async function runVerifyLens(
   const resolved: VerifyLensResult["resolved"] = [];
 
   for (const document of input.documents) {
+    // The document's open conflicts, handed to the agent so it re-checks each one
+    // and reports it still-conflicted or resolved instead of re-raising it as
+    // novel (which would re-annotate). Omitted when empty so an unconflicted
+    // document's rendered prompt stays byte-identical to a pre-conflict verify.
+    const openConflicts = await ctx.stores.sourceConflicts.listOpenForDocument(input.flowId, document.path);
+    const knownConflicts = openConflicts.map((conflict) => ({
+      id: conflict.id,
+      topic: conflict.topic,
+      summary: conflict.summary
+    }));
+
     let verdict: VerifyDocumentJobOutput | undefined;
     try {
       verdict = await input.verifyDocument(ctx, {
         path: document.path,
         content: document.content,
         sources: input.sources,
-        flowId: input.flowId
+        flowId: input.flowId,
+        ...(knownConflicts.length > 0 ? { knownConflicts } : {})
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "verify failed";
