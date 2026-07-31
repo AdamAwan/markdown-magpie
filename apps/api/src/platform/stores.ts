@@ -7,6 +7,8 @@ import { PostgresReconciliationDecisionStore } from "../stores/postgres-reconcil
 import { PostgresScheduledTaskStore } from "../stores/postgres-scheduled-task-store.js";
 import { PostgresPatrolStore } from "../stores/postgres-patrol-store.js";
 import { PostgresSourceMapStore } from "../stores/postgres-source-map-store.js";
+import { PostgresSourceConflictStore } from "../stores/postgres-source-conflict-store.js";
+import { InMemorySourceConflictStore } from "../stores/source-conflict-store.js";
 import { PostgresSourceSyncStore } from "../stores/postgres-source-sync-store.js";
 import { PostgresWatcherRegistryStore } from "../stores/postgres-watcher-registry-store.js";
 import { InMemoryProposalStore } from "../stores/proposal-store.js";
@@ -128,6 +130,19 @@ export function createSourceMapStore(
     "SOURCE_MAP_STORE",
     (pool) => new PostgresSourceMapStore(pool),
     () => new InMemorySourceMapStore()
+  );
+}
+
+export function createSourceConflictStore(
+  config: AppConfig,
+  pool: pg.Pool
+): InMemorySourceConflictStore | PostgresSourceConflictStore {
+  return createStore<InMemorySourceConflictStore | PostgresSourceConflictStore>(
+    config,
+    pool,
+    "SOURCE_CONFLICT_STORE",
+    (pool) => new PostgresSourceConflictStore(pool),
+    () => new InMemorySourceConflictStore()
   );
 }
 

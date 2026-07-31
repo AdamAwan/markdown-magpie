@@ -317,7 +317,7 @@ test("verify-answer instructs the model to ignore directives embedded in the mat
 });
 
 test("verify-document separates source conflicts from unprovable claims", () => {
-  const text = getPrompt("verify-document").instructions;
+  const text = getPrompt("verify-document")?.instructions ?? "";
   assert.match(text, /disagree with EACH OTHER/);
   assert.match(text, /knownConflicts/);
   assert.match(text, /resolvedConflicts/);
