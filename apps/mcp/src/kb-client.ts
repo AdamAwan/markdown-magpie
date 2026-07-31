@@ -654,6 +654,10 @@ export interface QuestionnaireView {
   id: string;
   name: string;
   flowId: string;
+  // The answering direction these answers were produced under — echoed back so
+  // the caller can see which reading of the questions was taken. Absent when the
+  // questionnaire carries no direction.
+  direction?: string;
   status: string;
   items: {
     id: string;
@@ -686,7 +690,12 @@ export async function createQuestionnaire(
   const name = stringArgument(args, "name");
   const flow = stringArgument(args, "flow");
   const questions = stringArrayArgument(args, "questions", MAX_QUESTIONNAIRE_QUESTIONS);
-  return readQuestionnaire(await postJson("/questionnaires", { name, flowId: flow, questions }, options));
+  // Optional: omitted from the body entirely when unset, so an absent direction
+  // is indistinguishable from a caller that predates the argument.
+  const direction = optionalStringArgument(args, "direction");
+  return readQuestionnaire(
+    await postJson("/questionnaires", { name, flowId: flow, questions, ...(direction ? { direction } : {}) }, options)
+  );
 }
 
 // Reads a questionnaire worksheet: GET /questionnaires/:id. Server-side this
@@ -736,7 +745,14 @@ function readQuestionnaire(value: unknown): QuestionnaireView {
   }
 
   const items = Array.isArray(questionnaire.items) ? questionnaire.items.map(readQuestionnaireItem) : [];
-  return { id, name, flowId, status, items };
+  return {
+    id,
+    name,
+    flowId,
+    ...(typeof questionnaire.direction === "string" ? { direction: questionnaire.direction } : {}),
+    status,
+    items
+  };
 }
 
 function readQuestionnaireItem(value: unknown): QuestionnaireViewItem {

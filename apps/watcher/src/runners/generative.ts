@@ -16,6 +16,7 @@ import {
   RECONCILE_ANSWER,
   VERIFY_ANSWER,
   withPersona,
+  withDirection,
   wrapUntrusted
 } from "@magpie/prompts";
 import { routeQuestionToFlow, type FlowRoute, type RoutableFlow } from "@magpie/retrieval";
@@ -144,7 +145,7 @@ async function reconcileOrAnswer(
     `answer_question[${job.id}]: reconciling against ${candidates.length} candidate(s)`
   );
   const seed = await api.retrieve(input.question, flowId, undefined, signal);
-  const decision = await reconcileWithCandidates(model, input.question, candidates, seed, signal);
+  const decision = await reconcileWithCandidates(model, input.question, candidates, seed, input.direction, signal);
 
   if (decision && decision.verdict !== "fresh") {
     logger.debug(
@@ -171,6 +172,9 @@ async function reconcileWithCandidates(
   question: string,
   candidates: AnswerCandidate[],
   sections: RetrievedSection[],
+  // The questionnaire's direction, so a candidate written under a DIFFERENT
+  // reading of the question is adapted or dropped rather than reused verbatim.
+  direction: string | undefined,
   signal: AbortSignal
 ): Promise<ReconcileDecision | undefined> {
   const candidateBlock = candidates
@@ -181,7 +185,7 @@ async function reconcileWithCandidates(
       ? wrapUntrusted(formatSectionContext(sections))
       : "(no current knowledge-base sections retrieved)";
   const response = await model.complete({
-    system: RECONCILE_ANSWER.instructions,
+    system: withDirection(RECONCILE_ANSWER.instructions, direction),
     messages: [
       {
         role: "user",
@@ -279,7 +283,11 @@ async function answerCore(
 
   const flowId = route.status === "routed" ? route.flowId : undefined;
   const routedFlow = flowId ? flows.find((flow) => flow.id === flowId) : undefined;
-  const system = withPersona(ANSWER_QUESTION.instructions, routedFlow?.persona);
+  // Persona first (how we sound), questionnaire direction second (what these
+  // questions are about) — so where a flow persona and a direction pull against
+  // each other, the direction sits nearer the end of the prompt and the
+  // questionnaire operator's intent gets the last word.
+  const system = withDirection(withPersona(ANSWER_QUESTION.instructions, routedFlow?.persona), input.direction);
 
   // Deduped accumulator (sectionId -> section) plus the set of follow-up queries
   // that returned nothing above the relevance floor.

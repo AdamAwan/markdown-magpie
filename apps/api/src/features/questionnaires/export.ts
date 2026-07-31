@@ -8,6 +8,10 @@ export function exportQuestionnaire(questionnaire: Questionnaire, format: "md" |
 
 function toMarkdown(questionnaire: Questionnaire): string {
   const lines: string[] = [`# ${questionnaire.name}`, ""];
+  // Provenance: a reviewer needs to know which reading these answers took.
+  if (questionnaire.direction) {
+    lines.push(`> Direction: ${questionnaire.direction}`, "");
+  }
   for (const item of questionnaire.items) {
     lines.push(`## ${item.position + 1}. ${item.question}`, "");
     if (item.status !== "unanswerable" && item.answer) {

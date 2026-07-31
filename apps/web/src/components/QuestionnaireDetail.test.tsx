@@ -242,3 +242,25 @@ test("an unknown id shows a not-found state with the back link", async () => {
     unmount();
   }
 });
+
+// The answering direction is provenance a reviewer needs while reading the
+// worksheet: it says which reading these answers took. Display only — it is set
+// at creation and immutable, so there is nothing to edit here.
+test("shows the answering direction when one is set", async () => {
+  const directed: Questionnaire = { ...worksheet(), direction: "Assume the company, not the product." };
+  const { container, unmount } = await renderDom(<QuestionnaireDetail {...props({ onGet: async () => directed })} />);
+  try {
+    assert.match(container.textContent ?? "", /Direction: Assume the company, not the product\./);
+  } finally {
+    unmount();
+  }
+});
+
+test("shows no direction block when none is set", async () => {
+  const { container, unmount } = await renderDom(<QuestionnaireDetail {...props()} />);
+  try {
+    assert.doesNotMatch(container.textContent ?? "", /Direction:/);
+  } finally {
+    unmount();
+  }
+});

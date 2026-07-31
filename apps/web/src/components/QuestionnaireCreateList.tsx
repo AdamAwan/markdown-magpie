@@ -7,7 +7,12 @@ interface QuestionnaireCreateListProps {
   flows: Array<{ id: string; name: string }>;
   loading: boolean;
   onList: () => Promise<QuestionnaireSummary[] | undefined>;
-  onCreate: (name: string, flowId: string, questions: string[]) => Promise<{ id: string } | undefined>;
+  onCreate: (
+    name: string,
+    flowId: string,
+    questions: string[],
+    direction?: string
+  ) => Promise<{ id: string } | undefined>;
   // Navigate to a questionnaire's detail page. Supplied by the page as a
   // router.push wrapper, so this component stays free of next/navigation and
   // tests without a router mock.
@@ -23,6 +28,7 @@ export function QuestionnaireCreateList({ flows, loading, onList, onCreate, onOp
   const [name, setName] = useState("");
   const [flowId, setFlowId] = useState("");
   const [questionsText, setQuestionsText] = useState("");
+  const [direction, setDirection] = useState("");
   const [creating, setCreating] = useState(false);
 
   // ConsoleProvider hands down fresh handler identities on every poll
@@ -49,10 +55,11 @@ export function QuestionnaireCreateList({ flows, loading, onList, onCreate, onOp
     if (!name.trim() || !flowId || questions.length === 0) return;
     setCreating(true);
     try {
-      const created = await onCreate(name.trim(), flowId, questions);
+      const created = await onCreate(name.trim(), flowId, questions, direction.trim() || undefined);
       if (created) {
         setName("");
         setQuestionsText("");
+        setDirection("");
         onOpen(created.id);
       }
     } finally {
@@ -75,6 +82,14 @@ export function QuestionnaireCreateList({ flows, loading, onList, onCreate, onOp
               </option>
             ))}
           </Select>
+        </Field>
+        <Field label="Direction (optional) — how ambiguous questions should be read. Cannot be changed later.">
+          <Textarea
+            rows={2}
+            value={direction}
+            onChange={(event) => setDirection(event.target.value)}
+            placeholder="Where ambiguous, assume the question is about the company and not the product."
+          />
         </Field>
         <Field label="Questions (one per line)">
           <Textarea

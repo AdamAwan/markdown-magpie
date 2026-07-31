@@ -617,3 +617,14 @@ test("fold_markdown_proposal is a provider AI job; comment_pull_request is githu
   assert.equal(queueNameForJob("fold_markdown_proposal", { provider: "codex" }), "fold_markdown_proposal__codex");
   assert.equal(jobDefinition("comment_pull_request").requiredCapability({}), "github");
 });
+
+test("answer_question input schema preserves the questionnaire direction", () => {
+  const parsed = answerQuestionInputSchema.parse({
+    provider: "openai-compatible",
+    question: "Where is data stored?",
+    flows: [{ id: "security", name: "Security" }],
+    direction: "Where ambiguous, assume the company and not the product.",
+    expectedOutput: "answer_result"
+  });
+  assert.equal(parsed.direction, "Where ambiguous, assume the company and not the product.");
+});

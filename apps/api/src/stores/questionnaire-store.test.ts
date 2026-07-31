@@ -177,3 +177,55 @@ describe("InMemoryQuestionnaireStore", () => {
     });
   });
 });
+
+// The answering direction (docs/questionnaires.md): stored on the questionnaire
+// and reported alongside every match, so the caller can gate verbatim reuse on
+// the candidate having been answered under the SAME steer.
+describe("InMemoryQuestionnaireStore direction", () => {
+  it("stores a direction and reports the donor questionnaire's direction on matches", async () => {
+    const store = new InMemoryQuestionnaireStore();
+    const donor = await store.create({
+      name: "donor",
+      flowId: "flow-direction",
+      questions: ["Where is data stored?"],
+      direction: "Assume the company, not the product."
+    });
+    assert.equal((await store.get(donor.id))?.direction, "Assume the company, not the product.");
+
+    const itemId = donor.items[0].id;
+    await store.setItemEmbeddings([{ itemId, embedding: [1, 0, 0], model: "test-model" }]);
+    await store.approveItem(itemId, [], false);
+
+    const matches = await store.matchApprovedTopN("flow-direction", [1, 0, 0], "test-model", 3);
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0].direction, "Assume the company, not the product.");
+
+    const single = await store.matchApproved("flow-direction", [1, 0, 0], "test-model");
+    assert.equal(single?.direction, "Assume the company, not the product.");
+  });
+
+  it("leaves the direction absent when none was given, on the questionnaire and on matches", async () => {
+    const store = new InMemoryQuestionnaireStore();
+    const created = await store.create({ name: "plain", flowId: "flow-plain", questions: ["q"] });
+    assert.equal((await store.get(created.id))?.direction, undefined);
+
+    const itemId = created.items[0].id;
+    await store.setItemEmbeddings([{ itemId, embedding: [1, 0, 0], model: "test-model" }]);
+    await store.approveItem(itemId, [], false);
+
+    const matches = await store.matchApprovedTopN("flow-plain", [1, 0, 0], "test-model", 3);
+    assert.equal(matches[0].direction, undefined);
+  });
+
+  it("carries the direction onto the list summary", async () => {
+    const store = new InMemoryQuestionnaireStore();
+    await store.create({
+      name: "summarised",
+      flowId: "flow-summary",
+      questions: ["q"],
+      direction: "Assume the company, not the product."
+    });
+    const summaries = await store.list();
+    assert.equal(summaries[0].direction, "Assume the company, not the product.");
+  });
+});

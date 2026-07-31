@@ -218,7 +218,7 @@ export const tools = [
       "Create a questionnaire — a named batch of questions answered against one flow's knowledge base, with " +
       "verbatim reuse of previously approved answers when the knowledge base hasn't changed. Returns immediately; " +
       "items may still be answering — re-read with kb_questionnaire_get until no items are pending/answering. " +
-      "Discover flow ids with kb_flows.",
+      "An optional `direction` steers how ambiguous questions are read. Discover flow ids with kb_flows.",
     inputSchema: {
       type: "object",
       properties: {
@@ -236,6 +236,13 @@ export const tools = [
           minItems: 1,
           maxItems: 500,
           description: "The questions to answer, one per entry (1-500)."
+        },
+        direction: {
+          type: "string",
+          description:
+            "Optional steer for how ambiguous questions should be read, applied to every answer in the batch " +
+            "(e.g. 'where ambiguous, assume the question is about the company and not the product'). Max 2000 " +
+            "characters. Set at creation and cannot be changed afterwards."
         }
       },
       required: ["name", "flow", "questions"],
