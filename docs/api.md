@@ -143,7 +143,7 @@ feature module under `apps/api/src/features/<name>/routes.ts`.
 | `/knowledge` | `knowledge` | Search, sections, indexing, repos/documents/stats |
 | `/questions` | `questions` | Question logs, parked queue, feedback, gap flags |
 | `/gaps` | `gaps` | Gap candidates, clusters, reconcile |
-| `/questionnaires` | `questionnaires` | Bulk question batches |
+| `/questionnaires` | `questionnaires` | Bulk question batches; `POST` body `{name, flowId, questions[], direction?}` (direction ≤2000 chars, set at creation and immutable — see [questionnaires.md](./questionnaires.md) Q4a) |
 | `/flows`, `/seed-plans` | `seed` | Seeding plans (outline → approve) |
 | `/proposals` | `proposals` | Draft/review/publish/merge/verify |
 | `/source-sync` | `source-sync` | Source-change sync runs |

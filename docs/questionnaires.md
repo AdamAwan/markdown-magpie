@@ -48,6 +48,21 @@ provably grounded, never a timestamp guess. All generative work is queue-only
   batch of questions to a flow (one question per array entry; the console splits pasted
   text). Body is bounded to **≤500** questions of **≤4000** chars each — a sanity bound,
   not a product limit, since the drip means size only affects duration.
+- **Q4a** — **Direction.** A questionnaire MAY carry an optional `direction`: free text
+  (**≤2000** chars) stating how its questions should be *read* — e.g. *"where ambiguous,
+  assume the question is about the company and not the product"*. It is set **at creation
+  and immutable**: answering starts on create, so an edit would leave one questionnaire
+  holding answers written under two different directions. A blank/whitespace value
+  normalises to **absent**, so `""` and `NULL` are never distinguishable downstream (the
+  Q6a comparison depends on it). To change a direction, create a new questionnaire.
+- **Q4b** — The direction is appended to the answer system prompt **after** the flow
+  persona (`withDirection(withPersona(…))`) and to the reconcile system prompt (Q7), so on
+  conflict the questionnaire operator's intent gets the last word. It is operator-authored
+  (creation requires `ask:knowledge`), so it is the same trust class as a flow persona: it
+  goes into the **system** prompt guarded by `DIRECTION_GROUNDING_GUARD`, **not** wrapped
+  as untrusted content. The guard is load-bearing — a direction steers *interpretation and
+  framing only*; it MUST NOT supply facts of its own, and MUST NOT license a claim the
+  retrieved context does not contain.
 - **Q5** — **Match.** Each item is embedded **inline** and compared, **within its flow
   only**, against **approved** items of prior questionnaires, via `matchApprovedTopN`
   returning the top `QUESTIONNAIRE_RECONCILE_CANDIDATES` (default **3**) above
@@ -64,6 +79,16 @@ provably grounded, never a timestamp guess. All generative work is queue-only
   `NEWCOMER_TOP_K = 8`). Check 2 MUST compare against the prior answer's **original**
   generation time, never a later reuse time. A reused item carries the **original**
   `answeredAt` forward as the freshness baseline for future checks.
+- **Q6a** — **Direction gate on the fast path.** Verbatim reuse additionally requires the
+  candidate's **owning questionnaire** to carry an *identical* direction (`directionsMatch`
+  — exact string comparison after trimming, with absent/empty/whitespace all normalised to
+  the same "no direction"). A candidate written under a different steer may answer a
+  different *reading* of the question, which only the reconcile step can judge. The
+  comparison is deliberately **exact**: guessing that two differently-worded directions
+  mean the same thing is the failure mode the feature exists to remove, and a mismatch is
+  cheap — it falls through to reconcile (Q7), not to a fresh answer. With no direction set
+  anywhere, every comparison is "none vs none" and behaviour is byte-for-byte what it was
+  before directions existed.
 - **Q7** — **Reconcile.** Any other matched case (multiple candidates, or a single
   candidate whose fast-path check couldn't confirm it) MUST NOT be vetoed. Its candidate
   ids are stashed (`setReconcileCandidates`) and the drip primes the item's
@@ -71,7 +96,11 @@ provably grounded, never a timestamp guess. All generative work is queue-only
   text of their cited sections). The model decides — against live sources — whether to
   reuse, adapt, merge, or answer fresh. This is the **only** place the watcher calls a
   model for reuse; it fails **open** (an unparseable verdict falls through to the normal
-  answer flow, stamped `reuse: {verdict: "fresh"}`).
+  answer flow, stamped `reuse: {verdict: "fresh"}`). When the questionnaire carries a
+  direction (Q4a) the reconcile prompt carries it too, with an explicit criterion: a
+  candidate that answers a **different reading** of the question than the direction implies
+  is **not** `reused`, however accurate it is on its own terms — adapt it, or answer fresh.
+  This is what makes a direction reach *inherited* answers, not only newly-written ones.
 
   | Verdict | Meaning | Answer text source |
   |---|---|---|
@@ -95,6 +124,12 @@ provably grounded, never a timestamp guess. All generative work is queue-only
   > Under the **default** (reconcile enabled) path the `changed` verdict is **retired for
   > new matched rows** — they route to reconcile (Q7) instead — and `matchApprovedTopN`
   > replaces `matchApproved`. `changed` now arises **only** under this legacy flag.
+
+  The legacy path carries the **same** direction gate: it reuses verbatim only when
+  `decision.reuse && directionsMatch(…)`. A candidate that passes the freshness check but
+  was answered under a *different* direction is left **pending** with no change reason —
+  nothing about the knowledge base changed — so the drip answers it fresh under this
+  questionnaire's direction.
 - **Q10** — **Answer.** Items with no usable candidate go through `answer_question_batch`
   (Q2) — the same handler, prompts, and grounding verification as a live ask.
 - **Q11** — **Review / approve / export** (console detail page, Q17). Items are badged
@@ -150,10 +185,15 @@ Questionnaire item asks record question logs with `purpose: "questionnaire"`:
   from items), export (`.md`/`.csv`) and "Approve all reused" actions, and per-item cards
   (badge, low-confidence badge, answer or the gap/failure reason, change reason, citations,
   and a per-item Approve). It polls every `5s` while any item is `pending`/`answering`; the
-  server-side read resumes a stalled drip, so polling doubles as restart recovery.
+  server-side read resumes a stalled drip, so polling doubles as restart recovery. When the
+  questionnaire carries a direction it is rendered once, above the stat banner, read-only —
+  it is immutable, so there is nothing to edit. The create form carries a matching optional
+  "Direction" field.
 - **Q18** — **Export.** `GET /api/questionnaires/:id/export?format=md|csv` renders a pure
   worksheet download: Markdown (`## n. question` + answer, with the low-confidence/
-  provenance blockquotes of Q13) for pasting into documents; CSV (RFC 4180 quoting, columns
+  provenance blockquotes of Q13, and — when set — a `> Direction: …` line under the title,
+  since a reviewer needs to know which reading the answers took) for pasting into
+  documents; CSV (RFC 4180 quoting, columns
   `position, question, answer, status, confidence, outcome`) for spreadsheet portals.
   Export is console/API-only (not on the MCP surface). Downloads MUST go through the
   console's authed download (a plain `<a href>` omits the bearer token and 401s under
@@ -166,7 +206,7 @@ reads follow the reads-as-404 convention). Creation sits under the `trigger` rat
 
 | Route | Scope | Notes |
 |---|---|---|
-| `POST /api/questionnaires` | `ask:knowledge` + flow `ask` | `{name, flowId, questions[]}` (≤500); **201** with initial worksheet |
+| `POST /api/questionnaires` | `ask:knowledge` + flow `ask` | `{name, flowId, questions[], direction?}` (≤500 questions; direction ≤2000 chars, immutable); **201** with initial worksheet |
 | `GET /api/questionnaires` | `read:knowledge` | summaries with per-status counts |
 | `GET /api/questionnaires/:id` | `read:knowledge` + flow `read` | worksheet; also resumes a stalled drip |
 | `GET /api/questionnaires/:id/export?format=md\|csv` | `read:knowledge` + flow `read` | file download |
@@ -181,7 +221,9 @@ already carry answers); everything else drips, so clients re-read with
 `kb_questionnaire_get` until no items are `pending`/`answering`. The worksheet view keeps
 per-item status/outcome/answer/confidence/changeReason plus `{path, heading}` citations and
 strips internal ids and citation fingerprints (the item `id` stays — approve targets it).
-Export stays console/API-only.
+`kb_questionnaire_create` takes an optional `direction` (Q4a), and the view echoes it back
+so an agent can see which reading the answers were produced under. Export stays
+console/API-only.
 
 | Tool | API call | HTTP-transport scope |
 |---|---|---|
@@ -210,6 +252,16 @@ Export stays console/API-only.
   future home, not yet built.
 - Candidate-priming is questionnaire-only; the live Ask path doesn't reuse approved answers
   verbatim (the shared job is ready for a future step, just not wired in).
+- A direction governs the answers **this** questionnaire produces. It does not retroactively
+  reframe an answer approved elsewhere and reused verbatim under a matching direction — that
+  is what the Q6a match check is for, but it also means changing the direction between two
+  runs of the same questionnaire invalidates the free path for every item in it.
+- Direction matching is exact (Q6a), so a whitespace-only or typo-level edit costs a full
+  reconcile pass. Deliberate; the alternative is guessing that two wordings mean the same.
+- A direction is not editable, and there is no per-question override or flow-level default.
+  Recovering from a wrong direction means creating a new questionnaire; the old
+  questionnaire's approved items remain candidates and are reconciled against the new
+  direction rather than fast-pathed.
 
 ## Code map
 
@@ -218,7 +270,9 @@ Export stays console/API-only.
 | Create / match / drip / completion / approval | `apps/api/src/features/questionnaires/service.ts` |
 | Routes (create, list, get, export, approve) | `apps/api/src/features/questionnaires/routes.ts`, `schema.ts` |
 | Deterministic reuse check (checks 1 & 2) | `apps/api/src/features/questionnaires/reuse-check.ts` |
-| Fast-path predicate | `apps/api/src/features/questionnaires/reconcile.ts` |
+| Fast-path predicate + direction matching | `apps/api/src/features/questionnaires/reconcile.ts` (`isFastPathReusable`, `directionsMatch`) |
+| Direction prompt assembly + grounding guard | `packages/prompts/src/catalog.ts` (`withDirection`, `DIRECTION_GROUNDING_GUARD`, `RECONCILE_ANSWER`) |
+| Direction column | `packages/db/migrations/0061_questionnaire_direction.sql` |
 | Export rendering (md/csv) | `apps/api/src/features/questionnaires/export.ts` |
 | Reconcile step (watcher — the only reuse model call) | `apps/watcher/src/runners/generative.ts` (`reconcileOrAnswer`, `reconcileWithCandidates`, `buildReconciledOutput`) |
 | Answer job input (candidate priming, `purpose`) | `apps/api/src/platform/answer-question.ts` |
@@ -248,5 +302,7 @@ deterministic fast-path reuse, the drip),
 retirement of the `changed` verdict for new rows, `matchApproved` → `matchApprovedTopN`, and
 the `reused/adapted/merged/fresh` verdicts), and
 `2026-07-17-questionnaire-detail-page-design.md` (the split into create-list + per-
-questionnaire detail page). Design docs are future-tense archive; this spec is the as-built
-source of truth.
+questionnaire detail page), and
+`2026-07-31-questionnaire-direction-design.md` (the per-questionnaire answering direction —
+Q4a/Q4b/Q6a, the direction gate on the fast path, and the direction-aware reconcile
+criterion). Design docs are future-tense archive; this spec is the as-built source of truth.

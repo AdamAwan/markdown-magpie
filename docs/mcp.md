@@ -209,10 +209,15 @@ non-obvious behavioural contracts are numbered below.
 
 ### `kb_questionnaire_create`
 
-- **M24** — Input `{name, flow, questions}` — 1–500 questions, one per entry; `flow` ids
-  come from `kb_flows`. Creates a [questionnaire](questionnaires.md): a named batch answered
-  against one flow's knowledge base with verbatim reuse of previously approved answers while
-  the KB sections they cited are unchanged.
+- **M24** — Input `{name, flow, questions, direction?}` — 1–500 questions, one per entry;
+  `flow` ids come from `kb_flows`. Creates a [questionnaire](questionnaires.md): a named
+  batch answered against one flow's knowledge base with verbatim reuse of previously
+  approved answers while the KB sections they cited are unchanged. The optional `direction`
+  (≤2000 chars) states how ambiguous questions should be *read* — e.g. *"where ambiguous,
+  assume the question is about the company and not the product"* — and applies to every
+  answer in the batch, including ones that would otherwise be inherited verbatim from an
+  earlier questionnaire. It is set at creation and **cannot be changed afterwards**; it
+  steers interpretation and framing only, never what may be claimed.
 - **M25** — Creation is **asynchronous by design**: the tool returns the initial worksheet
   immediately (same shape as `kb_questionnaire_get`). Items the deterministic fast-path
   already confirmed reusable carry answers immediately; everything else
@@ -229,6 +234,7 @@ non-obvious behavioural contracts are numbered below.
     "id": "string",
     "name": "string",
     "flowId": "string",
+    "direction": "string",                     // present only when one was set at creation
     "status": "open | completed | archived",
     "items": [
       {
