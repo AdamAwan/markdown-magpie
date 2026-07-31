@@ -136,9 +136,7 @@ test("the questionnaire direction reaches the fresh-answer system prompt", async
 });
 
 test("the questionnaire direction reaches the reconcile system prompt", async () => {
-  const chat = new RecordingChatProvider(
-    JSON.stringify({ verdict: "reused", basisItemIds: ["item-1"], answer: "" })
-  );
+  const chat = new RecordingChatProvider(JSON.stringify({ verdict: "reused", basisItemIds: ["item-1"], answer: "" }));
   await runGenerativeJob({
     job: answerJob({
       provider: "openai-compatible",
