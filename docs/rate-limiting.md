@@ -139,7 +139,7 @@ every retry, so spending the full budget on it burns paid generations for nothin
 `completeJob` handles it in two layers.
 
 - **RL16** — **Repair-reprompt.** For a **repairable** job type (`answer_question`,
-  `answer_question_batch`, `summarize_gap`, `detect_contradiction`, `suggest_consolidation`,
+  `answer_question_batch`, `summarize_gap`, `suggest_consolidation`,
   `reconcile_gap_clusters`, `outline_flow_seed`, `revise_seed_plan`; see
   `REPAIRABLE_JOB_TYPES` in `packages/jobs/src/catalog.ts`), the first schema-invalid output
   MUST be routed to **one informed repair**: the prior output + the exact Zod contract

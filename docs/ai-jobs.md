@@ -76,7 +76,6 @@ spec owns the **contract** they all share.
 | `outline_flow_seed` | provider | 10 min | source-grounded | ✓ | ✓ | ✓ |
 | `revise_seed_plan` | provider | 10 min | generative | ✓ | — | ✓ |
 | `fold_markdown_proposal` | provider | 15 min | generative | ✓ | — | — |
-| `detect_contradiction` | provider | 10 min | generative | ✓ | — | ✓ |
 | `suggest_consolidation` | provider | 10 min | generative | ✓ | — | ✓ |
 | `reconcile_gap_clusters` | provider | 5 min | generative | ✓ | — | ✓ |
 | `sync_source_changes_generate_plan` | provider | 60 min | source-grounded | ✓ | — | — |
@@ -248,7 +247,7 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   (a second invalid output finds a prior context and terminal-fails).
 - **J30** — **Repairable types** are the reshape-style ones that rework material already in
   the input/prior output with no risk of fabricating grounded content: `answer_question`,
-  `answer_question_batch`, `summarize_gap`, `detect_contradiction`, `suggest_consolidation`,
+  `answer_question_batch`, `summarize_gap`, `suggest_consolidation`,
   `reconcile_gap_clusters`, `outline_flow_seed`, `revise_seed_plan`. Source-grounded /
   agentic / patch-emitting types are deliberately **not** repairable (a context-free reshape
   could invent grounding or an `observedSha`). `isRepairableJobType` reads the catalog so the
@@ -385,6 +384,25 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   (falling back to full re-derivation). A draft that omits provenance is warned about but
   still published — quality is enforced by review, never by rejecting drafts.
   `dedupe_documents`/`split_document` changesets carry no per-claim provenance by design.
+
+## Source conflicts (the sources disagreeing with each other)
+
+- **J44a** — `verify_document` reports TWO distinct failures. A claim the sources agree is
+  wrong goes in `claims` and routes to `correct_document` as before. A fact the sources
+  disagree with **each other** about — within one source or across several — goes in
+  `conflicts` and routes to the conflict register, never to a correction: correcting it
+  would pick a winner between two sources, an authority Magpie does not have. `verdict`
+  stays `healthy | unprovable` because it describes the DOCUMENT's health; a document whose
+  only finding is a conflict is `healthy` with a non-empty `conflicts`.
+- **J44b** — Each conflict carries `topic`, `summary`, the section `anchor`, the `claim`, and
+  **at least two `positions`**, each naming a source id, a repo-relative path the agent
+  actually opened, and what that location states. One position is an unprovable claim, not a
+  conflict, and the schema rejects it.
+- **J44c** — `verify_document` accepts `knownConflicts` (the document's open register
+  entries) and must return each as still-conflicted or in `resolvedConflicts` with the
+  statement the sources now agree on. Resolution requires that POSITIVE signal: the prompt
+  runs under `CONSERVATIVE_CONTRACT`, so silence is the agent's default, and auto-resolving
+  on absence would close live conflicts. See `docs/source-conflicts.md`.
 
 ## Source map (agent navigation hints)
 

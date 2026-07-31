@@ -128,7 +128,7 @@ function formatDate(value: string): string {
   return new Date(value).toLocaleString();
 }
 
-export function SourceConflictsPanel(): JSX.Element {
+export function SourceConflictsPanel() {
   const [filter, setFilter] = useState<Filter>("open");
   const [conflicts, setConflicts] = useState<SourceConflict[]>([]);
   const [error, setError] = useState<string | undefined>();

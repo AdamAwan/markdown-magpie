@@ -71,6 +71,7 @@ subsystem specs of Magpie itself.
 | [ingestion.md](./ingestion.md) | Markdown ingestion & indexing | `apps/api` stores, `packages/markdown` |
 | [retrieval.md](./retrieval.md) | Retrieval & answering (agentic loop, hybrid search, flow routing) | `apps/api/src/features/{ask,retrieve,route}`, `packages/retrieval` |
 | [gaps-and-maintenance.md](./gaps-and-maintenance.md) | Knowledge gaps, clustering, the reconciler & patrols | `apps/api/src/scheduling`, `question-logging.md` |
+| [source-conflicts.md](./source-conflicts.md) | Disagreements between sources: detection, register, annotation & repair | `apps/api/src/features/patrol`, `packages/markdown` |
 | [proposals-and-publishing.md](./proposals-and-publishing.md) | Draft → reconcile gate → provenance → publish → stale-PR regen | `apps/api/src/features/proposals`, `packages/git` |
 | [source-sync.md](./source-sync.md) | Source-change sync to proposals | `apps/api/src/features/source-sync` |
 | [flows-and-seeding.md](./flows-and-seeding.md) | Flows, seed plans, self-seeding | `apps/api/src/features/{seed,config}` |
