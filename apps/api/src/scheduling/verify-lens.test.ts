@@ -105,3 +105,80 @@ test("a verifier that returns undefined does not count the doc as checked", asyn
   assert.deepEqual(findings, []);
   assert.deepEqual(checkedPaths, [], "a doc whose verify did not complete stays re-checkable");
 });
+
+const CONFLICT = {
+  topic: "log retention period",
+  summary: "One source states 1 year, another enforces 60 days.",
+  anchor: "logging-retention",
+  claim: "Logs are retained for 1 year.",
+  positions: [
+    { sourceId: "policy", path: "security/logging.md", statement: "retained for 1 year" },
+    { sourceId: "ingest", path: "src/retention.ts", statement: "RETENTION_DAYS = 60" }
+  ]
+};
+
+test("a conflicted claim never becomes a corrective finding", async () => {
+  // The regression this whole feature exists for: routing a source disagreement
+  // into correct_document rewrites the doc to one side, silently picking a
+  // winner between two sources.
+  const ctx = makeTestContext();
+  const { findings, conflicts, checkedPaths } = await runVerifyLens(ctx, {
+    flowId: undefined,
+    documents: [{ path: "a.md", content: "x" }],
+    sources: [],
+    verifyDocument: fixedVerifier({ "a.md": { verdict: "healthy", claims: [], conflicts: [CONFLICT] } })
+  });
+  assert.deepEqual(findings, [], "a conflict must not produce a corrective intent");
+  assert.equal(conflicts.length, 1);
+  assert.equal(conflicts[0].path, "a.md");
+  assert.equal(conflicts[0].topic, "log retention period");
+  assert.deepEqual(checkedPaths, ["a.md"], "conflict-only docs are still genuinely checked");
+});
+
+test("a stale claim and a conflict in one document produce both outcomes", async () => {
+  // Per-claim granularity: one unresolved conflict must not freeze the rest of
+  // the document's corrective work.
+  const ctx = makeTestContext();
+  const { findings, conflicts } = await runVerifyLens(ctx, {
+    flowId: undefined,
+    documents: [{ path: "a.md", content: "x" }],
+    sources: [],
+    verifyDocument: fixedVerifier({
+      "a.md": { verdict: "unprovable", claims: UNPROVABLE.claims, conflicts: [CONFLICT] }
+    })
+  });
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].claims.length, 1);
+  assert.equal(conflicts.length, 1);
+});
+
+test("resolved conflicts are carried out of the lens with their document", async () => {
+  const ctx = makeTestContext();
+  const { resolved } = await runVerifyLens(ctx, {
+    flowId: undefined,
+    documents: [{ path: "a.md", content: "x" }],
+    sources: [],
+    verifyDocument: fixedVerifier({
+      "a.md": {
+        verdict: "healthy",
+        claims: [],
+        resolvedConflicts: [{ id: "c1", agreedStatement: "Logs are retained for 60 days." }]
+      }
+    })
+  });
+  assert.equal(resolved.length, 1);
+  assert.equal(resolved[0].id, "c1");
+  assert.equal(resolved[0].path, "a.md");
+});
+
+test("a document with no conflicts yields empty conflict arrays", async () => {
+  const ctx = makeTestContext();
+  const { conflicts, resolved } = await runVerifyLens(ctx, {
+    flowId: undefined,
+    documents: [{ path: "a.md", content: "x" }],
+    sources: [],
+    verifyDocument: fixedVerifier({})
+  });
+  assert.deepEqual(conflicts, []);
+  assert.deepEqual(resolved, []);
+});

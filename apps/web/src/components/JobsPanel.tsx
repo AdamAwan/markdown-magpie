@@ -27,7 +27,6 @@ const PROVIDER_JOB_TYPES = [
   "draft_seed_document",
   "outline_flow_seed",
   "fold_markdown_proposal",
-  "detect_contradiction",
   "suggest_consolidation",
   "reconcile_gap_clusters",
   "sync_source_changes_generate_plan",

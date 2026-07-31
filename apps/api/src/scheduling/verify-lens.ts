@@ -1,4 +1,6 @@
 import type {
+  DetectedSourceConflict,
+  ResolvedSourceConflict,
   SourceDescriptor,
   UnprovableClaim,
   VerifyDocumentJobInput,
@@ -49,6 +51,13 @@ export function verifyIntent(flowId: string | undefined, path: string, claims: U
 export interface VerifyLensResult {
   findings: VerifyFinding[];
   checkedPaths: string[];
+  // Disagreements between the SOURCES, carried out of the lens untouched by the
+  // reconcile gate. They are not document defects: no corrective proposal can
+  // resolve one without picking a winner between two sources, so they route to
+  // the conflict register and the document is annotated instead.
+  conflicts: Array<DetectedSourceConflict & { path: string }>;
+  // Known conflicts the agent reported the sources now agree on.
+  resolved: Array<ResolvedSourceConflict & { path: string }>;
 }
 
 export async function runVerifyLens(
@@ -63,15 +72,29 @@ export async function runVerifyLens(
   const openPrs = openPullRequestSummaries(await sameFlowOpenProposals(ctx, input.flowId));
   const findings: VerifyFinding[] = [];
   const checkedPaths: string[] = [];
+  const conflicts: VerifyLensResult["conflicts"] = [];
+  const resolved: VerifyLensResult["resolved"] = [];
 
   for (const document of input.documents) {
+    // The document's open conflicts, handed to the agent so it re-checks each one
+    // and reports it still-conflicted or resolved instead of re-raising it as
+    // novel (which would re-annotate). Omitted when empty so an unconflicted
+    // document's rendered prompt stays byte-identical to a pre-conflict verify.
+    const openConflicts = await ctx.stores.sourceConflicts.listOpenForDocument(input.flowId, document.path);
+    const knownConflicts = openConflicts.map((conflict) => ({
+      id: conflict.id,
+      topic: conflict.topic,
+      summary: conflict.summary
+    }));
+
     let verdict: VerifyDocumentJobOutput | undefined;
     try {
       verdict = await input.verifyDocument(ctx, {
         path: document.path,
         content: document.content,
         sources: input.sources,
-        flowId: input.flowId
+        flowId: input.flowId,
+        ...(knownConflicts.length > 0 ? { knownConflicts } : {})
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "verify failed";
@@ -84,6 +107,18 @@ export async function runVerifyLens(
     }
     // A real verdict came back (healthy or unprovable), so this doc was genuinely checked.
     checkedPaths.push(document.path);
+
+    // Source conflicts and resolutions are collected BEFORE the healthy
+    // early-continue: a document whose only finding is a conflict is "healthy"
+    // (there is nothing about the document to correct — the disagreement is in
+    // the sources), so gathering them after the continue would silently drop
+    // every conflict that did not happen to arrive alongside a stale claim.
+    for (const conflict of verdict.conflicts ?? []) {
+      conflicts.push({ ...conflict, path: document.path });
+    }
+    for (const entry of verdict.resolvedConflicts ?? []) {
+      resolved.push({ ...entry, path: document.path });
+    }
 
     if (verdict.verdict === "healthy" || verdict.claims.length === 0) {
       continue;
@@ -98,5 +133,5 @@ export async function runVerifyLens(
     });
   }
 
-  return { findings, checkedPaths };
+  return { findings, checkedPaths, conflicts, resolved };
 }

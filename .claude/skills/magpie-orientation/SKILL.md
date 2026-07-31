@@ -187,9 +187,19 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
     work one doc (+ neighbours) at a time. **Correctness patrol** (hourly) fans into
     `verify_document` → `correct_document` / `dedupe_documents` / `split_document`;
     **editorial patrol** (hourly) fans into `improve_document`. A change gate skips docs
-    whose content-hash + source-descriptor-hash are unchanged. All doc producers pass a
+    whose content-hash + source-descriptor-hash are unchanged — except docs holding an open
+    **source conflict**, which are exempt (see 11a). All doc producers pass a
     shared **reconcile gate** (open-new / fold-into-overlapping-proposal / defer) before
     publishing (`apps/api/src/scheduling/fold.ts`).
+11a. **Source conflicts** — `verify_document` separately reports where the SOURCES
+    disagree with each other (within one source or across several), instead of folding that
+    into "unprovable" and letting `correct_document` silently pick a winner. Conflicts land
+    in the `source_conflicts` register, annotate the document with an insert-only marker
+    (no source paths in the body, #214), and close only when the agent positively reports
+    the sources agreeing again — at which point `correct_document` restates the value. No
+    new job types; `detect_contradiction` (dead scaffolding) was deleted. Change-gate
+    exemption + annotation idempotence are the two load-bearing rules
+    (`docs/source-conflicts.md`).
 12. **Gap-closure verification on merge** (#150/#154) — a merge never blindly resolves
     gaps. The merge cascade enqueues `verify_gap_closure`, which re-asks each triggering
     question and applies a deterministic test: closed only if the re-ask is confident
@@ -282,7 +292,7 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
 
 ## 3. Job catalog cheat sheet
 
-27 job types in `packages/jobs/src/types.ts`; contracts in `schemas.ts`, routing in
+26 job types in `packages/jobs/src/types.ts`; contracts in `schemas.ts`, routing in
 `catalog.ts`. AI (provider-fanned) jobs get retry 3 / backoff 15→300 s; others retry 2
 (maintenance-class AI — `AI_JOB_TYPES − INTERACTIVE_AI_JOB_TYPES` — also drops to retry 2).
 
@@ -303,10 +313,10 @@ dead-letter). Net: original + at most one repair, then terminal — no blind pai
 retries. Each decision emits a `job_repair` event; a successful completion warns
 on any undeclared fields the `z.object` output schema stripped.
 
-**18 provider (AI) jobs** — queue `` `${type}__${provider}` ``:
+**17 provider (AI) jobs** — queue `` `${type}__${provider}` ``:
 `answer_question`, `answer_question_batch`, `summarize_gap`, `draft_markdown_proposal`,
 `draft_seed_document`, `outline_flow_seed`, `revise_seed_plan`, `fold_markdown_proposal`,
-`fold_changeset_proposal`, `detect_contradiction`, `suggest_consolidation`,
+`fold_changeset_proposal`, `suggest_consolidation`,
 `reconcile_gap_clusters`, `sync_source_changes_generate_plan`, `verify_document`,
 `correct_document`, `dedupe_documents`, `split_document`, `improve_document`.
 `answer_question_batch` (#288c) is the questionnaire drip's own type: same answer handler

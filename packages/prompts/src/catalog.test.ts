@@ -319,6 +319,21 @@ test("verify-answer instructs the model to ignore directives embedded in the mat
   );
 });
 
+test("verify-document separates source conflicts from unprovable claims", () => {
+  const text = getPrompt("verify-document")?.instructions ?? "";
+  assert.match(text, /disagree with EACH OTHER/);
+  assert.match(text, /knownConflicts/);
+  assert.match(text, /resolvedConflicts/);
+  // Two positions minimum, both actually read — a one-sided "conflict" is an
+  // unprovable claim and must not reach the register.
+  assert.match(text, /READ BOTH SIDES/);
+  assert.match(text, /Two positions minimum/);
+  // The summary is published into the document body (#214).
+  assert.match(text, /never name source paths/);
+  // Silence must leave a known conflict open, never close it.
+  assert.match(text, /silence leaves it open/);
+});
+
 test("withDirection appends the direction and its grounding guard", () => {
   const out = withDirection("BASE", "Assume the company, not the product.");
   assert.match(out, /^BASE/);

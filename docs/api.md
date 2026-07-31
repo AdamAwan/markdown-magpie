@@ -148,6 +148,7 @@ feature module under `apps/api/src/features/<name>/routes.ts`.
 | `/proposals` | `proposals` | Draft/review/publish/merge/verify |
 | `/source-sync` | `source-sync` | Source-change sync runs |
 | `/source-map` | `source-map` | Navigation hints for source-grounded jobs |
+| `/source-conflicts` | `source-conflicts` | Register of disagreements between sources |
 | `/fix-patrol` | `patrol` | Correctness/editorial patrol triggers |
 | `/maintenance-runs` | `maintenance-runs` | Run history |
 | `/scheduled-tasks` | `scheduled-tasks` | Schedule list, settings, run-now |
@@ -970,6 +971,25 @@ read-only (the registry is populated as a side effect of the watcher's own claim
 calls). Returns `{ "workers": [...], "uncoveredJobTypes": [...] }`, where `uncoveredJobTypes`
 is the fleet's capability gap (job types no connected watcher can run), computed server-side
 so the console needn't ship the job catalog to the browser.
+
+### `GET /api/source-conflicts?flowId=&status=&limit=`
+
+Scope `read:knowledge`. The source-conflict register: places where the sources disagree with
+each other about something the knowledge base asserts (`docs/source-conflicts.md`). Filtered
+to flows the principal can read. `status` is `open | resolved | dismissed`.
+
+**Response (200):** `{ "conflicts": [ { "id", "flowId", "documentPath", "anchor", "topic",
+"summary", "claim", "positions": [ { "sourceId", "path", "statement", "lines" } ], "status",
+"firstSeenAt", "lastSeenAt", "seenCount", "annotatedProposalId", "agreedStatement",
+"dismissalNote" } ] }`
+
+### `PATCH /api/source-conflicts/:id`
+
+Scope `manage:knowledge` plus the `manage` capability on the conflict's flow. Body is
+`{ "status": "dismissed", "note"?: string }` — dismissing a conflict a reviewer judges not
+real. Any other status is a **400**: resolution is evidence-based and comes from the verify
+agent reporting that the sources agree again, so there is deliberately no hand-resolve. A
+conflict in a flow the principal cannot read returns **404**, not 403.
 
 ### `GET /api/source-map?sourceIds=…`
 
