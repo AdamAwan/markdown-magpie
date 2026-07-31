@@ -734,8 +734,7 @@ export const GAP_RECONCILE_CRITIC: PromptDefinition = {
 export const GENERIC_JOB: PromptDefinition = {
   id: "generic-job",
   title: "Generic job fallback",
-  description:
-    "Fallback prompt for job types without a dedicated prompt (e.g. suggest_consolidation).",
+  description: "Fallback prompt for job types without a dedicated prompt (e.g. suggest_consolidation).",
   usedBy: ["watcher"],
   outputShape: "JSON (job-specific)",
   instructions: `Complete this Markdown Magpie AI job. Return JSON only.`
