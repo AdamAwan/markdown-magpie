@@ -834,6 +834,11 @@ export interface AnswerQuestionJobInput {
   // Absent for non-questionnaire questions and for questionnaires with no
   // approved match candidates.
   candidates?: AnswerCandidate[];
+  // The owning questionnaire's answering direction (immutable, set at creation —
+  // docs/questionnaires.md). Steers how an ambiguous question is READ and framed,
+  // on both the fresh-answer and reconcile paths. Absent for live asks and
+  // gap-closure re-asks.
+  direction?: string;
   expectedOutput: "answer_result";
 }
 
