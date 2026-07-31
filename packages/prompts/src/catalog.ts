@@ -183,6 +183,7 @@ export const RECONCILE_ANSWER: PromptDefinition = {
     "- adapted: one candidate is close but needs edits → basisItemIds:[thatId], answer:<edited>.",
     "- merged: several combine → basisItemIds:[ids...], answer:<merged>.",
     '- fresh: none are usable → basisItemIds:[], answer:"" (the normal answer flow will run).',
+    "If an answering direction is given above, judge the candidates against it: a candidate that answers a different reading of the question than the direction implies is not reused, however accurate it is on its own terms — adapt it, or answer fresh.",
     UNTRUSTED_CONTENT_CONTRACT
   ].join("\n")
 };
@@ -854,5 +855,24 @@ export function withPersona(baseInstructions: string, persona?: string): string 
   const trimmed = persona?.trim();
   return trimmed
     ? `${baseInstructions}\n\nPersona (how to look and respond):\n${trimmed}\n\n${PERSONA_GROUNDING_GUARD}`
+    : baseInstructions;
+}
+
+// Appends a questionnaire's answering direction to a base prompt. Mirrors
+// withPersona in shape and in its guard: a direction settles how an ambiguous
+// question should be READ (the company or the product, the corporate entity or
+// a hosted service) and how the answer is framed — it is never a source of
+// facts, and never a licence to answer beyond the retrieved context. Applied
+// AFTER the persona, so where the two pull against each other the questionnaire
+// operator's intent gets the last word.
+export const DIRECTION_GROUNDING_GUARD =
+  "The direction above settles how to read an ambiguous question and how to frame the answer. " +
+  "It never overrides the grounding rules: it supplies no facts of its own, and it never licenses " +
+  "a claim the retrieved context does not contain.";
+
+export function withDirection(baseInstructions: string, direction?: string): string {
+  const trimmed = direction?.trim();
+  return trimmed
+    ? `${baseInstructions}\n\nAnswering direction (how to read these questions):\n${trimmed}\n\n${DIRECTION_GROUNDING_GUARD}`
     : baseInstructions;
 }

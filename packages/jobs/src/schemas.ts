@@ -135,6 +135,9 @@ export const answerQuestionInputSchema = z.object({
   // instead of answering fresh (questionnaire trust). Declared so the broker
   // preserves them from the enqueued input.
   candidates: z.array(answerCandidateSchema).optional(),
+  // The questionnaire's answering direction. Declared so the broker preserves it
+  // from the enqueued input (the schema-stripping gotcha).
+  direction: z.string().optional(),
   expectedOutput: z.literal("answer_result")
 }) satisfies z.ZodType<ProviderInput<CoreAnswerQuestionJobInput>>;
 export const answerQuestionOutputSchema = z.object({

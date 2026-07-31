@@ -4,7 +4,10 @@ import {
   promptCatalog,
   getPrompt,
   withPersona,
+  withDirection,
   PERSONA_GROUNDING_GUARD,
+  DIRECTION_GROUNDING_GUARD,
+  RECONCILE_ANSWER,
   wrapUntrusted,
   UNTRUSTED_CONTENT_OPEN,
   UNTRUSTED_CONTENT_CLOSE,
@@ -329,4 +332,26 @@ test("verify-document separates source conflicts from unprovable claims", () => 
   assert.match(text, /never name source paths/);
   // Silence must leave a known conflict open, never close it.
   assert.match(text, /silence leaves it open/);
+});
+
+test("withDirection appends the direction and its grounding guard", () => {
+  const out = withDirection("BASE", "Assume the company, not the product.");
+  assert.match(out, /^BASE/);
+  assert.ok(out.includes("Assume the company, not the product."));
+  assert.ok(out.includes(DIRECTION_GROUNDING_GUARD));
+});
+
+test("withDirection returns the base unchanged for an absent or blank direction", () => {
+  assert.equal(withDirection("BASE"), "BASE");
+  assert.equal(withDirection("BASE", ""), "BASE");
+  assert.equal(withDirection("BASE", "   \n  "), "BASE");
+});
+
+test("withDirection composes after withPersona so the direction lands last", () => {
+  const out = withDirection(withPersona("BASE", "Terse and formal."), "Company, not product.");
+  assert.ok(out.indexOf("Terse and formal.") < out.indexOf("Company, not product."));
+});
+
+test("RECONCILE_ANSWER tells the model a different reading is not reusable", () => {
+  assert.ok(RECONCILE_ANSWER.instructions.includes("different reading"));
 });

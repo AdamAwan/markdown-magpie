@@ -821,3 +821,58 @@ test("questionnaire calls pass API errors through with their status", async () =
     globalThis.fetch = originalFetch;
   }
 });
+
+// The answering direction (docs/questionnaires.md): optional on create, and
+// echoed back on the worksheet so an agent can see which reading the answers
+// were produced under.
+test("createQuestionnaire forwards an optional direction and omits it when unset", async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: unknown[] = [];
+  globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    bodies.push(typeof init?.body === "string" ? JSON.parse(init.body) : undefined);
+    return jsonResponse(questionnaireBody, 201);
+  }) as typeof fetch;
+
+  try {
+    await createQuestionnaire({
+      name: "Q3 security review",
+      flow: "magpie-support",
+      questions: ["Do you encrypt data at rest?"],
+      direction: "Where ambiguous, assume the company and not the product."
+    });
+    await createQuestionnaire({
+      name: "Q3 security review",
+      flow: "magpie-support",
+      questions: ["Do you encrypt data at rest?"]
+    });
+
+    assert.equal(
+      (bodies[0] as { direction?: string }).direction,
+      "Where ambiguous, assume the company and not the product."
+    );
+    assert.equal(Object.hasOwn(bodies[1] as object, "direction"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("the questionnaire view carries the direction back", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    jsonResponse(
+      {
+        questionnaire: {
+          ...questionnaireBody.questionnaire,
+          direction: "Where ambiguous, assume the company and not the product."
+        }
+      },
+      200
+    )) as typeof fetch;
+
+  try {
+    const view = await getQuestionnaire({ questionnaire: "qn-1" });
+    assert.equal(view.direction, "Where ambiguous, assume the company and not the product.");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

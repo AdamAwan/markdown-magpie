@@ -137,7 +137,7 @@ change already awaiting review.
 
 ## SC-8 · The register
 
-`source_conflicts` (migration `0061`), one row per fingerprint, with status
+`source_conflicts` (migration `0062`), one row per fingerprint, with status
 `open | resolved | dismissed`.
 
 The patrol re-verifies documents on a rolling cursor, so the same conflict is
@@ -196,6 +196,6 @@ take a second producer without change.
 | routing | `apps/api/src/scheduling/verify-lens.ts` |
 | annotate / repair | `apps/api/src/features/patrol/conflict-annotation.ts` |
 | patrol wiring, gate exemption | `apps/api/src/features/patrol/service.ts` |
-| register | `apps/api/src/stores/source-conflict-store.ts`, `postgres-source-conflict-store.ts`, migration `0061` |
+| register | `apps/api/src/stores/source-conflict-store.ts`, `postgres-source-conflict-store.ts`, migration `0062` |
 | routes | `apps/api/src/features/source-conflicts/routes.ts` |
 | console | `apps/web/src/components/SourceConflictsPanel.tsx`, `apps/web/src/app/conflicts/page.tsx` |

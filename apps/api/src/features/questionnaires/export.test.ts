@@ -126,3 +126,23 @@ test("markdown shows a provenance line for adapted and merged outcomes", () => {
   assert.match(md, /Source: adapted from a prior approved answer/);
   assert.match(md, /Source: merged from prior approved answers/);
 });
+
+// The direction is provenance: a reviewer reading the worksheet needs to know
+// which reading the answers took. CSV is deliberately untouched — the direction
+// is a per-document fact, not a per-row one.
+test("markdown export records the direction under the title", () => {
+  const base = questionnaire([
+    item({ position: 0, question: "Where is data stored?", status: "answered", answer: "EU." })
+  ]);
+  const markdown = exportQuestionnaire({ ...base, direction: "Assume the company, not the product." }, "md");
+  assert.ok(markdown.includes("> Direction: Assume the company, not the product."));
+  assert.ok(markdown.indexOf("> Direction:") < markdown.indexOf("## 1."), "it sits under the title, above the items");
+});
+
+test("markdown export omits the direction line when none is set, and CSV never carries it", () => {
+  const base = questionnaire([
+    item({ position: 0, question: "Where is data stored?", status: "answered", answer: "EU." })
+  ]);
+  assert.ok(!exportQuestionnaire(base, "md").includes("Direction:"));
+  assert.ok(!exportQuestionnaire({ ...base, direction: "Assume the company." }, "csv").includes("Direction"));
+});

@@ -14,7 +14,14 @@ import type {
 // items of prior questionnaires in a flow, and approval snapshots citation
 // fingerprints so reuse checks survive re-index section churn.
 export interface QuestionnaireStore {
-  create(input: { name: string; flowId: string; questions: string[] }): Promise<Questionnaire>;
+  create(input: {
+    name: string;
+    flowId: string;
+    questions: string[];
+    // The answering direction, already trimmed and blank-normalised by the
+    // caller. Immutable — there is deliberately no update path.
+    direction?: string;
+  }): Promise<Questionnaire>;
   get(id: string): Promise<Questionnaire | undefined>;
   list(): Promise<QuestionnaireSummary[]>;
   // Persist creation-time (or approval-backfill) embeddings, stamped with the
@@ -22,12 +29,14 @@ export interface QuestionnaireStore {
   setItemEmbeddings(items: Array<{ itemId: string; embedding: number[]; model: string }>): Promise<void>;
   // Nearest approved prior item in the flow (same embedding model), with its
   // cosine similarity. Threshold is applied by the caller so "no match" is an
-  // explicit decision, not a store default.
+  // explicit decision, not a store default. `direction` is the OWNING
+  // questionnaire's answering direction, so the caller can gate verbatim reuse
+  // on the candidate having been answered under the same steer.
   matchApproved(
     flowId: string,
     embedding: number[],
     model: string
-  ): Promise<{ item: QuestionnaireItem; similarity: number } | undefined>;
+  ): Promise<{ item: QuestionnaireItem; similarity: number; direction?: string } | undefined>;
   // Top-N nearest approved prior items in the flow (same embedding model),
   // ordered by descending similarity. Feeds the reconciler's candidate set —
   // unlike matchApproved this doesn't stop at the single closest match.
@@ -36,7 +45,7 @@ export interface QuestionnaireStore {
     embedding: number[],
     model: string,
     limit: number
-  ): Promise<Array<{ item: QuestionnaireItem; similarity: number }>>;
+  ): Promise<Array<{ item: QuestionnaireItem; similarity: number; direction?: string }>>;
   // Stash the candidate item ids the reconciler was offered, so a later
   // answer_question completion can be primed with the same candidate set.
   setReconcileCandidates(itemId: string, basisItemIds: string[]): Promise<void>;
@@ -118,6 +127,7 @@ function summarize(questionnaire: Questionnaire): QuestionnaireSummary {
     id: questionnaire.id,
     name: questionnaire.name,
     flowId: questionnaire.flowId,
+    ...(questionnaire.direction ? { direction: questionnaire.direction } : {}),
     status: questionnaire.status,
     createdAt: questionnaire.createdAt,
     counts
@@ -131,7 +141,12 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
   private readonly questionnaires = new Map<string, Questionnaire>();
   private readonly items = new Map<string, StoredItem>();
 
-  async create(input: { name: string; flowId: string; questions: string[] }): Promise<Questionnaire> {
+  async create(input: {
+    name: string;
+    flowId: string;
+    questions: string[];
+    direction?: string;
+  }): Promise<Questionnaire> {
     const id = randomUUID();
     const items: StoredItem[] = input.questions.map((question, position) => ({
       id: randomUUID(),
@@ -146,6 +161,7 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
       id,
       name: input.name,
       flowId: input.flowId,
+      ...(input.direction ? { direction: input.direction } : {}),
       status: "open",
       createdAt: new Date().toISOString(),
       items
@@ -180,15 +196,19 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
     flowId: string,
     embedding: number[],
     model: string
-  ): Promise<{ item: QuestionnaireItem; similarity: number } | undefined> {
-    let best: { item: QuestionnaireItem; similarity: number } | undefined;
+  ): Promise<{ item: QuestionnaireItem; similarity: number; direction?: string } | undefined> {
+    let best: { item: QuestionnaireItem; similarity: number; direction?: string } | undefined;
     for (const item of this.items.values()) {
       const questionnaire = this.questionnaires.get(item.questionnaireId);
       if (!questionnaire || questionnaire.flowId !== flowId) continue;
       if (item.status !== "approved" || !item.embedding || item.embeddingModel !== model) continue;
       const similarity = cosineSimilarity(item.embedding, embedding);
       if (!best || similarity > best.similarity) {
-        best = { item: structuredClone(item), similarity };
+        best = {
+          item: structuredClone(item),
+          similarity,
+          ...(questionnaire.direction ? { direction: questionnaire.direction } : {})
+        };
       }
     }
     return best;
@@ -199,14 +219,18 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
     embedding: number[],
     model: string,
     limit: number
-  ): Promise<Array<{ item: QuestionnaireItem; similarity: number }>> {
-    const candidates: Array<{ item: QuestionnaireItem; similarity: number }> = [];
+  ): Promise<Array<{ item: QuestionnaireItem; similarity: number; direction?: string }>> {
+    const candidates: Array<{ item: QuestionnaireItem; similarity: number; direction?: string }> = [];
     for (const item of this.items.values()) {
       const questionnaire = this.questionnaires.get(item.questionnaireId);
       if (!questionnaire || questionnaire.flowId !== flowId) continue;
       if (item.status !== "approved" || !item.embedding || item.embeddingModel !== model) continue;
       const similarity = cosineSimilarity(item.embedding, embedding);
-      candidates.push({ item: structuredClone(item), similarity });
+      candidates.push({
+        item: structuredClone(item),
+        similarity,
+        ...(questionnaire.direction ? { direction: questionnaire.direction } : {})
+      });
     }
     candidates.sort((a, b) => b.similarity - a.similarity);
     return candidates.slice(0, limit);

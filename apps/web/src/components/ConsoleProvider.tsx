@@ -967,13 +967,17 @@ function useConsoleController() {
   async function createQuestionnaire(
     name: string,
     flowId: string,
-    questions: string[]
+    questions: string[],
+    // The answering direction — omitted from the body when unset so a blank
+    // field is indistinguishable from never having supplied one.
+    direction?: string
   ): Promise<Questionnaire | undefined> {
     try {
       const { questionnaire } = await apiPost<{ questionnaire: Questionnaire }>("/questionnaires", {
         name,
         flowId,
-        questions
+        questions,
+        ...(direction ? { direction } : {})
       });
       showMessage(
         "Questionnaire created — matched items reuse prior approved answers; the rest are answering now.",

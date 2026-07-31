@@ -673,3 +673,14 @@ test("verify_document input accepts knownConflicts", () => {
 test("detect_contradiction is gone", () => {
   assert.ok(!(JOB_TYPES as readonly string[]).includes("detect_contradiction"));
 });
+
+test("answer_question input schema preserves the questionnaire direction", () => {
+  const parsed = answerQuestionInputSchema.parse({
+    provider: "openai-compatible",
+    question: "Where is data stored?",
+    flows: [{ id: "security", name: "Security" }],
+    direction: "Where ambiguous, assume the company and not the product.",
+    expectedOutput: "answer_result"
+  });
+  assert.equal(parsed.direction, "Where ambiguous, assume the company and not the product.");
+});

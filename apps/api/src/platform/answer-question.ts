@@ -52,6 +52,9 @@ export function buildAnswerQuestionInput(
     // (questionnaire trust, docs/questionnaires.md). Absent for non-questionnaire
     // questions and for questionnaires with no approved match candidates.
     candidates?: AnswerCandidate[];
+    // The owning questionnaire's answering direction (questionnaire mode only).
+    // Absent for live asks and gap-closure re-asks.
+    direction?: string;
   }
 ): AnswerQuestionJobInput & { provider: AiProviderName } {
   const flows = ctx.knowledgeConfig.flows.map((flow) => ({
@@ -68,6 +71,7 @@ export function buildAnswerQuestionInput(
     ...(options.priorTurns && options.priorTurns.length > 0 ? { priorTurns: options.priorTurns } : {}),
     ...(options.conversationFlowId ? { conversationFlowId: options.conversationFlowId } : {}),
     ...(options.candidates ? { candidates: options.candidates } : {}),
+    ...(options.direction ? { direction: options.direction } : {}),
     provider: ctx.config.get().aiProvider,
     expectedOutput: "answer_result"
   };

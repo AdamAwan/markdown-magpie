@@ -108,6 +108,8 @@ export function QuestionnaireDetail({
         </Row>
       </Row>
 
+      {questionnaire.direction ? <DirectionNote>Direction: {questionnaire.direction}</DirectionNote> : null}
+
       <StatBanner stats={itemStats(questionnaire.items)} />
 
       <Stack gap="md">
@@ -195,6 +197,18 @@ const AnswerText = styled.p(({ theme }) => ({
   margin: 0,
   whiteSpace: "pre-wrap",
   color: theme.color.text
+}));
+
+// The answering direction these answers were written under. Read-only — it is
+// set at creation and immutable, so there is nothing to edit here.
+const DirectionNote = styled.p(({ theme }) => ({
+  margin: 0,
+  padding: theme.space.md,
+  borderRadius: theme.radius.md,
+  background: theme.color.surfaceMuted,
+  color: theme.color.textMuted,
+  fontSize: theme.font.size.sm,
+  whiteSpace: "pre-wrap"
 }));
 
 const ReasonText = styled.p(({ theme }) => ({
