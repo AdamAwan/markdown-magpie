@@ -14,7 +14,7 @@ import { assertAiCapacity, nonInteractiveAiCapacity } from "../../platform/ai-ca
 import { buildAnswerQuestionInput, recordAnswerQuestionLog } from "../../platform/answer-question.js";
 import { embeddingModelId } from "../../platform/providers.js";
 import { retrieve } from "../retrieve/service.js";
-import { isFastPathReusable } from "./reconcile.js";
+import { directionsMatch, isFastPathReusable } from "./reconcile.js";
 import { checkReuse, type ReuseCheckDeps } from "./reuse-check.js";
 
 // Questionnaire mode (docs/questionnaires.md): explicit bulk batches with
@@ -26,7 +26,7 @@ export type CreateQuestionnaireResult =
 
 export async function createQuestionnaire(
   ctx: AppContext,
-  input: { name: string; flowId: string; questions: string[] }
+  input: { name: string; flowId: string; questions: string[]; direction?: string }
 ): Promise<CreateQuestionnaireResult> {
   if (!ctx.knowledgeConfig.flows.some((flow) => flow.id === input.flowId)) {
     return { ok: false, code: "flow_not_found" };
@@ -35,8 +35,17 @@ export async function createQuestionnaire(
   if (questions.length === 0) {
     return { ok: false, code: "empty_questionnaire" };
   }
+  // Normalise once, here: a blank direction becomes absent so "" and NULL are
+  // indistinguishable everywhere downstream — the fast-path comparison against a
+  // donor questionnaire's direction depends on it.
+  const direction = input.direction?.trim() ? input.direction.trim() : undefined;
 
-  const created = await ctx.stores.questionnaires.create({ name: input.name, flowId: input.flowId, questions });
+  const created = await ctx.stores.questionnaires.create({
+    name: input.name,
+    flowId: input.flowId,
+    questions,
+    ...(direction ? { direction } : {})
+  });
 
   // Match phase — embeddings are the sanctioned inline exception. With no
   // embedding provider configured, matching degrades to "everything is fresh"
@@ -61,7 +70,7 @@ export async function createQuestionnaire(
           }
           if (above.length === 1) {
             const decision = await checkReuse(deps, above[0]!.item, item.question);
-            if (isFastPathReusable(1, decision)) {
+            if (isFastPathReusable(1, decision, directionsMatch(direction, above[0]!.direction))) {
               await ctx.stores.questionnaires.markReused(item.id, {
                 itemId: above[0]!.item.id,
                 answer: above[0]!.item.answer ?? "",
@@ -85,7 +94,7 @@ export async function createQuestionnaire(
           continue;
         }
         const decision = await checkReuse(deps, match.item, item.question);
-        if (decision.reuse) {
+        if (decision.reuse && directionsMatch(direction, match.direction)) {
           await ctx.stores.questionnaires.markReused(item.id, {
             itemId: match.item.id,
             answer: match.item.answer ?? "",
@@ -93,10 +102,13 @@ export async function createQuestionnaire(
             // baseline for the next questionnaire's newcomer check.
             answeredAt: match.item.answeredAt ?? ""
           });
-        } else {
+        } else if (!decision.reuse) {
           // Stays pending for the drip; the worksheet explains the change.
           await ctx.stores.questionnaires.markChanged(item.id, decision.reason);
         }
+        // Reusable but differently directed: leave it pending so the drip
+        // answers it fresh under THIS questionnaire's direction. No change
+        // reason — nothing about the knowledge base changed.
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -164,7 +176,10 @@ async function topUpDrip(ctx: AppContext, questionnaireId: string): Promise<void
       questionLogId: log.id,
       question: item.question,
       requestedFlowId: questionnaire.flowId,
-      ...(candidates.length > 0 ? { candidates } : {})
+      ...(candidates.length > 0 ? { candidates } : {}),
+      // Immutable, so reading it off the questionnaire at drip time is always
+      // the direction this item's answer should be written under.
+      ...(questionnaire.direction ? { direction: questionnaire.direction } : {})
     });
     // Enqueue the questionnaire's OWN job type (#288c): answer_question_batch is
     // metered/globally-capped but NOT interactive, so a bulk batch counts toward

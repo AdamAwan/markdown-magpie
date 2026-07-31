@@ -82,11 +82,15 @@ async function jobForLog(ctx: Ctx, logId: string | undefined) {
 // Creates, answers, and approves a questionnaire item so it becomes an
 // approved match-corpus entry (embedding stamped via the real approval-time
 // backfill). Requires ctx to have a configured embedding provider.
-async function createApprovedDonor(ctx: Ctx, opts: { question: string; answer: string }): Promise<string> {
+async function createApprovedDonor(
+  ctx: Ctx,
+  opts: { question: string; answer: string; direction?: string }
+): Promise<string> {
   const created = await questionnaires.createQuestionnaire(ctx, {
     name: "donor pool",
     flowId: "security",
-    questions: [opts.question]
+    questions: [opts.question],
+    ...(opts.direction ? { direction: opts.direction } : {})
   });
   assert.ok(created.ok);
   if (!created.ok) throw new Error("unreachable");
@@ -755,4 +759,81 @@ test("a reused verdict whose basis is unresolvable degrades to unanswerable, not
   assert.equal(finalItem?.status, "unanswerable");
   assert.notEqual(finalItem?.outcome, "reused");
   assert.deepEqual(await ctx.stores.questionnaires.basisItemIds(targetItemId), []);
+});
+
+// --- Answering direction (docs/questionnaires.md) -----------------------------
+// A direction steers how an ambiguous question is READ. It must therefore also
+// govern answers that would otherwise be inherited verbatim from an earlier
+// questionnaire — free reuse is only safe when the donor was answered under the
+// same steer.
+
+const DIRECTION = "Where ambiguous, assume the question is about the company and not the product.";
+
+// The fast-path gate itself (one candidate + unchanged sources + matching
+// direction) cannot fire in this harness: with no Postgres knowledge store
+// checkReuse never confirms reuse, so `decision.reuse` is always false — see the
+// "exactly one candidate above threshold is stashed" test above. The gate is
+// covered directly in reconcile.test.ts (directionsMatch + isFastPathReusable),
+// and the donor's direction reaching the matcher in questionnaire-store.test.ts.
+// What matters here is that a differently-directed candidate still reaches the
+// reconciler WITH the direction, so the model can judge the reading rather than
+// the answer being inherited unexamined.
+test("a differently-directed candidate is primed into the reconcile job together with the direction", async () => {
+  const ctx = embeddingAxisContext();
+  const donorItemId = await createApprovedDonor(ctx, {
+    question: "Does the ISO 27001 certificate cover you?",
+    answer: "Yes, ISO 27001 since 2021.",
+    direction: "Where ambiguous, assume the question is about the product and not the company."
+  });
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "directed",
+    flowId: "security",
+    questions: ["Are you ISO 27001 certified?"],
+    direction: DIRECTION
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const itemId = created.questionnaire.items[0].id;
+  const item = await ctx.stores.questionnaires.itemById(itemId);
+  assert.notEqual(item?.outcome, "reused");
+  assert.deepEqual(await ctx.stores.questionnaires.reconcileCandidateIds(itemId), [donorItemId]);
+
+  const job = await jobForLog(ctx, item?.questionLogId);
+  const input = job?.input as { direction?: string; candidates?: Array<{ itemId: string }> };
+  assert.equal(input.direction, DIRECTION, "the reconciler judges the candidate against THIS direction");
+  assert.deepEqual(
+    input.candidates?.map((candidate) => candidate.itemId),
+    [donorItemId]
+  );
+});
+
+test("the drip puts the direction on the enqueued answer job", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "directed",
+    flowId: "security",
+    questions: ["Where is data stored?"],
+    direction: DIRECTION
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const item = await ctx.stores.questionnaires.itemById(created.questionnaire.items[0].id);
+  const job = await jobForLog(ctx, item?.questionLogId);
+  assert.equal((job?.input as { direction?: string }).direction, DIRECTION);
+});
+
+test("a blank direction normalises to absent rather than reaching the job", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "blank",
+    flowId: "security",
+    questions: ["Where is data stored?"],
+    direction: "   \n  "
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  assert.equal(created.questionnaire.direction, undefined);
+  const item = await ctx.stores.questionnaires.itemById(created.questionnaire.items[0].id);
+  const job = await jobForLog(ctx, item?.questionLogId);
+  assert.equal((job?.input as { direction?: string }).direction, undefined);
 });
