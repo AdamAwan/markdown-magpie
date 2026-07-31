@@ -480,14 +480,15 @@ export const VERIFY_DOCUMENT: PromptDefinition = {
   id: "verify-document",
   title: "Verify a document against its sources",
   description:
-    "Checks whether a knowledge-base document's claims are still provable against the flow's source repositories, which the executing agent explores directly. Returns only the claims the sources fail to support. Conservative: silent on healthy documents. Used by the watcher's verify_document job.",
+    "Checks whether a knowledge-base document's claims are still provable against the flow's source repositories, which the executing agent explores directly. Returns the claims the sources fail to support, plus any disagreements between the sources themselves. Conservative: silent on healthy documents. Used by the watcher's verify_document job.",
   usedBy: ["watcher · fix-patrol"],
-  outputShape: "{ verdict, claims[], mapUpdates? }",
+  outputShape: "{ verdict, claims[], conflicts[], resolvedConflicts[], mapUpdates? }",
   instructions: `You verify a Markdown knowledge-base document against the source repositories it should be derived from. Decide whether each substantive claim the document makes is still supported by the sources.
 
 Input:
 - "path" and "content": the knowledge-base document under review.
 - "citedClaims" (optional): claims previously published in this document, each with the source locations that grounded it when it shipped.
+- "knownConflicts" (optional): source disagreements already recorded for this document, each with an id.
 
 Grounding:
 - You have DIRECT access to the source repositories listed in the prompt. Explore them: list directories to learn the structure, search for the terms each claim rests on, open the files that matter, and follow references between files. Do not stop at the first file — corroborate across the codebase and docs before judging a claim.
@@ -501,6 +502,11 @@ Rules:
 - ${CONSERVATIVE_CONTRACT} Here a clear case is a claim the sources clearly contradict or clearly fail to support; when you are unsure, or the sources simply do not mention the claim, treat the document as healthy and do NOT flag it.
 - If every claim is supported (or the sources give you nothing to disprove), return verdict "healthy" with an empty claims array.
 - Otherwise return verdict "unprovable" and list ONLY the specific unprovable claims, each with a short reason citing the source files you checked (or searched and found silent).
+- Distinguish two DIFFERENT failures. If the sources agree with each other but the document is out of date, that is an unprovable claim: report it in "claims". If the sources disagree with EACH OTHER about the same fact — two files in one source, or two different sources — that is a source conflict: report it in "conflicts" and do NOT also report it in "claims". You must never choose which source is right; a conflict is fixed by a human changing the sources, not by changing the document.
+- Report a conflict only when you have READ BOTH SIDES. Every entry in "positions" must name a real repo-relative path you opened and state what that location actually says. Two positions minimum. Never raise a conflict from a reference-only (internet/agent) source — you cannot check it.
+- "anchor" is the slugified heading path of the section in the document under review where the conflicting claim lives (e.g. a "## Retention" heading gives "retention").
+- The conflict "summary" is published into the document body, so it must never name source paths, repository names, or source ids. State what the disagreement is and what the competing values are; the evidence lives elsewhere.
+- The input may include "knownConflicts": source disagreements already recorded for this document. Check each one FIRST. If the sources still disagree, report it in "conflicts" as usual. If the sources now AGREE, report it in "resolvedConflicts" with its id and the statement they now agree on. Say NOTHING about a known conflict you could not check — silence leaves it open, which is the safe default.
 - The input may include "citedClaims": claims previously published with the source locations that grounded them. Check each cited claim FIRST against its cited location(s). If the cited file no longer exists or no longer supports the claim, flag it with a reason starting "cited support changed:" naming the cited path — that distinguishes support that moved out from under a claim from a claim that was never provable. A cited claim whose support still holds needs no further work. Claims NOT in citedClaims are verified by exploring the sources as usual.
 - citedClaims is advisory: if it contradicts what you find in the sources, trust the sources.
 - Inline repository-path citations in the document body (e.g. "(see Docs/.../ingestion.md)") are a defect regardless of factual accuracy — internal source paths must never appear in published content. Flag each as a claim with reason "inline source-path citation".
@@ -511,6 +517,20 @@ Return JSON:
   "verdict": "healthy | unprovable",
   "claims": [
     { "claim": "string", "reason": "string" }
+  ],
+  "conflicts": [
+    {
+      "topic": "string",
+      "summary": "string",
+      "anchor": "string",
+      "claim": "string",
+      "positions": [
+        { "sourceId": "string", "path": "string", "statement": "string", "lines": "L10-L20" }
+      ]
+    }
+  ],
+  "resolvedConflicts": [
+    { "id": "string", "agreedStatement": "string" }
   ],
   "mapUpdates": [
     { "sourceId": "string", "topic": "string", "paths": ["string"], "description": "string" }
