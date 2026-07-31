@@ -166,9 +166,12 @@ On mismatch the item takes the existing `setReconcileCandidates` route
 ([service.ts:53](../../../apps/api/src/features/questionnaires/service.ts)), so the candidate
 is judged by the model with the direction in hand.
 
-Legacy path (`QUESTIONNAIRE_RECONCILE_ENABLED=0`): unchanged. `matchApproved` + `markChanged`
-means the item is re-answered anyway, and the fresh answer receives the direction through
-Part 2.
+Legacy path (`QUESTIONNAIRE_RECONCILE_ENABLED=0`) needs the same guard — it reuses verbatim
+whenever `decision.reuse` holds, so without a check it would bypass the direction entirely.
+`matchApproved` gains the same `direction` field, and the branch becomes: reuse only when
+`decision.reuse && directionMatches`; on a direction mismatch the item is simply left pending,
+so the drip answers it fresh with the direction applied. `markChanged` still covers the
+`!decision.reuse` case unchanged.
 
 ## Part 4 — Surfaces
 
