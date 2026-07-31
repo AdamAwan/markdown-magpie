@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { InMemorySourceConflictStore, conflictFingerprint, type SourceConflictUpsert } from "./source-conflict-store.js";
+import {
+  InMemorySourceConflictStore,
+  conflictFingerprint,
+  type SourceConflictUpsert
+} from "./source-conflict-store.js";
 
 const POLICY = { sourceId: "policy", path: "security/logging.md", statement: "retained for 1 year" };
 const INGEST = { sourceId: "ingest", path: "src/retention.ts", statement: "RETENTION_DAYS = 60" };

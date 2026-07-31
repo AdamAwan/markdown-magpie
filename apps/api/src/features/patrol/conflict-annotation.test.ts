@@ -203,7 +203,11 @@ test("a resolved conflict closes the register entry and repairs the document", a
     corrections.push({ path: input.path, content: input.content, reason: input.claims[0]?.reason ?? "" });
   }) as CorrectDocumentFn;
 
-  await patrol.runFixPatrol(ctx, { trigger: "manual" }, { ...QUIET, verifyDocument: conflictVerifier(), correctDocument });
+  await patrol.runFixPatrol(
+    ctx,
+    { trigger: "manual" },
+    { ...QUIET, verifyDocument: conflictVerifier(), correctDocument }
+  );
   const conflictId = (await ctx.stores.sourceConflicts.list({ limit: 10 }))[0]?.id ?? "";
   await mergeAnnotation(ctx);
 

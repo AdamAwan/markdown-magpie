@@ -87,7 +87,10 @@ export async function annotateConflict(ctx: AppContext, args: AnnotateConflictAr
 // repository paths must not reach published content.
 function conflictRationale(conflict: SourceConflict): string {
   const positions = conflict.positions
-    .map((position) => `- \`${position.sourceId}\` · \`${position.path}\`${lineHint(position.lines)}: ${position.statement}`)
+    .map(
+      (position) =>
+        `- \`${position.sourceId}\` · \`${position.path}\`${lineHint(position.lines)}: ${position.statement}`
+    )
     .join("\n");
   return [
     `The sources disagree about **${conflict.topic}**, which this document asserts.`,
