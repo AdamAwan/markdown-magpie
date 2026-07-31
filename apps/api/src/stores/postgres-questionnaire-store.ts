@@ -20,8 +20,15 @@ interface QuestionnaireRow {
   id: string;
   name: string;
   flow_id: string;
+  direction: string | null;
   status: Questionnaire["status"];
   created_at: Date;
+}
+
+// The answering direction is nullable in SQL and optional in the domain type,
+// so every mapping site spreads it in rather than emitting `direction: null`.
+function directionOf(row: { direction: string | null }): { direction?: string } {
+  return row.direction !== null ? { direction: row.direction } : {};
 }
 
 interface ItemRow {
@@ -75,14 +82,19 @@ function mapItem(row: ItemRow, citations: QuestionnaireItemCitation[]): Question
 export class PostgresQuestionnaireStore implements QuestionnaireStore {
   constructor(private readonly pool: pg.Pool) {}
 
-  async create(input: { name: string; flowId: string; questions: string[] }): Promise<Questionnaire> {
+  async create(input: {
+    name: string;
+    flowId: string;
+    questions: string[];
+    direction?: string;
+  }): Promise<Questionnaire> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       const id = randomUUID();
       const inserted = await client.query<QuestionnaireRow>(
-        "INSERT INTO questionnaires (id, name, flow_id) VALUES ($1, $2, $3) RETURNING *",
-        [id, input.name, input.flowId]
+        "INSERT INTO questionnaires (id, name, flow_id, direction) VALUES ($1, $2, $3, $4) RETURNING *",
+        [id, input.name, input.flowId, input.direction ?? null]
       );
       const items = input.questions.map((question, position) => ({
         id: randomUUID(),
@@ -104,6 +116,7 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
         id: row.id,
         name: row.name,
         flowId: row.flow_id,
+        ...directionOf(row),
         status: row.status,
         createdAt: row.created_at.toISOString(),
         items: items.map((item) => ({
@@ -143,6 +156,7 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
       id: row.id,
       name: row.name,
       flowId: row.flow_id,
+      ...directionOf(row),
       status: row.status,
       createdAt: row.created_at.toISOString(),
       items: items.rows.map((item) => mapItem(item, citations.get(item.id) ?? []))
@@ -178,6 +192,7 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
       id: row.id,
       name: row.name,
       flowId: row.flow_id,
+      ...directionOf(row),
       status: row.status,
       createdAt: row.created_at.toISOString(),
       counts: {
@@ -204,12 +219,12 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
     flowId: string,
     embedding: number[],
     model: string
-  ): Promise<{ item: QuestionnaireItem; similarity: number } | undefined> {
-    const result = await this.pool.query<ItemRow & { similarity: number }>(
+  ): Promise<{ item: QuestionnaireItem; similarity: number; direction?: string } | undefined> {
+    const result = await this.pool.query<ItemRow & { similarity: number; direction: string | null }>(
       `
         SELECT i.id, i.questionnaire_id, i.position, i.question, i.status, i.outcome, i.answer, i.confidence,
                i.answered_at, i.question_log_id, i.reused_from_item_id, i.change_reason, i.error,
-               i.approved_at, i.stale_at_approval,
+               i.approved_at, i.stale_at_approval, q.direction,
                1 - (i.question_embedding <=> $3::vector) AS similarity
         FROM questionnaire_items i
         JOIN questionnaires q ON q.id = i.questionnaire_id
@@ -227,7 +242,7 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
       return undefined;
     }
     const citations = await this.loadCitations([row.id]);
-    return { item: mapItem(row, citations.get(row.id) ?? []), similarity: row.similarity };
+    return { item: mapItem(row, citations.get(row.id) ?? []), similarity: row.similarity, ...directionOf(row) };
   }
 
   async matchApprovedTopN(
@@ -235,12 +250,12 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
     embedding: number[],
     model: string,
     limit: number
-  ): Promise<Array<{ item: QuestionnaireItem; similarity: number }>> {
-    const result = await this.pool.query<ItemRow & { similarity: number }>(
+  ): Promise<Array<{ item: QuestionnaireItem; similarity: number; direction?: string }>> {
+    const result = await this.pool.query<ItemRow & { similarity: number; direction: string | null }>(
       `
         SELECT i.id, i.questionnaire_id, i.position, i.question, i.status, i.outcome, i.answer, i.confidence,
                i.answered_at, i.question_log_id, i.reused_from_item_id, i.change_reason, i.error,
-               i.approved_at, i.stale_at_approval,
+               i.approved_at, i.stale_at_approval, q.direction,
                1 - (i.question_embedding <=> $3::vector) AS similarity
         FROM questionnaire_items i
         JOIN questionnaires q ON q.id = i.questionnaire_id
@@ -256,7 +271,8 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
     const citations = await this.loadCitations(result.rows.map((row) => row.id));
     return result.rows.map((row) => ({
       item: mapItem(row, citations.get(row.id) ?? []),
-      similarity: row.similarity
+      similarity: row.similarity,
+      ...directionOf(row)
     }));
   }
 

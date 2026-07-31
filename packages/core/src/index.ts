@@ -383,6 +383,10 @@ export interface Questionnaire {
   id: string;
   name: string;
   flowId: string;
+  // Free-text steer set at creation and immutable thereafter, applied to every
+  // answer this questionnaire produces (docs/questionnaires.md). Absent when
+  // none was given.
+  direction?: string;
   status: "open" | "completed" | "archived";
   createdAt: string;
   items: QuestionnaireItem[];
@@ -392,6 +396,7 @@ export interface QuestionnaireSummary {
   id: string;
   name: string;
   flowId: string;
+  direction?: string;
   status: "open" | "completed" | "archived";
   createdAt: string;
   counts: {
