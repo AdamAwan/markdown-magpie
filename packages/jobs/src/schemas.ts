@@ -138,6 +138,11 @@ export const answerQuestionInputSchema = z.object({
   // The questionnaire's answering direction. Declared so the broker preserves it
   // from the enqueued input (the schema-stripping gotcha).
   direction: z.string().optional(),
+  // The previously-given answer this item adjudicates (questionnaire ingestion).
+  // UNTRUSTED external content — the watcher wraps it in the user turn and never
+  // system-prompts it. Declared so the broker preserves it from the enqueued
+  // input (the schema-stripping gotcha).
+  importedAnswer: z.string().optional(),
   expectedOutput: z.literal("answer_result")
 }) satisfies z.ZodType<ProviderInput<CoreAnswerQuestionJobInput>>;
 export const answerQuestionOutputSchema = z.object({
@@ -155,7 +160,11 @@ export const answerQuestionOutputSchema = z.object({
   // The reconciler's verdict when the job was given candidates to reconcile
   // against (questionnaire trust). Declared so the broker preserves it on
   // completion for the API to persist.
-  reuse: reconcileResultSchema.optional()
+  reuse: reconcileResultSchema.optional(),
+  // Stage-1 adjudication of importedAnswer against the answer this job just
+  // produced from the KB. Declared so the broker preserves it on completion for
+  // the API to persist. Absent when the job carried no imported answer.
+  importVerdict: z.enum(["confirmed", "divergent", "uncovered"]).optional()
 }) satisfies z.ZodType<AnswerQuestionJobOutput>;
 
 export const summarizeGapInputSchema = z.object({

@@ -565,3 +565,37 @@ test("answer output schema preserves the reuse verdict", () => {
   });
   assert.equal((parsed as { reuse?: { verdict: string } }).reuse?.verdict, "merged");
 });
+
+// Ingesting completed questionnaires: both fields must survive the broker, or
+// the import silently never reaches the watcher / the verdict silently never
+// comes back (the schema-stripping gotcha).
+test("answer input schema preserves the imported answer", () => {
+  const parsed = answerQuestionInputSchema.parse({
+    question: "Do you hold ISO 27001?",
+    flows: [{ id: "f", name: "F" }],
+    provider: "openai-compatible",
+    expectedOutput: "answer_result",
+    importedAnswer: "Yes, since 2021."
+  });
+  assert.equal((parsed as { importedAnswer?: string }).importedAnswer, "Yes, since 2021.");
+});
+
+test("answer output schema preserves the stage-1 import verdict", () => {
+  const parsed = answerQuestionOutputSchema.parse({
+    answer: "a",
+    confidence: "high",
+    citations: [],
+    importVerdict: "divergent"
+  });
+  assert.equal((parsed as { importVerdict?: string }).importVerdict, "divergent");
+});
+
+test("an unknown import verdict is rejected rather than coerced", () => {
+  const parsed = answerQuestionOutputSchema.safeParse({
+    answer: "a",
+    confidence: "high",
+    citations: [],
+    importVerdict: "maybe"
+  });
+  assert.equal(parsed.success, false);
+});

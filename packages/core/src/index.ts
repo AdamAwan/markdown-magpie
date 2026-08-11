@@ -860,6 +860,12 @@ export interface AnswerQuestionJobInput {
   // on both the fresh-answer and reconcile paths. Absent for live asks and
   // gap-closure re-asks.
   direction?: string;
+  // The previously-given answer this item is adjudicating (ingesting completed
+  // questionnaires — docs/superpowers/specs/2026-08-11-questionnaire-ingestion-design.md).
+  // UNTRUSTED external content: the watcher wraps it in the user turn behind an
+  // explicit boundary and never places it in a system prompt. It must not change
+  // the answer that gets written — only be judged against it.
+  importedAnswer?: string;
   expectedOutput: "answer_result";
 }
 
@@ -890,6 +896,11 @@ export interface AnswerQuestionJobOutput {
   // against. Present only when input.candidates was non-empty; the API uses
   // this to set the questionnaire item's outcome and basis items.
   reuse?: ReconcileResult;
+  // Stage-1 adjudication of input.importedAnswer against the answer this job
+  // just produced from the KB. Present only when the job carried an imported
+  // answer; the API persists it on the questionnaire item and uses it to decide
+  // whether the item escalates to the source-grounded stage-2 check.
+  importVerdict?: ImportVerdict;
 }
 
 export interface SummarizeGapJobInput {
