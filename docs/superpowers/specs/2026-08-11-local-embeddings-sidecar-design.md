@@ -131,7 +131,7 @@ in code would change production behaviour to suit a local demo.
 
 Instead, `scripts/eval-gap-threshold.ts` is re-run against `bge-base-en-v1.5` and
 the results published as a documented per-model override block that an operator
-enabling the profile applies wholesale. `EMBEDDINGS_TIMEOUT_MS` belongs in that block
+enabling the profile applies wholesale. `EMBEDDING_TIMEOUT_MS` belongs in that block
 too — cold CPU inference is slower than a hosted endpoint, and the default timeout
 was set for the latter.
 
