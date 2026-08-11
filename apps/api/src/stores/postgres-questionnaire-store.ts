@@ -489,6 +489,10 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
     await this.pool.query("UPDATE questionnaire_items SET import_verdict = $2 WHERE id = $1", [itemId, verdict]);
   }
 
+  async setAnswerText(itemId: string, answer: string): Promise<void> {
+    await this.pool.query("UPDATE questionnaire_items SET answer = $2 WHERE id = $1", [itemId, answer]);
+  }
+
   async listAwaitingEscalation(questionnaireId: string, limit: number): Promise<QuestionnaireItem[]> {
     const result = await this.pool.query<ItemRow>(
       `

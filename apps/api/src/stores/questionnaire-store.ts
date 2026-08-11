@@ -107,6 +107,12 @@ export interface QuestionnaireStore {
   // Stage-1 adjudication of an imported answer against the answer Magpie just
   // produced from the KB (ingestion spec D4).
   setImportVerdict(itemId: string, verdict: ImportVerdict): Promise<void>;
+  // Replaces the item's answer text, leaving its citations and freshness
+  // baseline untouched. Used when a reviewer approves the IMPORTED wording:
+  // the human's already-reviewed, customer-facing phrasing is kept, but the
+  // grounding stays Magpie's, so the answer still tracks the sections it was
+  // actually built from (ingestion spec D7).
+  setAnswerText(itemId: string, answer: string): Promise<void>;
   // Imported items whose stage-1 compare did NOT confirm the import, and so
   // need the source-grounded stage-2 check. Bounded by the caller: a large
   // import against a thin KB would otherwise fan out hundreds of agentic runs
@@ -404,6 +410,12 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
     const item = this.items.get(itemId);
     if (!item) return;
     item.importVerdict = verdict;
+  }
+
+  async setAnswerText(itemId: string, answer: string): Promise<void> {
+    const item = this.items.get(itemId);
+    if (!item) return;
+    item.answer = answer;
   }
 
   async listAwaitingEscalation(questionnaireId: string, limit: number): Promise<QuestionnaireItem[]> {

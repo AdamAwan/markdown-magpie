@@ -342,14 +342,24 @@ export async function handleQuestionnaireAnswerFailure(
   }
 }
 
-export type ApproveResult = { ok: true } | { ok: false; code: "not_found" | "not_answered" };
+export type ApproveResult = { ok: true } | { ok: false; code: "not_found" | "not_answered" | "claim_unsubstantiated" };
+
+// Which wording the reviewer is admitting into the match corpus. Absent means
+// "Magpie's own answer", which is the only option for a non-imported item and
+// the historical behaviour.
+export type ApproveUse = "imported" | "magpie";
 
 // Approval is the human act that admits an answer into the match corpus for
 // future questionnaires. The snapshot keeps the GENERATION-TIME content hashes
 // (what the answer was actually built from); if the KB has already moved on by
 // approval time the item is flagged stale_at_approval — exportable, but it can
 // never pass reuse check 1, by construction.
-export async function approveItem(ctx: AppContext, questionnaireId: string, itemId: string): Promise<ApproveResult> {
+export async function approveItem(
+  ctx: AppContext,
+  questionnaireId: string,
+  itemId: string,
+  options?: { use?: ApproveUse }
+): Promise<ApproveResult> {
   const questionnaire = await ctx.stores.questionnaires.get(questionnaireId);
   const item = questionnaire?.items.find((candidate) => candidate.id === itemId);
   if (!questionnaire || !item) {
@@ -357,6 +367,28 @@ export async function approveItem(ctx: AppContext, questionnaireId: string, item
   }
   if (item.status !== "answered") {
     return { ok: false, code: "not_answered" };
+  }
+  // The hard gate (ingestion spec D7). Approval admits an answer into the match
+  // corpus for FUTURE questionnaires, so approving imported wording the sources
+  // cannot back would re-serve an unbackable claim to next quarter's customer
+  // automatically, with no human in the loop. Refused outright — Magpie's own
+  // grounded answer stays approvable for the same item, which is the escape
+  // hatch that keeps this from being a dead end.
+  if (options?.use === "imported") {
+    if (!item.importedAnswer) {
+      return { ok: false, code: "not_answered" };
+    }
+    const openFindings = await ctx.stores.assertedClaims.openForItem(itemId);
+    if (openFindings.length > 0) {
+      logger.info(
+        { itemId, questionnaireId, findingCount: openFindings.length },
+        "refused to approve imported wording: item has open asserted-claim findings"
+      );
+      return { ok: false, code: "claim_unsubstantiated" };
+    }
+    // Keep the human's reviewed phrasing, keep Magpie's citations: the answer
+    // stays grounded and keeps tracking the sections it was built from.
+    await ctx.stores.questionnaires.setAnswerText(itemId, item.importedAnswer);
   }
   const citations =
     item.outcome === "reused" && item.reusedFromItemId

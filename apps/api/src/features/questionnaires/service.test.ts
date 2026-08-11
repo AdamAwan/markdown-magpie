@@ -987,3 +987,114 @@ test("a blank imported answer normalises to absent rather than reaching the job"
   const job = await jobForLog(ctx, item?.questionLogId);
   assert.equal((job?.input as { importedAnswer?: string }).importedAnswer, undefined);
 });
+
+// --- the approval gate (ingestion spec D7) ---
+
+// Creates an imported questionnaire and answers its single item, leaving it
+// "answered" and therefore approvable.
+async function answeredImportedItem(
+  ctx: Ctx,
+  importedAnswer = "Yes, since 2021."
+): Promise<{ questionnaireId: string; itemId: string }> {
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "SIG 2025",
+    flowId: "security",
+    importOrigin: "sig.xlsx",
+    questions: [{ question: "Do you hold ISO 27001?", importedAnswer }]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const itemId = created.questionnaire.items[0].id;
+  const item = await ctx.stores.questionnaires.itemById(itemId);
+  const job = await jobForLog(ctx, item?.questionLogId);
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, confidentOutput());
+  return { questionnaireId: created.questionnaire.id, itemId };
+}
+
+test("approving the IMPORTED wording is refused while the item has an open finding", async () => {
+  const ctx = flowContext();
+  const { questionnaireId, itemId } = await answeredImportedItem(ctx);
+  await ctx.stores.assertedClaims.open({
+    flowId: "security",
+    itemId,
+    kind: "unsubstantiated",
+    question: "Do you hold ISO 27001?",
+    claim: "We have held ISO 27001 since 2021.",
+    positions: []
+  });
+
+  const result = await questionnaires.approveItem(ctx, questionnaireId, itemId, { use: "imported" });
+  assert.deepEqual(result, { ok: false, code: "claim_unsubstantiated" });
+
+  // And it really did not enter the corpus.
+  const after = await ctx.stores.questionnaires.itemById(itemId);
+  assert.notEqual(after?.status, "approved");
+});
+
+test("Magpie's grounded answer stays approvable on an item with an open finding", async () => {
+  // The escape hatch: the gate refuses the unbackable WORDING, not the item.
+  const ctx = flowContext();
+  const { questionnaireId, itemId } = await answeredImportedItem(ctx);
+  await ctx.stores.assertedClaims.open({
+    flowId: "security",
+    itemId,
+    kind: "contradicted",
+    question: "Do you hold ISO 27001?",
+    claim: "We have held ISO 27001 since 2021.",
+    positions: [{ sourceId: "policy", path: "certs.md", statement: "certified 2022" }]
+  });
+
+  const result = await questionnaires.approveItem(ctx, questionnaireId, itemId, { use: "magpie" });
+  assert.deepEqual(result, { ok: true });
+  const after = await ctx.stores.questionnaires.itemById(itemId);
+  assert.equal(after?.status, "approved");
+  assert.equal(after?.answer, "We hold ISO 27001.");
+});
+
+test("approving imported wording keeps the human phrasing and Magpie's citations", async () => {
+  const ctx = flowContext();
+  const { questionnaireId, itemId } = await answeredImportedItem(ctx);
+  const result = await questionnaires.approveItem(ctx, questionnaireId, itemId, { use: "imported" });
+  assert.deepEqual(result, { ok: true });
+
+  const after = await ctx.stores.questionnaires.itemById(itemId);
+  assert.equal(after?.answer, "Yes, since 2021.");
+  assert.ok((after?.citations.length ?? 0) > 0, "grounding must stay Magpie's");
+});
+
+test("a resolved finding unblocks approving the imported wording", async () => {
+  const ctx = flowContext();
+  const { questionnaireId, itemId } = await answeredImportedItem(ctx);
+  const { claim } = await ctx.stores.assertedClaims.open({
+    flowId: "security",
+    itemId,
+    kind: "unsubstantiated",
+    question: "Do you hold ISO 27001?",
+    claim: "We have held ISO 27001 since 2021.",
+    positions: []
+  });
+  assert.deepEqual(await questionnaires.approveItem(ctx, questionnaireId, itemId, { use: "imported" }), {
+    ok: false,
+    code: "claim_unsubstantiated"
+  });
+
+  await ctx.stores.assertedClaims.resolve(claim.id, "added the certificate to the compliance source repo");
+  assert.deepEqual(await questionnaires.approveItem(ctx, questionnaireId, itemId, { use: "imported" }), { ok: true });
+});
+
+test("approving an ordinary item is unaffected by the gate", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "ordinary",
+    flowId: "security",
+    questions: ["Do you hold ISO 27001?"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const itemId = created.questionnaire.items[0].id;
+  const item = await ctx.stores.questionnaires.itemById(itemId);
+  const job = await jobForLog(ctx, item?.questionLogId);
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, confidentOutput());
+
+  assert.deepEqual(await questionnaires.approveItem(ctx, created.questionnaire.id, itemId), { ok: true });
+});

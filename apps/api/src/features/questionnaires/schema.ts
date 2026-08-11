@@ -38,6 +38,12 @@ export const createQuestionnaireSchema = z.object({
   importOrigin: z.string().trim().max(500).optional()
 });
 
+// Which wording the reviewer is approving into the match corpus. Optional, so a
+// caller that sends no body at all keeps the pre-ingestion behaviour.
+export const approveItemSchema = z.object({
+  use: z.enum(["imported", "magpie"]).optional()
+});
+
 export const exportQuerySchema = z.object({
   format: z.enum(["md", "csv"]).default("md")
 });
