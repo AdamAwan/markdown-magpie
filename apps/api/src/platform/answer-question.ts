@@ -56,6 +56,10 @@ export function buildAnswerQuestionInput(
     // The owning questionnaire's answering direction (questionnaire mode only).
     // Absent for live asks and gap-closure re-asks.
     direction?: string;
+    // The previously-given answer this item adjudicates (ingesting completed
+    // questionnaires). Untrusted content — the watcher wraps it in the user turn.
+    // Absent for every path except an imported questionnaire item.
+    importedAnswer?: string;
   }
 ): AnswerQuestionJobInput & { provider: AiProviderName } {
   const flows = ctx.knowledgeConfig.flows.map((flow) => ({
@@ -73,6 +77,7 @@ export function buildAnswerQuestionInput(
     ...(options.conversationFlowId ? { conversationFlowId: options.conversationFlowId } : {}),
     ...(options.candidates ? { candidates: options.candidates } : {}),
     ...(options.direction ? { direction: options.direction } : {}),
+    ...(options.importedAnswer ? { importedAnswer: options.importedAnswer } : {}),
     provider: ctx.config.get().aiProvider,
     expectedOutput: "answer_result"
   };

@@ -8,6 +8,8 @@ import { PostgresScheduledTaskStore } from "../stores/postgres-scheduled-task-st
 import { PostgresPatrolStore } from "../stores/postgres-patrol-store.js";
 import { PostgresSourceMapStore } from "../stores/postgres-source-map-store.js";
 import { PostgresSourceConflictStore } from "../stores/postgres-source-conflict-store.js";
+import { InMemoryAssertedClaimsStore } from "../stores/asserted-claims-store.js";
+import { PostgresAssertedClaimsStore } from "../stores/postgres-asserted-claims-store.js";
 import { InMemorySourceConflictStore } from "../stores/source-conflict-store.js";
 import { PostgresSourceSyncStore } from "../stores/postgres-source-sync-store.js";
 import { PostgresWatcherRegistryStore } from "../stores/postgres-watcher-registry-store.js";
@@ -26,6 +28,8 @@ import { InMemoryPatrolStore } from "../stores/patrol-store.js";
 import { InMemorySeedPlanStore } from "../stores/seed-plan-store.js";
 import { PostgresSeedPlanStore } from "../stores/postgres-seed-plan-store.js";
 import { InMemoryQuestionnaireStore } from "../stores/questionnaire-store.js";
+import { InMemoryQuestionnaireImportStore } from "../stores/questionnaire-import-store.js";
+import { PostgresQuestionnaireImportStore } from "../stores/postgres-questionnaire-import-store.js";
 import { PostgresQuestionnaireStore } from "../stores/postgres-questionnaire-store.js";
 import { InMemorySourceMapStore } from "../stores/source-map-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
@@ -143,6 +147,32 @@ export function createSourceConflictStore(
     "SOURCE_CONFLICT_STORE",
     (pool) => new PostgresSourceConflictStore(pool),
     () => new InMemorySourceConflictStore()
+  );
+}
+
+export function createAssertedClaimsStore(
+  config: AppConfig,
+  pool: pg.Pool
+): InMemoryAssertedClaimsStore | PostgresAssertedClaimsStore {
+  return createStore<InMemoryAssertedClaimsStore | PostgresAssertedClaimsStore>(
+    config,
+    pool,
+    "ASSERTED_CLAIMS_STORE",
+    (pool) => new PostgresAssertedClaimsStore(pool),
+    () => new InMemoryAssertedClaimsStore()
+  );
+}
+
+export function createQuestionnaireImportStore(
+  config: AppConfig,
+  pool: pg.Pool
+): InMemoryQuestionnaireImportStore | PostgresQuestionnaireImportStore {
+  return createStore<InMemoryQuestionnaireImportStore | PostgresQuestionnaireImportStore>(
+    config,
+    pool,
+    "QUESTIONNAIRE_IMPORT_STORE",
+    (pool) => new PostgresQuestionnaireImportStore(pool),
+    () => new InMemoryQuestionnaireImportStore()
   );
 }
 

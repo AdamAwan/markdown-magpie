@@ -1,5 +1,7 @@
 import type { AiUsage, AnswerQuestionJobInput, AnswerQuestionJobOutput } from "@magpie/core";
 import { z } from "zod";
+import { handleImportVerificationCompletion } from "../questionnaires/import-escalation.js";
+import { applyColumnMapping } from "../questionnaire-imports/service.js";
 import { logger } from "../../logger.js";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
 import { isRepairableJobType, jobDefinition } from "@magpie/jobs";
@@ -7,7 +9,11 @@ import type { AppContext } from "../../context.js";
 import { HttpError } from "../../http/errors.js";
 import type { JobListFilters } from "../../jobs/broker.js";
 import type { WatcherTouch } from "../../stores/watcher-registry-store.js";
-import { refreshFlowSnapshotOutputSchema } from "@magpie/jobs";
+import {
+  mapQuestionnaireColumnsOutputSchema,
+  refreshFlowSnapshotOutputSchema,
+  verifyImportedAnswerOutputSchema
+} from "@magpie/jobs";
 import * as proposalsService from "../proposals/service.js";
 import * as seedService from "../seed/service.js";
 import * as questionnairesService from "../questionnaires/service.js";
@@ -447,6 +453,25 @@ export async function completeJob(
     // store failure here rides the 500-replay contract like its neighbours.
     if (isAnswerJobType(existingJob.type) && isAnswerQuestionJobOutput(resultData)) {
       await questionnairesService.handleQuestionnaireAnswerCompletion(ctx, existingJob, resultData);
+    }
+    // Stage-2 findings for an imported questionnaire answer route to a knowledge
+    // gap (the sources back it, the KB never wrote it down) or to a register
+    // entry. Without this the job runs and its findings vanish.
+    if (existingJob.type === "verify_imported_answer") {
+      const parsed = verifyImportedAnswerOutputSchema.safeParse(resultData);
+      const input = existingJob.input as { itemId?: unknown };
+      if (parsed.success && typeof input.itemId === "string") {
+        await handleImportVerificationCompletion(ctx, input.itemId, parsed.data.findings);
+      }
+    }
+    // The proposed column mapping has to land on the import row, or the mapping
+    // runs and its output vanishes while the operator polls a "mapping" import
+    // forever.
+    if (existingJob.type === "map_questionnaire_columns") {
+      const parsed = mapQuestionnaireColumnsOutputSchema.safeParse(resultData);
+      if (parsed.success) {
+        await applyColumnMapping(ctx, existingJob.id, parsed.data);
+      }
     }
     const draftedProposal = await proposalsService.createProposalFromCompletedJob(ctx, existingJob, resultData);
     if (draftedProposal) {

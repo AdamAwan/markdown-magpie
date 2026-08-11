@@ -11,25 +11,25 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@auth0/auth0-react": "^2.21.0",
-    "@dagrejs/dagre": "^3.0.0",
+    "@auth0/auth0-react": "^2.23.0",
+    "@dagrejs/dagre": "^3.1.1",
     "@emotion/cache": "^11.14.0",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
     "@radix-ui/react-tooltip": "^1.2.12",
     "@xyflow/react": "^12.11.2",
-    "lucide-react": "^1.25.0",
-    "next": "^16.2.11",
+    "lucide-react": "^1.30.0",
+    "next": "^16.3.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",
-    "recharts": "^3.9.2"
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
-    "@happy-dom/global-registrator": "^20.10.6",
-    "@types/node": "^26.1.1",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
+    "@happy-dom/global-registrator": "^20.11.2",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
     "typescript": "^6.0.3"
   }
 }

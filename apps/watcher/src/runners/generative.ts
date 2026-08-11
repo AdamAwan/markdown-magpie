@@ -17,6 +17,7 @@ import {
   VERIFY_ANSWER,
   withPersona,
   withDirection,
+  withImportedAnswer,
   wrapUntrusted
 } from "@magpie/prompts";
 import { routeQuestionToFlow, type FlowRoute, type RoutableFlow } from "@magpie/retrieval";
@@ -42,7 +43,7 @@ import {
   type AnswerOutput,
   type ReconcileDecision
 } from "../job-prompts.js";
-import type { AnswerCandidate, AnswerTrace } from "@magpie/core";
+import type { AnswerCandidate, AnswerTrace, ImportVerdict } from "@magpie/core";
 
 export interface GenerativeJobOptions {
   job: JobView;
@@ -115,9 +116,28 @@ type AnswerQuestionInput = z.infer<typeof answerQuestionInputSchema>;
 async function answer(options: GenerativeJobOptions): Promise<unknown> {
   const input = answerQuestionInputSchema.parse(options.job.input);
   if (input.candidates && input.candidates.length > 0) {
-    return reconcileOrAnswer(options, input, input.candidates);
+    return withImportVerdict(await reconcileOrAnswer(options, input, input.candidates), input);
   }
-  return answerCore(options, input);
+  return withImportVerdict(await answerCore(options, input), input);
+}
+
+// Settles the stage-1 verdict for an imported answer (ingestion spec D4).
+//
+// The ungrounded case is decided in CODE, never trusted from the model:
+// "uncovered" is defined as zero citations, the same equivalence `unanswerable`
+// already uses (docs/questionnaires.md Q12). A model that reports "confirmed"
+// while citing nothing is exactly the failure this feature exists to catch, so
+// its claim is overridden rather than believed. A missing or garbled verdict on
+// a grounded answer falls back to "divergent" — the direction that escalates to
+// the source-grounded check, because silently confirming is the unsafe default.
+function withImportVerdict(output: unknown, input: AnswerQuestionInput): unknown {
+  if (!input.importedAnswer || !output || typeof output !== "object") {
+    return output;
+  }
+  const built = output as { citations?: unknown[]; importVerdict?: ImportVerdict };
+  const grounded = Array.isArray(built.citations) && built.citations.length > 0;
+  const verdict: ImportVerdict = !grounded ? "uncovered" : (built.importVerdict ?? "divergent");
+  return { ...built, importVerdict: verdict };
 }
 
 // The reconcile step (the ONLY place the watcher runs the model for reuse). It
@@ -345,7 +365,8 @@ async function answerCore(
       false,
       unsatisfiedSearches,
       retrievalMode,
-      signal
+      signal,
+      input.importedAnswer
     );
     const assessment = parseAssessment(content);
     if (assessment.action === "answer") {
@@ -401,7 +422,8 @@ async function answerCore(
     true,
     unsatisfiedSearches,
     retrievalMode,
-    signal
+    signal,
+    input.importedAnswer
   );
   const output = buildAnswerOutput(
     finalContent,
@@ -560,7 +582,8 @@ async function assess(
   forceAnswer: boolean,
   unsatisfiedSearches: Set<string>,
   retrievalMode: "hybrid" | "keyword",
-  signal: AbortSignal
+  signal: AbortSignal,
+  importedAnswer?: string
 ): Promise<string> {
   // Retrieved KB sections are untrusted reference material: wrap them in the
   // shared delimiters so an embedded directive ("ignore your instructions",
@@ -579,11 +602,15 @@ async function assess(
   const note =
     unsatisfiedSearches.size > 0 ? buildEmptySearchNote([...unsatisfiedSearches], retrievalMode, forceAnswer) : "";
   const emptySearchNote = note ? `\n\n${note}` : "";
+  const base = `Question:\n${question}\n\nContext:\n${context}${emptySearchNote}${directive}`;
+  // An imported answer is untrusted EXTERNAL content (ingestion spec D2), so it
+  // rides in the user turn behind the same delimiters the retrieved sections
+  // use — never in the system prompt, where a questionnaire supplied by a
+  // customer's procurement team would read as trusted guidance.
+  const content = importedAnswer ? withImportedAnswer(base, importedAnswer, wrapUntrusted) : base;
   const response = await model.complete({
     system,
-    messages: [
-      { role: "user", content: `Question:\n${question}\n\nContext:\n${context}${emptySearchNote}${directive}` }
-    ],
+    messages: [{ role: "user", content }],
     responseFormat: "json",
     signal
   });

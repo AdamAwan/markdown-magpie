@@ -10,6 +10,7 @@ import {
   improveDocumentInputSchema,
   outlineFlowSeedInputSchema,
   verifyDocumentInputSchema,
+  verifyImportedAnswerInputSchema,
   type JobType,
   type JobView
 } from "@magpie/jobs";
@@ -48,10 +49,12 @@ export function hasFetchableSources(descriptors: SourceDescriptor[]): boolean {
 }
 
 // The input schema of each source-grounded job type — every input that carries
-// `sources: SourceDescriptor[]`. Six types: five arrived with the source-agentic
-// grounding increments (seeding, gap drafting, patrols) and outline_flow_seed
-// joined with self-seeding flows (whole-flow seed planning). A type absent here
-// is not source-grounded and never routes to the agentic tiers.
+// `sources: SourceDescriptor[]`. Seven types: five arrived with the source-agentic
+// grounding increments (seeding, gap drafting, patrols), outline_flow_seed joined
+// with self-seeding flows (whole-flow seed planning), and verify_imported_answer
+// with questionnaire ingestion. A type absent here is not source-grounded and
+// never routes to the agentic tiers — which for stage 2 would mean judging a
+// claim without ever reading a source, the exact thing it exists to do.
 function sourceGroundedInputSchema(type: JobType) {
   switch (type) {
     case "draft_seed_document":
@@ -62,6 +65,8 @@ function sourceGroundedInputSchema(type: JobType) {
       return outlineFlowSeedInputSchema;
     case "verify_document":
       return verifyDocumentInputSchema;
+    case "verify_imported_answer":
+      return verifyImportedAnswerInputSchema;
     case "correct_document":
       return correctDocumentInputSchema;
     case "improve_document":

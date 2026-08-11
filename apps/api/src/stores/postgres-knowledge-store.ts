@@ -23,7 +23,7 @@ const SECTION_INSERT_CHUNK = 1000;
 // the 65535 bind-parameter cap while still cutting round-trips drastically.
 const EMBEDDING_UPDATE_CHUNK = 1000;
 
-// ts_rank weight array, ordered {D, C, B, A} — see migration 0063 for what each
+// ts_rank weight array, ordered {D, C, B, A} — see migration 0067 for what each
 // weight labels. Body text (C) is deliberately well below heading (A) and
 // heading-path/file-path (B): a term in a heading is far stronger evidence of
 // aboutness than the same term buried in prose.

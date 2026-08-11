@@ -85,7 +85,7 @@ callbacks. Weak or unanswerable questions feed the gaps subsystem
   `quote_literal`'d), so Postgres's own stemming and stopword removal build the query and
   a section covering *part* of the question still surfaces. Ranking is
   `ts_rank_cd({0.1, 0.3, 0.6, 1.0}, search_tsv, any_query, 32)` over the weighted vector
-  built by migration `0063` — `A` heading, `B` heading path, `B` file path (punctuation
+  built by migration `0067` — `A` heading, `B` heading path, `B` file path (punctuation
   flattened to spaces), `C` body — multiplied by `STRICT_MATCH_BOOST = 1.5` when the
   section *also* satisfies the strict `websearch_to_tsquery`. Normalisation flag `32` is
   `rank / (rank + 1)`, already bounded in `[0,1)`, so there is **no** application-side
@@ -171,7 +171,7 @@ callbacks. Weak or unanswerable questions feed the gaps subsystem
   could not measure a hybrid prompt change.
 
   Gaps recorded from `auto` / `followup` sources are stamped with the active mode on
-  `question_gaps.retrieval_mode` (migration `0064`; NULL = pre-change, or not derived from
+  `question_gaps.retrieval_mode` (migration `0068`; NULL = pre-change, or not derived from
   retrieval). Gap candidacy (`gapIdsForSummary`) excludes `keyword`-mode gaps, so they
   never drive unattended proposal generation, while remaining fully visible in the console.
 
@@ -279,8 +279,8 @@ See [api.md](./api.md) for the full request/response reference.
 | Retrieve callback + relevance floor | `apps/api/src/features/retrieve/{routes,service}.ts` |
 | Route callback (embedding-first) | `apps/api/src/features/route/{routes,service}.ts` |
 | Hybrid search + RRF fusion | `apps/api/src/stores/knowledge-index.ts`, `apps/api/src/stores/postgres-knowledge-store.ts`, `packages/retrieval/src/rrf.ts` |
-| Weighted FTS vector + refresh trigger | `packages/db/migrations/0063_weighted_section_fts.sql` (`document_sections_search_tsv_refresh`, `document_sections_search_tsv_trg`) |
-| Gap retrieval-mode stamp + candidacy gate | `packages/db/migrations/0064_gap_retrieval_mode.sql`, `apps/api/src/stores/postgres-question-log-store.ts` |
+| Weighted FTS vector + refresh trigger | `packages/db/migrations/0067_weighted_section_fts.sql` (`document_sections_search_tsv_refresh`, `document_sections_search_tsv_trg`) |
+| Gap retrieval-mode stamp + candidacy gate | `packages/db/migrations/0068_gap_retrieval_mode.sql`, `apps/api/src/stores/postgres-question-log-store.ts` |
 | Empty-search framing | `apps/watcher/src/job-prompts.ts` (`buildEmptySearchNote`) |
 | Flow router (pure) | `packages/retrieval/src/flow-router.ts` |
 | Embedding providers | `packages/retrieval/src/embeddings.ts` |

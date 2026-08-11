@@ -102,6 +102,7 @@ export type ConsoleSection =
   | "knowledge"
   | "gaps"
   | "conflicts"
+  | "asserted-claims"
   | "seed"
   | "questionnaires"
   | "source-map"

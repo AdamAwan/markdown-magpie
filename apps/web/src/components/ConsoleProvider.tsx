@@ -44,8 +44,16 @@ import {
   WatcherView,
   WorkersResponse
 } from "../lib/types";
-import type { Questionnaire, QuestionnaireSummary, SeedPlan } from "@magpie/core";
-import { apiDelete, apiDownload, apiGet, apiPatch, apiPost, errorMessage } from "../lib/api";
+import type {
+  AssertedClaim,
+  ImportSheetPreview,
+  Questionnaire,
+  QuestionnaireImport,
+  QuestionnaireSummary,
+  SeedPlan,
+  SheetMapping
+} from "@magpie/core";
+import { apiDelete, apiDownload, apiGet, apiPatch, apiPost, apiUpload, errorMessage } from "../lib/api";
 import { knowledgeFlows } from "../lib/config";
 import {
   BulkProposalAction,
@@ -967,20 +975,26 @@ function useConsoleController() {
   async function createQuestionnaire(
     name: string,
     flowId: string,
-    questions: string[],
+    questions: Array<string | { question: string; importedAnswer?: string }>,
     // The answering direction — omitted from the body when unset so a blank
     // field is indistinguishable from never having supplied one.
-    direction?: string
+    direction?: string,
+    // Where an imported batch came from; its presence switches the questionnaire
+    // onto the adjudication path (questionnaire ingestion).
+    importOrigin?: string
   ): Promise<Questionnaire | undefined> {
     try {
       const { questionnaire } = await apiPost<{ questionnaire: Questionnaire }>("/questionnaires", {
         name,
         flowId,
         questions,
-        ...(direction ? { direction } : {})
+        ...(direction ? { direction } : {}),
+        ...(importOrigin ? { importOrigin } : {})
       });
       showMessage(
-        "Questionnaire created — matched items reuse prior approved answers; the rest are answering now.",
+        importOrigin
+          ? "Questionnaire imported — every answer is being adjudicated against the knowledge base, not trusted."
+          : "Questionnaire created — matched items reuse prior approved answers; the rest are answering now.",
         "info"
       );
       return questionnaire;
@@ -990,11 +1004,96 @@ function useConsoleController() {
     }
   }
 
-  async function approveQuestionnaireItem(questionnaireId: string, itemId: string): Promise<boolean> {
+  // `use` picks which wording enters the match corpus for an imported item
+  // (questionnaire ingestion). Omitted for an ordinary questionnaire, where
+  // there is only Magpie's answer to approve.
+  // The asserted-claims register for a flow: findings the source-grounded check
+  // raised against previously-given questionnaire answers.
+  // --- uploading a questionnaire file (docs/questionnaires.md Q29+) ----------
+  // An upload creates a staging import, never a questionnaire: the operator
+  // confirms the detected mapping first, and only that creates anything.
+
+  async function uploadQuestionnaireImport(
+    file: File,
+    name: string,
+    flowId: string
+  ): Promise<QuestionnaireImport | undefined> {
+    try {
+      const form = new FormData();
+      form.set("file", file);
+      form.set("name", name);
+      form.set("flowId", flowId);
+      const body = await apiUpload<{ import: QuestionnaireImport }>("/questionnaire-imports", form);
+      return body.import;
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
+  async function getQuestionnaireImport(
+    id: string
+  ): Promise<{ import: QuestionnaireImport; preview: ImportSheetPreview[] } | undefined> {
+    try {
+      return await apiGet<{ import: QuestionnaireImport; preview: ImportSheetPreview[] }>(
+        `/questionnaire-imports/${encodeURIComponent(id)}`
+      );
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
+  async function confirmQuestionnaireImport(
+    id: string,
+    body: { sheets: Array<{ sheetIndex: number; include: boolean; mapping: SheetMapping }>; promoted?: string[] }
+  ): Promise<Questionnaire | undefined> {
+    try {
+      const result = await apiPost<{ questionnaire: Questionnaire }>(
+        `/questionnaire-imports/${encodeURIComponent(id)}/confirm`,
+        body
+      );
+      showMessage(
+        "Questionnaire imported — every answer is being adjudicated against the knowledge base, not trusted.",
+        "info"
+      );
+      return result.questionnaire;
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
+  async function discardQuestionnaireImport(id: string): Promise<void> {
+    try {
+      await apiDelete(`/questionnaire-imports/${encodeURIComponent(id)}`);
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    }
+  }
+
+  async function listAssertedClaims(flowId: string): Promise<AssertedClaim[]> {
+    try {
+      const body = await apiGet<{ claims: AssertedClaim[] }>(
+        `/asserted-claims?status=open&flowId=${encodeURIComponent(flowId)}`
+      );
+      return body.claims;
+    } catch {
+      // A register outage must not break the worksheet; the server's 409 on
+      // approving unbackable wording remains the real guard.
+      return [];
+    }
+  }
+
+  async function approveQuestionnaireItem(
+    questionnaireId: string,
+    itemId: string,
+    use?: "imported" | "magpie"
+  ): Promise<boolean> {
     try {
       await apiPost<{ ok: boolean }>(
         `/questionnaires/${encodeURIComponent(questionnaireId)}/items/${encodeURIComponent(itemId)}/approve`,
-        {}
+        use ? { use } : {}
       );
       showMessage("Answer approved — it joins the match corpus for future questionnaires.", "success");
       return true;
@@ -1220,6 +1319,11 @@ function useConsoleController() {
     getQuestionnaire,
     createQuestionnaire,
     approveQuestionnaireItem,
+    listAssertedClaims,
+    uploadQuestionnaireImport,
+    getQuestionnaireImport,
+    confirmQuestionnaireImport,
+    discardQuestionnaireImport,
     approveReusedItems,
     exportQuestionnaire
   };

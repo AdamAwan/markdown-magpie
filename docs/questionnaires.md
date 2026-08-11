@@ -199,6 +199,150 @@ Questionnaire item asks record question logs with `purpose: "questionnaire"`:
   console's authed download (a plain `<a href>` omits the bearer token and 401s under
   Auth0).
 
+## Ingesting completed questionnaires
+
+Reading a questionnaire the organisation already answered, and using its answers as
+**evidence to be adjudicated** rather than answers to be trusted. Three outcomes: the KB gets
+richer, the KB gets audited, and every claim nothing can back surfaces in a register.
+
+- **Q19** — **An imported questionnaire is a questionnaire.** `questionnaires.import_origin`
+  (nullable) is the single switch; its presence routes the batch onto the adjudication path,
+  and its absence leaves behaviour byte-for-byte as it was before ingestion existed. Items
+  carry `imported_answer`. Creation accepts either a bare question string or
+  `{question, importedAnswer?}`, normalised once in the service (a blank imported answer
+  becomes absent, as a blank `direction` does).
+- **Q20** — **The imported answer is untrusted external input**, the same trust class as
+  fetched web content ([ingestion.md IN4](./ingestion.md)) — **not** the operator-authored
+  class of `direction` (Q4b). It is wrapped in the untrusted delimiters in the **user** turn,
+  never a system prompt, behind `IMPORTED_ANSWER_GUARD`: it is not a source, it may not be
+  cited, and it must not change the answer written. A questionnaire arriving from a
+  customer's procurement team is exactly the artifact an attacker would inject through.
+- **Q21** — **Imported items never fast-path** (Q6). Verbatim reuse short-circuits the model,
+  and the adjudication needs Magpie's *own* fresh KB answer to grade the import against.
+  Embeddings are still computed and stored, so approved imported items join the match corpus
+  for **future** questionnaires. A real one-off cost, paid deliberately.
+- **Q22** — **Stage 1 — the free compare.** `answer_question_batch` already holds the question
+  and the retrieved context, so the imported answer rides along in its input and the job emits
+  a verdict alongside the answer it was producing anyway: **no extra AI call**.
+
+  | Verdict | Meaning | Next |
+  |---|---|---|
+  | `confirmed` | Magpie's KB answer agrees on every material point | stops here |
+  | `divergent` | both grounded, materially different | stage 2 |
+  | `uncovered` | Magpie's answer cites nothing | stage 2 |
+
+  `uncovered` reuses the Q12 equivalence (zero citations), decided in **code**: a model
+  reporting `confirmed` while citing nothing is exactly the failure this exists to catch. A
+  missing or garbled verdict on a grounded answer falls back to `divergent`, because silently
+  confirming is the unsafe default.
+- **Q23** — **Stage 2 — the source-grounded per-claim check.** `verify_imported_answer`
+  (provider-routed, source-grounded, 15-min expiry — routed exactly like `verify_document`,
+  and registered in `sourceGroundedInputSchema` so it actually reaches the checkouts). Metered
+  by the global AI cap but **not** interactive, so a large import can never erode the reserve
+  protecting live `/api/ask`. Granularity is **per claim**: one answer asserting three things
+  can be right about two of them.
+
+  | Finding | Meaning | Routing |
+  |---|---|---|
+  | `documented-elsewhere` | sources back it, the KB never wrote it down | `import` gap → reconciler → proposal → PR |
+  | `contradicted` | sources say something materially different | `asserted_claims` register |
+  | `unsubstantiated` | no source anywhere asserts it | `asserted_claims` register |
+  | `source-conflict` | sources disagree with *each other* | existing conflict register ([source-conflicts.md](./source-conflicts.md)) |
+
+  `documented-elsewhere` is the flywheel: the past answer sets the agenda, the **sources**
+  supply the facts, and the imported text never reaches the drafting agent as content.
+- **Q24** — **Escalation is bounded**, in the manner of `MAX_DRAFTS_PER_TICK`:
+  `MAX_ESCALATIONS_PER_TICK` (**10**) per tick, with the remainder **deferred and logged**,
+  never dropped. Drip-style derived state — a worksheet read or a stage-1 completion drains
+  it — so an API restart can never wedge an ingestion part-way. Dequeuing uses a dedicated
+  `import_escalated_at` stamp rather than overwriting `import_verdict`, which would make the
+  worksheet report a stage-1 verdict the adjudication never reached.
+- **Q25** — **The asserted-claims register.** `contradicted` and `unsubstantiated` are two
+  kinds of one entity, mirroring how `verify_document` returns two finding kinds down one
+  pipe: both resolve identically, so one register with a `kind`. Detection upserts on
+  fingerprint and **never** writes `status`, which is what keeps a human's dismissal sticky
+  across re-ingestion. Magpie never adjudicates and never edits a source to make a claim
+  true — the posture source conflicts already take. Resolving or dismissing **requires a
+  note**: an entry closed without a reason defeats the audit trail the register exists to be.
+- **Q26** — **The approval gate.** An item with an open `unsubstantiated`/`contradicted`
+  finding **cannot be approved with the imported wording** (409 `claim_unsubstantiated`).
+  Approval admits an answer into the match corpus (Q16), so it would re-serve an unbackable
+  claim to next quarter's customer with no human in the loop. Magpie's own grounded answer
+  stays approvable for the same item, so the gate is never a dead end. Approving the imported
+  wording keeps the human's reviewed phrasing and **Magpie's citations**, so the answer stays
+  grounded and keeps tracking the sections it was built from.
+- **Q27** — **`import` is a sixth gap source** alongside `auto`/`manual`/`followup`/
+  `verification`/`feedback` ([gaps-and-maintenance.md G1](./gaps-and-maintenance.md)). A
+  `documented-elsewhere` item is *not* unanswerable — it answered fine and cites sections — so
+  the Q14 unanswerable→gap route never fires for it. Like `manual` and `verification` it
+  survives a re-answer (only `auto`/`followup` are rewritten), because it records a human
+  assertion rather than a model judgement. Raising is idempotent per (question, summary).
+
+- **Q28** — **The console.** An imported item renders **side by side** on the worksheet
+  (`ImportedAnswerPanel`): the previously-given wording against Magpie's KB-derived answer,
+  the stage-1 verdict, and any live findings inline with the source positions that produced
+  them. *Approve imported* is disabled on an item with an open finding — the server's 409
+  (Q26) is the real guard, the disabled button is so a reviewer is not invited to try. The
+  create form takes two-column paste (`parseTwoColumnPaste`: question, tab, previous answer —
+  a spreadsheet selection already carries the tab) plus an optional import source. The
+  register has its own page at `/asserted-claims`, filterable by status, where resolving or
+  dismissing requires a note.
+
+## Uploading a questionnaire file
+
+Turning a real questionnaire file — XLSX or CSV — into the `{question, importedAnswer?}` pairs
+the ingestion pipeline above already consumes. Nothing downstream changes: this is a second
+way to fill `POST /api/questionnaires`, not a second questionnaire model.
+
+- **Q29** — **An upload is a staging resource, not a second questionnaire path.** A file
+  creates a `questionnaire_imports` row; only *confirm* creates a questionnaire, and it does
+  so by calling the ordinary create service with `importOrigin` set to the file's name (Q19).
+  The questionnaire model never learns about files, sheets or columns — delete the extraction
+  half tomorrow and paste still works byte-for-byte.
+- **Q30** — **Deterministic parse, inferred mapping.** Reading cells out of a file needs no
+  model (`parse-xlsx.ts` unzips with `fflate` and walks the sheet XML; `parse-csv.ts` is an
+  RFC-4180 reader with BOM handling and comma/semicolon/tab sniffing). Deciding *which* column
+  is the question does: layout variance across SIG, CAIQ, VSA and bespoke workbooks is
+  unbounded, and every hardcoded heuristic is a rule some vendor's file breaks. Cells are read
+  as **text** — a cached formula value is taken as-is and never evaluated.
+- **Q31** — **The mapping job returns coordinates, never text.** `map_questionnaire_columns`
+  is provider-routed, non-interactive, metered and repairable. Its input is a bounded sample
+  per sheet (30 rows × 25 columns, cells truncated) wrapped in the untrusted delimiters
+  exactly as Q20 wraps an imported answer; its output is a role, a header-row index and column
+  **indices**. Every output field is a number, an enum or a short reason, so an injection
+  buried in a cell can at worst produce a **wrong mapping** — which is what the Q33 gate
+  catches. No model-authored text is ever on the path from file to questionnaire item.
+- **Q32** — **Nothing at rest.** The uploaded bytes are parsed inside the request and dropped:
+  never written to disk, never stored. What persists is the extracted grid in
+  `questionnaire_imports.sheets`, and it is nulled on confirm or discard, leaving filename,
+  format and the confirmed mapping as the audit trail. Unconfirmed imports are swept after
+  **24 hours**, lazily on upload rather than on a timer — the same derived-state discipline as
+  the drip (Q24), so a restart can never strand customer material. Bounds at upload: 5 MB, 20
+  sheets, 5 000 rows/sheet, 60 columns, cells capped at the 20 000-char imported-answer limit;
+  the 500-question cap is enforced at confirm.
+- **Q33** — **The human confirms the mapping before any answering starts.** Until confirm, no
+  questionnaire exists, no `answer_question_batch` is enqueued, and the only AI spend is the
+  one mapping call. A mis-parsed sheet caught here costs that; caught after answering it costs
+  a full adjudication run and pollutes the match corpus with instruction text. Preview and
+  confirm run the **same** pure `applyMapping`, so what the operator approved is what gets
+  created.
+- **Q34** — **Unclassified rows are surfaced, never dropped.** Rows the mapping cannot take
+  become a triage list with their reason (`above_header`, `blank_question`, `heading_like`,
+  `no_mapping`) and a promote-to-question control. A count-only "142 rows skipped" would make
+  the gate a rubber stamp: a mis-detected question column reads as a clean import precisely
+  when the rows it lost are invisible. Wholly blank rows stay silent — they are noise, not
+  loss.
+- **Q35** — **One upload may span sheets; the operator picks which.** Included sheets
+  concatenate into one questionnaire in sheet order, each question prefixed by its sheet name
+  (when more than one contributes) and by the running section heading. A workbook whose
+  domains are split across tabs is one questionnaire to the customer who sent it, and
+  splitting it would fragment the worksheet, the register and the approval flow.
+- **Q36** — **Never a dead end.** An unreadable, oversized, empty or unsupported file 400s at
+  upload with its reason and stores nothing. A failed or dead-lettered mapping job leaves the
+  import `failed` **with its grid intact**, so the operator maps by hand or the job re-runs —
+  only a bad *parse* needs the file again. A model that classifies nothing yields a blank
+  proposal the operator fills in. Paste remains available throughout.
+
 ## API surface
 
 All routes are flow-scoped via `assertCan(…, flow)` on the questionnaire's flow (cross-flow
@@ -206,12 +350,18 @@ reads follow the reads-as-404 convention). Creation sits under the `trigger` rat
 
 | Route | Scope | Notes |
 |---|---|---|
-| `POST /api/questionnaires` | `ask:knowledge` + flow `ask` | `{name, flowId, questions[], direction?}` (≤500 questions; direction ≤2000 chars, immutable); **201** with initial worksheet |
+| `POST /api/questionnaires` | `ask:knowledge` + flow `ask` | `{name, flowId, questions[], direction?, importOrigin?}` (≤500 questions; direction ≤2000 chars, immutable). A question entry is a string or `{question, importedAnswer?}` (imported answer ≤20000 chars); **201** with initial worksheet |
 | `GET /api/questionnaires` | `read:knowledge` | summaries with per-status counts |
 | `GET /api/questionnaires/:id` | `read:knowledge` + flow `read` | worksheet; also resumes a stalled drip |
 | `GET /api/questionnaires/:id/export?format=md\|csv` | `read:knowledge` + flow `read` | file download |
 | `POST /api/questionnaires/:id/items/:itemId/approve` | `manage:knowledge` + flow `manage` | 409 unless the item is `answered` |
 | `POST /api/questionnaires/:id/approve-reused` | `manage:knowledge` + flow `manage` | bulk-approve reused items |
+| `POST /api/questionnaire-imports` | `ask:knowledge` + flow `ask` | multipart (`file`, `flowId`, `name`); parses, stores the grid, enqueues the mapping job; **202** with the staged import |
+| `GET /api/questionnaire-imports/:id` | `read:knowledge` + flow `read` | status, proposed mapping, bounded preview and the unclassified rows |
+| `POST /api/questionnaire-imports/:id/confirm` | `manage:knowledge` + flow `manage` | `{sheets:[{sheetIndex, include, mapping}], promoted?}` → **201** with the created questionnaire; 409 `empty_questionnaire`/`too_many_questions`/`not_mapped` |
+| `DELETE /api/questionnaire-imports/:id` | `manage:knowledge` + flow `manage` | discard the upload and its extracted grid |
+| `GET /api/asserted-claims?status&flowId&limit` | `read:knowledge` | the register; flow-filtered to what the caller can read |
+| `PATCH /api/asserted-claims/:id` | `manage:knowledge` + flow `manage` | `{status: "resolved"\|"dismissed", note}` — note required; cross-flow reads as 404 |
 
 ## MCP surface
 
@@ -246,7 +396,13 @@ console/API-only.
 - **Match and reconcile see the indexed KB only.** A new certificate sitting un-merged in a
   *source* repo is invisible by construction; surfacing it is the source-change-sync
   pipeline's job.
-- Paste-only creation — no spreadsheet/PDF questionnaire parsing.
+- **XLSX and CSV only.** `.docx` and PDF are out of scope: prose formats need a different
+  extractor and a different confidence story. Formulas are read as their cached values, never
+  evaluated, and recovering from a bad *parse* means re-uploading — the file itself is never
+  kept (Q32).
+- Stage 2 is bounded to `MAX_ESCALATIONS_PER_TICK` (10) per tick and drains across later
+  worksheet reads and completions, so a large import finishes adjudicating over several ticks
+  rather than all at once.
 - No automated contradiction detection between candidate answers (e.g. a pricing answer vs.
   an Enterprise-SLA answer that quietly disagrees) — the reconcile step is the natural
   future home, not yet built.
@@ -268,6 +424,12 @@ console/API-only.
 | Concern | Code |
 | --- | --- |
 | Create / match / drip / completion / approval | `apps/api/src/features/questionnaires/service.ts` |
+| Ingestion: the `importOrigin` switch | `apps/api/src/features/questionnaires/import-verdict.ts` (`isImported`) |
+| Ingestion: bounded stage-2 escalation + finding routing | `apps/api/src/features/questionnaires/import-escalation.ts` |
+| Ingestion: stage-1 verdict (prompt guard, code-side override) | `packages/prompts/src/catalog.ts` (`IMPORTED_ANSWER_GUARD`, `withImportedAnswer`), `apps/watcher/src/runners/generative.ts` (`withImportVerdict`), `apps/watcher/src/job-prompts.ts` |
+| Ingestion: stage-2 job contract + prompt | `packages/jobs/src/{schemas,catalog,types}.ts`, `packages/prompts/src/catalog.ts` (`VERIFY_IMPORTED_ANSWER`), `apps/watcher/src/source-workspace.ts` |
+| Asserted-claims register (store + routes) | `apps/api/src/stores/{asserted-claims-store,postgres-asserted-claims-store}.ts`, `apps/api/src/features/asserted-claims/routes.ts` |
+| Ingestion columns | `packages/db/migrations/0063_questionnaire_import.sql`, `0064_asserted_claims.sql`, `0065_questionnaire_import_escalated.sql` |
 | Routes (create, list, get, export, approve) | `apps/api/src/features/questionnaires/routes.ts`, `schema.ts` |
 | Deterministic reuse check (checks 1 & 2) | `apps/api/src/features/questionnaires/reuse-check.ts` |
 | Fast-path predicate + direction matching | `apps/api/src/features/questionnaires/reconcile.ts` (`isFastPathReusable`, `directionsMatch`) |
@@ -282,12 +444,26 @@ console/API-only.
 | Config (threshold, inflight, candidates, enabled) | `apps/api/src/platform/config.ts` |
 | Job contract (`answer_question_batch`, reconcile result) | `packages/jobs/src/schemas.ts`, `packages/jobs/src/catalog.ts` |
 | Console (index + detail + badges) | `apps/web/src/components/QuestionnaireCreateList.tsx`, `QuestionnaireDetail.tsx`, `questionnaireItems.ts` |
+| Console: side-by-side imported review + paste parsing | `apps/web/src/components/ImportedAnswerPanel.tsx`, `questionnaireItems.ts` (`parseTwoColumnPaste`) |
+| Upload: XLSX/CSV extraction + bounds | `apps/api/src/features/questionnaire-imports/{parse,parse-xlsx,parse-csv}.ts` |
+| Upload: mapping → questions (preview AND confirm) | `apps/api/src/features/questionnaire-imports/apply-mapping.ts` |
+| Upload: staging service, routes, confirm body | `apps/api/src/features/questionnaire-imports/{service,routes,schema}.ts` |
+| Upload: staging store + migration | `apps/api/src/stores/{questionnaire-import-store,postgres-questionnaire-import-store}.ts`, `packages/db/migrations/0066_questionnaire_imports.sql` |
+| Upload: mapping job contract + prompt | `packages/jobs/src/{schemas,catalog,types}.ts`, `packages/prompts/src/catalog.ts` (`MAP_QUESTIONNAIRE_COLUMNS`), `apps/watcher/src/job-prompts.ts` |
+| Upload: the console's confirmation gate | `apps/web/src/components/ImportMappingPreview.tsx`, `QuestionnaireCreateList.tsx` |
+| Console: the asserted-claims register page | `apps/web/src/components/AssertedClaimsPanel.tsx`, `apps/web/src/app/asserted-claims/page.tsx` |
 
 ## Tests (behavioural contract)
 
-`apps/api/src/features/questionnaires/{service,routes,reuse-check,reconcile,export}.test.ts`,
+`apps/api/src/features/questionnaires/{service,routes,reuse-check,reconcile,export,import-escalation}.test.ts`,
+`apps/api/src/features/asserted-claims/routes.test.ts`,
+`apps/api/src/stores/asserted-claims-store.test.ts`,
 `apps/api/src/stores/{questionnaire-store,postgres-questionnaire-store}.test.ts`,
-`apps/web/src/components/{QuestionnaireCreateList,QuestionnaireDetail,questionnaireItems}.test.tsx`.
+`apps/web/src/components/{QuestionnaireCreateList,QuestionnaireDetail,questionnaireItems,ImportedAnswerPanel,ImportMappingPreview}.test.tsx`.
+Upload: `apps/api/src/features/questionnaire-imports/{parse,parse-csv,apply-mapping,service,routes}.test.ts`
+(the XLSX fixture at `fixtures/sample.xlsx` deliberately mixes shared strings, an inline
+string, a numeric cell and a sparse row) and
+`apps/api/src/stores/questionnaire-import-store.test.ts`.
 Cross-cutting coverage: `packages/jobs/src/{schemas,catalog}.test.ts` (the
 `answer_question_batch` contract), `apps/watcher/src/runners/generative.test.ts` (the
 reconcile step), and `apps/api/src/stores/postgres-question-log-store.test.ts` (gap
@@ -303,6 +479,12 @@ retirement of the `changed` verdict for new rows, `matchApproved` → `matchAppr
 the `reused/adapted/merged/fresh` verdicts), and
 `2026-07-17-questionnaire-detail-page-design.md` (the split into create-list + per-
 questionnaire detail page), and
+`2026-08-11-questionnaire-ingestion-design.md` (ingesting completed questionnaires — Q19–Q27:
+imported answers as untrusted evidence, the two-stage adjudication, the asserted-claims
+register, the approval gate, and the `import` gap source), and
+`2026-08-11-questionnaire-file-upload-design.md` (uploading a questionnaire file — Q29–Q36:
+the staging resource, the coordinates-only mapping job, nothing at rest, and the
+confirmation gate), and
 `2026-07-31-questionnaire-direction-design.md` (the per-questionnaire answering direction —
 Q4a/Q4b/Q6a, the direction gate on the fast path, and the direction-aware reconcile
 criterion). Design docs are future-tense archive; this spec is the as-built source of truth.

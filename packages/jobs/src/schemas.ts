@@ -138,6 +138,11 @@ export const answerQuestionInputSchema = z.object({
   // The questionnaire's answering direction. Declared so the broker preserves it
   // from the enqueued input (the schema-stripping gotcha).
   direction: z.string().optional(),
+  // The previously-given answer this item adjudicates (questionnaire ingestion).
+  // UNTRUSTED external content — the watcher wraps it in the user turn and never
+  // system-prompts it. Declared so the broker preserves it from the enqueued
+  // input (the schema-stripping gotcha).
+  importedAnswer: z.string().optional(),
   expectedOutput: z.literal("answer_result")
 }) satisfies z.ZodType<ProviderInput<CoreAnswerQuestionJobInput>>;
 export const answerQuestionOutputSchema = z.object({
@@ -155,7 +160,11 @@ export const answerQuestionOutputSchema = z.object({
   // The reconciler's verdict when the job was given candidates to reconcile
   // against (questionnaire trust). Declared so the broker preserves it on
   // completion for the API to persist.
-  reuse: reconcileResultSchema.optional()
+  reuse: reconcileResultSchema.optional(),
+  // Stage-1 adjudication of importedAnswer against the answer this job just
+  // produced from the KB. Declared so the broker preserves it on completion for
+  // the API to persist. Absent when the job carried no imported answer.
+  importVerdict: z.enum(["confirmed", "divergent", "uncovered"]).optional()
 }) satisfies z.ZodType<AnswerQuestionJobOutput>;
 
 export const summarizeGapInputSchema = z.object({
@@ -556,6 +565,90 @@ export const verifyDocumentOutputSchema = z.object({
   resolvedConflicts: z.array(resolvedSourceConflictSchema).optional(),
   mapUpdates: mapUpdatesField
 }) satisfies z.ZodType<VerifyDocumentJobOutput>;
+
+// Stage 2 of ingesting completed questionnaires
+// (docs/superpowers/specs/2026-08-11-questionnaire-ingestion-design.md D5): a
+// source-grounded, PER-CLAIM check of a previously-given answer whose stage-1
+// compare against the KB did not confirm it.
+//
+// Routed like verify_document — "provider", source-grounded, generous expiry —
+// because it is the same kind of work: an agent reading the actual source
+// checkouts. It is metered (AI_JOB_TYPES) but deliberately NOT interactive, so a
+// large import can never erode the reserve that protects live /api/ask.
+export const verifyImportedAnswerInputSchema = z.object({
+  provider: providerSchema,
+  itemId: z.string(),
+  question: z.string(),
+  // UNTRUSTED external content — the runner wraps it, never system-prompts it.
+  importedAnswer: z.string(),
+  // Magpie's own KB-derived answer, when it had one. Absent for an `uncovered`
+  // item, where by definition the KB produced nothing to compare against.
+  kbAnswer: z.string().optional(),
+  sources: z.array(sourceDescriptorSchema),
+  // Attribution only (per-flow cost read back off the stored job row), matching
+  // verify_document. Must be on the schema or the broker strips it.
+  flowId: z.string().optional()
+});
+
+export const verifyImportedAnswerOutputSchema = z.object({
+  // One finding per claim, not per answer: an imported answer asserting three
+  // things can be right about two of them, and each routes independently.
+  findings: z.array(
+    z.object({
+      kind: z.enum(["documented-elsewhere", "contradicted", "unsubstantiated", "source-conflict"]),
+      claim: z.string(),
+      // What each source location actually says. Empty for `unsubstantiated` —
+      // that absence IS the finding.
+      positions: z.array(sourceConflictPositionSchema).default([])
+    })
+  ),
+  mapUpdates: mapUpdatesField
+});
+
+// Proposing which sheets and columns of an uploaded questionnaire hold what
+// (docs/questionnaires.md Q31). The input carries a BOUNDED sample of the grid,
+// wrapped as untrusted content by the runner: a spreadsheet from a customer's
+// procurement team is the same trust class as fetched web content.
+export const mapQuestionnaireColumnsInputSchema = z.object({
+  provider: providerSchema,
+  importId: z.string(),
+  sheets: z
+    .array(
+      z.object({
+        index: z.number().int().min(0),
+        name: z.string(),
+        // The sheet's TRUE size, so the model can tell a 12-row cover sheet from
+        // a 900-row domain tab even though it only sees the sample.
+        rowCount: z.number().int().min(0),
+        sampleRows: z.array(z.array(z.string()))
+      })
+    )
+    .max(20),
+  flowId: z.string().optional(),
+  expectedOutput: z.literal("column_mapping")
+});
+
+// COORDINATES ONLY. Every field is a number, an enum or a short reason: there is
+// no field the model can put questionnaire content into, so an injection buried
+// in a cell can at worst produce a wrong mapping — which the human confirmation
+// gate is there to catch.
+export const mapQuestionnaireColumnsOutputSchema = z.object({
+  sheets: z
+    .array(
+      z.object({
+        sheetIndex: z.number().int().min(0),
+        role: z.enum(["questions", "ignore"]),
+        headerRow: z.number().int().min(0).nullable(),
+        questionColumn: z.number().int().min(0).nullable(),
+        answerColumn: z.number().int().min(0).nullable(),
+        responseTypeColumn: z.number().int().min(0).nullable(),
+        sectionHeadingColumn: z.number().int().min(0).nullable(),
+        confidence: z.enum(["high", "medium", "low"]),
+        reason: z.string().max(500)
+      })
+    )
+    .max(20)
+});
 
 export const correctDocumentInputSchema = z.object({
   provider: providerSchema,

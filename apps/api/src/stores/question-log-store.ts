@@ -111,6 +111,10 @@ export interface QuestionLogStore {
     id: string,
     gap: { summary: string; note: string; parked: boolean }
   ): Promise<QuestionLog | undefined>;
+  // Raises the knowledge gap for a claim the SOURCES support but the knowledge
+  // base never recorded (ingestion spec D8). Idempotent per (question, summary):
+  // re-ingesting the same questionnaire must not fan out duplicate gaps.
+  recordImportGap(id: string, gap: { summary: string; note: string }): Promise<QuestionLog | undefined>;
   // Human "retry" on a parked question: re-admits it to the pipeline. Dismisses
   // the live parked row (reason 'human_retry') — which ends the failed lineage so
   // the retry budget resets (verificationLineageResetSince) — and, if no live gap
@@ -562,6 +566,26 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
 
     const updated: QuestionLog = { ...existing, gaps: updatedGaps };
 
+    this.logs.set(id, updated);
+    this.bumpCatalog(existing.flowId);
+    return updated;
+  }
+
+  async recordImportGap(id: string, gap: { summary: string; note: string }): Promise<QuestionLog | undefined> {
+    const existing = this.logs.get(id);
+    if (!existing) {
+      return undefined;
+    }
+    const gaps = existing.gaps ?? [];
+    // Idempotent on the summary: the same import re-checked must bump nothing
+    // and duplicate nothing.
+    if (gaps.some((g) => g.source === "import" && g.summary === gap.summary && !g.resolvedAt && !g.dismissedAt)) {
+      return existing;
+    }
+    const updated: QuestionLog = {
+      ...existing,
+      gaps: [...gaps, { summary: gap.summary, source: "import", note: gap.note }]
+    };
     this.logs.set(id, updated);
     this.bumpCatalog(existing.flowId);
     return updated;

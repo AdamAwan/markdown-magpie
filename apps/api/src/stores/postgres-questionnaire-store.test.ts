@@ -334,4 +334,45 @@ describe("PostgresQuestionnaireStore", { skip: databaseUrl ? false : "DATABASE_U
     assert.deepEqual(await store.basisItemIds(item.id), [], "stale basis rows must be cleared");
     assert.equal(second?.reusedFromItemId, undefined, "stale reused-from pointer must be cleared");
   });
+
+  // --- ingesting completed questionnaires (ingestion spec D1/D4/D5) ---
+
+  it("round-trips importOrigin and imported answers through Postgres", async () => {
+    const created = await store.create({
+      name: `import-${randomUUID()}`,
+      flowId: `flow-${randomUUID()}`,
+      importOrigin: "sig-lite-2025.xlsx",
+      questions: [{ question: "Do you hold ISO 27001?", importedAnswer: "Yes, since 2021." }, "bare question"]
+    });
+    const read = await store.get(created.id);
+    assert.equal(read?.importOrigin, "sig-lite-2025.xlsx");
+    assert.equal(read?.items[0].importedAnswer, "Yes, since 2021.");
+    assert.equal(read?.items[1].importedAnswer, undefined);
+    assert.equal(read?.items[0].importVerdict, undefined);
+  });
+
+  it("lists only non-confirmed imported items for escalation, bounded by the limit", async () => {
+    const created = await store.create({
+      name: `escalation-${randomUUID()}`,
+      flowId: `flow-${randomUUID()}`,
+      importOrigin: "x.xlsx",
+      questions: [
+        { question: "q-confirmed", importedAnswer: "a" },
+        { question: "q-divergent", importedAnswer: "b" },
+        { question: "q-uncovered", importedAnswer: "c" },
+        { question: "q-no-import" }
+      ]
+    });
+    const [confirmed, divergent, uncovered] = created.items;
+    await store.setImportVerdict(confirmed.id, "confirmed");
+    await store.setImportVerdict(divergent.id, "divergent");
+    await store.setImportVerdict(uncovered.id, "uncovered");
+
+    const awaiting = await store.listAwaitingEscalation(created.id, 10);
+    assert.deepEqual(
+      awaiting.map((item) => item.question),
+      ["q-divergent", "q-uncovered"]
+    );
+    assert.equal((await store.listAwaitingEscalation(created.id, 1)).length, 1);
+  });
 });

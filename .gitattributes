@@ -1,0 +1,20 @@
+# Keep LF endings in the working tree on every platform, even on Windows
+# checkouts with core.autocrlf=true. Everything in git is already LF, and CI
+# runs on Linux, so a CRLF working copy silently diverges from CI:
+#   - `prettier --check .` fails (endOfLine defaults to "lf")
+#   - knip's husky plugin read `.husky/pre-commit` as `lint-staged\r` and
+#     reported lint-staged as an unused devDependency
+#   - `sh` chokes on CRLF shell scripts and git hooks
+* text=auto eol=lf
+
+# Binary assets: never touch.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+*.xlsx binary

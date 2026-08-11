@@ -946,7 +946,7 @@ function lowerBound<T>(items: T[], value: T, compare: (left: T, right: T) => num
   return low;
 }
 
-// Per-term field weights, mirroring the tsvector weights in migration 0063 so the
+// Per-term field weights, mirroring the tsvector weights in migration 0067 so the
 // in-memory fallback and the Postgres path cannot silently rank differently.
 // Scaled ×10 relative to the SQL weight array to keep this integer arithmetic.
 const HEADING_WEIGHT = 10;
@@ -958,7 +958,7 @@ function scoreSection(section: DocumentSection, terms: string[]): number {
   const heading = section.heading.toLowerCase();
   const headingPath = section.headingPath.join(" ").toLowerCase();
   // Flatten path punctuation so "billing/annual-plans.md" contributes words,
-  // matching the translate() in migration 0063.
+  // matching the translate() in migration 0067.
   const path = section.path.toLowerCase().replace(/[/\-_.]+/g, " ");
   const content = section.content.toLowerCase();
 

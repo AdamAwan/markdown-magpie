@@ -14,8 +14,8 @@ import {
   UNTRUSTED_CONTENT_CONTRACT
 } from "./catalog.js";
 
-test("catalog has exactly 23 prompts", () => {
-  assert.equal(promptCatalog.length, 23);
+test("catalog has exactly 24 prompts", () => {
+  assert.equal(promptCatalog.length, 24);
 });
 
 test("catalog ids are in the fixed, documented order", () => {
@@ -35,6 +35,7 @@ test("catalog ids are in the fixed, documented order", () => {
       "fold-changeset-proposal",
       "source-change-sync",
       "verify-document",
+      "map-questionnaire-columns",
       "correct-document",
       "dedupe-documents",
       "split-document",

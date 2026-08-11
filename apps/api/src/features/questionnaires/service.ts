@@ -14,8 +14,11 @@ import { assertAiCapacity, nonInteractiveAiCapacity } from "../../platform/ai-ca
 import { buildAnswerQuestionInput, recordAnswerQuestionLog } from "../../platform/answer-question.js";
 import { embeddingModelId } from "../../platform/providers.js";
 import { retrieve } from "../retrieve/service.js";
+import { escalateImports } from "./import-escalation.js";
+import { isImported } from "./import-verdict.js";
 import { directionsMatch, isFastPathReusable } from "./reconcile.js";
 import { checkReuse, type ReuseCheckDeps } from "./reuse-check.js";
+import { normaliseQuestionInput, type QuestionnaireQuestionInput } from "../../stores/questionnaire-store.js";
 
 // Questionnaire mode (docs/questionnaires.md): explicit bulk batches with
 // verbatim answer reuse. The item history is the canonical answer store;
@@ -26,15 +29,33 @@ export type CreateQuestionnaireResult =
 
 export async function createQuestionnaire(
   ctx: AppContext,
-  input: { name: string; flowId: string; questions: string[]; direction?: string }
+  input: {
+    name: string;
+    flowId: string;
+    questions: QuestionnaireQuestionInput[];
+    direction?: string;
+    // Where an imported batch came from (ingestion spec D1). Presence switches
+    // the questionnaire onto the adjudication path.
+    importOrigin?: string;
+  }
 ): Promise<CreateQuestionnaireResult> {
   if (!ctx.knowledgeConfig.flows.some((flow) => flow.id === input.flowId)) {
     return { ok: false, code: "flow_not_found" };
   }
-  const questions = input.questions.map((question) => question.trim()).filter((question) => question.length > 0);
+  // Normalise once, here, so nothing downstream has to know about the two input
+  // shapes. A blank imported answer becomes absent for the same reason a blank
+  // direction does: "" and NULL must never be distinguishable later.
+  const questions = input.questions
+    .map((entry) => normaliseQuestionInput(entry))
+    .map(({ question, importedAnswer }) => ({
+      question: question.trim(),
+      ...(importedAnswer?.trim() ? { importedAnswer: importedAnswer.trim() } : {})
+    }))
+    .filter(({ question }) => question.length > 0);
   if (questions.length === 0) {
     return { ok: false, code: "empty_questionnaire" };
   }
+  const importOrigin = input.importOrigin?.trim() ? input.importOrigin.trim() : undefined;
   // Normalise once, here: a blank direction becomes absent so "" and NULL are
   // indistinguishable everywhere downstream — the fast-path comparison against a
   // donor questionnaire's direction depends on it.
@@ -44,7 +65,8 @@ export async function createQuestionnaire(
     name: input.name,
     flowId: input.flowId,
     questions,
-    ...(direction ? { direction } : {})
+    ...(direction ? { direction } : {}),
+    ...(importOrigin ? { importOrigin } : {})
   });
 
   // Match phase — embeddings are the sanctioned inline exception. With no
@@ -60,7 +82,21 @@ export async function createQuestionnaire(
       );
       const deps = reuseCheckDeps(ctx, input.flowId);
       const threshold = ctx.settings.questionnaires.matchThreshold;
-      for (const [index, item] of created.items.entries()) {
+      // Imported questionnaires never fast-path (ingestion spec D3). Verbatim
+      // reuse of a prior approved answer short-circuits the model entirely, and
+      // the adjudication needs Magpie's OWN fresh KB answer to grade the import
+      // against — reusing an old answer would leave nothing to compare it to.
+      // The embeddings above are still computed and stored, so approved imported
+      // items join the match corpus for FUTURE questionnaires. A real one-off
+      // cost, paid deliberately.
+      const skipReuse = isImported(created);
+      if (skipReuse) {
+        logger.debug(
+          { questionnaireId: created.id, itemCount: created.items.length },
+          "imported questionnaire: skipping fast-path reuse so every item answers fresh"
+        );
+      }
+      for (const [index, item] of skipReuse ? [] : created.items.entries()) {
         if (ctx.settings.questionnaires.reconcileEnabled) {
           const k = ctx.settings.questionnaires.reconcileCandidates;
           const candidates = await ctx.stores.questionnaires.matchApprovedTopN(input.flowId, vectors[index], model, k);
@@ -130,6 +166,12 @@ export async function getQuestionnaire(ctx: AppContext, id: string): Promise<Que
   const questionnaire = await ctx.stores.questionnaires.get(id);
   if (questionnaire) {
     await topUpDrip(ctx, questionnaire.id);
+    // Stage-2 escalation is bounded per tick and its state is derived, exactly
+    // like the drip's — so a worksheet read drains whatever the last tick
+    // deferred, and an API restart can never wedge an ingestion part-way.
+    if (isImported(questionnaire)) {
+      await escalateImports(ctx, questionnaire.id);
+    }
     return ctx.stores.questionnaires.get(id);
   }
   return questionnaire;
@@ -179,7 +221,11 @@ async function topUpDrip(ctx: AppContext, questionnaireId: string): Promise<void
       ...(candidates.length > 0 ? { candidates } : {}),
       // Immutable, so reading it off the questionnaire at drip time is always
       // the direction this item's answer should be written under.
-      ...(questionnaire.direction ? { direction: questionnaire.direction } : {})
+      ...(questionnaire.direction ? { direction: questionnaire.direction } : {}),
+      // The previously-given answer this item adjudicates (ingestion spec D4).
+      // Riding it along on the answer job the drip was enqueueing anyway is what
+      // makes stage 1 cost no extra AI call.
+      ...(item.importedAnswer ? { importedAnswer: item.importedAnswer } : {})
     });
     // Enqueue the questionnaire's OWN job type (#288c): answer_question_batch is
     // metered/globally-capped but NOT interactive, so a bulk batch counts toward
@@ -278,6 +324,16 @@ export async function handleQuestionnaireAnswerCompletion(
     ...(outcome ? { outcome } : {}),
     ...(basisItemIds ? { basisItemIds } : {})
   });
+  // Stage-1 adjudication of the imported answer (ingestion spec D4). Present
+  // only when the job carried one, so an ordinary questionnaire never writes it.
+  if (output.importVerdict) {
+    await ctx.stores.questionnaires.setImportVerdict(item.id, output.importVerdict);
+    // A non-confirming stage-1 result is immediately escalatable; going through
+    // the same bounded sweep keeps the per-tick cap honest.
+    if (output.importVerdict !== "confirmed") {
+      await escalateImports(ctx, item.questionnaireId);
+    }
+  }
   await topUpDrip(ctx, item.questionnaireId);
 }
 
@@ -298,14 +354,24 @@ export async function handleQuestionnaireAnswerFailure(
   }
 }
 
-export type ApproveResult = { ok: true } | { ok: false; code: "not_found" | "not_answered" };
+export type ApproveResult = { ok: true } | { ok: false; code: "not_found" | "not_answered" | "claim_unsubstantiated" };
+
+// Which wording the reviewer is admitting into the match corpus. Absent means
+// "Magpie's own answer", which is the only option for a non-imported item and
+// the historical behaviour.
+export type ApproveUse = "imported" | "magpie";
 
 // Approval is the human act that admits an answer into the match corpus for
 // future questionnaires. The snapshot keeps the GENERATION-TIME content hashes
 // (what the answer was actually built from); if the KB has already moved on by
 // approval time the item is flagged stale_at_approval — exportable, but it can
 // never pass reuse check 1, by construction.
-export async function approveItem(ctx: AppContext, questionnaireId: string, itemId: string): Promise<ApproveResult> {
+export async function approveItem(
+  ctx: AppContext,
+  questionnaireId: string,
+  itemId: string,
+  options?: { use?: ApproveUse }
+): Promise<ApproveResult> {
   const questionnaire = await ctx.stores.questionnaires.get(questionnaireId);
   const item = questionnaire?.items.find((candidate) => candidate.id === itemId);
   if (!questionnaire || !item) {
@@ -313,6 +379,28 @@ export async function approveItem(ctx: AppContext, questionnaireId: string, item
   }
   if (item.status !== "answered") {
     return { ok: false, code: "not_answered" };
+  }
+  // The hard gate (ingestion spec D7). Approval admits an answer into the match
+  // corpus for FUTURE questionnaires, so approving imported wording the sources
+  // cannot back would re-serve an unbackable claim to next quarter's customer
+  // automatically, with no human in the loop. Refused outright — Magpie's own
+  // grounded answer stays approvable for the same item, which is the escape
+  // hatch that keeps this from being a dead end.
+  if (options?.use === "imported") {
+    if (!item.importedAnswer) {
+      return { ok: false, code: "not_answered" };
+    }
+    const openFindings = await ctx.stores.assertedClaims.openForItem(itemId);
+    if (openFindings.length > 0) {
+      logger.info(
+        { itemId, questionnaireId, findingCount: openFindings.length },
+        "refused to approve imported wording: item has open asserted-claim findings"
+      );
+      return { ok: false, code: "claim_unsubstantiated" };
+    }
+    // Keep the human's reviewed phrasing, keep Magpie's citations: the answer
+    // stays grounded and keeps tracking the sections it was built from.
+    await ctx.stores.questionnaires.setAnswerText(itemId, item.importedAnswer);
   }
   const citations =
     item.outcome === "reused" && item.reusedFromItemId

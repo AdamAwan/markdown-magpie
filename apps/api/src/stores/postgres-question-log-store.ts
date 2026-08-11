@@ -553,6 +553,51 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     return this.get(id);
   }
 
+  async recordImportGap(id: string, gap: { summary: string; note: string }): Promise<QuestionLog | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<{ flow_id: string | null }>("SELECT flow_id FROM questions WHERE id = $1", [
+        id
+      ]);
+      if (result.rowCount !== 1) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      // Idempotent on (question, summary): the stage-2 check re-runs whenever a
+      // questionnaire is re-ingested, and a duplicate gap per run would fan the
+      // reconciler out over the same topic repeatedly. Resolved and dismissed
+      // rows are deliberately not matched, so a topic that was closed and has
+      // regressed can be raised afresh.
+      const inserted = await client.query(
+        `
+          INSERT INTO question_gaps (question_id, summary, source, note)
+          SELECT $1, $2, 'import', $3
+          WHERE NOT EXISTS (
+            SELECT 1 FROM question_gaps
+            WHERE question_id = $1
+              AND source = 'import'
+              AND summary = $2
+              AND resolved_at IS NULL
+              AND dismissed_at IS NULL
+          )
+        `,
+        [id, gap.summary, gap.note]
+      );
+      if ((inserted.rowCount ?? 0) > 0) {
+        await bumpGapCatalog(client, result.rows[0].flow_id);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return this.get(id);
+  }
+
   async retryParkedGap(id: string): Promise<QuestionLog | undefined> {
     const client = await this.pool.connect();
     try {

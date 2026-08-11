@@ -214,7 +214,13 @@ export const NO_SOURCE_MATERIAL_GAP_PREFIX = "No sufficient source material foun
 // three. "Parked, awaiting a human" (repeated verification failures past the
 // retry cap) is NOT a source — it is the `parkedAt` state on a verification gap
 // (see QuestionGap).
-export type QuestionGapSource = "auto" | "manual" | "followup" | "verification" | "feedback";
+// `import` is raised when the stage-2 check finds that the SOURCES back a claim
+// a previously-given questionnaire answer made, but the knowledge base never
+// wrote it down (ingestion spec D8). It is not an `auto` gap: a documented-
+// elsewhere item answered fine and cites sections, so the unanswerable→gap route
+// never fires for it. Like `manual` and `verification` it survives a re-answer,
+// because it records a human assertion rather than a model judgement.
+export type QuestionGapSource = "auto" | "manual" | "followup" | "verification" | "feedback" | "import";
 
 export interface QuestionGap {
   summary: string;
@@ -336,6 +342,12 @@ export type QuestionnaireItemOutcome = "reused" | "fresh" | "changed" | "adapted
 // approved items, before it is persisted as the item's outcome.
 export type ReconcileVerdict = "reused" | "adapted" | "merged" | "fresh";
 
+// Stage-1 adjudication of an imported answer against Magpie's own KB-derived
+// answer (docs/superpowers/specs/2026-08-11-questionnaire-ingestion-design.md).
+// `uncovered` reuses the existing unanswerable definition — zero citations —
+// so confidence never gates it.
+export type ImportVerdict = "confirmed" | "divergent" | "uncovered";
+
 // A prior approved item offered to the reconciler as a candidate for reuse.
 export interface AnswerCandidate {
   itemId: string;
@@ -389,6 +401,15 @@ export interface QuestionnaireItem {
   approvedAt?: string;
   staleAtApproval: boolean;
   citations: QuestionnaireItemCitation[];
+  // The previously-given answer being adjudicated. Untrusted external input:
+  // never used as an answer, never placed in a system prompt.
+  importedAnswer?: string;
+  importVerdict?: ImportVerdict;
+  // When the source-grounded stage-2 check was enqueued for this item. Set so a
+  // resumed escalation sweep never enqueues the same item twice; deliberately
+  // separate from importVerdict, which stays an honest record of what stage 1
+  // actually decided.
+  importEscalatedAt?: string;
 }
 
 export interface Questionnaire {
@@ -399,6 +420,11 @@ export interface Questionnaire {
   // answer this questionnaire produces (docs/questionnaires.md). Absent when
   // none was given.
   direction?: string;
+  // Where the imported batch came from (e.g. the uploaded file's name). Its
+  // presence is the single switch onto the ingestion triage path; a
+  // questionnaire created the ordinary way leaves it absent and behaves exactly
+  // as it did before ingestion existed.
+  importOrigin?: string;
   status: "open" | "completed" | "archived";
   createdAt: string;
   items: QuestionnaireItem[];
@@ -409,6 +435,7 @@ export interface QuestionnaireSummary {
   name: string;
   flowId: string;
   direction?: string;
+  importOrigin?: string;
   status: "open" | "completed" | "archived";
   createdAt: string;
   counts: {
@@ -856,6 +883,12 @@ export interface AnswerQuestionJobInput {
   // on both the fresh-answer and reconcile paths. Absent for live asks and
   // gap-closure re-asks.
   direction?: string;
+  // The previously-given answer this item is adjudicating (ingesting completed
+  // questionnaires — docs/superpowers/specs/2026-08-11-questionnaire-ingestion-design.md).
+  // UNTRUSTED external content: the watcher wraps it in the user turn behind an
+  // explicit boundary and never places it in a system prompt. It must not change
+  // the answer that gets written — only be judged against it.
+  importedAnswer?: string;
   expectedOutput: "answer_result";
 }
 
@@ -886,6 +919,11 @@ export interface AnswerQuestionJobOutput {
   // against. Present only when input.candidates was non-empty; the API uses
   // this to set the questionnaire item's outcome and basis items.
   reuse?: ReconcileResult;
+  // Stage-1 adjudication of input.importedAnswer against the answer this job
+  // just produced from the KB. Present only when the job carried an imported
+  // answer; the API persists it on the questionnaire item and uses it to decide
+  // whether the item escalates to the source-grounded stage-2 check.
+  importVerdict?: ImportVerdict;
 }
 
 export interface SummarizeGapJobInput {
@@ -976,6 +1014,48 @@ export interface SourceConflictPosition {
   statement: string;
   // Optional "L10-L20" hint, same convention as ProvenanceClaim source locations.
   lines?: string;
+}
+
+// --- The asserted-claims register (questionnaire ingestion) ---------------
+// Claims we have made to customers, in a previously-given questionnaire answer,
+// that our own sources do not support
+// (docs/superpowers/specs/2026-08-11-questionnaire-ingestion-design.md D6).
+//
+// Two kinds down one pipe. They resolve identically — a human points at a
+// source, corrects the record, or dismisses — so they are one entity with a
+// kind, not two registers.
+export type AssertedClaimKind =
+  // No source anywhere asserts it: the phantom certificate.
+  | "unsubstantiated"
+  // The sources say something materially different from what we told the customer.
+  | "contradicted";
+
+export type AssertedClaimStatus = "open" | "resolved" | "dismissed";
+
+// A finding's supporting positions reuse SourceConflictPosition: "what a
+// specific source location actually says" is the identical concept here, and a
+// structurally identical second type would only invite the two drifting apart.
+// Empty for `unsubstantiated` — that absence IS the finding.
+
+// One register entry. Lives in core rather than the API store because it crosses
+// the HTTP boundary: the console renders these, and the worksheet needs to know
+// which items carry a live finding to gate approval of the imported wording.
+export interface AssertedClaim {
+  id: string;
+  flowId?: string;
+  questionnaireId?: string;
+  itemId?: string;
+  kind: AssertedClaimKind;
+  question: string;
+  claim: string;
+  positions: SourceConflictPosition[];
+  status: AssertedClaimStatus;
+  fingerprint: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  seenCount: number;
+  resolvedAt?: string;
+  resolutionNote?: string;
 }
 
 // A disagreement between two or more source locations about a fact a knowledge-base
@@ -2151,4 +2231,81 @@ export interface AiScheduleCost {
   outputTokens: number;
   totalTokens: number;
   estimatedCost?: AiCostEstimate;
+}
+
+// --- Uploading a questionnaire file (Spec B) ------------------------------
+// An upload is a STAGING resource, never a second questionnaire path
+// (docs/questionnaires.md Q29). The uploaded bytes are parsed in-request and
+// dropped; what persists is the extracted grid below, and it is nulled the
+// moment the operator confirms a mapping.
+
+// One sheet of an uploaded workbook, as text. Every cell is a string: a
+// spreadsheet's own idea of a cell's type tells us nothing about whether it
+// holds a question, and coercion would only lose leading zeroes and dates.
+export interface SheetGrid {
+  name: string;
+  rows: string[][];
+}
+
+// Which column holds what, for one sheet. Indices are 0-based into `rows[n]`,
+// and null means "absent". This is the ENTIRE output of the mapping model: it
+// returns coordinates, never text, so an injection buried in a cell can at worst
+// produce a wrong mapping — which is what the human confirmation gate catches.
+export interface SheetMapping {
+  sheetIndex: number;
+  role: "questions" | "ignore";
+  headerRow: number | null;
+  questionColumn: number | null;
+  answerColumn: number | null;
+  responseTypeColumn: number | null;
+  sectionHeadingColumn: number | null;
+  confidence: "high" | "medium" | "low";
+  reason: string;
+}
+
+export type QuestionnaireImportStatus = "mapping" | "mapped" | "confirmed" | "failed";
+
+export interface QuestionnaireImport {
+  id: string;
+  flowId: string;
+  name: string;
+  // Becomes the questionnaire's importOrigin on confirm.
+  filename: string;
+  format: "xlsx" | "csv";
+  status: QuestionnaireImportStatus;
+  mapping?: SheetMapping[];
+  error?: string;
+  questionnaireId?: string;
+  jobId?: string;
+  createdAt: string;
+}
+
+// Why a row was not taken as a question. Surfaced per row rather than as a bare
+// count: a mis-detected question column reads as a clean import when the rows it
+// lost are invisible, and that is the one failure the gate exists to catch.
+export type ImportRowSkipReason = "blank_question" | "above_header" | "heading_like" | "no_mapping";
+
+export interface ImportPreviewRow {
+  sheetIndex: number;
+  rowIndex: number;
+  kind: "question" | "heading" | "unclassified";
+  question: string;
+  importedAnswer?: string;
+  sectionHeading?: string;
+  reason?: ImportRowSkipReason;
+}
+
+export interface ImportSheetPreview {
+  sheetIndex: number;
+  name: string;
+  rowCount: number;
+  columnCount: number;
+  questionCount: number;
+  unclassifiedCount: number;
+  // Bounded samples, never the whole sheet.
+  sampleRows: ImportPreviewRow[];
+  unclassifiedRows: ImportPreviewRow[];
+  // The first rows of the raw grid, so the operator can see what a column
+  // actually contains while re-picking it.
+  headerSample: string[][];
 }

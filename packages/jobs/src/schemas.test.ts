@@ -3,6 +3,10 @@ import { test } from "node:test";
 import {
   answerQuestionInputSchema,
   answerQuestionOutputSchema,
+  verifyImportedAnswerInputSchema,
+  verifyImportedAnswerOutputSchema,
+  mapQuestionnaireColumnsInputSchema,
+  mapQuestionnaireColumnsOutputSchema,
   draftMarkdownProposalInputSchema,
   draftMarkdownProposalOutputSchema,
   draftSeedDocumentInputSchema,
@@ -564,4 +568,136 @@ test("answer output schema preserves the reuse verdict", () => {
     reuse: { verdict: "merged", basisItemIds: ["i1", "i2"] }
   });
   assert.equal((parsed as { reuse?: { verdict: string } }).reuse?.verdict, "merged");
+});
+
+// Ingesting completed questionnaires: both fields must survive the broker, or
+// the import silently never reaches the watcher / the verdict silently never
+// comes back (the schema-stripping gotcha).
+test("answer input schema preserves the imported answer", () => {
+  const parsed = answerQuestionInputSchema.parse({
+    question: "Do you hold ISO 27001?",
+    flows: [{ id: "f", name: "F" }],
+    provider: "openai-compatible",
+    expectedOutput: "answer_result",
+    importedAnswer: "Yes, since 2021."
+  });
+  assert.equal((parsed as { importedAnswer?: string }).importedAnswer, "Yes, since 2021.");
+});
+
+test("answer output schema preserves the stage-1 import verdict", () => {
+  const parsed = answerQuestionOutputSchema.parse({
+    answer: "a",
+    confidence: "high",
+    citations: [],
+    importVerdict: "divergent"
+  });
+  assert.equal((parsed as { importVerdict?: string }).importVerdict, "divergent");
+});
+
+test("an unknown import verdict is rejected rather than coerced", () => {
+  const parsed = answerQuestionOutputSchema.safeParse({
+    answer: "a",
+    confidence: "high",
+    citations: [],
+    importVerdict: "maybe"
+  });
+  assert.equal(parsed.success, false);
+});
+
+// --- questionnaire ingestion stage 2 (ingestion spec D5) ---
+
+test("verify_imported_answer input carries the import, the KB answer and the sources", () => {
+  const parsed = verifyImportedAnswerInputSchema.parse({
+    provider: "openai-compatible",
+    itemId: "item-1",
+    question: "Do you hold ISO 27001?",
+    importedAnswer: "Yes, since 2021.",
+    kbAnswer: "We hold ISO 27001.",
+    sources: [{ id: "s1", name: "Compliance", kind: "git", url: "https://example.com/c.git" }],
+    flowId: "security"
+  });
+  assert.equal(parsed.importedAnswer, "Yes, since 2021.");
+  assert.equal(parsed.sources.length, 1);
+});
+
+test("an uncovered item omits kbAnswer — there was nothing to compare against", () => {
+  const parsed = verifyImportedAnswerInputSchema.parse({
+    provider: "openai-compatible",
+    itemId: "item-1",
+    question: "q",
+    importedAnswer: "a",
+    sources: []
+  });
+  assert.equal(parsed.kbAnswer, undefined);
+});
+
+test("verify_imported_answer output keeps one finding per claim, with positions", () => {
+  const parsed = verifyImportedAnswerOutputSchema.parse({
+    findings: [
+      { kind: "documented-elsewhere", claim: "We encrypt at rest." },
+      {
+        kind: "contradicted",
+        claim: "Logs are retained for 1 year.",
+        positions: [{ sourceId: "policy", path: "security/retention.md", statement: "retained for 60 days" }]
+      }
+    ]
+  });
+  assert.equal(parsed.findings.length, 2);
+  // An omitted positions array defaults to empty rather than undefined, so the
+  // consumer never has to guard it.
+  assert.deepEqual(parsed.findings[0].positions, []);
+  assert.equal(parsed.findings[1].positions[0].sourceId, "policy");
+});
+
+test("an unknown finding kind is rejected rather than coerced", () => {
+  const parsed = verifyImportedAnswerOutputSchema.safeParse({
+    findings: [{ kind: "probably-fine", claim: "x" }]
+  });
+  assert.equal(parsed.success, false);
+});
+
+// --- questionnaire upload: the mapping contract (Spec B) ---
+
+const validMapping = {
+  sheetIndex: 0,
+  role: "questions" as const,
+  headerRow: 1,
+  questionColumn: 0,
+  answerColumn: 1,
+  responseTypeColumn: null,
+  sectionHeadingColumn: null,
+  confidence: "high" as const,
+  reason: "row 2 headed Question/Response"
+};
+
+test("the mapping input carries a bounded sample and the sheet's true size", () => {
+  const parsed = mapQuestionnaireColumnsInputSchema.parse({
+    provider: "codex",
+    importId: "imp-1",
+    sheets: [{ index: 0, name: "Security", rowCount: 940, sampleRows: [["Question", "Response"]] }],
+    expectedOutput: "column_mapping"
+  });
+  assert.equal(parsed.sheets[0].rowCount, 940);
+});
+
+test("the mapping output admits coordinates and strips anything else", () => {
+  const parsed = mapQuestionnaireColumnsOutputSchema.parse({
+    sheets: [{ ...validMapping, questions: ["injected question"], answer: "injected answer" }]
+  });
+  // The contract itself is the containment: no model-authored text survives it,
+  // so an injection in a cell can at worst produce a wrong index.
+  assert.deepEqual(parsed.sheets[0], validMapping);
+});
+
+test("a non-integer column index is rejected outright", () => {
+  assert.equal(
+    mapQuestionnaireColumnsOutputSchema.safeParse({ sheets: [{ ...validMapping, questionColumn: 1.5 }] }).success,
+    false
+  );
+});
+
+test("an absent column is null, not omitted", () => {
+  const { answerColumn, ...withoutAnswer } = validMapping;
+  assert.equal(answerColumn, 1);
+  assert.equal(mapQuestionnaireColumnsOutputSchema.safeParse({ sheets: [withoutAnswer] }).success, false);
 });
