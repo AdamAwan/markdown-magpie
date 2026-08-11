@@ -334,18 +334,34 @@ export function buildAnswerOutput(
 // In keyword-only mode it means no lexeme matched — the knowledge base may cover
 // the topic in different words. Saying so is what stops the model minting
 // knowledge gaps out of vocabulary mismatches.
-export function buildEmptySearchNote(queries: string[], retrievalMode: "hybrid" | "keyword"): string {
+//
+// `forceAnswer` mirrors the assess call's own flag: on the forced-final-answer
+// turn the loop's directive tells the model "do not request more searches", so
+// the keyword note must NOT also suggest retrying with different vocabulary —
+// that contradiction let a model emit one more search request on the very turn
+// where only an answer is accepted, which the loop then treats as an
+// unparseable answer. The lexical-miss framing itself still applies on that
+// turn (it is what stops the model minting a gap); only the retry suggestion
+// is suppressed.
+export function buildEmptySearchNote(
+  queries: string[],
+  retrievalMode: "hybrid" | "keyword",
+  forceAnswer: boolean
+): string {
   const list = queries.map((query) => `- ${query}`).join("\n");
   if (retrievalMode === "keyword") {
-    return [
+    const lines = [
       "These searches returned no sections:",
       list,
       "",
       "Semantic search is unavailable in this deployment; these were lexical",
       "keyword searches. No match means no shared wording was found — it is NOT",
-      "evidence that the knowledge base lacks the information. Prefer retrying with",
-      "different vocabulary over concluding a knowledge gap."
-    ].join("\n");
+      "evidence that the knowledge base lacks the information."
+    ];
+    if (!forceAnswer) {
+      lines.push("Prefer retrying with different vocabulary over concluding a knowledge gap.");
+    }
+    return lines.join("\n");
   }
   return ["These searches returned no sections:", list].join("\n");
 }

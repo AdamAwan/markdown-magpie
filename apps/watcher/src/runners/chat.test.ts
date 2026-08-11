@@ -428,6 +428,116 @@ describe("ChatRunner", () => {
     assert.equal(output.trace.verification.status, "grounded");
   });
 
+  it("keyword mode: frames an empty follow-up search to the model as a lexical miss, not proof of absence", async () => {
+    // Same shape as the previous test (seed retrieval hits, follow-up search for
+    // an example comes back empty), but the retrieve stub reports "keyword" mode
+    // — so the mode threading is genuinely exercised from the retrieve response,
+    // not hardcoded in the test.
+    const queries: string[] = [];
+    const api = fakeApi({
+      retrieve: async (question) => {
+        queries.push(question);
+        const sections = question.includes("example") ? [] : SECTIONS;
+        return { sections, retrievalMode: "keyword", candidateCount: sections.length };
+      }
+    });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("route a user question")) {
+        return JSON.stringify({ flowId: "flow-b", confidence: "high" });
+      }
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      if (queries.some((q) => q.includes("example"))) {
+        return JSON.stringify({
+          action: "answer",
+          answer: "Run the deploy script.",
+          confidence: "high",
+          isKnowledgeGap: false,
+          usedSectionIds: ["doc-1#deploy"]
+        });
+      }
+      return JSON.stringify({ action: "search", queries: ["deploy example"], rationale: "want an example" });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-b", name: "Beta" }],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    );
+
+    // Every assess/answer turn is a "Question:\n...Context:\n..." user message.
+    // The route call has a different system prompt, and the verify call's user
+    // message ALSO starts with "Question:\n" (it echoes the question under an
+    // "Answer under review:" heading) — so both are filtered out by system
+    // prompt, not by message shape. The seed round (before any search ran)
+    // must NOT carry the note; the round after the empty follow-up search must.
+    const assessRequests = chat.requests.filter(
+      (request) =>
+        !request.system.includes("route a user question") &&
+        !request.system.includes("You verify a drafted") &&
+        request.messages[0]?.content.startsWith("Question:\n")
+    );
+    assert.ok(assessRequests.length >= 2, "expected a seed assess call and a post-search assess call");
+    assert.doesNotMatch(
+      assessRequests[0]?.messages[0]?.content ?? "",
+      /lexical/i,
+      "the seed round has no empty search yet, so no note"
+    );
+    const postSearchContent = assessRequests[assessRequests.length - 1]?.messages[0]?.content ?? "";
+    assert.match(postSearchContent, /lexical/i, "the post-search round frames the empty search as a lexical miss");
+    assert.match(
+      postSearchContent,
+      /not[\s\S]*evidence that the knowledge base lacks the information/i,
+      "the note explicitly disclaims absence"
+    );
+  });
+
+  it("omits the empty-search note entirely when no search came back empty", async () => {
+    const api = fakeApi({
+      retrieve: async () => ({ sections: SECTIONS, retrievalMode: "keyword", candidateCount: SECTIONS.length })
+    });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("route a user question")) {
+        return JSON.stringify({ flowId: "flow-b", confidence: "high" });
+      }
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      return JSON.stringify({
+        answer: "Run the deploy script.",
+        confidence: "high",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"]
+      });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-b", name: "Beta" }],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    );
+
+    const assessRequest = chat.requests.find(
+      (request) =>
+        !request.system.includes("route a user question") &&
+        !request.system.includes("You verify a drafted") &&
+        request.messages[0]?.content.startsWith("Question:\n")
+    );
+    assert.ok(assessRequest, "expected an assess call");
+    const content = assessRequest?.messages[0]?.content ?? "";
+    assert.doesNotMatch(content, /lexical/i);
+    assert.doesNotMatch(content, /returned no sections/i);
+  });
+
   it("forces a gap-derived search when the model gives up low on the first round", async () => {
     // Reproduces the reported failure: the model answers low / flags a knowledge gap
     // immediately, without ever choosing action:"search". The guard must force one

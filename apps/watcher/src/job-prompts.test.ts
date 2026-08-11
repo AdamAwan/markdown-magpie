@@ -517,12 +517,25 @@ describe("forcedSearchQueries", () => {
 
 describe("buildEmptySearchNote", () => {
   it("empty searches are framed as lexical misses in keyword mode", () => {
-    const keyword = buildEmptySearchNote(["annual refunds"], "keyword");
+    const keyword = buildEmptySearchNote(["annual refunds"], "keyword", false);
     assert.match(keyword, /lexical/i);
     assert.doesNotMatch(keyword, /not covered/i);
 
-    const hybrid = buildEmptySearchNote(["annual refunds"], "hybrid");
+    const hybrid = buildEmptySearchNote(["annual refunds"], "hybrid", false);
     assert.doesNotMatch(hybrid, /lexical/i);
+  });
+
+  it("still frames a forced-answer keyword note as a lexical miss, but drops the retry suggestion", () => {
+    const forced = buildEmptySearchNote(["annual refunds"], "keyword", true);
+    assert.match(forced, /lexical/i);
+    // The forced-final-answer turn tells the model "do not request more
+    // searches"; suggesting a retry here would contradict that directive and
+    // risks the model requesting one more search on the very turn where only
+    // an answer is accepted.
+    assert.doesNotMatch(forced, /retry/i);
+
+    const unforced = buildEmptySearchNote(["annual refunds"], "keyword", false);
+    assert.match(unforced, /retry/i);
   });
 });
 

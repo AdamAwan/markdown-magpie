@@ -574,7 +574,9 @@ async function assess(
   // model in keyword mode that an empty search is a lexical miss, not proof the
   // knowledge base lacks the information.
   const emptySearchNote =
-    unsatisfiedSearches.size > 0 ? `\n\n${buildEmptySearchNote([...unsatisfiedSearches], retrievalMode)}` : "";
+    unsatisfiedSearches.size > 0
+      ? `\n\n${buildEmptySearchNote([...unsatisfiedSearches], retrievalMode, forceAnswer)}`
+      : "";
   const response = await model.complete({
     system,
     messages: [
