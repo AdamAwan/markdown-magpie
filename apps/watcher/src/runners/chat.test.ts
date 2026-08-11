@@ -428,6 +428,61 @@ describe("ChatRunner", () => {
     assert.equal(output.trace.verification.status, "grounded");
   });
 
+  it("grounds a followup gap on a search that only re-surfaced already-pooled sections", async () => {
+    // The #356 regression. OR'd lexeme matching means a follow-up search for
+    // material the KB does not have still returns rows — typically the very
+    // sections the seed retrieval already pooled. Gating gap emission on an
+    // empty result therefore discarded every followup gap; what the loop must
+    // key on is whether the search ADDED anything.
+    const queries: string[] = [];
+    const api = fakeApi({
+      retrieve: async (question) => {
+        queries.push(question);
+        // Same section back for the seed and for the follow-up search.
+        return retrieveResponse(SECTIONS);
+      }
+    });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("route a user question")) {
+        return JSON.stringify({ flowId: "flow-b", confidence: "high" });
+      }
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      if (queries.some((query) => query.includes("example"))) {
+        return JSON.stringify({
+          action: "answer",
+          answer: "Run the deploy script.",
+          confidence: "high",
+          isKnowledgeGap: false,
+          usedSectionIds: ["doc-1#deploy"],
+          followupGaps: ["no concrete deploy example"]
+        });
+      }
+      return JSON.stringify({ action: "search", queries: ["deploy example"], rationale: "want an example" });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    const output = (await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-b", name: "Beta" }],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    )) as {
+      gaps?: Array<{ source: string; summary: string }>;
+      trace?: { searches: Array<{ query: string; resultCount: number; round: number }> };
+    };
+
+    assert.equal(output.gaps?.length, 1, "the followup gap survives a non-empty but unproductive search");
+    assert.equal(output.gaps?.[0].source, "followup");
+    assert.equal(output.gaps?.[0].summary, "no concrete deploy example");
+    // The search genuinely returned a section — the trace records the truth, and
+    // the gap is grounded on novelty rather than on emptiness.
+    assert.deepEqual(output.trace?.searches, [{ query: "deploy example", resultCount: 1, round: 1 }]);
+  });
+
   it("keyword mode: frames an empty follow-up search to the model as a lexical miss, not proof of absence", async () => {
     // Same shape as the previous test (seed retrieval hits, follow-up search for
     // an example comes back empty), but the retrieve stub reports "keyword" mode

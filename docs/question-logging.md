@@ -39,7 +39,8 @@ Each question log records:
   see [Multi-turn conversations](#multi-turn-conversations) below.
 - Answer trace — the watcher's audit trail of how the answer was produced: the
   routing decision, every follow-up search the model requested with its hit count
-  (empty searches are what ground `followup` gaps), whether the final answer was
+  (searches that added no new evidence are what ground `followup` gaps), whether the
+  final answer was
   forced by the search budget, whether the model honoured the structured-answer
   contract, and the grounding-verification outcome (ran/skipped and why, with any
   stripped claims). Rendered in the console under **"How this was answered"** on
@@ -69,7 +70,7 @@ touched. See [api.md](api.md) for the full request/response shape.
 
 Gap candidates are grouped by gap summary, across the individual gaps of every question, and the reconciler's phase-1 assignment then buckets candidates by **embedding similarity within their flow**: a new gap joins the nearest active cluster whose representative embedding clears `GAP_CLUSTER_ASSIGN_THRESHOLD` (default 0.84; a conservative floor chosen by the offline sweep `npm run eval:gap-threshold` — it collapses near-identical rewordings only, and blank/out-of-range values fall back like the `FLOW_ROUTER_*` knobs), otherwise it seeds a new cluster together with any equally-close new gaps. Without an embedding provider, candidates bucket by exact summary as before; see [architecture.md](architecture.md) for the full mechanism. Answer synthesis asks the model to return structured JSON with `isKnowledgeGap` and a `gaps` array of summaries; `isKnowledgeGap` is reserved for a missed **core** of the question, and each summary becomes its own `auto` gap eligible for grouping. A gap-flagged answer that still substantively answers the core (the model rated itself medium/high and grounded the answer in honoured citations) ships at `medium` — capped below `high`, since a declared gap contradicts "fully answered" — while a gap answer with nothing behind it (self-rated low, no real citations, or empty retrieval) is forced to `low`; the `auto` gaps are emitted either way. This means a single multi-topic question — for example "how do I set this up with React so I can export dashboards?" — records one gap per unanswered topic, so each can cluster with the same gap from other questions and become its own proposal, rather than being condensed into one summary. (The model may still return a single gap, or the legacy singular `gapSummary` string, which is wrapped into a one-element array.)
 
-The answer is produced by an **agentic retrieval loop** (see [ai-jobs.md](./ai-jobs.md)): after an initial retrieval the model may run bounded follow-up searches within the routed flow to pull in closely related material before answering, and it cites only the sections it actually used. When one of those follow-up searches for supporting material (e.g. "a concrete example of X") comes back empty, the model can record a `followup` gap **even on a confident, well-cited answer**. These are grounded — kept only when the loop actually observed a search return nothing — so they point at a specific missing artifact rather than a whole-question failure. `followup` gaps join the same candidate-clustering and proposal workflow as `auto` gaps.
+The answer is produced by an **agentic retrieval loop** (see [ai-jobs.md](./ai-jobs.md)): after an initial retrieval the model may run bounded follow-up searches within the routed flow to pull in closely related material before answering, and it cites only the sections it actually used. When one of those follow-up searches for supporting material (e.g. "a concrete example of X") comes back with nothing the pool did not already hold, the model can record a `followup` gap **even on a confident, well-cited answer**. These are grounded — kept only when the loop actually observed a search fail to add evidence (see [retrieval.md](./retrieval.md) R22/R23; under OR'd keyword matching a fruitless search re-surfaces known sections rather than returning nothing) — so they point at a specific missing artifact rather than a whole-question failure. `followup` gaps join the same candidate-clustering and proposal workflow as `auto` gaps.
 
 ## Answer Grounding
 
@@ -90,7 +91,8 @@ base does not cover X" rather than fabricate. Several layers enforce this:
   `medium`.
 - **Search before asserting.** During the agentic retrieval loop the prompt directs
   the model to treat a tempting-but-absent supporting fact ("do we have SOC 2?") as
-  a search, not an assertion. When that search comes back empty, the missing topic
+  a search, not an assertion. When that search comes back without adding anything to
+  the retrieved pool, the missing topic
   is recorded as a `followup` gap alongside the (still confident) answer instead of
   appearing in it. Gap candidacy keys on gap rows — not question confidence — so
   these followup gaps cluster and draft proposals even though the answer itself was
