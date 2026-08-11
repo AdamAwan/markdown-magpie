@@ -214,7 +214,13 @@ export const NO_SOURCE_MATERIAL_GAP_PREFIX = "No sufficient source material foun
 // three. "Parked, awaiting a human" (repeated verification failures past the
 // retry cap) is NOT a source — it is the `parkedAt` state on a verification gap
 // (see QuestionGap).
-export type QuestionGapSource = "auto" | "manual" | "followup" | "verification" | "feedback";
+// `import` is raised when the stage-2 check finds that the SOURCES back a claim
+// a previously-given questionnaire answer made, but the knowledge base never
+// wrote it down (ingestion spec D8). It is not an `auto` gap: a documented-
+// elsewhere item answered fine and cites sections, so the unanswerable→gap route
+// never fires for it. Like `manual` and `verification` it survives a re-answer,
+// because it records a human assertion rather than a model judgement.
+export type QuestionGapSource = "auto" | "manual" | "followup" | "verification" | "feedback" | "import";
 
 export interface QuestionGap {
   summary: string;
@@ -387,6 +393,11 @@ export interface QuestionnaireItem {
   // never used as an answer, never placed in a system prompt.
   importedAnswer?: string;
   importVerdict?: ImportVerdict;
+  // When the source-grounded stage-2 check was enqueued for this item. Set so a
+  // resumed escalation sweep never enqueues the same item twice; deliberately
+  // separate from importVerdict, which stays an honest record of what stage 1
+  // actually decided.
+  importEscalatedAt?: string;
 }
 
 export interface Questionnaire {

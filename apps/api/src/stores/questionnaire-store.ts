@@ -113,6 +113,9 @@ export interface QuestionnaireStore {
   // grounding stays Magpie's, so the answer still tracks the sections it was
   // actually built from (ingestion spec D7).
   setAnswerText(itemId: string, answer: string): Promise<void>;
+  // Stamps that this item's stage-2 check has been enqueued, removing it from
+  // listAwaitingEscalation so a resumed sweep cannot double-enqueue it.
+  markImportEscalated(itemId: string): Promise<void>;
   // Imported items whose stage-1 compare did NOT confirm the import, and so
   // need the source-grounded stage-2 check. Bounded by the caller: a large
   // import against a thin KB would otherwise fan out hundreds of agentic runs
@@ -418,12 +421,19 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
     item.answer = answer;
   }
 
+  async markImportEscalated(itemId: string): Promise<void> {
+    const item = this.items.get(itemId);
+    if (!item) return;
+    item.importEscalatedAt = new Date().toISOString();
+  }
+
   async listAwaitingEscalation(questionnaireId: string, limit: number): Promise<QuestionnaireItem[]> {
     return [...this.items.values()]
       .filter(
         (item) =>
           item.questionnaireId === questionnaireId &&
           item.importedAnswer !== undefined &&
+          item.importEscalatedAt === undefined &&
           (item.importVerdict === "divergent" || item.importVerdict === "uncovered")
       )
       .sort((a, b) => a.position - b.position)

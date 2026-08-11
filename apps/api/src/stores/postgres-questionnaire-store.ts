@@ -62,13 +62,14 @@ interface ItemRow {
   stale_at_approval: boolean;
   imported_answer: string | null;
   import_verdict: ImportVerdict | null;
+  import_escalated_at: Date | null;
 }
 
 // Every item projection selects the same column set, so the escalation query and
 // the worksheet read can never drift apart on which fields they hydrate.
 const ITEM_COLUMNS = `id, questionnaire_id, position, question, status, outcome, answer, confidence, answered_at,
          question_log_id, reused_from_item_id, change_reason, error, approved_at, stale_at_approval,
-         imported_answer, import_verdict`;
+         imported_answer, import_verdict, import_escalated_at`;
 
 interface CitationRow {
   item_id: string;
@@ -98,7 +99,8 @@ function mapItem(row: ItemRow, citations: QuestionnaireItemCitation[]): Question
     staleAtApproval: row.stale_at_approval,
     citations,
     ...(row.imported_answer !== null ? { importedAnswer: row.imported_answer } : {}),
-    ...(row.import_verdict !== null ? { importVerdict: row.import_verdict } : {})
+    ...(row.import_verdict !== null ? { importVerdict: row.import_verdict } : {}),
+    ...(row.import_escalated_at !== null ? { importEscalatedAt: row.import_escalated_at.toISOString() } : {})
   };
 }
 
@@ -255,7 +257,8 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
       `
         SELECT i.id, i.questionnaire_id, i.position, i.question, i.status, i.outcome, i.answer, i.confidence,
                i.answered_at, i.question_log_id, i.reused_from_item_id, i.change_reason, i.error,
-               i.approved_at, i.stale_at_approval, i.imported_answer, i.import_verdict, q.direction,
+               i.approved_at, i.stale_at_approval, i.imported_answer, i.import_verdict, i.import_escalated_at,
+               q.direction,
                1 - (i.question_embedding <=> $3::vector) AS similarity
         FROM questionnaire_items i
         JOIN questionnaires q ON q.id = i.questionnaire_id
@@ -286,7 +289,8 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
       `
         SELECT i.id, i.questionnaire_id, i.position, i.question, i.status, i.outcome, i.answer, i.confidence,
                i.answered_at, i.question_log_id, i.reused_from_item_id, i.change_reason, i.error,
-               i.approved_at, i.stale_at_approval, i.imported_answer, i.import_verdict, q.direction,
+               i.approved_at, i.stale_at_approval, i.imported_answer, i.import_verdict, i.import_escalated_at,
+               q.direction,
                1 - (i.question_embedding <=> $3::vector) AS similarity
         FROM questionnaire_items i
         JOIN questionnaires q ON q.id = i.questionnaire_id
@@ -493,12 +497,17 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
     await this.pool.query("UPDATE questionnaire_items SET answer = $2 WHERE id = $1", [itemId, answer]);
   }
 
+  async markImportEscalated(itemId: string): Promise<void> {
+    await this.pool.query("UPDATE questionnaire_items SET import_escalated_at = now() WHERE id = $1", [itemId]);
+  }
+
   async listAwaitingEscalation(questionnaireId: string, limit: number): Promise<QuestionnaireItem[]> {
     const result = await this.pool.query<ItemRow>(
       `
         SELECT ${ITEM_COLUMNS} FROM questionnaire_items
         WHERE questionnaire_id = $1
           AND imported_answer IS NOT NULL
+          AND import_escalated_at IS NULL
           AND import_verdict IN ('divergent', 'uncovered')
         ORDER BY position ASC
         LIMIT $2

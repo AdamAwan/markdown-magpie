@@ -1171,3 +1171,76 @@ test("questionnaire asks count as citation usage", async () => {
     [["encryption", 1]]
   );
 });
+
+// --- questionnaire ingestion: the 'import' gap source (ingestion spec D8) ---
+
+test("an 'import' gap survives a re-answer that replaces auto gaps", async () => {
+  // An import gap records a HUMAN assertion (a past answer the sources back),
+  // not a model judgement, so a later re-ask must not silently erase it — the
+  // same reason manual and verification gaps are preserved.
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({
+    question: "Do you hold ISO 27001?",
+    chatProvider: "test",
+    retrievedSectionIds: [],
+    purpose: "questionnaire"
+  });
+  await store.recordImportGap(log.id, { summary: "ISO 27001 certification status", note: "from an import" });
+  await store.updateAnswer(log.id, {
+    answer: {
+      answer: "…",
+      confidence: "low",
+      citations: [],
+      gaps: [
+        {
+          summary: "an auto gap",
+          question: "Do you hold ISO 27001?",
+          citedSectionIds: [],
+          confidence: "low",
+          source: "auto" as const
+        }
+      ]
+    }
+  });
+
+  const before = await store.get(log.id);
+  assert.ok((before?.gaps ?? []).some((gap) => gap.source === "import"));
+
+  // Re-answer with a different auto gap: the auto lineage is rewritten, the
+  // import gap is untouched.
+  await store.updateAnswer(log.id, {
+    answer: {
+      answer: "…",
+      confidence: "low",
+      citations: [],
+      gaps: [
+        {
+          summary: "a different auto gap",
+          question: "Do you hold ISO 27001?",
+          citedSectionIds: [],
+          confidence: "low",
+          source: "auto" as const
+        }
+      ]
+    }
+  });
+
+  const after = await store.get(log.id);
+  const imports = (after?.gaps ?? []).filter((gap) => gap.source === "import");
+  assert.equal(imports.length, 1);
+  assert.equal(imports[0].summary, "ISO 27001 certification status");
+});
+
+test("recordImportGap is idempotent on the same summary", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const log = await store.record({
+    question: "q",
+    chatProvider: "test",
+    retrievedSectionIds: [],
+    purpose: "questionnaire"
+  });
+  await store.recordImportGap(log.id, { summary: "same topic", note: "n" });
+  await store.recordImportGap(log.id, { summary: "same topic", note: "n" });
+  const read = await store.get(log.id);
+  assert.equal((read?.gaps ?? []).filter((gap) => gap.source === "import").length, 1);
+});

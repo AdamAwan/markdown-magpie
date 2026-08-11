@@ -14,6 +14,7 @@ import { assertAiCapacity, nonInteractiveAiCapacity } from "../../platform/ai-ca
 import { buildAnswerQuestionInput, recordAnswerQuestionLog } from "../../platform/answer-question.js";
 import { embeddingModelId } from "../../platform/providers.js";
 import { retrieve } from "../retrieve/service.js";
+import { escalateImports } from "./import-escalation.js";
 import { isImported } from "./import-verdict.js";
 import { directionsMatch, isFastPathReusable } from "./reconcile.js";
 import { checkReuse, type ReuseCheckDeps } from "./reuse-check.js";
@@ -165,6 +166,12 @@ export async function getQuestionnaire(ctx: AppContext, id: string): Promise<Que
   const questionnaire = await ctx.stores.questionnaires.get(id);
   if (questionnaire) {
     await topUpDrip(ctx, questionnaire.id);
+    // Stage-2 escalation is bounded per tick and its state is derived, exactly
+    // like the drip's — so a worksheet read drains whatever the last tick
+    // deferred, and an API restart can never wedge an ingestion part-way.
+    if (isImported(questionnaire)) {
+      await escalateImports(ctx, questionnaire.id);
+    }
     return ctx.stores.questionnaires.get(id);
   }
   return questionnaire;
@@ -321,6 +328,11 @@ export async function handleQuestionnaireAnswerCompletion(
   // only when the job carried one, so an ordinary questionnaire never writes it.
   if (output.importVerdict) {
     await ctx.stores.questionnaires.setImportVerdict(item.id, output.importVerdict);
+    // A non-confirming stage-1 result is immediately escalatable; going through
+    // the same bounded sweep keeps the per-tick cap honest.
+    if (output.importVerdict !== "confirmed") {
+      await escalateImports(ctx, item.questionnaireId);
+    }
   }
   await topUpDrip(ctx, item.questionnaireId);
 }
