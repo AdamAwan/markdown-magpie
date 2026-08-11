@@ -238,8 +238,8 @@ export function parseJobOutput(job: JobView, stdout: string): unknown {
 // ships at "medium", while a gap answer with nothing behind it is forced to
 // "low"; `followup` gaps — supporting material the model searched for and did
 // not find — are emitted even for a confident answer, but only when the loop
-// actually observed a search return nothing (grounding them to real empty
-// searches rather than model hunches).
+// actually observed a search fail to add evidence (grounding them to real
+// unproductive searches rather than model hunches).
 // Shown instead of the raw model reply when the model was asked for a structured
 // answer but produced something we could not parse. Never surface the unparsed
 // text: a broken JSON envelope (e.g. an unescaped quote inside a string) would
@@ -252,7 +252,9 @@ export function buildAnswerOutput(
   sections: RetrievedSection[],
   question: string,
   flowId: string | undefined,
-  unsatisfiedSearches: Set<string> = new Set(),
+  // The searches that came back without adding evidence to the pool — a superset
+  // of the ones that literally returned nothing. Grounds the followup gaps.
+  unproductiveSearches: Set<string> = new Set(),
   loopTrace?: AnswerLoopTrace
 ): AnswerOutput {
   const structured = parseStructuredAnswer(modelContent);
@@ -310,7 +312,7 @@ export function buildAnswerOutput(
       !attributionFailed;
     const confidence: Confidence = substantive ? "medium" : "low";
     const autoGaps = summaries.map((summary) => toGapSignal(summary, question, citedSectionIds, confidence, "auto"));
-    const followupGaps = groundedFollowupGaps(structured, question, citedSectionIds, unsatisfiedSearches, confidence);
+    const followupGaps = groundedFollowupGaps(structured, question, citedSectionIds, unproductiveSearches, confidence);
     return {
       answer: answer || "I could not find reliable source material for this question.",
       confidence,
@@ -326,7 +328,7 @@ export function buildAnswerOutput(
   // answer to invented section ids, cannot be trusted as grounded — it ships at
   // "low" so the UI signals distrust instead of defaulting to quiet credibility.
   const confidence: Confidence = !structured || attributionFailed ? "low" : structured.confidence;
-  const followupGaps = groundedFollowupGaps(structured, question, citedSectionIds, unsatisfiedSearches, confidence);
+  const followupGaps = groundedFollowupGaps(structured, question, citedSectionIds, unproductiveSearches, confidence);
   return {
     answer,
     confidence,
@@ -507,20 +509,53 @@ export function applyGroundingVerdict(output: AnswerOutput, verdict: GroundingVe
   };
 }
 
+// How strong a newly-surfaced section must be, relative to the strongest section
+// already in the pool, to count as evidence a search actually produced. Mirrors
+// the API retrieve service's RELATIVE_RELEVANCE_FLOOR ("at least half as strong
+// as the best hit"), applied here against the accumulated pool rather than
+// against one query's own results.
+const NEW_EVIDENCE_RELATIVE_FLOOR = 0.5;
+
+// Did this search actually add evidence to the pool? True when it surfaced at
+// least one section the pool did not already hold, strong enough to stand beside
+// what is already there.
+//
+// Emptiness alone used to answer this question: under AND keyword matching a
+// search whose terms did not co-occur in one section genuinely returned nothing.
+// OR'd lexeme matching (#355) removed that signal — a query sharing a single
+// stemmed word with the corpus returns rows, typically the very sections the
+// seed retrieval already pooled — so "returned nothing" became unreachable and
+// the followup-gap gate below stopped firing at all (#356). Novelty plus
+// strength is the signal that survives OR matching: re-surfacing material the
+// model has already read is not evidence, and neither is a section too weak to
+// stand beside the pool's best.
+//
+// `pooled` must be the pool as it stood BEFORE this search's results were
+// merged, or every result reads as already-known.
+export function searchProducedEvidence(pooled: RetrievedSection[], results: RetrievedSection[]): boolean {
+  const known = new Set(pooled.map((section) => section.sectionId));
+  const strongest = pooled.reduce((best, section) => Math.max(best, section.relevance), 0);
+  // An empty pool floors at 0, so the first search that returns anything counts.
+  const floor = strongest * NEW_EVIDENCE_RELATIVE_FLOOR;
+  return results.some((section) => !known.has(section.sectionId) && section.relevance >= floor);
+}
+
 // Turns the model's followupGaps into gap signals, but only when the loop saw at
-// least one search return nothing: the model may only claim missing supporting
-// material if it actually went looking and came up empty. Each gap is stamped
-// with the confidence the answer actually ships at (the caller's post-contract
-// effective confidence, not the model's raw self-rating) and linked to the
-// sections the answer used.
+// least one search come back without adding evidence: the model may only claim
+// missing supporting material if it actually went looking and the looking
+// produced nothing (see `searchProducedEvidence` for why that is no longer the
+// same thing as "returned zero sections"). Each gap is stamped with the
+// confidence the answer actually ships at (the caller's post-contract effective
+// confidence, not the model's raw self-rating) and linked to the sections the
+// answer used.
 function groundedFollowupGaps(
   structured: StructuredAnswer | undefined,
   question: string,
   citedSectionIds: string[],
-  unsatisfiedSearches: Set<string>,
+  unproductiveSearches: Set<string>,
   confidence: Confidence
 ): KnowledgeGapSignal[] {
-  if (!structured || structured.followupGaps.length === 0 || unsatisfiedSearches.size === 0) {
+  if (!structured || structured.followupGaps.length === 0 || unproductiveSearches.size === 0) {
     return [];
   }
   return structured.followupGaps.map((summary) =>

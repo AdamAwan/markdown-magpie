@@ -18,7 +18,7 @@ watcher jobs.
 ## Gap lifecycle
 
 - **G1** — A gap row (`question_gaps`) has one of six **sources**: `auto` (the model
-  declared a whole-question gap), `followup` (a search observably returned empty),
+  declared a whole-question gap), `followup` (a search observably added no evidence),
   `manual` (an admin flag), `verification` (server-raised on a failed gap-closure
   re-ask), `feedback` (user feedback signal), or `import` (the source-grounded check of an
   **imported questionnaire answer** found that the sources back a claim the KB never

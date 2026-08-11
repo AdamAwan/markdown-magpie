@@ -36,6 +36,7 @@ import {
   parseGroundingVerdict,
   parseJobOutput,
   parseReconcileVerdict,
+  searchProducedEvidence,
   selectCitations,
   UNPARSEABLE_ANSWER_FALLBACK,
   withVerification,
@@ -102,8 +103,8 @@ export async function runGenerativeJob(options: GenerativeJobOptions): Promise<u
 // before answering, so an answer can pull in closely related material rather than
 // being capped at one fixed top-K grab. Bounded by MAX_SEARCH_ROUNDS and
 // MAX_POOL_SECTIONS so a job can never search unboundedly. Queries whose
-// retrieval comes back empty are recorded so the model's followup gaps can be
-// grounded to searches that genuinely found nothing.
+// retrieval adds no evidence to the pool are recorded so the model's followup
+// gaps can be grounded to searches that genuinely found nothing new.
 const MAX_SEARCH_ROUNDS = 3;
 const MAX_POOL_SECTIONS = 15;
 
@@ -317,10 +318,21 @@ async function answerCore(
   // questionnaire operator's intent gets the last word.
   const system = withDirection(withPersona(ANSWER_QUESTION.instructions, routedFlow?.persona), input.direction);
 
-  // Deduped accumulator (sectionId -> section) plus the set of follow-up queries
-  // that returned nothing above the relevance floor.
+  // Deduped accumulator (sectionId -> section) plus two records of searches that
+  // came back without usable evidence. They are deliberately separate sets:
+  //
+  // - `emptySearches` is literal zero results, and only ever feeds the prompt's
+  //   lexical-miss note (R17) — a note that says "these searches returned no
+  //   sections" must stay true of every query it names.
+  // - `unproductiveSearches` is the superset that also holds searches which
+  //   returned only sections the pool already had (or ones too weak to stand
+  //   beside it). That is what grounds followup gaps: under OR'd lexeme matching
+  //   a fruitless search re-surfaces known material instead of returning nothing,
+  //   so gating gap emission on emptiness silently discarded every followup gap
+  //   (#356).
   const pool = new Map<string, RetrievedSection>();
-  const unsatisfiedSearches = new Set<string>();
+  const emptySearches = new Set<string>();
+  const unproductiveSearches = new Set<string>();
 
   logger.debug(
     { jobId: job.id, flowId: flowId ?? null },
@@ -347,7 +359,12 @@ async function answerCore(
       const results = await api.retrieve(query, flowId, undefined, signal);
       searches.push({ query, resultCount: results.sections.length, round: round + 1 });
       if (results.sections.length === 0) {
-        unsatisfiedSearches.add(normalizeQuery(query));
+        emptySearches.add(normalizeQuery(query));
+      }
+      // Judged against the pool as it stands BEFORE this search is merged in —
+      // afterwards every result reads as already-known.
+      if (!searchProducedEvidence([...pool.values()], results.sections)) {
+        unproductiveSearches.add(normalizeQuery(query));
       }
       mergeSections(pool, results.sections);
       if (pool.size >= MAX_POOL_SECTIONS) {
@@ -363,7 +380,7 @@ async function answerCore(
       retrievalQuestion,
       [...pool.values()],
       false,
-      unsatisfiedSearches,
+      emptySearches,
       retrievalMode,
       signal,
       input.importedAnswer
@@ -395,7 +412,7 @@ async function answerCore(
         [...pool.values()],
         retrievalQuestion,
         flowId,
-        unsatisfiedSearches,
+        unproductiveSearches,
         loopTrace(false)
       );
       return stamp(await verifyAnswerGrounding(model, output, [...pool.values()], retrievalQuestion, signal, job.id));
@@ -420,7 +437,7 @@ async function answerCore(
     retrievalQuestion,
     [...pool.values()],
     true,
-    unsatisfiedSearches,
+    emptySearches,
     retrievalMode,
     signal,
     input.importedAnswer
@@ -430,7 +447,7 @@ async function answerCore(
     [...pool.values()],
     retrievalQuestion,
     flowId,
-    unsatisfiedSearches,
+    unproductiveSearches,
     loopTrace(true)
   );
   return stamp(await verifyAnswerGrounding(model, output, [...pool.values()], retrievalQuestion, signal, job.id));
@@ -580,7 +597,7 @@ async function assess(
   question: string,
   sections: RetrievedSection[],
   forceAnswer: boolean,
-  unsatisfiedSearches: Set<string>,
+  emptySearches: Set<string>,
   retrievalMode: "hybrid" | "keyword",
   signal: AbortSignal,
   importedAnswer?: string
@@ -599,8 +616,7 @@ async function assess(
   // The note is empty in hybrid mode (an empty search needs no reframing there),
   // so the blank-line separator is added only when there is actually a note —
   // otherwise hybrid prompts would gain a stray empty block.
-  const note =
-    unsatisfiedSearches.size > 0 ? buildEmptySearchNote([...unsatisfiedSearches], retrievalMode, forceAnswer) : "";
+  const note = emptySearches.size > 0 ? buildEmptySearchNote([...emptySearches], retrievalMode, forceAnswer) : "";
   const emptySearchNote = note ? `\n\n${note}` : "";
   const base = `Question:\n${question}\n\nContext:\n${context}${emptySearchNote}${directive}`;
   // An imported answer is untrusted EXTERNAL content (ingestion spec D2), so it

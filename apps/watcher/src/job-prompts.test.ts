@@ -12,6 +12,7 @@ import {
   forcedSearchQueries,
   parseGroundingVerdict,
   parseJobOutput,
+  searchProducedEvidence,
   UNPARSEABLE_ANSWER_FALLBACK
 } from "./job-prompts.js";
 
@@ -488,7 +489,28 @@ describe("buildAnswerOutput", () => {
     assert.deepEqual(output.gaps[0].citedSectionIds, ["doc-1#deploy"]);
   });
 
-  it("drops followup gaps that no empty search backs (ungrounded)", () => {
+  it("emits a followup gap when a search only re-surfaced material the pool already had", () => {
+    // The #356 case: OR'd lexeme matching means a fruitless follow-up search
+    // returns rows rather than nothing, so the runner records it as unproductive
+    // rather than empty — and the gap must still be honoured.
+    const output = buildAnswerOutput(
+      JSON.stringify({
+        answer: "Deploy with the script.",
+        confidence: "medium",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"],
+        followupGaps: ["no staging deploy example"]
+      }),
+      SECTIONS,
+      "How do I deploy?",
+      "flow-1",
+      new Set(["staging deploy example"])
+    );
+    assert.equal(output.gaps?.length, 1, "an unproductive search grounds the gap just like an empty one");
+    assert.equal(output.gaps?.[0].source, "followup");
+  });
+
+  it("drops followup gaps that no unproductive search backs (ungrounded)", () => {
     const output = buildAnswerOutput(
       JSON.stringify({
         answer: "Deploy with the script.",
@@ -500,9 +522,41 @@ describe("buildAnswerOutput", () => {
       SECTIONS,
       "How do I deploy?",
       "flow-1",
-      new Set() // no search came back empty
+      new Set() // every search produced evidence
     );
     assert.equal(output.gaps, undefined, "no grounded followup gaps ⇒ no gaps emitted");
+  });
+});
+
+describe("searchProducedEvidence", () => {
+  const pooled: RetrievedSection[] = [
+    { ...SECTIONS[0], sectionId: "doc-1#a", relevance: 0.9 },
+    { ...SECTIONS[0], sectionId: "doc-1#b", relevance: 0.5 }
+  ];
+
+  it("counts a strong section the pool did not already hold", () => {
+    assert.equal(searchProducedEvidence(pooled, [{ ...SECTIONS[0], sectionId: "doc-2#c", relevance: 0.8 }]), true);
+  });
+
+  it("rejects results the pool already holds, however strong", () => {
+    // The #356 shape: OR'd lexeme matching re-surfaces the very sections the
+    // seed retrieval already pooled, so the search added nothing to read.
+    assert.equal(searchProducedEvidence(pooled, pooled), false);
+  });
+
+  it("rejects a new section too weak to stand beside the pool's best", () => {
+    // 0.4 is below half of the pool's strongest (0.9) — noise beside what the
+    // model has already seen, not evidence the clause is covered.
+    assert.equal(searchProducedEvidence(pooled, [{ ...SECTIONS[0], sectionId: "doc-2#c", relevance: 0.4 }]), false);
+  });
+
+  it("rejects an empty result", () => {
+    assert.equal(searchProducedEvidence(pooled, []), false);
+  });
+
+  it("counts anything at all against an empty pool", () => {
+    // Nothing to be relatively weak against on the first search of a run.
+    assert.equal(searchProducedEvidence([], [{ ...SECTIONS[0], sectionId: "doc-2#c", relevance: 0.41 }]), true);
   });
 });
 

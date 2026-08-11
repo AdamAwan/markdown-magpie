@@ -180,8 +180,8 @@ callbacks. Weak or unanswerable questions feed the gaps subsystem
   > therefore goes quiet for all of them — the gaps keep accumulating and stay visible in
   > the console, but nothing acts on them until an embeddings endpoint is configured. This
   > is deliberate (weaker provenance must not drive unattended work), but it is a silent
-  > mode change from an operator's point of view. A second, unrelated suppression also
-  > applies to `followup` gaps in **both** modes — see R22.
+  > mode change from an operator's point of view. What grounds a `followup` gap in either
+  > mode is a separate question — see R22/R23.
 
 ## Citations
 
@@ -215,26 +215,33 @@ callbacks. Weak or unanswerable questions feed the gaps subsystem
   the whole question as unanswerable (or from the grounding verifier stripping a claim).
   **Followup** gaps come from the model naming a specific sub-clause it could not support
   (`followupGaps`) while still answering the rest — the partial-answer case. Followup gaps
-  are additionally gated: `groundedFollowupGaps`
-  (`apps/watcher/src/job-prompts.ts`) discards **every** model-declared followup gap
-  unless at least one search in the loop returned **zero** sections
-  (`unsatisfiedSearches.size > 0`). The rule exists so the model may only claim missing
-  supporting material if it actually went looking and came up empty.
+  are additionally gated: `groundedFollowupGaps` (`apps/watcher/src/job-prompts.ts`)
+  discards **every** model-declared followup gap unless at least one search in the loop
+  came back **unproductive** (`unproductiveSearches.size > 0`). The rule exists so the
+  model may only claim missing supporting material if it actually went looking and the
+  looking produced nothing.
+- **R23** — A search is **unproductive** when it added no evidence to the pool:
+  `searchProducedEvidence` (`apps/watcher/src/job-prompts.ts`) requires at least one
+  returned section that (a) the pool did not already hold and (b) scores at least
+  `NEW_EVIDENCE_RELATIVE_FLOOR` (0.5) of the strongest section already pooled. Judged
+  against the pool as it stood **before** the search's results were merged.
 
-  > ⚠️ **REGRESSION (as built).** OR matching (R14) has made a zero-section search nearly
-  > unreachable: any query sharing a single lexeme with the corpus now returns rows, and
-  > R16's floor only empties a pool of pure single-lexeme noise. So `unsatisfiedSearches`
-  > is almost always empty and **followup gaps are almost never emitted**.
-  >
-  > Observable consequence: a multi-clause question whose knowledge base covers only some
-  > clauses returns a partial answer that says so in prose, cites the covered material,
-  > ships at `medium` — and records **no gap row at all**. The uncovered clause is
-  > silently lost to the gaps subsystem, so nothing ever proposes documenting it. This is
-  > the failing `partial-answer-followup-gap` case in `docs/golden-eval.md`; it is not
-  > fixable by retuning R16's floor, because the sections such a search returns score
-  > *higher* than legitimately-cited sections in passing cases. Fixing it requires
-  > replacing the empty-result precondition with a strength-based one — `candidateCount`
-  > and per-section `relevance` (R17) are already plumbed for it.
+  > This replaces the original "returned zero sections" precondition, which OR matching
+  > (R14) made unreachable — any query sharing one lexeme with the corpus returns rows,
+  > typically the very sections the seed retrieval already pooled, so no followup gap
+  > was ever emitted (#356; the `partial-answer-followup-gap` golden case). Retuning
+  > R16's floor could not fix it: in that case the follow-up search's sections score
+  > 0.76–0.83, *higher* than legitimately-cited sections in passing cases (0.714+), so
+  > emptying that result would need `MIN_RELEVANCE > 0.83` — AND matching by another
+  > name. Novelty is the signal that survives OR matching: re-surfacing material the
+  > model has already read is not evidence, and neither is a section too weak to stand
+  > beside the pool's best.
+
+  The loop keeps the two records separate. `emptySearches` (literal zero results) feeds
+  **only** R17's lexical-miss note, so a note claiming "these searches returned no
+  sections" stays true of every query it names; `unproductiveSearches` is the superset
+  that grounds followup gaps. Prompts are therefore byte-identical to their pre-#356
+  form — the fix moves no text in front of the model.
 
 ## HTTP endpoints
 
@@ -263,6 +270,7 @@ See [api.md](./api.md) for the full request/response reference.
 | `TS_RANK_WEIGHTS` (D, C, B, A) | 0.1, 0.3, 0.6, 1.0 | `apps/api/src/stores/postgres-knowledge-store.ts` |
 | `MAX_SEARCH_ROUNDS` | 3 | `apps/watcher/src/runners/generative.ts` |
 | `MAX_POOL_SECTIONS` | 15 | `apps/watcher/src/runners/generative.ts` |
+| `NEW_EVIDENCE_RELATIVE_FLOOR` | 0.5 | `apps/watcher/src/job-prompts.ts` |
 | `MAX_PRIOR_TURNS` / `MAX_ANSWER_CHARS` | 6 / 1200 | `apps/api/src/features/ask/service.ts` |
 | `FLOW_ROUTER_MIN_SCORE` / `FLOW_ROUTER_MIN_MARGIN` | 0.25 / 0.05 | `apps/api/src/platform/config.ts` |
 | `DEFAULT_RRF_K` | 60 | `packages/retrieval/src/rrf.ts` |
@@ -282,6 +290,7 @@ See [api.md](./api.md) for the full request/response reference.
 | Weighted FTS vector + refresh trigger | `packages/db/migrations/0067_weighted_section_fts.sql` (`document_sections_search_tsv_refresh`, `document_sections_search_tsv_trg`) |
 | Gap retrieval-mode stamp + candidacy gate | `packages/db/migrations/0068_gap_retrieval_mode.sql`, `apps/api/src/stores/postgres-question-log-store.ts` |
 | Empty-search framing | `apps/watcher/src/job-prompts.ts` (`buildEmptySearchNote`) |
+| Followup-gap grounding | `apps/watcher/src/job-prompts.ts` (`searchProducedEvidence`, `groundedFollowupGaps`) |
 | Flow router (pure) | `packages/retrieval/src/flow-router.ts` |
 | Embedding providers | `packages/retrieval/src/embeddings.ts` |
 | Index-time background embedding | `apps/api/src/platform/background-embedder.ts`, `apps/api/src/stores/embed-sections.ts` |
