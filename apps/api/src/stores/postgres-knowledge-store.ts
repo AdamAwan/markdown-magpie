@@ -23,6 +23,15 @@ const SECTION_INSERT_CHUNK = 1000;
 // the 65535 bind-parameter cap while still cutting round-trips drastically.
 const EMBEDDING_UPDATE_CHUNK = 1000;
 
+// ts_rank weight array, ordered {D, C, B, A} — see migration 0063 for what each
+// weight labels. Body text (C) is deliberately well below heading (A) and
+// heading-path/file-path (B): a term in a heading is far stronger evidence of
+// aboutness than the same term buried in prose.
+const TS_RANK_WEIGHTS = [0.1, 0.3, 0.6, 1.0];
+// Multiplier for sections that satisfy the strict whole-question tsquery, not
+// just the OR'd one. Starting value; tuned against docs/golden-eval.md in Task 7.
+const STRICT_MATCH_BOOST = 1.5;
+
 // A section's identity at a moment in time: the md5 of (heading, content) plus
 // when that pair last changed. Produced only by sectionFingerprints (below) so
 // the hash expression can't fork between writers and readers.
@@ -410,25 +419,51 @@ export class PostgresKnowledgeStore
     if (query.trim().length === 0) {
       return [];
     }
-    // A null filter ($3) matches every repository; otherwise restrict to the flow's
-    // scope via the section -> document -> repository join. websearch_to_tsquery
-    // tolerates free-form user input; the GIN index on search_tsv serves the @@ match.
+    // Matching ORs the question's lexemes so a section that covers part of the
+    // question still surfaces; ranking then does the grading, because ts_rank_cd
+    // scores a section that matched more of the query higher. The strict
+    // websearch_to_tsquery is kept as a multiplier so whole-question matches
+    // retain the precedence they had when strict matching was the gate.
+    //
+    // The OR'd query is built by running the question through to_tsvector and
+    // taking its lexemes, which reuses Postgres's own stemming and stopword
+    // removal rather than string-munging plainto_tsquery's output. Each lexeme is
+    // quote_literal'd so punctuation cannot produce a malformed tsquery. A
+    // question with no content lexemes yields an empty tsquery, matching nothing.
+    //
+    // Normalisation flag 32 is rank/(rank+1), already bounded in [0,1) — which is
+    // why there is no application-side rank normalisation any more.
     const repositoryFilter = repositoryIds && repositoryIds.length > 0 ? repositoryIds : null;
     const result = await this.pool.query<{ id: string; relevance: string }>(
       `
-        SELECT s.id, ts_rank(s.search_tsv, websearch_to_tsquery('english', $1)) AS relevance
+        WITH q AS (
+          SELECT
+            to_tsquery(
+              'english',
+              coalesce(
+                (
+                  SELECT string_agg(quote_literal(lexeme), ' | ')
+                  FROM unnest(tsvector_to_array(to_tsvector('english', $1))) AS lexeme
+                ),
+                ''
+              )
+            ) AS any_query,
+            websearch_to_tsquery('english', $1) AS all_query
+        )
+        SELECT s.id,
+               ts_rank_cd($5::float4[], s.search_tsv, q.any_query, 32)
+                 * CASE WHEN s.search_tsv @@ q.all_query THEN $4::float4 ELSE 1.0 END AS relevance
         FROM document_sections s
         JOIN documents d ON d.id = s.document_id
-        WHERE s.search_tsv @@ websearch_to_tsquery('english', $1)
+        CROSS JOIN q
+        WHERE s.search_tsv @@ q.any_query
           AND ($3::text[] IS NULL OR d.repository_id = ANY($3))
         ORDER BY relevance DESC
         LIMIT $2
       `,
-      [query, limit, repositoryFilter]
+      [query, limit, repositoryFilter, STRICT_MATCH_BOOST, TS_RANK_WEIGHTS]
     );
-    // ts_rank is unbounded; normalise into [0,1] so it composes with vector
-    // similarities in the fusion step the same way the in-memory path does.
-    return result.rows.map((row) => ({ id: row.id, relevance: normaliseRank(Number(row.relevance)) }));
+    return result.rows.map((row) => ({ id: row.id, relevance: Math.min(1, Number(row.relevance)) }));
   }
 
   // A section "needs embedding" when it has no vector, or (on a versioned store)
@@ -565,14 +600,4 @@ interface SectionRow {
   anchor: string;
   ordinal: number;
   content: string;
-}
-
-// ts_rank returns a small non-negative score (typically well under 1 for short
-// sections). Map it into [0,1] with a saturating curve so a strong match trends
-// toward 1 while staying comparable to cosine similarities during fusion.
-function normaliseRank(rank: number): number {
-  if (!Number.isFinite(rank) || rank <= 0) {
-    return 0;
-  }
-  return rank / (rank + 0.1);
 }

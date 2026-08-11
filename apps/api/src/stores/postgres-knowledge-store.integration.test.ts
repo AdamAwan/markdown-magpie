@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
+import { PostgresKnowledgeStore } from "./postgres-knowledge-store.js";
 
 // DB-backed tests for the keyword-search SQL. Gated by RUN_PG_INTEGRATION so the
 // default unit run stays database-free (see the writing-magpie-tests skill).
@@ -74,4 +75,52 @@ test("search_tsv indexes heading_path and path, weighted", { skip: !runIntegrati
     Number(ranks.rows[0].heading_rank) > Number(ranks.rows[0].body_rank),
     "a heading match must outrank a body match"
   );
+});
+
+test("partial-question matches survive, whole-question matches outrank them", { skip: !runIntegration }, async (t) => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+
+  const whole = await seedSection(pool, {
+    heading: "Refunds on annual subscriptions",
+    headingPath: ["Billing"],
+    path: "billing/annual.md",
+    content: "We refund annual subscriptions pro rata."
+  });
+  const partial = await seedSection(pool, {
+    heading: "Refunds",
+    headingPath: ["Billing"],
+    path: "billing/refunds.md",
+    content: "Refunds are issued to the original payment method."
+  });
+  // node:test runs t.after hooks in registration order, so the delete (which
+  // needs a live pool) must be registered before the pool.end() hook. documents
+  // has no ON DELETE CASCADE from repositories (see seedSection above), so
+  // documents (and their cascading sections) must be deleted before repositories.
+  t.after(async () => {
+    await pool.query("DELETE FROM documents WHERE repository_id = ANY($1)", [
+      [whole.repositoryId, partial.repositoryId]
+    ]);
+    await pool.query("DELETE FROM repositories WHERE id = ANY($1)", [[whole.repositoryId, partial.repositoryId]]);
+  });
+  t.after(() => pool.end());
+
+  const store = new PostgresKnowledgeStore(pool);
+  const hits = await store.searchByKeyword("how do we handle refunds for annual subscriptions?", 10, [
+    whole.repositoryId,
+    partial.repositoryId
+  ]);
+
+  const ids = hits.map((hit) => hit.id);
+  assert.ok(ids.includes(partial.sectionId), "a section matching only some terms must still be returned");
+  assert.equal(ids[0], whole.sectionId, "the section matching the whole question must rank first");
+  for (const hit of hits) {
+    assert.ok(hit.relevance > 0 && hit.relevance <= 1, `relevance ${hit.relevance} must stay in (0,1]`);
+  }
+});
+
+test("a stopword-only question returns nothing", { skip: !runIntegration }, async (t) => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  t.after(() => pool.end());
+  const store = new PostgresKnowledgeStore(pool);
+  assert.deepEqual(await store.searchByKeyword("the and of", 10), []);
 });
