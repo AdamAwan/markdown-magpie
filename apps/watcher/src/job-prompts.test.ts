@@ -216,6 +216,53 @@ describe("buildSourceGroundedPrompt", () => {
   });
 });
 
+describe("buildAnswerOutput import verdict", () => {
+  // Ingesting completed questionnaires (ingestion spec D4): the verdict rides
+  // along on the answer the model was producing anyway, so stage 1 costs no
+  // extra AI call.
+  it("carries a well-formed import verdict off the grounded branch", () => {
+    const output = buildAnswerOutput(
+      JSON.stringify({
+        answer: "Deploy then verify.",
+        confidence: "high",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"],
+        importVerdict: "divergent"
+      }),
+      SECTIONS,
+      "How do I deploy?",
+      "flow-1"
+    );
+    assert.equal(output.importVerdict, "divergent");
+  });
+
+  it("drops a garbled verdict rather than coercing it", () => {
+    const output = buildAnswerOutput(
+      JSON.stringify({
+        answer: "Deploy then verify.",
+        confidence: "high",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"],
+        importVerdict: "probably fine"
+      }),
+      SECTIONS,
+      "How do I deploy?",
+      "flow-1"
+    );
+    assert.equal(output.importVerdict, undefined);
+  });
+
+  it("emits no verdict when the model reported none", () => {
+    const output = buildAnswerOutput(
+      JSON.stringify({ answer: "Deploy then verify.", confidence: "high", isKnowledgeGap: false }),
+      SECTIONS,
+      "How do I deploy?",
+      "flow-1"
+    );
+    assert.equal(output.importVerdict, undefined);
+  });
+});
+
 describe("buildAnswerOutput", () => {
   it("derives citations from the retrieved sections, not the model", () => {
     const output = buildAnswerOutput(

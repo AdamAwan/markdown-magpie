@@ -3,6 +3,7 @@ import type {
   Citation,
   Confidence,
   FlowSelectionRequired,
+  ImportVerdict,
   KnowledgeGapSignal,
   OutOfScope,
   ReconcileResult,
@@ -55,6 +56,11 @@ export interface AnswerOutput {
   // builds the output directly, and on a fresh verdict it stamps this onto the
   // normal answer flow's output. Absent when the job carried no candidates.
   reuse?: ReconcileResult;
+  // Stage-1 adjudication of an imported answer (questionnaire ingestion). Set
+  // from the model's structured reply on the grounded branch; the answer runner
+  // then settles the final value, forcing "uncovered" whenever the answer cites
+  // nothing. Absent when the job carried no imported answer.
+  importVerdict?: ImportVerdict;
 }
 
 // The loop-level portion of the trace the answer runner assembles as it goes
@@ -323,7 +329,11 @@ export function buildAnswerOutput(
     citations,
     ...(followupGaps.length > 0 ? { gaps: followupGaps } : {}),
     ...(flowId ? { flowId } : {}),
-    ...(trace ? { trace } : {})
+    ...(trace ? { trace } : {}),
+    // Carried only on the grounded branch. The gap and out-of-scope branches
+    // above ship zero citations, and zero citations IS "uncovered" — the answer
+    // runner stamps that in code rather than trusting the model there.
+    ...(structured?.importVerdict ? { importVerdict: structured.importVerdict } : {})
   };
 }
 
@@ -478,6 +488,15 @@ interface StructuredAnswer {
   gaps: string[];
   followupGaps: string[];
   usedSectionIds: string[];
+  // Stage-1 adjudication of an imported answer, present only when the job
+  // carried one. Absent (not defaulted) when the model omits or garbles it —
+  // the answer runner decides the shipped verdict, and an ungrounded answer is
+  // forced to "uncovered" in code regardless of what the model claimed.
+  importVerdict?: ImportVerdict;
+}
+
+function toImportVerdict(value: unknown): ImportVerdict | undefined {
+  return value === "confirmed" || value === "divergent" || value === "uncovered" ? value : undefined;
 }
 
 function parseStructuredAnswer(content: string): StructuredAnswer | undefined {
@@ -498,6 +517,7 @@ function parseStructuredAnswer(content: string): StructuredAnswer | undefined {
     gaps?: unknown;
     followupGaps?: unknown;
     usedSectionIds?: unknown;
+    importVerdict?: unknown;
   };
   if (typeof candidate.answer !== "string" || !isConfidence(candidate.confidence)) {
     return undefined;
@@ -513,7 +533,8 @@ function parseStructuredAnswer(content: string): StructuredAnswer | undefined {
     outOfScope: candidate.outOfScope === true,
     gaps: toStringArray(candidate.gaps),
     followupGaps: toStringArray(candidate.followupGaps),
-    usedSectionIds: toStringArray(candidate.usedSectionIds)
+    usedSectionIds: toStringArray(candidate.usedSectionIds),
+    ...(toImportVerdict(candidate.importVerdict) ? { importVerdict: toImportVerdict(candidate.importVerdict) } : {})
   };
 }
 
