@@ -2220,3 +2220,80 @@ export interface AiScheduleCost {
   totalTokens: number;
   estimatedCost?: AiCostEstimate;
 }
+
+// --- Uploading a questionnaire file (Spec B) ------------------------------
+// An upload is a STAGING resource, never a second questionnaire path
+// (docs/questionnaires.md Q29). The uploaded bytes are parsed in-request and
+// dropped; what persists is the extracted grid below, and it is nulled the
+// moment the operator confirms a mapping.
+
+// One sheet of an uploaded workbook, as text. Every cell is a string: a
+// spreadsheet's own idea of a cell's type tells us nothing about whether it
+// holds a question, and coercion would only lose leading zeroes and dates.
+export interface SheetGrid {
+  name: string;
+  rows: string[][];
+}
+
+// Which column holds what, for one sheet. Indices are 0-based into `rows[n]`,
+// and null means "absent". This is the ENTIRE output of the mapping model: it
+// returns coordinates, never text, so an injection buried in a cell can at worst
+// produce a wrong mapping — which is what the human confirmation gate catches.
+export interface SheetMapping {
+  sheetIndex: number;
+  role: "questions" | "ignore";
+  headerRow: number | null;
+  questionColumn: number | null;
+  answerColumn: number | null;
+  responseTypeColumn: number | null;
+  sectionHeadingColumn: number | null;
+  confidence: "high" | "medium" | "low";
+  reason: string;
+}
+
+export type QuestionnaireImportStatus = "mapping" | "mapped" | "confirmed" | "failed";
+
+export interface QuestionnaireImport {
+  id: string;
+  flowId: string;
+  name: string;
+  // Becomes the questionnaire's importOrigin on confirm.
+  filename: string;
+  format: "xlsx" | "csv";
+  status: QuestionnaireImportStatus;
+  mapping?: SheetMapping[];
+  error?: string;
+  questionnaireId?: string;
+  jobId?: string;
+  createdAt: string;
+}
+
+// Why a row was not taken as a question. Surfaced per row rather than as a bare
+// count: a mis-detected question column reads as a clean import when the rows it
+// lost are invisible, and that is the one failure the gate exists to catch.
+export type ImportRowSkipReason = "blank_question" | "above_header" | "heading_like" | "no_mapping";
+
+export interface ImportPreviewRow {
+  sheetIndex: number;
+  rowIndex: number;
+  kind: "question" | "heading" | "unclassified";
+  question: string;
+  importedAnswer?: string;
+  sectionHeading?: string;
+  reason?: ImportRowSkipReason;
+}
+
+export interface ImportSheetPreview {
+  sheetIndex: number;
+  name: string;
+  rowCount: number;
+  columnCount: number;
+  questionCount: number;
+  unclassifiedCount: number;
+  // Bounded samples, never the whole sheet.
+  sampleRows: ImportPreviewRow[];
+  unclassifiedRows: ImportPreviewRow[];
+  // The first rows of the raw grid, so the operator can see what a column
+  // actually contains while re-picking it.
+  headerSample: string[][];
+}

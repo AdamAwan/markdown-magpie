@@ -15,6 +15,7 @@ import {
   createScheduledTaskStore,
   createInsightsStore,
   createSeedPlanStore,
+  createQuestionnaireImportStore,
   createQuestionnaireStore,
   createSnapshotStore,
   createSourceMapStore,
@@ -61,6 +62,7 @@ export interface AppContext {
     assertedClaims: ReturnType<typeof createAssertedClaimsStore>;
     seedPlans: ReturnType<typeof createSeedPlanStore>;
     questionnaires: ReturnType<typeof createQuestionnaireStore>;
+    questionnaireImports: ReturnType<typeof createQuestionnaireImportStore>;
     patrol: ReturnType<typeof createPatrolStore>;
     gapClusters: ReturnType<typeof createGapClusterStore>;
     reconciliations: ReturnType<typeof createReconciliationDecisionStore>;
@@ -161,6 +163,7 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
       assertedClaims: createAssertedClaimsStore(config, pool),
       seedPlans: createSeedPlanStore(config, pool),
       questionnaires: createQuestionnaireStore(config, pool),
+      questionnaireImports: createQuestionnaireImportStore(config, pool),
       patrol: createPatrolStore(config, pool),
       gapClusters: createGapClusterStore(config, pool),
       reconciliations: createReconciliationDecisionStore(config, pool),
