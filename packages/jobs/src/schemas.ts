@@ -605,6 +605,51 @@ export const verifyImportedAnswerOutputSchema = z.object({
   mapUpdates: mapUpdatesField
 });
 
+// Proposing which sheets and columns of an uploaded questionnaire hold what
+// (docs/questionnaires.md Q31). The input carries a BOUNDED sample of the grid,
+// wrapped as untrusted content by the runner: a spreadsheet from a customer's
+// procurement team is the same trust class as fetched web content.
+export const mapQuestionnaireColumnsInputSchema = z.object({
+  provider: providerSchema,
+  importId: z.string(),
+  sheets: z
+    .array(
+      z.object({
+        index: z.number().int().min(0),
+        name: z.string(),
+        // The sheet's TRUE size, so the model can tell a 12-row cover sheet from
+        // a 900-row domain tab even though it only sees the sample.
+        rowCount: z.number().int().min(0),
+        sampleRows: z.array(z.array(z.string()))
+      })
+    )
+    .max(20),
+  flowId: z.string().optional(),
+  expectedOutput: z.literal("column_mapping")
+});
+
+// COORDINATES ONLY. Every field is a number, an enum or a short reason: there is
+// no field the model can put questionnaire content into, so an injection buried
+// in a cell can at worst produce a wrong mapping — which the human confirmation
+// gate is there to catch.
+export const mapQuestionnaireColumnsOutputSchema = z.object({
+  sheets: z
+    .array(
+      z.object({
+        sheetIndex: z.number().int().min(0),
+        role: z.enum(["questions", "ignore"]),
+        headerRow: z.number().int().min(0).nullable(),
+        questionColumn: z.number().int().min(0).nullable(),
+        answerColumn: z.number().int().min(0).nullable(),
+        responseTypeColumn: z.number().int().min(0).nullable(),
+        sectionHeadingColumn: z.number().int().min(0).nullable(),
+        confidence: z.enum(["high", "medium", "low"]),
+        reason: z.string().max(500)
+      })
+    )
+    .max(20)
+});
+
 export const correctDocumentInputSchema = z.object({
   provider: providerSchema,
   path: z.string(),

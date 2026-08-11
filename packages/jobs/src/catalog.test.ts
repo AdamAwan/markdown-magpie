@@ -40,6 +40,7 @@ const EXPIRATION_SECONDS = {
   sync_source_changes_generate_plan: 60 * 60,
   verify_document: 15 * 60,
   verify_imported_answer: 15 * 60,
+  map_questionnaire_columns: 10 * 60,
   correct_document: 15 * 60,
   dedupe_documents: 10 * 60,
   split_document: 10 * 60,
@@ -698,4 +699,22 @@ test("verify_imported_answer is provider-routed and metered, but never interacti
   // ...but absent from the interactive lane, so a large import can never erode
   // the reserve protecting live /api/ask.
   assert.ok(!(INTERACTIVE_AI_JOB_TYPES as readonly string[]).includes("verify_imported_answer"));
+});
+
+// --- questionnaire upload (Spec B) ---
+
+test("map_questionnaire_columns is provider-routed and metered, but never interactive", () => {
+  const definition = jobDefinition("map_questionnaire_columns");
+  assert.equal(definition.requiredCapability({ provider: "codex" }), "codex");
+  assert.equal(definition.queueName({ provider: "codex" }), "map_questionnaire_columns__codex");
+  assert.ok((AI_JOB_TYPES as readonly string[]).includes("map_questionnaire_columns"));
+  // An operator IS waiting on the preview, but on a screen that tolerates a
+  // queue — not on a live answer, so it stays out of the interactive reserve.
+  assert.ok(!(INTERACTIVE_AI_JOB_TYPES as readonly string[]).includes("map_questionnaire_columns"));
+});
+
+test("a schema-invalid mapping gets one repair rather than a terminal fail", () => {
+  // Safe here precisely because the output is coordinates: a reshape reworks
+  // integers already implied by the input and can invent no content.
+  assert.equal(jobDefinition("map_questionnaire_columns").repairable, true);
 });
