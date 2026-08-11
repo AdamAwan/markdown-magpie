@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
+import pg from "pg";
 import { PostgresGapClusterStore } from "./postgres-gap-cluster-store.js";
+import { PostgresQuestionLogStore } from "./postgres-question-log-store.js";
 import { makeTestPool } from "../test-support/db-pool.js";
 
 // Self-skips unless DATABASE_URL points at a migrated database (see
@@ -155,6 +157,44 @@ describe("PostgresGapClusterStore", { skip: databaseUrl ? false : "DATABASE_URL 
 
     await store.markPublicationActionDone(action.id);
     assert.ok(!(await store.listPendingPublicationActions()).some((a) => a.id === action.id));
+  });
+
+  it("keyword-mode gaps are excluded from gap candidacy", async (t) => {
+    const pool = new pg.Pool({ connectionString: databaseUrl as string });
+
+    const questionId = `cand-${randomUUID()}`;
+    await pool.query(
+      "INSERT INTO questions (id, question, chat_provider, asked_at, purpose) VALUES ($1,'q','mock',now(),'live')",
+      [questionId]
+    );
+    t.after(async () => {
+      await pool.query("DELETE FROM questions WHERE id = $1", [questionId]);
+      await pool.end();
+    });
+
+    const summary = `gap-${randomUUID()}`;
+    await pool.query(
+      "INSERT INTO question_gaps (question_id, summary, source, retrieval_mode) VALUES ($1,$2,'auto','keyword')",
+      [questionId, summary]
+    );
+
+    const questionLogStore = new PostgresQuestionLogStore(pool);
+    assert.deepEqual(
+      await questionLogStore.gapIdsForSummary(summary),
+      [],
+      "a keyword-mode gap must not be a candidate"
+    );
+
+    await pool.query("UPDATE question_gaps SET retrieval_mode = 'hybrid' WHERE summary = $1", [summary]);
+    assert.equal((await questionLogStore.gapIdsForSummary(summary)).length, 1, "a hybrid-mode gap must be a candidate");
+
+    // NULL retrieval_mode covers gaps recorded before this column existed, plus
+    // manual/feedback gaps that are never retrieval-derived — both must stay
+    // candidates. This is the regression an `IS DISTINCT FROM` predicate guards
+    // against: a naive `<> 'keyword'` predicate evaluates to NULL (not TRUE) for
+    // a NULL row, which would silently drop every legacy gap from candidacy.
+    await pool.query("UPDATE question_gaps SET retrieval_mode = NULL WHERE summary = $1", [summary]);
+    assert.equal((await questionLogStore.gapIdsForSummary(summary)).length, 1, "a NULL-mode gap must be a candidate");
   });
 });
 

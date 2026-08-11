@@ -292,6 +292,15 @@ export interface QuestionLogInput {
   // The conversation this question belongs to (#239). The API supplies it on every
   // live ask so follow-ups can be threaded and prior turns reconstructed.
   conversationId?: string;
+  // The retrieval mode active when this answer was produced ("hybrid" = semantic +
+  // keyword, "keyword" = lexical only). Stamped onto any retrieval-derived gaps
+  // the answer raises (source "auto"/"followup") so a keyword-mode gap — resting
+  // on "no lexeme matched" rather than "nothing close exists" — can be excluded
+  // from unattended proposal generation while staying visible in the console.
+  // Manual and server-side (feedback) gaps are never retrieval-derived, so this
+  // has no effect on them. Absent when the caller has no answer yet (e.g. the
+  // log is recorded before the watcher has produced one).
+  retrievalMode?: "hybrid" | "keyword";
 }
 
 export interface QuestionLogUpdateInput {
@@ -305,6 +314,9 @@ export interface QuestionLogUpdateInput {
   // watcher on completion. Persisted so gap candidacy/clustering key off the
   // resolved intent rather than the terse raw follow-up.
   standaloneQuestion?: string;
+  // See QuestionLogInput.retrievalMode — same meaning, stamped on the gaps this
+  // re-answer raises.
+  retrievalMode?: "hybrid" | "keyword";
 }
 
 export type QuestionFeedback = "helpful" | "unhelpful";
