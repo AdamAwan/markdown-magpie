@@ -4,7 +4,13 @@ import type { SheetGrid, SheetMapping } from "@magpie/core";
 import { InMemoryQuestionnaireImportStore } from "./questionnaire-import-store.js";
 
 const grid: SheetGrid[] = [
-  { name: "Sheet1", rows: [["Question", "Answer"], ["Do you encrypt?", "Yes, AES-256."]] }
+  {
+    name: "Sheet1",
+    rows: [
+      ["Question", "Answer"],
+      ["Do you encrypt?", "Yes, AES-256."]
+    ]
+  }
 ];
 
 const mapping: SheetMapping[] = [
