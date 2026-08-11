@@ -993,6 +993,27 @@ export interface SourceConflictPosition {
   lines?: string;
 }
 
+// --- The asserted-claims register (questionnaire ingestion) ---------------
+// Claims we have made to customers, in a previously-given questionnaire answer,
+// that our own sources do not support
+// (docs/superpowers/specs/2026-08-11-questionnaire-ingestion-design.md D6).
+//
+// Two kinds down one pipe. They resolve identically — a human points at a
+// source, corrects the record, or dismisses — so they are one entity with a
+// kind, not two registers.
+export type AssertedClaimKind =
+  // No source anywhere asserts it: the phantom certificate.
+  | "unsubstantiated"
+  // The sources say something materially different from what we told the customer.
+  | "contradicted";
+
+export type AssertedClaimStatus = "open" | "resolved" | "dismissed";
+
+// A finding's supporting positions reuse SourceConflictPosition: "what a
+// specific source location actually says" is the identical concept here, and a
+// structurally identical second type would only invite the two drifting apart.
+// Empty for `unsubstantiated` — that absence IS the finding.
+
 // A disagreement between two or more source locations about a fact a knowledge-base
 // document asserts — within one source or across several. Deliberately distinct
 // from an UnprovableClaim: there the sources AGREE the document is wrong and a
