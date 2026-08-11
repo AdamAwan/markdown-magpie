@@ -8,6 +8,8 @@ import { PostgresScheduledTaskStore } from "../stores/postgres-scheduled-task-st
 import { PostgresPatrolStore } from "../stores/postgres-patrol-store.js";
 import { PostgresSourceMapStore } from "../stores/postgres-source-map-store.js";
 import { PostgresSourceConflictStore } from "../stores/postgres-source-conflict-store.js";
+import { InMemoryAssertedClaimsStore } from "../stores/asserted-claims-store.js";
+import { PostgresAssertedClaimsStore } from "../stores/postgres-asserted-claims-store.js";
 import { InMemorySourceConflictStore } from "../stores/source-conflict-store.js";
 import { PostgresSourceSyncStore } from "../stores/postgres-source-sync-store.js";
 import { PostgresWatcherRegistryStore } from "../stores/postgres-watcher-registry-store.js";
@@ -143,6 +145,19 @@ export function createSourceConflictStore(
     "SOURCE_CONFLICT_STORE",
     (pool) => new PostgresSourceConflictStore(pool),
     () => new InMemorySourceConflictStore()
+  );
+}
+
+export function createAssertedClaimsStore(
+  config: AppConfig,
+  pool: pg.Pool
+): InMemoryAssertedClaimsStore | PostgresAssertedClaimsStore {
+  return createStore<InMemoryAssertedClaimsStore | PostgresAssertedClaimsStore>(
+    config,
+    pool,
+    "ASSERTED_CLAIMS_STORE",
+    (pool) => new PostgresAssertedClaimsStore(pool),
+    () => new InMemoryAssertedClaimsStore()
   );
 }
 

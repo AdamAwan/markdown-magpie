@@ -228,4 +228,72 @@ describe("InMemoryQuestionnaireStore direction", () => {
     const summaries = await store.list();
     assert.equal(summaries[0].direction, "Assume the company, not the product.");
   });
+
+  // --- ingesting completed questionnaires (ingestion spec D1/D4/D5) ---
+
+  it("persists an imported answer and importOrigin, and reads them back", async () => {
+    const store = new InMemoryQuestionnaireStore();
+    const created = await store.create({
+      name: "SIG 2025",
+      flowId: "flow-import",
+      importOrigin: "sig-lite-2025.xlsx",
+      questions: [{ question: "Do you hold ISO 27001?", importedAnswer: "Yes, since 2021." }]
+    });
+    const read = await store.get(created.id);
+    assert.equal(read?.importOrigin, "sig-lite-2025.xlsx");
+    assert.equal(read?.items[0].importedAnswer, "Yes, since 2021.");
+    // No verdict until stage 1 has actually run.
+    assert.equal(read?.items[0].importVerdict, undefined);
+  });
+
+  it("accepts bare strings and imported pairs in one batch", async () => {
+    const store = new InMemoryQuestionnaireStore();
+    const created = await store.create({
+      name: "mixed",
+      flowId: "flow-import",
+      questions: [{ question: "imported", importedAnswer: "prior answer" }, "bare"]
+    });
+    assert.equal(created.items[0].importedAnswer, "prior answer");
+    assert.equal(created.items[1].importedAnswer, undefined);
+  });
+
+  it("returns only non-confirmed imported items from listAwaitingEscalation", async () => {
+    const store = new InMemoryQuestionnaireStore();
+    const created = await store.create({
+      name: "SIG",
+      flowId: "flow-import",
+      importOrigin: "x.xlsx",
+      questions: [
+        { question: "q-confirmed", importedAnswer: "a" },
+        { question: "q-divergent", importedAnswer: "b" },
+        { question: "q-uncovered", importedAnswer: "c" },
+        { question: "q-no-import" }
+      ]
+    });
+    const [confirmed, divergent, uncovered, plain] = created.items;
+    await store.setImportVerdict(confirmed.id, "confirmed");
+    await store.setImportVerdict(divergent.id, "divergent");
+    await store.setImportVerdict(uncovered.id, "uncovered");
+
+    const awaiting = await store.listAwaitingEscalation(created.id, 10);
+    assert.deepEqual(
+      awaiting.map((item) => item.question),
+      ["q-divergent", "q-uncovered"]
+    );
+    assert.ok(!awaiting.some((item) => item.id === plain.id));
+  });
+
+  it("bounds listAwaitingEscalation by its limit — the stage-2 fan-out cap", async () => {
+    const store = new InMemoryQuestionnaireStore();
+    const created = await store.create({
+      name: "SIG",
+      flowId: "flow-import",
+      importOrigin: "x.xlsx",
+      questions: Array.from({ length: 5 }, (_, index) => ({ question: `q${index}`, importedAnswer: "a" }))
+    });
+    for (const item of created.items) {
+      await store.setImportVerdict(item.id, "uncovered");
+    }
+    assert.equal((await store.listAwaitingEscalation(created.id, 2)).length, 2);
+  });
 });

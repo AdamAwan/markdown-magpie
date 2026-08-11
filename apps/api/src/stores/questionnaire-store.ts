@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   Confidence,
+  ImportVerdict,
   Questionnaire,
   QuestionnaireChangeReason,
   QuestionnaireItem,
@@ -13,14 +14,31 @@ import type {
 // history is the canonical answer corpus: `matchApproved` searches approved
 // items of prior questionnaires in a flow, and approval snapshots citation
 // fingerprints so reuse checks survive re-index section churn.
+// A question arrives either bare (the original paste flow) or paired with the
+// answer previously given to it (ingestion of a completed questionnaire —
+// docs/superpowers/specs/2026-08-11-questionnaire-ingestion-design.md). The two
+// forms are normalised once, on the way in, so every implementation and every
+// reader downstream sees only the object form.
+export type QuestionnaireQuestionInput = string | { question: string; importedAnswer?: string };
+
+export function normaliseQuestionInput(input: QuestionnaireQuestionInput): {
+  question: string;
+  importedAnswer?: string;
+} {
+  return typeof input === "string" ? { question: input } : input;
+}
+
 export interface QuestionnaireStore {
   create(input: {
     name: string;
     flowId: string;
-    questions: string[];
+    questions: QuestionnaireQuestionInput[];
     // The answering direction, already trimmed and blank-normalised by the
     // caller. Immutable — there is deliberately no update path.
     direction?: string;
+    // Where an imported batch came from. Presence switches on the ingestion
+    // triage path; absent for an ordinary questionnaire.
+    importOrigin?: string;
   }): Promise<Questionnaire>;
   get(id: string): Promise<Questionnaire | undefined>;
   list(): Promise<QuestionnaireSummary[]>;
@@ -86,6 +104,23 @@ export interface QuestionnaireStore {
   countAnswering(questionnaireId: string): Promise<number>;
   approveItem(itemId: string, citations: QuestionnaireItemCitation[], staleAtApproval: boolean): Promise<void>;
   listReusedUnapproved(questionnaireId: string): Promise<QuestionnaireItem[]>;
+  // Stage-1 adjudication of an imported answer against the answer Magpie just
+  // produced from the KB (ingestion spec D4).
+  setImportVerdict(itemId: string, verdict: ImportVerdict): Promise<void>;
+  // Replaces the item's answer text, leaving its citations and freshness
+  // baseline untouched. Used when a reviewer approves the IMPORTED wording:
+  // the human's already-reviewed, customer-facing phrasing is kept, but the
+  // grounding stays Magpie's, so the answer still tracks the sections it was
+  // actually built from (ingestion spec D7).
+  setAnswerText(itemId: string, answer: string): Promise<void>;
+  // Stamps that this item's stage-2 check has been enqueued, removing it from
+  // listAwaitingEscalation so a resumed sweep cannot double-enqueue it.
+  markImportEscalated(itemId: string): Promise<void>;
+  // Imported items whose stage-1 compare did NOT confirm the import, and so
+  // need the source-grounded stage-2 check. Bounded by the caller: a large
+  // import against a thin KB would otherwise fan out hundreds of agentic runs
+  // at once (ingestion spec D5).
+  listAwaitingEscalation(questionnaireId: string, limit: number): Promise<QuestionnaireItem[]>;
 }
 
 // Internal storage shape — completion-time provenance (basisItemIds) and the
@@ -128,6 +163,7 @@ function summarize(questionnaire: Questionnaire): QuestionnaireSummary {
     name: questionnaire.name,
     flowId: questionnaire.flowId,
     ...(questionnaire.direction ? { direction: questionnaire.direction } : {}),
+    ...(questionnaire.importOrigin ? { importOrigin: questionnaire.importOrigin } : {}),
     status: questionnaire.status,
     createdAt: questionnaire.createdAt,
     counts
@@ -144,24 +180,30 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
   async create(input: {
     name: string;
     flowId: string;
-    questions: string[];
+    questions: QuestionnaireQuestionInput[];
     direction?: string;
+    importOrigin?: string;
   }): Promise<Questionnaire> {
     const id = randomUUID();
-    const items: StoredItem[] = input.questions.map((question, position) => ({
-      id: randomUUID(),
-      questionnaireId: id,
-      position,
-      question,
-      status: "pending",
-      staleAtApproval: false,
-      citations: []
-    }));
+    const items: StoredItem[] = input.questions.map((entry, position) => {
+      const { question, importedAnswer } = normaliseQuestionInput(entry);
+      return {
+        id: randomUUID(),
+        questionnaireId: id,
+        position,
+        question,
+        status: "pending",
+        staleAtApproval: false,
+        citations: [],
+        ...(importedAnswer ? { importedAnswer } : {})
+      };
+    });
     const questionnaire: Questionnaire = {
       id,
       name: input.name,
       flowId: input.flowId,
       ...(input.direction ? { direction: input.direction } : {}),
+      ...(input.importOrigin ? { importOrigin: input.importOrigin } : {}),
       status: "open",
       createdAt: new Date().toISOString(),
       items
@@ -364,6 +406,38 @@ export class InMemoryQuestionnaireStore implements QuestionnaireStore {
         (item) => item.questionnaireId === questionnaireId && item.outcome === "reused" && item.status === "answered"
       )
       .sort((a, b) => a.position - b.position)
+      .map((item) => structuredClone(item));
+  }
+
+  async setImportVerdict(itemId: string, verdict: ImportVerdict): Promise<void> {
+    const item = this.items.get(itemId);
+    if (!item) return;
+    item.importVerdict = verdict;
+  }
+
+  async setAnswerText(itemId: string, answer: string): Promise<void> {
+    const item = this.items.get(itemId);
+    if (!item) return;
+    item.answer = answer;
+  }
+
+  async markImportEscalated(itemId: string): Promise<void> {
+    const item = this.items.get(itemId);
+    if (!item) return;
+    item.importEscalatedAt = new Date().toISOString();
+  }
+
+  async listAwaitingEscalation(questionnaireId: string, limit: number): Promise<QuestionnaireItem[]> {
+    return [...this.items.values()]
+      .filter(
+        (item) =>
+          item.questionnaireId === questionnaireId &&
+          item.importedAnswer !== undefined &&
+          item.importEscalatedAt === undefined &&
+          (item.importVerdict === "divergent" || item.importVerdict === "uncovered")
+      )
+      .sort((a, b) => a.position - b.position)
+      .slice(0, limit)
       .map((item) => structuredClone(item));
   }
 

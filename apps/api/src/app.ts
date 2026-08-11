@@ -16,6 +16,7 @@ import { seedPlanRoutes, seedRoutes } from "./features/seed/routes.js";
 import { proposalRoutes } from "./features/proposals/routes.js";
 import { sourceSyncRoutes } from "./features/source-sync/routes.js";
 import { sourceMapRoutes } from "./features/source-map/routes.js";
+import { assertedClaimRoutes } from "./features/asserted-claims/routes.js";
 import { sourceConflictRoutes } from "./features/source-conflicts/routes.js";
 import { fixPatrolRoutes } from "./features/patrol/routes.js";
 import { maintenanceRunRoutes } from "./features/maintenance-runs/routes.js";
@@ -117,6 +118,7 @@ export function buildApp(ctx: AppContext, options?: ApiAuthOptions): Hono {
   api.route("/source-sync", sourceSyncRoutes(ctx));
   api.route("/source-map", sourceMapRoutes(ctx));
   api.route("/source-conflicts", sourceConflictRoutes(ctx));
+  api.route("/asserted-claims", assertedClaimRoutes(ctx));
   api.route("/fix-patrol", fixPatrolRoutes(ctx));
   api.route("/maintenance-runs", maintenanceRunRoutes(ctx));
   api.route("/scheduled-tasks", scheduledTaskRoutes(ctx));

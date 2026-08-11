@@ -7,7 +7,7 @@ import { HttpError } from "../../http/errors.js";
 import { rateLimit } from "../../http/rate-limit.js";
 import { exportQuestionnaire } from "./export.js";
 import { approveItem, approveReused, createQuestionnaire, getQuestionnaire, listQuestionnaires } from "./service.js";
-import { createQuestionnaireSchema, exportQuerySchema } from "./schema.js";
+import { approveItemSchema, createQuestionnaireSchema, exportQuerySchema } from "./schema.js";
 
 // Questionnaire routes, mounted at /api/questionnaires (docs/questionnaires.md).
 // Creation sits under the `trigger` rate tier (it fans out AI work — the drip
@@ -76,7 +76,18 @@ export function questionnaireRoutes(ctx: AppContext): Hono {
       throw new HttpError(404, "questionnaire_not_found");
     }
     assertCan(ctx, c, "manage", questionnaire.flowId);
-    const outcome = await approveItem(ctx, questionnaire.id, c.req.param("itemId"));
+    // Which wording is being admitted into the match corpus. Absent (and any
+    // unrecognised value) means Magpie's own answer — the historical behaviour
+    // and the only option for a non-imported item. A body is optional, so a
+    // legacy caller sending none still approves exactly as it did before.
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = approveItemSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new HttpError(400, "invalid_approve_body");
+    }
+    const outcome = await approveItem(ctx, questionnaire.id, c.req.param("itemId"), {
+      ...(parsed.data.use ? { use: parsed.data.use } : {})
+    });
     if (!outcome.ok) {
       throw new HttpError(outcome.code === "not_found" ? 404 : 409, outcome.code);
     }

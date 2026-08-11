@@ -18,6 +18,7 @@ import {
   createQuestionnaireStore,
   createSnapshotStore,
   createSourceMapStore,
+  createAssertedClaimsStore,
   createSourceConflictStore,
   createSourceSyncStore,
   createWatcherRegistryStore,
@@ -57,6 +58,7 @@ export interface AppContext {
     sourceSync: ReturnType<typeof createSourceSyncStore>;
     sourceMap: ReturnType<typeof createSourceMapStore>;
     sourceConflicts: ReturnType<typeof createSourceConflictStore>;
+    assertedClaims: ReturnType<typeof createAssertedClaimsStore>;
     seedPlans: ReturnType<typeof createSeedPlanStore>;
     questionnaires: ReturnType<typeof createQuestionnaireStore>;
     patrol: ReturnType<typeof createPatrolStore>;
@@ -156,6 +158,7 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
       sourceSync: createSourceSyncStore(config, pool),
       sourceMap: createSourceMapStore(config, pool),
       sourceConflicts: createSourceConflictStore(config, pool),
+      assertedClaims: createAssertedClaimsStore(config, pool),
       seedPlans: createSeedPlanStore(config, pool),
       questionnaires: createQuestionnaireStore(config, pool),
       patrol: createPatrolStore(config, pool),

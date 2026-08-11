@@ -1,4 +1,5 @@
 import type { QuestionnaireSummary } from "@magpie/core";
+import { parseTwoColumnPaste } from "./questionnaireItems";
 import { useCallback, useEffect, useRef, useState } from "react";
 import styled from "@emotion/styled";
 import { Actions, Badge, Button, EmptyState, Field, Input, Select, Stack, Textarea } from "./ui";
@@ -10,8 +11,11 @@ interface QuestionnaireCreateListProps {
   onCreate: (
     name: string,
     flowId: string,
-    questions: string[],
-    direction?: string
+    // A bare string, or a question paired with the answer previously given to
+    // it when ingesting a completed questionnaire.
+    questions: Array<string | { question: string; importedAnswer?: string }>,
+    direction?: string,
+    importOrigin?: string
   ) => Promise<{ id: string } | undefined>;
   // Navigate to a questionnaire's detail page. Supplied by the page as a
   // router.push wrapper, so this component stays free of next/navigation and
@@ -28,6 +32,7 @@ export function QuestionnaireCreateList({ flows, loading, onList, onCreate, onOp
   const [name, setName] = useState("");
   const [flowId, setFlowId] = useState("");
   const [questionsText, setQuestionsText] = useState("");
+  const [importOrigin, setImportOrigin] = useState("");
   const [direction, setDirection] = useState("");
   const [creating, setCreating] = useState(false);
 
@@ -48,17 +53,27 @@ export function QuestionnaireCreateList({ flows, loading, onList, onCreate, onOp
   }, [refreshList]);
 
   async function submitCreate() {
-    const questions = questionsText
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
+    // One question per line, or "question<TAB>previously-given answer" when a
+    // completed questionnaire is being ingested — a two-column spreadsheet
+    // selection pasted straight in already carries the tab.
+    const questions = parseTwoColumnPaste(questionsText);
     if (!name.trim() || !flowId || questions.length === 0) return;
+    const anyImported = questions.some((entry) => entry.importedAnswer);
     setCreating(true);
     try {
-      const created = await onCreate(name.trim(), flowId, questions, direction.trim() || undefined);
+      const created = await onCreate(
+        name.trim(),
+        flowId,
+        questions,
+        direction.trim() || undefined,
+        // Only an import needs an origin; without one the batch takes the
+        // ordinary path, exactly as it did before ingestion existed.
+        anyImported ? importOrigin.trim() || "pasted" : undefined
+      );
       if (created) {
         setName("");
         setQuestionsText("");
+        setImportOrigin("");
         setDirection("");
         onOpen(created.id);
       }
@@ -91,12 +106,19 @@ export function QuestionnaireCreateList({ flows, loading, onList, onCreate, onOp
             placeholder="Where ambiguous, assume the question is about the company and not the product."
           />
         </Field>
-        <Field label="Questions (one per line)">
+        <Field label="Questions (one per line). To ingest a completed questionnaire, paste two columns — the question, a tab, then the answer previously given.">
           <Textarea
             rows={6}
             value={questionsText}
             onChange={(event) => setQuestionsText(event.target.value)}
             placeholder={"What certifications does the product hold?\nWhere is customer data stored?"}
+          />
+        </Field>
+        <Field label="Import source (optional) — where a completed questionnaire came from, e.g. the file name.">
+          <Input
+            value={importOrigin}
+            onChange={(event) => setImportOrigin(event.target.value)}
+            placeholder="acme-sig-2025.xlsx"
           />
         </Field>
         <Actions>

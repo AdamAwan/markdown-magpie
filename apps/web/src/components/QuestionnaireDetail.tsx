@@ -1,20 +1,26 @@
-import type { Questionnaire, QuestionnaireItem } from "@magpie/core";
+import type { AssertedClaim, Questionnaire, QuestionnaireItem } from "@magpie/core";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import styled from "@emotion/styled";
 import { Actions, Badge, Button, EmptyState, Row, Stack, statusTone } from "./ui";
 import { StatBanner, type Stat } from "./StatBanner";
 import { changeReasonText, itemLabel, itemTone } from "./questionnaireItems";
+import { ImportedAnswerPanel, type ApproveUse } from "./ImportedAnswerPanel";
 
 interface QuestionnaireDetailProps {
   id: string;
   backHref: string;
   onGet: (id: string) => Promise<Questionnaire | undefined>;
-  onApproveItem: (questionnaireId: string, itemId: string) => Promise<boolean>;
+  onApproveItem: (questionnaireId: string, itemId: string, use?: ApproveUse) => Promise<boolean>;
   onApproveReused: (questionnaireId: string) => Promise<number | undefined>;
   // Downloads through the console's authed apiDownload (a plain <a href> omits
   // the bearer token and 401s under Auth0 — see ConsoleProvider.exportQuestionnaire).
   onExport: (id: string, format: "md" | "csv") => Promise<void>;
+  // Live asserted-claim findings for this questionnaire's flow (questionnaire
+  // ingestion). Absent for consoles that do not surface the register; the
+  // worksheet then simply shows no findings and the server's 409 remains the
+  // backstop on approving unbackable wording.
+  onListAssertedClaims?: (flowId: string) => Promise<AssertedClaim[]>;
 }
 
 const POLL_INTERVAL_MS = 5_000;
@@ -29,12 +35,14 @@ export function QuestionnaireDetail({
   onGet,
   onApproveItem,
   onApproveReused,
-  onExport
+  onExport,
+  onListAssertedClaims
 }: QuestionnaireDetailProps) {
   const [questionnaire, setQuestionnaire] = useState<Questionnaire | undefined>(undefined);
   // Distinguishes "still loading" from "loaded, but no such questionnaire" so a
   // bad/unknown id shows a not-found state instead of a permanent blank.
   const [loaded, setLoaded] = useState(false);
+  const [findings, setFindings] = useState<AssertedClaim[]>([]);
 
   // ConsoleProvider hands down fresh handler identities on every poll
   // re-render; pin onGet behind a ref so the effects below stay stable.
@@ -60,9 +68,26 @@ export function QuestionnaireDetail({
     return () => window.clearInterval(interval);
   }, [active, refresh]);
 
-  async function approveItem(itemId: string) {
+  // Findings are fetched per flow and grouped by item, so the worksheet can grey
+  // out "Approve imported" on exactly the items the sources cannot back.
+  const claimsRef = useRef(onListAssertedClaims);
+  claimsRef.current = onListAssertedClaims;
+  const flowId = questionnaire?.flowId;
+  const isImported = Boolean(questionnaire?.importOrigin);
+  useEffect(() => {
+    if (!isImported || !flowId || !claimsRef.current) return;
+    void claimsRef.current(flowId).then(setFindings);
+  }, [isImported, flowId, questionnaire?.items.length]);
+
+  const findingsByItem = new Map<string, AssertedClaim[]>();
+  for (const finding of findings) {
+    if (finding.status !== "open" || !finding.itemId) continue;
+    findingsByItem.set(finding.itemId, [...(findingsByItem.get(finding.itemId) ?? []), finding]);
+  }
+
+  async function approveItem(itemId: string, use?: ApproveUse) {
     if (!questionnaire) return;
-    if (await onApproveItem(questionnaire.id, itemId)) {
+    if (await onApproveItem(questionnaire.id, itemId, use)) {
       await refresh();
     }
   }
@@ -109,6 +134,12 @@ export function QuestionnaireDetail({
       </Row>
 
       {questionnaire.direction ? <DirectionNote>Direction: {questionnaire.direction}</DirectionNote> : null}
+      {questionnaire.importOrigin ? (
+        <DirectionNote>
+          Imported from {questionnaire.importOrigin}. Previously-given answers are adjudicated against the knowledge
+          base and the sources — never trusted as answers.
+        </DirectionNote>
+      ) : null}
 
       <StatBanner stats={itemStats(questionnaire.items)} />
 
@@ -124,8 +155,16 @@ export function QuestionnaireDetail({
                 {item.position + 1}. {item.question}
               </strong>
             </Row>
-            {item.answer && item.status !== "unanswerable" ? <AnswerText>{item.answer}</AnswerText> : null}
-            {item.status === "unanswerable" ? (
+            {item.importedAnswer ? (
+              <ImportedAnswerPanel
+                item={item}
+                findings={findingsByItem.get(item.id) ?? []}
+                onApprove={(use) => void approveItem(item.id, use)}
+              />
+            ) : item.answer && item.status !== "unanswerable" ? (
+              <AnswerText>{item.answer}</AnswerText>
+            ) : null}
+            {!item.importedAnswer && item.status === "unanswerable" ? (
               <ReasonText>
                 {item.error
                   ? `Failed: ${item.error}`
@@ -142,7 +181,7 @@ export function QuestionnaireDetail({
                 ))}
               </CitationList>
             ) : null}
-            {item.status === "answered" ? (
+            {!item.importedAnswer && item.status === "answered" ? (
               <Actions>
                 <Button variant="secondary" onClick={() => void approveItem(item.id)}>
                   Approve

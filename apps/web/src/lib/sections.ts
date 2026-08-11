@@ -5,6 +5,7 @@ import {
   ChartColumn,
   CircleDashed,
   GitCompareArrows,
+  ShieldAlert,
   ClipboardList,
   GitPullRequest,
   ListChecks,
@@ -39,6 +40,13 @@ export const SECTION_NAV: SectionNav[] = [
   { section: "knowledge", path: "/knowledge", icon: BookOpen, label: "Knowledge", group: 1 },
   { section: "gaps", path: "/gaps", icon: CircleDashed, label: "Gaps", group: 1 },
   { section: "conflicts", path: "/conflicts", icon: GitCompareArrows, label: "Conflicts", group: 1 },
+  {
+    section: "asserted-claims",
+    path: "/asserted-claims",
+    icon: ShieldAlert,
+    label: "Asserted claims",
+    group: 1
+  },
   { section: "seed", path: "/seed", icon: Sprout, label: "Seed", group: 1 },
   { section: "questionnaires", path: "/questionnaires", icon: ClipboardList, label: "Questionnaires", group: 1 },
   { section: "proposals", path: "/proposals", icon: GitPullRequest, label: "Proposals", group: 1 },

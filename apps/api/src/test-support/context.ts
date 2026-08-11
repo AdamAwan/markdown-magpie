@@ -18,6 +18,7 @@ import { InMemorySnapshotStore } from "../stores/snapshot-store.js";
 import { InMemorySeedPlanStore } from "../stores/seed-plan-store.js";
 import { InMemoryQuestionnaireStore } from "../stores/questionnaire-store.js";
 import { InMemorySourceMapStore } from "../stores/source-map-store.js";
+import { InMemoryAssertedClaimsStore } from "../stores/asserted-claims-store.js";
 import { InMemorySourceConflictStore } from "../stores/source-conflict-store.js";
 import { InMemorySourceSyncStore } from "../stores/source-sync-store.js";
 import { InMemoryWatcherRegistryStore } from "../stores/watcher-registry-store.js";
@@ -66,6 +67,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
       sourceSync: new InMemorySourceSyncStore(),
       sourceMap: new InMemorySourceMapStore(),
       sourceConflicts: new InMemorySourceConflictStore(),
+      assertedClaims: new InMemoryAssertedClaimsStore(),
       seedPlans: new InMemorySeedPlanStore(),
       questionnaires: new InMemoryQuestionnaireStore(),
       patrol: new InMemoryPatrolStore(),

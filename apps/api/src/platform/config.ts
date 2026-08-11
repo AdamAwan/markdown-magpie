@@ -33,7 +33,8 @@ const STORE_ENV_NAMES = [
   "SOURCE_MAP_STORE",
   "SOURCE_CONFLICT_STORE",
   "SEED_PLAN_STORE",
-  "QUESTIONNAIRE_STORE"
+  "QUESTIONNAIRE_STORE",
+  "ASSERTED_CLAIMS_STORE"
 ] as const;
 
 export type StoreEnvName = (typeof STORE_ENV_NAMES)[number];

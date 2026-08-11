@@ -39,6 +39,7 @@ const EXPIRATION_SECONDS = {
   reconcile_gap_clusters: 5 * 60,
   sync_source_changes_generate_plan: 60 * 60,
   verify_document: 15 * 60,
+  verify_imported_answer: 15 * 60,
   correct_document: 15 * 60,
   dedupe_documents: 10 * 60,
   split_document: 10 * 60,
@@ -683,4 +684,18 @@ test("answer_question input schema preserves the questionnaire direction", () =>
     expectedOutput: "answer_result"
   });
   assert.equal(parsed.direction, "Where ambiguous, assume the company and not the product.");
+});
+
+// --- questionnaire ingestion stage 2 (ingestion spec D5) ---
+
+test("verify_imported_answer is provider-routed and metered, but never interactive", () => {
+  const definition = jobDefinition("verify_imported_answer");
+  // Source-grounded generative work, exactly like verify_document.
+  assert.equal(definition.requiredCapability({ provider: "codex" }), "codex");
+  assert.equal(definition.queueName({ provider: "codex" }), "verify_imported_answer__codex");
+  // Counted by the global AI cap...
+  assert.ok((AI_JOB_TYPES as readonly string[]).includes("verify_imported_answer"));
+  // ...but absent from the interactive lane, so a large import can never erode
+  // the reserve protecting live /api/ask.
+  assert.ok(!(INTERACTIVE_AI_JOB_TYPES as readonly string[]).includes("verify_imported_answer"));
 });
