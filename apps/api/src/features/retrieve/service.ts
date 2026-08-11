@@ -1,6 +1,7 @@
 import type { ExistingDocumentContext } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import { selectFlow } from "../../platform/repositories.js";
+import { retrievalMode } from "../../platform/providers.js";
 
 export interface RetrieveRequest {
   question: string;
@@ -23,15 +24,25 @@ interface RetrievedSection {
   relevance: number;
 }
 
-export type RetrieveResult = { ok: true; sections: RetrievedSection[] } | { ok: false; code: "unknown_flow" };
+export type RetrieveResult =
+  | { ok: true; sections: RetrievedSection[]; retrievalMode: "hybrid" | "keyword"; candidateCount: number }
+  | { ok: false; code: "unknown_flow" };
 
-// Sections below this fused-relevance floor are dropped rather than returned as
-// weak filler. Without it, hybrid search always yields its top-K (vector search
-// returns nearest neighbours for any query), so even a bogus question produced a
-// full set of citations. Conservative on purpose: it removes clear non-matches,
-// not borderline hits. When nothing clears the floor the caller gets an empty
-// list and treats the question as a knowledge gap.
+// Absolute floor: a section this weak is a clear non-match regardless of what
+// else scored. Conservative on purpose — it removes noise, not borderline hits.
 const MIN_RELEVANCE = 0.15;
+// Relative floor: keep sections within this fraction of the best result. OR'd
+// keyword matching (see PostgresKnowledgeStore.searchByKeyword) surfaces
+// single-term hits that hybrid retrieval never produced, so a strong result now
+// implies its weak neighbours are noise.
+//
+// The two floors do different jobs, which is why both exist. The absolute floor
+// alone returns nothing when every candidate is weak — and in keyword mode
+// "nothing" is read downstream as evidence the knowledge base does not cover the
+// question, which is exactly the false signal this design removes. So the
+// relative floor is only allowed to cut when there IS a strong result to be
+// relative to: weak-but-best results survive, weak-beside-strong results do not.
+const RELATIVE_RELEVANCE_FLOOR = 0.35;
 
 // Pure (non-generative) retrieval the watcher calls after it has routed the
 // question to a flow. Resolving the flow's destination scope server-side keeps
@@ -44,10 +55,18 @@ export async function retrieve(ctx: AppContext, request: RetrieveRequest): Promi
   const limit = request.limit ?? 5;
 
   const ranked = await ctx.stores.knowledgeIndex.search(request.question, limit, scope.repositoryIds);
+  const topRelevance = ranked.length > 0 ? Math.max(...ranked.map(({ relevance }) => relevance)) : 0;
+  const relativeFloor = topRelevance * RELATIVE_RELEVANCE_FLOOR;
+
   return {
     ok: true,
+    retrievalMode: retrievalMode(ctx.settings).mode,
+    // Counted before the floor so the caller can tell "nothing matched" from
+    // "matches existed but were filtered" — the distinction the watcher needs to
+    // avoid reading a lexical miss as evidence of absence.
+    candidateCount: ranked.length,
     sections: ranked
-      .filter(({ relevance }) => relevance >= MIN_RELEVANCE)
+      .filter(({ relevance }) => relevance >= MIN_RELEVANCE && relevance >= relativeFloor)
       .map(({ section, relevance }) => ({
         sectionId: section.id,
         documentId: section.documentId,

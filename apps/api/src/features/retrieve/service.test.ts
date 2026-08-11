@@ -1,7 +1,32 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import type { RankedSection } from "@magpie/core";
 import { makeTestContext } from "../../test-support/context.js";
 import { retrieve, type RetrieveResult } from "./service.js";
+
+// Builds a context whose knowledge index returns exactly the given
+// (id, relevance) candidates, regardless of the question asked — lets the
+// relevance-floor tests assert on precise boundary values without depending on
+// the real keyword scorer's distribution. No embedding provider is configured
+// (makeTestContext's default), so retrievalMode resolves to "keyword".
+function buildContext(candidates: { id: string; relevance: number }[]): ReturnType<typeof makeTestContext> {
+  const ctx = makeTestContext();
+  ctx.stores.knowledgeIndex.search = async (): Promise<RankedSection[]> =>
+    candidates.map(({ id, relevance }) => ({
+      section: {
+        id,
+        documentId: `${id}-doc`,
+        path: `${id}.md`,
+        heading: id,
+        headingPath: [id],
+        anchor: id,
+        content: `content for ${id}`,
+        ordinal: 0
+      },
+      relevance
+    }));
+  return ctx;
+}
 
 async function seedTwoRepos(ctx: ReturnType<typeof makeTestContext>): Promise<void> {
   await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
@@ -86,4 +111,42 @@ test("retrieve rejects an unknown flowId rather than searching unscoped", async 
   if (!result.ok) {
     assert.equal(result.code, "unknown_flow");
   }
+});
+
+test("keeps weak results when they are the best available", async () => {
+  // Every candidate is weak. Returning nothing here is the exact failure this
+  // work exists to remove, so all three survive.
+  const ctx = buildContext([
+    { id: "s1", relevance: 0.2 },
+    { id: "s2", relevance: 0.18 },
+    { id: "s3", relevance: 0.17 }
+  ]);
+  const result = await retrieve(ctx, { question: "anything" });
+  assert.ok(result.ok);
+  assert.equal(result.sections.length, 3);
+});
+
+test("drops weak results that sit alongside a strong one", async () => {
+  const ctx = buildContext([
+    { id: "s1", relevance: 0.9 },
+    { id: "s2", relevance: 0.2 }
+  ]);
+  const result = await retrieve(ctx, { question: "anything" });
+  assert.ok(result.ok);
+  assert.deepEqual(
+    result.sections.map((section) => section.sectionId),
+    ["s1"]
+  );
+});
+
+test("reports candidate count before the floor, and the retrieval mode", async () => {
+  const ctx = buildContext([
+    { id: "s1", relevance: 0.9 },
+    { id: "s2", relevance: 0.02 }
+  ]);
+  const result = await retrieve(ctx, { question: "anything" });
+  assert.ok(result.ok);
+  assert.equal(result.sections.length, 1);
+  assert.equal(result.candidateCount, 2, "candidateCount counts matches before the floor");
+  assert.equal(result.retrievalMode, "keyword", "no embedding provider is configured in the fixture");
 });

@@ -42,7 +42,11 @@ export function retrieveRoutes(ctx: AppContext): Hono {
       if (!result.ok) {
         return c.json({ error: result.code }, 422);
       }
-      return c.json({ sections: result.sections });
+      return c.json({
+        sections: result.sections,
+        retrievalMode: result.retrievalMode,
+        candidateCount: result.candidateCount
+      });
     }
   );
 
