@@ -521,8 +521,13 @@ describe("buildEmptySearchNote", () => {
     assert.match(keyword, /lexical/i);
     assert.doesNotMatch(keyword, /not covered/i);
 
+    // Hybrid gets no note at all: an empty search there is genuine evidence of
+    // absence, and leaving hybrid's prompt byte-identical to its pre-change form
+    // keeps this feature confined to keyword mode (which is what the golden eval
+    // actually measures).
     const hybrid = buildEmptySearchNote(["annual refunds"], "hybrid", false);
-    assert.doesNotMatch(hybrid, /lexical/i);
+    assert.equal(hybrid, "");
+    assert.equal(buildEmptySearchNote(["annual refunds"], "hybrid", true), "");
   });
 
   it("still frames a forced-answer keyword note as a lexical miss, but drops the retry suggestion", () => {

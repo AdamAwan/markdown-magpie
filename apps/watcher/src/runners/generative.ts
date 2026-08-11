@@ -573,10 +573,12 @@ async function assess(
   // instruction and stays outside the wrapUntrusted context above — telling the
   // model in keyword mode that an empty search is a lexical miss, not proof the
   // knowledge base lacks the information.
-  const emptySearchNote =
-    unsatisfiedSearches.size > 0
-      ? `\n\n${buildEmptySearchNote([...unsatisfiedSearches], retrievalMode, forceAnswer)}`
-      : "";
+  // The note is empty in hybrid mode (an empty search needs no reframing there),
+  // so the blank-line separator is added only when there is actually a note —
+  // otherwise hybrid prompts would gain a stray empty block.
+  const note =
+    unsatisfiedSearches.size > 0 ? buildEmptySearchNote([...unsatisfiedSearches], retrievalMode, forceAnswer) : "";
+  const emptySearchNote = note ? `\n\n${note}` : "";
   const response = await model.complete({
     system,
     messages: [

@@ -329,11 +329,17 @@ export function buildAnswerOutput(
 
 // How a search that returned nothing should be presented to the model.
 //
-// In hybrid mode, empty is strong evidence: vector search returns nearest
-// neighbours for any query, so nothing came back means nothing close exists.
-// In keyword-only mode it means no lexeme matched — the knowledge base may cover
-// the topic in different words. Saying so is what stops the model minting
-// knowledge gaps out of vocabulary mismatches.
+// Keyword-only mode is the whole point of this note: an empty search means no
+// lexeme matched, and the knowledge base may well cover the topic in different
+// words. Saying so is what stops the model minting knowledge gaps out of
+// vocabulary mismatches.
+//
+// Hybrid mode returns "" — no note at all. In hybrid, empty IS strong evidence
+// (vector search returns nearest neighbours for any query, so nothing coming
+// back means nothing close exists), so there is nothing to correct; and this
+// environment's golden eval runs keyword-only, so any hybrid prompt change would
+// ship entirely unmeasured. Keeping hybrid's prompt byte-identical to what it
+// was confines this feature to keyword mode, as the design specified.
 //
 // `forceAnswer` mirrors the assess call's own flag: on the forced-final-answer
 // turn the loop's directive tells the model "do not request more searches", so
@@ -348,22 +354,21 @@ export function buildEmptySearchNote(
   retrievalMode: "hybrid" | "keyword",
   forceAnswer: boolean
 ): string {
-  const list = queries.map((query) => `- ${query}`).join("\n");
-  if (retrievalMode === "keyword") {
-    const lines = [
-      "These searches returned no sections:",
-      list,
-      "",
-      "Semantic search is unavailable in this deployment; these were lexical",
-      "keyword searches. No match means no shared wording was found — it is NOT",
-      "evidence that the knowledge base lacks the information."
-    ];
-    if (!forceAnswer) {
-      lines.push("Prefer retrying with different vocabulary over concluding a knowledge gap.");
-    }
-    return lines.join("\n");
+  if (retrievalMode !== "keyword") {
+    return "";
   }
-  return ["These searches returned no sections:", list].join("\n");
+  const lines = [
+    "These searches returned no sections:",
+    queries.map((query) => `- ${query}`).join("\n"),
+    "",
+    "Semantic search is unavailable in this deployment; these were lexical",
+    "keyword searches. No match means no shared wording was found — it is NOT",
+    "evidence that the knowledge base lacks the information."
+  ];
+  if (!forceAnswer) {
+    lines.push("Prefer retrying with different vocabulary over concluding a knowledge gap.");
+  }
+  return lines.join("\n");
 }
 
 // Records what the grounding check actually did on the output's trace. A no-op

@@ -427,9 +427,24 @@ export class PostgresKnowledgeStore
     //
     // The OR'd query is built by running the question through to_tsvector and
     // taking its lexemes, which reuses Postgres's own stemming and stopword
-    // removal rather than string-munging plainto_tsquery's output. Each lexeme is
-    // quote_literal'd so punctuation cannot produce a malformed tsquery. A
-    // question with no content lexemes yields an empty tsquery, matching nothing.
+    // removal rather than string-munging plainto_tsquery's output. A question
+    // with no content lexemes yields an empty tsquery, matching nothing.
+    //
+    // Each lexeme is wrapped in single quotes with embedded quotes doubled,
+    // rather than passed through quote_literal. This is NOT an injection fix —
+    // $1 is a bind parameter and the quoted text never becomes SQL, it only ever
+    // becomes tsquery input. It is a robustness fix: for a lexeme containing a
+    // backslash quote_literal emits an E'…' escape-string prefix, which
+    // to_tsquery cannot parse, so a single backslash anywhere in the question
+    // turned the whole search into a 500 instead of degraded results.
+    //
+    // The two configs differ deliberately. The OR'd query is built from lexemes
+    // that to_tsvector('english', …) has ALREADY stemmed, so it uses 'simple':
+    // re-stemming an already-stemmed lexeme is only safe if Snowball English is
+    // idempotent, which is not guaranteed, and a non-idempotent stem would
+    // silently drop that term from the query — an invisible recall hole. The
+    // strict websearch_to_tsquery takes the RAW question text and must therefore
+    // keep the 'english' config to stem and drop stopwords as normal.
     //
     // Normalisation flag 32 is rank/(rank+1), already bounded in [0,1) — which is
     // why there is no application-side rank normalisation any more.
@@ -439,10 +454,10 @@ export class PostgresKnowledgeStore
         WITH q AS (
           SELECT
             to_tsquery(
-              'english',
+              'simple',
               coalesce(
                 (
-                  SELECT string_agg(quote_literal(lexeme), ' | ')
+                  SELECT string_agg('''' || replace(lexeme, '''', '''''') || '''', ' | ')
                   FROM unnest(tsvector_to_array(to_tsvector('english', $1))) AS lexeme
                 ),
                 ''

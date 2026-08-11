@@ -280,6 +280,74 @@ describe("InMemoryKnowledgeIndex.search", () => {
   });
 });
 
+// The in-memory keyword leg is the documented fallback for no-persistence mode
+// AND for a Postgres keyword-search error (see keywordRank), but the golden eval
+// only ever exercises the SQL leg — it boots a real pgvector container. These
+// tests pin the in-memory relevances either side of the retrieval floor
+// (MIN_RELEVANCE = 0.4 in features/retrieve/service.ts) so the two legs'
+// disagreement is visible in code and any change to KEYWORD_RELEVANCE_SCALE or
+// to the field weights breaks a test instead of silently moving the cut line.
+//
+// The scoring function is: per unique query term (lowercased, /[a-z0-9]{3,}/,
+// stopwords dropped), add 10 if it occurs in the heading, 6 in the heading path,
+// 6 in the flattened file path, 3 in the content; relevance =
+// min(1, score / KEYWORD_RELEVANCE_SCALE) with KEYWORD_RELEVANCE_SCALE = 26.
+// Note the markdown parser keeps the heading line inside the section's content
+// and puts the section's own heading in its heading path, so a heading term
+// scores on all three of heading + heading path + content.
+describe("InMemoryKnowledgeIndex in-memory keyword relevance vs the retrieval floor", () => {
+  const floorDoc = {
+    path: "notes.md",
+    content: "# Overview\n\nCanary rollout stages proceed gradual by design.\n"
+  };
+
+  async function relevanceFor(question: string): Promise<number> {
+    const index = new InMemoryKnowledgeIndex();
+    await index.indexMarkdownDocuments({ documents: [floorDoc], repositoryId: "repo" });
+    const ranked = await index.search(question, 5, ["repo"]);
+    assert.equal(ranked.length, 1, "expected exactly the one indexed section to match");
+    return ranked[0].relevance;
+  }
+
+  it("scores three body-only terms below the 0.4 floor — where the SQL leg keeps them", async () => {
+    // "canary", "rollout", "stages" occur only in the body (the heading is
+    // "Overview" and the path flattens to "notes md"), so the score is
+    // 3 terms x CONTENT_WEIGHT 3 = 9, and 9 / 26 = 0.34615384615384615.
+    const relevance = await relevanceFor("canary rollout stages");
+    assert.equal(relevance, 9 / 26);
+    assert.ok(relevance < 0.4, `expected ${relevance} to be dropped by the 0.4 floor`);
+    // The same three body-only lexemes on the SQL leg score raw 3 x 0.3 = 0.9,
+    // which ts_rank_cd(..., 32) normalises to 0.9 / 1.9 ~= 0.474 — above the
+    // floor. The floor was derived against the SQL leg only; this is the known
+    // divergence, recorded rather than fixed (fixing it needs measurement).
+    assert.ok(0.9 / 1.9 > 0.4);
+  });
+
+  it("scores four body-only terms above the floor", async () => {
+    // "canary", "rollout", "stages", "gradual": 4 x 3 = 12, and
+    // 12 / 26 = 0.46153846153846156.
+    const relevance = await relevanceFor("canary rollout stages gradual");
+    assert.equal(relevance, 12 / 26);
+    assert.ok(relevance >= 0.4);
+  });
+
+  it("scores a single heading term well above the floor", async () => {
+    // "overview" is the section's heading, is therefore also in its heading path,
+    // and the parser keeps the "# Overview" line in the section content:
+    // 10 + 6 + 3 = 19, and 19 / 26 = 0.7307692307692307.
+    const relevance = await relevanceFor("overview");
+    assert.equal(relevance, 19 / 26);
+    assert.ok(relevance >= 0.4);
+  });
+
+  it("scores a single body-only term far below the floor", async () => {
+    // One body term: 1 x 3 = 3, and 3 / 26 = 0.11538461538461539.
+    const relevance = await relevanceFor("canary");
+    assert.equal(relevance, 3 / 26);
+    assert.ok(relevance < 0.4);
+  });
+});
+
 describe("InMemoryKnowledgeIndex.getSection", () => {
   it("returns an indexed section by id and undefined for unknown ids", async () => {
     const index = new InMemoryKnowledgeIndex();

@@ -135,6 +135,19 @@ callbacks. Weak or unanswerable questions feed the gaps subsystem
   because R15 applies the same floor to cosine similarity, where a higher value would
   prune real vector hits.
 
+  > **The floor was derived against the SQL keyword leg only, and the in-memory leg
+  > disagrees with it.** `MIN_RELEVANCE` is a measured property of `ts_rank_cd(…, 32)` over
+  > the weighted tsvector. The in-memory keyword fallback in `knowledge-index.ts` — used in
+  > no-persistence mode *and* whenever the Postgres keyword search errors (R17) — is a
+  > different scoring function: additive field weights over `KEYWORD_RELEVANCE_SCALE` (26).
+  > The two legs therefore cut in different places near the floor. Worked example: a section
+  > matching three body-only terms scores `9 / 26 ≈ 0.346` in memory (**dropped**) but
+  > `0.9 / 1.9 ≈ 0.474` in SQL (**kept**). The golden eval boots a real pgvector container,
+  > so it measures only the SQL leg and this divergence is invisible to it; the in-memory
+  > values either side of `0.4` are pinned by unit tests in `knowledge-index.test.ts`
+  > instead. This is recorded as-built, not endorsed — closing the gap requires measuring
+  > the in-memory leg, which has not been done.
+
   > **Empty is still read as absence downstream.** The design intent was that an empty
   > keyword-mode result is *not* evidence of a knowledge gap, and the prompt layer honours
   > that (R17's lexical-miss note). The answer builder does not: `buildAnswerOutput`
@@ -151,7 +164,11 @@ callbacks. Weak or unanswerable questions feed the gaps subsystem
   for every search in the job. A search that returns nothing is framed to the model as a
   *lexical miss* in keyword mode, explicitly not as evidence of absence
   (`buildEmptySearchNote`); on the forced-final-answer turn the "retry with different
-  vocabulary" suggestion is suppressed, because that turn accepts only an answer.
+  vocabulary" suggestion is suppressed, because that turn accepts only an answer. In
+  **hybrid** mode `buildEmptySearchNote` returns `""` — no note at all: an empty vector
+  search genuinely is evidence of absence, and the hybrid prompt is deliberately left
+  byte-identical to its pre-feature form because the golden eval runs keyword-only and
+  could not measure a hybrid prompt change.
 
   Gaps recorded from `auto` / `followup` sources are stamped with the active mode on
   `question_gaps.retrieval_mode` (migration `0064`; NULL = pre-change, or not derived from

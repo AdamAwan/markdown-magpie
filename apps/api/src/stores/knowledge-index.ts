@@ -112,6 +112,15 @@ export interface MarkdownUpload {
 // Normalises raw keyword scores into [0,1]. Roughly the score of a strong
 // two-term hit landing in both the heading and the body under the field weights
 // below (2 × (10 + 3)); stronger hits clamp to 1.
+//
+// As-built caveat: MIN_RELEVANCE (features/retrieve/service.ts) was derived
+// against the SQL keyword leg only — it is a measured property of
+// ts_rank_cd(..., 32) over the weighted tsvector, not of this scale. The two
+// legs are different scoring functions and are KNOWN to disagree near the floor:
+// e.g. a section matching three body-only terms scores 9/26 ≈ 0.346 here (cut)
+// but ≈ 0.474 on the SQL leg (kept). The golden eval measures only the SQL leg,
+// so the divergence is pinned by unit tests in knowledge-index.test.ts instead.
+// Do not "fix" it by nudging this constant without measuring — see docs/retrieval.md R16.
 const KEYWORD_RELEVANCE_SCALE = 26;
 // Over-fetch vector candidates before fusion so good hits are not cut off by a small limit.
 const VECTOR_CANDIDATES = 20;
