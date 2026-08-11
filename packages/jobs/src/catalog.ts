@@ -85,7 +85,11 @@ const REPAIRABLE_JOB_TYPES = new Set<JobType>([
   "suggest_consolidation",
   "reconcile_gap_clusters",
   "outline_flow_seed",
-  "revise_seed_plan"
+  "revise_seed_plan",
+  // Its output reworks material already in the input and carries no grounding or
+  // observedSha, so a single-shot reshape of a schema-invalid mapping can fix the
+  // contract without any risk of inventing content.
+  "map_questionnaire_columns"
 ]);
 
 function define(
@@ -241,6 +245,16 @@ const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
     schemas.verifyImportedAnswerOutputSchema,
     15 * 60
   ),
+  // Which sheets and columns of an uploaded questionnaire hold what. Cheap and
+  // single-shot next to its neighbours here: one bounded sample in, a handful of
+  // integers out, and an operator waiting on the preview.
+  map_questionnaire_columns: define(
+    "map_questionnaire_columns",
+    "provider",
+    schemas.mapQuestionnaireColumnsInputSchema,
+    schemas.mapQuestionnaireColumnsOutputSchema,
+    10 * 60
+  ),
   correct_document: define(
     "correct_document",
     "provider",
@@ -379,6 +393,9 @@ export const AI_JOB_TYPES = [
   // import must never erode the reserve that protects live /api/ask, exactly as
   // answer_question_batch must not.
   "verify_imported_answer",
+  // Metered, non-interactive for the same reason: an operator is waiting, but on
+  // a preview screen that tolerates a queue, not on a live answer.
+  "map_questionnaire_columns",
   "correct_document",
   "dedupe_documents",
   "split_document",

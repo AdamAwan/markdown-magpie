@@ -14,6 +14,7 @@ export const JOB_TYPES = [
   "sync_source_changes_generate_plan",
   "verify_document",
   "verify_imported_answer",
+  "map_questionnaire_columns",
   "correct_document",
   "dedupe_documents",
   "split_document",

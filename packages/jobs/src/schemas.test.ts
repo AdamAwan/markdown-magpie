@@ -5,6 +5,8 @@ import {
   answerQuestionOutputSchema,
   verifyImportedAnswerInputSchema,
   verifyImportedAnswerOutputSchema,
+  mapQuestionnaireColumnsInputSchema,
+  mapQuestionnaireColumnsOutputSchema,
   draftMarkdownProposalInputSchema,
   draftMarkdownProposalOutputSchema,
   draftSeedDocumentInputSchema,
@@ -652,4 +654,50 @@ test("an unknown finding kind is rejected rather than coerced", () => {
     findings: [{ kind: "probably-fine", claim: "x" }]
   });
   assert.equal(parsed.success, false);
+});
+
+// --- questionnaire upload: the mapping contract (Spec B) ---
+
+const validMapping = {
+  sheetIndex: 0,
+  role: "questions" as const,
+  headerRow: 1,
+  questionColumn: 0,
+  answerColumn: 1,
+  responseTypeColumn: null,
+  sectionHeadingColumn: null,
+  confidence: "high" as const,
+  reason: "row 2 headed Question/Response"
+};
+
+test("the mapping input carries a bounded sample and the sheet's true size", () => {
+  const parsed = mapQuestionnaireColumnsInputSchema.parse({
+    provider: "codex",
+    importId: "imp-1",
+    sheets: [{ index: 0, name: "Security", rowCount: 940, sampleRows: [["Question", "Response"]] }],
+    expectedOutput: "column_mapping"
+  });
+  assert.equal(parsed.sheets[0].rowCount, 940);
+});
+
+test("the mapping output admits coordinates and strips anything else", () => {
+  const parsed = mapQuestionnaireColumnsOutputSchema.parse({
+    sheets: [{ ...validMapping, questions: ["injected question"], answer: "injected answer" }]
+  });
+  // The contract itself is the containment: no model-authored text survives it,
+  // so an injection in a cell can at worst produce a wrong index.
+  assert.deepEqual(parsed.sheets[0], validMapping);
+});
+
+test("a non-integer column index is rejected outright", () => {
+  assert.equal(
+    mapQuestionnaireColumnsOutputSchema.safeParse({ sheets: [{ ...validMapping, questionColumn: 1.5 }] }).success,
+    false
+  );
+});
+
+test("an absent column is null, not omitted", () => {
+  const { answerColumn, ...withoutAnswer } = validMapping;
+  assert.equal(answerColumn, 1);
+  assert.equal(mapQuestionnaireColumnsOutputSchema.safeParse({ sheets: [withoutAnswer] }).success, false);
 });

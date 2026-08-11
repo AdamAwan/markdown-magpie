@@ -79,6 +79,18 @@ export async function apiPost<T>(path: string, body: unknown, options: ApiReques
   return readResponse<T>(response);
 }
 
+// Multipart upload. Deliberately sets NO content-type: the browser has to write
+// the multipart boundary itself, and setting the header by hand strips it.
+export async function apiUpload<T>(path: string, form: FormData, options: ApiRequestOptions = {}): Promise<T> {
+  const response = await fetch(resolveApiUrl(path), {
+    method: "POST",
+    headers: await authHeaders(),
+    body: form,
+    signal: requestSignal(options)
+  });
+  return readResponse<T>(response);
+}
+
 export async function apiPatch<T>(path: string, body: unknown, options: ApiRequestOptions = {}): Promise<T> {
   const response = await fetch(resolveApiUrl(path), {
     method: "PATCH",
