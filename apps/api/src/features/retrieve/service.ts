@@ -30,7 +30,19 @@ export type RetrieveResult =
 
 // Absolute floor: a section this weak is a clear non-match regardless of what
 // else scored. Conservative on purpose — it removes noise, not borderline hits.
-const MIN_RELEVANCE = 0.15;
+//
+// Re-derived in Task 7 against the golden KB, because `ts_rank_cd(..., 32)` =
+// rank/(rank+1) replaced the old rank/(rank+0.1) normalisation and the old 0.15
+// no longer means what it meant. Measured distribution (see the task-7 report):
+// a section matching a single body (C-weight) lexeme scores exactly 0.2308
+// (raw 0.3), a single path/heading-path (B-weight) lexeme exactly 0.3750
+// (raw 0.6), and the weakest genuinely answer-bearing section measured 0.7143
+// (raw 2.5). 0.40 (raw 0.667) is the lowest round value clear of that noise
+// band — chosen at the bottom of the empty band rather than its middle because
+// this floor is also applied to hybrid's fused relevance, which is
+// max(cosine similarity, keyword relevance); a higher value would prune real
+// vector hits in a mode this environment cannot measure (see R16).
+const MIN_RELEVANCE = 0.4;
 // Relative floor: keep sections within this fraction of the best result. OR'd
 // keyword matching (see PostgresKnowledgeStore.searchByKeyword) surfaces
 // single-term hits that hybrid retrieval never produced, so a strong result now
@@ -42,7 +54,16 @@ const MIN_RELEVANCE = 0.15;
 // question, which is exactly the false signal this design removes. So the
 // relative floor is only allowed to cut when there IS a strong result to be
 // relative to: weak-but-best results survive, weak-beside-strong results do not.
-const RELATIVE_RELEVANCE_FLOOR = 0.35;
+//
+// Raised from 0.35 to 0.5 in Task 7 for a mechanical reason: relevance is capped
+// at 1, so the relative floor can only ever cut below `1 * fraction`. At 0.35 —
+// with MIN_RELEVANCE now 0.4 — it could never cut anything the absolute floor
+// had not already cut, i.e. the "two-part" floor had silently collapsed to one
+// part. 0.5 ("at least half as strong as the best hit") is the lowest round
+// value that puts it back in play, and every genuinely answer-bearing secondary
+// section measured against the golden KB scores 0.71+ beside a 1.0 top, so it
+// clears this floor with margin.
+const RELATIVE_RELEVANCE_FLOOR = 0.5;
 
 // Pure (non-generative) retrieval the watcher calls after it has routed the
 // question to a flow. Resolving the flow's destination scope server-side keeps

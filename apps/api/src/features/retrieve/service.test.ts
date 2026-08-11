@@ -114,8 +114,27 @@ test("retrieve rejects an unknown flowId rather than searching unscoped", async 
 });
 
 test("keeps weak results when they are the best available", async () => {
-  // Every candidate is weak. Returning nothing here is the exact failure this
-  // work exists to remove, so all three survive.
+  // Every candidate is weak relative to the others — none stands out — so the
+  // relative floor drops nothing and all three survive. Returning nothing when
+  // the whole pool is merely mediocre is the failure this work exists to remove.
+  // The values sit above MIN_RELEVANCE on purpose: this test owns the RELATIVE
+  // floor's behaviour, and the absolute floor's is asserted separately below.
+  const ctx = buildContext([
+    { id: "s1", relevance: 0.5 },
+    { id: "s2", relevance: 0.45 },
+    { id: "s3", relevance: 0.42 }
+  ]);
+  const result = await retrieve(ctx, { question: "anything" });
+  assert.ok(result.ok);
+  assert.equal(result.sections.length, 3);
+});
+
+test("returns nothing when every candidate is below the absolute floor", async () => {
+  // The absolute floor still cliff-edges to empty, by design: a pool of pure
+  // single-lexeme noise (see MIN_RELEVANCE's derivation) is not evidence of
+  // anything, and a genuine knowledge-gap question must not collect citations
+  // from it. `candidateCount` is what tells the caller these matches existed —
+  // so a lexical near-miss is still distinguishable from "nothing matched".
   const ctx = buildContext([
     { id: "s1", relevance: 0.2 },
     { id: "s2", relevance: 0.18 },
@@ -123,13 +142,16 @@ test("keeps weak results when they are the best available", async () => {
   ]);
   const result = await retrieve(ctx, { question: "anything" });
   assert.ok(result.ok);
-  assert.equal(result.sections.length, 3);
+  assert.equal(result.sections.length, 0);
+  assert.equal(result.candidateCount, 3);
 });
 
 test("drops weak results that sit alongside a strong one", async () => {
+  // s2 clears the absolute floor, so only the relative floor can drop it —
+  // keeping this test honest about which of the two parts it exercises.
   const ctx = buildContext([
     { id: "s1", relevance: 0.9 },
-    { id: "s2", relevance: 0.2 }
+    { id: "s2", relevance: 0.42 }
   ]);
   const result = await retrieve(ctx, { question: "anything" });
   assert.ok(result.ok);
