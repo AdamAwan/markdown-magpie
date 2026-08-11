@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import type {
   Confidence,
+  ImportVerdict,
   Questionnaire,
   QuestionnaireChangeReason,
   QuestionnaireItem,
@@ -10,7 +11,11 @@ import type {
   QuestionnaireItemStatus,
   QuestionnaireSummary
 } from "@magpie/core";
-import type { QuestionnaireStore } from "./questionnaire-store.js";
+import {
+  normaliseQuestionInput,
+  type QuestionnaireQuestionInput,
+  type QuestionnaireStore
+} from "./questionnaire-store.js";
 import { chunk, valuesClause } from "./sql-bulk.js";
 import { toVectorLiteral } from "./vector-literal.js";
 
@@ -21,6 +26,7 @@ interface QuestionnaireRow {
   name: string;
   flow_id: string;
   direction: string | null;
+  import_origin: string | null;
   status: Questionnaire["status"];
   created_at: Date;
 }
@@ -29,6 +35,13 @@ interface QuestionnaireRow {
 // so every mapping site spreads it in rather than emitting `direction: null`.
 function directionOf(row: { direction: string | null }): { direction?: string } {
   return row.direction !== null ? { direction: row.direction } : {};
+}
+
+// Same treatment for the ingestion origin (ingestion spec D1): its presence is
+// the switch onto the triage path, so `null` must never reach the domain type
+// as a truthy-looking value.
+function importOriginOf(row: { import_origin: string | null }): { importOrigin?: string } {
+  return row.import_origin !== null ? { importOrigin: row.import_origin } : {};
 }
 
 interface ItemRow {
@@ -47,7 +60,15 @@ interface ItemRow {
   error: string | null;
   approved_at: Date | null;
   stale_at_approval: boolean;
+  imported_answer: string | null;
+  import_verdict: ImportVerdict | null;
 }
+
+// Every item projection selects the same column set, so the escalation query and
+// the worksheet read can never drift apart on which fields they hydrate.
+const ITEM_COLUMNS = `id, questionnaire_id, position, question, status, outcome, answer, confidence, answered_at,
+         question_log_id, reused_from_item_id, change_reason, error, approved_at, stale_at_approval,
+         imported_answer, import_verdict`;
 
 interface CitationRow {
   item_id: string;
@@ -75,7 +96,9 @@ function mapItem(row: ItemRow, citations: QuestionnaireItemCitation[]): Question
     ...(row.error !== null ? { error: row.error } : {}),
     ...(row.approved_at !== null ? { approvedAt: row.approved_at.toISOString() } : {}),
     staleAtApproval: row.stale_at_approval,
-    citations
+    citations,
+    ...(row.imported_answer !== null ? { importedAnswer: row.imported_answer } : {}),
+    ...(row.import_verdict !== null ? { importVerdict: row.import_verdict } : {})
   };
 }
 
@@ -85,29 +108,34 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
   async create(input: {
     name: string;
     flowId: string;
-    questions: string[];
+    questions: QuestionnaireQuestionInput[];
     direction?: string;
+    importOrigin?: string;
   }): Promise<Questionnaire> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       const id = randomUUID();
       const inserted = await client.query<QuestionnaireRow>(
-        "INSERT INTO questionnaires (id, name, flow_id, direction) VALUES ($1, $2, $3, $4) RETURNING *",
-        [id, input.name, input.flowId, input.direction ?? null]
+        "INSERT INTO questionnaires (id, name, flow_id, direction, import_origin) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+        [id, input.name, input.flowId, input.direction ?? null, input.importOrigin ?? null]
       );
-      const items = input.questions.map((question, position) => ({
-        id: randomUUID(),
-        position,
-        question
-      }));
+      const items = input.questions.map((entry, position) => {
+        const { question, importedAnswer } = normaliseQuestionInput(entry);
+        return {
+          id: randomUUID(),
+          position,
+          question,
+          importedAnswer
+        };
+      });
       for (const batch of chunk(items, ITEM_INSERT_CHUNK)) {
         await client.query(
           `
-            INSERT INTO questionnaire_items (id, questionnaire_id, position, question)
-            VALUES ${valuesClause(batch.length, 4)}
+            INSERT INTO questionnaire_items (id, questionnaire_id, position, question, imported_answer)
+            VALUES ${valuesClause(batch.length, 5)}
           `,
-          batch.flatMap((item) => [item.id, id, item.position, item.question])
+          batch.flatMap((item) => [item.id, id, item.position, item.question, item.importedAnswer ?? null])
         );
       }
       await client.query("COMMIT");
@@ -117,6 +145,7 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
         name: row.name,
         flowId: row.flow_id,
         ...directionOf(row),
+        ...importOriginOf(row),
         status: row.status,
         createdAt: row.created_at.toISOString(),
         items: items.map((item) => ({
@@ -126,7 +155,8 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
           question: item.question,
           status: "pending" as const,
           staleAtApproval: false,
-          citations: []
+          citations: [],
+          ...(item.importedAnswer ? { importedAnswer: item.importedAnswer } : {})
         }))
       };
     } catch (error) {
@@ -145,8 +175,7 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
     }
     const items = await this.pool.query<ItemRow>(
       `
-        SELECT id, questionnaire_id, position, question, status, outcome, answer, confidence, answered_at,
-               question_log_id, reused_from_item_id, change_reason, error, approved_at, stale_at_approval
+        SELECT ${ITEM_COLUMNS}
         FROM questionnaire_items WHERE questionnaire_id = $1 ORDER BY position ASC
       `,
       [id]
@@ -157,6 +186,7 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
       name: row.name,
       flowId: row.flow_id,
       ...directionOf(row),
+      ...importOriginOf(row),
       status: row.status,
       createdAt: row.created_at.toISOString(),
       items: items.rows.map((item) => mapItem(item, citations.get(item.id) ?? []))
@@ -193,6 +223,7 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
       name: row.name,
       flowId: row.flow_id,
       ...directionOf(row),
+      ...importOriginOf(row),
       status: row.status,
       createdAt: row.created_at.toISOString(),
       counts: {
@@ -224,7 +255,7 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
       `
         SELECT i.id, i.questionnaire_id, i.position, i.question, i.status, i.outcome, i.answer, i.confidence,
                i.answered_at, i.question_log_id, i.reused_from_item_id, i.change_reason, i.error,
-               i.approved_at, i.stale_at_approval, q.direction,
+               i.approved_at, i.stale_at_approval, i.imported_answer, i.import_verdict, q.direction,
                1 - (i.question_embedding <=> $3::vector) AS similarity
         FROM questionnaire_items i
         JOIN questionnaires q ON q.id = i.questionnaire_id
@@ -255,7 +286,7 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
       `
         SELECT i.id, i.questionnaire_id, i.position, i.question, i.status, i.outcome, i.answer, i.confidence,
                i.answered_at, i.question_log_id, i.reused_from_item_id, i.change_reason, i.error,
-               i.approved_at, i.stale_at_approval, q.direction,
+               i.approved_at, i.stale_at_approval, i.imported_answer, i.import_verdict, q.direction,
                1 - (i.question_embedding <=> $3::vector) AS similarity
         FROM questionnaire_items i
         JOIN questionnaires q ON q.id = i.questionnaire_id
@@ -449,6 +480,26 @@ export class PostgresQuestionnaireStore implements QuestionnaireStore {
         ORDER BY position ASC
       `,
       [questionnaireId]
+    );
+    const citations = await this.loadCitations(result.rows.map((row) => row.id));
+    return result.rows.map((row) => mapItem(row, citations.get(row.id) ?? []));
+  }
+
+  async setImportVerdict(itemId: string, verdict: ImportVerdict): Promise<void> {
+    await this.pool.query("UPDATE questionnaire_items SET import_verdict = $2 WHERE id = $1", [itemId, verdict]);
+  }
+
+  async listAwaitingEscalation(questionnaireId: string, limit: number): Promise<QuestionnaireItem[]> {
+    const result = await this.pool.query<ItemRow>(
+      `
+        SELECT ${ITEM_COLUMNS} FROM questionnaire_items
+        WHERE questionnaire_id = $1
+          AND imported_answer IS NOT NULL
+          AND import_verdict IN ('divergent', 'uncovered')
+        ORDER BY position ASC
+        LIMIT $2
+      `,
+      [questionnaireId, limit]
     );
     const citations = await this.loadCitations(result.rows.map((row) => row.id));
     return result.rows.map((row) => mapItem(row, citations.get(row.id) ?? []));
