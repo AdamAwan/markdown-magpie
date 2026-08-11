@@ -53,14 +53,23 @@ export function QuestionnaireCreateList({ flows, loading, onList, onCreate, onOp
   }, [refreshList]);
 
   async function submitCreate() {
-    const questions = questionsText
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
+    // One question per line, or "question<TAB>previously-given answer" when a
+    // completed questionnaire is being ingested — a two-column spreadsheet
+    // selection pasted straight in already carries the tab.
+    const questions = parseTwoColumnPaste(questionsText);
     if (!name.trim() || !flowId || questions.length === 0) return;
+    const anyImported = questions.some((entry) => entry.importedAnswer);
     setCreating(true);
     try {
-      const created = await onCreate(name.trim(), flowId, questions, direction.trim() || undefined);
+      const created = await onCreate(
+        name.trim(),
+        flowId,
+        questions,
+        direction.trim() || undefined,
+        // Only an import needs an origin; without one the batch takes the
+        // ordinary path, exactly as it did before ingestion existed.
+        anyImported ? importOrigin.trim() || "pasted" : undefined
+      );
       if (created) {
         setName("");
         setQuestionsText("");
@@ -97,12 +106,19 @@ export function QuestionnaireCreateList({ flows, loading, onList, onCreate, onOp
             placeholder="Where ambiguous, assume the question is about the company and not the product."
           />
         </Field>
-        <Field label="Questions (one per line)">
+        <Field label="Questions (one per line). To ingest a completed questionnaire, paste two columns — the question, a tab, then the answer previously given.">
           <Textarea
             rows={6}
             value={questionsText}
             onChange={(event) => setQuestionsText(event.target.value)}
             placeholder={"What certifications does the product hold?\nWhere is customer data stored?"}
+          />
+        </Field>
+        <Field label="Import source (optional) — where a completed questionnaire came from, e.g. the file name.">
+          <Input
+            value={importOrigin}
+            onChange={(event) => setImportOrigin(event.target.value)}
+            placeholder="acme-sig-2025.xlsx"
           />
         </Field>
         <Actions>

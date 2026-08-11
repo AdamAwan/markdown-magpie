@@ -46,7 +46,9 @@ function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
 }
 
 test("renders both answers side by side with the stage-1 verdict", async () => {
-  const { container } = await renderDom(<ImportedAnswerPanel item={importedItem()} findings={[]} onApprove={() => {}} />);
+  const { container } = await renderDom(
+    <ImportedAnswerPanel item={importedItem()} findings={[]} onApprove={() => {}} />
+  );
   const text = container.textContent ?? "";
   assert.ok(text.includes("Yes, since 2021."), "the previously-given answer must be shown");
   assert.ok(text.includes("We hold ISO 27001, certified 2022."), "Magpie's answer must be shown");

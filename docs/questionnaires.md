@@ -278,6 +278,16 @@ richer, the KB gets audited, and every claim nothing can back surfaces in a regi
   survives a re-answer (only `auto`/`followup` are rewritten), because it records a human
   assertion rather than a model judgement. Raising is idempotent per (question, summary).
 
+- **Q28** — **The console.** An imported item renders **side by side** on the worksheet
+  (`ImportedAnswerPanel`): the previously-given wording against Magpie's KB-derived answer,
+  the stage-1 verdict, and any live findings inline with the source positions that produced
+  them. *Approve imported* is disabled on an item with an open finding — the server's 409
+  (Q26) is the real guard, the disabled button is so a reviewer is not invited to try. The
+  create form takes two-column paste (`parseTwoColumnPaste`: question, tab, previous answer —
+  a spreadsheet selection already carries the tab) plus an optional import source. The
+  register has its own page at `/asserted-claims`, filterable by status, where resolving or
+  dismissing requires a note.
+
 ## API surface
 
 All routes are flow-scoped via `assertCan(…, flow)` on the questionnaire's flow (cross-flow
@@ -330,9 +340,6 @@ console/API-only.
 - **No spreadsheet/PDF parsing yet.** Imported answers arrive as pasted `{question, importedAnswer}`
   pairs over the API; XLSX/CSV upload with AI column mapping is a separate follow-on spec, and
   `.docx`/PDF are out of scope entirely.
-- **No console UI for ingestion yet.** The adjudication pipeline, the register and the approval
-  gate are API-only: there is no side-by-side worksheet and no register page. Reviewing an
-  imported questionnaire today means driving the API directly.
 - Stage 2 is bounded to `MAX_ESCALATIONS_PER_TICK` (10) per tick and drains across later
   worksheet reads and completions, so a large import finishes adjudicating over several ticks
   rather than all at once.
@@ -377,6 +384,8 @@ console/API-only.
 | Config (threshold, inflight, candidates, enabled) | `apps/api/src/platform/config.ts` |
 | Job contract (`answer_question_batch`, reconcile result) | `packages/jobs/src/schemas.ts`, `packages/jobs/src/catalog.ts` |
 | Console (index + detail + badges) | `apps/web/src/components/QuestionnaireCreateList.tsx`, `QuestionnaireDetail.tsx`, `questionnaireItems.ts` |
+| Console: side-by-side imported review + paste parsing | `apps/web/src/components/ImportedAnswerPanel.tsx`, `questionnaireItems.ts` (`parseTwoColumnPaste`) |
+| Console: the asserted-claims register page | `apps/web/src/components/AssertedClaimsPanel.tsx`, `apps/web/src/app/asserted-claims/page.tsx` |
 
 ## Tests (behavioural contract)
 
@@ -384,7 +393,7 @@ console/API-only.
 `apps/api/src/features/asserted-claims/routes.test.ts`,
 `apps/api/src/stores/asserted-claims-store.test.ts`,
 `apps/api/src/stores/{questionnaire-store,postgres-questionnaire-store}.test.ts`,
-`apps/web/src/components/{QuestionnaireCreateList,QuestionnaireDetail,questionnaireItems}.test.tsx`.
+`apps/web/src/components/{QuestionnaireCreateList,QuestionnaireDetail,questionnaireItems,ImportedAnswerPanel}.test.tsx`.
 Cross-cutting coverage: `packages/jobs/src/{schemas,catalog}.test.ts` (the
 `answer_question_batch` contract), `apps/watcher/src/runners/generative.test.ts` (the
 reconcile step), and `apps/api/src/stores/postgres-question-log-store.test.ts` (gap

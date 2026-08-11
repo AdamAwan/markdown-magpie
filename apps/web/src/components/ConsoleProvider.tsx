@@ -44,8 +44,7 @@ import {
   WatcherView,
   WorkersResponse
 } from "../lib/types";
-import type {
-  AssertedClaim, Questionnaire, QuestionnaireSummary, SeedPlan } from "@magpie/core";
+import type { AssertedClaim, Questionnaire, QuestionnaireSummary, SeedPlan } from "@magpie/core";
 import { apiDelete, apiDownload, apiGet, apiPatch, apiPost, errorMessage } from "../lib/api";
 import { knowledgeFlows } from "../lib/config";
 import {
