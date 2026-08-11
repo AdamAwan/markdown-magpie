@@ -8,7 +8,8 @@ import { Surface, Workbench } from "../../../components/ui";
 export default function QuestionnaireDetailPage() {
   const params = useParams<{ id: string }>();
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
-  const { getQuestionnaire, approveQuestionnaireItem, approveReusedItems, exportQuestionnaire } = useConsole();
+  const { getQuestionnaire, approveQuestionnaireItem, approveReusedItems, exportQuestionnaire, listAssertedClaims } =
+    useConsole();
 
   return (
     <Workbench>
@@ -22,6 +23,7 @@ export default function QuestionnaireDetailPage() {
             backHref="/questionnaires"
             onGet={getQuestionnaire}
             onApproveItem={approveQuestionnaireItem}
+            onListAssertedClaims={listAssertedClaims}
             onApproveReused={approveReusedItems}
             onExport={exportQuestionnaire}
           />

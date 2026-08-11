@@ -1025,6 +1025,27 @@ export type AssertedClaimStatus = "open" | "resolved" | "dismissed";
 // structurally identical second type would only invite the two drifting apart.
 // Empty for `unsubstantiated` — that absence IS the finding.
 
+// One register entry. Lives in core rather than the API store because it crosses
+// the HTTP boundary: the console renders these, and the worksheet needs to know
+// which items carry a live finding to gate approval of the imported wording.
+export interface AssertedClaim {
+  id: string;
+  flowId?: string;
+  questionnaireId?: string;
+  itemId?: string;
+  kind: AssertedClaimKind;
+  question: string;
+  claim: string;
+  positions: SourceConflictPosition[];
+  status: AssertedClaimStatus;
+  fingerprint: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  seenCount: number;
+  resolvedAt?: string;
+  resolutionNote?: string;
+}
+
 // A disagreement between two or more source locations about a fact a knowledge-base
 // document asserts — within one source or across several. Deliberately distinct
 // from an UnprovableClaim: there the sources AGREE the document is wrong and a

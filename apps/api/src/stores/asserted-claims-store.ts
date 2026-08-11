@@ -1,31 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { AssertedClaimKind, AssertedClaimStatus, SourceConflictPosition } from "@magpie/core";
+import type { AssertedClaim, AssertedClaimKind, AssertedClaimStatus, SourceConflictPosition } from "@magpie/core";
 
 // A claim we made to a customer, in a previously-given questionnaire answer,
 // that the sources do not support (ingesting completed questionnaires,
 // docs/superpowers/specs/2026-08-11-questionnaire-ingestion-design.md D6).
 //
-// Distinct from the stage-2 agent's finding: this is the stored row, with
-// identity, lifecycle and sighting counters the agent knows nothing about —
-// exactly the split source_conflicts makes.
-export interface AssertedClaim {
-  id: string;
-  flowId?: string;
-  questionnaireId?: string;
-  itemId?: string;
-  kind: AssertedClaimKind;
-  question: string;
-  claim: string;
-  positions: SourceConflictPosition[];
-  status: AssertedClaimStatus;
-  fingerprint: string;
-  firstSeenAt: string;
-  lastSeenAt: string;
-  seenCount: number;
-  resolvedAt?: string;
-  resolutionNote?: string;
-}
-
+// Distinct from the stage-2 agent's finding: the stored row carries identity,
+// lifecycle and sighting counters the agent knows nothing about — exactly the
+// split source_conflicts makes. The row shape itself lives in @magpie/core
+// because it crosses the HTTP boundary to the console.
+export type { AssertedClaim };
 export interface AssertedClaimUpsert {
   flowId?: string;
   questionnaireId?: string;

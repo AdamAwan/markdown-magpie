@@ -1,4 +1,5 @@
 import type { QuestionnaireSummary } from "@magpie/core";
+import { parseTwoColumnPaste } from "./questionnaireItems";
 import { useCallback, useEffect, useRef, useState } from "react";
 import styled from "@emotion/styled";
 import { Actions, Badge, Button, EmptyState, Field, Input, Select, Stack, Textarea } from "./ui";
@@ -10,8 +11,11 @@ interface QuestionnaireCreateListProps {
   onCreate: (
     name: string,
     flowId: string,
-    questions: string[],
-    direction?: string
+    // A bare string, or a question paired with the answer previously given to
+    // it when ingesting a completed questionnaire.
+    questions: Array<string | { question: string; importedAnswer?: string }>,
+    direction?: string,
+    importOrigin?: string
   ) => Promise<{ id: string } | undefined>;
   // Navigate to a questionnaire's detail page. Supplied by the page as a
   // router.push wrapper, so this component stays free of next/navigation and
@@ -28,6 +32,7 @@ export function QuestionnaireCreateList({ flows, loading, onList, onCreate, onOp
   const [name, setName] = useState("");
   const [flowId, setFlowId] = useState("");
   const [questionsText, setQuestionsText] = useState("");
+  const [importOrigin, setImportOrigin] = useState("");
   const [direction, setDirection] = useState("");
   const [creating, setCreating] = useState(false);
 
@@ -59,6 +64,7 @@ export function QuestionnaireCreateList({ flows, loading, onList, onCreate, onOp
       if (created) {
         setName("");
         setQuestionsText("");
+        setImportOrigin("");
         setDirection("");
         onOpen(created.id);
       }
