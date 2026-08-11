@@ -15,6 +15,11 @@ npm run eval:golden -- --update-baseline # re-pin the baseline after an intended
 `eval:golden` wraps `scripts/eval-golden.ts` in `scripts/test-db.mjs`, so it
 needs a Docker daemon (for the throwaway pgvector container) and nothing else —
 no provider credentials, no embedding endpoint (retrieval runs keyword-only).
+The orchestrator boots the API with `RATE_LIMIT_ENABLED=false`: with auth off,
+every ask-tier request shares one anonymous-IP bucket (30 per 60s window), and
+the cases' own asks plus the watcher's `/api/route` + `/api/retrieve` callbacks
+exhaust it partway through the set — a 429 that says nothing about answer
+quality. Throttling has its own tests (`apps/api/src/http/rate-limit.test.ts`).
 CI runs it on every PR (`.github/workflows/verify.yml`, job `golden-eval`).
 
 ## Moving parts

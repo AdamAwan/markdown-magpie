@@ -291,6 +291,14 @@ async function main(): Promise<void> {
       DATABASE_URL: databaseUrl,
       PORT: String(apiPort),
       AUTH_REQUIRED: "false",
+      // The eval is one client asking the whole question set as fast as the
+      // pipeline will go, and with auth off every ask-tier request — the cases'
+      // own POST /api/ask AND the watcher's /api/route + /api/retrieve callbacks
+      // — shares a single anonymous-IP bucket (30 per 60s window). The full set
+      // spends that budget around case nine and the run dies on a 429, which
+      // says nothing about answer quality. Throttling is measured by
+      // apps/api/src/http/rate-limit.test.ts; here it is pure interference.
+      RATE_LIMIT_ENABLED: "false",
       STORAGE_BACKEND: "postgres",
       KNOWLEDGE_STORE: "postgres",
       AI_PROVIDER: "openai-compatible",
