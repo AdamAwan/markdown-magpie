@@ -231,6 +231,16 @@ const definitions: Readonly<Record<JobType, JobDefinition>> = Object.freeze({
     schemas.verifyDocumentOutputSchema,
     15 * 60
   ),
+  // Stage 2 of questionnaire ingestion. Same shape as verify_document — a
+  // source-grounded agent reading the real checkouts — so the same routing and
+  // the same generous expiry (exploration runs for minutes).
+  verify_imported_answer: define(
+    "verify_imported_answer",
+    "provider",
+    schemas.verifyImportedAnswerInputSchema,
+    schemas.verifyImportedAnswerOutputSchema,
+    15 * 60
+  ),
   correct_document: define(
     "correct_document",
     "provider",
@@ -365,6 +375,10 @@ export const AI_JOB_TYPES = [
   "reconcile_gap_clusters",
   "sync_source_changes_generate_plan",
   "verify_document",
+  // Metered, but deliberately absent from INTERACTIVE_AI_JOB_TYPES: a large
+  // import must never erode the reserve that protects live /api/ask, exactly as
+  // answer_question_batch must not.
+  "verify_imported_answer",
   "correct_document",
   "dedupe_documents",
   "split_document",

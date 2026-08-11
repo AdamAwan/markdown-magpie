@@ -28,6 +28,7 @@ import {
   SPLIT_DOCUMENT,
   SUMMARIZE_GAP,
   VERIFY_DOCUMENT,
+  VERIFY_IMPORTED_ANSWER,
   wrapUntrusted
 } from "@magpie/prompts";
 import type { FetchableInternetSource } from "./fetch-url.js";
@@ -105,6 +106,7 @@ const JOB_INSTRUCTIONS: Partial<Record<JobType, string>> = {
   fold_changeset_proposal: FOLD_CHANGESET_PROPOSAL.instructions,
   sync_source_changes_generate_plan: SOURCE_CHANGE_SYNC.instructions,
   verify_document: VERIFY_DOCUMENT.instructions,
+  verify_imported_answer: VERIFY_IMPORTED_ANSWER.instructions,
   correct_document: CORRECT_DOCUMENT.instructions,
   dedupe_documents: DEDUPE_DOCUMENTS.instructions,
   split_document: SPLIT_DOCUMENT.instructions,

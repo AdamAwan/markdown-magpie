@@ -13,6 +13,7 @@ export const JOB_TYPES = [
   "reconcile_gap_clusters",
   "sync_source_changes_generate_plan",
   "verify_document",
+  "verify_imported_answer",
   "correct_document",
   "dedupe_documents",
   "split_document",
