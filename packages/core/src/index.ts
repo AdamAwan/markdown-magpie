@@ -324,6 +324,12 @@ export type QuestionnaireItemOutcome = "reused" | "fresh" | "changed" | "adapted
 // approved items, before it is persisted as the item's outcome.
 export type ReconcileVerdict = "reused" | "adapted" | "merged" | "fresh";
 
+// Stage-1 adjudication of an imported answer against Magpie's own KB-derived
+// answer (docs/superpowers/specs/2026-08-11-questionnaire-ingestion-design.md).
+// `uncovered` reuses the existing unanswerable definition — zero citations —
+// so confidence never gates it.
+export type ImportVerdict = "confirmed" | "divergent" | "uncovered";
+
 // A prior approved item offered to the reconciler as a candidate for reuse.
 export interface AnswerCandidate {
   itemId: string;
@@ -377,6 +383,10 @@ export interface QuestionnaireItem {
   approvedAt?: string;
   staleAtApproval: boolean;
   citations: QuestionnaireItemCitation[];
+  // The previously-given answer being adjudicated. Untrusted external input:
+  // never used as an answer, never placed in a system prompt.
+  importedAnswer?: string;
+  importVerdict?: ImportVerdict;
 }
 
 export interface Questionnaire {
@@ -387,6 +397,11 @@ export interface Questionnaire {
   // answer this questionnaire produces (docs/questionnaires.md). Absent when
   // none was given.
   direction?: string;
+  // Where the imported batch came from (e.g. the uploaded file's name). Its
+  // presence is the single switch onto the ingestion triage path; a
+  // questionnaire created the ordinary way leaves it absent and behaves exactly
+  // as it did before ingestion existed.
+  importOrigin?: string;
   status: "open" | "completed" | "archived";
   createdAt: string;
   items: QuestionnaireItem[];
@@ -397,6 +412,7 @@ export interface QuestionnaireSummary {
   name: string;
   flowId: string;
   direction?: string;
+  importOrigin?: string;
   status: "open" | "completed" | "archived";
   createdAt: string;
   counts: {
