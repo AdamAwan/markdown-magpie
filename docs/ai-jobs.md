@@ -80,6 +80,8 @@ spec owns the **contract** they all share.
 | `reconcile_gap_clusters` | provider | 5 min | generative | ✓ | — | ✓ |
 | `sync_source_changes_generate_plan` | provider | 60 min | source-grounded | ✓ | — | — |
 | `verify_document` | provider | 15 min | source-grounded | ✓ | — | — |
+| `verify_imported_answer` | provider | 15 min | source-grounded | ✓ | — | — |
+| `map_questionnaire_columns` | provider | 10 min | generative | ✓ | — | ✓ |
 | `correct_document` | provider | 15 min | source-grounded | ✓ | — | — |
 | `dedupe_documents` | provider | 10 min | generative | ✓ | — | — |
 | `split_document` | provider | 10 min | generative | ✓ | — | — |
