@@ -1,7 +1,32 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import type { RankedSection } from "@magpie/core";
 import { makeTestContext } from "../../test-support/context.js";
 import { retrieve, type RetrieveResult } from "./service.js";
+
+// Builds a context whose knowledge index returns exactly the given
+// (id, relevance) candidates, regardless of the question asked — lets the
+// relevance-floor tests assert on precise boundary values without depending on
+// the real keyword scorer's distribution. No embedding provider is configured
+// (makeTestContext's default), so retrievalMode resolves to "keyword".
+function buildContext(candidates: { id: string; relevance: number }[]): ReturnType<typeof makeTestContext> {
+  const ctx = makeTestContext();
+  ctx.stores.knowledgeIndex.search = async (): Promise<RankedSection[]> =>
+    candidates.map(({ id, relevance }) => ({
+      section: {
+        id,
+        documentId: `${id}-doc`,
+        path: `${id}.md`,
+        heading: id,
+        headingPath: [id],
+        anchor: id,
+        content: `content for ${id}`,
+        ordinal: 0
+      },
+      relevance
+    }));
+  return ctx;
+}
 
 async function seedTwoRepos(ctx: ReturnType<typeof makeTestContext>): Promise<void> {
   await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
@@ -86,4 +111,67 @@ test("retrieve rejects an unknown flowId rather than searching unscoped", async 
   if (!result.ok) {
     assert.equal(result.code, "unknown_flow");
   }
+});
+
+test("the relative floor keeps a uniformly-scoring pool intact", async () => {
+  // No candidate stands out, so there is nothing for the relative floor to be
+  // relative to and all three survive. This test owns the RELATIVE floor only:
+  // the values sit above MIN_RELEVANCE deliberately, because above the absolute
+  // floor is the only region where the relative floor decides anything.
+  //
+  // Note this is NOT the general "a weak pool is never returned empty" property
+  // the design aimed for — that property does not hold. Below MIN_RELEVANCE a
+  // uniformly weak pool IS returned empty; see the next test.
+  const ctx = buildContext([
+    { id: "s1", relevance: 0.5 },
+    { id: "s2", relevance: 0.45 },
+    { id: "s3", relevance: 0.42 }
+  ]);
+  const result = await retrieve(ctx, { question: "anything" });
+  assert.ok(result.ok);
+  assert.equal(result.sections.length, 3);
+});
+
+test("returns nothing when every candidate is below the absolute floor", async () => {
+  // The absolute floor still cliff-edges to empty, by design: a pool of pure
+  // single-lexeme noise (see MIN_RELEVANCE's derivation) is not evidence of
+  // anything, and a genuine knowledge-gap question must not collect citations
+  // from it. `candidateCount` is what tells the caller these matches existed —
+  // so a lexical near-miss is still distinguishable from "nothing matched".
+  const ctx = buildContext([
+    { id: "s1", relevance: 0.2 },
+    { id: "s2", relevance: 0.18 },
+    { id: "s3", relevance: 0.17 }
+  ]);
+  const result = await retrieve(ctx, { question: "anything" });
+  assert.ok(result.ok);
+  assert.equal(result.sections.length, 0);
+  assert.equal(result.candidateCount, 3);
+});
+
+test("drops weak results that sit alongside a strong one", async () => {
+  // s2 clears the absolute floor, so only the relative floor can drop it —
+  // keeping this test honest about which of the two parts it exercises.
+  const ctx = buildContext([
+    { id: "s1", relevance: 0.9 },
+    { id: "s2", relevance: 0.42 }
+  ]);
+  const result = await retrieve(ctx, { question: "anything" });
+  assert.ok(result.ok);
+  assert.deepEqual(
+    result.sections.map((section) => section.sectionId),
+    ["s1"]
+  );
+});
+
+test("reports candidate count before the floor, and the retrieval mode", async () => {
+  const ctx = buildContext([
+    { id: "s1", relevance: 0.9 },
+    { id: "s2", relevance: 0.02 }
+  ]);
+  const result = await retrieve(ctx, { question: "anything" });
+  assert.ok(result.ok);
+  assert.equal(result.sections.length, 1);
+  assert.equal(result.candidateCount, 2, "candidateCount counts matches before the floor");
+  assert.equal(result.retrievalMode, "keyword", "no embedding provider is configured in the fixture");
 });

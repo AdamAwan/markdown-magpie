@@ -109,9 +109,19 @@ export interface MarkdownUpload {
   content: string;
 }
 
-// Heading term match scores 3, body match 1 (see scoreSection); ~6 is the score of a
-// strong two-term-in-heading hit, used to normalise keyword scores into [0,1].
-const KEYWORD_RELEVANCE_SCALE = 6;
+// Normalises raw keyword scores into [0,1]. Roughly the score of a strong
+// two-term hit landing in both the heading and the body under the field weights
+// below (2 × (10 + 3)); stronger hits clamp to 1.
+//
+// As-built caveat: MIN_RELEVANCE (features/retrieve/service.ts) was derived
+// against the SQL keyword leg only — it is a measured property of
+// ts_rank_cd(..., 32) over the weighted tsvector, not of this scale. The two
+// legs are different scoring functions and are KNOWN to disagree near the floor:
+// e.g. a section matching three body-only terms scores 9/26 ≈ 0.346 here (cut)
+// but ≈ 0.474 on the SQL leg (kept). The golden eval measures only the SQL leg,
+// so the divergence is pinned by unit tests in knowledge-index.test.ts instead.
+// Do not "fix" it by nudging this constant without measuring — see docs/retrieval.md R16.
+const KEYWORD_RELEVANCE_SCALE = 26;
 // Over-fetch vector candidates before fusion so good hits are not cut off by a small limit.
 const VECTOR_CANDIDATES = 20;
 // How many markdown files indexLocalRepository reads+parses concurrently. High
@@ -936,14 +946,37 @@ function lowerBound<T>(items: T[], value: T, compare: (left: T, right: T) => num
   return low;
 }
 
-function scoreSection(section: DocumentSection, terms: string[]): number {
-  const haystack = `${section.heading} ${section.content}`.toLowerCase();
-  return terms.reduce((score, term) => {
-    if (!haystack.includes(term)) {
-      return score;
-    }
+// Per-term field weights, mirroring the tsvector weights in migration 0067 so the
+// in-memory fallback and the Postgres path cannot silently rank differently.
+// Scaled ×10 relative to the SQL weight array to keep this integer arithmetic.
+const HEADING_WEIGHT = 10;
+const HEADING_PATH_WEIGHT = 6;
+const PATH_WEIGHT = 6;
+const CONTENT_WEIGHT = 3;
 
-    return score + (section.heading.toLowerCase().includes(term) ? 3 : 1);
+function scoreSection(section: DocumentSection, terms: string[]): number {
+  const heading = section.heading.toLowerCase();
+  const headingPath = section.headingPath.join(" ").toLowerCase();
+  // Flatten path punctuation so "billing/annual-plans.md" contributes words,
+  // matching the translate() in migration 0067.
+  const path = section.path.toLowerCase().replace(/[/\-_.]+/g, " ");
+  const content = section.content.toLowerCase();
+
+  return terms.reduce((score, term) => {
+    let termScore = 0;
+    if (heading.includes(term)) {
+      termScore += HEADING_WEIGHT;
+    }
+    if (headingPath.includes(term)) {
+      termScore += HEADING_PATH_WEIGHT;
+    }
+    if (path.includes(term)) {
+      termScore += PATH_WEIGHT;
+    }
+    if (content.includes(term)) {
+      termScore += CONTENT_WEIGHT;
+    }
+    return score + termScore;
   }, 0);
 }
 

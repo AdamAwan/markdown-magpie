@@ -22,12 +22,13 @@ import {
 } from "@magpie/prompts";
 import { routeQuestionToFlow, type FlowRoute, type RoutableFlow } from "@magpie/retrieval";
 import type { z } from "zod";
-import type { RetrievedSection, WatcherApi } from "../http-client.js";
+import type { RetrievedSection, RetrieveResponse, WatcherApi } from "../http-client.js";
 import { logger } from "../logger.js";
 import { stampSourceMapUpdates } from "../source-workspace.js";
 import {
   applyGroundingVerdict,
   buildAnswerOutput,
+  buildEmptySearchNote,
   buildFlowSelectionRequiredOutput,
   buildPrompt,
   extractJson,
@@ -165,14 +166,21 @@ async function reconcileOrAnswer(
     `answer_question[${job.id}]: reconciling against ${candidates.length} candidate(s)`
   );
   const seed = await api.retrieve(input.question, flowId, undefined, signal);
-  const decision = await reconcileWithCandidates(model, input.question, candidates, seed, input.direction, signal);
+  const decision = await reconcileWithCandidates(
+    model,
+    input.question,
+    candidates,
+    seed.sections,
+    input.direction,
+    signal
+  );
 
   if (decision && decision.verdict !== "fresh") {
     logger.debug(
       { jobId: job.id, verdict: decision.verdict, basisItemIds: decision.basisItemIds },
       `answer_question[${job.id}]: reconciled to ${decision.verdict} from ${decision.basisItemIds.length} candidate(s)`
     );
-    return buildReconciledOutput(decision, seed, flowId);
+    return buildReconciledOutput(decision, seed.sections, flowId);
   }
 
   logger.debug(
@@ -318,13 +326,17 @@ async function answerCore(
     { jobId: job.id, flowId: flowId ?? null },
     `answer_question[${job.id}]: seeding retrieval for flow ${flowId ?? "(unscoped)"}`
   );
-  const seed = await api.retrieve(retrievalQuestion, flowId, undefined, signal);
-  mergeSections(pool, seed);
+  const seed: RetrieveResponse = await api.retrieve(retrievalQuestion, flowId, undefined, signal);
+  // The mode is a property of the deployment (which providers are configured),
+  // not of any one query, so the seed retrieval's mode holds for the whole loop —
+  // every subsequent search in this job runs against the same retrieval backend.
+  const retrievalMode = seed.retrievalMode;
+  mergeSections(pool, seed.sections);
 
   const searches: AnswerTrace["searches"] = [];
   const loopTrace = (answerForced: boolean): AnswerLoopTrace => ({
     routing,
-    seedSectionCount: seed.length,
+    seedSectionCount: seed.sections.length,
     searches: [...searches],
     poolSectionCount: pool.size,
     answerForced
@@ -333,11 +345,11 @@ async function answerCore(
   const runSearches = async (queries: string[], round: number): Promise<void> => {
     for (const query of queries) {
       const results = await api.retrieve(query, flowId, undefined, signal);
-      searches.push({ query, resultCount: results.length, round: round + 1 });
-      if (results.length === 0) {
+      searches.push({ query, resultCount: results.sections.length, round: round + 1 });
+      if (results.sections.length === 0) {
         unsatisfiedSearches.add(normalizeQuery(query));
       }
-      mergeSections(pool, results);
+      mergeSections(pool, results.sections);
       if (pool.size >= MAX_POOL_SECTIONS) {
         break;
       }
@@ -351,6 +363,8 @@ async function answerCore(
       retrievalQuestion,
       [...pool.values()],
       false,
+      unsatisfiedSearches,
+      retrievalMode,
       signal,
       input.importedAnswer
     );
@@ -406,6 +420,8 @@ async function answerCore(
     retrievalQuestion,
     [...pool.values()],
     true,
+    unsatisfiedSearches,
+    retrievalMode,
     signal,
     input.importedAnswer
   );
@@ -564,6 +580,8 @@ async function assess(
   question: string,
   sections: RetrievedSection[],
   forceAnswer: boolean,
+  unsatisfiedSearches: Set<string>,
+  retrievalMode: "hybrid" | "keyword",
   signal: AbortSignal,
   importedAnswer?: string
 ): Promise<string> {
@@ -574,7 +592,17 @@ async function assess(
   const directive = forceAnswer
     ? "\n\nYou have gathered enough context. Answer now using only the context above; do not request more searches."
     : "";
-  const base = `Question:\n${question}\n\nContext:\n${context}${directive}`;
+  // Empty searches are grounding, not untrusted content, so this note is our own
+  // instruction and stays outside the wrapUntrusted context above — telling the
+  // model in keyword mode that an empty search is a lexical miss, not proof the
+  // knowledge base lacks the information.
+  // The note is empty in hybrid mode (an empty search needs no reframing there),
+  // so the blank-line separator is added only when there is actually a note —
+  // otherwise hybrid prompts would gain a stray empty block.
+  const note =
+    unsatisfiedSearches.size > 0 ? buildEmptySearchNote([...unsatisfiedSearches], retrievalMode, forceAnswer) : "";
+  const emptySearchNote = note ? `\n\n${note}` : "";
+  const base = `Question:\n${question}\n\nContext:\n${context}${emptySearchNote}${directive}`;
   // An imported answer is untrusted EXTERNAL content (ingestion spec D2), so it
   // rides in the user turn behind the same delimiters the retrieved sections
   // use — never in the system prompt, where a questionnaire supplied by a

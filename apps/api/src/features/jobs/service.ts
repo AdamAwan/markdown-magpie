@@ -24,6 +24,7 @@ import { applyPullRequestTransition } from "../../scheduling/gap-reconciler.js";
 import * as foldService from "../../scheduling/fold.js";
 import { snapshotRoot } from "../../platform/repositories.js";
 import type { FanoutBudget } from "../../platform/maintenance-fanout.js";
+import { retrievalMode } from "../../platform/providers.js";
 
 // Thrown by runJobToCompletion when the maintenance fan-out budget/admission
 // sheds the create it was about to make (#288b). Both bounded-wait callers
@@ -784,7 +785,12 @@ async function updateQuestionLogFromCompletedJob(
     ...(typeof output.flowId === "string" ? { flowId: output.flowId } : {}),
     // The condensed standalone form of a follow-up (#239), when the watcher rewrote
     // one; persisted so gap candidacy/clustering key off the resolved intent.
-    ...(typeof output.standaloneQuestion === "string" ? { standaloneQuestion: output.standaloneQuestion } : {})
+    ...(typeof output.standaloneQuestion === "string" ? { standaloneQuestion: output.standaloneQuestion } : {}),
+    // Stamps any retrieval-derived gaps this answer raises with the mode active
+    // right now (config-derived, not the watcher's report) so keyword-mode gaps
+    // can be excluded from unattended proposal generation (see
+    // postgres-question-log-store.ts gapIdsForSummary).
+    retrievalMode: retrievalMode(ctx.settings).mode
   });
 }
 

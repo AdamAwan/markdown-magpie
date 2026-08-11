@@ -26,7 +26,7 @@ function fakeApi(open: OpenPullRequestRef[]): WatcherApi {
     heartbeat: async () => ({ cancelled: false }),
     complete: async () => undefined,
     fail: async () => undefined,
-    retrieve: async () => [],
+    retrieve: async () => ({ sections: [], retrievalMode: "hybrid", candidateCount: 0 }),
     routeByEmbedding: async () => ({ status: "abstain" }),
     proposalExecutionContext: async () => ({ proposal: {}, repository: {} }),
     reconcileGaps: async () => ({ ok: true }),

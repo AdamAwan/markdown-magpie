@@ -94,7 +94,7 @@ function retrievingApi(sections: RetrievedSection[]): WatcherApi {
     heartbeat: async () => ({ cancelled: false }),
     complete: async () => undefined,
     fail: async () => undefined,
-    retrieve: async () => sections,
+    retrieve: async () => ({ sections, retrievalMode: "hybrid", candidateCount: sections.length }),
     routeByEmbedding: async () => ({ status: "abstain" }),
     proposalExecutionContext: async () => ({ proposal: {}, repository: {} }),
     reconcileGaps: async () => ({ ok: true }),

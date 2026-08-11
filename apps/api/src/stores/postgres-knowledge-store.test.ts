@@ -213,6 +213,21 @@ describe("PostgresKnowledgeStore keyword search", { skip: databaseUrl ? false : 
 
     const empty = await store.searchByKeyword("   ", 10, [repositoryId]);
     assert.deepEqual(empty, []);
+
+    // A backslash in the question used to reach to_tsquery via quote_literal,
+    // which emits an E'…' escape-string prefix that to_tsquery cannot parse — so
+    // the whole search 500'd instead of degrading. The lexemes are now quoted by
+    // hand (quote + doubled inner quotes), which can never emit that prefix.
+    const backslashed = await store.searchByKeyword("rollback C:\\hotfix\\run", 10, [repositoryId]);
+    assert.ok(
+      backslashed.some((hit) => hit.id === `${repositoryId}:rollback.md:0`),
+      "a backslash in the question must degrade to a normal match, not raise"
+    );
+
+    // Likewise a single quote: the hand-rolled escaper must double it rather
+    // than terminate the quoted lexeme and produce a syntax error.
+    const quoted = await store.searchByKeyword("rollback the o'hotfix", 10, [repositoryId]);
+    assert.ok(quoted.some((hit) => hit.id === `${repositoryId}:rollback.md:0`));
   });
 });
 

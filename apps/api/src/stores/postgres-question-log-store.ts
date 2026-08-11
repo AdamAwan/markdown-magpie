@@ -55,6 +55,10 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
           )
           AND qg.summary = $1
           AND coalesce(q.flow_id, '') = coalesce($2, '')
+          -- Keyword-mode gaps rest on "no lexeme matched", not "nothing close
+          -- exists", so they never drive unattended proposal generation. NULL
+          -- (pre-existing, manual, or feedback gaps) stays a candidate.
+          AND qg.retrieval_mode IS DISTINCT FROM 'keyword'
         ORDER BY qg.id ASC
       `,
       [summary, flowId ?? null]
@@ -95,6 +99,10 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         SELECT p.summary AS summary, p.flow AS flow, qg.id::text AS id
         FROM pairs p
         JOIN question_gaps qg ON qg.summary = p.summary AND qg.resolved_at IS NULL AND qg.dismissed_at IS NULL
+          -- Keyword-mode gaps rest on "no lexeme matched", not "nothing close
+          -- exists", so they never drive unattended proposal generation. NULL
+          -- (pre-existing, manual, or feedback gaps) stays a candidate.
+          AND qg.retrieval_mode IS DISTINCT FROM 'keyword'
         JOIN questions q ON q.id = qg.question_id AND coalesce(q.flow_id, '') = p.flow
           AND q.purpose IN ('live', 'questionnaire')
         -- Exclude every gap of a parked question, matching gapIdsForSummary/candidacy (#158).
@@ -184,7 +192,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
       );
 
       const gapRows = answerGapRows(input.answer);
-      await insertGapRows(client, id, gapRows);
+      await insertGapRows(client, id, gapRows, input.retrievalMode);
       if (gapRows.length > 0) {
         await bumpGapCatalog(client, input.flowId ?? null);
       }
@@ -334,7 +342,7 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         // Re-answering replaces the answer-derived gaps (auto + followup) but
         // preserves any manual flag.
         await client.query("DELETE FROM question_gaps WHERE question_id = $1 AND source IN ('auto', 'followup')", [id]);
-        await insertGapRows(client, id, nextGapRows);
+        await insertGapRows(client, id, nextGapRows, input.retrievalMode);
         // The candidate set changed, so advance the revision for the reconciler.
         await bumpGapCatalog(client, flowId);
       }
@@ -1053,7 +1061,11 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
 async function insertGapRows(
   client: pg.PoolClient,
   questionId: string,
-  gaps: Array<{ summary: string; source: QuestionGapSource; note?: string }>
+  gaps: Array<{ summary: string; source: QuestionGapSource; note?: string }>,
+  // The retrieval mode active when the answer was produced, for gaps derived from
+  // retrieval ('auto' and 'followup'). Manual flags and feedback gaps are not
+  // retrieval-derived, so they stay NULL and remain unconditional candidates.
+  retrievalMode?: "hybrid" | "keyword"
 ): Promise<void> {
   if (gaps.length === 0) {
     return;
@@ -1061,10 +1073,16 @@ async function insertGapRows(
 
   await client.query(
     `
-      INSERT INTO question_gaps (question_id, summary, source, note)
-      VALUES ${valuesClause(gaps.length, 4)}
+      INSERT INTO question_gaps (question_id, summary, source, note, retrieval_mode)
+      VALUES ${valuesClause(gaps.length, 5)}
     `,
-    gaps.flatMap((gap) => [questionId, gap.summary, gap.source, gap.note ?? null])
+    gaps.flatMap((gap) => [
+      questionId,
+      gap.summary,
+      gap.source,
+      gap.note ?? null,
+      gap.source === "auto" || gap.source === "followup" ? (retrievalMode ?? null) : null
+    ])
   );
 }
 

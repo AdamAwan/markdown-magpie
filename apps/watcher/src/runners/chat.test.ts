@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { MockLanguageModelV3 } from "ai/test";
 import type { ChatProvider, ChatRequest, ChatResponse } from "@magpie/core";
 import { JOB_TYPES, jobDefinition, type JobView, type JobType } from "@magpie/jobs";
-import type { RetrievedSection, WatcherApi } from "../http-client.js";
+import type { RetrievedSection, RetrieveResponse, WatcherApi } from "../http-client.js";
 import { ChatRunner } from "./chat.js";
 
 function job(type: JobView["type"], input: unknown): JobView {
@@ -43,6 +43,13 @@ const SECTIONS: RetrievedSection[] = [
   }
 ];
 
+// Wraps a stub's sections into the full POST /api/retrieve response shape.
+// Tests default to "hybrid" — the mode is irrelevant to what they assert on
+// except the dedicated lexical-miss framing test, which builds its own.
+function retrieveResponse(sections: RetrievedSection[]): RetrieveResponse {
+  return { sections, retrievalMode: "hybrid", candidateCount: sections.length };
+}
+
 function providerJobTypes(): JobType[] {
   return JOB_TYPES.filter((type) => {
     try {
@@ -59,7 +66,7 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     heartbeat: async () => ({ cancelled: false }),
     complete: async () => undefined,
     fail: async () => undefined,
-    retrieve: async () => SECTIONS,
+    retrieve: async () => retrieveResponse(SECTIONS),
     // Default: the embedding router abstains, so routing falls back to the chat
     // router the existing tests mock. Tests that exercise embedding routing override.
     routeByEmbedding: async () => ({ status: "abstain" }),
@@ -124,7 +131,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (_question, flowId) => {
         retrievedFlow = flowId;
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -160,7 +167,7 @@ describe("ChatRunner", () => {
   it("routes an answer_question_batch job to the same answer handler as answer_question (#288c)", async () => {
     // The questionnaire-drip type shares the answer contract and must produce the
     // identical answer output — the watcher short-circuits it to the answer runner.
-    const api = fakeApi({ retrieve: async () => SECTIONS });
+    const api = fakeApi({ retrieve: async () => retrieveResponse(SECTIONS) });
     const chat = new FakeChatProvider((request) => {
       if (request.system.includes("route a user question")) {
         return JSON.stringify({ flowId: "flow-b", confidence: "high" });
@@ -270,7 +277,7 @@ describe("ChatRunner", () => {
       routeByEmbedding: async () => ({ status: "routed", flowId: "flow-b", confidence: "high", margin: 0.4 }),
       retrieve: async (_question, flowId) => {
         retrievedFlow = flowId;
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -352,7 +359,7 @@ describe("ChatRunner", () => {
         flowsSeen.push(flowId);
         // The seed retrieval (the question) returns a section; the model's
         // follow-up search for an example finds nothing → grounds a followup gap.
-        return question.includes("example") ? [] : SECTIONS;
+        return retrieveResponse(question.includes("example") ? [] : SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -421,6 +428,116 @@ describe("ChatRunner", () => {
     assert.equal(output.trace.verification.status, "grounded");
   });
 
+  it("keyword mode: frames an empty follow-up search to the model as a lexical miss, not proof of absence", async () => {
+    // Same shape as the previous test (seed retrieval hits, follow-up search for
+    // an example comes back empty), but the retrieve stub reports "keyword" mode
+    // — so the mode threading is genuinely exercised from the retrieve response,
+    // not hardcoded in the test.
+    const queries: string[] = [];
+    const api = fakeApi({
+      retrieve: async (question) => {
+        queries.push(question);
+        const sections = question.includes("example") ? [] : SECTIONS;
+        return { sections, retrievalMode: "keyword", candidateCount: sections.length };
+      }
+    });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("route a user question")) {
+        return JSON.stringify({ flowId: "flow-b", confidence: "high" });
+      }
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      if (queries.some((q) => q.includes("example"))) {
+        return JSON.stringify({
+          action: "answer",
+          answer: "Run the deploy script.",
+          confidence: "high",
+          isKnowledgeGap: false,
+          usedSectionIds: ["doc-1#deploy"]
+        });
+      }
+      return JSON.stringify({ action: "search", queries: ["deploy example"], rationale: "want an example" });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-b", name: "Beta" }],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    );
+
+    // Every assess/answer turn is a "Question:\n...Context:\n..." user message.
+    // The route call has a different system prompt, and the verify call's user
+    // message ALSO starts with "Question:\n" (it echoes the question under an
+    // "Answer under review:" heading) — so both are filtered out by system
+    // prompt, not by message shape. The seed round (before any search ran)
+    // must NOT carry the note; the round after the empty follow-up search must.
+    const assessRequests = chat.requests.filter(
+      (request) =>
+        !request.system.includes("route a user question") &&
+        !request.system.includes("You verify a drafted") &&
+        request.messages[0]?.content.startsWith("Question:\n")
+    );
+    assert.ok(assessRequests.length >= 2, "expected a seed assess call and a post-search assess call");
+    assert.doesNotMatch(
+      assessRequests[0]?.messages[0]?.content ?? "",
+      /lexical/i,
+      "the seed round has no empty search yet, so no note"
+    );
+    const postSearchContent = assessRequests[assessRequests.length - 1]?.messages[0]?.content ?? "";
+    assert.match(postSearchContent, /lexical/i, "the post-search round frames the empty search as a lexical miss");
+    assert.match(
+      postSearchContent,
+      /not[\s\S]*evidence that the knowledge base lacks the information/i,
+      "the note explicitly disclaims absence"
+    );
+  });
+
+  it("omits the empty-search note entirely when no search came back empty", async () => {
+    const api = fakeApi({
+      retrieve: async () => ({ sections: SECTIONS, retrievalMode: "keyword", candidateCount: SECTIONS.length })
+    });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("route a user question")) {
+        return JSON.stringify({ flowId: "flow-b", confidence: "high" });
+      }
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      return JSON.stringify({
+        answer: "Run the deploy script.",
+        confidence: "high",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"]
+      });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-b", name: "Beta" }],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    );
+
+    const assessRequest = chat.requests.find(
+      (request) =>
+        !request.system.includes("route a user question") &&
+        !request.system.includes("You verify a drafted") &&
+        request.messages[0]?.content.startsWith("Question:\n")
+    );
+    assert.ok(assessRequest, "expected an assess call");
+    const content = assessRequest?.messages[0]?.content ?? "";
+    assert.doesNotMatch(content, /lexical/i);
+    assert.doesNotMatch(content, /returned no sections/i);
+  });
+
   it("forces a gap-derived search when the model gives up low on the first round", async () => {
     // Reproduces the reported failure: the model answers low / flags a knowledge gap
     // immediately, without ever choosing action:"search". The guard must force one
@@ -429,7 +546,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (question) => {
         queries.push(question);
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -483,7 +600,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (_question, _flowId, _limit, signal) => {
         signals.push(signal);
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider(() =>
@@ -512,7 +629,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (_question, flowId) => {
         retrievedFlow = flowId;
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -550,7 +667,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (question) => {
         retrieved.push(question);
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -598,7 +715,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (question) => {
         retrieved.push(question);
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -644,7 +761,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (_question, flowId) => {
         retrievedFlow = flowId;
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -691,7 +808,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (_question, flowId) => {
         retrievedFlow = flowId;
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -811,7 +928,7 @@ describe("ChatRunner", () => {
         usedSectionIds: ["doc-1#deploy"]
       });
     });
-    const runner = new ChatRunner("openai-compatible", chat, fakeApi({ retrieve: async () => pool }));
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi({ retrieve: async () => retrieveResponse(pool) }));
     await runner.run(
       job("answer_question", {
         provider: "openai-compatible",
@@ -985,7 +1102,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async () => {
         retrieveCalled = true;
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {

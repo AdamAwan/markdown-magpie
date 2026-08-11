@@ -341,6 +341,50 @@ export function buildAnswerOutput(
   };
 }
 
+// How a search that returned nothing should be presented to the model.
+//
+// Keyword-only mode is the whole point of this note: an empty search means no
+// lexeme matched, and the knowledge base may well cover the topic in different
+// words. Saying so is what stops the model minting knowledge gaps out of
+// vocabulary mismatches.
+//
+// Hybrid mode returns "" — no note at all. In hybrid, empty IS strong evidence
+// (vector search returns nearest neighbours for any query, so nothing coming
+// back means nothing close exists), so there is nothing to correct; and this
+// environment's golden eval runs keyword-only, so any hybrid prompt change would
+// ship entirely unmeasured. Keeping hybrid's prompt byte-identical to what it
+// was confines this feature to keyword mode, as the design specified.
+//
+// `forceAnswer` mirrors the assess call's own flag: on the forced-final-answer
+// turn the loop's directive tells the model "do not request more searches", so
+// the keyword note must NOT also suggest retrying with different vocabulary —
+// that contradiction let a model emit one more search request on the very turn
+// where only an answer is accepted, which the loop then treats as an
+// unparseable answer. The lexical-miss framing itself still applies on that
+// turn (it is what stops the model minting a gap); only the retry suggestion
+// is suppressed.
+export function buildEmptySearchNote(
+  queries: string[],
+  retrievalMode: "hybrid" | "keyword",
+  forceAnswer: boolean
+): string {
+  if (retrievalMode !== "keyword") {
+    return "";
+  }
+  const lines = [
+    "These searches returned no sections:",
+    queries.map((query) => `- ${query}`).join("\n"),
+    "",
+    "Semantic search is unavailable in this deployment; these were lexical",
+    "keyword searches. No match means no shared wording was found — it is NOT",
+    "evidence that the knowledge base lacks the information."
+  ];
+  if (!forceAnswer) {
+    lines.push("Prefer retrying with different vocabulary over concluding a knowledge gap.");
+  }
+  return lines.join("\n");
+}
+
 // Records what the grounding check actually did on the output's trace. A no-op
 // for outputs built without a loop trace (unit tests, legacy callers).
 export function withVerification(output: AnswerOutput, verification: AnswerTrace["verification"]): AnswerOutput {

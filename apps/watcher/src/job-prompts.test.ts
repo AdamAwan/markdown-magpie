@@ -6,6 +6,7 @@ import type { RetrievedSection } from "./http-client.js";
 import {
   applyGroundingVerdict,
   buildAnswerOutput,
+  buildEmptySearchNote,
   buildPrompt,
   buildSourceGroundedPrompt,
   forcedSearchQueries,
@@ -558,6 +559,35 @@ describe("forcedSearchQueries", () => {
 
   it("returns nothing for an unparseable reply", () => {
     assert.deepEqual(forcedSearchQueries("not json"), []);
+  });
+});
+
+describe("buildEmptySearchNote", () => {
+  it("empty searches are framed as lexical misses in keyword mode", () => {
+    const keyword = buildEmptySearchNote(["annual refunds"], "keyword", false);
+    assert.match(keyword, /lexical/i);
+    assert.doesNotMatch(keyword, /not covered/i);
+
+    // Hybrid gets no note at all: an empty search there is genuine evidence of
+    // absence, and leaving hybrid's prompt byte-identical to its pre-change form
+    // keeps this feature confined to keyword mode (which is what the golden eval
+    // actually measures).
+    const hybrid = buildEmptySearchNote(["annual refunds"], "hybrid", false);
+    assert.equal(hybrid, "");
+    assert.equal(buildEmptySearchNote(["annual refunds"], "hybrid", true), "");
+  });
+
+  it("still frames a forced-answer keyword note as a lexical miss, but drops the retry suggestion", () => {
+    const forced = buildEmptySearchNote(["annual refunds"], "keyword", true);
+    assert.match(forced, /lexical/i);
+    // The forced-final-answer turn tells the model "do not request more
+    // searches"; suggesting a retry here would contradict that directive and
+    // risks the model requesting one more search on the very turn where only
+    // an answer is accepted.
+    assert.doesNotMatch(forced, /retry/i);
+
+    const unforced = buildEmptySearchNote(["annual refunds"], "keyword", false);
+    assert.match(unforced, /retry/i);
   });
 });
 

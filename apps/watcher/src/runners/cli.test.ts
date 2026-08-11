@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 import { after, describe, it } from "node:test";
 import { JOB_TYPES, jobDefinition, type JobView, type JobType } from "@magpie/jobs";
 import { JOB_RUNNER_SYSTEM } from "@magpie/prompts";
-import type { RetrievedSection, WatcherApi } from "../http-client.js";
+import type { RetrievedSection, RetrieveResponse, WatcherApi } from "../http-client.js";
 import { buildChildEnv, CliRunner, type CliSpawn, type SpawnedCli } from "./cli.js";
 
 function job(type: JobView["type"], input: unknown): JobView {
@@ -24,6 +24,11 @@ function job(type: JobView["type"], input: unknown): JobView {
     updatedAt: "2026-01-01T00:00:00.000Z",
     expireInSeconds: 300
   };
+}
+
+// Wraps a stub's sections into the full POST /api/retrieve response shape.
+function retrieveResponse(sections: RetrievedSection[]): RetrieveResponse {
+  return { sections, retrievalMode: "hybrid", candidateCount: sections.length };
 }
 
 function cliProviderJobTypes(): JobType[] {
@@ -56,7 +61,7 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     heartbeat: async () => ({ cancelled: false }),
     complete: async () => undefined,
     fail: async () => undefined,
-    retrieve: async () => SECTIONS,
+    retrieve: async () => retrieveResponse(SECTIONS),
     // The embedding router abstains, so CLI routing falls back to the chat router.
     routeByEmbedding: async () => ({ status: "abstain" }),
     proposalExecutionContext: async () => ({ proposal: {}, repository: {} }),
@@ -239,7 +244,7 @@ describe("CliRunner", () => {
     const api = fakeApi({
       retrieve: async (_question, flowId) => {
         retrievedFlow = flowId;
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const script = [

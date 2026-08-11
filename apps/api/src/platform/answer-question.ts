@@ -1,6 +1,6 @@
 import type { AnswerCandidate, AnswerQuestionJobInput, QuestionLog, QuestionPurpose } from "@magpie/core";
 import type { AppContext } from "../context.js";
-import type { AiProviderName } from "./providers.js";
+import { retrievalMode, type AiProviderName } from "./providers.js";
 
 // Shared by the two answer_question enqueue sites — the live /ask path
 // (features/ask/service.ts) and the gap-closure re-ask path
@@ -31,6 +31,7 @@ export async function recordAnswerQuestionLog(
     chatProvider: ctx.config.get().aiProvider,
     retrievedSectionIds: [],
     purpose,
+    retrievalMode: retrievalMode(ctx.settings).mode,
     ...(conversationId ? { conversationId } : {})
   });
 }

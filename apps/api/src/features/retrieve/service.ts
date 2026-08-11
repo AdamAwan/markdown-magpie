@@ -1,6 +1,7 @@
 import type { ExistingDocumentContext } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import { selectFlow } from "../../platform/repositories.js";
+import { retrievalMode } from "../../platform/providers.js";
 
 export interface RetrieveRequest {
   question: string;
@@ -23,15 +24,52 @@ interface RetrievedSection {
   relevance: number;
 }
 
-export type RetrieveResult = { ok: true; sections: RetrievedSection[] } | { ok: false; code: "unknown_flow" };
+export type RetrieveResult =
+  | { ok: true; sections: RetrievedSection[]; retrievalMode: "hybrid" | "keyword"; candidateCount: number }
+  | { ok: false; code: "unknown_flow" };
 
-// Sections below this fused-relevance floor are dropped rather than returned as
-// weak filler. Without it, hybrid search always yields its top-K (vector search
-// returns nearest neighbours for any query), so even a bogus question produced a
-// full set of citations. Conservative on purpose: it removes clear non-matches,
-// not borderline hits. When nothing clears the floor the caller gets an empty
-// list and treats the question as a knowledge gap.
-const MIN_RELEVANCE = 0.15;
+// Absolute floor: a section this weak is a clear non-match regardless of what
+// else scored. Conservative on purpose — it removes noise, not borderline hits.
+//
+// Re-derived in Task 7 against the golden KB, because `ts_rank_cd(..., 32)` =
+// rank/(rank+1) replaced the old rank/(rank+0.1) normalisation and the old 0.15
+// no longer means what it meant. Measured distribution (see the task-7 report):
+// a section matching a single body (C-weight) lexeme scores exactly 0.2308
+// (raw 0.3), a single path/heading-path (B-weight) lexeme exactly 0.3750
+// (raw 0.6), and the weakest genuinely answer-bearing section measured 0.7143
+// (raw 2.5). 0.40 (raw 0.667) is the lowest round value clear of that noise
+// band — chosen at the bottom of the empty band rather than its middle because
+// this floor is also applied to hybrid's fused relevance, which is
+// max(cosine similarity, keyword relevance); a higher value would prune real
+// vector hits in a mode this environment cannot measure (see R16).
+const MIN_RELEVANCE = 0.4;
+// Relative floor: keep sections within this fraction of the best result. OR'd
+// keyword matching (see PostgresKnowledgeStore.searchByKeyword) surfaces
+// single-term hits that hybrid retrieval never produced, so a strong result now
+// implies its weak neighbours are noise.
+//
+// The two floors do different jobs, which is why both exist. The absolute floor
+// alone returns nothing when every candidate is weak — and in keyword mode
+// "nothing" is read downstream as evidence the knowledge base does not cover the
+// question, which is exactly the false signal this design removes. So the
+// relative floor is only allowed to cut when there IS a strong result to be
+// relative to: weak-but-best results survive, weak-beside-strong results do not.
+//
+// Raised from 0.35 to 0.5 in Task 7 for a mechanical reason: relevance is capped
+// at 1, so the relative floor can only ever cut below `1 * fraction`. At 0.35 —
+// with MIN_RELEVANCE now 0.4 — it could never cut anything the absolute floor
+// had not already cut, i.e. the "two-part" floor had silently collapsed to one
+// part. 0.5 ("at least half as strong as the best hit") is the lowest round
+// value that makes it reachable again.
+//
+// Reachable, but on the keyword leg still not much more than that: it can only
+// cut inside [0.4, top * 0.5), which is empty unless top > 0.8, and even at
+// top = 1.0 the live band [0.4, 0.5) falls inside the measured-empty gap between
+// single-lexeme noise (<= 0.375) and real signal (>= 0.714) — so on the
+// quantised keyword scale nothing lands in it. This floor genuinely bites only
+// on the continuous cosine leg. Treat it as a hybrid-mode mechanism; see R16 in
+// docs/retrieval.md.
+const RELATIVE_RELEVANCE_FLOOR = 0.5;
 
 // Pure (non-generative) retrieval the watcher calls after it has routed the
 // question to a flow. Resolving the flow's destination scope server-side keeps
@@ -44,10 +82,18 @@ export async function retrieve(ctx: AppContext, request: RetrieveRequest): Promi
   const limit = request.limit ?? 5;
 
   const ranked = await ctx.stores.knowledgeIndex.search(request.question, limit, scope.repositoryIds);
+  const topRelevance = ranked.length > 0 ? Math.max(...ranked.map(({ relevance }) => relevance)) : 0;
+  const relativeFloor = topRelevance * RELATIVE_RELEVANCE_FLOOR;
+
   return {
     ok: true,
+    retrievalMode: retrievalMode(ctx.settings).mode,
+    // Counted before the floor so the caller can tell "nothing matched" from
+    // "matches existed but were filtered" — the distinction the watcher needs to
+    // avoid reading a lexical miss as evidence of absence.
+    candidateCount: ranked.length,
     sections: ranked
-      .filter(({ relevance }) => relevance >= MIN_RELEVANCE)
+      .filter(({ relevance }) => relevance >= MIN_RELEVANCE && relevance >= relativeFloor)
       .map(({ section, relevance }) => ({
         sectionId: section.id,
         documentId: section.documentId,

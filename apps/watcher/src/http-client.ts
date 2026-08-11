@@ -31,6 +31,18 @@ export interface RetrievedSection {
   relevance: number;
 }
 
+// The full POST /api/retrieve response. `retrievalMode` tells the caller
+// whether the sections behind this answer came from hybrid (vector + keyword)
+// or keyword-only search, so an empty result can be framed as a lexical miss
+// rather than evidence of absence in keyword mode. `candidateCount` is the
+// match count BEFORE the relevance floor, so the caller can distinguish
+// "nothing matched" from "matches existed but were filtered".
+export interface RetrieveResponse {
+  sections: RetrievedSection[];
+  retrievalMode: "hybrid" | "keyword";
+  candidateCount: number;
+}
+
 // The credential-free execution context the publication runners fetch before
 // running git. The repository fields are exactly the subset the API exposes.
 export interface ProposalExecutionContext {
@@ -56,7 +68,7 @@ export interface WatcherApi extends WatcherApiClient {
     flowId: string | undefined,
     limit: number | undefined,
     signal?: AbortSignal
-  ): Promise<RetrievedSection[]>;
+  ): Promise<RetrieveResponse>;
   // Cheap embedding-similarity flow routing (POST /api/route). Returns a confident
   // flow or an abstention; a transport/parse failure also resolves to `abstain`, so
   // the caller can uniformly fall back to the chat router. Never throws — routing
@@ -251,8 +263,8 @@ export class HttpWatcherApi implements WatcherApi {
     flowId: string | undefined,
     limit: number | undefined,
     signal?: AbortSignal
-  ): Promise<RetrievedSection[]> {
-    const { sections } = await this.post<{ sections: RetrievedSection[] }>(
+  ): Promise<RetrieveResponse> {
+    const body = await this.post<Partial<RetrieveResponse>>(
       "/api/retrieve",
       {
         question,
@@ -261,7 +273,14 @@ export class HttpWatcherApi implements WatcherApi {
       },
       signal
     );
-    return sections;
+    const sections = body.sections ?? [];
+    return {
+      sections,
+      // Default to "hybrid" so an API predating these fields cannot silently
+      // switch the watcher into the weaker-evidence framing.
+      retrievalMode: body.retrievalMode ?? "hybrid",
+      candidateCount: body.candidateCount ?? sections.length
+    };
   }
 
   async routeByEmbedding(question: string, flows: RoutableFlow[], signal?: AbortSignal): Promise<EmbeddingRoute> {
