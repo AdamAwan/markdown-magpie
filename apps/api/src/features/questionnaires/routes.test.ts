@@ -127,3 +127,45 @@ test("POST /api/questionnaires rejects an over-long direction", async () => {
   });
   assert.equal(res.status, 400);
 });
+
+// --- ingesting completed questionnaires (ingestion spec D1) ---
+
+test("POST /api/questionnaires accepts imported question/answer pairs alongside plain strings", async () => {
+  const ctx = flowContext();
+  const app = buildApp(ctx);
+  const res = await createRequest(app, {
+    name: "SIG 2025",
+    flowId: "security",
+    importOrigin: "sig-lite-2025.xlsx",
+    questions: [{ question: "Do you hold ISO 27001?", importedAnswer: "Yes, since 2021." }, "Plain question?"]
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { questionnaire: Questionnaire };
+  assert.equal(body.questionnaire.importOrigin, "sig-lite-2025.xlsx");
+  assert.equal(body.questionnaire.items[0].importedAnswer, "Yes, since 2021.");
+  assert.equal(body.questionnaire.items[1].importedAnswer, undefined);
+});
+
+test("POST /api/questionnaires rejects an over-long imported answer rather than truncating it", async () => {
+  const ctx = flowContext();
+  const app = buildApp(ctx);
+  const res = await createRequest(app, {
+    name: "SIG",
+    flowId: "security",
+    questions: [{ question: "q", importedAnswer: "x".repeat(20001) }]
+  });
+  assert.equal(res.status, 400);
+});
+
+test("POST /api/questionnaires without importOrigin stays an ordinary questionnaire", async () => {
+  const ctx = flowContext();
+  const app = buildApp(ctx);
+  const res = await createRequest(app, {
+    name: "Ordinary",
+    flowId: "security",
+    questions: ["Where is data stored?"]
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { questionnaire: Questionnaire };
+  assert.equal(body.questionnaire.importOrigin, undefined);
+});
