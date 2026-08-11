@@ -837,3 +837,153 @@ test("a blank direction normalises to absent rather than reaching the job", asyn
   const job = await jobForLog(ctx, item?.questionLogId);
   assert.equal((job?.input as { direction?: string }).direction, undefined);
 });
+
+// --- ingesting completed questionnaires (ingestion spec D1/D3/D4) ---
+
+test("an imported answer rides along on the item's answer job", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "SIG 2025",
+    flowId: "security",
+    importOrigin: "sig-lite-2025.xlsx",
+    questions: [{ question: "Do you hold ISO 27001?", importedAnswer: "Yes, since 2021." }]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  assert.equal(created.questionnaire.importOrigin, "sig-lite-2025.xlsx");
+
+  const item = await ctx.stores.questionnaires.itemById(created.questionnaire.items[0].id);
+  assert.equal(item?.importedAnswer, "Yes, since 2021.");
+  const job = await jobForLog(ctx, item?.questionLogId);
+  assert.equal((job?.input as { importedAnswer?: string }).importedAnswer, "Yes, since 2021.");
+});
+
+test("an imported item never fast-path reuses a matching approved answer (spec D3)", async () => {
+  // A prior approved item matches above threshold and would normally be reused
+  // verbatim for free. The import must still answer fresh — the whole point is
+  // to grade the import against Magpie's OWN answer, and a verbatim reuse
+  // leaves nothing to compare it to.
+  const ctx = embeddingAxisContext();
+  await createApprovedDonor(ctx, {
+    question: "Do you hold ISO 27001?",
+    answer: "We hold ISO 27001."
+  });
+
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "SIG 2025",
+    flowId: "security",
+    importOrigin: "sig.xlsx",
+    questions: [{ question: "Do you hold ISO 27001 certification?", importedAnswer: "Yes, since 2021." }]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+
+  const item = await ctx.stores.questionnaires.itemById(created.questionnaire.items[0].id);
+  assert.notEqual(item?.outcome, "reused");
+  assert.equal(item?.status, "answering");
+  const job = await jobForLog(ctx, item?.questionLogId);
+  assert.ok(job, "an imported item must enqueue a real answer job");
+});
+
+test("a NON-imported questionnaire still runs the match phase, unchanged", async () => {
+  // The regression guard for D1: importOrigin's absence must leave behaviour
+  // exactly as it was before ingestion existed. The donor matches above
+  // threshold, so the match phase primes it as a reconcile candidate on the
+  // answer job — the observable effect an imported questionnaire skips.
+  const ctx = embeddingAxisContext();
+  const donorId = await createApprovedDonor(ctx, {
+    question: "Do you hold ISO 27001?",
+    answer: "We hold ISO 27001."
+  });
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "ordinary",
+    flowId: "security",
+    questions: ["Do you hold ISO 27001 certification?"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const item = await ctx.stores.questionnaires.itemById(created.questionnaire.items[0].id);
+  const job = await jobForLog(ctx, item?.questionLogId);
+  const candidates = (job?.input as { candidates?: Array<{ itemId: string }> }).candidates ?? [];
+  assert.deepEqual(
+    candidates.map((candidate) => candidate.itemId),
+    [donorId]
+  );
+});
+
+test("an imported questionnaire primes NO reuse candidates on the answer job (spec D3)", async () => {
+  const ctx = embeddingAxisContext();
+  await createApprovedDonor(ctx, {
+    question: "Do you hold ISO 27001?",
+    answer: "We hold ISO 27001."
+  });
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "SIG 2025",
+    flowId: "security",
+    importOrigin: "sig.xlsx",
+    questions: [{ question: "Do you hold ISO 27001 certification?", importedAnswer: "Yes, since 2021." }]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const item = await ctx.stores.questionnaires.itemById(created.questionnaire.items[0].id);
+  const job = await jobForLog(ctx, item?.questionLogId);
+  assert.equal((job?.input as { candidates?: unknown[] }).candidates, undefined);
+});
+
+test("completion persists the stage-1 verdict alongside the answer", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "SIG",
+    flowId: "security",
+    importOrigin: "sig.xlsx",
+    questions: [{ question: "Do you hold ISO 27001?", importedAnswer: "Yes, since 2021." }]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const itemId = created.questionnaire.items[0].id;
+  const item = await ctx.stores.questionnaires.itemById(itemId);
+  const job = await jobForLog(ctx, item?.questionLogId);
+
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, {
+    ...confidentOutput(),
+    importVerdict: "divergent"
+  });
+
+  const after = await ctx.stores.questionnaires.itemById(itemId);
+  assert.equal(after?.importVerdict, "divergent");
+});
+
+test("an ordinary questionnaire's completion writes no import verdict", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "ordinary",
+    flowId: "security",
+    questions: ["Do you hold ISO 27001?"]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const itemId = created.questionnaire.items[0].id;
+  const item = await ctx.stores.questionnaires.itemById(itemId);
+  const job = await jobForLog(ctx, item?.questionLogId);
+
+  await questionnaires.handleQuestionnaireAnswerCompletion(ctx, job, confidentOutput());
+
+  const after = await ctx.stores.questionnaires.itemById(itemId);
+  assert.equal(after?.importVerdict, undefined);
+});
+
+test("a blank imported answer normalises to absent rather than reaching the job", async () => {
+  const ctx = flowContext();
+  const created = await questionnaires.createQuestionnaire(ctx, {
+    name: "blank import",
+    flowId: "security",
+    importOrigin: "sig.xlsx",
+    questions: [{ question: "Do you hold ISO 27001?", importedAnswer: "   \n  " }]
+  });
+  assert.ok(created.ok);
+  if (!created.ok) throw new Error("unreachable");
+  const item = await ctx.stores.questionnaires.itemById(created.questionnaire.items[0].id);
+  assert.equal(item?.importedAnswer, undefined);
+  const job = await jobForLog(ctx, item?.questionLogId);
+  assert.equal((job?.input as { importedAnswer?: string }).importedAnswer, undefined);
+});
