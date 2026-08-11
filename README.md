@@ -17,6 +17,60 @@ The project is intentionally provider-neutral: AI work is queued by the API and 
 7. Generate proposed Markdown changes.
 8. Publish branches or pull requests for maintainers.
 
+## Feature Timeline
+
+Dates are when the work landed on `main`. Design notes for each item live in
+`docs/superpowers/specs/`.
+
+### June 2026 - foundations
+
+| Date | What landed |
+| --- | --- |
+| Jun 12 | Initial scaffold: npm-workspace monorepo, local Markdown ingestion, Postgres-backed AI job queue and watcher contract, configurable chat providers, question logging with gap candidates, and the first console + proposal workflow. |
+| Jun 13 | Hybrid retrieval - pgvector nearest-neighbour fused with keyword ranking via RRF, HNSW index, `[0,1]` relevance scale. Publish ready proposals to Git branches. Manual knowledge-gap flagging with the `kb.feedback` MCP tool. |
+| Jun 14 | Knowledge bases configured from the environment; Mermaid data-flow diagrams in the console. |
+| Jun 15 | Git repository integration; API endpoints moved under `/api`. |
+| Jun 16 | Gap clustering into a single proposal; Crunch (cron-scheduled knowledge-base tidying); PR raise plus resolve-gaps-and-reindex on merge; reset-data endpoint and button; API decomposed into services behind an `AppContext`. |
+| Jun 17 | API rebuilt on Hono with zod request validation; MCP Streamable HTTP transport; `app` Compose profile; shared prompt catalog. |
+| Jun 18 | Auth0 across the API, web app, and both MCP transports, gated by scope. Source-change sync: watch sources and correct the knowledge base. |
+| Jun 19 | Per-flow snapshots feeding the reconciler; MCP connect page and runtime service-token refresh. |
+| Jun 20-21 | Jobs backed by pg-boss; product schedules reconciled into pg-boss and the timer schedulers dropped. |
+| Jun 22 | **Queue-only AI** - the generative chat provider is removed from the API; source-sync planning and publication become queued jobs. |
+| Jun 23 | Maintenance vocabulary: `ChangeIntent` + `MaintenanceLens`, and a lens-agnostic reconciliation gate. |
+| Jun 24 | The `fix_patrol` job, patrol store, and per-flow scheduling; the **verify** lens; source-sync changesets deferred when they overlap an open PR. |
+| Jun 25 | The **dedupe** lens. |
+| Jun 26 | The **split** lens and improve-patrol editorial expansion; `MaintenanceRun` replaces `PatrolRun`. |
+| Jun 28 | Source-sync plans become first-class proposals through the same gate. |
+| Jun 30 | Operational spine: structured logging, request-validation standardization, and API/watcher startup config validation. |
+
+### July 2026 - depth, cost control, and questionnaires
+
+| Date | What landed |
+| --- | --- |
+| Jul 1 | Per-principal rate limiting and AI cost controls. |
+| Jul 2 | OpenTelemetry traces and metrics (`@magpie/telemetry`); RFC 8693 token exchange so MCP can call the API on behalf of the end user; `/admin/reset` gated behind an admin capability. |
+| Jul 3 | Local-git destinations - publish `file://` branches and merge from the console. Flow seeding: `draft_seed_document`, outline generation, and the `kb_seed` / `kb_outline` MCP tools. |
+| Jul 4 | Verify-closure endpoint: a gap only resolves on re-ask evidence. |
+| Jul 6 | First-class local-git flow mode (Accept/Bin, no GitHub ceremony); stale-PR detection with auto-regeneration against a fresh base; the branching question-journey Sankey plus job-error, KB-freshness, and patrol-impact insights. |
+| Jul 7 | Embedding-based gap bucketing with lazy centroid maintenance; patrol grounded in source descriptors instead of a sampler. |
+| Jul 9 | **Claim provenance** end to end - structured claims on drafts, rendered into PR bodies, folded across rewrites, and checked first by the verify lens. Seed plans become source-grounded and reviewable. |
+| Jul 10 | `seed_bootstrap` auto-proposes plans for sparse flows. |
+| Jul 14 | The `kb_citation` MCP tool and full-section resolution endpoint; per-job provider token usage captured and charted. |
+| Jul 15 | Operator-supplied `AI_PRICING` table; token usage priced into cost on Insights, per flow and per schedule. |
+| Jul 16 | **Questionnaire mode** - questionnaire tables, matching, two-condition answer reuse, drip answering, export, a web console section, and MCP tools. Local-git proposals can be rejected before publishing. |
+| Jul 17 | Questionnaire trust: confidence snapshots, top-N matching with reconciliation reuse, and verdict mapping. Security wave - fail-closed per-flow authorization, per-tool scope on MCP JSON-RPC batches, protocol-allowlisted clone URLs, untrusted-content delimiters. |
+| Jul 18 | Reliability wave: durable replay-safe post-merge cascade, atomic AI admission control, a per-tick maintenance budget, `answer_question_batch`, and a terminal-fail backstop with repair reprompts. Secret redaction in logs, a minimal env allowlist for spawned agent CLIs, and `npm run verify` as the pre-push gate. |
+| Jul 19 | Per-repository PAT overrides resolved through a `tokenEnv` reference. |
+| Jul 20-21 | Documentation reworked into clause-numbered living product specs, plus a guide to consuming Magpie from another app. |
+| Jul 25 | Citation usage tracking - how often each section is actually cited by an answer, surfaced on the Knowledge page. |
+| Jul 31 | Per-questionnaire answering direction; detection and surfacing of disagreements between sources. |
+
+### August 2026
+
+| Date | What landed |
+| --- | --- |
+| Aug 11 | Completed questionnaires ingested as **evidence** rather than as answers; questionnaire file upload with a confirmed column mapping; keyword-only retrieval promoted to a usable first-class mode, so embeddings are optional. |
+
 ## Repository Layout
 
 ```text
