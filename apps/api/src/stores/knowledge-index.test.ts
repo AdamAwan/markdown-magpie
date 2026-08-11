@@ -251,6 +251,33 @@ describe("InMemoryKnowledgeIndex.search", () => {
     assert.equal(calls, 2);
     assert.ok(ranked.some((r) => r.section.id === "repo:felines.md:0"));
   });
+
+  it("in-memory keyword ranking scores heading path and file path", async () => {
+    const index = new InMemoryKnowledgeIndex();
+    await index.indexMarkdownDocuments({
+      repositoryId: "repo",
+      documents: [
+        { path: "billing/refunds.md", content: "# Billing\n\n## Annual plans\n\nCredit is issued pro rata.\n" },
+        { path: "other/notes.md", content: "# Other\n\n## Notes\n\nUnrelated prose about credit.\n" }
+      ]
+    });
+
+    // "refunds" occurs only in the first document's file path. That document's
+    // "# Billing" / "## Annual plans" headings split into two sections (one per
+    // heading), and both inherit the same document path, so both score on this
+    // path-only term — the assertion is on section count from the *correct*
+    // document, not on there being a single matching section.
+    const byPath = await index.search("refunds", 5, ["repo"]);
+    assert.equal(byPath.length, 2);
+    assert.equal(byPath[0].section.path, "billing/refunds.md");
+
+    // "billing" occurs only in the first document's heading path (its own heading,
+    // for the "Billing" section, and an ancestor heading, for the "Annual plans"
+    // section) — again both of that document's sections score, none of the other.
+    const byHeadingPath = await index.search("billing", 5, ["repo"]);
+    assert.equal(byHeadingPath.length, 2);
+    assert.equal(byHeadingPath[0].section.path, "billing/refunds.md");
+  });
 });
 
 describe("InMemoryKnowledgeIndex.getSection", () => {
