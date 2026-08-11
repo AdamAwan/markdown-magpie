@@ -44,8 +44,16 @@ import {
   WatcherView,
   WorkersResponse
 } from "../lib/types";
-import type { AssertedClaim, Questionnaire, QuestionnaireSummary, SeedPlan } from "@magpie/core";
-import { apiDelete, apiDownload, apiGet, apiPatch, apiPost, errorMessage } from "../lib/api";
+import type {
+  AssertedClaim,
+  ImportSheetPreview,
+  Questionnaire,
+  QuestionnaireImport,
+  QuestionnaireSummary,
+  SeedPlan,
+  SheetMapping
+} from "@magpie/core";
+import { apiDelete, apiDownload, apiGet, apiPatch, apiPost, apiUpload, errorMessage } from "../lib/api";
 import { knowledgeFlows } from "../lib/config";
 import {
   BulkProposalAction,
@@ -1001,6 +1009,69 @@ function useConsoleController() {
   // there is only Magpie's answer to approve.
   // The asserted-claims register for a flow: findings the source-grounded check
   // raised against previously-given questionnaire answers.
+  // --- uploading a questionnaire file (docs/questionnaires.md Q29+) ----------
+  // An upload creates a staging import, never a questionnaire: the operator
+  // confirms the detected mapping first, and only that creates anything.
+
+  async function uploadQuestionnaireImport(
+    file: File,
+    name: string,
+    flowId: string
+  ): Promise<QuestionnaireImport | undefined> {
+    try {
+      const form = new FormData();
+      form.set("file", file);
+      form.set("name", name);
+      form.set("flowId", flowId);
+      const body = await apiUpload<{ import: QuestionnaireImport }>("/questionnaire-imports", form);
+      return body.import;
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
+  async function getQuestionnaireImport(
+    id: string
+  ): Promise<{ import: QuestionnaireImport; preview: ImportSheetPreview[] } | undefined> {
+    try {
+      return await apiGet<{ import: QuestionnaireImport; preview: ImportSheetPreview[] }>(
+        `/questionnaire-imports/${encodeURIComponent(id)}`
+      );
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
+  async function confirmQuestionnaireImport(
+    id: string,
+    body: { sheets: Array<{ sheetIndex: number; include: boolean; mapping: SheetMapping }>; promoted?: string[] }
+  ): Promise<Questionnaire | undefined> {
+    try {
+      const result = await apiPost<{ questionnaire: Questionnaire }>(
+        `/questionnaire-imports/${encodeURIComponent(id)}/confirm`,
+        body
+      );
+      showMessage(
+        "Questionnaire imported — every answer is being adjudicated against the knowledge base, not trusted.",
+        "info"
+      );
+      return result.questionnaire;
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+      return undefined;
+    }
+  }
+
+  async function discardQuestionnaireImport(id: string): Promise<void> {
+    try {
+      await apiDelete(`/questionnaire-imports/${encodeURIComponent(id)}`);
+    } catch (error) {
+      showMessage(errorMessage(error), "danger");
+    }
+  }
+
   async function listAssertedClaims(flowId: string): Promise<AssertedClaim[]> {
     try {
       const body = await apiGet<{ claims: AssertedClaim[] }>(
@@ -1249,6 +1320,10 @@ function useConsoleController() {
     createQuestionnaire,
     approveQuestionnaireItem,
     listAssertedClaims,
+    uploadQuestionnaireImport,
+    getQuestionnaireImport,
+    confirmQuestionnaireImport,
+    discardQuestionnaireImport,
     approveReusedItems,
     exportQuestionnaire
   };

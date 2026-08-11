@@ -22,7 +22,11 @@ function noopHandlers() {
   return {
     onList: async () => [] as QuestionnaireSummary[],
     onCreate: async () => undefined,
-    onOpen: () => {}
+    onOpen: () => {},
+    onUpload: async () => undefined,
+    onLoadImport: async () => undefined,
+    onConfirmImport: async () => undefined,
+    onDiscardImport: async () => {}
   };
 }
 
@@ -57,4 +61,12 @@ test("loads summaries on mount and opens one on row click", async () => {
   } finally {
     unmount();
   }
+});
+
+// --- uploading a questionnaire file (Spec B) ---
+
+test("the create form offers a file upload alongside the paste box", () => {
+  const html = renderMarkup(<QuestionnaireCreateList flows={FLOWS} loading={false} {...noopHandlers()} />);
+  assert.match(html, /upload the completed questionnaire/i);
+  assert.match(html, /accept="\.xlsx,\.csv"/);
 });

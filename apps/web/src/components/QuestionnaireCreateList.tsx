@@ -1,4 +1,5 @@
-import type { QuestionnaireSummary } from "@magpie/core";
+import type { ImportSheetPreview, QuestionnaireImport, QuestionnaireSummary } from "@magpie/core";
+import { ImportMappingPreview, type ConfirmImportBody } from "./ImportMappingPreview";
 import { parseTwoColumnPaste } from "./questionnaireItems";
 import { useCallback, useEffect, useRef, useState } from "react";
 import styled from "@emotion/styled";
@@ -21,13 +22,29 @@ interface QuestionnaireCreateListProps {
   // router.push wrapper, so this component stays free of next/navigation and
   // tests without a router mock.
   onOpen: (id: string) => void;
+  // Uploading a questionnaire FILE (docs/questionnaires.md Q29+). Staged, not
+  // created: the mapping is confirmed before anything is answered.
+  onUpload: (file: File, name: string, flowId: string) => Promise<QuestionnaireImport | undefined>;
+  onLoadImport: (id: string) => Promise<{ import: QuestionnaireImport; preview: ImportSheetPreview[] } | undefined>;
+  onConfirmImport: (id: string, body: ConfirmImportBody) => Promise<{ id: string } | undefined>;
+  onDiscardImport: (id: string) => Promise<void>;
 }
 
 // Index view for questionnaire mode (docs/questionnaires.md): create a batch and
 // pick an existing one from the list. Opening a questionnaire navigates to its
 // own detail page — the worksheet no longer renders inline here, so this view is
 // just the form and the list.
-export function QuestionnaireCreateList({ flows, loading, onList, onCreate, onOpen }: QuestionnaireCreateListProps) {
+export function QuestionnaireCreateList({
+  flows,
+  loading,
+  onList,
+  onCreate,
+  onOpen,
+  onUpload,
+  onLoadImport,
+  onConfirmImport,
+  onDiscardImport
+}: QuestionnaireCreateListProps) {
   const [summaries, setSummaries] = useState<QuestionnaireSummary[]>([]);
   const [name, setName] = useState("");
   const [flowId, setFlowId] = useState("");
@@ -35,6 +52,10 @@ export function QuestionnaireCreateList({ flows, loading, onList, onCreate, onOp
   const [importOrigin, setImportOrigin] = useState("");
   const [direction, setDirection] = useState("");
   const [creating, setCreating] = useState(false);
+  // The staged upload being confirmed, if any. Its presence replaces the paste
+  // form with the mapping preview: the operator is answering one question at a
+  // time, not choosing between two ways to start.
+  const [pending, setPending] = useState<{ import: QuestionnaireImport; preview: ImportSheetPreview[] } | undefined>();
 
   // ConsoleProvider hands down fresh handler identities on every poll
   // re-render; pin onList behind a ref so the mount effect stays stable (the
@@ -82,6 +103,55 @@ export function QuestionnaireCreateList({ flows, loading, onList, onCreate, onOp
     }
   }
 
+  async function submitUpload(file: File) {
+    if (!flowId) return;
+    setCreating(true);
+    try {
+      const staged = await onUpload(file, name.trim() || file.name, flowId);
+      if (!staged) return;
+      // Poll while the mapping job runs. Bounded: an unmapped import is still
+      // usable — every column select simply starts blank.
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const view = await onLoadImport(staged.id);
+        if (!view) return;
+        setPending(view);
+        if (view.import.status !== "mapping") return;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function submitConfirm(body: ConfirmImportBody) {
+    if (!pending) return;
+    setCreating(true);
+    try {
+      const created = await onConfirmImport(pending.import.id, body);
+      if (created) {
+        setPending(undefined);
+        setName("");
+        onOpen(created.id);
+      }
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  if (pending) {
+    return (
+      <ImportMappingPreview
+        data={pending}
+        confirming={creating}
+        onConfirm={(body) => void submitConfirm(body)}
+        onDiscard={() => {
+          void onDiscardImport(pending.import.id);
+          setPending(undefined);
+        }}
+      />
+    );
+  }
+
   return (
     <Stack gap="lg">
       <Stack gap="sm">
@@ -119,6 +189,20 @@ export function QuestionnaireCreateList({ flows, loading, onList, onCreate, onOp
             value={importOrigin}
             onChange={(event) => setImportOrigin(event.target.value)}
             placeholder="acme-sig-2025.xlsx"
+          />
+        </Field>
+        <Field label="Or upload the completed questionnaire (.xlsx or .csv). You confirm where its questions and answers are before anything is answered.">
+          <Input
+            type="file"
+            accept=".xlsx,.csv"
+            disabled={creating || !flowId}
+            aria-label="Questionnaire file"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) {
+                void submitUpload(file);
+              }
+            }}
           />
         </Field>
         <Actions>

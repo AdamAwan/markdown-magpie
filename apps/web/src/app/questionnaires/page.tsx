@@ -9,7 +9,16 @@ import { knowledgeFlows } from "../../lib/config";
 
 export default function QuestionnairesPage() {
   const router = useRouter();
-  const { config, loading, listQuestionnaires, createQuestionnaire } = useConsole();
+  const {
+    config,
+    loading,
+    listQuestionnaires,
+    createQuestionnaire,
+    uploadQuestionnaireImport,
+    getQuestionnaireImport,
+    confirmQuestionnaireImport,
+    discardQuestionnaireImport
+  } = useConsole();
 
   const flows = useMemo(() => knowledgeFlows(config).map((flow) => ({ id: flow.id, name: flow.name })), [config]);
 
@@ -26,6 +35,10 @@ export default function QuestionnairesPage() {
             onList={listQuestionnaires}
             onCreate={createQuestionnaire}
             onOpen={(id) => router.push(`/questionnaires/${encodeURIComponent(id)}`)}
+            onUpload={uploadQuestionnaireImport}
+            onLoadImport={getQuestionnaireImport}
+            onConfirmImport={confirmQuestionnaireImport}
+            onDiscardImport={discardQuestionnaireImport}
           />
         </Surface.Body>
       </Surface>
