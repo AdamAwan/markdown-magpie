@@ -15,11 +15,11 @@ import { parseWorkbook, type ParseFailure } from "./parse.js";
 // radius: the model needs enough rows to recognise a layout, not the customer's
 // whole questionnaire.
 export const SAMPLE_ROWS = 30;
-export const SAMPLE_COLUMNS = 25;
-export const SAMPLE_CELL_CHARS = 200;
+const SAMPLE_COLUMNS = 25;
+const SAMPLE_CELL_CHARS = 200;
 
 // Unconfirmed uploads are customer material with no owner, so they expire.
-export const IMPORT_TTL_MS = 24 * 60 * 60 * 1000;
+const IMPORT_TTL_MS = 24 * 60 * 60 * 1000;
 
 // The questionnaire create schema's own bound, enforced here so an operator is
 // told at the gate rather than by a 400 from the create route.

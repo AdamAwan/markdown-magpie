@@ -6,8 +6,8 @@ import type { ImportPreviewRow, ImportSheetPreview, SheetGrid, SheetMapping } fr
 // gets created" true rather than aspirational (docs/questionnaires.md Q33).
 
 export const PREVIEW_SAMPLE_ROWS = 8;
-export const PREVIEW_UNCLASSIFIED_ROWS = 50;
-export const PREVIEW_HEADER_ROWS = 5;
+const PREVIEW_UNCLASSIFIED_ROWS = 50;
+const PREVIEW_HEADER_ROWS = 5;
 
 export interface ApplyMappingOptions {
   // Rows the operator promoted out of the unclassified list, as "sheetIndex:rowIndex".
@@ -22,7 +22,7 @@ export interface AppliedMapping {
   sheets: ImportSheetPreview[];
 }
 
-export function promotedKey(sheetIndex: number, rowIndex: number): string {
+function promotedKey(sheetIndex: number, rowIndex: number): string {
   return `${sheetIndex}:${rowIndex}`;
 }
 

@@ -7,20 +7,20 @@ import { parseXlsx } from "./parse-xlsx.js";
 // is ever persisted (docs/questionnaires.md Q32).
 
 export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
-export const MAX_SHEETS = 20;
-export const MAX_ROWS_PER_SHEET = 5000;
-export const MAX_COLUMNS = 60;
+const MAX_SHEETS = 20;
+const MAX_ROWS_PER_SHEET = 5000;
+const MAX_COLUMNS = 60;
 // Matches the imported-answer cap the questionnaire create schema enforces
 // (Q19), so a cell that survives here can never be rejected downstream.
-export const MAX_CELL_CHARS = 20000;
+const MAX_CELL_CHARS = 20000;
 
-export type ImportFormat = "xlsx" | "csv";
+type ImportFormat = "xlsx" | "csv";
 
 export type ParseFailure = "unsupported_format" | "file_too_large" | "unreadable_file" | "empty_file";
 
 export type ParseResult = { ok: true; format: ImportFormat; sheets: SheetGrid[] } | { ok: false; code: ParseFailure };
 
-export function detectFormat(filename: string): ImportFormat | undefined {
+function detectFormat(filename: string): ImportFormat | undefined {
   const lower = filename.toLowerCase();
   if (lower.endsWith(".xlsx")) return "xlsx";
   if (lower.endsWith(".csv")) return "csv";
