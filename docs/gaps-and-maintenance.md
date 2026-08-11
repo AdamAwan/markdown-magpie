@@ -17,16 +17,19 @@ watcher jobs.
 
 ## Gap lifecycle
 
-- **G1** — A gap row (`question_gaps`) has one of five **sources**: `auto` (the model
+- **G1** — A gap row (`question_gaps`) has one of six **sources**: `auto` (the model
   declared a whole-question gap), `followup` (a search observably returned empty),
   `manual` (an admin flag), `verification` (server-raised on a failed gap-closure
-  re-ask), or `feedback` (user feedback signal). `auto` ships at `low` confidence, or
-  `medium` for a substantive partial.
+  re-ask), `feedback` (user feedback signal), or `import` (the source-grounded check of an
+  **imported questionnaire answer** found that the sources back a claim the KB never
+  recorded — see [questionnaires.md Q27](./questionnaires.md)). `auto` ships at `low`
+  confidence, or `medium` for a substantive partial.
 - **G2** — Gap state is **column-modeled**, not an enum. A gap is a live candidate when
   `resolved_at IS NULL AND dismissed_at IS NULL` and its question has no live `parked_at`
   row. `listGapCandidates` groups candidates by `(summary, flow_id)`.
 - **G3** — On re-answer, a question's `auto`/`followup` gap rows are deleted and
-  rewritten; `manual` and `verification` rows are preserved. The empty-KB fallback
+  rewritten; `manual`, `verification` and `import` rows are preserved (an `import` gap
+  records a human assertion, not a model judgement, so a later re-ask must not erase it). The empty-KB fallback
   summary (a summary echoing the raw question) MUST be dropped at ingestion so a batch of
   unanswered questions does not each seed a singleton cluster.
 - **G4** — **Resolve**: `resolveGaps` stamps `resolved_at` + `resolved_by_proposal_id`
