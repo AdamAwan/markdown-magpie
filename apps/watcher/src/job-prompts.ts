@@ -327,6 +327,29 @@ export function buildAnswerOutput(
   };
 }
 
+// How a search that returned nothing should be presented to the model.
+//
+// In hybrid mode, empty is strong evidence: vector search returns nearest
+// neighbours for any query, so nothing came back means nothing close exists.
+// In keyword-only mode it means no lexeme matched — the knowledge base may cover
+// the topic in different words. Saying so is what stops the model minting
+// knowledge gaps out of vocabulary mismatches.
+export function buildEmptySearchNote(queries: string[], retrievalMode: "hybrid" | "keyword"): string {
+  const list = queries.map((query) => `- ${query}`).join("\n");
+  if (retrievalMode === "keyword") {
+    return [
+      "These searches returned no sections:",
+      list,
+      "",
+      "Semantic search is unavailable in this deployment; these were lexical",
+      "keyword searches. No match means no shared wording was found — it is NOT",
+      "evidence that the knowledge base lacks the information. Prefer retrying with",
+      "different vocabulary over concluding a knowledge gap."
+    ].join("\n");
+  }
+  return ["These searches returned no sections:", list].join("\n");
+}
+
 // Records what the grounding check actually did on the output's trace. A no-op
 // for outputs built without a loop trace (unit tests, legacy callers).
 export function withVerification(output: AnswerOutput, verification: AnswerTrace["verification"]): AnswerOutput {

@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { MockLanguageModelV3 } from "ai/test";
 import type { ChatProvider, ChatRequest, ChatResponse } from "@magpie/core";
 import { JOB_TYPES, jobDefinition, type JobView, type JobType } from "@magpie/jobs";
-import type { RetrievedSection, WatcherApi } from "../http-client.js";
+import type { RetrievedSection, RetrieveResponse, WatcherApi } from "../http-client.js";
 import { ChatRunner } from "./chat.js";
 
 function job(type: JobView["type"], input: unknown): JobView {
@@ -43,6 +43,13 @@ const SECTIONS: RetrievedSection[] = [
   }
 ];
 
+// Wraps a stub's sections into the full POST /api/retrieve response shape.
+// Tests default to "hybrid" — the mode is irrelevant to what they assert on
+// except the dedicated lexical-miss framing test, which builds its own.
+function retrieveResponse(sections: RetrievedSection[]): RetrieveResponse {
+  return { sections, retrievalMode: "hybrid", candidateCount: sections.length };
+}
+
 function providerJobTypes(): JobType[] {
   return JOB_TYPES.filter((type) => {
     try {
@@ -59,7 +66,7 @@ function fakeApi(overrides: Partial<WatcherApi> = {}): WatcherApi {
     heartbeat: async () => ({ cancelled: false }),
     complete: async () => undefined,
     fail: async () => undefined,
-    retrieve: async () => SECTIONS,
+    retrieve: async () => retrieveResponse(SECTIONS),
     // Default: the embedding router abstains, so routing falls back to the chat
     // router the existing tests mock. Tests that exercise embedding routing override.
     routeByEmbedding: async () => ({ status: "abstain" }),
@@ -124,7 +131,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (_question, flowId) => {
         retrievedFlow = flowId;
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -160,7 +167,7 @@ describe("ChatRunner", () => {
   it("routes an answer_question_batch job to the same answer handler as answer_question (#288c)", async () => {
     // The questionnaire-drip type shares the answer contract and must produce the
     // identical answer output — the watcher short-circuits it to the answer runner.
-    const api = fakeApi({ retrieve: async () => SECTIONS });
+    const api = fakeApi({ retrieve: async () => retrieveResponse(SECTIONS) });
     const chat = new FakeChatProvider((request) => {
       if (request.system.includes("route a user question")) {
         return JSON.stringify({ flowId: "flow-b", confidence: "high" });
@@ -270,7 +277,7 @@ describe("ChatRunner", () => {
       routeByEmbedding: async () => ({ status: "routed", flowId: "flow-b", confidence: "high", margin: 0.4 }),
       retrieve: async (_question, flowId) => {
         retrievedFlow = flowId;
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -352,7 +359,7 @@ describe("ChatRunner", () => {
         flowsSeen.push(flowId);
         // The seed retrieval (the question) returns a section; the model's
         // follow-up search for an example finds nothing → grounds a followup gap.
-        return question.includes("example") ? [] : SECTIONS;
+        return retrieveResponse(question.includes("example") ? [] : SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -429,7 +436,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (question) => {
         queries.push(question);
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -483,7 +490,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (_question, _flowId, _limit, signal) => {
         signals.push(signal);
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider(() =>
@@ -512,7 +519,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (_question, flowId) => {
         retrievedFlow = flowId;
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -550,7 +557,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (question) => {
         retrieved.push(question);
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -598,7 +605,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (question) => {
         retrieved.push(question);
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -644,7 +651,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (_question, flowId) => {
         retrievedFlow = flowId;
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -691,7 +698,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async (_question, flowId) => {
         retrievedFlow = flowId;
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {
@@ -811,7 +818,7 @@ describe("ChatRunner", () => {
         usedSectionIds: ["doc-1#deploy"]
       });
     });
-    const runner = new ChatRunner("openai-compatible", chat, fakeApi({ retrieve: async () => pool }));
+    const runner = new ChatRunner("openai-compatible", chat, fakeApi({ retrieve: async () => retrieveResponse(pool) }));
     await runner.run(
       job("answer_question", {
         provider: "openai-compatible",
@@ -985,7 +992,7 @@ describe("ChatRunner", () => {
     const api = fakeApi({
       retrieve: async () => {
         retrieveCalled = true;
-        return SECTIONS;
+        return retrieveResponse(SECTIONS);
       }
     });
     const chat = new FakeChatProvider((request) => {

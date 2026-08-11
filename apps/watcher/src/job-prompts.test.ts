@@ -6,6 +6,7 @@ import type { RetrievedSection } from "./http-client.js";
 import {
   applyGroundingVerdict,
   buildAnswerOutput,
+  buildEmptySearchNote,
   buildPrompt,
   buildSourceGroundedPrompt,
   forcedSearchQueries,
@@ -511,6 +512,17 @@ describe("forcedSearchQueries", () => {
 
   it("returns nothing for an unparseable reply", () => {
     assert.deepEqual(forcedSearchQueries("not json"), []);
+  });
+});
+
+describe("buildEmptySearchNote", () => {
+  it("empty searches are framed as lexical misses in keyword mode", () => {
+    const keyword = buildEmptySearchNote(["annual refunds"], "keyword");
+    assert.match(keyword, /lexical/i);
+    assert.doesNotMatch(keyword, /not covered/i);
+
+    const hybrid = buildEmptySearchNote(["annual refunds"], "hybrid");
+    assert.doesNotMatch(hybrid, /lexical/i);
   });
 });
 
