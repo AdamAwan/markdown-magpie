@@ -60,9 +60,15 @@ const MIN_RELEVANCE = 0.4;
 // with MIN_RELEVANCE now 0.4 — it could never cut anything the absolute floor
 // had not already cut, i.e. the "two-part" floor had silently collapsed to one
 // part. 0.5 ("at least half as strong as the best hit") is the lowest round
-// value that puts it back in play, and every genuinely answer-bearing secondary
-// section measured against the golden KB scores 0.71+ beside a 1.0 top, so it
-// clears this floor with margin.
+// value that makes it reachable again.
+//
+// Reachable, but on the keyword leg still not much more than that: it can only
+// cut inside [0.4, top * 0.5), which is empty unless top > 0.8, and even at
+// top = 1.0 the live band [0.4, 0.5) falls inside the measured-empty gap between
+// single-lexeme noise (<= 0.375) and real signal (>= 0.714) — so on the
+// quantised keyword scale nothing lands in it. This floor genuinely bites only
+// on the continuous cosine leg. Treat it as a hybrid-mode mechanism; see R16 in
+// docs/retrieval.md.
 const RELATIVE_RELEVANCE_FLOOR = 0.5;
 
 // Pure (non-generative) retrieval the watcher calls after it has routed the

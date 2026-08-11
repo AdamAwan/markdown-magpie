@@ -113,12 +113,15 @@ test("retrieve rejects an unknown flowId rather than searching unscoped", async 
   }
 });
 
-test("keeps weak results when they are the best available", async () => {
-  // Every candidate is weak relative to the others — none stands out — so the
-  // relative floor drops nothing and all three survive. Returning nothing when
-  // the whole pool is merely mediocre is the failure this work exists to remove.
-  // The values sit above MIN_RELEVANCE on purpose: this test owns the RELATIVE
-  // floor's behaviour, and the absolute floor's is asserted separately below.
+test("the relative floor keeps a uniformly-scoring pool intact", async () => {
+  // No candidate stands out, so there is nothing for the relative floor to be
+  // relative to and all three survive. This test owns the RELATIVE floor only:
+  // the values sit above MIN_RELEVANCE deliberately, because above the absolute
+  // floor is the only region where the relative floor decides anything.
+  //
+  // Note this is NOT the general "a weak pool is never returned empty" property
+  // the design aimed for — that property does not hold. Below MIN_RELEVANCE a
+  // uniformly weak pool IS returned empty; see the next test.
   const ctx = buildContext([
     { id: "s1", relevance: 0.5 },
     { id: "s2", relevance: 0.45 },

@@ -89,7 +89,7 @@ callbacks. Weak or unanswerable questions feed the gaps subsystem
   flattened to spaces), `C` body — multiplied by `STRICT_MATCH_BOOST = 1.5` when the
   section *also* satisfies the strict `websearch_to_tsquery`. Normalisation flag `32` is
   `rank / (rank + 1)`, already bounded in `[0,1)`, so there is **no** application-side
-  rank normalisation (the former `normaliseRank` no longer exists). `keywordRankInMemory`
+  rank normalisation — Postgres returns the final scale. `keywordRankInMemory`
   (`knowledge-index.ts`) mirrors the same four weighted fields for the no-Postgres path.
 
   > As built, the boost **saturates**: relevance is clamped to `1`, and every strict match
@@ -114,6 +114,17 @@ callbacks. Weak or unanswerable questions feed the gaps subsystem
   while a pool that is uniformly mediocre survives intact — it can never empty a result,
   because the top section always clears its own fraction. The absolute floor is the one
   that can, and does, return nothing.
+
+  > **The two-part floor is still effectively one part on the keyword leg.** The relative
+  > floor can only cut inside `[MIN_RELEVANCE, topRelevance × RELATIVE_RELEVANCE_FLOOR)`,
+  > i.e. `[0.4, top × 0.5)`, which is empty unless `top > 0.8`. Even at `top = 1.0` the
+  > live band is `[0.4, 0.5)` — which sits entirely inside the measured-empty gap between
+  > single-lexeme noise (`≤ 0.375`) and real signal (`≥ 0.714`), so on the quantised
+  > keyword scale nothing lands in it. Raising the fraction from `0.35` to `0.5` made the
+  > relative floor *reachable* rather than provably dead (at `0.35` it could never cut
+  > anything the absolute floor had not already cut), but it only genuinely bites on the
+  > **continuous cosine leg**, where scores are not quantised. Treat the second part of
+  > the floor as a hybrid-mode mechanism.
 
   `MIN_RELEVANCE` was re-derived in Task 7 against the golden KB, because
   `ts_rank_cd(…, 32)` replaced the old `rank / (rank + 0.1)` normalisation and `0.15` no
@@ -152,7 +163,8 @@ callbacks. Weak or unanswerable questions feed the gaps subsystem
   > therefore goes quiet for all of them — the gaps keep accumulating and stay visible in
   > the console, but nothing acts on them until an embeddings endpoint is configured. This
   > is deliberate (weaker provenance must not drive unattended work), but it is a silent
-  > mode change from an operator's point of view.
+  > mode change from an operator's point of view. A second, unrelated suppression also
+  > applies to `followup` gaps in **both** modes — see R22.
 
 ## Citations
 
@@ -182,6 +194,30 @@ callbacks. Weak or unanswerable questions feed the gaps subsystem
   gaps?, flowId?, flowSelectionRequired?, outOfScope?, trace?, standaloneQuestion?,
   reuse?}`. The `trace` records routing, seed/pool section counts, per-round searches,
   whether the answer was forced, the answer contract, and the grounding verdict.
+- **R22** — Two kinds of gap reach the output. **Auto** gaps come from the model flagging
+  the whole question as unanswerable (or from the grounding verifier stripping a claim).
+  **Followup** gaps come from the model naming a specific sub-clause it could not support
+  (`followupGaps`) while still answering the rest — the partial-answer case. Followup gaps
+  are additionally gated: `groundedFollowupGaps`
+  (`apps/watcher/src/job-prompts.ts`) discards **every** model-declared followup gap
+  unless at least one search in the loop returned **zero** sections
+  (`unsatisfiedSearches.size > 0`). The rule exists so the model may only claim missing
+  supporting material if it actually went looking and came up empty.
+
+  > ⚠️ **REGRESSION (as built).** OR matching (R14) has made a zero-section search nearly
+  > unreachable: any query sharing a single lexeme with the corpus now returns rows, and
+  > R16's floor only empties a pool of pure single-lexeme noise. So `unsatisfiedSearches`
+  > is almost always empty and **followup gaps are almost never emitted**.
+  >
+  > Observable consequence: a multi-clause question whose knowledge base covers only some
+  > clauses returns a partial answer that says so in prose, cites the covered material,
+  > ships at `medium` — and records **no gap row at all**. The uncovered clause is
+  > silently lost to the gaps subsystem, so nothing ever proposes documenting it. This is
+  > the failing `partial-answer-followup-gap` case in `docs/golden-eval.md`; it is not
+  > fixable by retuning R16's floor, because the sections such a search returns score
+  > *higher* than legitimately-cited sections in passing cases. Fixing it requires
+  > replacing the empty-result precondition with a strength-based one — `candidateCount`
+  > and per-section `relevance` (R17) are already plumbed for it.
 
 ## HTTP endpoints
 
