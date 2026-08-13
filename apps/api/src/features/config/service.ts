@@ -155,6 +155,16 @@ export function logStartupConfig(ctx: AppContext): void {
   add("poll interval ms", cfg.watcher.pollIntervalMs ?? "default (2000)");
 
   logger.info({ env: cfg.api.nodeEnv }, `Resolved configuration:\n${lines.join("\n")}`);
+
+  // A deployment that *intended* to authenticate but omitted the key now
+  // proceeds keyless rather than falling back to keyword mode, so say so.
+  const oai = ctx.settings.embeddings.openAiCompatible;
+  if (embeddingProviderName(ctx.settings) === "openai-compatible" && !oai.embeddingApiKey && !oai.apiKey) {
+    logger.warn(
+      { embeddingBaseUrl: oai.embeddingBaseUrl ?? oai.baseUrl },
+      "embeddings endpoint configured without an API key — requests will be unauthenticated"
+    );
+  }
 }
 
 // Clears all user-generated state then rebuilds the configured knowledge bases.
