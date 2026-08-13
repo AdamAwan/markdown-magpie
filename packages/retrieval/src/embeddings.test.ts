@@ -46,18 +46,46 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
     assert.equal(vectors[0].length, EMBEDDING_DIMENSIONS);
   });
 
-  it("throws when a returned vector has the wrong dimension", async () => {
+  it("pads a shorter provider vector to the stored dimension", async () => {
     globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ data: [{ index: 0, embedding: vectorOf(512) }] }), {
+      new Response(JSON.stringify({ data: [{ index: 0, embedding: vectorOf(768) }] }), {
+        status: 200
+      })) as unknown as typeof fetch;
+
+    const provider = new OpenAICompatibleEmbeddingProvider({
+      apiKey: "k",
+      baseUrl: "http://localhost:8080/v1",
+      model: "BAAI/bge-base-en-v1.5"
+    });
+    const [vector] = await provider.embed(["hello"]);
+
+    assert.equal(vector.length, EMBEDDING_DIMENSIONS);
+    assert.deepEqual(vector.slice(0, 768), vectorOf(768));
+    assert.deepEqual(vector.slice(768), new Array(EMBEDDING_DIMENSIONS - 768).fill(0));
+  });
+
+  it("throws when a returned vector is wider than the stored dimension", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ data: [{ index: 0, embedding: vectorOf(3072) }] }), {
         status: 200
       })) as unknown as typeof fetch;
 
     const provider = new OpenAICompatibleEmbeddingProvider({
       apiKey: "k",
       baseUrl: "https://api.example.com/v1",
-      model: "m"
+      model: "too-wide"
     });
-    await assert.rejects(provider.embed(["x"]), /512-dim vector; expected 1536/);
+    await assert.rejects(provider.embed(["x"]), /3072-dim vector.*1536 dimensions/s);
+  });
+
+  it("throws when a returned vector is empty", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ data: [{ index: 0, embedding: [] }] }), {
+        status: 200
+      })) as unknown as typeof fetch;
+
+    const provider = new OpenAICompatibleEmbeddingProvider({ apiKey: "k", baseUrl: "u", model: "m" });
+    await assert.rejects(provider.embed(["x"]), /empty vector/);
   });
 
   it("throws when the response count does not match the input count", async () => {
@@ -66,6 +94,25 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
 
     const provider = new OpenAICompatibleEmbeddingProvider({ apiKey: "k", baseUrl: "u", model: "m" });
     await assert.rejects(provider.embed(["x"]), /returned 0 vectors for 1 inputs/);
+  });
+});
+
+describe("zero-padding", () => {
+  // The property the whole approach rests on: appended zeros add nothing to the
+  // dot product and nothing to either norm, so every threshold tuned at 1536
+  // behaves identically on a padded 768-dimension vector. Executable
+  // justification for the design, not a driver for it.
+  it("leaves cosine similarity unchanged", () => {
+    const cosine = (x: number[], y: number[]): number => {
+      const dot = x.reduce((sum, value, index) => sum + value * y[index], 0);
+      const norm = (v: number[]): number => Math.sqrt(v.reduce((sum, value) => sum + value * value, 0));
+      return dot / (norm(x) * norm(y));
+    };
+    const pad = (v: number[]): number[] => [...v, ...new Array<number>(10).fill(0)];
+    const a = [3, 4, 0];
+    const b = [4, 3, 0];
+
+    assert.equal(cosine(pad(a), pad(b)), cosine(a, b));
   });
 });
 

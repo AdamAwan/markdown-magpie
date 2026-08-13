@@ -129,13 +129,33 @@ async function parseEmbeddingResponse(response: Response, expectedCount: number)
 
   return ordered.map((entry) => {
     const vector = entry.embedding;
-    if (!vector || vector.length !== EMBEDDING_DIMENSIONS) {
+    if (!vector || vector.length === 0) {
+      throw new Error("Embedding provider returned an empty vector");
+    }
+    if (vector.length > EMBEDDING_DIMENSIONS) {
       throw new Error(
-        `Embedding provider returned a ${vector?.length ?? 0}-dim vector; expected ${EMBEDDING_DIMENSIONS}`
+        `Embedding provider returned a ${vector.length}-dim vector; the store holds ${EMBEDDING_DIMENSIONS} dimensions. ` +
+          `Choose a model with at most ${EMBEDDING_DIMENSIONS} dimensions.`
       );
     }
-    return vector;
+    return padToStoredDimensions(vector);
   });
+}
+
+// Vectors are stored in a fixed-width pgvector column, but good local models emit
+// 384 or 768 dimensions. Zero-padding to the stored width is exact, not an
+// approximation: appended zeros contribute nothing to a dot product and nothing to
+// either vector's norm, so cosine similarity — and therefore every tuned threshold
+// and every ranking — is identical to what the model produces natively.
+//
+// The alternative, making the column dimension configurable, would fragment the
+// schema per deployment, which an append-only migrator with no rollback handles
+// badly. The cost here is storage: 2x for a 768-dimension model.
+function padToStoredDimensions(vector: number[]): number[] {
+  if (vector.length === EMBEDDING_DIMENSIONS) {
+    return vector;
+  }
+  return [...vector, ...new Array<number>(EMBEDDING_DIMENSIONS - vector.length).fill(0)];
 }
 
 function trimTrailingSlash(value: string): string {
