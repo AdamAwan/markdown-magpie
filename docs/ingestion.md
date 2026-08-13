@@ -283,6 +283,13 @@ See [api.md](./api.md) for the full request/response reference.
 | `EMBEDDING_DIMENSIONS` | 1536 (stored width; shorter provider vectors are zero-padded) | `packages/retrieval/src/embeddings.ts` |
 | keyword scorer weights | heading +3 / content +1 | `apps/api/src/stores/knowledge-index.ts` |
 
+Padding is exact, not lossy: appended zeros change neither the dot product nor either
+norm, so a 768-dimension model ranks identically to its native output (the cost is 2x
+storage). Note that index-time embedding against a **local CPU sidecar** (the `embeddings`
+compose profile, see `docs/retrieval.md`) is markedly slower than a hosted endpoint, so a
+first full index takes correspondingly longer — the background embedder just works through
+the backlog, and retrieval stays keyword-only until sections carry vectors.
+
 ## Code map
 
 | Concern | Code |

@@ -22,6 +22,8 @@ callbacks. Weak or unanswerable questions feed the gaps subsystem
   links}`.
 - **R2** — Query-time **embeddings** are the sanctioned inline exception: the API
   computes them synchronously for vector retrieval and for embedding-based flow routing.
+  The endpoint may be hosted or local, authenticated or not — a bundled Ollama sidecar is
+  a supported way to have embeddings at all (see "Local embeddings sidecar").
 - **R3** — **Index-time** embedding is neither inline-in-request nor a queued job: it
   runs as an in-API background task (`BackgroundEmbedder`) triggered after indexing.
   There is no `embed_sections` job type.
@@ -181,7 +183,9 @@ callbacks. Weak or unanswerable questions feed the gaps subsystem
   > the console, but nothing acts on them until an embeddings endpoint is configured. This
   > is deliberate (weaker provenance must not drive unattended work), but it is a silent
   > mode change from an operator's point of view. What grounds a `followup` gap in either
-  > mode is a separate question — see R22/R23.
+  > mode is a separate question — see R22/R23. Keyword-only is a **fallback, not the only
+  > option without an account**: the `embeddings` compose profile clears this cliff with no
+  > third-party dependency (see "Local embeddings sidecar").
 
 ## Citations
 
@@ -284,6 +288,96 @@ zeros contribute nothing to a dot product and nothing to either vector's norm, s
 similarity, every ranking, and every tuned threshold behave identically to the model's native
 output. The cost is storage: 2x for a 768-dimension model.
 
+## Local embeddings sidecar
+
+Hybrid retrieval does not require a third-party account. `docker compose --profile app
+--profile embeddings up -d` runs Ollama with `nomic-embed-text` (768-dim), which serves an
+OpenAI-compatible `/v1/embeddings` that the existing `openai-compatible` embedding provider
+reaches with no adapter and **no API key** — the key is optional precisely so an
+unauthenticated local endpoint is a first-class configuration (the API warns at startup that
+embeddings are unauthenticated). This is the turnkey escape from R17's operator-visible
+cliff, where a Postgres deployment with no embeddings endpoint stamps every new gap
+`keyword` and quietly stops generating proposals from them.
+
+Caveats an operator needs before turning it on:
+
+- **It is not air-gap capable.** Ollama pulls the model weights on first start. Ollama does
+  not fetch a model on demand either — an embeddings request naming an unpulled model
+  returns 404, so the compose service pulls once at startup and the first start is slow.
+  For an air-gapped host, pre-populate the `embeddings-cache` volume.
+- **It is not free of cost, just of money.** ~2.5 GB image (linux/amd64) plus ~275 MB of
+  weights, and CPU inference is markedly slower than a hosted endpoint — hence the
+  `EMBEDDING_TIMEOUT_MS=60000` in the example config.
+- **Retrieval quality is below a hosted model.** Measured below.
+
+### Measured comparison
+
+`npm run eval:golden` in all three configurations, same question set (v1), same fixture KB
+(14 sections), same deterministic chat provider — only the embedding configuration differs.
+The two hybrid runs use the eval's `--embeddings-base-url` / `--embeddings-model` flags; the
+keyword run is the default and is what the committed baseline pins.
+
+| Dimension | keyword (baseline) | hybrid, `nomic-embed-text` | hybrid, `text-embedding-3-small` |
+| --- | --- | --- | --- |
+| routing_accuracy | 1.0000 | 1.0000 | 1.0000 |
+| confidence_calibration | 1.0000 | 1.0000 | 1.0000 |
+| citation_precision | 1.0000 | **0.9091** | 1.0000 |
+| citation_recall | 1.0000 | 1.0000 | 1.0000 |
+| groundedness | 1.0000 | 1.0000 | 1.0000 |
+| answer_content | 1.0000 | 1.0000 | 1.0000 |
+| behaviour_compliance | 1.0000 | 1.0000 | 1.0000 |
+| cases passed | 11/11 | **10/11** | 11/11 |
+
+Read this honestly, in both directions:
+
+- **The eval cannot show what embeddings buy.** Keyword mode already scores a clean 1.0
+  on every dimension, so there is no headroom for any embedding model to demonstrate a
+  gain. The golden set was built as a regression gate for a keyword-mode pipeline over a
+  14-section KB where lexical overlap is near-perfect; it is not a retrieval-quality
+  benchmark. "Hybrid scored the same" is a statement about the instrument, not about
+  semantic retrieval.
+- **It can, and did, show a cost.** `nomic-embed-text` fails `knowledge-gap-sla`,
+  reproducibly across runs. The question ("What is the enterprise support SLA for
+  Aurora?") is one the KB genuinely does not answer. Under keyword mode and under
+  `text-embedding-3-small` the pool is emptied by R16's absolute floor, the answer
+  correctly reports a gap, and it cites nothing. Under `nomic-embed-text` five topically
+  adjacent sections clear the floor, so R19's fallback attaches the entire weak pool to a
+  "the knowledge base does not cover…" answer: citation precision 0. The gap is still
+  detected and confidence is still `low` — behaviour compliance is unaffected — but the
+  answer carries five citations that support nothing.
+
+  That is R19's documented failure mode, not a new one, and it is a **model-specific**
+  trigger: the weaker model's cosine scores for a merely-adjacent section sit above a floor
+  calibrated where the stronger model's do not. It is the concrete shape "lower quality"
+  takes here, and the reason `text-embedding-3-small` stays the production recommendation.
+
+### Per-model overrides
+
+`npm run eval:gap-threshold` swept against `nomic-embed-text` (62 labelled gap summaries,
+zero-over-merge threshold ≥ 0.82, +0.02 safety margin) recommends **0.84** — identical to
+the code default derived for `text-embedding-3-small`, and with slightly better pair recall
+at that threshold (0.265 vs 0.245) at the same perfect precision. So the thresholds need
+**no override for this model**; only the timeout does:
+
+```bash
+# Recommended when using the local sidecar with nomic-embed-text.
+# The code defaults are tuned for text-embedding-3-small, which remains the
+# production recommendation; these are NOT applied automatically.
+EMBEDDING_TIMEOUT_MS=60000
+# GAP_CLUSTER_ASSIGN_THRESHOLD — leave at the 0.84 default; the sweep lands on the
+# same value for nomic-embed-text.
+# QUESTIONNAIRE_MATCH_THRESHOLD — leave at 0.84. It was not swept independently; it
+# shares the near-identical-rewording bar the sweep measures, but it gates verbatim
+# answer reuse, so tighten rather than loosen it if a batch reuses too eagerly.
+```
+
+Re-running the sweep for a different model needs its own fixture, or `--refresh` overwrites
+the committed `text-embedding-3-small` vectors:
+
+```bash
+npm run eval:gap-threshold -- --refresh --fixture=.magpie/eval/gap-threshold-<model>.json
+```
+
 ## Code map
 
 | Concern | Code |
@@ -323,6 +417,9 @@ current code), `2026-06-13-vector-hybrid-retrieval-design.md` (hybrid substrate;
 `2026-07-04-flow-embedding-router-design.md` (embedding router),
 `2026-07-02-answer-search-reliability-design.md`,
 `2026-07-04-answer-reconcile-call-tuning-design.md`,
+`2026-08-11-local-embeddings-sidecar-design.md` (padding, keyless endpoints, the opt-in
+sidecar — implemented, except that the sidecar ships **Ollama**, not the Hugging Face TEI
+the spec assumed; that also retires the spec's TEI-licence blocker),
 `2026-08-11-keyword-retrieval-quality-design.md` (weighted FTS, OR matching, the two-part
 floor, and gap retrieval-mode provenance — implemented; its "an empty keyword result is
 not a knowledge gap" goal is only **partly** realised, see the R16 and R19 notes).

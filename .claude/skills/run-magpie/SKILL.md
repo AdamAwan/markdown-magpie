@@ -48,6 +48,17 @@ docker compose up -d postgres
 # wait for healthy:
 until [ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q postgres)")" = healthy ]; do sleep 2; done
 
+# 1b. OPTIONAL — local embeddings (hybrid retrieval with no provider account).
+#     Starts an Ollama sidecar on :11434 serving an OpenAI-compatible
+#     /v1/embeddings. The FIRST start is slow: it pulls ~275MB of model weights
+#     (Ollama does not fetch a model on demand, so the service pulls at startup;
+#     it is healthy only once the model is present). Point the API at it with
+#     OPENAI_COMPATIBLE_EMBEDDING_BASE_URL=http://localhost:11434/v1 and
+#     OPENAI_COMPATIBLE_EMBEDDING_MODEL=nomic-embed-text — no API key. Omit all
+#     of this and the stack runs keyword-only, which is a supported mode, not a
+#     broken one. Clashes with an Ollama already running on the host port.
+docker compose --profile embeddings up -d embeddings
+
 # 2. Migrations (migrate.mjs reads DATABASE_URL from the env-file).
 node --env-file=.env scripts/migrate.mjs
 
