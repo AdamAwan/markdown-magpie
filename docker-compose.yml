@@ -185,6 +185,61 @@ services:
       timeout: 5s
       retries: 20
 
+  # --- Optional local embeddings (profile: embeddings) ---------------------
+  # OPTIONAL. Runs Ollama, which serves an OpenAI-compatible /v1/embeddings, so
+  # the API's existing openai-compatible embedding provider talks to it with no
+  # adapter and no API key — semantic/hybrid retrieval without a third-party
+  # account. nomic-embed-text emits 768 dimensions; the provider zero-pads those
+  # to the stored 1536-wide column, which leaves cosine similarity (and so every
+  # tuned threshold) exactly unchanged.
+  #
+  # Quality is BELOW a hosted embedding model — see docs/retrieval.md for the
+  # measured comparison and the recommended per-model threshold overrides. This
+  # does NOT make Magpie air-gap capable: the model weights are downloaded on
+  # first start. For an air-gapped host, pre-populate the cache volume.
+  #
+  # Opt in with `--profile app --profile embeddings`, and set the
+  # OPENAI_COMPATIBLE_EMBEDDING_* variables (see .env.compose.example).
+  embeddings:
+    image: ollama/ollama:0.32.9
+    # Ollama does NOT fetch a model on demand: an embeddings request naming a
+    # model it has not pulled returns 404 "model ... not found, try pulling it
+    # first". So the server is started in the background, the model is pulled
+    # once (a no-op when the cache volume already holds it), and then the
+    # server is waited on as the foreground process.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        /bin/ollama serve &
+        until /bin/ollama list >/dev/null 2>&1; do sleep 1; done
+        /bin/ollama pull "$${MAGPIE_EMBEDDING_MODEL:-nomic-embed-text}"
+        wait
+    environment:
+      # Keep in step with OPENAI_COMPATIBLE_EMBEDDING_MODEL if you swap models.
+      MAGPIE_EMBEDDING_MODEL: ${MAGPIE_EMBEDDING_MODEL:-nomic-embed-text}
+    volumes:
+      # Persists pulled weights so a restart does not re-download ~275MB.
+      - embeddings-cache:/root/.ollama
+    ports:
+      # Published for host-based development (the API inside compose reaches it
+      # as http://embeddings:11434/v1). Drop this mapping in a real deployment.
+      # 11434 is Ollama's default, so this clashes with an Ollama already
+      # running on the host — change the host side if that is your setup.
+      - "11434:11434"
+    profiles:
+      - embeddings
+    # The image ships no curl or wget, so health is probed with the CLI itself.
+    # `ollama show` exits non-zero both when the server is not listening and
+    # when the model is absent, so healthy means "serving AND model present".
+    healthcheck:
+      test: ["CMD-SHELL", '/bin/ollama show "$${MAGPIE_EMBEDDING_MODEL:-nomic-embed-text}" >/dev/null 2>&1']
+      interval: 10s
+      timeout: 10s
+      # Generous: the first start downloads the model.
+      retries: 30
+      start_period: 60s
+    restart: unless-stopped
+
   # --- Example logging stack (profile: logging) ---------------------------
   # OPTIONAL and NOT part of the application. This Loki + Alloy + Grafana
   # setup is just an example of one way to collect the containers' logs — it's
@@ -247,5 +302,6 @@ volumes:
   magpie-api-checkouts:
   magpie-api-snapshots:
   magpie-watcher-checkouts:
+  embeddings-cache:
   loki-data:
   grafana-data:

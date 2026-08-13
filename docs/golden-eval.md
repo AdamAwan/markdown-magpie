@@ -12,6 +12,27 @@ npm run eval:golden                      # run + compare against the committed b
 npm run eval:golden -- --update-baseline # re-pin the baseline after an intended change
 ```
 
+The default run is keyword-only and is the gate. A **comparison** run can measure a
+retrieval configuration the baseline does not pin:
+
+```bash
+npm run eval:golden -- --embeddings-base-url=http://localhost:11434/v1 \
+                       --embeddings-model=nomic-embed-text
+# hosted model; the key is read from the NAMED env var, never a command-line argument
+npm run eval:golden -- --embeddings-base-url=https://api.openai.com/v1 \
+                       --embeddings-model=text-embedding-3-small \
+                       --embeddings-api-key-env=OPENAI_API_KEY
+```
+
+Only these flags can steer a run — `cleanEnv()` still strips the ambient shell, so a
+developer's provider keys can never silently change what the eval measures. A comparison
+run prints its retrieval mode, fails fast if embeddings were configured but the API fell
+back to keyword, refuses `--update-baseline`, labels its history line, and **reports**
+differences against the keyword baseline rather than failing on them. See
+`docs/retrieval.md` ("Local embeddings sidecar") for what the three configurations
+measured, including the eval's own ceiling: keyword mode already scores 1.0 on every
+dimension, so this instrument can show an embedding model's costs but not its gains.
+
 `eval:golden` wraps `scripts/eval-golden.ts` in `scripts/test-db.mjs`, so it
 needs a Docker daemon (for the throwaway pgvector container) and nothing else —
 no provider credentials, no embedding endpoint (retrieval runs keyword-only).
