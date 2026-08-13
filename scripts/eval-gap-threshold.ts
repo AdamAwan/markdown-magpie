@@ -18,7 +18,17 @@ import { cosineSimilarity, planAssignments } from "../apps/api/src/scheduling/ga
 import { createEmbeddingProvider } from "../packages/retrieval/src/embeddings.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const fixturePath = path.join(rootDir, "scripts", "fixtures", "gap-threshold-embeddings.json");
+// The committed fixture holds text-embedding-3-small vectors, and nothing in
+// the file records that. Sweeping a DIFFERENT model therefore needs somewhere
+// else to cache, or `--refresh` silently replaces the production reference's
+// vectors and every later "deterministic" run measures the other model:
+//
+//   npm run eval:gap-threshold -- --refresh \
+//     --fixture=scripts/fixtures/gap-threshold-embeddings.nomic.json
+const fixtureFlag = process.argv.find((arg) => arg.startsWith("--fixture="))?.slice("--fixture=".length);
+const fixturePath = fixtureFlag
+  ? path.resolve(rootDir, fixtureFlag)
+  : path.join(rootDir, "scripts", "fixtures", "gap-threshold-embeddings.json");
 
 // The labelled corpus. Constructed (no labelled production corpus exists);
 // themes mirror the compliance-questionnaire domain of the 100-gap incident.

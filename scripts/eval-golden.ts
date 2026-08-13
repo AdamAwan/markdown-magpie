@@ -37,6 +37,47 @@ const historyPath = path.join(evalStateDir, "golden-history.jsonl");
 
 const updateBaseline = process.argv.includes("--update-baseline");
 
+// Opt-in embeddings for a COMPARISON run. The eval is keyword-only by default
+// and the committed baseline anchors that configuration, which is what makes it
+// a stable regression gate. But "how much does semantic retrieval actually buy
+// on this question set?" can only be answered by running the same cases with
+// embeddings on, so it is exposed as an explicit flag — never read from the
+// ambient shell, which cleanEnv() deliberately strips.
+//
+//   npm run eval:golden -- --embeddings-base-url=http://localhost:11434/v1 \
+//                          --embeddings-model=nomic-embed-text
+//
+// The key is passed as the NAME of an env var holding it (never the secret on
+// a command line), matching the repo's tokenEnv convention.
+function flagValue(name: string): string | undefined {
+  const prefix = `--${name}=`;
+  return process.argv.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
+}
+
+const embeddingBaseUrl = flagValue("embeddings-base-url");
+const embeddingModel = flagValue("embeddings-model");
+const embeddingApiKeyEnv = flagValue("embeddings-api-key-env");
+if ((embeddingBaseUrl === undefined) !== (embeddingModel === undefined)) {
+  throw new Error("--embeddings-base-url and --embeddings-model must be given together");
+}
+const embeddingsConfigured = embeddingBaseUrl !== undefined && embeddingModel !== undefined;
+if (embeddingsConfigured && updateBaseline) {
+  throw new Error(
+    "--update-baseline cannot be combined with --embeddings-*: the baseline anchors the keyword-only configuration."
+  );
+}
+// Env overrides for the API child. Empty in the default (keyword) run, so that
+// path is byte-identical to what it was before this flag existed.
+const embeddingEnv: Record<string, string> = embeddingsConfigured
+  ? {
+      OPENAI_COMPATIBLE_EMBEDDING_BASE_URL: embeddingBaseUrl,
+      OPENAI_COMPATIBLE_EMBEDDING_MODEL: embeddingModel,
+      // Cold CPU inference on a local sidecar is far slower than a hosted endpoint.
+      EMBEDDING_TIMEOUT_MS: "60000",
+      ...(embeddingApiKeyEnv ? { OPENAI_COMPATIBLE_EMBEDDING_API_KEY: process.env[embeddingApiKeyEnv] ?? "" } : {})
+    }
+  : {};
+
 const BOOT_TIMEOUT_MS = 90_000;
 const CASE_TIMEOUT_MS = 90_000;
 const POLL_MS = 300;
@@ -306,13 +347,23 @@ async function main(): Promise<void> {
       KNOWLEDGE_SOURCES: JSON.stringify(sources),
       KNOWLEDGE_DESTINATIONS: JSON.stringify(destinations),
       KNOWLEDGE_FLOWS: JSON.stringify(flows),
-      LOG_LEVEL: "warn"
+      LOG_LEVEL: "warn",
+      ...embeddingEnv
     })
   );
   await waitFor("API health", BOOT_TIMEOUT_MS, async () => {
     const response = await fetch(`${apiBase}/api/health`);
     return response.ok;
   });
+
+  // State what was measured. A comparison run that silently fell back to
+  // keyword mode (unreachable endpoint, model not pulled) would otherwise
+  // produce baseline-identical scores and read as "embeddings changed nothing".
+  const { body: config } = await httpJson<{ retrieval: { mode: string } }>(`${apiBase}/api/config`);
+  console.log(`[eval] retrieval mode: ${config.retrieval.mode}${embeddingsConfigured ? ` (${embeddingModel})` : ""}`);
+  if (embeddingsConfigured && config.retrieval.mode !== "hybrid") {
+    throw new Error(`embeddings were configured but retrieval mode is "${config.retrieval.mode}" — check the endpoint`);
+  }
 
   for (const flow of flows) {
     await httpJson(`${apiBase}/api/knowledge/repositories/index`, {
@@ -381,7 +432,13 @@ async function main(): Promise<void> {
     console.log(`${dimension.padEnd(24)} ${score.toFixed(4)}`);
   }
 
-  appendFileSync(historyPath, `${JSON.stringify({ at: new Date().toISOString(), ...result })}\n`);
+  // Labelled so a comparison run is never mistaken for a movement in the
+  // default configuration's trend line.
+  const retrievalLabel = embeddingsConfigured ? `hybrid:${embeddingModel}` : "keyword";
+  appendFileSync(
+    historyPath,
+    `${JSON.stringify({ at: new Date().toISOString(), retrieval: retrievalLabel, ...result })}\n`
+  );
 
   if (updateBaseline) {
     writeFileSync(baselinePath, `${JSON.stringify(result, null, 2)}\n`);
@@ -410,13 +467,22 @@ async function main(): Promise<void> {
     );
   }
   if (regressions.length > 0) {
-    console.error("\n=== REGRESSIONS vs committed baseline ===");
+    // A comparison run is measured against a baseline pinned in a different
+    // retrieval configuration, so a difference is a finding to report, not a
+    // regression to fail on. Only the default run is the gate.
+    const heading = embeddingsConfigured
+      ? `\n=== BELOW the keyword-mode baseline (${retrievalLabel}) ===`
+      : "\n=== REGRESSIONS vs committed baseline ===";
+    const write = embeddingsConfigured ? console.log : console.error;
+    write(heading);
     for (const regression of regressions) {
-      console.error(
+      write(
         `${regression.kind} ${regression.name}: baseline ${String(regression.baseline)} -> ${String(regression.current)}`
       );
     }
-    process.exitCode = 1;
+    if (!embeddingsConfigured) {
+      process.exitCode = 1;
+    }
     return;
   }
   console.log("\nNo regressions against the committed baseline.");
