@@ -18,7 +18,11 @@ export interface EmbeddingProviderConfig {
 
 export class OpenAICompatibleEmbeddingProvider implements EmbeddingProvider {
   constructor(
-    private readonly config: Required<Pick<EmbeddingProviderConfig, "apiKey" | "baseUrl" | "model">>,
+    // apiKey is optional: unauthenticated OpenAI-compatible embedding servers are
+    // common (a local sidecar, an internal service on a trusted network), and
+    // sending a credential such an endpoint ignores was never meaningful.
+    private readonly config: Required<Pick<EmbeddingProviderConfig, "baseUrl" | "model">> &
+      Pick<EmbeddingProviderConfig, "apiKey">,
     private readonly timeoutMs: number = DEFAULT_EMBEDDING_TIMEOUT_MS
   ) {}
 
@@ -28,7 +32,8 @@ export class OpenAICompatibleEmbeddingProvider implements EmbeddingProvider {
       {
         method: "POST",
         headers: {
-          authorization: `Bearer ${this.config.apiKey}`,
+          // Omitted entirely when unset — never sent as "Bearer undefined".
+          ...(this.config.apiKey ? { authorization: `Bearer ${this.config.apiKey}` } : {}),
           "content-type": "application/json"
         },
         body: JSON.stringify({ model: this.config.model, input: texts })
@@ -73,7 +78,6 @@ export class AzureOpenAIEmbeddingProvider implements EmbeddingProvider {
 
 export function createEmbeddingProvider(config: EmbeddingProviderConfig): EmbeddingProvider {
   if (config.provider === "openai-compatible") {
-    assertConfig(config.apiKey, "OPENAI_COMPATIBLE_API_KEY");
     assertConfig(config.baseUrl, "OPENAI_COMPATIBLE_BASE_URL");
     assertConfig(config.model, "OPENAI_COMPATIBLE_EMBEDDING_MODEL");
     return new OpenAICompatibleEmbeddingProvider(

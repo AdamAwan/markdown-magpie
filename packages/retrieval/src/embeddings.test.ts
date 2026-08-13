@@ -88,6 +88,41 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
     await assert.rejects(provider.embed(["x"]), /empty vector/);
   });
 
+  it("omits the Authorization header when no API key is configured", async () => {
+    let captured: { headers: any } | undefined;
+    globalThis.fetch = (async (_url: string, init: any) => {
+      captured = { headers: init.headers };
+      return new Response(JSON.stringify({ data: [{ index: 0, embedding: vectorOf(768) }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const provider = new OpenAICompatibleEmbeddingProvider({
+      baseUrl: "http://embeddings:80/v1",
+      model: "BAAI/bge-base-en-v1.5"
+    });
+    await provider.embed(["hello"]);
+
+    assert.equal(captured?.headers.authorization, undefined);
+  });
+
+  it("sends the Authorization header when an API key is configured", async () => {
+    let captured: { headers: any } | undefined;
+    globalThis.fetch = (async (_url: string, init: any) => {
+      captured = { headers: init.headers };
+      return new Response(JSON.stringify({ data: [{ index: 0, embedding: vectorOf(EMBEDDING_DIMENSIONS) }] }), {
+        status: 200
+      });
+    }) as unknown as typeof fetch;
+
+    const provider = new OpenAICompatibleEmbeddingProvider({
+      apiKey: "secret",
+      baseUrl: "https://api.example.com/v1",
+      model: "text-embedding-3-small"
+    });
+    await provider.embed(["hello"]);
+
+    assert.equal(captured?.headers.authorization, "Bearer secret");
+  });
+
   it("throws when the response count does not match the input count", async () => {
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ data: [] }), { status: 200 })) as unknown as typeof fetch;
@@ -148,9 +183,13 @@ describe("AzureOpenAIEmbeddingProvider", () => {
 describe("createEmbeddingProvider", () => {
   it("requires the OpenAI-compatible embedding settings", () => {
     assert.throws(
-      () => createEmbeddingProvider({ provider: "openai-compatible", baseUrl: "u", model: "m" }),
-      /OPENAI_COMPATIBLE_API_KEY/
+      () => createEmbeddingProvider({ provider: "openai-compatible", apiKey: "k", baseUrl: "u" }),
+      /OPENAI_COMPATIBLE_EMBEDDING_MODEL/
     );
+  });
+
+  it("builds an OpenAI-compatible provider without an API key", () => {
+    assert.ok(createEmbeddingProvider({ provider: "openai-compatible", baseUrl: "u", model: "m" }));
   });
 
   it("requires the Azure embedding settings", () => {

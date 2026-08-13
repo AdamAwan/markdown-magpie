@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { loadConfig } from "./config.js";
+import { createConfiguredEmbeddingProvider, embeddingProviderName, retrievalMode } from "./providers.js";
 
 // loadConfig validates a plain env object, so each test passes its own env map
 // rather than mutating process.env.
@@ -267,6 +268,55 @@ describe("loadConfig — valid configs", () => {
     assert.equal(config.database.idleTimeoutMs, 5000);
     assert.equal(config.database.connectionTimeoutMs, 2000);
     assert.equal(config.database.statementTimeoutMs, 15_000);
+  });
+});
+
+describe("embedding provider selection", () => {
+  // An unauthenticated OpenAI-compatible embeddings endpoint (a local sidecar,
+  // an internal service on a trusted network) is a legitimate configuration, so
+  // a base url and a model are what identify one — not a credential.
+  it("selects openai-compatible embeddings without an API key", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      OPENAI_COMPATIBLE_EMBEDDING_BASE_URL: "http://embeddings:80/v1",
+      OPENAI_COMPATIBLE_EMBEDDING_MODEL: "BAAI/bge-base-en-v1.5"
+    });
+    assert.equal(embeddingProviderName(config), "openai-compatible");
+  });
+
+  it("does not select openai-compatible embeddings without a model", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      OPENAI_COMPATIBLE_EMBEDDING_BASE_URL: "http://embeddings:80/v1"
+    });
+    assert.equal(embeddingProviderName(config), undefined);
+  });
+
+  it("does not select openai-compatible embeddings without a base url", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      OPENAI_COMPATIBLE_EMBEDDING_MODEL: "BAAI/bge-base-en-v1.5"
+    });
+    assert.equal(embeddingProviderName(config), undefined);
+  });
+
+  it("reports hybrid retrieval for a keyless local endpoint with a Postgres store", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      STORAGE_BACKEND: "postgres",
+      OPENAI_COMPATIBLE_EMBEDDING_BASE_URL: "http://embeddings:80/v1",
+      OPENAI_COMPATIBLE_EMBEDDING_MODEL: "BAAI/bge-base-en-v1.5"
+    });
+    assert.equal(retrievalMode(config).mode, "hybrid");
+  });
+
+  it("builds a keyless embedding provider", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      OPENAI_COMPATIBLE_EMBEDDING_BASE_URL: "http://embeddings:80/v1",
+      OPENAI_COMPATIBLE_EMBEDDING_MODEL: "BAAI/bge-base-en-v1.5"
+    });
+    assert.ok(createConfiguredEmbeddingProvider(config));
   });
 });
 

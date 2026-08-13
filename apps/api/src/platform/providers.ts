@@ -22,7 +22,10 @@ function embeddingApiKey(config: AppConfig): string | undefined {
 export function embeddingProviderName(config: AppConfig): EmbeddingProviderName | undefined {
   const oai = config.embeddings.openAiCompatible;
   const azure = config.embeddings.azureOpenAi;
-  if (embeddingBaseUrl(config) && embeddingApiKey(config) && oai.embeddingModel) {
+  // No apiKey requirement: an unauthenticated endpoint is a legitimate
+  // configuration, so a base url and a model are what actually identify one.
+  // The startup log calls out the keyless case (see features/config/service.ts).
+  if (embeddingBaseUrl(config) && oai.embeddingModel) {
     return "openai-compatible";
   }
   if (azure.endpoint && azure.apiKey && azure.embeddingDeployment) {
