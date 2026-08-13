@@ -277,6 +277,13 @@ See [api.md](./api.md) for the full request/response reference.
 | `VECTOR_CANDIDATES` / `KEYWORD_CANDIDATES` | 20 / 20 | `apps/api/src/stores/knowledge-index.ts` |
 | `EMBEDDING_DIMENSIONS` | 1536 | `packages/retrieval/src/embeddings.ts` |
 
+`EMBEDDING_DIMENSIONS` is the **stored** width, not a requirement on the model. A provider
+vector shorter than 1536 (384 and 768 are common for local models) is **zero-padded** to the
+stored width; a wider one is rejected. Padding is exact rather than approximate — appended
+zeros contribute nothing to a dot product and nothing to either vector's norm, so cosine
+similarity, every ranking, and every tuned threshold behave identically to the model's native
+output. The cost is storage: 2x for a 768-dimension model.
+
 ## Code map
 
 | Concern | Code |

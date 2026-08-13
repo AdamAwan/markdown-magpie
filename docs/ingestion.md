@@ -216,14 +216,22 @@ zero embedding calls. It owns everything up to and including a populated, embedd
 
 ## Embedding configuration
 
-- **IN22** — An embedding endpoint is detected by the **presence of its credential
-  variables** — set the full set for whichever provider you use:
+- **IN22** — An embedding endpoint is detected by the **presence of the variables that
+  identify it** — set the full set for whichever provider you use:
 
   | Variable | Purpose |
   | --- | --- |
   | `KNOWLEDGE_STORE=postgres` + `DATABASE_URL` | Required for vector search. |
-  | `OPENAI_COMPATIBLE_EMBEDDING_MODEL` (+ base URL & API key) | OpenAI-compatible embeddings. Model must output 1536-dim vectors. |
-  | `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | Azure OpenAI embeddings. Deployment must output 1536-dim vectors. |
+  | `OPENAI_COMPATIBLE_EMBEDDING_MODEL` + base URL (API key optional) | OpenAI-compatible embeddings. Model must output **at most** 1536 dimensions; shorter vectors are zero-padded. |
+  | `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | Azure OpenAI embeddings. Deployment must output at most 1536 dimensions. |
+
+  The OpenAI-compatible endpoint needs **no API key**: an unauthenticated server — a local
+  sidecar, an internal service on a trusted network — is a supported configuration, and the
+  `Authorization` header is omitted entirely when no key is set. A base URL and a model are
+  what identify the endpoint. Because a keyless configuration now activates embeddings rather
+  than falling back to keyword mode, the API **warns at startup** when embeddings resolve
+  unauthenticated, so an accidentally-omitted credential is visible. Azure is unaffected: it
+  requires `api-key`.
 
 - **IN23** — Embeddings are configured **independently of chat**, so one provider MAY
   answer questions while another embeds (e.g. DeepSeek for `/api/ask`, OpenAI for
@@ -231,12 +239,14 @@ zero embedding calls. It owns everything up to and including a populated, embedd
   `OPENAI_COMPATIBLE_EMBEDDING_BASE_URL` / `OPENAI_COMPATIBLE_EMBEDDING_API_KEY`, each
   falling back to the shared chat values (`OPENAI_COMPATIBLE_BASE_URL` /
   `OPENAI_COMPATIBLE_API_KEY`) when blank; setting `OPENAI_COMPATIBLE_EMBEDDING_MODEL` is
-  what enables it. Both `text-embedding-3-small` and `ada-002` produce 1536-dim vectors and
-  are compatible. `EMBEDDING_PROVIDER` is **informational only** — surfaced in `/api/config`
-  for display, it does not enable embeddings.
+  what enables it, together with a base URL. Both `text-embedding-3-small` and `ada-002`
+  produce 1536-dim vectors and are compatible; a narrower model such as
+  `BAAI/bge-base-en-v1.5` (768) is padded to the stored width. `EMBEDDING_PROVIDER` is
+  **informational only** — surfaced in `/api/config` for display, it does not enable
+  embeddings.
 
 - **IN24** — Hybrid retrieval activates automatically when `KNOWLEDGE_STORE=postgres` **and**
-  a complete embedding credential set is configured; otherwise the system stays on
+  an embedding endpoint is configured; otherwise the system stays on
   keyword-only search with no change in API shape. `GET /api/config` MUST report the
   resolved `retrieval.mode` (`hybrid` or `keyword`) with a plain-language `reason`.
 
@@ -270,7 +280,7 @@ See [api.md](./api.md) for the full request/response reference.
 | --- | --- | --- |
 | `MAX_MARKDOWN_FILE_BYTES` | 5 MiB | `apps/api/src/stores/knowledge-index.ts` |
 | embedder `DEFAULT_BATCH_SIZE` | 64 | `apps/api/src/stores/embed-sections.ts` |
-| `EMBEDDING_DIMENSIONS` | 1536 | `packages/retrieval/src/embeddings.ts` |
+| `EMBEDDING_DIMENSIONS` | 1536 (stored width; shorter provider vectors are zero-padded) | `packages/retrieval/src/embeddings.ts` |
 | keyword scorer weights | heading +3 / content +1 | `apps/api/src/stores/knowledge-index.ts` |
 
 ## Code map
