@@ -33,15 +33,6 @@ interface SourceConflict {
 const FILTERS = ["open", "resolved", "dismissed"] as const;
 type Filter = (typeof FILTERS)[number];
 
-const Head = styled.div(({ theme }) => ({
-  display: "flex",
-  alignItems: "baseline",
-  justifyContent: "space-between",
-  gap: theme.space.md,
-  marginBottom: theme.space.lg,
-  flexWrap: "wrap"
-}));
-
 const Intro = styled.p(({ theme }) => ({
   margin: 0,
   fontSize: theme.font.size.sm,
@@ -56,10 +47,10 @@ const Filters = styled.div(({ theme }) => ({
 }));
 
 const ConflictRow = styled.div(({ theme }) => ({
-  padding: `${theme.space.lg} 0`,
   display: "grid",
   gap: theme.space.md,
   "&:not(:last-child)": {
+    paddingBottom: theme.space.lg,
     borderBottom: `1px solid ${theme.color.border}`
   }
 }));
@@ -162,15 +153,8 @@ export function SourceConflictsPanel() {
 
   return (
     <Surface>
-      <Head>
-        <div>
-          <h2>Source conflicts</h2>
-          <Intro>
-            Places where the sources disagree with each other about something the knowledge base asserts. Magpie does
-            not choose between sources — fix the disagreement in the sources themselves and the next correctness patrol
-            will close this and restate the agreed value. Dismiss a conflict that is not real.
-          </Intro>
-        </div>
+      <Surface.Header>
+        <h2>Source conflicts</h2>
         <Filters>
           {FILTERS.map((value) => (
             <Button key={value} variant={value === filter ? "primary" : "ghost"} onClick={() => setFilter(value)}>
@@ -178,74 +162,81 @@ export function SourceConflictsPanel() {
             </Button>
           ))}
         </Filters>
-      </Head>
+      </Surface.Header>
+      <Surface.Body>
+        <Intro>
+          Places where the sources disagree with each other about something the knowledge base asserts. Magpie does not
+          choose between sources — fix the disagreement in the sources themselves and the next correctness patrol will
+          close this and restate the agreed value. Dismiss a conflict that is not real.
+        </Intro>
 
-      {error ? <Error>{error}</Error> : null}
+        {error ? <Error>{error}</Error> : null}
 
-      {conflicts.length === 0 ? (
-        <EmptyState>{filter === "open" ? "No open source conflicts." : `No ${filter} source conflicts.`}</EmptyState>
-      ) : (
-        <ScrollList>
-          {conflicts.map((conflict) => (
-            <ConflictRow key={conflict.id}>
-              <TopicRow>
-                <h3>{conflict.topic}</h3>
-                <Badge>{conflict.status}</Badge>
-              </TopicRow>
-              <Summary>{conflict.summary}</Summary>
-              <Positions>
-                {conflict.positions.map((position, index) => (
-                  <Position key={`${position.sourceId}:${position.path}:${index}`}>
-                    <Badge>{position.sourceId}</Badge>
-                    <PositionPath>
-                      {position.path}
-                      {position.lines ? ` (${position.lines})` : ""}
-                    </PositionPath>
-                    <Statement>{position.statement}</Statement>
-                  </Position>
-                ))}
-              </Positions>
-              <Meta>
-                <span>
-                  Document: <code>{conflict.documentPath}</code>
-                  {conflict.anchor ? ` · ${conflict.anchor}` : ""}
-                </span>
-                {conflict.flowId ? <span>Flow: {conflict.flowId}</span> : null}
-                <span>First seen {formatDate(conflict.firstSeenAt)}</span>
-                <span>
-                  Last seen {formatDate(conflict.lastSeenAt)} ({conflict.seenCount}×)
-                </span>
-              </Meta>
-              {conflict.agreedStatement ? <Meta>Sources now agree: {conflict.agreedStatement}</Meta> : null}
-              {conflict.dismissalNote ? <Meta>Dismissed: {conflict.dismissalNote}</Meta> : null}
-              {conflict.status === "open" ? (
-                dismissingId === conflict.id ? (
-                  <>
-                    <Textarea
-                      value={note}
-                      onChange={(event) => setNote(event.target.value)}
-                      placeholder="Why is this not a real conflict?"
-                      rows={2}
-                    />
+        {conflicts.length === 0 ? (
+          <EmptyState>{filter === "open" ? "No open source conflicts." : `No ${filter} source conflicts.`}</EmptyState>
+        ) : (
+          <ScrollList>
+            {conflicts.map((conflict) => (
+              <ConflictRow key={conflict.id}>
+                <TopicRow>
+                  <h3>{conflict.topic}</h3>
+                  <Badge>{conflict.status}</Badge>
+                </TopicRow>
+                <Summary>{conflict.summary}</Summary>
+                <Positions>
+                  {conflict.positions.map((position, index) => (
+                    <Position key={`${position.sourceId}:${position.path}:${index}`}>
+                      <Badge>{position.sourceId}</Badge>
+                      <PositionPath>
+                        {position.path}
+                        {position.lines ? ` (${position.lines})` : ""}
+                      </PositionPath>
+                      <Statement>{position.statement}</Statement>
+                    </Position>
+                  ))}
+                </Positions>
+                <Meta>
+                  <span>
+                    Document: <code>{conflict.documentPath}</code>
+                    {conflict.anchor ? ` · ${conflict.anchor}` : ""}
+                  </span>
+                  {conflict.flowId ? <span>Flow: {conflict.flowId}</span> : null}
+                  <span>First seen {formatDate(conflict.firstSeenAt)}</span>
+                  <span>
+                    Last seen {formatDate(conflict.lastSeenAt)} ({conflict.seenCount}×)
+                  </span>
+                </Meta>
+                {conflict.agreedStatement ? <Meta>Sources now agree: {conflict.agreedStatement}</Meta> : null}
+                {conflict.dismissalNote ? <Meta>Dismissed: {conflict.dismissalNote}</Meta> : null}
+                {conflict.status === "open" ? (
+                  dismissingId === conflict.id ? (
+                    <>
+                      <Textarea
+                        value={note}
+                        onChange={(event) => setNote(event.target.value)}
+                        placeholder="Why is this not a real conflict?"
+                        rows={2}
+                      />
+                      <Actions>
+                        <Button onClick={() => void dismiss(conflict.id)}>Confirm dismiss</Button>
+                        <Button variant="ghost" onClick={() => setDismissingId(undefined)}>
+                          Cancel
+                        </Button>
+                      </Actions>
+                    </>
+                  ) : (
                     <Actions>
-                      <Button onClick={() => void dismiss(conflict.id)}>Confirm dismiss</Button>
-                      <Button variant="ghost" onClick={() => setDismissingId(undefined)}>
-                        Cancel
+                      <Button variant="ghost" onClick={() => setDismissingId(conflict.id)}>
+                        Dismiss
                       </Button>
                     </Actions>
-                  </>
-                ) : (
-                  <Actions>
-                    <Button variant="ghost" onClick={() => setDismissingId(conflict.id)}>
-                      Dismiss
-                    </Button>
-                  </Actions>
-                )
-              ) : null}
-            </ConflictRow>
-          ))}
-        </ScrollList>
-      )}
+                  )
+                ) : null}
+              </ConflictRow>
+            ))}
+          </ScrollList>
+        )}
+      </Surface.Body>
     </Surface>
   );
 }
