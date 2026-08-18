@@ -109,14 +109,18 @@ export function QuestionnaireCreateList({
     try {
       const staged = await onUpload(file, name.trim() || file.name, flowId);
       if (!staged) return;
-      // Poll while the mapping job runs. Bounded: an unmapped import is still
-      // usable — every column select simply starts blank.
-      for (let attempt = 0; attempt < 30; attempt += 1) {
+      // Poll while the mapping job runs. Bounded, but long enough to outlast the
+      // job's whole retry budget (retries at 15s+ backoff, then dead-letter), so a
+      // failing mapping is seen resolving to `failed` with its reason rather than
+      // being abandoned mid-retry on a "mapping" badge. Slows down after the first
+      // half-minute so the wait costs a handful of requests, not hundreds. An
+      // unmapped import stays usable throughout — every column select starts blank.
+      for (let attempt = 0; attempt < 45; attempt += 1) {
         const view = await onLoadImport(staged.id);
         if (!view) return;
         setPending(view);
         if (view.import.status !== "mapping") return;
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await new Promise((resolve) => setTimeout(resolve, attempt < 15 ? 2000 : 5000));
       }
     } finally {
       setCreating(false);

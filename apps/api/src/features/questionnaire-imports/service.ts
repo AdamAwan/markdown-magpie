@@ -137,6 +137,29 @@ export async function applyColumnMapping(
   await ctx.stores.questionnaireImports.markMapped(found.id, output.sheets);
 }
 
+// The job's TERMINAL-failure side effect, the twin of applyColumnMapping above
+// (#366). Without it a dead-lettered mapping job leaves the import in `mapping`
+// forever with the reason visible only in the logs and the dead-letter queue,
+// and the operator watches a spinner that never resolves — while Q36 of
+// docs/questionnaires.md promises exactly this terminal state. The grid
+// deliberately survives (markFailed keeps it), so the operator maps by hand.
+export async function handleColumnMappingFailure(ctx: AppContext, jobId: string, message: string): Promise<void> {
+  const found = await ctx.stores.questionnaireImports.byJobId(jobId);
+  // Only a still-mapping import is failed: a mapping that already landed, or an
+  // import already confirmed or failed, must never be regressed by a late failure.
+  if (!found || found.status !== "mapping") {
+    return;
+  }
+  await ctx.stores.questionnaireImports.markFailed(found.id, mappingFailureReason(message));
+}
+
+// The stored reason reads as a sentence fragment, because the console renders it
+// as "<reason>. Map the columns by hand below…".
+function mappingFailureReason(message: string): string {
+  const detail = message.trim().replace(/[.\s]+$/, "");
+  return detail ? `the automatic column mapping failed: ${detail}` : "the automatic column mapping failed";
+}
+
 export async function getQuestionnaireImport(ctx: AppContext, id: string): Promise<ImportView | undefined> {
   const found = await ctx.stores.questionnaireImports.get(id);
   if (!found) {

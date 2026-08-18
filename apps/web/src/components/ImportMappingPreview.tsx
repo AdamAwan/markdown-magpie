@@ -50,9 +50,20 @@ export function ImportMappingPreview({ data, onConfirm, onDiscard, confirming = 
         </Muted>
       </Row>
 
-      {data.import.error ? (
-        <Muted role="alert">
-          {data.import.error}. Map the columns by hand below, or discard the upload and paste the questions instead.
+      {data.import.status === "failed" ? (
+        // A failed mapping is a terminal state carrying its reason (#366), so it is
+        // shown as an error rather than left as a "mapping" badge that never
+        // resolves. The grid survives a failure, so the recovery is always the same:
+        // map by hand right here.
+        <ErrorLine role="alert">
+          {data.import.error ?? "the automatic column mapping failed"}. Map the columns by hand below, or discard the
+          upload and paste the questions instead.
+        </ErrorLine>
+      ) : null}
+
+      {data.import.status === "mapping" ? (
+        <Muted role="status">
+          Working out which columns hold what. You can map the columns by hand now rather than wait.
         </Muted>
       ) : null}
 
@@ -269,6 +280,12 @@ const SampleList = styled.ul(({ theme }) => ({
   gap: theme.space.sm,
   margin: 0,
   padding: `0 0 0 ${theme.space.lg}`,
+  fontSize: theme.font.size.sm
+}));
+
+const ErrorLine = styled.p(({ theme }) => ({
+  margin: 0,
+  color: theme.color.status.failed.fg,
   fontSize: theme.font.size.sm
 }));
 

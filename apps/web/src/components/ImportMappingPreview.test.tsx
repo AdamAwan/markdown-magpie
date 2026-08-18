@@ -206,6 +206,44 @@ test("a failed import explains itself and still offers a hand mapping", async ()
   }
 });
 
+// A dead-lettered mapping job resolves the import to `failed` with its reason
+// (#366); the console must show that reason instead of a mapping badge that
+// never resolves, while still letting the operator map by hand.
+test("a failed import with no recorded reason still reads as a failure, not a spinner", async () => {
+  const { container, unmount } = await renderDom(
+    <ImportMappingPreview
+      data={{ import: staged({ status: "failed", mapping: undefined as never }), preview: [preview()] }}
+      onConfirm={() => {}}
+      onDiscard={() => {}}
+    />
+  );
+  try {
+    const alert = container.querySelector('[role="alert"]');
+    assert.ok(alert);
+    assert.match(alert.textContent ?? "", /the automatic column mapping failed/);
+  } finally {
+    unmount();
+  }
+});
+
+test("an import still mapping says so rather than showing an error", async () => {
+  const { container, unmount } = await renderDom(
+    <ImportMappingPreview
+      data={{ import: staged({ status: "mapping", mapping: undefined as never }), preview: [preview()] }}
+      onConfirm={() => {}}
+      onDiscard={() => {}}
+    />
+  );
+  try {
+    assert.equal(container.querySelector('[role="alert"]'), null);
+    const status = container.querySelector('[role="status"]');
+    assert.ok(status);
+    assert.match(status.textContent ?? "", /map the columns by hand now rather than wait/);
+  } finally {
+    unmount();
+  }
+});
+
 test("discarding the upload calls back", async () => {
   let discarded = 0;
   const { container, unmount } = await renderDom(
