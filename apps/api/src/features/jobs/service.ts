@@ -1,7 +1,7 @@
 import type { AiUsage, AnswerQuestionJobInput, AnswerQuestionJobOutput } from "@magpie/core";
 import { z } from "zod";
 import { handleImportVerificationCompletion } from "../questionnaires/import-escalation.js";
-import { applyColumnMapping } from "../questionnaire-imports/service.js";
+import { applyColumnMapping, handleColumnMappingFailure } from "../questionnaire-imports/service.js";
 import { logger } from "../../logger.js";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
 import { isRepairableJobType, jobDefinition } from "@magpie/jobs";
@@ -891,6 +891,13 @@ export async function failJob(
   // Retryable failures are skipped — the job will run again.
   if (failingJob && isAnswerJobType(failingJob.type) && failedJob.state === "failed") {
     await questionnairesService.handleQuestionnaireAnswerFailure(ctx, failingJob, jobError.message);
+  }
+  // A terminally failed (dead-lettered) mapping job marks its questionnaire import
+  // `failed` with the reason (#366), so the console shows the error instead of a
+  // "mapping" badge that never resolves. Retryable failures are skipped — the job
+  // will run again, and the import is legitimately still mapping.
+  if (failingJob?.type === "map_questionnaire_columns" && failedJob.state === "failed") {
+    await handleColumnMappingFailure(ctx, jobId, jobError.message);
   }
   return failedJob;
 }

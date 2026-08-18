@@ -340,8 +340,14 @@ way to fill `POST /api/questionnaires`, not a second questionnaire model.
 - **Q36** — **Never a dead end.** An unreadable, oversized, empty or unsupported file 400s at
   upload with its reason and stores nothing. A failed or dead-lettered mapping job leaves the
   import `failed` **with its grid intact**, so the operator maps by hand or the job re-runs —
-  only a bad *parse* needs the file again. A model that classifies nothing yields a blank
-  proposal the operator fills in. Paste remains available throughout.
+  only a bad *parse* needs the file again. `failed` is terminal and carries the reason: the
+  enqueue-time failures record theirs directly, and a job that exhausts its retries records
+  its error through the same terminal-failure hook the source-sync run and the questionnaire
+  drip use (`failJob` fans out only on `state === "failed"`, so a *retryable* failure leaves
+  the import legitimately `mapping`). Without that hook the reason lives only in the logs and
+  the dead-letter queue and the console shows a `mapping` badge that never resolves. A model
+  that classifies nothing yields a blank proposal the operator fills in. Paste remains
+  available throughout.
 
 ## API surface
 
@@ -451,6 +457,7 @@ console/API-only.
 | Upload: staging store + migration | `apps/api/src/stores/{questionnaire-import-store,postgres-questionnaire-import-store}.ts`, `packages/db/migrations/0066_questionnaire_imports.sql` |
 | Upload: mapping job contract + prompt | `packages/jobs/src/{schemas,catalog,types}.ts`, `packages/prompts/src/catalog.ts` (`MAP_QUESTIONNAIRE_COLUMNS`), `apps/watcher/src/job-prompts.ts` |
 | Upload: the console's confirmation gate | `apps/web/src/components/ImportMappingPreview.tsx`, `QuestionnaireCreateList.tsx` |
+| Upload: terminal mapping failure → `failed` + reason | `apps/api/src/features/questionnaire-imports/service.ts` (`handleColumnMappingFailure`), `apps/api/src/features/jobs/service.ts` (`failJob`) |
 | Console: the asserted-claims register page | `apps/web/src/components/AssertedClaimsPanel.tsx`, `apps/web/src/app/asserted-claims/page.tsx` |
 
 ## Tests (behavioural contract)

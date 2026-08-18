@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { SheetMapping } from "@magpie/core";
 import { mapQuestionnaireColumnsInputSchema } from "@magpie/jobs";
+import { failJob } from "../jobs/service.js";
 import { makeTestContext } from "../../test-support/context.js";
 import {
   applyColumnMapping,
@@ -204,4 +205,55 @@ test("the sweep drops unconfirmed uploads past their retention and keeps confirm
 
   assert.equal(await store.get(stale.id), undefined);
   assert.ok(await store.get(confirmed.id));
+});
+
+// A mapping job that exhausts its retries and dead-letters must land its reason
+// on the import (#366) — otherwise the import sits in `mapping` forever and the
+// failure is visible only in the logs and the dead-letter queue.
+async function exhaustMappingJob(ctx: ReturnType<typeof flowContext>, jobId: string, message: string) {
+  const jobError = { code: "runner_failed", message, category: "external" as const, executor: "watcher" };
+  let failed = await failJob(ctx, jobId, jobError);
+  while (failed?.state !== "failed") {
+    failed = await failJob(ctx, jobId, jobError);
+  }
+}
+
+test("a dead-lettered mapping job fails the import with its reason, grid intact", async () => {
+  const ctx = flowContext();
+  const created = await uploadSimple(ctx);
+  await exhaustMappingJob(ctx, created.jobId ?? "", "model returned no sheets");
+
+  const view = await getQuestionnaireImport(ctx, created.id);
+  assert.equal(view?.import.status, "failed");
+  assert.equal(view?.import.error, "the automatic column mapping failed: model returned no sheets");
+  // The grid survives a failed mapping, so the operator maps by hand rather than
+  // re-uploading the file.
+  assert.ok((view?.preview[0].unclassifiedCount ?? 0) > 0);
+});
+
+test("a retryable mapping failure leaves the import mapping — the job will run again", async () => {
+  const ctx = flowContext();
+  const created = await uploadSimple(ctx);
+  const failed = await failJob(ctx, created.jobId ?? "", {
+    code: "runner_failed",
+    message: "transient blip",
+    category: "external",
+    executor: "watcher"
+  });
+  assert.notEqual(failed?.state, "failed");
+
+  const view = await getQuestionnaireImport(ctx, created.id);
+  assert.equal(view?.import.status, "mapping");
+  assert.equal(view?.import.error, undefined);
+});
+
+test("a late mapping failure never regresses an import that already mapped", async () => {
+  const ctx = flowContext();
+  const created = await uploadSimple(ctx);
+  await applyColumnMapping(ctx, created.jobId ?? "", { sheets: [mapping] });
+  await exhaustMappingJob(ctx, created.jobId ?? "", "too late");
+
+  const view = await getQuestionnaireImport(ctx, created.id);
+  assert.equal(view?.import.status, "mapped");
+  assert.equal(view?.import.error, undefined);
 });
