@@ -3,6 +3,9 @@ import { DEFAULT_CHAT_TIMEOUT_MS, fetchWithTimeout } from "./http.js";
 
 export type ChatProviderName = "openai-compatible" | "azure-openai";
 
+/** Sampling temperature used when a config leaves `temperature` unset. */
+export const DEFAULT_CHAT_TEMPERATURE = 0.2;
+
 export interface ChatProviderConfig {
   provider: ChatProviderName;
   apiKey?: string;
@@ -12,11 +15,27 @@ export interface ChatProviderConfig {
   azureDeployment?: string;
   azureApiVersion?: string;
   timeoutMs?: number;
+  /**
+   * `undefined` sends DEFAULT_CHAT_TEMPERATURE; a number overrides it; `null`
+   * omits the field entirely. Omission is what reasoning deployments
+   * (GPT-5-class, o-series) need — they accept only their own default and
+   * reject any explicit value with HTTP 400 (#364). Deployment names are
+   * operator-chosen, so this is configuration, never a name heuristic.
+   */
+  temperature?: number | null;
+}
+
+// Conditional spread so `null` contributes no key at all, matching the idiom
+// used for the optional embedding `authorization` header.
+function temperatureField(temperature: number | null | undefined): { temperature: number } | Record<string, never> {
+  const resolved = temperature === undefined ? DEFAULT_CHAT_TEMPERATURE : temperature;
+  return resolved === null ? {} : { temperature: resolved };
 }
 
 export class OpenAICompatibleChatProvider implements ChatProvider {
   constructor(
-    private readonly config: Required<Pick<ChatProviderConfig, "apiKey" | "baseUrl" | "model">>,
+    private readonly config: Required<Pick<ChatProviderConfig, "apiKey" | "baseUrl" | "model">> &
+      Pick<ChatProviderConfig, "temperature">,
     private readonly timeoutMs: number = DEFAULT_CHAT_TIMEOUT_MS
   ) {}
 
@@ -32,7 +51,7 @@ export class OpenAICompatibleChatProvider implements ChatProvider {
         body: JSON.stringify({
           model: this.config.model,
           messages: [{ role: "system", content: request.system }, ...request.messages],
-          temperature: 0.2,
+          ...temperatureField(this.config.temperature),
           ...(request.responseFormat === "json" ? { response_format: { type: "json_object" } } : {})
         })
       },
@@ -49,7 +68,8 @@ export class AzureOpenAIChatProvider implements ChatProvider {
   constructor(
     private readonly config: Required<
       Pick<ChatProviderConfig, "apiKey" | "azureEndpoint" | "azureDeployment" | "azureApiVersion">
-    >,
+    > &
+      Pick<ChatProviderConfig, "temperature">,
     private readonly timeoutMs: number = DEFAULT_CHAT_TIMEOUT_MS
   ) {}
 
@@ -67,7 +87,7 @@ export class AzureOpenAIChatProvider implements ChatProvider {
         },
         body: JSON.stringify({
           messages: [{ role: "system", content: request.system }, ...request.messages],
-          temperature: 0.2,
+          ...temperatureField(this.config.temperature),
           ...(request.responseFormat === "json" ? { response_format: { type: "json_object" } } : {})
         })
       },
@@ -89,7 +109,8 @@ export function createChatProvider(config: ChatProviderConfig): ChatProvider {
       {
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
-        model: config.model
+        model: config.model,
+        ...(config.temperature === undefined ? {} : { temperature: config.temperature })
       },
       config.timeoutMs ?? DEFAULT_CHAT_TIMEOUT_MS
     );
@@ -104,7 +125,8 @@ export function createChatProvider(config: ChatProviderConfig): ChatProvider {
         apiKey: config.apiKey,
         azureEndpoint: config.azureEndpoint,
         azureDeployment: config.azureDeployment,
-        azureApiVersion: config.azureApiVersion ?? "2024-10-21"
+        azureApiVersion: config.azureApiVersion ?? "2024-10-21",
+        ...(config.temperature === undefined ? {} : { temperature: config.temperature })
       },
       config.timeoutMs ?? DEFAULT_CHAT_TIMEOUT_MS
     );

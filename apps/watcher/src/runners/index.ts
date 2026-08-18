@@ -30,6 +30,8 @@ export function createConfiguredRunners(
   // Source-grounded CLI runs explore a checkout, so they get their own, much
   // longer budget than the one-shot AGENT_CLI_TIMEOUT_MS.
   const agenticTimeoutMs = positiveInt(env.MAGPIE_AGENTIC_TIMEOUT_MS, 600_000);
+  // Shared by both hosted chat providers — see chatTemperature below.
+  const temperature = chatTemperature(env.CHAT_TEMPERATURE);
 
   if (ready("openai-compatible")) {
     // The agent model drives the source-agent tool loop for source-grounded jobs;
@@ -48,7 +50,8 @@ export function createConfiguredRunners(
           apiKey: env.OPENAI_COMPATIBLE_API_KEY,
           baseUrl: env.OPENAI_COMPATIBLE_BASE_URL,
           model: env.OPENAI_COMPATIBLE_MODEL,
-          timeoutMs
+          timeoutMs,
+          ...temperature
         }),
         api,
         { agentModel: openaiAgentModel, ...optionalModel(env.OPENAI_COMPATIBLE_MODEL) }
@@ -85,7 +88,8 @@ export function createConfiguredRunners(
           azureEndpoint: env.AZURE_OPENAI_ENDPOINT,
           azureDeployment: env.AZURE_OPENAI_CHAT_DEPLOYMENT,
           ...(env.AZURE_OPENAI_API_VERSION ? { azureApiVersion: env.AZURE_OPENAI_API_VERSION } : {}),
-          timeoutMs
+          timeoutMs,
+          ...temperature
         }),
         api,
         // Azure's "model" for pricing purposes is the deployment name — the
@@ -175,6 +179,24 @@ function optionalModel(value: string | undefined): { model: string } | Record<st
 // their endpoints, so a `.../` env value cannot produce `//chat/completions` URLs.
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+// CHAT_TEMPERATURE for both hosted chat providers (#364). `default`
+// (case-insensitive) means "send no temperature at all", which is what
+// reasoning deployments (GPT-5-class, o-series) require — they reject any
+// explicit value with HTTP 400. A finite number overrides the provider default.
+// Unset or unparseable leaves the field absent, so the provider keeps sending
+// DEFAULT_CHAT_TEMPERATURE and existing deployments are unchanged.
+function chatTemperature(value: string | undefined): { temperature: number | null } | Record<string, never> {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return {};
+  }
+  if (trimmed.toLowerCase() === "default") {
+    return { temperature: null };
+  }
+  const parsed = Number.parseFloat(trimmed);
+  return Number.isFinite(parsed) ? { temperature: parsed } : {};
 }
 
 function positiveInt(value: string | undefined, fallback: number): number {
