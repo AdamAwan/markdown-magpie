@@ -64,6 +64,26 @@ Each CLI provider also accepts:
 On Windows, set `*_CLI_PATH` to a directly-spawnable executable (e.g. `claude.exe`);
 a `.cmd`/`.ps1` PATH shim cannot be spawned without a shell.
 
+## Sampling temperature
+
+Both hosted providers (`openai-compatible` and `azure-openai`) send
+`temperature: 0.2` by default. `CHAT_TEMPERATURE` on the watcher overrides that
+for both:
+
+| `CHAT_TEMPERATURE`     | Request body                       |
+| ---------------------- | ---------------------------------- |
+| unset (or unparseable) | `temperature: 0.2`                 |
+| `default`              | field omitted entirely             |
+| a number (e.g. `0.7`)  | `temperature: 0.7`                 |
+
+Set it to `default` for **reasoning deployments** — GPT-5-class and o-series
+models accept only their own temperature and reject any explicit value with
+`HTTP 400 unsupported_value`, which otherwise makes the deployment unusable. The
+value is deliberately configuration rather than a name heuristic: deployment
+names are operator-chosen, so sniffing for `gpt-5`/`o1` breaks on any other
+naming convention. This affects the chat-completions path only; the AI-SDK agent
+model used for source-grounded jobs never sends a temperature.
+
 ## JSON responses
 
 The `answer_question` flow's model calls (routing, the assess/answer step, and the
