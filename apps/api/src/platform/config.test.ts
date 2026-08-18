@@ -284,6 +284,28 @@ describe("embedding provider selection", () => {
     assert.equal(embeddingProviderName(config), "openai-compatible");
   });
 
+  // The opt-in output width has to survive loadConfig, because that is the only
+  // place the API reads env — a call site reading process.env would never see it.
+  it("leaves the embedding dimensions undefined when unset and parses them when set", () => {
+    const unset = loadConfig({
+      ...minimalEnv,
+      OPENAI_COMPATIBLE_EMBEDDING_BASE_URL: "http://embeddings:80/v1",
+      OPENAI_COMPATIBLE_EMBEDDING_MODEL: "BAAI/bge-base-en-v1.5"
+    });
+    assert.equal(unset.embeddings.openAiCompatible.embeddingDimensions, undefined);
+    assert.equal(unset.embeddings.azureOpenAi.embeddingDimensions, undefined);
+
+    const set = loadConfig({
+      ...minimalEnv,
+      OPENAI_COMPATIBLE_EMBEDDING_BASE_URL: "http://embeddings:80/v1",
+      OPENAI_COMPATIBLE_EMBEDDING_MODEL: "text-embedding-3-large",
+      OPENAI_COMPATIBLE_EMBEDDING_DIMENSIONS: "1024",
+      AZURE_OPENAI_EMBEDDING_DIMENSIONS: "1536"
+    });
+    assert.equal(set.embeddings.openAiCompatible.embeddingDimensions, 1024);
+    assert.equal(set.embeddings.azureOpenAi.embeddingDimensions, 1536);
+  });
+
   it("does not select openai-compatible embeddings without a model", () => {
     const config = loadConfig({
       ...minimalEnv,

@@ -223,7 +223,9 @@ zero embedding calls. It owns everything up to and including a populated, embedd
   | --- | --- |
   | `KNOWLEDGE_STORE=postgres` + `DATABASE_URL` | Required for vector search. |
   | `OPENAI_COMPATIBLE_EMBEDDING_MODEL` + base URL (API key optional) | OpenAI-compatible embeddings. Model must output **at most** 1536 dimensions; shorter vectors are zero-padded. |
+  | `OPENAI_COMPATIBLE_EMBEDDING_DIMENSIONS` (optional) | Requested output width — see IN22a. |
   | `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | Azure OpenAI embeddings. Deployment must output at most 1536 dimensions. |
+  | `AZURE_OPENAI_EMBEDDING_DIMENSIONS` (optional) | Requested output width — see IN22a. Required for a `text-embedding-3-large` deployment. |
 
   The OpenAI-compatible endpoint needs **no API key**: an unauthenticated server — a local
   sidecar, an internal service on a trusted network — is a supported configuration, and the
@@ -232,6 +234,16 @@ zero embedding calls. It owns everything up to and including a populated, embedd
   than falling back to keyword mode, the API **warns at startup** when embeddings resolve
   unauthenticated, so an accidentally-omitted credential is visible. Azure is unaffected: it
   requires `api-key`.
+
+- **IN22a** — The `dimensions` request parameter is **opt-in**. It is sent only when
+  `OPENAI_COMPATIBLE_EMBEDDING_DIMENSIONS` / `AZURE_OPENAI_EMBEDDING_DIMENSIONS` is set,
+  and the field is omitted from the request body entirely otherwise — `ada-002` and many
+  OpenAI-compatible servers (including the bundled Ollama sidecar) reject an unknown field,
+  so always sending it would break them. The `text-embedding-3-*` models accept it and
+  shorten their output natively at full quality, which is not the same as truncating: set
+  `AZURE_OPENAI_EMBEDDING_DIMENSIONS=1536` to use `text-embedding-3-large`, whose 3072-dim
+  default is wider than the stored width and is rejected outright. The width-guard error
+  names these variables as its first remedy.
 
 - **IN23** — Embeddings are configured **independently of chat**, so one provider MAY
   answer questions while another embeds (e.g. DeepSeek for `/api/ask`, OpenAI for

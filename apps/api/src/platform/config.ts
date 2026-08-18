@@ -86,12 +86,18 @@ export interface AppConfig {
       embeddingBaseUrl?: string;
       embeddingApiKey?: string;
       embeddingModel?: string;
+      // Opt-in output width, forwarded as the `dimensions` request parameter
+      // only when set — many OpenAI-compatible servers reject the field.
+      embeddingDimensions?: number;
     };
     azureOpenAi: {
       endpoint?: string;
       apiKey?: string;
       chatDeployment?: string;
       embeddingDeployment?: string;
+      // Opt-in output width. Needed to use text-embedding-3-large on Azure at
+      // all: it returns 3072 dimensions by default, wider than the store holds.
+      embeddingDimensions?: number;
       apiVersion: string;
     };
     timeoutMs?: number;
@@ -358,10 +364,12 @@ const schema = z
     OPENAI_COMPATIBLE_EMBEDDING_BASE_URL: optionalUrl,
     OPENAI_COMPATIBLE_EMBEDDING_API_KEY: optionalString,
     OPENAI_COMPATIBLE_EMBEDDING_MODEL: optionalString,
+    OPENAI_COMPATIBLE_EMBEDDING_DIMENSIONS: optionalPositiveInt,
     AZURE_OPENAI_ENDPOINT: optionalUrl,
     AZURE_OPENAI_API_KEY: optionalString,
     AZURE_OPENAI_CHAT_DEPLOYMENT: optionalString,
     AZURE_OPENAI_EMBEDDING_DEPLOYMENT: optionalString,
+    AZURE_OPENAI_EMBEDDING_DIMENSIONS: optionalPositiveInt,
     AZURE_OPENAI_API_VERSION: optionalString,
     EMBEDDING_TIMEOUT_MS: optionalPositiveInt,
 
@@ -528,13 +536,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
         model: parsed.OPENAI_COMPATIBLE_MODEL,
         embeddingBaseUrl: parsed.OPENAI_COMPATIBLE_EMBEDDING_BASE_URL,
         embeddingApiKey: parsed.OPENAI_COMPATIBLE_EMBEDDING_API_KEY,
-        embeddingModel: parsed.OPENAI_COMPATIBLE_EMBEDDING_MODEL
+        embeddingModel: parsed.OPENAI_COMPATIBLE_EMBEDDING_MODEL,
+        embeddingDimensions: parsed.OPENAI_COMPATIBLE_EMBEDDING_DIMENSIONS
       },
       azureOpenAi: {
         endpoint: parsed.AZURE_OPENAI_ENDPOINT,
         apiKey: parsed.AZURE_OPENAI_API_KEY,
         chatDeployment: parsed.AZURE_OPENAI_CHAT_DEPLOYMENT,
         embeddingDeployment: parsed.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
+        embeddingDimensions: parsed.AZURE_OPENAI_EMBEDDING_DIMENSIONS,
         apiVersion: parsed.AZURE_OPENAI_API_VERSION ?? "2024-10-21"
       },
       timeoutMs: parsed.EMBEDDING_TIMEOUT_MS

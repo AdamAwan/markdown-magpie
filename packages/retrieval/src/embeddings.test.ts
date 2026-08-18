@@ -123,6 +123,46 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
     assert.equal(captured?.headers.authorization, "Bearer secret");
   });
 
+  it("omits dimensions from the request body when unset", async () => {
+    let captured: { body: any } | undefined;
+    globalThis.fetch = (async (_url: string, init: any) => {
+      captured = { body: JSON.parse(init.body) };
+      return new Response(JSON.stringify({ data: [{ index: 0, embedding: vectorOf(EMBEDDING_DIMENSIONS) }] }), {
+        status: 200
+      });
+    }) as unknown as typeof fetch;
+
+    const provider = new OpenAICompatibleEmbeddingProvider({
+      baseUrl: "http://embeddings:80/v1",
+      model: "BAAI/bge-base-en-v1.5"
+    });
+    await provider.embed(["hello"]);
+
+    // Not merely undefined: the key must be absent, because servers that don't
+    // know the field (the Ollama sidecar, ada-002) reject the request outright.
+    assert.equal("dimensions" in (captured?.body as object), false);
+  });
+
+  it("sends dimensions when configured", async () => {
+    let captured: { body: any } | undefined;
+    globalThis.fetch = (async (_url: string, init: any) => {
+      captured = { body: JSON.parse(init.body) };
+      return new Response(JSON.stringify({ data: [{ index: 0, embedding: vectorOf(EMBEDDING_DIMENSIONS) }] }), {
+        status: 200
+      });
+    }) as unknown as typeof fetch;
+
+    const provider = new OpenAICompatibleEmbeddingProvider({
+      apiKey: "k",
+      baseUrl: "https://api.example.com/v1",
+      model: "text-embedding-3-large",
+      dimensions: EMBEDDING_DIMENSIONS
+    });
+    await provider.embed(["hello"]);
+
+    assert.equal(captured?.body.dimensions, EMBEDDING_DIMENSIONS);
+  });
+
   it("throws when the response count does not match the input count", async () => {
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ data: [] }), { status: 200 })) as unknown as typeof fetch;
@@ -178,6 +218,48 @@ describe("AzureOpenAIEmbeddingProvider", () => {
     assert.deepEqual(captured?.body.input, ["only"]);
     assert.equal(vectors.length, 1);
   });
+
+  it("omits dimensions from the request body when unset", async () => {
+    let captured: { body: any } | undefined;
+    globalThis.fetch = (async (_url: string, init: any) => {
+      captured = { body: JSON.parse(init.body) };
+      return new Response(JSON.stringify({ data: [{ index: 0, embedding: vectorOf(EMBEDDING_DIMENSIONS) }] }), {
+        status: 200
+      });
+    }) as unknown as typeof fetch;
+
+    const provider = new AzureOpenAIEmbeddingProvider({
+      apiKey: "secret",
+      azureEndpoint: "https://my.openai.azure.com",
+      azureDeployment: "ada-002",
+      azureApiVersion: "2024-10-21"
+    });
+    await provider.embed(["only"]);
+
+    // ada-002 deployments reject the field, so it has to be absent by default.
+    assert.equal("dimensions" in (captured?.body as object), false);
+  });
+
+  it("sends dimensions when configured, which is what makes -large usable", async () => {
+    let captured: { body: any } | undefined;
+    globalThis.fetch = (async (_url: string, init: any) => {
+      captured = { body: JSON.parse(init.body) };
+      return new Response(JSON.stringify({ data: [{ index: 0, embedding: vectorOf(EMBEDDING_DIMENSIONS) }] }), {
+        status: 200
+      });
+    }) as unknown as typeof fetch;
+
+    const provider = new AzureOpenAIEmbeddingProvider({
+      apiKey: "secret",
+      azureEndpoint: "https://my.openai.azure.com",
+      azureDeployment: "embed-3-large",
+      azureApiVersion: "2024-10-21",
+      dimensions: EMBEDDING_DIMENSIONS
+    });
+    await provider.embed(["only"]);
+
+    assert.equal(captured?.body.dimensions, EMBEDDING_DIMENSIONS);
+  });
 });
 
 describe("createEmbeddingProvider", () => {
@@ -196,6 +278,42 @@ describe("createEmbeddingProvider", () => {
     assert.throws(
       () => createEmbeddingProvider({ provider: "azure-openai", apiKey: "k", azureEndpoint: "e" }),
       /AZURE_OPENAI_EMBEDDING_DEPLOYMENT/
+    );
+  });
+
+  it("passes dimensions through to both providers only when set", async () => {
+    const bodies: any[] = [];
+    globalThis.fetch = (async (_url: string, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ data: [{ index: 0, embedding: vectorOf(EMBEDDING_DIMENSIONS) }] }), {
+        status: 200
+      });
+    }) as unknown as typeof fetch;
+
+    await createEmbeddingProvider({ provider: "openai-compatible", baseUrl: "u", model: "m" }).embed(["x"]);
+    await createEmbeddingProvider({
+      provider: "openai-compatible",
+      baseUrl: "u",
+      model: "text-embedding-3-large",
+      dimensions: 1024
+    }).embed(["x"]);
+    await createEmbeddingProvider({
+      provider: "azure-openai",
+      apiKey: "k",
+      azureEndpoint: "https://e.example.com",
+      azureDeployment: "d"
+    }).embed(["x"]);
+    await createEmbeddingProvider({
+      provider: "azure-openai",
+      apiKey: "k",
+      azureEndpoint: "https://e.example.com",
+      azureDeployment: "d",
+      dimensions: 1024
+    }).embed(["x"]);
+
+    assert.deepEqual(
+      bodies.map((body) => ("dimensions" in body ? body.dimensions : "absent")),
+      ["absent", 1024, "absent", 1024]
     );
   });
 });

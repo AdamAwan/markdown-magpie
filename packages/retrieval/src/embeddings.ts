@@ -13,6 +13,12 @@ export interface EmbeddingProviderConfig {
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
+  // Opt-in output width for models that support shortening natively
+  // (text-embedding-3-small / -large). Sent as the `dimensions` request
+  // parameter only when set: ada-002 and many OpenAI-compatible servers —
+  // including the Ollama sidecar this repo ships — reject the field outright,
+  // so the default has to remain "don't send it".
+  dimensions?: number;
   timeoutMs?: number;
 }
 
@@ -22,7 +28,7 @@ export class OpenAICompatibleEmbeddingProvider implements EmbeddingProvider {
     // common (a local sidecar, an internal service on a trusted network), and
     // sending a credential such an endpoint ignores was never meaningful.
     private readonly config: Required<Pick<EmbeddingProviderConfig, "baseUrl" | "model">> &
-      Pick<EmbeddingProviderConfig, "apiKey">,
+      Pick<EmbeddingProviderConfig, "apiKey" | "dimensions">,
     private readonly timeoutMs: number = DEFAULT_EMBEDDING_TIMEOUT_MS
   ) {}
 
@@ -36,7 +42,12 @@ export class OpenAICompatibleEmbeddingProvider implements EmbeddingProvider {
           ...(this.config.apiKey ? { authorization: `Bearer ${this.config.apiKey}` } : {}),
           "content-type": "application/json"
         },
-        body: JSON.stringify({ model: this.config.model, input: texts })
+        body: JSON.stringify({
+          model: this.config.model,
+          input: texts,
+          // Omitted entirely when unset — servers that don't know the field reject it.
+          ...(this.config.dimensions === undefined ? {} : { dimensions: this.config.dimensions })
+        })
       },
       this.timeoutMs,
       "Embedding provider"
@@ -50,7 +61,8 @@ export class AzureOpenAIEmbeddingProvider implements EmbeddingProvider {
   constructor(
     private readonly config: Required<
       Pick<EmbeddingProviderConfig, "apiKey" | "azureEndpoint" | "azureDeployment" | "azureApiVersion">
-    >,
+    > &
+      Pick<EmbeddingProviderConfig, "dimensions">,
     private readonly timeoutMs: number = DEFAULT_EMBEDDING_TIMEOUT_MS
   ) {}
 
@@ -66,7 +78,11 @@ export class AzureOpenAIEmbeddingProvider implements EmbeddingProvider {
           "api-key": this.config.apiKey,
           "content-type": "application/json"
         },
-        body: JSON.stringify({ input: texts })
+        body: JSON.stringify({
+          input: texts,
+          // Omitted entirely when unset — ada-002 deployments reject the field.
+          ...(this.config.dimensions === undefined ? {} : { dimensions: this.config.dimensions })
+        })
       },
       this.timeoutMs,
       "Embedding provider"
@@ -84,7 +100,8 @@ export function createEmbeddingProvider(config: EmbeddingProviderConfig): Embedd
       {
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
-        model: config.model
+        model: config.model,
+        ...(config.dimensions === undefined ? {} : { dimensions: config.dimensions })
       },
       config.timeoutMs ?? DEFAULT_EMBEDDING_TIMEOUT_MS
     );
@@ -99,7 +116,8 @@ export function createEmbeddingProvider(config: EmbeddingProviderConfig): Embedd
         apiKey: config.apiKey,
         azureEndpoint: config.azureEndpoint,
         azureDeployment: config.azureDeployment,
-        azureApiVersion: config.azureApiVersion ?? "2024-10-21"
+        azureApiVersion: config.azureApiVersion ?? "2024-10-21",
+        ...(config.dimensions === undefined ? {} : { dimensions: config.dimensions })
       },
       config.timeoutMs ?? DEFAULT_EMBEDDING_TIMEOUT_MS
     );
@@ -139,7 +157,9 @@ async function parseEmbeddingResponse(response: Response, expectedCount: number)
     if (vector.length > EMBEDDING_DIMENSIONS) {
       throw new Error(
         `Embedding provider returned a ${vector.length}-dim vector; the store holds ${EMBEDDING_DIMENSIONS} dimensions. ` +
-          `Choose a model with at most ${EMBEDDING_DIMENSIONS} dimensions.`
+          `Set AZURE_OPENAI_EMBEDDING_DIMENSIONS or OPENAI_COMPATIBLE_EMBEDDING_DIMENSIONS to ${EMBEDDING_DIMENSIONS} — ` +
+          `the text-embedding-3-* models shorten their output natively at full quality. ` +
+          `Otherwise choose a model with at most ${EMBEDDING_DIMENSIONS} dimensions.`
       );
     }
     return padToStoredDimensions(vector);

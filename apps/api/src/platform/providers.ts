@@ -58,8 +58,12 @@ export function createConfiguredEmbeddingProvider(config: AppConfig) {
   }
   const oai = config.embeddings.openAiCompatible;
   const azure = config.embeddings.azureOpenAi;
+  // Opt-in: forwarded only when the operator set it, because sending
+  // `dimensions` to a server that doesn't know the field fails the request.
+  const dimensions = provider === "azure-openai" ? azure.embeddingDimensions : oai.embeddingDimensions;
   return createEmbeddingProvider({
     provider,
+    ...(dimensions === undefined ? {} : { dimensions }),
     apiKey: embeddingApiKey(config) || azure.apiKey,
     baseUrl: embeddingBaseUrl(config),
     model: oai.embeddingModel,
