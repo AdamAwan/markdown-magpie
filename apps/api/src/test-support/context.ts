@@ -7,6 +7,7 @@ import { InMemoryGapClusterStore } from "../stores/gap-cluster-store.js";
 import { InMemoryKnowledgeIndex } from "../stores/knowledge-index.js";
 import { InMemoryProposalStore } from "../stores/proposal-store.js";
 import { InMemoryGapClosureVerificationStore } from "../stores/gap-closure-verification-store.js";
+import { InMemoryKnowledgeChangeStore } from "../stores/knowledge-change-store.js";
 import { InMemoryQuestionLogStore } from "../stores/question-log-store.js";
 import { InMemoryPrCrosslinkStore } from "../stores/pr-crosslink-store.js";
 import { InMemoryReconciliationDecisionStore } from "../stores/reconciliation-decision-store.js";
@@ -32,7 +33,8 @@ import { InMemoryRateLimitStore } from "../stores/rate-limit-store.js";
 // matching the real AppContext interface field-for-field. Pass overrides to
 // swap in a specific store or provider for a test.
 export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext {
-  const knowledgeIndex = new InMemoryKnowledgeIndex();
+  const knowledgeChanges = new InMemoryKnowledgeChangeStore();
+  const knowledgeIndex = new InMemoryKnowledgeIndex(undefined, {}, { store: knowledgeChanges });
   const knowledgeConfig = {
     sources: [],
     destinations: [],
@@ -61,6 +63,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
     stores: {
       knowledge: undefined,
       knowledgeIndex,
+      knowledgeChanges,
       questionLogs: new InMemoryQuestionLogStore(),
       proposals: new InMemoryProposalStore(),
       gapClosureVerifications: new InMemoryGapClosureVerificationStore(),

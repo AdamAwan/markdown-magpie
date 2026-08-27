@@ -18,6 +18,7 @@ import {
   createQuestionnaireImportStore,
   createQuestionnaireStore,
   createSnapshotStore,
+  createKnowledgeChangeStore,
   createSourceMapStore,
   createAssertedClaimsStore,
   createSourceConflictStore,
@@ -52,6 +53,8 @@ export interface AppContext {
   stores: {
     knowledge: PostgresKnowledgeStore | undefined;
     knowledgeIndex: InMemoryKnowledgeIndex;
+    // The append-only knowledge change log, written by the index-time diff.
+    knowledgeChanges: ReturnType<typeof createKnowledgeChangeStore>;
     questionLogs: ReturnType<typeof createQuestionLogStore>;
     proposals: ReturnType<typeof createProposalStore>;
     gapClosureVerifications: ReturnType<typeof createGapClosureVerificationStore>;
@@ -113,16 +116,34 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
       ? new PostgresKnowledgeStore(pool, embeddingModelId(config))
       : undefined;
   const embedding = knowledgeStore ? createConfiguredEmbeddingProvider(config) : undefined;
+  const knowledgeChanges = createKnowledgeChangeStore(config, pool);
+  // The flow a destination repository belongs to, resolved from configuration at
+  // write time so a change entry can be filtered by flow without joining back
+  // through config. A repository that is not a flow destination (a bare
+  // repository, or a source) resolves to undefined and its entries are unscoped.
+  const resolveFlowIdForDestination = (repositoryId: string): string | undefined =>
+    config.knowledge.flows.find((flow) => flow.destinationId === repositoryId)?.id;
   const knowledgeIndex = knowledgeStore
-    ? new InMemoryKnowledgeIndex(knowledgeStore, {
-        // Keyword search runs in Postgres (full-text) whenever the store is present,
-        // independent of embeddings; the vector side is only added when embeddings
-        // are configured. Both fall back to the in-memory path on error.
-        keywordSearch: knowledgeStore,
-        ...(embedding ? { embeddingProvider: embedding, vectorSearch: knowledgeStore } : {}),
-        onNotice: (message) => logger.warn({ notice: message }, "knowledge index notice")
-      })
-    : new InMemoryKnowledgeIndex();
+    ? new InMemoryKnowledgeIndex(
+        knowledgeStore,
+        {
+          // Keyword search runs in Postgres (full-text) whenever the store is present,
+          // independent of embeddings; the vector side is only added when embeddings
+          // are configured. Both fall back to the in-memory path on error.
+          keywordSearch: knowledgeStore,
+          ...(embedding ? { embeddingProvider: embedding, vectorSearch: knowledgeStore } : {}),
+          onNotice: (message) => logger.warn({ notice: message }, "knowledge index notice")
+        },
+        { store: knowledgeChanges, resolveFlowId: resolveFlowIdForDestination }
+      )
+    : new InMemoryKnowledgeIndex(
+        undefined,
+        {},
+        {
+          store: knowledgeChanges,
+          resolveFlowId: resolveFlowIdForDestination
+        }
+      );
 
   const knowledgeConfig = {
     sources: config.knowledge.sources,
@@ -153,6 +174,7 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
     stores: {
       knowledge: knowledgeStore,
       knowledgeIndex,
+      knowledgeChanges,
       questionLogs: createQuestionLogStore(config, pool),
       proposals: createProposalStore(config, pool),
       gapClosureVerifications: createGapClosureVerificationStore(config, pool),

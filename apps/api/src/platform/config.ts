@@ -19,6 +19,7 @@ type StoreBackend = "memory" | "postgres";
 // The per-store backend overrides. Each defaults to STORAGE_BACKEND when unset.
 const STORE_ENV_NAMES = [
   "KNOWLEDGE_STORE",
+  "KNOWLEDGE_CHANGE_STORE",
   "QUESTION_LOG_STORE",
   "PROPOSAL_STORE",
   "SCHEDULED_TASK_STORE",
