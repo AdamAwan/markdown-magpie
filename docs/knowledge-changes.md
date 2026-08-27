@@ -1,7 +1,8 @@
 # Knowledge change log
 
-**Status:** as-built (2026-08-27) — write path only; the read surfaces are marked
-below and are not yet built.
+**Status:** as-built (2026-08-27) — the write path and the human read surfaces
+(`GET /api/knowledge/changes`, the console panel and document timeline). The two
+remaining rollout steps are marked below.
 
 A durable, append-only record of **what changed in the destination knowledge
 base, when, and what caused it**. It exists to answer two questions retrieval
@@ -142,10 +143,64 @@ for the per-document timeline.
 
 ## KC-6 · Read surfaces
 
-> ⚠️ NOT YET IMPLEMENTED — the write path above is built; these are the remaining
-> rollout steps of the design (`GET /api/knowledge/changes`, the console panel and
-> document timeline, the `kb_changes` MCP tool, and answer-time change context).
-> No read surface exists yet; entries are queryable only through the store.
+`GET /api/knowledge/changes` (`read:knowledge`), alongside
+`/api/knowledge/citation-usage` and following its shape. Full request/response
+reference in [api.md](api.md#get-apiknowledgechanges).
+
+**R16.** The endpoint MUST support the filters `flowId`, `documentId`, `sourceId`,
+`since`, `until`, `cause` and `kind`, plus `limit` / `offset`, ordered newest
+first. Filters compose as an AND. `since` is inclusive and `until` exclusive, so a
+boundary instant belongs to exactly one window.
+
+**R17.** An unrecognised `cause` or `kind`, or an unparseable `since` / `until`,
+MUST be a 400 (`invalid_cause` / `invalid_kind` / `invalid_since` /
+`invalid_until`) — never a silently dropped filter. A log that quietly answers a
+different question than the one asked defeats its own purpose.
+
+**R18.** The response MUST carry a summary envelope, not just rows: entry counts
+by kind and by cause, and the distinct documents touched, **over the same filtered
+window the rows page through** — not over the whole table. Rows and summary are
+built from one filter set so they cannot describe different windows. Every kind
+and cause is keyed, zeros included, so a surface can render a stable breakdown.
+
+**R19.** The summary MUST report `logStartedAt`, the earliest instant recorded in
+the requested scope (flow / document / source), ignoring the time window. Because
+the log starts at install and is never backfilled (R8), an empty week is otherwise
+indistinguishable from a quiet one: with the start instant, an empty result reads
+as "nothing recorded yet" rather than "nothing changed". It is absent only when
+the scope has recorded nothing at all.
+
+**R20.** The summary MUST be aggregated in the backend, not by fetching rows and
+counting them. The filtered window is unbounded while the page is not; the
+Postgres store computes it in one `GROUPING SETS` pass over the same `WHERE`
+clause the rows use.
+
+**R21.** Authorization follows the repo convention (see
+[authorization.md](authorization.md)): `flowId` resolves through the flow's
+destination, and a flow or `documentId` in a flow the caller cannot read MUST be a
+404, not a 403, so other flows are not enumerable. A read that names no flow MUST
+be scoped — rows *and* summary — to the flows the caller may read. A `documentId`
+the index no longer holds resolves its flow from its own log entries, so the
+timeline of a **removed** document is still readable by those who could read it.
+
+**R22.** Where an entry displays its causing commit range it MUST carry both the
+true number of files the range touched and how many the sync run examined, and
+render e.g. "1,412 files changed upstream (1,000 examined)".
+`SOURCE_SYNC_MAX_CHANGED_FILES` (default 1000) caps what a run materializes while
+recording the true total, and a change log that implies a completeness it does not
+have is the failure mode most worth avoiding here.
+
+**Console.** A "Recent changes" panel on `/knowledge` and a change history on the
+document view. Both fetch page-locally (the `CitationUsagePanel` pattern) rather
+than through the console's 4s poll, since an unbounded log query has no place in
+it. Entries render as `§ Rate tiers changed — source product-repo a1b2f3…c3d4e5 —
+12 Aug`, linking to the attributed proposal where there is one, and both surfaces
+show the log's start instant per R19.
+
+> ⚠️ NOT YET IMPLEMENTED — the remaining rollout steps of the design: the
+> `kb_changes` MCP tool (step 4) and answer-time change context, the per-section
+> `changed_at` / `cause` the retrieval callback attaches plus its answer-prompt
+> clause (step 5, which lands last and alone).
 
 ## KC-7 · Known limitations
 
@@ -168,8 +223,21 @@ for the per-document timeline.
 | store | `apps/api/src/stores/knowledge-change-store.ts`, `postgres-knowledge-change-store.ts` |
 | schema | `packages/db/migrations/0069_knowledge_changes.sql` |
 | attribution | `apps/api/src/features/proposals/change-attribution.ts`, `service.ts` (`reindexDestinationForProposal`) |
-| source-sync join | `apps/api/src/features/source-sync/service.ts` (`resolveSourceOrigin`) |
+| source-sync join | `apps/api/src/features/source-sync/service.ts` (`resolveSourceOrigin`, `resolveUpstreamFileCounts`) |
+| read endpoint | `apps/api/src/features/knowledge/routes.ts`, `service.ts` (`knowledgeChanges`), `changes.ts` |
+| console | `apps/web/src/components/KnowledgeChangesPanel.tsx` (panel + document timeline) |
 | wiring | `apps/api/src/context.ts`, `apps/api/src/platform/stores.ts` |
+
+## Tests (behavioural contract)
+
+| area | test |
+|---|---|
+| pure diff + identity | `apps/api/src/stores/knowledge-change-diff.test.ts` |
+| index hook, baseline, attribution | `apps/api/src/stores/knowledge-change-log.test.ts` |
+| dedupe + the filter/summary query | `apps/api/src/stores/knowledge-change-store.test.ts` |
+| the same against Postgres (`RUN_PG_INTEGRATION`) | `apps/api/src/stores/postgres-knowledge-change-store.integration.test.ts` |
+| endpoint, summary window, flow scoping | `apps/api/src/features/knowledge/changes.test.ts` |
+| console panel + document timeline | `apps/web/src/components/KnowledgeChangesPanel.test.tsx` |
 
 ## Provenance
 
