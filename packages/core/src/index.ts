@@ -87,13 +87,20 @@ export interface Citation {
 // the durable (documentId, anchor) identity SectionCitationUsage and the
 // claim-provenance fold already share. A renamed heading therefore reads as a
 // removal plus an addition — the passage a reader could have cited is gone.
-export type KnowledgeChangeKind =
-  "document_added" | "document_removed" | "section_added" | "section_removed" | "section_changed";
+export const KNOWLEDGE_CHANGE_KINDS = [
+  "document_added",
+  "document_removed",
+  "section_added",
+  "section_removed",
+  "section_changed"
+] as const;
+export type KnowledgeChangeKind = (typeof KNOWLEDGE_CHANGE_KINDS)[number];
 
 // Why a change happened, resolved best-effort from links the system already
 // holds. "external" is both the default and the honest answer for a hand edit or
 // a merge that happened outside Magpie.
-export type KnowledgeChangeCause = "gap" | "source_sync" | "patrol" | "seed" | "external";
+export const KNOWLEDGE_CHANGE_CAUSES = ["gap", "source_sync", "patrol", "seed", "external"] as const;
+export type KnowledgeChangeCause = (typeof KNOWLEDGE_CHANGE_CAUSES)[number];
 
 export interface KnowledgeChange {
   id: string;

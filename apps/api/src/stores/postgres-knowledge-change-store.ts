@@ -2,10 +2,39 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import type { KnowledgeChange } from "@magpie/core";
 import {
+  emptyKnowledgeChangeCounts,
   UNVERSIONED_DEDUPE_WINDOW_MS,
+  type KnowledgeChangeCounts,
+  type KnowledgeChangeFilters,
+  type KnowledgeChangeQuery,
   type KnowledgeChangeRecord,
+  type KnowledgeChangeScope,
   type KnowledgeChangeStore
 } from "./knowledge-change-store.js";
+
+// Builds the shared WHERE clause every read uses, so the rows and the summary can
+// never disagree about what "the filtered window" means. Only the filters actually
+// supplied become predicates; the rest of the log stays visible.
+function whereClause(filters: KnowledgeChangeFilters): { sql: string; values: unknown[] } {
+  const predicates: string[] = [];
+  const values: unknown[] = [];
+  const add = (sql: string, value: unknown) => {
+    values.push(value);
+    predicates.push(sql.replace("$?", `$${values.length}`));
+  };
+
+  if (filters.flowId !== undefined) add("flow_id = $?", filters.flowId);
+  if (filters.documentId !== undefined) add("document_id = $?", filters.documentId);
+  if (filters.sourceId !== undefined) add("source_id = $?", filters.sourceId);
+  if (filters.cause !== undefined) add("cause = $?", filters.cause);
+  if (filters.kind !== undefined) add("kind = $?", filters.kind);
+  // Half-open window: `since` is inclusive, `until` exclusive, matching the
+  // in-memory store so a day boundary belongs to exactly one window.
+  if (filters.since !== undefined) add("changed_at >= $?", filters.since);
+  if (filters.until !== undefined) add("changed_at < $?", filters.until);
+
+  return { sql: predicates.length > 0 ? `WHERE ${predicates.join(" AND ")}` : "", values };
+}
 
 export class PostgresKnowledgeChangeStore implements KnowledgeChangeStore {
   constructor(private readonly pool: pg.Pool) {}
@@ -22,12 +51,64 @@ export class PostgresKnowledgeChangeStore implements KnowledgeChangeStore {
     return appended;
   }
 
-  async listRecent(limit: number): Promise<KnowledgeChange[]> {
+  async list(query: KnowledgeChangeQuery): Promise<KnowledgeChange[]> {
+    const { sql, values } = whereClause(query);
+    // (flow_id, changed_at DESC) and (document_id, changed_at DESC) are the two
+    // indexes this ordering is built for; id breaks ties so paging is stable when
+    // one re-index writes several entries at the same instant.
     const result = await this.pool.query<KnowledgeChangeRow>(
-      "SELECT * FROM knowledge_changes ORDER BY changed_at DESC, id DESC LIMIT $1",
-      [limit]
+      `SELECT * FROM knowledge_changes ${sql} ORDER BY changed_at DESC, id DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      [...values, query.limit, query.offset]
     );
     return result.rows.map(mapRow);
+  }
+
+  // One aggregate pass over the filtered window, in SQL. GROUPING SETS gives the
+  // per-kind rows, the per-cause rows and the grand total (which carries the
+  // distinct-document count) from a single index scan — fetching the window and
+  // counting in JS would mean reading an unbounded number of rows to summarize a
+  // bounded page.
+  async summarize(filters: KnowledgeChangeFilters): Promise<KnowledgeChangeCounts> {
+    const { sql, values } = whereClause(filters);
+    const result = await this.pool.query<SummaryRow>(
+      `
+        SELECT
+          GROUPING(kind) AS kind_total,
+          GROUPING(cause) AS cause_total,
+          kind,
+          cause,
+          count(*)::int AS entries,
+          count(DISTINCT document_id)::int AS documents
+        FROM knowledge_changes
+        ${sql}
+        GROUP BY GROUPING SETS ((kind), (cause), ())
+      `,
+      values
+    );
+
+    const counts = emptyKnowledgeChangeCounts();
+    for (const row of result.rows) {
+      if (row.kind_total === 0 && row.kind) {
+        counts.byKind[row.kind] = row.entries;
+        continue;
+      }
+      if (row.cause_total === 0 && row.cause) {
+        counts.byCause[row.cause] = row.entries;
+        continue;
+      }
+      counts.total = row.entries;
+      counts.documentsTouched = row.documents;
+    }
+    return counts;
+  }
+
+  async firstChangedAt(scope: KnowledgeChangeScope): Promise<string | undefined> {
+    const { sql, values } = whereClause(scope);
+    const result = await this.pool.query<{ first_changed_at: Date | null }>(
+      `SELECT min(changed_at) AS first_changed_at FROM knowledge_changes ${sql}`,
+      values
+    );
+    return result.rows[0]?.first_changed_at?.toISOString();
   }
 
   async reset(): Promise<void> {
@@ -92,6 +173,18 @@ export class PostgresKnowledgeChangeStore implements KnowledgeChangeStore {
     );
     return result.rowCount ?? 0;
   }
+}
+
+// One GROUPING SETS row. The GROUPING() flags are 0 when the column is part of
+// that row's grouping set and 1 when it was rolled up, which is what distinguishes
+// a per-kind row from a per-cause row from the grand total.
+interface SummaryRow {
+  kind_total: number;
+  cause_total: number;
+  kind: KnowledgeChange["kind"] | null;
+  cause: KnowledgeChange["cause"] | null;
+  entries: number;
+  documents: number;
 }
 
 interface KnowledgeChangeRow {

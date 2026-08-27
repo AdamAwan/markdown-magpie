@@ -43,7 +43,7 @@ test("knowledge_changes dedupes a replayed transition", { skip: !runIntegration 
   // A later commit is a genuinely new change.
   assert.equal(await store.record([entry({ commitSha: "def456" })]), 1);
 
-  const entries = await store.listRecent(10);
+  const entries = await store.list({ limit: 10, offset: 0 });
   assert.equal(entries.length, 3);
 });
 
@@ -65,7 +65,7 @@ test("knowledge_changes dedupes an unversioned entry within the window", { skip:
   // its second.
   await pool.query("UPDATE knowledge_changes SET changed_at = now() - interval '1 hour'");
   assert.equal(await store.record([unversioned]), 1);
-  assert.equal((await store.listRecent(10)).length, 2);
+  assert.equal((await store.list({ limit: 10, offset: 0 })).length, 2);
 });
 
 test("knowledge_changes round-trips every attribution field", { skip: !runIntegration }, async (t) => {
@@ -90,7 +90,7 @@ test("knowledge_changes round-trips every attribution field", { skip: !runIntegr
     })
   ]);
 
-  const [stored] = await store.listRecent(10);
+  const [stored] = await store.list({ limit: 10, offset: 0 });
   assert.equal(stored.cause, "source_sync");
   assert.equal(stored.proposalId, "proposal-1");
   assert.equal(stored.jobId, "job-1");
