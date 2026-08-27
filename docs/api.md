@@ -425,6 +425,66 @@ content that has since been removed; `unindexedUsageRows` totals them. Section r
 `anchor` and the section heading as `label`; document rows carry `citedSectionCount` /
 `sectionCount` and the document title.
 
+### `GET /api/knowledge/changes`
+
+The knowledge change log: what changed in the destination knowledge base, when, and what
+caused it. Written by the index-time diff, so an entry always describes a change that took
+effect — including a hand edit or a merge that landed outside Magpie. See
+[knowledge-changes.md](knowledge-changes.md). Read-only metadata about the corpus; the log
+never enters retrieval.
+
+| query | default | meaning |
+| --- | --- | --- |
+| `flowId` | — | One flow's feed. Resolved through the flow's destination at write time, so this is an index scan, not a join back through config. |
+| `documentId` | — | One document's timeline (`<repositoryId>:<path>`). |
+| `sourceId` | — | Only changes attributed to that upstream source. |
+| `since` / `until` | — | Half-open window on `changedAt`: `since` inclusive, `until` exclusive. Any parseable instant, including a bare date. |
+| `cause` | — | `gap` \| `source_sync` \| `patrol` \| `seed` \| `external`. |
+| `kind` | — | `document_added` \| `document_removed` \| `section_added` \| `section_removed` \| `section_changed`. |
+| `limit` / `offset` | `50` / `0` | Page over the window, newest first. |
+
+Filters compose (each is an AND), and the summary describes the same filtered window the
+rows page through — not the whole table.
+
+- `400 invalid_cause` / `400 invalid_kind` / `400 invalid_since` / `400 invalid_until` —
+  an unrecognised enum value or an unparseable instant. A filter is never silently ignored.
+- `404 flow_not_found` / `404 document_not_found` — unknown, or in a flow the caller cannot
+  read. Cross-flow ids read as 404, not 403 ([authorization.md](authorization.md)).
+- `200` —
+
+```json
+{
+  "changes": [
+    { "id": "…", "repositoryId": "billing-kb", "documentId": "billing-kb:rates.md",
+      "path": "rates.md", "anchor": "rate-tiers", "heading": "Rate tiers",
+      "kind": "section_changed", "changedAt": "2026-08-12T09:14:02.000Z",
+      "commitSha": "9f1c…", "cause": "source_sync", "proposalId": "p-42", "jobId": "j-7",
+      "sourceId": "product-repo", "sourceFromSha": "a1b2f3", "sourceToSha": "c3d4e5",
+      "summary": "Sync docs to product-repo changes", "flowId": "billing",
+      "upstream": { "changedFileCount": 1412, "examinedFileCount": 1000 } }
+  ],
+  "summary": {
+    "total": 1, "documentsTouched": 1,
+    "byKind": { "document_added": 0, "document_removed": 0, "section_added": 0,
+                "section_removed": 0, "section_changed": 1 },
+    "byCause": { "gap": 0, "source_sync": 1, "patrol": 0, "seed": 0, "external": 0 },
+    "logStartedAt": "2026-08-01T10:00:00.000Z"
+  },
+  "limit": 50, "offset": 0
+}
+```
+
+`logStartedAt` is the earliest instant recorded **in the requested scope**, ignoring the
+time window — the log starts at install and never backfills, so an empty window reads as
+"nothing recorded yet" rather than "nothing changed". It is absent when the scope has
+recorded nothing at all.
+
+`upstream` appears on a `source_sync` entry whose sync run still resolves:
+`changedFileCount` is the true number of files the commit range touched and
+`examinedFileCount` how many of them the run materialized (`SOURCE_SYNC_MAX_CHANGED_FILES`,
+default 1000). Where a surface shows the commit range it must show both — a change log that
+implies completeness it does not have is the failure mode most worth avoiding.
+
 ## Questions & Gaps
 
 See [question-logging.md](question-logging.md) for the recorded fields and lifecycle, and

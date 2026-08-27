@@ -51,10 +51,16 @@ export const UNVERSIONED_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
 
 // What narrows a read of the log. Every field is optional and they compose: each
 // one supplied is an AND, so "this flow, since Monday, caused by a source sync" is
-// one query. `flowId` and `documentId` are the two indexed axes (the feed and the
+// one query. `flowIds` and `documentId` are the two indexed axes (the feed and the
 // per-document timeline); the rest narrow within them.
 export interface KnowledgeChangeFilters {
-  flowId?: string;
+  /**
+   * The flows this read covers — an explicit filter, or the set a role-scoped
+   * caller may read. Entries with no flow (a repository that is nobody's
+   * destination) are outside every such set, so they are visible only to a read
+   * that names no flows at all.
+   */
+  flowIds?: string[];
   documentId?: string;
   sourceId?: string;
   /** Inclusive lower bound on `changedAt`, as an ISO instant. */
@@ -82,7 +88,7 @@ export interface KnowledgeChangeCounts {
 }
 
 /** The scope a "when did this log start?" read is asked within. */
-export type KnowledgeChangeScope = Pick<KnowledgeChangeFilters, "flowId" | "documentId" | "sourceId">;
+export type KnowledgeChangeScope = Pick<KnowledgeChangeFilters, "flowIds" | "documentId" | "sourceId">;
 
 export function emptyKnowledgeChangeCounts(): KnowledgeChangeCounts {
   return {
@@ -196,7 +202,8 @@ export class InMemoryKnowledgeChangeStore implements KnowledgeChangeStore {
   // want newest-first reverse it.
   private matching(filters: KnowledgeChangeFilters): KnowledgeChange[] {
     return this.entries.filter((entry) => {
-      if (filters.flowId !== undefined && entry.flowId !== filters.flowId) return false;
+      if (filters.flowIds !== undefined && (entry.flowId === undefined || !filters.flowIds.includes(entry.flowId)))
+        return false;
       if (filters.documentId !== undefined && entry.documentId !== filters.documentId) return false;
       if (filters.sourceId !== undefined && entry.sourceId !== filters.sourceId) return false;
       if (filters.cause !== undefined && entry.cause !== filters.cause) return false;

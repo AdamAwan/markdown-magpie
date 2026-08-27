@@ -7,6 +7,8 @@ import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import * as knowledgeService from "./service.js";
 import { knowledgeRepositoryErrorCode } from "./service.js";
+import { can } from "../../auth/capabilities.js";
+import { parseChangeQuery } from "./changes.js";
 
 export function knowledgeRoutes(ctx: AppContext): Hono {
   const app = new Hono();
@@ -65,6 +67,63 @@ export function knowledgeRoutes(ctx: AppContext): Hono {
         limit: parseLimit(c.req.query("limit") ?? null, 50),
         offset: parseOffset(c.req.query("offset") ?? null),
         ...(c.req.query("repositoryId") ? { repositoryId: c.req.query("repositoryId") } : {})
+      })
+    );
+  });
+
+  // The knowledge change log — what changed in the destination knowledge base,
+  // when, and what caused it (spec 2026-08-27-knowledge-change-log). Filtered,
+  // paginated, newest first, with an aggregate over the same window and the log's
+  // start instant so an empty window reads as "nothing recorded yet". Read-only
+  // metadata about the corpus; it never enters retrieval.
+  app.get("/changes", requireScopes("read:knowledge"), async (c) => {
+    const parsed = parseChangeQuery({
+      flowId: c.req.query("flowId"),
+      documentId: c.req.query("documentId"),
+      sourceId: c.req.query("sourceId"),
+      since: c.req.query("since"),
+      until: c.req.query("until"),
+      cause: c.req.query("cause"),
+      kind: c.req.query("kind")
+    });
+    if (!parsed.ok) {
+      throw new HttpError(400, parsed.code);
+    }
+
+    const { flowId, documentId } = parsed.query;
+    // A flow the caller cannot read is reported as not-found rather than
+    // forbidden, so other flows are not enumerable through this endpoint
+    // (docs/authorization.md).
+    if (
+      flowId !== undefined &&
+      (!ctx.knowledgeConfig.flows.some((flow) => flow.id === flowId) || !can(ctx, c, "read", flowId))
+    ) {
+      throw new HttpError(404, "flow_not_found");
+    }
+
+    if (documentId !== undefined) {
+      // Same rule for a document: one in another flow — or one nothing has ever
+      // recorded — is a 404, never a 403.
+      const document = await knowledgeService.resolveDocumentFlow(ctx, documentId);
+      if (!document.known || !can(ctx, c, "read", document.flowId)) {
+        throw new HttpError(404, "document_not_found");
+      }
+    }
+
+    // With no flow named, a role-scoped caller still only sees the flows it can
+    // read. A caller that can read every configured flow is left unrestricted, so
+    // entries belonging to no flow (a repository that is nobody's destination)
+    // stay visible to it.
+    const readable = ctx.knowledgeConfig.flows.filter((flow) => can(ctx, c, "read", flow.id)).map((flow) => flow.id);
+    const flowIds =
+      flowId !== undefined ? [flowId] : readable.length === ctx.knowledgeConfig.flows.length ? undefined : readable;
+
+    return c.json(
+      await knowledgeService.knowledgeChanges(ctx, {
+        query: parsed.query,
+        ...(flowIds ? { flowIds } : {}),
+        limit: parseLimit(c.req.query("limit") ?? null, 50),
+        offset: parseOffset(c.req.query("offset") ?? null)
       })
     );
   });

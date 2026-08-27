@@ -107,7 +107,7 @@ describe("InMemoryKnowledgeChangeStore queries", () => {
     const commits = async (filters: Parameters<InMemoryKnowledgeChangeStore["list"]>[0]) =>
       (await store.list(filters)).map((change) => change.commitSha).sort();
 
-    assert.deepEqual(await commits({ flowId: "billing", limit: 10, offset: 0 }), ["c1", "c2"]);
+    assert.deepEqual(await commits({ flowIds: ["billing"], limit: 10, offset: 0 }), ["c1", "c2"]);
     assert.deepEqual(await commits({ documentId: "kb:faq.md", limit: 10, offset: 0 }), ["c3"]);
     assert.deepEqual(await commits({ sourceId: "product-repo", limit: 10, offset: 0 }), ["c2"]);
     assert.deepEqual(await commits({ cause: "patrol", limit: 10, offset: 0 }), ["c3"]);
@@ -118,13 +118,13 @@ describe("InMemoryKnowledgeChangeStore queries", () => {
     const store = await populated();
 
     assert.deepEqual(
-      (await store.list({ flowId: "billing", kind: "section_added", limit: 10, offset: 0 })).map(
+      (await store.list({ flowIds: ["billing"], kind: "section_added", limit: 10, offset: 0 })).map(
         (change) => change.commitSha
       ),
       ["c2"]
     );
     // Each filter alone matches something; together they match nothing.
-    assert.deepEqual(await store.list({ flowId: "support", cause: "gap", limit: 10, offset: 0 }), []);
+    assert.deepEqual(await store.list({ flowIds: ["support"], cause: "gap", limit: 10, offset: 0 }), []);
   });
 
   it("filters on a half-open [since, until) window", async () => {
@@ -172,7 +172,7 @@ describe("InMemoryKnowledgeChangeStore queries", () => {
     assert.equal(all.byCause.source_sync, 1);
     assert.equal(all.byCause.patrol, 1);
 
-    const billing = await store.summarize({ flowId: "billing" });
+    const billing = await store.summarize({ flowIds: ["billing"] });
     assert.equal(billing.total, 2);
     assert.equal(billing.documentsTouched, 1, "both billing entries touch the same document");
     assert.equal(billing.byCause.patrol, 0, "the support flow's entry is outside the window");
@@ -187,12 +187,12 @@ describe("InMemoryKnowledgeChangeStore queries", () => {
 
     assert.equal(await store.firstChangedAt({}), oldest);
     assert.equal(
-      await store.firstChangedAt({ flowId: "support" }),
-      (await store.list({ flowId: "support", limit: 1, offset: 0 }))[0]!.changedAt
+      await store.firstChangedAt({ flowIds: ["support"] }),
+      (await store.list({ flowIds: ["support"], limit: 1, offset: 0 }))[0]!.changedAt
     );
     // The point of the read: a filter that matches nothing still knows the log
     // exists, so an empty result reads as "nothing recorded" rather than
     // "nothing changed".
-    assert.equal(await store.firstChangedAt({ flowId: "unknown" }), undefined);
+    assert.equal(await store.firstChangedAt({ flowIds: ["unknown"] }), undefined);
   });
 });

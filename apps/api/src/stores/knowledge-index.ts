@@ -872,6 +872,13 @@ export class InMemoryKnowledgeIndex {
     return paginate(sorted, options);
   }
 
+  // Resolves one document by its durable id (`<repositoryId>:<path>`). The change
+  // log's per-document timeline uses it to decide which flow a documentId belongs
+  // to before reading the log for it.
+  getDocument(id: string): KnowledgeDocument | undefined {
+    return this.documents.get(id);
+  }
+
   countDocuments(): number {
     return this.documents.size;
   }

@@ -23,7 +23,9 @@ function whereClause(filters: KnowledgeChangeFilters): { sql: string; values: un
     predicates.push(sql.replace("$?", `$${values.length}`));
   };
 
-  if (filters.flowId !== undefined) add("flow_id = $?", filters.flowId);
+  // = ANY still index-scans (flow_id, changed_at DESC). An entry with no flow is
+  // outside every named set, which NULL = ANY(...) already yields.
+  if (filters.flowIds !== undefined) add("flow_id = ANY($?)", filters.flowIds);
   if (filters.documentId !== undefined) add("document_id = $?", filters.documentId);
   if (filters.sourceId !== undefined) add("source_id = $?", filters.sourceId);
   if (filters.cause !== undefined) add("cause = $?", filters.cause);
