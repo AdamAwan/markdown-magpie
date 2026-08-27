@@ -107,6 +107,7 @@ Per-tool scopes (mirrors the API route scopes; enforced at the MCP boundary in
 | `kb_search` | `read:knowledge` |
 | `kb_flows` | `read:knowledge` |
 | `kb_citation` | `read:knowledge` |
+| `kb_changes` | `read:knowledge` |
 | `kb_ask` | `ask:knowledge` |
 | `kb_questionnaire_create` | `ask:knowledge` |
 | `kb_questionnaire_get` | `read:knowledge` |
@@ -117,7 +118,7 @@ Per-tool scopes (mirrors the API route scopes; enforced at the MCP boundary in
 
 ## Exposed tools
 
-The server exposes exactly these ten `kb_*` tools (verified against the `tools` array and
+The server exposes exactly these eleven `kb_*` tools (verified against the `tools` array and
 the `callTool` dispatch in `apps/mcp/src/main.ts`). This table is the quick reference; the
 non-obvious behavioural contracts are numbered below.
 
@@ -133,6 +134,7 @@ non-obvious behavioural contracts are numbered below.
 | `kb_questionnaire_create` | `{name, flow, questions[1..500]}` | questionnaire route | Create a batched-answer questionnaire. |
 | `kb_questionnaire_get` | `{questionnaire}` | questionnaire route | Read a questionnaire worksheet. |
 | `kb_questionnaire_approve` | `{questionnaire, item?}` | approve route(s) | Approve answers into the match corpus. |
+| `kb_changes` | `{flowId, since, documentPath?}` | `GET /knowledge/changes` | What changed in a flow's knowledge base since a date. |
 
 ### `kb_ask`
 
@@ -265,6 +267,38 @@ non-obvious behavioural contracts are numbered below.
   (`POST /api/questionnaires/:id/items/:itemId/approve`) and returns `{ok: true}`; the API
   answers **409** unless the item's status is `answered`.
 
+### `kb_changes`
+
+- **M28** — Input `{flowId, since, documentPath?}`. Returns the
+  [knowledge change log](knowledge-changes.md) for one flow since an instant —
+  `{flowId, changes, summary, limit, offset}`, newest first, proxied from
+  `GET /api/knowledge/changes` ([api.md](api.md#get-apiknowledgechanges)). This is the tool
+  that answers "what's new this week in product X": a filtered list returned **directly**,
+  with no queue round-trip and no model call, because the log is metadata the index already
+  recorded. `since` is validated client-side as a parseable date/instant, so an unusable
+  value is a message naming the argument rather than the endpoint's `400 invalid_since`.
+- **M29** — `documentPath` is a **repository-relative path** (an entry's `path`, e.g.
+  `billing/rates.md`), **not** the `<repositoryId>:<path>` `documentId` the endpoint filters
+  on — passing a bare path straight through would filter on nothing and return an empty
+  list. The client resolves it against the flow's own destination repository, read from the
+  flow's most recent log entry (`?flowId=…&limit=1`), which is authoritative for what the
+  log was written against and — unlike the live index — still resolves for a document that
+  has since been removed. A leading `./` or `/` is normalized away. The result echoes
+  `documentPath` and the `documentId` it resolved to; a path with no history in the flow is
+  a `No document '<path>' in flow '<flow>'` error, not a silent empty list. A flow that has
+  recorded nothing needs no resolution — its (empty) flow-scoped result is returned as-is.
+- **M30** — The tool MUST carry the endpoint's summary envelope through, `logStartedAt`
+  included ([knowledge-changes.md](knowledge-changes.md) R19): the counts by kind and cause
+  and the distinct documents touched, plus the first instant recorded for the scope. Absent
+  `logStartedAt`, an empty result means **nothing has ever been recorded** — the log starts
+  at install and is never backfilled — which a client must not confuse with a quiet week.
+- **M31** — Change entries pass through **as the API returned them** rather than being
+  re-projected field by field, so an entry showing a causing commit range keeps both
+  `upstream.changedFileCount` (what the range truly touched) and
+  `upstream.examinedFileCount` (what the sync run materialized) — R22's truncation honesty
+  travels with the entry, and a hand-maintained projection is exactly how one of those two
+  numbers goes missing.
+
 ## Configuration
 
 ### Common (all transports)
@@ -364,7 +398,7 @@ the plugin only packages the connection and the skills. See
 [`plugin/markdown-magpie/README.md`](../plugin/markdown-magpie/README.md).
 
 Contributors working *in this repository* should use the project-scoped stdio `.mcp.json`
-below instead; installing the plugin as well would register the same ten tools twice.
+below instead; installing the plugin as well would register the same eleven tools twice.
 
 ### Claude Code (stdio)
 
@@ -414,7 +448,7 @@ Continue, etc.).
 | stdio auth guard (`resolveStdioAuthToken`) | `apps/mcp/src/main.ts` |
 | Streamable HTTP app: OAuth protected-resource metadata, per-tool/batch scope gate, `/mcp`, `/health` | `apps/mcp/src/http.ts` |
 | HTTP service credential (client-credentials or static token) + on-behalf-of headers | `apps/mcp/src/http.ts` |
-| API proxy client: `askQuestion`, `listFlows`, `getJson`/`postJson`, job wait/poll, `submitFeedback`, `generateOutline`, `approveSeedPlan`, `getCitationSections`, questionnaire calls | `apps/mcp/src/kb-client.ts` |
+| API proxy client: `askQuestion`, `listFlows`, `getJson`/`postJson`, job wait/poll, `submitFeedback`, `generateOutline`, `approveSeedPlan`, `getCitationSections`, `listKnowledgeChanges`, questionnaire calls | `apps/mcp/src/kb-client.ts` |
 | Logger (stderr sink for stdio) | `apps/mcp/src/logger.ts` |
 | Claude Code plugin: manifest, MCP registration, skills | `plugin/markdown-magpie/` |
 | Plugin marketplace manifest | `.claude-plugin/marketplace.json` |
@@ -437,4 +471,5 @@ protected-resource, per-tool/batch scope, on-behalf-of delegation),
 (`kb_outline`/`kb_seed` and the source-grounded plan),
 `2026-07-16-revise-seed-plan-design.md` (persisted, reviewable seed plans),
 `2026-07-16-questionnaire-mode-design.md` and `2026-07-17-questionnaire-trust-design.md`
-(`kb_questionnaire_*` batch answering, reuse, and approval).
+(`kb_questionnaire_*` batch answering, reuse, and approval),
+`2026-08-27-knowledge-change-log-design.md` (`kb_changes`, rollout step 4).
