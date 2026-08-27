@@ -348,6 +348,26 @@ function readCandidateDocuments(input: unknown): SourceSyncCandidateDocument[] {
   return parsed.success ? parsed.data.candidateDocuments : [];
 }
 
+// The upstream commit range one source-sync job reacted to, resolved from the run
+// it is linked to. This is the join the knowledge change log uses to attribute a
+// KB change to the source commits that caused it: source_sync_runs is keyed by
+// run and holds (source_id, from_sha, to_sha), and a source-sync proposal carries
+// the plan job's id — the same id the run records.
+//
+// Best-effort by contract: a job that is not a source-sync plan job (a gap draft,
+// a patrol rewrite, a fold) simply has no run, and the caller attributes the
+// change some other way.
+export async function resolveSourceOrigin(
+  ctx: AppContext,
+  jobId: string
+): Promise<{ sourceId: string; fromSha?: string; toSha: string } | undefined> {
+  const run = await ctx.stores.sourceSync.getRunByJobId(jobId);
+  if (!run) {
+    return undefined;
+  }
+  return { sourceId: run.sourceId, fromSha: run.fromSha, toSha: run.toSha };
+}
+
 export async function listRuns(ctx: AppContext, limit: number): Promise<SourceSyncRun[]> {
   return ctx.stores.sourceSync.listRuns(limit);
 }

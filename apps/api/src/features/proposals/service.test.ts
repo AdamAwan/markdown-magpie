@@ -20,7 +20,7 @@ const execFileAsync = promisify(execFile);
 // Seeds a git checkout with one commit and an origin remote, then indexes it so
 // findRepositoryForProposal resolves a git-backed RepositoryRef (scope !=
 // not-git, with a workTreeRoot) — the precondition the publish path validates.
-async function seedGitRepository(ctx: ReturnType<typeof makeTestContext>): Promise<void> {
+async function seedGitRepository(ctx: ReturnType<typeof makeTestContext>): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "magpie-proposal-test-"));
   const remotePath = path.join(root, "remote.git");
   const clonePath = path.join(root, "clone");
@@ -40,6 +40,7 @@ async function seedGitRepository(ctx: ReturnType<typeof makeTestContext>): Promi
     repositoryId: "test-repo",
     name: "test-repo"
   });
+  return clonePath;
 }
 
 // A fake broker that synchronously completes every answer_question job by
@@ -116,6 +117,42 @@ async function mergedProposalWithGap(ctx: ReturnType<typeof makeTestContext>, fl
   assert.ok(merged);
   return { log, merged };
 }
+
+test("runMergeCascade stamps its proposal onto the change log entries the re-index produces", async () => {
+  const ctx = makeTestContext();
+  const clonePath = await seedGitRepository(ctx);
+  const run = (args: string[]) => execFileAsync("git", args, { cwd: clonePath });
+
+  // Change the destination the way a merged proposal would, then commit: the
+  // cascade's re-index is what observes it.
+  await writeFile(path.join(clonePath, "README.md"), "# seed\n\n## Rate tiers\n\nTier one costs ten.\n", "utf8");
+  await run(["add", "-A"]);
+  await run(["commit", "-m", "merge proposal"]);
+
+  const proposal = await ctx.stores.proposals.create({
+    title: "Document rate tiers",
+    targetPath: "README.md",
+    markdown: "# seed\n\n## Rate tiers\n",
+    rationale: "r",
+    evidence: [],
+    gapClusterId: "cluster-1",
+    gapSummary: "How do rate tiers work?"
+  });
+  await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+  const merged = await ctx.stores.proposals.get(proposal.id);
+  assert.ok(merged);
+
+  await proposals.runMergeCascade(ctx, merged);
+
+  const entries = await ctx.stores.knowledgeChanges.listRecent(10);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].kind, "section_added");
+  assert.equal(entries[0].documentId, "test-repo:README.md");
+  // Attribution resolved from the proposal's own links, not from the index.
+  assert.equal(entries[0].cause, "gap");
+  assert.equal(entries[0].proposalId, merged.id);
+  assert.equal(entries[0].summary, "How do rate tiers work?");
+});
 
 test("runMergeCascade enqueues verification instead of resolving gaps blindly", async () => {
   const ctx = makeTestContext();

@@ -74,6 +74,7 @@ subsystem specs of Magpie itself.
 | [source-conflicts.md](./source-conflicts.md) | Disagreements between sources: detection, register, annotation & repair | `apps/api/src/features/patrol`, `packages/markdown` |
 | [proposals-and-publishing.md](./proposals-and-publishing.md) | Draft → reconcile gate → provenance → publish → stale-PR regen | `apps/api/src/features/proposals`, `packages/git` |
 | [source-sync.md](./source-sync.md) | Source-change sync to proposals | `apps/api/src/features/source-sync` |
+| [knowledge-changes.md](./knowledge-changes.md) | The knowledge change log: index-time diff, cause attribution | `apps/api/src/stores/knowledge-change-*`, `apps/api/src/features/proposals` |
 | [flows-and-seeding.md](./flows-and-seeding.md) | Flows, seed plans, self-seeding | `apps/api/src/features/{seed,config}` |
 | [questionnaires.md](./questionnaires.md) | Questionnaire mode & trust | `apps/api/src/features/questionnaires` |
 | [ai-jobs.md](./ai-jobs.md) | Queue-only AI job contract & capability model | `packages/jobs`, `apps/watcher` |
