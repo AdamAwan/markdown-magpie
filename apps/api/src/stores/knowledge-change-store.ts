@@ -87,6 +87,13 @@ export interface KnowledgeChangeCounts {
   documentsTouched: number;
 }
 
+// One (documentId, anchor) the caller wants the latest entry for. The durable
+// section identity of KC-1, and exactly what a retrieved section already carries.
+export interface KnowledgeChangeSectionRef {
+  documentId: string;
+  anchor: string;
+}
+
 /** The scope a "when did this log start?" read is asked within. */
 export type KnowledgeChangeScope = Pick<KnowledgeChangeFilters, "flowIds" | "documentId" | "sourceId">;
 
@@ -118,11 +125,21 @@ export interface KnowledgeChangeStore {
   // backend rather than by counting fetched rows — the window is unbounded and the
   // page is not.
   summarize(filters: KnowledgeChangeFilters): Promise<KnowledgeChangeCounts>;
+  // The most recent entry for each of the given (documentId, anchor) pairs, in ONE
+  // call for the whole set — this runs on the answer path, which is latency
+  // sensitive, so a per-section query is not an option. Refs with no history are
+  // simply absent from the result: a section the log has never seen carries no
+  // change context, and silence is the correct answer there.
+  latestForSections(refs: KnowledgeChangeSectionRef[]): Promise<KnowledgeChange[]>;
   // The earliest instant recorded in the given scope, so an empty window reads as
   // "nothing recorded yet" rather than "nothing changed". Undefined when the scope
   // holds no entries at all.
   firstChangedAt(scope: KnowledgeChangeScope): Promise<string | undefined>;
   reset(): Promise<void>;
+}
+
+export function sectionKey(documentId: string, anchor: string): string {
+  return `${documentId}\u0000${anchor}`;
 }
 
 function dedupeKey(entry: Pick<KnowledgeChangeRecord, "documentId" | "anchor" | "kind" | "commitSha">): string {
@@ -182,6 +199,28 @@ export class InMemoryKnowledgeChangeStore implements KnowledgeChangeStore {
     }
     counts.documentsTouched = documents.size;
     return counts;
+  }
+
+  async latestForSections(refs: KnowledgeChangeSectionRef[]): Promise<KnowledgeChange[]> {
+    if (refs.length === 0) {
+      return [];
+    }
+    const wanted = new Set(refs.map((ref) => sectionKey(ref.documentId, ref.anchor)));
+    const latest = new Map<string, KnowledgeChange>();
+    for (const entry of this.entries) {
+      if (entry.anchor === undefined) {
+        continue;
+      }
+      const key = sectionKey(entry.documentId, entry.anchor);
+      if (!wanted.has(key)) {
+        continue;
+      }
+      const held = latest.get(key);
+      if (held === undefined || held.changedAt <= entry.changedAt) {
+        latest.set(key, entry);
+      }
+    }
+    return [...latest.values()];
   }
 
   async firstChangedAt(scope: KnowledgeChangeScope): Promise<string | undefined> {

@@ -1,5 +1,5 @@
 import type { ApiTokenProvider } from "@magpie/auth";
-import type { AiExecutionIdentity, AiUsage, SourceMapEntry } from "@magpie/core";
+import type { AiExecutionIdentity, AiUsage, SectionChangeContext, SourceMapEntry } from "@magpie/core";
 import type { JobCapability, JobError, JobView } from "@magpie/jobs";
 import type { Logger } from "@magpie/logger";
 import type { EmbeddingRoute, RoutableFlow } from "@magpie/retrieval";
@@ -29,6 +29,11 @@ export interface RetrievedSection {
   heading: string;
   content: string;
   relevance: number;
+  // The newest knowledge-change-log entry for this section, when the log has one.
+  // Attached by the API at retrieval time (never ranked on) so the answer prompt
+  // can state when a cited section last changed; absent means the log has nothing
+  // for it and the answer says nothing about its age.
+  lastChanged?: SectionChangeContext;
 }
 
 // The full POST /api/retrieve response. `retrievalMode` tells the caller

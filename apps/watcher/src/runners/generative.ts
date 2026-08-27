@@ -1,4 +1,4 @@
-import type { ChatProvider } from "@magpie/core";
+import type { ChatProvider, KnowledgeChangeCause } from "@magpie/core";
 import type { JobType, JobView } from "@magpie/jobs";
 import {
   JOB_TYPES,
@@ -657,11 +657,63 @@ function parseAssessment(content: string): { action: "search"; queries: string[]
 }
 
 // The "[section <id>]" labelling shared by the answer and verify prompts, so the
-// verifier reads the exact context representation the answer was drafted from.
+// verifier reads the exact context representation the answer was drafted from —
+// change metadata included, so a change date the answer states is checked against
+// the same line that licensed it rather than read as an unsupported claim.
 function formatSectionContext(sections: RetrievedSection[]): string {
   return sections
-    .map((section) => `[section ${section.sectionId}] # ${section.heading}\n${section.content}`)
+    .map(
+      (section) => `[section ${section.sectionId}] # ${section.heading}${formatChangeLine(section)}\n${section.content}`
+    )
     .join("\n\n");
+}
+
+// How each change cause reads as a plain factual clause. Derived from the change
+// log's own cause vocabulary, so a new cause is a compile error here rather than a
+// silently unexplained date.
+const CHANGE_CAUSE_PHRASES: Record<KnowledgeChangeCause, string> = {
+  gap: "closing a knowledge gap",
+  source_sync: "following an upstream source change",
+  patrol: "following a maintenance patrol",
+  seed: "when this knowledge base was seeded",
+  external: "edited directly in the knowledge base"
+};
+
+const CHANGE_SUMMARY_MAX_CHARS = 120;
+
+// The one factual line a section carries when the change log has an entry for it:
+// when it last changed and what caused it. A section with no entry gets nothing at
+// all — silence rather than a guess is the whole point of attaching this instead
+// of letting the model infer a section's age.
+function formatChangeLine(section: RetrievedSection): string {
+  const change = section.lastChanged;
+  if (!change) {
+    return "";
+  }
+  const cause = CHANGE_CAUSE_PHRASES[change.cause];
+  // The summary is a system-derived human label (a proposal title, a gap or plan
+  // summary), never prose written for this prompt — bounded so a long title cannot
+  // crowd out the section body it annotates.
+  const summary = change.summary?.trim();
+  const label = summary ? ` — "${truncate(summary, CHANGE_SUMMARY_MAX_CHARS)}"` : "";
+  return `\n(last changed ${formatChangeDate(change.changedAt)}, ${cause}${label})`;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// "12 Aug 2026", in UTC and without locale data, so the same instant renders the
+// same way on every watcher host. An unparseable instant falls back to the raw
+// value rather than rendering "Invalid Date" into the prompt.
+function formatChangeDate(changedAt: string): string {
+  const date = new Date(changedAt);
+  if (Number.isNaN(date.getTime())) {
+    return changedAt;
+  }
+  return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+}
+
+function truncate(value: string, max: number): string {
+  return value.length <= max ? value : `${value.slice(0, max - 1).trimEnd()}…`;
 }
 
 // The same "[section <id>]" labelling but heading only (no body), for the

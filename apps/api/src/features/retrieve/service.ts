@@ -1,7 +1,9 @@
-import type { ExistingDocumentContext } from "@magpie/core";
+import type { ExistingDocumentContext, SectionChangeContext } from "@magpie/core";
 import type { AppContext } from "../../context.js";
+import { logger } from "../../logger.js";
 import { selectFlow } from "../../platform/repositories.js";
 import { retrievalMode } from "../../platform/providers.js";
+import { sectionKey } from "../../stores/knowledge-change-store.js";
 
 export interface RetrieveRequest {
   question: string;
@@ -22,6 +24,12 @@ interface RetrievedSection {
   // The section's fused retrieval relevance in [0,1]. Carried so citations can
   // show/sort by strength and so weak matches can be floored out (below).
   relevance: number;
+  // The most recent knowledge change log entry for this section's durable
+  // (documentId, anchor) identity, so an answer citing it can state WHEN it last
+  // changed instead of guessing. Absent when the log has nothing for the section —
+  // silence, not a guess, is the point of attaching it here rather than letting a
+  // model infer age. See KC-6 in docs/knowledge-changes.md.
+  lastChanged?: SectionChangeContext;
 }
 
 export type RetrieveResult =
@@ -85,6 +93,18 @@ export async function retrieve(ctx: AppContext, request: RetrieveRequest): Promi
   const topRelevance = ranked.length > 0 ? Math.max(...ranked.map(({ relevance }) => relevance)) : 0;
   const relativeFloor = topRelevance * RELATIVE_RELEVANCE_FLOOR;
 
+  const sections = ranked
+    .filter(({ relevance }) => relevance >= MIN_RELEVANCE && relevance >= relativeFloor)
+    .map(({ section, relevance }) => ({
+      sectionId: section.id,
+      documentId: section.documentId,
+      anchor: section.anchor,
+      path: section.path,
+      heading: section.heading,
+      content: section.content,
+      relevance
+    }));
+
   return {
     ok: true,
     retrievalMode: retrievalMode(ctx.settings).mode,
@@ -92,18 +112,54 @@ export async function retrieve(ctx: AppContext, request: RetrieveRequest): Promi
     // "matches existed but were filtered" — the distinction the watcher needs to
     // avoid reading a lexical miss as evidence of absence.
     candidateCount: ranked.length,
-    sections: ranked
-      .filter(({ relevance }) => relevance >= MIN_RELEVANCE && relevance >= relativeFloor)
-      .map(({ section, relevance }) => ({
-        sectionId: section.id,
-        documentId: section.documentId,
-        anchor: section.anchor,
-        path: section.path,
-        heading: section.heading,
-        content: section.content,
-        relevance
-      }))
+    // Attached AFTER the floor, and to the surviving sections only: change data
+    // rides along on sections already chosen on merit and is never a ranking axis
+    // (KC-2/R7 — the log stays out of retrieval).
+    sections: await attachChangeContext(ctx, sections)
   };
+}
+
+// Decorates each retrieved section with the newest change-log entry for its
+// (documentId, anchor), in ONE store call for the whole result set — this runs on
+// every ask and the answer path is latency sensitive, so a query per section is
+// not an option.
+//
+// Failure degrades to no change context rather than failing the retrieval: the
+// answer is the product, the dates are a decoration on it, exactly as the log
+// itself may never fail an index (R6).
+async function attachChangeContext(ctx: AppContext, sections: RetrievedSection[]): Promise<RetrievedSection[]> {
+  if (sections.length === 0) {
+    return sections;
+  }
+
+  let latest: Awaited<ReturnType<typeof ctx.stores.knowledgeChanges.latestForSections>>;
+  try {
+    latest = await ctx.stores.knowledgeChanges.latestForSections(
+      sections.map(({ documentId, anchor }) => ({ documentId, anchor }))
+    );
+  } catch (error) {
+    logger.warn({ err: error }, "retrieve: knowledge change lookup failed — answering without change context");
+    return sections;
+  }
+
+  const bySection = new Map<string, SectionChangeContext>();
+  for (const entry of latest) {
+    if (entry.anchor === undefined) {
+      continue;
+    }
+    bySection.set(sectionKey(entry.documentId, entry.anchor), {
+      changedAt: entry.changedAt,
+      cause: entry.cause,
+      // A system-derived human label (proposal title / gap summary / plan
+      // summary), never model prose written for the log (R11).
+      ...(entry.summary === undefined ? {} : { summary: entry.summary })
+    });
+  }
+
+  return sections.map((section) => {
+    const lastChanged = bySection.get(sectionKey(section.documentId, section.anchor));
+    return lastChanged ? { ...section, lastChanged } : section;
+  });
 }
 
 // Scope grounding for judging whether a gap cluster is off-topic: what the flow's

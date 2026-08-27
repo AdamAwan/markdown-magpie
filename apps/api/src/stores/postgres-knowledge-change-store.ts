@@ -9,6 +9,7 @@ import {
   type KnowledgeChangeQuery,
   type KnowledgeChangeRecord,
   type KnowledgeChangeScope,
+  type KnowledgeChangeSectionRef,
   type KnowledgeChangeStore
 } from "./knowledge-change-store.js";
 
@@ -102,6 +103,26 @@ export class PostgresKnowledgeChangeStore implements KnowledgeChangeStore {
       counts.documentsTouched = row.documents;
     }
     return counts;
+  }
+
+  // One round trip for the whole result set: the (document_id, anchor) pairs go
+  // down as two parallel arrays and DISTINCT ON keeps the newest row per pair.
+  // This runs on every ask, so a query per section is not an option — and unnest
+  // keeps the parameter count at two however many sections came back.
+  async latestForSections(refs: KnowledgeChangeSectionRef[]): Promise<KnowledgeChange[]> {
+    if (refs.length === 0) {
+      return [];
+    }
+    const result = await this.pool.query<KnowledgeChangeRow>(
+      `
+        SELECT DISTINCT ON (document_id, anchor) *
+        FROM knowledge_changes
+        WHERE (document_id, anchor) IN (SELECT * FROM unnest($1::text[], $2::text[]))
+        ORDER BY document_id, anchor, changed_at DESC, id DESC
+      `,
+      [refs.map((ref) => ref.documentId), refs.map((ref) => ref.anchor)]
+    );
+    return result.rows.map(mapRow);
   }
 
   async firstChangedAt(scope: KnowledgeChangeScope): Promise<string | undefined> {
