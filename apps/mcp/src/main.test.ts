@@ -136,3 +136,239 @@ test("kb_questionnaire_approve dispatches to approve-reused (bulk) or the item r
     globalThis.fetch = originalFetch;
   }
 });
+
+// ── kb_changes (stdio) ────────────────────────────────────────────────────────
+//
+// The change-log tool (docs/knowledge-changes.md KC-6): a filtered read over
+// metadata the index already recorded — no queue round-trip, no model call. The
+// dispatch tests stub globalThis.fetch and assert on the downstream API path, so
+// the tool → client-function wiring is pinned without a live API.
+
+const changesBody = (
+  changes: unknown[],
+  summary: Record<string, unknown> = {
+    total: changes.length,
+    documentsTouched: changes.length,
+    byKind: {
+      document_added: 0,
+      document_removed: 0,
+      section_added: 0,
+      section_removed: 0,
+      section_changed: changes.length
+    },
+    byCause: { gap: 0, source_sync: changes.length, patrol: 0, seed: 0, external: 0 },
+    logStartedAt: "2026-08-01T10:00:00.000Z"
+  }
+): Record<string, unknown> => ({ changes, summary, limit: 50, offset: 0 });
+
+const changeEntry = {
+  id: "kc-1",
+  repositoryId: "billing-kb",
+  documentId: "billing-kb:rates.md",
+  path: "rates.md",
+  anchor: "rate-tiers",
+  heading: "Rate tiers",
+  kind: "section_changed",
+  changedAt: "2026-08-12T09:14:02.000Z",
+  cause: "source_sync",
+  sourceId: "product-repo",
+  sourceFromSha: "a1b2f3",
+  sourceToSha: "c3d4e5",
+  flowId: "billing",
+  upstream: { changedFileCount: 1412, examinedFileCount: 1000 }
+};
+
+test("tools/list advertises kb_changes with its flowId/since/documentPath contract", () => {
+  const tool = tools.find((candidate) => candidate.name === "kb_changes");
+  assert.ok(tool, "expected tools list to include kb_changes");
+  assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ["documentPath", "flowId", "since"]);
+  assert.deepEqual(tool.inputSchema.required, ["flowId", "since"]);
+  // The path/document-id distinction is the tool's one trap, so the description
+  // has to spell out how documentPath resolves.
+  const documentPath = tool.inputSchema.properties.documentPath as { description: string };
+  assert.match(documentPath.description, /not a `<repositoryId>:<path>` document id/);
+});
+
+test("kb_changes dispatches a flow read to the changes endpoint and carries the summary through", async () => {
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+    urls.push(typeof input === "string" ? input : input.toString());
+    return jsonResponse(changesBody([changeEntry]));
+  }) as typeof fetch;
+
+  try {
+    const result = await callTool({
+      name: "kb_changes",
+      arguments: { flowId: "billing", since: "2026-08-10" }
+    });
+
+    assert.equal(urls.length, 1);
+    assert.ok(urls[0].includes("/api/knowledge/changes?"));
+    assert.ok(urls[0].includes("flowId=billing"));
+    assert.ok(urls[0].includes("since=2026-08-10"));
+
+    const payload = textPayload(result) as {
+      flowId: string;
+      changes: { upstream: { changedFileCount: number; examinedFileCount: number } }[];
+      summary: { total: number; logStartedAt?: string; byCause: Record<string, number> };
+    };
+    assert.equal(payload.flowId, "billing");
+    assert.equal(payload.summary.total, 1);
+    assert.equal(payload.summary.logStartedAt, "2026-08-01T10:00:00.000Z");
+    assert.equal(payload.summary.byCause.source_sync, 1);
+    // Truncation honesty travels with the entry: both numbers, never just the
+    // examined one (docs/knowledge-changes.md R22).
+    assert.deepEqual(payload.changes[0].upstream, { changedFileCount: 1412, examinedFileCount: 1000 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("kb_changes reports the log's start instant even when the window is empty", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    jsonResponse(
+      changesBody([], {
+        total: 0,
+        documentsTouched: 0,
+        byKind: {
+          document_added: 0,
+          document_removed: 0,
+          section_added: 0,
+          section_removed: 0,
+          section_changed: 0
+        },
+        byCause: { gap: 0, source_sync: 0, patrol: 0, seed: 0, external: 0 },
+        logStartedAt: "2026-08-01T10:00:00.000Z"
+      })
+    )) as typeof fetch;
+
+  try {
+    const result = await callTool({ name: "kb_changes", arguments: { flowId: "billing", since: "2026-08-26" } });
+    const payload = textPayload(result) as {
+      changes: unknown[];
+      summary: { total: number; logStartedAt?: string };
+    };
+    // An empty week has to be legible as "quiet" rather than "nothing recorded
+    // yet" — which is exactly what logStartedAt tells the client (R19).
+    assert.deepEqual(payload.changes, []);
+    assert.equal(payload.summary.total, 0);
+    assert.equal(payload.summary.logStartedAt, "2026-08-01T10:00:00.000Z");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("kb_changes resolves documentPath against the flow's destination repository", async () => {
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+    const url = typeof input === "string" ? input : input.toString();
+    urls.push(url);
+    return jsonResponse(changesBody([changeEntry]));
+  }) as typeof fetch;
+
+  try {
+    const result = await callTool({
+      name: "kb_changes",
+      // A leading "./" names the same document as the bare path the log records.
+      arguments: { flowId: "billing", since: "2026-08-10", documentPath: "./rates.md" }
+    });
+
+    // Two calls: one to learn the flow's destination repository from its newest
+    // entry, then the document-scoped read.
+    assert.equal(urls.length, 2);
+    assert.ok(urls[0].includes("limit=1"));
+    assert.ok(!urls[0].includes("since="));
+    assert.ok(urls[1].includes(`documentId=${encodeURIComponent("billing-kb:rates.md")}`));
+    assert.ok(urls[1].includes("since=2026-08-10"));
+
+    const payload = textPayload(result) as { documentId: string; documentPath: string };
+    assert.equal(payload.documentId, "billing-kb:rates.md");
+    assert.equal(payload.documentPath, "rates.md");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("kb_changes turns an unknown documentPath into a message naming the path, not a 404", async () => {
+  const originalFetch = globalThis.fetch;
+  let call = 0;
+  globalThis.fetch = (async () => {
+    call += 1;
+    return call === 1 ? jsonResponse(changesBody([changeEntry])) : jsonResponse({ error: "document_not_found" }, 404);
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      callTool({ name: "kb_changes", arguments: { flowId: "billing", since: "2026-08-10", documentPath: "gone.md" } }),
+      /No document 'gone.md' in flow 'billing'/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("kb_changes needs no second call for a flow that has recorded nothing", async () => {
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+    urls.push(typeof input === "string" ? input : input.toString());
+    return jsonResponse(
+      changesBody([], {
+        total: 0,
+        documentsTouched: 0,
+        byKind: {},
+        byCause: {}
+      })
+    );
+  }) as typeof fetch;
+
+  try {
+    const result = await callTool({
+      name: "kb_changes",
+      arguments: { flowId: "billing", since: "2026-08-10", documentPath: "rates.md" }
+    });
+
+    // Nothing recorded for the flow means nothing recorded for the document, and
+    // there is no destination repository to resolve the path against. The
+    // flow-scoped answer (no logStartedAt) already says so.
+    assert.equal(urls.length, 1);
+    const payload = textPayload(result) as { summary: { logStartedAt?: string }; documentPath: string };
+    assert.equal(payload.summary.logStartedAt, undefined);
+    assert.equal(payload.documentPath, "rates.md");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("kb_changes validates its arguments before calling the API", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error("kb_changes must not call the API with invalid arguments");
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      callTool({ name: "kb_changes", arguments: { since: "2026-08-10" } }),
+      /flowId must be a non-empty string/
+    );
+    await assert.rejects(
+      callTool({ name: "kb_changes", arguments: { flowId: "billing" } }),
+      /since must be a non-empty string/
+    );
+    // An unparseable instant is rejected here rather than becoming an opaque
+    // 400 invalid_since from the endpoint.
+    await assert.rejects(
+      callTool({ name: "kb_changes", arguments: { flowId: "billing", since: "last tuesday" } }),
+      /since must be a date or instant/
+    );
+    await assert.rejects(
+      callTool({ name: "kb_changes", arguments: { flowId: "billing", since: "2026-08-10", documentPath: 7 } }),
+      /documentPath must be a string/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

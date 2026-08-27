@@ -11,6 +11,7 @@ import {
   getJson,
   getQuestionnaire,
   listFlows,
+  listKnowledgeChanges,
   optionalStringArgument,
   stringArgument,
   submitFeedback
@@ -286,6 +287,43 @@ export const tools = [
       required: ["questionnaire"],
       additionalProperties: false
     } satisfies JsonSchema
+  },
+  {
+    name: "kb_changes",
+    description:
+      "List what changed in a flow's knowledge base since a given date — the change log, not a search. " +
+      "This is the tool for 'what's new this week in <product>': a filtered list of added/removed/changed " +
+      "documents and sections, each with when it changed and what caused it (gap | source_sync | patrol | " +
+      "seed | external), returned directly. The summary carries counts by kind and cause, the distinct " +
+      "documents touched, and logStartedAt — the first instant the log recorded for this flow; when it is " +
+      "absent nothing has EVER been recorded (the log starts at install and is never backfilled), so an " +
+      "empty result means 'nothing recorded yet', not 'nothing changed'. Where an entry names an upstream " +
+      "commit range it also carries upstream.changedFileCount (files the range truly touched) and " +
+      "upstream.examinedFileCount (how many the sync run examined) — report both, never just the second. " +
+      "Discover flow ids with kb_flows.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        flowId: {
+          type: "string",
+          description: "The flow whose knowledge base to report changes for (from kb_flows)."
+        },
+        since: {
+          type: "string",
+          description: "Only changes at or after this instant, e.g. '2026-08-20' or '2026-08-20T00:00:00Z'."
+        },
+        documentPath: {
+          type: "string",
+          description:
+            "Optional. One document's timeline instead of the whole flow. A repository-relative path as " +
+            "shown on an entry's `path` (e.g. 'billing/rates.md'), not a `<repositoryId>:<path>` document " +
+            "id — it is resolved against the flow's destination repository, so a document that has since " +
+            "been removed still resolves. A path with no history in the flow is an error, not an empty list."
+        }
+      },
+      required: ["flowId", "since"],
+      additionalProperties: false
+    } satisfies JsonSchema
   }
 ];
 
@@ -461,6 +499,11 @@ export async function callTool(params: ToolCallParams): Promise<unknown> {
 
   if (params.name === "kb_questionnaire_approve") {
     const result = await approveQuestionnaire(params.arguments, { token: stdioAuthToken });
+    return textResult(result);
+  }
+
+  if (params.name === "kb_changes") {
+    const result = await listKnowledgeChanges(params.arguments, { token: stdioAuthToken });
     return textResult(result);
   }
 

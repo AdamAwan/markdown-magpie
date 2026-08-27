@@ -197,6 +197,73 @@ test("tools/call kb_citation requires read:knowledge scope", async () => {
   assert.equal(res.status, 403);
 });
 
+test("tools/call kb_changes requires read:knowledge scope", async () => {
+  const auth = await makeTestAuth();
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
+  const res = await request(app)
+    .post("/mcp")
+    .set("authorization", await auth.token(["ask:knowledge"]))
+    .send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "kb_changes", arguments: { flowId: "billing", since: "2026-08-20" } }
+    });
+  assert.equal(res.status, 403);
+});
+
+test("a correctly scoped kb_changes dispatches to the change-log endpoint", async () => {
+  const auth = await makeTestAuth();
+
+  const originalFetch = globalThis.fetch;
+  let captured: string | undefined;
+  const fetchStub: typeof fetch = async (input: RequestInfo | URL) => {
+    captured = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+    return new Response(
+      JSON.stringify({
+        changes: [],
+        summary: {
+          total: 0,
+          documentsTouched: 0,
+          byKind: {},
+          byCause: {},
+          logStartedAt: "2026-08-01T10:00:00.000Z"
+        },
+        limit: 50,
+        offset: 0
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  };
+  globalThis.fetch = fetchStub;
+
+  try {
+    const app = createHttpMcpApp(
+      testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+    );
+    const res = await request(app)
+      .post("/mcp")
+      .set("authorization", await auth.token(["read:knowledge"]))
+      .set("accept", "application/json, text/event-stream")
+      .send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "kb_changes", arguments: { flowId: "billing", since: "2026-08-20" } }
+      });
+
+    assert.equal(res.status, 200);
+    assert.ok(captured, "expected the tool to call the downstream API");
+    assert.match(captured, /\/api\/knowledge\/changes\?/);
+    assert.match(captured, /flowId=billing/);
+    assert.match(captured, /since=2026-08-20/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("tools/call kb_questionnaire_create requires ask:knowledge scope", async () => {
   const auth = await makeTestAuth();
   const app = createHttpMcpApp(
