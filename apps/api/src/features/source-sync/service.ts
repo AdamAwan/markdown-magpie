@@ -368,6 +368,25 @@ export async function resolveSourceOrigin(
   return { sourceId: run.sourceId, fromSha: run.fromSha, toSha: run.toSha };
 }
 
+// How many files the commit range behind a change actually touched, and how many
+// of those the sync run examined. A run caps the files it materializes
+// (SOURCE_SYNC_MAX_CHANGED_FILES) while recording the TRUE total, so a surface
+// that shows a causing commit range can say "1,412 files changed upstream (1,000
+// examined)" rather than implying a completeness it does not have.
+export async function resolveUpstreamFileCounts(
+  ctx: AppContext,
+  jobId: string
+): Promise<{ changedFileCount: number; examinedFileCount: number } | undefined> {
+  const run = await ctx.stores.sourceSync.getRunByJobId(jobId);
+  if (!run) {
+    return undefined;
+  }
+  return {
+    changedFileCount: run.changedFileCount,
+    examinedFileCount: Math.min(run.changedFileCount, maxChangedFiles())
+  };
+}
+
 export async function listRuns(ctx: AppContext, limit: number): Promise<SourceSyncRun[]> {
   return ctx.stores.sourceSync.listRuns(limit);
 }

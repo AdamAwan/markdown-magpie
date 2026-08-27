@@ -144,7 +144,7 @@ test("runMergeCascade stamps its proposal onto the change log entries the re-ind
 
   await proposals.runMergeCascade(ctx, merged);
 
-  const entries = await ctx.stores.knowledgeChanges.listRecent(10);
+  const entries = await ctx.stores.knowledgeChanges.list({ limit: 10, offset: 0 });
   assert.equal(entries.length, 1);
   assert.equal(entries[0].kind, "section_added");
   assert.equal(entries[0].documentId, "test-repo:README.md");

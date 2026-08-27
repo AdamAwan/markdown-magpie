@@ -81,7 +81,7 @@ describe("knowledge change log written by the index-time diff", () => {
     const index = new InMemoryKnowledgeIndex(undefined, {}, { store: changes });
     await index.indexLocalRepository({ localPath: root, repositoryId: "kb" });
 
-    assert.deepEqual(await changes.listRecent(50), []);
+    assert.deepEqual(await changes.list({ limit: 50, offset: 0 }), []);
   });
 
   it("records exactly one section_changed against the right anchor when one body is edited", async () => {
@@ -97,7 +97,7 @@ describe("knowledge change log written by the index-time diff", () => {
     const head = await commit(root, "edit rates");
     await index.indexLocalRepository({ localPath: root, repositoryId: "kb" });
 
-    const entries = await changes.listRecent(50);
+    const entries = await changes.list({ limit: 50, offset: 0 });
     assert.equal(entries.length, 1);
     assert.equal(entries[0].kind, "section_changed");
     assert.equal(entries[0].anchor, "billing-guide-rate-tiers");
@@ -125,7 +125,7 @@ describe("knowledge change log written by the index-time diff", () => {
     await commit(root, "insert notice");
     await index.indexLocalRepository({ localPath: root, repositoryId: "kb" });
 
-    const entries = await changes.listRecent(50);
+    const entries = await changes.list({ limit: 50, offset: 0 });
     assert.deepEqual(describeEntries(entries), ["section_added:billing-guide-notice"]);
   });
 
@@ -142,7 +142,7 @@ describe("knowledge change log written by the index-time diff", () => {
     await commit(root, "rename heading");
     await index.indexLocalRepository({ localPath: root, repositoryId: "kb" });
 
-    assert.deepEqual(describeEntries(await changes.listRecent(50)), [
+    assert.deepEqual(describeEntries(await changes.list({ limit: 50, offset: 0 })), [
       "section_added:billing-guide-pricing-tiers",
       "section_removed:billing-guide-rate-tiers"
     ]);
@@ -163,7 +163,7 @@ describe("knowledge change log written by the index-time diff", () => {
     await commit(root, "unrelated");
     await index.indexLocalRepository({ localPath: root, repositoryId: "kb" });
 
-    assert.deepEqual(await changes.listRecent(50), []);
+    assert.deepEqual(await changes.list({ limit: 50, offset: 0 }), []);
   });
 
   it("adds no second entry when the same transition is re-indexed at the same commit", async () => {
@@ -180,12 +180,12 @@ describe("knowledge change log written by the index-time diff", () => {
     await write(root, "guide.md", guide("Tier one costs twelve."));
     const head = await commit(root, "edit rates");
     await index.indexLocalRepository({ localPath: root, repositoryId: "kb" });
-    const afterFirst = await changes.listRecent(50);
+    const afterFirst = await changes.list({ limit: 50, offset: 0 });
     assert.equal(afterFirst.length, 1);
 
     // Replaying the cascade re-indexes the same commit...
     await index.indexLocalRepository({ localPath: root, repositoryId: "kb" });
-    assert.deepEqual(await changes.listRecent(50), afterFirst);
+    assert.deepEqual(await changes.list({ limit: 50, offset: 0 }), afterFirst);
 
     // ...and even an index that lost its prior-SHA tracking (a fresh process
     // that re-observes the transition) is deduped by the store on
@@ -203,7 +203,7 @@ describe("knowledge change log written by the index-time diff", () => {
       }
     ]);
     assert.equal(replayed, 0);
-    assert.equal((await changes.listRecent(50)).length, 1);
+    assert.equal((await changes.list({ limit: 50, offset: 0 })).length, 1);
   });
 
   it("records a removed document as one document_removed entry", async () => {
@@ -220,7 +220,7 @@ describe("knowledge change log written by the index-time diff", () => {
     await commit(root, "drop other");
     await index.indexLocalRepository({ localPath: root, repositoryId: "kb" });
 
-    const entries = await changes.listRecent(50);
+    const entries = await changes.list({ limit: 50, offset: 0 });
     assert.equal(entries.length, 1);
     assert.equal(entries[0].kind, "document_removed");
     assert.equal(entries[0].documentId, "kb:other.md");
@@ -259,7 +259,7 @@ describe("knowledge change log written by the index-time diff", () => {
       }
     });
 
-    const [entry] = await changes.listRecent(50);
+    const [entry] = await changes.list({ limit: 50, offset: 0 });
     assert.equal(entry.cause, "source_sync");
     assert.equal(entry.proposalId, "proposal-1");
     assert.equal(entry.jobId, "job-1");

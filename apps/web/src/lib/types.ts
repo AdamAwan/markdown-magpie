@@ -287,6 +287,55 @@ export interface CitationUsageResponse {
   total: number;
 }
 
+// The knowledge change log (docs/knowledge-changes.md): what changed in the
+// destination knowledge base, when, and what caused it. Metadata about the
+// corpus, never corpus — it exists to answer "what's new this week?" and "when
+// did this change?", which retrieval structurally cannot.
+export type KnowledgeChangeKind =
+  "document_added" | "document_removed" | "section_added" | "section_removed" | "section_changed";
+
+export type KnowledgeChangeCause = "gap" | "source_sync" | "patrol" | "seed" | "external";
+
+export interface KnowledgeChange {
+  id: string;
+  repositoryId: string;
+  documentId: string;
+  path: string;
+  anchor?: string;
+  heading?: string;
+  kind: KnowledgeChangeKind;
+  changedAt: string;
+  commitSha?: string;
+  cause: KnowledgeChangeCause;
+  proposalId?: string;
+  jobId?: string;
+  sourceId?: string;
+  sourceFromSha?: string;
+  sourceToSha?: string;
+  summary?: string;
+  flowId?: string;
+  // The causing commit range's true file count and how many of them the sync run
+  // examined. Both travel together: a change log that implies a completeness it
+  // does not have is worse than no change log.
+  upstream?: { changedFileCount: number; examinedFileCount: number };
+}
+
+export interface KnowledgeChangesResponse {
+  changes: KnowledgeChange[];
+  summary: {
+    total: number;
+    byKind: Record<KnowledgeChangeKind, number>;
+    byCause: Record<KnowledgeChangeCause, number>;
+    documentsTouched: number;
+    // The earliest instant recorded in the requested scope, ignoring the window.
+    // Absent when nothing has ever been recorded there — the log starts at
+    // install and never backfills, so an empty window is "nothing recorded yet".
+    logStartedAt?: string;
+  };
+  limit: number;
+  offset: number;
+}
+
 // The scheduled-task list response enriches the stored settings with the next
 // run time from the reconciled pg-boss schedule. `lastRunAt`/`runningSince` are
 // gone server-side (no API tick loop maintains them), so they are not modelled.

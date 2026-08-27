@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { KnowledgeChange } from "@magpie/core";
+import {
+  KNOWLEDGE_CHANGE_CAUSES,
+  KNOWLEDGE_CHANGE_KINDS,
+  type KnowledgeChange,
+  type KnowledgeChangeCause,
+  type KnowledgeChangeKind
+} from "@magpie/core";
 
 // One entry to append. Everything except the diff facts (document identity and
 // kind) is attribution, and every attribution field is optional: a change entry
@@ -43,9 +49,62 @@ export interface KnowledgeChangeAttribution {
 // than a completion replay, far shorter than a plausible gap between real edits.
 export const UNVERSIONED_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
 
+// What narrows a read of the log. Every field is optional and they compose: each
+// one supplied is an AND, so "this flow, since Monday, caused by a source sync" is
+// one query. `flowIds` and `documentId` are the two indexed axes (the feed and the
+// per-document timeline); the rest narrow within them.
+export interface KnowledgeChangeFilters {
+  /**
+   * The flows this read covers — an explicit filter, or the set a role-scoped
+   * caller may read. Entries with no flow (a repository that is nobody's
+   * destination) are outside every such set, so they are visible only to a read
+   * that names no flows at all.
+   */
+  flowIds?: string[];
+  documentId?: string;
+  sourceId?: string;
+  /** Inclusive lower bound on `changedAt`, as an ISO instant. */
+  since?: string;
+  /** Exclusive upper bound on `changedAt`, as an ISO instant. */
+  until?: string;
+  cause?: KnowledgeChangeCause;
+  kind?: KnowledgeChangeKind;
+}
+
+export interface KnowledgeChangeQuery extends KnowledgeChangeFilters {
+  limit: number;
+  offset: number;
+}
+
+// The aggregate over the SAME filtered window the rows come from — not the whole
+// table. Counts are keyed by every kind and cause, zeros included, so a caller can
+// render a stable breakdown without knowing which values happened to occur.
+export interface KnowledgeChangeCounts {
+  total: number;
+  byKind: Record<KnowledgeChangeKind, number>;
+  byCause: Record<KnowledgeChangeCause, number>;
+  /** Distinct documents touched in the filtered window. */
+  documentsTouched: number;
+}
+
+/** The scope a "when did this log start?" read is asked within. */
+export type KnowledgeChangeScope = Pick<KnowledgeChangeFilters, "flowIds" | "documentId" | "sourceId">;
+
+export function emptyKnowledgeChangeCounts(): KnowledgeChangeCounts {
+  return {
+    total: 0,
+    byKind: Object.fromEntries(KNOWLEDGE_CHANGE_KINDS.map((kind) => [kind, 0])) as Record<KnowledgeChangeKind, number>,
+    byCause: Object.fromEntries(KNOWLEDGE_CHANGE_CAUSES.map((cause) => [cause, 0])) as Record<
+      KnowledgeChangeCause,
+      number
+    >,
+    documentsTouched: 0
+  };
+}
+
 // The append-only knowledge change log (spec 2026-08-27-knowledge-change-log).
 // Written from the index-time diff, the one choke point every corpus change
-// passes through.
+// passes through, and read back through the filtered query below.
 export interface KnowledgeChangeStore {
   // Appends entries, skipping ones already recorded for the same
   // (documentId, anchor, kind, commitSha). Re-indexing is not rare — a merge, a
@@ -53,9 +112,16 @@ export interface KnowledgeChangeStore {
   // path deliberately re-runs side effects — so recording the same transition
   // twice must be a no-op, not a duplicate. Returns how many rows were appended.
   record(entries: KnowledgeChangeRecord[]): Promise<number>;
-  // Newest first. Read surfaces land in a later rollout step; this exists so the
-  // write path is assertable.
-  listRecent(limit: number): Promise<KnowledgeChange[]>;
+  // Newest first, filtered and paginated.
+  list(query: KnowledgeChangeQuery): Promise<KnowledgeChange[]>;
+  // The aggregate over the filtered window `list` pages through, computed in the
+  // backend rather than by counting fetched rows — the window is unbounded and the
+  // page is not.
+  summarize(filters: KnowledgeChangeFilters): Promise<KnowledgeChangeCounts>;
+  // The earliest instant recorded in the given scope, so an empty window reads as
+  // "nothing recorded yet" rather than "nothing changed". Undefined when the scope
+  // holds no entries at all.
+  firstChangedAt(scope: KnowledgeChangeScope): Promise<string | undefined>;
   reset(): Promise<void>;
 }
 
@@ -99,12 +165,55 @@ export class InMemoryKnowledgeChangeStore implements KnowledgeChangeStore {
     return appended;
   }
 
-  async listRecent(limit: number): Promise<KnowledgeChange[]> {
-    return [...this.entries].reverse().slice(0, limit);
+  async list(query: KnowledgeChangeQuery): Promise<KnowledgeChange[]> {
+    return this.matching(query)
+      .reverse()
+      .slice(query.offset, query.offset + query.limit);
+  }
+
+  async summarize(filters: KnowledgeChangeFilters): Promise<KnowledgeChangeCounts> {
+    const counts = emptyKnowledgeChangeCounts();
+    const documents = new Set<string>();
+    for (const entry of this.matching(filters)) {
+      counts.total += 1;
+      counts.byKind[entry.kind] += 1;
+      counts.byCause[entry.cause] += 1;
+      documents.add(entry.documentId);
+    }
+    counts.documentsTouched = documents.size;
+    return counts;
+  }
+
+  async firstChangedAt(scope: KnowledgeChangeScope): Promise<string | undefined> {
+    let earliest: string | undefined;
+    for (const entry of this.matching(scope)) {
+      if (earliest === undefined || entry.changedAt < earliest) {
+        earliest = entry.changedAt;
+      }
+    }
+    return earliest;
   }
 
   async reset(): Promise<void> {
     this.entries.length = 0;
+  }
+
+  // Oldest first, as appended. Every supplied filter is an AND; the callers that
+  // want newest-first reverse it.
+  private matching(filters: KnowledgeChangeFilters): KnowledgeChange[] {
+    return this.entries.filter((entry) => {
+      if (filters.flowIds !== undefined && (entry.flowId === undefined || !filters.flowIds.includes(entry.flowId)))
+        return false;
+      if (filters.documentId !== undefined && entry.documentId !== filters.documentId) return false;
+      if (filters.sourceId !== undefined && entry.sourceId !== filters.sourceId) return false;
+      if (filters.cause !== undefined && entry.cause !== filters.cause) return false;
+      if (filters.kind !== undefined && entry.kind !== filters.kind) return false;
+      // ISO-8601 UTC instants compare correctly as strings, and both bounds are
+      // normalized to that form before they reach a store.
+      if (filters.since !== undefined && entry.changedAt < filters.since) return false;
+      if (filters.until !== undefined && entry.changedAt >= filters.until) return false;
+      return true;
+    });
   }
 
   // Mirrors the Postgres backend: an exact key match when the entry carries a
