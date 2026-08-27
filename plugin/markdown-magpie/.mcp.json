@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "markdown-magpie": {
+      "type": "http",
+      "url": "${MAGPIE_MCP_URL:-http://localhost:4001/mcp}"
+    }
+  }
+}

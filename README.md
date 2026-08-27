@@ -288,6 +288,8 @@ API_BASE_URL=http://localhost:4000 node apps/mcp/dist/main.js
 
 A project-scoped `.mcp.json` is included for local clients. The API and a watcher must be running before `kb_ask` can complete.
 
+For Claude Code, this repository is also a plugin marketplace: `claude plugin marketplace add AdamAwan/markdown-magpie` then `claude plugin install markdown-magpie@markdown-magpie` registers the MCP server **and** installs skills for asking, seeding, and running questionnaires against it. See [plugin/markdown-magpie/README.md](plugin/markdown-magpie/README.md).
+
 See [docs/mcp.md](docs/mcp.md) for stdio, Streamable HTTP, auth, and client setup.
 
 ## Common Commands

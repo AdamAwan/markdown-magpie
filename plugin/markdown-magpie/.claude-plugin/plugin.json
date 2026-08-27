@@ -1,0 +1,12 @@
+{
+  "name": "markdown-magpie",
+  "description": "Query and maintain a Markdown Magpie knowledge base from Claude Code: cited answers, keyword search, flow seeding, and questionnaires over the kb_* MCP tools.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Adam Awan",
+    "url": "https://github.com/AdamAwan"
+  },
+  "homepage": "https://github.com/AdamAwan/markdown-magpie",
+  "repository": "https://github.com/AdamAwan/markdown-magpie",
+  "license": "MIT"
+}
