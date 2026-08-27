@@ -1,4 +1,6 @@
 import { InMemoryGapClusterStore } from "../stores/gap-cluster-store.js";
+import { InMemoryKnowledgeChangeStore } from "../stores/knowledge-change-store.js";
+import { PostgresKnowledgeChangeStore } from "../stores/postgres-knowledge-change-store.js";
 import { PostgresGapClusterStore } from "../stores/postgres-gap-cluster-store.js";
 import { PostgresPrCrosslinkStore } from "../stores/postgres-pr-crosslink-store.js";
 import { PostgresProposalStore } from "../stores/postgres-proposal-store.js";
@@ -121,6 +123,19 @@ export function createSourceSyncStore(
     "SOURCE_SYNC_STORE",
     (pool) => new PostgresSourceSyncStore(pool),
     () => new InMemorySourceSyncStore()
+  );
+}
+
+export function createKnowledgeChangeStore(
+  config: AppConfig,
+  pool: pg.Pool
+): InMemoryKnowledgeChangeStore | PostgresKnowledgeChangeStore {
+  return createStore<InMemoryKnowledgeChangeStore | PostgresKnowledgeChangeStore>(
+    config,
+    pool,
+    "KNOWLEDGE_CHANGE_STORE",
+    (pool) => new PostgresKnowledgeChangeStore(pool),
+    () => new InMemoryKnowledgeChangeStore()
   );
 }
 

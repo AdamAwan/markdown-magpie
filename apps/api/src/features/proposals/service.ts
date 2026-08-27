@@ -51,6 +51,7 @@ import type { FanoutBudget } from "../../platform/maintenance-fanout.js";
 import { buildAnswerQuestionInput, recordAnswerQuestionLog } from "../../platform/answer-question.js";
 import { logger } from "../../logger.js";
 import { advisoryNote, collectAdvisoryHeadings, flagAdvisoryDraft } from "./register-check.js";
+import { attributionForMergedProposal } from "./change-attribution.js";
 
 type PublishProposalJobOutput = z.infer<typeof publishProposalOutputSchema>;
 
@@ -768,6 +769,12 @@ async function resolveGapsForMergedProposal(ctx: AppContext, proposal: Proposal)
 type ReindexOutcome = "reindexed" | "skipped" | "failed";
 
 async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal): Promise<ReindexOutcome> {
+  // The knowledge change log's attribution hint: this is the one re-index caller
+  // that knows WHY the corpus is changing, so its entries can name the cause
+  // instead of reading as "external". Resolved before the try: the helper never
+  // throws (it degrades to "external"), so it cannot turn a good re-index into a
+  // "failed" outcome and suppress gap-closure verification.
+  const attribution = await attributionForMergedProposal(ctx, proposal);
   try {
     if (ctx.knowledgeConfig.destinations.length > 0) {
       const destination = selectDestinationForProposal(ctx.repositoryDeps(), proposal);
@@ -782,7 +789,8 @@ async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal
       await ctx.stores.knowledgeIndex.indexLocalRepository({
         localPath,
         repositoryId: destination.id,
-        name: destination.name
+        name: destination.name,
+        attribution
       });
     } else {
       const repository = await findRepositoryForProposal(ctx.repositoryDeps(), proposal);
@@ -794,7 +802,8 @@ async function reindexDestinationForProposal(ctx: AppContext, proposal: Proposal
       await ctx.stores.knowledgeIndex.indexLocalRepository({
         localPath: repository.localPath,
         repositoryId: repository.id,
-        name: repository.name
+        name: repository.name,
+        attribution
       });
     }
 

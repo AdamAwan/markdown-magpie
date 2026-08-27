@@ -179,6 +179,9 @@ export async function resetData(ctx: AppContext) {
   await ctx.stores.sourceSync.reset();
   await ctx.stores.patrol.reset();
   await ctx.stores.sourceMap.reset();
+  // The change log describes a corpus that is about to be wiped and re-baselined;
+  // its entries would outlive documents that no longer exist for any reason.
+  await ctx.stores.knowledgeChanges.reset();
   await ctx.stores.jobAcceptances.reset();
   await ctx.stores.jobRepairContexts.reset();
 

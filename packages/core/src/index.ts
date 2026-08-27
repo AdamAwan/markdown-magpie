@@ -79,6 +79,48 @@ export interface Citation {
   relevance: number;
 }
 
+// One entry in the knowledge change log (spec 2026-08-27-knowledge-change-log):
+// what changed in the destination knowledge base, when, and what caused it.
+// Derived from the index-time diff, never from model prose.
+//
+// Document-level kinds carry no anchor/heading; section-level kinds are keyed on
+// the durable (documentId, anchor) identity SectionCitationUsage and the
+// claim-provenance fold already share. A renamed heading therefore reads as a
+// removal plus an addition — the passage a reader could have cited is gone.
+export type KnowledgeChangeKind =
+  "document_added" | "document_removed" | "section_added" | "section_removed" | "section_changed";
+
+// Why a change happened, resolved best-effort from links the system already
+// holds. "external" is both the default and the honest answer for a hand edit or
+// a merge that happened outside Magpie.
+export type KnowledgeChangeCause = "gap" | "source_sync" | "patrol" | "seed" | "external";
+
+export interface KnowledgeChange {
+  id: string;
+  repositoryId: string;
+  documentId: string;
+  path: string;
+  /** Durable section identity; absent on a document-level entry. */
+  anchor?: string;
+  /** Latest observed heading for the section — display only. */
+  heading?: string;
+  kind: KnowledgeChangeKind;
+  changedAt: string;
+  /** Destination HEAD the change was observed at, when git context resolved. */
+  commitSha?: string;
+  cause: KnowledgeChangeCause;
+  proposalId?: string;
+  jobId?: string;
+  /** The upstream source whose commit range caused the change, when resolvable. */
+  sourceId?: string;
+  sourceFromSha?: string;
+  sourceToSha?: string;
+  /** A human label taken from existing data (proposal title, gap or plan summary). */
+  summary?: string;
+  /** Resolved at write time from the destination the document belongs to. */
+  flowId?: string;
+}
+
 // How often one knowledge section has been cited by an answer, keyed on the
 // durable (documentId, anchor) section identity rather than the ordinal-derived
 // sectionId (which a re-index renumbers). Aggregate only — it holds no question

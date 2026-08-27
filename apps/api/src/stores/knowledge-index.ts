@@ -17,6 +17,8 @@ import { isAncestor, listChangedMarkdown, resolvePrimaryBranch, type ChangedMark
 import { fuseRankings } from "@magpie/retrieval";
 import { logger } from "../logger.js";
 import { LruCache } from "./lru-cache.js";
+import { diffKnowledgeSnapshots, type DiffSection, type KnowledgeSnapshot } from "./knowledge-change-diff.js";
+import type { KnowledgeChangeAttribution, KnowledgeChangeStore } from "./knowledge-change-store.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -151,6 +153,19 @@ export interface HybridSearchOptions {
   onNotice?: (message: string) => void;
 }
 
+// The knowledge change log's hook into indexing (spec
+// 2026-08-27-knowledge-change-log). The index is the one choke point every corpus
+// change passes through — a hand edit of the destination repository or a merge
+// that landed outside Magpie changes the knowledge base just as much as a
+// proposal does — so the log is written here rather than at the merge cascade.
+export interface KnowledgeChangeLogOptions {
+  store: KnowledgeChangeStore;
+  // Resolves the flow a destination repository belongs to. Stamped on each entry
+  // at write time so filtering a flow's feed is an index scan rather than a join
+  // back through configuration. The index itself stays config-free.
+  resolveFlowId?: (repositoryId: string) => string | undefined;
+}
+
 export class InMemoryKnowledgeIndex {
   private readonly documents = new Map<string, KnowledgeDocument>();
   private readonly sections = new Map<string, DocumentSection>();
@@ -168,7 +183,8 @@ export class InMemoryKnowledgeIndex {
 
   constructor(
     private readonly persistence?: KnowledgePersistence,
-    private readonly hybrid: HybridSearchOptions = {}
+    private readonly hybrid: HybridSearchOptions = {},
+    private readonly changeLog?: KnowledgeChangeLogOptions
   ) {}
 
   /**
@@ -208,6 +224,10 @@ export class InMemoryKnowledgeIndex {
     repositoryId?: string;
     name?: string;
     configuredBranch?: string;
+    // Why this re-index is happening, for the change log. A decoration on an
+    // independently-correct diff: absent (or unresolvable) it becomes cause
+    // "external" and the entries are still true records of real changes.
+    attribution?: KnowledgeChangeAttribution;
   }): Promise<IndexedRepositorySummary> {
     const localPath = resolveLocalPath(input.localPath);
     const git = await detectGitContext(localPath);
@@ -243,10 +263,10 @@ export class InMemoryKnowledgeIndex {
       return this.summarizeRepository(repository, headSha);
     }
     if (plan.kind === "incremental") {
-      return this.incrementalIndex(repository, localPath, headSha, plan.changes);
+      return this.incrementalIndex(repository, localPath, headSha, plan.changes, input.attribution);
     }
 
-    return this.fullIndex(repository, localPath, headSha);
+    return this.fullIndex(repository, localPath, headSha, input.attribution);
   }
 
   // Re-reads and re-parses every markdown file in the source (the original,
@@ -254,7 +274,8 @@ export class InMemoryKnowledgeIndex {
   private async fullIndex(
     repository: RepositoryRef,
     localPath: string,
-    headSha: string | undefined
+    headSha: string | undefined,
+    attribution?: KnowledgeChangeAttribution
   ): Promise<IndexedRepositorySummary> {
     const markdownPaths = await findMarkdownFiles(localPath);
     // Read+parse with a bounded worker pool instead of one file at a time: local
@@ -287,6 +308,10 @@ export class InMemoryKnowledgeIndex {
       sections.push(...entry.sections);
     }
 
+    // Capture the prior corpus BEFORE the maps are overwritten: this is the
+    // change log's "before", and a full index replaces the repository wholesale.
+    const priorSnapshot = this.snapshotRepository(repository.id);
+
     this.repositories.set(repository.id, repository);
     this.pruneRepository(repository.id, new Set(documents.map((document) => document.id)));
     for (const document of documents) {
@@ -305,6 +330,22 @@ export class InMemoryKnowledgeIndex {
     };
 
     await this.persistence?.saveIndexedRepository(summary, documents, sections);
+    // A repository with no prior documents is being BASELINED, not changed: its
+    // first index would otherwise log every document as an addition, asserting
+    // that the whole knowledge base "changed" on install day. That is the
+    // backfill the design rules out, and it is exactly how source sync treats a
+    // source it is seeing for the first time. Everything after the baseline is
+    // logged. (A hydrated restart is not a baseline — hydrate() reloads the prior
+    // corpus first, so an unchanged repository diffs to nothing and writes nothing.)
+    if (priorSnapshot.documents.length > 0) {
+      await this.recordChanges({
+        repository,
+        commitSha: headSha,
+        before: priorSnapshot,
+        after: { documents, sections },
+        attribution
+      });
+    }
     return summary;
   }
 
@@ -316,7 +357,8 @@ export class InMemoryKnowledgeIndex {
     repository: RepositoryRef,
     localPath: string,
     headSha: string | undefined,
-    changes: ChangedMarkdownFile[]
+    changes: ChangedMarkdownFile[],
+    attribution?: KnowledgeChangeAttribution
   ): Promise<IndexedRepositorySummary> {
     const subdirPrefix = subdirectoryPrefix(repository.git);
 
@@ -382,6 +424,10 @@ export class InMemoryKnowledgeIndex {
     }
     const sectionIdsByDocumentId = this.indexSectionIdsByDocument(affectedDocumentIds);
 
+    // The change log's "before", captured while the maps still hold the prior
+    // state. Only the touched documents can have changed, so only they are diffed.
+    const priorSnapshot = this.snapshotDocuments(affectedDocumentIds);
+
     this.repositories.set(repository.id, repository);
     for (const documentId of affectedDocumentIds) {
       for (const sectionId of sectionIdsByDocumentId.get(documentId) ?? []) {
@@ -405,6 +451,16 @@ export class InMemoryKnowledgeIndex {
       upsertedDocuments,
       upsertedSections,
       deletedDocumentIds: [...deletedDocumentIds]
+    });
+
+    await this.recordChanges({
+      repository,
+      commitSha: headSha,
+      before: priorSnapshot,
+      // Deleted documents are simply absent from the "after" side, which is what
+      // makes them read as document_removed.
+      after: { documents: upsertedDocuments, sections: upsertedSections },
+      attribution
     });
 
     return this.summarizeRepository(repository, headSha);
@@ -531,6 +587,81 @@ export class InMemoryKnowledgeIndex {
   // over the section map, so callers can delete a batch of documents' sections by
   // lookup instead of re-scanning the whole map per document. Only the requested
   // documents are kept, keeping the returned map small.
+  // The current in-memory state of one repository's corpus, as the change log's
+  // diff consumes it.
+  private snapshotRepository(repositoryId: string): KnowledgeSnapshot {
+    const documentIds = new Set<string>();
+    for (const document of this.documents.values()) {
+      if (document.repositoryId === repositoryId) {
+        documentIds.add(document.id);
+      }
+    }
+    return this.snapshotDocuments(documentIds);
+  }
+
+  private snapshotDocuments(documentIds: Set<string>): KnowledgeSnapshot {
+    const documents: KnowledgeSnapshot["documents"] = [];
+    for (const documentId of documentIds) {
+      const document = this.documents.get(documentId);
+      if (document) {
+        documents.push({ id: document.id, path: document.path });
+      }
+    }
+
+    const sections: DiffSection[] = [];
+    for (const section of this.sections.values()) {
+      if (documentIds.has(section.documentId)) {
+        sections.push(section);
+      }
+    }
+
+    return { documents, sections };
+  }
+
+  // Appends the change log entries for one re-index. Best-effort by construction:
+  // the log is a record ABOUT indexing, never a precondition of it, so a failing
+  // change store degrades the log and leaves the index (and the answer corpus)
+  // exactly as correct as it was.
+  private async recordChanges(input: {
+    repository: RepositoryRef;
+    commitSha: string | undefined;
+    before: KnowledgeSnapshot;
+    after: KnowledgeSnapshot;
+    attribution: KnowledgeChangeAttribution | undefined;
+  }): Promise<void> {
+    if (!this.changeLog) {
+      return;
+    }
+
+    const drafts = diffKnowledgeSnapshots(input.before, input.after);
+    if (drafts.length === 0) {
+      return;
+    }
+
+    // Every re-index Magpie did not drive itself is honestly "external": a hand
+    // edit of the destination, or a merge that landed outside the product.
+    const attribution: KnowledgeChangeAttribution = input.attribution ?? { cause: "external" };
+    const flowId = this.changeLog.resolveFlowId?.(input.repository.id);
+
+    try {
+      await this.changeLog.store.record(
+        drafts.map((draft) => ({
+          ...attribution,
+          ...draft,
+          repositoryId: input.repository.id,
+          commitSha: input.commitSha,
+          flowId
+        }))
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      logger.warn(
+        { repositoryId: input.repository.id, entryCount: drafts.length, err: message },
+        "recording knowledge change log entries failed"
+      );
+    }
+  }
+
   private indexSectionIdsByDocument(documentIds: Set<string>): Map<string, string[]> {
     const byDocument = new Map<string, string[]>();
     if (documentIds.size === 0) {
