@@ -128,6 +128,19 @@ export interface KnowledgeChange {
   flowId?: string;
 }
 
+// The change-log fact a retrieved section carries into an answer: the most recent
+// knowledge_changes entry for its (documentId, anchor). Attached at retrieval time
+// so an answer can state WHEN a section it cites last changed instead of inferring
+// an age — a section with no entry carries no context and the answer says nothing.
+// Deliberately a projection of `KnowledgeChange`, not the entry itself: the answer
+// path has no business with entry ids, commit shas, or attribution links.
+export interface SectionChangeContext {
+  changedAt: string;
+  cause: KnowledgeChangeCause;
+  /** The human label from the causing proposal / gap / plan, when one resolved. */
+  summary?: string;
+}
+
 // How often one knowledge section has been cited by an answer, keyed on the
 // durable (documentId, anchor) section identity rather than the ordinal-derived
 // sectionId (which a re-index renumbers). Aggregate only — it holds no question

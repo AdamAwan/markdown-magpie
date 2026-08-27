@@ -1,8 +1,8 @@
 # Knowledge change log
 
-**Status:** as-built (2026-08-27) — the write path, the human read surfaces
-(`GET /api/knowledge/changes`, the console panel and document timeline) and the
-`kb_changes` MCP tool. The one remaining rollout step is marked below.
+**Status:** as-built (2026-08-27) — the whole design: the write path, the human
+read surfaces (`GET /api/knowledge/changes`, the console panel and document
+timeline), the `kb_changes` MCP tool, and answer-time change context.
 
 A durable, append-only record of **what changed in the destination knowledge
 base, when, and what caused it**. It exists to answer two questions retrieval
@@ -216,10 +216,6 @@ included (R19), and MUST pass entries through with both upstream file counts int
 that sees only how many files a sync run examined, has exactly the failure these
 two clauses exist to prevent.
 
-> ⚠️ NOT YET IMPLEMENTED — the last rollout step of the design: answer-time change
-> context, the per-section `changed_at` / `cause` the retrieval callback attaches
-> plus its answer-prompt clause (step 5, which lands last and alone).
-
 ## KC-7 · Known limitations
 
 - **`section_changed` has no magnitude.** A one-word typo fix and a rewritten
@@ -230,6 +226,57 @@ two clauses exist to prevent.
 - **The log grows without bound**, at roughly the rate the knowledge base is
   edited. No pruning is proposed; if it is ever needed, the honest form is
   aggregation of old entries, not deletion.
+
+## KC-8 · Answer-time change context
+
+The piece that makes *"when did this change?"* answerable in an ordinary ask, and
+the only place the log touches the answer path. `POST /api/retrieve` — the scoped
+context callback the watcher already calls — decorates each section it returns
+with the newest log entry for that section, and the answer prompt is told what it
+may do with it.
+
+**R25.** The retrieve callback MUST attach, per returned section, the most recent
+`knowledge_changes` entry for that section's `(documentId, anchor)` — its
+`changedAt`, `cause` and `summary` and nothing else. The answer path has no
+business with entry ids, commit shas or attribution links, so the attached
+`SectionChangeContext` is a projection of the entry, not the entry.
+
+**R26.** Attachment MUST happen **after** the relevance floor, on the sections
+retrieval already chose. The log is not a ranking axis and never a citable section
+of its own (R7): sections are chosen on merit and the dates ride along on the ones
+already chosen.
+
+**R27.** The lookup MUST be **one** store call for the whole result set
+(`latestForSections`), not one per section. This runs on every ask and the answer
+path is latency sensitive; the Postgres backend keeps it to one round trip with
+`DISTINCT ON (document_id, anchor)` over the pairs unnested from two arrays.
+Document-level entries carry no anchor and MUST never be matched as a section's
+change context.
+
+**R28.** A section the log has no entry for MUST carry no change context, and the
+answer MUST say nothing about its age. Silence, not a guess, is the whole reason
+the metadata is attached rather than the model being left to infer how old a
+section is. For the same reason a failing change-log read MUST degrade to no
+change context rather than failing the retrieval — the answer is the product and
+the dates decorate it, exactly as the log may never fail an index (R6).
+
+**R29.** The watcher MUST render each attached entry as one factual line under the
+section's heading in the answer context — `(last changed 12 Aug 2026, following an
+upstream source change — "Rate tiers raised")` — dated in UTC without locale data
+so every watcher host renders an instant identically, and MUST show the same line
+to the grounding verifier. `ANSWER_QUESTION` carries the standing rule
+(`CHANGE_CONTEXT_CONTRACT`, in its grounding rules, which override everything
+else) that a change date may be stated ONLY for a section listed in
+`usedSectionIds` and ONLY as that section's own line states it, never inferred,
+estimated, or carried across from another section, and never treated as a reason
+to prefer or distrust a section. `VERIFY_ANSWER` reads the same line as context,
+so a date the answer was licensed to state is checked against the metadata that
+licensed it instead of being stripped as an unsupported claim.
+
+**R30.** The `summary` on that line stays a system-derived human label per R11 (a
+proposal title, a gap or plan summary), bounded in length so a long title cannot
+crowd out the section body it annotates. Nothing on the answer path may write
+model prose into it.
 
 ## Code map
 
@@ -245,6 +292,9 @@ two clauses exist to prevent.
 | read endpoint | `apps/api/src/features/knowledge/routes.ts`, `service.ts` (`knowledgeChanges`), `changes.ts` |
 | console | `apps/web/src/components/KnowledgeChangesPanel.tsx` (panel + document timeline) |
 | MCP tool | `apps/mcp/src/main.ts` (stdio), `apps/mcp/src/http.ts` (HTTP + scope), `apps/mcp/src/kb-client.ts` (`listKnowledgeChanges`) |
+| answer-time attachment | `apps/api/src/features/retrieve/service.ts` (`attachChangeContext`), `knowledge-change-store.ts` (`latestForSections`) |
+| prompt context line | `apps/watcher/src/runners/generative.ts` (`formatChangeLine`), `apps/watcher/src/http-client.ts` |
+| prompt clause | `packages/prompts/src/catalog.ts` (`CHANGE_CONTEXT_CONTRACT`, `ANSWER_QUESTION`, `VERIFY_ANSWER`) |
 | wiring | `apps/api/src/context.ts`, `apps/api/src/platform/stores.ts` |
 
 ## Tests (behavioural contract)
@@ -259,6 +309,10 @@ two clauses exist to prevent.
 | console panel + document timeline | `apps/web/src/components/KnowledgeChangesPanel.test.tsx` |
 | `kb_changes` registration, dispatch, path resolution, validation | `apps/mcp/src/main.test.ts` |
 | `kb_changes` scope mapping + HTTP dispatch | `apps/mcp/src/http.test.ts` |
+| answer-time attachment, batching, degradation | `apps/api/src/features/retrieve/service.test.ts` |
+| the batched latest-per-section read | `apps/api/src/stores/knowledge-change-store.test.ts`, `postgres-knowledge-change-store.integration.test.ts` |
+| the prompt context line reaching the model | `apps/watcher/src/runners/chat.test.ts` |
+| the prompt clauses | `packages/prompts/src/catalog.test.ts` |
 
 ## Provenance
 

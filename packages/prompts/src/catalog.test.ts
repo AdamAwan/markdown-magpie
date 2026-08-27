@@ -11,7 +11,10 @@ import {
   wrapUntrusted,
   UNTRUSTED_CONTENT_OPEN,
   UNTRUSTED_CONTENT_CLOSE,
-  UNTRUSTED_CONTENT_CONTRACT
+  UNTRUSTED_CONTENT_CONTRACT,
+  ANSWER_QUESTION,
+  VERIFY_ANSWER,
+  CHANGE_CONTEXT_CONTRACT
 } from "./catalog.js";
 
 test("catalog has exactly 24 prompts", () => {
@@ -355,4 +358,35 @@ test("withDirection composes after withPersona so the direction lands last", () 
 
 test("RECONCILE_ANSWER tells the model a different reading is not reusable", () => {
   assert.ok(RECONCILE_ANSWER.instructions.includes("different reading"));
+});
+
+test("ANSWER_QUESTION carries the change-context contract in its grounding rules", () => {
+  // Answer-time change context (KC-6): the model may state a change date only for
+  // a section it cites, and only from the attached metadata.
+  assert.ok(
+    ANSWER_QUESTION.instructions.includes(CHANGE_CONTEXT_CONTRACT),
+    "the standing rule must ship with the answer prompt"
+  );
+  assert.ok(
+    ANSWER_QUESTION.instructions.indexOf(CHANGE_CONTEXT_CONTRACT) <
+      ANSWER_QUESTION.instructions.indexOf("(1) Gather more before answering:"),
+    "it belongs in the grounding rules, which override everything else"
+  );
+});
+
+test("the change-context contract permits a date only for a cited section, and silence otherwise", () => {
+  assert.match(CHANGE_CONTEXT_CONTRACT, /\(last changed …\) *" line/);
+  assert.match(CHANGE_CONTEXT_CONTRACT, /ONLY for a section you list in usedSectionIds/);
+  assert.match(CHANGE_CONTEXT_CONTRACT, /ONLY as that section's own line states it/);
+  // Silence, not a guess: this is the whole reason the metadata is attached
+  // rather than the model being left to infer a section's age.
+  assert.match(CHANGE_CONTEXT_CONTRACT, /no recorded change date/);
+  assert.match(CHANGE_CONTEXT_CONTRACT, /never infer, estimate, or carry a date across/);
+  // The log is not a ranking axis, and must not become one inside the prompt.
+  assert.match(CHANGE_CONTEXT_CONTRACT, /Never treat the line as a reason to prefer or distrust a section/);
+});
+
+test("VERIFY_ANSWER reads a change line as context, so a licensed date is not stripped", () => {
+  assert.match(VERIFY_ANSWER.instructions, /"\(last changed …\)" line under a section heading is context/);
+  assert.match(VERIFY_ANSWER.instructions, /A change date for a section with no such line.*is unsupported/s);
 });

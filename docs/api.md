@@ -318,8 +318,14 @@ no side effects — the watcher's only reach into retrieval/routing. Full behavi
 specified in [retrieval.md](./retrieval.md#http-endpoints).
 
 - `POST /api/retrieve` — `{ question, flowId?, limit?≤50 }` → `{ "sections": [
-  DocumentSection, ... ] }`, or `422 { "error": "unknown_flow" }`. Applies the relevance
-  floor; an empty result is a knowledge gap, not a weak answer.
+  DocumentSection, ... ], "retrievalMode", "candidateCount" }`, or
+  `422 { "error": "unknown_flow" }`. Applies the relevance floor; an empty result is a
+  knowledge gap, not a weak answer. Each returned section carries an optional
+  `lastChanged: { changedAt, cause, summary? }` — the newest knowledge-change-log entry
+  for its `(documentId, anchor)`, attached after the floor in one batched lookup and
+  absent when the log has nothing for that section (see
+  [knowledge-changes.md](./knowledge-changes.md) KC-8). It is context for the answer,
+  never a ranking axis.
 - `POST /api/route` — `{ question, flows[] }` → `{ "status": "routed", flowId, confidence,
   margin }` or `{ "status": "abstain" }`. Embedding-first; the `routingSummary` is resolved
   server-side from live config, never trusted from the body.

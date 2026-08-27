@@ -257,7 +257,9 @@ callbacks (service-principal carve-out).
   conversationId, job, links}`.
 - `POST /api/retrieve` — `{question, flowId?, limit?≤50}` → `{sections[], retrievalMode,
   candidateCount}`, or 422 `{error: "unknown_flow"}`. `candidateCount` is the pre-floor
-  match count (R17).
+  match count (R17). Each section may carry `lastChanged` — the newest knowledge-change-log
+  entry for it, attached **after** the floor so the log stays out of ranking and out of
+  retrieval; see [knowledge-changes.md](./knowledge-changes.md) KC-8.
 - `POST /api/route` — `{question≤4000, flows[]≤200}` → `{status: "routed", flowId,
   confidence, margin}` or `{status: "abstain"}`.
 
