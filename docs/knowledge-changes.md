@@ -1,8 +1,8 @@
 # Knowledge change log
 
-**Status:** as-built (2026-08-27) — the write path and the human read surfaces
-(`GET /api/knowledge/changes`, the console panel and document timeline). The two
-remaining rollout steps are marked below.
+**Status:** as-built (2026-08-27) — the write path, the human read surfaces
+(`GET /api/knowledge/changes`, the console panel and document timeline) and the
+`kb_changes` MCP tool. The one remaining rollout step is marked below.
 
 A durable, append-only record of **what changed in the destination knowledge
 base, when, and what caused it**. It exists to answer two questions retrieval
@@ -197,10 +197,28 @@ it. Entries render as `§ Rate tiers changed — source product-repo a1b2f3…c3
 12 Aug`, linking to the attributed proposal where there is one, and both surfaces
 show the log's start instant per R19.
 
-> ⚠️ NOT YET IMPLEMENTED — the remaining rollout steps of the design: the
-> `kb_changes` MCP tool (step 4) and answer-time change context, the per-section
-> `changed_at` / `cause` the retrieval callback attaches plus its answer-prompt
-> clause (step 5, which lands last and alone).
+**MCP.** An eleventh tool, `kb_changes` (`read:knowledge`), taking `flowId`,
+`since` and an optional `documentPath` — the read that answers "what's new this
+week in product X" for a client. Contract in [mcp.md](mcp.md#kb_changes) (M28–M31).
+
+**R23.** `kb_changes`'s `documentPath` is a repository-relative path (an entry's
+`path`), not the `<repositoryId>:<path>` `documentId` the endpoint filters on, and
+it MUST be resolved rather than passed through — a bare path filters on nothing and
+returns an empty list, which is indistinguishable from a quiet document. It
+resolves against the flow's destination repository read from the flow's most recent
+log entry, so a document the index has since dropped still resolves (per R21's
+removed-document timeline), and a path with no history in the flow is an error, not
+an empty list.
+
+**R24.** A tool result MUST carry the summary envelope through, `logStartedAt`
+included (R19), and MUST pass entries through with both upstream file counts intact
+(R22). A client that cannot tell "nothing recorded yet" from "nothing changed", or
+that sees only how many files a sync run examined, has exactly the failure these
+two clauses exist to prevent.
+
+> ⚠️ NOT YET IMPLEMENTED — the last rollout step of the design: answer-time change
+> context, the per-section `changed_at` / `cause` the retrieval callback attaches
+> plus its answer-prompt clause (step 5, which lands last and alone).
 
 ## KC-7 · Known limitations
 
@@ -226,6 +244,7 @@ show the log's start instant per R19.
 | source-sync join | `apps/api/src/features/source-sync/service.ts` (`resolveSourceOrigin`, `resolveUpstreamFileCounts`) |
 | read endpoint | `apps/api/src/features/knowledge/routes.ts`, `service.ts` (`knowledgeChanges`), `changes.ts` |
 | console | `apps/web/src/components/KnowledgeChangesPanel.tsx` (panel + document timeline) |
+| MCP tool | `apps/mcp/src/main.ts` (stdio), `apps/mcp/src/http.ts` (HTTP + scope), `apps/mcp/src/kb-client.ts` (`listKnowledgeChanges`) |
 | wiring | `apps/api/src/context.ts`, `apps/api/src/platform/stores.ts` |
 
 ## Tests (behavioural contract)
@@ -238,6 +257,8 @@ show the log's start instant per R19.
 | the same against Postgres (`RUN_PG_INTEGRATION`) | `apps/api/src/stores/postgres-knowledge-change-store.integration.test.ts` |
 | endpoint, summary window, flow scoping | `apps/api/src/features/knowledge/changes.test.ts` |
 | console panel + document timeline | `apps/web/src/components/KnowledgeChangesPanel.test.tsx` |
+| `kb_changes` registration, dispatch, path resolution, validation | `apps/mcp/src/main.test.ts` |
+| `kb_changes` scope mapping + HTTP dispatch | `apps/mcp/src/http.test.ts` |
 
 ## Provenance
 

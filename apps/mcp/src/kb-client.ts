@@ -786,3 +786,158 @@ function readQuestionnaireItem(value: unknown): QuestionnaireViewItem {
     citations
   };
 }
+
+// ── knowledge changes ─────────────────────────────────────────────────────────
+//
+// The knowledge change log (docs/knowledge-changes.md): what changed in the
+// destination knowledge base, when, and what caused it. This is what answers
+// "what's new this week in product X" — a filtered read over metadata the index
+// already recorded, so there is no queue round-trip and no model call. The log
+// never enters retrieval; this is a read *about* the corpus, not of it.
+
+// The endpoint's summary envelope. Projected explicitly (rather than passed
+// through) because `logStartedAt` is load-bearing: without it a client cannot
+// tell "nothing recorded yet" from "nothing changed" (docs/knowledge-changes.md
+// R19). It is absent only when the scope has recorded nothing at all. Not
+// exported — nothing outside names it, and the strict dead-code gate flags an
+// export nobody imports.
+interface KnowledgeChangesSummary {
+  total: number;
+  documentsTouched: number;
+  byKind: Record<string, number>;
+  byCause: Record<string, number>;
+  logStartedAt?: string;
+}
+
+export interface KnowledgeChangesResult {
+  flowId: string;
+  // Echoed back with the document id it resolved to, so the caller can see which
+  // document the timeline is of. Both absent on a whole-flow read.
+  documentPath?: string;
+  documentId?: string;
+  // Entries are passed through as the API returned them rather than re-projected
+  // field by field. That is deliberate: an entry showing a causing commit range
+  // carries `upstream.changedFileCount` (what the range truly touched) alongside
+  // `upstream.examinedFileCount` (what the sync run materialized), and a
+  // hand-maintained projection is exactly how one of those two numbers goes
+  // missing (R22).
+  changes: Record<string, unknown>[];
+  summary: KnowledgeChangesSummary;
+  limit: number;
+  offset: number;
+}
+
+// Validates a `since`-style argument: a non-empty string the API can parse as an
+// instant. The endpoint 400s on an unparseable one (invalid_since) rather than
+// dropping the filter; checking here turns that into a message naming the
+// argument instead of an HTTP status.
+function instantArgument(args: Record<string, unknown> | undefined, name: string): string {
+  const value = stringArgument(args, name);
+  if (Number.isNaN(Date.parse(value))) {
+    throw new Error(`${name} must be a date or instant, e.g. '2026-08-20' or '2026-08-20T00:00:00Z'`);
+  }
+
+  return value;
+}
+
+// Normalizes a repository-relative document path: `./docs/rates.md`,
+// `/docs/rates.md` and `docs/rates.md` all name the same document, and the log
+// records the last form.
+function normalizeDocumentPath(path: string): string {
+  return path.replace(/^\.?\/+/, "");
+}
+
+// Reads the change log for a flow, optionally narrowed to one document.
+//
+// `documentPath` is a repository-relative path (what an entry's `path` shows),
+// NOT the `<repositoryId>:<path>` document id the endpoint filters on. It is
+// resolved against the flow's own destination repository — read from the flow's
+// most recent log entry, which is authoritative for the destination the log was
+// written against and, unlike the live index, still resolves for a document that
+// has since been removed. A flow with no entries at all needs no resolution: its
+// (empty) result is returned as-is, carrying the summary that says the scope has
+// recorded nothing yet.
+export async function listKnowledgeChanges(
+  args: Record<string, unknown> | undefined,
+  options?: KbClientOptions
+): Promise<KnowledgeChangesResult> {
+  const flowId = stringArgument(args, "flowId");
+  const since = instantArgument(args, "since");
+  const documentPath = optionalStringArgument(args, "documentPath");
+
+  if (documentPath === undefined) {
+    return readKnowledgeChanges(flowId, await getJson(changesPath({ flowId, since }), options));
+  }
+
+  const path = normalizeDocumentPath(documentPath);
+  const newest = readKnowledgeChanges(flowId, await getJson(changesPath({ flowId, limit: 1 }), options));
+  const repositoryId = newest.changes[0]?.repositoryId;
+  if (typeof repositoryId !== "string" || repositoryId.length === 0) {
+    // Nothing has ever been recorded for this flow, so nothing can have been
+    // recorded for the document either. The flow-scoped summary already says so.
+    return { ...newest, documentPath: path };
+  }
+
+  const documentId = `${repositoryId}:${path}`;
+  try {
+    const result = readKnowledgeChanges(flowId, await getJson(changesPath({ flowId, since, documentId }), options));
+    return { ...result, documentPath: path, documentId };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      throw new Error(`No document '${path}' in flow '${flowId}' — the change log has no history for that path.`, {
+        cause: error
+      });
+    }
+    throw error;
+  }
+}
+
+function changesPath(filters: { flowId: string; since?: string; documentId?: string; limit?: number }): string {
+  const query = new URLSearchParams({ flowId: filters.flowId });
+  if (filters.since !== undefined) {
+    query.set("since", filters.since);
+  }
+  if (filters.documentId !== undefined) {
+    query.set("documentId", filters.documentId);
+  }
+  if (filters.limit !== undefined) {
+    query.set("limit", String(filters.limit));
+  }
+
+  return `/knowledge/changes?${query.toString()}`;
+}
+
+// Projects the endpoint's envelope. The rows ride through untouched (see
+// KnowledgeChangesResult); the summary is projected so a missing count reads as
+// zero and `logStartedAt` is carried deliberately rather than by accident.
+function readKnowledgeChanges(flowId: string, value: unknown): KnowledgeChangesResult {
+  const body = asObject(value);
+  const summary = asObject(body.summary);
+  const logStartedAt = summary.logStartedAt;
+
+  return {
+    flowId,
+    changes: Array.isArray(body.changes) ? body.changes.map((entry) => asObject(entry)) : [],
+    summary: {
+      total: numberOrZero(summary.total),
+      documentsTouched: numberOrZero(summary.documentsTouched),
+      byKind: countMap(summary.byKind),
+      byCause: countMap(summary.byCause),
+      ...(typeof logStartedAt === "string" ? { logStartedAt } : {})
+    },
+    limit: numberOrZero(body.limit),
+    offset: numberOrZero(body.offset)
+  };
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function countMap(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  return Object.fromEntries(Object.entries(asObject(value)).map(([key, count]) => [key, numberOrZero(count)]));
+}

@@ -1,7 +1,7 @@
 # `markdown-magpie` Claude Code plugin
 
 Installs the Markdown Magpie MCP server **and** the skills for using it well, in one step.
-Without the skills, a client gets ten `kb_*` tools and no idea that `kb_ask` is a queued
+Without the skills, a client gets eleven `kb_*` tools and no idea that `kb_ask` is a queued
 job, that `kb_outline` only proposes, or that approving a questionnaire answer writes into
 a reuse corpus.
 
