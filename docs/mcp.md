@@ -343,6 +343,29 @@ The server listens on port 4001 by default. The MCP endpoint is at
 
 ## Connecting clients
 
+### Claude Code (plugin — server + skills)
+
+The repository is also a **Claude Code plugin marketplace**
+(`.claude-plugin/marketplace.json`). The `markdown-magpie` plugin at
+`plugin/markdown-magpie/` bundles the MCP server registration *and* the skills that teach a
+client how to use it — that the answer path is asynchronous, that `kb_outline` only
+proposes, that questionnaire approval writes into the reuse corpus — so installing the
+server and installing the usage guidance is one step:
+
+```bash
+claude plugin marketplace add AdamAwan/markdown-magpie
+claude plugin install markdown-magpie@markdown-magpie
+```
+
+The plugin registers the **Streamable HTTP** transport and defaults to
+`http://localhost:4001/mcp`; point it at a deployment by setting `MAGPIE_MCP_URL` in the
+environment Claude Code runs in. Per-tool scopes and the OAuth gate above apply unchanged —
+the plugin only packages the connection and the skills. See
+[`plugin/markdown-magpie/README.md`](../plugin/markdown-magpie/README.md).
+
+Contributors working *in this repository* should use the project-scoped stdio `.mcp.json`
+below instead; installing the plugin as well would register the same ten tools twice.
+
 ### Claude Code (stdio)
 
 A project-scoped `.mcp.json` at the repository root registers the server with Claude Code:
@@ -393,6 +416,8 @@ Continue, etc.).
 | HTTP service credential (client-credentials or static token) + on-behalf-of headers | `apps/mcp/src/http.ts` |
 | API proxy client: `askQuestion`, `listFlows`, `getJson`/`postJson`, job wait/poll, `submitFeedback`, `generateOutline`, `approveSeedPlan`, `getCitationSections`, questionnaire calls | `apps/mcp/src/kb-client.ts` |
 | Logger (stderr sink for stdio) | `apps/mcp/src/logger.ts` |
+| Claude Code plugin: manifest, MCP registration, skills | `plugin/markdown-magpie/` |
+| Plugin marketplace manifest | `.claude-plugin/marketplace.json` |
 
 ## Tests (behavioural contract)
 

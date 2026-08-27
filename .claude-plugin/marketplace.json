@@ -1,0 +1,15 @@
+{
+  "name": "markdown-magpie",
+  "description": "Claude Code plugins for Markdown Magpie — the MCP server plus the skills for using it.",
+  "owner": {
+    "name": "Adam Awan",
+    "url": "https://github.com/AdamAwan/markdown-magpie"
+  },
+  "plugins": [
+    {
+      "name": "markdown-magpie",
+      "source": "./plugin/markdown-magpie",
+      "description": "Query and maintain a Markdown Magpie knowledge base from Claude Code: the kb_* MCP server plus skills for asking, seeding and questionnaires."
+    }
+  ]
+}
