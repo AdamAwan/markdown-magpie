@@ -164,6 +164,69 @@ describe("ChatRunner", () => {
     assert.equal(output.citations.length, 1);
   });
 
+  it("carries a section's change context into the answer and verify prompts", async () => {
+    // Answer-time change context (KC-6): the API attaches the newest change-log
+    // entry per section, and the watcher must put it in front of the model as a
+    // factual line — including for the grounding verifier, which would otherwise
+    // strip a change date the answer was licensed to state.
+    const changed: RetrievedSection[] = [
+      {
+        ...SECTIONS[0]!,
+        lastChanged: { changedAt: "2026-08-12T09:30:00.000Z", cause: "source_sync", summary: "Deploy script rewritten" }
+      },
+      {
+        sectionId: "doc-2#rollback",
+        documentId: "doc-2",
+        anchor: "rollback",
+        path: "ops/rollback.md",
+        heading: "Rollback",
+        content: "Run the rollback script.",
+        relevance: 0.8
+      }
+    ];
+    const api = fakeApi({ retrieve: async () => retrieveResponse(changed) });
+    const chat = new FakeChatProvider((request) => {
+      if (request.system.includes("route a user question")) {
+        return JSON.stringify({ flowId: "flow-b", confidence: "high" });
+      }
+      if (request.system.includes("You verify a drafted")) {
+        return JSON.stringify({ grounded: true, unsupportedClaims: [] });
+      }
+      return JSON.stringify({
+        answer: "Run the deploy script.",
+        confidence: "high",
+        isKnowledgeGap: false,
+        usedSectionIds: ["doc-1#deploy"]
+      });
+    });
+    const runner = new ChatRunner("openai-compatible", chat, api);
+    await runner.run(
+      job("answer_question", {
+        provider: "openai-compatible",
+        question: "How do I deploy?",
+        flows: [{ id: "flow-b", name: "Beta" }],
+        expectedOutput: "answer_result"
+      }),
+      new AbortController().signal
+    );
+
+    const prompts = chat.requests
+      .filter((request) => !request.system.includes("route a user question"))
+      .map((request) => request.messages.map((message) => message.content).join("\n"));
+    assert.ok(prompts.length >= 2, "both the answer turn and the grounding check ran");
+    for (const prompt of prompts) {
+      assert.match(
+        prompt,
+        /\(last changed 12 Aug 2026, following an upstream source change — "Deploy script rewritten"\)/,
+        "the changed section carries its one factual line"
+      );
+      assert.ok(
+        !prompt.includes("[section doc-2#rollback] # Rollback\n(last changed"),
+        "a section the log has nothing for carries no line at all"
+      );
+    }
+  });
+
   it("routes an answer_question_batch job to the same answer handler as answer_question (#288c)", async () => {
     // The questionnaire-drip type shares the answer contract and must produce the
     // identical answer output — the watcher short-circuits it to the answer runner.

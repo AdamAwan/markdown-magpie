@@ -175,3 +175,90 @@ test("reports candidate count before the floor, and the retrieval mode", async (
   assert.equal(result.candidateCount, 2, "candidateCount counts matches before the floor");
   assert.equal(result.retrievalMode, "keyword", "no embedding provider is configured in the fixture");
 });
+
+test("attaches the latest change-log entry to each retrieved section", async () => {
+  // Answer-time change context (KC-6): the sections are chosen on merit and the
+  // dates ride along on the ones already chosen.
+  const ctx = buildContext([
+    { id: "s1", relevance: 0.9 },
+    { id: "s2", relevance: 0.8 }
+  ]);
+  await ctx.stores.knowledgeChanges.record([
+    { repositoryId: "kb", documentId: "s1-doc", path: "s1.md", anchor: "s1", kind: "section_added", cause: "seed" }
+  ]);
+  await ctx.stores.knowledgeChanges.record([
+    {
+      repositoryId: "kb",
+      documentId: "s1-doc",
+      path: "s1.md",
+      anchor: "s1",
+      kind: "section_changed",
+      cause: "source_sync",
+      summary: "Rate tiers raised",
+      commitSha: "abc123"
+    }
+  ]);
+
+  const result = await retrieve(ctx, { question: "anything" });
+  assert.ok(result.ok);
+  const [s1, s2] = result.sections;
+
+  assert.equal(s1!.lastChanged?.cause, "source_sync", "the most recent entry wins, not the first");
+  assert.equal(s1!.lastChanged?.summary, "Rate tiers raised");
+  assert.ok(s1!.lastChanged?.changedAt, "the entry carries the instant the change was observed");
+  // A section the log has nothing for carries no date at all: silence, not a
+  // guess, is the point of attaching this rather than letting a model infer age.
+  assert.equal(s2!.lastChanged, undefined);
+});
+
+test("looks the change log up once for the whole result set", async () => {
+  // This runs on every ask, so a query per section is not an option.
+  const ctx = buildContext([
+    { id: "s1", relevance: 0.9 },
+    { id: "s2", relevance: 0.85 },
+    { id: "s3", relevance: 0.8 }
+  ]);
+  const refs: { documentId: string; anchor: string }[][] = [];
+  const store = ctx.stores.knowledgeChanges;
+  const latestForSections = store.latestForSections.bind(store);
+  store.latestForSections = async (batch) => {
+    refs.push(batch);
+    return latestForSections(batch);
+  };
+
+  const result = await retrieve(ctx, { question: "anything" });
+  assert.ok(result.ok);
+  assert.equal(result.sections.length, 3);
+  assert.equal(refs.length, 1, "one batched lookup, not one per section");
+  assert.deepEqual(
+    refs[0]!.map((ref) => ref.anchor),
+    ["s1", "s2", "s3"]
+  );
+});
+
+test("answers without change context when the change log read fails", async () => {
+  // The answer is the product; the dates are a decoration on it. A failing log
+  // must not fail the retrieval it decorates.
+  const ctx = buildContext([{ id: "s1", relevance: 0.9 }]);
+  ctx.stores.knowledgeChanges.latestForSections = async () => {
+    throw new Error("change log unavailable");
+  };
+
+  const result = await retrieve(ctx, { question: "anything" });
+  assert.ok(result.ok);
+  assert.equal(result.sections.length, 1);
+  assert.equal(result.sections[0]!.lastChanged, undefined);
+});
+
+test("never attaches a document-level entry as a section's change context", async () => {
+  // A document_added entry carries no anchor, so it is not a fact about any one
+  // section and must never be read as one.
+  const ctx = buildContext([{ id: "s1", relevance: 0.9 }]);
+  await ctx.stores.knowledgeChanges.record([
+    { repositoryId: "kb", documentId: "s1-doc", path: "s1.md", kind: "document_added", cause: "seed" }
+  ]);
+
+  const result = await retrieve(ctx, { question: "anything" });
+  assert.ok(result.ok);
+  assert.equal(result.sections[0]!.lastChanged, undefined);
+});

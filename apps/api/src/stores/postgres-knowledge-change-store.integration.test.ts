@@ -201,3 +201,41 @@ test("knowledge_changes reports the log's start instant per scope", { skip: !run
   // can say "nothing recorded yet" instead of "nothing changed".
   assert.equal(await store.firstChangedAt({ flowIds: ["unknown"] }), undefined);
 });
+
+test(
+  "knowledge_changes returns the newest entry per section in one batched read",
+  { skip: !runIntegration },
+  async (t) => {
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const store = new PostgresKnowledgeChangeStore(pool);
+    t.after(async () => {
+      await store.reset();
+      await pool.end();
+    });
+    await store.reset();
+
+    // The answer-path read (KC-6). DISTINCT ON over the unnested (document_id,
+    // anchor) pairs is the part the in-memory store can only mirror.
+    await store.record([entry({ commitSha: "c1", kind: "section_added", summary: "first draft" })]);
+    await store.record([entry({ commitSha: "c2", kind: "section_changed", summary: "rate tier update" })]);
+    await store.record([entry({ commitSha: "c3", anchor: "limits", heading: "Limits" })]);
+    await store.record([entry({ commitSha: "c4", kind: "document_added", anchor: undefined, heading: undefined })]);
+
+    const latest = await store.latestForSections([
+      { documentId: "kb:guide.md", anchor: "rate-tiers" },
+      { documentId: "kb:guide.md", anchor: "limits" },
+      { documentId: "kb:guide.md", anchor: "never-changed" }
+    ]);
+
+    assert.deepEqual(
+      latest.map((change) => [change.anchor, change.commitSha]).sort(),
+      [
+        ["limits", "c3"],
+        ["rate-tiers", "c2"]
+      ],
+      "newest per anchor; a section with no history is simply absent, and the document-level entry never matches"
+    );
+    assert.equal(latest.find((change) => change.anchor === "rate-tiers")?.summary, "rate tier update");
+    assert.deepEqual(await store.latestForSections([]), [], "an empty batch is not a query");
+  }
+);

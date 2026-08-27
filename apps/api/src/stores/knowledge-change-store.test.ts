@@ -181,6 +181,41 @@ describe("InMemoryKnowledgeChangeStore queries", () => {
     assert.equal(billing.byKind.document_removed, 0);
   });
 
+  it("returns the newest entry per (documentId, anchor) for a batch of sections", async () => {
+    // The answer-path read (KC-6): one call for the whole retrieved set, newest
+    // entry per section, and nothing at all for a section the log has never seen.
+    const store = new InMemoryKnowledgeChangeStore();
+    await store.record([entry({ commitSha: "c1", kind: "section_added", summary: "first draft" })]);
+    await store.record([entry({ commitSha: "c2", kind: "section_changed", summary: "rate tier update" })]);
+    await store.record([entry({ commitSha: "c3", anchor: "limits", heading: "Limits" })]);
+    // A document-level entry carries no anchor and must never be picked up as a
+    // section's change context.
+    await store.record([entry({ commitSha: "c4", kind: "document_added", anchor: undefined, heading: undefined })]);
+
+    const latest = await store.latestForSections([
+      { documentId: "kb:guide.md", anchor: "rate-tiers" },
+      { documentId: "kb:guide.md", anchor: "limits" },
+      { documentId: "kb:guide.md", anchor: "never-changed" }
+    ]);
+
+    assert.deepEqual(
+      latest.map((change) => [change.anchor, change.commitSha]).sort(),
+      [
+        ["limits", "c3"],
+        ["rate-tiers", "c2"]
+      ],
+      "newest per anchor, and nothing for an anchor with no history"
+    );
+    assert.equal(latest.find((change) => change.anchor === "rate-tiers")?.summary, "rate tier update");
+  });
+
+  it("returns nothing for an empty batch of sections", async () => {
+    const store = new InMemoryKnowledgeChangeStore();
+    await store.record([entry()]);
+
+    assert.deepEqual(await store.latestForSections([]), []);
+  });
+
   it("reports the log's start instant for a scope, even when the window is empty", async () => {
     const store = await populated();
     const oldest = (await store.list({ limit: 10, offset: 0 })).at(-1)!.changedAt;
