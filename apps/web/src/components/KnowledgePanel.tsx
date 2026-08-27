@@ -12,6 +12,7 @@ import { shortSha } from "../lib/format";
 import type { AppTheme } from "../theme/theme";
 import { ContextValue } from "./common";
 import { Actions, Badge, Button, EmptyState, IconButton, Surface, statusTone } from "./ui";
+import { DocumentChangeTimeline } from "./KnowledgeChangesPanel";
 
 /** Sidebar id for documents that no configured flow produced (e.g. console uploads). */
 export const OTHER_DOCUMENTS_ID = "__other_documents__";
@@ -796,6 +797,9 @@ function FlowDocuments({
               ))}
             </Actions>
             <MarkdownViewer>{selectedDocument.content}</MarkdownViewer>
+            {/* What has changed in this document, and why — the per-document half
+                of the change log. Its own fetch, keyed on the document. */}
+            <DocumentChangeTimeline documentId={selectedDocument.id} />
           </>
         ) : (
           <EmptyState>Select a document to preview its Markdown.</EmptyState>

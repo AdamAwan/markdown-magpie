@@ -321,7 +321,9 @@ export function ProposalPanel({
         <ProposalGrid>
           <ScrollList>
             {proposals.map((proposal) => (
-              <ProposalRow key={proposal.id}>
+              // The anchor the change log links an attributed entry to, so
+              // "what changed, and which proposal did it" is one click.
+              <ProposalRow id={`proposal-${proposal.id}`} key={proposal.id}>
                 <RowCheckbox
                   aria-label={`Select ${proposal.title}`}
                   checked={checked.includes(proposal.id)}
