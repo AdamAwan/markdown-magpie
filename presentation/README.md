@@ -30,7 +30,7 @@ Keyboard:
 
 The URL hash tracks the slide (e.g. `index.html#8`) for deep links.
 
-## The demo (slides 10–13) + Questionnaires (slide 14)
+## The demo (slides 10–13)
 
 A single scenario, followed end to end — no live stack required. A user asks Magpie's Sales
 KB whether it supports **single sign-on**; the KB doesn't cover it yet, so the loop fills the
@@ -43,8 +43,10 @@ gap and the same question is answered on re-ask.
    then raised as a PR, reviewed, merged & re-indexed (slide 12).
 3. **The payoff** (slide 13) — the same SSO question now returns a complete, cited answer.
 
-Slide 14 then shows **Questionnaires** — the same grounded engine answering a whole batch,
-reusing prior answers and flagging what changed.
+Questionnaires are deliberately **not** part of that spine: the core pitch is the knowledge
+base and the loop that keeps it healthy. The questionnaire slide (16) sits after the
+applications matrix (15) as one row of it worked through in depth — upload the vendor's file,
+reuse and re-check, audit what was sent last time, approve and export.
 
 The demo frames (slides 11–13), like the product shots, are content-focused mock-ups rendered
 by `scripts/render-static-ui-shots.mjs` — one coherent thread, styled from the theme tokens.
@@ -56,8 +58,8 @@ the deck stays a single self-contained file. Images come from two places:
 
 - `assets/opt/` — every deck image, all rendered by `scripts/render-static-ui-shots.mjs`:
   the product shots (`ask`, `conflicts`, `proposals`, `gaps`, `changes`, `questionnaires`) on
-  slides 5–9 & 14, the demo mock-ups (`demo-cluster`, `demo-draft`, `demo-pr`, `demo-merged`,
-  `demo-payoff`) on slides 11–13, the `insights` dashboard on slide 15, the `seed-plan` shot on
+  slides 5–9 & 16, the demo mock-ups (`demo-cluster`, `demo-draft`, `demo-pr`, `demo-merged`,
+  `demo-payoff`) on slides 11–13, the `insights` dashboard on slide 14, the `seed-plan` shot on
   slide 19, plus the `icon`. These are **content-focused mock-ups**: one console surface
   each — deliberately without the sidebar/topbar chrome so the content fills the deck's
   browser frame — styled from the theme tokens (`apps/web/src/theme/theme.ts`). Product-shot
@@ -70,7 +72,7 @@ node scripts/render-static-ui-shots.mjs
 # 2. assemble the single-file deck (writes both committed copies)
 node scripts/build-deck.mjs
 # 3. (optional) render specific slides to PNG to eyeball them (needs playwright)
-node scripts/verify-deck.mjs 5 6 9 10 14
+node scripts/verify-deck.mjs 5 6 9 10 16
 ```
 
 `CHROME_PATH` points the shot renderer at a Chrome/Chromium binary (it defaults to the

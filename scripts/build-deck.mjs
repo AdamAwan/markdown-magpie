@@ -459,25 +459,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 14 QUESTIONNAIRES -->
-  <section class="slide light" data-title="Questionnaires">
-    <div class="wrap split rev">
-      ${frame(A("questionnaires"), { tall: true, label: "localhost:3000 — Questionnaires · security review", pos: "top" })}
-      <div>
-        <div class="kicker">Whole workflows, not just single answers</div>
-        <h2>Answer a whole questionnaire from the knowledge base.</h2>
-        <ul class="feat">
-          <li><span class="b">1</span><div><b>Upload the actual file</b> <span>— drop in the vendor's XLSX or CSV; confirm which column is the question and which holds their answer.</span></div></li>
-          <li><span class="b">2</span><div><b>Reuse, and re-check</b> <span>— prior approved answers return instantly; when a cited source moved, it re-answers and says why.</span></div></li>
-          <li><span class="b">3</span><div><b>Audit what you sent last time</b> <span>— a completed questionnaire imports as <i>evidence</i>, graded against the KB: confirmed, contradicted or unsupported.</span></div></li>
-          <li><span class="b">✓</span><div><b>Approve &amp; export</b> <span>— sign answers into the reuse corpus, export to Markdown or CSV.</span></div></li>
-        </ul>
-        <p class="footnote">An imported answer is treated as untrusted input — never cited, never allowed to change what Magpie says.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- 15 INSIGHTS -->
+  <!-- 14 INSIGHTS -->
   <section class="slide light" data-title="Insights">
     <div class="wrap">
       <div class="kicker">Insights · prove it's working</div>
@@ -487,7 +469,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 16 WIDE APPLICATIONS -->
+  <!-- 15 WIDE APPLICATIONS -->
   <section class="slide light" data-title="Applications">
     <div class="wrap">
       <div class="kicker">Wide applications</div>
@@ -504,7 +486,25 @@ const HTML = `<!doctype html>
           <tr><td class="src">Product Knowledge Base</td><td><span class="ar">→</span></td><td>Tames a large, messy knowledge base into a refined, de-duplicated, contradiction-free distillation.</td></tr>
         </tbody>
       </table>
-      <p class="footnote">Each gets its own curated layer and its own reviewer — same loop, different source.</p>
+      <p class="footnote">Each gets its own curated layer and its own reviewer — same loop, different source. Next: one of these rows, in depth.</p>
+    </div>
+  </section>
+
+  <!-- 16 QUESTIONNAIRES -->
+  <section class="slide light" data-title="One application · questionnaires">
+    <div class="wrap split rev">
+      ${frame(A("questionnaires"), { tall: true, label: "localhost:3000 — Questionnaires · security review", pos: "top" })}
+      <div>
+        <div class="kicker">One application, in depth</div>
+        <h2>Take one row of that table: security questionnaires.</h2>
+        <ul class="feat">
+          <li><span class="b">1</span><div><b>Upload the actual file</b> <span>— drop in the vendor's XLSX or CSV; confirm which column is the question and which holds their answer.</span></div></li>
+          <li><span class="b">2</span><div><b>Reuse, and re-check</b> <span>— prior approved answers return instantly; when a cited source moved, it re-answers and says why.</span></div></li>
+          <li><span class="b">3</span><div><b>Audit what you sent last time</b> <span>— a completed questionnaire imports as <i>evidence</i>, graded against the KB: confirmed, contradicted or unsupported.</span></div></li>
+          <li><span class="b">✓</span><div><b>Approve &amp; export</b> <span>— sign answers into the reuse corpus, export to Markdown or CSV.</span></div></li>
+        </ul>
+        <p class="footnote">Nothing here is a second product: it's the same grounded, cited engine pointed at a whole worksheet instead of one question. (An imported answer is untrusted input — never cited, never allowed to change what Magpie says.)</p>
+      </div>
     </div>
   </section>
 
@@ -584,7 +584,7 @@ const HTML = `<!doctype html>
       <div class="brand"><img src="${A("icon")}" alt=""/><span class="nm">Markdown Magpie</span></div>
       <div class="kicker">The ask</div>
       <h1 style="max-width:16ch">Start with security questionnaires.</h1>
-      <p class="big-quote" style="max-width:38ch;color:#cfe6dd">The clearest first win: grounded, cited, consistent answers to the SIGs and vendor security reviews we fill in by hand today.</p>
+      <p class="big-quote" style="max-width:40ch;color:#cfe6dd">The product is the knowledge base and the loop that keeps it healthy. Questionnaires are just its clearest first application — the SIGs and vendor security reviews we fill in by hand today.</p>
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin:30px 0 2px">
         <span class="recap">⚖️ Won't <b>lie</b></span>
         <span class="recap">🛡️ Won't <b>leak</b></span>
