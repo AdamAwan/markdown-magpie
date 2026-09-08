@@ -291,6 +291,7 @@ const HTML = `<!doctype html>
           <li><span class="b">2</span><div><b>Confidence is scored &amp; shown</b> <span>— a HIGH/LOW badge on every answer, not buried.</span></div></li>
           <li><span class="b">3</span><div><b>It abstains</b> <span>— if the source doesn't cover it, it says so instead of inventing an answer.</span></div></li>
           <li><span class="b">4</span><div><b>Follow-ups keep the thread</b> <span>— multi-turn conversation carries the context and its citations forward.</span></div></li>
+          <li><span class="b">5</span><div><b>When the sources disagree, it says so</b> <span>— a disputed fact is flagged, never quietly resolved to one side.</span></div></li>
         </ul>
         <p class="footnote">Ask something it can't support and you get an honest "not enough here" — which becomes a tracked gap (see "won't rot").</p>
       </div>
@@ -298,7 +299,25 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 6 WON'T LEAK -->
+  <!-- 6 SOURCE CONFLICTS -->
+  <section class="slide light" data-title="When sources disagree">
+    <div class="wrap split rev">
+      ${frame(A("conflicts"), { label: "localhost:3000 \u2014 Knowledge \u00b7 source conflicts", pos: "top" })}
+      <div>
+        <div class="kicker">Won't lie \u00b7 the hard case</div>
+        <h2>Two sources, two answers. Neither gets to win quietly.</h2>
+        <ul class="feat">
+          <li><span class="b">\u2713</span><div><b>It spots the disagreement</b> <span>— the policy says one year, the code enforces sixty days. Both look authoritative.</span></div></li>
+          <li><span class="b">\u2713</span><div><b>It refuses to adjudicate</b> <span>— picking a side would bury a real problem inside a confident answer.</span></div></li>
+          <li><span class="b">\u2713</span><div><b>The document stops asserting it</b> <span>— the disputed claim is annotated and held out of corrective rewrites.</span></div></li>
+          <li><span class="b">\u2713</span><div><b>It closes itself</b> <span>— fix the disagreement in the sources and the conflict resolves, the document repairs.</span></div></li>
+        </ul>
+        <p class="footnote">The failure a knowledge base can't afford isn't a missing answer — it's a confident one built on a contradiction nobody noticed.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 WON'T LEAK -->
   <section class="slide light" data-title="Won't leak">
     <div class="wrap split rev">
       ${frame(A("proposals"), { label: "localhost:3000 — Proposals · human review", pos: "top" })}
@@ -316,7 +335,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 7 WON'T ROT -->
+  <!-- 8 WON'T ROT -->
   <section class="slide light" data-title="Won't rot">
     <div class="wrap split">
       <div>
@@ -326,6 +345,7 @@ const HTML = `<!doctype html>
           <li><span class="b">①</span><div><b>Detects its own gaps</b> <span>— clusters low-confidence answers &amp; unhelpful feedback into themes.</span></div></li>
           <li><span class="b">②</span><div><b>Drafts grounded fixes</b> <span>— writes proposed Markdown with evidence &amp; a rationale, ready for review.</span></div></li>
           <li><span class="b">③</span><div><b>Maintenance patrols prune</b> <span>— scheduled fix &amp; improve patrols de-dupe, split &amp; verify docs, flagging contradictions &amp; stale content.</span></div></li>
+          <li><span class="b">④</span><div><b>Every change is on the record</b> <span>— what changed, when, and what caused it: a sync, a gap, a seed plan or a patrol.</span></div></li>
         </ul>
         <p class="footnote"><b>Usage is the maintenance signal.</b> The more it's asked, the faster it finds and fills its own weak spots.</p>
       </div>
@@ -333,7 +353,24 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 8 DEMO: FROM INSIDE CLAUDE -->
+  <!-- 9 KNOWLEDGE CHANGE LOG -->
+  <section class="slide light" data-title="What changed">
+    <div class="wrap split rev">
+      ${frame(A("changes"), { label: "localhost:3000 \u2014 Knowledge \u00b7 recent changes", pos: "top" })}
+      <div>
+        <div class="kicker">Won't rot \u00b7 the receipts</div>
+        <h2>It can tell you what changed \u2014 and why.</h2>
+        <ul class="feat">
+          <li><span class="b">\u2713</span><div><b>\u201cWhat's new this week?\u201d</b> <span>\u2014 an append-only log of every section added, changed or removed. A time filter, not a similarity search.</span></div></li>
+          <li><span class="b">\u2713</span><div><b>Every entry has a cause</b> <span>\u2014 a source sync, a gap cluster, a seed plan, a patrol \u2014 or a human editing the repo directly.</span></div></li>
+          <li><span class="b">\u2713</span><div><b>Answers know it too</b> <span>\u2014 \u201cwhen did this change?\u201d is answerable, because each cited section carries its change context.</span></div></li>
+        </ul>
+        <p class="footnote">In the console, or over MCP as <span class="mono">kb_changes</span> \u2014 so an agent can brief you on what moved since Monday.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 DEMO: FROM INSIDE CLAUDE -->
   <section class="slide ink" data-title="Demo · in Claude">
     <div class="wrap">
       <div class="kicker">Demo · part 1 — in Claude</div>
@@ -361,11 +398,11 @@ const HTML = `<!doctype html>
           </div>
         </div>
       </div>
-      <p class="footnote">Same engine, exposed as MCP tools (<span class="mono">kb_ask</span>, <span class="mono">kb_search</span>, <span class="mono">kb_citation</span>, <span class="mono">kb_flows</span>, <span class="mono">kb_questionnaire_*</span>) over a hosted OAuth endpoint — so the knowledge shows up in Claude, Codex, or any agent, and every weak answer feeds back as a gap.</p>
+      <p class="footnote">Same engine, exposed as MCP tools (<span class="mono">kb_ask</span>, <span class="mono">kb_search</span>, <span class="mono">kb_citation</span>, <span class="mono">kb_changes</span>, <span class="mono">kb_flows</span>, <span class="mono">kb_questionnaire_*</span>) over a hosted OAuth endpoint — installable in Claude Code as a one-command plugin that ships the tools <i>and</i> the skills for using them. The knowledge shows up in Claude, Codex, or any agent, and every weak answer feeds back as a gap.</p>
     </div>
   </section>
 
-  <!-- 9 DEMO: BACKSTAGE · DETECT & DRAFT -->
+  <!-- 11 DEMO: BACKSTAGE · DETECT & DRAFT -->
   <section class="slide light" data-title="Demo · detect & draft">
     <div class="wrap">
       <div class="kicker">Demo · part 2 — backstage</div>
@@ -384,7 +421,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 10 DEMO: BACKSTAGE · REVIEW & SHIP -->
+  <!-- 12 DEMO: BACKSTAGE · REVIEW & SHIP -->
   <section class="slide light" data-title="Demo · review & ship">
     <div class="wrap">
       <div class="kicker">Demo · part 2 — backstage</div>
@@ -403,7 +440,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 11 DEMO: THE PAYOFF -->
+  <!-- 13 DEMO: THE PAYOFF -->
   <section class="slide ink" data-title="Demo · the payoff">
     <div class="wrap split">
       <div>
@@ -422,25 +459,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 12 QUESTIONNAIRES -->
-  <section class="slide light" data-title="Questionnaires">
-    <div class="wrap split rev">
-      ${frame(A("questionnaires"), { tall: true, label: "localhost:3000 — Questionnaires · security review", pos: "top" })}
-      <div>
-        <div class="kicker">Whole workflows, not just single answers</div>
-        <h2>Answer a whole questionnaire from the knowledge base.</h2>
-        <ul class="feat">
-          <li><span class="b">1</span><div><b>Paste a batch</b> <span>— a security review, an RFP, a SIG — one question per line.</span></div></li>
-          <li><span class="b">2</span><div><b>Reuse past answers</b> <span>— prior approved answers return instantly; only genuinely new questions are freshly grounded.</span></div></li>
-          <li><span class="b">3</span><div><b>See what changed</b> <span>— when a cited source moved, it re-answers and tells you exactly why.</span></div></li>
-          <li><span class="b">✓</span><div><b>Approve &amp; export</b> <span>— sign answers into the reuse corpus, export to Markdown or CSV.</span></div></li>
-        </ul>
-        <p class="footnote">The same grounded, cited engine — pointed at an entire worksheet instead of one question.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- 13 INSIGHTS -->
+  <!-- 14 INSIGHTS -->
   <section class="slide light" data-title="Insights">
     <div class="wrap">
       <div class="kicker">Insights · prove it's working</div>
@@ -450,7 +469,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 14 WIDE APPLICATIONS -->
+  <!-- 15 WIDE APPLICATIONS -->
   <section class="slide light" data-title="Applications">
     <div class="wrap">
       <div class="kicker">Wide applications</div>
@@ -467,11 +486,29 @@ const HTML = `<!doctype html>
           <tr><td class="src">Product Knowledge Base</td><td><span class="ar">→</span></td><td>Tames a large, messy knowledge base into a refined, de-duplicated, contradiction-free distillation.</td></tr>
         </tbody>
       </table>
-      <p class="footnote">Each gets its own curated layer and its own reviewer — same loop, different source.</p>
+      <p class="footnote">Each gets its own curated layer and its own reviewer — same loop, different source. Next: one of these rows, in depth.</p>
     </div>
   </section>
 
-  <!-- 15 EASY SETUP -->
+  <!-- 16 QUESTIONNAIRES -->
+  <section class="slide light" data-title="One application · questionnaires">
+    <div class="wrap split rev">
+      ${frame(A("questionnaires"), { tall: true, label: "localhost:3000 — Questionnaires · security review", pos: "top" })}
+      <div>
+        <div class="kicker">One application, in depth</div>
+        <h2>Take one row of that table: security questionnaires.</h2>
+        <ul class="feat">
+          <li><span class="b">1</span><div><b>Upload the actual file</b> <span>— drop in the vendor's XLSX or CSV; confirm which column is the question and which holds their answer.</span></div></li>
+          <li><span class="b">2</span><div><b>Reuse, and re-check</b> <span>— prior approved answers return instantly; when a cited source moved, it re-answers and says why.</span></div></li>
+          <li><span class="b">3</span><div><b>Audit what you sent last time</b> <span>— a completed questionnaire imports as <i>evidence</i>, graded against the KB: confirmed, contradicted or unsupported.</span></div></li>
+          <li><span class="b">✓</span><div><b>Approve &amp; export</b> <span>— sign answers into the reuse corpus, export to Markdown or CSV.</span></div></li>
+        </ul>
+        <p class="footnote">Nothing here is a second product: it's the same grounded, cited engine pointed at a whole worksheet instead of one question. (An imported answer is untrusted input — never cited, never allowed to change what Magpie says.)</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 17 EASY SETUP -->
   <section class="slide light" data-title="Easy setup">
     <div class="wrap">
       <div class="kicker">Easy to set up</div>
@@ -485,7 +522,21 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 16 SEED -->
+  <!-- 18 ON YOUR TERMS -->
+  <section class="slide ink" data-title="On your terms">
+    <div class="wrap">
+      <div class="kicker">Cheap &amp; yours</div>
+      <h2>No lock-in, anywhere in the stack.</h2>
+      <div class="cards" style="margin-top:26px">
+        <div class="card"><div class="ic">\ud83c\udfe0</div><h3>Runs where you do</h3><p>Self-hosted on your own infrastructure \u2014 API, watcher and Postgres, up with one Compose file. Nothing leaves your network unless you send it.</p><span class="chip">self-hosted</span></div>
+        <div class="card"><div class="ic">\ud83d\udd0c</div><h3>Bring your own model</h3><p>Chat providers are configuration, not architecture \u2014 swap them per flow, with rate limits, admission control and per-job spend priced on Insights.</p><span class="chip">any provider \u00b7 metered</span></div>
+        <div class="card"><div class="ic">\ud83d\udcc4</div><h3>The knowledge is just Markdown</h3><p>Plain files in your Git repo, with the full history. If you switch off Magpie tomorrow, you keep everything it wrote.</p><span class="chip">nothing to migrate</span></div>
+      </div>
+      <p class="footnote">Embeddings are optional, too: keyword-only retrieval is a first-class mode, so Magpie runs with no embedding provider at all \u2014 or with a local one in a sidecar, if the corpus can't leave the building.</p>
+    </div>
+  </section>
+
+  <!-- 19 SEED -->
   <section class="slide light" data-title="Seed">
     <div class="wrap split rev">
       ${frame(A("seed-plan"), { tall: true, label: "localhost:3000 — Seed · proposed plan", pos: "top" })}
@@ -503,7 +554,7 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 17 THE LOOP -->
+  <!-- 20 THE LOOP -->
   <section class="slide ink" data-title="The loop">
     <div class="wrap" style="text-align:center">
       <div class="kicker">The whole thing, in one loop</div>
@@ -527,13 +578,13 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 18 CTA -->
+  <!-- 21 CTA -->
   <section class="slide ink" data-title="Call to action">
     <div class="wrap">
       <div class="brand"><img src="${A("icon")}" alt=""/><span class="nm">Markdown Magpie</span></div>
       <div class="kicker">The ask</div>
       <h1 style="max-width:16ch">Start with security questionnaires.</h1>
-      <p class="big-quote" style="max-width:38ch;color:#cfe6dd">The clearest first win: grounded, cited, consistent answers to the SIGs and vendor security reviews we fill in by hand today.</p>
+      <p class="big-quote" style="max-width:40ch;color:#cfe6dd">The product is the knowledge base and the loop that keeps it healthy. Questionnaires are just its clearest first application — the SIGs and vendor security reviews we fill in by hand today.</p>
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin:30px 0 2px">
         <span class="recap">⚖️ Won't <b>lie</b></span>
         <span class="recap">🛡️ Won't <b>leak</b></span>
@@ -547,7 +598,7 @@ const HTML = `<!doctype html>
 </div>
 
 <a class="exit" href="/">Back to login</a>
-<div class="hud"><span id="counter">1 / 18</span> · <b id="hud-title">Title</b></div>
+<div class="hud"><span id="counter">1 / 21</span> · <b id="hud-title">Title</b></div>
 <div class="hint">← → navigate &nbsp;·&nbsp; <b>O</b> overview &nbsp;·&nbsp; <b>F</b> fullscreen</div>
 
 <div class="overlay" id="overlay"><div class="grid" id="grid"></div></div>

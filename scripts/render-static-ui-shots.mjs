@@ -19,6 +19,9 @@ const ROOT = process.cwd();
 const OUT = join(ROOT, "presentation/assets/opt");
 const TMP = join(ROOT, "tmp/static-ui-shots");
 const CHROME = process.env.CHROME_PATH ?? "C:/Program Files/Google/Chrome/Application/chrome.exe";
+// Extra Chrome flags, space-separated (e.g. CHROME_FLAGS="--no-sandbox" when
+// rendering as root in a container).
+const EXTRA_FLAGS = (process.env.CHROME_FLAGS ?? "").split(" ").filter(Boolean);
 
 // ---- theme tokens (mirrors apps/web/src/theme/theme.ts) -------------------
 const T = {
@@ -445,6 +448,63 @@ const insightsBody = `
   </div>
 </section>`;
 
+// ---- knowledge change log (recent changes panel) --------------------------
+// One log entry: kind, human summary, its attributed cause, and the commit range
+// that caused it. Mirrors the "Recent changes" panel on /knowledge.
+const changeRow = (kind, tone, summary, path, cause, meta, date) =>
+  `<div style="display:flex;gap:14px;align-items:flex-start;padding:13px 0;border-top:1px solid ${T.border}">
+     <div style="min-width:118px">${badge(tone, kind)}</div>
+     <div style="flex:1">
+       <div style="font-size:15.5px;font-weight:600">${summary}</div>
+       <div class="path" style="margin-top:3px">${path}</div>
+       <div style="font-size:13.5px;color:${T.muted};margin-top:5px">${meta}</div>
+     </div>
+     <div style="text-align:right;white-space:nowrap">
+       <span class="fpill">${cause}</span>
+       <div style="font-size:13px;color:${T.subtle};margin-top:6px">${date}</div>
+     </div>
+   </div>`;
+
+const changesBody = `
+<section class="surface">
+  <div class="between" style="margin-bottom:6px">
+    <div class="sh" style="margin:0"><h2>Recent changes</h2><span class="pill">18 entries · 7 days</span></div>
+    <div class="row"><span class="fpill">Magpie Sales</span><span class="btnS" style="padding:6px 12px;font-size:13px">All causes ▾</span></div>
+  </div>
+  <div style="font-size:13.5px;color:${T.muted};margin-bottom:6px">Recording since 12 Aug — anything older than that simply isn't logged.</div>
+  ${changeRow("section changed", "amber", "Rate tiers changed", "pricing-and-packaging.md § Rate tiers", "source sync", "source <span class='mono'>product-repo</span> · <span class='mono'>a1b2f3…c3d4e5</span> · 1,412 files changed upstream (1,000 examined)", "27 Aug")}
+  ${changeRow("section added", "ok", "Single sign-on (SSO / SAML) added", "authentication.md § Single sign-on", "gap cluster", "proposal <span class='mono'>#142</span> — drafted from the “authentication” gap cluster", "26 Aug")}
+  ${changeRow("section removed", "neutral", "Legacy API keys removed", "authentication.md § Legacy API keys", "patrol · dedupe", "merged into § Single sign-on by the dedupe lens", "26 Aug")}
+  ${changeRow("document added", "blue", "Data retention added", "data-retention.md", "seed plan", "drafted from the approved seed plan for this flow", "22 Aug")}
+</section>`;
+
+// ---- source conflicts register -------------------------------------------
+const position = (src, path, claim) =>
+  `<div style="border:1px solid ${T.border};border-radius:10px;padding:12px 15px;background:${T.surface}">
+     <div class="row" style="margin-bottom:5px"><span class="fpill">${src}</span><span class="path">${path}</span></div>
+     <div style="font-size:15px;line-height:1.5">${claim}</div>
+   </div>`;
+
+const conflictsBody = `
+<section class="surface">
+  <div class="between" style="align-items:flex-start;margin-bottom:12px">
+    <div><h2 style="font-size:20px">Sources disagree about log retention</h2>
+      <div class="path" style="margin-top:4px">asserted in data-retention.md § Log retention</div></div>
+    ${badge("amber", "open · unadjudicated")}</div>
+  <div style="display:grid;gap:10px;margin-bottom:14px">
+    ${position("security-policies", "policies/data-retention-policy.md", "Application logs are retained for <b>1 year</b>.")}
+    ${position("product-repo", "services/ingest/config/retention.ts", "Log retention is enforced at <b>60 days</b>.")}
+  </div>
+  <div style="border:1px solid ${T.accentBorder};background:${T.accentBg};border-radius:10px;padding:13px 16px;font-size:15px;line-height:1.55">
+    <b>Magpie does not pick a winner.</b> The document is annotated so it stops asserting a disputed
+    value, the claim is held out of corrective rewrites, and the conflict closes on its own once the
+    sources agree again.
+  </div>
+  <div class="row" style="margin-top:14px;flex-wrap:wrap">
+    <span class="btnS">Open the claim</span><span class="btnS">View both positions</span>
+    <span class="pill">found by the verify patrol · 24 Aug</span></div>
+</section>`;
+
 // name -> [full html, cssWidth, cssHeight]. Height ~matches the deck frame's
 // crop band at that width so there is little wasted space.
 const pages = {
@@ -458,7 +518,9 @@ const pages = {
   "demo-merged": [page("Proposals · merged & re-indexed", demoMergedBody), 760, 340],
   "demo-payoff": [page("Ask · now answered", demoPayoffBody), 900, 480],
   "seed-plan": [page("Seed · proposed plan", seedPlanBody), 900, 720],
-  insights: [page("Insights · pipeline health", insightsBody), 1400, 600]
+  insights: [page("Insights · pipeline health", insightsBody), 1400, 600],
+  changes: [page("Knowledge · recent changes", changesBody), 1000, 500],
+  conflicts: [page("Knowledge · source conflicts", conflictsBody), 900, 500]
 };
 
 await mkdir(TMP, { recursive: true });
@@ -480,6 +542,7 @@ for (const [name, [html, w, h]] of Object.entries(pages)) {
       "--force-device-scale-factor=2",
       `--window-size=${w},${h}`,
       `--screenshot=${shot}`,
+      ...EXTRA_FLAGS,
       `file:///${resolve(file).replaceAll("\\", "/")}`
     ],
     { encoding: "utf8" }
