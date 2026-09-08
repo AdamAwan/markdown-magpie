@@ -111,6 +111,9 @@ Dates are when the work landed on `main`. Design notes for each item live in
 | Aug 11 | Completed questionnaires ingested as **evidence** rather than as answers. |
 | Aug 11 | Questionnaire file upload with a confirmed column mapping. |
 | Aug 11 | Keyword-only retrieval promoted to a usable first-class mode, so embeddings are optional. |
+| Aug 13 | Narrower embedding vectors and unauthenticated embedding endpoints, plus an optional local embeddings sidecar (Ollama) behind the `embeddings` Compose profile. |
+| Aug 27 | The MCP server and its skills ship as a **Claude Code plugin**. |
+| Aug 27 | **Knowledge change log** - an index-time diff with cause attribution, `GET /api/knowledge/changes` with its console panel and document timeline, the `kb_changes` MCP tool, and answer-time change context. |
 
 ## Repository Layout
 
