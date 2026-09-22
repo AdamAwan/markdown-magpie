@@ -11,8 +11,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@ai-sdk/azure": "^4.0.37",
-    "@ai-sdk/openai-compatible": "^3.0.27",
+    "@ai-sdk/azure": "^4.0.70",
+    "@ai-sdk/openai-compatible": "^3.0.48",
     "@magpie/auth": "file:../../packages/auth",
     "@magpie/core": "file:../../packages/core",
     "@magpie/git": "file:../../packages/git",
@@ -21,12 +21,12 @@
     "@magpie/prompts": "file:../../packages/prompts",
     "@magpie/retrieval": "file:../../packages/retrieval",
     "@magpie/telemetry": "file:../../packages/telemetry",
-    "ai": "^7.0.58",
-    "tsx": "^4.23.11",
-    "zod": "^4.4.3"
+    "ai": "^7.0.99",
+    "tsx": "^4.23.13",
+    "zod": "^4.6.4"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.5.1",
     "typescript": "^6.0.3"
   }
 }
