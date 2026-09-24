@@ -115,7 +115,13 @@ function AuthGate({ children }: { children: ReactNode }) {
     if (isAuthenticated) {
       setAccessTokenProvider(async () => {
         try {
-          return await getAccessTokenSilently();
+          const token = await getAccessTokenSilently();
+          // The SDK types the token as possibly undefined; never send a
+          // token-less request as though it were authenticated.
+          if (!token) {
+            throw new Error("Auth0 returned no access token.");
+          }
+          return token;
         } catch (error) {
           if (!isMissingRefreshTokenError(error)) {
             throw error;

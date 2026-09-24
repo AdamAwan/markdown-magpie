@@ -12,11 +12,11 @@
   },
   "dependencies": {
     "@magpie/core": "file:../core",
-    "zod": "^4.6.4"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^26.5.1",
-    "tsx": "^4.23.13",
+    "@types/node": "^26.6.2",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.3"
   }
 }

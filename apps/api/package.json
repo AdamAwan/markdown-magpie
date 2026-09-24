@@ -27,14 +27,14 @@
     "cron-parser": "^5.10.1",
     "fast-xml-parser": "^5.11.1",
     "fflate": "^0.8.3",
-    "hono": "^4.13.7",
+    "hono": "^4.13.8",
     "pg": "^8.23.0",
-    "pg-boss": "^12.31.0",
-    "tsx": "^4.23.13",
-    "zod": "^4.6.4"
+    "pg-boss": "^12.33.2",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^26.5.1",
+    "@types/node": "^26.6.2",
     "jose": "^6.2.12",
     "typescript": "^6.0.3"
   }
