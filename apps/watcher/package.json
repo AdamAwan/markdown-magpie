@@ -21,7 +21,7 @@
     "@magpie/prompts": "file:../../packages/prompts",
     "@magpie/retrieval": "file:../../packages/retrieval",
     "@magpie/telemetry": "file:../../packages/telemetry",
-    "ai": "^7.0.116",
+    "ai": "^7.0.118",
     "tsx": "^4.23.15",
     "zod": "^4.6.5"
   },
